@@ -1894,10 +1894,10 @@ def _read_touch_record_as_legacy_lines_with_writer_names(
     commit-path invocation, which is on the repo's 500ms brightline.
 
     Returns ``(lines, degraded, writer_names)`` — exactly the same values
-    the two-call form would have produced: `lines`/`degraded` as
-    :func:`_read_touch_record_as_legacy_lines` renders them, `writer_names`
-    as :func:`_touch_record_writer_names` builds it (`event.path ->
-    event.name`, `None` for a surviving event with no name stamped).
+    the superseded two-call form produced: `lines`/`degraded` as
+    :func:`_read_touch_record_as_legacy_lines` renders them, and
+    `writer_names` mapping `event.path -> event.name`, with `None` for a
+    surviving event that carries no stamped name.
     """
     claims, degraded, _reasons = touch_record._read_stream_claims(sink_path)
     jsonl_lines = [
@@ -4597,9 +4597,14 @@ def compute_scope(
             # empty, non-degraded result (no jsonl family, no sibling
             # `touched.txt`) naturally no-ops every loop below, the same
             # outcome the old "file missing -> continue" arm produced.
-            raw_lines, agent_touched_degraded = _read_agent_touch_record_as_legacy_lines(
-                agent_dir / _TOUCH_RECORD_FILENAME
-            )
+            # Review: code-reviewer Finding 1 (coordinatorcode-reviewer.
+            # aed918d6ef1f26b24.md) — this arm used to call
+            # `_read_agent_touch_record_as_legacy_lines` a SECOND time on
+            # the same sink_path, paying the exact
+            # `touch_record._read_stream_claims` decode cost the fold above
+            # (`attr_raw_lines`/`attr_read_degraded`) exists to eliminate.
+            # Reused here instead, mirroring Step 3's single-decode shape.
+            raw_lines, agent_touched_degraded = attr_raw_lines, attr_read_degraded
             if agent_touched_degraded:
                 if em_sid not in unreadable_other_sessions:
                     unreadable_other_sessions.append(em_sid)

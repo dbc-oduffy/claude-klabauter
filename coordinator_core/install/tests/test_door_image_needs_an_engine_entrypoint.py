@@ -248,3 +248,64 @@ def test_the_canonical_door_is_never_removed_as_stale(tmp_path):
 
     assert removed is None
     assert canonical.exists()
+
+
+def test_a_renamed_native_image_is_reaped_on_windows_not_only_posix(monkeypatch, tmp_path):
+    """Condition 0 (native-forwarder manifest match) must identify a native
+    image by the FILENAME it was written under, not by the bare name the
+    manifest records.
+
+    The defect this pins, measured live 2026-09-01: `native_written.add(f)`
+    stores the bare installed name while `named_forwarder_path` writes
+    `<f>.exe` on Windows, so `entry.name in native_forwarder_names` was
+    unsatisfiable there. The image then fell through to the text-marker
+    branch, whose `read_text()` raises `UnicodeDecodeError` on an opaque
+    binary and is silently skipped -- leaving every renamed-away native
+    launcher on a Windows box unsweepable by construction. Four survivors
+    were found on the reporting box, each an OSS-renamed name with a live
+    source-named counterpart (`check-claude-klabauter-doctor-sentinel.exe`,
+    `gen-claude-klabauter-root-pointer.exe`,
+    `remove-claude-klabauter-precommit-hook.exe`,
+    `probe-cwd-example-retrieval-repo-relevance.exe`).
+
+    POSIX passed throughout, because there `named_forwarder_path` adds no
+    suffix and the filename IS the bare name -- which is why the platform is
+    forced here rather than left to the host.
+    """
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.setattr(door_install.sys, "platform", "win32")
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+
+    # The manifest records the BARE name, exactly as the writer does.
+    substrate._write_native_forwarder_manifest(bin_dst, {"renamed-away-cli"})
+    stale = bin_dst / "renamed-away-cli.exe"
+    stale.write_bytes(b"MZ-an-opaque-native-image")
+
+    substrate._sweep_orphaned_agent_helpers(bin_dst, {}, {}, check_only=False)
+
+    assert not stale.exists()
+
+
+def test_a_native_image_this_run_still_writes_survives_the_sweep(monkeypatch, tmp_path):
+    """The other half, and the one that makes the fix safe: broadening
+    condition 0's identification must not broaden DELETION. Condition 2
+    (absence from this run's complete write set) still gates it, and a
+    door-eligible name's `.exe` reaches that gate via
+    `extra_protected_names`. Without this, the fix above would sweep every
+    native image on the same run that wrote it."""
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.setattr(door_install.sys, "platform", "win32")
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+
+    substrate._write_native_forwarder_manifest(bin_dst, {"still-installed-cli"})
+    live = bin_dst / "still-installed-cli.exe"
+    live.write_bytes(b"MZ-an-opaque-native-image")
+
+    substrate._sweep_orphaned_agent_helpers(
+        bin_dst, {}, {}, check_only=False,
+        extra_protected_names=frozenset({"still-installed-cli.exe"}),
+    )
+
+    assert live.exists()

@@ -552,6 +552,28 @@ _LESSON_BODY_FLAGS: tuple[tuple[str, str], ...] = (
 
 _LESSON_BODY_KEYS: frozenset[str] = frozenset(key for key, _flag in _LESSON_BODY_FLAGS)
 
+
+#: The title transport pair. `coordinator-lesson-add` requires EXACTLY ONE
+#: of `--title`/`--title-file`, so these are not facets: running them through
+#: the generic loop below would forward both halves of a mutually-exclusive
+#: pair over a REQUIRED field. Forwarded by `_lesson_title_args`.
+_LESSON_TITLE_FLAGS: tuple[tuple[str, str], ...] = (
+    ("title", "--title"),
+    ("title_file", "--title-file"),
+)
+
+_LESSON_TITLE_KEYS: frozenset[str] = frozenset(key for key, _flag in _LESSON_TITLE_FLAGS)
+
+#: The `why` transport pair. `--why-file` is a second body-shaped pair over an
+#: OPTIONAL facet, not a seventh facet: the CLI resolves the two through
+#: `resolve_optional_prose`, which refuses both at once.
+_LESSON_WHY_FLAGS: tuple[tuple[str, str], ...] = (
+    ("why", "--why"),
+    ("why_file", "--why-file"),
+)
+
+_LESSON_WHY_KEYS: frozenset[str] = frozenset(key for key, _flag in _LESSON_WHY_FLAGS)
+
 #: Optional `decisions["lessons"][n]` keys → the `coordinator-lesson-add` flag
 #: that carries them, in the order they are appended to the directive's argv.
 #: Every optional flag the CLI accepts appears here: a facet the EM composes but
@@ -559,9 +581,8 @@ _LESSON_BODY_KEYS: frozenset[str] = frozenset(key for key, _flag in _LESSON_BODY
 #: which is what forces an author to bypass the directive and hand-run the CLI.
 #: The body pair leads (its two keys are handled by `_lesson_body_args`, and
 #: the generic loop skips them via `_LESSON_BODY_KEYS`); the facets follow.
-_LESSON_OPTIONAL_FLAGS: tuple[tuple[str, str], ...] = _LESSON_BODY_FLAGS + (
+_LESSON_OPTIONAL_FLAGS: tuple[tuple[str, str], ...] = _LESSON_BODY_FLAGS + _LESSON_TITLE_FLAGS + _LESSON_WHY_FLAGS + (
     ("trigger", "--trigger"),
-    ("why", "--why"),
     ("how_to_apply", "--how-to-apply"),
     ("target_wiki", "--target-wiki"),
     ("proposed_target", "--proposed-target"),
@@ -686,6 +707,36 @@ def _spool_body_to_file(repo_root: Path, body: str) -> str:
     return str(path)
 
 
+def _lesson_title_args(idx: int, lesson: Mapping[str, Any]) -> list[str]:
+    """The two-element title transport for one lesson's argv — `--title` or
+    `--title-file`, never both, mirroring `_lesson_body_args`.
+
+    An explicit `title_file` wins and is forwarded verbatim. A title is one
+    line by contract, so a newline-bearing `title` refuses here with the
+    remedy named rather than composing argv `coordinator-lesson-add` is
+    certain to reject after the launcher has already truncated it."""
+    title_file = str(lesson.get("title_file") or "").strip()
+    if title_file:
+        return ["--title-file", title_file]
+    title = str(lesson["title"])
+    if "\n" in title:
+        raise ValueError(
+            f"decisions[{_KEY_LESSONS!r}][{idx}]['title'] carries a newline; a"
+            " title is one line. Supply 'title_file' instead."
+        )
+    return ["--title", title]
+
+
+def _lesson_why_args(lesson: Mapping[str, Any]) -> list[str]:
+    """`--why` or `--why-file`, never both — the CLI's `resolve_optional_
+    prose` refuses the pair. Absent on both keys, the facet is omitted."""
+    why_file = str(lesson.get("why_file") or "").strip()
+    if why_file:
+        return ["--why-file", why_file]
+    why = str(lesson.get("why") or "")
+    return ["--why", why] if why.strip() else []
+
+
 def _lesson_body_args(idx: int, lesson: Mapping[str, Any], repo_root: Optional[Path]) -> list[str]:
     """The two-element body transport for one lesson's `coordinator-lesson-add`
     argv — `--body` or `--body-file`, never both.
@@ -804,7 +855,15 @@ def _iter_capturable_lessons(
                 "apply -- this is a malformed decisions map, not a ceremony "
                 "failure, and nothing has been written."
             )
-        missing = [k for k in _LESSON_REQUIRED_KEYS if not str(lesson.get(k) or "").strip()]
+        # `title` is satisfied by either half of its transport pair: the CLI
+        # requires exactly one of `--title`/`--title-file`, so an entry
+        # carrying only `title_file` is complete, not missing a key.
+        missing = [
+            k
+            for k in _LESSON_REQUIRED_KEYS
+            if not str(lesson.get(k) or '').strip()
+            and not (k == 'title' and str(lesson.get('title_file') or '').strip())
+        ]
         if missing:
             raise ValueError(
                 f"decisions[{_KEY_LESSONS!r}][{idx}] is missing required "
@@ -896,16 +955,17 @@ def build_lesson_capture_directives(
     directives: list[dict[str, Any]] = []
     for idx, lesson, wants_queue in _iter_capturable_lessons(decisions):
         add_id = lesson_add_directive_id(idx)
-        add_args = ["--title", str(lesson["title"])]
+        add_args = _lesson_title_args(idx, lesson)
         add_args += _lesson_body_args(idx, lesson, repo_root)
         add_args += ["--scope", str(lesson["scope"])]
         for key, flag in _LESSON_OPTIONAL_FLAGS:
-            if key in _LESSON_BODY_KEYS:
+            if key in _LESSON_BODY_KEYS | _LESSON_TITLE_KEYS | _LESSON_WHY_KEYS:
                 continue
             value = lesson.get(key)
             if value in (None, ""):
                 continue
             add_args += [flag, str(value)]
+        add_args += _lesson_why_args(lesson)
         directives.append(_directive(add_id, "coordinator-lesson-add", add_args))
         if wants_queue:
             queue_args = ["--schema", "improvement-queue", "--queue-scope", "central"]

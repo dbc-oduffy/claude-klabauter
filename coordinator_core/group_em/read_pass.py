@@ -228,7 +228,12 @@ def caller_session_id(env: Optional[Mapping[str, str]] = None) -> Optional[str]:
     return env.get("CLAUDE_CODE_SESSION_ID")
 
 
-def fetch_live_agents(repo_root: str) -> list[dict[str, Any]]:
+def fetch_live_agents(
+    repo_root: str,
+    *,
+    raise_on_failure: bool = False,
+    raise_on_empty_snapshot: bool = False,
+) -> list[dict[str, Any]]:
     """Read the live, already-cwd-filtered peer roster fresh. Never cache.
 
     Sources `coordinator_core.session.peer_roster.build_roster(repo_root=...)`
@@ -250,8 +255,26 @@ def fetch_live_agents(repo_root: str) -> list[dict[str, Any]]:
     legitimate, quiet outcome, not a raised exception; `build_roster` itself
     already degrades to `[]` rather than raising, so no extra try/except is
     needed here.
+
+    `raise_on_failure` (default `False`, so every existing caller is
+    unchanged) forwards `build_roster`'s own already-reviewed escape hatch: a
+    caller that DIFFS two consecutive rosters cannot use the default. An
+    unreadable registry and a genuinely empty repo both answer `[]`, and a
+    differ handed the first one concludes that every peer it knew about has
+    gone -- one broken read, the whole fleet reported dead. `watch.gone` is
+    that caller. An empty snapshot and an empty cwd filter are still `[]`
+    under this flag; only the registry read itself and `self_record()` raise.
+
+    `raise_on_empty_snapshot` is the half that actually fires, and a differ
+    needs BOTH -- why: `coordinator_core.session.peer_roster.EmptySnapshotError`,
+    the fact's home. It is a box-wide count taken before the cwd filter: a
+    repo with no peers still answers a quiet `[]`.
     """
-    rows = peer_roster.build_roster(repo_root=repo_root)
+    rows = peer_roster.build_roster(
+        repo_root=repo_root,
+        raise_on_failure=raise_on_failure,
+        raise_on_empty_snapshot=raise_on_empty_snapshot,
+    )
     return [
         {
             "sessionId": row.session_id,
@@ -474,6 +497,7 @@ def classify_peer(
             "reason": "no-session-id",
             "candidate": False,
             "unclassifiable": False,
+            "contradicted": False,
             # Review: coordinator:code-reviewer (finding 1) -- `cwd` threaded
             # onto every verdict row so `send_pass._dwell_seconds` can use the
             # peer's own cwd (`peer.get("cwd") or repo_root`), matching this
@@ -581,6 +605,7 @@ def classify_peer(
                     ),
                     "candidate": False,
                     "unclassifiable": True,
+                    "contradicted": False,
                     "cwd": peer.get("cwd"),
                 }
 
@@ -591,6 +616,14 @@ def classify_peer(
             "reason": reason,
             "candidate": reader_verdict == STATE_PAUSED and not contradicted,
             "unclassifiable": False,
+            # Carried through so `send_pass` can emit a `suppressed` row for a
+            # contradicted peer instead of it vanishing at this filter --
+            # C4, state/dispatch-briefs/2026-09-01-the-crowns-standing-
+            # surfaces-report-themselves/C4.md. `reason` above already holds
+            # the gate name that excluded it (`live-busy-contradicts-paused`,
+            # `stale-snapshot-contradicts-paused`, `stale-snapshot-unresolved`)
+            # -- this flag is what lets `build_candidate_roster` keep the row.
+            "contradicted": contradicted,
             "cwd": peer.get("cwd"),
         }
 
@@ -642,6 +675,9 @@ def classify_peer(
         "reason": reason,
         "candidate": state == STATE_PAUSED,
         "unclassifiable": False,
+        # The fallback leg has no reader record to contradict -- never a
+        # contradicted row.
+        "contradicted": False,
         "cwd": peer.get("cwd"),
         # Review: coordinator:code-reviewer (P2, double read) -- this leg
         # already reduced the tail and derived the epoch; threading it onto the
@@ -667,15 +703,19 @@ def build_candidate_roster(
     Read-only end to end: enumerates via `fetch_live_agents` (or the injected
     `agents`, for tests), classifies each surviving peer, and returns the
     verdicts marked `candidate` UNION the verdicts marked `unclassifiable`
-    (defect 4: a stale, frozen PRODUCING reader verdict -- see
-    `classify_peer`'s reader leg). A plain `STATE_PRODUCING` or
-    `STATE_UNKNOWN` peer that classify_peer could NOT further distinguish is
-    still never included here, and the two rows are never folded into each
-    other -- callers branch on `candidate` to decide nudge eligibility and on
-    `unclassifiable` to decide whether "no row for this peer" would have been
-    a silent drop rather than a genuine all-clear. This is a candidate list
-    for a human to adjudicate, not a filtered verdict about who "shouldn't"
-    be paused.
+    UNION the verdicts marked `contradicted` (defect 4: a stale, frozen
+    PRODUCING reader verdict -- see `classify_peer`'s reader leg; C4,
+    state/dispatch-briefs/2026-09-01-the-crowns-standing-surfaces-report-
+    themselves/C4.md: a `PAUSED` verdict the live status or transcript
+    contradicts). A plain `STATE_PRODUCING` or `STATE_UNKNOWN` peer that
+    classify_peer could NOT further distinguish is still never included
+    here, and the three rows are never folded into each other -- callers
+    branch on `candidate` to decide nudge eligibility, on `unclassifiable`
+    to decide whether "no row for this peer" would have been a silent drop
+    rather than a genuine all-clear, and on `contradicted` so `send_pass`
+    can report an upstream exclusion instead of it vanishing with no trace.
+    This is a candidate list for a human to adjudicate, not a filtered
+    verdict about who "shouldn't" be paused.
     """
     if agents is None:
         agents = fetch_live_agents(repo_root)
@@ -689,5 +729,5 @@ def build_candidate_roster(
     return [
         verdict
         for verdict in verdicts
-        if verdict["candidate"] or verdict.get("unclassifiable")
+        if verdict["candidate"] or verdict.get("unclassifiable") or verdict.get("contradicted")
     ]

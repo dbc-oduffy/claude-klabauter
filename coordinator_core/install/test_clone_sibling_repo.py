@@ -87,19 +87,51 @@ def test_second_invocation_is_a_safe_no_op(tmp_path):
     assert marker.stat().st_mtime == original_mtime
 
 
-def test_already_present_short_circuit_spawns_no_subprocess(tmp_path, monkeypatch):
-    """The already-present branch must never invoke git at all."""
-    target = tmp_path / "existing"
-    (target / ".git").mkdir(parents=True)
+def _make_existing_clone(tmp_path: Path, remote_url: str, name: str = "existing") -> Path:
+    """A target dir with a genuine `.git` directory and `origin` set to
+    `remote_url` — simulates an already-cloned target for the already-present
+    branch, distinct from `_make_source_repo`'s role as the clone source."""
+    target = tmp_path / name
+    target.mkdir()
+    _run_git(["init"], cwd=target)
+    _run_git(["remote", "add", "origin", remote_url], cwd=target)
+    return target
 
-    def _boom(*args, **kwargs):
-        raise AssertionError("subprocess.run must not be called on the already-present path")
 
-    monkeypatch.setattr(subprocess, "run", _boom)
+def test_already_present_with_matching_remote_short_circuits(tmp_path):
+    """AC — the already-present branch adopts the target only after
+    confirming its `origin` remote matches `repo_url`."""
+    target = _make_existing_clone(tmp_path, "https://example.invalid/repo.git")
 
     result = clone_idempotent("https://example.invalid/repo.git", str(target))
 
     assert result == {"cloned": False, "already_present": True, "path": str(target)}
+
+
+def test_already_present_remote_url_normalizes_trailing_git_and_slash(tmp_path):
+    target = _make_existing_clone(tmp_path, "https://example.invalid/repo.git")
+
+    result = clone_idempotent("https://example.invalid/repo/", str(target))
+
+    assert result == {"cloned": False, "already_present": True, "path": str(target)}
+
+
+def test_already_present_with_mismatched_remote_raises_loudly(tmp_path):
+    """AC — a `.git` directory whose `origin` points elsewhere is refused,
+    not silently adopted (the C10 wrong-repo hazard)."""
+    target = _make_existing_clone(tmp_path, "https://example.invalid/wrong-repo.git")
+
+    with pytest.raises(CloneSiblingRepoError):
+        clone_idempotent("https://example.invalid/right-repo.git", str(target))
+
+
+def test_already_present_with_no_origin_remote_raises_loudly(tmp_path):
+    target = tmp_path / "existing-no-remote"
+    target.mkdir()
+    _run_git(["init"], cwd=target)
+
+    with pytest.raises(CloneSiblingRepoError):
+        clone_idempotent("https://example.invalid/repo.git", str(target))
 
 
 def test_clone_failure_raises_clone_sibling_repo_error(tmp_path):
@@ -177,8 +209,7 @@ def test_journal_records_fresh_clone(tmp_path, _journal_env):
 
 
 def test_journal_records_already_present_target(tmp_path, _journal_env):
-    target = tmp_path / "existing"
-    (target / ".git").mkdir(parents=True)
+    target = _make_existing_clone(tmp_path, "https://example.invalid/repo.git")
 
     clone_idempotent("https://example.invalid/repo.git", str(target))
 

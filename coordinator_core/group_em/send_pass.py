@@ -17,6 +17,19 @@ clear it; a module that sent anyway would clear a gate it cannot evaluate.
 **The roster is the population** -- `read_pass` bounds it, a human adjudicates
 it. This module adds throttling and the gate, never another filter.
 
+**A contradicted peer is reported, not dropped** (C4, state/dispatch-briefs/
+2026-09-01-the-crowns-standing-surfaces-report-themselves/C4.md). `read_pass`
+now carries a `contradicted: True` peer (a `PAUSED` verdict the live status or
+a stale-snapshot check contradicted) into the roster instead of silently
+excluding it; `send_suppression_reason` labels it `"contradicted"` ahead of
+the generic `"not-a-candidate"`, and its `suppressed` row's `reason` is the
+same gate name `read_pass` already computed (`live-busy-contradicts-paused`,
+`stale-snapshot-contradicts-paused`, `stale-snapshot-unresolved`) -- never a
+second vocabulary for the same fact. Before this, "nothing needed offering"
+and "every peer was pruned one stage earlier" rendered identically: the
+digest's two counts (`entries` + `suppressed`) undercounted the population
+`read_pass.classify_peer` actually classified.
+
 **The obligation ledger ranks; it does not admit.** An undischarged, unfired
 record orders the digest most-owed-first. `None` means no ledger exists at all
 -- a producer coverage gap, never evidence the peer owes nothing, and never
@@ -239,7 +252,19 @@ def send_suppression_reason(verdict: dict[str, Any]) -> Optional[str]:
     pins bind what entries actually have. Doubles as the `suppressed[].why`
     label. Takes no clock and no obligation count -- the ledger ranks, never
     admits. Fails closed on every unrecognised shape.
+
+    `contradicted` is checked first and labelled distinctly from
+    `not-a-candidate` (C4, state/dispatch-briefs/2026-09-01-the-crowns-
+    standing-surfaces-report-themselves/C4.md): `read_pass.classify_peer`
+    reports a PAUSED verdict the live status or transcript contradicted as
+    `candidate: False, contradicted: True` rather than dropping it, so this
+    module must not collapse it into the same generic label an ordinary
+    non-candidate gets -- the whole point is that "nothing needed offering"
+    and "this peer was excluded one stage earlier" read differently in
+    `suppressed`.
     """
+    if verdict.get("contradicted"):
+        return "contradicted"
     if not verdict.get("candidate"):
         return "not-a-candidate"
     reason = verdict.get("reason")

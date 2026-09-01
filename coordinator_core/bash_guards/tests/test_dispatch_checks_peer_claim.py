@@ -233,20 +233,38 @@ class TestWriterNameBudgetBoundary:
         budget-length assertions) by
         ``test_all_six_owner_classes_render_name_and_verdict_intact``;
         duplicating them here added no coverage (Review:
-        overengineering-reviewer). These two classes keep fix 2's
-        truncate-the-name-tail behavior, unchanged here.
+        overengineering-reviewer).
+
+        The verdict and name assertions below are NOT decoration, and this
+        docstring used to claim them while the body checked neither. Both
+        classes were measured emitting the opposite: ``agent-race``'s base
+        sentence ran 117 bytes against the ~73-byte budget BEFORE any name,
+        so its ``CONTESTED`` verdict was truncated away on every call, named
+        or unnamed; ``unreadable`` emitted a ``-- w:proj…`` fragment that
+        still tripped ``_owner_name_provenance_note``'s ``" -- w:"``
+        trigger, firing a staleness warning beside an unreadable name. Both
+        passed every assertion this test then made. Do not weaken these back
+        to an id-substitution check.
         """
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
         cases = [
-            OwnerFact(REAL_SID_3, "undetermined", "agent-race", REAL_NAME),
-            OwnerFact(REAL_SID_2, "undetermined", "unreadable", REAL_NAME),
+            (OwnerFact(REAL_SID_3, "undetermined", "agent-race", REAL_NAME), "CONTESTED"),
+            (OwnerFact(REAL_SID_2, "undetermined", "unreadable", REAL_NAME), "unreadable"),
         ]
-        for fact in cases:
+        for fact, verdict in cases:
             sentence = dispatch_checks._format_owner_sentence(fact, {})
             assert fact.owner[:8] in sentence, sentence
             assert fact.owner not in sentence, sentence
+            # The load-bearing verdict survives the budget, always.
+            assert verdict in sentence, (fact.claim_source, sentence)
+            # And so does the whole name -- never a `w:proj…` fragment.
+            assert REAL_NAME in sentence, (fact.claim_source, sentence)
+            assert "…" not in sentence, (fact.claim_source, sentence)
+            assert len(sentence.encode("utf-8")) <= (
+                dispatch_checks._owner_clause_budget_bytes()
+            ), (fact.claim_source, sentence)
 
     def test_all_six_owner_classes_render_name_and_verdict_intact(
         self, monkeypatch

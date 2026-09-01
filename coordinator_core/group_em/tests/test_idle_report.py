@@ -357,6 +357,51 @@ def test_no_named_move_asks_which_it_is(tmp_path, projects_dir, now):
     assert row["nudge-shape"] == idle_report.SHAPE_ASK
 
 
+def test_peer_blocked_wait_holds_not_asks(tmp_path, projects_dir, now):
+    """C3(a): `_NAMED_REASON`'s vocabulary was entirely PM-centric, so a session
+    blocked on a PEER scored `named_reason=False` and `_nudge_shape` degraded it
+    to `ask` instead of `hold`. This is the real 2026-09-01 sentence that missed
+    every PM-shaped arm. A false negative here pushes a session that had
+    correctly stopped -- the harm that does not undo."""
+    _write(projects_dir, "9999aaaa-x", [
+        _said(
+            "Nothing pending on my side. The first end-to-end call is still "
+            "the one thing neither of us can test until their half lands, "
+            "and they'll ping when it has.",
+            40, now,
+        )
+    ], mtime_minutes_ago=40, now=now)
+    row = _row(_report(tmp_path, projects_dir, now,
+                       names={"9999aaaa-x": "claude-klabauter-a9"}), "9999aaaa")
+    assert row["nudge-shape"] == idle_report.SHAPE_HOLD
+
+
+def test_present_participle_next_move_is_found(tmp_path, projects_dir, now):
+    """C3(b): `_NEXT_MOVE`'s six-alternative whitelist missed the two most
+    ordinary phrasings. Verified 2026-09-01: "Checking the rule next" (the
+    present-participle statement) matched nothing before this arm."""
+    _write(projects_dir, "8888aaaa-x", [
+        _said("Checking the rule next.", 40, now)
+    ], mtime_minutes_ago=40, now=now)
+    row = _row(_report(tmp_path, projects_dir, now,
+                       names={"8888aaaa-x": "claude-klabauter-a9"}), "8888aaaa")
+    assert row["named-next-move"]
+    assert row["nudge-shape"] == idle_report.SHAPE_PUSH
+
+
+def test_plain_modal_contraction_next_move_is_found(tmp_path, projects_dir, now):
+    """C3(b): the contraction arm required `now|next|run|dispatch|start` after
+    `I'll`, so the ordinary "I'll check the rule" matched nothing. The plain
+    modal now matches any verb."""
+    _write(projects_dir, "7777aaaa-x", [
+        _said("I'll check the rule.", 40, now)
+    ], mtime_minutes_ago=40, now=now)
+    row = _row(_report(tmp_path, projects_dir, now,
+                       names={"7777aaaa-x": "claude-klabauter-a9"}), "7777aaaa")
+    assert row["named-next-move"]
+    assert row["nudge-shape"] == idle_report.SHAPE_PUSH
+
+
 def test_last_said_is_capped_at_the_emitting_end(tmp_path, projects_dir, now):
     """An uncapped field puts the token cost straight back into the agent's
     context, which is the whole thing this instrument removes."""

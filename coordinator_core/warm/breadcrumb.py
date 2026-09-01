@@ -96,6 +96,14 @@ __all__ = [
     "boot_lock_path",
     "try_claim_boot",
     "should_spawn_decision",
+    "CAUSE_RECORD_PRESENT",
+    "CAUSE_RECORD_ABSENT",
+    "CAUSE_RECORD_UNREADABLE",
+    "CAUSE_RECORD_UNPARSEABLE",
+    "CAUSE_RECORD_MALFORMED",
+    "READ_CAUSES",
+    "READ_RETRY_BUDGET_SECS",
+    "read_record_with_cause",
 ]
 
 # The old `client.START_DEADLINE` value, reused for a different job now
@@ -476,6 +484,98 @@ def _unix_socket_is_alive(
         return True
     except Exception:
         return True
+
+
+#: Why a discovery-record read produced no record. The distinctions
+#: `read_record_with_cause`'s control flow already draws, named so they
+#: survive the return instead of collapsing into a single `None`.
+CAUSE_RECORD_PRESENT = "record_present"
+CAUSE_RECORD_ABSENT = "record_absent"
+CAUSE_RECORD_UNREADABLE = "record_unreadable"
+CAUSE_RECORD_UNPARSEABLE = "record_unparseable"
+CAUSE_RECORD_MALFORMED = "record_malformed"
+
+READ_CAUSES = frozenset(
+    {
+        CAUSE_RECORD_PRESENT,
+        CAUSE_RECORD_ABSENT,
+        CAUSE_RECORD_UNREADABLE,
+        CAUSE_RECORD_UNPARSEABLE,
+        CAUSE_RECORD_MALFORMED,
+    }
+)
+
+#: The reader's budget, far smaller than any writer's: it sits on the hook
+#: path, so a contended read must resolve in single-digit milliseconds or
+#: give up and let the caller fall open. Covers one rename, not one write.
+READ_RETRY_BUDGET_SECS = 0.05
+READ_RETRY_SLEEP_SECS = 0.001
+
+
+def read_record_with_cause(path: Path) -> "tuple[Optional[dict], str]":
+    """Read one JSON discovery record, returning it AND why, when there is
+    none to return.
+
+    ONE READER FOR BOTH HTTP TRANSPORTS. `supervisor` and `front_door` each
+    carried a byte-identical copy of this body, differing only in which
+    `discovery_path` they called -- the same triplication C4 retired for
+    `should_spawn`, and retired here for the same reason: each publishes a
+    DISTINCT record, which justifies distinct paths, never distinct
+    algorithms. The path is the parameter; the retry policy is not.
+
+    WHY THE CAUSE IS RETURNED AT ALL. This control flow already tells "no
+    listener ever published here" apart from "a rename beat me to the open"
+    apart from "I read a half-written record" apart from "valid JSON, but not
+    an object" -- and a bare `return None` throws all four away one frame
+    below. Downstream that single bit became DoE's forwarder's `no_backend`
+    counter, which is why the 2026-09-01 incident (~38 minutes of no-backend
+    against a listener answering 200 on the port its own record named) could
+    not diagnose itself from its own dial file.
+
+    RETRIES ONLY ON FAILURE, so the happy path pays NOTHING -- a first read
+    that parses returns immediately. A missing file is NOT retried:
+    `FileNotFoundError` is a real answer available now, and spinning on it
+    would put the retry cost on the genuinely-cold path where it buys
+    nothing. Only a contended read and a torn parse are retried.
+
+    Never raises: every caller must treat a `None` record as "no
+    information", never as an error -- `read_breadcrumb`'s HINT contract,
+    unchanged.
+    """
+    deadline: Optional[float] = None
+    last_cause = CAUSE_RECORD_UNREADABLE
+    while True:
+        retryable = False
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None, CAUSE_RECORD_ABSENT
+        except OSError:
+            retryable = True
+            last_cause = CAUSE_RECORD_UNREADABLE
+            text = ""
+        if not retryable:
+            try:
+                record = json.loads(text)
+            except json.JSONDecodeError:
+                retryable = True
+                last_cause = CAUSE_RECORD_UNPARSEABLE
+                record = None
+            if not retryable:
+                if isinstance(record, dict):
+                    return record, CAUSE_RECORD_PRESENT
+                # Parsed, but not an object. Distinct from a torn read:
+                # retrying cannot help, because this is what the writer wrote.
+                return None, CAUSE_RECORD_MALFORMED
+
+        # Fail OPEN once the budget is spent -- a caller that cannot read the
+        # record must be told "no information", never made to wait or raise.
+        now = time.monotonic()
+        if deadline is None:
+            deadline = now + READ_RETRY_BUDGET_SECS
+        elif now >= deadline:
+            return None, last_cause
+        time.sleep(READ_RETRY_SLEEP_SECS)
 
 
 def boot_lock_path(record_path: Path) -> Path:

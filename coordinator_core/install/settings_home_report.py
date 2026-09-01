@@ -167,11 +167,21 @@ _FIXED_MEMBERS: tuple[tuple[str, str, str, str, bool], ...] = (
         True,
     ),
     (
-        "machine-local/.claude-klabauter-live-root (fail-loud rung-2 pointer)",
+        # Advisory, not required: engine_root.py rung 1.5 (:19-21, :173-186)
+        # treats this file's absence as a normal fallback, never an error --
+        # it is a zero-spawn perf cache for claude-klabauter's OWN root, not a location
+        # carrier (that job moved to repos.claude_klabauter per the
+        # 2026-08-05 ruling). Marking it required=True here FAILed on every
+        # box installed by the documented OSS path (scripts/setup.py never
+        # populates it -- only maximalist.py Step 3.5a.1b's
+        # gen-claude-klabauter-root-pointer.py does). Demoted to match rung 1.5's own
+        # contract (C5, 2026-09-01; ledger items 9 and 13, F-023).
+        "machine-local/.claude-klabauter-live-root (optional rung-1.5 perf cache; absence is normal)",
         "machine-local/.claude-klabauter-live-root",
         "file",
-        "DoE docs/install/AGENT.md § Fail-loud claude-klabauter resolution, rung 2",
-        True,
+        "DoE docs/install/AGENT.md § Fail-loud claude-klabauter resolution, rung 2; "
+        "claude-klabauter coordinator_core/engine_root.py rung 1.5 (absence is a normal fallback)",
+        False,
     ),
     (
         f"bin/{_RM_FAMILY_FILES[0]} (resolution shim every forwarder imports)",

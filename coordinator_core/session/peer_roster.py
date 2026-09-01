@@ -35,6 +35,33 @@ from coordinator_core.session import harness_registry
 from coordinator_core.session import reachability
 
 
+class EmptySnapshotError(RuntimeError):
+    """The registry answered with no records at all, box-wide.
+
+    Raised only when a caller opts in via `build_roster(...,
+    raise_on_empty_snapshot=True)`. Separate from `raise_on_failure` because
+    it is a separate claim: that flag re-raises an exception, and
+    `harness_registry.snapshot()` structurally cannot produce one -- it
+    catches every internal failure at its own boundary, including a registry
+    directory that is absent or not a directory, and answers `{}`. So the
+    read failure that actually happens on this box arrives as an empty dict,
+    and a caller that only re-raises exceptions never sees it.
+
+    WHY EMPTY IS A FAILED READ, NOT AN OBSERVATION. `snapshot()` includes
+    the CALLING session's own record (`build_roster`'s Self-handling note,
+    verified live 2026-08-13). A process running under the harness is
+    therefore always at least one record, and zero box-wide means the scan
+    found nothing where it must have found the caller -- an unresolvable or
+    empty registry directory, not an empty box. This is a box-wide count
+    taken BEFORE any cwd filter, so it never confuses "no peers in this
+    repo" (a legitimate, quiet `[]`) with "no sessions on this machine".
+
+    A caller running OUTSIDE the harness has no record of its own and could
+    in principle see a genuinely empty box. Raising is still the right
+    answer there: a box with zero sessions has nobody to read the result.
+    """
+
+
 @dataclass(frozen=True)
 class PeerRow:
     """One live session, filtered into the roster and resolved to its own
@@ -130,7 +157,10 @@ def _cwd_within_repo(cwd: Optional[str], repo_root: str) -> bool:
 
 
 def build_roster(
-    repo_root: Optional[str] = None, *, raise_on_failure: bool = False
+    repo_root: Optional[str] = None,
+    *,
+    raise_on_failure: bool = False,
+    raise_on_empty_snapshot: bool = False,
 ) -> List[PeerRow]:
     """Return every live session whose `cwd` is within `repo_root`.
 
@@ -207,6 +237,19 @@ def build_roster(
     the field from; this mirrors the existing degrade-to-`[]` contract and is
     not a new gap this change introduces.
 
+    BOTH LEGS `raise_on_failure` RE-RAISES ARE INERT AGAINST TODAY'S
+    `harness_registry` (review-integrator, per overengineering-reviewer
+    dispatch, verified against source rather than taken from the finding as
+    given -- the finding itself claimed the opposite and was not applied).
+    `harness_registry.snapshot()` (`harness_registry.py:552`) and
+    `harness_registry.self_record()` (`harness_registry.py:624`) each end in
+    a blanket `except Exception: return {}` / `return None` by explicit
+    contract, so neither can produce the exception this flag re-raises; a
+    caller relying on `raise_on_failure` to see a registry outage will not.
+    Left in place rather than deleted (pre-existing signature;
+    `coordinator/bin/session-reachability-cli.py`'s exit-code table depends
+    on it) -- do not re-derive this by reading the call site alone next time.
+
     `raise_on_failure` (default `False`, additive/backward-compatible --
     every existing caller, e.g. `coordinator_core.ops.session_peer_roster`'s
     op veneer, is unaffected and keeps the original never-raise degrade)
@@ -224,6 +267,13 @@ def build_roster(
     empty-roster path (an empty snapshot, or a snapshot with no row inside
     `repo_root`) still returns `[]` exactly as before -- those are not
     failures.
+
+    `raise_on_empty_snapshot` (default `False`, additive, independent of the
+    flag above) raises `EmptySnapshotError` when the box-wide snapshot has NO
+    records -- a separate flag because it is a separate claim from
+    `raise_on_failure`; full incident and rationale at `EmptySnapshotError`,
+    the fact's home. The check runs BEFORE the cwd filter, so a repo with no
+    peers still returns a quiet `[]` under this flag, exactly as before.
     """
     try:
         snapshot = harness_registry.snapshot()
@@ -233,6 +283,12 @@ def build_roster(
         return []
 
     if not snapshot:
+        if raise_on_empty_snapshot:
+            raise EmptySnapshotError(
+                "harness registry snapshot is empty box-wide; the calling session's "
+                "own record must appear in it, so this is a failed read, not an "
+                "empty box"
+            )
         return []
 
     effective_root = repo_root if repo_root else os.getcwd()

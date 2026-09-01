@@ -79,6 +79,20 @@ def resolve_name(
     renderers carry that discipline; this function only decides which rung
     answered and why, never how to print it.
     """
+    # Review: coordinator:code-reviewer -- bare truthiness here is safe, not
+    # accidental: both `recorded_name` (via touch_record.TouchEvent.name,
+    # written from harness_registry.self_record()) and `live_name` below (via
+    # harness_registry.lookup()) are normalized at the SAME upstream boundary,
+    # harness_registry._parse_one's `raw_name if isinstance(raw_name, str) and
+    # raw_name else None` -- an empty registry name already collapses to
+    # `None` there, and touch_record.encode_line omits the "name" key
+    # entirely when `None`, so a decoded value reaching this function is
+    # never `""`, only `None` or a genuine non-empty string. `if x:` and `if
+    # x is not None:` are therefore equivalent on both inputs today; verified
+    # 2026-09-01 (slice D integration) by tracing both call paths, not
+    # assumed. If a future writer ever bypasses that boundary and stores an
+    # explicit "", these checks would silently treat it as absent -- worth
+    # re-checking this comment against the writer side before trusting it.
     if recorded_name:
         return recorded_name, RUNG_RECORDED, None
 

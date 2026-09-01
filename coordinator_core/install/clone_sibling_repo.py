@@ -43,6 +43,19 @@ wiring that resolution is the composing caller's concern, not this
 primitive's (a hardcoded fallback here would be exactly the "silent
 wrong-repo hazard" DEC-4's spirit warns against).
 
+Adopted-clone identity check (chunk C10, `2026-09-01-the-dogfooded-install-
+stops-lying-about`): a `.git` directory being present at `target_dir` is
+NOT, by itself, proof it is a clone of `repo_url` — on a box with several
+sibling checkouts (the layout the engine's own sibling-default assumes,
+`setup.py:1879`), the already-present branch would otherwise silently adopt
+whatever unrelated repo happens to sit at that path. Before short-circuiting,
+this module now runs `git remote get-url origin` against the target and
+compares it (after stripping a trailing `/` and `.git` suffix from both
+sides) to the caller-supplied `repo_url`. A missing `origin` remote or a
+mismatched URL raises `CloneSiblingRepoError` loudly rather than adopting —
+this is a clone-identity check, not a network operation (`get-url` reads
+local config only, no fetch/pull is issued).
+
 Self-registration: importing this module calls
 `register_op("install.clone_idempotent", ...)` as a side-effect (same
 pattern as `ops/ping.py`). Already wired into
@@ -130,7 +143,36 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 
 class CloneSiblingRepoError(RuntimeError):
     """Raised when `git clone` itself fails (non-zero exit, or the `git`
-    executable is not resolvable on PATH)."""
+    executable is not resolvable on PATH), or when an already-present
+    target's `origin` remote does not match the caller-supplied `repo_url`
+    (adopted-clone identity check, see module docstring)."""
+
+
+def _normalize_repo_url(url: str) -> str:
+    """Strip a trailing `/` and `.git` suffix so equivalent spellings of the
+    same remote (`.../repo`, `.../repo/`, `.../repo.git`) compare equal."""
+    normalized = url.strip().rstrip("/")
+    if normalized.endswith(".git"):
+        normalized = normalized[: -len(".git")]
+    return normalized
+
+
+def _existing_origin_url(target: Path) -> Optional[str]:
+    """Read `origin`'s remote URL from an already-present `target` via
+    `git remote get-url origin` — a local-config read, no network fetch.
+    Returns ``None`` if `origin` is unset or the command otherwise fails."""
+    result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=str(target),
+        capture_output=True,
+        text=True,
+        timeout=_CLONE_TIMEOUT_SECS,
+        check=False,
+        **no_console_creationflags(),
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
 
 
 def clone_idempotent(repo_url: str, target_dir: str) -> dict:
@@ -154,9 +196,24 @@ def clone_idempotent(repo_url: str, target_dir: str) -> dict:
     target = normalize_native_path(target_dir)
 
     if (target / ".git").is_dir():
-        # Already present is a genuine, confirmed on-disk fact — the target
-        # repo exists at this path, whether this run cloned it or a prior
-        # one did.
+        # Already present is only a genuine, confirmed on-disk fact once its
+        # `origin` remote is verified to be `repo_url` — a bare `.git`
+        # directory is not proof of which repo it is (see module docstring's
+        # "Adopted-clone identity check" note). Refuse loudly rather than
+        # silently adopting an unrelated sibling checkout.
+        actual_url = _existing_origin_url(target)
+        if actual_url is None:
+            raise CloneSiblingRepoError(
+                f"install.clone_idempotent: {target} already has a .git "
+                f"directory but its 'origin' remote could not be determined "
+                f"— refusing to adopt an unverified clone"
+            )
+        if _normalize_repo_url(actual_url) != _normalize_repo_url(repo_url):
+            raise CloneSiblingRepoError(
+                f"install.clone_idempotent: refusing to adopt {target} — its "
+                f"'origin' remote is {actual_url!r}, not the expected "
+                f"{repo_url!r}"
+            )
         _record_resolution(
             _TARGET_CLAUSE_INDEX, (WriteSurfaceEntry(kind="file-path", path=str(target)),)
         )

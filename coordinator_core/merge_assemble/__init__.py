@@ -558,7 +558,23 @@ def build_directives(
     same narrated-no-op shape `d0` already uses — `apply()`'s
     `_fill_gate_verdicts` reads that `skipped_reason` to report
     `gates["portability_sweep"] = "unavailable"`, distinct from both
-    `"passed"` and `"failed"`."""
+    `"passed"` and `"failed"`.
+
+    **`d7` is a deferred narrated no-op, never an apply-time dispatch.**
+    `merge-release-notes-derive flip-tags` takes four required positionals
+    (`release_tag_cut merge_sha merge_date entry_paths...`); three of them
+    are facts about a merge commit that does not exist yet — `apply()` runs
+    at SKILL.md Step 3, before the PR is created, and the flip is Step 10.
+    Dispatching it here spent every run on `exited 2` (argparse usage
+    error) and, because the failure is a raised handler, returned
+    `APPLY_EXIT_PARTIAL_MUTATION` and abandoned `d8`/`d_grant_handback` —
+    the same argument-underfill shape as the D4 defect above, one directive
+    later. It therefore lands `already_satisfied` with a `skipped_reason`
+    naming the post-merge invocation, the same narrated-no-op shape `d0`
+    and `d5` use. `depends_on: ["d2"]` is retained: it is the true ordering
+    edge, and `apply_base.execute_directives` now propagates a
+    judgment-block through it rather than firing a dependent whose
+    dependency never landed."""
     cut_tag = proposed_tag or f"{tag_prefix}0.0.0"
     if release_notes_text is None:
         release_notes_text = f"Release {cut_tag}."
@@ -647,7 +663,15 @@ def build_directives(
             "cli": "merge-release-notes-derive",
             "args": ["flip-tags", cut_tag],
             "depends_on": ["d2"],
-            "already_satisfied": False,
+            "already_satisfied": True,
+            "skipped_reason": (
+                "completion-log tag flip is a POST-merge step (SKILL.md Step 10) — "
+                "`merge-release-notes-derive flip-tags` requires the merge SHA, merge "
+                "date, and entry paths, none of which exist at apply time, which runs "
+                "before the PR is even created. Run it directly once the merge commit "
+                "exists: `merge-release-notes-derive flip-tags "
+                f"{cut_tag} <merge_sha> <merge_date> <entry_paths...>`"
+            ),
         },
         {
             "id": "d8",

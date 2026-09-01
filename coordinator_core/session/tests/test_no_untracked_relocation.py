@@ -164,6 +164,27 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
         "move does (A stays claimed, B reads 'untouched by this session'); "
         "allow-listing it is mandatory, not an oversight -- this guard must "
         "not break the test that proves why it exists",
+    ("coordinator_core", "baton_assemble/tests/test_plan_stamp_carry.py", "test_governing_plan_follows_a_plan_archived_out_from_under_the_session", "Path.rename", "(repo / plan_rel).rename(repo / archived_rel)", 1):
+        "NOTHING TO STRAND: the moved path carries no T-claim. This fixture "
+        "writes the plan with `_write_artifact` and claims it with "
+        "`session_claims.claim_plan` -- a PLAN claim, keyed by slug -- and "
+        "never touch-claims it. `relocate_touched_path` re-declares T-claims "
+        "only, so on this path it would be a plain `shutil.move` with the "
+        "bookkeeping arm inert. Same class as the atomic tmp->final entries "
+        "below, which are allow-listed on exactly this ground, and as the "
+        "characterization entry above: a raw move on purpose. "
+        "AN EARLIER VERSION OF THIS ENTRY GAVE THE WRONG REASON -- that the "
+        "helper 'would re-declare the claim onto the destination' and defeat "
+        "the test. It would not: `claimed_plan._resolve_plan_slug_path`'s own "
+        "docstring says the claim store records a SLUG, never a location, and "
+        "resolves the path fresh from disk each call, so no claim anywhere "
+        "names a location to go stale. Corrected 2026-09-01 by "
+        "claude-klabauter-c0 after a review-integrator caught it; a "
+        "code-reviewer had endorsed the wrong reason. Recorded rather than "
+        "silently rewritten because an allow-list entry is only as good as "
+        "its reason -- a plausible wrong one is what makes the next reader "
+        "re-derive or 'fix' it. Landed red at `12a77cd37d`; allow-listed "
+        "rather than migrated, because the call site is correct",
 
     # --- C3's no-strand classification: atomic tmp->final writes, where the ---
     # --- temp source was never claimed, so there is nothing to strand.     ---

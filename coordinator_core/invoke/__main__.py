@@ -1030,13 +1030,34 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                         # then draw the same wrong conclusion from. A REPORTED
                         # ELAPSED WAIT IS NOT AN ETA: it says what this call
                         # spent, never what the next one will.
+                        # The `waited == 0` branch must not read as a knob the
+                        # reader can turn. `_wait_for_warm_boot` returns exactly
+                        # 0.0 only from its `deadline_secs <= 0` early return, so
+                        # this branch does mean the wait is off -- but a CLI
+                        # caller who then sets `COORDINATOR_WARM_BOOT_WAIT_SECS`
+                        # in their own shell sees the identical message again,
+                        # because the value comes from the process this door
+                        # runs in, not from theirs. Measured 2026-09-01: set to
+                        # 20 in the calling shell, five consecutive failures all
+                        # still reported it as 0.
+                        #
+                        # Only HOOK-spawned children are supposed to pass 0 (see
+                        # `WARM_BOOT_WAIT_SECS` -- hooks fire on the commit hot
+                        # path and must never sleep). This is the op/CLI door,
+                        # where the wait is meant to apply, so 0 arriving HERE is
+                        # itself the thing to investigate. Say where to look
+                        # rather than naming a variable the reader will set with
+                        # no effect.
                         waited_clause = (
                             f"this call waited {waited:.1f}s without the warm server "
                             "accepting connections"
                             if waited > 0
-                            else "the bounded boot wait is switched off "
+                            else "the bounded boot wait is off in this process "
                             "(COORDINATOR_WARM_BOOT_WAIT_SECS=0), so this call did not "
-                            "wait for it"
+                            "wait for the respawn it just triggered -- setting that "
+                            "variable in your own shell will NOT change this, and a "
+                            "CLI door reaching this branch means whatever launched "
+                            "this process set it, which only hook children should"
                         )
                         # The remedy half is not decoration. This message named
                         # a defect and then told the reader only what NOT to do
@@ -1055,6 +1076,28 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                         # a server that never accepts a connection is the
                         # crash-loop case, which is why the two are given
                         # separately rather than as one instruction.
+                        #
+                        # BUT IT IS NO LONGER RUNG 2, AND THE WEDGED CLAIM IS NO
+                        # LONGER ASSERTED. This message used to state outright
+                        # that a repeat meant "the server is wedged or
+                        # crash-looping" and hand the reader a shared-engine
+                        # restart. That diagnosis is not established by anything
+                        # this process can see: it observes only that ITS OWN
+                        # dispatch did not land. Measured 2026-09-01, session
+                        # 9b6b537a: five consecutive failures of one command
+                        # while peers committed successfully through the same
+                        # route in the same minutes, and while that caller's very
+                        # next command succeeded. The server was serving the
+                        # whole time. A caller following the old rung 2 would
+                        # have bounced a healthy engine ~50 sessions share and
+                        # paid the succession window in
+                        # docs/problems/2026-09-01-forwarder-no-backend-denies.md.
+                        #
+                        # So: state what is observed, give the discriminator that
+                        # separates a dead server from a local fault, and gate
+                        # the hatch behind it. A message that manufactures a
+                        # disruptive action against shared infrastructure is
+                        # worse than one that stops at the evidence.
                         _fatal_stderr(
                             "warm dispatch unavailable and cold fallback is disabled "
                             f"(no live ops without warm). A respawn was triggered and "
@@ -1062,11 +1105,20 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                             "the engine is budgeted in hundreds of milliseconds.\n"
                             "Re-issue this same command once -- the respawn already in "
                             "flight normally answers the next call.\n"
-                            "If it fails the same way again, the server is wedged or "
-                            "crash-looping: run `warm-engine-stop` (the operator hatch "
-                            "for a wedged-but-listening server) from the serving clone, "
-                            "then re-issue. Do not hand-roll the underlying git or op "
-                            "-- that skips the gates this op carries.\n"
+                            "If it fails the same way again, this process still only "
+                            "knows that ITS OWN dispatch did not land -- that is not "
+                            "evidence the server is down. Check whether anything else "
+                            "is reaching it (a peer's commit landing, or a second op "
+                            "from another session). If other callers ARE being served, "
+                            "the server is up and the fault is local to this caller: do "
+                            "NOT restart it. Only if nothing anywhere is being served "
+                            "is it a wedged or crash-looping engine, and then "
+                            "`warm-engine-stop` (the operator hatch for a "
+                            "wedged-but-listening server) from the serving clone is the "
+                            "move -- it evicts a listener every session on this box "
+                            "shares, so it is the last rung, not the second. Do not "
+                            "hand-roll the underlying git or op -- that skips the gates "
+                            "this op carries.\n"
                             "For deliberate manual testing, pass "
                             "--allow-unstamped-dispatch."
                         )

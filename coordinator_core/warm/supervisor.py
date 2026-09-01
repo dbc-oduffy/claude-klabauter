@@ -118,6 +118,14 @@ __all__ = [
     "discovery_path",
     "write_discovery",
     "read_discovery",
+    "read_discovery_with_cause",
+    "diagnose_no_backend",
+    "CAUSE_RECORD_PRESENT",
+    "CAUSE_RECORD_ABSENT",
+    "CAUSE_RECORD_UNREADABLE",
+    "CAUSE_RECORD_UNPARSEABLE",
+    "CAUSE_RECORD_MALFORMED",
+    "READ_CAUSES",
     "unlink_discovery",
     "discovery_is_live",
     "should_spawn",
@@ -204,9 +212,6 @@ def discovery_path(engine_root: Optional[Path] = None) -> Path:
 # path, so a contended read must resolve in single-digit milliseconds or give up
 # and let the caller fall open. The window it covers is one rename, not one
 # write.
-_READ_RETRY_BUDGET_SECS = 0.05
-_READ_RETRY_SLEEP_SECS = 0.001
-
 _replace_with_retry = locked_write.replace_with_retry
 
 
@@ -337,34 +342,114 @@ def read_discovery(engine_root: Optional[Path] = None) -> Optional[dict]:
     spinning on it would put the retry cost on the genuinely-cold path where it
     buys nothing. Only a contended read and a torn parse are retried.
     """
-    path = discovery_path(engine_root)
-    deadline: Optional[float] = None
-    while True:
-        retryable = False
-        try:
-            text = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return None
-        except OSError:
-            retryable = True
-            text = ""
-        if not retryable:
-            try:
-                record = json.loads(text)
-            except json.JSONDecodeError:
-                retryable = True
-                record = None
-            if not retryable:
-                return record if isinstance(record, dict) else None
+    return read_discovery_with_cause(engine_root)[0]
 
-        # Fail OPEN once the budget is spent -- a caller that cannot read the
-        # record must be told "no information", never made to wait or raise.
-        now = time.monotonic()
-        if deadline is None:
-            deadline = now + _READ_RETRY_BUDGET_SECS
-        elif now >= deadline:
-            return None
-        time.sleep(_READ_RETRY_SLEEP_SECS)
+
+#: Re-exported from `breadcrumb`, which owns the one reader both HTTP
+#: transports share. Named here because this is the module DoE's forwarder
+#: imports; a second definition would be a second closed set to drift.
+CAUSE_RECORD_PRESENT = breadcrumb.CAUSE_RECORD_PRESENT
+CAUSE_RECORD_ABSENT = breadcrumb.CAUSE_RECORD_ABSENT
+CAUSE_RECORD_UNREADABLE = breadcrumb.CAUSE_RECORD_UNREADABLE
+CAUSE_RECORD_UNPARSEABLE = breadcrumb.CAUSE_RECORD_UNPARSEABLE
+CAUSE_RECORD_MALFORMED = breadcrumb.CAUSE_RECORD_MALFORMED
+READ_CAUSES = breadcrumb.READ_CAUSES
+
+
+def read_discovery_with_cause(
+    engine_root: Optional[Path] = None,
+) -> "tuple[Optional[dict], str]":
+    """`read_discovery`, plus why when there is no record -- one of
+    `READ_CAUSES`. Thin wrapper over `breadcrumb.read_record_with_cause`,
+    which owns the body and the retry policy for both HTTP transports; this
+    supplies only the path, because the path is the only thing that differs.
+    """
+    return breadcrumb.read_record_with_cause(discovery_path(engine_root))
+
+
+def diagnose_no_backend(
+    engine_root: Optional[Path] = None,
+    *,
+    path_resolver: "Optional[Callable[..., Path]]" = None,
+) -> dict:
+    """Answer "why is there no reachable warm backend RIGHT NOW", cheaply, for a
+    caller that has already failed to reach one.
+
+    THE ASK THIS DISCHARGES, verbatim from DoE (2026-09-01): *"`no_backend`
+    collapses at least six distinct causes into one counter, which is exactly why
+    the incident could not diagnose itself from its own dial file. If the engine
+    side has any way to tell me WHICH of those fired, that is the highest-value
+    thing you could hand me next."* Their counter is theirs; this is the engine-side
+    half they cannot compute -- the state of the record, and the identity of the
+    directory it was looked for in.
+
+    Returns a plain dict, never an object, because the intended consumer serialises
+    it into a degrade row on a stdlib-only path where `coordinator_core` may be
+    unimportable -- see that caller's own reasoning for why its durability
+    mechanism must not share a failure mode with the thing it records.
+
+    Keys, all always present:
+
+    - `cause`: one of `READ_CAUSES`. `record_present` means THE ENGINE SIDE IS NOT
+      THE PROBLEM -- a well-formed record exists, and a caller still seeing no
+      backend is looking at a connect-side failure (its own `unreachable` arm),
+      not an absent listener.
+    - `discovery_path` / `svc_dir`: the file actually consulted, and its directory.
+      **This is the field the 38-minute incident most needed and nobody had.** A
+      record is per-clone and per-user (`breadcrumb.svc_dir`), so a caller that
+      resolves a different `engine_root` than the running listener reads a
+      different file and sees a permanent, self-consistent "absent" while the
+      listener is healthy on the port its own record names. That state is
+      indistinguishable from a dead engine through any counter, and visible
+      immediately by comparing this path against the listener's.
+    - `engine_root`: the root that produced the path above, so the divergence has
+      a name and not just a symptom.
+    - `record`: the parsed record when `cause` is `record_present`, else None.
+      Callers get the port/pid/endpoint without a second read.
+
+    NEGATIVE-SPEC. This function does NOT connect, probe, spawn, stat a pid, or
+    call `check_health` -- it is one read of a file the caller's own failure path
+    already touched, so it stays affordable on a degraded hot path where every
+    session on the box may be arriving at once. It therefore CANNOT tell you the
+    listener is dead; it tells you what the record says and where it looked, which
+    is the half that was missing. A caller wanting liveness has `check_health`
+    already and must pay for it deliberately.
+
+    `path_resolver` selects WHICH transport's record to explain, defaulting to
+    this module's. `front_door.discovery_path` is the other one -- passed rather
+    than duplicated, so a front door that takes the 47623 seat under the
+    succession contract inherits this diagnosis instead of re-growing the
+    collapse under a new owner (DoE, 2026-09-01: "on the day it does, that gap
+    becomes exactly this bug again with a different owner").
+
+    Never raises -- an instrument for explaining a degraded state may not add a
+    second failure to it. An unresolvable engine root reports itself as a cause
+    with the paths absent, rather than propagating.
+    """
+    resolve = path_resolver or discovery_path
+    try:
+        path = resolve(engine_root)
+        record, cause = breadcrumb.read_record_with_cause(path)
+        return {
+            "cause": cause,
+            "discovery_path": str(path),
+            "svc_dir": str(path.parent),
+            "engine_root": str(engine_root) if engine_root is not None else str(_default_engine_clone()),
+            "record": record,
+        }
+    except Exception as exc:  # noqa: BLE001 -- see docstring; never a second failure
+        # Root resolution itself failed, which is its own answer and a real one:
+        # a caller that cannot resolve an engine root was never going to find a
+        # record, and reporting that beats reporting "absent" from a path that
+        # was never computed.
+        return {
+            "cause": "engine_root_unresolvable",
+            "discovery_path": None,
+            "svc_dir": None,
+            "engine_root": None,
+            "record": None,
+            "detail": "%s: %s" % (type(exc).__name__, exc),
+        }
 
 
 def unlink_discovery(

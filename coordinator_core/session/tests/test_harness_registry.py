@@ -640,6 +640,7 @@ class TestRegistryRecordFieldContract:
             "name",
             "messaging_socket_path",
             "status",
+            "waiting_for",
             "stable_pid_capture",
         )
 

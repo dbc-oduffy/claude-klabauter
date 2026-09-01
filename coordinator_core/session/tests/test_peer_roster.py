@@ -345,6 +345,34 @@ class TestEmptyOrAbsentRegistry:
 
         assert peer_roster.build_roster("/repo/claude-klabauter", raise_on_failure=True) == []
 
+    def test_empty_snapshot_raises_when_raise_on_empty_snapshot(self, monkeypatch):
+        # Review: coordinatorcode-reviewer.a933f243c20654e60, Finding 2 --
+        # the owning module's own suite must prove this contract directly,
+        # not only via the integration test two modules away
+        # (test_watch.py::test_an_empty_box_wide_snapshot_raises_rather_than_reading_as_a_drained_fleet).
+        monkeypatch.setattr(hr, "snapshot", lambda: {})
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        import pytest
+
+        with pytest.raises(peer_roster.EmptySnapshotError):
+            peer_roster.build_roster("/repo/claude-klabauter", raise_on_empty_snapshot=True)
+
+    def test_empty_snapshot_still_returns_empty_list_by_default_when_raise_on_empty_snapshot_absent(
+        self, monkeypatch
+    ):
+        # Sibling to the raise case above -- pins the DEFAULT (flag absent or
+        # explicitly False) so a future edit cannot silently flip which arm
+        # is the default without breaking a test.
+        monkeypatch.setattr(hr, "snapshot", lambda: {})
+        monkeypatch.setattr(hr, "self_record", lambda: None)
+
+        assert peer_roster.build_roster("/repo/claude-klabauter") == []
+        assert (
+            peer_roster.build_roster("/repo/claude-klabauter", raise_on_empty_snapshot=False)
+            == []
+        )
+
 
 class TestStatusAndRunningSeconds:
     def test_status_parsed_display_only(self, monkeypatch):

@@ -3369,19 +3369,26 @@ class TestAttributionWriterName:
         projections (bare-path lines + writer names), not twice.
 
         This is NOT the only decode of this sink per `compute_scope` call —
-        unlike Step 3's single-read-site session loop, Step 3b legitimately
-        decodes an agent dir's record from up to three DISTINCT call sites
-        for three distinct purposes: the pre-scan (`all_agent_dir_entries`,
-        widens the batched git query), the attribution branch under test
-        here, and the final per-agent claim read below it. This fixture
-        (a live back-pointer already present) skips the race-window branch,
-        so exactly 3 calls -- not 1 -- is the correct folded count: pre-scan
-        (1) + attribution, now folded (1, was 2 before this fix) + final
-        read (1) = 3, down from 4 before this fix. Fewer than 3 would mean
-        a sibling branch stopped reading; exactly 1 would be the wrong bar
-        for this call site (see ``test_folded_helper_returns_same_values_
-        as_the_two_call_form`` above for the direct single-decode unit
-        pin on the folded helper itself). Same fixture shape as
+        unlike Step 3's single-read-site session loop, Step 3b decodes an
+        agent dir's record from more than one call site: the pre-scan
+        (`all_agent_dir_entries`, which widens the batched git query) and
+        the attribution branch under test here. This fixture (a live
+        back-pointer already present) skips the race-window branch, so
+        exactly 2 is the correct count: pre-scan (1) + attribution, folded
+        (1). Exactly 1 would be the wrong bar for this call site (see
+        ``test_folded_helper_returns_same_values_as_the_two_call_form``
+        above for the direct single-decode unit pin on the folded helper
+        itself).
+
+        The count was 4, then 3, and is now 2 -- and the walk from 3 to 2 is
+        why this docstring no longer says "fewer would mean a sibling branch
+        stopped reading". The fold that took it to 3 landed only in the
+        attribution branch and left the `other_owner`-population call site
+        ~70 lines downstream re-decoding the same file for a third time.
+        This test did not catch that, because its own fixture never
+        populates an `other_owner` and so never walked that call site -- a
+        call-count spy pins only the paths its fixture actually reaches.
+        Both sites now share one decode. Same fixture shape as
         ``test_agent_claim_carries_the_recorded_writer_name`` above."""
         repo = _make_repo(tmp_path)
         core.init("em-owner", cwd=str(repo))
@@ -3421,10 +3428,11 @@ class TestAttributionWriterName:
         result = scope.compute_scope("bystander", cwd=str(repo))
 
         agent_calls = [c for c in calls if Path(c) == sink]
-        assert len(agent_calls) == 3, (
-            "compute_scope's pre-scan + Step 3b attribution branch (folded) "
-            f"+ final claim read must decode this agent dir's touch record "
-            f"exactly 3 times total (down from 4 before this fix's fold); "
+        assert len(agent_calls) == 2, (
+            "compute_scope's pre-scan + Step 3b attribution branch (folded, "
+            f"and now shared with the other_owner-population site) must "
+            f"decode this agent dir's touch record exactly 2 times total "
+            f"(4 before the first fold, 3 before the second); "
             f"saw {len(agent_calls)} calls for {sink}: {agent_calls}"
         )
         assert result.attribution["coordinator/agent_owned.py"] == scope.OwnerFact(

@@ -6087,6 +6087,33 @@ def _owner_writer_name_clause(name: Optional[str]) -> str:
     return " -- w:%s" % name
 
 
+def _with_name_clause(sentence: str, writer_name: Optional[str]) -> str:
+    """Append the name clause whole-or-nothing, then cap to the owner-clause
+    budget. THE single exit for every owner class in
+    ``_format_owner_sentence`` -- do not re-implement it per branch.
+
+    Whole-or-nothing: if the full clause will not fit beside the
+    load-bearing subject/verdict prefix, drop it ENTIRELY rather than let
+    ``_truncate_to_budget`` cut it to a ``w:proj…`` fragment. A fragment is
+    strictly worse than no name, because ``_owner_name_provenance_note``
+    triggers on the same ``" -- w:"`` substring and would fire a staleness
+    warning beside a name the reader cannot read. Whole-or-nothing keeps
+    that coupling honest: the warning fires exactly when a full name shows.
+
+    Negative-spec -- this was ONE branch's local guard and the bug was
+    structural, not local: it lived inline in the ``session``/``agent`` arm
+    while ``agent-race`` and ``unreadable`` appended unconditionally and
+    truncated, so two of the six classes emitted exactly the fragment the
+    guard existed to prevent, and every test passed. A per-branch copy is
+    how that recurs; there is one implementation and three callers.
+    """
+    clause = _owner_writer_name_clause(writer_name)
+    budget = _owner_clause_budget_bytes()
+    if len((sentence + clause).encode("utf-8")) <= budget:
+        sentence += clause
+    return _truncate_to_budget(sentence, budget)
+
+
 def _format_owner_sentence(
     fact: Optional["OwnerFact"],
     live_verdicts: Dict[str, Tuple[bool, str, Optional[int]]],
@@ -6125,9 +6152,23 @@ def _format_owner_sentence(
     writer_name = _resolve_owner_writer_name(fact)
 
     if fact.claim_source == "agent-race":
+        # Prose deliberately terse. The pre-fix wording ("an in-flight
+        # dispatched agent (%s) not yet attributed to an owning session --
+        # CONTESTED: agent-race, unresolved") ran 117 bytes against this
+        # ~73-byte budget BEFORE any name clause, so `_truncate_to_budget`
+        # cut the sentence mid-subject and the load-bearing `CONTESTED`
+        # verdict -- the entire point of this class -- was never rendered at
+        # all, named or unnamed. That silently violated this function's own
+        # negative-spec above: agent-race must never read as an absence of
+        # evidence. The verdict is what a reader acts on; the descriptive
+        # words around it were never affordable here.
+        # No ": agent-race" suffix: at 52 bytes the prefix left under 21 for
+        # the name clause, so whole-or-nothing dropped the name from every
+        # rendering of this class -- trading the defect this plan fixed for
+        # a jargon token no test pins and no reader decodes. "unattributed
+        # agent" already says what "agent-race" means.
         sentence = (
-            "an in-flight dispatched agent (%s) not yet attributed to an "
-            "owning session -- CONTESTED: agent-race, unresolved"
+            "%s unattributed agent -- CONTESTED"
             % _owner_display_id(fact, writer_name)
         )
         # C3 follow-up fix 2 (EM-adjudicated break-class): the name clause
@@ -6143,17 +6184,19 @@ def _format_owner_sentence(
         # sid to 8 characters once a name resolves, freeing the budget the
         # name clause needed all along, without moving the name ahead of
         # the safety-relevant prefix.
-        sentence += _owner_writer_name_clause(writer_name)
-        return _truncate_to_budget(sentence, _owner_clause_budget_bytes())
+        return _with_name_clause(sentence, writer_name)
 
     if fact.claim_source == "unreadable":
         sibling_id = _owner_display_id(fact, writer_name) if fact.owner and fact.owner != ".agents" else None
         sentence = (
             ("sibling %s" % sibling_id if sibling_id else "an unresolved sibling")
-            + " (its claim record is unreadable this call)"
+            # "its claim record is" -> "claim record": the dropped words say
+            # nothing the remaining ones do not, and they were the whole
+            # difference between a readable name clause and a `w:proj…`
+            # fragment on a real 36-character sid.
+            + " (claim unreadable this call)"
         )
-        sentence += _owner_writer_name_clause(writer_name)
-        return _truncate_to_budget(sentence, _owner_clause_budget_bytes())
+        return _with_name_clause(sentence, writer_name)
 
     # claim_source in ("session", "agent") from here down.
     display_id = _owner_display_id(fact, writer_name)
@@ -6196,20 +6239,7 @@ def _format_owner_sentence(
         # were free bytes this budget cannot afford across all six classes
         # with a name attached, so they are cut rather than the name.
         sentence = "%s (CONTESTED)" % subject
-    name_clause = _owner_writer_name_clause(writer_name)
-    # C3 follow-up fix 3, lever 2 (whole-or-nothing): if the full name
-    # clause will not fit beside the load-bearing subject/liveness prefix,
-    # drop it ENTIRELY rather than let `_truncate_to_budget` cut it to a
-    # `w:proj...` fragment. A fragment is strictly worse than no name:
-    # `_owner_name_provenance_note`'s trigger (which keys on the same
-    # `" -- w:"` substring) would still fire a staleness warning beside a
-    # name the reader cannot actually read. Whole-or-nothing keeps that
-    # coupling honest -- the warning fires exactly when, and only when, a
-    # full name is actually shown.
-    budget = _owner_clause_budget_bytes()
-    if len((sentence + name_clause).encode("utf-8")) <= budget:
-        sentence += name_clause
-    return _truncate_to_budget(sentence, budget)
+    return _with_name_clause(sentence, writer_name)
 
 
 _OWNER_NAME_PROVENANCE_WARNING = (

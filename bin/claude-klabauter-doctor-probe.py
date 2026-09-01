@@ -778,9 +778,14 @@ def _run_probe_dialect_guard_armed(claude_klabauter_root: Path | None) -> _Probe
     Reuses `coordinator_core.bash_guards._dialect.probe_armed`, which
     exercises the guard's OWN code path (`_powershell_tokens`) rather than
     a second, parallel check — a disarmed result durably logs through the
-    existing `_log_dialect_parser_unavailable` observability record. This
-    probe reads that same record's path (`dialect_parser_unavailable_log_
-    path()`) for its remediation, rather than inventing a second one.
+    existing `_log_dialect_parser_unavailable` observability record, which
+    (DR-402, C12) now also appends a `KIND_COLD_FAILED` row to
+    `warm/telemetry.py`'s `degrade.jsonl` — the durable, attributable
+    record DR-402 requires for a guard that proceeds rather than a
+    settings-home log alone. This probe reads that same record's path
+    (`dialect_parser_unavailable_log_path()`) for its remediation, rather
+    than inventing a second one, and surfaces the degrade record's path
+    alongside it in `data["durable_degrade_record"]`.
 
     Checks bare `python3` on PATH — what `hooks.json` runs every bash guard
     hook under — plus `sys.executable` (the interpreter running THIS
@@ -835,7 +840,18 @@ def _run_probe_dialect_guard_armed(claude_klabauter_root: Path | None) -> _Probe
         if not armed:
             disarmed.append(f"{label} ({interpreter}): {detail}")
 
-    data = {"checked": checked, "durable_record": str(dialect_parser_unavailable_log_path())}
+    try:
+        from coordinator_core.warm.telemetry import degrade_path
+
+        durable_degrade_record = str(degrade_path(claude_klabauter_root))
+    except Exception:  # noqa: BLE001 — advisory field, never fails the probe
+        durable_degrade_record = None
+
+    data = {
+        "checked": checked,
+        "durable_record": str(dialect_parser_unavailable_log_path()),
+        "durable_degrade_record": durable_degrade_record,
+    }
 
     if not disarmed:
         return _ProbeResult(
@@ -872,6 +888,11 @@ def _run_probe_dialect_guard_armed(claude_klabauter_root: Path | None) -> _Probe
         detail=(
             "PowerShell dialect guard DISARMED under: " + "; ".join(disarmed)
             + f". Durable record: {data['durable_record']}"
+            + (
+                f". Durable degrade record (DR-402): {data['durable_degrade_record']}"
+                if data["durable_degrade_record"]
+                else ""
+            )
         ),
         remediation=remediation,
         required=False,

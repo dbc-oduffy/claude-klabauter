@@ -147,6 +147,88 @@ def write_atomic(path: str, payload: dict) -> bool:
         return False
 
 
+def _writer_identity(record: dict) -> tuple:
+    """The three fields that together name WHICH INSTRUMENT wrote a record.
+
+    Holder alone is not the identity, and that is the whole point of this
+    helper. Measured on this repo 2026-09-01: a cron audit tick stamped five
+    declinations at 19:31:16Z and the fleet-watch monitor replaced the record
+    fifty seconds later at 19:32:06Z, under the SAME `holder_session_id` and
+    the SAME `writer_session_id`. Two crown instruments, one record, and the
+    later arrival won by arriving later. A discriminator keyed on holder would
+    have seen no difference at all.
+    """
+    return (
+        record.get("holder_session_id"),
+        record.get("writer_session_id"),
+        record.get("tick_source"),
+    )
+
+
+def is_fresh_and_foreign(
+    record: Optional[dict],
+    now_epoch: float,
+    holder_session_id: str,
+    writer_session_id: Optional[str] = None,
+) -> bool:
+    # No `tick_source` parameter, and its absence is the contract: this
+    # predicate is holder-or-writer by design (see below), so accepting a
+    # source it cannot consult would invite a caller to believe it was
+    # consulted. `_writer_identity` is where `tick_source` belongs.
+    """Is `record` still live by its OWN deadline, and held by ANOTHER PARTY?
+
+    FRESH is asked of the record's own `next_expected_by`, never a constant
+    invented here: the writer that stamped it is the only party that knew its
+    own cadence, and a threshold picked at the reading end would be a second
+    opinion about someone else's clock. An unparseable or absent deadline is
+    NOT fresh -- a record that cannot say when it expects to be replaced has no
+    claim to be left alone.
+
+    FOREIGN IS HOLDER-OR-WRITER, DELIBERATELY NOT `tick_source`, AND THE
+    ASYMMETRY WITH `_writer_identity` IS THE POINT. This predicate and the
+    prior-holder trace ask two different questions and must not share one
+    answer:
+
+      - the TRACE asks "whose record did I just replace" and keys on all three
+        fields, because a same-crown cron-vs-monitor replacement is still one
+        instrument overwriting another's rows and a reader deserves to see it;
+      - this predicate asks "am I about to step on a LIVE PEER CROWN", and a
+        different `tick_source` under the same holder is not a peer crown. It
+        is the same crown's other instrument, doing its job.
+
+    Collapsing the two deadlocks the fleet, and this is measured rather than
+    argued. A cron audit tick declares `interval_seconds=23*60`, so its
+    `next_expected_by` sits ~69 minutes ahead. Under a three-field foreignness
+    the monitor -- cadence ~80s, the SAME holder and writer -- is declined on
+    every single poll until that deadline passes: the standing watch stops
+    stamping for over an hour after each audit tick, and the record it cannot
+    refresh reads STALE to every other session in the fleet. That is a worse
+    failure than the clobber this chunk exists to fix, and it is the
+    two-watchers-declining-each-other shape the arm-time chunk names as the
+    thing to avoid. Verified before the fix: `stamped: False`, monitor locked
+    out for 68.2 minutes.
+
+    Shared deliberately with the arm-time refusal (`group_em.watch`): one
+    predicate, two call sites. Arming and stamping ask the identical question
+    about the identical record, and two spellings of it would drift.
+    """
+    if not isinstance(record, dict):
+        return False
+    deadline = record.get("next_expected_by")
+    if not isinstance(deadline, str):
+        return False
+    try:
+        deadline_epoch = calendar.timegm(time.strptime(deadline, _STAMP_FORMAT))
+    except (ValueError, TypeError):
+        return False
+    if now_epoch >= deadline_epoch:
+        return False
+    return (record.get("holder_session_id"), record.get("writer_session_id")) != (
+        holder_session_id,
+        writer_session_id,
+    )
+
+
 def _carried_holder_name(repo_root: str, holder_session_id: str) -> Optional[str]:
     """The name the previous tick recorded, when it was for the SAME holder.
 
@@ -184,9 +266,29 @@ def stamp(
         raise ValueError(
             f"tick_source {tick_source!r} is not one of the reader's words {TICK_SOURCES}"
         )
+    if not writer_session_id:
+        raise ValueError(
+            "writer_session_id is required -- an omitting call is how a crown reads its "
+            "own write back as independent confirmation (see this module's C1 note)"
+        )
     now_epoch = time.time() if now_epoch is None else now_epoch
     if holder_name is None:
         holder_name = _carried_holder_name(repo_root, holder_session_id)
+
+    watch_file = watch_path(repo_root)
+    prior_record = _read_record(watch_file)
+
+    # DECLINE ON FRESH-AND-FOREIGN, checked BEFORE the trace/write. Shares
+    # `is_fresh_and_foreign` with the arm-time refusal in `group_em.watch` --
+    # one predicate, two call sites. Decline is falsey-return only, never a
+    # raise: a writer that raises where it used to write turns a reporting
+    # defect into a tick that dies (see module docstring, NEVER RAISES, NEVER
+    # GATES). The record on disk is left untouched.
+    if is_fresh_and_foreign(
+        prior_record, now_epoch, holder_session_id, writer_session_id
+    ):
+        return False
+
     payload: dict[str, Any] = {
         "holder_session_id": holder_session_id,
         "holder_name": holder_name,
@@ -197,7 +299,27 @@ def stamp(
         "declinations": list(declinations or []),
         "writer_session_id": writer_session_id,
     }
-    return write_atomic(watch_path(repo_root), payload)
+
+    # PRIOR-HOLDER TRACE (C1). Whenever the record about to be replaced was
+    # written by a DIFFERENT instrument -- any of holder, writer, or
+    # tick_source differing, one disjunction with tick_source a first-class
+    # arm -- carry that instrument's identity forward as `prior_*` keys.
+    # Additive only: never reorders, renames, or drops an existing key, and
+    # never changes the timestamp format (the record shape is a cross-plane
+    # contract -- see module docstring). Never refuses, never raises. A
+    # record with no prior write (first stamp) carries no `prior_*` keys at
+    # all -- absent, not null.
+    if isinstance(prior_record, dict) and _writer_identity(prior_record) != (
+        holder_session_id,
+        writer_session_id,
+        tick_source,
+    ):
+        payload["prior_holder_session_id"] = prior_record.get("holder_session_id")
+        payload["prior_holder_name"] = prior_record.get("holder_name")
+        payload["prior_tick_source"] = prior_record.get("tick_source")
+        payload["prior_last_tick_at"] = prior_record.get("last_tick_at")
+
+    return write_atomic(watch_file, payload)
 
 
 VERDICT_ABSENT = "absent"
@@ -323,6 +445,8 @@ def read_liveness(
         "holder_name": record.get("holder_name"),
         "last_tick_at": record.get("last_tick_at"),
         "tick_source": record.get("tick_source"),
+        "subscribed_peers": record.get("subscribed_peers"),
+        "declinations": record.get("declinations"),
     }
 
     deadline = record.get("next_expected_by")
@@ -385,6 +509,12 @@ def human_verdict(liveness: dict, now_epoch: Optional[float] = None) -> str:
     and never as an all-clear. "Nothing owed" and "nothing looked" rendering
     the same is the specific failure that produced this function; a reader who
     later shortens the absent branch to something reassuring reintroduces it.
+    The `armed` branch carries the identical hazard: a record clobbered to
+    zero population (no subscribed peers, no declinations) is still
+    structurally ARMED, so the reassurance line is suppressed there too and
+    the zero is named instead -- "running but reported on nobody" is a
+    different fact from a healthy quiet fleet, and rendering them the same
+    is this same failure one branch over.
 
     Prose, not a code: the caller decides the exit code (see `watch._cli`'s
     `--status`), and no consumer should parse these words back into a verdict.
@@ -400,8 +530,16 @@ def human_verdict(liveness: dict, now_epoch: Optional[float] = None) -> str:
         lines = [
             f"ALIVE - a watch is running and checked the fleet {when}.",
             f"  Held by: {holder}",
-            "  Quiet is the normal state between checks; it is not a fault.",
         ]
+        if liveness.get("subscribed_peers") or liveness.get("declinations"):
+            lines.append("  Quiet is the normal state between checks; it is not a fault.")
+        else:
+            lines.append(
+                "  Reported on nobody: 0 subscribed peers and 0 declinations this tick."
+            )
+            lines.append(
+                "  This is NOT a healthy quiet fleet -- nothing was watched, not nothing found."
+            )
     elif verdict == VERDICT_STALE:
         overdue = liveness.get("seconds_overdue")
         late = (

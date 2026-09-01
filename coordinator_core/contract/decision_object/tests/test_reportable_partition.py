@@ -361,6 +361,14 @@ def _sweep_consolidate_assemble(acc: dict[str, set[str]], tmp_path: Path) -> Non
             return SimpleNamespace(returncode=0 if ok else 1, stdout="", stderr="")
         if args[0] == "branch":
             return SimpleNamespace(returncode=0, stdout="* current\n  main\n  stale\n", stderr="")
+        if args[0] == "for-each-ref":
+            # The brief's single ref enumeration (`consolidate_assemble.
+            # ref_rows`): the same three branches the `branch` arm lists,
+            # in the `<refname>\t<short>\t<authoremail>` shape it parses.
+            rows = "".join(
+                f"refs/heads/{n}\t{n}\tme@x\n" for n in ("current", "main", "stale")
+            )
+            return SimpleNamespace(returncode=0, stdout=rows, stderr="")
         if args[0] == "log" and args[1] == "-1":
             return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
         if args[0] == "log" and args[1] == "--oneline":
@@ -529,6 +537,13 @@ EXPECTED_ACTION_CLASS_IDS: frozenset[str] = frozenset(
         "predecessor-distill-fate",
         "quota-retry-vs-escalate",
         "scratch-disposition-per-file",
+        # `session-work-summary`: both dispositions obligate a concrete act
+        # with no directive behind them. `drafted` means the EM hand-authors
+        # the synthesis onto disk (`d-complete-entry` scaffolds placeholders
+        # and refuses a scaffold still carrying them); the escalate side is a
+        # PM escalation. Same shape as `plan-doc-content-update` above, not
+        # the pure-labeling shape of the reportable set.
+        "session-work-summary",
         "shallow-row3-waive-check",
         "shared-schema-touch-check",
         "unattributable-file-disposition",

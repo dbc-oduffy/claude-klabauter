@@ -37,7 +37,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .build import write_sidecar
+from .build import write_image_identity, write_sidecar
 
 _HERE = Path(__file__).resolve().parent
 _SOURCES = (_HERE / "door_posix.c", _HERE / "door_core.c")
@@ -195,6 +195,11 @@ def build(
     # `breadcrumb.svc_dir`'s, and it must not have two implementations.
     write_sidecar(output, engine_root)
     write_provenance(output, compiler_path, engine_root)
+    # Same writer, same bytes, same contract as the Windows build -- see
+    # `build.py :: write_image_identity`'s own docstring for why this is a
+    # sidecar file, not a baked `-D` define (image identity is a hash of
+    # the finished binary, unknowable at compile time).
+    write_image_identity(output)
     return output
 
 

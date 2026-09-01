@@ -1115,6 +1115,7 @@ def build_session_work_summary_judgment_point() -> dict[str, Any]:
         evidence="the session's full commit/decision history",
         reason="authorial synthesis of the whole session",
         revalidate_at_dispatch=False,
+        reportable=False,
     )
 
 

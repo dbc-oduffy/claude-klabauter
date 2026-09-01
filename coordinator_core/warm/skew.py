@@ -100,6 +100,9 @@ __all__ = [
     "ServerVersionState",
     "build_skew_response",
     "evict_on_skew",
+    "SKEW_AXIS_SOURCE",
+    "SKEW_AXIS_TOKEN",
+    "SKEW_AXIS_DOOR_IMAGE",
 ]
 
 #: Repo-relative paths whose commits count as "engine-touching" for
@@ -210,6 +213,23 @@ _REFRESH_INTERVAL_SECS = 2.0
 #: may report both.
 SKEW_AXIS_SOURCE = "source"
 SKEW_AXIS_TOKEN = "token"
+
+#: Axis 3 (F-022, C1 of docs/plans/2026-09-01-the-dogfooded-install-stops-
+#: lying-about, ledger item 8) -- ADDITIVE to the two axes DR-328/DR-331
+#: established; neither existing axis is touched or weakened by this one.
+#: Axes 1 and 2 both key on `_engine_stamp`/engine SOURCE, so a door-only
+#: rebuild (`door.c`/`door_core.c` changing with no engine-source change)
+#: moves neither -- a server booted before that rebuild stays resident and
+#: authoritative, wrongly, since nothing it compares ever changed. This
+#: axis compares the door IMAGE identity recorded at boot
+#: (`ServerVersionState`'s `boot_door_image`, sourced from
+#: `build.write_image_identity`'s sidecar by whichever caller wires a
+#: request's door-image token through -- door.c/server.py wiring is a
+#: later chunk, not this one) against the identity a live request carries.
+#: A mismatch takes the existing -32002 (`ENGINE_SKEW`) path via
+#: `build_skew_response`, same as axes 1 and 2 -- no second staleness
+#: protocol, per this chunk's negative spec.
+SKEW_AXIS_DOOR_IMAGE = "door_image"
 
 
 def _default_engine_clone() -> Path:
@@ -780,6 +800,7 @@ class ServerVersionState:
         repo_root: Optional[Path] = None,
         *,
         clock: Callable[[], float] = time.monotonic,
+        boot_door_image: Optional[str] = None,
     ):
         self._root = Path(repo_root) if repo_root is not None else _default_engine_clone()
         self._clock = clock
@@ -789,6 +810,12 @@ class ServerVersionState:
         self._last_refresh = self._clock()
         self._source_stale = False
         self._last_skew_axes: tuple = ()
+        # Axis 3 (SKEW_AXIS_DOOR_IMAGE). `None` -- not an empty string --
+        # means "this boot has no known door image" (a non-door caller, or
+        # a caller that never supplied one), and the axis stays inert for
+        # the server's whole lifetime in that case: recording "nothing" is
+        # not evidence a later request's real identity is wrong.
+        self.boot_door_image = boot_door_image
 
     def refresh(self, *, force: bool = False) -> None:
         """Run the throttled axis-2 check if `_REFRESH_INTERVAL_SECS` has
@@ -828,30 +855,43 @@ class ServerVersionState:
         if current_hash != self._boot_hash:
             self._source_stale = True
 
-    def is_skewed(self, client_token: str) -> bool:
+    def is_skewed(
+        self, client_token: str, *, door_image_token: Optional[str] = None
+    ) -> bool:
         """True iff this request should be treated as version-skewed --
-        either axis 2 (the throttled secondary check has flagged this
-        server's own source stale since boot) or axis 1 (the client's live
-        primary token disagrees with the server's live primary token).
+        axis 2 (the throttled secondary check has flagged this server's
+        own source stale since boot), axis 1 (the client's live primary
+        token disagrees with the server's live primary token), or axis 3
+        (the request's door image disagrees with the one this server
+        booted against).
 
         Runs `refresh()` first (a no-op clock read on every call that
         isn't yet due, per the throttle), so callers need no separate
         timer -- calling `is_skewed` once per request is the entire
         server-side integration contract for axis 2.
 
-        BOTH AXES ARE EVALUATED, NOT SHORT-CIRCUITED, and the deciding set
+        `door_image_token` is keyword-only and optional, and BOTH halves of
+        that are load-bearing: a caller that never passes it (an existing
+        integration, a non-door client, or door.c/server.py wiring that has
+        not landed yet -- this chunk adds the axis, not that wiring) leaves
+        axis 3 permanently inert rather than fabricating a mismatch out of
+        `None`. Axis 3 can only fire when BOTH `self.boot_door_image` and
+        `door_image_token` are non-`None` and they disagree.
+
+        ALL AXES ARE EVALUATED, NOT SHORT-CIRCUITED, and the deciding set
         is left on `last_skew_axes` for the exit record. An earlier version
         tested `_source_stale` first and returned early, which is correct
         for the boolean and wrong for attribution: when both axes hold,
         only axis 2 was ever reachable, so any count built on it
         under-reports axis 1 BY CONSTRUCTION (claude-klabauter-22,
-        2026-08-26). The two have opposite remediations -- axis 1 is the
+        2026-08-26). Each axis has its own remediation -- axis 1 is the
         publish cadence stranding servers, axis 2 is something editing
-        engine source in the clone that serves the fleet -- so a telemetry
-        row that cannot tell them apart sends the next reader at the wrong
-        one. The extra cost is one stat (`compute_client_token`'s stamp
-        read) on a request that is already about to evict this server, not
-        on the served path.
+        engine source in the clone that serves the fleet, axis 3 is a
+        door-only rebuild -- so a telemetry row that cannot tell them apart
+        sends the next reader at the wrong one. The extra cost is one stat
+        (`compute_client_token`'s stamp read) plus one string compare on a
+        request that is already about to evict this server, not on the
+        served path.
         """
         self.refresh()
         axes = []
@@ -859,6 +899,12 @@ class ServerVersionState:
             axes.append(SKEW_AXIS_SOURCE)
         if compute_client_token(self._root) != client_token:
             axes.append(SKEW_AXIS_TOKEN)
+        if (
+            self.boot_door_image is not None
+            and door_image_token is not None
+            and door_image_token != self.boot_door_image
+        ):
+            axes.append(SKEW_AXIS_DOOR_IMAGE)
         self._last_skew_axes = tuple(axes)
         return bool(axes)
 

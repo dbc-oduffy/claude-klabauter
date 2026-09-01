@@ -630,6 +630,30 @@ def test_teammates_absent_entirely_on_a_refused_group_em(tmp_path, monkeypatch):
     assert "teammates_error" not in result
 
 
+def test_teammates_leg_reports_could_not_establish_when_unreadable(tmp_path, monkeypatch):
+    """C8: entry asserts the standing assistant was actually dispatched -- and
+    must distinguish "confirmed absent" from "could not establish" rather than
+    reading a probe that never looked as a clean green.
+
+    No subagents directory was ever created for this session (the harness's
+    own `~/.claude/projects/<cwd>/<session>/subagents/` tree does not exist
+    for a session id nothing dispatched under), so `teammates.presence`
+    cannot LIST anything -- it must report `unreadable: True`, not
+    `present: False`. A test asserting only `present is False` here would
+    pass on the exact defect this chunk exists to close: an absent probe
+    read as a confirmed-absent teammate.
+    """
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-c8c8c8c8c8c8"
+    _stub_legs(monkeypatch, session_id)
+
+    result = gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert result["teammates"] is not None
+    assert result["teammates"]["unreadable"] is True
+    assert result["teammates"]["agents"]["group_em_assistant"]["present"] is False
+    assert result["teammates"]["agents"]["group_em_assistant"]["dispatch_records"] == []
+
+
 def test_teammates_leg_degrades_without_taking_the_others(tmp_path, monkeypatch):
     session_id = "aaaaaaaa-bbbb-cccc-dddd-888888888888"
     _stub_legs(monkeypatch, session_id)
@@ -680,7 +704,11 @@ def test_watch_liveness_reports_armed_on_a_fresh_stamp(tmp_path, monkeypatch):
     _stub_legs(monkeypatch, session_id)
     repo_root = _group_em_with_teammates(tmp_path, monkeypatch, [], session_id)
     gee.group_em_watch_heartbeat.stamp(
-        repo_root, holder_session_id=session_id, declinations=[], interval_seconds=1380.0
+        repo_root,
+        holder_session_id=session_id,
+        declinations=[],
+        interval_seconds=1380.0,
+        writer_session_id=session_id,
     )
 
     result = gee._group_em_enter({"repo_root": repo_root})
@@ -701,6 +729,7 @@ def test_watch_liveness_reports_stale_past_the_deadline_the_tick_set_itself(tmp_
         holder_session_id=session_id,
         declinations=[],
         interval_seconds=5.0,
+        writer_session_id=session_id,
         now_epoch=time.time() - 3600,
     )
 

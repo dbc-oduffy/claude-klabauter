@@ -12,7 +12,8 @@ Public surface (pinned contract — do not change without updating consumers):
     def self_record() -> tuple[str, RegistryRecord] | None
     class RegistryRecord: pid: int; start_epoch: float; cwd: str | None;
                            name: str | None; messaging_socket_path: str | None;
-                           status: str | None; stable_pid_capture: str | None
+                           status: str | None; waiting_for: str | None;
+                           stable_pid_capture: str | None
 
 `name` and `messaging_socket_path` (added
 `state/handoffs/2026-08-13-session-owner-reachability-registry.md` § 1) are
@@ -293,6 +294,52 @@ raise `UnicodeDecodeError`. Nothing in this module may raise to its caller
 — it sits on the claim hot path, and the module it feeds
 (`session/liveness.py`) already documents fail-open-never-fail-dead as its
 established bias.
+
+WHAT `status` ACTUALLY MEANS, and why that STRENGTHENS the ban rather
+than qualifying it (measured 2026-09-01 against shipped bundle 2.1.257;
+identical in 2.1.251 and 2.1.252, so this is not a churning surface).
+The field is computed as `isLoading || delegatedActive ? "busy" : "idle"`,
+with `"shell"` substituted for `"idle"` when a non-terminal `local_bash`
+task is live, and a prior `"waiting"` arm that wins whenever a dialog or
+elicitation is blocking. Two consequences a reader of this module needs:
+
+  - `busy` is FORCED by any live delegated task — `local_agent`,
+    `remote_agent`, `in_process_teammate`, `local_workflow` — with no turn
+    in flight. This is why registry `busy` has been observed disagreeing
+    with a peer's own receiver-state saying the turn had ended. That was
+    never staleness: the field means something NARROWER than "the model is
+    generating," and reading it as the broader thing is the actual defect.
+
+  - Nothing ever re-stamps a record. The write is an effect keyed on the
+    status value — no timer, no heartbeat, no coalescing; one write per
+    transition, measured at 145ms from transition to visible on disk. So a
+    6.9-hour-old `busy` is NOT a session decaying toward wrong. It is most
+    likely one that dispatched an agent and then died with it: the last
+    transition it ever published was the dispatch, and it is frozen at a
+    moment with no bearing on now.
+
+The second point is the mechanism behind the 2026-08-14 ruling, and it is
+worse than that ruling knew — a stale `busy` is not merely old, it is
+pinned to an event that already completed. `updatedAt`/`statusUpdatedAt`
+remain read NOWHERE, at any call site, forever, and understanding WHY the
+field goes stale is not a licence to trust it for the question it was
+banned from. Full surface inventory, with the costs and the documented
+`claude agents --json` cross-check that catches this parser drifting:
+`docs/reference/harness-session-state-surface.md`.
+
+`waiting_for` (parsed below, alongside `status`) is the harness's own
+reason string for a `waiting` record: `"input needed"`, `"permission
+prompt"`, `"dialog open"`, `"sandbox request"`, `"worker request"`,
+`"goal proposal"`. It answers "what is this session blocked on", never
+"is it alive", and carries the same no-liveness contract as `cwd`, `name`
+and `status`. Confirmed live rather than inferred: recording this box's
+own record at 4Hz across an `AskUserQuestion` produced
+`busy -> waiting/"input needed" -> busy`. NOTE FOR THE NEXT READER — on a
+fleet where every peer runs in bypass permission mode no dialog is ever
+opened, so `waiting` is structurally UNREACHABLE and this field reads
+`None` on every record (measured: 0 of 40 here). That is a property of the
+fleet's configuration, not evidence the harness stopped publishing it. Do
+not delete this parse because a census returned zero.
 """
 
 from __future__ import annotations
@@ -369,6 +416,7 @@ class RegistryRecord:
     name: str | None = None
     messaging_socket_path: str | None = None
     status: str | None = None
+    waiting_for: str | None = None
     stable_pid_capture: str | None = None
 
 
@@ -514,6 +562,11 @@ def _parse_one(path: Path) -> tuple[str, RegistryRecord] | None:
     raw_status = data.get("status")
     status = raw_status if isinstance(raw_status, str) and raw_status else None
 
+    raw_waiting_for = data.get("waitingFor")
+    waiting_for = (
+        raw_waiting_for if isinstance(raw_waiting_for, str) and raw_waiting_for else None
+    )
+
     return session_id, RegistryRecord(
         pid=pid,
         start_epoch=start_epoch,
@@ -521,6 +574,7 @@ def _parse_one(path: Path) -> tuple[str, RegistryRecord] | None:
         name=name,
         messaging_socket_path=messaging_socket_path,
         status=status,
+        waiting_for=waiting_for,
     )
 
 

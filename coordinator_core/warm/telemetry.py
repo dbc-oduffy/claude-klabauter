@@ -130,6 +130,7 @@ __all__ = [
     "DEGRADE_FILENAME",
     "KIND_COLD_RUN",
     "KIND_HOOK_TIMEOUT",
+    "KIND_COLD_FAILED",
     "DEGRADE_KINDS",
     "degrade_path",
     "record_degrade",
@@ -558,7 +559,19 @@ KIND_COLD_RUN = "cold_run"
 #: elapsed time, not inferred from a caller-side timeout.
 KIND_HOOK_TIMEOUT = "hook_timeout"
 
-DEGRADE_KINDS = frozenset({KIND_COLD_RUN, KIND_HOOK_TIMEOUT})
+#: The cold rung ITSELF failed -- a caller that had already exhausted the
+#: warm listener asked for a verdict in process and the guard chain could
+#: not produce one either. DR-402's rung 3: the act proceeds, and this row
+#: is the whole of what makes that proceed accountable afterwards.
+#: Distinct from `cold_run` on purpose. A cold run that answered and a cold
+#: run that collapsed are the same event up to the moment the chain is
+#: entered, so recording both under one kind would make the box report its
+#: guards as running cold when they are not running at all -- precisely the
+#: "running cold for weeks" blindness PM ruling 2 named, one rung lower
+#: down and correspondingly worse.
+KIND_COLD_FAILED = "cold_failed"
+
+DEGRADE_KINDS = frozenset({KIND_COLD_RUN, KIND_HOOK_TIMEOUT, KIND_COLD_FAILED})
 
 
 def degrade_path(engine_root: Optional[Path] = None) -> Path:

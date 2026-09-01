@@ -72,7 +72,20 @@ def _fake_run_git_degraded_dirty_probe(argv: list[str], cwd: Path):
     elif argv[:2] == ["rev-parse", "--verify"]:
         stdout = "main\n" if argv[-1] == "main" else ""
     elif argv[0] == "branch":
-        stdout = "  work\n  main\n"
+        # `branches_merged_into` reads this arm. Omitting `stale-branch`
+        # left the worktree unreachable, so the loop `continue`d before any
+        # removal directive was built and this test could never observe the
+        # judgment-point gating it exists to pin.
+        stdout = "  work\n  main\n  stale-branch\n"
+    elif argv[0] == "for-each-ref":
+        # The brief's single ref enumeration (`consolidate_assemble.
+        # ref_rows`): the same branches the `branch` arm lists, in the
+        # `<refname>\t<short>\t<authoremail>` shape it parses. Falling
+        # through to the empty default here would silently hand `brief()`
+        # a repo with no branches at all.
+        stdout = "".join(
+            f"refs/heads/{n}\t{n}\t{_MY_EMAIL}\n" for n in ("work", "main", "stale-branch")
+        )
     elif argv[0] == "worktree":
         stdout = _WORKTREE_PORCELAIN
     elif argv[0] == "log":

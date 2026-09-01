@@ -60,6 +60,20 @@ _CORE_HEADER = Path(__file__).resolve().parent / "door_core.h"
 #: hand, and grep both on change.
 SIDECAR_FILENAME = "door.engine-root.txt"
 
+#: THE THIRD AXIS (F-022, C1 of
+#: docs/plans/2026-09-01-the-dogfooded-install-stops-lying-about, ledger
+#: item 8). DR-328 and DR-331 establish the two existing skew axes --
+#: `warm.skew`'s commit-level client token and its source-level
+#: `ServerVersionState` check -- and explicitly REJECTED weakening that
+#: token. This filename names a THIRD, ADDITIVE axis only: the door
+#: IMAGE's own build identity, so a door-only rebuild (which touches
+#: neither axis 1 nor axis 2 -- `_engine_stamp` is untouched by a rebuild
+#: of `door.c`/`door_core.c` alone) is still observable to whichever
+#: server the rebuilt door next talks to. Nothing about the two existing
+#: axes changes; this is a new file read by a new caller, not a
+#: replacement for `SIDECAR_FILENAME` or `_engine_stamp`.
+DOOR_IMAGE_STAMP_FILENAME = "door.image-identity.txt"
+
 #: Provenance sidecar written next to every compiled `door.exe` -- see
 #: `write_provenance()`. Filename convention: `<exe-name>.provenance.json`,
 #: so it survives a `--output` pointing somewhere other than `door.exe`.
@@ -123,6 +137,33 @@ def write_sidecar(output_exe: Path, engine_root: Path) -> Path:
 
 def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write_image_identity(output_exe: Path) -> Path:
+    """Writes the built door's own image identity next to it, so a server
+    it later talks to can tell a rebuilt door apart from the one it
+    booted against -- axis 3 (`skew.SKEW_AXIS_DOOR_IMAGE`), additive to
+    the two axes DR-328/DR-331 established.
+
+    THE CIRCULAR-HASH REASON THIS IS A SIDECAR, NOT A BAKED `-D` DEFINE.
+    `write_provenance`'s `image_sha256` is `sha256(output_exe)` -- taken
+    AFTER the binary is fully written, since a binary cannot embed the
+    hash of its own bytes (no fixed point is computed here). Baking it as
+    a compile-time define the way `__BUILD_ENGINE_ROOT_W__` is baked would
+    require hashing a binary that does not yet exist. This function
+    reuses that already-computed `image_sha256` value instead of a second
+    identity scheme, and ships it the way `write_sidecar` already ships
+    `engine_root` -- a single-line UTF-8 file next to the exe, read at the
+    door's own runtime -- rather than inventing a new transport for it.
+
+    Must be called AFTER the binary is fully written (i.e. after
+    `_compile()`), for the same reason `image_sha256` itself must be:
+    hashing a partially-written file would record the wrong identity.
+    """
+    identity = _sha256_file(output_exe)
+    path = output_exe.parent / DOOR_IMAGE_STAMP_FILENAME
+    path.write_text(identity + "\n", encoding="utf-8", newline="")
+    return path
 
 
 def _compiler_version(kind: str, compiler_path: str) -> str:
@@ -369,6 +410,7 @@ def build(
 
     write_sidecar(output, engine_root)
     write_provenance(output, _SOURCE, kind, compiler_path, engine_root)
+    write_image_identity(output)
 
     return output
 

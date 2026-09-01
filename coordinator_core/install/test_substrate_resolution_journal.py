@@ -146,13 +146,62 @@ def test_clause_indices_point_at_the_correct_shaped_clause_by_identity():
 # --- _sweep_orphaned_agent_helpers (clause _CLAUSE_ORPHAN_SWEEP) -----------
 
 
+def _forwarder_fixture_body() -> str:
+    """An agent-helper forwarder body the sweep's condition 1 actually
+    identifies -- the marker on its OWN LINE, never commented.
+
+    Every fixture in this section wrote the marker behind a `# ` until
+    2026-09-01. `_AGENT_FORWARDER_MARKER_RE` is line-anchored
+    (`^from _resolve_...`, `re.MULTILINE`) and the marker is an import
+    statement, so the comment prefix made it unmatchable: condition 1 never
+    fired and every sweep here ran on an EMPTY candidate set. One helper
+    rather than five literals, so the next anchoring change breaks in one
+    place and is caught by `test_the_fixture_is_actually_identified` below,
+    instead of silently emptying five tests again.
+    """
+    return f"{substrate._AGENT_FORWARDER_MARKER}\n"
+
+
+def test_the_fixture_is_actually_identified(tmp_path):
+    """THE PREMISE EVERY SWEEP TEST BELOW RESTS ON, pinned so it cannot fail
+    silently.
+
+    Two tests in this section assert an orphan SURVIVES -- the check-only run
+    and the guard-refused run. Those pass identically whether the guard worked
+    or the file was never a candidate at all, so with an unidentifiable
+    fixture they were guards that could not fail: a test of the refusal path
+    unable to detect that path breaking. Only the delete-asserting tests
+    noticed, which is how this surfaced.
+
+    Asserts identification twice, deliberately. The regex check names the
+    precise reason a fixture goes unmatched; the positive control proves the
+    path still reaches a delete, so this test cannot itself go vacuous if the
+    marker constant and its regex are changed together.
+    """
+    body = _forwarder_fixture_body()
+    assert substrate._AGENT_FORWARDER_MARKER_RE.search(body), (
+        "the fixture body is not identified by condition 1 -- every sweep test "
+        "in this section is running on an empty candidate set"
+    )
+
+    bin_dst = tmp_path / "bin_dst"
+    bin_dst.mkdir()
+    candidate = bin_dst / "stale-helper"
+    candidate.write_text(body, encoding="utf-8")
+    substrate._sweep_orphaned_agent_helpers(bin_dst, {}, {}, check_only=False)
+    assert not candidate.exists(), (
+        "the fixture is regex-identifiable but the sweep still did not reach a "
+        "delete -- identification and deletion have come apart"
+    )
+
+
 def test_orphan_sweep_journals_only_actually_deleted_entries(tmp_path):
     bin_dst = tmp_path / "bin_dst"
     bin_dst.mkdir()
     orphan = bin_dst / "stale-helper"
-    orphan.write_text(f"# {substrate._AGENT_FORWARDER_MARKER}\n", encoding="utf-8")
+    orphan.write_text(_forwarder_fixture_body(), encoding="utf-8")
     kept = bin_dst / "machine-local"  # a reserved/static name, never swept
-    kept.write_text(f"# {substrate._AGENT_FORWARDER_MARKER}\n", encoding="utf-8")
+    kept.write_text(_forwarder_fixture_body(), encoding="utf-8")
 
     substrate._sweep_orphaned_agent_helpers(bin_dst, {}, {}, check_only=False)
 
@@ -191,7 +240,7 @@ def test_orphan_sweep_check_only_never_journals(tmp_path):
     bin_dst = tmp_path / "bin_dst"
     bin_dst.mkdir()
     orphan = bin_dst / "stale-helper"
-    orphan.write_text(f"# {substrate._AGENT_FORWARDER_MARKER}\n", encoding="utf-8")
+    orphan.write_text(_forwarder_fixture_body(), encoding="utf-8")
 
     with pytest.raises(substrate.SubstrateFatalError):
         substrate._sweep_orphaned_agent_helpers(bin_dst, {}, {}, check_only=True)
@@ -209,7 +258,7 @@ def test_orphan_sweep_guard_refused_journals_nothing_phantom(tmp_path, monkeypat
     bin_dst = tmp_path / "bin_dst"
     bin_dst.mkdir()
     orphan = bin_dst / "stale-helper"
-    orphan.write_text(f"# {substrate._AGENT_FORWARDER_MARKER}\n", encoding="utf-8")
+    orphan.write_text(_forwarder_fixture_body(), encoding="utf-8")
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
 
     substrate._sweep_orphaned_agent_helpers(bin_dst, {}, {}, check_only=False)
@@ -485,7 +534,7 @@ def test_orphan_sweep_resolution_round_trips_through_derive_receipt_entries(tmp_
     bin_dst = tmp_path / "bin_dst"
     bin_dst.mkdir()
     orphan = bin_dst / "stale-helper"
-    orphan.write_text(f"# {substrate._AGENT_FORWARDER_MARKER}\n", encoding="utf-8")
+    orphan.write_text(_forwarder_fixture_body(), encoding="utf-8")
 
     substrate._sweep_orphaned_agent_helpers(bin_dst, {}, {}, check_only=False)
 

@@ -173,3 +173,82 @@ class TestColdTurnsAwayWhatItCannotServe:
         out = hook_http.evaluate_cold(_event(_NO_VERIFY_CMD))
 
         assert out != hook_http.unserved_response("PreToolUse")
+
+
+class TestColdItselfFailingStillLetsTheActProceed:
+    """DR-402 rung 3. A caller reaching `evaluate_cold` has already exhausted the warm
+    listener, so an exception out of this function lands in that caller's unreachable
+    branch and becomes the deny the whole ladder exists to retire -- the mechanism
+    observed 2026-08-30, where an `OSError` from an expensive evaluation surfaced inside
+    DoE's forwarder as `no live engine backend reachable`.
+
+    Asserts the three properties together, because any one alone is satisfiable by a
+    wrong implementation: it must not raise (or the caller denies), it must not carry a
+    verdict (a guard that could not run holds none), and it must be durably recorded (or
+    rung 3 becomes the silent normal PM ruling 2 forbids).
+    """
+
+    @staticmethod
+    def _explode(*args, **kwargs):
+        raise RuntimeError("chain exploded")
+
+    def test_a_chain_failure_is_not_raised_at_the_caller(self, monkeypatch):
+        monkeypatch.setattr(
+            "coordinator_core.bash_guards.dispatch.evaluate_payload_json", self._explode
+        )
+        monkeypatch.delenv("COORDINATOR_OVERRIDE_NO_VERIFY", raising=False)
+
+        body = hook_http.evaluate_cold(_event("echo probe"))
+
+        assert isinstance(body, dict)
+
+    def test_a_chain_failure_carries_no_verdict_and_says_so_loudly(self, monkeypatch):
+        monkeypatch.setattr(
+            "coordinator_core.bash_guards.dispatch.evaluate_payload_json", self._explode
+        )
+        monkeypatch.delenv("COORDINATOR_OVERRIDE_NO_VERIFY", raising=False)
+
+        body = hook_http.evaluate_cold(_event(_NO_VERIFY_CMD))
+
+        # No verdict: the harness reads absence of `permissionDecision` as no objection,
+        # which is rung 3's "the act proceeds". Asserted on the DENY-shaped command
+        # specifically -- the case where a wrong implementation is most tempted to keep
+        # denying on the strength of the command's shape rather than an evaluation.
+        assert "permissionDecision" not in body.get("hookSpecificOutput", {})
+        # Loud: the operator sees it and the model is told, so an unrun guard is never
+        # indistinguishable from a guard that ran and passed.
+        assert "did not run" in body.get("systemMessage", "")
+        assert "chain exploded" in body.get("systemMessage", "")
+
+    def test_a_chain_failure_is_durably_recorded_as_its_own_kind(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            "coordinator_core.warm.telemetry.record_degrade",
+            lambda *a, **kw: calls.append(kw),
+        )
+        monkeypatch.setattr(
+            "coordinator_core.bash_guards.dispatch.evaluate_payload_json", self._explode
+        )
+        monkeypatch.delenv("COORDINATOR_OVERRIDE_NO_VERIFY", raising=False)
+
+        hook_http.evaluate_cold(_event("echo probe"))
+
+        kinds = [kw.get("kind") for kw in calls]
+        # Both rows, in order: the cold run was entered, and then it collapsed. Recording
+        # only `cold_run` would report the box as running its guards cold when it is not
+        # running them at all -- the same blindness one rung further down.
+        assert kinds == ["cold_run", "cold_failed"]
+        assert "RuntimeError" in calls[1].get("cause", "")
+
+    def test_a_recorder_failure_cannot_itself_deny_the_box(self, monkeypatch):
+        """The instrument may not be the reason the request it describes also fails.
+        `record_degrade` is best-effort by its own contract, but this asserts the
+        property at THIS call site: rung 3 must survive its own telemetry breaking."""
+        monkeypatch.setattr(
+            "coordinator_core.warm.telemetry.record_degrade", self._explode
+        )
+        monkeypatch.delenv("COORDINATOR_OVERRIDE_NO_VERIFY", raising=False)
+
+        body = hook_http.evaluate_cold(_event("echo probe"))
+
+        assert "permissionDecision" not in body.get("hookSpecificOutput", {})

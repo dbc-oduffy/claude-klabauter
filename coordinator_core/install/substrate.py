@@ -88,6 +88,7 @@ from coordinator_core.win_portability import is_executable, no_console_creationf
 from coordinator_core.install._shared import (
     RequireHomeError,
     atomic_write_bytes,
+    env_overlay,
     is_pointer,
     require_home,
 )
@@ -1228,6 +1229,17 @@ def _union_native_forwarder_manifest(dst_dir: Path, written_names: "set[str]") -
 # committed artifact C2's census populates from its `door-eligible` bucket
 # (both the op-equivalent and warm-loadable axes pass) -- this module reads
 # it back as installed-forwarder NAMES, never re-derives eligibility itself.
+#
+# KEY SPLIT (C13, docs/dispatch-briefs/2026-09-01-the-dogfooded-install-
+# stops-lying-about/C13.md): this module used to read the SAME `entrypoints`
+# key `invoke_from_argv.py`'s warm-load allowlist reads, which meant
+# disabling this door cutover (by emptying that key) also disabled the
+# unrelated, working warm-load gate -- the two have opposite failure
+# semantics (this bucket degrades harmlessly to "no cutover" on absence;
+# the warm-load gate fails closed). This module now reads its OWN
+# `door_eligible_entrypoints` key, independently editable/clearable without
+# touching `entrypoints`. `invoke_from_argv.py` is untouched by this split
+# and keeps reading `entrypoints` exactly as before.
 # A name in this set gets a native `.exe`-direct forwarder that REPLACES its
 # `.py`/`.cmd` pair on Windows -- the pair is never written, and any pair left
 # by an earlier install is removed on a successful cutover. See
@@ -1252,16 +1264,19 @@ _DOOR_ELIGIBLE_ALLOWLIST_PATH = (
 
 def _door_eligible_forwarder_names() -> "frozenset[str]":
     """The door-eligible bucket, as installed forwarder names, read from the
-    committed allowlist C2's census writes. Best-effort: an absent or
-    malformed allowlist degrades to the empty set (nothing cut over this
-    run) rather than failing the install -- matches this module's other
-    best-effort side-file reads (`_read_native_forwarder_manifest`)."""
+    committed allowlist's OWN `door_eligible_entrypoints` key (C13 split --
+    NOT `entrypoints`, which is `invoke_from_argv.py`'s separately-gated
+    warm-load allowlist; see the KEY SPLIT comment above this function).
+    Best-effort: an absent or malformed allowlist, or an absent/malformed
+    `door_eligible_entrypoints` key, degrades to the empty set (nothing cut
+    over this run) rather than failing the install -- matches this module's
+    other best-effort side-file reads (`_read_native_forwarder_manifest`)."""
     try:
         raw = _DOOR_ELIGIBLE_ALLOWLIST_PATH.read_text(encoding="utf-8")
         data = json.loads(raw)
     except (OSError, ValueError):
         return frozenset()
-    names = data.get("entrypoints") if isinstance(data, dict) else None
+    names = data.get("door_eligible_entrypoints") if isinstance(data, dict) else None
     if not isinstance(names, list):
         return frozenset()
     return frozenset(n for n in names if isinstance(n, str))
@@ -1422,13 +1437,15 @@ def _write_native_door_forwarder(
     `check_only` performs no removal (no mutation permitted in check-only
     mode, matching `install_named_forwarder`'s own contract).
 
-    RETURNS None ON AN UNSTAMPED ENGINE ROOT, never raises. The native image
-    is ADDITIVE to the `.py`/`.cmd` pair this function's callers have already
-    written, so a root that cannot supply a door leaves the name on its
-    existing Python path -- correct, merely uncut-over. Raising instead
-    (`install_named_forwarder`'s own refusal) would abort the whole install
-    over an addition that was never load-bearing. Unreachable while the
-    door-eligible bucket was 12 names; at 382 it is every install run from an
+    RETURNS None ON AN UNSTAMPED ENGINE ROOT OR A FAILED BUILD, never raises.
+    The native image is ADDITIVE to the `.py`/`.cmd` pair this function's
+    callers have already written, so a root that cannot supply a door (no
+    stamp, or `install_named_forwarder`'s POSIX build failing -- C2,
+    dispatch brief F-013) leaves the name on its existing Python path --
+    correct, merely uncut-over. Raising instead (`install_named_forwarder`'s
+    own refusal, or a `SystemExit` out of a compile failure) would abort the
+    whole install over an addition that was never load-bearing. Unreachable
+    while the door-eligible bucket was 12 names; at 382 it is every install run from an
     unstamped root, which is why the degrade is here rather than at the AC."""
     from coordinator_core.install import door_install
     from coordinator_core.warm.engine_root import is_engine_root
@@ -1485,7 +1502,27 @@ def _write_native_door_forwarder(
             door_install.remove_stale_named_forwarder(bin_dst, name)
         return None
 
-    dest = door_install.install_named_forwarder(bin_dst, engine_root, name, check_only=check_only)
+    # A FAILED BUILD DEGRADES, IT DOES NOT ABORT (C2, dispatch brief F-013,
+    # part b). `install_named_forwarder` -> `install_door` -> (POSIX)
+    # `door_install_posix_build.build_or_advise` raises `door_install.
+    # DoorInstallError` on a missing toolchain and lets a genuine compile
+    # failure's `SystemExit` (`build_posix.build` / `build.py :: _compile`)
+    # propagate unchanged. Neither is a per-name reason to abandon this name:
+    # returning `None` here reaches this function's own contract exactly
+    # like the `is_engine_root`-false branch above -- the caller falls
+    # through to writing the ordinary Python forwarder pair for `name`,
+    # "left on its existing Python path -- correct, merely uncut-over," the
+    # promise this docstring already made for the unstamped-root case.
+    try:
+        dest = door_install.install_named_forwarder(bin_dst, engine_root, name, check_only=check_only)
+    except (door_install.DoorInstallError, SystemExit) as exc:
+        print(
+            f"[install-substrate] {name}: no native door forwarder -- "
+            f"door build failed ({exc}). Left on its Python forwarder; "
+            "fix the toolchain/build and re-run to cut it over.",
+            file=sys.stderr,
+        )
+        return None
     if not check_only:
         door_install.remove_shadowing_ps1_sibling(bin_dst, name)
     return dest
@@ -2335,7 +2372,30 @@ def _sweep_orphaned_agent_helpers(
     # unsweepable, which is why limb 1's marker branch above is what makes
     # deletion reachable at all.
     protected_names |= {Path(n).stem + ".ps1" for n in protected_names}
+    from coordinator_core.install import door_install
+
+    # THE MANIFEST RECORDS BARE INSTALLED NAMES; EVERY ENTRY BELOW IS A
+    # FILENAME. `native_written.add(f)` stores the agent-helper map KEY
+    # (`cross-repo-memo`), while the file actually written is
+    # `named_forwarder_path`'s output -- `cross-repo-memo.exe` on Windows, the
+    # bare name on POSIX. Comparing `entry.name` against the manifest directly
+    # therefore matched on POSIX and could NEVER match on Windows, leaving
+    # condition 0 dead on the one platform whose native images are opaque
+    # binaries -- so a native `.exe` fell through to the text-marker branch,
+    # raised `UnicodeDecodeError`, and was skipped. Every renamed-away native
+    # image on a Windows box was unsweepable by construction: measured
+    # 2026-09-01, four OSS-renamed launchers surviving indefinitely
+    # (`check-claude-klabauter-doctor-sentinel.exe` and siblings, each with a
+    # live source-named counterpart). Condition 0b escaped this because it
+    # already compared `Path(name).stem`.
+    # Projected through `named_forwarder_path` rather than by appending a
+    # literal `.exe`, so this and the writer cannot drift on the suffix rule;
+    # the bare names are kept in the set too, so a manifest that ever recorded
+    # filenames still matches and POSIX behaviour is bit-for-bit unchanged.
     native_forwarder_names = _read_native_forwarder_manifest(dst_dir)
+    native_forwarder_names = native_forwarder_names | {
+        door_install.named_forwarder_path(dst_dir, n).name for n in native_forwarder_names
+    }
     orphans: "list[str]" = []
     removed: "list[WriteSurfaceEntry]" = []
     for entry in sorted(dst_dir.iterdir()):
@@ -3599,7 +3659,22 @@ def _write_agent_helper_forwarders(
     # collects (name, exc) pairs; a non-empty `failed` after the loop raises
     # `SubstrateFatalError`, which `run()`/`main()` already turn into exit 1
     # (see their own `except SubstrateFatalError` clauses) — no new exit path.
+    #
+    # THE CATCH IS THREE TYPES WIDE, NOT `Exception` (DR-402's shape, one
+    # plane over; C2, dispatch brief F-013). `OSError` alone caught the
+    # WinError-32 case above but let a POSIX door-BUILD failure kill the
+    # whole loop: `door_build_posix.build()` (a real compile error, toolchain
+    # present) raises `SystemExit`, and a missing-toolchain degrade
+    # (`door_install_posix_build.build_or_advise`) is surfaced by
+    # `door_install.install_door` as `door_install.DoorInstallError`. Both
+    # must degrade THIS NAME onto its existing Python path and continue, the
+    # same as the OSError case -- but the catch stays this named triple,
+    # never a bare `except Exception`, so a per-name failure keeps landing in
+    # `failed` (and therefore the non-zero exit / summary line below) instead
+    # of silently vanishing the way the backlog row above describes.
     failed: "list[tuple[str, BaseException]]" = []
+    from coordinator_core.install import door_install
+    _PER_NAME_DEGRADE_EXCEPTIONS = (OSError, door_install.DoorInstallError, SystemExit)
 
     if check_only:
         agent_helper_resolved: "list[WriteSurfaceEntry]" = []
@@ -3620,7 +3695,7 @@ def _write_agent_helper_forwarders(
                     resolver_module=resolver_module,
                 )
                 agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
-            except OSError as exc:
+            except _PER_NAME_DEGRADE_EXCEPTIONS as exc:
                 failed.append((f, exc))
         _report_agent_helper_forwarder_summary(agent_helper_target_map, failed)
         _raise_if_agent_helper_forwarders_failed(
@@ -3648,7 +3723,7 @@ def _write_agent_helper_forwarders(
                     resolver_module=resolver_module,
                 )
                 agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(py_dst)))
-            except OSError as exc:
+            except _PER_NAME_DEGRADE_EXCEPTIONS as exc:
                 failed.append((f, exc))
 
     if engine_root is not None:
@@ -4715,6 +4790,59 @@ def _install_claude_klabauter_seed_wiki_page(claude_klabauter_root: Path, settin
     shutil.copy2(src, dst)
 
 
+_FNM_MANUAL_INSTALL = (
+    "install fnm manually if you need per-repo Node pinning: "
+    "https://github.com/Schniz/fnm#installation"
+)
+
+
+def _fnm_mutation_declined(*, leg_desc: str, prompt_verb: str) -> bool:
+    """Shared consent gate for EVERY fnm install leg (brew and curl alike) —
+    the same gate, not a per-leg lookalike. This is C6's fix for the finding
+    that the curl leg asked (interactive prompt or
+    ``COORDINATOR_INSTALL_FNM=1``) while the brew leg had no consent check at
+    all, guarded only by ``_refuse_machine_mutation`` (a test-harness switch,
+    not human consent). Declining costs the operator nothing that matters:
+    fnm is an OPTIONAL dependency (per-repo Node pinning); core substrate is
+    unaffected without it.
+
+    Prints the reason and the manual alternative; never raises. Under a
+    non-interactive/agent path (no tty, or ``COORDINATOR_NON_INTERACTIVE=1``)
+    the default is to DECLINE and report — never to proceed.
+
+    Cite: DR-317 (machine-first provisioning) is ORTHOGONAL, not
+    contradictory, to this gate — DR-317 governs interpreter/venv
+    provisioning targets, not consent for mutating a user's tools (installing
+    a third-party package via brew/curl). This gate also claims DR-402's
+    irreversible-harm carve-out explicitly: it sits outside that record's
+    premise (performance/ergonomics guards on the warm-vs-cold seam) and
+    keeps its own default-DECLINE disposition regardless of engine or backend
+    availability.
+    """
+    if os.environ.get("COORDINATOR_INSTALL_FNM") == "1":
+        return False
+
+    interactive = sys.stdin.isatty() and os.environ.get("COORDINATOR_NON_INTERACTIVE") != "1"
+    if interactive:
+        print(f"[setup] fnm is absent. {leg_desc}")
+        try:
+            consent = input(f"[setup] {prompt_verb}? [y/N] ")
+        except EOFError:
+            consent = ""
+        if consent[:1] in ("y", "Y"):
+            return False
+        print(f"[setup] fnm: declined — optional, core substrate unaffected; {_FNM_MANUAL_INSTALL}")
+        return True
+
+    print(
+        f"[setup] fnm: absent, and installing it would {leg_desc[0].lower()}{leg_desc[1:]} "
+        f"— not done without consent. Set COORDINATOR_INSTALL_FNM=1 to opt in, or "
+        f"{_FNM_MANUAL_INSTALL}",
+        file=sys.stderr,
+    )
+    return True
+
+
 def _fnm_curl_leg_declined() -> bool:
     """True when the `curl https://fnm.vercel.app/install | bash` leg must not
     run. Prints the reason and the manual alternative; never raises.
@@ -4725,17 +4853,10 @@ def _fnm_curl_leg_declined() -> bool:
        outright (`OS MSYS_NT-10.0-26200 is not supported`), so the leg could
        only ever fetch a remote script, execute it, and fail. `winget install
        Schniz.fnm` is the Windows path.
-    2. No consent. This leg downloads a remote script and pipes it into a
-       shell — an external, unpinned code-execution step, for an OPTIONAL
-       dependency (per-repo Node pinning; core substrate is unaffected without
-       it). It is opt-in: set COORDINATOR_INSTALL_FNM=1, or answer the prompt
-       on an interactive terminal. Silence means declined, and declining costs
-       the operator nothing that matters.
+    2. No consent, via the shared gate ``_fnm_mutation_declined`` — this leg
+       downloads a remote script and pipes it into a shell, an external,
+       unpinned code-execution step.
     """
-    fnm_manual = (
-        "install fnm manually if you need per-repo Node pinning: "
-        "https://github.com/Schniz/fnm#installation"
-    )
     if os.name == "nt":
         print(
             "[setup] fnm: skipping the curl installer — not supported on Windows. "
@@ -4744,60 +4865,75 @@ def _fnm_curl_leg_declined() -> bool:
         )
         return True
 
-    if os.environ.get("COORDINATOR_INSTALL_FNM") == "1":
-        return False
-
-    interactive = sys.stdin.isatty() and os.environ.get("COORDINATOR_NON_INTERACTIVE") != "1"
-    if interactive:
-        print(
-            "[setup] fnm is absent. Installing it runs a remote script "
-            "(https://fnm.vercel.app/install) through bash.",
-        )
-        try:
-            consent = input("[setup] Fetch and run it? [y/N] ")
-        except EOFError:
-            consent = ""
-        if consent[:1] in ("y", "Y"):
-            return False
-        print(f"[setup] fnm: declined — optional, core substrate unaffected; {fnm_manual}")
-        return True
-
-    print(
-        f"[setup] fnm: absent, and its installer is a remote script — not fetched without "
-        f"consent. Set COORDINATOR_INSTALL_FNM=1 to opt in, or {fnm_manual}",
-        file=sys.stderr,
+    return _fnm_mutation_declined(
+        leg_desc="Installing it runs a remote script (https://fnm.vercel.app/install) through bash.",
+        prompt_verb="Fetch and run it",
     )
-    return True
+
+
+def _fnm_brew_leg_declined() -> bool:
+    """True when the `brew install fnm` leg must not run — same consent gate
+    as ``_fnm_curl_leg_declined``, via ``_fnm_mutation_declined`` (C6: the
+    brew leg previously had NO consent check at all, only
+    ``_refuse_machine_mutation``, which is a test-harness switch keyed on
+    ``COORDINATOR_DISABLE_MACHINE_MUTATION=1``, not human consent — the same
+    install step asked on the curl path and not the brew one)."""
+    return _fnm_mutation_declined(
+        leg_desc="Installing it runs `brew install fnm`, mutating this machine's Homebrew cellar/cache.",
+        prompt_verb="Install via brew",
+    )
 
 
 def _fnm_step(check_only: bool) -> None:
+    # C6 fix 3: check the REQUIREMENT (a usable node), not just the tool
+    # (fnm) — a box with node already on PATH has already met the need fnm
+    # exists to provide (per-repo Node pinning is a bonus fnm adds on top,
+    # not the base requirement), so it must not trigger an install.
+    node_path = shutil.which("node")
     if check_only:
         fnm_path = shutil.which("fnm")
-        if fnm_path:
+        if node_path:
+            print(f"[install-substrate] check: node already present at {node_path} (no-op; fnm not needed)")
+        elif fnm_path:
             print(f"[install-substrate] check: fnm already present at {fnm_path} (no-op)")
         else:
             print(
                 "[install-substrate] check: fnm absent (would install via brew, or via the "
-                "remote curl installer only with consent / COORDINATOR_INSTALL_FNM=1, and "
-                "never on Windows; optional, core substrate unaffected)"
+                "remote curl installer, both only with consent / COORDINATOR_INSTALL_FNM=1, and "
+                "curl never on Windows; optional, core substrate unaffected)"
             )
+        return
+    if node_path:
+        print(f"[setup] node already available at {node_path} — skipping fnm install (requirement already met)")
         return
     fnm_path = shutil.which("fnm")
     if fnm_path:
         print(f"[setup] fnm already installed at {fnm_path} — skipping binary install")
         return
-    fnm_manual = "install fnm manually if you need per-repo Node pinning: https://github.com/Schniz/fnm#installation"
+    fnm_manual = _FNM_MANUAL_INSTALL
     blocked = _refuse_machine_mutation("fnm", what="install fnm via brew/curl")
     if blocked:
         print(f"[install-substrate] REFUSED: {blocked}", file=sys.stderr)
         return
     if shutil.which("brew"):
-        print("[setup] installing fnm via brew...", flush=True)
-        proc = _run(["brew", "install", "fnm"], timeout=TOOLCHAIN_BOOTSTRAP_SECS)
-        if proc.returncode == 0:
-            print("[setup] fnm installed via brew")
+        if _fnm_brew_leg_declined():
+            # _fnm_brew_leg_declined printed the reason and the manual alternative.
+            pass
         else:
-            print(f"[setup] WARNING: brew install fnm failed — optional, core substrate unaffected; {fnm_manual}", file=sys.stderr)
+            print("[setup] installing fnm via brew...", flush=True)
+            # C6 fix 2: HOMEBREW_NO_AUTO_UPDATE / HOMEBREW_NO_INSTALL_CLEANUP —
+            # `_run` never sets `env=` on its own, so an un-opted-in `brew
+            # install` ran a full `brew update` plus `brew cleanup`, which is
+            # how this leg reached >50MB of the operator's UNRELATED cask/
+            # formula caches for a single optional `fnm` install.
+            brew_env = dict(os.environ)
+            brew_env["HOMEBREW_NO_AUTO_UPDATE"] = "1"
+            brew_env["HOMEBREW_NO_INSTALL_CLEANUP"] = "1"
+            proc = _run(["brew", "install", "fnm"], timeout=TOOLCHAIN_BOOTSTRAP_SECS, env=brew_env)
+            if proc.returncode == 0:
+                print("[setup] fnm installed via brew")
+            else:
+                print(f"[setup] WARNING: brew install fnm failed — optional, core substrate unaffected; {fnm_manual}", file=sys.stderr)
     elif not shutil.which("curl"):
         print(f"[setup] WARNING: cannot install fnm — neither brew nor curl available; optional, core substrate unaffected; {fnm_manual}", file=sys.stderr)
     elif _fnm_curl_leg_declined():
@@ -5541,12 +5677,24 @@ def main(argv: Optional[List[str]] = None) -> int:
             "docs/plans/2026-08-18-retire-coordinator-venv.md chunk C4."
         ),
     )
+    parser.add_argument(
+        "--engine-root", default=None, metavar="PATH",
+        help=(
+            "Explicit claude-klabauter engine root, for a cold install with no "
+            "machine-local registry yet. Outranks every discovered rung "
+            "(sets COORDINATOR_ENGINE_ROOT, which coordinator_engine_root's "
+            "Rung 1 already reads ahead of the .claude-klabauter-live-root sentinel and the "
+            "machine-local registry) — see coordinator_core/engine_root.py."
+        ),
+    )
     args = parser.parse_args(argv)
+    overlay = {"COORDINATOR_ENGINE_ROOT": args.engine_root} if args.engine_root else {}
     try:
-        return run(
-            setup_only=args.setup_only, check_only=args.check_only,
-            allow_venv_fallback=args.allow_venv_fallback,
-        )
+        with env_overlay(overlay):
+            return run(
+                setup_only=args.setup_only, check_only=args.check_only,
+                allow_venv_fallback=args.allow_venv_fallback,
+            )
     except SubstrateFatalError as exc:
         print(str(exc), file=sys.stderr)
         return 1

@@ -318,6 +318,23 @@ def _log_dialect_parser_unavailable(guard_name: str, reason: str) -> None:
 
     Agent-facing register (`docs/wiki/guard-messaging.md` § Register): the
     remedy line names `/coordinator:install`, never an override key.
+
+    DR-402 alignment (2026-09-01, C12): a disarmed dialect guard is exactly
+    the "guard that cannot run allows, and says so" shape DR-402 names --
+    the guard proceeds (SILENT, never a deny) and the proceed must be loud.
+    Advisory text on stdout/a settings-home log alone is not the record
+    format DR-402 settles on; `warm/telemetry.py::record_degrade` is, so
+    this now ALSO appends one `KIND_COLD_FAILED` row there -- reused
+    because the semantics match exactly ("the guard chain could not
+    produce a verdict") even though this call site is not the warm/cold
+    hook-serving path `KIND_COLD_FAILED`'s sibling call sites in
+    `hook_http.py` guard: this module's dialect-parse layer never reaches
+    the warm/cold hook split at all (see module docstring, `dispatch.py`
+    Anti-scope), so there is no narrower existing kind to reuse instead of
+    widening `DEGRADE_KINDS` -- out of `writes:` scope for this chunk. The
+    settings-home log stays, unchanged, as the guard-messaging-facing
+    remedy line's own record; `record_degrade` is the second, durable,
+    attributable row DR-402 requires and does not replace it.
     """
     global _LOGGED_PARSER_UNAVAILABLE
     if _LOGGED_PARSER_UNAVAILABLE:
@@ -333,6 +350,15 @@ def _log_dialect_parser_unavailable(guard_name: str, reason: str) -> None:
         with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
         _LOGGED_PARSER_UNAVAILABLE = True
+    except Exception:  # noqa: BLE001 -- observability must never raise into a guard
+        pass
+    try:
+        from coordinator_core.warm.telemetry import KIND_COLD_FAILED, record_degrade
+
+        record_degrade(
+            kind=KIND_COLD_FAILED,
+            cause=f"PowerShell dialect guard disarmed for {guard_name!r}: {reason}",
+        )
     except Exception:  # noqa: BLE001 -- observability must never raise into a guard
         pass
 

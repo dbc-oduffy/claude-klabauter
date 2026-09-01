@@ -603,7 +603,10 @@ def evaluate_cold(event: Mapping[str, Any]) -> Dict[str, Any]:
 
     Calls `warm.telemetry.record_degrade(kind="cold_run", ...)` (C2) on every invocation
     -- unconditionally, because reaching this function AT ALL already means "no
-    reachable listener", which is the fact worth a durable row. NOT a fallback: DR-347
+    reachable listener", which is the fact worth a durable row. A second row
+    (`kind="cold_failed"`) follows it if the cold evaluation then collapses; see the
+    never-raises paragraph below for why that is a distinct kind and not a re-use of
+    this one. NOT a fallback: DR-347
     Ruling 3 forbids THIS module rerouting a served call to cold dispatch on failure
     (module docstring, negative-spec); this function is the opposite direction -- a
     caller that has ALREADY decided to go cold, asking for a real verdict instead of an
@@ -616,6 +619,30 @@ def evaluate_cold(event: Mapping[str, Any]) -> Dict[str, Any]:
     examines `tool_name`/`tool_input`, so an event that carries neither would otherwise come
     back a confident no-objection about a question it was never asked. A non-string name is
     unserveable by the same test and is reported without echoing the caller's value back.
+
+    NEVER RAISES past the route check -- DR-402 rung 3, and the reason this function is
+    written with a bare `except` where the rest of this module is not. A caller reaching
+    here has ALREADY exhausted the warm listener; it has no third thing left to try, so an
+    exception out of this function is not an error it can handle -- it is the caller's own
+    unreachable branch re-entered from below. That is the mechanism observed on 2026-08-30
+    (`state/bug-backlog/2026-08-30-the-bash-guard-forwarder-fails-closed-on-3488980e5fba.yaml`):
+    an expensive evaluation surfaced as an `OSError` inside DoE's forwarder, which turned it
+    into `no live engine backend reachable` and denied a command nothing had evaluated.
+
+    On failure this answers `unreachable_response` -- the same loud, verdict-free shape
+    `interpret_result` already returns for every other unverdictable outcome, which the
+    harness reads as no objection while `systemMessage`/`additionalContext` keep the unrun
+    guard visible in the transcript. The act proceeds; it does not proceed quietly.
+
+    NEGATIVE-SPEC, so the breadth of that `except` is not later "tidied" into a narrow one:
+    the failures worth catching here are open-ended BY CONSTRUCTION -- an import error from
+    a half-published engine, a policy file that does not parse, an unstamped root, a bug in
+    any guard in the chain. Enumerating them is exactly the move that leaves the
+    unenumerated one denying the box. Narrowing the RETURN to a deny is forbidden for a
+    different reason: a guard that could not run holds no verdict to report, and DR-402's
+    premise is that these are performance and ergonomics instruments, not security
+    controls. `KeyboardInterrupt`/`SystemExit` are deliberately NOT caught -- they are not
+    guard failures, and a caller being shut down must not be told its guard degraded.
     """
     event_name = event.get("hook_event_name")
     if not isinstance(event_name, str):
@@ -623,22 +650,48 @@ def evaluate_cold(event: Mapping[str, Any]) -> Dict[str, Any]:
     if route_for_event(event_name) is None:
         return unserved_response(event_name)
 
-    payload = payload_from_event(event)
+    try:
+        from coordinator_core.warm.telemetry import (
+            KIND_COLD_FAILED,
+            KIND_COLD_RUN,
+            record_degrade,
+        )
 
-    from coordinator_core.bash_guards.dispatch import evaluate_payload_json
-    from coordinator_core.ops.warm_guard_evaluate import (
-        _engine_resolution_class,
-        _policy_file_for,
-        _verdict_from_envelope,
-    )
-    from coordinator_core.warm.telemetry import KIND_COLD_RUN, record_degrade
+        record_degrade(kind=KIND_COLD_RUN, cause="no reachable warm listener")
 
-    record_degrade(kind=KIND_COLD_RUN, cause="no reachable warm listener")
+        payload = payload_from_event(event)
 
-    out = evaluate_payload_json(
-        json.dumps(payload),
-        policy_file=_policy_file_for(payload),
-        resolution_class=_engine_resolution_class(),
-    )
-    result = _verdict_from_envelope(out)
-    return _decision_to_response(event_name, result)
+        from coordinator_core.bash_guards.dispatch import evaluate_payload_json
+        from coordinator_core.ops.warm_guard_evaluate import (
+            _engine_resolution_class,
+            _policy_file_for,
+            _verdict_from_envelope,
+        )
+
+        out = evaluate_payload_json(
+            json.dumps(payload),
+            policy_file=_policy_file_for(payload),
+            resolution_class=_engine_resolution_class(),
+        )
+        result = _verdict_from_envelope(out)
+        return _decision_to_response(event_name, result)
+    except Exception as exc:  # noqa: BLE001 -- breadth is the point; see docstring
+        detail = "cold evaluation failed: %s: %s" % (type(exc).__name__, exc)
+        try:
+            from coordinator_core.warm.telemetry import (
+                KIND_COLD_FAILED,
+                record_degrade,
+            )
+
+            record_degrade(kind=KIND_COLD_FAILED, cause=detail)
+        except Exception:  # noqa: BLE001 -- the instrument may not be the failure
+            # Deliberately swallowed and deliberately NOT re-raised or upgraded to a
+            # deny. `record_degrade` is best-effort past its own `kind` validation, but
+            # the import above and the telemetry module itself are not covered by that
+            # contract, and this rung is reached precisely when the engine is in a state
+            # where imports fail. Losing the row costs accountability for one degrade;
+            # letting it propagate costs the box its shell. The row is why rung 3 is not
+            # silent, so this is the one place that trade runs the other way -- and the
+            # response below is still loud in the transcript regardless.
+            pass
+        return unreachable_response(event_name, detail)

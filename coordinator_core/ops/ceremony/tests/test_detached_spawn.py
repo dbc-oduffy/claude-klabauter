@@ -167,6 +167,75 @@ def test_child_env_carries_repo_root_on_pythonpath(repo_root: str, existing_scri
     assert "/pre-existing" in pythonpath
 
 
+def test_hook_scoped_boot_wait_is_scrubbed_from_the_child(
+    repo_root: str, existing_script: str
+) -> None:
+    """A detached child outlives the hook that spawned it, so a hook-scoped env
+    value must not cross this boundary.
+
+    THE MEASURED FAILURE (2026-09-01). DoE-claude's `_hook_boot.py` sets
+    `COORDINATOR_WARM_BOOT_WAIT_SECS=0` unconditionally and deliberately, so a
+    hook never blocks -- correct for a hook. But a hook process missed warm,
+    `warm.client._spawn_once` spawned the WARM SERVER through this function, and
+    the server inherited `0` for its whole lifetime, then handed it to every
+    child it spawned including op/CLI doors, where the bounded boot wait is
+    supposed to apply. Confirmed by reading the live server's environment block
+    (PID 17188): it carried both the `0` and `CLAUDE_PLUGIN_ROOT`, which the
+    harness sets only for plugin hook processes.
+
+    Operator-visible cost: every CLI call that missed warm refused instantly
+    rather than waiting for the respawn it had just triggered, so "re-issue once
+    -- the respawn already in flight normally answers the next call" could never
+    converge, and the next rung pointed at restarting an engine ~50 sessions
+    share.
+
+    Pins the scrub, not the setter: `_hook_boot.py` is right for its own process
+    and lives in a repo claude-klabauter does not own."""
+    with mock.patch.dict(
+        detached_spawn.os.environ,
+        {"COORDINATOR_WARM_BOOT_WAIT_SECS": "0"},
+        clear=False,
+    ), mock.patch.object(detached_spawn.subprocess, "Popen") as mock_popen:
+        detached_spawn.spawn_detached(repo_root, existing_script)
+        # Asserted INSIDE the patch: `mock.patch.dict` restores the environment
+        # on exit, so a parent-env check outside this block would read the
+        # fixture's teardown rather than the scrub's blast radius.
+        parent_value = detached_spawn.os.environ["COORDINATOR_WARM_BOOT_WAIT_SECS"]
+
+    _, kwargs = mock_popen.call_args
+    assert "COORDINATOR_WARM_BOOT_WAIT_SECS" not in kwargs["env"], (
+        "a hook-scoped boot wait must not reach a child that outlives the hook"
+    )
+    # The parent's own environment is untouched -- the scrub is child-scoped,
+    # exactly as `env_extra` is, and for the same reason.
+    assert parent_value == "0"
+
+
+def test_scrub_leaves_unrelated_inherited_env_alone(
+    repo_root: str, existing_script: str
+) -> None:
+    """The scrub is a named list, never a filter. A detached child still needs
+    the rest of the parent's environment -- settings home, session identity,
+    interpreter config -- so this pins that exactly one name is removed and
+    ordinary inherited values survive."""
+    with mock.patch.dict(
+        detached_spawn.os.environ,
+        {
+            "COORDINATOR_WARM_BOOT_WAIT_SECS": "0",
+            "COORDINATOR_SETTINGS_HOME": "/settings/home",
+            "SOME_UNRELATED_VAR": "keep-me",
+        },
+        clear=False,
+    ), mock.patch.object(detached_spawn.subprocess, "Popen") as mock_popen:
+        detached_spawn.spawn_detached(repo_root, existing_script)
+
+    _, kwargs = mock_popen.call_args
+    env = kwargs["env"]
+    assert env["COORDINATOR_SETTINGS_HOME"] == "/settings/home"
+    assert env["SOME_UNRELATED_VAR"] == "keep-me"
+    assert "COORDINATOR_WARM_BOOT_WAIT_SECS" not in env
+
+
 def test_missing_script_is_logged_and_never_spawned(repo_root: str) -> None:
     """A `script_path` that resolves to nothing (repo_root-relative form,
     not the old cwd-relative one) must be caught BEFORE `Popen` -- the prior

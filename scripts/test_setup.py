@@ -69,6 +69,7 @@ def test_parse_args_defaults(setup_mod):
     assert args.allow_venv_fallback is False
     assert args.register_only is False
     assert args.check is False
+    assert args.preflight is False
     assert args.help is False
     assert args.claude_klabauter_root == ""
     assert args.coordinator_root == ""
@@ -561,6 +562,67 @@ def test_help_mode_exits_zero(setup_mod):
     assert setup_mod.main(["--help"]) == 0
 
 
+def test_help_text_names_preflight_flag(setup_mod):
+    assert "--preflight" in setup_mod.HELP_TEXT
+
+
+def test_parse_args_preflight_flag(setup_mod):
+    assert setup_mod.parse_args(["--preflight"]).preflight is True
+
+
+# ---------------------------------------------------------------------------
+# --preflight / run_preflight — wires coordinator_core.install.prereq_probe,
+# does not reimplement it. Monkeypatch the probe module's functions rather
+# than the real binaries so this suite stays hermetic.
+# ---------------------------------------------------------------------------
+
+
+def _fake_probe_line(status: str, severity: str) -> str:
+    return json.dumps(
+        {
+            "name": "fake",
+            "status": status,
+            "severity": severity,
+            "detail": "fake detail",
+            "remediation": "fake remediation" if status != "pass" else "",
+        }
+    ) + "\n"
+
+
+def test_run_preflight_all_pass_exits_zero(setup_mod, monkeypatch):
+    from coordinator_core.install import prereq_probe
+
+    for name in setup_mod._PREFLIGHT_PROBE_NAMES:
+        monkeypatch.setattr(prereq_probe, name, lambda: _fake_probe_line("pass", "hard"))
+    assert setup_mod.run_preflight() == 0
+
+
+def test_run_preflight_hard_failure_exits_one(setup_mod, monkeypatch):
+    from coordinator_core.install import prereq_probe
+
+    for name in setup_mod._PREFLIGHT_PROBE_NAMES:
+        monkeypatch.setattr(prereq_probe, name, lambda: _fake_probe_line("pass", "hard"))
+    monkeypatch.setattr(prereq_probe, "probe_git", lambda: _fake_probe_line("fail", "hard"))
+    assert setup_mod.run_preflight() == 1
+
+
+def test_run_preflight_advisory_failure_still_exits_zero(setup_mod, monkeypatch):
+    from coordinator_core.install import prereq_probe
+
+    for name in setup_mod._PREFLIGHT_PROBE_NAMES:
+        monkeypatch.setattr(prereq_probe, name, lambda: _fake_probe_line("pass", "hard"))
+    monkeypatch.setattr(prereq_probe, "probe_uv", lambda: _fake_probe_line("warn", "advisory"))
+    assert setup_mod.run_preflight() == 0
+
+
+def test_main_preflight_flag_short_circuits_before_flag_pair_gate(setup_mod, monkeypatch):
+    from coordinator_core.install import prereq_probe
+
+    for name in setup_mod._PREFLIGHT_PROBE_NAMES:
+        monkeypatch.setattr(prereq_probe, name, lambda: _fake_probe_line("pass", "hard"))
+    assert setup_mod.main(["--preflight", "--skip-dep-check"]) == 0
+
+
 # ---------------------------------------------------------------------------
 # resolve_python — branch behavior with a monkeypatched sys.version_info
 # ---------------------------------------------------------------------------
@@ -627,6 +689,35 @@ def test_resolve_claude_klabauter_root_env_fallback(setup_mod, monkeypatch):
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/env/path")
     args = setup_mod.Args()
     root, source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
+    assert root == Path("/env/path")
+    assert source == "CLAUDE_KLABAUTER_ROOT env var (RETIRED)"
+
+
+def test_resolve_claude_klabauter_root_env_fallback_emits_c14_retirement_advisory(
+    setup_mod, monkeypatch, capsys
+):
+    """C5 (2026-09-01): C23 required the value RESOLVE, never that it stay
+    SILENT. This rung must keep resolving for un-migrated boxes AND emit
+    engine_root.py's C14-style retirement line naming
+    COORDINATOR_ENGINE_ROOT, reusing its once-per-site emission guard so a
+    long-running installer does not spam it on repeated calls."""
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/env/path")
+    monkeypatch.setattr(
+        setup_mod.sys.modules["coordinator_core.engine_root"],
+        "_ENGINE_ROOT_FALLBACK_EMITTED",
+        set(),
+    )
+    args = setup_mod.Args()
+
+    setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
+    first_stderr = capsys.readouterr().err
+    assert "CLAUDE_KLABAUTER_ROOT is set but is NO LONGER HONOURED" in first_stderr
+    assert "COORDINATOR_ENGINE_ROOT" in first_stderr
+
+    root, source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
+    second_stderr = capsys.readouterr().err
+    assert second_stderr == ""
     assert root == Path("/env/path")
     assert source == "CLAUDE_KLABAUTER_ROOT env var (RETIRED)"
 
@@ -2430,30 +2521,31 @@ class _FakeDoorRouteResult:
         self.entry = entry
 
 
-class _FakeDoorBuildResult:
-    def __init__(self, built, output=None, advisory=None):
-        self.built = built
-        self.output = output
-        self.advisory = advisory
-
-
 def _patch_door_seams(
     monkeypatch,
     *,
     resolved,
     settings_home_dir,
     socket_path_exc=None,
-    posix_build=None,
+    door_installed=True,
     door_route=None,
     control_route=None,
 ):
     """Patches every function-local import `install_warm_door` makes, on
     the REAL module objects those imports resolve to (mirroring
     `_patch_warm_engine_seams`'s shape) — never on `setup_mod` itself,
-    since these are deferred imports inside the function body."""
+    since these are deferred imports inside the function body.
+
+    NO BUILD SEAM HERE, DELIBERATELY. Since the C3 collapse (ledger item 6
+    / F-019 residue), `install_warm_door` never builds/installs the door
+    itself — `install_bin_forwarders` is the sole build site — so this
+    helper controls only whether `door_install.is_door_installed` reports
+    the artifact as already present (`door_installed`, default True: the
+    common case where `install_bin_forwarders` already landed it), never
+    `install_door`/`build_or_advise`, which `install_warm_door` no longer
+    calls."""
     import coordinator_core._settings_home as settings_home_mod
     import coordinator_core.install.door_install as door_install_mod
-    import coordinator_core.install.door_install_posix_build as door_posix_mod
     import coordinator_core.install.door_route_signal as door_route_signal_mod
     import coordinator_core.install.engine_root_for_install as engine_root_for_install_mod
     import coordinator_core.warm.election as election_mod
@@ -2472,11 +2564,7 @@ def _patch_door_seams(
 
     monkeypatch.setattr(election_mod, "socket_path", _fake_socket_path)
 
-    monkeypatch.setattr(door_install_mod, "install_door", lambda bin_dst, engine_root: bin_dst / "coordinator-invoke")
-
-    if posix_build is None:
-        posix_build = _FakeDoorBuildResult(built=True, output=settings_home_dir / "bin" / "coordinator-invoke")
-    monkeypatch.setattr(door_posix_mod, "build_or_advise", lambda engine_root, output=None: posix_build)
+    monkeypatch.setattr(door_install_mod, "is_door_installed", lambda bin_dst: door_installed)
 
     if door_route is None:
         door_route = _FakeDoorRouteResult(door_route_signal_mod.WARM_SERVER)
@@ -2523,22 +2611,27 @@ def test_install_warm_door_advisory_on_sun_path_budget(setup_mod, tmp_path, monk
     assert "140 bytes" in err
 
 
-def test_install_warm_door_advisory_on_posix_build_miss(setup_mod, tmp_path, monkeypatch, capsys):
+def test_install_warm_door_advisory_on_door_not_installed(setup_mod, tmp_path, monkeypatch, capsys):
+    """ONE BUILD SITE (C3, ledger item 6 / F-019 residue): `install_warm_door`
+    never builds the door itself — `install_bin_forwarders` is the sole
+    build site. When `door_install.is_door_installed` reports absent (that
+    build site bailed on an unrelated precondition before reaching the
+    door-eligible loop), this step reports an ADVISORY naming
+    `install_bin_forwarders` and never attempts a build of its own."""
     published = tmp_path / "published"
     published.mkdir()
     resolved = _FakeInstallEngineRoot("published", root=published)
     _patch_door_seams(
         monkeypatch, resolved=resolved, settings_home_dir=tmp_path / "settings-home",
-        posix_build=_FakeDoorBuildResult(built=False, advisory="no C compiler found on PATH"),
+        door_installed=False,
     )
-    monkeypatch.setattr(setup_mod.sys, "platform", "darwin")
 
     setup_mod.install_warm_door(tmp_path, tmp_path, setup_mod.Args())
 
     out, err = capsys.readouterr()
     assert "PASS" not in out
     assert "[ADVISORY]" in err
-    assert "no C compiler found on PATH" in err
+    assert "install_bin_forwarders" in err
 
 
 def test_install_warm_door_pass_on_warm_server_route(setup_mod, tmp_path, monkeypatch, capsys):
@@ -2679,21 +2772,18 @@ def test_install_warm_door_read_anchored_to_repo_root_not_engine_root(setup_mod,
     assert "PASS [door]" in out
 
 
-def test_install_warm_door_posix_branch_claims_the_bare_name(
+def test_install_warm_door_claims_the_bare_name(
     setup_mod, tmp_path, monkeypatch, capsys
 ):
-    """The POSIX branch must strip the shadowing `.ps1` sibling.
+    """`install_warm_door` must still strip the shadowing `.ps1` sibling
+    after the C3 collapse — `claim_bare_name` is unconditional now (no
+    win32/POSIX build branch gates it any more), reached once the presence
+    check confirms `install_bin_forwarders` already landed the door.
 
-    Regression guard, and it is the REAL path this time. `install_door()`
-    removes the sibling for itself, but `install_warm_door` only calls
-    `install_door()` under `sys.platform == "win32"` -- POSIX goes through
-    `door_install_posix_build.build_or_advise`. A removal reachable only
-    from `install_door()` is therefore dead code on every Mac and Linux
-    box, which is exactly what shipped: a full `scripts/setup.py
-    --i-am-agent` run landed the door and left `coordinator-invoke.ps1` in
-    place, while the unit tests calling `install_door()` directly all
-    passed. Assert against `install_warm_door` on a darwin platform, not
-    against `install_door`.
+    Regression guard for the original defect this once caught: a full
+    `scripts/setup.py --i-am-agent` run landed the door and left
+    `coordinator-invoke.ps1` in place, which PowerShell would resolve
+    ahead of the door's `.exe`.
     """
     import coordinator_core.install.door_route_signal as door_route_signal_mod
 
@@ -2710,12 +2800,11 @@ def test_install_warm_door_posix_branch_claims_the_bare_name(
         monkeypatch, resolved=resolved, settings_home_dir=settings_home_dir,
         door_route=_FakeDoorRouteResult(door_route_signal_mod.WARM_SERVER),
     )
-    monkeypatch.setattr(setup_mod.sys, "platform", "darwin")
 
     setup_mod.install_warm_door(tmp_path, tmp_path, setup_mod.Args())
 
     assert not shadowing.exists(), (
-        "the POSIX branch left coordinator-invoke.ps1 in place -- on Windows "
+        "install_warm_door left coordinator-invoke.ps1 in place -- on Windows "
         "PowerShell would resolve the bare name to it and never reach the door"
     )
     assert "PASS [door]" in capsys.readouterr().out
@@ -2787,14 +2876,20 @@ def test_install_lfs_pre_push_gate_falls_back_on_git_resolution_failure(
 
 
 # ---------------------------------------------------------------------------
-# check_governed_authoring_surfaces_manifest — HARD dep (PM ruling 2026-08-29)
+# check_governed_authoring_surfaces_manifest — SOFT, PERMANENTLY (downgraded
+# 2026-09-01 from HARD; was PM ruling 2026-08-29). This probe advises; it
+# does not gate another repo's release — DoE confirmed the manifest has
+# never once reached a published mirror, so a hard gate on it means every
+# coordinator-claude engine release can brick installs of a current-but-
+# older claude-klabauter checkout. If this is ever re-armed as a gate, it must gate on
+# a declared minimum plugin version, never on file presence/shape.
 # ---------------------------------------------------------------------------
 #
 # `guard-doctrine-surface-bash-write` reads `<plugin_root>/governed-
 # authoring-surfaces.json` fresh on every Bash call; a miss (absent,
 # unreadable, bad JSON, wrong shape) degrades that guard to a silent DECLINE.
-# Install time is the only place a broken manifest is catchable, so this
-# check is the whole safety net for that failure mode. Each helper below
+# This check surfaces that as an install-time WARN, not a blocking gate.
+# Each helper below
 # stubs `_resolve_coordinator_claude_root` (never exercised by this check
 # beyond producing SOME coord_path) and `_resolve_plugin_root_for_machine_
 # local` directly, mirroring the decorated-resolver monkeypatch idiom used
@@ -2826,7 +2921,7 @@ def test_check_governed_authoring_surfaces_manifest_well_formed_passes_and_names
     args = setup_mod.Args()
     setup_mod.check_governed_authoring_surfaces_manifest(Path("/repo/claude-klabauter"), args)  # must not raise
     out = capsys.readouterr().out
-    assert "PASS [hard] governed-authoring-surfaces manifest — 3 surface(s)" in out
+    assert "PASS [soft] governed-authoring-surfaces manifest — 3 surface(s)" in out
 
 
 def test_check_governed_authoring_surfaces_manifest_empty_list_is_a_real_answer_and_passes(
@@ -2844,26 +2939,25 @@ def test_check_governed_authoring_surfaces_manifest_empty_list_is_a_real_answer_
     args = setup_mod.Args()
     setup_mod.check_governed_authoring_surfaces_manifest(Path("/repo/claude-klabauter"), args)  # must not raise
     out = capsys.readouterr().out
-    assert "PASS [hard] governed-authoring-surfaces manifest — 0 surface(s)" in out
+    assert "PASS [soft] governed-authoring-surfaces manifest — 0 surface(s)" in out
 
 
-def test_check_governed_authoring_surfaces_manifest_absent_exits_hard(
+def test_check_governed_authoring_surfaces_manifest_absent_warns_soft(
     setup_mod, monkeypatch, tmp_path, capsys
 ):
     plugin_root = tmp_path / "plugin"
     plugin_root.mkdir()
     _stub_coord_and_plugin_root(setup_mod, monkeypatch, plugin_root)
     args = setup_mod.Args()
-    with pytest.raises(SystemExit) as exc_info:
-        setup_mod.check_governed_authoring_surfaces_manifest(Path("/repo/claude-klabauter"), args)
-    assert exc_info.value.code == setup_mod.EXIT_HARD_DEP_MISSING
-    stderr = capsys.readouterr().err
-    assert "absent at" in stderr
-    assert "unreadable" not in stderr
-    assert "not a" not in stderr
+    setup_mod.check_governed_authoring_surfaces_manifest(Path("/repo/claude-klabauter"), args)  # must not raise
+    out = capsys.readouterr().out
+    assert "WARN [soft]" in out
+    assert "absent at" in out
+    assert "unreadable" not in out
+    assert "not a" not in out
 
 
-def test_check_governed_authoring_surfaces_manifest_unreadable_bad_json_exits_hard(
+def test_check_governed_authoring_surfaces_manifest_unreadable_bad_json_warns_soft(
     setup_mod, monkeypatch, tmp_path, capsys
 ):
     plugin_root = tmp_path / "plugin"
@@ -2871,16 +2965,15 @@ def test_check_governed_authoring_surfaces_manifest_unreadable_bad_json_exits_ha
     (plugin_root / "governed-authoring-surfaces.json").write_text("{not valid json")
     _stub_coord_and_plugin_root(setup_mod, monkeypatch, plugin_root)
     args = setup_mod.Args()
-    with pytest.raises(SystemExit) as exc_info:
-        setup_mod.check_governed_authoring_surfaces_manifest(Path("/repo/claude-klabauter"), args)
-    assert exc_info.value.code == setup_mod.EXIT_HARD_DEP_MISSING
-    stderr = capsys.readouterr().err
-    assert "unreadable at" in stderr
-    assert "absent at" not in stderr
-    assert "valid JSON but not a" not in stderr
+    setup_mod.check_governed_authoring_surfaces_manifest(Path("/repo/claude-klabauter"), args)  # must not raise
+    out = capsys.readouterr().out
+    assert "WARN [soft]" in out
+    assert "unreadable at" in out
+    assert "absent at" not in out
+    assert "valid JSON but not a" not in out
 
 
-def test_check_governed_authoring_surfaces_manifest_valid_json_not_a_list_exits_hard(
+def test_check_governed_authoring_surfaces_manifest_valid_json_not_a_list_warns_soft(
     setup_mod, monkeypatch, tmp_path, capsys
 ):
     plugin_root = tmp_path / "plugin"
@@ -2888,16 +2981,15 @@ def test_check_governed_authoring_surfaces_manifest_valid_json_not_a_list_exits_
     (plugin_root / "governed-authoring-surfaces.json").write_text(json.dumps({"a": "dict, not a list"}))
     _stub_coord_and_plugin_root(setup_mod, monkeypatch, plugin_root)
     args = setup_mod.Args()
-    with pytest.raises(SystemExit) as exc_info:
-        setup_mod.check_governed_authoring_surfaces_manifest(Path("/repo/claude-klabauter"), args)
-    assert exc_info.value.code == setup_mod.EXIT_HARD_DEP_MISSING
-    stderr = capsys.readouterr().err
-    assert "valid JSON but not a" in stderr
-    assert "absent at" not in stderr
-    assert "unreadable at" not in stderr
+    setup_mod.check_governed_authoring_surfaces_manifest(Path("/repo/claude-klabauter"), args)  # must not raise
+    out = capsys.readouterr().out
+    assert "WARN [soft]" in out
+    assert "valid JSON but not a" in out
+    assert "absent at" not in out
+    assert "unreadable at" not in out
 
 
-def test_check_governed_authoring_surfaces_manifest_list_with_non_string_entry_exits_hard(
+def test_check_governed_authoring_surfaces_manifest_list_with_non_string_entry_warns_soft(
     setup_mod, monkeypatch, tmp_path, capsys
 ):
     plugin_root = tmp_path / "plugin"
@@ -2905,25 +2997,23 @@ def test_check_governed_authoring_surfaces_manifest_list_with_non_string_entry_e
     (plugin_root / "governed-authoring-surfaces.json").write_text(json.dumps(["surface/one.md", 42]))
     _stub_coord_and_plugin_root(setup_mod, monkeypatch, plugin_root)
     args = setup_mod.Args()
-    with pytest.raises(SystemExit) as exc_info:
-        setup_mod.check_governed_authoring_surfaces_manifest(Path("/repo/claude-klabauter"), args)
-    assert exc_info.value.code == setup_mod.EXIT_HARD_DEP_MISSING
-    stderr = capsys.readouterr().err
-    assert "valid JSON but not a" in stderr
-    assert "absent at" not in stderr
-    assert "unreadable at" not in stderr
+    setup_mod.check_governed_authoring_surfaces_manifest(Path("/repo/claude-klabauter"), args)  # must not raise
+    out = capsys.readouterr().out
+    assert "WARN [soft]" in out
+    assert "valid JSON but not a" in out
+    assert "absent at" not in out
+    assert "unreadable at" not in out
 
 
-def test_check_governed_authoring_surfaces_manifest_unresolvable_plugin_root_exits_hard(
+def test_check_governed_authoring_surfaces_manifest_unresolvable_plugin_root_warns_soft(
     setup_mod, monkeypatch, capsys
 ):
     _stub_coord_and_plugin_root(setup_mod, monkeypatch, None)
     args = setup_mod.Args()
-    with pytest.raises(SystemExit) as exc_info:
-        setup_mod.check_governed_authoring_surfaces_manifest(Path("/repo/claude-klabauter"), args)
-    assert exc_info.value.code == setup_mod.EXIT_HARD_DEP_MISSING
-    stderr = capsys.readouterr().err
-    assert "could not resolve a plugin root" in stderr
-    assert "absent at" not in stderr
-    assert "unreadable at" not in stderr
-    assert "valid JSON but not a" not in stderr
+    setup_mod.check_governed_authoring_surfaces_manifest(Path("/repo/claude-klabauter"), args)  # must not raise
+    out = capsys.readouterr().out
+    assert "WARN [soft]" in out
+    assert "could not resolve a plugin root" in out
+    assert "absent at" not in out
+    assert "unreadable at" not in out
+    assert "valid JSON but not a" not in out

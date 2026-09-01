@@ -120,29 +120,49 @@ def resolve_main_branch(run_git: RunGit, repo_root: Path) -> Optional[str]:
 
 
 def list_branches(run_git: RunGit, repo_root: Path) -> list[dict[str, Any]]:
-    """Parses `git branch -a` into `[{name, ref, is_local, is_remote}]`.
-    `ref` is the git-log-resolvable reference for a remote-only branch
-    (`origin/<name>`) or the bare local name otherwise. Skips the
-    `remotes/origin/HEAD -> origin/main` alias line — it names no branch of
-    its own."""
-    proc = run_git(["branch", "-a"], repo_root)
+    """`[{name, ref, is_local, is_remote}]` for every branch. `ref` is the
+    git-log-resolvable reference for a remote-only branch (`origin/<name>`)
+    or the bare local name otherwise.
+
+    Derived from `ref_rows` — the SAME `for-each-ref` call the tip authors
+    come from — rather than a `git branch -a` spawn of its own. `branch -a`
+    enumerates exactly `refs/heads` + `refs/remotes`, which is what that
+    call already walks, so the second spawn was buying a re-listing of refs
+    already in hand: 284 ms of the op's measured 931 ms process time on this
+    repo, the single most expensive call in the brief. Prefer
+    `list_branches_from(rows)` at any call site that also needs the authors,
+    so one call feeds both."""
+    return list_branches_from(ref_rows(run_git, repo_root))
+
+
+def list_branches_from(rows: list[tuple[str, str, str]]) -> list[dict[str, Any]]:
+    """The parse half of `list_branches`, over already-fetched `ref_rows`,
+    so a caller needing both the branch list and the tip authors spawns
+    `for-each-ref` once rather than twice.
+
+    Local vs remote is decided by the FULL refname (`refs/heads/…` vs
+    `refs/remotes/…`), never by whether the short name happens to contain a
+    remote's name — a local branch called `origin/foo` is legal, and the
+    short name alone cannot tell it from a remote-tracking one.
+
+    `refs/remotes/<remote>/HEAD` is skipped: it is the symbolic alias
+    `git branch -a` renders as `remotes/origin/HEAD -> origin/main`, whose
+    short form is the bare remote name. It names no branch of its own — and
+    read as one it becomes a phantom `origin` branch that categorizes as
+    stale work and drags a `git log` and a `git show` behind it."""
     branches: dict[str, dict[str, Any]] = {}
-    for raw_line in proc.stdout.splitlines():
-        line = raw_line.strip().lstrip("* ").strip()
-        if not line or "->" in line:
-            continue
-        if line.startswith("remotes/"):
-            remote_name = line[len("remotes/"):]
-            parts = remote_name.split("/", 1)
-            if len(parts) != 2:
+    for refname, short, _email in rows:
+        if refname.startswith("refs/heads/"):
+            entry = branches.setdefault(short, {"name": short, "is_local": False, "is_remote": False})
+            entry["is_local"] = True
+        elif refname.startswith("refs/remotes/"):
+            if refname.rsplit("/", 1)[-1] == "HEAD":
                 continue
-            name = parts[1]
+            name = short.partition("/")[2]
+            if not name:
+                continue
             entry = branches.setdefault(name, {"name": name, "is_local": False, "is_remote": False})
             entry["is_remote"] = True
-        else:
-            name = line
-            entry = branches.setdefault(name, {"name": name, "is_local": False, "is_remote": False})
-            entry["is_local"] = True
     out = []
     for name, entry in branches.items():
         ref = name if entry["is_local"] else f"origin/{name}"
@@ -159,25 +179,55 @@ def tip_author(run_git: RunGit, repo_root: Path, ref: str) -> str:
     return proc.stdout.strip()
 
 
-def tip_authors(run_git: RunGit, repo_root: Path) -> dict[str, str]:
-    """Batches `tip_author` across every local and remote-tracking ref into
-    ONE `git for-each-ref` call: `%(refname:short)` yields `<name>` for a
-    local branch and `origin/<name>` for a remote-only one — the same `ref`
-    shape `list_branches` already produces — and `%(authoremail:trim)`
-    strips the `<...>` `git log --format=%ae` never adds, so the returned
-    map is keyed and valued identically to N per-ref `tip_author` calls."""
+def ref_rows(run_git: RunGit, repo_root: Path) -> list[tuple[str, str, str]]:
+    """`[(refname, refname_short, tip_author_email)]` over every local and
+    remote-tracking ref, from ONE `git for-each-ref` call — THE single ref
+    enumeration for the whole brief. Its short names plus full refnames are
+    the branch set (`list_branches_from`); its emails are the tip authors
+    (`tip_authors`). A ref resolved here never needs a spawn of its own for
+    either question.
+
+    Tab-separated, not space-separated: `%(authoremail:trim)` can be empty
+    on a ref with no author line, and a trailing empty space-delimited field
+    is indistinguishable from a missing one. A tab cannot occur inside a
+    refname (git rejects it) and cannot occur inside an email here, so the
+    split is unambiguous for exactly the fields being read."""
     proc = run_git(
-        ["for-each-ref", "--format=%(refname:short) %(authoremail:trim)", "refs/heads", "refs/remotes"],
+        [
+            "for-each-ref",
+            "--format=%(refname)\t%(refname:short)\t%(authoremail:trim)",
+            "refs/heads",
+            "refs/remotes",
+        ],
         repo_root,
     )
-    authors: dict[str, str] = {}
+    rows: list[tuple[str, str, str]] = []
     for raw_line in proc.stdout.splitlines():
-        line = raw_line.strip()
-        if not line:
+        line = raw_line.rstrip("\r\n")
+        if not line.strip():
             continue
-        name, _, email = line.partition(" ")
-        authors[name] = email
-    return authors
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        refname, short = parts[0], parts[1]
+        email = parts[2] if len(parts) > 2 else ""
+        rows.append((refname, short, email))
+    return rows
+
+
+def tip_authors(run_git: RunGit, repo_root: Path) -> dict[str, str]:
+    """`{ref: tip_author_email}` — batches `tip_author` across every ref
+    into one spawn. `%(refname:short)` yields `<name>` for a local branch
+    and `origin/<name>` for a remote-only one, the same `ref` shape
+    `list_branches` produces, and `%(authoremail:trim)` strips the `<...>`
+    `git log --format=%ae` never adds, so the map is keyed and valued
+    identically to N per-ref `tip_author` calls."""
+    return tip_authors_from(ref_rows(run_git, repo_root))
+
+
+def tip_authors_from(rows: list[tuple[str, str, str]]) -> dict[str, str]:
+    """The map half of `tip_authors`, over already-fetched `ref_rows`."""
+    return {short: email for _refname, short, email in rows}
 
 
 #: Branch-name segments that mark a ref as a deliberate safety copy. A backup
@@ -388,7 +438,13 @@ def brief(
     current = current_branch(run_git, repo_root)
     main_branch = resolve_main_branch(run_git, repo_root)
 
-    branch_entries = list_branches(run_git, repo_root)
+    # ONE `for-each-ref` spawn answers both questions the brief asks of the
+    # ref set: which branches exist, and who authored each tip. The branch
+    # listing used to spawn `git branch -a` for the first — 284 ms on this
+    # repo, re-enumerating refs this call already returns.
+    ref_listing = ref_rows(run_git, repo_root)
+    all_tip_authors = tip_authors_from(ref_listing)
+    branch_entries = list_branches_from(ref_listing)
     branches_report: list[dict[str, Any]] = []
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []
@@ -403,11 +459,6 @@ def brief(
     # pinned invariant and its attribution argument.
     stale_branches: list[dict[str, Any]] = []
     all_shas: list[str] = []
-
-    # Hoisted out of the branch loop: one `for-each-ref` call resolves
-    # every branch's tip author at once (see `tip_authors`'s docstring for
-    # the key/value equivalence to the per-ref call it replaces).
-    all_tip_authors = tip_authors(run_git, repo_root)
 
     for entry in branch_entries:
         name, ref = entry["name"], entry["ref"]

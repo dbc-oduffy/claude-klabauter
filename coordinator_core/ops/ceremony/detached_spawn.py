@@ -186,6 +186,50 @@ def _log_spawn_failure(repo_root: str, script_path: str, args: Sequence[str], ex
         pass
 
 
+#: Environment variables scoped to a HOOK PROCESS that must never be inherited
+#: by a detached child. A detached child outlives the hook that spawned it --
+#: that is this module's entire contract -- so any value meaning "I am a hook,
+#: behave accordingly" becomes a lie the moment it crosses this boundary.
+#:
+#: `COORDINATOR_WARM_BOOT_WAIT_SECS` is the live case, and the failure it caused
+#: was measured on 2026-09-01 rather than reasoned about.
+#: `DoE-claude coordinator/hooks/scripts/_hook_boot.py` sets it to `0`
+#: DELIBERATELY and UNCONDITIONALLY (its own comment: "an operator's exported
+#: value is a preference about their own shell, never a licence for a hook to
+#: block"), and deliberately sets rather than deletes it so it crosses the
+#: invoke-spawn boundary. That is correct FOR A HOOK: hooks fire on the session
+#: and commit hot path where blocking is never acceptable.
+#:
+#: What it is not correct for is the warm SERVER. A hook process missed warm,
+#: `warm.client._spawn_once` spawned the server through this function, and the
+#: server inherited `0` FOR ITS WHOLE LIFETIME -- then handed it to every child
+#: it spawns, including op/CLI doors where the bounded boot wait is supposed to
+#: apply (`coordinator_core/invoke/__main__.py`'s `WARM_BOOT_WAIT_SECS`, whose
+#: comment says in terms that only hook children pass `0`). Confirmed by reading
+#: the live server's environment block: PID 17188 carried both
+#: `COORDINATOR_WARM_BOOT_WAIT_SECS=0` and `CLAUDE_PLUGIN_ROOT`, the latter set
+#: by the harness only for plugin hook processes and absent from an ordinary
+#: tool child.
+#:
+#: The operator-visible cost: every CLI call that missed warm refused instantly
+#: instead of waiting for the respawn it had just triggered, so the documented
+#: "re-issue once -- the respawn already in flight normally answers the next
+#: call" could never converge, and its next rung pointed at `warm-engine-stop`
+#: on an engine ~50 sessions share.
+#:
+#: SCRUB HERE, NOT AT THE SETTER. `_hook_boot.py` is right for the process it
+#: runs in, and it lives in a repo claude-klabauter does not own. The boundary this
+#: function draws -- parent dies, child persists -- is exactly where a
+#: hook-scoped value stops being true, which makes this the correct seam and
+#: keeps the fix in one place for every future detached spawn.
+#:
+#: Same defect CLASS as `env_extra`'s docstring below (an env value outliving
+#: the call that meant it), approached from the other direction: `env_extra`
+#: stops this process poisoning its children, this stops this process's PARENT
+#: poisoning them.
+_HOOK_SCOPED_ENV_NAMES = ("COORDINATOR_WARM_BOOT_WAIT_SECS",)
+
+
 def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
     """Build the detached child's environment: `PYTHONPATH` with `repo_root` PREPENDED
     ahead of anything already there, everything else inherited from this process's own
@@ -219,6 +263,8 @@ def _child_env(repo_root: str, env_extra: "dict | None" = None) -> dict:
     is the fix it points at.
     """
     env = dict(os.environ)
+    for name in _HOOK_SCOPED_ENV_NAMES:
+        env.pop(name, None)
     existing = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = repo_root + (os.pathsep + existing if existing else "")
     if env_extra:

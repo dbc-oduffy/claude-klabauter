@@ -18,7 +18,15 @@ import os
 from coordinator_core.group_em import send_pass
 
 
-def _verdict(session_id, reason="turn-ended", candidate=True, state="paused", source="reader", cwd=None):
+def _verdict(
+    session_id,
+    reason="turn-ended",
+    candidate=True,
+    state="paused",
+    source="reader",
+    cwd=None,
+    contradicted=False,
+):
     return {
         "session_id": session_id,
         "candidate": candidate,
@@ -26,6 +34,7 @@ def _verdict(session_id, reason="turn-ended", candidate=True, state="paused", so
         "state": state,
         "source": source,
         "cwd": cwd,
+        "contradicted": contradicted,
     }
 
 
@@ -604,3 +613,81 @@ def test_an_unsafe_session_id_is_still_refused_a_path(tmp_path):
     assert subagent_share.safe_session_id("sess-1") is True
     for bad in ("..", ".", "", None, "a/b", "a\b", "a:b"):
         assert subagent_share.safe_session_id(bad) is False
+
+
+# C4 -- state/dispatch-briefs/2026-09-01-the-crowns-standing-surfaces-report-
+# themselves/C4.md: a contradicted peer reaches `suppressed` with the gate
+# that excluded it named, instead of vanishing with no trace at either
+# `read_pass`'s filter or this module's own.
+
+
+def test_contradicted_peer_reaches_suppressed_with_gate_named_live_busy(tmp_path):
+    repo_root = str(tmp_path)
+    roster = [
+        _verdict(
+            "peer-live-busy",
+            reason="live-busy-contradicts-paused",
+            candidate=False,
+            contradicted=True,
+        )
+    ]
+
+    digest = send_pass.build_send_digest(repo_root, roster, "caller-c4a", now=1000.0)
+
+    assert digest["entries"] == []
+    assert len(digest["suppressed"]) == 1
+    row = digest["suppressed"][0]
+    assert row["session_id"] == "peer-live-busy"
+    assert row["why"] == "contradicted"
+    assert row["reason"] == "live-busy-contradicts-paused"
+
+
+def test_contradicted_peer_reaches_suppressed_with_gate_named_stale_snapshot(tmp_path):
+    repo_root = str(tmp_path)
+    roster = [
+        _verdict(
+            "peer-stale-snapshot",
+            reason="stale-snapshot-contradicts-paused",
+            candidate=False,
+            contradicted=True,
+        )
+    ]
+
+    digest = send_pass.build_send_digest(repo_root, roster, "caller-c4b", now=1000.0)
+
+    assert digest["entries"] == []
+    assert len(digest["suppressed"]) == 1
+    row = digest["suppressed"][0]
+    assert row["session_id"] == "peer-stale-snapshot"
+    assert row["why"] == "contradicted"
+    assert row["reason"] == "stale-snapshot-contradicts-paused"
+
+
+def test_digest_counts_sum_to_population_classified_including_contradicted(tmp_path):
+    """`entries` + `suppressed` must account for every verdict this tick
+    classified -- a contradicted peer that reached neither would be an
+    upstream exclusion with no trace anywhere (the defect C4 closes)."""
+    repo_root = str(tmp_path)
+    roster = [
+        _verdict("peer-normal"),
+        _verdict(
+            "peer-live-busy",
+            reason="live-busy-contradicts-paused",
+            candidate=False,
+            contradicted=True,
+        ),
+        _verdict(
+            "peer-stale-unresolved",
+            reason="stale-snapshot-unresolved",
+            candidate=False,
+            contradicted=True,
+        ),
+    ]
+
+    digest = send_pass.build_send_digest(repo_root, roster, "caller-c4c", now=1000.0)
+
+    assert len(digest["entries"]) + len(digest["suppressed"]) == len(roster)
+    contradicted_ids = {
+        row["session_id"] for row in digest["suppressed"] if row["why"] == "contradicted"
+    }
+    assert contradicted_ids == {"peer-live-busy", "peer-stale-unresolved"}

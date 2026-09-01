@@ -237,6 +237,9 @@ from coordinator_core.install.timeouts import (  # noqa: E402
     PACKAGE_INSTALL_SECS,
     PLATFORM_UNINSTALL_SECS,
 )
+from coordinator_core.engine_root import (  # noqa: E402
+    _maybe_emit_engine_root_retired as _emit_claude_klabauter_root_retired,
+)
 
 HELP_TEXT = """\
 Claude-klabauter installer — sets up the coordinator control-plane engine.
@@ -264,6 +267,10 @@ Options:
                                       default: the installer provisions the engine, not the dev loop
   --register-only                    Skip Step Zero + dep check; run registration + verification only
   --check                            Smoke-test that the script is present and executable; exits 0
+  --preflight                        Read-only OSS Step Zero probe: python, git, uv, gh, node, pwsh,
+                                      clone_auth (coordinator_core.install.prereq_probe). Prints one
+                                      pass/warn/fail line per probe; mutates nothing. Exit 0 if no
+                                      `severity: hard` probe fails, exit 1 otherwise.
   --help                             Show this message
 """
 
@@ -338,6 +345,7 @@ class Args:
         self.with_test_deps = False
         self.register_only = False
         self.check = False
+        self.preflight = False
         self.help = False
         self.claude_klabauter_root: str = ""
         self.coordinator_root: str = ""
@@ -366,6 +374,8 @@ def parse_args(argv: list[str]) -> Args:
             args.register_only = True
         elif tok == "--check":
             args.check = True
+        elif tok == "--preflight":
+            args.preflight = True
         elif tok == "--help":
             args.help = True
         elif tok == "--claude-klabauter-live-root":
@@ -1970,91 +1980,67 @@ def resolve_repo_identity(repo_root: Path) -> str | None:
 
 
 def check_governed_authoring_surfaces_manifest(repo_root: Path, args: Args) -> None:
-    """HARD (PM ruling 2026-08-29): `coordinator_core.bash_guards.dispatch.
+    """SOFT, PERMANENTLY (downgraded from HARD 2026-09-01; was PM ruling
+    2026-08-29) — this probe advises, it does not gate another repo's
+    release. `coordinator_core.bash_guards.dispatch.
     resolve_governed_authoring_surfaces` reads `<plugin_root>/governed-
     authoring-surfaces.json` fresh on every Bash call, and a miss (absent,
     unreadable, bad JSON, wrong shape) degrades `guard-doctrine-surface-bash-
-    write` to a silent DECLINE — that guard's own hard-deny denies nothing it
-    is supposed to (state/bug-backlog/2026-08-29-the-guard-rehome-is-not-yet-
-    safe-to-dele-9f7396118b81.yaml, gap 2). Once DoE deletes their in-process
-    fold there is no second path to catch this, so install time is the only
-    place a missing/broken manifest can be caught before it matters — fails
-    loud (exit 90) the same as `check_coordinator_claude_dep`, whose call-site
-    guard (`main`'s `if args.skip_dep_check: ... else: ...`) already covers
-    this function too, so the --skip-dep-check + --accept-missing-deps-risk
-    override pair applies here identically without a separate check.
+    write` to a silent DECLINE. That is still worth flagging at install time
+    — but two independently-versioned repos plus a hard gate on the other's
+    artifact means every coordinator-claude engine release can brick installs
+    of a current-but-older claude-klabauter checkout on the manifest's mere presence or
+    shape, and DoE confirmed on 2026-09-01 that this manifest has never once
+    reached a published mirror: the hard gate was failing on an artifact that
+    does not exist on the release path it was meant to protect. Do not
+    re-arm this as a hard gate after DoE publishes it — if this ever becomes
+    a gate again, it gates on a DECLARED MINIMUM PLUGIN VERSION, never on
+    file presence/shape, which cannot distinguish "not shipped yet" from
+    "genuinely broken".
 
-    RUNTIME STAYS FAIL-OPEN — this hardens the INSTALLER only. Do not read
-    this as license to make `resolve_governed_authoring_surfaces` or
-    `guard-doctrine-surface-bash-write` hard-deny on a miss: a runtime hard-
-    deny would refuse every Bash call on an install with no plugin, bricking
-    the tool, which is exactly why that call site chose loud-fail-open.
+    RUNTIME STAYS FAIL-OPEN — this only ever advised the INSTALLER, never
+    gated it: `resolve_governed_authoring_surfaces` and
+    `guard-doctrine-surface-bash-write` must keep loud-fail-open at runtime
+    regardless of this probe's severity, since a runtime hard-deny would
+    refuse every Bash call on an install with no plugin, bricking the tool.
 
     Only runs when `check_coordinator_claude_dep` already passed (same call-
     site guard as that function), so `coord_path` here is a verified
     coordinator-claude checkout, not an unresolved guess."""
     print()
-    print("--- Dep check: governed-authoring-surfaces manifest (hard) ---")
+    print("--- Dep check: governed-authoring-surfaces manifest (soft) ---")
 
     coord_path, _coord_source = _resolve_coordinator_claude_root(repo_root, args)
     plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
     if plugin_root is None:
-        print(f"ERROR [hard] governed-authoring-surfaces manifest — could not resolve a plugin root under "
-              f"{coord_path} (exit {EXIT_HARD_DEP_MISSING})", file=sys.stderr)
-        print("  guard-doctrine-surface-bash-write would find no manifest to read and decline every call.", file=sys.stderr)
-        print(file=sys.stderr)
-        print("  Fix the coordinator-claude checkout so a plugin root can be resolved under it, or", file=sys.stderr)
-        print("  point --coordinator-root / $COORDINATOR_CLAUDE_ROOT at one that has one.", file=sys.stderr)
-        print(file=sys.stderr)
-        print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
-        print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
-        print(file=sys.stderr)
-        sys.exit(EXIT_HARD_DEP_MISSING)
+        print(f"WARN [soft] governed-authoring-surfaces manifest — could not resolve a plugin root under "
+              f"{coord_path}")
+        print("  guard-doctrine-surface-bash-write would find no manifest to read and decline every call.")
+        return
 
     manifest_path = plugin_root / "governed-authoring-surfaces.json"
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        print(f"ERROR [hard] governed-authoring-surfaces manifest — absent at {manifest_path} "
-              f"(exit {EXIT_HARD_DEP_MISSING})", file=sys.stderr)
-        print("  guard-doctrine-surface-bash-write reads this file on every Bash call; with no file", file=sys.stderr)
-        print("  present it silently declines rather than enforcing anything.", file=sys.stderr)
-        print(file=sys.stderr)
-        print(f"  Fix: ship/create a well-formed governed-authoring-surfaces.json at {manifest_path}", file=sys.stderr)
-        print("  (a flat JSON list of surface-path strings) — this is normally shipped by the plugin install.", file=sys.stderr)
-        print(file=sys.stderr)
-        print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
-        print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
-        print(file=sys.stderr)
-        sys.exit(EXIT_HARD_DEP_MISSING)
-    except Exception as exc:  # noqa: BLE001 -- any other read/parse failure is fatal too
-        print(f"ERROR [hard] governed-authoring-surfaces manifest — unreadable at {manifest_path} "
-              f"({type(exc).__name__}) (exit {EXIT_HARD_DEP_MISSING})", file=sys.stderr)
-        print("  guard-doctrine-surface-bash-write cannot parse this file and will silently decline", file=sys.stderr)
-        print("  rather than enforcing anything.", file=sys.stderr)
-        print(file=sys.stderr)
-        print(f"  Fix: repair or regenerate {manifest_path} as valid JSON (a flat list of surface-path", file=sys.stderr)
-        print("  strings).", file=sys.stderr)
-        print(file=sys.stderr)
-        print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
-        print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
-        print(file=sys.stderr)
-        sys.exit(EXIT_HARD_DEP_MISSING)
+        print(f"WARN [soft] governed-authoring-surfaces manifest — absent at {manifest_path}")
+        print("  guard-doctrine-surface-bash-write reads this file on every Bash call; with no file")
+        print("  present it silently declines rather than enforcing anything.")
+        return
+    except Exception as exc:  # noqa: BLE001 -- any other read/parse failure is advisory too
+        print(f"WARN [soft] governed-authoring-surfaces manifest — unreadable at {manifest_path} "
+              f"({type(exc).__name__})")
+        print("  guard-doctrine-surface-bash-write cannot parse this file and will silently decline")
+        print("  rather than enforcing anything.")
+        return
 
     if not isinstance(data, list) or not all(isinstance(entry, str) for entry in data):
-        print(f"ERROR [hard] governed-authoring-surfaces manifest — {manifest_path} is valid JSON but not a "
-              f"flat list of strings (exit {EXIT_HARD_DEP_MISSING})", file=sys.stderr)
-        print("  guard-doctrine-surface-bash-write expects a flat JSON array of surface-path strings and", file=sys.stderr)
-        print("  will silently decline rather than enforcing anything against this shape.", file=sys.stderr)
-        print(file=sys.stderr)
-        print(f"  Fix: rewrite {manifest_path} as a flat JSON list of strings, e.g. [\"path/one\", \"path/two\"].", file=sys.stderr)
-        print(file=sys.stderr)
-        print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
-        print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
-        print(file=sys.stderr)
-        sys.exit(EXIT_HARD_DEP_MISSING)
+        print(f"WARN [soft] governed-authoring-surfaces manifest — {manifest_path} is valid JSON but not a "
+              f"flat list of strings")
+        print("  guard-doctrine-surface-bash-write expects a flat JSON array of surface-path strings and")
+        print("  will silently decline rather than enforcing anything against this shape.")
+        return
 
-    print(f"PASS [hard] governed-authoring-surfaces manifest — {len(data)} surface(s) at {manifest_path}")
+    print(f"PASS [soft] governed-authoring-surfaces manifest — {len(data)} surface(s) at {manifest_path}")
 
 
 def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
@@ -2089,6 +2075,14 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
         print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
         print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
         print(file=sys.stderr)
+        # Item 11 (2026-09-01 dogfood ledger): under `> log 2>&1` this
+        # stderr block did not appear at all, only truncated stdout — the
+        # redirected-to-a-file combination is fully buffered rather than
+        # line-buffered, and sys.exit's normal interpreter teardown flush
+        # was not enough to guarantee both streams land before the process
+        # tears down. Force both explicitly on every hard-fail exit here.
+        sys.stdout.flush()
+        sys.stderr.flush()
         sys.exit(EXIT_HARD_DEP_MISSING)
 
     # functional_probe: a "coordinator-claude" root can be shaped two ways —
@@ -2126,6 +2120,9 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
     print("  To proceed anyway, accept the risk explicitly (both flags together):", file=sys.stderr)
     print("    --skip-dep-check --accept-missing-deps-risk", file=sys.stderr)
     print(file=sys.stderr)
+    # Item 11: see the matching flush comment above in this function.
+    sys.stdout.flush()
+    sys.stderr.flush()
     sys.exit(EXIT_HARD_DEP_MISSING)
 
 
@@ -2150,6 +2147,13 @@ def resolve_claude_klabauter_root(repo_root: Path, args: Args) -> tuple[Path, st
     if os.environ.get("COORDINATOR_ENGINE_ROOT"):
         return Path(os.environ["COORDINATOR_ENGINE_ROOT"]), "COORDINATOR_ENGINE_ROOT env var"
     if os.environ.get("CLAUDE_KLABAUTER_ROOT"):
+        # C23 required the value RESOLVE (this installer runs against
+        # un-migrated boxes that still export the old spelling) -- it never
+        # required SILENCE. Reuse engine_root.py's C14 retirement wording and
+        # once-per-site emission guard so the fleet has one message for one
+        # retirement: an un-migrated operator gets a working install AND the
+        # one signal that tells them to migrate (C5, 2026-09-01).
+        _emit_claude_klabauter_root_retired("scripts.setup", os.environ["CLAUDE_KLABAUTER_ROOT"])
         return Path(os.environ["CLAUDE_KLABAUTER_ROOT"]), "CLAUDE_KLABAUTER_ROOT env var (RETIRED)"
     return repo_root, "git-root auto-discovery"
 
@@ -2861,7 +2865,10 @@ def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: s
     path (`_powershell_tokens`) rather than opening a second, parallel
     signal path — a disarmed result durably logs through the existing
     `_log_dialect_parser_unavailable` observability record exactly as it
-    would in production.
+    would in production, which (DR-402, C12) now also appends a
+    `KIND_COLD_FAILED` row to `warm/telemetry.py`'s `degrade.jsonl` — the
+    durable, attributable record DR-402 requires for a guard that proceeds,
+    rather than a settings-home log or stdout advisory text alone.
 
     Checks TWO interpreters, both load-bearing for the defect this closes:
       - `engine_py`, the interpreter dependency provisioning resolved above.
@@ -2934,6 +2941,12 @@ def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: s
             file=sys.stderr,
         )
         print(f"  Durable record: {dialect_parser_unavailable_log_path()}", file=sys.stderr)
+        try:
+            from coordinator_core.warm.telemetry import degrade_path
+
+            print(f"  Durable degrade record (DR-402): {degrade_path()}", file=sys.stderr)
+        except Exception:  # noqa: BLE001 -- advisory step, never fails the install
+            pass
         if any_missing_package:
             print(
                 "  Remediation: install tree_sitter and tree_sitter_pwsh under the named "
@@ -3241,19 +3254,48 @@ def install_lfs_pre_push_gate(repo_root: Path, args: Args) -> None:
 
 
 def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args) -> None:
-    """Best-effort install-chain step: lands the native warm-engine door
+    """Best-effort install-chain step: VERIFIES the native warm-engine door
     (`coordinator-invoke`) at `settings_home() / "bin"` — the same
-    destination spelling `install_bin_forwarders` already uses — and
-    verifies it THROUGH THE DOOR rather than trusting its exit code.
+    destination spelling `install_bin_forwarders` already uses — through
+    THE DOOR rather than trusting an exit code.
+
+    ONE BUILD SITE, NOT TWO (ledger item 6 / F-019 residue, this chunk's
+    brief). This function used to ALSO build/install the door itself
+    (`door_install.install_door` on Windows, `door_install_posix_build.
+    build_or_advise` directly on POSIX) — a second, independent build of
+    the exact name `install_bin_forwarders` (below, called first per the
+    load-bearing ordering comment in `main()`) had *already* built and
+    hardlinked 381 other door-eligible forwarders to, via `coordinator_core.
+    install.substrate`'s `_install_bin_resolvers` -> `_cut_over_to_native_
+    door` -> `install_named_forwarder` -> `door_install.install_door`
+    (`substrate.py` cannot be touched by this chunk's declared `writes:`
+    scope; its per-name loop unavoidably builds the door as a side effect
+    of cutting over ANY of the 363 `warm_entrypoint_allowlist.json` names,
+    `coordinator-invoke` included). Building it again here, moments later,
+    is exactly what produced "1 of 374 images a build behind": the second
+    build lands a fresh inode at the bare name while the 373 forwarders
+    `install_bin_forwarders` already hardlinked point at the first one.
+
+    DECISION: `install_bin_forwarders` survives as the sole builder (it is
+    the one call graph that must build the door regardless — `substrate.py`
+    is out of this chunk's scope to change), and this function is cut down
+    to verification-only: it checks presence via `door_install.
+    is_door_installed`, uses the artifact `install_bin_forwarders` already
+    produced, and reports an ADVISORY (never builds one itself) when that
+    artifact did not land — e.g. `install_bin_forwarders` bailed early on
+    an unrelated precondition (coordinator-claude root/plugin resolution).
+    That tradeoff is deliberate: an unconditional install here can only be
+    unconditional by racing `install_bin_forwarders`'s own build, which is
+    the defect this collapses.
 
     Spec backlink: state/dispatch-briefs/2026-08-22-warm-engine-and-door-
     install-from-published-root/C6.md.
 
-    PLACEMENT (this chunk's brief): installed UNCONDITIONALLY, never gated
+    PLACEMENT (this chunk's brief): verified UNCONDITIONALLY, never gated
     on `offer_warm_opt_in`'s warmth toggle. A door that falls through
     correctly when no server is resident is itself a correct outcome —
-    coupling the install to the toggle would mean flipping warmth on later
-    leaves the box doorless with no signal at all. Skipped only under
+    coupling the verification to the toggle would mean flipping warmth on
+    later leaves the box doorless with no signal at all. Skipped only under
     `--register-only`, same footing as `install_bin_forwarders` (its own
     caller in `main()` already gates on that flag).
 
@@ -3262,13 +3304,13 @@ def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, arg
     DR-315 §2 forbids hosting a warm server or a door build against (the
     live checkout is unstamped).
 
-    AC12 (peer-filed sun_path bug): before installing or verifying,
-    computes the resulting socket path's byte length the same way
+    AC12 (peer-filed sun_path bug): before verifying, computes the
+    resulting socket path's byte length the same way
     `coordinator_core.warm.election.socket_path` does (reused, not
     re-derived — `election.socket_path` and `breadcrumb._runtime_base`
     remain the only answer for where things live) and reports a distinct
     ADVISORY naming the `SUN_PATH_MAX_BYTES` budget and the actual byte
-    count when it will not fit, rather than installing a door that can
+    count when it will not fit, rather than verifying a door that can
     never connect and letting that present as an unexplained fall-through
     (`coordinator_core.warm.client._record_permanent_preamble_failure`
     already classifies `SocketPathTooLongError` this way for the dispatch
@@ -3344,42 +3386,40 @@ def install_warm_door(repo_root: Path, claude_klabauter_root_resolved: Path, arg
         from coordinator_core._settings_home import settings_home
         from coordinator_core.install import door_install
     except Exception as exc:  # noqa: BLE001
-        print(f"[ADVISORY] door not installed (door_install import failed: {exc!r}).", file=sys.stderr)
+        print(f"[ADVISORY] door not verified (door_install import failed: {exc!r}).", file=sys.stderr)
         return
 
     bin_dst = settings_home() / "bin"
 
-    try:
-        if sys.platform == "win32":
-            dest = door_install.install_door(bin_dst, engine_root)
-        else:
-            from coordinator_core.install.door_install_posix_build import build_or_advise
-
-            build_result = build_or_advise(engine_root, output=bin_dst / door_install.DOOR_INSTALLED_NAME)
-            if not build_result.built:
-                print(f"[ADVISORY] {build_result.advisory}", file=sys.stderr)
-                return
-            dest = build_result.output
-    except door_install.DoorInstallError as exc:
-        print(f"[ADVISORY] door install failed: {exc}", file=sys.stderr)
+    # ONE BUILD SITE (ledger item 6 / F-019 residue, this chunk's brief):
+    # `install_bin_forwarders` (called first, `main()`'s load-bearing
+    # ordering) already built and installed the door as a side effect of
+    # `coordinator_core.install.substrate`'s 363-name door-eligible cutover
+    # loop, which `coordinator-invoke` is itself a member of. Building it
+    # AGAIN here used to land a second, independently-built inode at the
+    # bare name moments after the first one had already been hardlinked to
+    # by every other door-eligible forwarder -- the exact "1 of 374 images
+    # a build behind" defect this collapse fixes. This step therefore never
+    # builds; it uses `door_install.is_door_installed` to confirm the
+    # artifact `install_bin_forwarders` already produced is there, and
+    # reports an ADVISORY (no build attempted here, on either platform) if
+    # it is not -- e.g. `install_bin_forwarders` bailed on an unrelated
+    # precondition (coordinator-claude root/plugin resolution) before its
+    # subprocess ever reached the door-eligible loop.
+    if not door_install.is_door_installed(bin_dst):
+        print(
+            f"[ADVISORY] door not installed at {bin_dst} -- install_bin_forwarders (this chunk's "
+            "sole build site) did not land it, so no verification was attempted.",
+            file=sys.stderr,
+        )
+        print(
+            "  Remediation: re-run: python3 -m coordinator_core.install.substrate --setup-only "
+            "(same env install_bin_forwarders uses), then re-run: python3 scripts/setup.py",
+            file=sys.stderr,
+        )
         return
-    except Exception as exc:  # noqa: BLE001
-        print(f"[ADVISORY] door install failed unexpectedly: {exc!r}", file=sys.stderr)
-        return
+    dest = bin_dst / door_install.DOOR_INSTALLED_NAME
 
-    # 2026-08-22 collision fix. `install_door()` no longer claims the bare
-    # name itself -- it is reached on Windows only. On POSIX the door is
-    # produced by `door_install_posix_build.build_or_advise` instead (no
-    # committed prebuilt exists for POSIX; see that module's docstring),
-    # landing at the identical `bin_dst / DOOR_INSTALLED_NAME` path
-    # `install_door()` would have used, through a code path that never
-    # calls `install_door()` at all. `dest` is established by EITHER
-    # branch above ONLY on a door that genuinely landed (a degraded build
-    # already returned above, leaving the forwarder family untouched as
-    # the fallback) -- so this single call site, covering both platforms,
-    # is the one place that actually knows the door landed. Kept out of
-    # `build_or_advise` deliberately: that module stays a pure build step
-    # with no settings-home-shape knowledge of its own (see its docstring).
     # Best-effort: a failure here must never un-succeed a door install that
     # already landed (mirrors every other step in this function).
     try:
@@ -4171,6 +4211,67 @@ def install_verify_settings_home(claude_klabauter_root_resolved: Path) -> None:
         )
 
 
+# Probes run by --preflight, in a fixed order -- one function name per
+# `coordinator_core.install.prereq_probe` probe already SSOT for the OSS
+# Step Zero check (see that module's own docstring). Names, not the
+# functions themselves, so the wiring below stays a plain lookup and this
+# list alone documents the probe set for anyone reading the source rather
+# than the docstring.
+_PREFLIGHT_PROBE_NAMES = (
+    "probe_python",
+    "probe_git",
+    "probe_uv",
+    "probe_gh",
+    "probe_node",
+    "probe_pwsh",
+    "probe_clone_auth",
+)
+
+
+def run_preflight() -> int:
+    """`--preflight`: the OSS install path's own Step Zero prerequisite gate.
+
+    Read-only -- wires the already-landed native probe suite
+    (coordinator_core.install.prereq_probe), does not reimplement any
+    detection logic, and does not mutate the machine. Runs
+    `_PREFLIGHT_PROBE_NAMES` in order, prints one human-readable line per
+    probe (derived from that probe's own Step-Zero NDJSON line -- name,
+    status, severity, detail, and remediation when the probe did not pass),
+    and returns the process exit code.
+
+    Exit contract: 0 if every probe with `severity: "hard"` reports
+    `status: "pass"`; 1 if any hard-severity probe reports a non-"pass"
+    status (fail/warn/inconclusive). A non-hard (advisory) probe never
+    affects the exit code, only the printed summary -- matching
+    `coordinator_core.ops.setup_chain_walker.pf_emit_row`'s own hard/
+    semi-hard/advisory severity split for the same probe suite.
+
+    Named so INSTALL.md can cite ONE command for the OSS path (`python3
+    scripts/setup.py --preflight`) rather than a narrated shell fence --
+    see this repo's C8 chunk of
+    docs/plans/2026-09-01-the-dogfooded-install-stops-lying-about.md.
+    """
+    from coordinator_core.install import prereq_probe
+
+    hard_failure = False
+    for probe_name in _PREFLIGHT_PROBE_NAMES:
+        probe_fn = getattr(prereq_probe, probe_name)
+        line = probe_fn()
+        row = json.loads(line)
+        name = row.get("name", probe_name)
+        status = row.get("status", "")
+        severity = row.get("severity", "")
+        detail = row.get("detail", "")
+        remediation = row.get("remediation", "")
+        marker = "PASS" if status == "pass" else ("WARN" if status == "warn" else "FAIL")
+        print(f"[{marker}] {name} ({severity}) — {detail}")
+        if remediation and status != "pass":
+            print(f"    remediation: {remediation}")
+        if severity == "hard" and status != "pass":
+            hard_failure = True
+    return 1 if hard_failure else 0
+
+
 def main(argv: list[str]) -> int:
     try:
         args = parse_args(argv)
@@ -4185,6 +4286,9 @@ def main(argv: list[str]) -> int:
     if args.help:
         print(HELP_TEXT, end="")
         return 0
+
+    if args.preflight:
+        return run_preflight()
 
     # Override flag pair gate (exit 93 on single-flag violation — contract § exit-code 93)
     if args.skip_dep_check != args.accept_risk:

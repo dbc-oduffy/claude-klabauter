@@ -227,20 +227,45 @@ _QUOTA_REJECTED = re.compile(r'(?<!\\)"status"\s*:\s*"rejected"')
 _QUOTA_RESETS_AT = re.compile(r'(?<!\\)"resetsAt"\s*:\s*(\d{9,12})')
 
 #: A session naming its own next move -- what a `push` names back at it.
+#: Two arms added 2026-09-01 (C3, overengineering-reviewer finding 5(b)): the
+#: six-alternative whitelist missed the two most ordinary phrasings, both
+#: verified against a live tick that day -- "I'll check the rule" (the plain
+#: modal, any verb, not just the five the original arm named) and "Checking
+#: the rule next" (a present-participle statement whose own "next" already
+#: names the move, matched without anchoring to sentence-start since the
+#: participle need not lead).
 _NEXT_MOVE = re.compile(
     r"(next (?:is|step|up|I)|I'?ll (?:now|next|run|dispatch|start)|about to|"
-    r"remains? to|still (?:to|need)|then I)",
+    r"remains? to|still (?:to|need)|then I|"
+    r"(?:I'?ll|I will|I'?m going to) \w+|"
+    r"\w+ing\b[^.!?]*\bnext\b)",
     re.IGNORECASE,
 )
 
 #: A session naming a REASON it stopped. A gate is a considered refusal with a
 #: reason; hesitation is the absence of one. These phrases are the difference
 #: between `push` and `hold`, so they live here and not in a prompt.
+#: Peer-dependency arms added 2026-09-01 (C3, overengineering-reviewer finding
+#: 5(a)): the original vocabulary was entirely PM-centric, so a session
+#: blocked on a PEER scored `named_reason=False` and `_nudge_shape` degraded
+#: it to `ask` instead of `hold`. Measured against a live sentence that
+#: matched none of the PM arms: "Nothing pending on my side. The first
+#: end-to-end call is still the one thing neither of us can test until their
+#: half lands, and they'll ping when it has." A false positive here holds a
+#: session that should have been asked; a false negative pushes one that had
+#: correctly stopped -- the harm that does not undo -- so these arms are
+#: deliberately testable alternatives, never a bare verb match, and err
+#: toward matching.
 _NAMED_REASON = re.compile(
     r"(waiting (?:for|on)|blocked (?:by|on)|gated (?:by|on)|awaiting|"
     r"cannot proceed|can'?t proceed|until (?:the )?(?:PM|you|approval|a ruling)|"
     r"needs? (?:your|the PM'?s|PM |approval|a decision|a ruling)|"
-    r"pending (?:your|the PM|approval|a decision)|handing (?:this )?(?:back|up))",
+    r"pending (?:your|the PM|approval|a decision)|handing (?:this )?(?:back|up)|"
+    r"until \S+ (?:lands|ships|merges|land|ship|merge)|"
+    r"they'?ll (?:ping|message|come back)|"
+    r"waiting on (?:a |the )?peer|"
+    r"neither of us can|"
+    r"queued behind)",
     re.IGNORECASE,
 )
 

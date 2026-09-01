@@ -2086,6 +2086,26 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      by a later invocation.
     # Spec: docs/plans/2026-08-30-group-em-entry-fires-one-warm-op.md § C5.
     "groupem.enter": OpClass.MUTATING,
+    # groupem.stamp -- MUTATING: writes the watch-heartbeat record via
+    # watch_heartbeat.write_atomic (whole-file replace).
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object? Yes --
+    #      the heartbeat record at watch_heartbeat.watch_path(repo_root).
+    #   2. Writes into rag's relational store?                                No.
+    #   3. Opens any file for write (including sentinel creation)?            Yes --
+    #      the heartbeat record file, via write_atomic.
+    #   4. Mutates shared mutable state outside its own module?               No.
+    #   5. Persistent state changes observable across process boundaries?     Yes --
+    #      the stamped record is read back by later liveness checks.
+    "groupem.stamp": OpClass.MUTATING,
+    # groupem.resolve_addressee -- COMPUTE_ONLY: send_pass.resolve_addressee
+    # only re-reads the live peer registry (peer_roster.build_roster) and
+    # writes nothing.
+    "groupem.resolve_addressee": OpClass.COMPUTE_ONLY,
+    # groupem.idle_report -- COMPUTE_ONLY: idle_report.build_report only
+    # reads peer transcripts, the harness registry, and the Group-EM's own
+    # offer log; it writes nothing.
+    "groupem.idle_report": OpClass.COMPUTE_ONLY,
     # session.work_state — COMPUTE_ONLY: reads state/handoffs/*.md and the
     # claim-state ledger via build_work_state() (coordinator_core.session.
     # work_state), which itself only reads disk (frontmatter, claim ledger,

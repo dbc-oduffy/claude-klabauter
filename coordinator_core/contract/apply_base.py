@@ -900,6 +900,17 @@ def execute_directives(
     actually dispatched (or was skipped as `already_satisfied`) in
     `report["results"]` / `report["landed"]` — a directive blocked by an
     unresolved judgment point never appears in either.
+
+    A judgment block PROPAGATES along directive-to-directive `depends_on`
+    edges: a directive naming a dependency that was itself blocked this
+    pass is blocked too, transitively, and likewise appears in neither
+    `results` nor `landed`. Ordering alone was not enough — a dependent
+    used to dispatch against a repo state its blocked dependency was
+    supposed to have established, and if it raised, the run returned
+    `APPLY_EXIT_PARTIAL_MUTATION` and abandoned every directive after it
+    (including grant-handback). `unresolved_judgment_points` still lists
+    only originating judgment-point ids, never the intermediate directive:
+    resolving those with `--decisions` is what unblocks the whole chain.
     """
     decisions, malformed_decisions = normalize_decisions(decisions or {})
     if malformed_decisions:
@@ -998,6 +1009,7 @@ def execute_directives(
     landed: list[str] = []
     results: list[DirectiveResult] = []
     blocked_jp_ids: set[str] = set()
+    blocked_directive_ids: set[str] = set()
     advisory_failures: list[dict[str, Any]] = []
     for directive_id, handler, directive in resolved:
         if directive.get("already_satisfied"):
@@ -1008,6 +1020,28 @@ def execute_directives(
         ready, blocking = directive_gate_open(directive, jp_by_id, decisions)
         if not ready:
             blocked_jp_ids.update(blocking)
+            blocked_directive_ids.add(directive_id)
+            continue
+
+        # A judgment block propagates along directive-to-directive
+        # `depends_on` edges. `directive_gate_open` only reads
+        # judgment-point ids, and `order_by_depends_on` only ORDERS on
+        # directive ids -- so before this, a directive whose named
+        # dependency had just been blocked at its own judgment point still
+        # dispatched, against a repo state that dependency was supposed to
+        # have established. `merge_assemble`'s `d7 depends_on d2` was the
+        # live case: `d2` (cut-tag) blocked on an unresolved
+        # `version_bump_final`, and `d7` fired anyway. Propagation reports
+        # the ORIGINATING judgment points, not the intermediate directive
+        # id, so `unresolved_judgment_points` stays a list of things an
+        # operator can actually resolve with `--decisions`.
+        upstream_blocked = [
+            dep
+            for dep in normalize_depends_on(directive.get("depends_on"))
+            if dep in blocked_directive_ids
+        ]
+        if upstream_blocked:
+            blocked_directive_ids.add(directive_id)
             continue
 
         try:

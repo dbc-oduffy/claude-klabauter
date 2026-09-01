@@ -955,6 +955,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # engine-injected kwarg.
     # Spec: docs/plans/2026-08-30-group-em-entry-fires-one-warm-op.md § C5.
     "groupem.enter":                          "none",
+    # groupem.stamp / groupem.resolve_addressee / groupem.idle_report --
+    # same resolution story as groupem.enter immediately above: each
+    # composes over the machine-global harness peer registry and/or a
+    # repo-scoped path passed VERBATIM as the wire-level repo_root param,
+    # never resolved against this engine-injected kwarg.
+    # Spec: state/dispatch-briefs/2026-09-01-the-crowns-standing-surfaces-report-themselves/C7.md.
+    "groupem.stamp":                          "none",
+    "groupem.resolve_addressee":              "none",
+    "groupem.idle_report":                    "none",
     # session.work_state — read-only held/unclaimed corpus read over
     # state/handoffs/, which is main-worktree-rooted repo state -- exactly
     # the case this table's own header comment names for "common_dir"

@@ -464,7 +464,14 @@ def test_fetch_live_agents_sources_peer_roster_not_a_subprocess():
         return_value=[_peer_row(session_id="peer-1", status="busy")],
     ) as fake_build_roster:
         agents = read_pass.fetch_live_agents(REPO_ROOT)
-    fake_build_roster.assert_called_once_with(repo_root=REPO_ROOT)
+    # BOTH REFUSALS DEFAULT OFF, asserted rather than omitted. The two flags
+    # (added 2026-09-01 for `watch.gone`, which cannot tell an unreadable
+    # registry from an empty one) are forwarded on every call, so this pin
+    # would break silently if a future edit flipped a default and turned every
+    # existing caller's quiet `[]` into a raise.
+    fake_build_roster.assert_called_once_with(
+        repo_root=REPO_ROOT, raise_on_failure=False, raise_on_empty_snapshot=False
+    )
     assert agents == [
         {"sessionId": "peer-1", "status": "busy", "cwd": REPO_ROOT, "name": None}
     ]

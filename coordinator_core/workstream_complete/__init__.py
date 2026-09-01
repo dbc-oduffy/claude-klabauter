@@ -1907,9 +1907,140 @@ def _append_directive_dependency(directives: list[dict[str, Any]], directive_id:
 # ---------------------------------------------------------------------------
 
 
+# Successor `deployment_state` values that answer leg B's REAL question --
+# "did the continuation finish" -- rather than the question a present
+# `continued_into` answers on its own ("was a continuation ever minted").
+# Three arms, not two: a value in neither set resolves `indeterminate`,
+# never a fail-closed `live-child`. Collapsing "cannot tell" into "a child
+# is live" is the exact shape of both regressions this seam has already
+# shipped (cross-repo/inbox 2026-08-31-doe-claude-em-has-live-children-
+# fail-closed-reads-as-a-finding.md, and 2026-09-01-example-game-repo-em-wsc-leg-b-
+# renames-referenced-to-live-child.md).
+#
+# `continued` is deliberately in NEITHER set: it is terminal for that
+# successor and says nothing about the chain, so it is FOLLOWED (see
+# `_leg_b_walk_continuation_chain`). 210 of the 443 continuation edges in
+# this repo's own corpus land on a `continued` successor; a plain
+# terminal/non-terminal split stopping at the first link would answer
+# "finished" for nearly half of them while the chain's real terminus was
+# still in flight -- the same accurate-about-the-field/wrong-about-the-
+# question defect, inverted.
+#
+# Its OWN partition, not `lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT`:
+# that set counts `continued` as terminal, which is precisely the answer
+# this leg must not take. `abandoned` is retired from handoff.schema.json's
+# enum (DR-084 P4) and retained here only for archived records still
+# carrying it.
+_LEG_B_SUCCESSOR_FINISHED_DEPLOYMENT = frozenset({"shipped", "closed", "abandoned"})
+_LEG_B_SUCCESSOR_LIVE_DEPLOYMENT = frozenset({"awaiting_gate", "ready_to_fire", "in_flight"})
+
+#: Belt to the visited-set cycle guard's braces -- a chain of distinct
+#: records that never terminates costs one file read per link. The deepest
+#: chain in this repo's corpus is 14 links; 32 is headroom, not a target.
+_LEG_B_MAX_CHAIN_DEPTH = 32
+
+
+def _leg_b_read_handoff_frontmatter(
+    root: Path, raw: str, label: str
+) -> tuple[Optional[Path], Optional[dict], Optional[str]]:
+    """Resolve-and-parse one handoff for leg B, returning
+    `(resolved_path, frontmatter, error)` with exactly one of
+    `frontmatter`/`error` set. `label` names the role the record plays in
+    the caller's sentence ("candidate handoff", "successor handoff") so a
+    leg-B `indeterminate` detail says WHICH link of the chain could not be
+    read, not merely that something could not be.
+
+    Never raises for a resolution, read, or parse failure -- those are the
+    `error` return. Shared by the candidate read and every link of
+    `_leg_b_walk_continuation_chain` so the two cannot drift."""
+    resolved = _resolve_handoff_path_str(root, raw)
+    if resolved is None:
+        return None, None, f"could not resolve {label} path {raw!r}"
+    try:
+        text = resolved.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, None, f"could not read {label} {raw!r}: {exc}"
+    frontmatter = parse_frontmatter(text).get("frontmatter")
+    if not isinstance(frontmatter, dict):
+        return None, None, f"{label} {raw!r} carries no parseable frontmatter"
+    return resolved, frontmatter, None
+
+
+def _leg_b_walk_continuation_chain(root: Path, first_successor: str) -> dict[str, Any]:
+    """Follow the continuation chain from `first_successor` to the link
+    that answers whether the continuation finished, and return
+    `_dispatch_has_live_children`'s own `{exit_code, ...}` shape.
+
+    NEVER READS `status:`. A finished baton's `status:` stays `open`
+    forever -- the sender of the 2026-09-01 memo hit that trap directly.
+    `deployment_state` is the axis that moves when the work finishes.
+
+    Each link resolves one of four ways:
+      finished (`_LEG_B_SUCCESSOR_FINISHED_DEPLOYMENT`) -> `exit_code=1`,
+        the chain is done and nothing live descends from the candidate;
+      live (`_LEG_B_SUCCESSOR_LIVE_DEPLOYMENT`) -> `exit_code=0`, leg B
+        fires on a successor genuinely still in flight;
+      `continued` -> follow this link's own `continued_into` (a `continued`
+        record without one is a malformed chain, `exit_code=2`, not a
+        guess in either direction);
+      anything else, absent, or unresolvable -> `exit_code=2`, naming the
+        value or the link -- an off-enum `deployment_state` is a record
+        this gate cannot read, not a live child.
+
+    Cycle-guarded on RESOLVED paths (two spellings of one record -- live
+    and archived -- are the same link), and bounded by
+    `_LEG_B_MAX_CHAIN_DEPTH`. Both exhaustions are `indeterminate`."""
+    seen: set[Path] = set()
+    successor = first_successor
+    for _ in range(_LEG_B_MAX_CHAIN_DEPTH):
+        resolved, frontmatter, error = _leg_b_read_handoff_frontmatter(
+            root, successor, "successor handoff"
+        )
+        if error is not None or resolved is None or frontmatter is None:
+            return {"exit_code": 2, "error": error or f"successor handoff {successor!r} could not be read"}
+        if resolved in seen:
+            return {
+                "exit_code": 2,
+                "error": f"continuation chain revisits {successor!r} -- the chain is a cycle and cannot be resolved",
+            }
+        seen.add(resolved)
+
+        raw_state = frontmatter.get("deployment_state")
+        state = raw_state.strip() if isinstance(raw_state, str) else None
+        if state in _LEG_B_SUCCESSOR_FINISHED_DEPLOYMENT:
+            return {
+                "exit_code": 1,
+                "referenced": True,
+                "detail": f"successor {successor} is `deployment_state: {state}` -- the continuation finished",
+            }
+        if state in _LEG_B_SUCCESSOR_LIVE_DEPLOYMENT:
+            return {
+                "exit_code": 0,
+                "referenced": True,
+                "detail": f"successor {successor} is `deployment_state: {state}` -- the continuation is still in flight",
+            }
+        if state == "continued":
+            onward = frontmatter.get("continued_into")
+            if not (isinstance(onward, str) and onward.strip()):
+                return {
+                    "exit_code": 2,
+                    "error": f"successor handoff {successor!r} is `deployment_state: continued` but carries no `continued_into` -- the chain cannot be followed",
+                }
+            successor = onward.strip()
+            continue
+        return {
+            "exit_code": 2,
+            "error": f"successor handoff {successor!r} carries deployment_state {state!r}, neither a finished nor an in-flight state -- whether the continuation finished cannot be read off it",
+        }
+    return {
+        "exit_code": 2,
+        "error": f"continuation chain from {first_successor!r} exceeded {_LEG_B_MAX_CHAIN_DEPTH} links without reaching a terminus",
+    }
+
+
 def _dispatch_has_live_children(root: Path, candidate: str) -> dict[str, Any]:
     """Leg B, RETARGETED (Ruling 4, C9, 2026-08-21 rebuild-the-three-ceremony-
-    assemblers plan — supersedes the in-process `handoff.has_live_children`
+    assemblers plan -- supersedes the in-process `handoff.has_live_children`
     op dispatch this function used to perform).
 
     Reads the candidate's OWN frontmatter for the write-time back-edge
@@ -1918,58 +2049,70 @@ def _dispatch_has_live_children(root: Path, candidate: str) -> dict[str, Any]:
     `handoff.archive_transition` mode="supersede" call at the successor's
     mint (`_supersede_continued` is the ONE writer of this field, and its
     own MutateAbort conflict guard means at most one continuation edge is
-    ever recorded per predecessor — see that function's docstring). A
+    ever recorded per predecessor -- see that function's docstring). A
     successor's mint already knows its predecessor and is already writing
     to the predecessor's frontmatter at that same moment; this is a read
-    of that same pass, not a second mechanism. Presence of a non-empty
-    `continued_into` therefore answers "does a live child exist" on its
-    own, without walking state/handoffs/ + archive/handoffs/ +
-    archive/completed/ the way the retired op dispatch did (1.6-1.7s
+    of that same pass, not a second mechanism. What follows is a walk of
+    ONE continuation chain (a file read per link, deepest observed 14),
+    never the corpus walk the retired op dispatch performed (1.6-1.7s
     across this module's 3 call sites, per the spike verdict this retarget
     cites).
 
+    A PRESENT `continued_into` IS NOT THE ANSWER. The field is written once
+    at the successor's mint and never cleared, so its presence answers "was
+    a continuation ever minted" -- which is not leg B's question. Leg B
+    asks whether a child is still LIVE. Returning `live-child` on presence
+    alone (this function's shape until 2026-09-01, reported by example-game-repo-em)
+    blocked EVERY predecessor-consumed close whose consumed baton had ever
+    been continued, permanently and by construction: `no-children` was
+    unreachable for that shape and `override-known-in-flight` the only
+    exit. So the chain is followed to the link that actually answers it --
+    `_leg_b_walk_continuation_chain`, which reads `deployment_state` and
+    NEVER `status:` (a finished baton's `status:` stays `open` forever).
+
+    Third member of a family this fleet keeps finding: an instrument
+    accurate about the thing it measures, wired to a caller asking a
+    different question (`order_by_depends_on` was accurate about ordering;
+    `handoff.has_live_children`'s fail-closed default was accurate about
+    its own failure). Search that shape, not this function.
+
     Deliberately narrower than a general "any edge" reader: `continued_into`
     is stamped ONLY by the continuation (supersede) path, never by a
-    spinoff's `origin_handoff`/`forked_from` fields — so this reads as the
+    spinoff's `origin_handoff`/`forked_from` fields -- so this reads as the
     same `{"predecessor", "additional_predecessors"}` edge set the retired
     op dispatch explicitly narrowed to (excluding `forked_from`; see
     example-cockpit-repo-em, 2026-08-05, cross-repo/archive/2026-08-05-project-
     cockpit-em-wsc-leg-b-counts-spinoffs-as-live-children.md), without
-    naming an edge-kinds parameter at all — a spinoff's own origin fields
+    naming an edge-kinds parameter at all -- a spinoff's own origin fields
     never populate this candidate's `continued_into`.
 
     `exit_code` shape mirrors the retired op dispatch's own contract, so the
-    caller (`_evaluate_consumed_handoff_completeness_element`) needs no
-    change: `0` — a live child exists (`continued_into` present and
-    non-empty); `1` — no children (candidate resolved and read cleanly,
-    `continued_into` absent/empty); `2` — indeterminate (candidate could not
-    be resolved, read, or parsed).
+    caller (`_evaluate_consumed_handoff_completeness_element`) reads the
+    same three arms: `0` -- a live child exists; `1` -- no live children
+    (no continuation was ever minted, or the chain from it has finished);
+    `2` -- indeterminate. `detail` accompanies arms 0 and 1 and names the
+    evidence that decided them; `error` accompanies arm 2.
 
     R1 (Absent back-edge -> warn, never fall back to the retired scan): an
     unresolvable/unreadable/unparseable candidate degrades to `exit_code=2`
-    with `error` set — AC5's non-blocking mapping applies uniformly. This
+    with `error` set -- AC5's non-blocking mapping applies uniformly. This
     function never re-derives the answer by scanning the corpus; a missing
     back-edge on a resolvable, readable candidate is a genuine "no-children"
     verdict (`exit_code=1`), not an occasion to fall back to a walk.
 
     Never raises."""
     try:
-        resolved = _resolve_handoff_path_str(root, candidate)
-        if resolved is None:
-            return {"exit_code": 2, "error": f"could not resolve candidate handoff path {candidate!r}"}
-        text = resolved.read_text(encoding="utf-8")
-        frontmatter = parse_frontmatter(text).get("frontmatter")
-        if not isinstance(frontmatter, dict):
-            return {
-                "exit_code": 2,
-                "error": f"candidate handoff {candidate!r} carries no parseable frontmatter",
-            }
+        _, frontmatter, error = _leg_b_read_handoff_frontmatter(root, candidate, "candidate handoff")
+        if error is not None or frontmatter is None:
+            return {"exit_code": 2, "error": error or f"candidate handoff {candidate!r} could not be read"}
         continued_into = frontmatter.get("continued_into")
-        if isinstance(continued_into, str) and continued_into.strip():
-            return {"exit_code": 0, "referenced": True}
-        return {"exit_code": 1, "referenced": False}
-    except (OSError, UnicodeDecodeError) as exc:
-        return {"exit_code": 2, "error": f"could not read candidate handoff {candidate!r}: {exc}"}
+        if not (isinstance(continued_into, str) and continued_into.strip()):
+            return {
+                "exit_code": 1,
+                "referenced": False,
+                "detail": "candidate carries no `continued_into` -- no continuation was ever minted from it",
+            }
+        return _leg_b_walk_continuation_chain(root, continued_into.strip())
     except Exception as exc:  # noqa: BLE001 - degrade to leg B indeterminate (AC5), never raise out of brief()
         return {"exit_code": 2, "error": f"has_live_children back-edge read failed: {exc}"}
 
@@ -2714,10 +2857,16 @@ def _evaluate_consumed_handoff_completeness_element(root: Path, raw_path: str) -
                             as self-attestation, so a terminal-looking
                             `status:` next to it must not read as verified
                             (see _evaluate_session_handoff_leg_a).
-    leg_b["verdict"] is one of "live-child" (FIRES, AC4), "no-children"
-    (does not block), or "indeterminate" (AC5's non-blocking `exit_code=2`
-    mapping — `leg_b["error"]` always carries the op's own `error` string
-    in this case, never silently dropped, per AC3b)."""
+    leg_b["verdict"] is one of "live-child" (FIRES, AC4 — the candidate's
+    continuation chain ends on a successor whose `deployment_state` is
+    still in flight), "no-children" (does not block — no continuation was
+    ever minted, or the chain from it has finished), or "indeterminate"
+    (AC5's non-blocking `exit_code=2` mapping — `leg_b["error"]` always
+    carries the producer's own `error` string in this case, never silently
+    dropped, per AC3b). The verdict is decided at the link that supplied
+    the evidence and carried here verbatim in `leg_b["detail"]`: a present
+    `continued_into` alone decides nothing, since the field is written once
+    at mint and never cleared (see `_dispatch_has_live_children`)."""
     resolved = _resolve_handoff_path_str(root, raw_path)
     text: Optional[str] = None
     if resolved is not None:
@@ -2769,23 +2918,19 @@ def _evaluate_consumed_handoff_completeness_element(root: Path, raw_path: str) -
 
     leg_b_result = _dispatch_has_live_children(root, raw_path)
     exit_code = leg_b_result.get("exit_code")
+    # NAME THE EVIDENCE, NOT THE RETIRED PRODUCER, AND NOT A RELABEL. These detail
+    # strings once read "has_live_children reports a live child" -- an op that was
+    # KILLED (-32006) and is called from nowhere in this module -- and then, after
+    # that repair, "candidate's own `continued_into` back-edge names a successor",
+    # which was accurate about the field and silent on the question: whether the
+    # successor is still live. Both misreads blocked real closes (doe-claude-em
+    # 2026-08-31, example-game-repo-em 2026-09-01). The detail now comes from the link that
+    # decided the verdict, composed where that link was read, so a relabel here
+    # cannot outrun the evidence again.
     if exit_code == 0:
-        leg_b = {
-            "verdict": "live-child",
-            # NAME THE EVIDENCE, NOT THE RETIRED PRODUCER. This detail string used to
-            # read "has_live_children reports a live child" -- an op that was KILLED
-            # (-32006) and is no longer called from anywhere in this module, since leg B
-            # was retargeted to the write-time back-edge read above. A consumer reading
-            # a dead op's name in a live verdict cannot tell a real finding from a
-            # fail-closed default manufactured by a corpse, and doe-claude-em's
-            # 2026-08-31 memo reports exactly that misread blocking their close. The
-            # string now names the field that actually decided it, which is checkable.
-            "detail": "candidate's own `continued_into` back-edge names a successor",
-            "exit_code": 0,
-            "error": None,
-        }
+        leg_b = {"verdict": "live-child", "detail": leg_b_result.get("detail"), "exit_code": 0, "error": None}
     elif exit_code == 1:
-        leg_b = {"verdict": "no-children", "detail": "no live handoff names this candidate as predecessor", "exit_code": 1, "error": None}
+        leg_b = {"verdict": "no-children", "detail": leg_b_result.get("detail"), "exit_code": 1, "error": None}
     else:
         error = leg_b_result.get("error") or "leg B back-edge read returned an unexpected shape"
         leg_b = {"verdict": "indeterminate", "detail": error, "exit_code": exit_code, "error": error}

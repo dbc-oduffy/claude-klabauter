@@ -958,7 +958,15 @@ def _depends_on_list(directive: dict) -> list:
 
 
 def _patch_leg_b(monkeypatch: pytest.MonkeyPatch, result: dict) -> None:
-    monkeypatch.setattr(wsc, "_dispatch_has_live_children", lambda root, candidate: dict(result))
+    # The real producer always supplies `detail` alongside arms 0 and 1 -- it is
+    # composed at the link that decided the verdict (see `_leg_b_walk_continuation_
+    # chain`), not relabelled by the caller. The fake defaults it so these tests
+    # exercise the caller's real shape and not a `None` the producer never returns.
+    monkeypatch.setattr(
+        wsc,
+        "_dispatch_has_live_children",
+        lambda root, candidate: {"detail": "leg B evidence (test fake)", **result},
+    )
 
 
 def _write_ac_handoff(tmp_path: Path, rel_path: str, body: str) -> None:
@@ -967,14 +975,29 @@ def _write_ac_handoff(tmp_path: Path, rel_path: str, body: str) -> None:
     handoff_path.write_text(f"---\nstatus: open\n---\n\n{body}\n", encoding="utf-8")
 
 
+def _write_leg_b_handoff(tmp_path: Path, rel_path: str, **frontmatter: str) -> None:
+    """One handoff record with the frontmatter fields named, and nothing else.
+
+    Deliberately writes `status: open` on EVERY record, including finished
+    ones: a finished baton's `status:` stays `open` forever, which is the
+    trap the 2026-09-01 example-game-repo-em memo reports its sender falling into.
+    Leg B reading `status:` instead of `deployment_state:` must fail these
+    tests, not pass them.
+    """
+    handoff_path = tmp_path / rel_path
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    fields = "".join(f"{k}: {v}\n" for k, v in frontmatter.items())
+    handoff_path.write_text(f"---\nstatus: open\n{fields}---\n\nbody\n", encoding="utf-8")
+
+
 def test_leg_b_back_edge_dispatch_reads_continued_into_off_the_candidates_own_frontmatter(tmp_path):
     """C9 Ruling 4 retarget: `_dispatch_has_live_children` no longer dispatches
     the `handoff.has_live_children` op — it reads the candidate's OWN
     frontmatter for `continued_into`, the write-time back-edge
     `baton_assemble/apply.py :: _dispatch_handoff_supersede_predecessor`
-    stamps onto a predecessor at the successor's mint. This is a single-file
-    read, not a corpus walk: no op registry, no IPC dispatch, no
-    `git_common_dir` conversion. Every other leg-B test monkeypatches
+    stamps onto a predecessor at the successor's mint. This is a walk of one
+    continuation chain, not a corpus walk: no op registry, no IPC dispatch,
+    no `git_common_dir` conversion. Every other leg-B test monkeypatches
     `_dispatch_has_live_children` wholesale and so cannot see this.
 
     Supersedes `test_leg_b_dispatch_narrows_edge_kinds_so_a_live_spinoff_does_
@@ -985,17 +1008,97 @@ def test_leg_b_back_edge_dispatch_reads_continued_into_off_the_candidates_own_fr
     never populate the candidate's OWN `continued_into`, so a live spinoff
     still cannot make this leg fire.
     """
-    handoff_path = tmp_path / "state" / "handoffs" / "x.md"
-    handoff_path.parent.mkdir(parents=True, exist_ok=True)
-    handoff_path.write_text(
-        '---\nstatus: claimed\ndeployment_state: continued\ncontinued_into: "state/handoffs/successor.md"\n---\n\nbody\n',
-        encoding="utf-8",
-    )
+    _write_leg_b_handoff(tmp_path, "state/handoffs/x.md", deployment_state="continued",
+                   continued_into='"state/handoffs/successor.md"')
+    _write_leg_b_handoff(tmp_path, "state/handoffs/successor.md", deployment_state="in_flight")
 
     result = wsc._dispatch_has_live_children(tmp_path, "state/handoffs/x.md")
 
     assert result["exit_code"] == 0
     assert result["referenced"] is True
+    assert "successor" in result["detail"]
+
+
+def test_leg_b_a_finished_successor_is_no_children_not_a_permanent_block(tmp_path):
+    """THE 2026-09-01 REGRESSION (example-game-repo-em, cross-repo/inbox/2026-09-01-
+    example-game-repo-em-wsc-leg-b-renames-referenced-to-live-child.md). `continued_
+    into` is written once at the successor's mint and NEVER cleared, so its
+    presence answers "was a continuation ever minted", not "is a child still
+    live". Deciding `live-child` on presence alone blocked every
+    predecessor-consumed close whose consumed baton had ever been continued,
+    permanently and by construction — `no-children` was unreachable for that
+    shape, leaving `override-known-in-flight` the only exit, which is the
+    gate everyone clicks through.
+
+    The successor here is FINISHED (`deployment_state: shipped`) while its
+    `status:` still reads `open` — the exact record shape the sender
+    reproduced against. Leg B must clear."""
+    _write_leg_b_handoff(tmp_path, "state/handoffs/x.md", deployment_state="continued",
+                   continued_into="state/handoffs/successor.md")
+    _write_leg_b_handoff(tmp_path, "state/handoffs/successor.md", deployment_state="shipped")
+
+    result = wsc._dispatch_has_live_children(tmp_path, "state/handoffs/x.md")
+
+    assert result["exit_code"] == 1
+    assert "shipped" in result["detail"]
+
+
+def test_leg_b_follows_the_chain_through_a_continued_successor_to_its_terminus(tmp_path):
+    """A successor that is ITSELF `continued` is terminal for that record and
+    silent about the chain — 210 of the 443 continuation edges in this repo's
+    corpus land on one. Stopping there and calling it finished would answer
+    the question wrong in the other direction for nearly half of them, so the
+    chain is followed to the link that actually answers it: here, a live
+    grandchild still blocks."""
+    _write_leg_b_handoff(tmp_path, "state/handoffs/x.md", deployment_state="continued",
+                   continued_into="state/handoffs/mid.md")
+    _write_leg_b_handoff(tmp_path, "state/handoffs/mid.md", deployment_state="continued",
+                   continued_into="state/handoffs/last.md")
+    _write_leg_b_handoff(tmp_path, "state/handoffs/last.md", deployment_state="ready_to_fire")
+
+    result = wsc._dispatch_has_live_children(tmp_path, "state/handoffs/x.md")
+
+    assert result["exit_code"] == 0
+    assert "last.md" in result["detail"]
+
+
+def test_leg_b_a_continuation_cycle_is_indeterminate_not_an_infinite_walk(tmp_path):
+    """Cycle guard, on RESOLVED paths — a corrupt pair of records pointing at
+    each other must degrade to the non-blocking `exit_code=2` arm, never spin."""
+    _write_leg_b_handoff(tmp_path, "state/handoffs/a.md", deployment_state="continued",
+                   continued_into="state/handoffs/b.md")
+    _write_leg_b_handoff(tmp_path, "state/handoffs/b.md", deployment_state="continued",
+                   continued_into="state/handoffs/a.md")
+
+    result = wsc._dispatch_has_live_children(tmp_path, "state/handoffs/a.md")
+
+    assert result["exit_code"] == 2
+    assert result["error"]
+
+
+def test_leg_b_an_unreadable_deployment_state_is_indeterminate_never_a_live_child(tmp_path):
+    """THE 2026-08-31 REGRESSION, generalised (doe-claude-em, cross-repo/inbox/
+    2026-08-31-doe-claude-em-has-live-children-fail-closed-reads-as-a-finding.md):
+    a leg that cannot tell must say so, never manufacture a finding. An
+    off-enum `deployment_state` on the successor, and a successor that
+    cannot be resolved at all, are both `indeterminate` — the non-blocking
+    AC5 arm — not `live-child`."""
+    _write_leg_b_handoff(tmp_path, "state/handoffs/x.md", deployment_state="continued",
+                   continued_into="state/handoffs/successor.md")
+    _write_leg_b_handoff(tmp_path, "state/handoffs/successor.md", deployment_state="delivered")
+
+    off_enum = wsc._dispatch_has_live_children(tmp_path, "state/handoffs/x.md")
+
+    assert off_enum["exit_code"] == 2
+    assert "delivered" in off_enum["error"]
+
+    _write_leg_b_handoff(tmp_path, "state/handoffs/y.md", deployment_state="continued",
+                   continued_into="state/handoffs/never-minted.md")
+
+    missing = wsc._dispatch_has_live_children(tmp_path, "state/handoffs/y.md")
+
+    assert missing["exit_code"] == 2
+    assert "successor handoff" in missing["error"]
 
 
 def test_leg_b_back_edge_absent_is_no_children_not_a_fallback_scan(tmp_path):

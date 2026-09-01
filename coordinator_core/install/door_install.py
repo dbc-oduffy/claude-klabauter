@@ -600,32 +600,65 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
 
     dest_provenance = installed_provenance_path(bin_dst)
 
-    if _PREBUILT_DOOR_EXE.exists():
-        _replace_possibly_running_image(_PREBUILT_DOOR_EXE, dest_exe)
-        print(f"[door-install] copied prebuilt {_PREBUILT_DOOR_EXE} -> {dest_exe}")
-        if _PREBUILT_PROVENANCE.exists():
-            shutil.copy2(_PREBUILT_PROVENANCE, dest_provenance)
+    # ROUTE ON PLATFORM FIRST, NOT ON PREBUILT PRESENCE (C2, dispatch brief
+    # F-013, part a). This used to branch solely on `_PREBUILT_DOOR_EXE.
+    # exists()` -- true on Windows (the committed `door.exe`), false on
+    # POSIX (no bare `door` ships, by design; see `door_install_posix_build`'s
+    # module docstring). The `else` branch that miss fell into called
+    # `door_build.build()` -- `warm/door/build.py`, Windows-shaped end to
+    # end (`-ladvapi32 -lshell32 -Xlinker /Brepro` against a `windows.h`
+    # TU) -- unconditionally on every POSIX install. `scripts/setup.py ::
+    # install_warm_door` already routes correctly (`sys.platform == "win32"`
+    # first, `door_install_posix_build.build_or_advise` otherwise); this
+    # reuses that exact routing and helper rather than re-deriving a second
+    # one, so the two install-time door writers can never disagree on which
+    # builder POSIX gets.
+    if sys.platform == "win32":
+        if _PREBUILT_DOOR_EXE.exists():
+            _replace_possibly_running_image(_PREBUILT_DOOR_EXE, dest_exe)
+            print(f"[door-install] copied prebuilt {_PREBUILT_DOOR_EXE} -> {dest_exe}")
+            if _PREBUILT_PROVENANCE.exists():
+                shutil.copy2(_PREBUILT_PROVENANCE, dest_provenance)
+            else:
+                # A missing prebuilt sidecar next to a present prebuilt exe used
+                # to be a SILENT skip while the exe copy above is unconditional
+                # -- that asymmetry is exactly how a destination keeps a stale
+                # record: the binary changes, nothing tells the sidecar to. A
+                # record describing a different binary is worse than no record
+                # at all, so any pre-existing destination sidecar is removed
+                # rather than left to misdescribe the binary this call just
+                # installed.
+                print(
+                    f"[door-install] WARNING: no prebuilt provenance at "
+                    f"{_PREBUILT_PROVENANCE} -- installing without one",
+                    file=sys.stderr,
+                )
+                try:
+                    dest_provenance.unlink()
+                except FileNotFoundError:
+                    pass
         else:
-            # A missing prebuilt sidecar next to a present prebuilt exe used
-            # to be a SILENT skip while the exe copy above is unconditional
-            # -- that asymmetry is exactly how a destination keeps a stale
-            # record: the binary changes, nothing tells the sidecar to. A
-            # record describing a different binary is worse than no record
-            # at all, so any pre-existing destination sidecar is removed
-            # rather than left to misdescribe the binary this call just
-            # installed.
-            print(
-                f"[door-install] WARNING: no prebuilt provenance at "
-                f"{_PREBUILT_PROVENANCE} -- installing without one",
-                file=sys.stderr,
-            )
-            try:
-                dest_provenance.unlink()
-            except FileNotFoundError:
-                pass
+            door_build.build(engine_root, output=dest_exe)
+            print(f"[door-install] no prebuilt found -- compiled fresh at {dest_exe}")
     else:
-        door_build.build(engine_root, output=dest_exe)
-        print(f"[door-install] no prebuilt found -- compiled fresh at {dest_exe}")
+        # POSIX has no committed prebuilt to fall back to at all (see
+        # `door_install_posix_build`'s own docstring on why one is
+        # impossible, not merely unshipped) -- `build_or_advise` is the only
+        # honest option: build when a toolchain is present, otherwise
+        # return a non-fatal advisory rather than raising. A missing
+        # toolchain is surfaced here as `DoorInstallError` (caught by this
+        # function's own callers -- `install_named_forwarder` ->
+        # `_write_native_door_forwarder`, C2 part b) so the degrade is
+        # explicit and attributable, never a silent no-op; a genuine compile
+        # failure (toolchain present, bad build) raises `SystemExit` out of
+        # `build_or_advise` unchanged, which those same callers now also
+        # catch.
+        from coordinator_core.install.door_install_posix_build import build_or_advise
+
+        result = build_or_advise(engine_root, output=dest_exe)
+        if not result.built:
+            raise DoorInstallError(result.advisory)
+        print(f"[door-install] POSIX build: wrote {dest_exe}")
 
     if dest_provenance.exists():
         verdict = verify_installed_provenance(bin_dst)

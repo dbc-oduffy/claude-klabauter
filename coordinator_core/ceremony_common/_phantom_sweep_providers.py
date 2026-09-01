@@ -248,6 +248,14 @@ def sweep_consolidate_assemble(tmp_path: Path) -> PhantomSweepResult:
             return SimpleNamespace(returncode=0 if ok else 1, stdout="", stderr="")
         if args[0] == "branch":
             return SimpleNamespace(returncode=0, stdout="* current\n  main\n  stale\n", stderr="")
+        if args[0] == "for-each-ref":
+            # The brief's single ref enumeration (`consolidate_assemble.
+            # ref_rows`): the same three branches the `branch` arm lists,
+            # in the `<refname>\t<short>\t<authoremail>` shape it parses.
+            rows = "".join(
+                f"refs/heads/{n}\t{n}\tme@x\n" for n in ("current", "main", "stale")
+            )
+            return SimpleNamespace(returncode=0, stdout=rows, stderr="")
         if args[0] == "log" and args[1] == "-1":
             return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
         if args[0] == "log" and args[1] == "--oneline":

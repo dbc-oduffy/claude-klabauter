@@ -1526,13 +1526,17 @@ def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp
     delta_vs_today = round(rebuild_only_ms - _MEASURED_TODAY_MS, 3)
     delta_vs_bar = round(rebuild_only_ms - _BRIGHTLINE_MS, 3)
     verdict = "PASSES" if rebuild_only_ms <= _BRIGHTLINE_MS else "FAILS"
+    # Review: coordinator:code-reviewer nit — single computation, reused in
+    # both the printed detail and the assertion below (was computed twice
+    # via slightly different rounding paths).
+    procs_excess = round(result["procs_per_call"] - floor["procs_per_call"], 3)
     detail = (
         f"AC18 projected-width rebuild(): rebuild_only="
         f"{rebuild_only_ms}ms (total {result['process_time_ms']}ms minus "
         f"{floor['process_time_ms']}ms interpreter+import floor) "
         f"procs_per_call={result['procs_per_call']} (floor "
         f"{floor['procs_per_call']}, excess "
-        f"{round(result['procs_per_call'] - floor['procs_per_call'], 3)}) (k={result['k']}) at "
+        f"{procs_excess}) (k={result['k']}) at "
         f"{_PROJECTED_CLAIMANTS} claimants + {_PROJECTED_EMPTY_DIRS} "
         f"sink-less dirs -- {_PROJECTION_HORIZON_DAYS:.0f}d of the growth "
         f"measured over {_MEASURED_WINDOW_DAYS}d "
@@ -1559,7 +1563,16 @@ def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp
     # `rebuild()`'s and nothing else's. Independently corroborated the same
     # day by instrumenting `subprocess.run` across a live `rebuild()` over a
     # synthetic 30-session / 600-event corpus: zero calls.
-    procs_excess = result["procs_per_call"] - floor["procs_per_call"]
+    #
+    # `abs=0.01` is deliberately far tighter than the quantity it bounds, and
+    # is not a slack budget to be widened. `procs_per_call` is an exact
+    # job-object process count divided by `k`, so it moves only in steps of
+    # `1/k` (0.2 at k=5) and is isolated from ambient box load by that job
+    # object -- there is no measurement noise here for a tolerance to absorb.
+    # The only two reachable values are an exact 0.0 and a step at least 20x
+    # the tolerance, so a tight bound cannot produce a false failure, while a
+    # loose one would silently buy nothing and lose the margin that keeps this
+    # honest if the metric ever becomes fractional.
     assert procs_excess == pytest.approx(0.0, abs=0.01), (
         f"a pure-Python rebuild driver must spawn no subprocess of its own "
         f"BEYOND its import floor: driver={result['procs_per_call']} "

@@ -147,6 +147,7 @@ __all__ = [
     "discovery_path",
     "write_discovery",
     "read_discovery",
+    "read_discovery_with_cause",
     "unlink_discovery",
     "discovery_is_live",
     "should_spawn",
@@ -475,9 +476,6 @@ ENTRY_SCRIPT = "coordinator_core/warm/front_door.py"
 # module's own comment for why `os.replace` (not truncate-then-write) is the
 # only safe publish shape for a lock-free reader on the hook path, and why
 # the reader's retry budget is far smaller than the writer's.
-_READ_RETRY_BUDGET_SECS = 0.05
-_READ_RETRY_SLEEP_SECS = 0.001
-
 _replace_with_retry = locked_write.replace_with_retry
 
 
@@ -545,37 +543,35 @@ def write_discovery(
             raise
 
 
+def read_discovery_with_cause(
+    engine_root: Optional[Path] = None,
+) -> "tuple[Optional[dict], str]":
+    """This door's discovery record, plus why when there is none -- one of
+    `breadcrumb.READ_CAUSES`.
+
+    The body and retry policy live in `breadcrumb.read_record_with_cause`,
+    shared with `supervisor`: the two doors publish DISTINCT records, which
+    justifies distinct paths, never a second copy of the reader. This one was
+    a byte-identical duplicate until 2026-09-01.
+
+    Not currently on any deployed hot path -- DoE's forwarder holds 47623 as
+    an ordinary defer holder and never becomes a front door -- but the
+    succession contract permits a front door to take that seat, and on the day
+    it does this is the reader that keeps `no_backend` from collapsing five
+    answers into one all over again.
+    """
+    return breadcrumb.read_record_with_cause(discovery_path(engine_root))
+
+
 def read_discovery(engine_root: Optional[Path] = None) -> Optional[dict]:
     """Read and parse the discovery record, or return None if absent,
     unreadable, or not a well-formed JSON object -- never raises, mirrors
     `supervisor.read_discovery`'s HINT contract and identical retry-only-
-    on-failure shape (a first read that parses pays nothing extra)."""
-    path = discovery_path(engine_root)
-    deadline: Optional[float] = None
-    while True:
-        retryable = False
-        try:
-            text = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return None
-        except OSError:
-            retryable = True
-            text = ""
-        if not retryable:
-            try:
-                record = json.loads(text)
-            except json.JSONDecodeError:
-                retryable = True
-                record = None
-            if not retryable:
-                return record if isinstance(record, dict) else None
+    on-failure shape (a first read that parses pays nothing extra).
 
-        now = time.monotonic()
-        if deadline is None:
-            deadline = now + _READ_RETRY_BUDGET_SECS
-        elif now >= deadline:
-            return None
-        time.sleep(_READ_RETRY_SLEEP_SECS)
+    A projection of `read_discovery_with_cause`, so the two can never drift
+    into disagreeing about what a contended read means."""
+    return read_discovery_with_cause(engine_root)[0]
 
 
 def unlink_discovery(
