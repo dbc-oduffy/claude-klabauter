@@ -66,7 +66,7 @@ def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):
                 max_iterations=1,
             )
 
-        assert lines[0].startswith(f"ARMED peer_count=7 {name} peers, "), lines[0]
+        assert lines[0].startswith(f"ARMED peer_count=7 {name} peers at "), lines[0]
         assert "claude-klabauter" not in lines[0]
         assert "klabauter" not in lines[0]
 
@@ -322,9 +322,8 @@ def test_main_arms_and_reports_measured_interval(tmp_path):
     armed_line = stream_lines[0]
     # The repo name is READ OFF repo_root, so it is tmp_path's basename here rather
     # than a literal. Pinned that way on purpose -- see the regression test below.
-    assert armed_line.startswith(
-        f"ARMED peer_count=5 {tmp_path.name} peers, snapshot=2.0ms"
-    )
+    assert armed_line.startswith(f"ARMED peer_count=5 {tmp_path.name} peers at ")
+    assert "snapshot=2.0ms" in armed_line
     # interval = max(floor, 1000 * snapshot_s) = max(5.0, 1000 * 0.002) = 5.0
     assert "interval=5.0s" in armed_line
 
@@ -852,3 +851,61 @@ def test_a_nameless_peer_still_gets_a_line():
         )
 
     assert emitted[0].startswith("PARKED session=peer-1 ")
+
+
+# --- the root the process stands on ----------------------------------------
+
+
+def test_the_cli_refuses_a_root_that_does_not_exist(capsys):
+    """`peer_count=0` is what a quiet repo and an unreadable one both printed,
+    and the run exited 0. A watcher reported `armed and standing by` four times
+    across fifty minutes while watching nothing, through nine live peer
+    transitions (example-game-repo-em, 2026-09-01)."""
+    rc = watch._cli(["--repo-root", "X:/no-such-repo-anywhere"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "not an existing directory" in err
+    assert "no-such-repo-anywhere" in err
+
+
+def test_the_cli_refuses_a_drive_relative_root(capsys):
+    """The mangling that actually happened: a Windows backslash path through a
+    shell loses its separators, leaving `X:name` -- drive-relative, so it binds
+    to wherever the process was standing. A type check cannot see it; only
+    `isabs` can, and it must refuse even when the directory it would resolve to
+    happens to exist."""
+    rc = watch._cli(["--repo-root", "X:example-game-workbench-repo"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "not an absolute path" in err
+    assert "resolves against" in err
+
+
+def test_the_armed_line_names_the_resolved_path_not_only_the_repo_name(tmp_path):
+    """The display name SURVIVES the mangling -- it is the tail of the mangled
+    path too -- so the name alone made a broken arm look healthy. The resolved
+    path is what makes the line self-diagnosing."""
+    lines: list[str] = []
+
+    class _Stream:
+        def write(self, text):
+            if text.strip():
+                lines.append(text.strip())
+
+        def flush(self):
+            pass
+
+    with mock.patch.object(
+        watch, "_measure_snapshot_ms", return_value=(2.0, [])
+    ), mock.patch.object(watch, "poll_once", return_value=({}, [])):
+        watch.main(
+            str(tmp_path),
+            caller_session_id="sid",
+            stream=_Stream(),
+            sleep_fn=lambda _s: None,
+            max_iterations=1,
+        )
+
+    armed = lines[0]
+    assert armed.startswith("ARMED ")
+    assert str(pathlib.Path(tmp_path).resolve()) in armed

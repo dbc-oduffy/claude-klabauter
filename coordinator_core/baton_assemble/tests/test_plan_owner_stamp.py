@@ -3,10 +3,13 @@
 R5 reverse edge (2026-08-21, rebuild-the-three-ceremony-assemblers plan C6):
 a plan records which baton currently owns it, stamped at the baton-claims-plan
 moment. Write site: `coordinator_core.baton_assemble.apply._stamp_plan_owner_
-back_edge`, called from the module's own `session_claims.claim_plan` call
-site (`_compensate_d5_release_claim` -- the only place `apply.py` itself
-claims a plan; the mint-time claim lives in `coordinator-doc-new.py`, out of
-this chunk's `writes:` scope).
+back_edge`, called from `session.claims.claim_plan(..., for_execution=True)`
+-- the plan-execution claim, and the only claim that can answer "which baton
+is advancing this plan right now". `_compensate_d5_release_claim` calls the
+same stamp on its partial-mutation reclaim path; that compensator was for a
+while the ONLY caller, which is why the field landed on zero plans in a
+corpus of 346 while these tests stayed green (AC6 below pins the happy path
+so that cannot recur).
 
 Pinned here, per this chunk's own dispatch brief:
   1. claiming stamps `claimed_by_handoff` (repo-relative POSIX path to the
@@ -21,6 +24,9 @@ Pinned here, per this chunk's own dispatch brief:
      `governing_plan` of its own has nothing to stamp and is a silent no-op.
   5. `_compensate_d5_release_claim`'s own reclaim path drives the stamp end
      to end (integration, not just the unit-level helper).
+  6. `claim_plan(..., for_execution=True)` -- the PRODUCTION happy path --
+     drives the stamp end to end. A green unit-level helper proves nothing
+     about whether anything calls it.
 
 `_resolve_held_handoff_for_session` is reused (never re-derived) per the
 dispatch brief -- monkeypatched here at its `coordinator_core.baton_assemble`
@@ -185,3 +191,34 @@ def test_release_reclaim_compensator_drives_the_stamp(tmp_path, monkeypatch):
 
     fm = _fm_dict(repo / f"{plan_rel}.md")
     assert fm["claimed_by_handoff"] == held_rel
+
+
+def test_for_execution_claim_stamps_plan_owner(tmp_path, monkeypatch):
+    """AC6: the production happy path stamps the back-edge.
+
+    `claim_plan(..., for_execution=True)` is `/execute-plan` Step 0's own
+    call. Pinned end to end rather than at the helper, because the defect
+    this closes was exactly a helper with green tests and no production
+    caller.
+    """
+    from coordinator_core.session import claims as session_claims
+
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    slug = "2026-08-21-executed-plan"
+    plan_rel = f"docs/plans/{slug}.md"
+    _write_artifact(repo / plan_rel, ["title: Executed plan", "status: draft"])
+    held_rel = "state/handoffs/2026-08-21-executing-baton.md"
+    _write_artifact(
+        repo / held_rel,
+        ["kind: session-handoff", f"governing_plan: {plan_rel}"],
+    )
+    _patch_held_handoff(monkeypatch, held_rel)
+
+    assert (
+        session_claims.claim_plan(slug, cwd=str(repo), for_execution=True) is True
+    )
+
+    fm = _fm_dict(repo / plan_rel)
+    assert fm["claimed_by_handoff"] == held_rel
+    assert fm["status"] == "executing"

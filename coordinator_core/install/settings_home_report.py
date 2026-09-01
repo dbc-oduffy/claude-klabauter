@@ -65,7 +65,12 @@ import io
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from coordinator_core.install.door_install import BARE_FORWARDER_NAME, is_door_installed
+from coordinator_core.install.door_install import (
+    BARE_FORWARDER_NAME,
+    DoorInstallError,
+    audit_installed_image_currency,
+    is_door_installed,
+)
 from coordinator_core.install.substrate import (
     _AGENT_FORWARDER_MARKER,
     _RM_FAMILY_FILES,
@@ -205,6 +210,12 @@ class SettingsHomeReport:
     forwarder_door_owned: list[str] = field(default_factory=list)
     forwarder_byte_copied: list[str] = field(default_factory=list)
     forwarder_derivation_error: str | None = None
+    #: Names whose native door image is present but is NOT the build this
+    #: tree ships -- see `check_settings_home`'s currency paragraph.
+    door_image_stale: list[str] = field(default_factory=list)
+    #: Set when the currency question could not be asked at all (no readable
+    #: prebuilt). Never collapsed into "no stale images".
+    door_image_audit_error: str | None = None
 
     @property
     def fixed_missing(self) -> list[SettingsHomeMember]:
@@ -221,6 +232,7 @@ class SettingsHomeReport:
             not self.fixed_missing
             and not self.forwarder_missing
             and not self.forwarder_unverified
+            and not self.door_image_stale
         )
 
 
@@ -380,6 +392,20 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
     writes and would report green even if the installer silently failed to
     land a forwarder). Forwarder bodies are read, not merely stat'd -- see
     `forwarder_body_is_ours`.
+
+    PRESENCE IS NOT CURRENCY, AND THE FORWARDER COUNT ONLY EVER ANSWERED
+    PRESENCE. Every check above asks "is a body here, and is it ours" --
+    a question an installed door image one build behind passes cleanly,
+    because it IS ours, just older. On Windows the `.exe` image is the only
+    launcher a name gets (ONE ENTRYPOINT PER PLATFORM), so the count could
+    read `384/384 verified` while all 373 installed images predated the fix
+    the operator had just installed and `cross-repo-memo` hung on every
+    call (2026-09-01). Reporting a green count in that state is worse than
+    reporting nothing, because it actively tells the operator the box is
+    current. `door_image_stale` closes that: it re-derives each image
+    against the committed prebuilt via
+    `door_install.audit_installed_image_currency`, and a non-empty list
+    fails `complete` on the same terms as a missing forwarder.
     """
     report = SettingsHomeReport(settings_home_path=settings_home_path)
 
@@ -432,6 +458,13 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
     report.forwarder_unverified = unverified
     report.forwarder_door_owned = door_owned
     report.forwarder_byte_copied = byte_copied
+
+    try:
+        audit = audit_installed_image_currency(bin_dir, expected.keys())
+    except DoorInstallError as exc:
+        report.door_image_audit_error = str(exc)
+    else:
+        report.door_image_stale = audit.stale
     return report
 
 
@@ -471,4 +504,22 @@ def format_report_lines(report: SettingsHomeReport) -> list[str]:
             preview = ", ".join(names[:10])
             more = "" if len(names) <= 10 else f" (+{len(names) - 10} more)"
             lines.append(f"    {label}: {preview}{more}")
+
+    if report.door_image_audit_error is not None:
+        lines.append(
+            "  FAIL [settings-home] door image currency unverifiable: "
+            f"{report.door_image_audit_error}"
+        )
+    elif report.door_image_stale:
+        names = report.door_image_stale
+        preview = ", ".join(names[:10])
+        more = "" if len(names) <= 10 else f" (+{len(names) - 10} more)"
+        lines.append(
+            f"  FAIL [settings-home] door images a build behind: {len(names)} "
+            f"of {report.forwarder_expected} -- {preview}{more}"
+        )
+        lines.append(
+            "    remediation: run `python scripts/setup.py` from a box with a "
+            "registered published engine root"
+        )
     return lines

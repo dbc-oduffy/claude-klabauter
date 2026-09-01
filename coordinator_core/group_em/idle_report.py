@@ -141,6 +141,7 @@ import re
 import time
 from typing import Optional
 
+from coordinator_core.group_em import repo_root_arg
 from coordinator_core.ops.discover_working_repos import encode_projects_dir_name
 
 #: Below this, a quiet session is simply between turns. Applied here, never remembered.
@@ -850,6 +851,17 @@ def _cli(argv: Optional[list] = None) -> int:
         "--json", action="store_true",
         help="Emit the same facts as a machine-readable object, for the Monitor and tests.")
     args = parser.parse_args(argv)
+
+    # Same refusal as `watch._cli`, for the same reason and the same shell: this
+    # oracle is run by the same agent, with the same `--repo-root` spelling, and
+    # a report over a root that does not exist reads as a quiet fleet.
+    try:
+        args.repo_root = repo_root_arg.resolve_repo_root_arg(args.repo_root)
+    except repo_root_arg.RepoRootArgError as exc:
+        import sys as _sys
+
+        print(f"group-em-idle-report: {exc}", file=_sys.stderr)
+        return 2
 
     # Nothing is printed until the whole report exists: a partial report on a
     # failed run is indistinguishable from a quiet fleet, which is the one

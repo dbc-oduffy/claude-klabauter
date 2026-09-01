@@ -629,3 +629,53 @@ def test_scrubbed_env_omits_the_nested_pytest_env_vars(tmp_path, monkeypatch):
     env = _subprocess_env()
     for var in _PYTEST_ENV_SCRUB:
         assert var not in env
+
+
+def test_default_timeout_is_a_hang_guard_not_a_speed_bar():
+    """REGRESSION PIN, 2026-09-01. `DEFAULT_TIMEOUT_S` was 60.0 against a
+    collection measured at 23.97s of work but 32s-60.3s of WALL CLOCK
+    depending on how many of the box's ~50 sessions were running. The bar
+    therefore decided, by coin flip, whether every publish on the fleet came
+    back "unverified" -- a wall-clock measurement standing in for a claim
+    about the tree, which this repo's load norm forbids outright.
+
+    This pins the INTENT, not a magic number: the default must stay far
+    enough above the measured collection cost that peer load cannot reach
+    it. Tightening it back toward the measured cost reinstates the coin
+    flip, so that change should fail here and be argued rather than tuned.
+    """
+    from percolate.assembled_mirror_gate import DEFAULT_TIMEOUT_S
+
+    measured_collection_seconds = 24.0
+    assert DEFAULT_TIMEOUT_S >= measured_collection_seconds * 8, (
+        "DEFAULT_TIMEOUT_S is close enough to real collection cost that peer "
+        "load alone can trip it -- see the constant's own negative spec"
+    )
+
+
+def test_a_timed_out_gate_still_makes_no_claim_about_the_tree(tmp_path):
+    """The budget change must not touch the hard-won half: a run that could
+    not finish reports INCOMPLETE, never a pass and never a content-bearing
+    fail. Pinned here beside the budget so the two are read together -- the
+    number is safe to move only while this stays true."""
+    from percolate.assembled_mirror_gate import (
+        DEFAULT_TIMEOUT_S,
+        MirrorCollectionResult,
+        format_refusal,
+    )
+
+    result = MirrorCollectionResult(
+        passed=False,
+        errored=True,
+        timed_out=True,
+        collected_count=0,
+        exit_code=None,
+        elapsed_s=DEFAULT_TIMEOUT_S,
+        timeout_s=DEFAULT_TIMEOUT_S,
+        command=("python", "-m", "pytest"),
+        tree_root=tmp_path,
+        stdout_tail="",
+        stderr_tail="",
+    )
+    assert result.is_incomplete is True
+    assert "INCOMPLETE" in format_refusal(result)

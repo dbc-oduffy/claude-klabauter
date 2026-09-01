@@ -325,8 +325,11 @@ def main(argv: "list[str] | None" = None) -> int:
         help=(
             "Read the lesson title from PATH ('-' for stdin) instead of "
             "--title. Exactly one of --title / --title-file is required. "
-            "The only title transport that survives every launcher leg "
-            "intact — see --title's own refusal for why."
+            "Survives the LAUNCHER leg intact — see --title's own refusal "
+            "for why. It does NOT make a title multi-line: the title becomes "
+            "the output filename's slug, so it is resolved to a single-line "
+            "value here and passed inline to coordinator-queue-append, which "
+            "has no --title-file for that same reason."
         ),
     )
     parser.add_argument(
@@ -406,6 +409,29 @@ def main(argv: "list[str] | None" = None) -> int:
         args.body = resolve_body(args.body, args.body_file)
         refuse_newline_argv(args.title, flag_name="--title")
         args.title = resolve_body(args.title, args.title_file, flag_name="--title")
+        # AFTER the resolve, not only before it. The refusal above runs on the
+        # RAW argv value, which is None whenever --title-file was used -- so a
+        # multi-line title file sailed through this wrapper and died in the
+        # child as a bare `coordinator-queue-append exited 2`, with the reason
+        # on a stderr stream that (until 2e03652635) was not relayed. Reported
+        # by example-game-repo-em 2026-09-01 (memo
+        # `example-game-repo-em-close-ceremony-engine-defects-seven`, defect 4).
+        #
+        # The remedy is spelled out rather than pointing at --title-file,
+        # because --title-file IS what the operator just used: the constraint
+        # is not the transport, it is that a lesson title becomes a filename
+        # slug (`_slug_from_title`), and no title transport can carry a
+        # newline into a filename losslessly. This mirrors
+        # `coordinator-queue-append`'s own refusal for the same reason.
+        refuse_newline_argv(
+            args.title,
+            flag_name="--title-file" if args.title_file else "--title",
+            remedy=(
+                "a lesson title must be a single line -- it becomes the output "
+                "filename's slug, which cannot carry a newline losslessly. "
+                "Put the detail in --body/--body-file instead."
+            ),
+        )
         args.why = resolve_optional_prose(args.why, args.why_file, flag_name="--why")
     except ArgvFidelityError as exc:
         parser.error(str(exc))

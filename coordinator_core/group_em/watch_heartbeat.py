@@ -107,6 +107,24 @@ def write_atomic(path: str, payload: dict) -> bool:
     directory = os.path.dirname(path)
     tmp_path = None
     try:
+        # NEVER MINT A REPO. `makedirs` used to create the WHOLE chain, so a
+        # caller handed a mangled root created a repo-shaped directory wherever
+        # that path landed: measured 2026-09-01, a drive-relative
+        # `X:example-game-workbench-repo` resolved against the writer's cwd and this
+        # function created `<a sibling checkout>/example-game-workbench-repo/state/`
+        # and wrote the heartbeat into it. The stray tree was inside a publish
+        # mirror, where it failed a publish row's content check and blocked the
+        # round for the whole fleet (claude-klabauter-c0).
+        #
+        # An arm-time check on `--repo-root` is the other half of that fix and
+        # is not this half: it only covers callers that came through a CLI. A
+        # writer that can conjure a repo directory is doing something no correct
+        # caller ever needs, so the refusal belongs HERE too -- the repo root
+        # must already exist, and only the `state/` leaf under it is ours to
+        # create.
+        parent = os.path.dirname(directory)
+        if parent and not os.path.isdir(parent):
+            return False
         os.makedirs(directory, exist_ok=True)
         handle, tmp_path = tempfile.mkstemp(
             prefix=".group-em-watch-", suffix=".tmp", dir=directory
@@ -149,6 +167,7 @@ def stamp(
     now_epoch: Optional[float] = None,
     tick_source: str = TICK_SOURCE,
     holder_name: Optional[str] = None,
+    writer_session_id: Optional[str] = None,
 ) -> bool:
     """Rewrite the heartbeat for one tick. Whole-file replace, never a fold.
 
@@ -172,6 +191,7 @@ def stamp(
         "next_expected_by": next_expected_by(now_epoch, interval_seconds),
         "subscribed_peers": subscribed_peers,
         "declinations": list(declinations or []),
+        "writer_session_id": writer_session_id,
     }
     return write_atomic(watch_path(repo_root), payload)
 

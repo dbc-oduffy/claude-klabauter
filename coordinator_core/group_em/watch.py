@@ -110,6 +110,7 @@ from typing import Any, Callable, Iterable, Optional, TextIO
 
 from coordinator_core.group_em import obligations
 from coordinator_core.group_em import read_pass
+from coordinator_core.group_em import repo_root_arg
 from coordinator_core.group_em import send_pass
 from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.session.receiver_state import read_receiver_state
@@ -618,6 +619,7 @@ def tick_once(
         interval_seconds=tick_interval_seconds,
         tick_source="cron",
         subscribed_peers=len(cur_parked),
+        writer_session_id=caller_session_id,
         # No `holder_name`: a wake makes no enumeration of its own, so it has
         # no name to write. `stamp` carries the armed poller's forward rather
         # than blanking it -- a cheaper answer than a registry read per wake.
@@ -691,9 +693,18 @@ def main(
     # half: a Group EM arming for DoE reads a foreign repo name beside a plausible
     # count and the honest conclusion is that the watch is pointed at the wrong repo,
     # so the failure lands as a stand-down rather than an error.
-    watched_repo = os.path.basename(os.path.abspath(str(repo_root))) or str(repo_root)
+    resolved_root = os.path.abspath(str(repo_root))
+    watched_repo = os.path.basename(resolved_root) or str(repo_root)
+    # THE RESOLVED PATH GOES ON THE LINE, not just the derived name. The name
+    # SURVIVES a mangled root -- `X:\example-game-workbench-repo` through a shell
+    # becomes the drive-relative `X:example-game-workbench-repo`, which still ends in
+    # `example-game-workbench-repo` -- so an arm pointed at nothing printed the right
+    # repo name beside a plausible snapshot time and read healthy for fifty
+    # minutes (cross-repo/inbox/2026-09-01-example-game-repo-em-group-em-watch-accepts-bad-repo-root-silently.md).
+    # `_cli` now refuses that root outright; the path here is the second line of
+    # defence, for every caller that reaches `main` without passing through it.
     emit(
-        f"ARMED peer_count={peer_count} {watched_repo} peers, "
+        f"ARMED peer_count={peer_count} {watched_repo} peers at {resolved_root}, "
         f"snapshot={snapshot_ms:.1f}ms, interval={interval:.1f}s"
     )
 
@@ -726,6 +737,7 @@ def main(
                 # can question.
                 subscribed_peers=len(prev_parked),
                 holder_name=holder_name,
+                writer_session_id=caller_session_id,
             )
         except Exception:
             # Review: coordinatorcode-reviewer.a9e1410288878bea9 -- reporting
@@ -829,6 +841,15 @@ def _cli(argv: "list[str] | None" = None) -> int:
              "For probes and tests; omit for a real arm.",
     )
     args = parser.parse_args(argv)
+
+    # REFUSE A ROOT THIS PROCESS CANNOT STAND ON, before anything reads or
+    # writes through it. An unarmable root used to arm: `peer_count=0` is what a
+    # quiet repo and an unreadable one both print, and the run exited 0.
+    try:
+        args.repo_root = repo_root_arg.resolve_repo_root_arg(args.repo_root)
+    except repo_root_arg.RepoRootArgError as exc:
+        print(f"group-em-watch: {exc}", file=sys.stderr)
+        return 2
 
     if args.once:
         # A single-shot wake reports its own failure through the exit code --

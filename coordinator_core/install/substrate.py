@@ -1280,6 +1280,57 @@ class _StaticFamilyAlreadyServed:
 _STATIC_FAMILY_ALREADY_SERVED = _StaticFamilyAlreadyServed()
 
 
+def _door_engine_root() -> Optional[Path]:
+    """The engine root the native door leg installs FROM -- resolved through
+    `engine_root_for_install.resolve_engine_root_for_install()`, never from
+    the live claude-klabauter checkout this installer is running out of.
+
+    THE LIVE CHECKOUT IS NEVER AN ENGINE ROOT, AND FEEDING IT HERE KILLED
+    THE WHOLE LEG SILENTLY. `_install_bin_resolvers` previously passed
+    `claude_klabauter_root_resolved` straight through to
+    `_write_agent_helper_forwarders`. That path is correct for deriving
+    WHICH names exist (`_derive_agent_helper_target_map` reads the live
+    tree's `coordinator/bin/`), and wrong for deciding WHERE the door comes
+    from: claude-klabauter's working tree carries no `coordinator_core/_engine_stamp`
+    and never will -- `engine_root_for_install`'s own negative spec says so
+    in as many words ("Never returns the live claude-klabauter checkout as an engine
+    root answer"). So `_write_native_door_forwarder`'s `is_engine_root()`
+    guard rejected it for EVERY name, returned `None` for every name, and
+    the loop fell through to the bare Python forwarder 382 times -- on
+    Windows a file PATHEXT cannot even resolve by bare name. No `.exe` was
+    written or refreshed on any claude-klabauter-driven install run.
+
+    That is why a door fix that shipped and an install that ran to exit 0
+    left 373 of 374 installed images on the pre-fix `d1e570dc1e` build,
+    hardlinked to one orphaned inode, and `cross-repo-memo` hung
+    (2026-09-01). The receipt is the manifest that run wrote:
+    `{"names": []}`. `scripts/setup.py`'s own door step already resolved
+    through this resolver -- which is exactly why `coordinator-invoke.exe`
+    was the ONE image any install had ever refreshed. This makes the
+    382-name leg use the same root as the one-name leg beside it.
+
+    Returns `None` when no published engine exists on this box, printing
+    the resolver's own runnable remediation ONCE. `None` is the same
+    doorless signal `_cut_over_to_native_door` already handles, so a box
+    with no engine still installs its Python forwarders rather than
+    failing -- but it says so once, as a summary, instead of 382 times as
+    per-name noise nothing reads.
+    """
+    from coordinator_core.install.engine_root_for_install import (
+        resolve_engine_root_for_install,
+    )
+
+    resolved = resolve_engine_root_for_install()
+    if resolved.root is not None:
+        return resolved.root
+    print(
+        "[install-substrate] no native door images installed -- "
+        f"{resolved.remediation}",
+        file=sys.stderr,
+    )
+    return None
+
+
 def _cut_over_to_native_door(
     name: str,
     bin_dst: Path,
@@ -3948,7 +3999,7 @@ def _install_bin_resolvers(
     rm_family(bin_dst, "resolve-claude-klabauter")
     agent_helper_resolved = _write_agent_helper_forwarders(
         agent_helper_target_map, bin_dst, check_only,
-        engine_root=claude_klabauter_root_resolved,
+        engine_root=_door_engine_root(),
         static_family_names=_static_bin_family_names(claude_klabauter_root_resolved),
     )
     if not check_only:

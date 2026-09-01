@@ -418,7 +418,15 @@ def test_main_prints_a_blocked_remedy_line_for_each_blocked_directive(
 
     assert exit_code == int(ws_apply.WorkstreamApplyExitCode.HALTED_AT_JUDGMENT)
     captured = capsys.readouterr()
-    assert 'BLOCKED d_gated — set decisions["jp_gate"].disposition to one of: go' in captured.out
+    # STDERR, and stdout is the JSON alone. `main` used to print both prose
+    # blocks (disabled-op lines, blocked-remedy lines) to stdout around the
+    # report, which made `json.loads(stdout)` fail whenever either fired --
+    # example-game-repo-em hit the same defect on the sibling `brief` path 2026-09-01
+    # (memo `example-game-repo-em-close-ceremony-engine-defects-seven`, defect 5).
+    # Asserting the stdout half is what stops a revert: the remedy-line
+    # assertion alone does not care which stream carried it.
+    assert 'BLOCKED d_gated — set decisions["jp_gate"].disposition to one of: go' in captured.err
+    json.loads(captured.out)
 
 
 def test_execute_directives_resolved_disposition_opens_the_gate(

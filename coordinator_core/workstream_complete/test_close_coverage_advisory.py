@@ -121,8 +121,14 @@ def test_uncovered_set_lands_advisory_without_gating_the_close(
     )
 
     captured = capsys.readouterr()
-    assert directives_review._CLOSE_COVERAGE_ADVISORY_PREFIX in captured.out
-    assert "uncovered: 1/2 commit(s)" in captured.out
+    # STDERR, not stdout: this op's stdout contract is its JSON, and an
+    # advisory line on it is a `json.loads(stdout)` failure for every caller
+    # (example-game-repo-em 2026-09-01, defect 5). The empty-stdout assertion is the
+    # half that has teeth -- without it a future revert to `print(message)`
+    # passes, since the prefix assertion alone does not care which stream.
+    assert directives_review._CLOSE_COVERAGE_ADVISORY_PREFIX in captured.err
+    assert "uncovered: 1/2 commit(s)" in captured.err
+    assert captured.out == ""
 
     sibling = _sibling_directive("d-run-wsc-tail")
     directives = [advisory_directive, sibling]
@@ -155,6 +161,7 @@ def test_uncovered_set_lands_advisory_without_gating_the_close(
     directives_review.build_close_coverage_advisory_directive(["some/file.py"], "abc123..def456", tmp_path)
     captured = capsys.readouterr()
     assert captured.out == ""
+    assert captured.err == ""
 
 
 # ---------------------------------------------------------------------------
@@ -175,6 +182,7 @@ def test_silent_when_dimension_returns_unavailable(monkeypatch: pytest.MonkeyPat
 
     captured = capsys.readouterr()
     assert captured.out == ""
+    assert captured.err == ""
     assert directive["already_satisfied"] is True
     assert directive["depends_on"] is None
 
@@ -192,6 +200,7 @@ def test_silent_when_dimension_raises(monkeypatch: pytest.MonkeyPatch, tmp_path:
 
     captured = capsys.readouterr()
     assert captured.out == ""
+    assert captured.err == ""
     assert directive["already_satisfied"] is True
     assert directive["depends_on"] is None
 
@@ -213,6 +222,7 @@ def test_silent_when_reviewed_set_store_is_absent(tmp_path: Path, capsys: pytest
 
     captured = capsys.readouterr()
     assert captured.out == ""
+    assert captured.err == ""
     assert directive["already_satisfied"] is True
     assert directive["depends_on"] is None
 

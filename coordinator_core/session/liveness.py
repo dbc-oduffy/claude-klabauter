@@ -896,18 +896,35 @@ ElsewhereVerdict = tuple[bool, str, Optional[str]]
 #: session COUNT with a ~0.1ms-per-file constant, taken once, against a 500ms
 #: brightline -- and the alternative is a predicate that answers confidently
 #: about the wrong process.
+#: ASSUMPTION: single-threaded per process (the only caller shape in this
+#: repo -- `_verdict_for_sdir` calls this synchronously). One slot per `base`,
+#: no lock. If a future caller invokes `_shared_stable_pids` from multiple
+#: threads in one process, a read-then-write race on this dict becomes
+#: possible (a lost update, not corruption -- `dict.get`/assignment are
+#: individually atomic under the GIL) -- add a lock or make the cache
+#: per-call before adding a threaded caller.
 _SHARED_PID_CACHE: "dict[str, tuple[float, frozenset]]" = {}
+
+
+#: Own copy rather than an import, matching this repo's established pattern
+#: for this exact shape check (`coordinator_core.git.commit_trailers._UUID_RE`,
+#: `coordinator_core.session.core._UUID_RE`, and the three
+#: `_SESSION_ID_UUID_RE` replicas pinned by
+#: `test_session_id_uuid_re_replicas_agree.py`) -- those modules sit in
+#: different dependency strata and each keeps its own copy deliberately to
+#: avoid coupling across them; `_shared_stable_pids` below sits in that same
+#: position relative to `git.commit_trailers`. Strict canonical
+#: 8-4-4-4-12, unlike `chain_attribution.py` / `archive_stamp.py`'s looser
+#: variants, which is required here: those accept `sess-1` / `test-session`
+#: shaped specimens, and this predicate exists specifically to reject them.
+_SESSION_ID_SHAPE_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 def _looks_like_session_id(name: str) -> bool:
     """UUID-shaped, the only thing `_shared_stable_pids` will count."""
-    parts = name.split("-")
-    return (
-        len(name) == 36
-        and len(parts) == 5
-        and [len(p) for p in parts] == [8, 4, 4, 4, 12]
-        and all(c in "0123456789abcdefABCDEF" for p in parts for c in p)
-    )
+    return bool(_SESSION_ID_SHAPE_RE.match(name))
 
 
 def _shared_stable_pids(base: "Optional[str]") -> frozenset:

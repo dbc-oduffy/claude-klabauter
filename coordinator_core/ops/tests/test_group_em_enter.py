@@ -525,6 +525,11 @@ def _crown_with_teammates(tmp_path, monkeypatch, metas, session_id):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     repo_root = str(tmp_path / "repo")
+    # The repo root has to EXIST: `watch_heartbeat.stamp` refuses to mint one
+    # (a writer that conjures a repo tree put a stray directory inside a publish
+    # mirror on 2026-09-01), so a test that stamps into a path nothing created
+    # is testing the refusal, not the leg.
+    Path(repo_root).mkdir(parents=True, exist_ok=True)
     directory = Path(gee.group_em_teammates.subagents_dir(repo_root, session_id))
     directory.mkdir(parents=True, exist_ok=True)
     for index, meta in enumerate(metas):

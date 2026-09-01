@@ -346,7 +346,7 @@ def archived_session_dir(sid: str, cwd: Optional[str] = None) -> Optional[str]:
 
     Matches on the entry's BASENAME against ``^<sid>-\\d{4}-\\d{2}-\\d{2}$``,
     never a bare ``startswith(sid + "-")`` and never a separator-bearing
-    substring test (the shape ``claims.py:669``'s
+    substring test (the shape ``claims._warn_dead_holder_residue``'s
     ``(os.sep + ".archive" + os.sep) in record_dir`` uses for a different
     question -- "is this path under archive" -- which is fine there but is NOT
     a portable way to match a basename). An unanchored prefix test matches
@@ -361,6 +361,17 @@ def archived_session_dir(sid: str, cwd: Optional[str] = None) -> Optional[str]:
     ``sorted()[-1]`` is newest-first only because the date suffix is
     zero-padded ``YYYY-MM-DD``, for which lexicographic and chronological
     order coincide.
+
+    Excludes ``_agents-*`` entries, matching ``liveness._archived_sids``'s
+    identical exclusion (sub-reap (ii)'s own archive-naming convention, a
+    different population -- see ``_prune_stale_agent_archive``'s docstring
+    on why the two archive shapes must not be conflated). Today the two
+    populations cannot collide anyway: an agent archive dir is named
+    ``_agents-<agent_id>-<YYYYMMDD>`` (dashless date, ``scope.py``'s
+    ``_reap_stale_agents``), so it never matches this function's dashed
+    ``-YYYY-MM-DD`` anchor regardless of ``sid``. The exclusion is kept
+    explicit rather than relying on that date-format accident, so the two
+    matchers stay in lockstep if either naming convention changes.
     """
     if not sid:
         return None
@@ -373,7 +384,9 @@ def archived_session_dir(sid: str, cwd: Optional[str] = None) -> Optional[str]:
         matches = sorted(
             entry.path
             for entry in os.scandir(archive)
-            if pattern.match(entry.name) and entry.is_dir()
+            if not entry.name.startswith("_agents-")
+            and pattern.match(entry.name)
+            and entry.is_dir()
         )
     except OSError:
         return None

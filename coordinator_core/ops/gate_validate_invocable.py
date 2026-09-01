@@ -219,21 +219,26 @@ def _tests_stub_skipped_gated(
 # module is the second half of the sentence this dict starts.
 _DIMENSION_REGISTRY: dict[str, DimensionCheck] = {
     "types": _stub_unavailable(
-        "types", "mypy strict-override ledger unavailable (C2 landed; this stub is the "
-        "fallback for a failed self-registration import)"
+        "types", "mypy strict-override ledger unavailable (C2 landed; this slot is "
+        "replaced below by an unconditional self-registration import, which raises "
+        "at module load rather than leaving this stub in place if it fails)"
     ),
     "docstrings": _stub_unavailable(
-        "docstrings", "Ruff D1xx + interrogate unavailable (C3 landed; this stub is the "
-        "fallback for a failed self-registration import)"
+        "docstrings", "Ruff D1xx + interrogate unavailable (C3 landed; this slot is "
+        "replaced below by an unconditional self-registration import, which raises "
+        "at module load rather than leaving this stub in place if it fails)"
     ),
     "tests": _tests_stub_skipped_gated,
     "review": _stub_unavailable(
-        "review", "review-stamp assertion unavailable (C5 landed at b40126c036; this stub "
-        "is the fallback for a failed self-registration import)"
+        "review", "review-stamp assertion unavailable (C5 landed at b40126c036; this "
+        "slot is replaced below by an unconditional self-registration import, which "
+        "raises at module load rather than leaving this stub in place if it fails)"
     ),
     "latency": _stub_unavailable(
-        "latency", "qsub-01 benchmarks/gate.py budget-manifest unavailable (C7 landed at "
-        "b40126c036; this stub is the fallback for a failed self-registration import)"
+        "latency", "qsub-01 benchmarks/gate.py budget-manifest unavailable (C7 landed "
+        "at b40126c036; this slot is replaced below by an unconditional "
+        "self-registration import, which raises at module load rather than leaving "
+        "this stub in place if it fails)"
     ),
 }
 

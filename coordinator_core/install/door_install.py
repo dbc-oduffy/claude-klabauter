@@ -139,7 +139,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import Collection, Iterable, NamedTuple, Optional
 
 from coordinator_core.warm.door import build as door_build
 from coordinator_core.warm.engine_root import is_engine_root
@@ -152,6 +152,8 @@ __all__ = [
     "installed_provenance_path",
     "verify_installed_provenance",
     "ProvenanceVerdict",
+    "ImageCurrencyAudit",
+    "audit_installed_image_currency",
     "rebuild_and_verify_prebuilt",
     "named_forwarder_path",
     "install_named_forwarder",
@@ -246,8 +248,9 @@ def installed_provenance_path(bin_dst: Path) -> Path:
 
 class ProvenanceVerdict(NamedTuple):
     """Result of `verify_installed_provenance()` -- `status` is one of
-    `"no-door"`, `"absent"`, `"unrecorded"`, `"mismatch"`, `"ok"` (see that
-    function's own docstring); `detail` is a human-readable explanation."""
+    `"no-door"`, `"absent"`, `"unrecorded"`, `"mismatch"`, `"stale"`, `"ok"`
+    (see that function's own docstring); `detail` is a human-readable
+    explanation."""
 
     status: str
     detail: str
@@ -280,7 +283,23 @@ def verify_installed_provenance(bin_dst: Path) -> ProvenanceVerdict:
       - `"mismatch"` -- `image_sha256` present and differs from the
         installed binary's actual sha256. `detail` names both hashes and
         both paths, so a reader never has to re-derive either by hand.
-      - `"ok"` -- they match.
+      - `"stale"` -- sidecar and binary agree with EACH OTHER, but the
+        binary is not the build this tree ships at `_PREBUILT_DOOR_EXE`.
+      - `"ok"` -- they match, and the binary is the current prebuilt.
+
+    INTERNAL CONSISTENCY IS NOT CURRENCY, AND THE STALE CASE SATISFIES IT.
+    The four statuses above answer "does the sidecar describe the binary
+    beside it" -- a question a build-behind install passes cleanly, because
+    the installer copies exe and sidecar together and a stale PAIR is
+    perfectly self-consistent. That is how a door image one build behind
+    the fix that shipped for it read as `ok` here while `cross-repo-memo`
+    hung on the missing `COORDINATOR_DOOR_STDIN_MODE` gate (2026-09-01).
+    The oracle for currency is the committed prebuilt, never the sidecar,
+    so the `"stale"` leg below re-derives against `_PREBUILT_DOOR_EXE`
+    rather than against anything the install itself wrote. A missing or
+    unreadable prebuilt leaves the currency question unanswerable and is
+    NOT reported as `ok` on that basis -- the sidecar verdict stands and
+    the currency leg is simply not reached.
     """
     bin_dst = Path(bin_dst)
     dest_exe = bin_dst / DOOR_INSTALLED_NAME
@@ -311,7 +330,120 @@ def verify_installed_provenance(bin_dst: Path) -> ProvenanceVerdict:
             f"sidecar {provenance_path} records image_sha256={recorded}",
         )
 
-    return ProvenanceVerdict("ok", f"{dest_exe} matches its recorded image_sha256")
+    try:
+        prebuilt = hashlib.sha256(_PREBUILT_DOOR_EXE.read_bytes()).hexdigest()
+    except OSError:
+        return ProvenanceVerdict(
+            "ok", f"{dest_exe} matches its recorded image_sha256"
+        )
+    if actual != prebuilt:
+        return ProvenanceVerdict(
+            "stale",
+            f"installed binary {dest_exe} agrees with its own sidecar "
+            f"({actual}) but is not the current prebuilt "
+            f"{_PREBUILT_DOOR_EXE} ({prebuilt}) -- the install is a build "
+            "behind; re-run the installer from a stamped engine root",
+        )
+
+    return ProvenanceVerdict(
+        "ok", f"{dest_exe} matches its recorded image_sha256 and the current prebuilt"
+    )
+
+
+class ImageCurrencyAudit(NamedTuple):
+    """Per-slot verdict from `audit_installed_image_currency()`. Each field
+    is a sorted list of installed NAMES (not paths) -- `current` carries the
+    prebuilt's bytes, `stale` carries some other build's, `missing` has no
+    file at the slot at all."""
+
+    current: "list[str]"
+    stale: "list[str]"
+    missing: "list[str]"
+
+
+def audit_installed_image_currency(
+    bin_dst: Path,
+    names: "Iterable[str]",
+    *,
+    exempt_names: "Collection[str]" = frozenset(),
+) -> ImageCurrencyAudit:
+    """Classifies every argv[0]-dispatched door image slot in `bin_dst`
+    against the committed prebuilt -- the currency oracle
+    `install_named_forwarder` has no counterpart for, and the one a
+    presence check cannot stand in for.
+
+    WHY PRESENCE CANNOT STAND IN. Under ONE ENTRYPOINT PER PLATFORM
+    (`substrate._write_agent_helper_forwarders`) the image IS the only
+    launcher a name gets, so "the slot is populated" is satisfied by an
+    image from any build, including one predating the fix the name needs.
+    Measured 2026-09-01: 373 of 374 installed `.exe` images shared one
+    inode from the `d1e570dc1e` build while the installer reported
+    `384/384 verified`, and `cross-repo-memo` hung on every invocation.
+    A check whose success signal is satisfied by the failure it exists to
+    catch is worse than no check, because it tells the operator the box is
+    current.
+
+    THE POPULATION IS DERIVED FROM `names`, NEVER FROM THE INSTALLER'S OWN
+    MANIFEST. `_native-forwarder-manifest.json` is written BY the writer
+    whose failure this audit exists to detect -- the run that installed
+    nothing wrote `{"names": []}`, and a manifest-driven audit would have
+    reported zero stale images on exactly the box that had 373. Callers
+    pass the same derivation the writer consumes
+    (`substrate._derive_agent_helper_target_map`), so a name the writer was
+    asked to serve and did not is visible here.
+
+    ANYTHING AT THE SLOT THAT IS NOT THE PREBUILT IS `stale`, INCLUDING A
+    NON-DOOR FILE. There is no byte-marker that identifies a door build
+    (checked: the image carries no version string), so this makes no
+    attempt to guess door-shape. It does not need to: under ONE ENTRYPOINT
+    PER PLATFORM the correct content of this slot is the current door and
+    nothing else, so a foreign file there is a defect on the same terms as
+    an old one. `exempt_names` carries the static bin families that
+    legitimately own their own slot -- mirror the writer's
+    `static_family_names` into it, or they read as stale.
+
+    ONE READ PER INODE, NOT ONE PER NAME. The slots are hardlinks to a
+    single image by construction (`install_named_forwarder`'s spike
+    verdict), so hashing per name would read the same 176 KiB 373 times on
+    a box whose load norm is 50-70 concurrent sessions. Results are
+    memoised on `(st_dev, st_ino)` and a size mismatch short-circuits
+    before any read: the full 374-slot audit costs one prebuilt read plus
+    one image read.
+    """
+    bin_dst = Path(bin_dst)
+    try:
+        prebuilt_bytes = _PREBUILT_DOOR_EXE.read_bytes()
+    except OSError as exc:
+        raise DoorInstallError(
+            f"door_install: cannot audit image currency -- no readable "
+            f"prebuilt at {_PREBUILT_DOOR_EXE}: {exc}"
+        ) from exc
+    prebuilt_size = len(prebuilt_bytes)
+
+    current: "list[str]" = []
+    stale: "list[str]" = []
+    missing: "list[str]" = []
+    seen: "dict[tuple, bool]" = {}
+
+    for name in sorted(set(names) - set(exempt_names)):
+        dest = named_forwarder_path(bin_dst, name)
+        try:
+            st = dest.stat()
+        except OSError:
+            missing.append(name)
+            continue
+        if st.st_size != prebuilt_size:
+            stale.append(name)
+            continue
+        key = (st.st_dev, st.st_ino)
+        if key not in seen:
+            try:
+                seen[key] = dest.read_bytes() == prebuilt_bytes
+            except OSError:
+                seen[key] = False
+        (current if seen[key] else stale).append(name)
+
+    return ImageCurrencyAudit(current=current, stale=stale, missing=missing)
 
 
 def claim_bare_name(bin_dst: Path) -> "list[Path]":

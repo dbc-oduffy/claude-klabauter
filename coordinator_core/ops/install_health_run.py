@@ -291,9 +291,14 @@ def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
     Delegates entirely to `door_install.verify_installed_provenance` -- see
     that function's own docstring for why the record's `image_sha256`
     field is the oracle rather than mtime. This leg only translates its
-    five-way verdict into this module's print register and return code:
+    six-way verdict into this module's print register and return code:
 
       - `"ok"` -> 0.
+      - `"stale"` -> 1. The sidecar and the binary agree with each other
+        and the binary is still a build behind -- the shape that let a
+        door image predating the `COORDINATOR_DOOR_STDIN_MODE` gate read
+        as healthy here while `cross-repo-memo` hung on every invocation
+        (2026-09-01). Same remediation as `"mismatch"`.
       - `"mismatch"` -> 1, printing both hashes plus a runnable
         remediation (`python scripts/setup.py`, never a slash command --
         cold-path remediation must name a runnable script).
@@ -322,7 +327,7 @@ def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
     if verdict.status == "no-door":
         print(f"[door-provenance] NOTE: {verdict.detail}")
         return 0
-    if verdict.status == "mismatch":
+    if verdict.status in ("mismatch", "stale"):
         print(f"[door-provenance] FAIL: {verdict.detail}", file=sys.stderr)
         print(
             "[door-provenance] remediation: run `python scripts/setup.py` "

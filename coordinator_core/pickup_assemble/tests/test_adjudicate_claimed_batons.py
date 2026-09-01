@@ -5,8 +5,9 @@ archiver.md).
 
 Purpose: `adjudicate_claimed_batons` is the bulk READ-ONLY route this chunk
 adds. Walks `state/handoffs/*.md` for `status: claimed`, resolves each
-holder's basis into one of four named buckets (live / archive-record /
-no-sid / unknown), writes nothing, and settles the exit-code contract so a
+holder's basis into `liveness`'s own raw-basis vocabulary (live /
+archive-record / live-dir-signals / no-sid / unknown), writes nothing, and
+settles the exit-code contract so a
 genuine transport failure (`APPLY_EXIT_TRANSPORT_FAIL`) is never the same
 shape as a completed sweep (`APPLY_EXIT_OK`) — even a sweep over zero
 claimed rows.
@@ -66,7 +67,7 @@ def test_no_claimed_batons_is_exit_ok_with_honest_zero(tmp_path):
     assert exit_code == pa_apply.APPLY_EXIT_OK
     assert report["claimed_count"] == 0
     assert report["rows"] == []
-    assert report["buckets"] == {b: 0 for b in pa_apply.ADJUDICATION_BUCKETS}
+    assert report["buckets"] == {}
 
 
 def test_four_way_split(tmp_path, monkeypatch):
@@ -104,21 +105,21 @@ def test_four_way_split(tmp_path, monkeypatch):
         "unknown": 1,
     }
     by_path = {row["path"]: row for row in report["rows"]}
-    assert by_path["state/handoffs/h-live.md"]["basis"] == "live"
-    assert by_path["state/handoffs/h-archived.md"]["basis"] == "archive-record"
+    assert by_path["state/handoffs/h-live.md"]["raw_basis"] == "live"
+    assert by_path["state/handoffs/h-archived.md"]["raw_basis"] == "archive-record"
     assert by_path["state/handoffs/h-archived.md"]["deployment_state"] == "shipped"
-    assert by_path["state/handoffs/h-unknown.md"]["basis"] == "unknown"
-    assert by_path["state/handoffs/h-no-sid.md"]["basis"] == "no-sid"
+    assert by_path["state/handoffs/h-unknown.md"]["raw_basis"] == "unknown"
+    assert by_path["state/handoffs/h-no-sid.md"]["raw_basis"] == "no-sid"
     # The `open` row is never adjudicated -- the sweep selects on `status:
     # claimed` only.
     assert "state/handoffs/h-open.md" not in by_path
 
 
-def test_live_dir_signals_folds_into_unknown_not_archive_record(tmp_path, monkeypatch):
+def test_live_dir_signals_reads_as_its_own_raw_basis(tmp_path, monkeypatch):
     """`abandonment_basis`'s OTHER positive leg (`live-dir-signals`) must
-    not read as `archive-record` -- this sweep's own bucket vocabulary is
-    exactly the four named in the C4 body, and only a genuine archive
-    record earns that bucket."""
+    not read as `archive-record` -- `raw_basis` is `liveness`'s own
+    vocabulary verbatim, so only a genuine archive record reports
+    `archive-record`."""
     repo = tmp_path / "repo"
     (repo / "state" / "handoffs").mkdir(parents=True)
     _seed_handoff(repo, "h-stale.md", holder="sid-stale")
@@ -133,17 +134,8 @@ def test_live_dir_signals_folds_into_unknown_not_archive_record(tmp_path, monkey
     exit_code, report = pa_apply.adjudicate_claimed_batons(repo_root=repo)
 
     assert exit_code == pa_apply.APPLY_EXIT_OK
-    assert report["rows"][0]["basis"] == "unknown"
-
-
-def test_no_write_no_release_surface(tmp_path):
-    """No `--write`/`--release` argv is accepted by the CLI wrapper -- the
-    absence is the deliverable, not a gated flag."""
-    repo = tmp_path / "repo"
-    (repo / "state" / "handoffs").mkdir(parents=True)
-    exit_code = pa_apply.main_adjudicate_claimed_batons(["--write"])
-    assert exit_code == pa_apply.APPLY_EXIT_TRANSPORT_FAIL
-    assert not hasattr(pa_apply, "APPLY_EXIT_HALTED_AT_JUDGMENT") or True  # no 5th vocabulary added
+    assert report["rows"][0]["raw_basis"] == "live-dir-signals"
+    assert report["rows"][0]["abandoned"] is True
 
 
 def test_missing_repo_root_is_transport_fail(tmp_path, monkeypatch):

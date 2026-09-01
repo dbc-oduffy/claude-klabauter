@@ -11,8 +11,9 @@ catch a regression near its introduction, and over a registered op, which
 would mint a new op identity DR-344 rules out). Reads the LIVE `state/
 handoffs/*.md` corpus and asserts the PROPERTY, never a count: no holder in
 the abandonment population may receive the same answer as a live holder, and
-every claimed baton must resolve into exactly one named bucket
-(`coordinator_core.pickup_assemble.apply.ADJUDICATION_BUCKETS`). SKIPS when
+every claimed baton must resolve into one of `liveness`'s own named
+`raw_basis` values (`_RAW_BASIS_VALUES` below — `adjudicate_claimed_batons`
+carries no second, derived vocabulary of its own). SKIPS when
 the live corpus carries no claimed batons at all, so a fresh clone reports
 honestly rather than passing vacuously on an empty population — a green with
 nothing to check is the same instrument defect this plan's own lesson names
@@ -36,13 +37,23 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.pickup_assemble.apply import (
-    ADJUDICATION_BUCKETS,
-    adjudicate_claimed_batons,
-)
+from coordinator_core.pickup_assemble.apply import adjudicate_claimed_batons
 from coordinator_core.session import liveness as _liveness
 
 pytestmark = [pytest.mark.cadence]
+
+#: `liveness.abandonment_basis`'s own vocabulary (`no-sid`/`live`/
+#: `archive-record`/`live-dir-signals`/`unknown`) plus the two call-site
+#: values `adjudicate_claimed_batons` mints before ever reaching
+#: `abandonment_basis` (`no-sid` for an unresolvable holder, `live` for one
+#: `session_live` already confirmed) — the one vocabulary this sweep reports.
+_RAW_BASIS_VALUES = (
+    "no-sid",
+    "live",
+    "archive-record",
+    "live-dir-signals",
+    "unknown",
+)
 
 
 def _repo_root() -> Path:
@@ -60,8 +71,8 @@ def test_every_claimed_baton_resolves_into_exactly_one_named_bucket():
         pytest.skip("live corpus carries no `status: claimed` handoffs -- nothing to adjudicate")
 
     for row in report["rows"]:
-        assert row["basis"] in ADJUDICATION_BUCKETS, (
-            f"{row['path']}: basis {row['basis']!r} is not one of {ADJUDICATION_BUCKETS}"
+        assert row["raw_basis"] in _RAW_BASIS_VALUES, (
+            f"{row['path']}: raw_basis {row['raw_basis']!r} is not one of {_RAW_BASIS_VALUES}"
         )
 
 
@@ -82,16 +93,16 @@ def test_no_non_live_holder_reads_as_live():
     for row in report["rows"]:
         sid = row["claimed_by"]
         if not sid:
-            assert row["basis"] == "no-sid"
+            assert row["raw_basis"] == "no-sid"
             continue
         really_live = _liveness.session_live(sid, str(root))
-        if row["basis"] == "live":
+        if row["raw_basis"] == "live":
             assert really_live, (
-                f"{row['path']}: bucketed 'live' but session_live({sid!r}) is False"
+                f"{row['path']}: reported 'live' but session_live({sid!r}) is False"
             )
         else:
             assert not really_live, (
-                f"{row['path']}: session_live({sid!r}) is True but bucketed "
-                f"{row['basis']!r} -- a live holder must never resolve into a "
-                "non-'live' bucket"
+                f"{row['path']}: session_live({sid!r}) is True but reported "
+                f"raw_basis {row['raw_basis']!r} -- a live holder must never resolve "
+                "into a non-'live' basis"
             )

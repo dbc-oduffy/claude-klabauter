@@ -19,8 +19,6 @@ import io
 import sys
 from pathlib import Path
 
-import io
-
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]

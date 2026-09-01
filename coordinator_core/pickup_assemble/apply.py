@@ -1456,8 +1456,8 @@ def _recorded_claim_session_id(claim_dir: Path) -> str:
 def _claim_dir_identity(claim_dir: Path) -> tuple:
     """`(recorded session_id text, dir mtime)` snapshot of `claim_dir`, used
     to detect a mutation of the ledger dir itself between the abandonment-
-    basis gate read and the release it authorizes (staff-eng review finding
-    2's TOCTOU close) — the dir being replaced/recreated changes this tuple
+    basis gate read and the release it authorizes (`drop`'s TOCTOU close)
+    — the dir being replaced/recreated changes this tuple
     even when the recorded sid text happens to match. `(None, None)` on any
     read failure, which the caller treats as "changed" (fails toward
     refusing the release, never toward proceeding on unreadable evidence)."""
@@ -1517,25 +1517,22 @@ def drop(
     reaches this gate: no frontmatter stamp was ever written for it, so
     there is nothing here for a holder gate to protect.
 
-    AMENDMENT 2026-09-01 (chunk C3, docs/plans/2026-09-01-the-abandonment-
-    verdict-outlives-the-archiver.md): case (iii) — held by someone else —
-    no longer refuses uniformly. `liveness.abandonment_basis(held_sid, cwd)`
-    is consulted on the recorded holder's raw session id; `no-sid` (a
-    legacy pid-only claim dir, or an unreadable one) and `unknown` (absent
-    evidence) both refuse exactly as before. `live-dir-signals` and
-    `archive-record` — a dead holder — make the claim releasable. The basis
-    rides on the report either way (`identity_source`'s own sibling field,
-    `abandonment_basis`) so a reader can tell WHICH fact this gate acted on.
-    An abandoned-basis grant is re-verified a SECOND time, immediately
-    before the class-inverse call below, never trusted stale across the
-    read-then-mutate window (`abandonment_basis` must still resolve the
-    SAME basis, `session_live(held_sid, cwd)` must still be `False`, and
-    the ledger dir's own identity/mtime must be unchanged) — a resurrected
-    holder re-refuses with `APPLY_EXIT_CLAIM_DENIED` rather than proceeding
-    on the stale gate-time basis. The dead holder's uncommitted residue is
-    reported (advisory, fail-open, via `claims._warn_dead_holder_residue`)
-    alongside the release — "the holder is dead" and "the work is free" are
-    two verdicts, not one (state/lessons/2026-08-26-liveness-has-three-
+    Case (iii) — held by someone else — does not refuse uniformly:
+    `liveness.abandonment_basis(held_sid, cwd)` decides, and only a
+    genuinely dead holder (`live-dir-signals` or `archive-record`) makes
+    the claim releasable; `no-sid`/`unknown` still refuse. The basis rides
+    on the report either way so a reader can tell WHICH fact this gate
+    acted on. A REGISTRY-LIVE HOLDER IS REFUSED WHATEVER THE BASIS SAYS,
+    which is why the pair above is necessary and not sufficient:
+    `live-dir-signals` fires on directory recency alone and reads a session
+    that is live but has not written for 30 minutes — thinking, or inside a
+    long tool call — as abandoned. `archive-record` cannot collide with a
+    live holder (its own arm is gated on `not session_live`), so this costs
+    one registry read on the rare dead-holder path and narrows nothing the
+    archive arm answers. A releasable grant is re-verified immediately before the
+    class-inverse call below, never trusted stale across the
+    read-then-mutate window — "the holder is dead" and "the work is free"
+    are two verdicts, not one (state/lessons/2026-08-26-liveness-has-three-
     answers-not-two-and-m-23bdebd1994e.yaml).
 
     ORDERING (2026-08-30): `release_artifact`'s own docstring states an
@@ -1717,6 +1714,15 @@ def drop(
         # forever in case (i) — do not collapse them.
         gate_abandonment_basis: Optional[str] = None
         gate_held_sid: Optional[str] = None
+        # Bound here, not only inside the gate branch below, because the
+        # recheck block that reports it sits OUTSIDE that branch. Today the
+        # two are safe by an invariant a reader has to reconstruct —
+        # `gate_abandonment_basis` is set only on the path that also computes
+        # `identity_source`, so the recheck cannot run without it — and an
+        # invariant holding an unbound name off a claim-release report is one
+        # edit away from a NameError on the refusal path. A default costs
+        # nothing and does not depend on that reconstruction.
+        identity_source: Optional[str] = None
         gate_claim_identity: Optional[tuple] = None
         if claims_dir.is_dir():
             # `resolved_sid` is only trustworthy as an explicit `my_sid` when
@@ -1762,17 +1768,8 @@ def drop(
             else:
                 held_by_me = _liveness.claim_held_by_me(str(claims_dir), cwd=str(root))
             if not held_by_me:
-                # abandonment_basis split (2026-09-01, C3 — docs/plans/2026-
-                # 09-01-the-abandonment-verdict-outlives-the-archiver.md):
-                # case (iii) no longer refuses uniformly. `held_sid` (raw,
-                # `""` on a legacy pid-only dir) feeds `liveness.
-                # abandonment_basis`, which resolves one of `no-sid` /
-                # `live-dir-signals` / `archive-record` / `unknown` — only
-                # the first two carry `abandoned=True`; `unknown` and
-                # `no-sid` both refuse exactly as before (absent evidence
-                # keeps the claim). The basis rides on the report either way
-                # (`identity_source`'s own sibling field) so a reader can
-                # tell WHICH fact this gate acted on.
+                # See `drop`'s own docstring for the four-basis split this
+                # gate acts on. `held_sid` is `""` on a legacy pid-only dir.
                 recorded_holder = _recorded_claim_holder(claims_dir)
                 held_sid = _recorded_claim_session_id(claims_dir)
                 abandoned, basis = _liveness.abandonment_basis(held_sid, cwd=str(root))
@@ -1807,9 +1804,7 @@ def drop(
                         "abandonment_basis": basis,
                     }
                 # Abandoned holder: releasable. Snapshot the evidence the
-                # gate acted on — re-verified immediately before the
-                # class-inverse call below (finding 2's TOCTOU close), never
-                # trusted stale across the read-then-mutate window.
+                # gate acted on, re-verified below (TOCTOU close).
                 gate_abandonment_basis = basis
                 gate_held_sid = held_sid
                 gate_claim_identity = _claim_dir_identity(claims_dir)
@@ -1820,22 +1815,24 @@ def drop(
         # `_scoped_commit` reports when its own pathspec-diff finds nothing
         # dirty (the write was already committed by cs_release_memo_revert).
         memo_op_commit_sha: Optional[str] = None
-        # TOCTOU close (staff-eng review finding 2): a release granted on an
-        # abandoned basis is read-then-MUTATE, and the window between the
-        # gate's basis read (above) and this dispatch is exactly where
+        # TOCTOU close: a release granted on an abandoned basis is
+        # read-then-MUTATE, and the gate-to-dispatch window is exactly where
         # resurrection lives — 4 of 15 live session dirs also carried an
-        # archive record, measured 2026-09-01. Re-read BOTH liveness facts
-        # right here, never trust the gate-time snapshot across the window:
-        # `abandonment_basis` must still resolve the SAME basis the gate
-        # granted on, AND `session_live(held_sid, cwd)` must still be
-        # `False` — the union the gate itself relied on, re-evaluated. The
-        # ledger dir's own identity/mtime is also re-checked: a dir that was
-        # removed and recreated (a fresh claim by a resurrected — or a new —
-        # holder) changes this tuple even when the recorded sid text happens
-        # to match. Any mismatch re-refuses with `APPLY_EXIT_CLAIM_DENIED`
-        # rather than proceeding on the stale gate-time basis; nothing here
-        # runs for a `held_by_me` drop (`gate_abandonment_basis` is `None`).
+        # archive record, measured 2026-09-01. Nothing here runs for a
+        # `held_by_me` drop (`gate_abandonment_basis` is `None`).
         if gate_abandonment_basis is not None:
+            # Report the residue the dead holder left behind on GATE-time
+            # evidence, before the recheck below — not after it. The report
+            # is advisory and fail-open by design (`claims._warn_dead_holder_
+            # residue`'s own docstring), so gate-time evidence is adequate
+            # for it, and running it here keeps the recheck immediately
+            # adjacent to the mutation dispatch instead of leaving its own
+            # git spawn inside the read-then-mutate window it exists to
+            # close (reviewer finding: adjacency claim was false with the
+            # call in the old position). "The holder is dead" and "the work
+            # is free" are two verdicts, not one (state/lessons/2026-08-26-
+            # liveness-has-three-answers-not-two-and-m-23bdebd1994e.yaml).
+            _warn_dead_holder_residue(class_, basename, gate_held_sid or "", cwd=str(root))
             _recheck_abandoned, _recheck_basis = _liveness.abandonment_basis(
                 gate_held_sid or "", cwd=str(root)
             )
@@ -1858,17 +1855,11 @@ def drop(
                     "basename": basename,
                     "released": False,
                     "unclaimed": None,
+                    "identity_source": identity_source,
                     "abandonment_basis": _recheck_basis,
                 }
             # Dead holder confirmed a second time, immediately before the
-            # mutation: report the residue it left behind (staff-eng review
-            # finding 3 — "the holder is dead" and "the work is free" are
-            # two verdicts, not one, per state/lessons/2026-08-26-liveness-
-            # has-three-answers-not-two-and-m-23bdebd1994e.yaml). Advisory,
-            # fail-open, never blocks or alters this release — the same seam
-            # the takeover path already uses, reused rather than a third
-            # reader of its own.
-            _warn_dead_holder_residue(class_, basename, gate_held_sid or "", cwd=str(root))
+            # class-inverse mutation dispatch below.
 
         # ORDERING (2026-08-30): the class inverse runs BEFORE
         # `release_artifact`, per `release_artifact`'s own ORDERING CONTRACT
@@ -1980,8 +1971,8 @@ def main_drop(argv: list[str]) -> int:
 # NOT a replacement for the suspended `session.reap_claims_for_repos`, which
 # reaps `.git/`-scoped claim dirs and never touches the frontmatter that
 # decides routability — this walks `state/handoffs/*.md` for `status:
-# claimed` and resolves each holder's basis, ONCE, into one of four named
-# buckets. REPORTS BY DEFAULT AND WRITES NOTHING; THERE IS NO `--write` FLAG
+# claimed` and resolves each holder's basis, ONCE, into liveness's own
+# raw-basis vocabulary. REPORTS BY DEFAULT AND WRITES NOTHING; THERE IS NO `--write` FLAG
 # AND NO RELEASE PATH IN THIS FUNCTION (ruling: apm 2026-09-01 — the
 # disposition is three-way and it is now RULED: `shipped` is report-only,
 # `continued` composes nothing, and `in_flight`'s only release verb is C3's
@@ -1999,16 +1990,6 @@ def main_drop(argv: list[str]) -> int:
 # is issued anywhere in this path (frontmatter is read directly off disk;
 # `session_live`/`abandonment_basis` are in-process registry/dir reads).
 # ---------------------------------------------------------------------------
-
-#: The four named buckets this sweep ever resolves a holder into (C4 body:
-#: "print the four-way split (live / archive-record / no-sid / unknown)").
-#: `"live-dir-signals"` (the OTHER positive `abandonment_basis` basis) is
-#: folded into `"unknown"` here — this sweep's own bucket vocabulary is
-#: exactly the four named in the body, not a fifth one `abandonment_basis`
-#: happens to also return; a genuinely archived holder still resolves its
-#: own distinct bucket regardless of this fold.
-ADJUDICATION_BUCKETS = ("live", "archive-record", "no-sid", "unknown")
-
 
 def adjudicate_claimed_batons(repo_root: Optional[Path] = None) -> tuple[int, dict[str, Any]]:
     """Walks `state/handoffs/*.md` for `status: claimed`, resolves each
@@ -2030,9 +2011,20 @@ def adjudicate_claimed_batons(repo_root: Optional[Path] = None) -> tuple[int, di
     defect this chunk repairs: exit 0 while doing nothing, indistinguishable
     from exit 0 having done the whole job).
 
+    Each row's `raw_basis` is `liveness`'s OWN vocabulary
+    (`no-sid`/`live`/`archive-record`/`live-dir-signals`/`unknown`) — the
+    only vocabulary this sweep carries. An earlier revision also projected a
+    second, lossy four-way bucket (folding `live-dir-signals` into
+    `unknown`) and shipped it beside `raw_basis`/`abandoned` to recover what
+    the fold discarded; two vocabularies for one question, one of them
+    derived from the other, is exactly the redundancy `raw_basis` +
+    `abandoned` already resolve without it. `report["buckets"]` is a
+    histogram over `raw_basis`, computed at render time, not a stored
+    third vocabulary.
+
     `report["rows"][*]["deployment_state"]` rides on the report as a DISPLAY
     column only — never a match predicate. The sweep selects purely on
-    holder liveness (`status: claimed` plus the holder-basis bucket above);
+    holder liveness (`status: claimed` plus the holder's `raw_basis`);
     `deployment_state` answers a different question (is the WORK done) that
     a human reading this report, not this sweep, is left to resolve (C4
     body's `apm` finding 1 / ruling: `shipped` rows report-only, `in_flight`
@@ -2054,7 +2046,7 @@ def adjudicate_claimed_batons(repo_root: Optional[Path] = None) -> tuple[int, di
         return APPLY_EXIT_TRANSPORT_FAIL, {"error": f"could not list {handoffs_dir}: {exc}"}
 
     rows: list[dict[str, Any]] = []
-    counts: dict[str, int] = {bucket: 0 for bucket in ADJUDICATION_BUCKETS}
+    counts: dict[str, int] = {}
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
@@ -2068,15 +2060,6 @@ def adjudicate_claimed_batons(repo_root: Optional[Path] = None) -> tuple[int, di
             continue
         sid = (read_fm_field_unquoted(split.fm_text, "claimed_by") or "").strip()
         deployment_state = (read_fm_field_unquoted(split.fm_text, "deployment_state") or "").strip()
-        # `abandoned` and `raw_basis` travel BESIDE the bucket because the
-        # bucket alone conflates two different states inside `unknown`: a
-        # holder the dir signals positively call abandoned, and a holder with
-        # no evidence either way. Both bucket `unknown`, and a reader deciding
-        # what to do about a row cannot tell them apart from the bucket name.
-        # The collapse runs in the safe direction -- nothing is laundered INTO
-        # abandoned -- but "I cannot tell" is the whole safety design here, and
-        # a report that cannot say which one it means is not reporting it.
-        #
         # Resolved inline, and the `_adjudicate_holder_basis` helper this
         # replaced is DELETED rather than kept: asking it for the bucket and
         # then asking `abandonment_basis` again for the boolean doubled this
@@ -2085,23 +2068,21 @@ def adjudicate_claimed_batons(repo_root: Optional[Path] = None) -> tuple[int, di
         # tests included. `session_live` is still checked FIRST, which is the
         # part that was load-bearing: a holder confirmed live via the registry
         # read is reported `live` unconditionally, so this sweep can never
-        # bucket a live holder the same as an abandoned one even when
+        # report a live holder the same as an abandoned one even when
         # `abandonment_basis`'s `live-dir-signals` leg would fire on stale
         # directory signals for that same sid.
         if not sid:
-            basis, abandoned, raw_basis = "no-sid", False, "no-sid"
+            abandoned, raw_basis = False, "no-sid"
         elif _liveness.session_live(sid, str(root)):
-            basis, abandoned, raw_basis = "live", False, "live"
+            abandoned, raw_basis = False, "live"
         else:
             abandoned, raw_basis = _liveness.abandonment_basis(sid, cwd=str(root))
-            basis = "archive-record" if raw_basis == "archive-record" else "unknown"
-        counts[basis] += 1
+        counts[raw_basis] = counts.get(raw_basis, 0) + 1
         rows.append(
             {
                 "path": str(path.relative_to(root)).replace(os.sep, "/"),
                 "claimed_by": sid,
                 "deployment_state": deployment_state,
-                "basis": basis,
                 "abandoned": abandoned,
                 "raw_basis": raw_basis,
             }
@@ -2113,23 +2094,3 @@ def adjudicate_claimed_batons(repo_root: Optional[Path] = None) -> tuple[int, di
         "rows": rows,
     }
     return APPLY_EXIT_OK, report
-
-
-def main_adjudicate_claimed_batons(argv: list[str]) -> int:
-    """`main()`'s (future) `adjudicate-claimed-batons` dispatch arm — parses
-    no flags (there is no `--write`/`--release` flag on this route; any
-    argument is rejected), calls `adjudicate_claimed_batons()`, prints the
-    report, returns its exit code. Not yet wired into `pickup_assemble.
-    __init__.main`'s subcommand table — that file is outside this chunk's
-    declared write scope; the wrapper is provided so a caller invoking this
-    module directly has the same argv/report/exit-code shape `main_apply`/
-    `main_drop` already give theirs."""
-    if argv:
-        print(
-            f"pickup-assemble adjudicate-claimed-batons: unrecognized argument {argv[0]!r}",
-            file=sys.stderr,
-        )
-        return APPLY_EXIT_TRANSPORT_FAIL
-    exit_code, report = adjudicate_claimed_batons()
-    print(json.dumps(report, indent=2, sort_keys=True))
-    return exit_code

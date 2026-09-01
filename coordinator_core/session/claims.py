@@ -1711,6 +1711,35 @@ def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = Fa
             release_artifact("plan", slug, cwd=cwd)
             return False
 
+        # The plan->executing-baton back-edge (`claimed_by_handoff`). This is
+        # the ONLY production call site: `_stamp_plan_owner_back_edge`'s other
+        # caller is `_compensate_d5_release_claim`, a partial-mutation
+        # compensator that fires on a failure path, so before this line the
+        # field landed on zero plans in a corpus of 346 despite the mechanism
+        # and its tests being green. `for_execution` is the right — and only —
+        # trigger: the field answers "which baton is advancing this plan right
+        # now", which plan authorship and workstream close-out (the other two
+        # `claim_plan` callers, both at the default) cannot answer.
+        #
+        # Best-effort by the stamp's own contract, deliberately unlike the
+        # stamp-executing flip above: the back-edge is an optimization for a
+        # single-file read, never a load-bearing gate, and must not fail a
+        # claim over a missing or malformed plan file.
+        #
+        # ABSENCE MEANS "NO LIVE EDGE RECORDED" AND NOTHING ELSE. A reader
+        # must not infer "not being executed" from a missing
+        # `claimed_by_handoff`: after this line, absence covers a plan
+        # claimed before it landed (the whole 346-plan corpus), a plan
+        # claimed by a caller at the `for_execution` default, and a holder
+        # whose own baton carries no `governing_plan`. Three states, one
+        # absence -- the same collapse `status: executing` on a plan whose
+        # holder session has ended already produces from the other side.
+        # Reach for the plan's status and its holder's liveness, never for
+        # this field's absence alone.
+        from coordinator_core.baton_assemble.apply import _stamp_plan_owner_back_edge
+
+        _stamp_plan_owner_back_edge(Path(root))
+
     # C3 — best-effort session-shape instrumentation (non-fatal).
     sid = core.resolve_session_id(cwd)
     if sid:

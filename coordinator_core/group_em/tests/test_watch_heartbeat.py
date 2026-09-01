@@ -20,8 +20,17 @@ import time
 from coordinator_core.group_em import watch_heartbeat
 
 
-#: Every key `read_watch` reads off the record, plus the two `stamp` writes
-#: for a reader's benefit (`tick_source`, `subscribed_peers`).
+#: Every key `read_watch` reads off the record, plus the writes `stamp` makes
+#: for a reader's benefit (`tick_source`, `subscribed_peers`,
+#: `writer_session_id`).
+#:
+#: `writer_session_id` was added 2026-09-01 and is deliberately inside this pin
+#: rather than exempted from it. The sibling reader takes the keys it wants BY
+#: NAME (`record.get(...)`, verified against its own source), so an added key
+#: cannot break it -- but the pin's job is to make any change to this record's
+#: shape a decision someone writes down, and quietly loosening it to "at least
+#: these" would retire that job while looking like a smaller edit than removing
+#: the test.
 _READER_KEYS = {
     "holder_session_id",
     "holder_name",
@@ -30,6 +39,7 @@ _READER_KEYS = {
     "next_expected_by",
     "subscribed_peers",
     "declinations",
+    "writer_session_id",
 }
 
 _READER_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -146,3 +156,60 @@ def test_an_unknown_tick_source_raises_rather_than_writing_it(tmp_path):
 
     with _pytest.raises(ValueError):
         watch_heartbeat.stamp(str(tmp_path), holder_session_id="c", declinations=[], interval_seconds=5.0, tick_source="poller")
+
+
+def test_the_writer_refuses_to_mint_a_repo_it_was_pointed_at(tmp_path):
+    """A heartbeat writer that can conjure a repo directory is doing something
+    no correct caller ever needs.
+
+    Measured 2026-09-01: a drive-relative `X:example-game-workbench-repo` (a
+    backslash path that lost its separators to a shell) resolved against the
+    writer's cwd, and this function created the whole chain there -- a
+    repo-shaped tree inside a publish mirror, where it failed a publish row's
+    content check and blocked the round for the fleet. The `state/` leaf under
+    an EXISTING root is ours to create; the root is not.
+    """
+    ghost = tmp_path / "never-existed"
+    assert watch_heartbeat.stamp(
+        str(ghost), holder_session_id="s", declinations=[], interval_seconds=5.0
+    ) is False
+    assert not ghost.exists()
+
+
+def test_the_state_leaf_under_a_real_root_is_still_created(tmp_path):
+    """The refusal is one level deep, not a demand that the caller pre-make
+    `state/` -- a first tick in a real repo must still write."""
+    assert watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="s", declinations=[], interval_seconds=5.0
+    ) is True
+    assert (tmp_path / "state" / "group-em-watch.json").is_file()
+
+
+def test_the_record_says_which_process_wrote_it_not_only_who_holds_it(tmp_path):
+    """`holder_session_id` is the crown in every case, including ticks a
+    dispatched teammate writes on its behalf -- so it cannot answer "did I
+    write this?". A fleet-watch read back a `subscribed_peers` value its own
+    crown had written minutes earlier and reported it to that crown as
+    independent confirmation (2026-09-01). Whole-file replace plus no writer
+    attribution is what makes an echo indistinguishable from a confirmation.
+    """
+    watch_heartbeat.stamp(
+        str(tmp_path),
+        holder_session_id="crown-1",
+        declinations=[],
+        interval_seconds=5.0,
+        writer_session_id="teammate-9",
+    )
+    record = _record(tmp_path)
+    assert record["holder_session_id"] == "crown-1"
+    assert record["writer_session_id"] == "teammate-9"
+
+
+def test_an_unattributed_write_says_so_rather_than_claiming_the_holder(tmp_path):
+    """A writer that does not name itself must leave the field null, never
+    default to the holder -- that would manufacture exactly the false
+    attribution the field exists to prevent."""
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="crown-1", declinations=[], interval_seconds=5.0
+    )
+    assert _record(tmp_path)["writer_session_id"] is None

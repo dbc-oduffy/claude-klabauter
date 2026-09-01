@@ -123,6 +123,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, NamedTuple, Optional
@@ -1876,21 +1877,30 @@ def _emit_close_coverage_advisory(
     message = _render_close_coverage_advisory_message(result.detail)
     if message is None:
         return
-    # Prose to stdout ahead of the report, matching `apply.py`'s established
-    # convention (`render_disabled_op_lines`, "Ahead of the report, never
-    # after it") -- a consumer of this CLI's stdout must already tolerate
-    # non-JSON prefix lines rather than json.loads()-ing the whole stream.
-    # This fires during `build_directives`, earlier than and outside that
-    # function's emission point, and the message is deliberately NOT folded
-    # into `report`. Reviewer finding 4 proposed adding a
+    # DIAGNOSTIC, therefore stderr. This used to print to stdout, matching
+    # `apply.py`'s then-convention that a consumer "must already tolerate
+    # non-JSON prefix lines rather than json.loads()-ing the whole stream".
+    # That convention was wrong and is gone (`apply.py::main` now emits its
+    # own prose on stderr for the same reason): `workstream-complete-assemble
+    # brief`'s contract IS the JSON on stdout, so every advisory line was a
+    # `json.loads(stdout)` failure, and every NEW advisory silently broke
+    # callers that were previously fine. Reported by example-game-repo-em 2026-09-01
+    # (memo `example-game-repo-em-close-ceremony-engine-defects-seven`, defect 5),
+    # observed live ahead of `brief`'s `{"artifact": ...`.
+    #
+    # What has NOT changed, and must not: the message is still deliberately
+    # NOT folded into `report`. Reviewer finding 4 proposed a
     # `report["close_coverage_advisory"]` key so a programmatic caller could
-    # see the advisory fired; refused, on purpose. The advisory's audience is
-    # a human reading their own terminal at close, and stdout is that channel.
-    # A machine-readable field has no named consumer today and invites one
-    # tomorrow -- and the first thing a consumer does with a coverage signal
-    # is branch on it, which is the drift K-001 died of. The observability
-    # gap is real and accepted: nothing should be able to gate on this.
-    print(message)
+    # see the advisory fired; refused, on purpose, and that refusal is
+    # untouched here. Its audience is a human reading their own terminal at
+    # close -- stderr is that channel too. A machine-readable field has no
+    # named consumer today and invites one tomorrow, and the first thing a
+    # consumer does with a coverage signal is branch on it, which is the
+    # drift K-001 died of. The observability gap is real and accepted:
+    # nothing should be able to gate on this. Moving the STREAM does not
+    # reopen that question -- a human still sees it, nothing can parse it
+    # out of the op's contract.
+    print(message, file=sys.stderr)
 
 
 def build_close_coverage_advisory_directive(
