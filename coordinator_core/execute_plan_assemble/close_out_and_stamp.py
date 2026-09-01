@@ -2099,7 +2099,7 @@ _AC_NEXT_HEADING_RE = re.compile(r"^## ", re.MULTILINE)
 _AC_TABLE_ROW_RE = re.compile(r"^\s*\|(.+)\|\s*$")
 _AC_TABLE_SEPARATOR_RE = re.compile(r"^[\s|:-]+$")
 
-_AC_UNRESOLVED_STATUS_RE = re.compile(r"^(?:$|(?:pending|todo|tbd|open))", re.IGNORECASE)
+_AC_UNRESOLVED_STATUS_RE = re.compile(r"^(?:$|(?:pending|todo|tbd|open)\b)", re.IGNORECASE)
 """Matches an EMPTY `Status` cell, or one whose vocabulary word OPENS the cell.
 
 Word-bounded rather than whole-cell anchored: the anchored form read
@@ -2993,9 +2993,13 @@ def close_out_and_stamp(
             " -- ADVISORY: the '## Tasks' spine is fully resolved but the "
             f"plan's own '## Acceptance Criteria' table still has "
             f"{len(ac_table_desync['unresolved_ac_ids'])} of "
-            f"{ac_table_desync['total_ac_rows']} row(s) reading unresolved "
-            f"({', '.join(ac_table_desync['unresolved_ac_ids'])}) -- the AC "
-            "table may simply be stale; not blocking the stamp."
+            f"{ac_table_desync['total_ac_rows']} advisory AC cell(s) unticked "
+            f"({', '.join(ac_table_desync['unresolved_ac_ids'])}) -- not a "
+            "gate; the mechanical oracle over this table is retired, an "
+            "unticked cell carries no information in either direction, and "
+            "delivery is the falsifier delta "
+            "(prime_exit_criterion.exit_criterion_met.falsifier_verdict "
+            "against its recorded baseline)."
         )
 
     if dry_run:

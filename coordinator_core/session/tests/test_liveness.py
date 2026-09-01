@@ -2595,6 +2595,111 @@ class TestSessionAbandoned:
         assert before is after is True
 
 
+class TestAbandonmentBasis:
+    """`abandonment_basis` -- the evidence-carrying sibling of
+    `session_abandoned` (C2, docs/plans/2026-09-01-the-abandonment-verdict-
+    outlives-the-archiver.md)."""
+
+    def _archive(self, repo, sid, date="2026-08-30"):
+        archive_root = Path(repo) / ".git" / "coordinator-sessions" / ".archive"
+        entry = archive_root / f"{sid}-{date}"
+        entry.mkdir(parents=True, exist_ok=True)
+        return entry
+
+    def test_empty_sid_is_no_sid(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert liveness.abandonment_basis("", cwd=str(repo)) == (False, "no-sid")
+
+    def test_live_dir_signals_delegates_to_session_abandoned(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        sdir = _write_session(
+            repo, "s-basis-abandoned", {"pid": "1", "last_activity": _STALE}
+        )
+        _touch(sdir / "meta.json", _STALE_EPOCH)
+        (sdir / "touched.txt").write_text("x", encoding="utf-8")
+        _touch(sdir / "touched.txt", _STALE_EPOCH)
+        assert liveness.session_abandoned("s-basis-abandoned", cwd=str(repo)) is True
+        assert liveness.abandonment_basis("s-basis-abandoned", cwd=str(repo)) == (
+            True,
+            "live-dir-signals",
+        )
+
+    def test_registry_confirmed_live_no_session_dir_is_unknown(
+        self, tmp_path, monkeypatch
+    ):
+        # The C2 test's named anti-scope: a live registry-confirmed sid with
+        # NO local session dir must never read as a dead verdict of any
+        # kind -- session_abandoned already reads False (no sdir), and
+        # session_live reads True (Source 0), so neither the live-dir nor
+        # the archive arm fires; the fixture must land on "unknown", never
+        # "archive-record" or a fabricated abandoned basis.
+        repo = _make_repo(tmp_path)
+        monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: True)
+        assert liveness.abandonment_basis("s-registry-live-no-dir", cwd=str(repo)) == (
+            False,
+            "unknown",
+        )
+
+    def test_not_live_with_archive_record_is_archive_record(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        self._archive(repo, "s-archived-only")
+        assert liveness.session_live("s-archived-only", cwd=str(repo)) is False
+        assert liveness.session_abandoned("s-archived-only", cwd=str(repo)) is False
+        assert liveness.abandonment_basis("s-archived-only", cwd=str(repo)) == (
+            True,
+            "archive-record",
+        )
+
+    def test_not_live_no_archive_record_is_unknown(self, tmp_path):
+        repo = _make_repo(tmp_path)
+        assert liveness.abandonment_basis("s-nowhere", cwd=str(repo)) == (
+            False,
+            "unknown",
+        )
+
+    def test_live_session_never_reaches_archive_arm(self, tmp_path):
+        # Ordering-as-correctness (C2 brief): a session that is BOTH live
+        # and carries a stale archive entry (the resurrected-session case)
+        # must never be misread as abandoned via the archive arm.
+        repo = _make_repo(tmp_path)
+        _write_session(
+            repo, "s-resurrected", {"pid": "1", "last_activity": core.now_iso()}
+        )
+        self._archive(repo, "s-resurrected", date="2026-08-30")
+        assert liveness.session_live("s-resurrected", cwd=str(repo)) is True
+        assert liveness.abandonment_basis("s-resurrected", cwd=str(repo)) == (
+            False,
+            "unknown",
+        )
+
+    def test_archive_agents_entries_are_not_counted(self, tmp_path):
+        # `_agents-*` is sub-reap (ii)'s own archive-naming convention -- a
+        # different population that must not be conflated with sub-reap
+        # (i)'s `<sid>-<date>` session-archive shape.
+        repo = _make_repo(tmp_path)
+        archive_root = Path(repo) / ".git" / "coordinator-sessions" / ".archive"
+        (archive_root / "_agents-s-agent-only-20260830").mkdir(parents=True)
+        assert liveness.abandonment_basis("s-agent-only", cwd=str(repo)) == (
+            False,
+            "unknown",
+        )
+
+    def test_archive_listing_revalidates_after_archiving(self, tmp_path):
+        # The memo pins revalidation on (sessions-dir, mtime) -- a fresh
+        # archive write after an earlier miss must be seen, not masked by a
+        # stale-empty-set memo.
+        repo = _make_repo(tmp_path)
+        assert liveness.abandonment_basis("s-late-archive", cwd=str(repo)) == (
+            False,
+            "unknown",
+        )
+        self._archive(repo, "s-late-archive")
+        assert liveness.abandonment_basis("s-late-archive", cwd=str(repo)) == (
+            True,
+            "archive-record",
+        )
+
+
 # ---------------------------------------------------------------------------
 # AC1 tripwire: session_abandoned is additive. Capture session_live,
 # live_session_ids, live_session_verdicts and session_verdict's outputs
@@ -2668,6 +2773,21 @@ class TestAC1CharacterizationUnchanged:
         assert before["session_live"]["m-thin"] is False
         assert before["session_live"]["m-rich"] is False
         assert before["session_live"]["no-such-session"] is False
+
+    def test_session_abandoned_false_for_archived_only_sid(self, tmp_path):
+        # The anti-scope, as a test (C2 brief): session_abandoned's answer
+        # for an archived-only sid is UNCHANGED by this chunk -- it stays
+        # False (no session dir at all) even though abandonment_basis, the
+        # NEW function, resolves a positive basis for the same sid via the
+        # archive arm session_abandoned itself never gains.
+        repo = _make_repo(tmp_path)
+        archive_root = Path(repo) / ".git" / "coordinator-sessions" / ".archive"
+        (archive_root / "s-archived-ac1-2026-08-30").mkdir(parents=True)
+        assert liveness.session_abandoned("s-archived-ac1", cwd=str(repo)) is False
+        assert liveness.abandonment_basis("s-archived-ac1", cwd=str(repo)) == (
+            True,
+            "archive-record",
+        )
 
     def test_live_corpus_unchanged_by_session_abandoned(self, tmp_path):
         # Golden-diff against REAL corpus SHAPES (Q20 pattern, see

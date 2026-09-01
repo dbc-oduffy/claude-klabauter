@@ -599,32 +599,11 @@ def _dead_holder_record_dir(held_sid: str, cwd: Optional[str] = None) -> Optiona
     live = core.session_dir(held_sid, cwd)
     if live and os.path.isdir(live):
         return live
-    base = core.sessions_dir(cwd)
-    if not base:
-        return None
-    archive = os.path.join(base, ".archive")
-    # Anchored to the trailing `-YYYY-MM-DD`, NOT a bare `startswith(sid + "-")`.
-    # Review: coordinator:code-reviewer P2. `bash_guards/_write_bump_marker.py ::
-    # sweep_stale_markers` hit this same collision class -- a session id that is
-    # a string-prefix of another -- and chose exact match deliberately. This is a
-    # read path, so over-matching only misattributes residue rather than deleting
-    # anything, but nothing in this module establishes that ids are never
-    # prefixes of one another, so the loose primitive is not earned.
-    pattern = re.compile(r"^" + re.escape(held_sid) + r"-\d{4}-\d{2}-\d{2}$")
-    try:
-        matches = sorted(
-            entry.path
-            for entry in os.scandir(archive)
-            if pattern.match(entry.name) and entry.is_dir()
-        )
-    except OSError:
-        return None
-    # `sorted()[-1]` IS newest-first here, and only because the suffix the
-    # pattern above just enforced is zero-padded `YYYY-MM-DD`, for which
-    # lexicographic and chronological order coincide. That coincidence is the
-    # whole basis for this line -- if the archive naming ever grows a time
-    # component or an unpadded field, this silently picks the wrong directory.
-    return matches[-1] if matches else None
+    # Archive leg delegated to `core.archived_session_dir` -- the same
+    # anchored `^<sid>-YYYY-MM-DD$` basename match this function used to
+    # duplicate inline. See that function's docstring for why it lives in
+    # `core.py` rather than here.
+    return core.archived_session_dir(held_sid, cwd)
 
 
 def _warn_dead_holder_residue(

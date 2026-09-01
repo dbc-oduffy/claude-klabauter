@@ -334,6 +334,52 @@ def session_dir(sid: str, cwd: Optional[str] = None) -> str:
     return str(Path(base) / sid)
 
 
+def archived_session_dir(sid: str, cwd: Optional[str] = None) -> Optional[str]:
+    """The newest ``.archive/<sid>-YYYY-MM-DD`` entry for ``sid``, or ``None``.
+
+    Lives in ``core.py``, not ``liveness.py``: ``claims.py`` already imports
+    ``liveness`` (claims -> liveness), so ``liveness`` cannot import ``claims``,
+    and ``core`` is the one layer both can see -- this is the anchored archive
+    lookup both need, lifted out of ``claims._dead_holder_record_dir`` so a
+    caller that has no live-tree leg to check (a bare "is this sid archived at
+    all?" question) does not have to reimplement the anchoring by hand.
+
+    Matches on the entry's BASENAME against ``^<sid>-\\d{4}-\\d{2}-\\d{2}$``,
+    never a bare ``startswith(sid + "-")`` and never a separator-bearing
+    substring test (the shape ``claims.py:669``'s
+    ``(os.sep + ".archive" + os.sep) in record_dir`` uses for a different
+    question -- "is this path under archive" -- which is fine there but is NOT
+    a portable way to match a basename). An unanchored prefix test matches
+    every archive entry whose sid happens to start with a shorter sid's
+    characters -- the collision class this function exists to not repeat.
+
+    Returns ``None`` (never raises) when ``sid`` is empty -- checked BEFORE
+    any listing, since an empty-string prefix test would otherwise match every
+    entry in ``.archive/`` -- when ``.archive/`` does not exist, or when no
+    entry matches.
+
+    ``sorted()[-1]`` is newest-first only because the date suffix is
+    zero-padded ``YYYY-MM-DD``, for which lexicographic and chronological
+    order coincide.
+    """
+    if not sid:
+        return None
+    base = sessions_dir(cwd)
+    if not base:
+        return None
+    archive = os.path.join(base, ".archive")
+    pattern = re.compile(r"^" + re.escape(sid) + r"-\d{4}-\d{2}-\d{2}$")
+    try:
+        matches = sorted(
+            entry.path
+            for entry in os.scandir(archive)
+            if pattern.match(entry.name) and entry.is_dir()
+        )
+    except OSError:
+        return None
+    return matches[-1] if matches else None
+
+
 def ensure_session(
     sid: str,
     cwd: Optional[str] = None,

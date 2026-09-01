@@ -59,6 +59,7 @@ from coordinator_core.frontmatter.schema_validate import (
     load_schemas,
     match_schema,
     SchemaDriftError,
+    SchemaProbeUnavailableError,
     SchemaVersionError,
     check_plan_tasks_ordering,
     check_schema_ahead_of_doe,
@@ -82,6 +83,7 @@ from coordinator_core.frontmatter.schema_validate import (
     _read_bump_class,
     _read_bump_note,
 )
+from coordinator_core.git_scope import foreign_repo_unusable_reason
 from coordinator_core.testing.doe_root import resolve_doe_root
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -4706,6 +4708,26 @@ class TestDivergenceKind:
         assert "re-vendor" in detail_lower
 
 
+def _skip_if_probe_unavailable(fn, *args, **kwargs):
+    """Run a drift/ahead check, converting an unanswerable probe into a SKIP.
+
+    A byte-pin test's subject is the vendored bytes. `SchemaProbeUnavailableError`
+    says the DoE clone could not be read at all, so no bytes were compared --
+    reporting that as pin failure claims a drift nobody observed. A real
+    divergence still raises plain `SchemaDriftError` and still fails here.
+
+    The existing `_DOE_REPO.exists()` guard covers only the absent-path cause.
+    This covers the rest, including the one actually seen on this box: the
+    probe's single `git rev-parse` exceeding `FOREIGN_REPO_GIT_TIMEOUT_SECONDS`
+    under fleet load, which made these tests fail non-deterministically (a
+    different subset each run) with no schema having changed.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except SchemaProbeUnavailableError as exc:
+        pytest.skip(f'DoE clone unreadable, comparison never ran: {exc}')
+
+
 class TestPinnedQueueSchemaDrift:
     """Gating tamper-check: each vendored queue schema must still equal the pin.
 
@@ -4716,7 +4738,8 @@ class TestPinnedQueueSchemaDrift:
     def test_bug_backlog_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(
+        _skip_if_probe_unavailable(
+            check_schema_drift,
             _SCHEMAS_DIR / 'bug-backlog.schema.json',
             _DOE_REPO,
             ref=_QUEUE_SCHEMA_PINS['bug-backlog'],
@@ -4725,7 +4748,8 @@ class TestPinnedQueueSchemaDrift:
     def test_cross_repo_commitment_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(
+        _skip_if_probe_unavailable(
+            check_schema_drift,
             _SCHEMAS_DIR / 'cross-repo-commitment.schema.json',
             _DOE_REPO,
             ref=_QUEUE_SCHEMA_PINS['cross-repo-commitment'],
@@ -4734,7 +4758,8 @@ class TestPinnedQueueSchemaDrift:
     def test_debt_backlog_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(
+        _skip_if_probe_unavailable(
+            check_schema_drift,
             _SCHEMAS_DIR / 'debt-backlog.schema.json',
             _DOE_REPO,
             ref=_QUEUE_SCHEMA_PINS['debt-backlog'],
@@ -4743,7 +4768,8 @@ class TestPinnedQueueSchemaDrift:
     def test_improvement_queue_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(
+        _skip_if_probe_unavailable(
+            check_schema_drift,
             _SCHEMAS_DIR / 'improvement-queue.schema.json',
             _DOE_REPO,
             ref=_QUEUE_SCHEMA_PINS['improvement-queue'],
@@ -4752,7 +4778,8 @@ class TestPinnedQueueSchemaDrift:
     def test_lesson_entry_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(
+        _skip_if_probe_unavailable(
+            check_schema_drift,
             _SCHEMAS_DIR / 'lesson-entry.schema.json',
             _DOE_REPO,
             ref=_QUEUE_SCHEMA_PINS['lesson-entry'],
@@ -4761,7 +4788,8 @@ class TestPinnedQueueSchemaDrift:
     def test_lessons_outbox_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(
+        _skip_if_probe_unavailable(
+            check_schema_drift,
             _SCHEMAS_DIR / 'lessons-outbox.schema.json',
             _DOE_REPO,
             ref=_QUEUE_SCHEMA_PINS['lessons-outbox'],
@@ -4770,7 +4798,8 @@ class TestPinnedQueueSchemaDrift:
     def test_review_findings_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(
+        _skip_if_probe_unavailable(
+            check_schema_drift,
             _SCHEMAS_DIR / 'review-findings.schema.json',
             _DOE_REPO,
             ref=_QUEUE_SCHEMA_PINS['review-findings'],
@@ -4788,7 +4817,8 @@ class TestPinnedQueueSchemaDrift:
         # gone. Nothing about that is a special case worth preserving here.
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(
+        _skip_if_probe_unavailable(
+            check_schema_drift,
             _SCHEMAS_DIR / 'review-trail.schema.json',
             _DOE_REPO,
             ref=_QUEUE_SCHEMA_PINS['review-trail'],
@@ -4797,7 +4827,8 @@ class TestPinnedQueueSchemaDrift:
     def test_priority_ledger_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(
+        _skip_if_probe_unavailable(
+            check_schema_drift,
             _SCHEMAS_DIR / 'priority-ledger.schema.json',
             _DOE_REPO,
             ref=_QUEUE_SCHEMA_PINS['priority-ledger'],
@@ -4806,7 +4837,8 @@ class TestPinnedQueueSchemaDrift:
     def test_priority_intent_matches_pinned_sha(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        check_schema_drift(
+        _skip_if_probe_unavailable(
+            check_schema_drift,
             _SCHEMAS_DIR / 'priority-intent.schema.json',
             _DOE_REPO,
             ref=_QUEUE_SCHEMA_PINS['priority-intent'],
@@ -4887,6 +4919,20 @@ class TestCheckSchemaAheadOfDoe:
             _ahead_git(repo, "config", "user.name", "ahead-pin test")
             _ahead_git(repo, "add", "-A")
             _ahead_git(repo, "commit", "-q", "-m", f"seed widget schema {version}")
+
+            # Precondition, not a check of the subject: every test in this class
+            # asserts what check_schema_ahead_of_doe CONCLUDES, which requires
+            # the probe to reach this repo at all. Its single `git rev-parse`
+            # is bounded by FOREIGN_REPO_GIT_TIMEOUT_SECONDS, and on a loaded
+            # box that spawn alone has been measured past the budget -- which
+            # surfaced here as a different arbitrary subset of this class going
+            # red each run, every failure a timeout string rather than the
+            # STALE/leaf-retention message the test names. Skipping on an
+            # unreadable fixture keeps that noise out of the verdict without
+            # softening a single assertion about a repo we COULD read.
+            unusable = foreign_repo_unusable_reason(repo)
+            if unusable is not None:
+                pytest.skip(f"fixture repo not probe-readable: {unusable}")
             return repo
 
         return _make

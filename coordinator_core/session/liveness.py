@@ -1565,6 +1565,140 @@ def session_abandoned(sid: str, cwd: Optional[str] = None) -> bool:
     return stale_count >= 2
 
 
+#: `.archive/<sid>-<YYYY-MM-DD>` entry names, memoised per (sessions-dir,
+#: mtime) -- the same shape as `_SHARED_PID_CACHE`/`_shared_stable_pids`
+#: above (C2, docs/plans/2026-09-01-the-abandonment-verdict-outlives-the-
+#: archiver.md). A path-keyed memo alone returns a STALE EMPTY SET forever
+#: once a directory is first seen empty -- the mtime pairing is what makes a
+#: later archive write (the reaper running between two calls) actually
+#: revalidate, rather than silently surviving its own fix.
+_ARCHIVE_SID_CACHE: "dict[str, tuple[float, frozenset]]" = {}
+
+#: `.archive/<sid>-<YYYY-MM-DD>` entry-name shape, per `reap.py`'s own
+#: `archive_dest = archive_root / f"{sid}-{_today_str()}"` (`_today_str`:
+#: `YYYY-MM-DD`). Anchored so a sid that itself ends in a date-shaped
+#: suffix cannot be mis-split -- greedy `.*` plus an anchored trailing group
+#: still isolates the LAST such suffix, matching how `_reap_stale_sessions`
+#: names its own destination.
+_ARCHIVE_ENTRY_RE = re.compile(r"^(?P<sid>.+)-\d{4}-\d{2}-\d{2}$")
+
+
+def _archived_sids(sessions_dir: str) -> frozenset:
+    """Sids carrying at least one `.archive/<sid>-<YYYY-MM-DD>` entry under
+    `sessions_dir` (`session.reap`'s own sub-reap (i) destination shape).
+
+    Cost (C2 brief): a caller must not pay this listing when the live-dir
+    already answers -- `abandonment_basis` below only reaches this function
+    after confirming `not session_live(sid, cwd)`, so a live holder never
+    triggers a `.archive` scan. Memoised per (sessions_dir, `.archive`
+    mtime), the same shape `_shared_stable_pids` uses above: a stat plus a
+    listdir, taken once per distinct mtime rather than once per call.
+
+    Excludes `_agents-*` entries (sub-reap (ii)'s own archive-naming
+    convention, a different population -- see `_prune_stale_agent_archive`'s
+    docstring on why the two archive shapes must not be conflated).
+
+    Returns `frozenset()` when `sessions_dir` is falsy, `.archive` does not
+    exist, or a listing/stat fails -- absence of the archive dir is not
+    evidence either way, so this reads as "no archive record" rather than
+    raising.
+    """
+    if not sessions_dir:
+        return frozenset()
+    archive_root = os.path.join(sessions_dir, ".archive")
+    try:
+        if not os.path.isdir(archive_root):
+            return frozenset()
+        stamp = os.stat(archive_root).st_mtime
+    except OSError:
+        return frozenset()
+
+    hit = _ARCHIVE_SID_CACHE.get(sessions_dir)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+
+    sids: "set[str]" = set()
+    try:
+        for entry in os.listdir(archive_root):
+            if entry.startswith("_agents-"):
+                continue
+            m = _ARCHIVE_ENTRY_RE.match(entry)
+            if m:
+                sids.add(m.group("sid"))
+    except OSError:
+        return frozenset()
+
+    result = frozenset(sids)
+    _ARCHIVE_SID_CACHE[sessions_dir] = (stamp, result)
+    return result
+
+
+def abandonment_basis(sid: str, cwd: Optional[str] = None) -> "tuple[bool, str]":
+    """The evidence-carrying sibling of `session_abandoned` (C2,
+    docs/plans/2026-09-01-the-abandonment-verdict-outlives-the-archiver.md).
+    `session_abandoned` KEEPS ITS CURRENT ANSWER FOR EVERY INPUT -- this adds
+    a function, it does not change one (see `TestAC1CharacterizationUnchanged`
+    and its archive-arm sibling in `test_liveness.py`). Every existing caller
+    of `session_abandoned` (`scope.py:4020`, `scope.py:4434`, `reap.py:481`)
+    is untouched by construction: the archive arm below is reachable ONLY
+    through this function.
+
+    Bases, in resolution order:
+      - `"no-sid"` -- `sid` is empty. Always `(False, "no-sid")`, named so a
+        caller can bucket "no holder at all" separately from a holder this
+        module has evidence about, rather than reading it as a healthy one.
+      - `"live-dir-signals"` -- the existing in-window computation,
+        delegated to `session_abandoned` VERBATIM (never reimplemented): a
+        `True` here carries exactly `session_abandoned`'s own OR-combined
+        signal set and >= 2-stale floor.
+      - `"archive-record"` -- returned only when `not session_live(sid,
+        cwd)` (the registry-grade Source-0 read, never mere session-dir
+        absence) AND a `.archive/<sid>-<YYYY-MM-DD>` entry resolves for
+        `sid`. This holds regardless of which reaper leg wrote the record --
+        sub-reap (i) is the only leg that writes THIS shape, but the arm
+        gates on `session_live`, not on which leg ran, so it stays sound if
+        a future leg starts writing archive entries of its own.
+      - `"unknown"` -- a registry-confirmed-live sid with no session dir
+        (`session_abandoned` reads `False` for "no sdir", `session_live`
+        reads `True` off Source 0 -- neither the live-dir nor the archive
+        arm above ever fires), or a sid with no live dir and no archive
+        record. Always `(False, "unknown")` -- absent evidence is never
+        dispositive of abandonment, matching this module's fail-open bias.
+
+    Ordering is a CORRECTNESS requirement, not a cost optimisation that
+    happens to save a listing (C2 brief): `live-dir-signals` (via
+    `session_abandoned`, which itself never asserts abandonment for a sid
+    holding ANY fresh signal) and the `not session_live(sid, cwd)` gate both
+    run BEFORE the archive lookup, so a resurrected session -- archived once,
+    live again, and possibly archived a second time by a later reaper pass
+    -- can never reach the archive arm while it is live. Checking the
+    (cheaper) archive listing first would misclassify such a session as
+    abandoned the moment it has ever been archived, which is exactly the
+    defect this ordering forecloses.
+
+    Negative spec -- cross-machine: `"archive-record"` is evidence about
+    THIS machine's reaper only. `session_live`'s registry read is PID-based
+    (`core.stable_pid_alive`), i.e. machine-local -- it can confirm
+    live-HERE, never live-elsewhere. A foreign-machine holder resolves
+    `"unknown"`, never `"archive-record"`, by construction: both the
+    archive lookup and the registry read run against THIS box's own
+    `core.sessions_dir()`, and there is no code path here that lets a
+    foreign holder's record surface as this box's own archive entry.
+    """
+    if not sid:
+        return (False, "no-sid")
+
+    if session_abandoned(sid, cwd):
+        return (True, "live-dir-signals")
+
+    if not session_live(sid, cwd):
+        base = core.sessions_dir(cwd)
+        if base and sid in _archived_sids(base):
+            return (True, "archive-record")
+
+    return (False, "unknown")
+
+
 def active_sessions(cwd: Optional[str] = None) -> list:
     """Port of ``cs_active_sessions``.
 

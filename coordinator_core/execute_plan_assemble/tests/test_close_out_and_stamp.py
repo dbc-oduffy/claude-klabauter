@@ -3221,6 +3221,15 @@ class TestAcTableDesync:
         }
         assert "ADVISORY" in result["message"]
         assert "AC1" in result["message"]
+        # The memo's second binding constraint (cross-repo/archive/
+        # 2026-08-27-doe-claude-em-ac-table-disposition.md § "Option (1)"):
+        # a bare `N of M unticked` re-implies the retired oracle to a reader
+        # who never knew it was retired, so the emission must name the
+        # table's advisory standing AND where delivery is actually judged.
+        assert "advisory AC cell(s) unticked" in result["message"]
+        assert "not a gate" in result["message"]
+        assert "retired" in result["message"]
+        assert "falsifier delta" in result["message"]
 
     def test_no_finding_when_ac_table_already_agrees(self, tmp_path, monkeypatch):
         root = tmp_path

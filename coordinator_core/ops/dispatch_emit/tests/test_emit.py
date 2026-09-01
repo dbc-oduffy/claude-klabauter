@@ -417,6 +417,68 @@ def test_preflight_blocked_still_wins_over_clear():
 
 
 # ---------------------------------------------------------------------------
+# Cached-preflight staleness detection
+# ---------------------------------------------------------------------------
+
+
+def test_preflight_sha_is_bound_for_later_phases():
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert "const preflightHeadSha = " in script
+    # Parsed out of the agent's own report, not assumed.
+    assert "PREFLIGHT-CLEAR[*_ ]+([0-9a-f]{7,40})" in script
+
+
+def test_every_commit_phase_carries_the_staleness_check():
+    """The check belongs at the commit agent because that is the last step
+    before anything is written AND the only actor in the run that can run git.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert script.count("STALENESS CHECK") == 2  # one per commit phase
+    assert script.count("${preflightHeadSha") == 2
+    assert "git rev-parse HEAD" in script
+
+
+def test_staleness_clause_interpolates_rather_than_printing_source():
+    """`_escape_for_js_template_literal` neutralises `$` on purpose, so a
+    `${...}` written into the prompt would reach the agent as literal text."""
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert "<<<PREFLIGHT_HEAD_SHA>>>" not in script  # placeholder consumed
+    assert "\\${preflightHeadSha" not in script  # not escaped into source text
+
+
+def test_escaper_still_neutralises_other_dollars_in_prompt_text():
+    """The splice is one known token to one known binding, never a general
+    unescaping -- otherwise prompt text could inject expressions."""
+    from coordinator_core.ops.dispatch_emit.emit import (
+        _escape_for_js_template_literal,
+        _interpolate_preflight_sha,
+    )
+
+    hostile = "cost was ${process.env.SECRET} and ${alert(1)}"
+    out = _interpolate_preflight_sha(_escape_for_js_template_literal(hostile))
+    # A plain `"${x}" not in out` would PASS on unescaped output too, since
+    # the escaped form `\${x}` contains it as a substring. Assert on what
+    # actually matters: every `${` is preceded by a backslash, so none of them
+    # is a live interpolation.
+    unescaped = [
+        m.start()
+        for m in re.finditer(r"\$\{", out)
+        if m.start() == 0 or out[m.start() - 1] != "\\"
+    ]
+    assert not unescaped, out
+
+
+def test_a_mismatch_is_not_framed_as_a_refusal_reason():
+    """A resumed run replaying a cached verdict is EXPECTED. Framing the
+    mismatch as grounds to refuse would halt every legitimate resume."""
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    i = script.index("STALENESS CHECK")
+    clause = script[i:i + 900]
+    assert "is NOT by itself a reason to refuse" in clause
+    assert "Re-verify claimability" in clause
+
+
+# ---------------------------------------------------------------------------
 # Terminal completion return
 # ---------------------------------------------------------------------------
 

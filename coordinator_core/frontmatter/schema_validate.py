@@ -94,7 +94,7 @@ from typing import Any, Sequence, TypedDict
 
 import yaml
 
-from coordinator_core.ops.fleet._memo_compose import _VALID_KINDS
+from coordinator_core.ops.fleet.memo_kinds import VALID_KINDS as _VALID_KINDS
 
 from coordinator_core.frontmatter.baton_class import (
     _PRE_RENAME_ALIASES as _HANDOFF_KIND_PRE_RENAME_ALIASES,
@@ -163,6 +163,36 @@ class SchemaVersionError(ValueError):
 
 class SchemaDriftError(RuntimeError):
     """Raised when a vendored schema file diverges from DoE HEAD at drift-check time."""
+
+
+class SchemaProbeUnavailableError(SchemaDriftError):
+    """Raised when the comparison NEVER RAN -- the DoE clone could not be read.
+
+    A drift finding and an unanswerable probe are different claims, and this
+    subclass is what makes the difference readable by a caller rather than only
+    by a human reading the message. `check_schema_drift` and
+    `check_schema_ahead_of_doe` both already said "This is NOT a drift finding
+    -- the comparison never ran" in prose while raising the same type as a real
+    divergence, so the one distinction their own messages insist on was the one
+    a caller could not act on.
+
+    Subclasses `SchemaDriftError` deliberately: every existing
+    `except SchemaDriftError` / `pytest.raises(SchemaDriftError)` site keeps its
+    current behaviour, and the gating checks stay red by default. Nothing is
+    downgraded to a warning here -- callers that genuinely cannot distinguish
+    (a revendor run, a tamper gate) should keep treating it as failure.
+
+    Who SHOULD catch it: a test whose subject is the PIN, not the probe.
+    `foreign_repo_unusable_reason` can return a reason for causes that say
+    nothing whatever about the vendored bytes -- the clone absent, git missing,
+    or (measured on this box) a `git rev-parse` spawn exceeding
+    `FOREIGN_REPO_GIT_TIMEOUT_SECONDS` under fleet load. Failing a byte-pin
+    assertion on any of those reports drift that was never observed.
+
+    Negative-spec: this is NOT for a git command that RAN and answered. A
+    `git show` exiting non-zero because the ref or path is absent is git
+    answering the question, and stays a plain `SchemaDriftError`.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -4410,7 +4440,8 @@ def check_schema_drift(
 
     Raises:
         SchemaDriftError: if the vendored schema diverges from the DoE ref.
-        SchemaDriftError: if git is unavailable or the DoE ref path cannot be read.
+        SchemaProbeUnavailableError: if the DoE clone could not be read at all
+            (subclass of SchemaDriftError -- the comparison never ran).
 
     Negative-spec: this is a pure comparison; it does NOT update the vendored file.
     Call this function from tests to detect silent drift (e.g. a formatter reformat).
@@ -4433,7 +4464,7 @@ def check_schema_drift(
 
     unusable = foreign_repo_unusable_reason(doe_repo_path)
     if unusable is not None:
-        raise SchemaDriftError(
+        raise SchemaProbeUnavailableError(
             f'Cannot read DoE {ref} schema "{doe_schema_ref}": the DoE clone at '
             f'{doe_repo_path} could not be read as a git repository ({unusable}). '
             'This is NOT a drift finding — the comparison never ran.'
@@ -4441,16 +4472,29 @@ def check_schema_drift(
 
     # Review: code-reviewer — F4 (Wave B): stdin=DEVNULL + CREATE_NO_WINDOW to match the
     # _run_git hardening pattern used by this slice's sibling modules.
-    result = subprocess.run(
-        ['git', '-C', str(doe_repo_path), 'show', f'{ref}:{doe_schema_ref}'],
-        capture_output=True,
-        text=True,
-        encoding='utf-8',
-        timeout=FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
-        stdin=subprocess.DEVNULL,
-        env=scoped_git_env(),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    #
+    # The timeout is bounded but its EXPIRY is a could-not-check, not a tamper
+    # verdict — the same claim the probe above raises
+    # SchemaProbeUnavailableError for. Left unhandled it escaped as a raw
+    # subprocess.TimeoutExpired, past every could-not-check disclaimer this
+    # module states, to a caller reading `except SchemaDriftError`.
+    try:
+        result = subprocess.run(
+            ['git', '-C', str(doe_repo_path), 'show', f'{ref}:{doe_schema_ref}'],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            timeout=FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
+            stdin=subprocess.DEVNULL,
+            env=scoped_git_env(),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        raise SchemaProbeUnavailableError(
+            f'Cannot read DoE {ref} schema "{doe_schema_ref}": git could not be '
+            f'run against {doe_repo_path} ({exc.__class__.__name__}: {exc}). '
+            'This is NOT a drift finding — the comparison never ran.'
+        ) from exc
     if result.returncode != 0:
         raise SchemaDriftError(
             f'Cannot read DoE {ref} schema "{doe_schema_ref}": {result.stderr.strip()}. '
@@ -4658,23 +4702,40 @@ def check_schema_ahead_of_doe(
 
     unusable = foreign_repo_unusable_reason(doe_repo_path)
     if unusable is not None:
-        raise SchemaDriftError(
+        raise SchemaProbeUnavailableError(
             f'Cannot read DoE schema "{doe_schema_ref}": the DoE clone at '
             f'{doe_repo_path} could not be read as a git repository ({unusable}). '
             'This is NOT an ahead-pin finding — the comparison never ran.'
         )
 
     def _run_git(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ['git', '-C', str(doe_repo_path), *args],
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            timeout=FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
-            stdin=subprocess.DEVNULL,
-            env=scoped_git_env(),
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
+        """One bounded, repo-scoped git read; an unrunnable one is a non-finding.
+
+        Every caller below turns a non-zero RETURN CODE into a specific verdict,
+        which is right — that is git answering. A timeout or an OSError is git
+        never answering, and the four reads here share this helper precisely so
+        that distinction is made once. Without it a `TimeoutExpired` escaped raw
+        past all four, so a spawn this function never got to run surfaced as
+        neither a drift finding nor a could-not-check but as an unrelated
+        exception type.
+        """
+        try:
+            return subprocess.run(
+                ['git', '-C', str(doe_repo_path), *args],
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                timeout=FOREIGN_REPO_GIT_TIMEOUT_SECONDS,
+                stdin=subprocess.DEVNULL,
+                env=scoped_git_env(),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            raise SchemaProbeUnavailableError(
+                f'Cannot run `git {" ".join(args)}` against the DoE clone at '
+                f'{doe_repo_path} ({exc.__class__.__name__}: {exc}). '
+                'This is NOT an ahead-pin finding — the comparison never ran.'
+            ) from exc
 
     def _show(ref: str) -> str:
         result = _run_git('show', f'{ref}:{doe_schema_ref}')

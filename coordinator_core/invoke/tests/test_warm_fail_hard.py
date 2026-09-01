@@ -173,7 +173,7 @@ def test_transient_advice_does_not_fabricate_an_eta(monkeypatch, tmp_path):
         monkeypatch, tmp_path, warm_enabled=True, warm_response=None, allow_unstamped=False
     )
 
-    assert not re.search(r"[0-9]+ *(s|sec|second|m|min|minute)[a-z]*", stderr), stderr
+    assert not re.search(r"[0-9]+ *(s|sec|second|m|min|minute)[a-z]*\b", stderr), stderr
 
 
 def test_warm_miss_falls_through_to_cold_when_opted_in(monkeypatch, tmp_path):

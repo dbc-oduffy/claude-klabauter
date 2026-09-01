@@ -572,3 +572,98 @@ def test_delegation_carries_the_served_session_not_the_servers_spawner(monkeypat
     child_env = mock_run.call_args.kwargs["env"]
     for var in _session_core.SESSION_ENV_PRECEDENCE:
         assert child_env.get(var) == caller, f"{var} must name the served session"
+
+
+# ---------------------------------------------------------------------------
+# Child-stderr relay on the warm (no-fd) leg — 2026-09-01
+#
+# `no_console_passthrough_kwargs()` hands the child real fds, but its own
+# docstring exempts "a captured-object stream [with] no fd at all", which
+# degrades to plain inheritance. This CLI runs IN-PROCESS inside the warm
+# server via `workstream_complete.apply`, which is exactly that shape -- so a
+# child failure printed into the warm server's streams and the caller saw only
+# `coordinator-queue-append exited 2`.
+#
+# Source: cross-repo/inbox/2026-09-01-example-game-repo-em-close-ceremony-engine-
+# defects-seven.md defect 4 (symptom) + 2026-09-01-example-retrieval-repo-em-ceremony-
+# engine-defects-second-repo-confirmation.md (mechanism).
+# ---------------------------------------------------------------------------
+
+
+def _run_with_stdio(passthrough_kwargs, child_stderr, returncode):
+    """Invoke main() with `no_console_passthrough_kwargs` stubbed to a given
+    shape, capturing what the wrapper writes to its own stderr."""
+    mock_result = unittest.mock.MagicMock()
+    mock_result.returncode = returncode
+    mock_result.stderr = child_stderr
+
+    # `find_cli_cmd` is stubbed because its interpreter resolution is
+    # environment-dependent and returns None on boxes whose `sys.executable`
+    # is `python3.exe` -- which short-circuits `main()` at "no python
+    # interpreter resolvable" long before the spawn these tests are about.
+    # (That same resolution already fails 7 pre-existing tests in this file on
+    # such a box; it is not what is under test here.)
+    import _queue_append_locator
+
+    captured = io.StringIO()
+    with (
+        unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
+        unittest.mock.patch.object(
+            _queue_append_locator, "find_cli_cmd",
+            return_value=["python3", str(_BIN_DIR / "coordinator-queue-append.py")],
+        ),
+        unittest.mock.patch("subprocess.run", return_value=mock_result) as mock_run,
+        unittest.mock.patch(
+            "coordinator_core.win_portability.no_console_passthrough_kwargs",
+            return_value=dict(passthrough_kwargs),
+        ),
+        unittest.mock.patch("sys.stderr", captured),
+    ):
+        rc = _invoke()
+    return rc, captured.getvalue(), mock_run
+
+
+def test_no_fd_leg_pipes_and_relays_child_stderr():
+    """The warm-server shape: no `stderr` fd to inherit, so the wrapper must
+    capture the child's stderr and re-emit it in its own message."""
+    import subprocess as _sp
+
+    rc, emitted, mock_run = _run_with_stdio(
+        {},  # no stdout/stderr keys == no usable fd, the degradation case
+        b"argument --body must not contain a newline\n",
+        2,
+    )
+
+    assert rc == 2
+    assert mock_run.call_args.kwargs["stderr"] is _sp.PIPE, (
+        "with no fd to pass through, the child's stderr must be PIPEd, "
+        "not inherited into the warm server's streams"
+    )
+    assert "coordinator-queue-append exited 2" in emitted
+    assert "argument --body must not contain a newline" in emitted, (
+        "the child's own diagnosis is the whole point -- this is the line "
+        "example-game-repo-em never saw"
+    )
+
+
+def test_real_fd_leg_keeps_passthrough_and_does_not_pipe():
+    """The interactive shape: a real fd exists, so passthrough is preserved
+    and the wrapper adds no PIPE (live streaming is not sacrificed)."""
+    rc, emitted, mock_run = _run_with_stdio(
+        {"stdout": 1, "stderr": 2},
+        None,
+        2,
+    )
+
+    assert rc == 2
+    assert mock_run.call_args.kwargs["stderr"] == 2
+    assert "coordinator-queue-append exited 2" in emitted
+    # Nothing was captured on this leg, so nothing is re-emitted -- the child
+    # already wrote straight to the operator's terminal.
+    assert "stderr:" not in emitted
+
+
+def test_success_relays_nothing_and_returns_zero():
+    rc, emitted, _ = _run_with_stdio({}, b"", 0)
+    assert rc == 0
+    assert emitted == ""

@@ -1018,6 +1018,23 @@ _PROVENANCE_HEADING = (
 _COMMIT_LANDED_TOKEN = "COMMIT-LANDED"
 
 
+def _interpolate_preflight_sha(escaped: str) -> str:
+    """Swap the placeholder for a real template-literal interpolation.
+
+    Runs AFTER `_escape_for_js_template_literal`, never before. That escaper
+    neutralises every `$` on purpose -- it is what keeps prompt text from
+    injecting expressions into the emitted script -- so writing `${var}` into
+    the prompt yields the literal characters in the agent's prompt instead of
+    the value. Splicing here is the narrow, auditable exception: exactly one
+    known token becomes exactly one known binding, and every other `$` in the
+    prompt stays escaped.
+    """
+    return escaped.replace(
+        _PREFLIGHT_SHA_PLACEHOLDER,
+        '${%s || "(no sha reported)"}' % _PREFLIGHT_SHA_VAR,
+    )
+
+
 def _commit_agent_call(
     pathspec: list[str],
     phase_title: str,
@@ -1134,14 +1151,60 @@ def _commit_agent_call(
         " coordinator_core/ops/dispatch_emit/emit.py."
     )
 
+    # The preflight's claimed HEAD travels to an agent that can check it.
+    #
+    # A resumed run replays this phase's preflight from cache, sha and all --
+    # the resume cache keys on (prompt, opts), and an unchanged script yields
+    # an unchanged preflight prompt by construction, so a stale verdict reads
+    # exactly like a fresh one. The emitted script cannot tell the difference:
+    # it is pure JS orchestration with no git access, so it cannot resolve the
+    # real HEAD to compare against.
+    #
+    # A commit agent can. It runs git anyway, it is the LAST step before
+    # anything is written, and on a resume the commit phases that have not yet
+    # run are fresh (only the ones that already succeeded are served from
+    # cache, and those need no re-check). So this is the exact point where a
+    # stale claim is both detectable and still actionable.
+    #
+    # Cache-neutral by construction, which is why the interpolation is safe:
+    # on a resume the replayed preflight yields the SAME sha, so these prompts
+    # are byte-identical and every already-succeeded commit phase still hits
+    # cache. A genuinely new run produces a new sha and new prompts, which is
+    # correct -- those phases have not run. Salting the preflight prompt with
+    # a nonce would achieve staleness-detection too, and is the wrong fix: the
+    # preflight is the FIRST call in every emitted script, so busting its cache
+    # busts the longest-unchanged-prefix for everything downstream and makes
+    # `resumeFromRunId` a full re-run of an already-landed plan.
+    static_prompt = (
+        f"{static_prompt}\n\nSTALENESS CHECK, before you stage anything. The "
+        f"commit-claimability preflight reported observing HEAD at "
+        f"{_PREFLIGHT_SHA_PLACEHOLDER}. Run `git rev-parse "
+        f"HEAD`. If it MATCHES, proceed normally and say nothing about it. If it "
+        f"DIFFERS, that preflight verdict is stale -- this is a resumed run "
+        f"replaying a cached result, which is expected and is NOT by itself a "
+        f"reason to refuse. Re-verify claimability for your own pathspec "
+        f"yourself, state in your report that you did so and why, and then "
+        f"proceed or report BLOCKED on what you actually find. Never treat the "
+        f"preflight's verdict as covering a tree it did not see."
+    )
+
     if results_var:
         static_prompt = f"{static_prompt}\n\n{_PROVENANCE_HEADING}\n\nExecutor report(s):"
-        escaped_static = _escape_for_js_template_literal(static_prompt)
+        escaped_static = _interpolate_preflight_sha(
+            _escape_for_js_template_literal(static_prompt)
+        )
         prompt_literal = (
             f"`{escaped_static}\\n${{JSON.stringify({results_var}, null, 2)}}`"
         )
     else:
-        prompt_literal = _js_string_literal(static_prompt)
+        # Always a template literal now -- the staleness clause interpolates a
+        # run-time binding, so a plain string literal would emit the source
+        # text `${preflightHeadSha}` into the agent's prompt verbatim.
+        prompt_literal = "`{}`".format(
+            _interpolate_preflight_sha(
+                _escape_for_js_template_literal(static_prompt)
+            )
+        )
 
     call = (
         f"  const {commit_var} = await agent("
@@ -1247,6 +1310,23 @@ def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
 _PREFLIGHT_BLOCKED_TOKEN = "PREFLIGHT-BLOCKED"
 _PREFLIGHT_CLEAR_TOKEN = "PREFLIGHT-CLEAR"
 
+#: JS binding holding the HEAD sha the preflight agent reported observing.
+#: Interpolated into every commit-phase prompt so a CACHED preflight verdict
+#: -- which a resumed run replays, because the resume cache keys on
+#: (prompt, opts) and an unchanged script yields an unchanged prompt by
+#: construction -- is detectable by an agent that CAN run git, at the one
+#: place where acting on a stale verdict could do harm.
+_PREFLIGHT_SHA_VAR = "preflightHeadSha"
+
+#: Stands in for the interpolation while the prompt is still plain text.
+#: `_escape_for_js_template_literal` neutralises `$` by design -- that is
+#: what stops prompt text from injecting expressions -- so a `${...}`
+#: written into the prompt would reach the agent as literal source. The
+#: placeholder survives escaping unchanged and is swapped for the real
+#: interpolation afterwards, which keeps the escaper's guarantee intact for
+#: every OTHER `$` in the prompt.
+_PREFLIGHT_SHA_PLACEHOLDER = "<<<PREFLIGHT_HEAD_SHA>>>"
+
 
 def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
     """Compose the preflight phase's ``phase()`` + ``agent()`` call (AC14).
@@ -1290,7 +1370,18 @@ def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
         "});"
     )
     gate = _preflight_halt_gate(preflight_var, phase_title)
-    return f"{phase_call}\n{call}\n{gate}"
+    # Bound here, consumed by every later commit phase (see
+    # `_PREFLIGHT_SHA_VAR`). Empty string when unparseable, which the
+    # consuming clause treats as "no claim to check" rather than as a
+    # mismatch -- the CLEAR gate above has already refused a verdict with no
+    # sha in it, so an empty value here means the shape changed, not that the
+    # preflight was skipped.
+    bind = (
+        f"  const {_PREFLIGHT_SHA_VAR} = (String({preflight_var} ?? \"\")"
+        f".match(/{_PREFLIGHT_CLEAR_TOKEN}[*_ ]+([0-9a-f]{{7,40}})/) || [])[1]"
+        f" || \"\";"
+    )
+    return f"{phase_call}\n{call}\n{gate}\n{bind}"
 
 
 def _preflight_halt_gate(preflight_var: str, phase_title: str) -> str:

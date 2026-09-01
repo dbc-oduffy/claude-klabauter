@@ -403,6 +403,32 @@ def _tier_a_greedy_decode(rest: str, drive: str, fs_root: str) -> Optional[str]:
     return f"{drive}:" + "".join(f"\\{seg}" for seg in segs)
 
 
+def encode_projects_dir_name(root: str) -> str:
+    """Encode an absolute repo root the way Claude Code names its
+    ``~/.claude/projects/<basename>/`` directory. The forward direction of
+    `_decode_projects_dir_name`, and the single definition of that mapping:
+    a colon, a backslash, a forward slash and a dot all become `-`, so
+    ``X:/claude-klabauter`` -> ``X--claude-klabauter``.
+
+    Public (unlike the decode) because callers outside this module need to go
+    from a repo root to its transcript directory --
+    `coordinator_core.group_em.idle_report` and
+    `coordinator_core.ops.check_auto_memory_drained` both do. Kept here rather
+    than copied to either: an encode that drifts from the decode beside it is
+    a directory that silently resolves to nothing, which reads downstream as
+    an empty fleet rather than as an error.
+
+    Negative-spec: a separator-only encoding (no colon, no dot) was the
+    original defect -- it silently mismatched every real Windows drive-letter
+    root (``D:`` -> a ``D:-``-prefixed slug against the ``D--`` directory that
+    actually exists on disk), making its caller a permanent no-op on Windows.
+    A test path with no drive-letter colon does NOT exercise that and must not
+    be mistaken for Windows coverage.
+    """
+    normalized = str(root).replace("\\", "/").replace(":", "-").replace(".", "-")
+    return normalized.replace("/", "-")
+
+
 def _decode_projects_dir_name(base: str) -> tuple:
     """Decode one ~/.claude/projects/ basename. Returns (drive, rest, decoded).
 

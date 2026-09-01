@@ -439,8 +439,12 @@ def _render_extra_field(key: str, value: Any) -> str:
     return f"{key}: {_yaml_scalar(value)}"
 
 
-# kind enum — mirrors DoE cross-repo-memo._VALID_KINDS (~line 1774).
-_VALID_KINDS = ("ask", "consult", "fyi", "proposal", "bug")
+from coordinator_core.ops.fleet.memo_kinds import VALID_KINDS as _CANONICAL_VALID_KINDS
+
+# kind enum — re-exported from `memo_kinds`, which is import-free on purpose.
+# Kept as a module-level name because five call sites and several tests already
+# read `_memo_compose._VALID_KINDS`; the value is not defined here.
+_VALID_KINDS = _CANONICAL_VALID_KINDS
 
 # Single source of truth for the two frontmatter literals that matter most for
 # receiver-lifecycle correctness. `_compose_memo`'s self-validation call and

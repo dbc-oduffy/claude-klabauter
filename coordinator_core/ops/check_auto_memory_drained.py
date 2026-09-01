@@ -135,6 +135,7 @@ from __future__ import annotations
 import os
 import re
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.ops.discover_working_repos import encode_projects_dir_name
 import sys
 from pathlib import Path
 from shutil import which
@@ -194,22 +195,15 @@ def _guarded_project_roots() -> "List[Path]":
 
 
 def _slugify_repo_root(root: str) -> str:
-    """Encode an absolute repo path the way Claude Code names its
-    ``~/.claude/projects/<slug>/`` directory: every OS path separator
-    becomes ``-``. Mirrors the decode direction documented in
-    ``discover_working_repos._decode_projects_dir_name`` (dashes -> path
-    separators); this is that mapping's forward encode.
+    """Thin alias for `discover_working_repos.encode_projects_dir_name`.
 
-    Negative-spec: a separator-only encoding (no colon handling) was the
-    original defect here -- it silently mismatched every real Windows
-    drive-letter root (e.g. a ``D:`` drive path -> a ``D:-``-prefixed slug  # abs-path-ok: illustrative drive letter, not a resolved path
-    on disk vs. the actual ``D--``-prefixed directory Claude Code
-    creates), making the drain gate a permanent no-op on Windows. A test
-    Windows path with no drive-letter colon (e.g. a UNC-shaped or
-    colon-free fixture) does NOT exercise this path and must not be
-    mistaken for Windows coverage."""
-    normalized = str(root).replace("\\", "/").replace(":", "-").replace(".", "-")
-    return normalized.replace("/", "-")
+    The mapping itself lives beside its decode twin so the two cannot drift;
+    this name is kept because it is what this module's callers and tests
+    spell. Do not reinline the body here: a second copy is how the Windows
+    drive-letter defect documented at the canonical site got shipped once
+    already.
+    """
+    return encode_projects_dir_name(root)
 
 
 def _resolve_root(explicit_root: str | None) -> str | None:

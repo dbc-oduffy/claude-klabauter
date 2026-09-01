@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import re
 
-from coordinator_core.ops.fleet._memo_compose import _VALID_KINDS
+from coordinator_core.ops.fleet.memo_kinds import VALID_KINDS as _VALID_KINDS
 
 #: Required outbox-draft frontmatter fields. `summary`'s KEY must be present
 #: (value may be empty at draft time — filled in by `memo.compose`); every

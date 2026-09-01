@@ -489,15 +489,42 @@ def main(argv: "list[str] | None" = None) -> int:
     # `subprocess_identity_env` carries the caller's resolved id across the
     # boundary, and STRIPS the identity vars when there is none to carry --
     # see its own docstring for why inheritance is never the fallback.
+    # `no_console_passthrough_kwargs()` hands the child REAL fds, and its own
+    # docstring names the case where it cannot: "a captured-object stream has
+    # no fd at all -- there is nothing to pass through, so those degrade to
+    # plain inheritance". That degradation is not hypothetical here. This CLI
+    # is a CONSUMES_MANIFEST member `workstream_complete.apply` runs
+    # IN-PROCESS inside the warm server (see the `env=` note above), where
+    # stdio is a captured object -- so the child's stderr landed in the warm
+    # server's streams and never reached the caller. Example-game-repo-em got exactly
+    # `coordinator-queue-append exited 2` and nothing else, for a multi-line
+    # `--body` the child had refused by name, and nearly closed a workstream
+    # with the lesson silently missing (memo `cross-repo/inbox/2026-09-01-
+    # example-game-repo-em-close-ceremony-engine-defects-seven.md` defect 4; mechanism
+    # identified by example-retrieval-repo-em).
+    #
+    # So: passthrough when there IS an fd to pass through, capture when there
+    # is not, and re-emit what we captured. Capturing unconditionally would
+    # cost the interactive leg its live streaming for no gain; inheriting
+    # unconditionally is what lost the message.
+    _passthrough = no_console_passthrough_kwargs()
+    _relay_stderr = "stderr" not in _passthrough
+    if _relay_stderr:
+        _passthrough["stderr"] = subprocess.PIPE
     result = subprocess.run(
         cmd,
         env=subprocess_identity_env(),
-        **no_console_passthrough_kwargs(),
+        **_passthrough,
     )
     if result.returncode != 0:
+        child_stderr = (result.stderr or b"") if _relay_stderr else b""
+        if isinstance(child_stderr, bytes):
+            child_stderr = child_stderr.decode("utf-8", errors="replace")
+        detail = child_stderr.strip()
         print(
             "coordinator-queue-append exited " + str(result.returncode)
-            + " — no lesson was written",
+            + " — no lesson was written"
+            + (f"\ncoordinator-queue-append stderr:\n{detail}" if detail else ""),
             file=sys.stderr,
         )
     return result.returncode

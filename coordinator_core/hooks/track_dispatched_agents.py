@@ -237,8 +237,19 @@ def _fold_agent_type(value: str) -> str:
     COMPARISON ONLY is the whole constraint. Consumers keying on column 3
     need the exact real spelling on disk, so nothing here reaches `cols[2]`;
     every write below stores the caller's own value.
+
+    Review: code-reviewer -- break-class: an unconditional split(":")[-1]
+    strips ANY namespace prefix, not just `coordinator:`, so two genuinely
+    different agent types sharing a bare suffix across different namespaces
+    (e.g. `vendor-a:reviewer` vs `vendor-b:reviewer`) would fold to the same
+    key and silently skip the AMBIGUOUS arm. Scoped to the one namespace the
+    docstring actually justifies.
     """
-    return value.split(":")[-1].strip().casefold()
+    folded = value.strip().casefold()
+    prefix = "coordinator:"
+    if folded.startswith(prefix):
+        folded = folded[len(prefix):]
+    return folded
 
 
 def _resolve_row_collision(

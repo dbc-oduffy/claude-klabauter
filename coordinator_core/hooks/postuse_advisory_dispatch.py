@@ -62,17 +62,21 @@ from coordinator_core.session.autonomous_sentinel import sentinel_path  # noqa: 
 from coordinator_core.session.context_usage_sidecar import read_usage
 from coordinator_core.session.mode_resolution import resolve_mode
 
-# `sentinel_path` above is no longer called by this module's own logic (both
-# call sites now go through `resolve_mode("autonomous", ...)`, C3 of
-# 2026-08-28-the-fleet-gets-one-file-and-the-floor-moves-to-the-reader.md) --
-# kept as a live module attribute solely because
+# Review: reviewer -- comment was stale: `sentinel_path` IS called directly by this
+# module's own logic now, in the mise-en-place CONTINUANCE detection below (reads
+# the sentinel's own `mode` field to distinguish autonomous from mise-en-place runs;
+# `resolve_mode("autonomous", ...)` only answers presence, not that distinction --
+# see the block starting "mise-en-place CONTINUANCE detection" further down).
+# `sentinel_path` remains a live module attribute for two reasons now: (1) that real
+# call site, and (2)
 # coordinator_core/hooks/tests/test_postuse_context_pressure.py's `_under_sentinel`
 # helper (out of this chunk's file scope) monkeypatches BOTH
 # `autonomous_sentinel.sentinel_path` (which resolve_mode's `_autonomous_session_value`
-# actually reads, module-qualified, so this patch is what changes behaviour) AND this
-# module's own `sentinel_path` name, redundantly. Removing this import raises
-# AttributeError on that second, now-inert patch. Do not remove without updating that
-# test file in its own chunk.
+# actually reads, module-qualified, so this patch is what changes THAT behaviour) AND
+# this module's own `sentinel_path` name, redundantly -- removing this import would
+# raise AttributeError on that second, now-inert-for-resolve_mode patch, independent
+# of the real call site above. Do not remove without updating that test file in its
+# own chunk.
 
 
 def _tempfile():

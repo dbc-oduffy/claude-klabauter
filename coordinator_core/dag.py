@@ -1767,6 +1767,7 @@ def build_reverse_edge_index(
     handoff_dir: Optional[str] = None,
     id_index_source: Optional[List[str]] = None,
     metas: Optional[Dict[str, dict]] = None,
+    edge_kinds: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """One forward pass over live_set producing a reverse-edge index that
     `referenced_by_indexed` answers any number of single-target lookups from.
@@ -1810,7 +1811,17 @@ def build_reverse_edge_index(
                 "live_set is empty"
             )
     repo_root = _repo_root_from_handoff_dir(handoff_dir)
-    all_kinds = set(ARCHIVAL_EDGE_KINDS)
+    # COVERAGE, not a default to be overridden lightly. Whatever is indexed
+    # here is the complete set `referenced_by_indexed` can ever answer for --
+    # it filters this index in memory and cannot consult disk -- so a kind
+    # missing from here yields an EMPTY answer, which is indistinguishable
+    # from "nothing references this target". That is why the index records
+    # its own coverage below and the reader refuses anything outside it.
+    #
+    # Found 2026-09-01: `origin_handoff` is not in ARCHIVAL_EDGE_KINDS, so a
+    # caller following this function's own "safe to swap in" equivalence
+    # argument from `referenced_by` got silent empties for that kind.
+    all_kinds = set(ARCHIVAL_EDGE_KINDS) if edge_kinds is None else set(edge_kinds)
 
     # The id index resolves `*_id` edge aliases to paths, so it must span the
     # caller's FULL corpus even when the scan set below is narrowed — a live
@@ -1869,6 +1880,7 @@ def build_reverse_edge_index(
         'by_abspath': by_abspath,
         'by_basename': by_basename,
         'live_set_size': len(live_set),
+        'edge_kinds': frozenset(all_kinds),
     }
 
 
@@ -1886,6 +1898,28 @@ def referenced_by_indexed(
     """
     if edge_kinds is None:
         edge_kinds = set(ARCHIVAL_EDGE_KINDS)
+
+    # FAIL LOUD on a kind this index does not carry. Filtering it away would
+    # return `{'referenced': False, 'referencedBy': []}` -- a well-formed
+    # answer that is indistinguishable from a genuine no-referencer result,
+    # for a question this index structurally cannot answer. The whole point
+    # of swapping `referenced_by` for this function is that the answers agree;
+    # an unindexed kind is precisely where they silently would not.
+    #
+    # `edge_kinds` is absent on an index built before it was recorded, and
+    # such an index carries exactly ARCHIVAL_EDGE_KINDS by construction.
+    covered = index.get('edge_kinds')
+    if covered is None:
+        covered = frozenset(ARCHIVAL_EDGE_KINDS)
+    missing = set(edge_kinds) - set(covered)
+    if missing:
+        raise ValueError(
+            "referenced_by_indexed: index does not cover edge kind(s) "
+            f"{sorted(missing)} (covers {sorted(covered)}). Rebuild with "
+            "build_reverse_edge_index(..., edge_kinds=<the kinds you will "
+            "ask for>). Answering from this index would report no "
+            "referencers, which is not the same as there being none."
+        )
 
     exclude_set: Set[str] = set()
     if exclude:

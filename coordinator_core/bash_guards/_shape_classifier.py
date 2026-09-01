@@ -651,16 +651,58 @@ def _detect_for_loop_pwsh(tokens: List[str]) -> Optional[ShapeMatch]:
     """
     if not tokens:
         return None
-    if tokens[0].lower() != "foreach":
-        return None
-    if len(tokens) < 2 or tokens[1] != "(":
-        return None
-    if not any(tok.lower() == "in" for tok in tokens):
-        return None
     if "{" not in tokens or "}" not in tokens:
         return None
-    preview = tokens[: min(len(tokens), 12)]
-    return ShapeMatch(Shape.FOR_LOOP, evidence=" ".join(preview))
+    head = tokens[0].lower()
+
+    # `foreach ($x in $y) { ... }` -- the statement grammar, distinguished
+    # from the pipeline alias by the parenthesised `in` clause.
+    if head == "foreach":
+        if len(tokens) < 2 or tokens[1] != "(":
+            return None
+        if not any(tok.lower() == "in" for tok in tokens):
+            return None
+        preview = tokens[: min(len(tokens), 12)]
+        return ShapeMatch(Shape.FOR_LOOP, evidence=" ".join(preview))
+
+    # The other three PowerShell loop grammars, added 2026-09-01. Each runs
+    # its brace block once per iteration, which is the fan-out `FOR_LOOP`
+    # names -- so they classify as `FOR_LOOP` rather than taking a new
+    # `SHAPE_PRECEDENCE` seat. Precedent for the naming is one branch up:
+    # `foreach` is not a `for` either, and has classified `FOR_LOOP` since
+    # this detector existed. The consumer leg is advisory-only on every
+    # platform (`guard_plumbing_and_loops`' negative-spec), so widening what
+    # classifies here widens what gets ADVISED, never what gets denied.
+    #
+    # Measured before the change: `for ($i=0; $i -lt 10; $i++) { git log -1 }`,
+    # `while ($true) { git log -1 }` and `do { git log -1 } while ($i -lt 3)`
+    # all returned NO SHAPES, while `foreach` and the `%` pipeline alias
+    # classified. Raised by doe-claude-aa, who found the C-style `for` from
+    # their own tree and could not tell intent from omission -- correctly,
+    # because no intent was recorded. This module's own docstring sets that
+    # standard: an absence with no stated reason reads as an oversight.
+    #
+    # `WHILE_READ_LOOP` stays absent from the POWERSHELL table entry and this
+    # does not disturb it. That absence is about the bash `while read` IDIOM,
+    # which pwsh has no analogue for. PowerShell having no `while read` idiom
+    # never meant it has no `while` LOOP -- it has one, and it fans out. The
+    # two are separate facts and only the first was ever documented.
+    if head in ("for", "while"):
+        if len(tokens) < 2 or tokens[1] != "(":
+            return None
+        preview = tokens[: min(len(tokens), 12)]
+        return ShapeMatch(Shape.FOR_LOOP, evidence=" ".join(preview))
+
+    # `do { ... } while (...)` / `do { ... } until (...)` -- the trailing
+    # condition form. The block precedes the keyword here, so the head test
+    # is `do` and the loop keyword is looked for after the closing brace.
+    if head == "do":
+        if not any(tok.lower() in ("while", "until") for tok in tokens):
+            return None
+        preview = tokens[: min(len(tokens), 12)]
+        return ShapeMatch(Shape.FOR_LOOP, evidence=" ".join(preview))
+
+    return None
 
 
 #: Approved-verb prefix set for the in-process-cmdlet exclusion

@@ -128,3 +128,26 @@ def test_non_write_tool_not_matched(tmp_path):
     payload = _payload(tmp_path, content=_HAND_AUTHORED_MISSING_AGENT_TYPE)
     payload["tool_name"] = "Read"
     assert guard.check(payload) is None
+
+
+def test_allows_overwrite_when_file_path_relative_to_payload_cwd(tmp_path):
+    # Review: reviewer -- os.path.exists(file_path) must resolve a relative
+    # Write file_path against payload['cwd'] (mirrors
+    # block_fleet_delegation_write._resolve_candidate), not the guard
+    # process's own cwd, or a legitimate overwrite of an already-provisioned
+    # sidecar is wrongly denied as a CREATE.
+    sidecar_dir = tmp_path / "state" / "subagent-share" / "sess-1"
+    sidecar_dir.mkdir(parents=True, exist_ok=True)
+    target = sidecar_dir / "2026-08-16-repaired-sidecar.md"
+    target.write_text(_PROVISIONED_SHAPE, encoding="utf-8")
+
+    relative_file_path = "state/subagent-share/sess-1/2026-08-16-repaired-sidecar.md"
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": relative_file_path,
+            "content": _HAND_AUTHORED_MISSING_AGENT_TYPE,
+        },
+        "cwd": str(tmp_path),
+    }
+    assert guard.check(payload) is None

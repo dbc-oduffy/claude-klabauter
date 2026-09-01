@@ -482,7 +482,18 @@ _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
 #: `_memo_compose._VALID_KINDS` -- the scaffolder must refuse exactly what the
 #: sender would, and in the same words. `ack` is deliberately absent:
 #: acknowledgement is receipt-state, not a kind.
-_MEMO_KINDS = ("ask", "consult", "fyi", "proposal")
+#:
+#: HAND-MIRRORED ON PURPOSE, and pinned rather than imported. Importing
+#: `_memo_compose` here would put its transitive chain (session.core,
+#: ops.ceremony.git_native, git.commit_trailers, dag, lifecycle) on this
+#: scaffolder's interpreter start, which every `coordinator-doc-new` call pays.
+#: The drift that mirroring invites is caught instead by
+#: `coordinator/bin/tests/test_memo_kind_enum_mirrors.py`, which fails when this
+#: tuple and `cross-repo-memo._VALID_KINDS` stop matching the engine's own list.
+#: That test exists because this tuple sat one value stale (`bug` landed in the
+#: engine and in cross-repo-memo, not here) and the scaffolder refused a kind
+#: the sender accepted.
+_MEMO_KINDS = ("ask", "consult", "fyi", "proposal", "bug")
 
 # Slice ID regex — allows uppercase because slice IDs like "Z", "A", "B1" are common in wave-maps.
 _SLICE_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9\-]*$")

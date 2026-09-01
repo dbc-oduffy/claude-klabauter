@@ -174,9 +174,7 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
     # native Windows shells do not set HOME, and os.environ.get("HOME", "")
     # would make the join below a RELATIVE ".claude" resolving against cwd — so
     # the walk would silently inspect the wrong directory and report a
-    # misleading path. home_dir() is USERPROFILE-aware. Bound once here because
-    # `home_claude_dir` below must be the SAME string as the list entry — the
-    # loop compares against it by equality to special-case this one directory.
+    # misleading path. home_dir() is USERPROFILE-aware.
     home = str(home_dir())
     # `$HOME/.claude` IS NOT A UE-CONTEXT DIR, and demanding `true` there was
     # the drift engine itself. Per-project plugin gating (ratified; DoE-claude

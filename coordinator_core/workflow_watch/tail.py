@@ -181,7 +181,7 @@ class TailReader:
         self._line_offset += len(new_bytes)
         text = self._pending + self._line_decoder.decode(new_bytes)
         # Split on "\n" rather than str.splitlines(): splitlines() also
-        # breaks on , , - and U+2028/2029, any of which can
+        # breaks on \x0b, \x0c, \x1c-\x1e and U+2028/2029, any of which can
         # appear INSIDE a JSON string value and would silently cut a record
         # in half. Strip a trailing "\r" per line so a CRLF journal --
         # the ordinary case on Windows, which is first-class here -- yields

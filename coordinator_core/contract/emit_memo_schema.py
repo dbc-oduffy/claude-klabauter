@@ -57,7 +57,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from coordinator_core.ops.fleet._memo_compose import _VALID_KINDS
+from coordinator_core.ops.fleet.memo_kinds import VALID_KINDS as _VALID_KINDS
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
 
 # ---------------------------------------------------------------------------

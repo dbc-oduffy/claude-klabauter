@@ -196,13 +196,40 @@ def _corpus_agreement(root: str, fields, edge_kinds: Set[str]) -> None:
     all_corpus_paths = oracle.collect_corpus_paths(root)
     handoff_dir = os.path.dirname(all_corpus_paths[0])
 
+    # ONE forward pass over the corpus, then N in-memory lookups.
+    #
+    # This loop used to call `dag.referenced_by` per baton, and that function
+    # re-walks the ENTIRE live_set on every call -- one `_read_meta` per node
+    # per call, plus a second full pass to rebuild `id_index`. At 296 live
+    # batons over a 1236-file corpus that is ~730,000 file opens, and the test
+    # did not finish inside a 180s per-test timeout. Because it carries no
+    # tier marker it is selected by the FAST tier, so the whole tier stalled
+    # at ~36% and everything ordered after it never ran; under `-n` it
+    # presented as `node down: Not properly terminated`, which reads as
+    # flakiness rather than as one test that never returns.
+    #
+    # `build_reverse_edge_index` + `referenced_by_indexed` is the seam built
+    # for exactly this shape -- see that function's own docstring, which
+    # records the same defect measured on `session.boot_sweep`'s backstop
+    # (176 candidates over ~548 nodes = 96,534 file opens, 21.5s) and its
+    # equivalence argument: the per-node work is target-INDEPENDENT, so it
+    # hoists verbatim and only the final comparison stays in the loop.
+    #
+    # `_FRONTMATTER_CACHE` does not rescue the old shape and its absence is
+    # not the bug: it caches PARSING, while every `_read_meta` still does
+    # `read_bytes()` + sha256 by design to close a TOCTOU window. The cost is
+    # the reads, so the fix has to be asking fewer times.
+    reverse_index = dag.build_reverse_edge_index(
+        all_corpus_paths, handoff_dir=handoff_dir, edge_kinds=edge_kinds
+    )
+
     mismatches = []
     for baton_path in live_paths:
         baton_basename = os.path.basename(baton_path)
         oracle_set = oracle_children.get(baton_basename, set())
 
-        engine_result = dag.referenced_by(
-            baton_path, all_corpus_paths, edge_kinds=edge_kinds, handoff_dir=handoff_dir
+        engine_result = dag.referenced_by_indexed(
+            baton_path, reverse_index, edge_kinds=edge_kinds
         )
         engine_set = {os.path.basename(p) for p in engine_result["referencedBy"]}
 
@@ -280,6 +307,85 @@ class TestForeignFamilyPointerIsNotRehomed:
         )
         assert resolved is not None
         assert os.path.abspath(resolved) == os.path.abspath(str(parent))
+
+
+class TestReverseEdgeIndexCoverage:
+    """An index answers only for the kinds it was built over, and says so.
+
+    `referenced_by_indexed` filters a prebuilt index in memory and cannot
+    consult disk. Asked for a kind the index never carried it used to return
+    `{'referenced': False, 'referencedBy': []}` -- a well-formed answer,
+    indistinguishable from a genuine no-referencer result, for a question the
+    index structurally could not answer.
+
+    That was reachable by following `build_reverse_edge_index`'s own "safe to
+    swap in" equivalence argument: `origin_handoff` is not in
+    ARCHIVAL_EDGE_KINDS, so swapping `referenced_by` for the indexed form on
+    that kind silently changed the answer to empty. Found 2026-09-01 when this
+    file's own oracle-agreement tests were hoisted onto the indexed seam and
+    the `origin_handoff` families went red while `predecessor` passed.
+    """
+
+    def _corpus(self):
+        root = str(Path(__file__).resolve().parents[2])
+        return root, oracle.collect_corpus_paths(root)
+
+    def test_index_records_the_kinds_it_covers(self):
+        root, paths = self._corpus()
+        index = dag.build_reverse_edge_index(
+            paths, handoff_dir=os.path.dirname(paths[0])
+        )
+        assert index["edge_kinds"] == frozenset(dag.ARCHIVAL_EDGE_KINDS)
+
+        widened = dag.build_reverse_edge_index(
+            paths,
+            handoff_dir=os.path.dirname(paths[0]),
+            edge_kinds={"origin_handoff"},
+        )
+        assert widened["edge_kinds"] == frozenset({"origin_handoff"})
+
+    def test_uncovered_kind_raises_instead_of_answering_empty(self):
+        root, paths = self._corpus()
+        index = dag.build_reverse_edge_index(
+            paths, handoff_dir=os.path.dirname(paths[0])
+        )
+        with pytest.raises(ValueError) as exc:
+            dag.referenced_by_indexed(
+                paths[0], index, edge_kinds={"origin_handoff"}
+            )
+        # The message must name the gap AND the remedy -- a bare "invalid
+        # edge kind" would send a caller looking for a typo.
+        assert "origin_handoff" in str(exc.value)
+        assert "build_reverse_edge_index" in str(exc.value)
+
+    def test_a_covered_kind_still_answers(self):
+        root, paths = self._corpus()
+        index = dag.build_reverse_edge_index(
+            paths,
+            handoff_dir=os.path.dirname(paths[0]),
+            edge_kinds={"origin_handoff"},
+        )
+        # No raise, and the shape is unchanged.
+        result = dag.referenced_by_indexed(
+            paths[0], index, edge_kinds={"origin_handoff"}
+        )
+        assert set(result) == {"referenced", "referencedBy"}
+
+    def test_a_legacy_index_without_coverage_is_read_as_archival(self):
+        """An index built before coverage was recorded carries exactly
+        ARCHIVAL_EDGE_KINDS by construction, so absence is not unknown."""
+        root, paths = self._corpus()
+        index = dag.build_reverse_edge_index(
+            paths, handoff_dir=os.path.dirname(paths[0])
+        )
+        del index["edge_kinds"]
+        # A default kind still answers...
+        dag.referenced_by_indexed(paths[0], index, edge_kinds={"predecessor"})
+        # ...and an uncovered one still refuses.
+        with pytest.raises(ValueError):
+            dag.referenced_by_indexed(
+                paths[0], index, edge_kinds={"origin_handoff"}
+            )
 
 
 class TestDifferentialOracleAgreement:

@@ -97,7 +97,9 @@ Spec backlink: state/handoffs/2026-08-16-sidecar-provisioning-is-the-engines-job
 from __future__ import annotations
 
 import os
+import posixpath
 import re
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
@@ -122,6 +124,26 @@ def _normalize(file_path: str) -> str:
     return normalized
 
 
+def _is_absolute(normalized: str) -> bool:
+    return normalized.startswith("/") or (
+        len(normalized) >= 2 and normalized[1] == ":"
+    )
+
+
+def _resolve_against_cwd(file_path: str, cwd: Optional[str]) -> str:
+    """Resolve ``file_path`` against ``payload['cwd']`` when relative, mirroring
+    ``block_fleet_delegation_write._resolve_candidate`` — Claude's Write
+    ``tool_input.file_path`` is frequently relative to the session's cwd, not
+    to this guard-process's own cwd, so an unresolved ``os.path.exists`` can
+    resolve against the wrong base.
+    """
+    normalized = _normalize(file_path)
+    if not _is_absolute(normalized):
+        base = cwd or "."
+        normalized = _normalize(str(Path(base) / normalized))
+    return posixpath.normpath(normalized)
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
@@ -144,8 +166,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         # New-file gate: an overwrite of an already-provisioned sidecar is a
-        # different (legitimate) event this guard does not touch.
-        if os.path.exists(file_path):
+        # different (legitimate) event this guard does not touch. Resolve
+        # against payload['cwd'] first -- Write's file_path is frequently
+        # relative to the session's cwd, not this guard-process's own cwd.
+        resolved_path = _resolve_against_cwd(file_path, payload.get("cwd"))
+        if os.path.exists(resolved_path):
             return None
 
         content = tool_input.get("content") or ""
