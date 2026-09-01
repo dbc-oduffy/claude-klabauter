@@ -149,7 +149,6 @@ elsewhere.
 
 from __future__ import annotations
 
-import datetime
 import hashlib
 import json
 import os
@@ -805,13 +804,4 @@ def build_send_digest(
         "unrecorded": unrecorded,
         "gate_declaration_required": True,
         "open_obligations": open_obligations,
-        # THE STRUCK INSTANT -- the SAME `now` cooldowns/dwell were computed
-        # against, never a second `time.time()` call. Matches
-        # `idle_report.build_report`'s `as_of` key and format exactly (same
-        # precedent, same helper shape): a digest pasted into context or read
-        # minutes later as one leg of a `groupem.enter` payload could report
-        # WHAT it counted but not WHEN.
-        "as_of": datetime.datetime.fromtimestamp(
-            now, datetime.timezone.utc
-        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }

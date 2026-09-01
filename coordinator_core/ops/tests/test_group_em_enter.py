@@ -15,7 +15,7 @@ from coordinator_core.ops import group_em_enter as gee
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 
 
-def test_payload_has_exactly_eight_keys(tmp_path, monkeypatch):
+def test_payload_has_exactly_seven_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-1")
     monkeypatch.setattr(
         gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: []
@@ -39,7 +39,7 @@ def test_payload_has_exactly_eight_keys(tmp_path, monkeypatch):
     result = gee._group_em_enter({"repo_root": str(tmp_path)})
 
     assert set(result.keys()) == {
-        "as_of", "nomination", "roster", "roster_considered", "digest", "baseline", "teammates",
+        "nomination", "roster", "roster_considered", "digest", "baseline", "teammates",
         "watch_liveness"
     }
 

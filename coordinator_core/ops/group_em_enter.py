@@ -23,18 +23,8 @@ per-worktree), and `coordinator_core/authz/classification.py` (MUTATING --
 see that module's comment on this entry for the reason).
 
 Returns exactly one payload:
-    {"as_of": "<iso>", "nomination": {...}, "roster": [...], "roster_considered": int,
-     "digest": {...}, "baseline": {...}, "teammates": {...}, "watch_liveness": {...}}
-
-`as_of` is the ONE clock struck before any leg runs (`time.time()`, formatted like
-`group_em.idle_report.build_report`'s own `as_of` -- same key name, same
-`%Y-%m-%dT%H:%M:%SZ` helper, no second timestamp spelling invented here). Every leg
-that accepts a caller-supplied clock (`watch_heartbeat.read_liveness`'s `now_epoch`)
-is passed this exact value, so the composite payload reports against one instant
-rather than however many clocks its legs would otherwise read independently. It is
-written to `result` before the first leg runs and survives every leg's own
-degrade-never-raise failure, including a refused Group-EM (see PAYLOAD SHAPE ON
-REFUSAL below) -- a failing leg takes its own key down, never `as_of`.
+    {"nomination": {...}, "roster": [...], "roster_considered": int,
+     "digest": {...}, "baseline": {...}, "teammates": {...}}
 
 `roster` IS NOT THE PEER POPULATION, AND THE PAYLOAD MUST SAY SO. It is
 `build_candidate_roster`'s output: the peers marked `candidate` UNION those
@@ -156,9 +146,7 @@ Negative-spec:
 
 from __future__ import annotations
 
-import datetime
 import os
-import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -301,7 +289,7 @@ def _run_teammates(
         return None, _leg_error(exc)
 
 
-def _run_watch_liveness(repo_root: str, now_epoch: float):
+def _run_watch_liveness(repo_root: str):
     """Is the fleet watch actually TICKING -- not merely dispatched.
 
     THE TEAMMATES LEG CANNOT ANSWER THIS, and extending it to try would break
@@ -333,7 +321,7 @@ def _run_watch_liveness(repo_root: str, now_epoch: float):
     evidence.
     """
     try:
-        return group_em_watch_heartbeat.read_liveness(repo_root, now_epoch), None
+        return group_em_watch_heartbeat.read_liveness(repo_root), None
     except Exception as exc:  # noqa: BLE001
         return None, _leg_error(exc)
 
@@ -351,11 +339,10 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
             env var) when omitted.
 
     Returns:
-        {"as_of": "<iso>", "nomination": {...} | None, "roster": [...] | None,
+        {"nomination": {...} | None, "roster": [...] | None,
          "roster_considered": int | None, "digest": {...} | None,
          "baseline": {...} | None, "teammates": {...} | None,
          "watch_liveness": {...} | None}
-    `as_of` is the single clock struck before any leg runs -- see module docstring.
     `roster_considered` is how many peers the roster leg classified, of which
     `roster` is the kept subset -- see module docstring for why the count is
     top-level and why a consumer cannot read `len(roster)` as a population.
@@ -394,16 +381,6 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
         caller_session_id = group_em_read_pass.caller_session_id()
 
     result: dict[str, Any] = {}
-
-    # ONE clock, struck before any leg runs, so `nomination`/`roster`/`digest`/
-    # `baseline`/`teammates`/`watch_liveness` all report against the SAME instant
-    # rather than three re-reads of the wall clock scattered across the legs.
-    # Legs that accept a caller-supplied clock (`watch_heartbeat.read_liveness`)
-    # are passed this exact value; no second clock is struck anywhere below.
-    now_epoch = time.time()
-    result["as_of"] = datetime.datetime.fromtimestamp(
-        now_epoch, datetime.timezone.utc
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     nomination_outcome = (
         _run_nomination(target_root, caller_session_id)
@@ -451,7 +428,7 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     # watch ticking" are different claims on different evidence, and the whole
     # failure this leg exists for is the case where the first is true and the
     # second is false.
-    _leg(result, "watch_liveness", _run_watch_liveness(target_root, now_epoch))
+    _leg(result, "watch_liveness", _run_watch_liveness(target_root))
 
     # Baseline does NOT consume the roster, so a roster-leg failure does not
     # cascade here -- it consumes the enumeration directly.

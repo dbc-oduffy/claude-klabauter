@@ -221,18 +221,19 @@ PUSH_RETRY_BUDGET_SECS: float = 12.0
 #: `EXIT_SWEEP_CEILING_SECS`, never independently -- both were re-derived to
 #: the same ratios C5 set (EXIT = 2x this budget, SWEEP_TOTAL > EXIT) rather
 #: than left pointing at 6.0's now-superseded arithmetic.
-#:
-#: MEASURED FLOOR this clears, n=6 direct measurements under the documented
-#: 50-70-session load norm: 2.07s, 2.85s, 5.64s, 8.54s, 14.54s, 15.31s (max
-#: 15.31s). Cross-repo corroboration: `cross-repo/inbox/2026-09-01-project-
-#: rag-em-push-cadence-cap-below-noop-floor.md` measured 7.8-10.0s (n=3) on a
-#: different box the same day. The measurement is kept here and in DR-401
-#: rather than as its own runtime constant (review-integrator, 2026-09-01,
-#: per overengineering-reviewer finding 3): its only consumer was the guard
-#: test asserting `CADENCE_PUSH_RETRY_BUDGET_SECS >= <this floor>`, i.e. a
-#: production symbol that existed so an assertion could be spelled against a
-#: sibling literal set in the same edit.
 CADENCE_PUSH_RETRY_BUDGET_SECS: float = 16.0
+
+#: Measured floor for a genuine no-op `git push` (nothing to transfer) on
+#: this box, DR-401 (2026-09-01), n=6 direct measurements under the
+#: documented 50-70-session load norm: 2.07s, 2.85s, 5.64s, 8.54s, 14.54s,
+#: 15.31s (max 15.31s). `test_cadence_push_budget_is_at_least_the_measured_
+#: noop_push_floor` in `tests/test_push_cadence_budget_floor.py` asserts
+#: `CADENCE_PUSH_RETRY_BUDGET_SECS >= MEASURED_NOOP_PUSH_FLOOR_SECS` --
+#: a relationship guard, not a value pin, so a future re-measurement only
+#: needs this constant updated, never the test. Cross-repo corroboration:
+#: `cross-repo/inbox/2026-09-01-example-retrieval-repo-em-push-cadence-cap-below-noop-
+#: floor.md` measured 7.8-10.0s (n=3) on a different box the same day.
+MEASURED_NOOP_PUSH_FLOOR_SECS: float = 15.31
 
 #: The push budget for a CEREMONY op, which is a different job from the cadence
 #: ladder above and deliberately carries a different number.

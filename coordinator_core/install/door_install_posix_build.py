@@ -107,12 +107,23 @@ def build_or_advise(
         # runnable-remediation rule exists to prevent (CLAUDE.md § Runtime
         # conventions), and it is worse than naming nothing, because the
         # operator burns a cycle on a command that cannot work.
+        # `PYTHONPATH=<engine root>` is load-bearing, not decoration. The
+        # module route fixed the relative-import death above, but a bare
+        # `python3 -m coordinator_core.warm.door.build_posix` still dies one
+        # step earlier with `ModuleNotFoundError: No module named
+        # 'coordinator_core'` unless the engine root is importable -- and an
+        # operator reading this advisory is by definition not running from
+        # inside the engine tree. Naming the root twice (once to import the
+        # package, once as the build's argument) is redundant-looking and
+        # correct: they answer different questions, and dropping either one
+        # breaks the command.
         engine_root_str = str(Path(engine_root).resolve())
         advisory = (
             "[door-install] no C compiler found on PATH (checked clang, cc, gcc) -- "
             "the native warm-engine door is optional on POSIX; install continues "
             "without it. Install a compiler (e.g. `xcode-select --install` on "
-            "macOS) and build it later with: python3 -m "
+            "macOS) and build it later with: "
+            f"PYTHONPATH={engine_root_str} python3 -m "
             f"{build_posix.__name__} {engine_root_str}"
         )
         return PosixDoorBuildResult(built=False, output=None, advisory=advisory)

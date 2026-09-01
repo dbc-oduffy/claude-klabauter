@@ -826,7 +826,12 @@ def pf_emit_row(
     return hard_fail, semihard_fail
 
 
-_DEMOTE_TO_ADVISORY_POST_CONSUMER = {"gh", "node", "git", "clone_auth"}
+#: `node` is deliberately ABSENT: `prereq_probe.probe_node` emits `advisory`
+#: itself, in every mode, so demoting it here would be a second mechanism for a
+#: severity the probe already owns -- and a mode-scoped one, which is what let
+#: `--preflight` report node as `(hard)` while the default path reported it
+#: advisory (PM ruling 2026-08-28; see that probe's own docstring).
+_DEMOTE_TO_ADVISORY_POST_CONSUMER = {"gh", "git", "clone_auth"}
 
 
 def run_prereq_gate(

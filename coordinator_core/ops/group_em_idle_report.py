@@ -78,12 +78,8 @@ def _groupem_idle_report(params: dict, repo_root: Optional[Path] = None) -> dict
     override = p.get("repo_root")
     target_root = override if isinstance(override, str) and override else str(Path.cwd())
 
-    observed_exits_param = p.get("observed_exits")
-    observed_exits = (
-        frozenset(observed_exits_param)
-        if isinstance(observed_exits_param, (list, tuple, frozenset, set))
-        else None
-    )
+    observed_exits = p.get("observed_exits")
+    observed_exits = observed_exits if isinstance(observed_exits, (list, tuple, frozenset, set)) else None
 
     return group_em_idle_report.build_report(
         target_root,

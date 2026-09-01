@@ -894,3 +894,86 @@ def test_missing_batch_line_falls_through_to_existing_now_default(tmp_path, monk
     # not the whole-command-failure fallback exercised above.
     per_branch_ct = [c for c in calls if c[:2] == ["log", "-1"] and c[2] == "--format=%ct"]
     assert per_branch_ct == [], "expected the batch-hit/missing-line path, not the per-branch fallback"
+
+
+# ---------------------------------------------------------------------------
+# The CRITICAL classification must be clearable by its own remedy. `gh pr list`
+# orders newest-first, so reading a list POSITION (`prs[-1]`) selected the
+# oldest of the five most recent PRs: a fresh PR opened to track the commits
+# that outlived an already-merged one prepends to the list and was never the
+# element read, leaving the sweep reporting the long-merged PR forever. Pins
+# selection by `number`, not position.
+# ---------------------------------------------------------------------------
+
+
+def _write_multi_pr_gh_stub(bin_dir: Path, pr_map: dict) -> None:
+    """Like `_write_gh_stub`, but each branch maps to a LIST of PR objects,
+    emitted newest-first exactly as `gh pr list` orders them."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    map_file = bin_dir / "multi-pr-map.json"
+    map_file.write_text(json.dumps(pr_map))
+    stub = bin_dir / "gh"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        "BRANCH=\"\"\n"
+        "while [[ $# -gt 0 ]]; do\n"
+        "  case \"$1\" in\n"
+        "    --head) BRANCH=\"$2\"; shift 2 ;;\n"
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+        "python3 -c 'import json,sys\n"
+        "m=json.load(open(sys.argv[2]))\n"
+        "branch=sys.argv[1]\n"
+        "if branch:\n"
+        "    print(json.dumps(m.get(branch, [])))\n"
+        "else:\n"
+        "    out=[]\n"
+        "    for b, prs in m.items():\n"
+        "        for pr in prs:\n"
+        "            entry=dict(pr)\n"
+        "            entry[\"headRefName\"]=b\n"
+        "            out.append(entry)\n"
+        "    print(json.dumps(out))\n"
+        "' "
+        f"\"$BRANCH\" \"{map_file}\"\n"
+    )
+    stub.chmod(0o755)
+
+
+def test_newest_pr_wins_over_an_older_merged_one(tmp_path, monkeypatch, capsys):
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(repo)
+
+    base_ts = int(time.time()) - 10 * 86400
+    branch = "work/test/reopened"
+
+    _git(repo, "checkout", "-q", "-b", branch)
+    _dated_commit(repo, "a.txt", "a", base_ts)
+    merged_at_ts = base_ts + 30
+    merged_at_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(merged_at_ts))
+    for i in range(2):
+        _dated_commit(repo, f"post{i}.txt", f"post{i}", merged_at_ts + 60 + i * 10)
+    _git(repo, "checkout", "-q", "main")
+
+    gh_stub_dir = tmp_path / "stub-bin"
+    # Newest-first, as `gh pr list` emits: the OPEN tracking PR for the
+    # post-merge commits, then the long-merged one.
+    _write_multi_pr_gh_stub(gh_stub_dir, {
+        branch: [
+            {"number": 15, "state": "OPEN", "mergedAt": None},
+            {"number": 11, "state": "MERGED", "mergedAt": merged_at_iso},
+        ],
+    })
+    monkeypatch.setenv("PATH", f"{gh_stub_dir}{os.pathsep}{os.environ['PATH']}")
+
+    rc = main(["--format", "json", "--severity-min", "ok", "--max-age-days", "365"])
+    assert rc == 0
+    lines = [json.loads(ln) for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    row = {ln["branch"]: ln for ln in lines}[branch]
+
+    assert row["pr"]["number"] == 15, "the sweep read a list position, not the newest PR"
+    assert row["severity"] != "CRITICAL", (
+        "an open PR tracking the post-merge commits must clear CRITICAL -- "
+        "otherwise the classification cannot be discharged by its own remedy"
+    )

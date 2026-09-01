@@ -30,21 +30,6 @@ already running before this store existed are not spawns; a caller that
 diffed against an absent baseline as if it were an empty one would report
 six already-running sessions as six simultaneous spawns, which is a fiction.
 
-`first_tick: True` STAYS ONE VERDICT, but "no file yet" and "file present
-and unreadable" are not the same event to whoever is reading it: the former
-is a fresh watch, the latter is a bug. `first_tick_reason`
-(`FIRST_TICK_NEVER_ARMED` | `FIRST_TICK_UNREADABLE`) carries that distinction
-beside the unchanged verdict, mirroring `watch_heartbeat`'s
-`absent_reason` split -- see `_load_previous`.
-
-EVERY DIFF CARRIES ITS OWN INSTANT. `as_of` is the ISO timestamp this diff
-was taken at; `previous_taken_at` is the ISO timestamp the prior baseline was
-persisted at (None on `first_tick`, or when an old pre-timestamp record is
-read back). The persisted `taken_at` is the load-bearing half: it is what
-lets the NEXT tick's diff report how stale the baseline it diffed against
-was, so `exited: [sid]` can be read as "gone since the last few seconds" or
-"gone since a three-day-old baseline" rather than reading the same either way.
-
 STORAGE SHAPE. One file per (repo-key, caller session id), under this
 machine's own working tree:
 
@@ -70,22 +55,11 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-import time
 from pathlib import Path
 from typing import Any, Mapping
 
-from coordinator_core.group_em.watch_heartbeat import _iso
-
 PeerRecord = Mapping[str, Any]
 PeerSet = Mapping[str, PeerRecord]
-
-#: Why `_load_previous` returned no usable baseline. Mirrors
-#: `watch_heartbeat.ABSENT_NEVER_ARMED` / `ABSENT_UNREADABLE`: "no file yet"
-#: and "a file exists but is torn/corrupt" are different events to whoever
-#: reads `first_tick_reason` even though both degrade to the same
-#: `first_tick: True` treatment for the diff itself.
-FIRST_TICK_NEVER_ARMED = "never-armed"
-FIRST_TICK_UNREADABLE = "unreadable-record"
 
 
 def _repo_root() -> Path:
@@ -98,42 +72,30 @@ def _store_path(repo_key: str, session_id: str, *, repo_root: Path | None = None
     return root / "state" / "subagent-share" / session_id / f"group-em-baseline-{repo_key}.json"
 
 
-def _load_previous(
-    path: Path,
-) -> tuple[dict[str, PeerRecord] | None, str | None, str | None]:
-    """Return `(peers, taken_at, reason)` for the previous tick.
+def _load_previous(path: Path) -> dict[str, PeerRecord] | None:
+    """Return the previous tick's peer set, or None if there is none to use.
 
-    `peers` is None when there is nothing usable -- either "no file yet" or
-    "file present but unreadable/corrupt". Unlike an earlier revision of this
-    module, that verdict-level collapse does NOT also collapse the reason:
-    `reason` is `FIRST_TICK_NEVER_ARMED` or `FIRST_TICK_UNREADABLE`
-    respectively, mirroring `watch_heartbeat._read_record` /
-    `read_liveness`'s `absent_reason` split for the identical two-cases-one-
-    verdict shape. `taken_at` is the stored `taken_at` string (None when
-    `peers` is None, or when an old pre-timestamp record is read back).
+    None covers both "no file yet" and "file present but unreadable/corrupt" --
+    both degrade to the same first_tick treatment; the caller never learns
+    which, by design (a torn file is not a diagnosable event here).
     """
     try:
         raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None, None, FIRST_TICK_NEVER_ARMED
-    except OSError:
-        return None, None, FIRST_TICK_UNREADABLE
+    except (FileNotFoundError, OSError):
+        return None
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
-        return None, None, FIRST_TICK_UNREADABLE
+        return None
     if not isinstance(data, dict):
-        return None, None, FIRST_TICK_UNREADABLE
+        return None
     peers = data.get("peers")
     if not isinstance(peers, dict):
-        return None, None, FIRST_TICK_UNREADABLE
+        return None
     for value in peers.values():
         if not isinstance(value, dict):
-            return None, None, FIRST_TICK_UNREADABLE
-    taken_at = data.get("taken_at")
-    if not isinstance(taken_at, str):
-        taken_at = None
-    return peers, taken_at, None
+            return None
+    return peers
 
 
 def _write_atomic(path: Path, payload: dict[str, Any]) -> None:
@@ -172,14 +134,10 @@ def diff_and_persist(
           "exited": [session_id, ...],    # present before, absent now
           "changed": [session_id, ...],   # present both ticks, state/reason differs
           "first_tick": bool,             # True iff no usable prior baseline existed
-          "first_tick_reason": str|None,  # FIRST_TICK_* when first_tick, else None
-          "as_of": str,                   # ISO instant this diff was taken
-          "previous_taken_at": str|None,  # ISO instant of the prior baseline, or None
         }
     """
-    now_iso = _iso(time.time())
     path = _store_path(repo_key, session_id, repo_root=repo_root)
-    previous, previous_taken_at, first_tick_reason = _load_previous(path)
+    previous = _load_previous(path)
 
     current_ids = set(current_peers.keys())
 
@@ -189,9 +147,6 @@ def diff_and_persist(
             "exited": [],
             "changed": [],
             "first_tick": True,
-            "first_tick_reason": first_tick_reason,
-            "as_of": now_iso,
-            "previous_taken_at": None,
         }
     else:
         previous_ids = set(previous.keys())
@@ -210,10 +165,7 @@ def diff_and_persist(
             "exited": exited,
             "changed": changed,
             "first_tick": False,
-            "first_tick_reason": None,
-            "as_of": now_iso,
-            "previous_taken_at": previous_taken_at,
         }
 
-    _write_atomic(path, {"peers": dict(current_peers), "taken_at": now_iso})
+    _write_atomic(path, {"peers": dict(current_peers)})
     return result

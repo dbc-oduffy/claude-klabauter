@@ -51,7 +51,10 @@ Negative-spec:
   - Does NOT fall back to a spawning, hook-running commit in the receiver's
     tree when `commit_authored_new_file` declines (AC4) — a decline fails
     the receiver item loud; the sender-side receipt is never written for
-    that item (see the ordering note above).
+    that item (see the ordering note above). A decline also leaves NO file
+    behind: the O_EXCL write this op made is rolled back, so the receiver's
+    tree is exactly as it was found and a re-run is not blocked by AC6's
+    no-clobber guard tripping over this op's own orphan.
   - Does NOT deliver an unattributed memo SILENTLY — when `sent_by` lands as
     the sentinel, `acted[0].sender_unattributed` says so on the result
     envelope and `cross-repo-memo send` prints it. The delivery still
@@ -780,17 +783,46 @@ def _memo_send(params: dict, repo_root=None) -> dict:
 
     if not commit_result.ok:
         # AC4 — fail loud, never fall back to a spawning/hook-running commit
-        # in the receiver's tree. The file is left written+uncommitted in a
-        # repo we do not own (recoverable by the receiver's own next
-        # session-init sweep) — nothing here retries or escalates the write.
-        # Per the plan's ordering guarantee, the sender-side receipt below
-        # is never written for a delivery that did not durably commit.
+        # in the receiver's tree. Per the plan's ordering guarantee, the
+        # sender-side receipt below is never written for a delivery that did
+        # not durably commit.
+        #
+        # The file this call created is REMOVED before returning, so a declined
+        # commit leaves the receiver's tree exactly as it was found. That is a
+        # rollback of this op's own write, not the spawning-commit fallback AC4
+        # forbids -- nothing is committed, and no hook in the receiver's tree
+        # fires either way.
+        #
+        # Leaving it behind was worse than untidy, and "recoverable by the
+        # receiver's next session-init sweep" overstated the recovery. The
+        # orphan is materially delivered (a reader with that tree open sees the
+        # memo) while every ledger says it was not: the sender's draft is still
+        # `status: draft` and no receipt exists. Worse, it is unrecoverable
+        # through this op -- the retry is refused by AC6's no-clobber guard
+        # against the very file the failed attempt wrote, so the only ways
+        # forward were hand-removing a file from a repo we do not own or
+        # hand-committing into it, both of which the cross-repo memo channel
+        # exists to prevent. Removing our own uncommitted write closes that
+        # trap: the state is clean, and re-running `memo.send` just works.
+        #
+        # Unlinking is safe precisely here and nowhere else: the O_EXCL open
+        # above proves the file did not exist before this call, and the failed
+        # commit proves nothing references it.
+        rollback_detail = " the file this call wrote was removed (tree restored)."
+        try:
+            target_file.unlink()
+        except OSError as unlink_exc:
+            rollback_detail = (
+                f" WARNING: the file this call wrote could NOT be removed"
+                f" ({unlink_exc}); it is left uncommitted in the receiver's"
+                f" tree and a retry will refuse on the no-clobber guard until"
+                f" it is cleared."
+            )
         return build_act_result(_MODE, [], [], [{
             "id": str(target_file),
             "reason": (
                 f"receiver-side commit declined: {commit_result.stderr} — "
-                f"the memo file was written but NOT committed into the "
-                f"receiver's tree; not retried, per AC4."
+                f"not retried, per AC4;{rollback_detail}"
             ),
         }])
 

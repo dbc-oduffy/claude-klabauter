@@ -640,17 +640,55 @@ class TestReceiverCommitDeclineFailsLoud:
         assert result["exit_code"] != 0
         assert result["acted"] == []
         assert len(result["failed"]) == 1
-        # The memo file itself is still written (worktree write precedes the
-        # commit attempt) but nothing sender-side is touched.
+        # The receiver's tree is left EXACTLY as it was found: the worktree
+        # write precedes the commit attempt, so a declined commit rolls its own
+        # write back rather than orphaning an uncommitted memo in a repo we do
+        # not own. Nothing sender-side is touched either.
+        #
+        # This asserts the opposite of what it once did. Leaving the file was a
+        # dead end, not untidiness: the orphan is materially delivered while
+        # every ledger says it is not, and AC6's no-clobber guard then refuses
+        # the retry against the failed attempt's own file -- leaving hand-
+        # editing a foreign tree as the only way out. Rolling back is not the
+        # spawning-commit fallback AC4 forbids; nothing is committed either way.
         inbox_files = [
             p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
             if p.name != ".gitkeep"
         ]
-        assert len(inbox_files) == 1
+        assert inbox_files == []
         assert (sender_repo / "state" / "memo-outbox" / "declined-topic.md").exists()
         assert not (sender_repo / "state" / "memo-outbox" / "sent").exists()
         ledger_path = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
         assert not ledger_path.exists()
+
+
+    def test_retry_after_declined_commit_is_not_blocked_by_no_clobber(
+        self, tmp_path, monkeypatch
+    ):
+        """The regression that made the rollback necessary.
+
+        A declined commit used to leave its own file in the receiver's inbox,
+        so the identical re-run was refused by the no-clobber guard -- a memo
+        that could be neither finished nor withdrawn through this op. The retry
+        must reach the commit leg again.
+        """
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "retry-topic")
+
+        def _fake_decline(*args, **kwargs):
+            return git_native.GitResult(returncode=1, stdout="", stderr="synthetic decline")
+
+        monkeypatch.setattr(
+            memo_send_module.git_native, "commit_authored_new_file", _fake_decline,
+        )
+        first = _memo_send({"dry_run": False, "topic": "retry-topic"}, repo_root=sender_repo)
+        assert first["exit_code"] != 0
+
+        second = _memo_send({"dry_run": False, "topic": "retry-topic"}, repo_root=sender_repo)
+        assert "no clobber" not in json.dumps(second["failed"]), second["failed"]
 
 
 # ---------------------------------------------------------------------------

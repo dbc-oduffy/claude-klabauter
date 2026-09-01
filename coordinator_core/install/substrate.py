@@ -2062,6 +2062,24 @@ def _is_pytest_infrastructure(filename: str) -> bool:
     return filename == "conftest.py" or (filename.startswith("test_") and filename.endswith(".py"))
 
 
+#: Installed names whose extensionless twin is DELIBERATE and load-bearing, so
+#: the duplicate-CLI pair below is a permanent, correct state rather than
+#: strangler-port leftovers awaiting a dedupe.
+#:
+#: `coordinator-prepare-commit-msg`: `git_hook_install._shim_body`'s baked-path
+#: fallback rung probes the BARE name before the `.py` suffix, so the
+#: extensionless file must exist for every environment where the settings-home
+#: forwarder rung is unavailable (forwarder uninstalled, `$HOME` moved, the
+#: settings-home env var unset). It is a thin in-process delegate to its own
+#: `.py` sibling -- see that file's docstring, and the C14 fix that replaced the
+#: hand-duplicated 869-line copy it used to be. Deleting it to silence the
+#: warning would restore the silent-fallthrough bug that fix closed.
+#:
+#: An entry here suppresses only the console line; the `.py`-twin precedence
+#: rule applies identically either way.
+_DELIBERATE_EXTENSIONLESS_TWINS = frozenset({"coordinator-prepare-commit-msg"})
+
+
 def _derive_agent_helper_target_map(agent_bin: Path) -> "dict[str, str]":
     """Derive the installed-forwarder name -> on-disk-target-filename map
     from claude-klabauter's own ``coordinator/bin/`` directory listing. This is the
@@ -2175,6 +2193,13 @@ def _derive_agent_helper_target_map(agent_bin: Path) -> "dict[str, str]":
                 # lacks, and matches the .py-CLI convention every other
                 # install-path decision already assumes.
                 #
+                # A pair in `_DELIBERATE_EXTENSIONLESS_TWINS` is SILENT here:
+                # the precedence rule still applies and the `.py` twin still
+                # wins, but there is nothing for an operator to act on, so
+                # saying so every run is noise. A warning nobody can close
+                # trains people to skim the install console, which is how two
+                # break-class defects sat unnoticed on this same output.
+                #
                 # NEGATIVE SPEC -- this branch is NOT dormant. An earlier
                 # version of this comment claimed it was "exercised only by
                 # the synthetic fixture test (no live on-disk instance)";
@@ -2188,12 +2213,13 @@ def _derive_agent_helper_target_map(agent_bin: Path) -> "dict[str, str]":
                 # below therefore reaches any caller that has not arranged
                 # otherwise -- check the tree before assuming it is quiet.
                 dropped = existing if py_twin == n else n
-                print(
-                    f"[install-substrate] WARNING: duplicate CLI pair for "
-                    f"installed name {installed_name!r} in {agent_bin} -- "
-                    f"{py_twin!r} and {dropped!r} both exist; installing "
-                    f"{py_twin!r} (the .py twin) and ignoring {dropped!r}"
-                )
+                if installed_name not in _DELIBERATE_EXTENSIONLESS_TWINS:
+                    print(
+                        f"[install-substrate] WARNING: duplicate CLI pair for "
+                        f"installed name {installed_name!r} in {agent_bin} -- "
+                        f"{py_twin!r} and {dropped!r} both exist; installing "
+                        f"{py_twin!r} (the .py twin) and ignoring {dropped!r}"
+                    )
                 mapping[installed_name] = py_twin
                 continue
             raise SubstrateFatalError(
