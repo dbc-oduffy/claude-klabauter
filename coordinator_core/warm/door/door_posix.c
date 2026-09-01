@@ -1276,6 +1276,33 @@ int main(int argc, char **argv) {
         have_stdin_payload = 0;
     }
 
+    /* ADDITIVE, NOT ALWAYS PRESENT (C0) -- the POSIX half of the field
+     * `door.c` appends at the same point in the same request; see that
+     * file's block for the full rationale, including why it lives INSIDE
+     * `params` (`ops/invoke_from_argv.py :: _invoke_from_argv` reads
+     * `params["entrypoint"]`; at envelope level it is silently unread and
+     * every renamed image runs `coordinator-invoke`'s argument grammar
+     * instead of its own).
+     *
+     * This half was missing until 2026-09-02, and the same disagreement
+     * door.c's block describes reappeared here in its cross-leg form: the
+     * COLD leg was name-aware (`fall_through` reads
+     * `door_entrypoint_basename()` directly), the WARM leg was not, so
+     * every one of the 372 hardlinked names dispatched the coordinator-
+     * invoke grammar whenever a warm server was up -- which is always.
+     * Omitted when this image's resolved name is the default, so a
+     * single-name install produces a byte-identical request to before.
+     * Keep this append BEFORE the `}` that closes `params`. */
+    if (req_ok) {
+        const char *entrypoint_basename = door_entrypoint_basename();
+        if (strcmp(entrypoint_basename, DOOR_DEFAULT_ENTRYPOINT) != 0) {
+            req_ok &= buf_append_cstr(&req, ",\"entrypoint\":\"");
+            req_ok &= buf_append_json_escaped(
+                &req, entrypoint_basename, strlen(entrypoint_basename));
+            req_ok &= buf_append_cstr(&req, "\"");
+        }
+    }
+
     req_ok &= buf_append_cstr(&req, "},\"_engine_token\":\"");
     req_ok &= buf_append_cstr(&req, engine_token);
     req_ok &= buf_append_cstr(&req, "\"");

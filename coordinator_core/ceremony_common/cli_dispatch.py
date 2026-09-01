@@ -29,9 +29,12 @@ accepted, critical): each trio member computes its own script root as
 because each `apply.py` lives at a fixed depth under the repo root. This
 module lives in `ceremony_common/`, at a DIFFERENT depth than any of the
 three callers, so the same `Path(__file__)` computation would resolve to
-the wrong directory here. `resolve_cli_script_root` therefore takes
-`repo_root` as an explicit parameter and computes the join from it —
-never from this module's own file location, never from `Path.cwd()`.
+the wrong directory here. This module therefore computes NO script root at
+all: each caller passes an already-resolved `script_path`, anchored on the
+engine checkout that ships the producer — never on this module's own file
+location, never on `Path.cwd()`, and never on the target repo root (see the
+`resolve_cli_script_root` gravestone below for the defect that taught the
+last of those three).
 
 CWD IS A LOAD-BEARING GAP THE TRIO NEVER HAD. Verified against the actual
 emitted directives (`build_directives(Path('.'), tag_prefix='v',
@@ -163,10 +166,9 @@ from coordinator_core.ceremony_common.cli_rejection import (
 #: chosen `module_name`, which is passed only into
 #: `spec_from_file_location`/`SourceFileLoader` and plays no part in the
 #: cache key. This is defence-in-depth, not a fix for a live defect: today
-#: every trio caller resolves scripts from this module's own
-#: `resolve_cli_script_root` (a fixed `coordinator/bin` under an explicit
-#: `repo_root`), so two different on-disk scripts never collide under one
-#: `module_name` in practice. Keying by path anyway means a future change
+#: every trio caller resolves scripts from its own engine-anchored
+#: `coordinator/bin` directory, so two different on-disk scripts never
+#: collide under one `module_name` in practice. Keying by path anyway means a future change
 #: to how callers resolve scripts can't silently reintroduce a stale-cache
 #: hit. Neither mtime nor file content participates in the key — a script
 #: edited on disk between two calls with the same resolved path still
@@ -174,13 +176,23 @@ from coordinator_core.ceremony_common.cli_rejection import (
 _LOADED_MODULES: dict[str, ModuleType] = {}
 
 
-def resolve_cli_script_root(repo_root: Path) -> Path:
-    """The `coordinator/bin` directory holding every consumes-manifest
-    script, joined from an explicit `repo_root` — never from `Path(
-    __file__)` (this module's own location does not sit at the same depth
-    under the repo root as any of the three trio callers) and never from
-    `Path.cwd()` (see module docstring, "CWD IS A LOAD-BEARING GAP")."""
-    return repo_root / "coordinator" / "bin"
+# GRAVESTONE (2026-09-01): `resolve_cli_script_root(repo_root)` is deleted.
+# It joined `coordinator/bin` onto the TARGET repo root, which is the engine
+# root only when a ceremony runs inside claude-klabauter itself. Its one production
+# caller — merge_assemble's own `apply._dispatch_in_process` — dispatches
+# claude-klabauter-shipped producers (`merge-recovery-and-tag-cut.py`,
+# `check-no-illegal-paths.py`, `portability-sweep.py`) that exist in no
+# consumer repo, so every consumer-repo run probed a path that cannot exist
+# and raised `UnrecognizedDirective`. Reported from example-cockpit-repo
+# 2026-09-01: `merge-assemble apply` halted at `d1` with "no producer at
+# /Users/example-operator/X/example-cockpit-repo/coordinator/bin/merge-recovery-and-tag-
+# cut.py". The staff-eng finding this function answered was real — this
+# module sits at a different depth than its callers and must not compute a
+# root from `Path(__file__)` — but the substitute conflated two roots: the
+# ENGINE that ships the producer, and the REPO the ceremony operates on.
+# Callers now pass the engine-anchored bin directory they already hold
+# (`apply.py`'s `_BIN_DIR`), keeping `repo_root` for what it names — the
+# target, threaded into each producer's own argv by its handler.
 
 
 def load_cli_module(module_name: str, script_path: Path) -> ModuleType:

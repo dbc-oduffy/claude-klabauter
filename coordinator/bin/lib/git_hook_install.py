@@ -1098,10 +1098,30 @@ def _ensure_hook(
 # still-pushing shim installed on a box that had not yet turned over. PM
 # ruling on that date: this is the only box, and a direct check found no
 # installed post-commit hook anywhere left in the pushing form — the
-# overwrite target no longer exists, so the horizon is zero. The
-# `.git/hooks/post-commit` files already installed on this box are inert
-# (`exit 0`, no invocation of anything) and are left in place; only the
-# installer that maintained them is gone.
+# overwrite target no longer exists, so the horizon is zero.
+#
+# CORRECTION (2026-09-01): that premise did not hold, and the two claims
+# built on it were both false. A census of all 13 repos under `~/X` on this
+# box found EVERY `.git/hooks/post-commit` still stamped
+# `coordinator-hook-gen: 2` and still in the pushing form — none inert, none
+# `exit 0`, every one of them ending `exec "$_PY" "$SCRIPT" "$@"`. The
+# generation stamp was bumped to 11 precisely to force one rewrite pass over
+# the fleet (see `_HOOK_GEN_STAMP`'s own note), but the installer that would
+# have performed it was deleted before any session ran it, so the bump could
+# never be honoured — nothing left on this box can rewrite those bodies.
+#
+# What the surviving hooks do now: rung 4 of their SCRIPT cascade resolves
+# `${COORDINATOR_SETTINGS_HOME}/bin/coordinator-auto-push`, a forwarder that
+# outlived the `coordinator-auto-push.py` C8 deleted, so every commit in
+# every repo on this box exits 127 with a "missing under the resolved live-
+# working-tree root — run scripts/setup.py to repair" line whose advice
+# cannot work. Reported from example-cockpit-repo 2026-09-01. The forwarder half
+# is retired by `install.substrate._KILLED_OP_ORPHAN_NAMES` (see that set's
+# own note); the 13 installed hook bodies are UNFIXED here — they are each
+# repo's own local `.git/` state, not claude-klabauter's, and rewriting a peer's hooks
+# mid-commit on a box running ~50 concurrent sessions is not a change this
+# module may make unasked. Do not re-derive "the horizon is zero" from this
+# gravestone: measure the fleet first.
 
 
 def ensure_prepare_commit_msg_hook(

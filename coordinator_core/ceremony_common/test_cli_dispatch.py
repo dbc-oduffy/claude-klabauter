@@ -15,7 +15,6 @@ import pytest
 from coordinator_core.ceremony_common.cli_dispatch import (
     invoke_cli_main,
     load_cli_module,
-    resolve_cli_script_root,
 )
 from coordinator_core.ceremony_common.cli_rejection import CliExitClass
 
@@ -24,11 +23,6 @@ def _write_script(tmp_path: Path, name: str, body: str) -> Path:
     script_path = tmp_path / name
     script_path.write_text(body, encoding="utf-8")
     return script_path
-
-
-def test_resolve_cli_script_root_joins_from_explicit_repo_root(tmp_path: Path):
-    root = resolve_cli_script_root(tmp_path)
-    assert root == tmp_path / "coordinator" / "bin"
 
 
 def test_load_cli_module_loads_extensionless_script(tmp_path: Path):

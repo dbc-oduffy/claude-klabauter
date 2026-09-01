@@ -1103,10 +1103,26 @@ _PRE_MARKER_LEGACY_ORPHAN_NAMES = frozenset({"mint-deliverable-id.sh.cmd"})
 # two states a given box is in. A killed op answers "does not exist",
 # never a gravestone refusal -- keeping an image for a killed op is the
 # shape K-068 removed.
+#
+# `coordinator-auto-push` joined this set 2026-09-01, same shape, different
+# plan: C8 of docs/plans/2026-08-30-who-pushes-and-when.md gravestoned the
+# per-commit auto-push machinery, deleting `coordinator/bin/coordinator-auto-
+# push.py` and its `bin-inventory.json` row together (`124e2c5c5c`). The
+# roster edit dropped the name from the per-name install loop, so
+# `remove_stale_named_forwarder` never iterated it, and the three forwarder
+# images already on disk (extensionless + `.cmd` + `.ps1` — one stem, so one
+# entry retires all three) outlived their target. What they became is worse
+# than inert: `_resolve_claude_klabauter.exec_cli` exits 127 with "coordinator helper
+# ... is missing under the resolved live-working-tree root — run python3
+# <engine-clone>/scripts/setup.py to repair the plugin tree", advice that
+# cannot work because nothing is missing to repair. Reported from
+# example-cockpit-repo 2026-09-01, where the still-installed `.git/hooks/post-
+# commit` reaches the forwarder on every single commit.
 _KILLED_OP_ORPHAN_NAMES = frozenset({
     "coordinator-write-review-trail",
     "list-review-trail-records",
     "repair-empty-review-trail-ranges",
+    "coordinator-auto-push",
 })
 
 # NATIVE-FORWARDER MANIFEST (C4a, docs/plans/2026-08-26-every-forwarder-that-
@@ -1449,6 +1465,28 @@ def _write_native_door_forwarder(
     unstamped root, which is why the degrade is here rather than at the AC."""
     from coordinator_core.install import door_install
     from coordinator_core.warm.engine_root import is_engine_root
+
+    # NO DOOR FOR AN ENTRYPOINT THAT REPLACES ITS OWN PROCESS. The warm leg
+    # runs the named entrypoint's `main()` inside the warm server, so an
+    # `os.execv` there overlays the SERVER -- see `door_install.
+    # _EXEC_SHAPED_NAMES` for the full argument. Returning None here reaches
+    # this function's own documented contract ("left on its existing Python
+    # path -- correct, merely uncut-over"), which is the RIGHT end state for
+    # this population and the opposite of `launcher_is_installable`-false
+    # below: that branch means "no launcher at all", this one means "a
+    # launcher, just never the native one". The stale image an earlier
+    # install wrote is taken back for the same reason it is there: it
+    # outranks nothing on POSIX, it IS the name's only file.
+    if not door_install.name_is_warm_servable(name):
+        print(
+            f"[install-substrate] {name}: no native door forwarder -- this "
+            "entrypoint replaces its own process, which the warm leg cannot "
+            "serve. Left on its Python forwarder.",
+            file=sys.stderr,
+        )
+        if not check_only:
+            door_install.remove_stale_named_forwarder(bin_dst, name)
+        return None
 
     if not is_engine_root(engine_root):
         print(

@@ -961,6 +961,41 @@ def engine_carries_entrypoint_script(engine_root: Path, name: str) -> bool:
 _GENERATOR_BIN_DIR = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 
 
+#: Names whose CLI REPLACES THE CALLING PROCESS, and which therefore cannot
+#: be served by the warm leg at all -- the door's warm path runs the named
+#: entrypoint's `main()` INSIDE the warm server, so an `os.execv` there
+#: overlays the SERVER, not the caller: the engine every peer on this box is
+#: queued behind disappears mid-request, and the caller gets nothing back.
+#:
+#: `claude-doe` is the whole population today: `coordinator/bin/claude-doe.py`
+#: exists solely to `exec claude --plugin-dir <clone>/coordinator`, and
+#: `docs/reference/interactive-launch-chain.md`'s direct-child invariant is a
+#: second, independent reason -- an interactive TUI handed back over a socket
+#: is not a child of the terminal at all. (`cross-repo-memo` READS as a member
+#: -- it still names `os.execvp` -- but only in a comment recording that its
+#: own cutover removed the call; it is warm-served correctly and is not one.)
+#:
+#: WHY A ROSTER AND NOT AN ORACLE. `launcher_is_installable`'s predicate is
+#: self-maintaining because "is this name in the published payload" is a
+#: question the payload itself answers. "Does this entrypoint exec" has no
+#: such artifact to ask: static-detecting an `os.execv` reachable from
+#: `main()` is a call-graph problem, and the honest fix is for an entrypoint
+#: to DECLARE itself non-servable. Until that marker exists this roster is
+#: the mechanism, and it is deliberately tiny.
+_EXEC_SHAPED_NAMES = frozenset({"claude-doe"})
+
+
+def name_is_warm_servable(name: str) -> bool:
+    """False for a name in `_EXEC_SHAPED_NAMES` -- see that roster for why a
+    process-replacing entrypoint must never be reached through the door.
+
+    NOT the same answer as `launcher_is_installable`, and the callers must
+    not collapse them: an unservable name still WANTS its Python forwarder
+    pair (it is a live PATH tool, just not a warm-servable one), whereas a
+    publish-excluded name wants no launcher at all."""
+    return name not in _EXEC_SHAPED_NAMES
+
+
 def launcher_is_installable(engine_root: Path, name: str) -> bool:
     """False only for a name that HAS a `.py` CLI here and does NOT have one in
     `engine_root` -- the publish-excluded and publish-renamed set.

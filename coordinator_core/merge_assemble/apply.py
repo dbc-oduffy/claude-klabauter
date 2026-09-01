@@ -62,7 +62,6 @@ from typing import Any, Callable, Optional
 from coordinator_core.ceremony_common.cli_dispatch import (
     invoke_cli_main,
     load_cli_module,
-    resolve_cli_script_root,
 )
 from coordinator_core.contract import apply_base
 from coordinator_core.merge_assemble import (
@@ -143,10 +142,16 @@ def _dispatch_result(cli: str, proc: subprocess.CompletedProcess) -> dict[str, A
 
 def _dispatch_in_process(cli: str, script_name: str, args: list[str], repo_root: Path) -> dict[str, Any]:
     """Shared body for merge_assemble's three IN-PROCESS verbs (C2 AC3):
-    resolves `<repo_root>/coordinator/bin/<script_name>.py` via
-    `ceremony_common.cli_dispatch.resolve_cli_script_root` — `repo_root`
-    always explicit, never `Path(__file__)`/`Path.cwd()` (that module's own
-    docstring, "CWD IS A LOAD-BEARING GAP") — loads it once per process via
+    resolves `<engine root>/coordinator/bin/<script_name>.py` from
+    `_BIN_DIR` — the SAME engine-anchored directory `_run_py_script` uses,
+    never `Path.cwd()` (`ceremony_common.cli_dispatch`'s own docstring,
+    "CWD IS A LOAD-BEARING GAP") and never `repo_root`. All three producers
+    are claude-klabauter-shipped and exist in no consumer repo, so a repo_root-anchored
+    join resolved to a path that cannot exist for every ceremony run outside
+    claude-klabauter itself (reported from example-cockpit-repo 2026-09-01; see the
+    `resolve_cli_script_root` gravestone in `cli_dispatch.py`). `repo_root`
+    stays the TARGET, threaded into each producer's own argv by its handler,
+    never into the producer's location — loads it once per process via
     `load_cli_module` (cached by module name across calls in this same
     engine process), and invokes its `main()` via `invoke_cli_main`. No
     subprocess, ever, for the three callers of this function.
@@ -172,7 +177,7 @@ def _dispatch_in_process(cli: str, script_name: str, args: list[str], repo_root:
     resolved nonzero exit: still `RuntimeError`, mapped from the
     primitive's returned integer exit code exactly as it was from a
     `subprocess.CompletedProcess.returncode`."""
-    script_path = resolve_cli_script_root(repo_root) / f"{script_name}.py"
+    script_path = _BIN_DIR / f"{script_name}.py"
     if not script_path.is_file():
         raise UnrecognizedDirective(
             f"{cli}: no producer at {script_path} — cannot dispatch in-process"
