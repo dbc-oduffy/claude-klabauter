@@ -752,11 +752,29 @@ def _queue_body_args(idx: int, lesson: Mapping[str, Any], repo_root: Optional[Pa
 #: DOWNSTREAM of this module -- lesson-add forwards `--scope` verbatim to the
 #: record-writing CLI, whose enum is the real gate, and the same three values
 #: are hard-coded at `coordinator/bin/coordinator-queue-append.py`'s own
-#: `_VALID_LESSON_SCOPES`. Duplicated here rather than imported because that is
-#: a bin script, not an importable module; if a fourth value is ever added,
-#: this set is one of three places that must move together, and the reason it
-#: is worth the duplication is that the alternative -- discovering the mismatch
-#: at dispatch -- costs a PARTIAL_MUTATION after the commit tail has landed.
+#: `_VALID_LESSON_SCOPES`. Duplicated here rather than imported.
+#:
+#: Review: overengineering-reviewer (finding #4) — the prior comment here
+#: claimed this could not be imported because a bin script is "not an
+#: importable module". That claim is false and this session's own diff
+#: falsifies it twice over: `coordinator/bin/tests/test_cc_invoke_
+#: indeterminate.py` and `test_cross_repo_memo_indeterminate_reconcile.py`
+#: both import across this exact boundary (one via `sys.path.insert` onto
+#: `bin/lib`, the other via `SourceFileLoader` on the hyphenated `.py`), and
+#: `ceremony_common.cli_dispatch.load_cli_module` (this package's own
+#: `apply.py` sibling) does the same at PRODUCTION runtime to invoke bin
+#: CLIs from `workstream_complete`/`workday_complete`/`workweek_complete`.
+#: The honest reason for duplicating anyway: `load_cli_module` is scoped to
+#: directive DISPATCH time and its own docstring disclaims isolating a
+#: loaded script's top-level side effects/argv/env -- reaching for it here,
+#: at directive-BUILD time (this module runs well before any directive
+#: executes), to read one three-value constant would import
+#: `coordinator-queue-append.py`'s full top-level (argparse setup and all)
+#: on a path that has nothing to do with dispatching it, for a cost this
+#: three-value enum does not justify. If a fourth value is ever added, this
+#: set is one of three places that must move together; the alternative --
+#: discovering the mismatch at dispatch -- costs a PARTIAL_MUTATION after
+#: the commit tail has landed.
 _VALID_LESSON_SCOPES = frozenset({"universal", "project", "wiki-only"})
 
 

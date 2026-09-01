@@ -263,3 +263,79 @@ def test_subject_is_unchanged_when_no_deletions_are_carried():
 
     assert without == with_empty
     assert "1 added, 0 modified, 0 removed" in without
+
+
+def test_a_round_that_carries_removals_is_not_a_warning(capsys):
+    """A pathspec larger than this run's change lines, with nothing dropped,
+    must not count as a warning.
+
+    `real_changes` is the worktree comparison; a removal reaches the pathspec
+    from the dest-HEAD comparison instead, so ANY round that deletes something
+    has a bigger pathspec by construction. That used to return a counted
+    warning, so a healthy round announced its own success in the register of a
+    warning -- reported by DoE on the first round that could carry deletions
+    at all. The informational line must still print: uncounted, not silent.
+    """
+    warning = _mod._report_commit_residual(
+        "coordinator-claude",
+        [("NEW", "bin/added.py")],
+        ["bin/added.py", "bin/gone.cmd", "bin/also-gone.py"],
+        deletion_paths=["bin/gone.cmd", "bin/also-gone.py"],
+    )
+
+    assert warning is None
+    err = capsys.readouterr().err
+    assert "2 removal(s) this round carries" in err
+    assert "2 carried into the pathspec beyond" in err
+    assert "this is not a warning" in err
+
+
+def test_surplus_separates_removals_from_unexplained_residue(capsys):
+    """Removals and stranded residue used to render identically. They are not
+    the same fact: one is the round working, the other is a path nothing in
+    this run explains and is still worth an eye.
+    """
+    _mod._report_commit_residual(
+        "coordinator-claude",
+        [("NEW", "bin/added.py")],
+        ["bin/added.py", "bin/gone.cmd", "bin/mystery.txt"],
+        deletion_paths=["bin/gone.cmd"],
+    )
+
+    err = capsys.readouterr().err
+    assert "1 removal(s) this round carries" in err
+    assert "1 path(s) from an earlier round's" in err
+
+
+def test_a_dropped_change_is_still_a_counted_warning():
+    """The direction that matters must keep warning: an intended change that
+    did NOT reach the pathspec is the defect this function exists for, and a
+    round once printed a bare PASS while dropping 57 of them.
+    """
+    warning = _mod._report_commit_residual(
+        "coordinator-claude",
+        [("NEW", "bin/added.py"), ("UPDATE", "bin/dropped.py")],
+        ["bin/added.py"],
+    )
+
+    assert warning is not None
+    assert "NOT committed" in warning
+
+
+def test_the_dropped_warning_does_not_call_the_pathspec_committed():
+    """Vocabulary: the pathspec is what is NAMED to the commit leg, not what
+    committed -- entries can still decline there. The refusal line called the
+    same paths "declined" while this report called them "committed": one fact,
+    two words, opposite meanings, which cost a round trip to reconcile. The
+    surviving warning speaks about reported changes, never about paths having
+    committed.
+    """
+    warning = _mod._report_commit_residual(
+        "coordinator-claude",
+        [("NEW", "a.py"), ("NEW", "b.py"), ("NEW", "c.py")],
+        ["a.py", "b.py"],
+    )
+
+    assert warning is not None
+    assert "path(s) committed" not in warning
+    assert "were NOT committed" in warning

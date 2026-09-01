@@ -964,6 +964,38 @@ def claim_artifact(
     if not basename:
         raise ValueError("basename required")
 
+    # `artifact` is releasable and clearable but NOT claimable, and it is
+    # refused here by name rather than left to fail downstream.
+    #
+    # `release_artifact` and `clear_claim_if_dead` both early-route this class
+    # to the path-touch plane (see `ARTIFACT_CLASS_PATH`). There is no claim
+    # side to route to, deliberately: a touch-claim is RECORDED BY TOUCHING
+    # the path (`claim_index.commit_set`), never declared ahead of one, so
+    # there is no primitive here to widen onto and adding one would let a
+    # session assert a touch it has not made.
+    #
+    # What happened without this branch: an artifact-class basename IS a
+    # repo-relative path, so `claims_dir / basename` carried directory
+    # components whose parents do not exist under `artifact-claims/`, and the
+    # atomic mkdir raised FileNotFoundError. The generic OSError handler below
+    # then printed its standard advice -- "if it looks like a path, pass the
+    # basename alone" -- which is correct for handoff/memo/plan and exactly
+    # WRONG here, where a path is the documented input. A caller following it
+    # would strip the path down to a basename and claim a DIFFERENT key, in
+    # the wrong plane, and be told it succeeded.
+    if class_ == ARTIFACT_CLASS_PATH:
+        print(
+            f"cs_claim_{class_}: the '{ARTIFACT_CLASS_PATH}' class is not "
+            f"claimable -- it is the path-touch plane, where a claim is "
+            f"recorded by touching the path, not declared in advance. "
+            f"Nothing was claimed. This class is valid on release-artifact "
+            f"and clear-claim-if-dead, which is how a path claim "
+            f"who-claims-path reports gets released. To claim a RECORD, pass "
+            f"handoff, memo, or plan with a basename.",
+            file=sys.stderr,
+        )
+        return False
+
     # Canonical 4-tier resolution; sid is a property of the running (cwd)
     # session — only the lock LOCATION follows the baton. Empty -> FAIL LOUD.
     sid = core.resolve_session_id(cwd)

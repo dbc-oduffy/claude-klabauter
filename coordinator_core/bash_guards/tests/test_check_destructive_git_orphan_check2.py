@@ -574,3 +574,69 @@ class TestCheck2ConfirmedNonGitLeafCommand:
     def test_stash_push_with_f_still_allowed(self):
         cmd = "git stash " + "push" + " -f -- paths"
         assert check_destructive_git_orphan(cmd) is None
+
+
+class TestCheck2WrapperOwnFlagsAreNotGitsFlags:
+    """Fifth bug in this lineage (2026-09-01), reported by example-retrieval-repo-em in
+    `cross-repo/inbox/2026-09-01-example-retrieval-repo-em-push-cadence-cap-below-noop-
+    floor.md` and reproduced here on the first attempt to measure a push.
+
+    Same shape as the four above, one seam further out. CHECK 2 resolves the
+    push CANDIDATE positionally, but then scanned the WHOLE segment for
+    `--force`/`-f`/`+refspec`. A spawning wrapper's own flags live in that
+    text and are not git's:
+
+        /usr/bin/time -f "%e" git push
+
+    `time` takes `-f FORMAT`. The push is a plain no-argument push, and it was
+    denied as a "forcing form" -- so the obvious way to MEASURE a push became
+    the one command that cannot run, which is how the reporter found it.
+
+    Neither existing seam covers this. `_seg_resolved_git_subcommand` returns
+    `None` (no command-position `git`), and `_seg_confirmed_not_git_
+    invocation` must NOT vouch for these heads -- a wrapper really can launch
+    git, which is the whole point of the allowlist's direction.
+
+    Fix: `_seg_forcing_form_scan_text` narrows the scan to the tokens
+    at-and-after the first `git` token. This cannot open a bypass -- `--force`
+    and `+refspec` are push ARGUMENTS, so a genuine forcing push carries them
+    after that token -- and it fails closed to the whole segment whenever no
+    `git` token can be located.
+
+    Both directions asserted, per this file's standing discipline.
+    """
+
+    # ---- direction 1: wrapper flags must no longer false-positive ----
+
+    def test_allows_time_f_measuring_a_plain_push(self):
+        cmd = "/usr/bin/time -f \"%e\" git " + "push"
+        assert check_destructive_git_orphan(cmd) is None
+
+    def test_allows_env_wrapper_with_own_f_flag(self):
+        cmd = "env -f other.env git " + "push" + " origin main"
+        assert check_destructive_git_orphan(cmd) is None
+
+    def test_allows_time_f_measuring_a_dry_run_push(self):
+        cmd = "/usr/bin/time -f \"%e\" git " + "push" + " --dry-run origin HEAD"
+        assert check_destructive_git_orphan(cmd) is None
+
+    # ---- direction 2: a real forcing push behind a wrapper still denies ----
+
+    def test_still_denies_long_flag_force_behind_wrapper(self):
+        cmd = "/usr/bin/time -f \"%e\" git " + "push" + " origin main --" + "force"
+        assert check_destructive_git_orphan(cmd) is not None
+
+    def test_still_denies_short_flag_force_behind_wrapper(self):
+        cmd = "/usr/bin/time -f \"%e\" git " + "push" + " origin main -f"
+        assert check_destructive_git_orphan(cmd) is not None
+
+    def test_still_denies_plus_refspec_behind_wrapper(self):
+        cmd = "env -f other.env git " + "push" + " origin +main"
+        assert check_destructive_git_orphan(cmd) is not None
+
+    def test_still_denies_force_when_no_git_token_resolves(self):
+        """Fail-closed leg: the scan text falls back to the whole segment
+        whenever no `git` token is located, so the scripted-spawn shape the
+        raw `\bpush\b` fallback exists for keeps denying."""
+        cmd = "subprocess.run(['g" + "it', '" + "push" + "', '--" + "force" + "'])"
+        assert check_destructive_git_orphan(cmd) is not None

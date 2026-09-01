@@ -1746,9 +1746,25 @@ def emit_script(
     when present, a ``## Goal`` section.
 
     A review phase (a) composes if, and only if, a caller also supplies
-    ``review_roster_fragment`` (DoE's data — no live fragment exists yet,
-    see module docstring § Review phases); omitting it composes no review
-    phase, same as before this chunk.
+    ``review_roster_fragment`` (DoE's data — see module docstring § Review
+    phases); omitting it composes no review phase, same as before this chunk.
+
+    This used to read "no live fragment exists yet". THAT IS NO LONGER TRUE
+    and the correction matters, because it was the stated reason the call
+    site was never wired: ``DoE-claude/coordinator/contract/review-roster-
+    fragment.json`` has existed since 2026-08-30, carrying the same
+    ``lightweight``/``standard``/``full`` tiers ``derive_review_tier``
+    resolves. Found 2026-09-01 by our own drift oracle over the vendored copy
+    (``review_mint/tests/test_roundtrip.py``) going red, not by anyone
+    re-reading this line.
+
+    Still unwired, on a NARROWER open question than "does the data exist":
+    where a production emit should READ it from. The only copy on this side
+    is a hand-synced test fixture, which is right for a drift oracle and
+    wrong as a production read -- an emitted script's roster would lag DoE's
+    by however long it takes a test to go red. Asked of doe-claude-em in
+    ``review-phases-are-unwired-not-broken``; do not answer it here by
+    pointing this parameter at the fixture.
 
     ``plan_context`` (AC12) is resolved here, once, and passed to
     ``compose_script`` -> ``_wave_agent_calls`` -> ``_row_prompt`` — no

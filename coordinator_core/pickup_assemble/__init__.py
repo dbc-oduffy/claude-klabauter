@@ -3640,6 +3640,149 @@ def compute_claim_grant(
     }
 
 
+#: The `handoff_phase` value that declares this baton's next move is
+#: `/execute-plan` rather than shaping. Schema-declared (handoff.schema.json
+#: 8.x, "the plan->execute seam axis"), written by `baton_assemble`, and
+#: carried by 4 of 296 live handoffs at 2026-09-01 alongside 140
+#: `continuation` -- a populated field, not an aspiration.
+_EXECUTION_PHASE = "execution"
+
+
+def execution_phase_prefix(fm: dict[str, Any]) -> str:
+    """The `next_move` prefix a baton earns for DECLARING the execute seam.
+
+    `/pickup` read this field nowhere, so a baton whose declared next move is
+    `/execute-plan` opened identically to one that still needs shaping -- the
+    EM had to reconstruct from the body what the frontmatter already said.
+
+    Deliberately NOT folded into `sizing_disposition`, which also emits an
+    `execution` value: that one means "a `governing_plan` resolves on disk",
+    this one means "a PM authorized executing it". They are different facts
+    and can disagree -- a baton can cite a resolvable plan without the
+    four-field authorization stamp, and the schema's own
+    `_cf_execution_stamp_required` cross-field rule exists precisely because
+    the phase carries an obligation the citation does not. Collapsing them
+    would let a resolvable citation read as an authorization.
+
+    Emits a FACT, never a gate: no judgment point, no directive, nothing
+    blocked -- the same posture `unsized_next_move_prefix` takes, and for the
+    same reason. Absence is continuation, per the field's own description.
+    """
+    if fm.get("handoff_phase") != _EXECUTION_PHASE:
+        return ""
+    return (
+        "This baton declares handoff_phase: execution — its next move is "
+        "/execute-plan, not shaping. Verify the execution-authorization stamp "
+        "before proceeding. "
+    )
+
+
+def reply_obligation_at_open(fm: dict[str, Any]) -> Optional[str]:
+    """Whether picking this memo up incurs a reply — decided AT ACTION TIME.
+
+    `compute_reply_closure` answers a different question, and only asked it
+    too late: it searches the sender's tree for a reply that already exists,
+    and both its call sites sit inside the already-terminal / re-pickup
+    branches. So the obligation was DETECTED after the memo was actioned and
+    archived, never DIRECTED while the EM still had the memo open and was in
+    a position to discharge it. A detector on the closing edge cannot cause
+    the thing it detects the absence of.
+
+    This is the arming half, and it is deliberately not the same computation.
+    On a live memo no reply can exist yet, so searching for one is both
+    guaranteed-negative and expensive -- `compute_reply_closure` walks the
+    sender repo's `cross-repo/inbox/` and `cross-repo/archive/` trees. The
+    obligation itself needs none of that: it falls out of `kind` alone, at
+    zero I/O and zero spawns, which is what lets it run on every memo pickup
+    under the 500ms bar.
+
+    Returns the prefix to prepend to `next_move`, or `None` when no reply is
+    owed. Absent/unrecognized `kind` owes a reply: the closure check treats
+    absence as reply-required, and the polarity must match -- silently
+    excusing an unlabelled memo is the failure this exists to stop.
+    """
+    # `fyi` is the ONLY excused kind. Everything else owes -- `ask`,
+    # `consult`, `proposal`, an absent `kind`, and an unrecognized one alike.
+    # Written as a single negative check rather than a membership test on
+    # purpose: a new memo kind landing in the schema then defaults to owing a
+    # reply, which is the safe direction. A membership test would silently
+    # excuse it.
+    # Review: overengineering-reviewer — `_REPLY_OWED_KINDS` frozenset had
+    # zero readers and its own comment argued against ever using a
+    # membership test; deleted per "delete on sight".
+    if fm.get("kind") == "fyi":
+        return None
+    return (
+        "A reply to the sender is owed on this memo and is part of actioning "
+        "it, not a follow-up: action it and reply in the same pass. "
+    )
+
+
+def compute_governing_plan_resolution(
+    repo_root: Path, fm: dict[str, Any]
+) -> dict[str, Any]:
+    """The governing plan this baton executes, resolved at OPEN.
+
+    `/pickup` is the moment a session inherits work, and it resolved the
+    plan nowhere -- `workstream_complete` has had a factored resolver since
+    C10 and this package never called it, so the two ceremonies could
+    disagree about which plan a baton governs while reading the same
+    frontmatter. This calls the SAME function rather than growing a second
+    precedence, which is the whole point: one ladder, one answer, and a
+    change to it lands in both ceremonies at once.
+
+    Cheap by construction, because C10 already made it so. Its legs are two
+    caller-supplied overrides and the baton's own stamped `governing_plan`
+    field -- "no ladder, no join, no scan is attempted at any price". At
+    2026-09-01 that field is non-null on 68 of 295 live handoffs (it was 0
+    of 276 before C5 gave it a mint-time writer), so this resolves real
+    plans rather than reporting absence forever.
+
+    `source` is carried, not just the plan: an unresolved plan and a plan
+    resolved from an override are different facts, and flattening them to
+    `None` is what made the absence illegible in the first place. Emits a
+    FACT -- no gate, no directive, no judgment point.
+
+    `source` can read `"decisions_slug"`/`"decisions_slug_not_found"`/
+    `"decisions_path"`/`"decisions_path_not_found"` in the resolver's own
+    signature, but those legs are unreachable from `/pickup`'s real
+    `--decisions` CLI: this call passes `{}`, not the judgment-point map,
+    so only the stamped-`governing_plan` legs (`"handoff_frontmatter"` /
+    `"handoff_frontmatter_not_found"` / `"none"`) can ever surface here.
+    (Review: reviewer 2026-09-01-codereview-sliceB #5)
+    """
+    # Imported HERE, not at module scope: `workstream_complete/__init__.py`
+    # imports `compute_repo_identity_gate` from this package, so a top-level
+    # import closes a cycle and fails at import time. The function-local form
+    # is the standard break and costs one `sys.modules` hit after the first
+    # call -- not a spawn, not I/O.
+    from coordinator_core.workstream_complete.directives_lessons_plan import (
+        resolve_governing_plan_with_source,
+    )
+
+    # Review: overengineering-reviewer (finding 2) — the resolver's two
+    # override legs read `decisions["governing_plan_slug"]` /
+    # `["governing_plan_path"]`, which are CLOSE-OUT's channel. `/pickup`'s
+    # `decisions` is the judgment-point map and carries neither, so passing
+    # it could only ever be a no-op here -- or, the day something did set
+    # those keys, the one way this resolution could disagree with
+    # `compute_sizing_disposition`'s reading of the SAME field three lines
+    # away in the same emission dict. `{}` makes the shared input the sole
+    # input: one stamped `governing_plan`, one answer, no divergence
+    # reachable. Fixing it here rather than in `sizing_disposition.py`
+    # keeps `plan`'s admission gate, that module's other consumer, untouched.
+    plan, source = resolve_governing_plan_with_source(
+        repo_root,
+        {},
+        fm.get("governing_plan"),
+    )
+    return {
+        "rel": plan.rel if plan else None,
+        "slug": plan.slug if plan else None,
+        "source": source,
+    }
+
+
 def _adopt_into_baton(
     repo_root: Path, artifact_path: str, fm: Optional[dict] = None
 ) -> None:
@@ -3656,8 +3799,13 @@ def _adopt_into_baton(
     this is a DERIVATION off that already-claimed artifact, not a new
     prompt-shape discrimination (the mint op's first-wins `first_prompt`
     policy is untouched; it does not run on this path). Only stamps when
-    the baton doesn't already carry a title, so a later, different
-    adoption in the same session never clobbers the first one. `title`
+    the baton doesn't already carry a title OR an intent, so a later,
+    different adoption in the same session never clobbers either one —
+    `merge_baton` itself plain-overwrites both fields on every call, so
+    first-wins here is entirely this gate's job (Review: reviewer
+    2026-09-01-codereview-sliceB #1 — a title-only gate let a title-less
+    first adoption's `intent` survive to a second adoption's overwrite).
+    `title`
     comes straight off the schema-required field; `intent` prefers
     `session_goal` (forward-looking, unlike the retrospective `summary`)
     and falls back to a `(from summary)`-prefixed `summary`, because
@@ -3700,10 +3848,13 @@ def _adopt_into_baton(
     }
     if fm:
         try:
-            already_titled = bool(read_baton(sid, cwd=str(repo_root)).get("title"))
+            _existing_baton = read_baton(sid, cwd=str(repo_root))
+            already_named = bool(_existing_baton.get("title")) or bool(
+                _existing_baton.get("intent")
+            )
         except Exception:  # noqa: BLE001 — naming is best-effort, never load-bearing
-            already_titled = True  # err toward not stamping over unknown state
-        if not already_titled:
+            already_named = True  # err toward not stamping over unknown state
+        if not already_named:
             title = fm.get("title")
             if title:
                 kwargs["title"] = title
@@ -5971,6 +6122,15 @@ _MEMO_ACTION_DECISION_MAP: dict[tuple[str, str], str] = {
     ("proposal", "adopt"): "accepted",
     ("proposal", "decline"): "declined",
     ("fyi", "surgical-fix"): "accepted",
+    # `fold-into-plan` is an ACCEPTED outcome on both kinds it is offered on:
+    # the fold is the action, and routing it through `--decision accepted`
+    # is what makes `realized_by` (the fold commit's SHA) required, so the
+    # edit is auditable from the memo record and not only from the plan's
+    # history. Without these two rows the disposition resolves
+    # `d-action-memo` with no decision channel and `cs_action_memo` fails
+    # loud at dispatch.
+    ("fyi", "fold-into-plan"): "accepted",
+    ("proposal", "fold-into-plan"): "accepted",
 }
 
 
@@ -6903,6 +7063,39 @@ def build_gate_recheck_directive(artifact_path: str) -> dict[str, Any]:
 #: entries, never on a `recommendation` object, which the shared seam
 #: (`contract/decision_object/judgment.py`) restricts to
 #: `disposition`/`rationale` only).
+# Review: overengineering-reviewer — this guidance and its comment were
+# duplicated byte-for-byte across the `proposal` and `fyi` "fold-into-plan"
+# entries below; hoisted to one constant so drift between the two copies is
+# no longer possible.
+#
+# `fold-into-plan` (2026-07-27 memo, PM-directed): the response to a memo
+# that kills a LIVE plan's premise. It resolves `d-action-memo` through the
+# `--decision accepted` channel so the fold is auditable from the memo
+# record by its `realized_by` SHA, not only from the plan's own history.
+_FOLD_INTO_PLAN_GUIDANCE = (
+    "The memo changes a LIVE plan's premise. Edit that plan and commit "
+    "— including, and especially, when another session owns or is "
+    "executing it: the commit is how that session finds out. A reply "
+    "reaches the sender's inbox and our inbound memo gets archived; the "
+    "executing EM reads neither, they read their chunk. Declining the "
+    "edit as someone else's surface is what destroys the finding. "
+    "ANNOTATE, never rewrite: mark stale text superseded-in-part with "
+    "the date and reason, and land it in the chunk body that EM reads "
+    "next rather than only a preamble. Do NOT re-scope, re-sequence, or "
+    "execute their chunks — change the premise record, leave the work. "
+    "STAGING DISCIPLINE, because this disposition invites writes into "
+    "files other sessions hold open: `git commit <pathspec>` commits the "
+    "WORKING TREE version of that path, so committing a plan a peer has "
+    "dirty sweeps their in-flight edit under your subject. When the file "
+    "already carries a peer's hunks, stage only your own — `git diff "
+    "<path>`, drop the hunks that are not yours, `git apply --cached`, "
+    "then commit the staged version. Never `git stash`. This disposition "
+    "maps to `--decision accepted`, so it requires `realized_by` "
+    "(the SHA of the fold commit); `cs_action_memo` fails loud without it. "
+    "`decision_note` is not enforced but is worth adding for the record."
+)
+
+
 _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
     "ask": [
         {
@@ -7089,6 +7282,16 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
                 "counter, however brief, rather than leaving `actioned_note` empty."
             ),
         },
+        {
+            # `fold-into-plan` (2026-07-27 memo, PM-directed): guidance
+            # hoisted to `_FOLD_INTO_PLAN_GUIDANCE`, shared verbatim with the
+            # `fyi` entry below (Review: overengineering-reviewer — this was
+            # a byte-identical duplicate; a single constant closes the drift
+            # axis).
+            "value": "fold-into-plan",
+            "resolves": ["d-action-memo"],
+            "guidance": _FOLD_INTO_PLAN_GUIDANCE,
+        },
     ],
     "fyi": [
         {
@@ -7108,9 +7311,24 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
             "value": "re-plan",
             "resolves": [],
             "guidance": (
-                "The FYI invalidates an existing plan's premise — the right response is "
-                "re-planning that surface, not a direct edit."
+                "The FYI invalidates an existing plan's premise deeply enough that the "
+                "surface needs re-planning rather than an annotation. Re-planning and "
+                "folding into the plan are responses to different MAGNITUDES, not a rule "
+                "against the smaller one — if the plan survives with its premise "
+                "corrected, `fold-into-plan` is the response, and choosing this one "
+                "instead leaves the executing session running on a premise the sender "
+                "already told us was dead."
             ),
+        },
+        {
+            # `fold-into-plan` (2026-07-27 memo, PM-directed): guidance
+            # hoisted to `_FOLD_INTO_PLAN_GUIDANCE`, shared verbatim with the
+            # `proposal` entry above (Review: overengineering-reviewer —
+            # this was a byte-identical duplicate; a single constant closes
+            # the drift axis).
+            "value": "fold-into-plan",
+            "resolves": ["d-action-memo"],
+            "guidance": _FOLD_INTO_PLAN_GUIDANCE,
         },
         {
             "value": "surgical-fix",
@@ -7551,11 +7769,27 @@ def _classify_stamp_delta(repo_root: Path, stamp_commit: str, path: str) -> str:
     return "bookkeeping" if saw_change else "substantive"
 
 
-#: The two directories a plan lives in, mirroring
+#: Review: overengineering-reviewer (finding 5) — DERIVED from
 #: `workstream_complete.directives_lessons_plan._GOVERNING_PLAN_GLOB_DIRS`
-#: rather than inventing a third convention. Path-shaped and O(1): no read,
-#: no spawn, on a per-pickup path.
-_PLAN_DIRS = ("docs/plans/", "tasks/plans/")
+#: rather than restating the convention a third time. The cycle objection
+#: that would argue for a literal is disproved by this module's own
+#: function-local import of that same module (see
+#: `compute_governing_plan_resolution`); at module scope the import is
+#: still a cycle, so this derives lazily on first use and caches. Path-
+#: shaped and O(1) thereafter: no read, no spawn, on a per-pickup path.
+_PLAN_DIRS_CACHE: tuple[str, ...] = ()
+
+
+def _plan_dirs() -> tuple[str, ...]:
+    """The trailing-slash directory prefixes a plan document lives under."""
+    global _PLAN_DIRS_CACHE
+    if not _PLAN_DIRS_CACHE:
+        from coordinator_core.workstream_complete.directives_lessons_plan import (
+            _GOVERNING_PLAN_GLOB_DIRS,
+        )
+
+        _PLAN_DIRS_CACHE = tuple(f"{d}/" for d in _GOVERNING_PLAN_GLOB_DIRS)
+    return _PLAN_DIRS_CACHE
 
 
 def _artifact_is_a_plan(artifact_path: str) -> bool:
@@ -7567,8 +7801,21 @@ def _artifact_is_a_plan(artifact_path: str) -> bool:
     no-pointer condition without satisfying the premise, which is the shape
     that fell through -- see the `else` arm there for what it cost.
     """
-    normalized = artifact_path.replace(chr(92), "/").lstrip("./")
-    return normalized.startswith(_PLAN_DIRS)
+    # Review: coordinator:code-reviewer — `str.lstrip("./")` strips a
+    # character SET, not a literal prefix: a traversal-shaped input like
+    # "../../docs/plans/x.md" has every leading "." and "/" collapsed away
+    # to "docs/plans/x.md" and is wrongly classified as an in-tree plan.
+    # `stamp_check.py` calls this function directly from argv with no
+    # upstream traversal guard (unlike `brief()`'s
+    # `_repo_relative_artifact_path`), so this path is live. Strip only a
+    # single literal leading "./", and refuse (never normalize) anything
+    # carrying a ".." segment.
+    normalized = artifact_path.replace(chr(92), "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    if any(part == ".." for part in normalized.split("/")):
+        return False
+    return normalized.startswith(_plan_dirs())
 
 
 def compute_execution_stamp_match(
@@ -8665,7 +8912,11 @@ def brief(
         sizing_disposition = compute_sizing_disposition(root, fm)
 
         narration, next_move = _ready_summary(classification, directives, judgment_points)
-        next_move = unsized_next_move_prefix(sizing_disposition) + next_move
+        next_move = (
+            execution_phase_prefix(fm)
+            + unsized_next_move_prefix(sizing_disposition)
+            + next_move
+        )
         if claim_grant.get("held_by_self"):
             # 2026-07-29 self-claim narration fix — an EM re-briefing an
             # artifact it claimed itself must be told plainly it already
@@ -8682,6 +8933,14 @@ def brief(
                 "artifact": artifact,
                 "preflight": preflight,
                 "sizing_disposition": sizing_disposition,
+                # The declared plan->execute seam, surfaced as a fact beside
+                # the derived one. Absence is continuation.
+                "handoff_phase": fm.get("handoff_phase"),
+                # The governing plan, through workstream-complete's own
+                # resolver so the two ceremonies cannot disagree.
+                "governing_plan_resolution": compute_governing_plan_resolution(
+                    root, fm
+                ),
                 "gates": gates_obj,
                 "directives": directives,
                 "judgment_points": judgment_points,
@@ -8904,10 +9163,26 @@ def brief(
     # `build_competing_claim_judgment_point` always returns `None`.
 
     narration, next_move = _ready_summary(classification, directives, judgment_points)
+    # Arm the reply obligation HERE, while the memo is still open and the EM
+    # can act on it -- not only in the terminal branches, where the same fact
+    # arrives as an audit finding about a memo already archived.
+    reply_prefix = reply_obligation_at_open(fm)
+    if reply_prefix:
+        next_move = reply_prefix + next_move
     return _emit_elision_aware(
         {
             "artifact": {**artifact, "kind_resolved": kind_resolved},
-            "preflight": {"tree_quiescence": tree_quiescence, "staleness": staleness, "closure_signals": []},
+            "preflight": {
+                "tree_quiescence": tree_quiescence,
+                "staleness": staleness,
+                "closure_signals": [],
+                # Review: code-reviewer P2 -- `closure_signals` is `list[dict]`
+                # everywhere else (`compute_closure_signals` emits
+                # `{"item_text": ..., "candidate_commits": [...], ...}`); a
+                # bare string sentinel in that key is a type trap for any
+                # future uniform-shape reader. Own key instead.
+                "reply_obligation": "reply-owed-on-action" if reply_prefix else None,
+            },
             "gates": {
                 "claim": claim,
                 "claim_grant": claim_grant,

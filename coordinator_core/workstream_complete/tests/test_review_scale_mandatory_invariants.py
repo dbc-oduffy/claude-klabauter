@@ -8,10 +8,10 @@ ships-no-brightline-inputs.md`, asks (a) and (c)).
 
 WHAT IT COST, since that is the argument for pinning rather than trusting the
 current shape: told "mandatory" and handed nothing to read, an EM hand-measured
-gross LOC across the commit RANGE `<oldest>~1..<newest>`. On a shared branch
-that range counts every peer commit landed in the window — it returned 33,246
-gross LOC where summing this session's own commits returns the true 16,037, and
-the inflated number reached the PM before it was caught.
+gross LOC across a shared-branch commit range and reported an inflated number
+that reached the PM before it was caught — see `directives_review.py`'s own
+"HOW BOTH ARE MEASURED" comment (the 33,246-vs-16,037 incident) for the full
+telling; not restated here.
 
 WHY THESE ARE PINS AND NOT A FIX. Ask (a) landed on 2026-08-31 at `b0ab8b1129`
 ("the unresolved review-scale arm stops reporting a measured negative"),
@@ -130,14 +130,39 @@ def test_the_reason_names_the_arm_that_tripped() -> None:
     assert "commits+" not in decision.reason
 
 
-def test_an_unmeasured_input_is_named_as_unmeasured_never_printed_as_a_value() -> None:
-    """The precise defect: `code_loc=None` inside "big-diff brightline hit"
-    reads as a measurement that came back empty. It is not a measurement at
-    all, and the verdict does not rest on it — both facts now say so."""
+def test_an_unmeasured_commits_or_surfaces_input_is_named_as_unable_to_change_the_verdict() -> None:
+    """`commits`/`surfaces` are pure OR-arms with no veto power: an unmeasured
+    reading of either genuinely cannot change a verdict already tripped by
+    another arm, and the reason string may say so."""
+    decision = _decide(commit_count=None)
+    assert "commit_count=None" not in decision.reason
+    assert "commits=None" not in decision.reason
+    assert "commits not measured, and cannot change this verdict" in decision.reason
+
+
+def test_an_unmeasured_code_loc_input_is_named_but_not_told_it_cannot_change_the_verdict() -> None:
+    """Review: coordinator:code-reviewer (a67271301efadc596) Finding 1 —
+    `code_loc` is not a peer of `commits`/`surfaces`: it alone carries veto
+    power via `code_loc_resolved_zero`. When `commits`/`surfaces` already
+    tripped row 4 while `code_loc` is still unmeasured, a later
+    `code_loc == 0` measurement WOULD flip the decision away from mandatory
+    partition — so the reason string must not claim it "cannot change this
+    verdict" the way it correctly does for `commits`/`surfaces`."""
     decision = _decide(code_loc=None)
     assert "code_loc=None" not in decision.reason
     assert "code_loc not measured" in decision.reason
-    assert "cannot change this verdict" in decision.reason
+    assert "code_loc not measured, and cannot change this verdict" not in decision.reason
+    assert "code_loc==0 measurement could still suppress this verdict" in decision.reason
+
+
+def test_code_loc_unmeasured_with_commits_and_surfaces_also_unmeasured_states_both_claims() -> None:
+    """When `code_loc` is unmeasured alongside a genuinely-unmeasured
+    `commits`/`surfaces` arm, both the narrower `code_loc` claim and the
+    unqualified `commits`/`surfaces` claim appear — neither one drowns out
+    the other."""
+    decision = _decide(code_loc=None, surface_count=None)
+    assert "surfaces not measured, and cannot change this verdict" in decision.reason
+    assert "code_loc==0 measurement could still suppress this verdict" in decision.reason
 
 
 def test_a_fully_measured_hit_carries_no_unmeasured_clause() -> None:

@@ -301,10 +301,12 @@ def test_magic_pathspec_colon_slash_dot_denies_in_hazard_repo(monkeypatch, tmp_p
 # ---------------------------------------------------------------------------
 
 
-#: state/bash-guards/known-red.json group "dispatch-checks-windows-path"
-#: (check_blanket_git_add stripping backslashes). Owner:
-#: docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md.
-@pytest.mark.pending_fix
+#: FIXED 2026-09-01, `pending_fix` retired with the defect. The guard used to
+#: strip every backslash out of its operand text, which on `nt` deleted the
+#: separators in a drive-absolute operand so it no longer matched the
+#: absolute-pathspec arm at all. The strip is now POSIX-only (a backslash is an
+#: escape there, not a separator). Formerly known-red group
+#: "dispatch-checks-windows-path".
 def test_absolute_pathspec_equal_to_repo_root_denies_in_hazard_repo(monkeypatch, tmp_path):
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
@@ -315,7 +317,6 @@ def test_absolute_pathspec_equal_to_repo_root_denies_in_hazard_repo(monkeypatch,
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-@pytest.mark.pending_fix
 def test_absolute_pathspec_trailing_slash_equal_to_repo_root_denies_in_hazard_repo(
     monkeypatch, tmp_path
 ):
@@ -326,6 +327,44 @@ def test_absolute_pathspec_trailing_slash_equal_to_repo_root_denies_in_hazard_re
     result = guard.check_blanket_git_add("git add %s/" % root, "sess1")
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_absolute_pathspec_denies_in_the_backslash_spelling(monkeypatch, tmp_path):
+    """The actual regression, stated in the spelling a Windows operator types.
+    `_wire_git_root` hands back a real `tmp_path` root, so the operand and the
+    resolved root differ only in separator -- which is the whole bug."""
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    _wire_git_root(monkeypatch, str(root))
+    _wire_hazard(monkeypatch, is_hazard=True)
+    backslashed = str(root).replace("/", "\\")
+    result = guard.check_blanket_git_add("git add %s" % backslashed, "sess1")
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_both_separator_spellings_reach_the_same_verdict(monkeypatch, tmp_path):
+    """The property the guard owes, and the one a per-spelling test cannot
+    state: a verdict may not depend on which separator was typed for the same
+    path. Before the fix these two disagreed."""
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    _wire_git_root(monkeypatch, str(root))
+    _wire_hazard(monkeypatch, is_hazard=True)
+    fwd = guard.check_blanket_git_add("git add %s" % str(root).replace("\\", "/"), "s")
+    back = guard.check_blanket_git_add("git add %s" % str(root).replace("/", "\\"), "s")
+    assert (fwd is None) == (back is None)
+
+
+def test_a_scoped_subtree_in_the_backslash_spelling_still_passes(monkeypatch, tmp_path):
+    """False-positive floor. Preserving separators must not convert the
+    root-not-subtree asymmetry into a denial for a genuinely scoped add."""
+    root = tmp_path / "repo"
+    (root / "sub").mkdir(parents=True, exist_ok=True)
+    _wire_git_root(monkeypatch, str(root))
+    _wire_hazard(monkeypatch, is_hazard=True)
+    sub = str(root / "sub").replace("/", "\\")
+    assert guard.check_blanket_git_add("git add %s" % sub, "sess1") is None
 
 
 def test_absolute_pathspec_subdirectory_allows_in_hazard_repo(monkeypatch, tmp_path):

@@ -832,13 +832,41 @@ def _extract_commit_trailing_pathspecs(seg: str) -> Optional[List[str]]:
     if i + 1 >= len(tokens) or tokens[i] != "git" or tokens[i + 1] != "commit":
         return None
     rest = tokens[i + 2:]
-    if "--" not in rest:
+    if "--" in rest:
+        last_dd = len(rest) - 1 - rest[::-1].index("--")
+        paths = rest[last_dd + 1:]
+        if not paths:
+            return None
+        return paths
+    # `-o`/`--only <paths>` selects git's SAME index-bypassing self-scoped
+    # mode with no `--` anywhere, so keying this extractor on the separator
+    # made Check 13 structurally not-applicable to half the scoped-commit
+    # surface. On the 2026-08-03 incident command shape that was the second
+    # of two independent silences: the advisory was suppressed by a
+    # directory operand, and this check never evaluated the command at all.
+    # Spinoff: `state/handoffs/2026-08-03-commit-scope-guard-predicates.md`.
+    #
+    # The operand walk is DELEGATED, never re-implemented here. The import
+    # is function-local because `dispatch_checks` imports this module at
+    # its own import time; by the time any guard calls this, that module is
+    # already in `sys.modules`, so this costs a dict lookup and no import
+    # work on the PreToolUse hot path. Re-walking tokens locally would be a
+    # third dialect of the same parse -- the exact two-independent-
+    # recognizers defect the spinoff exists to remove.
+    try:
+        from coordinator_core.bash_guards.dispatch_checks import (
+            _bt_commit_operand_scan,
+        )
+    except ImportError:
         return None
-    last_dd = len(rest) - 1 - rest[::-1].index("--")
-    paths = rest[last_dd + 1:]
-    if not paths:
+    operands, ambiguous, has_include, has_only = _bt_commit_operand_scan(tokens[i:])
+    # Fail CLOSED to not-applicable, the posture this function already
+    # documents above: an ambiguous parse, `--include` (which scopes
+    # nothing), or `--only` naming no paths gives this check nothing it can
+    # safely reason about.
+    if ambiguous or has_include or not has_only or not operands:
         return None
-    return paths
+    return operands
 
 
 from coordinator_core.bash_guards._override_log_path import _override_log_path

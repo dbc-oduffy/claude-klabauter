@@ -1,9 +1,7 @@
 """Measure each of the three gates `run_commit_pipeline` ran before landing a
 commit -- `deletion_block_gate`, `carry_gate`, `op_scope_coverage_gate` --
-in-process, against a ceremony-sized path set. (A fourth gate,
-`dirty_tree_gate`, was probed here until its deletion under the brightline
-kill bar -- it had zero production callers of its own, unlike the other
-three, and was removed outright rather than carried forward.)
+in-process, against a ceremony-sized path set. (A fourth gate, `dirty_tree_gate`,
+was probed here until its brightline-kill-bar deletion -- Review: overengineering-reviewer.)
 
 THE QUESTION THIS ANSWERS, and it is the one the P1 asks rather than a
 general benchmark: `run_commit_pipeline` was killed at the 500ms brightline

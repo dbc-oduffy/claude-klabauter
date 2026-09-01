@@ -2821,6 +2821,42 @@ def _wg_fleet_delegation_write_fire(
     }
 
 
+def _wg_foreign_family_sidecar_write_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """Fires `block_foreign_family_sidecar_write.check`: a same-family,
+    different-member sidecar write -- the 2026-08-31 incident shape (an
+    integrator stamping its receipt into a sibling integrator's leaf).
+    `resolve_repo_root`/`_resolve_subagent_identity`/
+    `_read_backpointer_subagent_type` are monkeypatched open on the guard's
+    own module, matching `_wg_subagent_plan_body_write_fire`'s precedent for
+    the identical back-pointer-chain shape -- a real
+    `.git/coordinator-sessions/` fixture is this guard's own unit-test
+    concern (`test_block_foreign_family_sidecar_write.py`), not this
+    corpus's."""
+    from coordinator_core.write_guards import (
+        block_foreign_family_sidecar_write as guard_mod,
+    )
+
+    mp.setattr(guard_mod, "resolve_repo_root", lambda cwd: str(scratch_dir))
+    mp.setattr(guard_mod, "_resolve_subagent_identity", lambda raw, session_id: raw)
+    mp.setattr(
+        guard_mod,
+        "_read_backpointer_subagent_type",
+        lambda git_root, agent_id, expected_em_session_id=None: "coordinator:review-integrator",
+    )
+    return {
+        "tool_name": "Write",
+        "tool_input": {
+            "file_path": "state/subagent-share/sess-fff/coordinatorreview-integrator.siblingagent0123.md",
+            "content": "integrated_from: [x]\n",
+        },
+        "cwd": str(scratch_dir),
+        "agent_id": "deadbeef0123",
+        "session_id": "sess-fff",
+    }
+
+
 def _wg_session_display_name_as_identifier_fire(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, Any]:
@@ -2891,6 +2927,13 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
         "block_fleet_delegation_write", "fire", True, _wg_fleet_delegation_write_fire
     ),
     WriteGuardRow("block_fleet_delegation_write", "control", False, _wg_benign),
+    WriteGuardRow(
+        "block_foreign_family_sidecar_write",
+        "fire",
+        True,
+        _wg_foreign_family_sidecar_write_fire,
+    ),
+    WriteGuardRow("block_foreign_family_sidecar_write", "control", False, _wg_benign),
     WriteGuardRow("block_goals_log_hand_write", "fire", True, _wg_goals_log_fire),
     WriteGuardRow("block_goals_log_hand_write", "control", False, _wg_benign),
     WriteGuardRow("block_home_dir_memo_delivery", "fire", True, _wg_home_dir_memo_delivery_fire),

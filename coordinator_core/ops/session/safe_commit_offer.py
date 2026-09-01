@@ -1120,9 +1120,12 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
     # failed readout still labels every owner `undetermined` exactly as the
     # deleted per-path helper did.
     try:
-        _live_now = live_session_ids(cwd)
+        # Review: coordinator:code-reviewer — no leading underscore; this is
+        # not a throwaway, it's the resolved value every loop iteration below
+        # depends on.
+        live_now = live_session_ids(cwd)
     except Exception:  # noqa: BLE001 - a readout must never raise
-        _live_now = None
+        live_now = None
     for path in sorted(answer.contested):
         holders = answer.contested[path]
         excluded.append(
@@ -1135,7 +1138,7 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
             {
                 "path": path,
                 "owner": holders[0],
-                "liveness": _liveness_from_set(holders[0], _live_now),
+                "liveness": _liveness_from_set(holders[0], live_now),
                 # Every claim the index carries is a session claim by the time
                 # it is read: `rebuild` has already resolved an agent's claim
                 # back to the EM session that owns it, so there is no

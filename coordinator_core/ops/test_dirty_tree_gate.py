@@ -10,10 +10,12 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
-from coordinator_core.ops.dirty_tree_gate import _resolve_plugin_root, main
+from coordinator_core import claim_state
+from coordinator_core.ops.dirty_tree_gate import _build_known_scope, _resolve_plugin_root, main
 from coordinator_core.testing.doe_root import resolve_doe_root
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -315,3 +317,72 @@ def test_unknown_argument_exits_two(tmp_path, isolated_plugin_root, capsys):
     repo = _make_repo(tmp_path, "t9")
     rc, out = _run_gate(repo, "--bogus", capsys=capsys)
     assert rc == 2
+
+
+# ---------------------------------------------------------------------------
+# _build_known_scope — claim-ledger desync (AC4, docs/plans/2026-08-07-claim-
+# state-ledger-first-authoritative-read.md § C3)
+#
+# Review: overengineering-reviewer — migrated from
+# ops/ceremony/tests/test_commit_gates_known_scope.py, whose lockstep-parity
+# purpose (running this predicate side-by-side with a second, now-deleted
+# `ceremony/commit_gates.py::_build_known_scope` copy) died when 629cd7724b
+# deleted the second copy. Not already covered by the case-(b) tests above,
+# which exercise a mirror `claimed_by`/`consumed_by` field rather than a
+# claim-ledger-only desync.
+# ---------------------------------------------------------------------------
+
+
+def _write_desynced_handoff(repo: Path, name: str) -> Path:
+    """A handoff whose tracked frontmatter mirror is reverted to `open` (no
+    claimed_by/consumed_by) but that a peer session still holds via the claim
+    ledger -- the exact branch-switch-revert desync AC4 exists to fix."""
+    (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
+    handoff = repo / "state" / "handoffs" / name
+    handoff.write_text(
+        "---\n"
+        "status: open\n"
+        "scope:\n"
+        "  - peers/owned-file.txt\n"
+        "category: workstream\n"
+        "---\n"
+        "\n# desynced peer handoff\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "--", f"state/handoffs/{name}")
+    _git(repo, "commit", "-q", "-m", "seed: desynced peer handoff")
+    return handoff
+
+
+def _write_ledger_claim(repo: Path, handoff_name: str, session_id: str = "peer-session-id") -> None:
+    common_dir = repo / ".git"
+    claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff_name
+    claim_dir.mkdir(parents=True, exist_ok=True)
+    (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
+    (claim_dir / "claimed_at").write_text("2026-08-07T10:00:00Z", encoding="utf-8")
+
+
+def test_known_scope_desynced_handoff_scope_paths_survive(tmp_path):
+    repo = _make_repo(tmp_path, "t10")
+    handoff_name = "2026-08-07_120000_peer.md"
+    _write_desynced_handoff(repo, handoff_name)
+    _write_ledger_claim(repo, handoff_name)
+
+    handoffs_dir = str(repo / "state" / "handoffs")
+    with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=True):
+        known_scope = _build_known_scope(handoffs_dir, repo_root=str(repo))
+
+    assert "peers/owned-file.txt" in known_scope
+
+
+def test_known_scope_dead_ledger_holder_no_mirror_drops_scope(tmp_path):
+    repo = _make_repo(tmp_path, "t11")
+    handoff_name = "2026-08-07_120001_dead.md"
+    _write_desynced_handoff(repo, handoff_name)
+    _write_ledger_claim(repo, handoff_name, session_id="dead-session-id")
+
+    handoffs_dir = str(repo / "state" / "handoffs")
+    with mock.patch.object(claim_state, "cs_claim_holder_live", return_value=False):
+        known_scope = _build_known_scope(handoffs_dir, repo_root=str(repo))
+
+    assert "peers/owned-file.txt" not in known_scope

@@ -1499,6 +1499,63 @@ class TestClearClaimIfDeadArtifactClass:
         assert claims.clear_claim_if_dead("bogus", "x", cwd=str(repo)) is False
 
 
+class TestClaimArtifactRefusesTheArtifactClass:
+    """`artifact` is releasable and clearable, never claimable.
+
+    `release_artifact` and `clear_claim_if_dead` both early-route this class
+    to the path-touch plane. `claim_artifact` has no such route by design --
+    a touch-claim is recorded by touching the path, never declared ahead of
+    one -- and before this refusal existed it fell through to the classed
+    `<class>-claims/<basename>` mkdir, where an artifact-class basename's
+    path separators produced FileNotFoundError.
+    """
+
+    _TARGET = "coordinator/commands/workday-start.md"
+
+    def test_refused_and_nothing_is_claimed(self, tmp_path, monkeypatch, capsys):
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        assert claims.claim_artifact("artifact", self._TARGET, cwd=str(repo)) is False
+        # No claim record anywhere -- not under the classed store, and not in
+        # the touch plane either, which the caller never touched.
+        assert not (Path(repo) / ".git" / "coordinator-sessions" / "artifact-claims").exists()
+        base = str(Path(repo) / ".git" / "coordinator-sessions")
+        assert claim_index.lookup([self._TARGET], sessions_dir=base)[self._TARGET] == []
+
+    def test_refusal_does_not_advise_stripping_the_path(self, tmp_path, monkeypatch, capsys):
+        """The generic OSError handler's advice is wrong for THIS class.
+
+        "If it looks like a path, pass the basename alone" is right for
+        handoff/memo/plan and exactly wrong here, where a repo-relative path
+        IS the documented input. A caller following it would claim a
+        different key in a different plane and be told nothing was wrong.
+        """
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        claims.claim_artifact("artifact", self._TARGET, cwd=str(repo))
+        err = capsys.readouterr().err
+        assert "pass the basename alone" not in err
+        assert "not claimable" in err
+        # Names where the class IS valid, so the refusal routes rather than
+        # just denying.
+        assert "release-artifact" in err
+        assert "clear-claim-if-dead" in err
+
+    def test_a_bare_basename_is_refused_too_not_silently_reinterpreted(
+        self, tmp_path, monkeypatch
+    ):
+        """The refusal is on the CLASS, never on whether the arg has slashes.
+
+        Refusing only path-shaped input would leave `claim-artifact artifact
+        workday-start.md` succeeding against the classed store -- a claim in
+        the wrong plane that reports success, which is the outcome this
+        refusal exists to prevent.
+        """
+        repo = _make_repo(tmp_path)
+        _set_me(monkeypatch)
+        assert claims.claim_artifact("artifact", "workday-start.md", cwd=str(repo)) is False
+
+
 class TestReleaseArtifactArtifactClass:
     _TARGET = "coordinator/commands/workday-start.md"
 
@@ -3094,8 +3151,21 @@ class TestDeadHolderResidueParsing:
             returncode = 0
             timed_out = False
 
+        # Patch `run_git`, NOT `subprocess.run`. This stub has now decayed
+        # TWICE by the same mechanism, and the second time was worse than the
+        # first. `_dirty_paths` moved off a direct `subprocess.run` onto
+        # `coordinator_core.git.run.run_git`; the old patch target stopped
+        # intercepting anything, and instead of erroring the test ran
+        # `git status --porcelain` against the REAL repo and asserted
+        # `"old/name.py" in <this checkout's actual dirty files>`. That fails
+        # or passes on working-tree state unrelated to the code under test --
+        # on a clean tree it is a false green.
+        #
+        # `_dirty_paths` imports `run_git` inside its own body, so patching
+        # the SOURCE module is what takes effect; there is no module-level
+        # attribute on `claims` to replace.
         monkeypatch.setattr(
-            "subprocess.run", lambda *a, **k: _Result()
+            "coordinator_core.git.run.run_git", lambda *a, **k: _Result()
         )
         got = claims._dirty_paths(".")
         assert "old/name.py" in got, got

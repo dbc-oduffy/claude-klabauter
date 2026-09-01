@@ -45,6 +45,17 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _init_git_repo(root: Path) -> None:
+    # IDEMPOTENT ON PURPOSE. This helper is called from inside the
+    # monkeypatched `load_targets` fake, so it runs once per RESOLUTION, not
+    # once per test. `publish.py` resolves targets twice now -- `main()` with
+    # the `--target` filter, and `_declared_repo_roots_carrying_
+    # coordinator_core` unfiltered -- so a second call re-seeded an already
+    # committed repo and `git commit` failed "nothing to commit, working tree
+    # clean". Guarding here rather than counting call sites: a fixture that
+    # cannot be invoked twice encodes a production call count no test should
+    # be asserting by accident.
+    if (root / ".git").is_dir():
+        return
     def _git(*args: str) -> None:
         subprocess.run(
             ["git", *args],
@@ -98,7 +109,7 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
         publish, "_resolve_percolate_root_and_rung", lambda **kw: (tmp_path, "test-rung")
     )
     monkeypatch.setattr(
-        publish, "load_targets", lambda setup_dir, target_filter=None: [
+        publish, "load_targets", lambda setup_dir, target_filter=None, **_: [
             fake_row(n) for n in _ROW_NAMES
         ]
     )
@@ -170,7 +181,13 @@ def test_gate_declined_row_is_not_counted_succeeded(monkeypatch, tmp_path, capsy
     combined = captured.out + captured.err
 
     assert rows_reached == _ROW_NAMES
-    assert "Done. 2 target(s) processed." in combined
+    # "FAILED.", not "Done." -- `3ce12f31b2` (2026-08-30, "stop the headline
+    # lying about a fail-closed row") deliberately stopped the headline
+    # reading Done when a row failed. This assertion predated that by ten days
+    # and pinned the lie; it was masked until 2026-09-01 by an unrelated
+    # TypeError erroring the test out before it could fail.
+    assert "FAILED. 2 target(s) processed" in combined
+    assert "Done. 2 target(s) processed." not in combined
     assert "Rows succeeded: 2/3" in combined
     assert _SKIPPED_ROW not in combined.split("Rows succeeded:")[1].split("\n")[0]
     assert "Rows FAILED" in combined and _SKIPPED_ROW in combined.split("Rows FAILED")[1]

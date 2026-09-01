@@ -307,7 +307,10 @@ _SUBCOMMANDS = (
     "list-stale-claim-handoffs | list-claims-by-session | who-claims-path\n"
     "  <class>: handoff | memo | plan (basename-keyed claim records), or "
     "'artifact' (path-touch plane — basename is a repo-relative PATH; this "
-    "is how a path claim who-claims-path reports is released)"
+    "is how a path claim who-claims-path reports is released)\n"
+    "  'artifact' is valid on release-artifact and clear-claim-if-dead ONLY. "
+    "claim-artifact refuses it: a touch-claim is recorded by touching the "
+    "path, never declared ahead of one."
 )
 
 _HELP_FLAGS = ("--help", "-h", "help")

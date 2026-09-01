@@ -2,13 +2,10 @@
 TYPE, not a string a caller has to regex out of a generic RuntimeError.
 
 WHAT THIS EXISTS TO PIN. `-32004 WARM_DISPATCH_INDETERMINATE` is the one
-refusal that says nothing about whether the write landed, and the client
-cannot narrow it: `warm/client.py :: _try_warm_dispatch_inner` sets
-`delivered` immediately after `flush()`, and its own zero-byte branch already
-concedes that flush "proves the bytes left THIS process into the pipe buffer
--- it never proved the server read them". Delivered-then-stalled and
-died-mid-flight are therefore indistinguishable at that layer BY
-CONSTRUCTION, and no amount of work on the envelope recovers the answer.
+refusal that says nothing about whether the write landed — see
+`cc_invoke.WarmDispatchIndeterminate`'s own class docstring for the
+flush/delivered mechanics that make it structurally unrecoverable (the
+canonical telling; not restated here).
 
 The only thing that can recover it is a caller reconciling against the
 artifact the op would have written. That caller has to be able to CATCH this
@@ -89,14 +86,41 @@ def test_indeterminate_is_a_runtimeerror_subclass():
         "[1, 2, 3]",                                   # JSON, not an object
         json.dumps({"jsonrpc": "2.0", "result": {}}),  # success envelope
         json.dumps({"error": "a bare string, not a dict"}),
+        json.dumps({"error": {}}),                      # present but keyless error
     ],
-    ids=["empty", "blank", "not-json", "json-array", "success", "error-not-a-dict"],
+    ids=[
+        "empty",
+        "blank",
+        "not-json",
+        "json-array",
+        "success",
+        "error-not-a-dict",
+        "error-keyless-dict",
+    ],
 )
 def test_stdout_error_code_returns_none_for_everything_that_is_not_a_code(stdout_text):
     """Never raises and never guesses -- this runs on a failing path, and a
     wrong answer here would RECLASSIFY a failure rather than merely fail to
-    decorate one."""
+    decorate one.
+
+    # Review: `{"error": {}}` added to close the gap named in the sliceD
+    # review -- a present-but-keyless `error` reaches `_parse_stdout_envelope`
+    # as a real dict (not the None returned for "not an envelope at all"),
+    # and `_stdout_error_code` must still fall through to None via
+    # `err.get("code")` returning None, not conflate the two `None` reasons.
+    """
     assert _mod._stdout_error_code(stdout_text) is None
+
+
+def test_parse_stdout_envelope_distinguishes_not_an_envelope_from_no_error_key():
+    """`_parse_stdout_envelope` returns `None` only for "not parseable as an
+    envelope" -- a valid envelope dict with no `error` key (or a keyless
+    `error`) comes back as the dict itself, so callers can still tell the two
+    `None` reasons apart downstream via `parsed.get("error")`."""
+    assert _mod._parse_stdout_envelope("not json at all") is None
+    assert _mod._parse_stdout_envelope("[1, 2, 3]") is None
+    success = json.dumps({"jsonrpc": "2.0", "result": {}})
+    assert _mod._parse_stdout_envelope(success) == {"jsonrpc": "2.0", "result": {}}
 
 
 def test_stdout_error_code_recovers_the_code():

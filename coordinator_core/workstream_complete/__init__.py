@@ -512,7 +512,10 @@ def _all_free_value_keys() -> tuple[str, ...]:
 DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS: dict[str, str] = {
     "governing_plan_slug": "preflight.governing_plan_resolution.slug",
     "governing_plan_path": "preflight.governing_plan_resolution.path",
-    "stage_paths": "gates.stage_paths_candidates",
+    # "stage_paths" removed (review: overengineering-reviewer, finding #2):
+    # its one source, `gates.stage_paths_candidates`, always resolved to
+    # `None` (its one consumer, `d-run-wsc-tail`, was killed 2026-08-23) —
+    # a pre-fill nothing ever populated. Deleted with the gate itself.
 }
 
 
@@ -5009,10 +5012,11 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     # wsc_tail kill, 2026-08-23): `d-run-wsc-tail` no longer exists, so
     # `jp-completion-entry-scaffold`/`jp-commit-subject-missing`/
     # `jp-stage-paths-missing` have nothing left to gate. AC5's
-    # `stage_paths` template pre-fill source (`gates.stage_paths_
-    # candidates`) is left wired below, always `None` now — see
-    # `directives_commit_tail.py`'s module docstring for the removed step.
-    stage_paths_candidates: Optional[list[str]] = None
+    # `stage_paths` template pre-fill source (`gates.stage_paths_candidates`)
+    # was itself dead structure kept unconditionally `None` — struck
+    # entirely (review: overengineering-reviewer, finding #2) rather than
+    # kept wired-but-inert; see `directives_commit_tail.py`'s module
+    # docstring for the removed step this was pre-filling for.
 
     # AC3/AC4 — either leg fires -> emit ONE judgment point, then depend
     # every attribution/tail directive on it. Keyed on `consumed_handoff_
@@ -5210,16 +5214,16 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
     if _decided_session_shape_disposition is not None:
         session_shape_fact["disposition"] = _decided_session_shape_disposition
 
-    # AC5 — the ONLY three free-value keys `build_decisions_template`
+    # AC5 — the ONLY two free-value keys `build_decisions_template`
     # pre-fills from data this SAME run already resolved (`DECISIONS_
     # TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS`), threaded from the SAME local
     # variables the envelope below reads for `preflight.governing_plan_
-    # resolution`/`gates.stage_paths_candidates` — never re-derived a second
-    # time here.
+    # resolution` — never re-derived a second time here. (A third key,
+    # `stage_paths`, was struck along with `gates.stage_paths_candidates` —
+    # review: overengineering-reviewer, finding #2.)
     resolved_free_values = {
         "governing_plan_slug": governing_plan.slug if governing_plan else None,
         "governing_plan_path": str(governing_plan.path) if governing_plan else None,
-        "stage_paths": stage_paths_candidates,
     }
 
     # A (spec backlink above): a trail-ready `review_scale.commit_slices`
@@ -5332,7 +5336,6 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "review_receipt": review_receipt_gate._asdict(),
             "consumed_handoff_completeness": consumed_handoff_completeness_gate._asdict(),
             "review_scale": review_scale_payload,
-            "stage_paths_candidates": stage_paths_candidates,
             "repo_identity": repo_identity_gate,
             "completion_verdict": completion_verdict_payload,
         },

@@ -3888,3 +3888,64 @@ def test_log_fail_open_rotates_before_appending(tmp_path, monkeypatch):
 
     assert log_path.with_name("fail-open.log.1").read_text(encoding="utf-8") == "x" * 20
     assert "sess-rot-1" in log_path.read_text(encoding="utf-8")
+
+
+class TestLegacyPushForceScanIgnoresWrapperOwnFlags:
+    """A spawning wrapper's own flags are not git's flags (2026-09-01).
+
+    `_evaluate_git_segment_legacy` gated the push-force check on a free-text
+    `\bpush\b` and then scanned the WHOLE segment for `--force`/`-f`/
+    `+refspec`. `/usr/bin/time -f "%e" git push` therefore denied as `git
+    push --force`: `time` takes `-f FORMAT`, and the push is a plain
+    no-argument push.
+
+    The legacy path is where a WRAPPED invocation lands -- every anchored
+    caller requires `tokens[0]` to normalize to `git`, so `time`/`env`/`nice`
+    heads skip the anchored path entirely and never got the `remaining_text`
+    scoping the anchored path's other option gates already have.
+
+    `_seg_forcing_form_scan_text` narrows the scan to the tokens at-and-after
+    the `git` token. Both directions asserted -- a deny-guard needs coverage
+    on the inputs it must NOT fire on, which is the gap that let this ship.
+
+    Reported by example-retrieval-repo-em, `cross-repo/inbox/2026-09-01-example-retrieval-repo-em-
+    push-cadence-cap-below-noop-floor.md`; the reporter found it because it
+    made measuring a push the one command they could not run.
+    """
+
+    # ---- direction 1: wrapper flags must not fire the force deny ----
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            '/usr/bin/time -f "%e" git ' + "push",
+            '/usr/bin/time -f "%e" git ' + "push" + " --dry-run origin HEAD",
+            "env -f other.env git " + "push" + " origin main",
+            "nice -n 5 git " + "push" + " origin main",
+        ],
+    )
+    def test_wrapper_own_dash_f_does_not_deny(self, cmd):
+        assert guard._evaluate_git_segment_legacy(cmd, False) is None
+
+    # ---- direction 2: a real forcing push still denies, wrapped or not ----
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git " + "push" + " origin main --" + "force",
+            "git " + "push" + " origin main -f",
+            "git " + "push" + " origin +main",
+            '/usr/bin/time -f "%e" git ' + "push" + " origin main --" + "force",
+            '/usr/bin/time -f "%e" git ' + "push" + " origin main -f",
+            "env -f other.env git " + "push" + " origin +main",
+        ],
+    )
+    def test_real_forcing_push_still_denies(self, cmd):
+        assert guard._evaluate_git_segment_legacy(cmd, False) == "git " + "push" + " --" + "force"
+
+    def test_plain_push_still_allowed(self):
+        assert guard._evaluate_git_segment_legacy("git " + "push" + " origin main", False) is None
+
+    def test_force_with_lease_still_allowed(self):
+        cmd = "git " + "push" + " --" + "force" + "-with-lease origin main"
+        assert guard._evaluate_git_segment_legacy(cmd, False) is None

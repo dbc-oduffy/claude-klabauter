@@ -441,13 +441,25 @@ def main(argv: "list[str] | None" = None) -> int:
         )
         return 1
 
+    # FORWARD THE FILE, NEVER THE RESOLVED PROSE. `resolve_body` above reads
+    # `--body-file` INTO `args.body`, which is right for the dedup check and
+    # wrong for argv: `coordinator-queue-append` refuses a `--body` carrying a
+    # newline and answers "pass --body-file instead" -- advice the caller had
+    # already taken, one hop up. Every multi-line lesson therefore died at
+    # exit 2 with `no lesson was written`, and from a close ceremony that
+    # lands AFTER the commit tail, so the ceremony read as done and the
+    # lesson was simply gone. Inline `--body` stays inline: it is
+    # newline-free by `refuse_newline_argv` above, so it cannot hit that arm.
     cmd = [
         *cli_cmd,
         "--schema", "lessons",
         "--title", args.title,
-        "--body", args.body,
         "--scope", args.scope,
     ]
+    if args.body_file:
+        cmd += ["--body-file", args.body_file]
+    else:
+        cmd += ["--body", args.body]
     if args.target_wiki:
         cmd += ["--target-wiki", args.target_wiki]
     if args.proposed_target:
@@ -456,7 +468,10 @@ def main(argv: "list[str] | None" = None) -> int:
         cmd += ["--evidence", args.evidence]
     if args.trigger:
         cmd += ["--trigger", args.trigger]
-    if args.why:
+    if args.why_file:
+        # Same seam as `--body-file` above, same failure mode.
+        cmd += ["--why-file", args.why_file]
+    elif args.why:
         cmd += ["--why", args.why]
     if args.how_to_apply:
         cmd += ["--how-to-apply", args.how_to_apply]

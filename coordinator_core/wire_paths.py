@@ -62,5 +62,11 @@ def plans_dir(root: Path) -> Path:
     before calling this. Callers should use this instead of composing
     ``root / "docs" / "plans"`` inline, so the two planes cannot disagree
     about where plans live.
+
+    Kept at one in-repo caller deliberately: the caller count is not the
+    justification, the named cross-repo seam above is. Inlining it at that
+    sole caller would leave the sibling plane's backlink pointing at a
+    composition rather than a function, which is the disagreement this
+    emitter exists to prevent.
     """
     return root / "docs" / "plans"

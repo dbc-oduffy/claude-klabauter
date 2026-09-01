@@ -1256,14 +1256,8 @@ def _provision_plan_derivable_doc(
 
     doc_path = plan_sidecars_dir / f"{plan_stem}.{lens}.md"
     spawned_at = datetime.now(timezone.utc).isoformat()
-    # Review: overengineering-reviewer flagged (and this integration verified)
-    # a since-removed second `_declared_plan_disagrees_with_stem` call here
-    # that re-scanned this skeleton's own `plan:` line. It cannot fire
-    # independently of the check above: the sole `_TEMPLATE_REGISTRY` builder
-    # that emits `plan:` at all writes it verbatim as `f"plan: {plan_path or
-    # ''}"`, so the value this call would re-derive is byte-identical to
-    # `plan_path`, already checked. Removed to drop a full-document
-    # split-and-scan from a per-dispatch hook path.
+    # Review: overengineering-reviewer — redundant second `_declared_plan_disagrees_with_stem`
+    # scan removed here; see this commit's message for why.
     doc_text = _build_doc_text(
         agent_type, spawned_at, doc_type, lead_session_id=session_id, plan_path=plan_path
     )

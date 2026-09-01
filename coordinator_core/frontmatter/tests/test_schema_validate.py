@@ -5650,6 +5650,14 @@ class TestMemoRuleKindEnum:
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'kind' for e in errors)
 
+    def test_valid_kind_bug(self):
+        # Review: overengineering-reviewer — 'bug' was added to _memo_compose
+        # and _outbox_frontmatter_rules but not here; a memo drafted with
+        # --kind bug passed the sender and was then rejected by this validator.
+        fm = _valid_memo(kind='bug')
+        errors = validate_memo_cross_fields(fm)
+        assert not any(e['field'] == 'kind' for e in errors)
+
     def test_invalid_kind_ack_fails(self):
         """'ack' is NOT a valid kind — acknowledgement is receipt-state."""
         fm = _valid_memo(kind='ack')

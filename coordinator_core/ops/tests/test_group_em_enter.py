@@ -14,7 +14,7 @@ from coordinator_core.ops import group_em_enter as gee
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 
 
-def test_payload_has_exactly_four_keys(tmp_path, monkeypatch):
+def test_payload_has_exactly_five_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-1")
     monkeypatch.setattr(
         gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: []
@@ -37,7 +37,7 @@ def test_payload_has_exactly_four_keys(tmp_path, monkeypatch):
 
     result = gee._group_em_enter({"repo_root": str(tmp_path)})
 
-    assert set(result.keys()) == {"nomination", "roster", "digest", "baseline"}
+    assert set(result.keys()) == {"nomination", "roster", "digest", "baseline", "teammates"}
 
 
 def test_mutating_classification_registered():
@@ -347,7 +347,7 @@ def test_pid_not_running_incumbent_is_auto_replaced_not_refused(tmp_path, monkey
     assert "baseline_error" not in result
 
 
-def test_successful_claim_still_returns_all_four_keys(tmp_path, monkeypatch):
+def test_successful_claim_still_returns_all_five_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-9")
     monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: [])
     monkeypatch.setattr(
@@ -373,7 +373,7 @@ def test_successful_claim_still_returns_all_four_keys(tmp_path, monkeypatch):
 
     result = gee._group_em_enter({"repo_root": str(tmp_path)})
 
-    assert set(result.keys()) >= {"nomination", "roster", "digest", "baseline"}
+    assert set(result.keys()) >= {"nomination", "roster", "digest", "baseline", "teammates"}
     assert result["nomination"]["claimed"] is True
     assert result["nomination"]["already_held"] is False
     assert result["roster"] == []
@@ -506,3 +506,130 @@ def test_baseline_leg_writes_under_the_acted_on_repo_root_not_claude_klabauter(t
         )
     )
     assert not claude_klabauter_store_after, "baseline snapshot must NOT land under the claude-klabauter checkout"
+
+
+def _crown_with_teammates(tmp_path, monkeypatch, metas, session_id):
+    """Plant `metas` as `.meta.json` sidecars in a fake home's subagents dir for
+    `session_id`, and return the repo root to enter with."""
+    import json
+
+    home = tmp_path / "home"
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    repo_root = str(tmp_path / "repo")
+    directory = Path(gee.group_em_teammates.subagents_dir(repo_root, session_id))
+    directory.mkdir(parents=True, exist_ok=True)
+    for index, meta in enumerate(metas):
+        (directory / f"agent-astub{index}.meta.json").write_text(
+            json.dumps(meta), encoding="utf-8"
+        )
+    return repo_root
+
+
+def _stub_legs(monkeypatch, session_id, claimed=True):
+    monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: session_id)
+    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: [])
+    monkeypatch.setattr(
+        gee.group_em_send_pass,
+        "build_send_digest",
+        lambda *a, **k: {"entries": [], "gate_declaration_required": True},
+    )
+    monkeypatch.setattr(
+        gee.group_em_baseline,
+        "diff_and_persist",
+        lambda *a, **k: {"spawned": [], "exited": [], "changed": [], "first_tick": True},
+    )
+    monkeypatch.setattr(
+        gee.group_em_nomination,
+        "claim",
+        lambda *a, **k: {
+            "claimed": claimed,
+            "holder": session_id if claimed else "someone-else",
+            "already_held": False,
+            "superseded_incumbent": None if claimed else {"live_reason": "live"},
+        },
+    )
+
+
+def test_teammates_leg_reports_both_agents_present(tmp_path, monkeypatch):
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    _stub_legs(monkeypatch, session_id)
+    repo_root = _crown_with_teammates(
+        tmp_path,
+        monkeypatch,
+        [
+            {"agentType": "coordinator:group-em-assistant", "name": "gem-assistant"},
+            {"agentType": "general-purpose", "name": "fleet-watch"},
+        ],
+        session_id,
+    )
+
+    result = gee._group_em_enter({"repo_root": repo_root})
+
+    assert result["teammates"]["dispatch_required"] is False
+    assert result["teammates"]["missing"] == []
+    assert "teammates_error" not in result
+
+
+def test_teammates_leg_reports_a_crown_holding_neither_agent(tmp_path, monkeypatch):
+    """The regression this op exists to end: a crown that skipped the dispatch
+    used to produce no error, no warning, and no record. It now carries an
+    unmet obligation on every tick, with the fleet watcher named first."""
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff"
+    _stub_legs(monkeypatch, session_id)
+    repo_root = _crown_with_teammates(
+        tmp_path, monkeypatch, [{"agentType": "coordinator:staff-eng"}], session_id
+    )
+
+    result = gee._group_em_enter({"repo_root": repo_root})
+
+    assert result["teammates"]["dispatch_required"] is True
+    assert result["teammates"]["missing"] == ["fleet_watch", "group_em_assistant"]
+    assert result["teammates"]["agents"]["fleet_watch"]["present"] is False
+    assert result["teammates"]["agents"]["group_em_assistant"]["present"] is False
+
+
+def test_teammates_leg_reports_the_watcher_missing_on_its_own(tmp_path, monkeypatch):
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-999999999999"
+    _stub_legs(monkeypatch, session_id)
+    repo_root = _crown_with_teammates(
+        tmp_path,
+        monkeypatch,
+        [{"agentType": "coordinator:group-em-assistant", "name": "gem-assistant"}],
+        session_id,
+    )
+
+    result = gee._group_em_enter({"repo_root": repo_root})
+
+    assert result["teammates"]["missing"] == ["fleet_watch"]
+    assert result["teammates"]["agents"]["group_em_assistant"]["present"] is True
+
+
+def test_teammates_absent_entirely_on_a_refused_crown(tmp_path, monkeypatch):
+    """A session with no standing to hold the crown owes no teammates -- the key
+    is OMITTED, never reported as an unmet obligation it does not carry."""
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-777777777777"
+    _stub_legs(monkeypatch, session_id, claimed=False)
+
+    result = gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert "teammates" not in result
+    assert "teammates_error" not in result
+
+
+def test_teammates_leg_degrades_without_taking_the_others(tmp_path, monkeypatch):
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-888888888888"
+    _stub_legs(monkeypatch, session_id)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr(gee.group_em_teammates, "presence", _boom)
+
+    result = gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert result["teammates"] is None
+    assert result["teammates_error"] == "RuntimeError: probe exploded"
+    assert result["roster"] == []
+    assert result["digest"] == {"entries": [], "gate_declaration_required": True}

@@ -31,8 +31,16 @@ Negative-spec:
     those already have dedicated coverage in test_safe_commit_offer.py;
     this file only proves scope_report's OWN composition/allow-list/
     fail-closed contract on top of it.
-  - Does NOT assert anything about block_subagent_commit or
-    scoped_git_commit — those are C4b/C4c, out of scope for this chunk.
+  - Does NOT assert anything about block_subagent_commit's OWN behavior
+    (its message-cap logic, its branch selection) — that stays C4b's own
+    coverage. `test_indeterminate_call_names_the_degradation` below is the
+    one deliberate exception: it imports block_subagent_commit's
+    `_ownership_leg_summary` read-only, as a fixed downstream consumer, to
+    pin THIS module's own contract (`scope_report.py`'s
+    `_CLASSIFICATION_INDETERMINATE` comment, "TRUNCATION IS EXPECTED AND
+    CORRECT HERE") — that the discriminating token survives truncation at
+    the seam. It asserts nothing about block_subagent_commit's own logic
+    beyond that one pinned byte budget.
 """
 
 from __future__ import annotations
@@ -1156,3 +1164,43 @@ class TestOwnershipLegRebuilt:
             "mine", ["nobody-touched-this.py"], cwd=str(repo)
         )
         assert denied_ok is False
+
+    def test_indeterminate_call_names_the_degradation(self, tmp_path, monkeypatch):
+        # Review: coordinator:code-reviewer, coordinatorcode-reviewer.a8583fd1571c29519
+        # (P2) — scope_report.py's `_CLASSIFICATION_INDETERMINATE` comment
+        # asserts "TRUNCATION IS EXPECTED AND CORRECT HERE ... the capped
+        # path still carries 'indeterminate'/'adoption withheld'" and cited
+        # this exact test name as the thing that pins it. No such test
+        # existed. Written here to make the comment true, and to prove the
+        # claim itself: the discriminating token DOES survive
+        # block_subagent_commit._ownership_leg_summary's ~70-byte cap.
+        from coordinator_core.bash_guards.block_subagent_commit import (
+            _ownership_leg_summary,
+        )
+        from coordinator_core.session import claim_index as ci
+
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "a.txt").write_text("dirty")
+
+        def _degraded_classify(session_id, paths, sessions_dir=None, cwd=None):
+            # An aborted walk: no path resolves to MINE or UNCLAIMED, and
+            # `complete=False` is exactly what sets `call_indeterminate` in
+            # `assert_paths_in_session_scope` (scope_report.py, "An aborted
+            # walk is this gate's `indeterminate`").
+            return ci.OwnershipAnswer(by_path={}, complete=False, abort_cause="io_error")
+
+        monkeypatch.setattr(claim_index, "classify_paths", _degraded_classify)
+
+        ok, reason = assert_paths_in_session_scope(
+            "mine", ["a.txt"], cwd=str(repo)
+        )
+
+        assert ok is False
+        assert "indeterminate" in reason
+        assert "adoption withheld" in reason
+
+        capped = _ownership_leg_summary(reason)
+        assert len(capped.encode("utf-8")) <= 73  # 70-byte cap + "..." ellipsis
+        assert "indeterminate" in capped
+        assert "adoption withheld" in capped

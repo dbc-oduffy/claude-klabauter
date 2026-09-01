@@ -94,6 +94,8 @@ from typing import Any, Sequence, TypedDict
 
 import yaml
 
+from coordinator_core.ops.fleet._memo_compose import _VALID_KINDS
+
 from coordinator_core.frontmatter.baton_class import (
     _PRE_RENAME_ALIASES as _HANDOFF_KIND_PRE_RENAME_ALIASES,
 )
@@ -3886,15 +3888,20 @@ def _memo_cf_disposition_superseded_requires_companions(fm: dict) -> ErrorDict |
 
 
 def _memo_cf_kind_enum(fm: dict) -> ErrorDict | None:
-    """kind must be one of ask|consult|fyi|proposal when present; absent/null is valid.
+    """kind must be a valid memo kind when present; absent/null is valid.
 
-    Port of schema.js:1509-1520.
+    Port of schema.js:1509-1520, kept in sync with the DoE oracle's kind list
+    by hand (see cross-repo-memo.py's own copy). The Python-side list is
+    single-sourced from _memo_compose._VALID_KINDS rather than hand-mirrored
+    a fourth time.
+    # Review: overengineering-reviewer — was a stale hand-mirrored list still
+    # missing 'bug'; single-sourced instead of re-copying the value.
     'ack' is NOT a valid kind — acknowledgement is receipt-state, not sender-declared kind.
     """
     kind = fm.get('kind')
     if kind is None:
         return None
-    valid_kinds = ['ask', 'consult', 'fyi', 'proposal']
+    valid_kinds = list(_VALID_KINDS)
     if str(kind) not in valid_kinds:
         return {
             'field': 'kind',

@@ -158,7 +158,7 @@ _GOVERNING_PLAN_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # sink as --governing-plan-slug (sid6 = sid[-6:] spliced into entry_filename)
 # but was missing the adjacent flag's allowlist guard; validate at parse time.
 _SID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-#: A git object name as `--commits` / `--claim-shas-from` will accept it.
+#: A git object name as `--commits` will accept it.
 #: Bounded 7-40 to match git's own abbreviation floor and full-sha length --
 #: shorter is ambiguous in any real repo, longer is not a sha at all. NOT
 #: resolved against the object database here: a backfill routinely reconstructs
@@ -468,9 +468,6 @@ Backfill mode (reconstructing the record of a session that has ended):
       Seed commits: with these shas (7-40 hex, comma-separated, de-duplicated,
       order preserved). The only path that seeds this field -- on a live close
       commits: is [] and belongs to the reconcile step.
-  --claim-shas-from <file>
-      As --commits, reading whitespace-separated shas from a file instead.
-      Mutually exclusive with --commits.
   --authored-by-unknown
       OMIT authored_by rather than stamping --sid. For a reconstructed entry
       whose real session id is unknown -- never fabricate one, it would pollute
@@ -563,25 +560,20 @@ def _parse_args(argv: List[str]):
                 return None, 1
             i += 2
             continue
-        if a in ("--commits", "--claim-shas-from"):
+        if a == "--commits":
+            if commits_source:
+                # Review: coordinatorcode-reviewer.a2ea175d92501b498 -- the
+                # --claim-shas-from removal also dropped the only guard
+                # against a repeated --commits, letting a second occurrence
+                # silently merge without de-duplicating across invocations,
+                # which contradicts this flag's own "de-duplicated" promise.
+                # Refuse the repeat rather than merge it.
+                print(f"ERROR: {a} may only be given once", file=sys.stderr)
+                return None, 1
             if i + 1 >= n or not argv[i + 1]:
                 print(f"ERROR: {a} requires a value", file=sys.stderr)
                 return None, 1
-            if commits_source:
-                print(
-                    "ERROR: --commits and --claim-shas-from are mutually exclusive "
-                    f"(already supplied {commits_source})",
-                    file=sys.stderr,
-                )
-                return None, 1
-            if a == "--commits":
-                raw_shas = argv[i + 1].split(",")
-            else:
-                try:
-                    raw_shas = Path(argv[i + 1]).read_text(encoding="utf-8").split()
-                except OSError as exc:
-                    print(f"ERROR: --claim-shas-from: {exc}", file=sys.stderr)
-                    return None, 1
+            raw_shas = argv[i + 1].split(",")
             seen: set[str] = set()
             for token in raw_shas:
                 token = token.strip()

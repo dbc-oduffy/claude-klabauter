@@ -54,6 +54,8 @@ from __future__ import annotations
 
 import re
 
+from coordinator_core.ops.fleet._memo_compose import _VALID_KINDS
+
 #: Required outbox-draft frontmatter fields. `summary`'s KEY must be present
 #: (value may be empty at draft time — filled in by `memo.compose`); every
 #: other field must be present AND non-empty.
@@ -78,9 +80,9 @@ OUTBOX_REQUIRED_FIELDS = (
     "kind",
 )
 
-#: Mirrors the canonical `kind` enum in `coordinator/bin/lib/schema.js:2131`
-#: (validKinds).
-VALID_KINDS = ("ask", "consult", "fyi", "proposal")
+# Review: overengineering-reviewer — single-sourced from _memo_compose._VALID_KINDS
+# (mirrored across 5 sites; `bug` landed in 2 of them and this copy went stale).
+VALID_KINDS = _VALID_KINDS
 
 #: scoped_to.sha shape — 7-40 hex chars.
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")

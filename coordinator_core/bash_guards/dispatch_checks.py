@@ -2163,6 +2163,52 @@ def _seg_resolved_git_subcommand(seg: str) -> Optional[str]:
     return None
 
 
+def _seg_forcing_form_scan_text(seg: str) -> str:
+    """Narrow `seg` to the argv of the `git` it invokes, for CHECK 2's
+    forcing-form regex only -- or return `seg` whole when that cannot be
+    established.
+
+    CHECK 2 resolves whether a segment is a push candidate positionally,
+    but then scanned the WHOLE segment for `--force`/`-f`/`+refspec`. A
+    wrapper's own flags live in that text and are not git's: `/usr/bin/time
+    -f "%e" git push` was denied as a "forcing form" because `time` takes
+    `-f FORMAT`, which is how the obvious way to MEASURE a push became the
+    one command that cannot run. Same shape for `env -f`, `nice`, `xargs
+    -0f` and any other spawning head -- these are exactly the segments
+    `_seg_confirmed_not_git_invocation` must leave ambiguous (they really
+    can launch git), so neither existing seam covers them.
+
+    Scoping to the tokens at-and-after the first command-position-agnostic
+    `git` token cannot open a bypass: `--force` and `+refspec` are push
+    ARGUMENTS, so a genuine forcing push carries them after that token and
+    stays inside the scanned text. `git push origin main --force` behind
+    any wrapper still denies. What drops out is only text that git never
+    sees.
+
+    Fail-CLOSED on every uncertainty, mirroring `_seg_resolved_git_
+    subcommand`'s contract: a heredoc marker, an untokenizable segment, an
+    over-ceiling segment, or no `git` token at all all return `seg`
+    unchanged, leaving the pre-existing over-inclusive scan in place. The
+    return narrows the scan ONLY when a real `git` token was positively
+    located.
+    """
+    if "<<" in seg:
+        return seg
+    if _bt_exceeds_tokenizable_ceiling(seg):
+        return seg
+    try:
+        tokens = shlex.split(seg, posix=True)
+    except ValueError:
+        return seg
+    for idx, tok in enumerate(tokens):
+        if _normalize_executable_basename(tok) == "git":
+            # Space-join rather than raw slicing: the regex matches
+            # whitespace-delimited flag tokens, and shlex has already
+            # stripped the quoting that the raw text would still carry.
+            return " ".join(tokens[idx:])
+    return seg
+
+
 #: ALLOWLIST (deliberately, not a denylist) of ordinary POSIX-ish utility
 #: heads that are positionally CONFIRMED to never themselves launch `git` --
 #: none of these execs argv it's handed, spawns a subprocess, or interprets
@@ -2544,7 +2590,7 @@ def check_destructive_git_orphan(
         if _is_push_candidate:
             if re.search(
                 r"(--force([^-=]|$)|(^|\s)-[a-zA-Z]*f[a-zA-Z]*(\s|$)|(^|[\s\"'])\+\S+)",
-                seg_check2,
+                _seg_forcing_form_scan_text(seg_check2),
             ):
                 return _deny(
                     "BLOCKED: this 'git push' uses a forcing form (--force / -f / "
@@ -5123,6 +5169,9 @@ def _bt_blanket_add_dash_c_cwd(cmd: str) -> str:
     return os.path.normpath(os.path.join(os.getcwd(), dash_c_val))
 
 
+from coordinator_core.bash_guards._write_bump_sink_shapes import (
+    _host_is_windows,
+)
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 
 
@@ -5208,7 +5257,21 @@ def check_blanket_git_add(
             seg,
             count=1,
         )
-        after = after.replace('"', "").replace("'", "").replace("\\", "")
+        # Quote characters are stripped so a quoted operand reads as its
+        # payload. The BACKSLASH strip that used to ride along here is
+        # Windows-gated now: on `nt` it deleted every separator in a
+        # drive-absolute operand (`X:\repo` -> `X:repo`), which no longer
+        # matches `_ABS_PATHSPEC_RE` and never reaches `_paths_match`, so
+        # `git add <repo root>` in its ordinary Windows spelling passed this
+        # guard while the forward-slash spelling of the same path denied.
+        # There is no later seam that can recover a separator once it is
+        # gone. Same host-gating precedent, and the same reasoning, as
+        # `tokenize_full_command(preserve_windows_backslashes=...)` in the
+        # two write-bump guards. On POSIX the strip is retained unchanged:
+        # a backslash there is an escape, not a separator.
+        after = after.replace('"', "").replace("'", "")
+        if not _host_is_windows():
+            after = after.replace("\\", "")
 
         drtoks = after.split()
         past_dd = False
@@ -8966,6 +9029,89 @@ def _bt_commit_has_sweep_all_flag(seg_tokens: List[str]) -> bool:
     return False
 
 
+#: Pathspec glob metacharacters. A `*`/`?`/`[...]` operand names however many
+#: paths happen to match at commit time, so its blast radius is not visible in
+#: the command the operator read back to themselves before running it.
+_COMMIT_GLOB_META_RE = re.compile(r"[*?\[]")
+
+
+def _bt_commit_scope_operand_is_sweeping(operand: str, cwd: Optional[str]) -> bool:
+    """True iff ONE `git commit` scope operand names a subtree rather than a
+    path the operator can be said to have chosen.
+
+    Three sweeping shapes, cheapest test first (this runs on the
+    PreToolUse(Bash) hot path -- `os.path.isdir` is one stat, no spawn, and
+    the glob/separator arms are pure string work; DR-344):
+
+      1. a trailing forward or back slash -- an unambiguous directory
+         before touching the filesystem so a deleted-or-not-yet-existing
+         directory still reads as a sweep;
+      2. a glob metacharacter -- membership resolves at commit time, not at
+         read-back time;
+      3. an operand that resolves to a real directory on disk.
+
+    Resolution is relative to the payload cwd, never `os.getcwd()`: the guard
+    runs in whatever directory the harness happens to sit in, and a relative
+    operand resolved against the wrong root is a fabricated answer rather than
+    a missing one.
+
+    DELIBERATE NARROWING vs the spinoff spec, recorded because it is a
+    departure and not an oversight. `state/handoffs/2026-08-03-commit-scope-
+    guard-predicates.md` says an operand that cannot be resolved must fail
+    toward FIRING. Taken literally that fires on every scoped commit of a
+    DELETED path -- `git commit -m x -- gone.py` is the correct, ratified
+    spelling for landing a deletion, and its operand is absent from disk by
+    construction. An advisory that fires on a correct commit teaches the
+    operator to dismiss it, which costs more than the case it catches. So a
+    bare unresolvable operand (no trailing separator, no glob) reads as a
+    named file and does NOT suppress the narrowing -- while every DIRECTORY
+    spelling still sweeps, resolvable or not, which is what the incident
+    command actually was. What would change this: an unresolvable bare
+    operand shown to be a real sweep vector in a live incident.
+    """
+    if not operand:
+        return True
+    if operand.endswith("/") or operand.endswith("\\"):
+        return True
+    if _COMMIT_GLOB_META_RE.search(operand):
+        return True
+    base = cwd or ""
+    try:
+        candidate = operand if os.path.isabs(operand) else os.path.join(base, operand)
+        return os.path.isdir(candidate)
+    except (OSError, ValueError):
+        # A path the OS refuses to even stat is not evidence of a file.
+        return False
+
+
+def _bt_commit_scope_is_sweeping(
+    seg_tokens: List[str], cwd: Optional[str]
+) -> bool:
+    """True iff a `git commit` segment's scope operands include a sweep.
+
+    Reuses `_bt_commit_operand_scan` -- the one parser that already performs
+    option-value pair-skipping and already returns operands for BOTH the
+    `-- <paths>` and `-o`/`--only` spellings. Re-walking raw tokens here
+    would be the fourth tokenizer dialect the spinoff's anti-scope forbids,
+    and would reintroduce exactly the two-independent-recognizers defect that
+    file is about.
+
+    `-o`/`--only` with no operands this walk can see is a sweep: the flag
+    selects git's self-scoped mode while naming nothing, so there is no
+    chosen path to suppress an advisory on.
+    """
+    operands, ambiguous, has_include, has_only = _bt_commit_operand_scan(seg_tokens)
+    if has_include or ambiguous:
+        # Neither is a suppression case at the call site anyway; say "not
+        # sweeping" so this predicate never becomes the reason an ambiguous
+        # parse gets treated as a sweep. The caller's own SC-DR-020 bound-4
+        # fail-open still governs.
+        return False
+    if has_only and not operands:
+        return True
+    return any(_bt_commit_scope_operand_is_sweeping(o, cwd) for o in operands)
+
+
 def _bt_commit_has_amend_flag(seg_tokens: List[str]) -> bool:
     """True iff a `git commit` segment carries `--amend` (stopping at the
     segment's own `--` pathspec separator, since a flag can never appear in
@@ -9695,7 +9841,34 @@ def check_git_commit_safe_commit_advise(
         if _override("COORDINATOR_ALLOW_GIT_COMMIT_BARE", payload=payload):
             return None
         if _bt_commit_has_explicit_pathspec(seg_tokens):
-            return None
+            # A scope FORM is not a scope BOUND. `-o state/` and
+            # `-- state/` both name git's self-scoped mode over a whole
+            # SUBTREE, and until this narrowing both suppressed the
+            # advisory outright -- the 2026-08-03 incident committed 71
+            # files across 10 sessions and produced no guard output at
+            # all. Recognition is unchanged (`-o` really is scope, and
+            # reverting that is the spinoff's own anti-scope); only
+            # SUPPRESSION narrows, and only for operands that name a
+            # subtree rather than a path. Spinoff:
+            # `state/handoffs/2026-08-03-commit-scope-guard-predicates.md`.
+            if not _bt_commit_scope_is_sweeping(
+                seg_tokens, (payload or {}).get("cwd")
+            ):
+                return None
+            # The sweep advisory carries its own key rather than reusing
+            # `COORDINATOR_ALLOW_GIT_COMMIT_BARE` below. That key means "I
+            # meant to commit the whole index"; this shape is the opposite
+            # claim -- "I named a subtree and I meant that subtree" -- and an
+            # operator silencing one has not decided the other. Naming follows
+            # the family already established in this file
+            # (`..._BARE`, `..._AMEND`), per doe-claude-aa 2026-09-01.
+            # ALLOW-vs-OVERRIDE does not track advisory-vs-deny here
+            # (`ALLOW_GIT_COMMIT_BARE` gates a deny), so this key survives
+            # unrenamed if the advisory is ever escalated.
+            if _override(
+                "COORDINATOR_ALLOW_GIT_COMMIT_SCOPE_SWEEP", payload=payload
+            ):
+                return None
         subject = None
         for i, tok in enumerate(seg_tokens):
             # `-m`, `--message`, and the bundled short forms (`-am`, `-sm`,

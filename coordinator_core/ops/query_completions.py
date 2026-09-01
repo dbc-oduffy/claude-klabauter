@@ -141,8 +141,15 @@ def _format_commits(commits: Any) -> str:
     """
     if not commits:
         return "no-commit"
-    if isinstance(commits, (str, bytes)):
-        return commits.decode("utf-8", "replace") if isinstance(commits, bytes) else commits
+    # `str` only, not `(str, bytes)` (review: overengineering-reviewer,
+    # finding #7): `commits` arrives from `parse_frontmatter`'s YAML load,
+    # which never deserialises a scalar to `bytes` -- this function's own
+    # total-coercion argument above already covers a `bytes` value correctly
+    # via the final `str(c)`/`str(commits)` fallback. The `str` guard here
+    # exists only to stop a bare string being iterated CHARACTER BY
+    # CHARACTER by `", ".join` below.
+    if isinstance(commits, str):
+        return commits
     if not isinstance(commits, (list, tuple)):
         return str(commits)
     return ", ".join(str(c) for c in commits)

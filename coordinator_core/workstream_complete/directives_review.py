@@ -424,12 +424,11 @@ def _decide_review_scale_core(
         # dispositive, and no later measurement can un-trip it. That verdict is
         # sound. What was NOT sound was printing the unmeasured input as though
         # it were a measurement: `code_loc=None` inside "big-diff brightline
-        # hit" reads as a measurement that came back empty, which is what sent
-        # an EM hand-measuring gross LOC across a shared-branch RANGE and
-        # reporting 33,246 where the per-owned-commit sum is 16,037 (doe-claude-
-        # em, cross-repo/archive/2026-08-29-doe-claude-em-review-scale-ships-no-
-        # brightline-inputs.md). Naming the tripped arm tells the reader the
-        # verdict does not depend on what is missing.
+        # hit" reads as a measurement that came back empty -- see this
+        # function's own "HOW BOTH ARE MEASURED" comment above for the
+        # 33,246-vs-16,037 incident that cost (not restated here). Naming the
+        # tripped arm tells the reader the verdict does not depend on what is
+        # missing.
         tripped = [
             name
             for name, value, floor in (
@@ -453,11 +452,24 @@ def _decide_review_scale_core(
             )
             if value is not None
         )
-        unmeasured_note = (
-            f"; {', '.join(unmeasured)} not measured, and cannot change this verdict"
-            if unmeasured
-            else ""
-        )
+        # Review: coordinator:code-reviewer (a67271301efadc596) Finding 1 —
+        # `code_loc` is not a peer of `commits`/`surfaces` here: it alone
+        # carries veto power via `code_loc_resolved_zero`. When it is the
+        # unmeasured member, a later `code_loc == 0` measurement CAN still
+        # flip this verdict away from mandatory partition, even though
+        # `commits`/`surfaces` already tripped — so it must not be told
+        # "cannot change this verdict" alongside them.
+        unmeasured_fixed = [name for name in unmeasured if name != "code_loc"]
+        unmeasured_parts = []
+        if unmeasured_fixed:
+            unmeasured_parts.append(
+                f"{', '.join(unmeasured_fixed)} not measured, and cannot change this verdict"
+            )
+        if "code_loc" in unmeasured:
+            unmeasured_parts.append(
+                "code_loc not measured; a later code_loc==0 measurement could still suppress this verdict"
+            )
+        unmeasured_note = f"; {'; '.join(unmeasured_parts)}" if unmeasured_parts else ""
         return ReviewScaleDecision(
             row=4, scale="partitioned", partition_mandatory=True, commit_message_names_change=False,
             reason=(

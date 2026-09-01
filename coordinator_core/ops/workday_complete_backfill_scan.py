@@ -494,6 +494,13 @@ def _scan_full_day_union(root: str, day: str, prev_day: str, out: List[str]) -> 
     under a `len(cols) < 4` guard, so the fifth column is forward-compatible by
     construction. Treat them as an anchor pair, never as a description of the
     union: do not re-derive the union from them.
+
+    `count` is `len(shas)` by construction, so this row carries that fact
+    twice; that is a deliberate transition, not a permanent second truth
+    (Review: overengineering-reviewer). Retire the `count` column once every
+    reader takes `cols[4]` (shas) directly instead of `cols[1]` — today no
+    in-repo consumer reads `cols[4]` at all, so the redundancy is unowned
+    until a `shas`-reading consumer exists, in this repo or the mirror side.
     """
     refs = _collect_union_refs(root)
     if not refs:

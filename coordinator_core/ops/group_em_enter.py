@@ -24,15 +24,17 @@ see that module's comment on this entry for the reason).
 
 Returns exactly one payload:
     {"nomination": {...}, "roster": [...], "digest": {...},
-     "baseline": {...}}
+     "baseline": {...}, "teammates": {...}}
 
 DEGRADE, NEVER RAISE. Each leg's own exception is caught HERE (not inside
 the leg module, which is untouched) and reported as `null` for that key
 plus a `<key>_error` sibling string, via the shared `_leg` write helper
 (overengineering review finding 9: the four legs used to repeat this
-result-write by hand). THREE independent legs, not four and not two:
-nomination stands alone; baseline consumes the peer ENUMERATION; only
-digest consumes the roster leg's output. So a raising roster leg cascades
+result-write by hand). FOUR independent legs, not five and not
+two: nomination stands alone; teammates stands alone (it reads the
+CALLER's own subagent dispatch records, nothing this op enumerated);
+baseline consumes the peer ENUMERATION; only digest consumes the roster
+leg's output. So a raising roster leg cascades
 to digest ALONE -- digest goes `null` carrying `"roster-leg-failed"` rather
 than its own exception text, while nomination and baseline still populate.
 A failing ENUMERATION is the wider blast radius: it takes roster and
@@ -49,9 +51,9 @@ This mirrors
 `session.peer_roster`'s own degrade-not-raise discipline (that op relies on
 `peer_roster.build_roster`'s internal degrade; this op applies the same
 per-leg degrade at this composition layer, with the roster dependency named
-above rather than four fully isolated legs). A reader adding a fifth leg
-expecting the same isolation nomination gets should not: it inherits
-whatever the roster chain does.
+above rather than four fully isolated legs). A reader adding a further leg
+expecting the same isolation nomination and teammates get should not: it
+inherits whatever the roster chain does.
 
 ORDER IS LOAD-BEARING: crown, then roster, then digest. A REFUSED crown -- `claimed`
 false in the nomination verdict -- stops the op BEFORE the roster leg is built, not
@@ -79,7 +81,7 @@ LOUDLY via `nomination["replaced_holder"]`, never folded into `superseded_incumb
 
 PAYLOAD SHAPE ON REFUSAL -- ABSENT KEYS, NOT NULL VALUES. On a refused crown (cases 3
 and 5 above), `roster` and `digest` (and `baseline`, which itself consumes the roster)
-are OMITTED from the returned dict entirely -- `"roster" not in result`, never
+are OMITTED from the returned dict entirely, and so is `teammates` -- `"roster" not in result`, never
 `result["roster"] is None`. This is deliberate and load-bearing for the consumer, not a
 cosmetic choice: an EMPTY roster (`[]`) is a live fact -- "I looked, nobody is there" --
 while an ABSENT roster means "I had no standing to look, do not reason about peers from
@@ -110,6 +112,12 @@ Negative-spec:
       here, and never disguised as an empty/absent-but-keyed result.
     - Never resolves GATE 1 / GATE 2. `digest["gate_declaration_required"]`
       is carried through from `build_send_digest` unmodified.
+    - Never dispatches the teammates it asserts. The `teammates` leg is a
+      read-only presence ASSERTION (`group_em.teammates.presence`): the
+      engine cannot spawn an agent on the session's behalf, so a missing
+      warm assistant or fleet watcher is REPORTED every tick and never
+      remediated here. It is also never inferred from a clock -- see that
+      module's negative-spec.
     - Never re-enumerates the harness. The roster leg is built over
       `group_em.read_pass.build_candidate_roster`, which itself only reads
       `claude agents --json` / the receiver-state reader -- no second
@@ -129,6 +137,7 @@ from coordinator_core.group_em import baseline as group_em_baseline
 from coordinator_core.group_em import nomination as group_em_nomination
 from coordinator_core.group_em import read_pass as group_em_read_pass
 from coordinator_core.group_em import send_pass as group_em_send_pass
+from coordinator_core.group_em import teammates as group_em_teammates
 
 
 def _leg_error(exc: BaseException) -> str:
@@ -220,6 +229,27 @@ def _run_baseline(
         return None, _leg_error(exc)
 
 
+def _run_teammates(
+    repo_root: str, caller_session_id: str
+) -> tuple[Optional[dict], Optional[str]]:
+    """Assert the crown's STANDING TEAMMATE obligation -- see
+    `group_em.teammates` for the evidence rule (a dispatch record, never a
+    clock) and for why the fleet watcher is reported ahead of the assistant.
+
+    TOP-LEVEL, NOT INSIDE `digest`. This carries the same shape as
+    `digest["gate_declaration_required"]` -- a standing per-tick obligation
+    the EM cannot discharge by ignoring -- but it is a property of the
+    SESSION, not of the send pass, and it must remain visible on a tick whose
+    digest leg failed. Folding it into `build_send_digest`'s return would
+    make the one obligation that says "you are running this mode with no
+    watcher" disappear exactly when something else has already gone wrong.
+    """
+    try:
+        return group_em_teammates.presence(repo_root, caller_session_id), None
+    except Exception as exc:  # noqa: BLE001
+        return None, _leg_error(exc)
+
+
 @register_op("groupem.enter")
 def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "groupem.enter" handler.
@@ -234,7 +264,14 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Returns:
         {"nomination": {...} | None, "roster": [...] | None,
-         "digest": {...} | None, "baseline": {...} | None}
+         "digest": {...} | None, "baseline": {...} | None,
+         "teammates": {...} | None}
+    `teammates` carries `dispatch_required` plus per-agent `present` flags
+    for the crown's two standing teammates (fleet watcher first, then the
+    assistant) -- the `gate_declaration_required` shape for an obligation
+    that is a property of the SESSION rather than of one send. Like the
+    other post-crown legs it is OMITTED on a refused crown: a session with
+    no standing to hold the crown owes no teammates.
     A failed leg (one that RAN and raised) is `None` with a `"<key>_error"`
     sibling string carrying the reason; the other legs still populate (see
     module docstring). On a REFUSED crown, `roster`/`digest`/`baseline` are
@@ -298,6 +335,8 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     roster = result["roster"]
 
     _leg(result, "digest", _run_digest(target_root, roster, caller_session_id))
+
+    _leg(result, "teammates", _run_teammates(target_root, caller_session_id))
 
     # Baseline does NOT consume the roster, so a roster-leg failure does not
     # cascade here -- it consumes the enumeration directly.

@@ -1,8 +1,7 @@
 """
 coordinator_core.ops.tests.test_coordinator_complete_entry_backfill
 
-The backfill mode — `--for-date`, `--commits` / `--claim-shas-from`,
-`--authored-by-unknown`.
+The backfill mode — `--for-date`, `--commits`, `--authored-by-unknown`.
 
 WHY IT EXISTS, because the shape only makes sense against the gap it closes.
 `resolve_entry_path` derived its filename from `date.today()`, and this
@@ -224,27 +223,28 @@ def test_a_non_sha_token_fails_loud(bad: str) -> None:
     assert parsed is None and rc == 1
 
 
-def test_claim_shas_from_reads_whitespace_separated_shas(tmp_path: Path) -> None:
-    f = tmp_path / "shas.txt"
-    f.write_text("deadbee\ncafef00d\n\n  ba5eba11  \n", encoding="utf-8")
-    parsed, rc = _parse("--for-date", "2026-07-28", "--claim-shas-from", str(f))
-    assert rc is None and parsed is not None
-    assert parsed["commits"] == ["deadbee", "cafef00d", "ba5eba11"]
+# `--claim-shas-from` (a whitespace-separated-file second source for the same
+# `commits` field) and its three tests (`test_claim_shas_from_reads_
+# whitespace_separated_shas`, `test_claim_shas_from_a_missing_file_fails_
+# loud`, `test_the_two_sha_sources_are_mutually_exclusive`) were removed here
+# (review: overengineering-reviewer, finding #3): the flag duplicated
+# `--commits` — same field, same validation, same de-duplication — for an
+# exclusivity arm and a distinct error surface nothing named a real caller
+# for. `--commits` remains the sole sha source; the de-duplication/ordering
+# coverage above (`test_commits_are_deduplicated_but_keep_their_given_
+# order`) and the sha-shape coverage (`test_a_non_sha_token_fails_loud`)
+# still apply to it unchanged.
 
 
-def test_claim_shas_from_a_missing_file_fails_loud(tmp_path: Path) -> None:
+def test_a_repeated_commits_flag_is_refused_not_merged() -> None:
+    """Review: coordinatorcode-reviewer.a2ea175d92501b498 -- the
+    `--claim-shas-from` removal also dropped the only guard against a second
+    `--commits` occurrence. A second `--commits` must be refused, not
+    silently merged (which would fail to de-dup across invocations and
+    contradict the flag's own "de-duplicated" usage-text promise)."""
     parsed, rc = _parse(
-        "--for-date", "2026-07-28", "--claim-shas-from", str(tmp_path / "nope.txt")
-    )
-    assert parsed is None and rc == 1
-
-
-def test_the_two_sha_sources_are_mutually_exclusive(tmp_path: Path) -> None:
-    """Supplying both is an unstated intent, not a merge — refuse rather than
-    pick one."""
-    f = tmp_path / "shas.txt"
-    f.write_text("deadbee\n", encoding="utf-8")
-    parsed, rc = _parse(
-        "--for-date", "2026-07-28", "--commits", "cafef00d", "--claim-shas-from", str(f)
+        "--for-date", "2026-07-28",
+        "--commits", "deadbee",
+        "--commits", "cafef00d",
     )
     assert parsed is None and rc == 1

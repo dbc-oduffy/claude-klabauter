@@ -4,12 +4,11 @@ coordinator_core.workstream_complete.tests.test_lesson_scope_validated_before_th
 Example-market-data-repo-em, `cross-repo/archive/2026-08-11-example-market-data-repo-em-
 workstream-complete-engine-defects.md` defect 2.
 
-WHAT HAPPENED. They supplied `decisions.lessons[].scope: "local"`. The
-assembler forwarded it unchecked; `coordinator-lesson-add` rejected it against
-its own `universal | project | wiki-only` enum; both lesson directives returned
-exit 1. By then THE COMMIT TAIL HAD ALREADY SUCCEEDED, so apply returned exit 4
-(PARTIAL_MUTATION) on a ceremony that looked done while both lessons were
-silently lost. They found it by grepping `state/lessons/` afterwards.
+WHAT HAPPENED, in full, at `directives_lessons_plan.py::_iter_capturable_
+lessons`'s own inline comment (the canonical telling; not restated here) —
+in short: a caller-supplied `scope` the CLI would reject was checked only
+after the commit tail had already landed, so the ceremony read as done
+while both lessons were silently lost.
 
 WHY THE FIX GOES HERE AND NOT IN THE CLI. The CLI already rejected it —
 correctly, and that is not the defect. The defect is WHEN: a value the caller

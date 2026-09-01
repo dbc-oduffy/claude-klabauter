@@ -1243,6 +1243,55 @@ _PUSH_WORD_RE = re.compile(r"\bpush\b")
 _PUSH_FORCE_RE = re.compile(
     r"(?:--force(?:[^\-=]|$)|(?:^|\s)-[a-zA-Z]*f[a-zA-Z]*(?:\s|$)|(?:^|[\s\"'])\+[^\s]+)"
 )
+
+
+def _seg_forcing_form_scan_text(seg: str) -> str:
+    """Narrow `seg` to the argv of the `git` it invokes, for the LEGACY
+    path's `_PUSH_FORCE_RE` only -- or return `seg` whole when that cannot
+    be established.
+
+    The anchored path (`_evaluate_git_segment_anchored`) already has this
+    right for every other option gate: its docstring records that the
+    2026-07-25 hardening scoped checkout/switch/branch/tag/merge/pull/
+    config to `remaining_text` "never `seg`" so a pre-subcommand token
+    cannot false-trip a subcommand-local check. Push kept scanning `seg`,
+    and the legacy path -- which is where a WRAPPED invocation lands,
+    because the anchored callers all require `tokens[0]` to normalize to
+    `git` -- never had the scoping at all.
+
+    The reachable consequence, reproduced 2026-09-01 against this module:
+
+        /usr/bin/time -f "%e" git push   ->  "git push --force"
+
+    `time` takes `-f FORMAT`. The push is a plain no-argument push. Same
+    defect as CHECK 2's in `dispatch_checks` (see `_seg_forcing_form_scan_
+    text` there and `TestCheck2WrapperOwnFlagsAreNotGitsFlags`); reported
+    together by example-retrieval-repo-em in `cross-repo/inbox/2026-09-01-example-retrieval-repo-
+    em-push-cadence-cap-below-noop-floor.md`.
+
+    Deliberately NOT imported from `dispatch_checks` -- these two modules
+    keep their force-form regexes separately for the same reason
+    `_real_git_subcommand` is not shared: different token-source contracts,
+    and a guard that fails closed on its own terms beats one coupled to a
+    sibling's parsing assumptions.
+
+    Cannot open a bypass: `--force` and `+refspec` are push ARGUMENTS, so a
+    genuine forcing push carries them after the `git` token and stays in
+    the scanned text. Fails CLOSED to the whole segment on a heredoc
+    marker, an untokenizable segment, or no `git` token at all -- so the
+    free-text fallback this legacy path exists to provide keeps firing on
+    exactly the segments it always did.
+    """
+    if "<<" in seg:
+        return seg
+    try:
+        tokens = shlex.split(seg, posix=True)
+    except ValueError:
+        return seg
+    for idx, tok in enumerate(tokens):
+        if _normalize_executable_basename(tok) == "git":
+            return " ".join(tokens[idx:])
+    return seg
 _BRANCH_WORD_RE = re.compile(r"\bbranch\b")
 _BRANCH_DASH_D_UPPER_RE = re.compile(r"(?:^|\s)-[a-zA-Z]*D[a-zA-Z]*(?:\s|$)")
 _DASH_D_OR_DELETE_RE = re.compile(r"(?:^|\s)-[a-zA-Z]*d[a-zA-Z]*(?:\s|$)|--delete")
@@ -2569,7 +2618,7 @@ def _evaluate_git_segment_legacy(
     if _COMMIT_WORD_RE.search(seg) and _AMEND_FLAG_RE.search(seg):
         return "git commit --amend"
     if _PUSH_WORD_RE.search(seg):
-        if _PUSH_FORCE_RE.search(seg):
+        if _PUSH_FORCE_RE.search(_seg_forcing_form_scan_text(seg)):
             return "git push --force"
     if _BRANCH_WORD_RE.search(seg):
         if _BRANCH_DASH_D_UPPER_RE.search(seg):

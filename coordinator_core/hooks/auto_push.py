@@ -990,6 +990,7 @@ def log_failure(
     attempts: Optional[int],
     first_err: str,
     stderr_text: str,
+    unconfirmed: bool = False,
 ) -> None:
     """Append a one-line failure summary to the repo's git COMMON dir's
     push-failures.log, copying the full stderr alongside it so server-side
@@ -1011,6 +1012,39 @@ def log_failure(
     (non-empty file, any bytes including whitespace-only) -- a plain truthy
     check on `stderr_text`, not `.strip()`, so a whitespace-only stderr still
     gets copied.
+
+    `unconfirmed` selects the row's HEADLINE VERB, and nothing else. False
+    (the default, so no existing caller changes shape) writes `PUSH FAILED`
+    -- an outcome git itself reported. True writes `PUSH UNCONFIRMED` -- a
+    push whose true outcome was never observed, `PushOutcome.unconfirmed`'s
+    state, which may still land afterwards.
+
+    WHY THE VERB IS NOT COSMETIC. Every row was headlined `PUSH FAILED`
+    regardless, including the ones the engine had already classified as
+    unobserved (`_feed_failure_detector` writes `err_class=
+    "sweep-unconfirmed"` for exactly these). So the log asserted a failure
+    the engine never claimed, in the one file a genuine push failure would
+    appear in. `runtime_tripwire_em_check._PUSH_FAILED_LINE_RE`'s own
+    comment says it "matches only a genuine, exhausted-retry failure row" --
+    it could not, because the rows were indistinguishable; this parameter is
+    what makes that stated contract true rather than aspirational.
+
+    Measured 2026-09-01: with `CADENCE_PUSH_RETRY_BUDGET_SECS = 6.0` against
+    a no-op push floor of 1.9-10.0s on the reference box, the cadence arm
+    times out MID-FLIGHT before any attempt completes -- so `unconfirmed` is
+    not the rare case on that leg, it is the steady state. Example-retrieval-repo-em
+    measured four for four in one session, every one of which landed on the
+    remote 39-87s later (memo `cross-repo/inbox/2026-09-01-example-retrieval-repo-em-
+    push-cadence-cap-below-noop-floor.md`). A log that cries failure at that
+    rate trains its reader to ignore it.
+
+    This narrows what `PUSH FAILED` means and never widens it, so a reader
+    grepping that string keeps working and simply stops matching rows that
+    were never failures. The cap itself is untouched -- `PUSH_RETRY_BUDGET_
+    SECS`'s "a ladder that does not fit is a cheaper ladder, never a wider
+    number here" still governs, and the sizing premise behind that number is
+    a separate, open question (the 2026-08-26 measurement it cites reads
+    p50 753.9ms for a leg that now floors an order of magnitude higher).
     """
     git_dir = resolve_git_common_dir(repo_root)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -1035,8 +1069,9 @@ def log_failure(
     # ladder depth (example-retrieval-repo-em did, memo 2026-08-30 Problem 1), so a
     # caller that did not count its legs must say so rather than name one.
     attempts_text = "?" if attempts is None else str(attempts)
+    headline = "PUSH UNCONFIRMED" if unconfirmed else "PUSH FAILED"
     line = (
-        f"[{timestamp}] PUSH FAILED on {branch} ({route}/{err_class} after "
+        f"[{timestamp}] {headline} on {branch} ({route}/{err_class} after "
         f"{attempts_text}) :: {first_err or '<empty>'} :: stderr={forensic}\n"
     )
     log_path = git_dir / "push-failures.log"

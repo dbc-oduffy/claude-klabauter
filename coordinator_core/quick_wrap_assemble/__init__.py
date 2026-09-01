@@ -240,7 +240,12 @@ def _closed_pickup_kind() -> dict[str, Any]:
 #: landed -- the remedy would be wrong, which is worse than silence. `draft`,
 #: `reviewed`, `approved` are pre-execution for the same reason. `deferred`,
 #: `abandoned`, `superseded` are terminal by disposition and owe nothing.
-_TERMINAL_WRITE_OWED_STATUSES = frozenset({"landed"})
+#:
+#: A ONE-MEMBER SET IS A PREDICATE (review: overengineering-reviewer, finding
+#: #6) -- every candidate for membership is foreclosed by the comment above,
+#: so `_terminal_write_owed` compares `status` to the literal directly rather
+#: than testing membership in a collection of one.
+_TERMINAL_WRITE_OWED_STATUS = "landed"
 
 
 def _terminal_write_owed(governing_plan: dict[str, Any]) -> bool:
@@ -280,11 +285,17 @@ def _terminal_write_owed(governing_plan: dict[str, Any]) -> bool:
     `None` status is not evidence of an owed write -- claiming one there would
     point an operator at `stamp-plan-implemented` for a plan this call could not
     even read.
+
+    // Review: coordinator-code-reviewer (finding #1) -- `terminal_write_owed:
+    // false` alone does not distinguish "nothing owed" from "couldn't tell";
+    // it collapses degraded reads and genuine non-owed status to the same
+    // boolean. A consumer must read `present`/`degraded` in the same
+    // `governing_plan` record alongside this key, not this key in isolation.
     """
     if not governing_plan.get("present"):
         return False
     status = (governing_plan.get("status") or "").strip().lower()
-    return status in _TERMINAL_WRITE_OWED_STATUSES
+    return status == _TERMINAL_WRITE_OWED_STATUS
 
 
 def _closed_governing_plan() -> dict[str, Any]:

@@ -420,6 +420,7 @@ rationale.
 | `COORDINATOR_ALLOW_CAT_HEREDOC` | `cat-heredoc-write-advise` (`check_cat_heredoc_write_advise`) | `bash_guards/dispatch_checks.py` |
 | `COORDINATOR_ALLOW_GIT_COMMIT_BARE` | `git-commit-safe-commit-advise` (`check_git_commit_safe_commit_advise`) | `bash_guards/dispatch_checks.py` |
 | `COORDINATOR_ALLOW_GIT_COMMIT_AMEND` | `git-commit-safe-commit-advise` amend-ownership gate (`check_git_commit_safe_commit_advise`) | `bash_guards/dispatch_checks.py` |
+| `COORDINATOR_ALLOW_GIT_COMMIT_SCOPE_SWEEP` | `git-commit-safe-commit-advise` sweeping-scope gate — a pathspec naming a subtree rather than a path (`check_git_commit_safe_commit_advise`) | `bash_guards/dispatch_checks.py` |
 | `COORDINATOR_ALLOW_MULTIPROBE_BANNER` | `multiprobe-banner-rewrite` (`check_multiprobe_banner_rewrite`) | `bash_guards/dispatch_checks.py` |
 | `COORDINATOR_ALLOW_HEAD_TAIL_PLUMBING` | `head-tail-plumbing-rewrite` (`check_head_tail_plumbing_rewrite`) | `bash_guards/guard_head_tail_rewrite.py` |
 | `COORDINATOR_ALLOW_INVOKE_ARGV_PARAMS` | `offer-invoke-params-stdin` (`check_offer_invoke_params_stdin`) | `bash_guards/guard_offer_invoke_params_stdin.py` |

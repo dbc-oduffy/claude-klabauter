@@ -926,3 +926,66 @@ def test_resolved_git_rides_executable_and_never_argv0(invoke, tmp_path, monkeyp
 # gravestoned (no production caller since C7 removed the post-commit
 # hook's invocation of this module); their driving tests retired with
 # them.
+
+
+# ---------------------------------------------------------------------------
+# PUSH UNCONFIRMED vs PUSH FAILED headline (2026-09-01)
+# ---------------------------------------------------------------------------
+
+
+def _log_line(repo_root):
+    return (repo_root / ".git" / "push-failures.log").read_text(encoding="utf-8")
+
+
+def test_log_failure_defaults_to_failed_headline(tmp_path):
+    """Default is unchanged, so no existing caller shifts shape."""
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True)
+    auto_push.log_failure(str(repo_root), "work/foo", "direct push", "auth", 1, "denied", "")
+    assert "PUSH FAILED on work/foo" in _log_line(repo_root)
+    assert "PUSH UNCONFIRMED" not in _log_line(repo_root)
+
+
+def test_log_failure_unconfirmed_uses_unconfirmed_headline(tmp_path):
+    """An outcome the engine never observed must not assert a failure.
+
+    The cadence arm times out mid-flight and reports `PushOutcome.
+    unconfirmed`; the row headlined `PUSH FAILED` anyway while carrying
+    `sweep-unconfirmed` in its own class field, so it contradicted itself.
+    """
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True)
+    auto_push.log_failure(
+        str(repo_root),
+        "work/foo",
+        "cadence-sweep",
+        "sweep-unconfirmed",
+        None,
+        "git push: timed out after 5.999998299987055s",
+        "",
+        unconfirmed=True,
+    )
+    line = _log_line(repo_root)
+    assert "PUSH UNCONFIRMED on work/foo" in line
+    assert "PUSH FAILED" not in line
+    # The diagnostic payload is unchanged -- only the verb moved.
+    assert "(cadence-sweep/sweep-unconfirmed after ?)" in line
+    assert "timed out after 5.99" in line
+
+
+def test_unconfirmed_row_does_not_trip_the_push_failure_tripwire(tmp_path):
+    """`_PUSH_FAILED_LINE_RE`'s comment claims it matches "only a genuine,
+    exhausted-retry failure row". Before the headline split it could not --
+    every row said PUSH FAILED. This pins the stated contract."""
+    from coordinator_core.hooks.runtime_tripwire_em_check import _PUSH_FAILED_LINE_RE
+
+    repo_root = tmp_path / "repo"
+    (repo_root / ".git").mkdir(parents=True)
+    auto_push.log_failure(
+        str(repo_root), "work/foo", "cadence-sweep", "sweep-unconfirmed",
+        None, "timed out", "", unconfirmed=True,
+    )
+    assert _PUSH_FAILED_LINE_RE.search(_log_line(repo_root)) is None
+
+    auto_push.log_failure(str(repo_root), "work/foo", "direct push", "auth", 3, "denied", "")
+    assert _PUSH_FAILED_LINE_RE.search(_log_line(repo_root)) is not None

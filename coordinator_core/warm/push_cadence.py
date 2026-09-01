@@ -334,12 +334,19 @@ def _release_sweep_lock(repo_root: Union[str, Path], *, pid: Optional[int] = Non
 
 def _feed_failure_detector(repo_root: Union[str, Path], outcome) -> None:
     branch = head_branch(Path(repo_root)) or "<unknown>"
+    # `is_unconfirmed` and `err_class` are the SAME decision, so they are
+    # taken together here rather than re-derived downstream from the
+    # `err_class` string. The log row used to headline `PUSH FAILED` on both
+    # legs while carrying `sweep-unconfirmed` in its class field -- the row
+    # contradicted itself, and the readers key on the headline.
     if outcome.failed:
         first_err = "; ".join(outcome.failed)
         err_class = "sweep-failed"
+        is_unconfirmed = False
     else:
         first_err = "; ".join(outcome.unconfirmed)
         err_class = "sweep-unconfirmed"
+        is_unconfirmed = True
     # `outcome.attempts`, never a literal: this feed passed `1` for three
     # months, and `log_failure` writes that number into `.git/push-failures.log`
     # as `after <N>` -- which every reader takes as the ladder depth actually
@@ -357,6 +364,7 @@ def _feed_failure_detector(repo_root: Union[str, Path], outcome) -> None:
             outcome.attempts,
             first_err,
             "",
+            unconfirmed=is_unconfirmed,
         )
     except Exception:  # noqa: BLE001 -- feeding the detector must never raise
         pass

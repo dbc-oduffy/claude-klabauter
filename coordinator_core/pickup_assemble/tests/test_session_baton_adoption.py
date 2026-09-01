@@ -208,6 +208,32 @@ def test_intent_falls_back_to_summary_and_says_so(tmp_path, as_session):
     assert record["intent"] == "(from summary) What the session did."
 
 
+def test_second_different_adoption_never_clobbers_first_intent(tmp_path, as_session):
+    """Review: reviewer 2026-09-01-codereview-sliceB #1/#2 -- a title-less
+    first adoption can legitimately stamp `intent` alone (fail-open posture,
+    § `_adopt_into_baton` docstring). A SECOND, DIFFERENT artifact adopted in
+    the same session must not re-fire the naming block and overwrite that
+    `intent`, even though `title` is still unset -- the only scenario where
+    the docstring's "never clobbers the first one" claim is load-bearing.
+    Calls `_adopt_into_baton` directly (not `brief()`) to construct the
+    title-less-but-intent-bearing `fm` the schema's own required-`title`
+    field would otherwise prevent seeding through a real handoff.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    as_session("sid-two")
+    _ensure_session_dir(repo, "sid-two")
+
+    pa._adopt_into_baton(repo, "state/handoffs/first.md", {"session_goal": "First goal."})
+    pa._adopt_into_baton(
+        repo, "state/handoffs/second.md", {"title": "Second Title", "session_goal": "Second goal."}
+    )
+
+    record = read_baton("sid-two", cwd=str(repo))
+    assert record["intent"] == "First goal."
+    assert not record.get("title")
+
+
 def test_intent_stays_unset_when_neither_field_is_present(tmp_path, as_session):
     """No goal and no summary means no intent -- never an invented one."""
     repo = tmp_path / "repo"

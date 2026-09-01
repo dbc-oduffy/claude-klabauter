@@ -1269,6 +1269,6 @@ def test_every_status_in_the_schema_enum_is_classified():
     enum = set(schema["properties"]["status"]["enum"])
     assert enum == known, (
         "plan.schema.json's status enum changed; classify the new value(s) in "
-        f"_TERMINAL_WRITE_OWED_STATUSES before widening this guard: {enum ^ known}"
+        f"_TERMINAL_WRITE_OWED_STATUS before widening this guard: {enum ^ known}"
     )
-    assert qwa._TERMINAL_WRITE_OWED_STATUSES <= enum
+    assert qwa._TERMINAL_WRITE_OWED_STATUS in enum

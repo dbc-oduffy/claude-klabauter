@@ -4740,53 +4740,31 @@ def test_decisions_template_governing_plan_keys_stay_none_when_unresolved(monkey
     assert template["governing_plan_path"] is None
 
 
-def test_decisions_template_stage_paths_candidates_is_dead_with_its_consumer(monkeypatch, tmp_path):
-    """`gates.stage_paths_candidates` had exactly one consumer,
-    `d-run-wsc-tail`, killed 2026-08-23; `build_directives` now hard-codes the
-    source to `None` (see its own `stage_paths_candidates: Optional[list[str]]
-    = None` and the comment above it). This test asserted the pre-fill still
-    happened and was red at HEAD. Inverted rather than deleted: the wiring is
-    still present and still emitted, so what needs pinning is that it stays
-    inert -- a future edit re-populating it would silently re-introduce a
-    pre-fill nothing reads."""
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    monkeypatch.setattr(
-        wsc.directives_memo_lifecycle,
-        "classify_session_authored_files",
-        lambda root, start, known_concurrent_paths=frozenset(): [
-            {"path": "state/some-file.md", "session_authored": True}
-        ],
-    )
-    decision_object = wsc.brief(decisions={"subject": "a commit subject"}, repo_root=tmp_path)
-    assert decision_object["gates"]["stage_paths_candidates"] is None
-    assert decision_object["preflight"]["decisions_template"]["stage_paths"] is None
-
-
-def test_decisions_template_stage_paths_stays_none_when_caller_already_supplied_it(monkeypatch, tmp_path):
-    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
-    decision_object = wsc.brief(
-        decisions={"subject": "a commit subject", "stage_paths": ["state/already-known.md"]},
-        repo_root=tmp_path,
-    )
-    assert decision_object["gates"]["stage_paths_candidates"] is None
-    template = decision_object["preflight"]["decisions_template"]
-    assert template["stage_paths"] is None
+# `gates.stage_paths_candidates` / `decisions_template["stage_paths"]` and
+# their two pinning tests (`..._is_dead_with_its_consumer`,
+# `..._stays_none_when_caller_already_supplied_it`) were deleted here
+# (review: overengineering-reviewer, finding #2): the field's one consumer,
+# `d-run-wsc-tail`, was killed 2026-08-23, and pinning its inertness with a
+# test converted "nobody removed it" into "a test now says it must stay" —
+# the deadness is now absent from the gate/template rather than documented
+# as inert. See `coordinator_core/workstream_complete/__init__.py`'s
+# `DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS` for the removal.
 
 
 def test_build_decisions_template_only_declared_ac5_keys_are_ever_prefilled():
     """Negative-spec: a key not in `DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_
     PATHS` stays `None` even when `resolved_free_values` supplies a value for
-    it -- only the three declared keys are in scope for this chunk."""
+    it -- only the two declared keys are in scope for this chunk."""
     resolved = {
         "governing_plan_slug": "some-plan",
         "governing_plan_path": "docs/plans/some-plan.md",
-        "stage_paths": ["a", "b"],
+        "stage_paths": ["a", "b"],  # not a declared key (struck 2026-09-01)
         "review_partition": {"range": "a..b"},  # not a declared key
     }
     template = wsc.build_decisions_template([], resolved)
     assert template["governing_plan_slug"] == "some-plan"
     assert template["governing_plan_path"] == "docs/plans/some-plan.md"
-    assert template["stage_paths"] == ["a", "b"]
+    assert template["stage_paths"] is None
     assert template["review_partition"] is None
 
 
@@ -4794,7 +4772,6 @@ def test_build_decisions_template_declared_mapping_names_the_real_envelope_paths
     assert wsc.DECISIONS_TEMPLATE_RESOLVED_KEY_ENVELOPE_PATHS == {
         "governing_plan_slug": "preflight.governing_plan_resolution.slug",
         "governing_plan_path": "preflight.governing_plan_resolution.path",
-        "stage_paths": "gates.stage_paths_candidates",
     }
 
 

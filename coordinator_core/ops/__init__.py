@@ -238,6 +238,16 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         # KILLED (max 2062ms against the 2000ms bar); its sole caller was the CLI
         # trampoline `coordinator/bin/query-record-history.py`, which now surfaces
         # the refusal. Nothing this module declares dispatches.
+        # Review: overengineering-reviewer (finding #1, major) asked this row
+        # struck entirely rather than re-annotated. Left in place: the module
+        # still declares `@register_op("records.history")`
+        # (coordinator_core/ops/record_history.py:657), and
+        # test_eager_op_modules_covers_every_register_op.py requires every
+        # such module to be _EAGER_OP_MODULES-reachable or it ships
+        # present-but-dead (registry MISS at dispatch). That test is the
+        # arbiter per this dispatch's brief — striking this row is correct
+        # only once the module's `@register_op` decorator (or the module
+        # itself) is also removed, which is outside this integration pass.
         "no reachable op; `records.history` was killed under the budget",
     ),
     (
