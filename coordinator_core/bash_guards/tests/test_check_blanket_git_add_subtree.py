@@ -172,3 +172,102 @@ def test_subtree_add_dry_run_failure_fails_open(monkeypatch, tmp_path):
     )
 
     assert result is None
+
+
+def test_subtree_add_with_foreign_path_is_denied_after_dashdash(monkeypatch, tmp_path):
+    """DoE example-game-repo-em finding (2026-08-31, cross-repo/inbox): the canonical
+    ``git add -- <dir>`` form this guard's own deny message prescribes
+    ("Use instead: git add -- path/to/file") used to pass unguarded --
+    C3 sat inside the same blanket ``if past_dd: continue`` built for
+    flag detection (`--all`/`-A`), so a subtree pathspec placed AFTER
+    `--` never reached ``_bt_add_resolve_subtree_dir_token`` at all. This
+    is the discriminating case: same directory, same foreign path,
+    opposite side of ``--`` from ``test_subtree_add_with_foreign_path_is_
+    denied`` above. Red before the ``not past_dd`` gating fix (C3
+    unreachable -> ``result is None``), green after.
+    """
+    root = tmp_path / "repo"
+    subtree = root / "src"
+    subtree.mkdir(parents=True)
+    monkeypatch.chdir(root)
+    _wire_hazard(monkeypatch)
+    _wire_git(
+        monkeypatch,
+        str(root),
+        dry_run_lines=["add 'src/mine.py'", "add 'src/peer.py'"],
+    )
+    _wire_claims(monkeypatch, {"src/mine.py"})
+
+    result = guard.check_blanket_git_add(
+        "git add -- src/", session_id="sess1", hook_payload={}
+    )
+
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "src/peer.py" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_multiple_post_dashdash_tokens_all_evaluated(monkeypatch, tmp_path):
+    """Example-Game-Repo-em observation 1: the real command had three post-``--``
+    tokens (two literal files, one directory); the fix must walk every
+    post-`--` token, not just the first. Here the FIRST post-`--` token
+    is an innocuous literal file and the SECOND is the foreign subtree --
+    a fix that only re-checked the first token would miss this.
+    """
+    root = tmp_path / "repo"
+    subtree = root / "src"
+    subtree.mkdir(parents=True)
+    monkeypatch.chdir(root)
+    _wire_hazard(monkeypatch)
+    _wire_git(
+        monkeypatch,
+        str(root),
+        dry_run_lines=["add 'src/mine.py'", "add 'src/peer.py'"],
+    )
+    _wire_claims(monkeypatch, {"src/mine.py", "README.md"})
+
+    result = guard.check_blanket_git_add(
+        "git add -- README.md src/", session_id="sess1", hook_payload={}
+    )
+
+    assert result is not None
+    assert "src/peer.py" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_root_anchor_after_dashdash_is_still_denied(monkeypatch, tmp_path):
+    """The other path-shaped checks (`.`, `:/`, absolute repo root) share
+    the same C3 fix -- pin that `git add -- .` is denied identically to
+    `git add .`, not just the subtree branch."""
+    root = tmp_path / "repo"
+    root.mkdir(parents=True)
+    monkeypatch.chdir(root)
+    _wire_hazard(monkeypatch)
+    _wire_git(monkeypatch, str(root))
+
+    result = guard.check_blanket_git_add(
+        "git add -- .", session_id="sess1", hook_payload={}
+    )
+
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_flag_shaped_token_after_dashdash_is_a_literal_path_not_a_flag(
+    monkeypatch, tmp_path
+):
+    """Flag detection stays pre-``--`` only: a token that is spelled like a
+    flag (``-A``) but appears AFTER ``--`` is a literal filename in git's
+    own semantics, not the blanket-add flag, and must not be denied on
+    that basis. Guards against a fix that over-corrects by making flag
+    detection post-`--`-aware too."""
+    root = tmp_path / "repo"
+    root.mkdir(parents=True)
+    monkeypatch.chdir(root)
+    _wire_hazard(monkeypatch)
+    _wire_git(monkeypatch, str(root))
+
+    result = guard.check_blanket_git_add(
+        "git add -- -A", session_id="sess1", hook_payload={}
+    )
+
+    assert result is None

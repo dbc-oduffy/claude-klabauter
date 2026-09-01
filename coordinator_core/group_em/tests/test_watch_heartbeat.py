@@ -129,3 +129,20 @@ def test_stamp_returns_false_rather_than_raising_when_the_path_is_unusable(tmp_p
     assert watch_heartbeat.stamp(
         str(tmp_path), holder_session_id="crown-1", declinations=[], interval_seconds=5.0
     ) is False
+
+
+def test_tick_source_is_the_callers_word_when_a_wake_fired_the_tick(tmp_path):
+    """A cron-floor wake and a held poller write the same keys and mean
+    different things about what happens if nobody fires again."""
+    watch_heartbeat.stamp(str(tmp_path), holder_session_id="crown-1", declinations=[], interval_seconds=1380.0, tick_source="cron")
+    assert _record(tmp_path)["tick_source"] == "cron"
+
+
+def test_an_unknown_tick_source_raises_rather_than_writing_it(tmp_path):
+    """The one argument a caller can get wrong silently. An unknown word reads
+    to the DoE reader as a watch of unknown provenance -- worse than a loud
+    failure at the writer's first run."""
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError):
+        watch_heartbeat.stamp(str(tmp_path), holder_session_id="c", declinations=[], interval_seconds=5.0, tick_source="poller")

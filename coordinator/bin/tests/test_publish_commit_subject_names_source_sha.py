@@ -104,11 +104,11 @@ def test_every_percolate_commit_subject_site_stamps():
     import ast  # noqa: PLC0415
 
     sites = {
-        "publish.py": "_commit_published_dests",
-        "percolate-round.py": "_build_commit_subject",
-        "percolate-mirror.py": "main",
+        "publish.py": ("_commit_published_dests", "_pinned_source_sha_suffix"),
+        "percolate-round.py": ("_build_commit_subject", "_source_sha_suffix"),
+        "percolate-mirror.py": ("main", "_source_sha_suffix"),
     }
-    for filename, funcname in sites.items():
+    for filename, (funcname, stamp_call_name) in sites.items():
         tree = ast.parse((_BIN_DIR / filename).read_text(encoding="utf-8"))
         enclosing = [
             n
@@ -123,10 +123,10 @@ def test_every_percolate_commit_subject_site_stamps():
         stamped = any(
             isinstance(n, ast.Call)
             and (
-                (isinstance(n.func, ast.Name) and n.func.id == "_source_sha_suffix")
+                (isinstance(n.func, ast.Name) and n.func.id == stamp_call_name)
                 or (
                     isinstance(n.func, ast.Attribute)
-                    and n.func.attr == "_source_sha_suffix"
+                    and n.func.attr == stamp_call_name
                 )
             )
             for node in enclosing
@@ -136,6 +136,64 @@ def test_every_percolate_commit_subject_site_stamps():
             f"{filename}: {funcname} composes a commit subject without the "
             f"currency stamp"
         )
+
+
+def test_commit_published_dests_stamps_the_round_pinned_sha_not_live_head(
+    monkeypatch, tmp_path
+):
+    """The blind spot the earlier version of this file had: every prior
+    assertion here compared `_source_sha_suffix()` against ITSELF (or
+    against a sibling leg's call to the identical live-HEAD read), so a
+    subject built from a stale-by-construction live `HEAD` read passed
+    every one of them. `_commit_published_dests` runs at the END of a
+    multi-target run, after every row — the site furthest from
+    round-start and most exposed to a peer commit landing mid-run
+    (`_round_pin_source_sha`'s own docstring: four distinct SHAs observed
+    across one round on a 50-70-session box). This drives it with a
+    `round_pinned_shas` cache pre-seeded to one sha and `head_sha` stubbed
+    to answer a DIFFERENT one, so a subject naming the live-HEAD sha
+    (the pre-fix behaviour) and a subject naming the pinned sha (the
+    fix) are distinguishable outcomes, not the same assertion twice.
+    """
+    import coordinator_core.git.git_state as git_state
+    from coordinator_core.git import commit as commit_mod
+
+    pinned_sha = "1111111111112222222222223333333333333444"
+    live_sha = "9999999999998888888888887777777777777666"
+    monkeypatch.setattr(git_state, "head_sha", lambda _repo: live_sha)
+
+    repo_root = tmp_path / "claude-klabauter"
+    dest_dir = repo_root / "coordinator_core"
+    dest_dir.mkdir(parents=True)
+
+    seen: dict = {}
+
+    def _fake_commit_paths(root, paths, message, **kwargs):
+        seen["message"] = message
+        return commit_mod.CommitOutcome(sha="a" * 40, staged_preferred=(), worktree_over_staged=())
+
+    monkeypatch.setattr(commit_mod, "commit_paths", _fake_commit_paths)
+    monkeypatch.setattr(publish, "_is_git_repo", lambda _root: True)
+    monkeypatch.setattr(
+        publish, "_dirty_paths_under", lambda _root, _dirs: ["coordinator_core/ipc.py"]
+    )
+    monkeypatch.setattr(publish, "_normalize_dest_exec_bits", lambda _root, _dirs: [])
+
+    round_pinned_shas = {str(publish._REPO_ROOT): pinned_sha}
+    ok = publish._commit_published_dests(
+        {repo_root: {dest_dir}},
+        succeeded_row_names=["claude-klabauter"],
+        round_pinned_shas=round_pinned_shas,
+    )
+    assert ok is True
+
+    subject = seen["message"]
+    assert pinned_sha[:12] in subject, (
+        f"subject named a sha other than the round-pinned one: {subject!r}"
+    )
+    assert live_sha[:12] not in subject, (
+        f"subject named the live-HEAD sha instead of the round-pinned one: {subject!r}"
+    )
 
 
 def test_the_stamp_has_exactly_one_definition():

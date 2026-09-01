@@ -1038,14 +1038,35 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                             "(COORDINATOR_WARM_BOOT_WAIT_SECS=0), so this call did not "
                             "wait for it"
                         )
+                        # The remedy half is not decoration. This message named
+                        # a defect and then told the reader only what NOT to do
+                        # ("rather than retrying by hand"), so example-game-repo-em read
+                        # it, confirmed the supervisor was the respawn it had
+                        # just triggered, and had nothing to act on -- while the
+                        # correct move was the one the message did not name:
+                        # re-issue the call, which then returned in 2.9s (memo
+                        # `cross-repo/inbox/2026-09-01-example-game-repo-em-close-
+                        # ceremony-engine-defects-seven.md` defect 7).
+                        #
+                        # `warm-engine-stop` is named as a RUNNABLE, per the
+                        # cold-path rule -- what fires before a session exists
+                        # cannot be remediated by a slash command. It clears a
+                        # wedged-but-LISTENING server (its own docstring's job);
+                        # a server that never accepts a connection is the
+                        # crash-loop case, which is why the two are given
+                        # separately rather than as one instruction.
                         _fatal_stderr(
                             "warm dispatch unavailable and cold fallback is disabled "
                             f"(no live ops without warm). A respawn was triggered and "
                             f"{waited_clause}. THIS IS A DEFECT, not a queue: reaching "
-                            "the engine is budgeted in hundreds of milliseconds, so an "
-                            "unreachable warm server is over budget by orders of "
-                            "magnitude however busy the box is. Check for a wedged or "
-                            "crash-looping warm server rather than retrying by hand. "
+                            "the engine is budgeted in hundreds of milliseconds.\n"
+                            "Re-issue this same command once -- the respawn already in "
+                            "flight normally answers the next call.\n"
+                            "If it fails the same way again, the server is wedged or "
+                            "crash-looping: run `warm-engine-stop` (the operator hatch "
+                            "for a wedged-but-listening server) from the serving clone, "
+                            "then re-issue. Do not hand-roll the underlying git or op "
+                            "-- that skips the gates this op carries.\n"
                             "For deliberate manual testing, pass "
                             "--allow-unstamped-dispatch."
                         )

@@ -5295,12 +5295,32 @@ def check_blanket_git_add(
             if tok == "--":
                 past_dd = True
                 continue
-            if past_dd:
-                continue
-            if tok in ("--all", "--update"):
-                should_deny = True
-                deny_reason = tok
-                break
+            # Flag detection is pre-`--` ONLY: after the separator every
+            # token is a literal pathspec, never a flag, so `--all`/
+            # `--update`/a bundled `-A` spelled post-`--` is a filename,
+            # not the flag -- denying it here would be a false positive.
+            # The PATH-shaped checks below (`.`, `:/`, absolute-root, C3
+            # subtree) are the opposite: paths only ever appear after `--`
+            # in the canonical `git add -- <path>` form this guard's own
+            # deny message prescribes, so gating them on `not past_dd` is
+            # exactly the hole DoE's example-game-repo-em finding (2026-08-31,
+            # cross-repo/inbox) reported -- `git add -- state/subagent-
+            # share/` swept 130 foreign paths past C3 because C3 sat
+            # inside the same blanket `if past_dd: continue` built for
+            # flag detection. Every post-`--` token is walked here, not
+            # just the first (same finding, observation 1).
+            if not past_dd:
+                if tok in ("--all", "--update"):
+                    should_deny = True
+                    deny_reason = tok
+                    break
+                if tok.startswith("-") and not tok.startswith("--"):
+                    if "/" not in tok and not tok.startswith("./"):
+                        flag_chars = tok[1:]
+                        if "A" in flag_chars or "u" in flag_chars or "U" in flag_chars:
+                            should_deny = True
+                            deny_reason = tok
+                            break
             if tok in (".", "./"):
                 should_deny = True
                 deny_reason = tok
@@ -5313,13 +5333,6 @@ def check_blanket_git_add(
                 should_deny = True
                 deny_reason = tok
                 break
-            if tok.startswith("-") and not tok.startswith("--"):
-                if "/" not in tok and not tok.startswith("./"):
-                    flag_chars = tok[1:]
-                    if "A" in flag_chars or "u" in flag_chars or "U" in flag_chars:
-                        should_deny = True
-                        deny_reason = tok
-                        break
             # An absolute pathspec that resolves to the repo root itself is
             # `.` written a different way -- same finding as `:/` above. A
             # DEEPER absolute path (a genuinely scoped subdirectory/file) is
@@ -5979,6 +5992,97 @@ def _owner_liveness_basis(owner_id: str, live_verdicts: Dict[str, Tuple[bool, st
     return verdict[1] if verdict is not None else None
 
 
+def _owner_writer_name_clause(
+    fact: "OwnerFact",
+    live_verdicts: Dict[str, Tuple[bool, str, Optional[int]]],
+) -> str:
+    """Three-rung name resolution ladder (C3, plan
+    ``2026-09-01-the-claim-record-carries-the-name``) -- the same ladder
+    C2 (``coordinator/bin/session-claim-cli.py``) implements against its
+    own read surface, applying ``_holder_context``'s discipline
+    (``coordinator/bin/coordinator-safe-commit.py``, landed 3dcf73f06c/
+    586bb605a6) VERBATIM: PROVENANCE, never ADDRESS.
+
+    Rung 1 -- ``fact.writer_name``, the name C1 stamped ON the claim at
+    write time. Survives the writer exiting, a name re-point, and a
+    cross-machine read -- the durable answer this plan exists to add.
+    Rung 2 -- failing that, a live ``harness_registry.lookup(fact.owner)``.
+    The cheap fallback rung: correct only for a pre-C1 record whose writer
+    is still resident on THIS machine, at read time, on THIS box.
+    Rung 3 -- failing both, an explicit UNNAMED marker, visually distinct
+    from a bare sid (Anti-scope: never print a bare sid as though it were
+    an address -- that teaches the fleet to route around the guard).
+
+    Renders a resolved name (rung 1 or 2) with its AGE where evidence for
+    one exists (the ``_holder_context`` "held 33.8h" precedent) and an
+    explicit staleness marker -- never as ready-to-send, and never with
+    "re-resolve from the stored session UUID" (Anti-scope: that sid is, by
+    hypothesis, precisely the one that no longer resolves -- the plan's
+    Problem section). A resolver exception (``harness_registry.lookup``
+    unavailable, corrupt registry) degrades to rung 3, never raises --
+    Check 5 is advisory infrastructure and must not turn a lookup failure
+    into a guard crash.
+
+    DELIBERATELY TERSE: ``_owner_clause_budget_bytes()`` is a THIRD of the
+    already-small ``MESSAGE_PROSE_CAP_BYTES`` (measured 73 bytes today),
+    and the load-bearing subject/liveness prefix this clause is appended
+    to already consumes over half of that on a typical rendering -- there
+    is no headroom left for a full sentence. This clause carries only the
+    name plus a ONE-CHARACTER provenance marker, never prose:
+
+      ``*``  -- rung 1, the name recorded ON the claim at write time.
+      ``~``  -- rung 2, a live registry lookup this call (cheaper, weaker
+                evidence -- correct only while the writer is still
+                resident on THIS machine).
+
+    C3 follow-up fix 1 (plan ``2026-09-01-the-claim-record-carries-the-
+    name``, EM-adjudicated break-class): a bare glyph is NOT itself an
+    explicit staleness warning -- its meaning lives only in this
+    docstring, and a reader who has not read this module's source learns
+    nothing from seeing ``claude-klabauter-26*`` in a guard message. The
+    EXPLICIT warning ("provenance, not a live address -- verify the
+    holder before sending to it") now lives at zero budget cost in
+    ``_owner_name_provenance_note``, appended by every call site that
+    renders an ``_format_owner_sentence()`` result into an unbudgeted
+    deny/warn message. This clause keeps the marker anyway, because it
+    still carries information the warning sentence does not: WHICH rung
+    resolved the name (recorded-at-write-time vs a cheap live lookup this
+    call), i.e. how much to trust it relative to the other rung, not
+    whether to trust it at all -- that second question is what the
+    warning sentence answers, once, in prose, at the point a human
+    actually reads it.
+
+    Either marker means the same thing a full sentence would have said,
+    at 1 byte instead of ~20: UNVERIFIED PROVENANCE, NOT A READY-TO-SEND
+    ADDRESS -- see this function's own docstring and the module-level
+    Anti-scope citation for the long-form statement of that rule; this
+    clause is where the rule is APPLIED under a real byte budget, not
+    where it is explained. `_truncate_to_budget` cuts from the END, so
+    ordering the marker AFTER the name means an over-length name (not
+    this clause's own text) is what a truncation degrades first, and the
+    caller-side subject/liveness prefix -- placed before this clause is
+    even called -- is what a truncation degrades LAST, by construction.
+    """
+    name = fact.writer_name
+    rung = "recorded"
+    if not name:
+        try:
+            from coordinator_core.session import harness_registry
+
+            record = harness_registry.lookup(fact.owner)
+        except Exception:
+            record = None
+        if record is not None and record.name:
+            name = record.name
+            rung = "live-lookup"
+
+    if not name:
+        return " -- UNNAMED"
+
+    marker = "*" if rung == "recorded" else "~"
+    return " -- w:%s%s" % (name, marker)
+
+
 def _format_owner_sentence(
     fact: Optional["OwnerFact"],
     live_verdicts: Dict[str, Tuple[bool, str, Optional[int]]],
@@ -6017,6 +6121,12 @@ def _format_owner_sentence(
             "owning session -- CONTESTED: agent-race, unresolved"
             % fact.owner
         )
+        # C3: the name clause is appended BEFORE the budget truncation
+        # (the load-bearing CONTESTED/liveness verdict sits first in every
+        # branch's `sentence`, so a budget cut lands on the additive name
+        # tail, never the safety-relevant prefix -- see this function's
+        # own "THE BUDGET IS PART OF THE WORK" chunk note).
+        sentence += _owner_writer_name_clause(fact, live_verdicts)
         return _truncate_to_budget(sentence, _owner_clause_budget_bytes())
 
     if fact.claim_source == "unreadable":
@@ -6025,6 +6135,7 @@ def _format_owner_sentence(
             ("sibling %s" % sibling if sibling else "an unresolved sibling")
             + " (its claim record is unreadable this call)"
         )
+        sentence += _owner_writer_name_clause(fact, live_verdicts)
         return _truncate_to_budget(sentence, _owner_clause_budget_bytes())
 
     # claim_source in ("session", "agent") from here down.
@@ -6043,7 +6154,44 @@ def _format_owner_sentence(
         sentence = "%s (no longer live)" % subject
     else:
         sentence = "%s (liveness undetermined this call -- CONTESTED)" % subject
+    sentence += _owner_writer_name_clause(fact, live_verdicts)
     return _truncate_to_budget(sentence, _owner_clause_budget_bytes())
+
+
+_OWNER_NAME_PROVENANCE_WARNING = (
+    " A name shown beside a claim is provenance recorded when the claim "
+    "was written, not a live address -- verify the holder before "
+    "sending to it."
+)
+
+
+def _owner_name_provenance_note(owner_sentence: str) -> str:
+    """C3 follow-up fix 1 (plan ``2026-09-01-the-claim-record-carries-the-
+    name``, EM-adjudicated break-class): the EXPLICIT staleness warning
+    Check 5's owner-clause budget has no room for (see
+    ``_owner_writer_name_clause``'s docstring -- the marker it appends is
+    1 byte, not a sentence). This function is called by every UNBUDGETED
+    site that interpolates an ``_format_owner_sentence()`` result into a
+    deny or warn message (Check 6a's two strict-mode denies and its
+    warn-only advisory) -- those three templates have no
+    ``_truncate_to_budget`` cap, so the warning lives there instead of in
+    the budgeted clause itself, at zero cost, read exactly once by the
+    human it is for.
+
+    Deliberately does NOT say "re-resolve from the stored session UUID":
+    the ``sid`` a stale name is attached to is, by hypothesis, precisely
+    the one that no longer resolves (this plan's own Problem statement) --
+    telling the reader to check the thing that is already known broken is
+    ritual, not a remedy.
+
+    Fires only when ``owner_sentence`` actually names someone (contains
+    ``_owner_writer_name_clause``'s ``" -- w:"`` marker prefix, rung 1 or
+    rung 2) -- returns ``""`` for the "unknown owner" / "UNNAMED"
+    renderings, which name nobody to warn about.
+    """
+    if " -- w:" not in owner_sentence:
+        return ""
+    return _OWNER_NAME_PROVENANCE_WARNING
 
 
 def _format_owner_token(fact: Optional["OwnerFact"]) -> str:
@@ -6805,25 +6953,42 @@ def check_validate_commit(
                             return _deny(
                                 "BLOCKED (strict scope): %s is claimed by BOTH "
                                 "this session and %s, and a live peer's claim "
-                                "wins — recording it again will not clear this.\n\n"
+                                "wins — recording it again will not clear this."
+                                "%s\n\n"
                                 "Unstage it (git restore --staged %s). If this "
                                 "session is the real author, the peer's claim is "
                                 "what has to go: it is this session's write "
                                 "recorded under the wrong id, not a peer edit."
-                                % (staged_file, owner_sentence, staged_file)
+                                % (
+                                    staged_file,
+                                    owner_sentence,
+                                    _owner_name_provenance_note(owner_sentence),
+                                    staged_file,
+                                )
                             )
                         return _deny(
                             "BLOCKED (strict scope): %s is staged but not in "
-                            "this session's touch list — owned by %s.\n\n"
+                            "this session's touch list — owned by %s.%s\n\n"
                             "Unstage it (git restore --staged %s) or, if it "
                             "genuinely belongs to this session's work, record it "
-                            "as touched first." % (staged_file, owner_sentence, staged_file)
+                            "as touched first."
+                            % (
+                                staged_file,
+                                owner_sentence,
+                                _owner_name_provenance_note(owner_sentence),
+                                staged_file,
+                            )
                         )
 
                     warnings.append(
                         "SCOPE: %s is staged but not in this session's touch "
                         "list — likely owned by %s. Strict mode would block "
-                        "this commit." % (staged_file, owner_sentence)
+                        "this commit.%s"
+                        % (
+                            staged_file,
+                            owner_sentence,
+                            _owner_name_provenance_note(owner_sentence),
+                        )
                     )
 
                 # `verdict` here is CHECK 5's own verdict, not the function's
@@ -10291,7 +10456,16 @@ def check_multiprobe_banner_rewrite(
 
     for kind, extra in kinds:
         if kind == "pwd":
-            lines.append("print(os.getcwd())")
+            # `os.sep`, never a literal backslash: on POSIX this is `"/"` and
+            # the replace is a no-op, which is what keeps a directory name
+            # containing a literal backslash (legal on POSIX, and a path
+            # component there rather than a separator) from being rewritten
+            # into a bogus nested path. On Windows it converts the native
+            # separator to the one the shell this chain was written for
+            # actually prints -- Git Bash's `pwd` emits `X:/claude-klabauter`,
+            # not `X:\claude-klabauter`, so the unconverted form was a
+            # gratuitous divergence from the command being replaced.
+            lines.append('print(os.getcwd().replace(os.sep, "/"))')
         elif kind == "whoami":
             lines.append("print(getpass.getuser())")
         elif kind == "date":

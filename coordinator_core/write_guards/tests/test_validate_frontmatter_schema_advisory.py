@@ -923,7 +923,7 @@ class TestReviewedRangeOffer:
         text = _advisory_text(result)
         assert "[frontmatter-schema warning]" in text
         assert "required shape: Value must match pattern:" in text
-        assert "The write will proceed." in text
+        assert "This check will not block the write." in text
 
     @pytest.mark.spawns_process
     @pytest.mark.cadence

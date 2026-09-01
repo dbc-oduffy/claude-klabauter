@@ -61,9 +61,10 @@ Negative-spec (hard-won, restated for this row):
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 from coordinator_core.git.commit import (
+    CommitOutcome,
     CommitRefused,
     NothingToCommit,
     FilterUnsupported,
@@ -71,6 +72,7 @@ from coordinator_core.git.commit import (
     hash_worktree_blobs_via_spawn,
 )
 from coordinator_core.git.commit_trailers import apply_missing_trailers
+from coordinator_core.git.index_write import IndexStaleAfterCommit
 from coordinator_core.git.eol_declared import (
     find_declared_eol_drift,
     repair_declared_eol_drift,
@@ -562,8 +564,37 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         # commit after `memo.send` already committed its own receipt) tell
         # "already done" from "failed" without parsing prose.
         return _error(str(exc), nothing_to_commit=True)
+    except IndexStaleAfterCommit as exc:
+        # THE COMMIT LANDED. Reporting this as an error is the single most
+        # expensive mistake available on this op: `_error` says `committed:
+        # False`, the caller retries, and the same work is committed twice.
+        # `commit_paths` splices the index AFTER the ref swap by design, so a
+        # peer holding `.git/index.lock` for the width of that splice lands
+        # here with real work in history -- routine at the ~50-session load
+        # norm, not exotic.
+        #
+        # Recovered as a SUCCESS carrying the outcome the splice would have
+        # returned, with the stale index reported as a warning rather than a
+        # failure, because that is all the residue actually is: peers' `git
+        # status` misreports these paths until any subsequent index write
+        # refreshes it.
+        # `cast`, not a runtime check: `IndexStaleAfterCommit.outcome` is typed
+        # `object` there only to keep `index_write` free of an import cycle
+        # back to `commit.py`. The sole raiser passes a real `CommitOutcome`.
+        outcome = cast(CommitOutcome, exc.outcome)
+        if exc.outcome is None:
+            # No raiser on the commit path omits it; if one ever does, say so
+            # rather than inventing a sha -- but never downgrade to `_error`,
+            # because the commit landed either way.
+            return _error(
+                f"{exc} (the outcome was not carried out of the raise site, so "
+                "no sha can be reported -- resolve it with `git log -1`)"
+            )
+        index_stale_warning = str(exc)
     except (CommitRefused, FilterUnsupported) as exc:
         return _error(str(exc))
+    else:
+        index_stale_warning = None
 
     # A FIELD IS NOT A SIGNAL. The other route through this same disagreement
     # (`commit_scoped`'s private-index branch, via `commit_pipeline`) has
@@ -573,6 +604,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # equivalent fact as a dict key nobody is obliged to read, so the same
     # disagreement was loud on one path and silent on the other.
     warnings = []
+    if index_stale_warning is not None:
+        # First, because it is the one warning here that changes what the
+        # reader should DO: everything else describes which bytes landed; this
+        # one says the commit landed and the index did not, so `git status`
+        # will misreport these paths until any subsequent index write.
+        warnings.append(index_stale_warning)
     if outcome.worktree_over_staged:
         # Bounded like the other truncation sites in this diff area
         # (commit.py's `refused[:5]` / `sorted(unknown)[:5]`) -- an unbounded

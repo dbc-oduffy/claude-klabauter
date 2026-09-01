@@ -31,13 +31,22 @@ does not make and must not be extended to make.
 TWO IDENTITY NAMESPACES PER TEAMMATE, BOTH ACCEPTED. Observed on disk
 (2026-08-31, this repo's own projects tree): the assistant is dispatched by
 agent TYPE -- `{"agentType": "coordinator:group-em-assistant", ...}` -- while
-the fleet watcher is dispatched as a NAMED `general-purpose` agent,
-`{"agentType": "general-purpose", "name": "fleet-watch", ...}`, because no
-`coordinator:fleet-watch` agent type is registered on this machine. A matcher
-keyed on `agentType` alone therefore reports the watcher permanently absent,
-and one keyed on `name` alone reports the assistant permanently absent
-whenever it is dispatched unnamed. Each teammate below carries BOTH an
-accepted-type set and an accepted-name set, and matches on either.
+the fleet watcher appears as a NAMED `general-purpose` agent,
+`{"agentType": "general-purpose", "name": "fleet-watch", ...}`. That is a
+LAUNCH-TIME artefact, not a missing agent type: the harness enumerates agent
+types once per session, and `coordinator:fleet-watch` first existed at
+DoE-claude `6eb9c0051` (2026-08-31 16:01 +0100, on that repo's
+`work/machine-a/2026-08-22to31`; not yet on its `origin/main`), so a session
+launched before that timestamp cannot dispatch by type and falls back to a
+named `general-purpose` dispatch, while one launched after dispatches by
+type. Both namespaces are therefore live simultaneously across a fleet
+straddling the restart, and neither is vestigial -- do NOT delete the
+type-keyed set on the strength of a `general-purpose` sidecar, nor the
+name-keyed set once every session has restarted. A matcher keyed on
+`agentType` alone reports a pre-restart watcher permanently absent, and one
+keyed on `name` alone reports the assistant permanently absent whenever it
+is dispatched unnamed. Each teammate below carries BOTH an accepted-type set
+and an accepted-name set, and matches on either.
 
 THE WATCHER IS THE WORSE ABSENCE. `missing` is ordered by severity, watcher
 first: an absent assistant costs the EM its own throughput, while an absent

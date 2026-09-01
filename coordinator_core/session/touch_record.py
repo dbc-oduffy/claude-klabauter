@@ -342,7 +342,17 @@ class TouchEvent:
     treat that as "could not confirm ownership", per this module's existing
     degrade posture (see module docstring's Failure posture section) -- this
     module only carries the field, it does not decide how an absent hash is
-    used."""
+    used.
+
+    ``name`` (C1, plan ``2026-09-01-the-claim-record-carries-the-name``) is
+    the WRITER's own SendMessage-addressable name (``harness_registry.
+    RegistryRecord.name``), stamped by ``append_event`` ONLY when the
+    resolved writer's ``sessionId`` matches this event's own ``session_id``
+    -- see ``append_event``'s docstring for why a foreign-sid replay (e.g.
+    ``legacy_touch_corpus_migrate``) must never carry it. ``None`` for any
+    event where the writer could not be resolved, was resolving a foreign
+    session's event, or predates this field -- absence is never a degrade
+    signal here, same posture as ``content_hash``."""
 
     schema_version: int
     verb: str
@@ -351,6 +361,7 @@ class TouchEvent:
     agent_id: Optional[str]
     path: str
     content_hash: Optional[str] = None
+    name: Optional[str] = None
 
 
 def record_carries_content(record_path: "Path | str") -> bool:
@@ -437,6 +448,7 @@ def encode_line(
     path: str,
     timestamp: Optional[float] = None,
     content_hash: Optional[str] = None,
+    name: Optional[str] = None,
 ) -> bytes:
     """Encode one event as a self-describing, newline-terminated line.
 
@@ -449,6 +461,13 @@ def encode_line(
     ``null``) when ``None`` -- keeps a pre-C10 line and a hash-less RELEASE
     byte-identical to what this module already wrote, rather than growing
     every line's minimum size on a field most events do not carry.
+
+    ``name`` (C1) is carried straight through into the encoded record's
+    ``"name"`` field when given, and OMITTED (not written as ``null``) when
+    ``None`` -- same omit-when-None rule as ``"hash"``, so a name-less line
+    stays byte-identical to what this module already wrote (schema version
+    NOT bumped; ``decode_line`` treats an absent ``"name"`` key like any
+    other unknown/absent optional field).
 
     Raises ``ValueError`` for an invalid verb, ``LineTooLong`` if the
     encoded form would meet or exceed ``MAX_ENCODED_LINE_LEN`` -- rejected
@@ -480,6 +499,8 @@ def encode_line(
     }
     if content_hash is not None:
         record["hash"] = content_hash
+    if name is not None:
+        record["name"] = name
     encoded = (json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8")
     if len(encoded) >= MAX_ENCODED_LINE_LEN:
         raise LineTooLong(
@@ -534,6 +555,14 @@ def decode_line(line: "bytes | str") -> TouchEvent:
     if content_hash is not None and not isinstance(content_hash, str):
         raise MalformedRecordLine(f"invalid content hash {content_hash!r}")
 
+    # C1: optional, absent on any pre-C1 line or an event whose writer could
+    # not be resolved / was a foreign-sid replay -- same absence posture as
+    # ``"hash"`` above (never malformed here; see ``TouchEvent.name``'s
+    # docstring for who decides what an absent name means downstream).
+    name = record.get("name")
+    if name is not None and not isinstance(name, str):
+        raise MalformedRecordLine(f"invalid name {name!r}")
+
     if verb not in _VALID_VERBS:
         raise MalformedRecordLine(f"invalid verb {verb!r}")
     if not isinstance(session_id, str) or not session_id:
@@ -551,6 +580,7 @@ def decode_line(line: "bytes | str") -> TouchEvent:
         agent_id=agent_id,
         path=path,
         content_hash=content_hash,
+        name=name,
     )
 
 
@@ -627,6 +657,7 @@ def compact_record(sink: "Path | str") -> None:
             path=event.path,
             timestamp=event.timestamp,
             content_hash=event.content_hash,
+            name=event.name,
         )
         for event in compacted
     )
@@ -702,6 +733,54 @@ def _maybe_rotate(sink_path: Path) -> None:
         _rotate_oversized(sink_path)
 
 
+#: C1 per-process memo of the resolved writer's own ``(sessionId, name)`` --
+#: re-checked on every call (never import-time-cached against a mutable env,
+#: see ``state/lessons/2026-08-31-never-cache-a-value-derived-from-a-mutable-
+#: env-lazily.yaml``), but the underlying ``harness_registry.self_record()``
+#: registry read runs at most once per process. ``_UNSET`` (not ``None``)
+#: marks "not yet resolved" so a legitimate ``self_record() -> None`` (no
+#: registry record for this process) memoizes too, rather than re-reading
+#: the registry on every single append -- ``append_event``'s dominant
+#: caller, ``hooks/track_touched_files.py``, fires on every write-tool call
+#: fleet-wide (see this function's own docstring).
+_UNSET = object()
+_WRITER_IDENTITY_MEMO: object = _UNSET
+
+
+def _resolve_writer_name(session_id: str) -> Optional[str]:
+    """C1: the WRITER's own SendMessage-addressable name, stamped ONLY when
+    the resolved writer IS the event's own subject -- see ``append_event``'s
+    docstring for why an unconditional stamp would fabricate identity onto
+    a foreign session's claim (``legacy_touch_corpus_migrate``'s replay).
+
+    Its own try/except, deliberately NOT the caller's outer one: a failure
+    here must degrade to ``None`` without being able to reach
+    ``append_touch_claims``'s outer handler, which drops the ENTIRE batch on
+    any exception raised before its per-path loop -- see that function's
+    own docstring. Routed through ``_note_degrade`` on a resolution failure
+    so this is countable, never silent, matching this module's established
+    read-side degrade posture.
+    """
+    global _WRITER_IDENTITY_MEMO
+    try:
+        if _WRITER_IDENTITY_MEMO is _UNSET:
+            from coordinator_core.session import harness_registry
+
+            resolved = harness_registry.self_record()
+            _WRITER_IDENTITY_MEMO = resolved
+
+        resolved = _WRITER_IDENTITY_MEMO
+        if resolved is None:
+            return None
+        writer_session_id, record = resolved
+        if writer_session_id != session_id:
+            return None
+        return record.name
+    except Exception as exc:
+        _note_degrade("writer_name_resolution", str(exc))
+        return None
+
+
 def append_event(
     sink: "Path | str",
     *,
@@ -711,6 +790,7 @@ def append_event(
     path: str,
     timestamp: Optional[float] = None,
     content_hash: Optional[str] = None,
+    name: "Optional[str] | object" = _UNSET,
 ) -> None:
     """Encode one event and append it to ``sink`` through
     ``atomic_append.append_line`` -- the only append mechanism this module
@@ -724,9 +804,21 @@ def append_event(
     does not wire a caller (C11's job); ``touch()`` continuing to call this
     without ``content_hash`` is unchanged behavior, not a regression.
 
+    ``name`` (C1) defaults to a PER-PROCESS resolution: when the caller
+    passes nothing, this function resolves the current writer's own
+    registry name (``_resolve_writer_name``) and stamps it ONLY if the
+    resolved writer's ``sessionId`` matches this event's own ``session_id``
+    -- so a caller replaying a FOREIGN session's historical event (e.g.
+    ``legacy_touch_corpus_migrate``, which always passes a foreign,
+    already-decided ``session_id``) never gets the migrating process's own
+    name fabricated onto it: the mismatch alone suppresses the stamp, no
+    extra argument required. A caller passing an explicit string (or
+    ``None``) always wins over the default.
+
     Encoding happens before the growth check so a rejected (too-long) line
     never triggers a rotation for a write that will not land.
     """
+    resolved_name = _resolve_writer_name(session_id) if name is _UNSET else name
     encoded = encode_line(
         session_id=session_id,
         agent_id=agent_id,
@@ -734,6 +826,7 @@ def append_event(
         path=path,
         timestamp=timestamp,
         content_hash=content_hash,
+        name=resolved_name,
     )
     sink_path = Path(sink)
     # Judged, not overlooked: ``sink`` is caller-supplied and serves BOTH

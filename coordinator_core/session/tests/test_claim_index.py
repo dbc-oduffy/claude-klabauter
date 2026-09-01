@@ -63,6 +63,32 @@ def _session_touched(base, sid, lines):
         _append_fixture_line(sink, sid, None, line)
 
 
+def _append_named_fixture_line(sink, session_id, agent_id, line, name):
+    """Same as ``_append_fixture_line``, but pins an explicit ``name`` on
+    the event (C2, docs/plans/2026-09-01-the-claim-record-carries-the-
+    name.md) rather than letting ``append_event`` resolve one off the test
+    process's own (absent) harness registry record."""
+    verb, ts_str, path = line.split(None, 2)
+    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
+    touch_record.append_event(
+        sink,
+        session_id=session_id,
+        agent_id=agent_id,
+        verb=verb,
+        path=path,
+        timestamp=ts,
+        name=name,
+    )
+
+
+def _session_touched_named(base, sid, lines_and_names):
+    """Like ``_session_touched``, but each entry is a ``(line, name)`` pair
+    so a fixture can pin a per-event recorded name."""
+    sink = os.path.join(str(base), sid, "touch-record.jsonl")
+    for line, name in lines_and_names:
+        _append_named_fixture_line(sink, sid, None, line, name)
+
+
 def _agent_touched(base, agent_id, owner_sid, lines):
     agent_dir = os.path.join(str(base), ".agents", agent_id)
     sink = os.path.join(agent_dir, "touch-record.jsonl")
@@ -664,6 +690,123 @@ def test_lookup_edit_ts_removed_on_release(tmp_path):
 # `touch_record.encode_line`/`decode_line` require every field, so a "bare
 # path, unknown time" event cannot be constructed or fed through the seam at
 # all. See this chunk's own report for the C7b AC21-deletion writeup.
+
+
+# ---------------------------------------------------------------------------
+# C2 — recorded_name widening (docs/plans/2026-09-01-the-claim-record-
+# carries-the-name.md). Mirrors the edit_ts block above byte-for-byte on
+# shape and lifecycle: populated on TOUCH, popped on RELEASE, absent (never
+# a degrade signal) for a claimant whose event carries no name.
+# ---------------------------------------------------------------------------
+
+
+def test_lookup_value_shape_is_byte_compatible_plain_dict_of_lists(tmp_path):
+    """The `.recorded_name` widening is ADDITIVE-ATTRIBUTE-ONLY -- it must
+    never reshape `lookup()`'s own `{path: [sid, ...]}` value list into
+    tuples or any other shape. `session.claims` (`claim_index.lookup([path],
+    ...).get(path, [])`) and `ops.session.safe_commit_offer` both consume
+    those list values directly; this pins the literal shape both depend on."""
+    base = str(tmp_path)
+    _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
+
+    result = claim_index.lookup(["foo.py"], sessions_dir=base)
+
+    assert result == {"foo.py": ["sess-a"]}
+    assert type(result["foo.py"]) is list
+    assert result["foo.py"] == ["sess-a"]
+    assert all(isinstance(sid, str) for sid in result["foo.py"])
+
+
+def test_lookup_recorded_name_carries_name_for_claimant(tmp_path):
+    base = str(tmp_path)
+    _session_touched_named(
+        base, "sess-a", [(_touch_line("T", "foo.py"), "claude-klabauter-57")]
+    )
+
+    result = claim_index.lookup(["foo.py"], sessions_dir=base)
+
+    assert result.recorded_name["foo.py"] == {"sess-a": "claude-klabauter-57"}
+
+
+def test_lookup_recorded_name_absent_when_event_carries_no_name(tmp_path):
+    base = str(tmp_path)
+    _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
+
+    result = claim_index.lookup(["foo.py"], sessions_dir=base)
+
+    assert result["foo.py"] == ["sess-a"]
+    assert result.recorded_name.get("foo.py") is None
+
+
+def test_lookup_recorded_name_absent_for_unclaimed_path(tmp_path):
+    base = str(tmp_path)
+    _session_touched_named(
+        base, "sess-a", [(_touch_line("T", "foo.py"), "claude-klabauter-57")]
+    )
+
+    result = claim_index.lookup(["never/touched.py"], sessions_dir=base)
+
+    assert result.recorded_name.get("never/touched.py") is None
+
+
+def test_lookup_recorded_name_removed_on_release(tmp_path):
+    base = str(tmp_path)
+    _session_touched_named(
+        base,
+        "sess-a",
+        [
+            (_touch_line("T", "foo.py", when="2026-08-13T10:00:00.000000Z"), "claude-klabauter-57"),
+            (_touch_line("R", "foo.py", when="2026-08-13T10:00:05.000000Z"), None),
+        ],
+    )
+
+    result = claim_index.lookup(["foo.py"], sessions_dir=base)
+
+    assert result["foo.py"] == []
+    assert result.recorded_name.get("foo.py") is None
+
+
+def test_lookup_recorded_name_survives_reclaim_after_release_by_new_name(tmp_path):
+    """Last-event-wins applies to the recorded name too: a re-claim after a
+    release carries whatever name (if any) the RE-claim's own event
+    recorded, never the earlier claim's stale name."""
+    base = str(tmp_path)
+    _session_touched_named(
+        base,
+        "sess-a",
+        [
+            (_touch_line("T", "foo.py", when="2026-08-13T10:00:00.000000Z"), "claude-klabauter-57"),
+            (_touch_line("R", "foo.py", when="2026-08-13T10:00:05.000000Z"), None),
+            (_touch_line("T", "foo.py", when="2026-08-13T10:00:10.000000Z"), "claude-klabauter-99"),
+        ],
+    )
+
+    result = claim_index.lookup(["foo.py"], sessions_dir=base)
+
+    assert result["foo.py"] == ["sess-a"]
+    assert result.recorded_name["foo.py"] == {"sess-a": "claude-klabauter-99"}
+
+
+def test_lookup_recorded_name_no_extra_io_no_git_spawn(tmp_path, monkeypatch):
+    """Same cost-class negative spec as ``edit_ts``: the name was already
+    parsed off every touch-record line before this widening, and no new
+    file read or subprocess spawn is introduced by carrying it through."""
+    import subprocess
+
+    def _forbid_spawn(*args, **kwargs):
+        raise AssertionError("claim_index must never spawn a subprocess")
+
+    monkeypatch.setattr(subprocess, "run", _forbid_spawn)
+    monkeypatch.setattr(subprocess, "Popen", _forbid_spawn)
+
+    base = str(tmp_path)
+    _session_touched_named(
+        base, "sess-a", [(_touch_line("T", "foo.py"), "claude-klabauter-57")]
+    )
+
+    result = claim_index.lookup(["foo.py"], sessions_dir=base)
+
+    assert result.recorded_name["foo.py"] == {"sess-a": "claude-klabauter-57"}
 
 
 if __name__ == "__main__":

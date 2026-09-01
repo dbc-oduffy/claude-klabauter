@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.session.touch_record as touch_record
+from coordinator_core.session import harness_registry as hr
 from coordinator_core.session.touch_record import (
     MAX_ENCODED_LINE_LEN,
     MAX_RECORD_BYTES,
@@ -34,6 +35,28 @@ from coordinator_core.session.touch_record import (
     encode_line,
     project_live_claims,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_writer_identity_memo():
+    """C1's per-process memo must not leak between tests -- each test that
+    cares about writer-name stamping sets up its own `self_record` fixture
+    or expects the unresolved default (`self_record` unpatched -> None in
+    this sandboxed test environment)."""
+    touch_record._WRITER_IDENTITY_MEMO = touch_record._UNSET
+    yield
+    touch_record._WRITER_IDENTITY_MEMO = touch_record._UNSET
+
+
+def _registry_record(name, pid=1, start_epoch=1000.0, cwd="/repo"):
+    return hr.RegistryRecord(
+        pid=pid,
+        start_epoch=start_epoch,
+        cwd=cwd,
+        name=name,
+        messaging_socket_path=None,
+        status=None,
+    )
 
 
 def test_round_trip_encode_decode():
@@ -636,3 +659,150 @@ def test_discover_family_still_finds_generations_rotated_before_the_counter(tmp_
 
     family = touch_record.discover_family(sink)
     assert [p.read_bytes() for p in family] == [b"legacy\n", b"newer\n", b"live\n"]
+
+
+# ---------------------------------------------------------------------------
+# C1: the claim record carries the name.
+# ---------------------------------------------------------------------------
+
+
+def test_name_less_line_is_byte_identical_to_pre_c1_encoder():
+    pre_c1 = json.dumps(
+        {"v": 1, "verb": "T", "ts": 1234.5, "sid": "sid-1", "agent": None, "path": "a/b.py"},
+        separators=(",", ":"),
+    ) + "\n"
+    encoded = encode_line(
+        session_id="sid-1", agent_id=None, verb="T", path="a/b.py", timestamp=1234.5,
+    )
+    assert encoded == pre_c1.encode("utf-8")
+
+
+def test_name_round_trips_through_decode_line():
+    encoded = encode_line(
+        session_id="sid-1", agent_id=None, verb="T", path="a/b.py", timestamp=1.0,
+        name="claude-klabauter-a9",
+    )
+    event = decode_line(encoded)
+    assert event.name == "claude-klabauter-a9"
+
+
+def test_absent_name_decodes_as_none():
+    encoded = encode_line(session_id="sid-1", agent_id=None, verb="T", path="a/b.py")
+    event = decode_line(encoded)
+    assert event.name is None
+
+
+def test_append_event_stamps_name_when_writer_matches_subject(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        hr, "self_record", lambda: ("sid-1", _registry_record("claude-klabauter-a9"))
+    )
+    sink = tmp_path / "touch-record.jsonl"
+    append_event(sink, session_id="sid-1", agent_id=None, verb=VERB_TOUCH, path="a/b.py")
+
+    lines = touch_record.iter_complete_lines(sink.read_bytes())
+    assert len(lines) == 1
+    assert decode_line(lines[0]).name == "claude-klabauter-a9"
+
+
+def test_append_event_leaves_foreign_sid_event_unnamed(tmp_path, monkeypatch):
+    """`self_record()` resolves the WRITER's own identity; an event whose
+    `session_id` is a different (foreign) session -- the exact shape
+    `legacy_touch_corpus_migrate` replays -- must never carry the writer's
+    name onto it."""
+    monkeypatch.setattr(
+        hr, "self_record", lambda: ("sid-writer", _registry_record("claude-klabauter-a9"))
+    )
+    sink = tmp_path / "touch-record.jsonl"
+    append_event(sink, session_id="sid-foreign", agent_id=None, verb=VERB_TOUCH, path="a/b.py")
+
+    lines = touch_record.iter_complete_lines(sink.read_bytes())
+    assert decode_line(lines[0]).name is None
+
+
+def test_append_event_degrade_path_never_drops_the_event(tmp_path, monkeypatch):
+    """A `self_record()` raise must not propagate into `append_event` --
+    the event still lands, unnamed, and the degrade is counted."""
+
+    def _raising_self_record():
+        raise RuntimeError("registry read boom")
+
+    monkeypatch.setattr(hr, "self_record", _raising_self_record)
+    before = degrade_counts().get("writer_name_resolution", 0)
+
+    sink = tmp_path / "touch-record.jsonl"
+    append_event(sink, session_id="sid-1", agent_id=None, verb=VERB_TOUCH, path="a/b.py")
+
+    lines = touch_record.iter_complete_lines(sink.read_bytes())
+    assert len(lines) == 1
+    assert decode_line(lines[0]).name is None
+    assert degrade_counts().get("writer_name_resolution", 0) == before + 1
+
+
+def test_append_touch_claims_batch_survives_writer_name_resolution_failure(tmp_path, monkeypatch):
+    """The whole `append_touch_claims` batch (a real caller of the append
+    hot path this chunk touches) still lands every path even when the
+    writer-name resolution raises inside `append_event`."""
+
+    def _raising_self_record():
+        raise RuntimeError("registry read boom")
+
+    monkeypatch.setattr(hr, "self_record", _raising_self_record)
+
+    touch_record.append_touch_claims(["a.py", "b.py"], "sid-1", str(tmp_path))
+
+    sink = tmp_path / ".git" / "coordinator-sessions" / "sid-1" / touch_record.RECORD_FILENAME
+    lines = touch_record.iter_complete_lines(sink.read_bytes())
+    assert len(lines) == 2
+    assert all(decode_line(line).name is None for line in lines)
+
+
+def test_explicit_name_argument_overrides_the_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        hr, "self_record", lambda: ("sid-1", _registry_record("claude-klabauter-a9"))
+    )
+    sink = tmp_path / "touch-record.jsonl"
+    append_event(
+        sink, session_id="sid-1", agent_id=None, verb=VERB_TOUCH, path="a/b.py", name=None,
+    )
+    lines = touch_record.iter_complete_lines(sink.read_bytes())
+    assert decode_line(lines[0]).name is None
+
+
+def test_a_maximal_realistic_name_does_not_push_a_realistic_path_over_the_bound():
+    # A generous but realistic path/name pairing stays well under
+    # MAX_ENCODED_LINE_LEN.
+    realistic_path = "coordinator_core/" + ("sub/" * 10) + "a_fairly_long_module_name.py"
+    realistic_name = "claude-klabauter-" + "a" * 32
+    encoded = encode_line(
+        session_id="sid-1", agent_id=None, verb="T", path=realistic_path,
+        name=realistic_name,
+    )
+    assert len(encoded) < MAX_ENCODED_LINE_LEN
+
+
+def test_an_absurd_name_raises_line_too_long_rather_than_silently_corrupting():
+    with pytest.raises(LineTooLong):
+        encode_line(
+            session_id="sid-1", agent_id=None, verb="T", path="a/b.py",
+            name="x" * (MAX_ENCODED_LINE_LEN * 2),
+        )
+
+
+def test_per_process_memo_does_not_re_read_the_registry_per_event(tmp_path, monkeypatch):
+    calls = {"n": 0}
+
+    def _counting_self_record():
+        calls["n"] += 1
+        return ("sid-1", _registry_record("claude-klabauter-a9"))
+
+    monkeypatch.setattr(hr, "self_record", _counting_self_record)
+
+    sink = tmp_path / "touch-record.jsonl"
+    for i in range(5):
+        append_event(sink, session_id="sid-1", agent_id=None, verb=VERB_TOUCH, path=f"a{i}.py")
+
+    assert calls["n"] == 1
+
+    lines = touch_record.iter_complete_lines(sink.read_bytes())
+    assert len(lines) == 5
+    assert all(decode_line(line).name == "claude-klabauter-a9" for line in lines)

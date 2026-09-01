@@ -215,6 +215,35 @@ scope derivation had to refuse in order to defend an invariant this module
 imposed, and the refusal surfaced to plan authors as an unsatisfiable
 guard. See ``pathspec``'s module docstring § The sharp edge AC16 exists for.
 
+## The terminal phase degrades, it never vetoes (cross-repo memo
+``empty-terminal-test-scope-degrades-not-vetoes``, doe-claude-em, 2026-08-31)
+
+``pathspec.NoTestTargetError`` is a locator blind spot, not proof of a bad
+plan: the locator is Python-test-shaped, so a build/config migration, a
+non-Python repo, or a docs/schema-only plan trips it on repo LAYOUT rather
+than on spine quality, and the guard cannot tell "this plan tests nothing"
+from "I cannot see this repo's tests." ``compose_script`` therefore composes
+the terminal phase in three rungs, tried in order and never as
+either/or:
+
+1. ``pathspec.terminal_test_scope`` resolves real test targets (unchanged).
+2. On ``NoTestTargetError``, fall back to the plan's own
+   ``prime_exit_criterion.falsifier`` (``_prime_exit_criterion_falsifier``) —
+   a plan that carries one already has a terminal verification with a
+   recorded baseline and an ``expected_when_true``, which is a BETTER
+   terminal phase than any unit suite for a migration a unit suite cannot
+   see (``_falsifier_terminal_phase``).
+3. Absent a falsifier too, emit with NO terminal test phase, but LOUD about
+   it: a ``log()`` line naming the unmapped paths explicitly
+   (``_no_test_target_narration``) — a degraded emit and a fully-tested one
+   must never read the same to the operator reading the run afterward.
+
+Anti-scope: this is not an override an EM can set to skip rung 1 — "an
+override an EM sets to get past a refusal is a refusal nobody experiences,
+and it puts the judgment in the least-informed place" (same memo). It is
+also not a repo-supplied test-locator keyed off ``coordinator.local.md``;
+that is the real long-term fix and is out of scope here.
+
 ## A review-phase gate abort never suppresses the terminal test phase (Anti-scope)
 
 This caller's commits have already landed by the time any review phase it
@@ -277,7 +306,11 @@ import yaml
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.ops._workflow_contract import Severity, run_checks
-from coordinator_core.ops.dispatch_emit.pathspec import commit_pathspec, terminal_test_scope
+from coordinator_core.ops.dispatch_emit.pathspec import (
+    NoTestTargetError,
+    commit_pathspec,
+    terminal_test_scope,
+)
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, _normalize_path, build_waves
 from coordinator_core.ops.review_mint.compose import compose as compose_review_stages
@@ -631,6 +664,57 @@ def _prime_exit_criterion_statement(plan_text: str) -> Optional[str]:
     return collapsed or None
 
 
+def _prime_exit_criterion_falsifier(plan_text: str) -> Optional[dict]:
+    """``prime_exit_criterion.falsifier`` from ``plan_text``'s frontmatter, as
+    ``{"how": ..., "baseline_output": ..., "expected_when_true": ...}``, or
+    ``None``.
+
+    The rung-2 fallback ``compose_script`` reaches for when
+    ``pathspec.terminal_test_scope`` raises ``NoTestTargetError`` — see
+    module docstring § The terminal phase degrades, it never vetoes. Fail-
+    soft in the same shape ``_prime_exit_criterion_statement`` is: no
+    frontmatter, unparseable YAML, a non-mapping document, an absent or
+    non-mapping ``prime_exit_criterion``/``falsifier``, or a missing/empty/
+    non-string ``how``/``expected_when_true`` all return ``None`` rather
+    than raising or fabricating a partial falsifier. ``baseline_output`` is
+    carried through when present but is not itself required — a falsifier
+    schema-required to have one may still lack it on a malformed or
+    hand-edited plan, and the phase this feeds reads it as context, not as
+    the gate.
+    """
+    split = split_frontmatter(plan_text)
+    if split is None:
+        return None
+    try:
+        doc = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return None
+    if not isinstance(doc, dict):
+        return None
+    block = doc.get("prime_exit_criterion")
+    if not isinstance(block, dict):
+        return None
+    falsifier = block.get("falsifier")
+    if not isinstance(falsifier, dict):
+        return None
+    how = falsifier.get("how")
+    expected_when_true = falsifier.get("expected_when_true")
+    if not isinstance(how, str) or not how.strip():
+        return None
+    if not isinstance(expected_when_true, str) or not expected_when_true.strip():
+        return None
+    baseline_output = falsifier.get("baseline_output")
+    return {
+        "how": " ".join(how.split()),
+        "expected_when_true": " ".join(expected_when_true.split()),
+        "baseline_output": (
+            " ".join(baseline_output.split())
+            if isinstance(baseline_output, str)
+            else None
+        ),
+    }
+
+
 def _plan_deliverable_id(plan_text: str) -> Optional[str]:
     """The plan's top-level frontmatter ``deliverable_id``, or ``None``.
 
@@ -899,9 +983,51 @@ _PROVENANCE_HEADING = (
     "\n\nSHARED TREE: this repo is worked by many concurrent sessions, and "
     "the index routinely holds staged paths belonging to peers. That is the "
     "normal state, not a divergence and not a refusal condition -- your "
-    "scoped-commit route commits only the paths in the pathspec and cannot "
-    "sweep peer-staged work into your commit. Never unstage, revert, or "
+    "scoped-commit route commits only the paths in the pathspec, so peer work "
+    "in any OTHER file cannot reach your commit. Never unstage, revert, or "
     "commit a peer's paths, and never ask for the index to be cleared."
+    "\n\nTHAT PROTECTION IS PER-FILE, NOT PER-HUNK, AND THE DIFFERENCE IS THE "
+    "ONE THING YOU MUST CHECK YOURSELF. A pathspec scopes which FILES are "
+    "committed; it does not scope which CHANGES within them. `commit_paths` "
+    "commits WORKING-TREE state for every path you hand it, so a peer's "
+    "uncommitted edit to a file that is in your pathspec lands in your commit, "
+    "under your subject and your chunk ids, with nothing refusing it. "
+    "Measured 2026-08-31: commit `ef3bbb1663` carried three hunks belonging to "
+    "another session in `coordinator/bin/cross-repo-memo.py` -- a declared "
+    "path, so every guard passed and every report read green."
+    "\n\nSo before you commit: run `git diff --stat -- <your pathspec>` and "
+    "account for what you see against the executor reports above. A file "
+    "showing changes that NO report mentions at all is the peer case -- STOP, "
+    "name the file and its unaccounted hunks, and emit no success token. Extra "
+    "changes in a file some report DOES name are that executor's own work and "
+    "are yours to commit; do not halt on those, and do not ask an executor to "
+    "re-itemise. Never revert, stash, or check out a hunk to \"clean\" the path "
+    "-- the correct move is to stop and report, because the hunks are someone "
+    "else's and this run cannot tell you what they were mid-way through."
+    "\n\nRead the diff, not just the reports. A report is what an agent says "
+    "it wrote; the diff is what is actually there, and only the second one is "
+    "what you are about to commit."
+    "\n\nPASTE THE `git diff --stat` OUTPUT VERBATIM into your report, above "
+    "your token line, under the heading `DIFF OBSERVED:`. Not a summary of it, "
+    "not a table you built from it -- the raw lines, with their real path names "
+    "and real counts."
+    "\n\nWhy this is required rather than encouraged. Commit agents split "
+    "2-2 across two measured runs on whether they ran any tool at all, and "
+    "BOTH non-verifying agents reached correct conclusions from honest "
+    "executor reports -- so the output of an agent that checked and one that "
+    "did not were indistinguishable, and neither could have caught a report "
+    "that was wrong. Worse, thoroughness of PRESENTATION was anti-correlated "
+    "with whether checking happened: the agent that made zero tool calls "
+    "rendered a 13-row table with a tick per path, the most rigorous-LOOKING "
+    "verdict in its run, while the agent that actually looked returned a plain "
+    "list. Triaging by eye picks the wrong one every time "
+    "(cross-repo/archive/2026-08-20-example-retrieval-repo-em-emitted-workflow-commit-"
+    "phase-consolidated.md)."
+    "\n\nSo do not build a nicer artifact -- paste the plainer one. Real stat "
+    "output carries this tree's actual line counts, which is the one thing a "
+    "report assembled from the executor summaries above cannot supply. A "
+    "verdict with no `DIFF OBSERVED:` block is a verdict that did not look, "
+    "however thorough it reads."
     "\n\nA CLAIM CAN REFUSE YOU, BUT ONLY A GUARD RAISES IT -- AND A DEAD "
     "HOLDER'S CLAIM IS REAPABLE. Two layers, and they answer differently. "
     "`commit_paths` performs NO ownership or claim check -- see `coordinator_core/"
@@ -1471,6 +1597,75 @@ def _no_test_scope_narration() -> str:
     return f"  log({_js_string_literal(message)});"
 
 
+def _falsifier_terminal_phase(falsifier: dict, phase_title: str) -> str:
+    """Rung 2's terminal phase: the plan's own
+    ``prime_exit_criterion.falsifier`` run in place of a test suite
+    ``pathspec.terminal_test_scope`` could not resolve.
+
+    Composes a ``coordinator:test-runner`` ``agent()`` call the same shape
+    ``_test_agent_call`` does — same Tier-T-only agent type, same phase — so
+    this rung is not a lesser terminal phase, just a differently-sourced
+    one; see module docstring § The terminal phase degrades, it never
+    vetoes. The prompt carries ``how`` (what to run/observe),
+    ``baseline_output`` when the plan recorded one (what FALSE looked like
+    before any work), and ``expected_when_true`` (what the agent is
+    comparing against) — never gated on the agent's own exit code, matching
+    the falsifier's own "judged by a human/agent reading the re-run", not a
+    typed cell.
+    """
+    baseline = falsifier["baseline_output"]
+    baseline_clause = (
+        f" Baseline observed before any work (must now differ): {baseline!r}."
+        if baseline
+        else ""
+    )
+    prompt = (
+        f"No scoped unit test target was resolvable for this spine's written "
+        f"paths, so run this plan's own recorded falsifier instead. "
+        f"Observation: {falsifier['how']!r}.{baseline_clause} Expected when "
+        f"the prime exit criterion is TRUE: {falsifier['expected_when_true']!r}. "
+        f"Report the raw observation and whether it matches; do not gate on "
+        f"exit code alone."
+    )
+    phase_call = f"  phase({_js_string_literal(phase_title)});"
+    call = (
+        "  await agent("
+        f"{_js_string_literal(prompt)}, "
+        "{ "
+        f"label: {_js_string_literal('test:terminal-falsifier')}, "
+        f"phase: {_js_string_literal(phase_title)}, "
+        f"agentType: {_js_string_literal(_TEST_AGENT_TYPE)}, "
+        f"{_model_opt(_TEST_AGENT_TYPE)} "
+        "});"
+    )
+    return f"{phase_call}\n{call}"
+
+
+def _no_test_target_narration(error: NoTestTargetError) -> str:
+    """Rung 3's terminal narration: emitted in place of a test phase when
+    NEITHER ``pathspec.terminal_test_scope`` NOR the plan's own
+    ``prime_exit_criterion.falsifier`` (``_prime_exit_criterion_falsifier``)
+    resolved anything runnable.
+
+    Unlike ``_no_test_scope_narration`` (an all-prose spine, legitimately
+    silent), this fires over a spine that DID write testable-looking
+    surfaces the locator could not map — the memo's whole complaint is that
+    the two must not read the same to an operator scanning the run. Names
+    ``error.unmapped_paths`` explicitly, per the memo's "Explicitly NOT
+    wanted" § warning silently: a degrade that swallowed the paths would
+    reproduce the exact bug family (an unreadable pass/fail boundary) it
+    exists to close, one level down.
+    """
+    message = (
+        "No terminal test phase: no scoped test target resolved and this "
+        "plan carries no prime_exit_criterion.falsifier to fall back to. "
+        f"Unmapped written paths: {list(error.unmapped_paths)!r}. This is a "
+        "degraded emit, not a pass -- absence of a test run here is "
+        "declared, not verified."
+    )
+    return f"  log({_js_string_literal(message)});"
+
+
 def derive_review_tier(
     plan_path, *, repo_root: Optional[Path] = None, plan_text: Optional[str] = None
 ) -> Optional[str]:
@@ -1599,6 +1794,35 @@ def _meta_block(name: str, description: str, phase_titles: list[str]) -> str:
     )
 
 
+def _excluded_rows_narration(excluded: list) -> str:
+    """A comment block naming every spine row this script does NOT run.
+
+    Emitted into the script itself rather than only returned to the caller,
+    because the script is the artifact that outlives the invocation: an
+    operator reading it six phases in, or resuming it in a later session,
+    sees what was left out and why without re-deriving it from the plan.
+
+    An `operator` row is called out separately from the rest. The others are
+    exclusions whose work is either done or externally blocked; an operator
+    row is work that is IN SCOPE, READY, and STILL OWED -- by a human, after
+    this run.
+    """
+    lines = ["  // ROWS THIS SCRIPT DOES NOT RUN -- read before treating the plan as executed."]
+    operator_rows = [e for e in excluded if e.get("reason") == "operator"]
+    other_rows = [e for e in excluded if e.get("reason") != "operator"]
+    for e in other_rows:
+        lines.append("  //   %s: %s" % (e.get("id"), e.get("detail")))
+    for e in operator_rows:
+        lines.append("  //   %s: %s" % (e.get("id"), e.get("detail")))
+    if operator_rows:
+        lines.append(
+            "  // ^ the operator row(s) above are OWED WORK, not skipped work: in "
+            "scope, ready, and waiting on a human. This run completing is not "
+            "that plan completing."
+        )
+    return "\n".join(lines)
+
+
 def compose_script(
     waves: list[list[WaveRow]],
     *,
@@ -1607,17 +1831,26 @@ def compose_script(
     repo_root: Optional[Path] = None,
     review_tier: Optional[str] = None,
     review_roster_fragment: Optional[dict] = None,
+    excluded_rows: Optional[list] = None,
     plan_path: Optional[str] = None,
     plan_context: Optional[PlanContext] = None,
     deliverable_id: Optional[str] = None,
+    falsifier: Optional[dict] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``.
 
     Refuses (``NoWavesError``) if ``waves`` is empty — see module docstring
-    § Reuse boundary. Every other refusal (``NoWritesDeclaredError``,
-    ``NoTestTargetError``) is raised by ``pathspec.commit_pathspec``/
-    ``pathspec.terminal_test_scope`` and propagates unchanged: this function
-    adds no derivation of its own.
+    § Reuse boundary. ``NoWritesDeclaredError`` is raised by
+    ``pathspec.commit_pathspec`` and propagates unchanged: this function
+    adds no derivation of its own there. ``pathspec.terminal_test_scope``'s
+    ``NoTestTargetError`` no longer propagates — see module docstring § The
+    terminal phase degrades, it never vetoes; this function catches it and
+    composes rung 2 (``falsifier``) or rung 3 (a loud narration) instead.
+
+    ``falsifier`` (rung 2), when supplied, is
+    ``_prime_exit_criterion_falsifier``'s already-derived dict — this
+    function never opens or re-parses the plan itself, matching
+    ``plan_context``'s resolution discipline.
 
     A review phase (a) composes ONLY when BOTH ``review_tier`` (this repo's
     data — see ``derive_review_tier``) AND ``review_roster_fragment`` (DoE's
@@ -1711,16 +1944,26 @@ def compose_script(
             phase_titles.append(title)
             body_blocks.append(block)
 
-    scope = terminal_test_scope(waves, repo_root=repo_root)
-    if scope:
-        phase_titles.append(_TEST_PHASE_TITLE)
-        body_blocks.append(_test_agent_call(scope, _TEST_PHASE_TITLE))
+    try:
+        scope = terminal_test_scope(waves, repo_root=repo_root)
+    except NoTestTargetError as exc:
+        if falsifier is not None:
+            phase_titles.append(_TEST_PHASE_TITLE)
+            body_blocks.append(_falsifier_terminal_phase(falsifier, _TEST_PHASE_TITLE))
+        else:
+            body_blocks.append(_no_test_target_narration(exc))
     else:
-        body_blocks.append(_no_test_scope_narration())
+        if scope:
+            phase_titles.append(_TEST_PHASE_TITLE)
+            body_blocks.append(_test_agent_call(scope, _TEST_PHASE_TITLE))
+        else:
+            body_blocks.append(_no_test_scope_narration())
 
     body_blocks.append(_completion_return(waves, phase_titles))
 
     meta_block = _meta_block(name, description, phase_titles)
+    if excluded_rows:
+        body_blocks.insert(0, _excluded_rows_narration(excluded_rows))
     body = "\n\n".join(body_blocks)
 
     # Top-level, never `async function run(ctx) { ... }` -- see module
@@ -1865,7 +2108,17 @@ def emit_script(
     ``compose_script`` -> ``_commit_agent_call``.
     """
     plan_path = Path(plan_path)
-    rows = read_spine(plan_path)
+    # Collected so an excluded row cannot vanish. `read_spine` drops
+    # non-dispatchable rows by design, and until this out-parameter existed it
+    # dropped them WITHOUT A WORD -- an emitted script named only what it was
+    # going to run, so a gated, deferred, or operator row was indistinguishable
+    # from a row that did not exist. For `execution_mode: operator` that would
+    # be worse than the mis-dispatch the field exists to prevent: a
+    # mis-dispatched row at least reports that it cannot proceed, while a
+    # silently dropped one leaves a plan reading fully executed with a step
+    # nobody performed.
+    exclusions: list = []
+    rows = read_spine(plan_path, exclusions=exclusions)
     waves = build_waves(rows)
 
     resolved_name = name or plan_path.stem
@@ -1888,6 +2141,7 @@ def emit_script(
     )
 
     deliverable_id = _plan_deliverable_id(plan_text) if plan_text else None
+    falsifier = _prime_exit_criterion_falsifier(plan_text) if plan_text else None
 
     return compose_script(
         waves,
@@ -1896,9 +2150,11 @@ def emit_script(
         repo_root=repo_root,
         review_tier=review_tier,
         review_roster_fragment=review_roster_fragment,
+        excluded_rows=exclusions,
         plan_path=spec_path.as_posix(),
         plan_context=plan_context,
         deliverable_id=deliverable_id,
+        falsifier=falsifier,
     )
 
 

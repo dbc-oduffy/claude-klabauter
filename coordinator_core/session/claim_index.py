@@ -326,11 +326,24 @@ class _LookupResult(dict):
     this call already performed, without a second ``rebuild()`` pass. A
     consumer that never reads it (every consumer before C1d) observes no
     behavior change.
+
+    ``recorded_name`` (C2, docs/plans/2026-09-01-the-claim-record-carries-
+    the-name.md) maps each requested path (caller's ORIGINAL string, same
+    keying as ``claimants``/``edit_ts``) -> ``{claimant_sid: name}`` — a
+    straight passthrough of ``_IndexState.recorded_name`` re-keyed onto the
+    caller's original path strings, added so ``session-claim-cli.py``'s
+    ``who-claims-path`` can render a claimant's PROVENANCE name off the SAME
+    rebuild this call already performed, without a second ``rebuild()``
+    pass. See ``_IndexState.recorded_name``'s own docstring for what this
+    name is and is not: a name claimed at write time, never a live address,
+    and never re-resolved by this module. A consumer that never reads it
+    (every consumer before C2) observes no behavior change.
     """
 
     complete: bool = True
     abort_cause: Optional[str] = None
     edit_ts: Dict[str, Dict[str, datetime]] = None  # type: ignore[assignment]
+    recorded_name: Dict[str, Dict[str, str]] = None  # type: ignore[assignment]
 
 
 @dataclasses.dataclass
@@ -364,6 +377,25 @@ class _IndexState:
     (legacy/malformed line) is absent from this mapping even though it is
     still present in ``claims``.
 
+    ``recorded_name`` (C2, docs/plans/2026-09-01-the-claim-record-carries-
+    the-name.md) maps path -> ``{claimant_sid: name}`` for every claimant
+    CURRENTLY holding a ``T`` claim on that path — the SAME per-file,
+    per-path last-verb-wins fold ``claims``/``edit_ts`` already apply,
+    mirroring ``edit_ts``'s own shape and lifecycle byte for byte
+    (populated on TOUCH, popped on RELEASE). The name is the WRITER's own
+    ``harness_registry.RegistryRecord.name`` as stamped by
+    ``touch_record.append_event`` at claim time (``TouchEvent.name``) — an
+    identity CLAIMED AT WRITE TIME, not a live address: the session that
+    recorded it may have since exited, re-pointed its session id, or had
+    its name reassigned to a different peer. A claimant with no recorded
+    name (a legacy line predating this field, or a foreign-sid replay per
+    ``append_event``'s own docstring) is absent from this mapping even
+    though it is still present in ``claims`` — same absence convention as
+    ``edit_ts``. This module performs NO liveness check and NO
+    re-resolution of its own; a caller wanting a live address must consult
+    ``harness_registry.lookup(sid)`` itself and treat that as a SEPARATE,
+    live rung, never as confirmation that this recorded name still holds.
+
     ``agent_claims`` (C2, docs/plans/2026-08-27-safe-commit-offer-excludes-
     a-live-agent.md) maps path -> ``{claimant_sid: [source, ...]}`` — the
     SOURCE(s) currently contributing that sid's membership in ``claims`` for
@@ -389,6 +421,7 @@ class _IndexState:
     complete: bool
     abort_cause: Optional[str] = None
     edit_ts: Dict[str, Dict[str, datetime]] = dataclasses.field(default_factory=dict)
+    recorded_name: Dict[str, Dict[str, str]] = dataclasses.field(default_factory=dict)
     agent_claims: Dict[str, Dict[str, List[Optional[str]]]] = dataclasses.field(
         default_factory=dict
     )
@@ -552,6 +585,7 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
     process_deadline = time.process_time() + REBUILD_PROCESS_TIME_CAP_SECS
     claims: Dict[str, set] = {}
     edit_ts: Dict[str, Dict[str, datetime]] = {}
+    recorded_name: Dict[str, Dict[str, str]] = {}
     agent_claims: Dict[str, Dict[str, Set[Optional[str]]]] = {}
     touched_pairs, complete = _enumerate_claim_sinks(base)
     abort_cause: Optional[str] = None if complete else ABORT_CAUSE_IO_ERROR
@@ -586,6 +620,14 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
                     edit_ts.setdefault(path, {})[claimant_sid] = datetime.fromtimestamp(
                         event.timestamp, tz=timezone.utc
                     )
+                # C2 (recorded_name): the writer's SendMessage-addressable
+                # name at claim time, when the record carries one. Absence
+                # (legacy line, or a foreign-sid replay -- see
+                # ``touch_record.append_event``'s own docstring) leaves the
+                # claimant simply out of this mapping, same convention as
+                # ``edit_ts`` above -- never a degrade signal.
+                if event.name:
+                    recorded_name.setdefault(path, {})[claimant_sid] = event.name
             else:  # RELEASE — a release only ever removes the claimant from
                 # the aggregate bucket. A same-file re-claim after a release
                 # can't reach this branch: this per-file scan already
@@ -593,6 +635,7 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
                 # last-verb-wins fold).
                 claims.get(path, set()).discard(claimant_sid)
                 edit_ts.get(path, {}).pop(claimant_sid, None)
+                recorded_name.get(path, {}).pop(claimant_sid, None)
                 # C2: drop exactly THIS file's source attribution, not the
                 # whole sid -- a peer agent's own live claim is untouched.
                 sid_sources = agent_claims.get(path, {}).get(claimant_sid)
@@ -602,6 +645,9 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
     result_claims = {path: sorted(sids) for path, sids in claims.items() if sids}
     result_edit_ts = {
         path: dict(sids_ts) for path, sids_ts in edit_ts.items() if sids_ts
+    }
+    result_recorded_name = {
+        path: dict(sids_names) for path, sids_names in recorded_name.items() if sids_names
     }
     result_agent_claims: Dict[str, Dict[str, List[Optional[str]]]] = {}
     for path, sid_sources in agent_claims.items():
@@ -617,6 +663,7 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
         complete=complete,
         abort_cause=abort_cause,
         edit_ts=result_edit_ts,
+        recorded_name=result_recorded_name,
         agent_claims=result_agent_claims,
     )
 
@@ -666,12 +713,14 @@ def lookup(
         result.complete = False
         result.abort_cause = ABORT_CAUSE_EMPTY_BASE
         result.edit_ts = {}
+        result.recorded_name = {}
         return result
 
     state = rebuild(sessions_dir=base)
 
     result = _LookupResult()
     result_edit_ts: Dict[str, Dict[str, datetime]] = {}
+    result_recorded_name: Dict[str, Dict[str, str]] = {}
     for path in paths:
         normalized = _normalize_key(path)
         claimants = state.claims.get(normalized)
@@ -684,9 +733,13 @@ def lookup(
         path_edit_ts = state.edit_ts.get(normalized)
         if path_edit_ts:
             result_edit_ts[path] = dict(path_edit_ts)
+        path_recorded_name = state.recorded_name.get(normalized)
+        if path_recorded_name:
+            result_recorded_name[path] = dict(path_recorded_name)
     result.complete = state.complete
     result.abort_cause = state.abort_cause
     result.edit_ts = result_edit_ts
+    result.recorded_name = result_recorded_name
 
     return result
 

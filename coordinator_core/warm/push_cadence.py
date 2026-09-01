@@ -133,28 +133,28 @@ __all__ = [
 #: docstring's HOST section for why that ordering matters.
 PUSH_CADENCE_INTERVAL_SECS = 600.0
 
-#: The idle-tick sweep's own ceiling (C5, 2026-08-30, lowered from 60.0):
-#: `sweep_repos` now refuses to START a repo it cannot finish inside this
-#: deadline (see that function's own docstring), so this is a REAL bound on
-#: worst-case occupancy, not merely a loop-exit check that still lets one
-#: last repo run past it. At `CADENCE_PUSH_RETRY_BUDGET_SECS` (6.0s) this
-#: guarantees 2 slow (has-outstanding-work, needs-the-ladder) repos served
-#: per tick -- down from 5 at the pre-C5 60.0/12.0 pairing, a deliberate
-#: 4x cut in worst-case occupancy of a thread ~50 peer sessions are queued
-#: behind, traded against a 600s (`PUSH_CADENCE_INTERVAL_SECS`) retry that
-#: makes a deferred slow repo cost one tick, not a throughput improvement.
+#: The idle-tick sweep's own ceiling (DR-401, 2026-09-01, re-derived from
+#: `CADENCE_PUSH_RETRY_BUDGET_SECS` rising 6.0 -> 16.0 -- C5's premise for
+#: 6.0 is superseded, see `push.py`'s constant docstring). `sweep_repos`
+#: still refuses to START a repo it cannot finish inside this deadline (see
+#: that function's own docstring), so this stays a REAL bound on worst-case
+#: occupancy. At the new `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0s) this keeps
+#: C5's own "2 slow (has-outstanding-work, needs-the-ladder) repos served
+#: per tick" guarantee (34.0 / 16.0 ~= 2.1, same shape as C5's 14.0/6.0
+#: ~= 2.3), rather than leaving 14.0 pointed at an arithmetic that no
+#: longer even guarantees ONE repo (14.0 < 16.0 would refuse every repo).
 #: A repo with nothing outstanding costs ~0 via `push_outstanding`'s
 #: zero-spawn arm and is unaffected by this number either way.
-SWEEP_TOTAL_CEILING_SECS = 14.0
+SWEEP_TOTAL_CEILING_SECS = 34.0
 
 #: The exit-path sweep's ceiling is tighter than the idle-tick one -- an
 #: unbounded exit sweep directly lengthens warm-restart latency (module
-#: docstring's SWEEP COST BUDGET section). Re-derived (C5, 2026-08-30) from
-#: the new `CADENCE_PUSH_RETRY_BUDGET_SECS` (6.0s) rather than left at the
-#: stale 15.0, which INVERTED this invariant once the idle ceiling dropped
-#: to 14.0 below it: 12.0 is 2x the per-repo budget, one tick tighter than
-#: the idle ceiling's own 2-repo guarantee, and still strictly under 14.0.
-EXIT_SWEEP_CEILING_SECS = 12.0
+#: docstring's SWEEP COST BUDGET section). Re-derived (DR-401, 2026-09-01)
+#: from the new `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0s), keeping C5's own
+#: ratio: 2x the per-repo budget, one tick tighter than the idle ceiling's
+#: own 2-repo guarantee, and still strictly under `SWEEP_TOTAL_CEILING_SECS`
+#: (34.0).
+EXIT_SWEEP_CEILING_SECS = 32.0
 
 #: A zero-arg callable returning the repos (worktree roots) this server has
 #: actually served, in the order first served. `on_idle_tick`'s caller

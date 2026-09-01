@@ -55,9 +55,13 @@ Reply fields:
     writes the script to disk and returns this verdict for transparency; it
     does not refuse to write on a non-zero ``error_count`` — ``emit.py``'s
     own construction already targets AC5's zero-ERROR bar, and any refusal
-    for an under-declared spine (``NoWavesError``, ``NoWritesDeclaredError``,
-    ``NoTestTargetError``) is raised by ``emit_script``/``pathspec.py``
-    BEFORE this op ever reaches the write, and propagates uncaught.
+    for an under-declared spine (``NoWavesError``, ``NoWritesDeclaredError``)
+    is raised by ``emit_script``/``pathspec.py`` BEFORE this op ever reaches
+    the write, and propagates uncaught. ``pathspec.NoTestTargetError`` is
+    NOT one of these any more: ``emit.compose_script`` catches it and
+    degrades to a falsifier phase or a loud no-test-phase narration instead
+    of vetoing the emit — see ``emit.py`` module docstring § The terminal
+    phase degrades, it never vetoes.
 
 Negative-spec:
   - Does NOT derive waves, pathspecs, or script text itself — delegates
@@ -170,9 +174,12 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         (descriptive message naming the required param), matching the
         cartography.symbols/tree and ``workflow.validate`` error contract.
         Also raised (as ``emit.NoWavesError`` / ``pathspec.
-        NoWritesDeclaredError`` / ``pathspec.NoTestTargetError``,
-        propagated uncaught) if the spine under-declares — see ``emit.py``
-        module docstring.
+        NoWritesDeclaredError``, propagated uncaught) if the spine
+        under-declares — see ``emit.py`` module docstring.
+        ``pathspec.NoTestTargetError`` does NOT reach here: ``emit_script``
+        -> ``compose_script`` catches it and degrades the terminal phase
+        instead (see ``emit.py`` module docstring § The terminal phase
+        degrades, it never vetoes).
         PathEscapeError — if ``output_path`` resolves outside
         ``target_root``.
         ForeignEmissionError — if ``output_path`` already holds a different

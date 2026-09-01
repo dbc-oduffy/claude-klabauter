@@ -2770,11 +2770,24 @@ def _evaluate_consumed_handoff_completeness_element(root: Path, raw_path: str) -
     leg_b_result = _dispatch_has_live_children(root, raw_path)
     exit_code = leg_b_result.get("exit_code")
     if exit_code == 0:
-        leg_b = {"verdict": "live-child", "detail": "has_live_children reports a live child", "exit_code": 0, "error": None}
+        leg_b = {
+            "verdict": "live-child",
+            # NAME THE EVIDENCE, NOT THE RETIRED PRODUCER. This detail string used to
+            # read "has_live_children reports a live child" -- an op that was KILLED
+            # (-32006) and is no longer called from anywhere in this module, since leg B
+            # was retargeted to the write-time back-edge read above. A consumer reading
+            # a dead op's name in a live verdict cannot tell a real finding from a
+            # fail-closed default manufactured by a corpse, and doe-claude-em's
+            # 2026-08-31 memo reports exactly that misread blocking their close. The
+            # string now names the field that actually decided it, which is checkable.
+            "detail": "candidate's own `continued_into` back-edge names a successor",
+            "exit_code": 0,
+            "error": None,
+        }
     elif exit_code == 1:
         leg_b = {"verdict": "no-children", "detail": "no live handoff names this candidate as predecessor", "exit_code": 1, "error": None}
     else:
-        error = leg_b_result.get("error") or "has_live_children returned an unexpected shape"
+        error = leg_b_result.get("error") or "leg B back-edge read returned an unexpected shape"
         leg_b = {"verdict": "indeterminate", "detail": error, "exit_code": exit_code, "error": error}
 
     blocks = leg_a["verdict"] == "open" or leg_b["verdict"] == "live-child"

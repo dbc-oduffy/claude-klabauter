@@ -3077,6 +3077,271 @@ def test_compute_scope_over_real_registry_corpus(entry, frozen_corpus_repo):
 
 
 # ---------------------------------------------------------------------------
+# C3 (plan 2026-09-01-the-claim-record-carries-the-name) -- OwnerFact.
+# writer_name is sourced from the underlying TouchEvent (C1's stamped
+# name), not the re-rendered '<verb> <ts> <path>' legacy line
+# `_read_touch_record_as_legacy_lines` hands the shared projection-policy
+# functions -- that adapter drops every field beyond verb/ts/path by
+# design (see its own docstring), so writer_name is read through the
+# SEPARATE `_touch_record_writer_names`/`_agent_touch_record_writer_names`
+# seam this chunk adds, keyed by TouchEvent.path.
+# ---------------------------------------------------------------------------
+
+
+class TestAttributionWriterName:
+    def test_session_claim_carries_the_recorded_writer_name(
+        self, tmp_path, monkeypatch
+    ):
+        """A session-keyed claim (claim_source "session") carries the name
+        C1 stamped on the underlying TouchEvent -- not lost through the
+        legacy-line re-render."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("live-peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+
+        peer_sink = (
+            Path(core.sessions_dir(cwd=str(repo)))
+            / "live-peer"
+            / scope._TOUCH_RECORD_FILENAME
+        )
+        touch_record.append_event(
+            peer_sink,
+            session_id="live-peer",
+            agent_id=None,
+            verb=touch_record.VERB_TOUCH,
+            path="shared.py",
+            name="claude-klabauter-a9",
+        )
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "live-peer"}),
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert result.attribution["shared.py"] == scope.OwnerFact(
+            "live-peer", "live", "session", "claude-klabauter-a9"
+        )
+
+    def test_session_claim_with_no_stamped_name_carries_none(
+        self, tmp_path, monkeypatch
+    ):
+        """A pre-C1 (or unstamped) claim renders ``writer_name`` as
+        ``None`` -- UNNAMED, never a degrade signal and never fabricated."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("live-peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+
+        peer_sink = (
+            Path(core.sessions_dir(cwd=str(repo)))
+            / "live-peer"
+            / scope._TOUCH_RECORD_FILENAME
+        )
+        touch_record.append_event(
+            peer_sink,
+            session_id="live-peer",
+            agent_id=None,
+            verb=touch_record.VERB_TOUCH,
+            path="shared.py",
+            name=None,
+        )
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "live-peer"}),
+        )
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        assert result.attribution["shared.py"] == scope.OwnerFact(
+            "live-peer", "live", "session", None
+        )
+
+    def test_agent_claim_carries_the_recorded_writer_name(
+        self, tmp_path, monkeypatch
+    ):
+        """A peer's dispatched-agent claim (claim_source "agent") carries
+        the AGENT's own stamped name -- the sub-agent's identity, not the
+        owning EM session's."""
+        repo = _make_repo(tmp_path)
+        core.init("em-owner", cwd=str(repo))
+        core.init("bystander", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-xyz"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
+        sink = agent_dir / scope._TOUCH_RECORD_FILENAME
+        touch_record.append_event(
+            sink,
+            session_id="em-owner",
+            agent_id="agent-xyz",
+            verb=touch_record.VERB_TOUCH,
+            path="coordinator/agent_owned.py",
+            name="claude-klabauter-c1",
+        )
+        (repo / "coordinator").mkdir()
+        (repo / "coordinator" / "agent_owned.py").write_text("z")
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"bystander", "em-owner"}),
+        )
+        result = scope.compute_scope("bystander", cwd=str(repo))
+
+        assert result.attribution["coordinator/agent_owned.py"] == scope.OwnerFact(
+            "em-owner", "live", "agent", "claude-klabauter-c1"
+        )
+
+    def test_touch_record_writer_names_keyed_by_canonical_path(self, tmp_path):
+        """Direct unit pin on the new seam: keyed by TouchEvent.path,
+        ``None`` for an unstamped survivor, absent for a RELEASEd path."""
+        sink = tmp_path / scope._TOUCH_RECORD_FILENAME
+        touch_record.append_event(
+            sink,
+            session_id="sid",
+            agent_id=None,
+            verb=touch_record.VERB_TOUCH,
+            path="a.py",
+            name="claude-klabauter-a9",
+        )
+        touch_record.append_event(
+            sink,
+            session_id="sid",
+            agent_id=None,
+            verb=touch_record.VERB_TOUCH,
+            path="b.py",
+            name=None,
+        )
+        touch_record.append_event(
+            sink,
+            session_id="sid",
+            agent_id=None,
+            verb=touch_record.VERB_TOUCH,
+            path="c.py",
+            name="claude-klabauter-c1",
+        )
+        touch_record.append_event(
+            sink,
+            session_id="sid",
+            agent_id=None,
+            verb=touch_record.VERB_RELEASE,
+            path="c.py",
+        )
+
+        names = scope._touch_record_writer_names(sink)
+        assert names["a.py"] == "claude-klabauter-a9"
+        assert names["b.py"] is None
+
+        agent_names = scope._agent_touch_record_writer_names(sink)
+        assert agent_names["a.py"] == "claude-klabauter-a9"
+        # c.py's last event is a RELEASE -- excluded from the agent-dir
+        # bare-path dialect (no TOUCH survivor to render), mirroring
+        # `_read_agent_touch_record_as_legacy_lines`'s own TOUCH-only
+        # filter.
+        assert "c.py" not in agent_names
+
+    def test_folded_helper_returns_same_values_as_the_two_call_form(self, tmp_path):
+        """:func:`_read_touch_record_as_legacy_lines_with_writer_names`
+        must reproduce exactly what the two-call form used to produce --
+        pure cost fix, no rendered-output change."""
+        sink = tmp_path / scope._TOUCH_RECORD_FILENAME
+        touch_record.append_event(
+            sink,
+            session_id="sid",
+            agent_id=None,
+            verb=touch_record.VERB_TOUCH,
+            path="a.py",
+            name="claude-klabauter-a9",
+        )
+        touch_record.append_event(
+            sink,
+            session_id="sid",
+            agent_id=None,
+            verb=touch_record.VERB_TOUCH,
+            path="b.py",
+            name=None,
+        )
+
+        expected_lines, expected_degraded = scope._read_touch_record_as_legacy_lines(
+            sink
+        )
+        expected_names = scope._touch_record_writer_names(sink)
+
+        lines, degraded, names = scope._read_touch_record_as_legacy_lines_with_writer_names(
+            sink
+        )
+
+        assert lines == expected_lines
+        assert degraded == expected_degraded
+        assert names == expected_names
+
+    def test_compute_scope_step3_reads_each_live_peers_touch_record_once(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression pin for the C3-introduced double read (docs/plans/
+        2026-09-01-the-claim-record-carries-the-name.md C3 folded into a
+        single 2026-09-01 cost fix): Step 3's per-peer loop body must call
+        ``touch_record._read_stream_claims`` exactly ONCE per live peer's
+        sink, not twice (once for the legacy-line render, once again for
+        the writer-name map). A spy on the shared seam function -- the
+        cheapest possible sentinel for "how many times was this peer's
+        on-disk record actually decoded"."""
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        core.init("live-peer", cwd=str(repo))
+        (repo / "shared.py").write_text("z")
+        scope.touch("mine", "shared.py", cwd=str(repo))
+
+        peer_sink = (
+            Path(core.sessions_dir(cwd=str(repo)))
+            / "live-peer"
+            / scope._TOUCH_RECORD_FILENAME
+        )
+        touch_record.append_event(
+            peer_sink,
+            session_id="live-peer",
+            agent_id=None,
+            verb=touch_record.VERB_TOUCH,
+            path="shared.py",
+            name="claude-klabauter-a9",
+        )
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"mine", "live-peer"}),
+        )
+
+        real_read = touch_record._read_stream_claims
+        calls = []
+
+        def _counted_read(sink_path, *args, **kwargs):
+            calls.append(sink_path)
+            return real_read(sink_path, *args, **kwargs)
+
+        monkeypatch.setattr(scope.touch_record, "_read_stream_claims", _counted_read)
+
+        result = scope.compute_scope("mine", cwd=str(repo))
+
+        peer_calls = [c for c in calls if Path(c) == peer_sink]
+        assert len(peer_calls) == 1, (
+            "Step 3's per-peer loop body must decode a live peer's touch "
+            f"record exactly once; saw {len(peer_calls)} calls for "
+            f"{peer_sink}: {peer_calls}"
+        )
+        assert result.attribution["shared.py"] == scope.OwnerFact(
+            "live-peer", "live", "session", "claude-klabauter-a9"
+        )
+
+
+# ---------------------------------------------------------------------------
 # AC8 — defensive read-side normalization (C7): compute_scope's Step 1
 # candidates AND Step 3/3b other_owner key space are BOTH run through the
 # SAME strip-one-'../'-then-verify-containment transform C6 applies to the

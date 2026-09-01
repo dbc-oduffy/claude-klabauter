@@ -193,6 +193,7 @@ from coordinator_core.hooks.nudge_autonomous_askuserquestion import (
     _resolve_posture as _resolve_posture_for_cwd,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.session import subagent_share
 
 # ---------------------------------------------------------------------------
 # Static seam table (emission side) -- verbatim port of the source script's
@@ -263,22 +264,18 @@ def _git_dir_for(cwd: Any) -> Optional[str]:
 # "LEDGER LOCATION" for why this is NOT under the git dir.
 # ---------------------------------------------------------------------------
 
-_LEDGER_FILENAME = "next-move-ledger.jsonl"
-_INTAKE_FILENAME = "obligations-inbound.jsonl"
 _INTAKE_SCHEMA = 1
 _INTAKE_OPS = ("open", "progress", "blocked", "discharge")
 
 
-def _session_share_dir(repo_root: str, session_id: str) -> str:
-    return os.path.join(repo_root, "state", "subagent-share", session_id)
-
-
-def _ledger_path(repo_root: str, session_id: str) -> str:
-    return os.path.join(_session_share_dir(repo_root, session_id), _LEDGER_FILENAME)
-
-
-def _intake_path(repo_root: str, session_id: str) -> str:
-    return os.path.join(_session_share_dir(repo_root, session_id), _INTAKE_FILENAME)
+# Paths come from `session.subagent_share` -- this module, `group_em.send_pass`
+# and `group_em.obligations` each carried the same join and the same filename
+# string, so a correction to one copy left the other two writing elsewhere.
+# That module is stdlib-only and does no import-time work: this hook is on the
+# per-turn path for every session on the box.
+_session_share_dir = subagent_share.share_dir
+_ledger_path = subagent_share.ledger_path
+_intake_path = subagent_share.intake_path
 
 
 def _read_records(repo_root: str, session_id: str) -> list:

@@ -375,5 +375,165 @@ class UsageDeclaresEveryFileSiblingTest(unittest.TestCase):
                     self.assertIn(flag, usage)
 
 
+class DispositionNoteFileSiblingTest(_ProseFlagTestBase):
+    """The three prose-bearing disposition flags of `action-memo`/`resolve-memo`
+    carry the same file sibling as every other prose-bearing flag in this CLI.
+
+    WHY THESE THREE AND NOT THE WHOLE TAIL. `action-memo` forwards its tail to
+    the engine verbatim — `_DISPOSITION_FLAGS` is the declaration, not this
+    file — so the sibling is resolved and NORMALISED BACK to the inline form
+    before dispatch. `--decision`, `--realized-by`, `--superseded-by` and the
+    rest are pointers and enum values, not prose; they carry no newline, quote
+    or space exposure and get no sibling.
+
+    NEGATIVE SPEC:
+      - The file leg is NOT a multi-line channel. A multi-line note reaches the
+        engine intact and is refused there by `_validate_disposition`, because
+        `serialize_yaml_scalar` emits an inline scalar. This CLI does not
+        pre-empt that refusal and does not weaken it.
+      - No `-file` token ever reaches the op.
+      - A repeated flag (either form) is a usage error, never a silent
+        first-wins/last-wins flip.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.stub.action_calls: list[tuple] = []
+        self.stub.resolve_calls: list[tuple] = []
+        self.stub.cs_action_memo = lambda path, *tail: (
+            self.stub.action_calls.append((path, tail)) or 0
+        )
+        self.stub.cs_resolve_memo = lambda path, *tail: (
+            self.stub.resolve_calls.append((path, tail)) or 0
+        )
+
+    def test_decision_note_file_is_normalised_to_the_inline_flag(self):
+        note_path = self._write("a note with 'quotes' and spaces")
+        rc = _cli.main(
+            [
+                "action-memo", "cross-repo/inbox/m.md",
+                "--decision", "accepted", "--realized-by", "abc1234",
+                "--decision-note-file", note_path,
+            ]
+        )
+        self.assertEqual(rc, 0)
+        path, tail = self.stub.action_calls[-1]
+        self.assertEqual(path, "cross-repo/inbox/m.md")
+        self.assertNotIn("--decision-note-file", tail)
+        self.assertEqual(
+            tail[tail.index("--decision-note") + 1],
+            "a note with 'quotes' and spaces",
+        )
+        self.assertEqual(tail[tail.index("--decision") + 1], "accepted")
+        self.assertEqual(tail[tail.index("--realized-by") + 1], "abc1234")
+
+    def test_every_prose_disposition_flag_has_a_working_sibling(self):
+        for flag in _cli._PROSE_DISPOSITION_FLAGS:
+            with self.subTest(flag=flag):
+                note_path = self._write(f"note for {flag}")
+                rc = _cli.main(
+                    ["resolve-memo", "cross-repo/inbox/m.md", f"{flag}-file", note_path]
+                )
+                self.assertEqual(rc, 0)
+                _, tail = self.stub.resolve_calls[-1]
+                self.assertEqual(tail, (flag, f"note for {flag}"))
+
+    def test_inline_form_is_forwarded_unchanged(self):
+        rc = _cli.main(
+            ["action-memo", "cross-repo/inbox/m.md", "--decision-note", "one line"]
+        )
+        self.assertEqual(rc, 0)
+        _, tail = self.stub.action_calls[-1]
+        self.assertEqual(tail, ("--decision-note", "one line"))
+
+    def test_inline_and_file_together_are_a_usage_error(self):
+        rc = _cli.main(
+            [
+                "action-memo", "cross-repo/inbox/m.md",
+                "--decision-note", "inline",
+                "--decision-note-file", self._write("from file"),
+            ]
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.action_calls, [])
+
+    def test_repeated_flag_is_refused_not_silently_collapsed(self):
+        rc = _cli.main(
+            [
+                "action-memo", "cross-repo/inbox/m.md",
+                "--decision-note", "first", "--decision-note", "second",
+            ]
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.action_calls, [])
+
+    def test_multiline_inline_note_is_refused_here(self):
+        rc = _cli.main(
+            ["action-memo", "cross-repo/inbox/m.md", "--decision-note", _MULTILINE]
+        )
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.action_calls, [])
+
+    def test_multiline_file_note_reaches_the_engine_for_its_own_refusal(self):
+        """The file leg does not smuggle a multi-line note past the engine, and
+        this CLI does not duplicate the engine's refusal either. The value
+        arrives intact; `_validate_disposition` is the one that says no."""
+        rc = _cli.main(
+            [
+                "action-memo", "cross-repo/inbox/m.md",
+                "--decision-note-file", self._write(_MULTILINE),
+            ]
+        )
+        self.assertEqual(rc, 0)
+        _, tail = self.stub.action_calls[-1]
+        self.assertEqual(tail, ("--decision-note", _MULTILINE))
+
+    def test_prose_flags_are_all_real_engine_disposition_flags(self):
+        """`_PROSE_DISPOSITION_FLAGS` is a SUBSET selection over the engine's
+        table, not a second declaration of it. If a flag is renamed engine-side
+        the sibling silently stops applying to anything, so the membership is
+        pinned rather than assumed."""
+        from coordinator_core.archive_stamp import _DISPOSITION_FLAGS
+
+        for flag in _cli._PROSE_DISPOSITION_FLAGS:
+            self.assertIn(flag, _DISPOSITION_FLAGS)
+
+    def test_unrelated_disposition_flags_are_untouched(self):
+        rc = _cli.main(
+            [
+                "action-memo", "cross-repo/inbox/m.md",
+                "--superseded-by", "cross-repo/archive/other.md",
+                "--correct-realization",
+            ]
+        )
+        self.assertEqual(rc, 0)
+        _, tail = self.stub.action_calls[-1]
+        self.assertEqual(
+            tail,
+            ("--superseded-by", "cross-repo/archive/other.md", "--correct-realization"),
+        )
+
+    def test_a_note_whose_text_is_a_flag_name_is_not_re_read_as_a_flag(self):
+        """The membership-scan trap the positional walk exists to avoid.
+
+        `--decision-note --actioned-note` is a note whose literal text is
+        another flag's name. `_parse_disposition_args` consumes it as a VALUE,
+        so anything here that scanned by membership would strip a pair the
+        engine never saw and change what lands."""
+        rc = _cli.main(
+            [
+                "action-memo", "cross-repo/inbox/m.md",
+                "--decision-note", "--actioned-note",
+            ]
+        )
+        self.assertEqual(rc, 0)
+        _, tail = self.stub.action_calls[-1]
+        self.assertEqual(tail, ("--decision-note", "--actioned-note"))
+
+    def test_a_trailing_prose_flag_with_no_value_is_refused(self):
+        rc = _cli.main(["action-memo", "cross-repo/inbox/m.md", "--decision-note"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(self.stub.action_calls, [])
+
 if __name__ == "__main__":
     unittest.main()

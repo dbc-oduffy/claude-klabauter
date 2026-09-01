@@ -115,16 +115,34 @@ def _run_real(cmd: str, timeout: float = 10.0) -> str:
     return result.stdout
 
 
+#: `lineno:content` -- real `grep`'s shape for a single-file invocation.
+_BARE_LINE_RE = re.compile(r"^(\d+):(.*)$")
+#: `path:lineno:content` -- the rewrite always prefixes the path. The path
+#: part is `.*?` and NOT `[^:]*`: on Windows the path carries its own drive
+#: colon (`C:/Users/...`), which a colon-excluding class cannot span, so the
+#: whole line fell through unparsed and was compared against a parsed tuple
+#: from the other side. That is not a grep-dialect divergence at all -- it is
+#: this normalizer failing to normalize -- and it is what kept four
+#: differential-execution cases red under `pending_fix` on Windows while the
+#: rewrite under test was producing byte-identical MATCHES.
+_PATH_LINE_RE = re.compile(r"^.*?:(\d+):(.*)$")
+
+
 def _lines_of(txt: str):
     """Normalize `path:lineno:content` / `lineno:content` output (the
     rewrite always includes the path; real `grep` omits it for a
     single-file invocation) down to a comparable ``{(lineno, content)}``
-    set."""
+    set.
+
+    The bare form is tried FIRST, before the path-prefixed one. Order is
+    load-bearing, not stylistic: content containing its own `:<digits>:`
+    would let the path-prefixed pattern consume a real content colon as the
+    separator and report a line number taken from the matched text."""
     out = set()
     for line in txt.splitlines():
         if not line:
             continue
-        m = re.match(r"^(?:[^:]*:)?(\d+):(.*)$", line)
+        m = _BARE_LINE_RE.match(line) or _PATH_LINE_RE.match(line)
         out.add((m.group(1), m.group(2)) if m else line)
     return out
 
@@ -265,14 +283,20 @@ class TestDifferentialExecutionMatchesRealBinary:
         assert rewritten is not None, "expected a rewrite for: %s" % cmd
         assert _lines_of(real) == _lines_of(rewritten), (cmd, real, rewritten)
 
-    #: state/bash-guards/known-red.json group "dispatch-checks-windows-path"
-    #: (check_grep_via_bash_rewrite's os.path.join defect). Owner:
-    #: docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md.
-    @pytest.mark.pending_fix
+    #: These four were carried as `pending_fix` in
+    #: state/bash-guards/known-red.json group "dispatch-checks-windows-path",
+    #: attributed to a `check_grep_via_bash_rewrite` `os.path.join` defect.
+    #: That attribution was wrong. Retired 2026-09-01 after measuring the
+    #: rewrite's actual output: the MATCHES were already byte-identical to
+    #: real `grep`'s on every one of them, and the sole divergence was in
+    #: `_lines_of` -- this file's own normalizer -- which could not span the
+    #: drive colon in a Windows path and so left the rewrite's line unparsed
+    #: while parsing `grep`'s. A red test does not establish where the defect
+    #: is; it establishes that two sides disagree, and here one of the two
+    #: sides was the instrument. See `_PATH_LINE_RE`.
     def test_dot_metachar_basic(self, fixture_file):
         self._assert_matches("grep", "-n", ".", fixture_file)
 
-    @pytest.mark.pending_fix
     def test_escaped_dot_basic(self, fixture_file):
         self._assert_matches("grep", "-n", r"\.", fixture_file)
 
@@ -291,14 +315,12 @@ class TestDifferentialExecutionMatchesRealBinary:
     def test_fixed_star_is_literal(self, fixture_file):
         self._assert_matches("fgrep", "-n", "literal*star*here", fixture_file)
 
-    @pytest.mark.pending_fix
     def test_grep_dash_capital_f_fixed(self, fixture_file):
         self._assert_matches("grep", "-Fn", "a+b", fixture_file)
 
     def test_rg_default_dialect_is_extended_like(self, fixture_file):
         self._assert_matches("rg", "-n", "a+b", fixture_file)
 
-    @pytest.mark.pending_fix
     def test_anchors_basic_dialect_safe(self, fixture_file):
         self._assert_matches("grep", "-n", "^plain", fixture_file)
 

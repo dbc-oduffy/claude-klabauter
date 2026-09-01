@@ -101,9 +101,11 @@ class _LookupResultStub(dict):
     the real return type is a dict subclass too, so ``.get(path, [])`` in
     the CLI works identically against this stub."""
 
-    def __init__(self, mapping, abort_cause):
+    def __init__(self, mapping, abort_cause, *, recorded_name=None, edit_ts=None):
         super().__init__(mapping)
         self.abort_cause = abort_cause
+        self.recorded_name = recorded_name or {}
+        self.edit_ts = edit_ts or {}
 
 
 class _StubCore:
@@ -114,6 +116,23 @@ class _StubCore:
 
     def __init__(self, *, sessions_dir=None):
         self.sessions_dir = sessions_dir or (lambda cwd=None: "")
+
+
+class _StubRegistryRecord:
+    """Minimal stand-in for harness_registry.RegistryRecord -- who-claims-
+    path's rung-2 resolution only ever reads ``.name`` off this."""
+
+    def __init__(self, name):
+        self.name = name
+
+
+class _StubHarnessRegistry:
+    """Stand-in for coordinator_core.session.harness_registry, on its OWN
+    seam (_cli._import_harness_registry_module) -- who-claims-path's C2
+    name-resolution-ladder rung 2 coverage."""
+
+    def __init__(self, *, lookup=None):
+        self.lookup = lookup or (lambda sid: None)
 
 
 class _StubHolderEvidence:
@@ -179,6 +198,17 @@ def stub_import_claim_index_module():
 
     yield _apply
     _cli._import_claim_index_module = orig
+
+
+@pytest.fixture()
+def stub_import_harness_registry_module():
+    orig = _cli._import_harness_registry_module
+
+    def _apply(stub):
+        _cli._import_harness_registry_module = lambda: stub
+
+    yield _apply
+    _cli._import_harness_registry_module = orig
 
 
 @pytest.fixture()
@@ -950,9 +980,9 @@ def test_list_claims_by_session_transport_failure_exits_3():
 
 # ---------------------------------------------------------------------------
 # who-claims-path: reads the PATH-TOUCH plane (claim_index.lookup) + liveness
-# per claimant, TAB-delimited "<sid>\t<live|dead>" rows, exit 0. A separate
-# question from list-claims-by-session (artifact-claim store) above — see
-# the CLI's own comment block.
+# per claimant, TAB-delimited "<sid>\t<live|dead>\t<name>" rows, exit 0. A
+# separate question from list-claims-by-session (artifact-claim store)
+# above — see the CLI's own comment block.
 # ---------------------------------------------------------------------------
 
 def test_who_claims_path_no_claimant_exits_0_no_output(
@@ -968,8 +998,13 @@ def test_who_claims_path_no_claimant_exits_0_no_output(
 
 
 def test_who_claims_path_with_claimants_reports_liveness_per_row(
-    stub_import_claim_index_module, stub_import_liveness_module, capsys
+    stub_import_claim_index_module, stub_import_liveness_module,
+    stub_import_harness_registry_module, capsys,
 ):
+    """No recorded name and no registry record for either claimant -- both
+    rows degrade to rung 3's NO-RECORD marker, alongside the unchanged
+    sid/liveness columns. The registry answered here; it simply holds
+    nothing, which is a different outcome from it being unaskable."""
     stub_import_claim_index_module(
         _StubClaimIndex(
             lookup=lambda paths, cwd=None: {p: ["sess-live", "sess-dead"] for p in paths}
@@ -978,10 +1013,168 @@ def test_who_claims_path_with_claimants_reports_liveness_per_row(
     stub_import_liveness_module(
         _StubLiveness(session_live=lambda sid, cwd=None: sid == "sess-live")
     )
+    stub_import_harness_registry_module(_StubHarnessRegistry())
     rc = _cli.main(["who-claims-path", "some/path.txt"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert out == "sess-live\tlive\nsess-dead\tdead\n"
+    assert out == (
+        f"sess-live\tlive\t{_cli._NO_REGISTRY_RECORD_MARKER}\n"
+        f"sess-dead\tdead\t{_cli._NO_REGISTRY_RECORD_MARKER}\n"
+    )
+
+
+def test_who_claims_path_rung1_recorded_name_wins_over_live_registry(
+    stub_import_claim_index_module, stub_import_liveness_module,
+    stub_import_harness_registry_module, capsys,
+):
+    """C2 resolution ladder rung 1: a name recorded ON the claim is used
+    even when a live registry lookup for the same sid would ALSO resolve --
+    rung 1 is checked first and wins, per the ladder's stated order."""
+    from datetime import datetime, timedelta, timezone
+
+    ts = datetime.now(timezone.utc) - timedelta(hours=2)
+    stub_import_claim_index_module(
+        _StubClaimIndex(
+            lookup=lambda paths, cwd=None: _LookupResultStub(
+                {p: ["sess-a"] for p in paths},
+                None,
+                recorded_name={"some/path.txt": {"sess-a": "claude-klabauter-57"}},
+                edit_ts={"some/path.txt": {"sess-a": ts}},
+            )
+        )
+    )
+    stub_import_liveness_module(_StubLiveness(session_live=lambda sid, cwd=None: True))
+    stub_import_harness_registry_module(
+        _StubHarnessRegistry(
+            lookup=lambda sid: (_ for _ in ()).throw(
+                AssertionError("rung 2 must not be consulted when rung 1 resolves")
+            )
+        )
+    )
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.startswith("sess-a\tlive\tproject-claude-klabauter-57 (recorded name")
+    assert "held 2.0h" in out
+
+
+def test_who_claims_path_rung1_absent_falls_to_rung2_live_registry(
+    stub_import_claim_index_module, stub_import_liveness_module,
+    stub_import_harness_registry_module, capsys,
+):
+    """C2 resolution ladder rung 2: no recorded name on the claim (a pre-C1
+    record) falls through to a live harness_registry.lookup(sid)."""
+    stub_import_claim_index_module(
+        _StubClaimIndex(
+            lookup=lambda paths, cwd=None: _LookupResultStub(
+                {p: ["sess-b"] for p in paths}, None,
+            )
+        )
+    )
+    stub_import_liveness_module(_StubLiveness(session_live=lambda sid, cwd=None: True))
+    stub_import_harness_registry_module(
+        _StubHarnessRegistry(
+            lookup=lambda sid: _StubRegistryRecord("claude-klabauter-99")
+            if sid == "sess-b"
+            else None
+        )
+    )
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out == "sess-b\tlive\tproject-claude-klabauter-99 (live harness registry lookup)\n"
+
+
+def test_who_claims_path_neither_rung_resolves_prints_unnamed_marker(
+    stub_import_claim_index_module, stub_import_liveness_module,
+    stub_import_harness_registry_module, capsys,
+):
+    """C2 resolution ladder rung 3: neither a recorded name nor a live
+    registry hit -- a real outcome (a pre-C1 record from an exited
+    session), rendered distinctly from a bare sid."""
+    stub_import_claim_index_module(
+        _StubClaimIndex(
+            lookup=lambda paths, cwd=None: _LookupResultStub(
+                {p: ["sess-c"] for p in paths}, None,
+            )
+        )
+    )
+    stub_import_liveness_module(_StubLiveness(session_live=lambda sid, cwd=None: False))
+    stub_import_harness_registry_module(_StubHarnessRegistry(lookup=lambda sid: None))
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out == f"sess-c\tdead\t{_cli._NO_REGISTRY_RECORD_MARKER}\n"
+    assert "sess-c\t" not in _cli._NO_REGISTRY_RECORD_MARKER  # marker itself is never sid-shaped
+    # The registry ANSWERED and holds nothing. That is a fact, and it must not
+    # render as the marker for "the registry could not be asked" -- the
+    # rung-2-raise test below pins the other side of the same split.
+    assert _cli._NO_REGISTRY_RECORD_MARKER != _cli._NAME_UNRESOLVED_MARKER
+
+
+def test_who_claims_path_rung2_registry_raise_degrades_to_unnamed(
+    stub_import_claim_index_module, stub_import_liveness_module,
+    stub_import_harness_registry_module, capsys,
+):
+    """Best-effort on rung 2: harness_registry.lookup raising must degrade
+    the name column to the unnamed marker, never take down the row's
+    sid/liveness columns or the command's exit code."""
+    stub_import_claim_index_module(
+        _StubClaimIndex(
+            lookup=lambda paths, cwd=None: _LookupResultStub(
+                {p: ["sess-d"] for p in paths}, None,
+            )
+        )
+    )
+    stub_import_liveness_module(_StubLiveness(session_live=lambda sid, cwd=None: True))
+
+    def _raise(sid):
+        raise RuntimeError("simulated registry lookup failure")
+
+    stub_import_harness_registry_module(_StubHarnessRegistry(lookup=_raise))
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out == f"sess-d\tlive\t{_cli._NAME_UNRESOLVED_MARKER}\n"
+    # A DEGRADATION, not a fact: the registry was never successfully asked, so
+    # this must stay distinguishable from the no-record marker. Asserting only
+    # "the row survived" would let the two collapse back together silently.
+    assert _cli._NAME_UNRESOLVED_MARKER != _cli._NO_REGISTRY_RECORD_MARKER
+
+
+def test_who_claims_path_rung1_name_never_asserts_present_tense_reachability(
+    stub_import_claim_index_module, stub_import_liveness_module,
+    stub_import_harness_registry_module, capsys,
+):
+    """NEGATIVE SPEC (C2): a rung-1 (recorded-name) rendering never claims
+    the name is presently reachable -- it must carry a staleness/verify
+    warning and must NOT read as ready-to-SendMessage. Guards against a
+    future edit dropping the qualifier and silently re-authorizing the
+    exact stale-address failure C2 exists to prevent."""
+    stub_import_claim_index_module(
+        _StubClaimIndex(
+            lookup=lambda paths, cwd=None: _LookupResultStub(
+                {p: ["sess-e"] for p in paths},
+                None,
+                recorded_name={"some/path.txt": {"sess-e": "claude-klabauter-12"}},
+            )
+        )
+    )
+    stub_import_liveness_module(_StubLiveness(session_live=lambda sid, cwd=None: True))
+    stub_import_harness_registry_module(
+        _StubHarnessRegistry(
+            lookup=lambda sid: (_ for _ in ()).throw(
+                AssertionError("rung 2 must not be consulted when rung 1 resolves")
+            )
+        )
+    )
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "provenance only, not a live address" in out
+    assert "verify" in out
+    assert "SendMessage" not in out
+    assert "ready to send" not in out
 
 
 def test_who_claims_path_unanswerable_exits_nonzero_not_unclaimed(
@@ -1081,7 +1274,8 @@ def test_who_claims_path_lookup_raise_exits_transport_fail(
 
 
 def test_who_claims_path_multi_claimant_raise_mid_stream_emits_only_indeterminate(
-    stub_import_claim_index_module, stub_import_liveness_module, capsys
+    stub_import_claim_index_module, stub_import_liveness_module,
+    stub_import_harness_registry_module, capsys,
 ):
     """Review: staff-eng slice-A P1 #2 — with N claimants, a raise on
     claimant k must not have already printed k-1 well-formed "sid\tstate"
@@ -1105,6 +1299,7 @@ def test_who_claims_path_multi_claimant_raise_mid_stream_emits_only_indeterminat
         raise AssertionError("claimant after the raise must not be consulted")
 
     stub_import_liveness_module(_StubLiveness(session_live=_session_live))
+    stub_import_harness_registry_module(_StubHarnessRegistry())
     rc = _cli.main(["who-claims-path", "some/path.txt"])
     assert rc == _cli._TRANSPORT_FAIL
     assert rc == 3

@@ -254,7 +254,27 @@ class NoTestTargetError(ValueError):
     ``writes:`` WAS declared (satisfying AC10's literal wording) because
     no declared path has a co-located test file named for its stem — see
     module docstring § The sharp edge AC16 exists for.
+
+    Carries ``unmapped_paths``/``testable_omissions`` (both tuples) alongside
+    the formatted message so a catching caller — ``emit.compose_script``'s
+    degrade path — can name the unmapped paths in its own warning without
+    re-parsing this error's prose. This is a locator-blind-spot signal, not
+    necessarily a bad plan (see cross-repo memo
+    ``empty-terminal-test-scope-degrades-not-vetoes``): the caller decides
+    whether to fall back to a falsifier or warn and proceed with no terminal
+    test phase, never this class.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        unmapped_paths: tuple[str, ...] = (),
+        testable_omissions: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.unmapped_paths = unmapped_paths
+        self.testable_omissions = testable_omissions
 
 
 class DirectoryShapedWriteError(ValueError):
@@ -655,7 +675,9 @@ def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = 
             raise NoTestTargetError(
                 "every written path mapped to no runnable test target, "
                 f"refusing an empty terminal test scope (paths: {unmapped!r}; "
-                f"testable surfaces with no target: {omissions!r})"
+                f"testable surfaces with no target: {omissions!r})",
+                unmapped_paths=tuple(unmapped),
+                testable_omissions=tuple(omissions),
             )
         _logger.info(
             "spine writes no testable surface; terminal test scope is "

@@ -23,8 +23,23 @@ per-worktree), and `coordinator_core/authz/classification.py` (MUTATING --
 see that module's comment on this entry for the reason).
 
 Returns exactly one payload:
-    {"nomination": {...}, "roster": [...], "digest": {...},
-     "baseline": {...}, "teammates": {...}}
+    {"nomination": {...}, "roster": [...], "roster_considered": int,
+     "digest": {...}, "baseline": {...}, "teammates": {...}}
+
+`roster` IS NOT THE PEER POPULATION, AND THE PAYLOAD MUST SAY SO. It is
+`build_candidate_roster`'s output: the peers marked `candidate` UNION those
+marked `unclassifiable`, which on a busy repo is a small fraction of the
+sessions this op enumerated (measured 2026-09-01: 11 peers enumerated, 2 in
+`roster`). A consumer holding `roster` alone cannot tell "classified eleven
+peers, two are interesting" from "there are two peers in this repo" -- and
+`len(roster) == 0` reads identically to "the fleet is quiet" and to "the
+enumeration returned nobody". `roster_considered` carries the ENUMERATED
+count -- the denominator `roster` is a numerator of -- so the same
+looked-versus-found distinction this op already draws between an ABSENT and
+an EMPTY roster (§ PAYLOAD SHAPE ON REFUSAL) also holds WITHIN a roster that
+ran. Reported top-level beside `roster`, never inside it: a roster leg that
+raised still leaves the enumeration count answerable, and that is exactly
+the tick on which "did anything look at the fleet" matters most.
 
 DEGRADE, NEVER RAISE. Each leg's own exception is caught HERE (not inside
 the leg module, which is untouched) and reported as `null` for that key
@@ -112,6 +127,9 @@ Negative-spec:
       here, and never disguised as an empty/absent-but-keyed result.
     - Never resolves GATE 1 / GATE 2. `digest["gate_declaration_required"]`
       is carried through from `build_send_digest` unmodified.
+    - Never re-arms the watch it reports on, and never dispatches a watcher.
+      `watch_liveness` is read-only like every other leg; the remedy it
+      carries is a command for the EM to run, never one this op runs.
     - Never dispatches the teammates it asserts. The `teammates` leg is a
       read-only presence ASSERTION (`group_em.teammates.presence`): the
       engine cannot spawn an agent on the session's behalf, so a missing
@@ -138,6 +156,7 @@ from coordinator_core.group_em import nomination as group_em_nomination
 from coordinator_core.group_em import read_pass as group_em_read_pass
 from coordinator_core.group_em import send_pass as group_em_send_pass
 from coordinator_core.group_em import teammates as group_em_teammates
+from coordinator_core.group_em import watch_heartbeat as group_em_watch_heartbeat
 
 
 def _leg_error(exc: BaseException) -> str:
@@ -172,6 +191,26 @@ def _run_roster(
             ),
             None,
         )
+    except Exception as exc:  # noqa: BLE001
+        return None, _leg_error(exc)
+
+
+def _run_roster_considered(
+    agents: Optional[list], caller_session_id: str
+) -> tuple[Optional[int], Optional[str]]:
+    """How many peers the roster leg CLASSIFIED, as opposed to how many it kept.
+
+    Re-runs `enumerate_repo_peers` over the enumeration this op already
+    fetched -- a list filter over dicts in memory, no second registry read and
+    no second classification pass -- because the count must survive a roster
+    leg that raised. Sharing the roster leg's own return value would tie the
+    denominator to the numerator's success and lose the count on exactly the
+    tick where "did this op look at the fleet at all" is the open question.
+    """
+    if agents is None:
+        return None, "enumeration-leg-failed"
+    try:
+        return len(group_em_read_pass.enumerate_repo_peers(agents, caller_session_id)), None
     except Exception as exc:  # noqa: BLE001
         return None, _leg_error(exc)
 
@@ -250,6 +289,43 @@ def _run_teammates(
         return None, _leg_error(exc)
 
 
+def _run_watch_liveness(repo_root: str):
+    """Is the fleet watch actually TICKING -- not merely dispatched.
+
+    THE TEAMMATES LEG CANNOT ANSWER THIS, and extending it to try would break
+    its own evidence rule. `teammates.presence` answers "did this session
+    dispatch a watcher" off a dispatch record and refuses a clock on purpose.
+    A watcher that was dispatched correctly and whose subprocess never started
+    satisfies that leg completely and watches nothing: measured 2026-09-01 in
+    example-game-workbench-repo, where the mandated `python -m` arm form raised
+    `ModuleNotFoundError` from a repo that cannot import the engine, the agent
+    returned instead of blocking, and `ListAgents` read `idle` for thirteen
+    minutes while seven peers talked past it. An idle watcher and a quiet fleet
+    emit identically.
+
+    Until this leg existed the remedy was prose -- the `fleet-watch` agent body
+    telling the agent to report a failed start -- and prose lost. This is the
+    artifact that discharges it: every crown tick reads the watch's own
+    heartbeat and reports `absent`/`vacant`/`stale` with the re-arm command,
+    so a dead watcher is a line the EM reads rather than a silence it
+    misreads as coverage.
+
+    FRESHNESS ONLY -- the registry is deliberately NOT joined here, though
+    `read_liveness` accepts one. The record's holder is the CROWN, never the
+    teammate process (see `watch_heartbeat`'s own WHO THE HOLDER IS), so from
+    the crown's own tick that join asks whether the caller exists: it can only
+    answer yes, or answer `vacant` wrongly on an enumeration that happens not
+    to list self. The holder join earns its keep for a DIFFERENT session
+    reading the record; here it would be a false negative dressed as evidence.
+    A watcher that exited stops stamping and reads `stale` on the next tick
+    anyway, which is the same finding by better evidence.
+    """
+    try:
+        return group_em_watch_heartbeat.read_liveness(repo_root), None
+    except Exception as exc:  # noqa: BLE001
+        return None, _leg_error(exc)
+
+
 @register_op("groupem.enter")
 def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "groupem.enter" handler.
@@ -264,14 +340,23 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Returns:
         {"nomination": {...} | None, "roster": [...] | None,
-         "digest": {...} | None, "baseline": {...} | None,
-         "teammates": {...} | None}
+         "roster_considered": int | None, "digest": {...} | None,
+         "baseline": {...} | None, "teammates": {...} | None,
+         "watch_liveness": {...} | None}
+    `roster_considered` is how many peers the roster leg classified, of which
+    `roster` is the kept subset -- see module docstring for why the count is
+    top-level and why a consumer cannot read `len(roster)` as a population.
     `teammates` carries `dispatch_required` plus per-agent `present` flags
     for the crown's two standing teammates (fleet watcher first, then the
     assistant) -- the `gate_declaration_required` shape for an obligation
     that is a property of the SESSION rather than of one send. Like the
     other post-crown legs it is OMITTED on a refused crown: a session with
     no standing to hold the crown owes no teammates.
+    `watch_liveness` answers the OTHER half of the same obligation: whether the
+    watch is ticking, read off the heartbeat record's own self-set deadline
+    rather than off a dispatch record. Reported beside `teammates`, never
+    folded into it -- a watcher that was dispatched and died satisfies that leg
+    and fails this one, which is precisely the case the pair exists to catch.
     A failed leg (one that RAN and raised) is `None` with a `"<key>_error"`
     sibling string carrying the reason; the other legs still populate (see
     module docstring). On a REFUSED crown, `roster`/`digest`/`baseline` are
@@ -332,11 +417,18 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
         agents = None
 
     _leg(result, "roster", _run_roster(target_root, caller_session_id, agents))
+    _leg(result, "roster_considered", _run_roster_considered(agents, caller_session_id))
     roster = result["roster"]
 
     _leg(result, "digest", _run_digest(target_root, roster, caller_session_id))
 
     _leg(result, "teammates", _run_teammates(target_root, caller_session_id))
+
+    # Beside `teammates`, never inside it: "was a watcher dispatched" and "is a
+    # watch ticking" are different claims on different evidence, and the whole
+    # failure this leg exists for is the case where the first is true and the
+    # second is false.
+    _leg(result, "watch_liveness", _run_watch_liveness(target_root))
 
     # Baseline does NOT consume the roster, so a roster-leg failure does not
     # cascade here -- it consumes the enumeration directly.

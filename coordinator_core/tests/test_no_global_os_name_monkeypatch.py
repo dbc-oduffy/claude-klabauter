@@ -233,7 +233,7 @@ def _scan_offenders(*, use_prefilter: bool) -> dict[str, list[int]]:
             continue
         lines = _find_violations(tree)
         if lines:
-            offenders[str(path.relative_to(_REPO_ROOT))] = lines
+            offenders[path.relative_to(_REPO_ROOT).as_posix()] = lines
     return offenders
 
 

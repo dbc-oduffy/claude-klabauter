@@ -145,8 +145,17 @@ class TestDeny:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        # The reason names the caller's OWN leaf and the target, both as
+        # bare path entries -- the dispatched type is deliberately absent.
+        # Naming it forced a `Caller: <id> (dispatched as <type>)` line into
+        # the indented block, which broke `_message_size`'s path-entry data
+        # exemption and put the message at 358 prose bytes against a 220
+        # cap. The caller's identity still reaches the reader, via the id
+        # embedded in its own leaf's filename.
         assert _AGENT_A in reason
-        assert "coordinator:executor" in reason
+        assert f"coordinatorexecutor.{_AGENT_A}.md" in reason
+        assert f"coordinatorexecutor.{_AGENT_B}.md" in reason
+        assert "dispatched as" not in reason
 
 
 class TestCarveOut1LabelMismatch:
@@ -328,3 +337,88 @@ class TestAcceptanceOracle:
         result = guard.check(payload)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+class TestCaseInsensitiveFilesystemBypass:
+    """Review: coordinator:code-reviewer -- Finding 4. A case-insensitive-
+    but-preserving filesystem (NTFS, default APFS) resolves an
+    uppercase-extension or mixed-case-label variant of a leaf to the SAME
+    physical file as the canonical-case one this guard protects; every
+    comparison must casefold or these bypass to ALLOW.
+    """
+
+    def test_uppercase_extension_still_denied(self, tmp_path):
+        _write_backpointer(
+            tmp_path,
+            _AGENT_A,
+            _EM_SESSION_ID,
+            dispatched_rows=[(_AGENT_A, "x", "coordinator:executor")],
+        )
+        payload = _payload(
+            tmp_path,
+            f"state/subagent-share/{_SESSION_ID}/coordinatorexecutor.{_AGENT_B}.MD",
+            agent_id=_AGENT_A,
+            session_id=_EM_SESSION_ID,
+        )
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_mixed_case_label_still_denied(self, tmp_path):
+        _write_backpointer(
+            tmp_path,
+            _AGENT_A,
+            _EM_SESSION_ID,
+            dispatched_rows=[(_AGENT_A, "x", "coordinator:executor")],
+        )
+        payload = _payload(
+            tmp_path,
+            f"state/subagent-share/{_SESSION_ID}/CoordinatorExecutor.{_AGENT_B}.md",
+            agent_id=_AGENT_A,
+            session_id=_EM_SESSION_ID,
+        )
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+class TestCanonicalIdDivergence:
+    """Review: coordinator:code-reviewer -- Finding 3. A canonical-shaped
+    (``<name>@session-<short>``) ``agent_id`` whose embedded short is STALE
+    relative to the live/EM session gets rewritten by this guard's own
+    ``_resolve_subagent_identity`` (leg (d)), but ``provision_report``'s
+    ``_canonical_agent_id`` leg (c) returns the SAME canonical id
+    unchanged when it keys the sidecar leaf. If a canonical-shaped
+    ``agent_id`` reaches a subagent's own PreToolUse payload with a stale
+    embedded short, this pins whether that self-write still allows.
+    """
+
+    def test_stale_embedded_short_self_write_allowed(self, tmp_path):
+        raw_agent_id = "teammate@session-12345678"  # stale embedded short
+        resolved_agent_id = "teammate@session-em-sessi"  # rebuilt vs live/EM session
+        _write_backpointer(
+            tmp_path,
+            resolved_agent_id,
+            _EM_SESSION_ID,
+            dispatched_rows=[(resolved_agent_id, "x", "coordinator:executor")],
+        )
+        payload = _payload(
+            tmp_path,
+            f"state/subagent-share/{_SESSION_ID}/coordinatorexecutor.{raw_agent_id}.md",
+            agent_id=raw_agent_id,
+            session_id=_EM_SESSION_ID,
+        )
+        assert guard.check(payload) is None
+
+
+def test_label_whitelist_matches_provision_report():
+    """``_LABEL_WHITELIST_RE`` is a hand-derived copy of
+    ``provision_report._SEGMENT_WHITELIST_RE`` (not imported -- see module
+    docstring's negative-spec bullet on import-chain weight). Pin the two
+    patterns equal so the copies cannot silently drift.
+    """
+    from coordinator_core.subagent_sandbox.provision_report import (
+        _SEGMENT_WHITELIST_RE,
+    )
+
+    assert guard._LABEL_WHITELIST_RE.pattern == _SEGMENT_WHITELIST_RE.pattern

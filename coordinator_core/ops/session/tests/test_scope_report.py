@@ -317,10 +317,21 @@ class TestAssertPathsInSessionScope:
 
         ok, reason = assert_paths_in_session_scope("mine", ["orphan.py"], cwd=str(repo))
         assert ok is False
+        # The pin stops at the DISCRIMINATOR, not at a closing paren. The
+        # paren was only ever adjacent because `orphan` was the one
+        # classification carrying no remedy; its siblings (`unclaimed`,
+        # `indeterminate`) have appended `_REMEDY_WHO_CLAIMS` inside these
+        # same parens for as long as they have existed. Pinning the paren
+        # made this guard fail on a message that got MORE useful, which is
+        # the opposite of what a stable-prefix guard is for.
         assert reason.startswith(
             "path outside session mine scope: 'orphan.py' "
-            "(orphan — no session holds a claim on it)"
+            "(orphan — no session holds a claim on it"
         )
+        # The remedy is present and, per the constant's own note, comes after
+        # the discriminator so a truncating reader keeps the part it needs.
+        assert "who-claims-path" in reason
+        assert reason.index("orphan —") < reason.index("who-claims-path")
 
     def test_empty_remainder_reads_sensibly_when_all_paths_denied(self, tmp_path):
         """All paths in the pathspec denied — no committable remainder; the

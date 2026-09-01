@@ -363,8 +363,12 @@ def build_violation_payload_advisory(
     override_note = operator_override_note(
         "COORDINATOR_SCHEMA_STRICT", payload=payload, git_root=git_root
     )
+    # This guard sees only its own verdict, not a sibling PreToolUse guard's
+    # -- it cannot promise the call's outcome, only that it itself will not
+    # block. A stronger claim here reads as "the write landed" when a
+    # sibling guard may still have denied it.
     trailer_parts = [
-        "The write will proceed. Fix the frontmatter on the next edit."
+        "This check will not block the write. Fix the frontmatter on the next edit."
     ]
     if override_note:
         trailer_parts.append(override_note)

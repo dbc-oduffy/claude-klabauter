@@ -29,6 +29,10 @@
 #     into ONE atomic locked_rmw closure, open->actioned with no in_progress
 #     ever visible on disk between the two calls; see
 #     coordinator_core/ops/memo_transition.py's _resolve docstring)
+#     (the flag vocabulary is the ENGINE's — coordinator_core/archive_stamp.py
+#     :: _DISPOSITION_FLAGS — and this file forwards its tail verbatim. The
+#     three prose-bearing ones take a lossless file sibling here:
+#     --decision-note-file / --actioned-note-file / --supersede-note-file)
 #   release-memo-revert <memo_path>
 #   stamp-plan-implemented <plan_path>
 #   gate-recheck-handoff <handoff_path> <at> [--cleared]
@@ -174,8 +178,18 @@ _SUBCOMMAND_USAGE = {
     # Deprecated alias — retained-for-compat, not advertised in _SUBCOMMANDS.
     "consume-handoff": "archive-stamp-cli consume-handoff <handoff_path>",
     "claim-memo-stamp": "archive-stamp-cli claim-memo-stamp <memo_path>",
-    "action-memo": "archive-stamp-cli action-memo <memo_path> [disposition-flags...]",
-    "resolve-memo": "archive-stamp-cli resolve-memo <memo_path> [disposition-flags...]",
+    "action-memo": (
+        "archive-stamp-cli action-memo <memo_path> [disposition-flags...]\n"
+        "  NOTE — the prose-bearing disposition flags each take a lossless\n"
+        "  file sibling: --decision-note-file / --actioned-note-file /\n"
+        "  --supersede-note-file <path>. The remaining flags are the ENGINE's\n"
+        "  (coordinator_core/archive_stamp.py :: _DISPOSITION_FLAGS); this\n"
+        "  file forwards its tail verbatim and does not restate them."
+    ),
+    "resolve-memo": (
+        "archive-stamp-cli resolve-memo <memo_path> [disposition-flags...]\n"
+        "  NOTE — same prose file siblings as action-memo."
+    ),
     "release-memo-revert": "archive-stamp-cli release-memo-revert <memo_path>",
     "stamp-plan-implemented": "archive-stamp-cli stamp-plan-implemented <plan_path>",
     "gate-recheck-handoff": (
@@ -490,6 +504,76 @@ def _resolve_prose_pair(
         return None, f"archive-stamp-cli: {flag}: {exc}"
 
 
+# The prose-bearing disposition flags of `action-memo`/`resolve-memo`. Their
+# values are free text a reviewer writes by hand, so they carry the same
+# `%*`-truncation and quote-mangling exposure `_resolve_prose` exists for, and
+# this file's own header block already names the remedy for every prose-bearing
+# flag: a `--<flag>-file <path>` sibling. These three were the flags that
+# remedy had not reached (example-retrieval-repo-em, 2026-08-31).
+#
+# NOT A MULTI-LINE CHANNEL. `memo_transition._validate_disposition` refuses a
+# note containing a newline or a carriage return, and that refusal stays:
+# `serialize_yaml_scalar` emits an inline YAML scalar, and its negative-spec
+# says so. A multi-line file
+# is therefore still refused, by the engine, loudly. What the file leg buys is
+# LOSSLESS transport of a single-line note carrying a quote or a space, which
+# the `.cmd` forwarder corrupts with nothing observable at any layer above it.
+_PROSE_DISPOSITION_FLAGS = ("--decision-note", "--actioned-note", "--supersede-note")
+
+
+def _resolve_disposition_prose(
+    tail: list[str],
+) -> tuple[list[str] | None, str | None]:
+    """Normalise each `--<note>-file <path>` in a disposition tail to its inline form.
+
+    Returns `(rewritten_tail, None)` or `(None, error_message)`. The rewrite is
+    what lets `action-memo`/`resolve-memo` keep forwarding their tail to the
+    engine VERBATIM: no `-file` token ever reaches the op, the engine's flag
+    vocabulary is unchanged, and `_DISPOSITION_FLAGS` stays the single
+    declaration of what a disposition accepts. Resolved flags are re-appended
+    at the tail's end -- `_parse_disposition_args` is order-independent.
+
+    THE WALK IS POSITIONAL, not a membership scan, and deliberately mirrors
+    `_parse_disposition_args`: a recognized flag consumes the token after it,
+    so a note whose literal text is `--actioned-note` stays a value on both
+    sides of the seam rather than being re-read as a flag here and not there.
+
+    A repeated flag is refused rather than resolved. `_parse_disposition_args`
+    is last-wins; quietly landing one of two conflicting notes is the same
+    class of silent partial write `_reject_unknown_flags` exists to stop.
+    """
+    _FILE = "-file"
+    out: list[str] = []
+    seen: dict[str, list[str | None]] = {}
+    i = 0
+    while i < len(tail):
+        tok = tail[i]
+        base, slot = None, 0
+        if tok in _PROSE_DISPOSITION_FLAGS:
+            base = tok
+        elif tok.endswith(_FILE) and tok[: -len(_FILE)] in _PROSE_DISPOSITION_FLAGS:
+            base, slot = tok[: -len(_FILE)], 1
+        if base is None:
+            out.append(tok)
+            i += 1
+            continue
+        if i + 1 >= len(tail):
+            return None, f"archive-stamp-cli: {tok} requires a value"
+        pair = seen.setdefault(base, [None, None])
+        if pair[slot] is not None:
+            return None, f"archive-stamp-cli: {tok} may only be given once"
+        pair[slot] = tail[i + 1]
+        i += 2
+
+    for base, (inline, from_file) in seen.items():
+        value, err = _resolve_prose_pair(inline, from_file, base)
+        if err is not None:
+            return None, err
+        if value is not None:
+            out += [base, value]
+    return out, None
+
+
 def main(argv: list[str]) -> int:
     if not argv:
         return _usage("archive-stamp-cli")
@@ -675,15 +759,15 @@ def main(argv: list[str]) -> int:
             return _usage("archive-stamp-cli claim-memo-stamp <memo_path>")
         return mod.cs_claim_memo_stamp(rest[0])
 
-    if subcmd == "action-memo":
+    if subcmd in ("action-memo", "resolve-memo"):
         if not rest:
-            return _usage("archive-stamp-cli action-memo <memo_path> [disposition-flags...]")
-        return mod.cs_action_memo(rest[0], *rest[1:])
-
-    if subcmd == "resolve-memo":
-        if not rest:
-            return _usage("archive-stamp-cli resolve-memo <memo_path> [disposition-flags...]")
-        return mod.cs_resolve_memo(rest[0], *rest[1:])
+            return _usage(_SUBCOMMAND_USAGE[subcmd])
+        disposition, err = _resolve_disposition_prose(rest[1:])
+        if err is not None:
+            print(err, file=sys.stderr)
+            return 2
+        fn = mod.cs_action_memo if subcmd == "action-memo" else mod.cs_resolve_memo
+        return fn(rest[0], *disposition)
 
     if subcmd == "release-memo-revert":
         if not rest:

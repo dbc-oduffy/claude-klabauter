@@ -108,6 +108,7 @@ from coordinator_core.git.commit import (
     hash_worktree_blobs_via_spawn,
 )
 from coordinator_core.git.commit_trailers import apply_missing_trailers
+from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, locked_rmw
 from coordinator_core.ops.ceremony import git_native
@@ -954,7 +955,41 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             ),
         )
         sender_commit = _SenderCommit(True, outcome.sha, "")
-    except (CommitRefused, FilterUnsupported) as exc:
+    except IndexStaleAfterCommit as exc:
+        # THE RECEIPT LANDED; only the index is stale. This clause is the one
+        # the sibling below said to add "at the same time as the raiser" --
+        # `commit.py` is now that raiser. It MUST precede the
+        # `IndexWriteError` clause, which is its own base class: reaching that
+        # clause instead would report a committed receipt as uncommitted and
+        # invite an operator to redo work already in history.
+        landed = getattr(exc, "outcome", None)
+        sender_commit = _SenderCommit(
+            True, getattr(landed, "sha", None), ""
+        )
+    except (CommitRefused, FilterUnsupported, IndexWriteError) as exc:
+        # `IndexWriteError` (and its `IndexWriteLockBusy` subclass) belongs
+        # here for the SAME reason the other two do: by this line the receiver
+        # commit has already landed, so anything that only stops the SENDER's
+        # receipt is the "uncredited delivery is merely untidy" case the module
+        # docstring's ordering guarantee describes -- reported on the envelope
+        # as `sender_committed: false`, never as a failed send.
+        #
+        # It was missing, and at the ~50-session load norm a peer holding
+        # `.git/index.lock` is routine, not exotic. The escape turned a
+        # fully-delivered memo into a bare `-32603 Internal error:
+        # IndexWriteLockBusy` at the JSON-RPC boundary, which reads as total
+        # failure -- so the honest caller response is a retry, and the retry
+        # DOUBLE-DELIVERS. Example-retrieval-repo-em hit exactly this: receiver commit,
+        # ledger row and delivery all landed, and the op reported an internal
+        # error (memo `cross-repo/inbox/2026-09-01-example-retrieval-repo-em-ceremony-
+        # engine-defects-second-repo-confirmation.md`).
+        #
+        # SUBCLASS HAZARD, for whoever adds the first raiser:
+        # `IndexStaleAfterCommit` is also an `IndexWriteError`, but it means
+        # the commit LANDED and only the index is stale -- routing it here
+        # would report a landed receipt as uncommitted. Nothing raises it
+        # today (checked: no raise site in the tree), so no branch guards it
+        # yet; add one ahead of this clause at the same time as the raiser.
         sender_commit = _SenderCommit(False, None, str(exc))
 
     acted_item = {

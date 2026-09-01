@@ -66,13 +66,20 @@ def repo(tmp_path):
     return tmp_path
 
 
-def test_legacy_only_touched_txt_still_reads(repo):
-    """A bare `touched.txt` with no jsonl family — the pre-C2 shape — still
-    reads through the seam unchanged."""
+def test_legacy_only_touched_txt_no_longer_reads(repo):
+    """A bare `touched.txt` with no jsonl family — the pre-C2 shape — is no
+    longer read at all: the compat union that used to prepend it came out in
+    commit 227b513e79 ("the compat union comes out, all three arms in one
+    change"), per `session.scope._read_touch_record_as_legacy_lines`'s own
+    "THE COMPAT UNION IS GONE (2026-08-26)" docstring section
+    (docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-
+    repointing-its-writers.md, chunk C8). A sibling `touched.txt` with no
+    jsonl family now reads as "no record" — empty, not degraded (the file
+    is readable; it is simply no longer a recognised source)."""
     session_id = "sess-legacy"
     _write_legacy_touched(repo, session_id, "state/sizings/a.yaml")
 
-    assert m._session_touched_lines(session_id, str(repo)) == ["state/sizings/a.yaml"]
+    assert m._session_touched_lines(session_id, str(repo)) == []
 
 
 def test_jsonl_only_family_reads_via_seam(repo):
@@ -84,15 +91,18 @@ def test_jsonl_only_family_reads_via_seam(repo):
     assert m._session_touched_lines(session_id, str(repo)) == ["state/sizings/b.yaml"]
 
 
-def test_union_prepends_legacy_ahead_of_jsonl(repo):
-    """Both dialects present: the seam prepends the legacy line ahead of the
-    jsonl-derived one, so this reader sees both paths."""
+def test_legacy_touched_txt_ignored_when_jsonl_family_present(repo):
+    """Both dialects present: the seam reads ONLY the jsonl-derived line —
+    the legacy `touched.txt` sibling is no longer unioned in at all (see
+    `test_legacy_only_touched_txt_no_longer_reads` for the retiring
+    commit/plan). Renamed from `test_union_prepends_legacy_ahead_of_jsonl`,
+    which asserted the pre-227b513e79 union-and-prepend behaviour this seam
+    no longer has."""
     session_id = "sess-union"
     _write_legacy_touched(repo, session_id, "state/sizings/legacy.yaml")
     _append_jsonl_touch(repo, session_id, "state/sizings/jsonl.yaml")
 
     assert m._session_touched_lines(session_id, str(repo)) == [
-        "state/sizings/legacy.yaml",
         "state/sizings/jsonl.yaml",
     ]
 

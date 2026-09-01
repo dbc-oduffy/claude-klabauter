@@ -787,7 +787,41 @@ def commit_paths(
     # direction. A failure here leaves a correct commit and a stale index --
     # recoverable by any `git add`/`git status` -- so it is reported, never
     # rolled back onto a landed commit.
-    index_write.splice_index(repo, index_updates)
+    #
+    # "REPORTED" HAS TO MEAN A TYPE THE CALLER CAN TELL APART. The bare
+    # `index_write` error escaping here says `IndexWriteLockBusy`, whose own
+    # docstring promises the opposite of what is true at THIS line: that it
+    # was "raised BEFORE any bytes reach `.git/index` and before the ref
+    # moves, so retrying is correct there". Past the `cas_ref` above, the ref
+    # HAS moved. Every `commit_paths` caller in the tree catches
+    # `(CommitRefused, FilterUnsupported)` and nothing else, so the lock-busy
+    # propagated as a raw internal error for a commit that had LANDED -- and
+    # the honest response to an internal error is a retry, which commits the
+    # same work twice.
+    #
+    # `IndexStaleAfterCommit` was written for exactly this outcome ("the one
+    # outcome on this surface that must not be retried") and had no raise
+    # site, so the word existed and was never said. This is that site. At the
+    # ~50-session load norm a peer holding `.git/index.lock` for the width of
+    # a splice is routine, not exotic; example-retrieval-repo-em observed the memo.send
+    # face of it on 2026-09-01 (`cross-repo/inbox/2026-09-01-example-retrieval-repo-em-
+    # ceremony-engine-defects-second-repo-confirmation.md`).
+    outcome = CommitOutcome(
+        sha=commit_sha,
+        staged_preferred=tuple(staged_preferred),
+        worktree_over_staged=tuple(worktree_over_staged),
+        no_delta=tuple(no_delta),
+        declared_absent_from_head=tuple(declared_absent_from_head),
+    )
+    try:
+        index_write.splice_index(repo, index_updates)
+    except index_write.IndexWriteError as exc:
+        raise index_write.IndexStaleAfterCommit(
+            f"commit {commit_sha} LANDED; the index splice did not: {exc}. "
+            "Do not retry -- the work is in history. Any subsequent "
+            "`git add`/`git status` refreshes the index.",
+            outcome=outcome,
+        ) from exc
 
     return CommitOutcome(
         sha=commit_sha,

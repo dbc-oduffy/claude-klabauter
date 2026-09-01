@@ -234,9 +234,18 @@ def fetch_live_agents(repo_root: str) -> list[dict[str, Any]]:
     Sources `coordinator_core.session.peer_roster.build_roster(repo_root=...)`
     -- an in-process `harness_registry.snapshot()` read, zero subprocesses --
     in place of the former `claude agents --json` child-process spawn. Each
-    `PeerRow` is mapped to the `{"sessionId", "status", "cwd"}`-shaped dict
-    this module's classification ladder already reads, so no downstream
-    function needs to change its dict-key assumptions. Returns `[]` on any
+    `PeerRow` is mapped to the `{"sessionId", "status", "cwd", "name"}`-shaped
+    dict this module's classification ladder already reads, so no downstream
+    function needs to change its dict-key assumptions.
+
+    `name` was added 2026-09-01 and is the reason a whole downstream feature
+    read null. `PeerRow.name` is populated upstream; this projection dropped
+    it, so `watch._holder_name` -- written specifically to put the crown's
+    name on the heartbeat for a reader that cannot reach this box's registry
+    -- could only ever return `None`, and `state/group-em-watch.json` read
+    `holder_name: null` on every tick including ones its own watch stamped.
+    Established by doe-claude-27. A projection that silently narrows its
+    source is invisible to every caller downstream of it. Returns `[]` on any
     internal `build_roster` failure -- a read pass with no peers to show is a
     legitimate, quiet outcome, not a raised exception; `build_roster` itself
     already degrades to `[]` rather than raising, so no extra try/except is
@@ -248,6 +257,7 @@ def fetch_live_agents(repo_root: str) -> list[dict[str, Any]]:
             "sessionId": row.session_id,
             "status": row.status,
             "cwd": row.cwd,
+            "name": row.name,
         }
         for row in rows
     ]
@@ -298,9 +308,9 @@ def _transcript_mtime_epoch(session_id: str, cwd: str) -> Optional[float]:
     coordinator:overengineering-reviewer -- this docstring used to argue its
     shape from "two callers want that number for DIFFERENT questions", and
     both of those callers were rerouted through
-    `_transcript_activity_epoch` by the change that demoted mtime. What
+    `transcript_activity_epoch` by the change that demoted mtime. What
     remains is one number with one job: the upper bound
-    `_transcript_activity_epoch` falls back to when no record in the tail
+    `transcript_activity_epoch` falls back to when no record in the tail
     carries a timestamp. Not evidence of activity, and never promoted to it.
 
     NEGATIVE SPEC: `None` means the mtime could not be established (absent or
@@ -314,8 +324,16 @@ def _transcript_mtime_epoch(session_id: str, cwd: str) -> Optional[float]:
         return None
 
 
-def _transcript_activity_epoch(session_id: str, cwd: str) -> tuple[Optional[float], bool]:
-    """When this peer last actually MOVED, as `(epoch, trusted)`.
+def transcript_activity_epoch(session_id: str, cwd: str) -> tuple[Optional[float], bool]:
+    """PUBLIC BY NAME BECAUSE IT IS PUBLIC BY USE. `group_em.send_pass` and
+    `group_em.watch` both call this, and both module docstrings name it as the
+    ONE place a session id becomes a transcript activity instant -- the rule
+    that stops a third clock site from appearing. It carried an underscore
+    anyway, so the symbol said "private to this module" while two siblings
+    depended on its signature and nothing pinned it; an edit here with no
+    reason to look for foreign callers could have broken either silently.
+
+    When this peer last actually MOVED, as `(epoch, trusted)`.
 
     `trusted` is True only when the number came from a record's own
     `timestamp`. The mtime fallback is returned with `trusted=False` and is an
@@ -354,7 +372,7 @@ def _transcript_moved_since(
     cannot be established -- an unreadable/absent transcript, an unparseable
     stamp, or a transcript whose tail carries no timestamped record and whose
     mtime has run PAST the stamp. That last case used to answer True from file
-    mtime, which is not an activity clock (`_transcript_activity_epoch`): a
+    mtime, which is not an activity clock (`transcript_activity_epoch`): a
     bookkeeping rewrite moved mtime past the stamp and this reported "the peer
     acted" for a peer that had done nothing, suppressing exactly the candidate
     the guard was reinstating. An untrusted mtime that has NOT passed the
@@ -366,7 +384,7 @@ def _transcript_moved_since(
     """
     if stamp_dt is None:
         return None
-    activity_epoch, trusted = _transcript_activity_epoch(session_id, cwd)
+    activity_epoch, trusted = transcript_activity_epoch(session_id, cwd)
     if activity_epoch is None:
         return None
     if trusted:
@@ -587,10 +605,10 @@ def classify_peer(
             transcript_path = _transcript_path_for(session_id, cwd)
             reduced_lines, _any_unparseable, _cap_reached = reduce_transcript_tail(transcript_path)
         # Derived from the tail ALREADY reduced above -- no second read, and
-        # no `_transcript_activity_epoch` call, which would re-reduce the same
+        # no `transcript_activity_epoch` call, which would re-reduce the same
         # file. Falls back to mtime only when no line in that tail carries a
         # timestamp, which is the same upper-bound-not-evidence fallback
-        # `_transcript_activity_epoch` makes, kept identical on both paths.
+        # `transcript_activity_epoch` makes, kept identical on both paths.
         transcript_activity_epoch = activity_epoch_from_reduced(list(reduced_lines or []))
         if transcript_activity_epoch is None and read_tail is None:
             transcript_activity_epoch = _transcript_mtime_epoch(session_id, cwd)

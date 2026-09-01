@@ -1688,13 +1688,28 @@ def abandonment_basis(sid: str, cwd: Optional[str] = None) -> "tuple[bool, str]"
     if not sid:
         return (False, "no-sid")
 
-    if session_abandoned(sid, cwd):
-        return (True, "live-dir-signals")
-
+    # ARCHIVE BEFORE DIR SIGNALS, once the holder is confirmed non-live. An
+    # archived session can still own a leftover session dir -- the reaper's
+    # archival is not conditioned on the dir being gone -- and resolving the
+    # dir arm first meant such a holder reported `live-dir-signals` while its
+    # archive record sat unread. Both arms agree on the boolean, so this
+    # renames rather than reverses; what it fixes is a holder the reaper
+    # positively archived failing to name that record as its basis.
+    #
+    # This does NOT weaken the resurrection ordering. What protects an
+    # archived-then-resumed session is the `session_live` gate below, never
+    # the dir arm's position: a live holder never reaches the archive arm at
+    # all, and a holder `session_live` calls non-live is one the archive
+    # record may speak for. Specimen that forced this (2026-09-01, live
+    # corpus): sid `6a160155-...` carries TWO archive entries and a stale dir,
+    # and reported `live-dir-signals` with its archive record found.
     if not session_live(sid, cwd):
         base = core.sessions_dir(cwd)
         if base and sid in _archived_sids(base):
             return (True, "archive-record")
+
+    if session_abandoned(sid, cwd):
+        return (True, "live-dir-signals")
 
     return (False, "unknown")
 

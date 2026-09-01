@@ -176,6 +176,32 @@ class OwnerFact(NamedTuple):
                        ``"unreadable"`` (the claim set itself could not be
                        read, so only the fact of an indeterminate claim is
                        recorded, not its path content).
+      writer_name   — (C3, plan ``2026-09-01-the-claim-record-carries-the-
+                       name``) the claiming writer's ``TouchEvent.name`` —
+                       the SendMessage-addressable registry name stamped at
+                       write time (see ``touch_record.TouchEvent.name``'s
+                       own docstring) — or ``None`` when unresolved (the
+                       claim predates the field, the writer could not be
+                       resolved, or this ``OwnerFact`` was constructed for a
+                       sentinel/unreadable claimant that never had a
+                       per-event name to carry). ``None`` is NEVER a signal
+                       that the writer is dead or absent — it means UNNAMED,
+                       the same posture as ``TouchEvent.name`` itself (see
+                       :func:`_touch_record_writer_names`/
+                       :func:`_agent_touch_record_writer_names`, the C3
+                       direct-TouchEvent reads this field is sourced from —
+                       deliberately NOT threaded through
+                       ``_read_touch_record_as_legacy_lines``, whose
+                       re-rendered ``'<verb> <ts> <path>'`` lines are shared
+                       by out-of-scope callers (``session/claims.py``,
+                       ``session/shape.py``, ``hooks/nudge_unrouted_sizing
+                       .py``, ``ops/reap_orphaned_agent_dirs.py``) this
+                       chunk's ``writes:`` does not cover). A consumer
+                       renders a present ``writer_name`` as
+                       PROVENANCE alongside its age, never as a ready-to-
+                       send address (``dispatch_checks._format_owner_
+                       sentence``/``_holder_context``'s discipline) — this
+                       field is not itself a SendMessage target.
     """
 
     owner: str
@@ -186,6 +212,10 @@ class OwnerFact(NamedTuple):
     # comparison. `Literal` closes that at every one of the ~6 call sites.
     liveness: Literal["live", "dead", "undetermined"]
     claim_source: Literal["session", "agent", "agent-race", "unreadable"]
+    # C3 — additive, defaulted so every pre-existing construction site
+    # (the sentinel/unreadable/agent-race arms that never had a per-event
+    # name to carry) keeps type-checking unchanged.
+    writer_name: Optional[str] = None
 
 
 class ScopeResult(NamedTuple):
@@ -1836,6 +1866,92 @@ def _read_agent_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[L
     ]
 
     return jsonl_lines, degraded
+
+
+def _touch_record_writer_names(sink_path: "Path | str") -> Dict[str, Optional[str]]:
+    """C3 (plan ``2026-09-01-the-claim-record-carries-the-name``) — the
+    session-keyed ``OwnerFact.writer_name`` source, keyed by each surviving
+    event's own ``event.path`` (already canonical -- ``touch_record.
+    encode_line`` canonicalizes at write time, AC4).
+
+    Deliberately a SEPARATE direct read of ``touch_record._read_stream_
+    claims`` rather than a third return value bolted onto
+    :func:`_read_touch_record_as_legacy_lines`: that adapter's ``(lines,
+    degraded)`` tuple is shared by out-of-scope callers this chunk's
+    ``writes:`` does not cover (``session/claims.py``, ``session/shape.py``,
+    ``session/stable_pid_watch.py``, ``hooks/nudge_unrouted_sizing.py``,
+    ``ops/ceremony/receipt_emit`` and their tests) -- widening its arity
+    would be an out-of-scope edit at every one of those call sites. This
+    function costs a second, small read of the same family; the shared
+    adapter's own re-render is untouched.
+
+    ``None`` for a path whose surviving event never had a name stamped
+    (see ``touch_record.TouchEvent.name``'s own docstring) -- absence is
+    UNNAMED, never a degrade signal, same posture as the adapter's own
+    ``degraded`` flag (deliberately not returned here: a caller already
+    calls :func:`_read_touch_record_as_legacy_lines` for that signal on
+    the same ``sink_path``, immediately before or after this call).
+    """
+    claims, _degraded, _reasons = touch_record._read_stream_claims(sink_path)
+    return {event.path: event.name for event in claims.values()}
+
+
+def _read_touch_record_as_legacy_lines_with_writer_names(
+    sink_path: "Path | str",
+) -> Tuple[List[str], bool, Dict[str, Optional[str]]]:
+    """Cost fix (2026-09-01, docs/plans/2026-09-01-the-claim-record-carries-
+    the-name.md follow-up) -- single-read sibling of
+    :func:`_read_touch_record_as_legacy_lines` and :func:`_touch_record_
+    writer_names` for :func:`compute_scope`'s own Step 3 loop, the ONE
+    caller in this module that needs both projections off the SAME
+    ``sink_path`` back to back. C3 shipped those two adapters as
+    independent reads deliberately -- their own docstrings explain why
+    neither widened its signature, because ``session/claims.py``,
+    ``session/shape.py``, and ``hooks/nudge_unrouted_sizing.py`` call them
+    with the two-tuple / dict-only signatures C3 shipped, outside this
+    fix's declared scope. This sibling does not touch either of them; it
+    just gives Step 3's loop body a third option that decodes the family
+    ONCE and derives both projections from that one decode, instead of
+    calling `touch_record._read_stream_claims` twice per live peer.
+
+    Measured on this box (2026-09-01, 20 peers x 200 paths, 7 trials,
+    median of warmed runs, process time): the two-call form (this
+    function's own two callees, called back to back) cost 30.503ms; this
+    folded form costs 15.471ms -- a 15.032ms delta (~2x the loop body) on
+    a function `compute_scope` calls once per live peer on every
+    commit-path invocation, which is on the repo's 500ms brightline.
+
+    Returns ``(lines, degraded, writer_names)`` — exactly the same values
+    the two-call form would have produced: `lines`/`degraded` as
+    :func:`_read_touch_record_as_legacy_lines` renders them, `writer_names`
+    as :func:`_touch_record_writer_names` builds it (`event.path ->
+    event.name`, `None` for a surviving event with no name stamped).
+    """
+    claims, degraded, _reasons = touch_record._read_stream_claims(sink_path)
+    jsonl_lines = [
+        format_touch_event(
+            event.verb,
+            event.path,
+            when=datetime.fromtimestamp(event.timestamp, tz=timezone.utc),
+        )
+        for event in claims.values()
+    ]
+    writer_names = {event.path: event.name for event in claims.values()}
+    return jsonl_lines, degraded, writer_names
+
+
+def _agent_touch_record_writer_names(sink_path: "Path | str") -> Dict[str, Optional[str]]:
+    """C3 -- the agent-dir counterpart of :func:`_touch_record_writer_names`,
+    mirroring :func:`_read_agent_touch_record_as_legacy_lines`'s own TOUCH-
+    only filter (a RELEASE survivor has no bare-path representation in that
+    adapter's rendering, so it is excluded here too, for the same reason).
+    """
+    claims, _degraded, _reasons = touch_record._read_stream_claims(sink_path)
+    return {
+        event.path: event.name
+        for event in claims.values()
+        if event.verb == touch_record.VERB_TOUCH
+    }
 
 
 def _agent_touch_activity(agent_dir: Path) -> Tuple[bool, float]:
@@ -3960,7 +4076,13 @@ def compute_scope(
             # fold, re-rendered to the legacy dialect the unchanged
             # `project_peer_claims`/`_collect_peer_path_mtimes` policies
             # below still expect -- see `_read_touch_record_as_legacy_lines`).
-            lines, read_degraded = _read_touch_record_as_legacy_lines(other_touched)
+            # Cost fix (2026-09-01): folded with the writer-name read below
+            # into ONE `touch_record._read_stream_claims` decode -- see
+            # `_read_touch_record_as_legacy_lines_with_writer_names`'s own
+            # docstring for the measurement.
+            lines, read_degraded, peer_writer_names = (
+                _read_touch_record_as_legacy_lines_with_writer_names(other_touched)
+            )
             if read_degraded:
                 unreadable_other_sessions.append(other_id)
                 print(
@@ -3984,6 +4106,9 @@ def compute_scope(
             # this peer's record was even opened — a dead peer never
             # reaches here at all any more).
             peer_liveness = _peer_liveness_str(other_id)
+            # C3: `peer_writer_names` is keyed the same way as `lines` above
+            # (`event.path`, already canonical) -- both came out of the same
+            # folded read above (see the cost-fix comment there).
             for opath in lines:
                 if not opath:
                     continue
@@ -4001,7 +4126,10 @@ def compute_scope(
                 )
                 if norm_attr_path and norm_attr_path not in attribution:
                     attribution[norm_attr_path] = OwnerFact(
-                        other_id, peer_liveness, "session"
+                        other_id,
+                        peer_liveness,
+                        "session",
+                        peer_writer_names.get(opath_attr_field),
                     )
 
             # Abandonment (C4, docs/plans/2026-08-19-abandonment-is-its-own-
@@ -4388,6 +4516,11 @@ def compute_scope(
                     em_sid, "undetermined", "unreadable"
                 )
             peer_liveness = _peer_liveness_str(em_sid)
+            # C3: keyed by bare `event.path`, matching `attr_raw_lines`
+            # (see `_agent_touch_record_writer_names`'s own docstring).
+            attr_writer_names = _agent_touch_record_writer_names(
+                agent_dir / _TOUCH_RECORD_FILENAME
+            )
             normalized_attr_lines = [
                 _normalize_agent_touched_entry(raw) for raw in attr_raw_lines
             ]
@@ -4409,6 +4542,13 @@ def compute_scope(
                             opath, root_path
                         )
                         if norm_attr_path and norm_attr_path not in attribution:
+                            # No single raw jsonl line maps to `opath` (it
+                            # is a git-dirty path expanded FROM the
+                            # directory entry `norm`, not itself a recorded
+                            # event path) -- writer_name stays unresolved
+                            # here, same UNNAMED posture as any other
+                            # unmapped path (OwnerFact.writer_name's
+                            # docstring).
                             attribution[norm_attr_path] = OwnerFact(
                                 em_sid, peer_liveness, "agent"
                             )
@@ -4416,7 +4556,10 @@ def compute_scope(
                     norm_attr_claim = normalize_peer_claim_key(norm, root_path)
                     if norm_attr_claim and norm_attr_claim not in attribution:
                         attribution[norm_attr_claim] = OwnerFact(
-                            em_sid, peer_liveness, "agent"
+                            em_sid,
+                            peer_liveness,
+                            "agent",
+                            attr_writer_names.get(norm),
                         )
 
             # Liveness gate (evaluated first — same rationale as Step 3

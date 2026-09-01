@@ -139,3 +139,110 @@ def test_do_pathspec_calls_the_gate_before_dispatching():
     assert body.index("_refuse_contested_pathspec(") < body.index(
         'cc_invoke("ceremony.commit_v2"'
     ), "gate must run before the commit dispatch"
+
+
+def _tiny_repo(tmp_path):
+    """A real git repo with one committed file. The narrowing asks git a
+    question no stub can answer honestly, so these tests spend one."""
+    import subprocess
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    run = lambda *a: subprocess.run(
+        ["git", *a], cwd=root, capture_output=True, text=True, check=True
+    )
+    run("init", "-q")
+    run("config", "user.email", "t@example.com")
+    run("config", "user.name", "t")
+    (root / "committed.py").write_text("clean\n", encoding="utf-8")
+    (root / "dirty.py").write_text("original\n", encoding="utf-8")
+    run("add", "committed.py", "dirty.py")
+    run("commit", "-q", "-m", "seed")
+    return root
+
+
+class TestCleanPathNarrowing:
+    """A TOUCH has a birth and no death, so most of what reaches the refusal is
+    residue: a path committed hours ago still contests for the rest of its
+    holder's lifetime. Measured 2026-08-31 -- one holder blocked
+    `coordinator/bin/publish.py` for 11.3h with no uncommitted content in it,
+    bypass the only exit. A path identical to its HEAD blob cannot carry the
+    harm the refusal names, whoever holds it."""
+
+    def test_a_path_matching_head_no_longer_blocks_the_commit(self, tmp_path, monkeypatch):
+        mod = _load_cli_module()
+        root = _tiny_repo(tmp_path)
+        _stub_session(mod, monkeypatch, contested={"committed.py": ["peer-a"]})
+
+        # Returns rather than exiting: nothing uncommitted is in that file, so
+        # committing it lands nobody's work.
+        assert mod._refuse_contested_pathspec(["committed.py"], str(root)) is None
+
+    def test_a_dirty_contested_path_still_refuses(self, tmp_path, monkeypatch, capsys):
+        mod = _load_cli_module()
+        root = _tiny_repo(tmp_path)
+        (root / "dirty.py").write_text("edited\n", encoding="utf-8")
+        _stub_session(mod, monkeypatch, contested={"dirty.py": ["peer-a"]})
+
+        with pytest.raises(SystemExit):
+            mod._refuse_contested_pathspec(["dirty.py"], str(root))
+        assert "dirty.py" in capsys.readouterr().err
+
+    def test_the_dirty_half_of_a_mixed_pathspec_still_refuses(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        """Narrowing the set is not the same as dropping the refusal."""
+        mod = _load_cli_module()
+        root = _tiny_repo(tmp_path)
+        (root / "dirty.py").write_text("edited\n", encoding="utf-8")
+        _stub_session(
+            mod,
+            monkeypatch,
+            contested={"dirty.py": ["peer-a"], "committed.py": ["peer-b"]},
+        )
+
+        with pytest.raises(SystemExit):
+            mod._refuse_contested_pathspec(["dirty.py", "committed.py"], str(root))
+        err = capsys.readouterr().err
+        assert "dirty.py" in err
+        assert "committed.py" not in err, err
+
+    def test_an_untracked_contested_path_still_refuses(self, tmp_path, monkeypatch):
+        """`diff HEAD` would call a brand-new file clean -- it is absent from
+        HEAD -- while committing it lands exactly the peer's work. That is why
+        the probe reads `status --porcelain`."""
+        mod = _load_cli_module()
+        root = _tiny_repo(tmp_path)
+        (root / "brand-new.py").write_text("theirs\n", encoding="utf-8")
+        _stub_session(mod, monkeypatch, contested={"brand-new.py": ["peer-a"]})
+
+        with pytest.raises(SystemExit):
+            mod._refuse_contested_pathspec(["brand-new.py"], str(root))
+
+    def test_an_undeterminable_answer_leaves_the_refusal_whole(self, tmp_path, monkeypatch):
+        """Fails CLOSED. `I could not tell` must never become `safe to commit`."""
+        mod = _load_cli_module()
+        _stub_session(mod, monkeypatch, contested={"committed.py": ["peer-a"]})
+
+        with pytest.raises(SystemExit):
+            mod._refuse_contested_pathspec(["committed.py"], str(tmp_path / "not-a-repo"))
+
+    def test_the_probe_spends_one_process_for_the_whole_set(self, tmp_path, monkeypatch):
+        """Never one spawn per path -- the amplification gate's rule, and this
+        runs ahead of every explicit-pathspec commit the fleet makes."""
+        import subprocess as _subprocess
+
+        mod = _load_cli_module()
+        root = _tiny_repo(tmp_path)
+        calls = []
+        real_run = _subprocess.run
+
+        def _counting_run(*args, **kwargs):
+            calls.append(args[0])
+            return real_run(*args, **kwargs)
+
+        monkeypatch.setattr(mod.subprocess, "run", _counting_run)
+        mod._paths_with_no_uncommitted_content(
+            ["committed.py", "dirty.py", "brand-new.py"], str(root)
+        )
+        assert len(calls) == 1, calls

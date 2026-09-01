@@ -152,6 +152,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import secrets
@@ -299,6 +300,17 @@ def transition_event(
     Returns exactly the closed field set this module owns at construction
     time: `item_id`, `axis`, `from_state`, `to_state`, `actor`, `evidence`,
     `tier`, `source_observation_id`.
+
+    `evidence` is DEEP-COPIED in. The event reads as an immutable record of an
+    observation, and storing the caller's dict by reference made it one only
+    by convention: a caller that reused or mutated its evidence dict after the
+    call silently rewrote what the event says it saw, action at a distance on
+    the one field that exists to be a fixed account. Deep rather than shallow
+    because `evidence` is documented as nested (`probe`, and whatever a caller
+    puts beside it) and a shallow copy would leave every nested value aliased
+    -- the same bug one level down. The dicts are small and this path already
+    JSON-serialises them downstream, so the copy is not a cost worth trading
+    the guarantee for.
     """
     reject_invalid_axis(axis, action="construct")
     reject_invalid_tier(tier, action="construct")
@@ -309,7 +321,7 @@ def transition_event(
         "from_state": from_state,
         "to_state": to_state,
         "actor": actor,
-        "evidence": evidence,
+        "evidence": copy.deepcopy(evidence),
         "tier": tier,
         "source_observation_id": source_observation_id,
     }

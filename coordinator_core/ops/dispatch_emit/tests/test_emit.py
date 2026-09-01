@@ -22,7 +22,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     derive_review_tier,
     emit_script,
 )
-from coordinator_core.ops.dispatch_emit.pathspec import NoTestTargetError, NoWritesDeclaredError
+from coordinator_core.ops.dispatch_emit.pathspec import NoWritesDeclaredError
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
@@ -417,6 +417,70 @@ def test_preflight_blocked_still_wins_over_clear():
 
 
 # ---------------------------------------------------------------------------
+# Per-hunk divergence: a pathspec scopes files, not changes
+# ---------------------------------------------------------------------------
+
+
+def _provenance_block():
+    from coordinator_core.ops.dispatch_emit.emit import _PROVENANCE_HEADING
+
+    return _PROVENANCE_HEADING
+
+
+def test_provenance_no_longer_claims_peer_work_cannot_reach_the_commit():
+    """The old reassurance was true per-FILE and false per-HUNK, and it is
+    exactly the sentence that would stop an agent from looking.
+
+    `commit_paths` commits working-tree state for every path handed to it, so
+    a peer's uncommitted edit inside a DECLARED path lands under this run's
+    subject with every guard passing. Measured at `ef3bbb1663`.
+    """
+    block = _provenance_block()
+    assert "cannot sweep peer-staged work into your commit" not in block
+    assert "PER-FILE, NOT PER-HUNK" in block
+
+
+def test_provenance_requires_reading_the_diff_not_only_the_reports():
+    block = _provenance_block()
+    assert "git diff --stat" in block
+    assert "Read the diff, not just the reports" in block
+
+
+def test_the_halt_discriminator_is_a_file_no_report_mentions():
+    """Halting on any unreported hunk would fire on ordinary under-itemised
+    executor reports; halting on none leaves the peer case silent."""
+    block = _provenance_block()
+    assert "NO report mentions at all is the peer case" in block
+    # The non-halting arm is stated explicitly, or the agent will over-halt.
+    assert "do not halt on those" in block
+
+
+def test_the_remedy_is_stop_and_report_never_clean_the_path():
+    """Reverting a peer's hunk is the destructive failure this must not invite."""
+    block = _provenance_block()
+    assert "Never revert, stash, or check out a hunk" in block
+
+
+def test_verification_must_produce_an_artifact_it_cannot_fabricate():
+    """The measured failure mode is an agent that reasons from pasted reports
+    and produces output indistinguishable from one that checked -- and whose
+    presentation is anti-correlated with having checked. Requiring verbatim
+    stat output makes the two modes produce different artifacts."""
+    block = _provenance_block()
+    assert "DIFF OBSERVED:" in block
+    assert "VERBATIM" in block
+    assert "do not build a nicer artifact" in block
+    assert "did not look" in block
+
+
+def test_the_per_hunk_clause_reaches_the_emitted_script():
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    # Only waves carrying executor reports get the provenance block at all.
+    if "Pathspec provenance" in script:
+        assert "PER-FILE, NOT PER-HUNK" in script
+
+
+# ---------------------------------------------------------------------------
 # Cached-preflight staleness detection
 # ---------------------------------------------------------------------------
 
@@ -626,13 +690,34 @@ def test_compose_script_propagates_no_writes_declared_from_commit_pathspec():
         compose_script(waves, name="wf", description="undeclared")
 
 
-def test_compose_script_propagates_no_test_target_from_terminal_scope():
-    # Propagation is pinned on the shape that still refuses: an uncovered
-    # .py. A doc-only spine no longer raises here (it composes without a
-    # terminal phase) -- see the three cases below.
+def test_compose_script_no_longer_propagates_no_test_target_but_degrades_loudly():
+    # NoTestTargetError used to veto the whole emit. It now degrades: absent
+    # a falsifier, compose_script composes rung 3 -- a loud narration naming
+    # the unmapped path -- instead of raising. See empty-terminal-test-scope-
+    # degrades-not-vetoes.
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
-    with pytest.raises(NoTestTargetError):
-        compose_script(waves, name="wf", description="uncovered module")
+    script = compose_script(waves, name="wf", description="uncovered module")
+    assert "No terminal test phase" in script
+    assert "coordinator_core/ops/dispatch_emit/nonexistent_module.py" in script
+    assert "no prime_exit_criterion.falsifier" in script
+
+
+def test_compose_script_falls_back_to_the_plans_falsifier_when_no_test_target_resolves():
+    waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
+    falsifier = {
+        "how": "run the migration and check the flag",
+        "expected_when_true": "the flag reads enabled",
+        "baseline_output": "the flag reads disabled",
+    }
+    script = compose_script(
+        waves, name="wf", description="uncovered module", falsifier=falsifier
+    )
+    assert "Scoped test run" in script
+    assert "coordinator:test-runner" in script
+    assert "run the migration and check the flag" in script
+    assert "the flag reads enabled" in script
+    assert "the flag reads disabled" in script
+    assert "No terminal test phase" not in script
 
 
 def test_compose_script_omits_the_terminal_phase_for_a_prose_only_spine():
@@ -644,6 +729,46 @@ def test_compose_script_omits_the_terminal_phase_for_a_prose_only_spine():
     script = compose_script(waves, name="wf", description="doc only")
     assert "Scoped test run" not in script
     assert "coordinator:test-runner" not in script
+
+
+def test_prime_exit_criterion_falsifier_reads_how_and_expected_when_true():
+    plan_text = textwrap.dedent(
+        """\
+        ---
+        title: x
+        prime_exit_criterion:
+          statement: the migration is live
+          derived_from: state/sizings/x.yaml
+          falsifier:
+            how: run the migration script
+            baseline_output: fails today
+            expected_when_true: succeeds
+        ---
+        # Plan
+        """
+    )
+    result = emit._prime_exit_criterion_falsifier(plan_text)
+    assert result == {
+        "how": "run the migration script",
+        "expected_when_true": "succeeds",
+        "baseline_output": "fails today",
+    }
+
+
+def test_prime_exit_criterion_falsifier_is_none_when_absent_or_incomplete():
+    assert emit._prime_exit_criterion_falsifier("no frontmatter here") is None
+    assert (
+        emit._prime_exit_criterion_falsifier(
+            "---\ntitle: x\nprime_exit_criterion:\n  statement: s\n---\n"
+        )
+        is None
+    )
+    assert (
+        emit._prime_exit_criterion_falsifier(
+            "---\ntitle: x\nprime_exit_criterion:\n  falsifier:\n    how: x\n---\n"
+        )
+        is None
+    )
 
 
 def test_a_prose_only_spine_declares_the_absent_test_run_on_the_emitted_script():

@@ -379,18 +379,33 @@ def test_absolute_pathspec_subdirectory_allows_in_hazard_repo(monkeypatch, tmp_p
     assert result is None
 
 
-def test_explicit_pathspec_separator_at_repo_root_allows_in_hazard_repo(monkeypatch, tmp_path):
-    """The ratified explicit-scope form (`git add -- <paths>`) stays ALLOW
-    even when the named path happens to equal the repo root -- an explicit
-    `--` pathspec is the deliberate, scoped form this guard's own
-    remediation message recommends; it must never itself become a target of
-    the closure above."""
+def test_explicit_pathspec_separator_at_repo_root_still_denies_in_hazard_repo(
+    monkeypatch, tmp_path
+):
+    """SUPERSEDES the prior `..._allows_in_hazard_repo` ratification of this
+    same scenario. That version asserted ALLOW on the theory that an
+    explicit `--` pathspec is inherently the "deliberate, scoped form" and
+    must never be a target of the root-anchor closure -- but DoE example-game-repo-em
+    (2026-08-31, cross-repo/inbox/...-safe-commit-add-guard-blind-after-
+    dashdash.md) found this is exactly backwards for the repo-root case: an
+    absolute path that resolves to the repo root is `.`/`-A` written a
+    different way regardless of which side of `--` it sits on, and the
+    guard's OWN remediation text recommends `git add -- path/to/file` --
+    the memo's constraint is that this form must be "at least as protected
+    as `git add <dir>`", not exempt from the same closure that already
+    covers the pre-`--` spelling. This is the ONE deliberate strictness
+    change in that fix: a caller relying on `git add -- <repo_root>` being
+    silently allowed now gets the same deny `git add <repo_root>` always
+    got. Genuinely scoped subtrees/files after `--` are unaffected --
+    see `test_a_scoped_subtree_in_the_backslash_spelling_still_passes` and
+    `test_absolute_pathspec_subdirectory_allows_in_hazard_repo` above."""
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
     _wire_hazard(monkeypatch, is_hazard=True)
     result = guard.check_blanket_git_add("git add -- %s" % root, "sess1")
-    assert result is None
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 # ---------------------------------------------------------------------------

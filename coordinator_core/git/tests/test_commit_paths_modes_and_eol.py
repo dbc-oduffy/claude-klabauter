@@ -329,3 +329,87 @@ def test_unattributed_cr_content_autocrlf_unset_refuses_without_fallback(tmp_pat
 # `_autocrlf_checkin_normalize` branch as `true`. Left unimplemented here:
 # this dispatch is scoped to test coverage only, and `commit.py` is
 # explicitly out of scope for this change.
+
+
+# ---------------------------------------------------------------------------
+# POST-REF SPLICE FAILURE -- the commit LANDED and must not be retried.
+#
+# `commit_paths` splices the index AFTER the ref swap by design (invariant 3:
+# "an index that matches a commit which never landed is the same lie in the
+# other direction"). A peer holding `.git/index.lock` for the width of that
+# splice therefore lands with real work in history -- routine at the
+# ~50-session load norm, not exotic.
+#
+# It escaped as a bare `IndexWriteLockBusy`, whose own docstring promises the
+# OPPOSITE of what is true at that line: "raised BEFORE any bytes reach
+# `.git/index` and before the ref moves, so retrying is correct there". Every
+# `commit_paths` caller in the tree catches `(CommitRefused, FilterUnsupported)`
+# and nothing else, so it surfaced as an internal error for a landed commit --
+# and the honest response to an internal error is a retry, which commits the
+# same work twice.
+#
+# `IndexStaleAfterCommit` was written for this outcome and had no raise site.
+# Source: cross-repo/inbox/2026-09-01-example-retrieval-repo-em-ceremony-engine-defects-
+# second-repo-confirmation.md (the memo.send face of it).
+
+
+def test_lock_held_during_splice_raises_stale_not_lock_busy(tmp_path):
+    from coordinator_core.git.index_write import (
+        IndexStaleAfterCommit,
+        IndexWriteLockBusy,
+    )
+
+    repo = _repo(tmp_path)
+    (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
+    head_before = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    # Stand in for a peer mid-write. The lock is taken before the call, so it
+    # is held across the post-ref splice.
+    (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
+
+    with pytest.raises(IndexStaleAfterCommit) as caught:
+        gcommit.commit_paths(repo, ["seed.txt"], "second\n")
+
+    exc = caught.value
+    assert not isinstance(exc, IndexWriteLockBusy), (
+        "the type must say the commit LANDED -- IndexWriteLockBusy's docstring "
+        "promises the ref had not moved, which is false past the cas_ref"
+    )
+
+    head_after = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert head_after != head_before, "the commit really did land"
+    assert exc.outcome is not None, (
+        "the caller needs the sha it just created -- naming the outcome without "
+        "carrying it still strands them"
+    )
+    assert exc.outcome.sha == head_after
+
+
+def test_stale_after_commit_message_forbids_the_retry(tmp_path):
+    """The message is the whole remedy here: a caller that retries commits the
+    same work twice, which is the one thing this outcome must prevent."""
+    from coordinator_core.git.index_write import IndexStaleAfterCommit
+
+    repo = _repo(tmp_path)
+    (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
+    (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
+
+    with pytest.raises(IndexStaleAfterCommit) as caught:
+        gcommit.commit_paths(repo, ["seed.txt"], "second\n")
+
+    text = str(caught.value)
+    assert "LANDED" in text
+    assert "Do not retry" in text
+
+
+def test_ordinary_commit_still_splices_and_raises_nothing(tmp_path):
+    """The unchanged path: no lock, so the splice lands and the index is
+    current. Asserted so the wrap above cannot quietly swallow the success."""
+    repo = _repo(tmp_path)
+    (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
+
+    outcome = gcommit.commit_paths(repo, ["seed.txt"], "second\n")
+
+    assert outcome.sha == _git(repo, "rev-parse", "HEAD").stdout.strip()
+    # A current index reports nothing staged and nothing dirty for this path.
+    assert _git(repo, "status", "--porcelain", "--", "seed.txt").stdout.strip() == ""

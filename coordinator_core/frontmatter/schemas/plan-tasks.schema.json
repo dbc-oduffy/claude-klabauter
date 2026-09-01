@@ -8,7 +8,12 @@
   "title": "plan-tasks",
   "description": "Per-row schema for the plan `## Tasks` task-spine YAML block (one task object per row). Full authoring contract, parser-locate rule, malformed-row disposition, and harvest routing: docs/wiki/writing-plans.md § Machine-Parseable Task Spine and docs/wiki/canonical-artifact-shapes.md § Addressable-Section Convention.\n\nSpec backlink: pln-full-coverage-planning-posture-bca96f § C1 (pinned task-spine contract).",
   "type": "object",
-  "required": ["id", "title", "change_kind", "surface"],
+  "required": [
+    "id",
+    "title",
+    "change_kind",
+    "surface"
+  ],
   "properties": {
     "id": {
       "type": "string",
@@ -44,7 +49,10 @@
     },
     "queue_scope": {
       "type": "string",
-      "enum": ["project", "central"],
+      "enum": [
+        "project",
+        "central"
+      ],
       "default": "project",
       "description": "Which improvement-queue the harvest writes into. Default 'project' writes to the plan's own repo-local state/improvement-queue/. 'central' is a per-deferral opt-in that maps to `coordinator-queue-append --queue-scope central`."
     },
@@ -63,7 +71,13 @@
     },
     "disposition": {
       "type": "string",
-      "enum": ["open", "coded", "spun_off", "backlogged", "wont_do"],
+      "enum": [
+        "open",
+        "coded",
+        "spun_off",
+        "backlogged",
+        "wont_do"
+      ],
       "default": "open",
       "description": "Row resolution state. 'open' (default) => not yet resolved. 'coded' => shipped in a specific commit (disposition_ref is a single hex SHA). 'spun_off' => moved to a new plan (disposition_ref is a single repo-relative path). 'backlogged' => deferred to the improvement/debt backlog (disposition_ref is a single repo-relative path). 'wont_do' => explicitly declined (disposition_ref forbidden; disposition_detail required). Mirrors the shape of `carried_items[].disposition` (D1). Cross-field enforcement matrix: D2/D3/D4 in the originating plan; hard rejection happens in schema_validate.py (C2), not here — see the allOf $comments below for what this schema itself does and does not hard-fail."
     },
@@ -71,12 +85,24 @@
       "type": "string",
       "description": "Forward pointer/evidence for a non-open disposition — semantics depend on `disposition` (SHA for coded, repo-relative path for spun_off/backlogged, forbidden for wont_do). Separate from `disposition_detail`, which carries rationale prose (D2)."
     },
+    "execution_mode": {
+      "type": "string",
+      "enum": [
+        "agent",
+        "operator"
+      ],
+      "default": "agent",
+      "description": "Who executes this row. 'agent' (the default, and the meaning of an absent value) dispatches it to a model in the emitted workflow. 'operator' means a HUMAN must perform it -- a manual verification, a physical check, an action requiring credentials or judgement no dispatched agent holds. An 'operator' row is excluded from dispatch by dispatch_emit/spine_read.py and surfaced by emit-dispatch-workflow.py instead, so it is neither silently skipped nor handed to a Sonnet that cannot do it. Absent is not the same as 'operator': the exclusion is opt-IN, so a row that says nothing is dispatched exactly as before. Distinct from 'deferred' (not doing it) and from 'external_gate' (waiting on another repo): this row IS in scope and IS ready, and the only question is who runs it. Requested by cross-repo/archive/2026-08-29-doe-claude-em-dispatch-emit-schedules-a-human-only-verification-row.md."
+    },
     "depends_on": {
       "type": "array",
       "description": "OPTIONAL declared sequencing edges into this row, one entry per predecessor. ABSENT (or empty) means no non-write-overlap gate — it does NOT mean the row is unconditionally parallel, because write-overlap gates are computed elsewhere and are never written here. Exists so the two gate kinds that are NOT derivable from the file-write graph have a home on the spine instead of living only in wave-map prose the EM must re-derive at execute time. Authoring procedure: docs/wiki/writing-plans.md § Substrate-Migration Sequencing step 2. Gate-kind semantics and the malformed-serialization rule: skills/execute-plan/SKILL.md Phase 1.6 § gate-kind discriminator. NEGATIVE SPEC — three of the six discriminator gate kinds are deliberately unwritable here, see `gate_kind`'s enum note.",
       "items": {
         "type": "object",
-        "required": ["chunk", "gate_kind"],
+        "required": [
+          "chunk",
+          "gate_kind"
+        ],
         "properties": {
           "chunk": {
             "type": "string",
@@ -85,7 +111,10 @@
           },
           "gate_kind": {
             "type": "string",
-            "enum": ["output-consumption-runtime", "epistemic-premise"],
+            "enum": [
+              "output-consumption-runtime",
+              "epistemic-premise"
+            ],
             "description": "Which Phase 1.6 gate this edge is. DELIBERATELY RESTRICTED to the two gate kinds that a mechanical wave-builder cannot derive on its own. `output-consumption-runtime`: the predecessor's artifact must EXIST AT RUNTIME when this row executes (the layout/substrate case — a directory, schema, or persistence path the producer opens). `epistemic-premise`: the predecessor decides whether this row should exist at all, so there is no interface to pin and nothing to author against until its verdict lands. NEGATIVE SPEC, three exclusions, each for its own reason: (1) `file-write-overlap` is COMPUTED by the wave-builder from the chunks' write targets (skills/execute-plan/SKILL.md:128) and must NEVER be hand-declared here — a hand-written write-overlap edge is a second, silently-desyncing source of truth for a fact the graph already knows. (2) `output-consumption-content` and (3) `contract-change` do not gate AUTHORING at all: Phase 1.6 requires both to downgrade to concurrent-with-pinned-interface with verification deferred to merge, so declaring either as a dependency edge is precisely the malformed serialization the discriminator exists to catch — pin the interface in the consumer's body instead. `none` is likewise unwritable: absence of the field is how a row says it has no declared gate."
           },
           "note": {
@@ -106,12 +135,16 @@
     },
     "writes": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Repo-relative paths (plain strings; no glob syntax in this version) this task writes. Optional — absence means 'undeclared', not 'writes nothing'. Feeds write-overlap/wave-map derivation as a pure function of the spine."
     },
     "reads": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Repo-relative paths this task reads without writing. Optional. Same string-array shape as writes:."
     },
     "external_gate": {
@@ -119,7 +152,10 @@
       "description": "OPTIONAL declared blockers on work owned by ANOTHER repo — a sibling field to depends_on, not nested in it, because an external blocker has no local predecessor row to reference (depends_on[].chunk resolves only within THIS plan's spine). One entry per blocking party — a row blocked on two repos carries two entries. Authoring procedure: docs/wiki/writing-plans.md § Machine-Parseable Task Spine. NEGATIVE SPEC: this is NOT for intra-plan edges — a predecessor that is a row in THIS plan's spine belongs on depends_on, never here, regardless of wording. It is also NOT a substitute for the write-overlap gate the wave-builder computes from writes:/reads: — never hand-declare a same-repo write conflict here.",
       "items": {
         "type": "object",
-        "required": ["owner_repo", "condition"],
+        "required": [
+          "owner_repo",
+          "condition"
+        ],
         "properties": {
           "owner_repo": {
             "type": "string",
@@ -142,12 +178,18 @@
           "closure_key": {
             "type": "object",
             "description": "OPTIONAL — the machine-matchable IDENTITY of the thing whose landing discharges this gate, as distinct from `condition` (reader-facing prose, never machine-evaluated) and `closure_evidence` (how closure was or will be verified). A reader matches this against the `discharges.closure_key` block on a cross-repo memo delivered by owner_repo, and on a match may PROPOSE the `cleared: true` flip with a citation — it never performs it. `cleared: true` remains the one clearing path; nothing here clears a gate. Writable BEFORE the discharge by construction: a key naming something that cannot exist until after the work lands is evidence, not a gate declaration, and belongs on `closure_evidence`.",
-            "required": ["kind", "id"],
+            "required": [
+              "kind",
+              "id"
+            ],
             "additionalProperties": false,
             "properties": {
               "kind": {
                 "type": "string",
-                "enum": ["deliverable", "memo-thread"],
+                "enum": [
+                  "deliverable",
+                  "memo-thread"
+                ],
                 "description": "Which identity namespace `id` is drawn from. `deliverable`: a `dlv-<slug>-<6hex>` deliverable_id (plan.schema.json's `deliverable_id`) — the fleet's durable, path-independent join key, minted once at the earliest artifact and carried verbatim downstream by plan, handoff, completion-entry, goal, and the Deliverable-Id commit trailer. `memo-thread`: a memo basename, in the same form `in_reply_to` normalizes to (bare basename, matched case-insensitively with or without the `.md`) — the identity for a gate that blocks on owner_repo actioning a named ask. NEGATIVE SPEC, four exclusions, each for its own reason: (1) `commit` is unwritable here — a SHA does not exist at authoring time, and a SHA naming work already done is `closure_evidence`, which would give one fact two desyncing homes. (2) `schema-version` (`<schema>@<x-schema-version>`) is deliberately excluded even though contract-bump gates are common: its value is that the WAITING repo evaluates it locally against its own vendored copy, making it a predicate rather than a join key against an emitted record — mixing the two forces every reader to branch on `kind` to know whether to look outward or inward. A future `closure_probe` field is the right home if a census earns one. (3) `plan-path`/`plan_id` are excluded because path-shaped ids rename silently and a plan's existence is not its discharge; `deliverable` is the rename-proof identity for the same intent. (4) `commitment` (a state/cross-repo-commitments/ record) is excluded because that ledger is receiver-side-only and repo-local by explicit negative spec — the owner repo, the one discharging, cannot write or reference it."
               },
               "id": {
@@ -159,7 +201,10 @@
           },
           "blocks": {
             "type": "string",
-            "enum": ["execution", "ac-closure"],
+            "enum": [
+              "execution",
+              "ac-closure"
+            ],
             "default": "execution",
             "description": "OPTIONAL, defaults to execution. `execution`: this row cannot run until the gate clears — the wave-builder must not schedule it. `ac-closure`: the row executes normally; only the gated criterion's closure is blocked — the plan's prime exit criterion (docs/wiki/writing-plans.md), not a cell in the now-collapsed AC checkbox table; the table is gone, but a gate that holds up closure without blocking execution is still a distinct thing this value names and nothing else does. This distinction is load-bearing — conflating the two stalls an executable chunk on a gate that only blocks its criterion's closure, not its execution. Any future removal of this value (should the concept itself ever genuinely die) is joint DoE+engine work tracked on claude-klabauter's re-vendor of this schema, not folded into any plan narrowing depends_on/gate-kind clearing semantics — that is a different, unrelated hazard."
           }
@@ -172,92 +217,166 @@
     {
       "$comment": "Cross-field rule: pm_approved is required-when-deferred. JSON Schema if/then encodes this — when deferred is true, pm_approved MUST be present (and, per the field's semantics, true) for the row to be a valid harvest candidate. A deferred:true row with pm_approved absent or false remains structurally valid JSON (this schema does not hard-fail it — see the malformed-row-disposition note in the top-level description) but is flagged by plan-coverage-checker, the enforcement surface for this cross-field rule.",
       "if": {
-        "properties": { "deferred": { "const": true } },
-        "required": ["deferred"]
+        "properties": {
+          "deferred": {
+            "const": true
+          }
+        },
+        "required": [
+          "deferred"
+        ]
       },
       "then": {
         "$comment": "Presence, not truthiness — this only checks that pm_approved is a key on the row. A deferred:true row with pm_approved:false still validates here (schema does not hard-fail it); the truthiness check (pm_approved must equal literal true) is flagged by plan-coverage-checker, not schema-rejected.",
-        "required": ["pm_approved"]
+        "required": [
+          "pm_approved"
+        ]
       }
     },
     {
       "$comment": "Cross-field rule: disposition: coded requires disposition_ref matching a single hex SHA (7-40 hex chars) — DR-096's singular-referent constraint (D2): no ranges, comma-lists, or branch names.",
       "if": {
-        "properties": { "disposition": { "const": "coded" } },
-        "required": ["disposition"]
+        "properties": {
+          "disposition": {
+            "const": "coded"
+          }
+        },
+        "required": [
+          "disposition"
+        ]
       },
       "then": {
-        "required": ["disposition_ref"],
+        "required": [
+          "disposition_ref"
+        ],
         "properties": {
-          "disposition_ref": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" }
+          "disposition_ref": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{7,40}$"
+          }
         }
       }
     },
     {
       "$comment": "Cross-field rule: disposition: spun_off requires disposition_ref as a single repo-relative path (DR-096 singular-referent — one path, not a list).",
       "if": {
-        "properties": { "disposition": { "const": "spun_off" } },
-        "required": ["disposition"]
+        "properties": {
+          "disposition": {
+            "const": "spun_off"
+          }
+        },
+        "required": [
+          "disposition"
+        ]
       },
       "then": {
-        "required": ["disposition_ref"]
+        "required": [
+          "disposition_ref"
+        ]
       }
     },
     {
       "$comment": "Cross-field rule: disposition: backlogged requires disposition_ref as a single repo-relative path (DR-096 singular-referent — one path, not a list).",
       "if": {
-        "properties": { "disposition": { "const": "backlogged" } },
-        "required": ["disposition"]
+        "properties": {
+          "disposition": {
+            "const": "backlogged"
+          }
+        },
+        "required": [
+          "disposition"
+        ]
       },
       "then": {
-        "required": ["disposition_ref"]
+        "required": [
+          "disposition_ref"
+        ]
       }
     },
     {
       "$comment": "Cross-field rule: disposition: wont_do requires disposition_detail and FORBIDS disposition_ref (there is no forward pointer for a declined row).",
       "if": {
-        "properties": { "disposition": { "const": "wont_do" } },
-        "required": ["disposition"]
+        "properties": {
+          "disposition": {
+            "const": "wont_do"
+          }
+        },
+        "required": [
+          "disposition"
+        ]
       },
       "then": {
-        "required": ["disposition_detail"],
-        "not": { "required": ["disposition_ref"] }
+        "required": [
+          "disposition_detail"
+        ],
+        "not": {
+          "required": [
+            "disposition_ref"
+          ]
+        }
       }
     },
     {
       "$comment": "Cross-field rule: the two SCOPE-CUT dispositions (backlogged/wont_do) require pm_approved (D4, as narrowed by DR-2026-08-05 below). `coded` is deliberately NOT gated: per D3 it is evidence of work done, not a scope decision, so it needs no PM authorization. `spun_off`'s gate is the `spun_off` grouping in plan.schema.json's `grouping_approvals`, checked by `check_plan_tasks_grouping_approval` — not this branch. That gate is DECLARABLE but NOT YET LIVE: the predicate does not scan `spun_off` until claude-klabauter re-vendors plan.schema.json and widens its GOVERNED-leg set, so today a `spun_off` row closes ungated on governed and legacy plans alike. It is deliberately absent from this trigger set because this branch is legacy-only (see LEGACY-ONLY BRANCH below) and every plan carrying a spun_off row predates the grouping contract: widening here would retroactively invalidate rows authored correctly under the rules then in force, and the only way to revalidate them is to write `pm_approved: true` onto rows no PM ever approved — forging assent in the exact field the gate exists to make meaningful. A plan enters the contract by ACQUIRING the grouping_approvals block; that acquisition is the migration event, and from it spun_off is gated like backlogged and wont_do. backlogged and wont_do DO drop work, and choosing between them is a PM judgment the EM does not self-issue; claude-klabauter-em's ask to relax them to a recorded-reason gate was declined (see cross-repo/outbox for the reply). Do not widen this enum to include spun_off — that is the governed layer's job, not this one — and do not narrow it further, without a PM ruling. Presence-only / NON-hard-failing at this schema layer, exactly like the deferred=>pm_approved rule's own $comment above: this only checks that pm_approved is a key on the row, not that it equals literal true. Hard rejection of `pm_approved is not True` on a closed disposition is schema_validate.py's job (C2's _cf_plan_tasks_disposition_shape — the plan-tasks-specific caller, not the shared _cf_disposition_shape), not this file's. LEGACY-ONLY BRANCH: on a GOVERNED plan (one whose frontmatter carries a plan-document-level `grouping_approvals` block — see plan.schema.json), claude-klabauter's frontmatter layer derives a governed schema variant at validation time (`schema_validate.py`'s `_plan_tasks_schema_without_pm_approved_required`) that STRIPS this exact branch — any `allOf` branch whose `then.required` names `pm_approved` is removed from the derived copy — because a governed plan's closed-row authorization is instead checked against the row's grouping approval state (`check_plan_tasks_grouping_approval`), not this per-row bool. This branch therefore governs LEGACY plans only; do not hand-copy a second, governed-only variant of it into this file. The derivation is computed once, at runtime, from this single branch — a hand-maintained duplicate here would be a second home for the same rule, free to silently desync from the branch it duplicates.",
       "if": {
         "properties": {
-          "disposition": { "enum": ["backlogged", "wont_do"] }
+          "disposition": {
+            "enum": [
+              "backlogged",
+              "wont_do"
+            ]
+          }
         },
-        "required": ["disposition"]
+        "required": [
+          "disposition"
+        ]
       },
       "then": {
-        "required": ["pm_approved"]
+        "required": [
+          "pm_approved"
+        ]
       }
     },
     {
       "$comment": "Cross-field rule: the two SCOPE-CUT dispositions (backlogged/wont_do) also require case_against — the both-sides ask (cross-repo/inbox/2026-08-06-claude-klabauter-em-deferrals-need-both-sides-not-a-ratify-list.md; docs/plans/2026-08-06-deferrals-carry-both-sides.md). Shares the pm_approved conditional's trigger set immediately above, but for its OWN reason, not by parity: `case_against` is the argument against DROPPING work, and a spun-off row drops none — the work continues in a named successor. Approving a move and arguing against a drop are different asks, so widening this trigger to spun_off would make case_against a box-tick on the one closed disposition where it has no content. `spun_off` IS PM-gated, at the grouping layer (plan.schema.json's `grouping_approvals.spun_off`); its assent and its argument are deliberately scoped differently, so do not re-derive this trigger set from that one. Presence-only / NON-hard-failing at this schema layer, exactly like every other conditional in this file: this checks that case_against is a key on the row, not that its prose is non-vacuous. Hard rejection is claude-klabauter-resident and landed (`eee18fb77`) as absent/empty/whitespace-only refusal — presence and non-blankness only. Anti-strawman detection was deliberately NOT built: a case against phrased weakly enough to lose satisfies any mechanical check, so that is a doctrine and review-gate problem (docs/wiki/plan-coverage-checker.md Lens 2b specificity sub-check), not a validator's. NOT-SUPPRESSED-ON-GOVERNED: the mirroring stops at the trigger set. Claude-klabauter's governed-plan schema variant (`_plan_tasks_schema_without_pm_approved_required`) strips only allOf branches whose `then.required` names `pm_approved`; this branch requires `case_against`, so it survives, and claude-klabauter's own gate fires regardless of governed=True. That is correct and deliberate on both sides — `case_against` is the argument FOR the cut, not the authorization OF it, so it is orthogonal to the governance model.",
       "if": {
         "properties": {
-          "disposition": { "enum": ["backlogged", "wont_do"] }
+          "disposition": {
+            "enum": [
+              "backlogged",
+              "wont_do"
+            ]
+          }
         },
-        "required": ["disposition"]
+        "required": [
+          "disposition"
+        ]
       },
       "then": {
-        "required": ["case_against"]
+        "required": [
+          "case_against"
+        ]
       }
     },
     {
       "$comment": "Cross-field rule: the CLOSED dispositions other than wont_do (spun_off/backlogged) also require disposition_detail — rationale prose alongside the evidence pointer (D2/D4: 'the verbatim PM reasoning ... goes in disposition_detail — which is already required on every CLOSED disposition'). wont_do's disposition_detail requirement is already covered by its own conditional above. `coded` is deliberately excluded here: per D3 it is evidence of work done, not a scope decision, and is therefore NOT a CLOSED disposition — close_out_and_stamp's auto-resolution to coded writes only disposition + disposition_ref (the commit SHA) and must remain schema-valid with no detail.",
       "if": {
         "properties": {
-          "disposition": { "enum": ["spun_off", "backlogged"] }
+          "disposition": {
+            "enum": [
+              "spun_off",
+              "backlogged"
+            ]
+          }
         },
-        "required": ["disposition"]
+        "required": [
+          "disposition"
+        ]
       },
       "then": {
-        "required": ["disposition_detail"]
+        "required": [
+          "disposition_detail"
+        ]
       }
     }
   ]

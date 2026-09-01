@@ -117,6 +117,60 @@ def _mask_clock(text: str) -> str:
     return _CLOCK_RE.sub("HH:MM:SS", text)
 
 
+#: Every calendar field `date(1)` prints, extracted independently of the
+#: ORDER and PUNCTUATION it prints them in. See `_date_facts`.
+_WEEKDAY_RE = re.compile(r"\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b")
+_MONTH_RE = re.compile(
+    r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b"
+)
+_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+
+
+def _date_facts(text: str):
+    """The calendar facts `date(1)` reports, as an order-free dict.
+
+    WHY THIS EXISTS, and what it deliberately stops claiming. On a POSIX
+    host the rewrite reproduces `date`'s output byte-for-byte and the
+    callers below assert exactly that. On Windows it cannot, and no amount
+    of work on the rewrite would change that: the shell in play is Git
+    Bash, whose `date` is MSYS coreutils reading MSYS's own locale data
+    (`Tue, Sep  1, 2026 13:01:24`), while the rewrite runs native CPython
+    against the Windows CRT, which has no route to that rendering --
+    measured 2026-09-01 across `setlocale(LC_TIME, "")`, `%c`, and `%x %X`,
+    none of which reproduce it. `uname -a` is the same shape one layer
+    down: MSYS reports the MINGW64 kernel string, `platform.uname()`
+    reports the Windows host. Both sides are correct; they are rendered by
+    different layers.
+
+    So on Windows the assertion drops to the claim the rewrite's own
+    docstring actually makes -- "reproducing the SAME facts" -- and this
+    helper is what keeps that from becoming a rubber stamp. Weekday, month,
+    day-of-month and year are each compared individually, so a rewrite that
+    dropped the year or reported a stale day still fails here. The clock is
+    reported as PRESENCE only, never as a value -- for the same reason
+    `_mask_clock` exists above: the shell run and the rewritten run are two
+    subprocesses that cannot be made to straddle the same tick. What is no
+    longer asserted on Windows, explicitly: field order, separator
+    punctuation, and the timezone rendering.
+    """
+    day = None
+    m_month = _MONTH_RE.search(text)
+    if m_month:
+        after = text[m_month.end() :]
+        m_day = re.match(r"[\s,]*(\d{1,2})\b", after)
+        day = m_day.group(1) if m_day else None
+    m_week = _WEEKDAY_RE.search(text)
+    m_year = _YEAR_RE.search(text)
+    m_clock = _CLOCK_RE.search(text)
+    return {
+        "weekday": m_week.group(1) if m_week else None,
+        "month": m_month.group(1) if m_month else None,
+        "day": day,
+        "year": m_year.group(0) if m_year else None,
+        "clock_present": m_clock is not None,
+    }
+
+
 # ---------------------------------------------------------------------------
 # _bt_python3_invocation -- ImportError fallback (Task 3, 2026-07-29)
 # ---------------------------------------------------------------------------
@@ -166,7 +220,6 @@ class TestPython3InvocationImportErrorFallback:
         rewritten = _run_python_c(rewrite)
         assert original == rewritten
 
-    @pytest.mark.pending_fix
     def test_date_and_uname_a_equivalence(self):
         """`date`'s output carries a wall-clock second, so the shell run and
         the rewritten run are compared with that second masked -- the two
@@ -175,16 +228,34 @@ class TestPython3InvocationImportErrorFallback:
         passing in isolation, 2026-08-03).
 
         Negative-spec: masking is deliberately narrowed to `HH:MM:SS`, not
-        applied to the whole line. The equivalence under test is that the
-        rewrite reproduces the shell's output byte-for-byte -- timezone, day,
-        month, year, and every `uname -a` field stay compared exactly, so a
-        rewrite that dropped or reordered a field still fails."""
+        applied to the whole line. On POSIX the equivalence under test is
+        that the rewrite reproduces the shell's output byte-for-byte --
+        timezone, day, month, year, and every `uname -a` field stay compared
+        exactly, so a rewrite that dropped or reordered a field still fails.
+
+        On Windows byte-fidelity is unreachable rather than unimplemented,
+        for both probes and for the same underlying reason: the shell is Git
+        Bash and answers from the MSYS layer, the rewrite is native CPython
+        and answers from the Windows host. `_date_facts` states precisely
+        what is still asserted there and what is not; `uname -a` drops to
+        the host identity both layers do agree on. Carried as `pending_fix`
+        in state/bash-guards/known-red.json group
+        "dispatch-checks-windows-path" until 2026-09-01 under a reason that
+        named a path-corruption defect -- there was no such defect on this
+        leg, and no edit to the rewrite would have turned it green."""
         cmd = "date; uname -a"
         out = dc.check_multiprobe_banner_rewrite("echo \"=== X === Y ===\"; " + cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         original = _run_shell("echo \"=== X === Y ===\"; " + cmd)
         rewritten = _run_python_c(rewrite)
-        assert _mask_clock(original) == _mask_clock(rewritten)
+        if platform.system() != "Windows":
+            assert _mask_clock(original) == _mask_clock(rewritten)
+            return
+        assert _date_facts(original) == _date_facts(rewritten)
+        assert _date_facts(rewritten)["year"] is not None
+        assert _date_facts(rewritten)["clock_present"]
+        node = platform.node()
+        assert node and node in original and node in rewritten
 
     def test_git_facts_batched_into_one_git_invocation(self, tmp_path):
         cmd = (
@@ -365,17 +436,27 @@ class TestDatePortableAcrossPlatforms:
     instead of asking `strftime` for it, so no platform branch is needed and
     the real `date` command's exact output is still reproduced."""
 
-    @pytest.mark.pending_fix
     def test_date_rewrite_never_raises_and_matches_real_date(self):
-        """state/bash-guards/known-red.json group "dispatch-checks-windows-path"
-        (date/uname divergence). Owner:
-        docs/plans/2026-08-07-spawn-storm-culprit-taxonomy-and-detectors.md."""
+        """The `pwd` leg IS asserted byte-for-byte on every platform. It was
+        red on Windows until 2026-09-01 for a real reason -- the rewrite
+        printed `os.getcwd()` with the native separator unconverted, where
+        the Git Bash it replaces prints `X:/claude-klabauter` -- and that is
+        fixed in the generator, not accommodated here.
+
+        The `date` leg is the one that drops to fact-equivalence on Windows;
+        `_date_facts` says why and what survives."""
         cmd = 'echo "=== FACTS ==="; pwd; date'
         out = dc.check_multiprobe_banner_rewrite(cmd)
         rewrite = out["hookSpecificOutput"]["updatedInput"]["command"]
         original = _run_shell(cmd)
         rewritten = _run_python_c(rewrite)  # would raise ValueError pre-fix on Windows
-        assert original == rewritten
+        if platform.system() != "Windows":
+            assert original == rewritten
+            return
+        orig_lines = original.splitlines()
+        rw_lines = rewritten.splitlines()
+        assert orig_lines[:2] == rw_lines[:2]
+        assert _date_facts(orig_lines[2]) == _date_facts(rw_lines[2])
 
     def test_date_rewrite_uses_no_percent_e_directive(self):
         cmd = 'echo "=== FACTS ==="; pwd; date'

@@ -116,7 +116,7 @@ Negative-spec:
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus
 from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
@@ -160,6 +160,27 @@ KNOWN_DISPOSITIONS = NON_DISPATCHABLE_DISPOSITIONS | {"open"}
 _GATE_BLOCKS_AC_CLOSURE = "ac-closure"
 _GATE_CLOSURE_EVIDENCE_KEY = "closure_evidence"
 _GATE_CLEARED_KEY = "cleared"
+
+
+def _is_operator_row(raw: dict) -> bool:
+    """True when this row declares a HUMAN must run it.
+
+    Opt-IN, and the asymmetry is deliberate: only the literal string
+    ``"operator"`` excludes. An absent value, ``"agent"``, ``None``, or any
+    unrecognised value dispatches exactly as before, so no plan written before
+    this field existed changes behaviour, and a typo (``"human"``,
+    ``"Operator"``) fails toward the old default rather than silently pulling
+    a row out of the run. A row that vanishes from a wave map is far harder to
+    notice than one dispatched to an agent that reports it cannot proceed.
+
+    Blocks like an uncleared ``external_gate``, NOT like ``deferred``. The
+    distinction is the one ``read_spine``'s docstring already draws: a
+    deferred or closed row's work is DONE, so a dependent's edge onto it is
+    satisfied; an operator row's work has NOT run at emit time, so a dependent
+    dispatched now would run against work that does not exist. It therefore
+    joins ``blocked_ids`` and propagates transitively.
+    """
+    return raw.get("execution_mode") == "operator"
 
 
 def _has_uncleared_execution_gate(raw: dict) -> bool:
@@ -337,7 +358,7 @@ class EmitterRow(NamedTuple):
     depends_on: list
 
 
-def read_spine(plan_path) -> list[EmitterRow]:
+def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]:
     """Read `plan_path`'s task-spine and return normalized ``EmitterRow`` objects.
 
     Raises ``SpineReadError`` if the spine block is absent or malformed,
@@ -355,10 +376,25 @@ def read_spine(plan_path) -> list[EmitterRow]:
     plan-tasks.schema.json).
 
     Rows whose ``disposition`` is closed (see
-    ``NON_DISPATCHABLE_DISPOSITIONS``), whose ``deferred`` is ``true``, or
-    which carry an uncleared ``external_gate`` entry blocking ``execution``
-    (see ``_has_uncleared_execution_gate``) are excluded from the returned
-    list — they are not dispatchable. An ``external_gate`` entry with
+    ``NON_DISPATCHABLE_DISPOSITIONS``), whose ``deferred`` is ``true``, which
+    carry an uncleared ``external_gate`` entry blocking ``execution`` (see
+    ``_has_uncleared_execution_gate``), or which declare
+    ``execution_mode: operator`` (see ``_is_operator_row``) are excluded from
+    the returned list — they are not dispatchable.
+
+    ``exclusions``, when a list is passed, is APPENDED with one
+    ``{"id", "reason", "detail"}`` dict per row this function drops. It is an
+    out-parameter rather than a changed return type so no existing caller
+    moves, and it re-reads nothing — the classification already happens here.
+
+    Passing it is how a caller avoids a SILENT SKIP, and for
+    ``execution_mode: operator`` that is not optional in spirit. A row a human
+    must run, dropped without a word, is strictly worse than the mis-dispatch
+    this field exists to prevent: a mis-dispatched row at least reports that
+    it could not proceed, whereas a vanished one leaves a plan that reads
+    fully executed with a step nobody performed. The same argument applies to
+    the gate and deferral exclusions that predate this parameter, which is why
+    it reports all of them rather than only the new one. An ``external_gate`` entry with
     ``blocks: ac-closure`` does NOT exclude its row — that row executes
     normally; only a named acceptance criterion stays open. depends_on
     referent resolution runs against the full row-id set before this
@@ -511,13 +547,32 @@ def read_spine(plan_path) -> list[EmitterRow]:
         # string before this loop runs. Keep the two loops in that
         # order -- reordering them reintroduces a possible None into
         # these sets with no signal.
+        if exclusions is not None:
+            _reason = None
+            if disposition in NON_DISPATCHABLE_DISPOSITIONS:
+                _reason = ("disposition", "disposition: %s" % disposition)
+            elif deferred is True:
+                _reason = ("deferred", "deferred: true")
+            elif _is_operator_row(raw):
+                _reason = (
+                    "operator",
+                    "execution_mode: operator — a human must run this row; it "
+                    "was NOT dispatched and has NOT been done",
+                )
+            elif _has_uncleared_execution_gate(raw):
+                _reason = ("external_gate", "uncleared external_gate blocking execution")
+            if _reason is not None:
+                exclusions.append(
+                    {"id": raw.get("id"), "reason": _reason[0], "detail": _reason[1]}
+                )
+
         if disposition in NON_DISPATCHABLE_DISPOSITIONS or deferred is True:
             # Checked ahead of the gate below by construction (elif): a row
             # excluded for both reasons resolves as satisfied, not blocked
             # (docstring point above) -- its work shipped, so a stale gate
             # on a done row is bookkeeping, not a live blocker.
             satisfied_ids.add(raw.get("id"))
-        elif _has_uncleared_execution_gate(raw):
+        elif _has_uncleared_execution_gate(raw) or _is_operator_row(raw):
             blocked_ids.add(raw.get("id"))
 
     # Transitive closure over depends_on: a row depending, directly or

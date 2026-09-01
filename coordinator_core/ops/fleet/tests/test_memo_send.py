@@ -1008,3 +1008,90 @@ class TestLedgerIsBoundedInTimeToo:
             "unparseable-stamp",
             "age-topic",
         ], rows
+
+
+class TestIndexLockOnReceiptIsNotAFailedSend:
+    """A peer holding `.git/index.lock` must not turn a DELIVERED memo into an
+    internal error (2026-09-01).
+
+    `commit_paths` raises `IndexWriteLockBusy` when a peer holds the index --
+    routine, not exotic, at the ~50-session load norm this repo sizes for. It
+    was absent from the sender-receipt `except` tuple, so it escaped `_memo_send`
+    entirely and surfaced at the JSON-RPC boundary as a bare
+    `-32603 Internal error: IndexWriteLockBusy`.
+
+    By that line the receiver commit, the delivered file and the ledger row have
+    all landed. So the caller reads total failure for a send that fully
+    succeeded, and the honest response to an internal error -- retry -- DOUBLE
+    DELIVERS. Example-retrieval-repo-em reported exactly this shape.
+
+    The module's ordering guarantee already names the correct outcome: "an
+    uncredited delivery is merely untidy". This asserts the op reports it that
+    way instead of raising.
+    """
+
+    def test_index_lock_busy_reports_uncommitted_receipt_not_an_exception(
+        self, tmp_path, monkeypatch
+    ):
+        from coordinator_core.git.index_write import IndexWriteLockBusy
+
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "peer-holds-index", track=False)
+
+        def _locked_commit_paths(worktree, *a, **kw):
+            raise IndexWriteLockBusy(
+                f"{worktree}/.git/index.lock exists -- a peer holds the index"
+            )
+
+        monkeypatch.setattr(memo_send_module, "commit_paths", _locked_commit_paths)
+
+        # The contract under test is "returns an envelope", so an escaping
+        # exception fails the test by propagating -- no pytest.raises here.
+        result = _memo_send(
+            {"dry_run": False, "topic": "peer-holds-index"}, repo_root=sender_repo
+        )
+
+        acted = result["acted"][0]
+        assert acted["written"] is True
+        assert acted["committed"] is True, (
+            "the DELIVERY landed -- that is what makes a retry a double-delivery"
+        )
+        assert acted["sender_committed"] is False
+        assert "index.lock" in acted["sender_commit_stderr"], (
+            "the deciding reason must reach the caller, not the engine's log"
+        )
+        assert result["failed"] == [], "a delivered memo is not a failed item"
+
+    def test_delivered_memo_is_actually_on_disk_in_the_receiver_inbox(
+        self, tmp_path, monkeypatch
+    ):
+        """The claim above rests on the delivery having really landed, so it is
+        asserted against the receiver's tree rather than the envelope alone."""
+        from coordinator_core.git.index_write import IndexWriteLockBusy
+
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "peer-holds-index-2", track=False)
+
+        monkeypatch.setattr(
+            memo_send_module,
+            "commit_paths",
+            lambda worktree, *a, **kw: (_ for _ in ()).throw(
+                IndexWriteLockBusy("index.lock exists")
+            ),
+        )
+
+        _memo_send(
+            {"dry_run": False, "topic": "peer-holds-index-2"}, repo_root=sender_repo
+        )
+
+        inbox = receiver_repo / "cross-repo" / "inbox"
+        delivered = list(inbox.glob("*peer-holds-index-2*"))
+        assert delivered, (
+            f"the memo must be in the receiver's inbox: {list(inbox.iterdir())}"
+        )

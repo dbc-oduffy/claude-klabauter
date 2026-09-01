@@ -118,7 +118,7 @@ cooldown starts suppressing its entry.
 DWELL TIME. Every EMITTED entry (never a suppressed row) carries
 `dwell_seconds` -- how long that peer has sat since its last observed
 activity, derived from its receiver-state `stamped_at` cross-checked
-against `read_pass._transcript_activity_epoch` (the one place that turns a
+against `read_pass.transcript_activity_epoch` (the one place that turns a
 session id into a transcript mtime; reused rather than re-derived). The
 more RECENT of the two -- a stale `stamped_at` with a transcript that kept
 moving is evidence of later activity than the stamp alone would report --
@@ -139,12 +139,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import re
 import time
 from typing import Any, Callable, Optional
 
 from coordinator_core.group_em import read_pass
 from coordinator_core.session import peer_roster
+from coordinator_core.session.receiver_state import parse_iso_timestamp
+from coordinator_core.session import subagent_share
 
 #: `gate` values `decline()` accepts -- which gate the EM declared against.
 #: No other value is written; `decline()` refuses anything else.
@@ -181,29 +182,13 @@ DEFAULT_COOLDOWN_SECONDS = 3600
 #: consumer, never by a local tidy-up.
 DEFAULT_MAX_ENTRIES = 5
 
-_SEND_LOG_FILENAME = "group-em-send-log.jsonl"
-_LEDGER_FILENAME = "next-move-ledger.jsonl"
-
-#: A session id arrives from `claude agents --json` (peers) and the
-#: environment (the caller), and is joined straight into a path
-#: `_record_offer` will `makedirs`. The sibling reader
-#: (`receiver_state_reader.receiver_state_path`) rejects an unsafe component,
-#: a bare `.`/`..` the character class alone would pass included; the same
-#: guard applies here rather than trusting the producer.
-_SAFE_SID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-
-
-def _safe_session_id(session_id: Any) -> bool:
-    return (
-        isinstance(session_id, str)
-        and bool(session_id)
-        and session_id not in (".", "..")
-        and bool(_SAFE_SID_RE.match(session_id))
-    )
-
-
-def _session_share_dir(repo_root: str, session_id: str) -> str:
-    return os.path.join(repo_root, "state", "subagent-share", session_id)
+# The share-directory layout and the id predicate live in
+# `session.subagent_share` -- this module, `group_em.obligations` and
+# `hooks.watchdog_undischarged_next_move` were each carrying their own copy of
+# the same join and the same filename string, and `obligations` was importing
+# two of them out of THIS module's private namespace.
+_safe_session_id = subagent_share.safe_session_id
+_session_share_dir = subagent_share.share_dir
 
 
 def undischarged_obligations(repo_root: str, session_id: str) -> Optional[int]:
@@ -216,7 +201,7 @@ def undischarged_obligations(repo_root: str, session_id: str) -> Optional[int]:
     """
     if not _safe_session_id(session_id):
         return None
-    path = os.path.join(_session_share_dir(repo_root, session_id), _LEDGER_FILENAME)
+    path = os.path.join(_session_share_dir(repo_root, session_id), subagent_share.LEDGER_FILENAME)
     if not os.path.exists(path):
         return None
     count = 0
@@ -265,7 +250,7 @@ def send_log_path(repo_root: str, caller_session_id: str) -> str:
     ruling that the Driver role ends with the session.
     """
     return os.path.join(
-        _session_share_dir(repo_root, caller_session_id), _SEND_LOG_FILENAME
+        _session_share_dir(repo_root, caller_session_id), subagent_share.SEND_LOG_FILENAME
     )
 
 
@@ -418,12 +403,15 @@ def _log_key_is_open(log: list[dict[str, Any]], key: str) -> bool:
 
 
 # Review: overengineering-reviewer (finding #6, confidence 8 AUTO-FIX,
-# EM-in-scope discretionary application) -- the local `_parse_iso_stamp` copy
-# is deleted. Its stated reason for staying local ("that symbol is private to
-# its own module") was already contradicted three lines below by this same
-# module importing `read_pass._transcript_activity_epoch`, also private. Calls
-# `read_pass._parse_iso_stamp` directly, the same way the transcript-clock
-# helpers already are.
+# EM-in-scope discretionary application) -- the local copy is deleted. It now
+# calls `receiver_state.parse_iso_timestamp`, the implementation itself, rather
+# than `read_pass._parse_iso_stamp`, which is a thin domain-named alias over
+# exactly that call and is private to its own module. The stamp being parsed
+# here is read off a receiver-state record, so this module is talking to the
+# module that owns the format. The other reach this comment used to justify
+# itself with is gone too: `read_pass.transcript_activity_epoch` is public
+# now, because two siblings depend on it and both docstrings name it as the
+# one transcript-clock site.
 
 
 def _dwell_seconds(
@@ -435,7 +423,7 @@ def _dwell_seconds(
     """Seconds since this peer's last observed activity, or `None`.
 
     Reads its own receiver-state `stamped_at` and cross-checks it against
-    `read_pass._transcript_activity_epoch(peer_session_id, cwd or repo_root)`
+    `read_pass.transcript_activity_epoch(peer_session_id, cwd or repo_root)`
     -- the later of the two is the last-activity instant (a transcript that
     kept moving after the stamp was written is evidence of activity the stamp
     alone would miss). `now` is the SAME clock `build_send_digest` already
@@ -468,10 +456,10 @@ def _dwell_seconds(
     candidates: list[float] = []
     record = read_pass.read_receiver_state(peer_session_id, repo_root)
     if record is not None:
-        stamp_dt = read_pass._parse_iso_stamp(record.get("stamped_at"))
+        stamp_dt = parse_iso_timestamp(record.get("stamped_at"))
         if stamp_dt is not None:
             candidates.append(stamp_dt.timestamp())
-    transcript_epoch, transcript_trusted = read_pass._transcript_activity_epoch(
+    transcript_epoch, transcript_trusted = read_pass.transcript_activity_epoch(
         peer_session_id, effective_cwd
     )
     if transcript_epoch is not None and (transcript_trusted or not candidates):

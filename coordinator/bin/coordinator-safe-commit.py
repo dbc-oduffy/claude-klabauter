@@ -729,6 +729,93 @@ def _holder_context(
     return " ".join(bits)
 
 
+def _paths_with_no_uncommitted_content(
+    paths: "Sequence[str]", worktree_root: str
+) -> "Set[str]":
+    """Of `paths`, those whose worktree state matches HEAD exactly.
+
+    THE NARROWING THE REFUSAL NEVER HAD. `_refuse_contested_pathspec` takes the
+    raw pathspec with no dirtiness filter, so a path a live peer holds a TOUCH
+    on refuses the whole commit even when that path carries no uncommitted
+    content of anyone's. A touch is unreleased until its own session releases
+    it, and a session releases nothing when it commits its work and moves on --
+    so a file touched hours ago, long since committed, contests against every
+    peer for the rest of that session's lifetime. Measured 2026-08-31: one
+    holder blocked `coordinator/bin/publish.py` for 11.3h with zero
+    uncommitted content in it, with bypass as the only exit, and a bypass
+    normalised is how the true positives die too.
+
+    The named harm is "committing it lands their uncommitted work under your
+    message". A path identical to its HEAD blob has no uncommitted work in it
+    to land -- anyone's -- so that harm is impossible regardless of who holds a
+    touch. This is the only narrowing available without per-hunk provenance,
+    which `docs/research/2026-08-27-hunk-level-ownership-spike.md` anti-scopes.
+    Explicitly NOT the tempting one: dropping the refusal when the holder's
+    recorded `content_hash` differs from disk looks sound and is not -- a
+    peer's hunk already sitting in a file this session then edits produces
+    exactly that mismatch, which is the incident the guard was built for.
+
+    FAILS CLOSED, to the empty set: an unrunnable git, a timeout, a nonzero
+    exit, or an unparseable line all mean "cannot establish that anything is
+    clean", and the refusal stands whole. The one thing this must never do is
+    turn "I could not tell" into "safe to commit".
+
+    UNTRACKED COUNTS AS DIRTY, which is why this reads `status --porcelain`
+    rather than `diff HEAD`: a peer's brand-new file is absent from HEAD, so a
+    diff would call it clean while committing it lands exactly their work.
+
+    ONE spawn for the whole set, on the already-rare contested path (~25ms,
+    against the ~140ms this refusal already costs) -- never one per path, per
+    the amplification gate.
+    """
+    wanted = {str(p).replace("\\", "/").strip("/") for p in paths if str(p).strip()}
+    if not wanted:
+        return set()
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "-z", "--untracked-files=all", "--"]
+            + [str(p) for p in paths],
+            cwd=worktree_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    if result.returncode != 0:
+        return set()
+
+    dirty: "Set[str]" = set()
+    fields = [f for f in result.stdout.split("\x00") if f]
+    index = 0
+    while index < len(fields):
+        entry = fields[index]
+        index += 1
+        if len(entry) < 4:
+            # A porcelain entry is `XY <path>`; anything shorter is a shape
+            # this parser does not understand, and an unparsed line must not
+            # silently reduce the dirty set.
+            return set()
+        status_code, path_field = entry[:2], entry[3:]
+        dirty.add(path_field.replace("\\", "/").strip("/"))
+        if "R" in status_code or "C" in status_code:
+            # A rename/copy entry is followed by its ORIGIN path in its own
+            # NUL-separated field; both ends are dirty.
+            if index < len(fields):
+                dirty.add(fields[index].replace("\\", "/").strip("/"))
+                index += 1
+            else:
+                return set()
+
+    clean = set()
+    for path in wanted:
+        prefix = path + "/"
+        if not any(d == path or d.startswith(prefix) for d in dirty):
+            clean.add(path)
+    return clean
+
+
 def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None:
     """The ownership gate the explicit-pathspec form never had.
 
@@ -788,6 +875,22 @@ def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None
         return
     if not contested:
         return
+
+    # A claim has a birth and no death: a TOUCH outlives the work that made it,
+    # so most of what reaches here is residue rather than a live hold. Drop the
+    # paths that provably cannot carry the harm -- worktree identical to HEAD --
+    # before naming anyone. Fails closed: an undeterminable answer leaves the
+    # whole refusal standing.
+    clean = _paths_with_no_uncommitted_content(sorted(contested), worktree_root)
+    if clean:
+        contested = {
+            path: holders
+            for path, holders in contested.items()
+            if str(path).replace("\\", "/").strip("/") not in clean
+        }
+        if not contested:
+            return
+
     # Review: coordinatorcode-reviewer.a075e39a58642def2, Finding 4 -- one
     # registry read for the whole refusal instead of one per (path, holder)
     # pair; `_holder_context` still degrades to its own read if this is None.

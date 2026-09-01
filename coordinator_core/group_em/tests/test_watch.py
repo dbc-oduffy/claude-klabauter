@@ -56,7 +56,7 @@ def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):
                 pass
 
         with mock.patch.object(
-            watch, "_measure_snapshot_ms", return_value=(2.0, 7)
+            watch, "_measure_snapshot_ms", return_value=(2.0, [{"sessionId": f"p{i}"} for i in range(7)])
         ), mock.patch.object(watch, "poll_once", return_value=({}, [])):
             watch.main(
                 str(root),
@@ -279,7 +279,7 @@ def test_main_emits_poll_error_and_continues(tmp_path):
             pass
 
     with mock.patch.object(
-        watch, "_measure_snapshot_ms", return_value=(1.0, 3)
+        watch, "_measure_snapshot_ms", return_value=(1.0, [{"sessionId": f"p{i}"} for i in range(3)])
     ), mock.patch.object(
         watch, "poll_once", side_effect=RuntimeError("boom")
     ):
@@ -307,7 +307,7 @@ def test_main_arms_and_reports_measured_interval(tmp_path):
             pass
 
     with mock.patch.object(
-        watch, "_measure_snapshot_ms", return_value=(2.0, 5)
+        watch, "_measure_snapshot_ms", return_value=(2.0, [{"sessionId": f"p{i}"} for i in range(5)])
     ), mock.patch.object(
         watch, "poll_once", return_value=({}, [])
     ):
@@ -381,7 +381,7 @@ def test_cli_requires_repo_root_rather_than_guessing_cwd(capsys):
 
 def test_cli_runs_a_bounded_watch_and_emits_armed(tmp_path, monkeypatch, capsys):
     """End to end through the entrypoint an operator would actually type."""
-    monkeypatch.setattr(watch, "_measure_snapshot_ms", lambda repo_root: (4.6, 3))
+    monkeypatch.setattr(watch, "_measure_snapshot_ms", lambda repo_root: (4.6, [{"sessionId": f"p{i}"} for i in range(3)]))
     monkeypatch.setattr(watch, "_current_agents", lambda repo_root, sid: [])
     rc = watch._cli(
         ["--repo-root", str(tmp_path), "--caller-session-id", "sid-cli", "--max-iterations", "1"]
@@ -508,7 +508,7 @@ def test_main_stamps_the_watch_presence_record_every_tick(tmp_path):
     """A crown that arms this runnable and stops hand-stamping must not read
     to the rest of the fleet as a repo nobody is watching."""
     with mock.patch.object(
-        watch, "_measure_snapshot_ms", return_value=(2.0, 5)
+        watch, "_measure_snapshot_ms", return_value=(2.0, [{"sessionId": f"p{i}"} for i in range(5)])
     ), mock.patch.object(
         watch, "poll_once", return_value=({}, [])
     ):
@@ -540,7 +540,7 @@ def test_parked_line_reuses_the_verdicts_epoch_and_reads_no_second_time():
     }
 
     with mock.patch.object(
-        watch.read_pass, "_transcript_activity_epoch", side_effect=AssertionError("re-read")
+        watch.read_pass, "transcript_activity_epoch", side_effect=AssertionError("re-read")
     ), mock.patch.object(
         watch, "_stamped_age_seconds", return_value=None
     ), mock.patch.object(
@@ -559,7 +559,7 @@ def test_parked_line_still_reads_when_the_verdict_carries_no_epoch():
 
     with mock.patch.object(
         watch.read_pass,
-        "_transcript_activity_epoch",
+        "transcript_activity_epoch",
         return_value=(now.timestamp() - 120.0, True),
     ), mock.patch.object(
         watch, "_stamped_age_seconds", return_value=None
@@ -569,3 +569,286 @@ def test_parked_line_still_reads_when_the_verdict_carries_no_epoch():
         line = watch._parked_line(REPO_ROOT, "caller-1", "peer-1", verdict, REPO_ROOT, now)
 
     assert "transcript_idle=120s" in line
+
+
+# --- the single-tick wake (`--once` / `tick_once`) -------------------------
+#
+# The mode exists because a watch that must HOLD a process to be watching has
+# one failure mode and no signal for it: a subprocess that never started, or
+# exited, or an agent that returned instead of blocking, reads from outside
+# exactly like a quiet fleet. Measured live 2026-09-01 from
+# example-game-workbench-repo (cross-repo memo group-em-fleet-watch-wake-on-session-state).
+# What these pin is the ONE thing the held loop got for free and a stateless
+# wake has to earn: the prior tick to diff against.
+
+
+def _parked_once(repo_root, prev_on_disk, candidate, emitted, now=None):
+    """Drive one `tick_once` over a single peer with a fixed verdict."""
+    watch.save_prev_parked(str(repo_root), prev_on_disk)
+    now = now or datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+    with mock.patch.object(
+        watch.read_pass, "fetch_live_agents", return_value=[_agent()]
+    ), mock.patch.object(
+        watch.read_pass, "enumerate_repo_peers", side_effect=lambda agents, sid: agents
+    ), mock.patch.object(
+        watch.read_pass,
+        "classify_peer",
+        return_value={"state": "PAUSED", "reason": "turn-ended", "candidate": candidate},
+    ), mock.patch.object(
+        watch, "_cooldown_active", return_value=False
+    ), mock.patch.object(
+        watch, "_stamped_age_seconds", return_value=42.0
+    ), mock.patch.object(
+        watch, "_transcript_idle_seconds", return_value=None
+    ), mock.patch.object(
+        watch.obligations, "for_peer", return_value=None
+    ):
+        stream = io.StringIO()
+        rc = watch.tick_once(
+            str(repo_root),
+            caller_session_id="waker-1",
+            crown_session_id="crown-1",
+            stream=stream,
+            now=now,
+        )
+    emitted.extend(l for l in stream.getvalue().splitlines() if l.strip())
+    return rc
+
+
+def test_tick_once_carries_the_prior_tick_across_two_separate_wakes(tmp_path):
+    """Two processes, no shared memory, one transition -- reported once.
+
+    This is the whole contract. Wake one sees an unparked peer and says
+    nothing; wake two, a different process entirely, sees it parked and emits
+    the line, because the first wrote down what it saw.
+    """
+    emitted: list[str] = []
+    assert _parked_once(tmp_path, {}, candidate=False, emitted=emitted) == 0
+    assert emitted == []
+
+    assert _parked_once(tmp_path, watch.load_prev_parked(str(tmp_path)), candidate=True, emitted=emitted) == 0
+    assert len(emitted) == 1
+    assert emitted[0].startswith("PARKED session=peer-1")
+
+
+def test_tick_once_is_silent_when_the_peer_was_already_parked_last_wake(tmp_path):
+    """Steady state emits nothing -- the firehose that gets a watch muted."""
+    emitted: list[str] = []
+    _parked_once(tmp_path, {"peer-1": True}, candidate=True, emitted=emitted)
+    assert emitted == []
+
+
+def test_tick_once_stamps_the_presence_record_with_the_cron_word(tmp_path):
+    """A reader must be able to tell a wake-driven watch from a held poller:
+    what happens next if nobody fires again is a different question for each."""
+    _parked_once(tmp_path, {}, candidate=False, emitted=[])
+    with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["tick_source"] == "cron"
+    assert record["holder_session_id"] == "crown-1"
+
+
+def test_tick_once_deadline_follows_the_callers_cadence_not_the_poll_interval(tmp_path):
+    """A wake that stamped the poll loop's few-second interval would read STALE
+    within the minute -- the watch reporting itself absent while working."""
+    with mock.patch.object(watch, "poll_once", return_value=({}, [])):
+        watch.tick_once(str(tmp_path), caller_session_id="w", crown_session_id="c", stream=io.StringIO())
+    with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
+        record = json.load(fh)
+    last = datetime.strptime(record["last_tick_at"], "%Y-%m-%dT%H:%M:%SZ")
+    nxt = datetime.strptime(record["next_expected_by"], "%Y-%m-%dT%H:%M:%SZ")
+    assert (nxt - last).total_seconds() >= watch._CRON_FLOOR_INTERVAL_SECONDS
+
+
+def test_tick_once_exits_nonzero_and_loud_when_the_poll_raises(tmp_path):
+    """No loop to carry on into: a wake that failed must not exit 0. A silent
+    zero here rebuilds the exact indistinguishability this mode removes."""
+    stream = io.StringIO()
+    with mock.patch.object(watch, "poll_once", side_effect=RuntimeError("registry gone")):
+        rc = watch.tick_once(str(tmp_path), caller_session_id="w", crown_session_id="c", stream=stream)
+    assert rc == 1
+    assert "POLL-ERROR" in stream.getvalue()
+
+
+def test_load_prev_parked_answers_empty_for_absent_and_malformed_state(tmp_path):
+    """An unreadable prior map must read as a first tick, never as a roster to
+    flag wholesale."""
+    assert watch.load_prev_parked(str(tmp_path)) == {}
+    state = pathlib.Path(watch.parked_state_path(str(tmp_path)))
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("{not json", encoding="utf-8")
+    assert watch.load_prev_parked(str(tmp_path)) == {}
+    state.write_text('{"parked": "everyone"}', encoding="utf-8")
+    assert watch.load_prev_parked(str(tmp_path)) == {}
+
+
+def test_cli_once_runs_one_tick_and_returns_its_code(tmp_path):
+    """`--once` must not fall through into the held loop -- the flag IS the mode."""
+    with mock.patch.object(watch, "tick_once", return_value=0) as ticker, mock.patch.object(
+        watch, "main", side_effect=AssertionError("--once must not arm the poll loop")
+    ):
+        rc = watch._cli(["--repo-root", str(tmp_path), "--crown-session-id", "crown-1", "--once"])
+    assert rc == 0
+    assert ticker.call_args.kwargs["crown_session_id"] == "crown-1"
+
+
+# --- what the heartbeat says about itself ----------------------------------
+
+
+def test_the_record_names_the_holder_and_the_coverage_it_actually_had(tmp_path):
+    """Two facts a reader could not get from the record before.
+
+    `holder_name` was hardcoded null, so a reader that could not reach this
+    box's registry -- another machine, the record read cold -- had a session
+    id and nothing else, exactly when self-description is all that is left.
+    `subscribed_peers` was the default 1 on every tick: the crown of this repo
+    read `subscribed_peers: 1` against a live population of 10-18 on
+    2026-09-01, and a watch covering one peer looked identical to a healthy
+    one on every artifact on disk.
+    """
+    agents = [{"sessionId": "crown-1", "name": "claude-klabauter-65"}]
+    with mock.patch.object(
+        watch, "_measure_snapshot_ms", return_value=(2.0, agents)
+    ), mock.patch.object(
+        watch, "poll_once", return_value=({"p1": True, "p2": False, "p3": False}, [])
+    ):
+        watch.main(
+            str(tmp_path),
+            caller_session_id="watcher-1",
+            crown_session_id="crown-1",
+            stream=io.StringIO(),
+            sleep_fn=lambda _s: None,
+            max_iterations=1,
+        )
+
+    with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["holder_name"] == "claude-klabauter-65"
+    assert record["subscribed_peers"] == 3
+
+
+def test_the_holder_name_is_resolved_once_at_arm_not_per_tick(tmp_path):
+    """A name on a heartbeat is self-description, not an address. Paying a
+    registry read every tick to keep a string fresh puts the load norm's cost
+    on the cheapest thing the watch does."""
+    agents = [{"sessionId": "crown-1", "name": "claude-klabauter-65"}]
+    with mock.patch.object(
+        watch, "_measure_snapshot_ms", return_value=(2.0, agents)
+    ) as measured, mock.patch.object(watch, "poll_once", return_value=({}, [])):
+        watch.main(
+            str(tmp_path),
+            caller_session_id="watcher-1",
+            crown_session_id="crown-1",
+            stream=io.StringIO(),
+            sleep_fn=lambda _s: None,
+            max_iterations=4,
+        )
+    assert measured.call_count == 1
+
+
+def test_a_nameless_wake_carries_the_armed_pollers_name_rather_than_blanking_it(tmp_path):
+    """`--once` makes no enumeration, so it has no name to write. Writing null
+    would make the record oscillate between describing itself and not,
+    depending on which clock last fired."""
+    watch.watch_heartbeat.stamp(
+        str(tmp_path),
+        holder_session_id="crown-1",
+        declinations=[],
+        interval_seconds=5.0,
+        holder_name="claude-klabauter-65",
+    )
+    with mock.patch.object(watch, "poll_once", return_value=({}, [])):
+        watch.tick_once(
+            str(tmp_path), caller_session_id="w", crown_session_id="crown-1", stream=io.StringIO()
+        )
+    with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["holder_name"] == "claude-klabauter-65"
+    assert record["tick_source"] == "cron"
+
+
+def test_a_new_holders_stamp_does_not_inherit_the_old_holders_name(tmp_path):
+    """A stale name beside a new id is worse than no name: it is an address
+    that resolves to the wrong session."""
+    watch.watch_heartbeat.stamp(
+        str(tmp_path),
+        holder_session_id="crown-1",
+        declinations=[],
+        interval_seconds=5.0,
+        holder_name="claude-klabauter-65",
+    )
+    watch.watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="crown-2", declinations=[], interval_seconds=5.0
+    )
+    with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
+        record = json.load(fh)
+    assert record["holder_session_id"] == "crown-2"
+    assert record["holder_name"] is None
+
+
+def test_the_parked_line_names_the_peer_and_frames_the_name_as_provenance():
+    """A reader cannot act on a session uuid -- `SendMessage` takes a name --
+    so a line carrying only the uuid asks the crown to resolve one from a
+    registry this tick already read. The name goes on, framed as how the peer
+    was known THIS TICK, with `verify before sending` rather than
+    `re-resolve from this id`: in the case that matters the printed id is
+    exactly the one that no longer resolves."""
+    now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+    emitted = []
+    agent = dict(_agent(), name="claude-klabauter-65")
+
+    with mock.patch.object(
+        watch.read_pass, "fetch_live_agents", return_value=[agent]
+    ), mock.patch.object(
+        watch.read_pass, "enumerate_repo_peers", side_effect=lambda agents, sid: agents
+    ), mock.patch.object(
+        watch.read_pass,
+        "classify_peer",
+        return_value={"state": "PAUSED", "reason": "turn-ended", "candidate": True},
+    ), mock.patch.object(
+        watch, "_cooldown_active", return_value=False
+    ), mock.patch.object(
+        watch, "_stamped_age_seconds", return_value=42.0
+    ), mock.patch.object(
+        watch, "_transcript_idle_seconds", return_value=None
+    ), mock.patch.object(
+        watch.obligations, "for_peer", return_value=None
+    ):
+        watch.poll_once(
+            REPO_ROOT, "caller-1", prev_parked={"peer-1": False}, now=now, emit=emitted.append
+        )
+
+    line = emitted[0]
+    assert "session=claude-klabauter-65 [peer-1]" in line
+    assert "verify before sending" in line
+    assert "re-resolve" not in line
+
+
+def test_a_nameless_peer_still_gets_a_line():
+    """A missing name degrades to the bare id -- never to silence, and never
+    to an invented address."""
+    now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+    emitted = []
+
+    with mock.patch.object(
+        watch.read_pass, "fetch_live_agents", return_value=[_agent()]
+    ), mock.patch.object(
+        watch.read_pass, "enumerate_repo_peers", side_effect=lambda agents, sid: agents
+    ), mock.patch.object(
+        watch.read_pass,
+        "classify_peer",
+        return_value={"state": "PAUSED", "reason": "turn-ended", "candidate": True},
+    ), mock.patch.object(
+        watch, "_cooldown_active", return_value=False
+    ), mock.patch.object(
+        watch, "_stamped_age_seconds", return_value=None
+    ), mock.patch.object(
+        watch, "_transcript_idle_seconds", return_value=None
+    ), mock.patch.object(
+        watch.obligations, "for_peer", return_value=None
+    ):
+        watch.poll_once(
+            REPO_ROOT, "caller-1", prev_parked={"peer-1": False}, now=now, emit=emitted.append
+        )
+
+    assert emitted[0].startswith("PARKED session=peer-1 ")

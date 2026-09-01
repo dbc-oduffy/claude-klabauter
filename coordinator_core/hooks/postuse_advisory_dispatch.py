@@ -1262,27 +1262,22 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 # that armed and later died with its session; that gap is the same one C2's
 # own docstring names as undischarged by any chunk in this spine.
 #
-# LAUNCHER GAP, NAMED RATHER THAN WORKED AROUND: unlike workflow-watch, no
-# settings-home launcher for `coordinator_core.group_em.watch` exists yet
-# (no `group-em-watch(.exe)` under any `<settings-home>/bin/`). The other
-# half of this gap is closed: `watch.py` grew an `argparse`/`__main__` CLI at
-# f826ac0f2b, so the watch is armable by hand
-# (`python -m coordinator_core.group_em.watch --repo-root <path>`) even
-# though this leg still has no installed launcher to name. Building one is a
-# generator/launcher-chain change, outside this chunk's `writes:` scope
-# (coordinator_core/hooks/postuse_advisory_dispatch.py and its test only).
-# `_group_em_watch_launcher` therefore always resolves to `None` today, which
-# is the correct fail-open-to-silence outcome per `_portable_arg`'s own
-# doctrine: a command naming a launcher/entrypoint that cannot run is worse
-# than silence. Reported as the concrete follow-up in this chunk's own report
-# rather than invented here.
+# THE LAUNCHER EXISTS NOW, AND THIS LEG IS NO LONGER INERT. It was, and the
+# comment here said so: no settings-home launcher for
+# `coordinator_core.group_em.watch` had been generated, so
+# `_group_em_watch_launcher` resolved to None on every machine and this leg
+# could not fire even when it logically should. `coordinator/bin/group-em-watch.py`
+# landed 2026-09-01 (117dbd53c2), and `install.substrate` enumerates
+# `coordinator/bin/*.py` into `<settings-home>/bin/` under its stem, so the
+# name this probe looks for arrives with the next install like any other CLI.
 #
-# INERT-BY-CONSTRUCTION: this leg cannot fire until a launcher-chain change
-# lands (queued at state/improvement-queue/2026-08-31-group-em-watch-has-no-
-# installed-launcher-*.yaml). `_check_group_em_watch_arm_sync` probes the
-# launcher FIRST, before any other read, precisely so that fact is established
-# at the cheapest possible cost per call rather than after a repo-root walk,
-# a nomination read, and a whole-file transcript read.
+# THE PROBE STILL RUNS FIRST, and the reason survives the change: it is the
+# cheapest check in the function, so paying it ahead of the sentinel check,
+# the repo-root walk, the nomination read and the whole-file transcript read
+# keeps a machine that has not installed yet -- or one whose settings home is
+# elsewhere -- from paying any of those per PostToolUse event. A None answer
+# stays fail-open-to-silence per `_portable_arg`'s doctrine: a command naming
+# an entrypoint that cannot run is worse than no command.
 # ---------------------------------------------------------------------------
 
 #: The exact prefix `coordinator_core.group_em.watch.main` prints as its
@@ -1371,9 +1366,8 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
         return ""
 
     # Review: overengineering-reviewer (finding #2, EM-ratified break-class) --
-    # the launcher probe is the cheapest check AND today the only one that can
-    # decide this leg's outcome (no launcher is installed by any generator
-    # path yet), so it runs FIRST and short-circuits before the sentinel
+    # the launcher probe is the cheapest check, so it runs FIRST and
+    # short-circuits before the sentinel
     # check, the repo-root walk, the nomination read, or the whole-file
     # transcript read -- none of which should be paid, per PostToolUse event,
     # for a guaranteed empty string.

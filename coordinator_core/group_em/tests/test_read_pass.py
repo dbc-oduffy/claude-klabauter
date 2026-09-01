@@ -12,6 +12,7 @@ on the fallback tail (defect C).
 
 from __future__ import annotations
 
+import types
 import json
 from datetime import datetime, timedelta, timezone
 from unittest import mock
@@ -464,7 +465,9 @@ def test_fetch_live_agents_sources_peer_roster_not_a_subprocess():
     ) as fake_build_roster:
         agents = read_pass.fetch_live_agents(REPO_ROOT)
     fake_build_roster.assert_called_once_with(repo_root=REPO_ROOT)
-    assert agents == [{"sessionId": "peer-1", "status": "busy", "cwd": REPO_ROOT}]
+    assert agents == [
+        {"sessionId": "peer-1", "status": "busy", "cwd": REPO_ROOT, "name": None}
+    ]
 
 
 def test_fetch_live_agents_empty_when_build_roster_empty():
@@ -553,7 +556,7 @@ def test_activity_epoch_ignores_an_mtime_pushed_forward_by_bookkeeping(tmp_path,
         mtime_epoch=last_real.timestamp() + 420.0,
     )
 
-    epoch, trusted = read_pass._transcript_activity_epoch("peer-stalled", REPO_ROOT)
+    epoch, trusted = read_pass.transcript_activity_epoch("peer-stalled", REPO_ROOT)
 
     assert trusted is True
     assert epoch == last_real.timestamp()
@@ -568,7 +571,7 @@ def test_activity_epoch_falls_back_to_mtime_untrusted_when_nothing_is_timestampe
         tmp_path, "peer-no-stamps", REPO_ROOT, [{"type": "cost-state"}], mtime_epoch=1000.0
     )
 
-    epoch, trusted = read_pass._transcript_activity_epoch("peer-no-stamps", REPO_ROOT)
+    epoch, trusted = read_pass.transcript_activity_epoch("peer-no-stamps", REPO_ROOT)
 
     assert trusted is False
     assert epoch == 1000.0
@@ -577,7 +580,7 @@ def test_activity_epoch_falls_back_to_mtime_untrusted_when_nothing_is_timestampe
 def test_activity_epoch_is_none_when_the_transcript_is_absent(tmp_path, monkeypatch):
     """`None` must never be read as "has not moved" or as an age of zero."""
     _patch_transcript_root(monkeypatch, tmp_path)
-    assert read_pass._transcript_activity_epoch("peer-missing", REPO_ROOT) == (None, False)
+    assert read_pass.transcript_activity_epoch("peer-missing", REPO_ROOT) == (None, False)
 
 
 def test_moved_since_is_not_answered_from_an_untrusted_clock(tmp_path, monkeypatch):
@@ -653,3 +656,25 @@ def test_classify_peer_threads_its_activity_epoch_onto_the_verdict(tmp_path, mon
     verdict = read_pass.classify_peer(REPO_ROOT, _agent(session_id="peer-threaded"))
 
     assert verdict["activity_epoch"] == last_real.timestamp()
+
+
+def test_the_projection_carries_the_peer_name_it_used_to_drop(monkeypatch):
+    """A projection that silently narrows its source is invisible downstream.
+
+    `PeerRow.name` is populated upstream and this mapping dropped it, so
+    `watch._holder_name` -- written to put the crown's name on the heartbeat
+    for a reader that cannot reach this box's registry -- could only ever
+    return None, and `state/group-em-watch.json` read `holder_name: null` on
+    every tick including ones its own watch stamped. Established by
+    doe-claude-27, 2026-09-01.
+    """
+    row = types.SimpleNamespace(
+        session_id="peer-1", status="idle", cwd=REPO_ROOT, name="claude-klabauter-65"
+    )
+    monkeypatch.setattr(read_pass.peer_roster, "build_roster", lambda **_: [row])
+
+    projected = read_pass.fetch_live_agents(REPO_ROOT)
+
+    assert projected == [
+        {"sessionId": "peer-1", "status": "idle", "cwd": REPO_ROOT, "name": "claude-klabauter-65"}
+    ]

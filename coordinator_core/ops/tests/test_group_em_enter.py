@@ -5,6 +5,7 @@ Spec backlink: docs/plans/2026-08-30-group-em-entry-fires-one-warm-op.md § C5
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from coordinator_core import ipc
@@ -14,7 +15,7 @@ from coordinator_core.ops import group_em_enter as gee
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 
 
-def test_payload_has_exactly_five_keys(tmp_path, monkeypatch):
+def test_payload_has_exactly_seven_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-1")
     monkeypatch.setattr(
         gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: []
@@ -37,7 +38,10 @@ def test_payload_has_exactly_five_keys(tmp_path, monkeypatch):
 
     result = gee._group_em_enter({"repo_root": str(tmp_path)})
 
-    assert set(result.keys()) == {"nomination", "roster", "digest", "baseline", "teammates"}
+    assert set(result.keys()) == {
+        "nomination", "roster", "roster_considered", "digest", "baseline", "teammates",
+        "watch_liveness"
+    }
 
 
 def test_mutating_classification_registered():
@@ -373,7 +377,10 @@ def test_successful_claim_still_returns_all_five_keys(tmp_path, monkeypatch):
 
     result = gee._group_em_enter({"repo_root": str(tmp_path)})
 
-    assert set(result.keys()) >= {"nomination", "roster", "digest", "baseline", "teammates"}
+    assert set(result.keys()) >= {
+        "nomination", "roster", "roster_considered", "digest", "baseline", "teammates",
+        "watch_liveness"
+    }
     assert result["nomination"]["claimed"] is True
     assert result["nomination"]["already_held"] is False
     assert result["roster"] == []
@@ -633,3 +640,155 @@ def test_teammates_leg_degrades_without_taking_the_others(tmp_path, monkeypatch)
     assert result["teammates_error"] == "RuntimeError: probe exploded"
     assert result["roster"] == []
     assert result["digest"] == {"entries": [], "gate_declaration_required": True}
+
+
+# --- watch_liveness: dispatched is not ticking -----------------------------
+
+
+def test_watch_liveness_reports_absent_when_nothing_ever_stamped(tmp_path, monkeypatch):
+    """The live failure this leg exists for, from the outside: the crown holds a
+    dispatch record for a watcher whose subprocess never started, so the
+    teammates leg is satisfied and nothing is watching. Measured 2026-09-01 in
+    example-game-workbench-repo -- `ListAgents` read `idle` for thirteen minutes."""
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
+    _stub_legs(monkeypatch, session_id)
+    repo_root = _crown_with_teammates(
+        tmp_path,
+        monkeypatch,
+        [
+            {"agentType": "coordinator:group-em-assistant", "name": "gem-assistant"},
+            {"agentType": "general-purpose", "name": "fleet-watch"},
+        ],
+        session_id,
+    )
+
+    result = gee._group_em_enter({"repo_root": repo_root})
+
+    assert result["teammates"]["dispatch_required"] is False
+    assert result["watch_liveness"]["verdict"] == "absent"
+    assert "group-em-watch" in result["watch_liveness"]["remedy"]
+    assert "watch_liveness_error" not in result
+
+
+def test_watch_liveness_reports_armed_on_a_fresh_stamp(tmp_path, monkeypatch):
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-222222222222"
+    _stub_legs(monkeypatch, session_id)
+    repo_root = _crown_with_teammates(tmp_path, monkeypatch, [], session_id)
+    gee.group_em_watch_heartbeat.stamp(
+        repo_root, holder_session_id=session_id, declinations=[], interval_seconds=1380.0
+    )
+
+    result = gee._group_em_enter({"repo_root": repo_root})
+
+    assert result["watch_liveness"]["verdict"] == "armed"
+    assert result["watch_liveness"]["holder_session_id"] == session_id
+    assert "remedy" not in result["watch_liveness"]
+
+
+def test_watch_liveness_reports_stale_past_the_deadline_the_tick_set_itself(tmp_path, monkeypatch):
+    """Not an mtime read: the deadline is one the previous tick wrote for
+    itself off its own cadence. Missing a deadline you set is evidence."""
+    session_id = "aaaaaaaa-bbbb-cccc-dddd-333333333333"
+    _stub_legs(monkeypatch, session_id)
+    repo_root = _crown_with_teammates(tmp_path, monkeypatch, [], session_id)
+    gee.group_em_watch_heartbeat.stamp(
+        repo_root,
+        holder_session_id=session_id,
+        declinations=[],
+        interval_seconds=5.0,
+        now_epoch=time.time() - 3600,
+    )
+
+    result = gee._group_em_enter({"repo_root": repo_root})
+
+    assert result["watch_liveness"]["verdict"] == "stale"
+    assert result["watch_liveness"]["seconds_overdue"] > 0
+
+
+def test_roster_considered_separates_looked_from_found(tmp_path, monkeypatch):
+    """An EMPTY roster over a POPULATED enumeration is not a quiet fleet.
+
+    The defect this closes (measured 2026-09-01, 11 peers enumerated / 2 kept):
+    `roster` is candidates UNION unclassifiable, so a consumer reading its
+    length as the peer population reports a busy repo as empty. The count of
+    what was classified has to be in the payload, or the two states are
+    indistinguishable from it.
+    """
+    monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rc")
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [
+        {"sessionId": "peer-a", "cwd": str(tmp_path), "status": "busy"},
+        {"sessionId": "peer-b", "cwd": str(tmp_path), "status": "busy"},
+        {"sessionId": "peer-c", "cwd": str(tmp_path), "status": "idle"},
+    ])
+    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: [])
+    monkeypatch.setattr(
+        gee.group_em_send_pass,
+        "build_send_digest",
+        lambda *a, **k: {"entries": [], "gate_declaration_required": True},
+    )
+    monkeypatch.setattr(
+        gee.group_em_nomination,
+        "claim",
+        lambda *a, **k: {"claimed": True, "holder": "caller-sid-rc", "superseded_incumbent": None},
+    )
+    monkeypatch.setattr(
+        gee.group_em_baseline,
+        "diff_and_persist",
+        lambda *a, **k: {"spawned": [], "exited": [], "changed": [], "first_tick": True},
+    )
+
+    result = gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert result["roster"] == []
+    assert result["roster_considered"] == 3
+
+
+def test_roster_considered_survives_a_raising_roster_leg(tmp_path, monkeypatch):
+    """The count is the answer to "did anything look", so it must outlive the
+    leg whose failure raises that question. A roster leg that raised leaves
+    `roster` None with an error sibling; `roster_considered` still reports."""
+    monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rc2")
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: [
+        {"sessionId": "peer-a", "cwd": str(tmp_path), "status": "busy"},
+    ])
+
+    def _boom(*a, **k):
+        raise RuntimeError("roster leg blew up")
+
+    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", _boom)
+    monkeypatch.setattr(
+        gee.group_em_nomination,
+        "claim",
+        lambda *a, **k: {"claimed": True, "holder": "caller-sid-rc2", "superseded_incumbent": None},
+    )
+    monkeypatch.setattr(
+        gee.group_em_baseline,
+        "diff_and_persist",
+        lambda *a, **k: {"spawned": [], "exited": [], "changed": [], "first_tick": True},
+    )
+
+    result = gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert result["roster"] is None
+    assert "roster_error" in result
+    assert result["roster_considered"] == 1
+
+
+def test_roster_considered_is_absent_on_a_refused_crown(tmp_path, monkeypatch):
+    """Same rule as `roster`: a leg that never ran is ABSENT, not zero. A
+    `roster_considered` of 0 under a refused crown would assert an empty fleet
+    this op had no standing to enumerate."""
+    monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rc3")
+    monkeypatch.setattr(
+        gee.group_em_nomination,
+        "claim",
+        lambda *a, **k: {
+            "claimed": False,
+            "superseded_incumbent": {"session_id": "other", "live_reason": "live"},
+        },
+    )
+
+    result = gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert "roster_considered" not in result
+    assert "roster" not in result

@@ -1356,3 +1356,27 @@ def test_withdrawal_and_withdrawn_row_both_present_in_shard(repo_root):
     assert any(
         f'"id": "{withdrawal["id"]}"' in line for line in shard_lines if line.strip()
     )
+
+
+def test_evidence_is_copied_in_rather_than_aliased():
+    """The event is a record of an observation, so it must not change when the
+    caller reuses the dict it was built from. Deep, not shallow: `evidence` is
+    documented as nested, and a shallow copy leaves the same bug one level
+    down."""
+    evidence = {"probe": {"probe_result": "pass", "notes": ["one"]}}
+    event = tt.transition_event(
+        "item-evidence-copy",
+        "manual_close",
+        "closed",
+        actor="human",
+        evidence=evidence,
+        tier="direct",
+        source_observation_id=None,
+    )
+    evidence["probe"]["probe_result"] = "error"
+    evidence["probe"]["notes"].append("two")
+    evidence["added_later"] = True
+
+    assert event["evidence"]["probe"]["probe_result"] == "pass"
+    assert event["evidence"]["probe"]["notes"] == ["one"]
+    assert "added_later" not in event["evidence"]

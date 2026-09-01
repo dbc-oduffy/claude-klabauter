@@ -600,7 +600,6 @@ def _session_has_positive_evidence(session_id: str, cwd: Optional[str]) -> bool:
 #: `assert_paths_in_session_scope` -- see this module's own history --
 #: before landing; none pattern-matches on word order, only on the presence
 #: of `"include_orphans ignored"` as a substring).
-_CLASSIFICATION_ORPHAN = "orphan — no session holds a claim on it"
 _CLASSIFICATION_INCLUDE_ORPHANS_IGNORED = (
     "include_orphans ignored — orphan, but this session has no "
     "initialization record"
@@ -634,6 +633,36 @@ _CLASSIFICATION_INCLUDE_ORPHANS_IGNORED = (
 #: remedy is for the reader of the FULL string; the capped reader needs the
 #: discriminator, not the command.
 _REMEDY_WHO_CLAIMS = " — run: session-claim-cli who-claims-path <path>"
+
+#: Carries the remedy for the same reason its siblings do, and it was the
+#: only one of the four without it. The discriminator stays FIRST so the
+#: ~70-byte cap in `block_subagent_commit._ownership_leg_summary` keeps it.
+#:
+#: WHAT THIS DOES AND DOES NOT MEAN, because a dispatched committer reads it
+#: as "your writes were rejected" and that is not what it says. It reports
+#: that NO touch record in the index covers this path. A dispatched agent's
+#: writes are NOT excluded by being an agent's: `claim_index.rebuild()`
+#: resolves each agent's claims onto its owning EM session through the
+#: `.agents/<agent_id>/em-session-id.txt` back-pointer, so an executor's
+#: write and its EM's commit are the SAME claimant by construction. That is
+#: the sanctioned attribution path, and it needs nothing at dispatch time.
+#:
+#: So an orphan verdict on a path an agent demonstrably wrote means the touch
+#: record is missing or unattributable, not that attribution was refused --
+#: the writer bypassed the Edit/Write hot path (an engine CLI or a shell
+#: redirect writes no touch record), or its agent dir carries no resolvable
+#: owner, in which case `_agent_owner_sid` contributes NO claims and the
+#: path reads exactly as if nobody had touched it. Those two are
+#: indistinguishable from this string, which is why the remedy is a command
+#: and not a sentence: `who-claims-path` answers determinately-unclaimed
+#: (rc=0, no rows) against could-not-determine (rc=1) where reasoning cannot.
+#:
+#: Asked and answered for an emitted workflow's commit phase, 2026-09-01,
+#: cross-repo/archive/2026-08-28-doe-claude-em-workflow-commit-phase-cannot-
+#: commit-executor-writes.md.
+_CLASSIFICATION_ORPHAN = (
+    "orphan — no session holds a claim on it" + _REMEDY_WHO_CLAIMS
+)
 
 _CLASSIFICATION_INDETERMINATE = (
     "indeterminate — adoption withheld; this call's claim reads were "

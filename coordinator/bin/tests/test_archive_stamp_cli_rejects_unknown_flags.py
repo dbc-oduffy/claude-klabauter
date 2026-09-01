@@ -204,3 +204,27 @@ def test_a_verb_with_no_flags_still_refuses(cli):
     """
     assert cli._reject_unknown_flags("claim-handoff", ["p.md", "--bogus"]) == 2
     assert cli._reject_unknown_flags("repark-handoff", ["p.md", "--gate-note", "w"]) == 2
+
+
+def test_every_engine_disposition_flag_survives_the_guard(cli):
+    """The tripwire example-retrieval-repo-em asked for, keyed on the ENGINE's own table.
+
+    The parametrised case above pins the guard's SHAPE — an open flag tail
+    declines — using invented flag names. This pins the actual contract: every
+    flag `coordinator_core.archive_stamp` declares for a memo disposition
+    reaches the engine through this CLI. It fails the moment someone
+    "documents" these two verbs by enumerating their flags in the usage row,
+    which would close the open tail and re-strand whichever flag the
+    enumeration missed — the exact regression, arrived at from the other side.
+    """
+    from coordinator_core.archive_stamp import (
+        _DISPOSITION_BOOL_FLAGS,
+        _DISPOSITION_FLAGS,
+    )
+
+    assert _DISPOSITION_FLAGS, "engine declares no disposition flags — table moved?"
+    for subcmd in ("action-memo", "resolve-memo"):
+        for flag in _DISPOSITION_FLAGS:
+            assert cli._reject_unknown_flags(subcmd, ["m.md", flag, "v"]) is None, flag
+        for flag in _DISPOSITION_BOOL_FLAGS:
+            assert cli._reject_unknown_flags(subcmd, ["m.md", flag]) is None, flag

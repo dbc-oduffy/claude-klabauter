@@ -31,9 +31,13 @@ teammate to hold the watch -- see `watch.main`'s `crown_session_id`). The
 holder is the session accountable for the fleet, and the record exists so
 handover is legible from outside; naming a teammate that dies with its
 dispatch would make the record answer a different question than the one it is
-asked. `holder_name` is always written null: a name is an address that
-re-points, and the DoE reader already prefers the live registry row over any
-stored copy.
+asked. `holder_name` is SELF-DESCRIPTION, never an address: a name re-points,
+so every reader that can reach the registry prefers the live row over this
+copy (the DoE reader does exactly that). It is written for the reader that
+cannot -- another machine, or the record read cold after the fact, which is
+precisely when self-description is the only thing left. Resolved once at arm
+time off the enumeration the caller already made; a nameless writer carries
+the previous tick's name forward rather than blanking it.
 
 NEVER RAISES, NEVER GATES. A failed stamp is a missed tick -- it must never
 end a watch that is otherwise working. `stamp` returns True/False; it does
@@ -44,6 +48,7 @@ planes).
 
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import tempfile
@@ -63,6 +68,12 @@ _GRACE_FLOOR_SECONDS = 60.0
 
 TICK_SOURCE = "monitor"
 
+#: The three words the DoE reader already declares. A tick that cannot name
+#: itself one of them is a writer bug, not a record to write: an unknown word
+#: reads to that reader as a watch of unknown provenance, which is worse than
+#: a loud failure here.
+TICK_SOURCES = ("cron", "monitor", "entry")
+
 _STAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -81,12 +92,17 @@ def next_expected_by(now_epoch: float, interval_seconds: float) -> str:
     return _iso(now_epoch + grace)
 
 
-def _write_atomic(path: str, payload: dict) -> bool:
+def write_atomic(path: str, payload: dict) -> bool:
     """Temp-file then `os.replace` -- atomic on POSIX and Windows alike.
 
     Returns False on any I/O failure rather than raising: the caller is a poll
     loop whose product is its stdout lines, and a heartbeat that could not be
     written is a missed tick, not a reason to stop watching.
+
+    Public because `group_em.watch` persists a second small JSON record next to
+    this one (the carried parked map a single-tick wake diffs against) and one
+    atomic writer serving both is a copy fewer, not a coupling: the failure
+    posture -- False, never raise, never gate -- is the same for both records.
     """
     directory = os.path.dirname(path)
     tmp_path = None
@@ -109,6 +125,21 @@ def _write_atomic(path: str, payload: dict) -> bool:
         return False
 
 
+def _carried_holder_name(repo_root: str, holder_session_id: str) -> Optional[str]:
+    """The name the previous tick recorded, when it was for the SAME holder.
+
+    A different holder's name is not carried: the record is whole-file replace
+    and a stale name beside a new id is worse than no name at all.
+    """
+    record = _read_record(watch_path(repo_root))
+    if not isinstance(record, dict):
+        return None
+    if record.get("holder_session_id") != holder_session_id:
+        return None
+    carried = record.get("holder_name")
+    return carried if isinstance(carried, str) and carried else None
+
+
 def stamp(
     repo_root: str,
     holder_session_id: str,
@@ -116,6 +147,8 @@ def stamp(
     interval_seconds: float,
     subscribed_peers: int = 1,
     now_epoch: Optional[float] = None,
+    tick_source: str = TICK_SOURCE,
+    holder_name: Optional[str] = None,
 ) -> bool:
     """Rewrite the heartbeat for one tick. Whole-file replace, never a fold.
 
@@ -124,14 +157,133 @@ def stamp(
     "looked, nothing to do" apart from "did not look". A tick that emitted and
     declined nothing passes `[]`.
     """
+    if tick_source not in TICK_SOURCES:
+        raise ValueError(
+            f"tick_source {tick_source!r} is not one of the reader's words {TICK_SOURCES}"
+        )
     now_epoch = time.time() if now_epoch is None else now_epoch
+    if holder_name is None:
+        holder_name = _carried_holder_name(repo_root, holder_session_id)
     payload: dict[str, Any] = {
         "holder_session_id": holder_session_id,
-        "holder_name": None,
+        "holder_name": holder_name,
         "last_tick_at": _iso(now_epoch),
-        "tick_source": TICK_SOURCE,
+        "tick_source": tick_source,
         "next_expected_by": next_expected_by(now_epoch, interval_seconds),
         "subscribed_peers": subscribed_peers,
         "declinations": list(declinations or []),
     }
-    return _write_atomic(watch_path(repo_root), payload)
+    return write_atomic(watch_path(repo_root), payload)
+
+
+VERDICT_ABSENT = "absent"
+VERDICT_VACANT = "vacant"
+VERDICT_STALE = "stale"
+VERDICT_ARMED = "armed"
+
+#: The re-arm command every non-`armed` verdict carries. A liveness report that
+#: says the watch is dead and leaves the reader to reconstruct the invocation is
+#: half a report: the launcher name is the whole point (the `python -m` spelling
+#: resolves only from a cwd that can already import the engine, which the repos
+#: this watch is armed FOR generally cannot -- 2026-09-01, example-game-workbench-repo).
+REARM_COMMAND = (
+    "group-em-watch --repo-root <root> --crown-session-id <your sid>   "
+    "(hold it with Monitor, persistent: true; or fire "
+    "`group-em-watch --repo-root <root> --crown-session-id <sid> --once` on a cron floor)"
+)
+
+
+def _read_record(path: str) -> Optional[dict]:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            record = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def read_liveness(
+    repo_root: str,
+    agents: Optional[list] = None,
+    now_epoch: Optional[float] = None,
+) -> dict:
+    """Is anything actually watching this repo? `absent` | `vacant` | `stale` | `armed`.
+
+    WHY A SECOND READER EXISTS AT ALL. `group_em.teammates.presence` answers
+    "did this session dispatch a watcher", on a dispatch record, and refuses a
+    clock on purpose. That is the right evidence for that question and the
+    wrong evidence for this one: a watcher that WAS dispatched and whose
+    subprocess never started -- the `ModuleNotFoundError` reproduced from
+    example-game-workbench-repo on 2026-09-01 -- has a perfectly good dispatch
+    record and is watching nothing. The agent presented `idle`, and an idle
+    watcher is indistinguishable from a quiet fleet from outside. So the two
+    legs answer different questions and neither replaces the other.
+
+    THIS IS NOT AN MTIME LIE. The freshness term here is not "a file was
+    touched recently": `next_expected_by` is a deadline the previous tick
+    WROTE for itself, off its own cadence. Missing a deadline you set is
+    evidence; a file being old is not. That distinction is why the record
+    carries the deadline at all.
+
+    `agents`, when given, is the already-fetched registry -- one enumeration,
+    two consumers, never a second spawn at this layer. Omitted, the holder-
+    liveness join is skipped entirely and the verdict is freshness-only: a
+    registry nobody read cannot retire a holder, and reporting `vacant` on no
+    evidence would send a crown to re-arm over a watcher that is fine.
+
+    Every verdict but `armed` carries `remedy`. A liveness leg that reports a
+    dead watch and no way to restart it just moves the prose one file over.
+    """
+    now_epoch = time.time() if now_epoch is None else now_epoch
+    record = _read_record(watch_path(repo_root))
+    if record is None:
+        return {
+            "verdict": VERDICT_ABSENT,
+            "holder_session_id": None,
+            "holder_name": None,
+            "last_tick_at": None,
+            "tick_source": None,
+            "seconds_overdue": None,
+            "remedy": REARM_COMMAND,
+        }
+
+    holder_session_id = record.get("holder_session_id")
+    # `holder_name` is carried as PROVENANCE -- how the holder was known when
+    # the tick was written -- never as an address to send to and never as an
+    # instruction to re-resolve from the sid beside it. In the case that
+    # matters (the holder re-pointed or exited) that sid is exactly the one
+    # that no longer resolves, so "re-resolve from it" reads like a check and
+    # performs like a ritual, failing where a reader needs it most.
+    base = {
+        "holder_session_id": holder_session_id,
+        "holder_name": record.get("holder_name"),
+        "last_tick_at": record.get("last_tick_at"),
+        "tick_source": record.get("tick_source"),
+    }
+
+    if agents is not None:
+        listed = any(
+            isinstance(a, dict) and a.get("sessionId") == holder_session_id for a in agents
+        )
+        if not listed:
+            # `absent` and `vacant` never collapse, matching the sibling reader:
+            # no file is "nobody ever entered"; a file naming a session that is
+            # gone is "the watcher exited".
+            return {"verdict": VERDICT_VACANT, "seconds_overdue": None,
+                    "remedy": REARM_COMMAND, **base}
+
+    deadline = record.get("next_expected_by")
+    if not isinstance(deadline, str):
+        return {"verdict": VERDICT_STALE, "seconds_overdue": None,
+                "remedy": REARM_COMMAND, **base}
+    try:
+        deadline_epoch = calendar.timegm(time.strptime(deadline, _STAMP_FORMAT))
+    except ValueError:
+        return {"verdict": VERDICT_STALE, "seconds_overdue": None,
+                "remedy": REARM_COMMAND, **base}
+
+    overdue = now_epoch - deadline_epoch
+    if overdue > 0:
+        return {"verdict": VERDICT_STALE, "seconds_overdue": round(overdue, 1),
+                "remedy": REARM_COMMAND, **base}
+    return {"verdict": VERDICT_ARMED, "seconds_overdue": None, **base}

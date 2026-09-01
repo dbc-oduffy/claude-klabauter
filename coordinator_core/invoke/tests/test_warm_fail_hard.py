@@ -316,3 +316,37 @@ def test_warm_disabled_still_falls_through_to_cold(monkeypatch, tmp_path):
 
     assert code == 0
     assert '"pong":true' in stdout.lower().replace(" ", "")
+
+
+def test_wedge_refusal_names_what_to_do_not_only_what_not_to_do(monkeypatch, tmp_path):
+    """example-game-repo-em read this refusal, did exactly what it said (checked for a
+    wedged server, found only the respawn it had just triggered), and was left
+    with nothing to act on -- while the move that worked was the one the
+    message never named: re-issue the call, which then returned in 2.9s.
+
+    A refusal that names a defect and then only forbids ("rather than retrying
+    by hand") is the shape defect 7 of `cross-repo/inbox/2026-09-01-example-game-repo-
+    em-close-ceremony-engine-defects-seven.md` is about. The remedy must be
+    positive and runnable.
+    """
+    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
+
+    stdout, stderr, code = _run(
+        monkeypatch,
+        tmp_path,
+        warm_enabled=True,
+        warm_response=None,
+        allow_unstamped=False,
+        boot_wait_secs="0.3",
+    )
+
+    assert code != 0
+    assert stdout == ""
+    # The first move, which is what actually recovered it in the field.
+    assert "Re-issue this same command once" in stderr
+    # The second move, named as a RUNNABLE per the cold-path rule -- what fires
+    # before a session exists cannot be fixed by a slash command.
+    assert "warm-engine-stop" in stderr
+    assert "/warm-engine-stop" not in stderr, "must be a runnable, never a slash command"
+    # The prohibition survives, but it is no longer the only guidance present.
+    assert "hand-roll" in stderr

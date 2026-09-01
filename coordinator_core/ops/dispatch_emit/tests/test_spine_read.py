@@ -920,3 +920,66 @@ def test_every_schema_disposition_is_accepted(tmp_path, disposition):
 """
     plan_path = _write_plan(tmp_path, body)
     read_spine(plan_path)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# execution_mode: a row a human must run
+# ---------------------------------------------------------------------------
+
+
+def test_operator_row_is_not_dispatched():
+    from coordinator_core.ops.dispatch_emit.spine_read import _is_operator_row
+
+    assert _is_operator_row({"execution_mode": "operator"}) is True
+
+
+def test_exclusion_is_opt_in_so_no_existing_plan_changes_behaviour():
+    """Absent, `agent`, null, and any unrecognised value all still dispatch.
+
+    A typo must fail toward the OLD default. A row that vanishes from a wave
+    map is far harder to notice than one dispatched to an agent that reports
+    it cannot proceed, so `"Operator"` and `"human"` dispatch rather than
+    silently pulling the row out of the run.
+    """
+    from coordinator_core.ops.dispatch_emit.spine_read import _is_operator_row
+
+    for raw in ({}, {"execution_mode": "agent"}, {"execution_mode": None},
+                {"execution_mode": "Operator"}, {"execution_mode": "human"}):
+        assert _is_operator_row(raw) is False, raw
+
+
+def test_operator_blocks_like_a_gate_not_like_a_deferral():
+    """An operator row's work has NOT run at emit time, so a dependent
+    dispatched now would run against work that does not exist. It must join
+    `blocked_ids` (transitive) rather than `satisfied_ids` (edge-stripped)."""
+    import inspect
+
+    from coordinator_core.ops.dispatch_emit import spine_read
+
+    src = inspect.getsource(spine_read.read_spine)
+    # The operator predicate sits on the gate arm, beside the gate check.
+    assert "_has_uncleared_execution_gate(raw) or _is_operator_row(raw)" in src
+
+
+def test_an_excluded_row_is_reported_not_silently_dropped():
+    """Exclusion without surfacing is a silent skip, and for an operator row
+    that is worse than the mis-dispatch the field exists to prevent."""
+    from coordinator_core.ops.dispatch_emit.emit import _excluded_rows_narration
+
+    out = _excluded_rows_narration([
+        {"id": "C7", "reason": "operator", "detail": "execution_mode: operator — a human must run this row"},
+    ])
+    assert "C7" in out
+    assert "DOES NOT RUN" in out
+    assert "OWED WORK, not skipped work" in out
+
+
+def test_operator_rows_are_called_out_separately_from_other_exclusions():
+    """A deferred row's work is done or dropped; an operator row's is owed."""
+    from coordinator_core.ops.dispatch_emit.emit import _excluded_rows_narration
+
+    out = _excluded_rows_narration([
+        {"id": "C3", "reason": "deferred", "detail": "deferred: true"},
+    ])
+    assert "C3" in out
+    assert "OWED WORK" not in out  # no operator row -> no owed-work banner

@@ -58,24 +58,22 @@ import os
 import time
 from typing import Any, Optional
 
-from coordinator_core.group_em.send_pass import _safe_session_id, _session_share_dir
+from coordinator_core.session import subagent_share
 
 #: Valid intake ops, mirroring DoE's own closed `_INTAKE_OPS` vocabulary at
 #: the landed sha. Kept as our own tuple rather than importing theirs --
 #: this plane conforms to the wiki contract, not to a cross-repo import.
 _INTAKE_OPS = ("open", "progress", "blocked", "discharge")
 
-_LEDGER_FILENAME = "next-move-ledger.jsonl"
-_INTAKE_FILENAME = "obligations-inbound.jsonl"
 _INTAKE_SCHEMA = 1
 
-
-def _ledger_path(repo_root: str, session_id: str) -> str:
-    return os.path.join(_session_share_dir(repo_root, session_id), _LEDGER_FILENAME)
-
-
-def _intake_path(repo_root: str, session_id: str) -> str:
-    return os.path.join(_session_share_dir(repo_root, session_id), _INTAKE_FILENAME)
+# The filenames and the share-directory join live in `session.subagent_share`.
+# This module used to retype both AND reach into `send_pass`'s private
+# namespace for the join -- one string typo apart from reading a different
+# file than the module writing it.
+_ledger_path = subagent_share.ledger_path
+_intake_path = subagent_share.intake_path
+_safe_session_id = subagent_share.safe_session_id
 
 
 def for_peer(repo_root: str, session_id: str) -> Optional[list[dict[str, Any]]]:

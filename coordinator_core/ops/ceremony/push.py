@@ -196,27 +196,44 @@ _PUSH_MAX_RETRIES = 3
 PUSH_RETRY_BUDGET_SECS: float = 12.0
 
 #: C5 (2026-08-30, docs/plans/2026-08-30-the-cockpit-publish-rejoins-the-
-#: push-that-survived.md) -- the cadence sweep's OWN retry budget, separate
-#: from the interactive `PUSH_RETRY_BUDGET_SECS` above. The cadence used to
-#: inherit that constant by accident (nothing sized a cadence-specific
-#: number), and at `SWEEP_TOTAL_CEILING_SECS=60.0` / `12.0` that bought only
-#: five served repos before the ceiling was exhausted.
+#: push-that-survived.md) sized this at 6.0 from `git ls-remote`/`git push
+#: --dry-run` timings (~600-750ms, quiet) as a stand-in for the cost of a
+#: real `git push`. DR-401 (2026-09-01) supersedes that premise: those two
+#: commands never open a pack-negotiation/transfer round trip the way an
+#: actual `git push` does, so they underpriced the leg they were sized to
+#: stand in for by an order of magnitude. Measured directly (DR-401): a
+#: genuine no-op `git push` (`Everything up-to-date`, nothing to transfer)
+#: on this box under its documented 50-70-session load norm ranges 2.07s to
+#: 15.31s, not the ~750ms the dry-run proxy reported. A 6.0s budget sat
+#: below that floor -- it could time out a push that had already succeeded
+#: server-side and would report `unconfirmed`/`failed` for work that landed.
 #:
-#: SIZING: one attempt plus one retry is a fetch + local `rebase --onto` +
-#: re-push, not a second push alone -- against the same 2026-08-26
-#: measurements behind `PUSH_RETRY_BUDGET_SECS` (ls-remote p50 669.5ms, push
-#: --dry-run p50 753.9ms, quiet), that is ~2.2s before any load.
-#: `CEREMONY_PUSH_BUDGET_SECS` (1.2s) already documents what 1.2s buys in
-#: this codebase ("exactly ONE honest push attempt and no retry ladder"), so
-#: 2.0s is not enough headroom for a retry. 6.0 is roughly half of the
-#: interactive 12.0 (not a quarter) -- one attempt plus one retry with
-#: load-norm headroom kept. A cadence sweep that fails a repo this tick
-#: retries in `push_cadence.PUSH_CADENCE_INTERVAL_SECS` (600s) regardless,
-#: so it does not need the interactive ladder's full patience; that 600s
-#: retry is what keeps the publish guarantee intact while this budget
-#: shrinks. Ratchets in step with `push_cadence.SWEEP_TOTAL_CEILING_SECS`/
-#: `EXIT_SWEEP_CEILING_SECS`, never independently.
-CADENCE_PUSH_RETRY_BUDGET_SECS: float = 6.0
+#: SIZING (DR-401): 16.0s clears the measured worst-case single-leg floor
+#: (15.31s) with headroom, covering the common case (one push attempt) that
+#: dominates cadence traffic -- the retry leg (fetch + `rebase --onto` +
+#: re-push) fires only on the `non-fast-forward` class, not every tick. A
+#: cadence sweep that fails a repo this tick retries in
+#: `push_cadence.PUSH_CADENCE_INTERVAL_SECS` (600s) regardless, so 16.0s
+#: does not need to cover a worst-case retry chain the way the interactive
+#: `PUSH_RETRY_BUDGET_SECS` does -- that 600s backstop is what keeps the
+#: publish guarantee intact at a budget sized for the dominant single-attempt
+#: case. Ratchets in step with `push_cadence.SWEEP_TOTAL_CEILING_SECS`/
+#: `EXIT_SWEEP_CEILING_SECS`, never independently -- both were re-derived to
+#: the same ratios C5 set (EXIT = 2x this budget, SWEEP_TOTAL > EXIT) rather
+#: than left pointing at 6.0's now-superseded arithmetic.
+CADENCE_PUSH_RETRY_BUDGET_SECS: float = 16.0
+
+#: Measured floor for a genuine no-op `git push` (nothing to transfer) on
+#: this box, DR-401 (2026-09-01), n=6 direct measurements under the
+#: documented 50-70-session load norm: 2.07s, 2.85s, 5.64s, 8.54s, 14.54s,
+#: 15.31s (max 15.31s). `test_cadence_push_budget_is_at_least_the_measured_
+#: noop_push_floor` in `tests/test_push_cadence_budget_floor.py` asserts
+#: `CADENCE_PUSH_RETRY_BUDGET_SECS >= MEASURED_NOOP_PUSH_FLOOR_SECS` --
+#: a relationship guard, not a value pin, so a future re-measurement only
+#: needs this constant updated, never the test. Cross-repo corroboration:
+#: `cross-repo/inbox/2026-09-01-example-retrieval-repo-em-push-cadence-cap-below-noop-
+#: floor.md` measured 7.8-10.0s (n=3) on a different box the same day.
+MEASURED_NOOP_PUSH_FLOOR_SECS: float = 15.31
 
 #: The push budget for a CEREMONY op, which is a different job from the cadence
 #: ladder above and deliberately carries a different number.

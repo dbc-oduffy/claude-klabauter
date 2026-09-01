@@ -289,7 +289,7 @@ def test_dwell_seconds_derived_from_receiver_state_stamp(tmp_path, monkeypatch):
         lambda sid, cwd: {"stamped_at": "2026-08-31T00:00:00Z"},
     )
     monkeypatch.setattr(
-        send_pass.read_pass, "_transcript_activity_epoch", lambda sid, cwd: (None, False)
+        send_pass.read_pass, "transcript_activity_epoch", lambda sid, cwd: (None, False)
     )
     from datetime import datetime, timezone
 
@@ -307,7 +307,7 @@ def test_dwell_seconds_uses_peer_cwd_not_repo_root(tmp_path, monkeypatch):
     """Finding 1 (coordinator:code-reviewer, P1): a peer whose `cwd` is a
     subdirectory of `repo_root` (permitted by `build_roster`'s "within
     repo_root" filter) must have ITS OWN cwd threaded to
-    `_transcript_activity_epoch`, matching `read_pass.classify_peer`'s own
+    `transcript_activity_epoch`, matching `read_pass.classify_peer`'s own
     `peer.get("cwd") or repo_root` pattern -- else `_transcript_path_for`
     looks up the wrong encoded path and dwell silently degrades to `None`
     forever for exactly this population."""
@@ -325,7 +325,7 @@ def test_dwell_seconds_uses_peer_cwd_not_repo_root(tmp_path, monkeypatch):
         return (500.0, True) if cwd == peer_cwd else (None, False)
 
     monkeypatch.setattr(
-        send_pass.read_pass, "_transcript_activity_epoch", fake_transcript_activity
+        send_pass.read_pass, "transcript_activity_epoch", fake_transcript_activity
     )
 
     roster = [_verdict("peer-nested", cwd=peer_cwd)]
@@ -359,7 +359,7 @@ def test_dwell_seconds_prefers_more_recent_of_stamp_and_transcript(tmp_path, mon
     # stale stamp.
     monkeypatch.setattr(
         send_pass.read_pass,
-        "_transcript_activity_epoch",
+        "transcript_activity_epoch",
         lambda sid, cwd: (stamp_epoch + 200.0, True),
     )
     roster = [_verdict("peer-newer-transcript")]
@@ -372,7 +372,7 @@ def test_dwell_seconds_prefers_more_recent_of_stamp_and_transcript(tmp_path, mon
     # (more recent) stamp, not the stale transcript.
     monkeypatch.setattr(
         send_pass.read_pass,
-        "_transcript_activity_epoch",
+        "transcript_activity_epoch",
         lambda sid, cwd: (stamp_epoch - 200.0, True),
     )
     roster2 = [_verdict("peer-newer-stamp")]
@@ -522,7 +522,7 @@ def test_an_untrusted_transcript_clock_never_wins_the_dwell_max(tmp_path, monkey
     )
     monkeypatch.setattr(
         send_pass.read_pass,
-        "_transcript_activity_epoch",
+        "transcript_activity_epoch",
         lambda sid, cwd: (stamp_epoch + 420.0, False),
     )
 
@@ -544,7 +544,7 @@ def test_an_untrusted_transcript_clock_is_still_used_when_it_is_the_only_source(
     repo_root = str(tmp_path)
     monkeypatch.setattr(send_pass.read_pass, "read_receiver_state", lambda sid, root: None)
     monkeypatch.setattr(
-        send_pass.read_pass, "_transcript_activity_epoch", lambda sid, cwd: (500.0, False)
+        send_pass.read_pass, "transcript_activity_epoch", lambda sid, cwd: (500.0, False)
     )
 
     digest = send_pass.build_send_digest(
@@ -552,3 +552,41 @@ def test_an_untrusted_transcript_clock_is_still_used_when_it_is_the_only_source(
     )
 
     assert digest["entries"][0]["dwell_seconds"] == 500.0
+
+
+def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
+    """`send_pass`, `group_em.obligations` and the undischarged-next-move
+    watchdog each carried their own `state/subagent-share/<sid>/` join and
+    their own `"next-move-ledger.jsonl"` literal, with `obligations` reaching
+    into this module's private namespace for one of them. One typo apart, a
+    producer and its reader would have been on different files with nothing
+    to catch it -- all three build their paths from the same owner now."""
+    from coordinator_core.group_em import obligations
+    from coordinator_core.hooks import watchdog_undischarged_next_move as watchdog
+    from coordinator_core.session import subagent_share
+
+    repo_root, session_id = str(tmp_path), "sess-share"
+    assert (
+        send_pass._session_share_dir(repo_root, session_id)
+        == subagent_share.share_dir(repo_root, session_id)
+    )
+    assert (
+        obligations._ledger_path(repo_root, session_id)
+        == watchdog._ledger_path(repo_root, session_id)
+        == subagent_share.ledger_path(repo_root, session_id)
+    )
+    assert (
+        obligations._intake_path(repo_root, session_id)
+        == watchdog._intake_path(repo_root, session_id)
+        == subagent_share.intake_path(repo_root, session_id)
+    )
+
+
+def test_an_unsafe_session_id_is_still_refused_a_path(tmp_path):
+    """The predicate moved modules; it did not relax. A bare `.`/`..` passes
+    the character class alone, which is why the check is not just a regex."""
+    from coordinator_core.session import subagent_share
+
+    assert subagent_share.safe_session_id("sess-1") is True
+    for bad in ("..", ".", "", None, "a/b", "a\b", "a:b"):
+        assert subagent_share.safe_session_id(bad) is False

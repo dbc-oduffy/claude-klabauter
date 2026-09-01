@@ -301,13 +301,22 @@ def test_sentinel_is_not_written_when_the_launcher_is_missing(
     assert not os.path.isfile(sentinel)
 
 
-def test_no_group_em_watch_launcher_installed_by_default(monkeypatch):
-    """Documents the current, honest state of the repo: no
-    `group-em-watch(.exe)` launcher has been generated anywhere yet, so this
-    leg's own launcher probe always resolves to None until that lands (a
-    follow-up outside this chunk's `writes:` scope -- see this chunk's report).
+def test_the_launcher_probe_resolves_nothing_from_an_empty_settings_home(tmp_path, monkeypatch):
+    """The probe answers the disk, and stays None when the launcher is absent.
+
+    This test used to assert the same thing about the REAL settings home, on
+    the reasoning that no `group-em-watch` launcher had been generated
+    anywhere yet. That premise expired: `coordinator/bin/group-em-watch.py`
+    landed 2026-09-01 (117dbd53c2) and `install.substrate` enumerates
+    `coordinator/bin/*.py` into the settings home under its stem, so the
+    launcher this leg names now exists and installs like any other. Pinning
+    the machine's install state made this test assert that a shipped artifact
+    can never arrive -- it would have started failing on the next install with
+    nothing wrong. What is worth pinning is the FAIL-OPEN rule itself: a leg
+    that cannot find the launcher composes no command at all, because a
+    command naming an entrypoint that will not run is worse than silence.
     """
-    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "empty-home"))
     assert pad._group_em_watch_launcher() is None
 
 

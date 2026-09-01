@@ -22,11 +22,14 @@ The sidecar leaf naming convention this guard reads is
 ``[A-Za-z0-9._@-]`` character dropped -- a colon-bearing ``agent_type``
 string like ``coordinator:executor`` collapses to ``coordinatorexecutor``)
 effective dispatched type and ``agent_id`` is the resolved canonical
-identity (bare hex, or ``<name>@session-<short>``). This guard never
-imports that module (a PreToolUse hook and a spawn-time provisioner have no
-runtime dependency on one another); it re-derives the same sanitization
-locally, by name, so both sides read one convention rather than risking two
-independently-drifting copies.
+identity (bare hex, or ``<name>@session-<short>``). This guard re-derives
+the same sanitization locally rather than importing ``provision_report``
+-- that module's own import chain (``engine``, ``snippet_sync.registry``,
+``session.scope``) is heavier than this guard's leg-1 pure-string budget
+should carry on every PreToolUse write. The two patterns are pinned equal
+by
+``coordinator_core/write_guards/tests/test_block_foreign_family_sidecar_write.py::test_label_whitelist_matches_provision_report``,
+not by a runtime import.
 
 Two legs, in budget order:
 
@@ -43,8 +46,14 @@ and this guard's remit is the foreign-family case, not filename hygiene).
 Leg 2 (only reached for a leaf-shaped target): resolves the CALLER's own
 dispatched ``subagent_type`` via the shared back-pointer chain
 (``_subagent_identity._read_backpointer_subagent_type``, pinned to the
-CALLING session via ``expected_em_session_id``) and denies ONLY when both
-of the following hold:
+CALLING session via ``expected_em_session_id=payload["session_id"]``).
+This is the right field to pin against because, inside a dispatched
+subagent's own PreToolUse hook, ``CLAUDE_CODE_SESSION_ID``-derived
+``session_id`` is the DISPATCHING EM's own id, not a distinct subagent
+session -- ``coordinator_core/hooks/nudge_unrouted_sizing.py``'s
+``_is_subagent_session`` documents this inheritance directly, and it is
+exactly what the back-pointer's own ``em-session-id.txt`` is keyed on.
+And denies ONLY when both of the following hold:
   (a) the resolved type's sanitized label form equals the leaf's ``<label>``
       -- the write is INTO this agent's own dispatched family's sidecar
       shape, AND
@@ -64,10 +73,7 @@ omission:
     brick a spawn over an unresolvable environment fact.
   - The caller's own ``agent_id`` does not resolve through
     ``_resolve_subagent_identity`` (unrecognised shape) -> allow. Symmetric
-    with every other write-guard's identity-unresolvable posture (see
-    ``block_subagent_archive_write``'s own presence-only fire gate, though
-    that guard's downstream allow-condition posture is asymmetric for a
-    DIFFERENT, named reason -- see this module's own asymmetry note below).
+    with every other write-guard's identity-unresolvable posture.
   - The back-pointer lookup itself fails (absent, unreadable, malformed
     ``em-session-id.txt``, session-id mismatch against
     ``expected_em_session_id``, missing/ambiguous ``dispatched-agents.txt``
@@ -82,20 +88,9 @@ omission:
     file) -> allow, trivially -- this is the entire population of writes
     this guard exists to let through unimpeded.
 
-Deliberate fail-open, named explicitly (mirrors
-``block_subagent_archive_write``'s own explicit-asymmetry discipline, for a
-DIFFERENT direction and a DIFFERENT reason): EVERY leg-2 failure mode above
-resolves to ALLOW, never DENY. Unlike ``block_subagent_archive_write``'s
-review-integrator allow-condition (whose failed lookup falls through to a
-deny-everything-under-archive/ DEFAULT), this guard's only failure-free path
-IS the deny -- there is no safe default to fail closed TO. A caller whose
-identity this guard cannot positively resolve, or whose family this guard
-cannot positively confirm, is not distinguishable from a legitimate
-first-class writer (a hand-authored non-sidecar doc, a differently-shaped
-dispatch, an EM write missing only its ``agent_id`` stamp), and denying that
-population on an unresolvable fact would be a false positive with no
-recovery path narrower than "stop dispatching". Only a POSITIVELY confirmed
-same-family, different-member write denies.
+Deliberate fail-open, named explicitly: every leg-2 failure resolves to
+ALLOW, never DENY -- only a POSITIVELY confirmed same-family,
+different-member write denies.
 
 Negative-spec:
   - Does NOT gate on tool name beyond the standard Write/Edit/MultiEdit/
@@ -106,9 +101,9 @@ Negative-spec:
     (``block_subagent_archive_write._normalize_path``'s own docstring notes
     the same choice).
   - Does NOT import ``coordinator_core.subagent_sandbox.provision_report``
-    -- a PreToolUse hook has no runtime dependency on the spawn-time
-    provisioner; the sanitization convention is re-derived locally by name
-    (see module docstring above), not imported.
+    -- its import chain is too heavy for this guard's leg-1 budget; the
+    sanitization convention is re-derived locally and pinned equal by a
+    test (see module docstring above), not imported.
   - Does NOT compare the leaf's ``<agent_id>`` against the caller's RAW
     ``agent_id`` -- ``provision_report``'s own ``derived_key`` branch keys
     the leaf on the RESOLVED canonical id (``resolve_effective_types``'s
@@ -144,18 +139,16 @@ _INTERCEPTED_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
 
 #: Leg 1 -- pure-string applicability gate. Captures the session-id
 #: directory segment and the leaf basename; the leaf's own
-#: ``<label>.<agent_id>.md`` split happens separately below (an
-#: ``<agent_id>`` may legitimately contain a literal ``.``, e.g. a
-#: ``<name>@session-<short>`` teammate id never does today but the leaf
-#: grammar does not forbid it, so the FIRST ``.`` -- not a greedy split --
-#: decides where ``<label>`` ends).
+#: ``<label>.<agent_id>.md`` split happens separately below, on the FIRST
+#: ``.`` (``partition``), not a greedy split.
 _SIDECAR_LEAF_RE = re.compile(
     r"(^|/)state/subagent-share/(?P<session>[^/]+)/(?P<leaf>[^/]+)$"
 )
 
 #: Same single-segment whitelist ``provision_report._SEGMENT_WHITELIST_RE``
 #: uses to sanitize the ``<label>`` component -- re-derived here rather than
-#: imported (see module docstring's negative-spec bullet).
+#: imported (see module docstring's negative-spec bullet); pinned equal by
+#: test_label_whitelist_matches_provision_report.
 _LABEL_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._@-]")
 
 
@@ -199,7 +192,11 @@ def _split_sidecar_leaf(normalized_path: str) -> Optional[Dict[str, str]]:
     if not match:
         return None
     leaf = match.group("leaf")
-    if not leaf.endswith(".md"):
+    # Review: coordinator:code-reviewer -- casefold the extension test so
+    # `.MD`/`.Md` on a case-insensitive-but-preserving filesystem (NTFS,
+    # default APFS) still resolves to the same leaf-shaped applicability
+    # this guard protects, rather than falling through to ALLOW.
+    if not leaf.casefold().endswith(".md"):
         return None
     stem = leaf[: -len(".md")]
     if "." not in stem:
@@ -255,24 +252,57 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     caller_label = _sanitize_label(caller_subagent_type)
-    if not caller_label or caller_label != leaf_info["label"]:
+    # Review: coordinator:code-reviewer -- casefold both the label and
+    # agent_id equality checks; a case-insensitive-but-preserving
+    # filesystem write (e.g. `CoordinatorExecutor.<sibling>.MD`) lands on
+    # the same physical file as the canonical-case leaf, so a
+    # case-sensitive compare here would fall through to ALLOW on the exact
+    # bypass shape this guard exists to deny. Agent ids (bare hex,
+    # `<name>@session-<short>`) and sanitized labels never legitimately
+    # differ from one another only by case, so casefolding only makes this
+    # guard deny MORE, never produces a false deny.
+    if not caller_label or caller_label.casefold() != leaf_info["label"].casefold():
         return None
 
-    if leaf_info["agent_id"] == resolved_agent_id:
-        return None
+    # The leaf may be keyed on EITHER form of this caller's id, so a match
+    # against either one is this agent's own file. `provision_report` names
+    # the leaf via `subagent_sandbox.engine._canonical_agent_id`, whose leg
+    # (c) returns an already-canonical `<name>@session-<short>` id
+    # UNCHANGED, while `_resolve_subagent_identity`'s leg (d) rebuilds that
+    # same shape against the live session id. The two disagree exactly when
+    # the embedded short is stale, and comparing only against the resolved
+    # form then denies an agent writing its OWN sidecar --
+    # `test_stale_embedded_short_self_write_allowed` is that case.
+    # Checking both is the fail-open reading this guard's posture requires:
+    # only a POSITIVELY confirmed foreign write denies, and an id that
+    # matches either form of the caller is not positively foreign. Widening
+    # here cannot admit a genuine sibling -- a different agent's id matches
+    # neither form.
+    for own_id in (resolved_agent_id, raw_agent_id):
+        if own_id and leaf_info["agent_id"].casefold() == own_id.casefold():
+            return None
 
+    own_leaf = "state/subagent-share/%s/%s.%s.md" % (
+        leaf_info["session"], leaf_info["label"], resolved_agent_id
+    )
+    # Register (docs/wiki/guard-messaging.md): one fact, once, plus the
+    # terse alternative. The indented block is PATH ENTRIES ONLY -- every
+    # non-blank line in it must be a bare path, or `_message_size`'s
+    # `_LABELED_INDENT_BLOCK_RE` data exemption does not apply and the
+    # echoed paths are charged against the 220-byte prose cap. A
+    # `Caller: <id> (dispatched as <type>)` line in this block is what put
+    # an earlier draft at 358 prose bytes against that cap.
     return {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": (
-                "BLOCKED: a run-report sidecar leaf may only be written by "
-                "the agent it names.\n"
-                f"  Caller:   {resolved_agent_id} (dispatched as "
-                f"{caller_subagent_type})\n"
-                f"  Target:   {normalized}\n"
-                "Use instead: your own sidecar (the path your dispatch "
-                "brief named), not a sibling's."
+                "BLOCKED: a sidecar leaf is written only by the agent it names.\n"
+                "Your own leaf, then the one you targeted:\n"
+                "  %s\n"
+                "  %s\n"
+                "Write yours, or skip the stamp and say so in your report."
+                % (own_leaf, normalized)
             ),
         }
     }

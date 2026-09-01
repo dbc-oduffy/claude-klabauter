@@ -101,7 +101,24 @@ class IndexStaleAfterCommit(IndexWriteError):
     it was on. `CommitOutcome` carries a sha on success and had nothing that
     said "committed, index stale" -- this type is that missing word, and it
     turns a retry hazard into a `git status`.
+
+    `outcome` carries the `CommitOutcome` the call would have RETURNED had the
+    splice succeeded -- sha included. Without it this type names the right
+    outcome and still strands the caller, who knows a commit landed but not
+    which one, and so cannot report a sha or stamp a trailer. It is optional
+    only so the type stays constructible in tests and by any future raiser
+    that genuinely has no outcome in hand; every raiser on the commit path
+    passes it.
+
+    Typed as `object` rather than importing `CommitOutcome`: `commit.py`
+    already imports THIS module, so naming its type here would close an
+    import cycle. The one raiser is `commit.py` itself and it passes the real
+    thing.
     """
+
+    def __init__(self, *args: object, outcome: object = None) -> None:
+        super().__init__(*args)
+        self.outcome = outcome
 
 
 def _entry_span(raw: bytes, offset: int) -> Tuple[bytes, int]:

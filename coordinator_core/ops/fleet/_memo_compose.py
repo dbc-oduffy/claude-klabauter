@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.ops.fleet._common import build_setup_error_result
+from coordinator_core.ops.fleet.memo_kinds import VALID_KINDS as _CANONICAL_VALID_KINDS
 from coordinator_core.ops.fleet._memo_resolver import (
     AmbiguousReceiverError,
     RegistryReadError,
@@ -438,8 +439,6 @@ def _render_extra_field(key: str, value: Any) -> str:
         return "\n".join([f"{key}:"] + block_lines)
     return f"{key}: {_yaml_scalar(value)}"
 
-
-from coordinator_core.ops.fleet.memo_kinds import VALID_KINDS as _CANONICAL_VALID_KINDS
 
 # kind enum — re-exported from `memo_kinds`, which is import-free on purpose.
 # Kept as a module-level name because five call sites and several tests already

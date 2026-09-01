@@ -77,7 +77,7 @@ never dies silently. A watcher that exits without a trace is
 indistinguishable from a quiet repo, the exact false-green class this plan's
 predecessor session was caught by repeatedly.
 
-DO NOT ADD A THIRD TRANSCRIPT-CLOCK SITE. `read_pass._transcript_activity_epoch`
+DO NOT ADD A THIRD TRANSCRIPT-CLOCK SITE. `read_pass.transcript_activity_epoch`
 is the one place a session id becomes a last-activity instant; this module
 calls it and does not add its own `getmtime`.
 
@@ -100,6 +100,7 @@ NEGATIVE SPEC -- what this module deliberately does not do:
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -140,18 +141,58 @@ _POLL_INTERVAL_CEILING_SECONDS = 300.0
 _COOLDOWN_SECONDS = send_pass.DEFAULT_COOLDOWN_SECONDS
 
 
-def _measure_snapshot_ms(repo_root: str) -> tuple[float, int]:
-    """Time one `fetch_live_agents` call on THIS box; return (ms, peer_count).
+#: The carried parked map, next to the heartbeat record it accompanies. A held
+#: poll loop keeps `prev_parked` in memory for the life of the session; a
+#: single-tick wake (`--once`, `tick_once`) has no memory at all, and a
+#: transition is a DIFF -- with no prior tick to diff against, every wake sees
+#: either an empty prior (flagging nothing, since `transitions` requires
+#: membership in both) or the whole roster (flagging everyone). Neither is the
+#: answer, so the prior tick is written down.
+_PARKED_STATE_RELATIVE_PATH = os.path.join("state", "group-em-watch-parked.json")
+
+#: What `--once` promises the reader about the NEXT wake, when its caller does
+#: not say. The crown's cron floor is ~23 minutes (the group-em entry
+#: sequence's own cadence), so a wake that named the poll loop's few-second
+#: interval instead would stamp a deadline it cannot meet and read STALE to
+#: every other session within the minute -- the watch reporting itself absent
+#: while working correctly.
+_CRON_FLOOR_INTERVAL_SECONDS = 23 * 60.0
+
+
+def _measure_snapshot_ms(repo_root: str) -> tuple[float, list]:
+    """Time one `fetch_live_agents` call on THIS box; return (ms, agents).
 
     Re-measures rather than trusting the plan's cited 4.6ms cold -- that
     number was measured on a different box, on a different tick, and this
     module's poll interval is derived from ITS OWN measurement so the
     denominator printed on `ARMED` is always this box's own evidence.
+
+    Returns the enumeration itself, not just its length. The arm sequence
+    needs one more fact out of it -- the crown's own display name, for the
+    heartbeat's self-description leg -- and re-reading the registry to get a
+    string this call already held would bill the box twice for one answer.
     """
     started = time.monotonic()
     agents = read_pass.fetch_live_agents(repo_root)
     elapsed_ms = (time.monotonic() - started) * 1000.0
-    return elapsed_ms, len(agents)
+    return elapsed_ms, list(agents)
+
+
+def _holder_name(agents: list, session_id: Optional[str]) -> Optional[str]:
+    """The crown's display name off an enumeration already in hand, or None.
+
+    Resolved ONCE, at arm time. Never per tick: a name on the heartbeat is
+    self-description for a reader that cannot reach this box's registry, and
+    paying a registry read every tick to keep a string fresh would put the
+    load norm's cost on the cheapest thing the watch does.
+    """
+    if not session_id:
+        return None
+    for agent in agents:
+        if isinstance(agent, dict) and agent.get("sessionId") == session_id:
+            name = agent.get("name")
+            return name if isinstance(name, str) and name else None
+    return None
 
 
 def _poll_interval_seconds(snapshot_ms: float) -> float:
@@ -275,7 +316,7 @@ def _transcript_idle_seconds(
 ) -> Optional[float]:
     """Seconds since this peer last MOVED, or `None` if that is unreadable.
 
-    Calls `read_pass._transcript_activity_epoch` -- the one place a session id
+    Calls `read_pass.transcript_activity_epoch` -- the one place a session id
     becomes a last-activity instant, extracted for exactly this reuse (module
     docstring). No second transcript-clock site is added here.
 
@@ -296,7 +337,7 @@ def _transcript_idle_seconds(
     only then is a read paid here -- a first read, not a second.
     """
     if activity_epoch is None:
-        activity_epoch, _trusted = read_pass._transcript_activity_epoch(
+        activity_epoch, _trusted = read_pass.transcript_activity_epoch(
             session_id, cwd or repo_root
         )
     if activity_epoch is None:
@@ -336,20 +377,39 @@ def _parked_line(
     verdict: dict[str, Any],
     cwd: Optional[str],
     now: datetime,
+    name: Optional[str] = None,
 ) -> str:
-    """Compose one PARKED line -- observed evidence, framed as evidence."""
+    """Compose one PARKED line -- observed evidence, framed as evidence.
+
+    `name` IS PROVENANCE, NOT AN ADDRESS, and the line says so. A reader
+    cannot act on a session uuid -- `SendMessage` takes a name -- so a line
+    carrying only the uuid asks the crown to go resolve one, and the resolve
+    is a second read of a registry this tick already held. The name goes on.
+
+    What the line must NOT do is tell the reader to re-resolve from the
+    printed sid, which reads like a check and performs like a ritual: in the
+    case that matters -- the peer has re-pointed or gone -- that sid is
+    precisely the one that no longer resolves, so the instruction is
+    guaranteed to fail exactly when it is needed, and its failure looks
+    identical to the peer simply being gone. `verify before sending` is the
+    honest qualifier; `re-resolve from this id` is not
+    (`DoE-claude docs/wiki/session-facade.md`, amended 2b6df17e6c, via
+    claude-klabauter-a9).
+    """
     stamped_age = _stamped_age_seconds(repo_root, session_id, now)
     transcript_idle = _transcript_idle_seconds(
         repo_root, session_id, cwd, now, activity_epoch=verdict.get("activity_epoch")
     )
     obligations_summary = _obligation_summary(repo_root, session_id)
     reason = verdict.get("reason")
+    who = f"{name} [{session_id}]" if name else str(session_id)
     return (
-        f"PARKED session={session_id} reason={reason} "
+        f"PARKED session={who} reason={reason} "
         f"stamped_age={_fmt_seconds(stamped_age)} "
         f"transcript_idle={_fmt_seconds(transcript_idle)} "
         f"obligations={obligations_summary} "
-        f"(observed, not asserted -- overturn if wrong)"
+        f"(observed, not asserted -- overturn if wrong; "
+        f"the name is how it was known this tick, verify before sending)"
     )
 
 
@@ -423,7 +483,13 @@ def poll_once(
             continue
         peer = agents_by_id.get(session_id, {})
         line = _parked_line(
-            repo_root, crown_session_id, session_id, verdicts[session_id], peer.get("cwd"), now
+            repo_root,
+            crown_session_id,
+            session_id,
+            verdicts[session_id],
+            peer.get("cwd"),
+            now,
+            name=peer.get("name"),
         )
         emit(line)
 
@@ -438,6 +504,125 @@ def poll_once(
         )
 
     return cur_parked, declinations
+
+
+def parked_state_path(repo_root: str) -> str:
+    """Absolute path of the carried parked map for `repo_root`."""
+    return os.path.join(repo_root, _PARKED_STATE_RELATIVE_PATH)
+
+
+def load_prev_parked(repo_root: str) -> dict[str, bool]:
+    """The prior tick's `{session_id: parked}`, or `{}` when there is none.
+
+    Absent, unreadable, and malformed all answer `{}` -- the same answer as a
+    first tick. A wake that cannot read its own prior state must not be able to
+    turn that into a flood of PARKED lines for peers nobody just observed
+    changing: `transitions` requires membership in BOTH maps, so an empty prior
+    emits nothing and the NEXT wake reports the transitions honestly.
+
+    Deliberately NOT aged out. A prior map written hours ago is stale, but a
+    peer that parked in the meantime is exactly what the fleet wants surfaced,
+    late rather than never; the send-pass cooldown is what stops an
+    already-answered peer being raised twice, and it does that on its own
+    clock rather than this one.
+    """
+    try:
+        with open(parked_state_path(repo_root), "r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    parked = payload.get("parked") if isinstance(payload, dict) else None
+    if not isinstance(parked, dict):
+        return {}
+    return {
+        str(sid): bool(value)
+        for sid, value in parked.items()
+        if isinstance(sid, str)
+    }
+
+
+def save_prev_parked(repo_root: str, parked: dict[str, bool]) -> bool:
+    """Write this tick's parked map for the next wake to diff against.
+
+    Same posture as the heartbeat stamp it sits beside: returns False on I/O
+    failure, never raises. A lost map costs one tick's transitions, never the
+    watch.
+    """
+    return watch_heartbeat.write_atomic(
+        parked_state_path(repo_root), {"parked": dict(parked)}
+    )
+
+
+def tick_once(
+    repo_root: str,
+    caller_session_id: Optional[str] = None,
+    crown_session_id: Optional[str] = None,
+    stream: Optional[TextIO] = None,
+    tick_interval_seconds: float = _CRON_FLOOR_INTERVAL_SECONDS,
+    now: Optional[datetime] = None,
+) -> int:
+    """One wake: poll once against the carried prior map, then exit.
+
+    THE POINT OF THIS ENTRY IS THAT NOTHING IS HELD. `main` is a watch only
+    while its process lives, and a process that never started, exited, or
+    returned instead of blocking presents from outside exactly like a quiet
+    fleet -- the failure `cross-repo/inbox/2026-09-01-example-game-repo-em-group-em-fleet-watch-wake-on-session-state.md`
+    reproduces. A wake that carries its state on disk and exits has no held
+    thing to lapse: the next caller -- the crown's cron floor, or any
+    session-state-transition wake wired above this line -- supplies the
+    liveness, and the heartbeat record says which clock last fired.
+
+    NOT A SECOND WATCHER. Every judgement here is `poll_once`'s, unchanged:
+    same parked predicate, same cooldown gate, same line format. The only
+    thing this adds is where `prev_parked` comes from and goes.
+
+    `tick_interval_seconds` is the CALLER's cadence, not a measurement --
+    it sets the staleness deadline the heartbeat promises, so a caller on a
+    slower clock must say so or the record reads STALE between correct wakes.
+
+    Returns a process exit code: 0 for a tick that ran, 1 for one that raised
+    (reported as a POLL-ERROR line first). A failed wake exits LOUD -- there
+    is no loop left to carry on into, and a silent zero here would rebuild the
+    exact indistinguishability this entry exists to remove.
+    """
+    if caller_session_id is None:
+        caller_session_id = read_pass.caller_session_id()
+    if crown_session_id is None:
+        crown_session_id = caller_session_id
+    out = sys.stdout if stream is None else stream
+
+    def emit(line: str) -> None:
+        print(line, file=out, flush=True)
+
+    try:
+        cur_parked, declinations = poll_once(
+            repo_root,
+            caller_session_id,
+            load_prev_parked(repo_root),
+            now=now,
+            emit=emit,
+            crown_session_id=crown_session_id,
+        )
+    except Exception:
+        try:
+            emit("POLL-ERROR " + traceback.format_exc(limit=1).strip().replace("\n", " | "))
+        except Exception:
+            pass
+        return 1
+
+    save_prev_parked(repo_root, cur_parked)
+    watch_heartbeat.stamp(
+        repo_root,
+        holder_session_id=crown_session_id or "",
+        declinations=declinations,
+        interval_seconds=tick_interval_seconds,
+        tick_source="cron",
+        subscribed_peers=len(cur_parked),
+        # No `holder_name`: a wake makes no enumeration of its own, so it has
+        # no name to write. `stamp` carries the armed poller's forward rather
+        # than blanking it -- a cheaper answer than a registry read per wake.
+    )
+    return 0
 
 
 def main(
@@ -489,7 +674,9 @@ def main(
     def emit(line: str) -> None:
         print(line, file=out, flush=True)
 
-    snapshot_ms, peer_count = _measure_snapshot_ms(repo_root)
+    snapshot_ms, agents = _measure_snapshot_ms(repo_root)
+    peer_count = len(agents)
+    holder_name = _holder_name(agents, crown_session_id)
     interval = _poll_interval_seconds(snapshot_ms)
     # Review: coordinatorcode-reviewer.a9e1410288878bea9 -- the ARMED line is
     # operator-facing; "denominator" is an internal metric name from the
@@ -530,6 +717,15 @@ def main(
                 holder_session_id=crown_session_id or "",
                 declinations=declinations,
                 interval_seconds=interval,
+                # THE PEERS THIS TICK ACTUALLY LOOKED AT, never the default 1.
+                # A watch subscribed to one peer and a watch covering the whole
+                # repo were indistinguishable from every artifact on disk:
+                # measured 2026-09-01 by the crown of this repo, whose record
+                # read `subscribed_peers: 1` against a live population of 10-18.
+                # A coverage figure nobody writes is a coverage figure nobody
+                # can question.
+                subscribed_peers=len(prev_parked),
+                holder_name=holder_name,
             )
         except Exception:
             # Review: coordinatorcode-reviewer.a9e1410288878bea9 -- reporting
@@ -564,6 +760,14 @@ def _cli(argv: "list[str] | None" = None) -> int:
     A watch you cannot spell on a command line is a watch nobody runs.
 
     Arm it with:
+        group-em-watch --repo-root <path>
+
+    That is the settings-home launcher (`coordinator/bin/group-em-watch.py`),
+    which resolves the engine wherever it is installed. The `python -m` spelling
+    below works only from a cwd whose interpreter can already import
+    `coordinator_core` -- which the repos this watch is armed FOR generally
+    cannot, and the failure is a `ModuleNotFoundError` the arming agent reports
+    as nothing at all:
         python -m coordinator_core.group_em.watch --repo-root <path>
 
     When a dispatched teammate holds the watch rather than the crown itself,
@@ -601,6 +805,23 @@ def _cli(argv: "list[str] | None" = None) -> int:
              "nudged twice.",
     )
     parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Run ONE tick against the carried parked map and exit, instead of holding a poll "
+             "loop. This is the form a cron floor -- or any session-state wake -- fires: nothing "
+             "is held between wakes, so nothing can silently lapse. Stamps the heartbeat with "
+             "tick_source=cron.",
+    )
+    parser.add_argument(
+        "--tick-interval-seconds",
+        type=float,
+        default=_CRON_FLOOR_INTERVAL_SECONDS,
+        help="With --once: the CALLER's cadence, which sets the staleness deadline the heartbeat "
+             f"promises. Defaults to the group-em entry sequence's own cron floor "
+             f"({_CRON_FLOOR_INTERVAL_SECONDS/60:.0f} minutes). Ignored without --once, where the "
+             "interval is measured at arm time.",
+    )
+    parser.add_argument(
         "--max-iterations",
         type=int,
         default=None,
@@ -608,6 +829,17 @@ def _cli(argv: "list[str] | None" = None) -> int:
              "For probes and tests; omit for a real arm.",
     )
     args = parser.parse_args(argv)
+
+    if args.once:
+        # A single-shot wake reports its own failure through the exit code --
+        # there is no loop to carry on into, and a wake that exits 0 having
+        # done nothing is the false-green this mode exists to remove.
+        return tick_once(
+            args.repo_root,
+            caller_session_id=args.caller_session_id,
+            crown_session_id=args.crown_session_id,
+            tick_interval_seconds=args.tick_interval_seconds,
+        )
 
     try:
         main(

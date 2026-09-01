@@ -143,21 +143,16 @@ def test_no_tracked_python_source_carries_a_control_byte():
     assert offenders == [], (
         "Tracked *.py carrying a raw C0 control byte (tab/LF/CR excluded): "
         + ", ".join(offenders)
-        + ". Almost always an escape that lost its backslash -- `"
-        + _BACKSLASH
-        + "b` becoming 0x08 is the observed case. Read the byte's context "
+        + ". Almost always an escape that lost its backslash -- `\\b` "
+        "becoming 0x08 is the observed case. Read the byte's context "
         "before repairing: in a regex it changes what the pattern matches, "
         "in a path it changes what the path names."
     )
 
 
 def test_scanner_sees_a_planted_control_byte(tmp_path):
-    """The guard proves it can fire.
-
-    Without this, a scan that silently matched nothing -- a mangled pattern,
-    a pathspec that selects no files, a git that ignores `-P` -- would be
-    indistinguishable from a clean repo, which is precisely the defect in
-    `test_warm_fail_hard.py` that this module's docstring records.
+    """The guard proves it can fire -- see the module docstring's WHY block
+    for the dead-instrument failure this proves against.
 
     The fixture COMMITS. `git grep` against a repo with no HEAD reports no
     matches for a worktree file that is merely staged, so an uncommitted
@@ -191,19 +186,28 @@ def test_scanner_sees_a_planted_control_byte(tmp_path):
     )
 
 
-def test_scanner_reports_a_git_that_cannot_run_the_scan(monkeypatch):
-    """A >1 exit is an unrun scan, and must read as one.
+def test_a_scan_that_could_not_run_raises_rather_than_reading_clean(tmp_path):
+    """`_scan`'s `returncode > 1` arm, exercised against the real binary.
 
-    The arm exists because its absence is the whole failure mode: a git
-    without PCRE refuses `-P` and exits 128, and a `returncode != 0` test
-    would fold that into the same branch as "clean repo"."""
+    Restored after two reviewers disagreed about it, and the disagreement was
+    settled by measurement rather than by preference. The overengineering pass
+    argued the arm needed no test of its own because a git that cannot honour
+    `-P` would make the other two tests raise anyway. That is true only on a
+    machine that has such a git, and this fleet has none -- so on every machine
+    that actually runs this suite the arm had no coverage at all. Measured by
+    deleting the `raise` outright: both surviving tests still passed. A
+    fail-loud branch nothing exercises can be deleted silently, which is the
+    same shape as the dead assertion this whole module exists to prevent.
 
-    def fake_run(*_args, **_kwargs):
-        return subprocess.CompletedProcess(
-            args=[], returncode=128, stdout="", stderr="fatal: cannot use Perl-compatible regexes"
-        )
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    Exercised through a real `git grep` rather than a faked exit code, which
+    answers the reviewer's actual objection: a monkeypatched 128 only feeds the
+    branch the constant it tests for. A directory that is not a git repository
+    makes the real binary exit 128 on its own, so this pins the behaviour end
+    to end -- and a scan that returned `[]` here, rather than raising, would be
+    reporting a clean tree it never looked at."""
+    not_a_repo = tmp_path / "bare"
+    not_a_repo.mkdir()
 
     with pytest.raises(AssertionError, match="could not run the control-byte scan"):
-        _scan(REPO_ROOT)
+        _scan(not_a_repo)
+
