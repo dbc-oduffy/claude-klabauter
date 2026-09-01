@@ -1564,15 +1564,8 @@ def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp
     # day by instrumenting `subprocess.run` across a live `rebuild()` over a
     # synthetic 30-session / 600-event corpus: zero calls.
     #
-    # `abs=0.01` is deliberately far tighter than the quantity it bounds, and
-    # is not a slack budget to be widened. `procs_per_call` is an exact
-    # job-object process count divided by `k`, so it moves only in steps of
-    # `1/k` (0.2 at k=5) and is isolated from ambient box load by that job
-    # object -- there is no measurement noise here for a tolerance to absorb.
-    # The only two reachable values are an exact 0.0 and a step at least 20x
-    # the tolerance, so a tight bound cannot produce a false failure, while a
-    # loose one would silently buy nothing and lose the margin that keeps this
-    # honest if the metric ever becomes fractional.
+    # procs_per_call moves in exact 1/k steps under a job object -- no noise
+    # for a tolerance to absorb; do not widen `abs=0.01`.
     assert procs_excess == pytest.approx(0.0, abs=0.01), (
         f"a pure-Python rebuild driver must spawn no subprocess of its own "
         f"BEYOND its import floor: driver={result['procs_per_call']} "

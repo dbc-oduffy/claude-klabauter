@@ -57,7 +57,7 @@ def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):
 
         with mock.patch.object(
             watch, "_measure_snapshot_ms", return_value=(2.0, [{"sessionId": f"p{i}"} for i in range(7)])
-        ), mock.patch.object(watch, "poll_once", return_value=({}, [], {})):
+        ), mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
             watch.main(
                 str(root),
                 caller_session_id="caller-1",
@@ -183,7 +183,7 @@ def test_poll_once_emits_parked_line_on_transition():
     ), mock.patch.object(
         watch.obligations, "for_peer", return_value=None
     ):
-        result, _declinations, _notes = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={"peer-1": False}, now=now, emit=emitted.append)
+        result, _declinations, _notes, _inbox_open = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={"peer-1": False}, now=now, emit=emitted.append)
 
     assert result == {"peer-1": True}
     assert len(emitted) == 1
@@ -208,7 +208,7 @@ def test_poll_once_stays_silent_on_first_sighting():
         "classify_peer",
         return_value={"state": "PAUSED", "reason": "turn-ended", "candidate": True},
     ):
-        result, _declinations, _notes = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={}, now=now, emit=emitted.append)
+        result, _declinations, _notes, _inbox_open = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={}, now=now, emit=emitted.append)
 
     assert result == {"peer-1": True}
     assert emitted == []
@@ -229,7 +229,7 @@ def test_poll_once_suppresses_when_cooldown_active():
     ), mock.patch.object(
         watch, "_cooldown_active", return_value=True
     ):
-        result, _declinations, _notes = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={"peer-1": False}, now=now, emit=emitted.append)
+        result, _declinations, _notes, _inbox_open = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={"peer-1": False}, now=now, emit=emitted.append)
 
     assert result == {"peer-1": True}
     assert emitted == []
@@ -248,7 +248,7 @@ def test_poll_once_steady_state_emits_nothing():
         "classify_peer",
         return_value={"state": "PAUSED", "reason": "turn-ended", "candidate": True},
     ):
-        result, _declinations, _notes = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={"peer-1": True}, now=now, emit=emitted.append)
+        result, _declinations, _notes, _inbox_open = watch.poll_once(REPO_ROOT, "caller-1", prev_parked={"peer-1": True}, now=now, emit=emitted.append)
 
     assert result == {"peer-1": True}
     assert emitted == []
@@ -317,7 +317,7 @@ def test_main_arms_and_reports_measured_interval(tmp_path):
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, [{"sessionId": f"p{i}"} for i in range(5)])
     ), mock.patch.object(
-        watch, "poll_once", return_value=({}, [], {})
+        watch, "poll_once", return_value=({}, [], {}, 0)
     ):
         watch.main(
             str(tmp_path),
@@ -334,6 +334,39 @@ def test_main_arms_and_reports_measured_interval(tmp_path):
     assert "snapshot=2.0ms" in armed_line
     # interval = max(floor, 1000 * snapshot_s) = max(5.0, 1000 * 0.002) = 5.0
     assert "interval=5.0s" in armed_line
+
+
+def test_armed_line_names_its_population_and_the_instant_it_was_struck(tmp_path):
+    """C5 falsifier leg 1: `peer_count` includes the caller (`_current_agents`'s
+    docstring), the OPPOSITE population from the heartbeat's `subscribed_peers`
+    -- one word, two definitions, is the gap this line closes. The ARMED line
+    must name which population it counted and when, not just print a bare int.
+    """
+    stream_lines = []
+
+    class _Stream:
+        def write(self, text):
+            if text.strip():
+                stream_lines.append(text.strip())
+
+        def flush(self):
+            pass
+
+    with mock.patch.object(
+        watch, "_measure_snapshot_ms", return_value=(2.0, [{"sessionId": "p1"}])
+    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
+        watch.main(
+            str(tmp_path),
+            caller_session_id="caller-1",
+            stream=_Stream(),
+            sleep_fn=lambda _s: None,
+            max_iterations=1,
+            now_epoch=1_000_000.0,
+        )
+
+    armed_line = stream_lines[0]
+    assert "peers seen including this caller" in armed_line
+    assert "as_of=1970-01-12T13:46:40Z" in armed_line
 
 
 # ---------------------------------------------------------------------------
@@ -497,7 +530,7 @@ def test_declinations_record_the_gate_that_stopped_each_peer():
     ), mock.patch.object(
         watch, "_cooldown_active", return_value=True
     ):
-        _parked, declinations, _notes = watch.poll_once(
+        _parked, declinations, _notes, _inbox_open = watch.poll_once(
             REPO_ROOT,
             "caller-1",
             {"parked-1": False, "busy-1": False},
@@ -517,7 +550,7 @@ def test_main_stamps_the_watch_presence_record_every_tick(tmp_path):
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, [{"sessionId": f"p{i}"} for i in range(5)])
     ), mock.patch.object(
-        watch, "poll_once", return_value=({}, [], {})
+        watch, "poll_once", return_value=({}, [], {}, 0)
     ):
         watch.main(
             str(tmp_path),
@@ -664,7 +697,7 @@ def test_tick_once_stamps_the_presence_record_with_the_cron_word(tmp_path):
 def test_tick_once_deadline_follows_the_callers_cadence_not_the_poll_interval(tmp_path):
     """A wake that stamped the poll loop's few-second interval would read STALE
     within the minute -- the watch reporting itself absent while working."""
-    with mock.patch.object(watch, "poll_once", return_value=({}, [], {})):
+    with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
         watch.tick_once(str(tmp_path), caller_session_id="w", group_em_session_id="c", stream=io.StringIO())
     with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
         record = json.load(fh)
@@ -780,7 +813,7 @@ def _gone_poll(prev_parked, agents, prev_names=None, emitted=None, **kwargs):
 
 def test_poll_once_reports_a_departed_peer_by_name():
     last_seen = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
-    (_parked, _decl, notes), emitted = _gone_poll(
+    (_parked, _decl, notes, _inbox_open), emitted = _gone_poll(
         prev_parked={"peer-1": False, "peer-gone": False},
         agents=[_agent("peer-1")],
         prev_names={"peer-gone": {"name": "claude-klabauter-3e", "last_seen": last_seen}},
@@ -798,7 +831,7 @@ def test_poll_once_reports_a_departed_peer_by_name():
 def test_poll_once_still_reports_a_departure_it_cannot_name():
     """An unnameable departure is still worth a line -- silence was the defect,
     and the uuid at least tells a reader which roster row to drop."""
-    (_p, _d, _n), emitted = _gone_poll(
+    (_p, _d, _n, _io), emitted = _gone_poll(
         prev_parked={"peer-gone": True}, agents=[], prev_names=None
     )
     assert len(emitted) == 1
@@ -811,7 +844,7 @@ def test_poll_once_never_reports_the_watcher_or_the_group_em_as_gone():
     legitimately appear -- but a wake handed a DIFFERENT --group-em-session-id
     than the last one changes the exclusion set, and reporting the Group-EM as
     gone to the Group-EM is the worst possible way to say a flag changed."""
-    (_p, _d, _n), emitted = _gone_poll(
+    (_p, _d, _n, _io), emitted = _gone_poll(
         prev_parked={"waker-1": False, "group-em-1": False, "peer-1": False},
         agents=[],
     )
@@ -928,7 +961,7 @@ def test_no_spawn_event_exists_so_a_mass_arrival_cannot_be_reported():
     spawn line here has to come back and set the same refusals: with 36 peers
     arriving against an empty prior, the correct output is still silence.
     """
-    (_p, _d, _n), emitted = _gone_poll(
+    (_p, _d, _n, _io), emitted = _gone_poll(
         prev_parked={}, agents=[_agent(f"sid-{i}") for i in range(36)]
     )
     assert emitted == []
@@ -937,7 +970,7 @@ def test_no_spawn_event_exists_so_a_mass_arrival_cannot_be_reported():
 def test_a_genuinely_empty_repo_still_reports_its_departures():
     """The flag must separate "unreadable" from "empty", not collapse both into
     a raise -- a fleet that really did drain is exactly what GONE is for."""
-    (_p, _d, _n), emitted = _gone_poll(prev_parked={"peer-1": False}, agents=[])
+    (_p, _d, _n, _io), emitted = _gone_poll(prev_parked={"peer-1": False}, agents=[])
     assert len(emitted) == 1
     assert "peer-1" in emitted[0]
 
@@ -1130,7 +1163,7 @@ def test_the_record_names_the_holder_and_the_coverage_it_actually_had(tmp_path):
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, agents)
     ), mock.patch.object(
-        watch, "poll_once", return_value=({"p1": True, "p2": False, "p3": False}, [], {})
+        watch, "poll_once", return_value=({"p1": True, "p2": False, "p3": False}, [], {}, 0)
     ):
         watch.main(
             str(tmp_path),
@@ -1154,7 +1187,7 @@ def test_the_holder_name_is_resolved_once_at_arm_not_per_tick(tmp_path):
     agents = [{"sessionId": "group-em-1", "name": "claude-klabauter-65"}]
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, agents)
-    ) as measured, mock.patch.object(watch, "poll_once", return_value=({}, [], {})):
+    ) as measured, mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
         watch.main(
             str(tmp_path),
             caller_session_id="watcher-1",
@@ -1179,7 +1212,7 @@ def test_a_nameless_wake_carries_the_armed_pollers_name_rather_than_blanking_it(
         writer_session_id="w",
         tick_source="cron",
     )
-    with mock.patch.object(watch, "poll_once", return_value=({}, [], {})):
+    with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
         watch.tick_once(
             str(tmp_path), caller_session_id="w", group_em_session_id="group-em-1", stream=io.StringIO()
         )
@@ -1335,7 +1368,7 @@ def test_the_armed_line_names_the_resolved_path_not_only_the_repo_name(tmp_path)
 
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, [])
-    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {})):
+    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
         watch.main(
             str(tmp_path),
             caller_session_id="sid",
@@ -1413,7 +1446,7 @@ def test_arming_refuses_against_a_fresh_foreign_holder(tmp_path):
 
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, [])
-    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {})):
+    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
         with pytest.raises(watch.WatchAlreadyHeldError) as excinfo:
             watch.main(
                 str(tmp_path),
@@ -1443,7 +1476,7 @@ def test_arming_names_the_holders_display_name_when_carried(tmp_path):
 
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, [])
-    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {})):
+    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
         with pytest.raises(watch.WatchAlreadyHeldError) as excinfo:
             watch.main(
                 str(tmp_path),
@@ -1477,7 +1510,7 @@ def test_arming_proceeds_against_a_stale_foreign_holder(tmp_path):
     # well past it.
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, [])
-    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {})):
+    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
         watch.main(
             str(tmp_path),
             caller_session_id="me",
@@ -1508,7 +1541,7 @@ def test_arming_proceeds_against_its_own_holder(tmp_path):
 
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, [])
-    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {})):
+    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
         watch.main(
             str(tmp_path),
             caller_session_id="me",
@@ -1534,7 +1567,7 @@ def test_arming_proceeds_against_no_record_at_all(tmp_path):
 
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, [])
-    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {})):
+    ), mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
         watch.main(
             str(tmp_path),
             caller_session_id="me",
@@ -1580,7 +1613,7 @@ def test_cli_once_is_not_gated_by_the_arm_time_refusal(tmp_path):
     now = 1_000_000.0
     _stamp_holder(tmp_path, "foreign-holder", "foreign-writer", now_epoch=now)
 
-    with mock.patch.object(watch, "poll_once", return_value=({}, [], {})):
+    with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
         rc = watch.tick_once(
             str(tmp_path),
             caller_session_id="me",
@@ -1603,3 +1636,113 @@ def test_cli_status_watches_nothing_and_reads_no_roster(tmp_path, monkeypatch, c
     monkeypatch.setattr(watch, "poll_once", _refuse)
     assert watch._cli(["--repo-root", str(tmp_path), "--status"]) == 2
     capsys.readouterr()
+
+
+# ---------------------------------------------------------------------------
+# C6: inbox depth, struck at the instant it was taken
+# ---------------------------------------------------------------------------
+
+
+def _write_inbox_memo(inbox_dir: pathlib.Path, name: str, status: str) -> None:
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    (inbox_dir / name).write_text(
+        f"---\ntitle: \"t\"\nfrom: \"a\"\nto: \"b\"\ncreated: 2026-09-01\nstatus: {status}\n---\nbody\n",
+        encoding="utf-8",
+    )
+
+
+def test_inbox_counts_reads_status_off_the_frontmatter_head(tmp_path):
+    inbox_dir = tmp_path / "cross-repo" / "inbox"
+    _write_inbox_memo(inbox_dir, "a.md", "open")
+    _write_inbox_memo(inbox_dir, "b.md", "open")
+    _write_inbox_memo(inbox_dir, "c.md", "actioned")
+
+    open_count, total_count, taken_at = watch._inbox_counts(str(tmp_path))
+
+    assert open_count == 2
+    assert total_count == 3
+    assert isinstance(taken_at, float)
+
+
+def test_inbox_counts_answers_zero_for_an_absent_inbox(tmp_path):
+    open_count, total_count, taken_at = watch._inbox_counts(str(tmp_path))
+
+    assert (open_count, total_count) == (0, 0)
+    assert isinstance(taken_at, float)
+
+
+def test_inbox_line_carries_c5s_struck_instant_spelling():
+    line = watch._inbox_line(2, 3, 1_000_000.0)
+
+    assert line.startswith("INBOX ")
+    assert "2 (" in line
+    assert "of 3 total" in line
+    assert "counts_struck_at=" in line
+    assert "taken_at=" not in line
+
+
+def _inbox_poll(repo_root, prev_inbox_open, emitted):
+    return watch.poll_once(
+        repo_root,
+        "caller-1",
+        {},
+        emit=emitted.append,
+        prev_inbox_open=prev_inbox_open,
+    )
+
+
+def test_poll_once_stays_silent_on_the_first_inbox_tick(tmp_path):
+    """No prior to compare against -- the honest first-tick answer is silence,
+    same posture as PARKED's own first-sighting behaviour."""
+    _write_inbox_memo(tmp_path / "cross-repo" / "inbox", "a.md", "open")
+    emitted: list[str] = []
+
+    with mock.patch.object(watch.read_pass, "fetch_live_agents", return_value=[]):
+        _parked, _decl, _notes, inbox_open = _inbox_poll(str(tmp_path), None, emitted)
+
+    assert inbox_open == 1
+    assert emitted == []
+
+
+def test_poll_once_emits_inbox_line_only_when_the_open_count_rises(tmp_path):
+    """Two ticks: a rise from 1 to 2 open memos emits one INBOX line; a
+    steady tick at the new depth emits nothing (the transition discipline
+    C6 pins against PARKED's own re-report firehose)."""
+    inbox_dir = tmp_path / "cross-repo" / "inbox"
+    _write_inbox_memo(inbox_dir, "a.md", "open")
+    emitted: list[str] = []
+
+    with mock.patch.object(watch.read_pass, "fetch_live_agents", return_value=[]):
+        _parked, _decl, _notes, inbox_open_1 = _inbox_poll(str(tmp_path), None, emitted)
+        assert inbox_open_1 == 1
+        assert emitted == []
+
+        _write_inbox_memo(inbox_dir, "b.md", "open")
+        _parked, _decl, _notes, inbox_open_2 = _inbox_poll(str(tmp_path), inbox_open_1, emitted)
+
+    assert inbox_open_2 == 2
+    assert len(emitted) == 1
+    assert emitted[0].startswith("INBOX ")
+    assert "of 2 total" in emitted[0]
+
+
+def test_poll_once_stays_silent_when_the_open_count_holds_or_falls(tmp_path):
+    inbox_dir = tmp_path / "cross-repo" / "inbox"
+    _write_inbox_memo(inbox_dir, "a.md", "open")
+    _write_inbox_memo(inbox_dir, "b.md", "open")
+    emitted: list[str] = []
+
+    with mock.patch.object(watch.read_pass, "fetch_live_agents", return_value=[]):
+        # steady: prior == current
+        _parked, _decl, _notes, inbox_open = _inbox_poll(str(tmp_path), 2, emitted)
+        assert emitted == []
+
+        # falling: prior > current (one memo actioned since)
+        (inbox_dir / "b.md").write_text(
+            "---\ntitle: \"t\"\nfrom: \"a\"\nto: \"b\"\ncreated: 2026-09-01\nstatus: actioned\n---\nbody\n",
+            encoding="utf-8",
+        )
+        _parked, _decl, _notes, inbox_open = _inbox_poll(str(tmp_path), 2, emitted)
+        assert inbox_open == 1
+
+    assert emitted == []

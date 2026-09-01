@@ -1170,3 +1170,215 @@ def test_single_bucket_flag_use_is_unchanged_and_dedupes():
     ]
     assert _split_ids(parser.parse_args(["--sidecar", "x"]).applied) == []
     assert _split_ids(["1,2", "2,3"]) == ["1", "2", "3"]
+
+
+# ---------------------------------------------------------------------------
+# The routing stamp. Regression cover for 2026-09-01: an integrator REPORTED
+# writing `integrated_from` "at column zero" and had not -- the field was prose
+# in its run-notes body, the frontmatter carried none, and the Kira-verdict stop
+# guard read genuinely routed findings as unrouted. This module had already
+# de-hand-authored the disposition block; the stamp was still hand-authored YAML,
+# so it kept the exact failure mode the module exists to remove.
+# ---------------------------------------------------------------------------
+
+_REVIEWER_DOC = """---
+status: open
+agent_type: coordinator:overengineering-reviewer
+findings_count: 1
+---
+
+## Findings
+
+- [major] a real thing - disposition: accepted - rationale: measured.
+"""
+
+_RUN_REPORT_DOC = """---
+status: open
+agent_type: coordinator:review-integrator
+{stamp}integrator_receipt:
+  session_id: 'sess1'
+  agent_id: '{agent_id}'
+---
+
+## Run notes
+"""
+
+
+def _share(tmp_path):
+    share = tmp_path / "state" / "subagent-share" / "sess1"
+    share.mkdir(parents=True)
+    return share
+
+
+def _reviewer(share, name="coordinatoroverengineering-reviewer.aRRR.md", agent_type=None):
+    path = share / name
+    doc = _REVIEWER_DOC
+    if agent_type is not None:
+        doc = doc.replace("coordinator:overengineering-reviewer", agent_type)
+    path.write_text(doc, encoding="utf-8")
+    return path
+
+
+def _run_report(share, agent_id="aIII", stamped=None):
+    path = share / ("coordinatorreview-integrator." + agent_id + ".md")
+    stamp = "integrated_from: [" + stamped + "]\n" if stamped else ""
+    path.write_text(
+        _RUN_REPORT_DOC.format(stamp=stamp, agent_id=agent_id), encoding="utf-8"
+    )
+    return path
+
+
+def test_stamp_lands_at_column_zero_and_the_stop_guard_can_read_it(tmp_path):
+    """The whole point: a TOP-LEVEL frontmatter key, spelled the way the guard's
+    own `_kira_stem` spells it. A stamp the guard cannot match is
+    indistinguishable from no stamp at all."""
+    from coordinator_core.ops import append_integrator_dispositions as mod
+    from coordinator_core.hooks import stop_dispatch as sd
+
+    share = _share(tmp_path)
+    reviewer = _reviewer(share)
+    report = _run_report(share)
+
+    assert mod.main(
+        ["--sidecar", str(reviewer), "--applied", "F1", "--root", str(tmp_path)]
+    ) == 0
+
+    head = report.read_text(encoding="utf-8").split("---")[1]
+    assert "\nintegrated_from: [coordinatoroverengineering-reviewer.aRRR]\n" in head
+
+    answers = sd._kira_find_answers(
+        reviewer.name,
+        [
+            (
+                reviewer.name,
+                {
+                    "agent_type": "coordinator:overengineering-reviewer",
+                    "findings_count": 1,
+                },
+            ),
+            (
+                report.name,
+                {
+                    "integrator_receipt": {"agent_id": "aIII"},
+                    "integrated_from": ["coordinatoroverengineering-reviewer.aRRR"],
+                },
+            ),
+        ],
+    )
+    assert answers == [report.name]
+
+
+def test_stamp_is_idempotent_across_reruns(tmp_path):
+    from coordinator_core.ops import append_integrator_dispositions as mod
+
+    share = _share(tmp_path)
+    reviewer = _reviewer(share)
+    report = _run_report(share)
+
+    mod.main(["--sidecar", str(reviewer), "--applied", "F1", "--root", str(tmp_path)])
+    mod.main(["--sidecar", str(reviewer), "--applied", "F1", "--root", str(tmp_path)])
+
+    assert report.read_text(encoding="utf-8").count("integrated_from:") == 1
+
+
+def test_second_reviewer_is_appended_never_replacing_the_first(tmp_path):
+    """One integrator answering two reviewers is legitimate. Overwriting the
+    earlier stem would un-route findings that were genuinely routed."""
+    from coordinator_core.ops import append_integrator_dispositions as mod
+
+    share = _share(tmp_path)
+    first = _reviewer(share, "coordinatorstaff-eng.aP1.md", agent_type="coordinator:staff-eng")
+    second = _reviewer(share)
+    report = _run_report(share)
+
+    mod.main(["--sidecar", str(first), "--applied", "F1", "--root", str(tmp_path)])
+    mod.main(["--sidecar", str(second), "--applied", "F1", "--root", str(tmp_path)])
+
+    head = report.read_text(encoding="utf-8").split("---")[1]
+    assert "coordinatorstaff-eng.aP1" in head
+    assert "coordinatoroverengineering-reviewer.aRRR" in head
+
+
+def test_ambiguous_run_reports_are_refused_not_guessed(tmp_path, capsys):
+    """Concurrent integrators share the session directory. Stamping the wrong
+    run-report attests dispositions its agent never made, so the ambiguity is
+    reported rather than resolved by picking one."""
+    from coordinator_core.ops import append_integrator_dispositions as mod
+
+    share = _share(tmp_path)
+    reviewer = _reviewer(share)
+    _run_report(share, "aAAA")
+    _run_report(share, "aBBB")
+
+    assert mod.main(
+        ["--sidecar", str(reviewer), "--applied", "F1", "--root", str(tmp_path)]
+    ) == 0
+
+    assert "will not guess which is yours" in capsys.readouterr().err
+    for report in share.glob("coordinatorreview-integrator.*.md"):
+        assert "integrated_from" not in report.read_text(encoding="utf-8")
+
+
+def test_explicit_run_report_resolves_the_ambiguity(tmp_path):
+    from coordinator_core.ops import append_integrator_dispositions as mod
+
+    share = _share(tmp_path)
+    reviewer = _reviewer(share)
+    mine = _run_report(share, "aAAA")
+    theirs = _run_report(share, "aBBB")
+
+    assert mod.main(
+        [
+            "--sidecar", str(reviewer), "--applied", "F1",
+            "--run-report", str(mine), "--root", str(tmp_path),
+        ]
+    ) == 0
+
+    assert "integrated_from" in mine.read_text(encoding="utf-8")
+    assert "integrated_from" not in theirs.read_text(encoding="utf-8")
+
+
+def test_missing_run_report_warns_and_never_fails_the_disposition_write(tmp_path, capsys):
+    """The dispositions block is the primary deliverable and is already on disk.
+    A stamp that cannot be placed must be LOUD, not fatal and not silent."""
+    from coordinator_core.ops import append_integrator_dispositions as mod
+
+    share = _share(tmp_path)
+    reviewer = _reviewer(share)
+
+    assert mod.main(
+        ["--sidecar", str(reviewer), "--applied", "F1", "--root", str(tmp_path)]
+    ) == 0
+
+    assert "## Integrator Dispositions" in reviewer.read_text(encoding="utf-8")
+    assert "no integrator run-report was found to stamp" in capsys.readouterr().err
+
+
+def test_rerun_reports_already_routed_rather_than_a_false_missing_stamp(tmp_path, capsys):
+    """Discovery excludes already-stamped run-reports, so a re-run looks
+    identical to "no run-report exists" unless that is checked first. Warning
+    about a stamp that IS present trains a reader to ignore the one that isn't."""
+    from coordinator_core.ops import append_integrator_dispositions as mod
+
+    share = _share(tmp_path)
+    reviewer = _reviewer(share)
+    _run_report(share, "aIII", stamped="coordinatoroverengineering-reviewer.aRRR")
+
+    assert mod.main(
+        ["--sidecar", str(reviewer), "--applied", "F1", "--root", str(tmp_path)]
+    ) == 0
+
+    captured = capsys.readouterr()
+    assert "routing stamp already in place" in captured.out
+    assert "no integrator run-report was found" not in captured.err
+
+
+def test_stem_spelling_matches_the_guards_own(tmp_path):
+    """`_kira_stem_for_sidecar` must stay byte-identical to the stop guard's
+    `_kira_stem`; a divergence writes a stamp the guard cannot see, which is
+    the same outcome as writing none."""
+    from coordinator_core.ops.append_integrator_dispositions import _kira_stem_for_sidecar
+    from coordinator_core.hooks.stop_dispatch import _kira_stem
+
+    for name in ("a.md", "coordinatorstaff-eng.a1b2.md", "noext"):
+        assert _kira_stem_for_sidecar(tmp_path / name) == _kira_stem(name)

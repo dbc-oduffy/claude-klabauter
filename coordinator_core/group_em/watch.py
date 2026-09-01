@@ -219,6 +219,84 @@ _POLL_INTERVAL_CEILING_SECONDS = 300.0
 #: clock rather than a second cooldown window, per the module docstring.
 _COOLDOWN_SECONDS = send_pass.DEFAULT_COOLDOWN_SECONDS
 
+#: Where the memo inbox lives, relative to a repo root -- the same tree
+#: `cross-repo-memo` delivers into and `records_query` reads.
+_INBOX_RELATIVE_PATH = os.path.join("cross-repo", "inbox")
+
+#: Measured (C6 brief): 145 files, `os.scandir` 0.16ms median / 0.34ms max,
+#: reading the first 14 lines of every file 9.4ms total. Frontmatter's
+#: `status:` key is always inside the first 14 lines of every memo this
+#: repo has ever written; 14 is a generous margin over the observed max
+#: (title/from/to/created/status is 5 lines in), not a tight fit.
+_INBOX_FRONTMATTER_HEAD_LINES = 14
+
+#: The one status value that counts as OPEN for this count. Every other
+#: value (`actioned`, `delivered`, `draft`, `draft-awaiting-pm-relay`,
+#: `superseded`) is not a pending item this instrument reports on.
+_INBOX_OPEN_STATUS = "open"
+
+
+def _inbox_frontmatter_status(path: str) -> Optional[str]:
+    """The `status:` value from a memo's frontmatter head, or `None`.
+
+    Reads only the first `_INBOX_FRONTMATTER_HEAD_LINES` lines -- a full
+    parse is not needed for one scalar key, and this repo's own memos never
+    put `status:` past line 5. `None` on any read failure or absent key:
+    an unreadable memo is not an open one, but it is also not silently
+    dropped from `total_count` -- the caller counts the file either way.
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for i, line in enumerate(fh):
+                if i >= _INBOX_FRONTMATTER_HEAD_LINES:
+                    break
+                stripped = line.strip()
+                if stripped.startswith("status:"):
+                    return stripped[len("status:"):].strip().strip("'\"")
+    except OSError:
+        return None
+    return None
+
+
+def _inbox_counts(repo_root: str) -> tuple[int, int, float]:
+    """`(open_count, total_count, taken_at_epoch)` for `repo_root`'s inbox.
+
+    A COUNT WITHOUT THE INSTANT IT WAS TAKEN IS THE DEFECT, NOT A NICETY
+    (C6 brief) -- two correct readings minutes apart cost real
+    reconciliation time when neither carries when it was struck. The
+    instant is read at the START of the scan, before either count is
+    known, so a caller that logs it alongside the counts is dating the
+    read, not the report.
+
+    An absent or unreadable inbox directory answers `(0, 0, taken_at)`
+    rather than raising -- the same posture as `load_prev_parked`'s
+    absent-file answer: a poll that has not yet seen an inbox is not a
+    poll error.
+    """
+    taken_at_epoch = time.time()
+    inbox_dir = os.path.join(str(repo_root), _INBOX_RELATIVE_PATH)
+    total_count = 0
+    open_count = 0
+    try:
+        with os.scandir(inbox_dir) as it:
+            entries = [e.path for e in it if e.is_file() and e.name.endswith(".md")]
+    except OSError:
+        return 0, 0, taken_at_epoch
+    total_count = len(entries)
+    for entry_path in entries:
+        if _inbox_frontmatter_status(entry_path) == _INBOX_OPEN_STATUS:
+            open_count += 1
+    return open_count, total_count, taken_at_epoch
+
+
+def _inbox_line(open_count: int, total_count: int, taken_at_epoch: float) -> str:
+    """One INBOX line, composed on C5's `render_struck_count` -- the one
+    rendering shape (count + population name + struck instant), spelled
+    `counts_struck_at`, not a bespoke `taken_at` (C6 brief, C5's ownership).
+    """
+    population = f"inbox memos open, of {total_count} total"
+    return f"INBOX {watch_heartbeat.render_struck_count(open_count, population, taken_at_epoch)}"
+
 
 #: The carried parked map, next to the heartbeat record it accompanies. A held
 #: poll loop keeps `prev_parked` in memory for the life of the session; a
@@ -656,17 +734,26 @@ def poll_once(
     emit: Callable[[str], None] = print,
     group_em_session_id: Optional[str] = None,
     prev_names: Optional[dict[str, dict[str, Any]]] = None,
-) -> tuple[dict[str, bool], list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    prev_inbox_open: Optional[int] = None,
+) -> tuple[dict[str, bool], list[dict[str, Any]], dict[str, dict[str, Any]], int]:
     """One poll: classify, diff against `prev_parked`, emit PARKED and GONE lines.
 
-    Returns `(parked_map, declinations, peer_notes)`: this tick's
+    Returns `(parked_map, declinations, peer_notes, inbox_open)`: this tick's
     `{session_id: parked_bool}` -- the caller's new `prev_parked` -- this
-    tick's declination rows, and `{session_id: {"name", "last_seen"}}` for
+    tick's declination rows, `{session_id: {"name", "last_seen"}}` for
     every peer seen, which is what the NEXT tick's GONE lines are named
-    from. RAISES on an unreadable registry (`_current_agents`), which
-    `main`'s loop and `tick_once` both turn into a POLL-ERROR line; every
-    other failure mode stays a plain computation the caller can drive
+    from, and this tick's inbox open count -- the caller's new
+    `prev_inbox_open`. RAISES on an unreadable registry (`_current_agents`),
+    which `main`'s loop and `tick_once` both turn into a POLL-ERROR line;
+    every other failure mode stays a plain computation the caller can drive
     without a live registry.
+
+    `prev_inbox_open` is the previous tick's inbox open count -- `None` is
+    the honest first-tick answer (no prior to compare against), and an
+    INBOX line is emitted ONLY when the count RISES over a known prior,
+    same transition discipline as PARKED (module docstring): a tick that
+    re-reports the same or a falling depth is the firehose that gets a
+    `Monitor` auto-stopped.
 
     `prev_names` is the previous tick's `peer_notes`, and it is only ever
     read for peers that have LEFT -- a departed session's name cannot be
@@ -775,7 +862,11 @@ def poll_once(
             )
         )
 
-    return cur_parked, declinations, peer_notes
+    cur_inbox_open, inbox_total, inbox_taken_at = _inbox_counts(repo_root)
+    if prev_inbox_open is not None and cur_inbox_open > prev_inbox_open:
+        emit(_inbox_line(cur_inbox_open, inbox_total, inbox_taken_at))
+
+    return cur_parked, declinations, peer_notes, cur_inbox_open
 
 
 def parked_state_path(repo_root: str) -> str:
@@ -967,7 +1058,13 @@ def tick_once(
     prev_parked = load_prev_parked(repo_root)
 
     try:
-        cur_parked, declinations, peer_notes = poll_once(
+        # `prev_inbox_open=None`: a single-tick wake carries no memory
+        # across wakes (same posture as `prev_parked` in the module
+        # docstring's CONCURRENT WAKES note) and there is no on-disk carry
+        # for this count today, so every `tick_once` wake is a first tick
+        # for the inbox line -- it never fires here, only on `main`'s held
+        # loop, which is the surface a rise is worth a line on.
+        cur_parked, declinations, peer_notes, _cur_inbox_open = poll_once(
             repo_root,
             caller_session_id,
             prev_parked,
@@ -1100,15 +1197,29 @@ def main(
     # comment used to retell the incident (mangled path, publish-mirror
     # consequence) at full length, the third of four full retellings across
     # this diff. Reduced to a pointer.
+    # ROSTER NAME AND STRUCK INSTANT, beside the count. `peer_count` includes
+    # this caller (see `_current_agents`'s docstring -- this measurement runs
+    # BEFORE the watcher excludes itself), which is the opposite population
+    # from the heartbeat's `subscribed_peers` (caller excluded). Naming both
+    # here, plus the instant this enumeration was taken, is what lets a reader
+    # tell a real fleet change from a gap inferred between two differently-
+    # defined lines (module's C5 note).
+    armed_struck_epoch = time.time() if now_epoch is None else now_epoch
+    armed_struck_at = watch_heartbeat._iso(armed_struck_epoch)
     emit(
         f"ARMED peer_count={peer_count} {watched_repo} peers at {resolved_root}, "
-        f"snapshot={snapshot_ms:.1f}ms, interval={interval:.1f}s"
+        f"snapshot={snapshot_ms:.1f}ms, interval={interval:.1f}s, "
+        f"roster=(peers seen including this caller), as_of={armed_struck_at}"
     )
 
     prev_parked: dict[str, bool] = {}
     # Held in memory alongside `prev_parked`, for the same reason and with
     # the same lifetime.
     prev_names: dict[str, dict[str, Any]] = {}
+    # `None` until the first tick strikes a count -- the honest no-prior
+    # answer, same as `prev_parked` starting empty. Held for the loop's
+    # life, same lifetime as `prev_parked`/`prev_names` above.
+    prev_inbox_open: Optional[int] = None
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
         declinations: list = []
@@ -1119,13 +1230,14 @@ def main(
             # `subscribed_peers` in particular reported a coverage figure whose
             # own variable name argued it was stale. The rebind to `prev_parked`
             # is the last statement of the iteration, where it means what it says.
-            cur_parked, declinations, peer_notes = poll_once(
+            cur_parked, declinations, peer_notes, cur_inbox_open = poll_once(
                 repo_root,
                 caller_session_id,
                 prev_parked,
                 emit=emit,
                 group_em_session_id=group_em_session_id,
                 prev_names=prev_names,
+                prev_inbox_open=prev_inbox_open,
             )
             # A stamp failure is a missed tick, never a reason to stop
             # watching -- `stamp` returns False rather than raising, and the
@@ -1157,6 +1269,7 @@ def main(
             )
             prev_parked = cur_parked
             prev_names = peer_notes
+            prev_inbox_open = cur_inbox_open
         except Exception:
             # Review: coordinatorcode-reviewer.a9e1410288878bea9 -- reporting
             # an error must never be able to fail worse than the error itself.

@@ -160,28 +160,22 @@ def test_transient_miss_names_the_defect_rather_than_a_wait(monkeypatch, tmp_pat
     assert "waiting it out" not in stderr
 
 
-def test_transient_advice_does_not_assert_a_wedged_server(monkeypatch, tmp_path):
-    """The message may report what it observed; it may NOT diagnose the server.
+def test_transient_advice_does_not_assert_a_wedged_server_or_name_a_dead_knob(
+    monkeypatch, tmp_path
+):
+    """The message may report what it observed; it may NOT diagnose the server,
+    and it may not name an override the caller cannot reach.
 
-    This process sees exactly one thing: its own dispatch did not land. It
-    cannot see whether the server is serving anyone else, so "the server is
-    wedged or crash-looping" was never an observation -- it was an inference
-    stated as fact, and it was measurably false. On 2026-09-01 (session
-    9b6b537a) one caller hit this branch five consecutive times while peers
-    committed successfully through the same route in the same minutes, and
-    while that caller's very next command succeeded. The server was up
-    throughout.
-
-    The cost of that wording is not a misleading sentence, it is an ACTION:
-    the message handed the reader `warm-engine-stop` as rung 2, which evicts a
-    listener every session on the box shares and opens the succession window in
-    docs/problems/2026-09-01-forwarder-no-backend-denies.md. A message that
-    manufactures a disruptive action against healthy shared infrastructure is
-    worse than one that stops at its evidence.
-
-    So this pins three things: the bare diagnosis is absent, the discriminator
-    that separates a dead server from a caller-local fault is present, and the
-    hatch is explicitly conditioned rather than offered as the next step."""
+    This process sees exactly one thing: its own dispatch did not land. On
+    2026-09-01 (session 9b6b537a) one caller hit this branch five consecutive
+    times while peers committed successfully through the same route in the
+    same minutes, and while that caller's very next command succeeded -- the
+    server was up throughout, so "the server is wedged or crash-looping" was
+    never an observation. The old wording also named
+    `COORDINATOR_WARM_BOOT_WAIT_SECS` bare; a reader who set it in their own
+    shell got the identical message back (measured 2026-09-01: set to 20,
+    five consecutive failures still reported 0) -- the value is read from the
+    process this door runs in, not the caller's shell."""
     monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
 
     stdout, stderr, code = _run(
@@ -199,27 +193,7 @@ def test_transient_advice_does_not_assert_a_wedged_server(monkeypatch, tmp_path)
     assert "warm-engine-stop" in stderr, "the hatch is still reachable when warranted"
     assert "do NOT restart it" in stderr, "the healthy-server case must be called out"
     assert "last rung, not the second" in stderr
-
-
-def test_boot_wait_zero_does_not_name_a_knob_the_caller_can_turn(monkeypatch, tmp_path):
-    """`COORDINATOR_WARM_BOOT_WAIT_SECS` is read from the process this door runs
-    in, not from the caller's shell. The old wording named it bare, so a reader
-    set it and got the identical message back -- measured 2026-09-01: set to 20
-    in the calling shell, five consecutive failures all still reported 0. Naming
-    an override the reader cannot reach converts a diagnosable stop into a
-    confident wrong action (docs/wiki/guard-messaging.md).
-
-    Only hook-spawned children are supposed to pass 0 (hooks fire on the commit
-    hot path and must never sleep). This is the op/CLI door, where the wait is
-    meant to apply, so reaching this branch here points at whatever launched the
-    process -- which is what the message must say."""
-    monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
-
-    stdout, stderr, code = _run(
-        monkeypatch, tmp_path, warm_enabled=True, warm_response=None, allow_unstamped=False
-    )
-
-    assert code != 0
+    # 4. The boot-wait knob is named as unreachable from the caller's shell.
     assert "COORDINATOR_WARM_BOOT_WAIT_SECS=0" in stderr
     assert "will NOT change this" in stderr, (
         "a reader who sets it in their own shell must be told it has no effect here"

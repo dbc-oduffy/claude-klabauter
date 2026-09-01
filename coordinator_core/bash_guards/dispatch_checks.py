@@ -6152,38 +6152,14 @@ def _format_owner_sentence(
     writer_name = _resolve_owner_writer_name(fact)
 
     if fact.claim_source == "agent-race":
-        # Prose deliberately terse. The pre-fix wording ("an in-flight
-        # dispatched agent (%s) not yet attributed to an owning session --
-        # CONTESTED: agent-race, unresolved") ran 117 bytes against this
-        # ~73-byte budget BEFORE any name clause, so `_truncate_to_budget`
-        # cut the sentence mid-subject and the load-bearing `CONTESTED`
-        # verdict -- the entire point of this class -- was never rendered at
-        # all, named or unnamed. That silently violated this function's own
-        # negative-spec above: agent-race must never read as an absence of
-        # evidence. The verdict is what a reader acts on; the descriptive
-        # words around it were never affordable here.
-        # No ": agent-race" suffix: at 52 bytes the prefix left under 21 for
-        # the name clause, so whole-or-nothing dropped the name from every
-        # rendering of this class -- trading the defect this plan fixed for
-        # a jargon token no test pins and no reader decodes. "unattributed
-        # agent" already says what "agent-race" means.
+        # Terse by budget: the pre-fix wording exceeded the ~73-byte budget
+        # before any name, truncating the load-bearing CONTESTED verdict
+        # away. Do not re-lengthen -- and no ": agent-race" token; the
+        # prefix cost dropped the name clause entirely.
         sentence = (
             "%s unattributed agent -- CONTESTED"
             % _owner_display_id(fact, writer_name)
         )
-        # C3 follow-up fix 2 (EM-adjudicated break-class): the name clause
-        # is still appended AFTER the load-bearing CONTESTED/liveness
-        # prefix, so a budget cut still lands on the additive name tail,
-        # never the safety-relevant prefix -- that part of the original
-        # comment held. What was FALSE is a different claim this docstring
-        # used to make: that the full-uuid subject left "no headroom" as a
-        # problem for the NAME alone -- on real input the full 36-char sid
-        # itself spent over half the ~73-byte budget, so the name got cut
-        # to an unusable fragment or dropped entirely even though it was
-        # positioned last. `_owner_display_id` now shrinks the subject's
-        # sid to 8 characters once a name resolves, freeing the budget the
-        # name clause needed all along, without moving the name ahead of
-        # the safety-relevant prefix.
         return _with_name_clause(sentence, writer_name)
 
     if fact.claim_source == "unreadable":

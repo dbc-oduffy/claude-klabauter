@@ -487,6 +487,20 @@ def test_the_summary_line_carries_every_parameter_the_report_used(
         assert token in line
 
 
+def test_the_report_dict_carries_the_instant_its_counts_were_struck(
+    tmp_path, projects_dir, now
+):
+    """C5 falsifier leg 1, `report_has_when`. The heartbeat's `last_tick_at`
+    answers when the watcher ran, not when THIS report's `counts` block was
+    taken -- `counts_struck_at` is `now`, spelled the way the falsifier's
+    `_WHEN_TOKEN` actually matches (never `taken_at`), and it lands in the
+    dict only: `summary_line` is DoE-owned contract and does not move.
+    """
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="group-em-1")
+    assert report["as_of"] == "2027-01-15T08:00:00Z"
+    assert "as_of" not in idle_report.summary_line(report)
+
+
 def test_an_empty_roster_is_a_legible_statement_not_an_absence(
     tmp_path, projects_dir, now
 ):
@@ -519,6 +533,82 @@ def test_between_turns_peers_are_counted_but_not_printed(tmp_path, projects_dir,
     rendered = idle_report.render(report)
     assert "2020aaaa" not in rendered
     assert rendered.startswith("peers=1 ")
+
+
+# --- C11: registry-absent WATCH-band peers ---------------------------------
+
+def test_watch_peer_absent_from_a_read_registry_is_excluded_and_marked_and_never_pushed(
+    tmp_path, projects_dir, now
+):
+    """The measured case: session `9a44b41a` rendered `exited=0` at 16.7m
+    content-age while its registry row was gone and its process was an hour
+    dead. The verdict stays WATCH (the docstring's floor guard is correct for
+    the case it was argued for -- age alone never proves death here), but the
+    row must say what the count cannot: `registry: absent`, excluded from
+    `counts.peers`, and never eligible for `push`."""
+    _write(projects_dir, "9a44b41a-x", [_record(16.7, now)], mtime_minutes_ago=16.7, now=now)
+    report = _report(tmp_path, projects_dir, now, names={})
+    row = _row(report, "9a44b41a")
+    assert row["verdict"] == idle_report.VERDICT_WATCH
+    assert row["registry"] == "absent"
+    assert row["nudge-shape"] != idle_report.SHAPE_PUSH
+    # Present in `rows` (omission is impossible) but not in the count a crown
+    # routes on.
+    assert any(r["session"] == "9a44b41a-x" for r in report["peers"])
+    assert report["counts"]["peers"] == 0
+
+
+def test_watch_peer_with_an_unreadable_registry_stays_counted_and_unmarked(
+    tmp_path, projects_dir, now
+):
+    """`in_registry is None` (unreadable) is not `in_registry is False` (read
+    and absent). An unreadable registry answers nothing, so this peer must not
+    be excluded or marked -- only a SUCCESSFUL read that says "absent" counts."""
+    _write(projects_dir, "9a44b41b-x", [_record(16.7, now)], mtime_minutes_ago=16.7, now=now)
+    report = _report(tmp_path, projects_dir, now, names=None, registry_read=False)
+    row = _row(report, "9a44b41b")
+    assert row["verdict"] == idle_report.VERDICT_WATCH
+    assert row["registry"] is None
+    assert report["counts"]["peers"] == 1
+
+
+def test_between_turns_peer_absent_from_registry_is_still_counted(
+    tmp_path, projects_dir, now
+):
+    """The exact case the docstring's floor guard was argued for: a peer 30
+    seconds into a turn the registry has not caught up with is between turns,
+    not dead. Registry absence must not touch it."""
+    _write(projects_dir, "9a44b41c-x", [_record(0.5, now)], mtime_minutes_ago=0.5, now=now)
+    report = _report(tmp_path, projects_dir, now, names={})
+    row = _row(report, "9a44b41c")
+    assert row["verdict"] == idle_report.VERDICT_BETWEEN_TURNS
+    assert row["registry"] is None
+    assert report["counts"]["peers"] == 1
+
+
+def test_no_row_rendered_as_a_live_verdict_is_absent_from_a_read_registry(
+    tmp_path, projects_dir, now
+):
+    """Property, not a fixture: build a small roster against a registry
+    snapshot and assert the invariant this whole chunk exists to restore --
+    any row NOT marked `registry: absent` and not `EXITED`, over a
+    SUCCESSFULLY-read registry, is actually present in that registry. This is
+    what would have caught the 2026-09-01 case on any tick."""
+    live_ids = ["3030aaaa-x", "3131bbbb-x"]
+    absent_ids = ["3232cccc-x"]
+    names = {sid: "peer-%d" % i for i, sid in enumerate(live_ids)}
+    for sid in live_ids + absent_ids:
+        _write(projects_dir, sid, [_record(16.7, now)], mtime_minutes_ago=16.7, now=now)
+    report = _report(tmp_path, projects_dir, now, names=names)
+    for row in report["peers"]:
+        live_verdict = row["verdict"] not in (
+            idle_report.VERDICT_EXITED, idle_report.VERDICT_UNKNOWN,
+        )
+        if live_verdict and row["registry"] != "absent":
+            assert row["session"] in names, (
+                "row %r rendered a live verdict but is absent from the "
+                "registry snapshot" % row["session"]
+            )
 
 
 def test_the_projects_directory_is_derived_from_the_repo_root(tmp_path):

@@ -90,6 +90,30 @@ def _iso(epoch: float) -> str:
     return time.strftime(_STAMP_FORMAT, time.gmtime(epoch))
 
 
+def render_struck_count(count: int, population: str, struck_at_epoch: Optional[float] = None) -> str:
+    """`<count> (<population>) counts_struck_at=<instant>` -- the one spelling.
+
+    THE RENDERING HELPER C5 OWNS (plan chunk C5, overengineering-reviewer
+    finding 1, ACCEPTED). A rendered count that carries the instant it was
+    struck and the population it was computed over was about to be authored
+    three times (C5, C6, C11) against overlapping surfaces, which would have
+    landed three differently-shaped timestamp fields. This is the one place
+    that composition happens; a caller with its own count and population
+    calls this rather than re-inventing the join.
+
+    `population` is a short PROSE label -- "peers seen including this
+    caller", "peers subscribed, caller excluded" -- never a code, so the
+    line reads without a lookup table (module docstring's C5 gap: two
+    populations shared one word and cost three instruments in one night).
+
+    `struck_at_epoch` defaults to `time.time()` at call time, not at import:
+    a caller composing this string is doing so AT the instant its count was
+    taken, and a frozen default would silently drift from that.
+    """
+    struck_at_epoch = time.time() if struck_at_epoch is None else struck_at_epoch
+    return f"{count} ({population}) counts_struck_at={_iso(struck_at_epoch)}"
+
+
 def next_expected_by(now_epoch: float, interval_seconds: float) -> str:
     """The deadline this tick promises the next one by, as the reader parses it."""
     grace = max(_GRACE_FLOOR_SECONDS, interval_seconds * _GRACE_TICKS)

@@ -173,6 +173,7 @@ import time
 from typing import Optional
 
 from coordinator_core.group_em import repo_root_arg
+from coordinator_core.group_em.watch_heartbeat import render_struck_count
 from coordinator_core.ops.discover_working_repos import encode_projects_dir_name
 
 #: Below this, a quiet session is simply between turns. Applied here, never remembered.
@@ -672,7 +673,8 @@ def _verdict(age_minutes: Optional[float], in_registry: Optional[bool],
 
 
 def _nudge_shape(verdict: str, addressable: bool, within_cooldown: bool,
-                 named_move: Optional[str], named_reason: bool) -> str:
+                 named_move: Optional[str], named_reason: bool,
+                 registry_absent: bool = False) -> str:
     """Which of the two nudge sentences the watcher sends, or neither.
 
     `push` is the narrow case: an affirmatively named next move AND no named
@@ -682,7 +684,17 @@ def _nudge_shape(verdict: str, addressable: bool, within_cooldown: bool,
     question. `hold` covers suppression, a gate-shaped stop, and an escalation
     with no address; `assign` belongs to `OUT-OF-WORK` alone and is addressed
     to the Group-EM, not the peer.
+
+    `registry_absent` is an explicit, defensive guard (C11): a peer the
+    registry read successfully and does not list must never be pushed, even
+    though today's verdict ordering makes ESCALATE+absent unreachable (absent
+    at or above threshold already resolves to EXITED in `_verdict`). Pushing a
+    session that does not exist is a wrong action taken confidently, the harm
+    this role must never risk, so the guard does not lean on that invariant
+    holding forever.
     """
+    if registry_absent:
+        return SHAPE_HOLD
     if verdict == VERDICT_OUT_OF_WORK:
         return SHAPE_ASSIGN
     if verdict != VERDICT_ESCALATE:
@@ -767,6 +779,20 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
     verdict, reason = _verdict(age, in_registry, out_of_work, clock_reason, observed_exit,
                                rate_limited(raw_text, newest, now))
 
+    # C11: registry absence in the WATCH band. `_verdict`'s ordering never
+    # reaches the registry branches below FLOOR..THRESHOLD, by design (the
+    # docstring's guard is correct there -- a peer thirty seconds into a turn
+    # the registry has not caught up with is between turns, not dead). But
+    # `in_registry` is already computed above, so the fact that this WATCH row
+    # is absent from a SUCCESSFULLY-read registry (`in_registry is False`,
+    # never `None` -- an unreadable registry stays unknown) is in hand and
+    # must not be silently dropped: the row states it, and the peer stops
+    # inflating the `peers` count a crown routes on. Scoped to VERDICT_WATCH
+    # only -- between-turns keeps the docstring's floor guard untouched, and
+    # every other verdict either already resolves liveness itself (EXITED,
+    # ESCALATE) or is out of this chunk's remit (OUT-OF-WORK).
+    registry_absent = verdict == VERDICT_WATCH and in_registry is False
+
     said = _assistant_text(raw_text)
     last_said = said[-1][:LAST_SAID_CHARS] if said else None
     named_move = next((line for line in reversed(said) if _NEXT_MOVE.search(line)), None)
@@ -776,7 +802,8 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
         # Downgrade toward REPORTING. Nudging here would re-nudge whoever the
         # Group-EM already answered, which is the failure the offer log prevents.
         verdict, reason = VERDICT_UNKNOWN, REASON_SUPPRESSION_UNAVAILABLE
-    shape = _nudge_shape(verdict, bool(name), within_cooldown, named_move, named_reason)
+    shape = _nudge_shape(verdict, bool(name), within_cooldown, named_move, named_reason,
+                        registry_absent)
     divergence, divergence_minutes = _divergence(age, mtime_age)
     exited = verdict == VERDICT_EXITED
 
@@ -786,6 +813,12 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
         "reason": reason,
         "content-age": None if age is None else round(age, 1),
         "mtime-age": round(mtime_age, 1),
+        # C11: absent from a SUCCESSFULLY-read registry, in the WATCH band
+        # only (see `registry_absent` above). "absent" or None -- never a
+        # confidence claim, matching every other closed-vocabulary field on
+        # this row. This peer is excluded from `counts.peers` in
+        # `build_report`, and `_nudge_shape` above already refused it a push.
+        "registry": "absent" if registry_absent else None,
         "divergence": divergence,
         "divergence-minutes": divergence_minutes,
         # A corpse that re-escalates every tick reads as a fresh alarm and
@@ -880,12 +913,27 @@ def build_report(
         "group-em-moved": moved,
         "peers": rows,
         "counts": {
-            "peers": len(rows),
+            # C11: a peer marked `registry: absent` is a fact the row already
+            # states -- it does not also inflate the population a crown routes
+            # on. Excluded here, never dropped from `rows` above (omission is
+            # still impossible; the row itself is the load-bearing half).
+            "peers": sum(1 for row in rows if row["registry"] != "absent"),
             "escalate": count(VERDICT_ESCALATE),
             "out-of-work": count(VERDICT_OUT_OF_WORK),
             "unknown": count(VERDICT_UNKNOWN),
             "exited": count(VERDICT_EXITED),
         },
+        # THE STRUCK INSTANT, in the return DICT only -- never on `summary_line`
+        # (staff-eng finding 3: `summary_line` is DoE-owned contract, spelled
+        # verbatim at `fleet-watch-idle-report-contract.md:223`; moving what
+        # renders there is C9-gated, not this chunk's to make). `now` is the
+        # SAME clock every row's age was computed against this call, so this is
+        # the instant the `counts` block above was struck, never a re-read.
+        # Spelled `as_of`, not `taken_at` -- the falsifier's `_WHEN_TOKEN` does
+        # not match `taken_at` (staff-eng finding 2).
+        "as_of": datetime.datetime.fromtimestamp(
+            now, datetime.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 
@@ -896,14 +944,27 @@ def summary_line(report: dict) -> str:
 
     `exited=` is an additive extension to the consumer's spelled contract, for
     the verdict their doc predates. Nothing else on this line moves without a
-    cross-repo memo.
+    cross-repo memo. Being additive is what lets C11 render `exited=` with
+    C5's `render_struck_count` rather than a bare int: a bare `exited=0` reads
+    as "none exited" over the WHOLE roster, when it is only ever asked of the
+    peers reaching `_verdict`'s registry branches -- naming that population is
+    this row's job, not a co-author's (C5 owns the rendering, this is a
+    consumer of it). `as_of` is the same struck instant `counts` above was
+    taken against, re-derived here rather than re-read as a second clock.
     """
     counts = report["counts"]
+    struck_at = datetime.datetime.strptime(
+        report["as_of"], "%Y-%m-%dT%H:%M:%SZ"
+    ).replace(tzinfo=datetime.timezone.utc).timestamp()
+    exited_rendered = render_struck_count(
+        counts["exited"], "peers whose liveness reached the registry check",
+        struck_at_epoch=struck_at,
+    )
     return (
-        "peers=%d escalate=%d out-of-work=%d unknown=%d exited=%d "
+        "peers=%d escalate=%d out-of-work=%d unknown=%d exited=%s "
         "floor=%.0fm threshold=%.0fm group-em=%s%s" % (
             counts["peers"], counts["escalate"], counts["out-of-work"],
-            counts["unknown"], counts["exited"],
+            counts["unknown"], exited_rendered,
             report["floor-minutes"], report["threshold-minutes"],
             report["group-em-session-id"] or "unset",
             " GROUP-EM-MOVED" if report["group-em-moved"] else "",
@@ -925,6 +986,11 @@ def _render_row(row: dict) -> list:
         lines.append("      reason: %s" % row["reason"])
     if row["exited-since"]:
         lines.append("      EXITED since %s" % row["exited-since"])
+    if row["registry"] == "absent":
+        # THE ROW MUST SAY IT, NOT ONLY THE COUNT (C11): a crown reading only
+        # `peers=N` cannot know one row is a corpse the registry has not been
+        # asked about yet; the row itself must carry the fact.
+        lines.append("      registry: absent (excluded from peers count)")
     if row["verdict"] in (VERDICT_BETWEEN_TURNS, VERDICT_WATCH):
         return lines
     lines.append("      address: %s" % row["address"])

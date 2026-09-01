@@ -1004,50 +1004,22 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                                 "testing, pass --allow-unstamped-dispatch."
                             )
 
-                        # A WAIT THIS LONG IS A DEFECT REPORT, NOT A DIAGNOSIS.
-                        # An earlier version of this block said "retry in a
-                        # moment"; four sessions read that as seconds, retried
-                        # twice, and concluded the fault was permanent
-                        # (2026-08-25/26). The first correction merely told the
-                        # truth about the delay -- "it takes MINUTES" -- which
-                        # is the "the box was busy" answer CLAUDE.md forbids: it
-                        # made an over-budget path read as normal operation and
-                        # invited the operator to absorb it.
-                        #
-                        # Both framings were wrong for the same reason. Reaching
-                        # the engine is budgeted in HUNDREDS OF MILLISECONDS;
-                        # anything that turns into a multi-minute wait is over
-                        # the brightline by orders of magnitude and is a P0, not
-                        # a cadence. Say that, and do not instruct anyone to wait
-                        # it out -- this process has already done the only
-                        # waiting anyone should do, and reports the duration it
-                        # ACTUALLY waited rather than an interval to aim at.
-                        #
                         # Negative-spec: no ETA, no countdown, no "wait N
-                        # minutes". Boot time is load-dependent and, until
-                        # `record_client_boot_wait` has rows, unmeasured; any
-                        # interval printed is one the operator can satisfy and
-                        # then draw the same wrong conclusion from. A REPORTED
-                        # ELAPSED WAIT IS NOT AN ETA: it says what this call
-                        # spent, never what the next one will.
-                        # The `waited == 0` branch must not read as a knob the
-                        # reader can turn. `_wait_for_warm_boot` returns exactly
-                        # 0.0 only from its `deadline_secs <= 0` early return, so
-                        # this branch does mean the wait is off -- but a CLI
-                        # caller who then sets `COORDINATOR_WARM_BOOT_WAIT_SECS`
-                        # in their own shell sees the identical message again,
-                        # because the value comes from the process this door
-                        # runs in, not from theirs. Measured 2026-09-01: set to
-                        # 20 in the calling shell, five consecutive failures all
-                        # still reported it as 0.
+                        # minutes" -- this process observes only what it
+                        # ACTUALLY waited, never an interval to aim at. Reaching
+                        # the engine is budgeted in hundreds of milliseconds;
+                        # a multi-minute wait is a P0, not a cadence to absorb.
                         #
-                        # Only HOOK-spawned children are supposed to pass 0 (see
-                        # `WARM_BOOT_WAIT_SECS` -- hooks fire on the commit hot
-                        # path and must never sleep). This is the op/CLI door,
-                        # where the wait is meant to apply, so 0 arriving HERE is
-                        # itself the thing to investigate. Say where to look
-                        # rather than naming a variable the reader will set with
-                        # no effect.
+                        # `waited == 0` is not a knob the reader can turn: the
+                        # value comes from the process this door runs in, not
+                        # the caller's shell (measured 2026-09-01 -- setting
+                        # COORDINATOR_WARM_BOOT_WAIT_SECS=20 in the calling
+                        # shell left five consecutive failures still reporting
+                        # 0). Only hook-spawned children are supposed to pass 0
+                        # (see `WARM_BOOT_WAIT_SECS`, which must stay
+                        # unchanged -- hooks fire on the commit hot path and
+                        # must never sleep); this is the op/CLI door, so 0
+                        # arriving here is itself what to investigate.
                         waited_clause = (
                             f"this call waited {waited:.1f}s without the warm server "
                             "accepting connections"
@@ -1059,45 +1031,18 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                             "CLI door reaching this branch means whatever launched "
                             "this process set it, which only hook children should"
                         )
-                        # The remedy half is not decoration. This message named
-                        # a defect and then told the reader only what NOT to do
-                        # ("rather than retrying by hand"), so example-game-repo-em read
-                        # it, confirmed the supervisor was the respawn it had
-                        # just triggered, and had nothing to act on -- while the
-                        # correct move was the one the message did not name:
-                        # re-issue the call, which then returned in 2.9s (memo
-                        # `cross-repo/inbox/2026-09-01-example-game-repo-em-close-
-                        # ceremony-engine-defects-seven.md` defect 7).
-                        #
-                        # `warm-engine-stop` is named as a RUNNABLE, per the
-                        # cold-path rule -- what fires before a session exists
-                        # cannot be remediated by a slash command. It clears a
-                        # wedged-but-LISTENING server (its own docstring's job);
-                        # a server that never accepts a connection is the
-                        # crash-loop case, which is why the two are given
-                        # separately rather than as one instruction.
-                        #
-                        # BUT IT IS NO LONGER RUNG 2, AND THE WEDGED CLAIM IS NO
-                        # LONGER ASSERTED. This message used to state outright
-                        # that a repeat meant "the server is wedged or
-                        # crash-looping" and hand the reader a shared-engine
-                        # restart. That diagnosis is not established by anything
-                        # this process can see: it observes only that ITS OWN
-                        # dispatch did not land. Measured 2026-09-01, session
-                        # 9b6b537a: five consecutive failures of one command
-                        # while peers committed successfully through the same
-                        # route in the same minutes, and while that caller's very
-                        # next command succeeded. The server was serving the
-                        # whole time. A caller following the old rung 2 would
-                        # have bounced a healthy engine ~50 sessions share and
-                        # paid the succession window in
-                        # docs/problems/2026-09-01-forwarder-no-backend-denies.md.
-                        #
-                        # So: state what is observed, give the discriminator that
-                        # separates a dead server from a local fault, and gate
-                        # the hatch behind it. A message that manufactures a
-                        # disruptive action against shared infrastructure is
-                        # worse than one that stops at the evidence.
+                        # This process observes only that its own dispatch did
+                        # not land -- never assert the server's state. Measured
+                        # 2026-09-01, session 9b6b537a: five consecutive
+                        # failures of one command while peers committed
+                        # successfully through the same route in the same
+                        # minutes, and that caller's very next command
+                        # succeeded -- the server was serving the whole time.
+                        # `warm-engine-stop` is a RUNNABLE (cold-path rule: what
+                        # fires before a session exists cannot be remediated by
+                        # a slash command); it clears a wedged-but-LISTENING
+                        # server and is gated behind the is-anyone-else-served
+                        # discriminator below, as the last rung, not the second.
                         _fatal_stderr(
                             "warm dispatch unavailable and cold fallback is disabled "
                             f"(no live ops without warm). A respawn was triggered and "

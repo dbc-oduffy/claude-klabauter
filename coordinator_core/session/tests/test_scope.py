@@ -3380,16 +3380,12 @@ class TestAttributionWriterName:
         above for the direct single-decode unit pin on the folded helper
         itself).
 
-        The count was 4, then 3, and is now 2 -- and the walk from 3 to 2 is
-        why this docstring no longer says "fewer would mean a sibling branch
-        stopped reading". The fold that took it to 3 landed only in the
-        attribution branch and left the `other_owner`-population call site
-        ~70 lines downstream re-decoding the same file for a third time.
-        This test did not catch that, because its own fixture never
-        populates an `other_owner` and so never walked that call site -- a
-        call-count spy pins only the paths its fixture actually reaches.
-        Both sites now share one decode. Same fixture shape as
-        ``test_agent_claim_carries_the_recorded_writer_name`` above."""
+        A call-count spy pins only the paths its own fixture reaches: this
+        fixture never populates an `other_owner`, so it never walked that
+        call site, and a prior fold that looked complete left it re-decoding
+        the same file downstream. Both sites now share one decode. Same
+        fixture shape as ``test_agent_claim_carries_the_recorded_writer_name``
+        above."""
         repo = _make_repo(tmp_path)
         core.init("em-owner", cwd=str(repo))
         core.init("bystander", cwd=str(repo))
