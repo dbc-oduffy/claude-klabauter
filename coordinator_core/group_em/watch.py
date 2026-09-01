@@ -152,7 +152,7 @@ _COOLDOWN_SECONDS = send_pass.DEFAULT_COOLDOWN_SECONDS
 _PARKED_STATE_RELATIVE_PATH = os.path.join("state", "group-em-watch-parked.json")
 
 #: What `--once` promises the reader about the NEXT wake, when its caller does
-#: not say. The crown's cron floor is ~23 minutes (the group-em entry
+#: not say. The Group-EM's cron floor is ~23 minutes (the group-em entry
 #: sequence's own cadence), so a wake that named the poll loop's few-second
 #: interval instead would stamp a deadline it cannot meet and read STALE to
 #: every other session within the minute -- the watch reporting itself absent
@@ -169,7 +169,7 @@ def _measure_snapshot_ms(repo_root: str) -> tuple[float, list]:
     denominator printed on `ARMED` is always this box's own evidence.
 
     Returns the enumeration itself, not just its length. The arm sequence
-    needs one more fact out of it -- the crown's own display name, for the
+    needs one more fact out of it -- the Group-EM's own display name, for the
     heartbeat's self-description leg -- and re-reading the registry to get a
     string this call already held would bill the box twice for one answer.
     """
@@ -180,7 +180,7 @@ def _measure_snapshot_ms(repo_root: str) -> tuple[float, list]:
 
 
 def _holder_name(agents: list, session_id: Optional[str]) -> Optional[str]:
-    """The crown's display name off an enumeration already in hand, or None.
+    """The Group-EM's display name off an enumeration already in hand, or None.
 
     Resolved ONCE, at arm time. Never per tick: a name on the heartbeat is
     self-description for a reader that cannot reach this box's registry, and
@@ -211,7 +211,7 @@ def _poll_interval_seconds(snapshot_ms: float) -> float:
 def _current_agents(
     repo_root: str,
     caller_session_id: Optional[str],
-    crown_session_id: Optional[str] = None,
+    group_em_session_id: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """This tick's repo-filtered peer set, with the watch's own side excluded.
 
@@ -220,19 +220,19 @@ def _current_agents(
     and `read_pass.enumerate_repo_peers` (exclusion by session id, never by
     name). No second enumeration and no second cwd filter is built here.
 
-    TWO IDS, BECAUSE THE WATCH CAN BE HELD BY A TEAMMATE. When a crown
+    TWO IDS, BECAUSE THE WATCH CAN BE HELD BY A TEAMMATE. When a Group-EM
     dispatches a watcher rather than holding the poller in its own session,
     the roster must drop BOTH: the watcher (a session sitting in a `Monitor`
     poll presents exactly like a parked peer, so a single-id exclusion has it
-    flagging itself) and the crown (which is the recipient of every line this
-    watch emits -- reporting the crown to the crown is noise by construction).
+    flagging itself) and the Group-EM (which is the recipient of every line this
+    watch emits -- reporting the Group-EM to the Group-EM is noise by construction).
     `enumerate_repo_peers` excludes one id per call, so it is called twice
     rather than gaining a second parameter it does not otherwise need.
     """
     agents = read_pass.fetch_live_agents(repo_root)
     peers = read_pass.enumerate_repo_peers(agents, caller_session_id)
-    if crown_session_id is not None and crown_session_id != caller_session_id:
-        peers = read_pass.enumerate_repo_peers(peers, crown_session_id)
+    if group_em_session_id is not None and group_em_session_id != caller_session_id:
+        peers = read_pass.enumerate_repo_peers(peers, group_em_session_id)
     return peers
 
 
@@ -384,7 +384,7 @@ def _parked_line(
 
     `name` IS PROVENANCE, NOT AN ADDRESS, and the line says so. A reader
     cannot act on a session uuid -- `SendMessage` takes a name -- so a line
-    carrying only the uuid asks the crown to go resolve one, and the resolve
+    carrying only the uuid asks the Group-EM to go resolve one, and the resolve
     is a second read of a registry this tick already held. The name goes on.
 
     What the line must NOT do is tell the reader to re-resolve from the
@@ -430,7 +430,7 @@ def poll_once(
     prev_parked: dict[str, bool],
     now: Optional[datetime] = None,
     emit: Callable[[str], None] = print,
-    crown_session_id: Optional[str] = None,
+    group_em_session_id: Optional[str] = None,
 ) -> tuple[dict[str, bool], list[dict[str, Any]]]:
     """One poll: classify, diff against `prev_parked`, emit any PARKED lines.
 
@@ -441,9 +441,9 @@ def poll_once(
     function is also exercised directly by tests, so it stays a plain
     computation the caller can drive without a live registry.
 
-    `crown_session_id` is the session whose OFFER LOG suppresses lines, which
+    `group_em_session_id` is the session whose OFFER LOG suppresses lines, which
     is not necessarily the process running this poll -- see `main`. It
-    defaults to `caller_session_id`, the case where the crown holds the watch
+    defaults to `caller_session_id`, the case where the Group-EM holds the watch
     itself.
 
     The declination rows carry the `{session_id, name, gate, reason}` shape the
@@ -453,7 +453,7 @@ def poll_once(
 
     Review: coordinator:overengineering-reviewer -- these were an out-parameter
     on the argument that no caller had to unpack a tuple, which was already
-    false (the same change added `crown_session_id` and rewrote the call site).
+    false (the same change added `group_em_session_id` and rewrote the call site).
     A function whose product is split between a return value and a mutated
     argument is harder to read for a compatibility that was never bought. Not
     taken from the same finding: collapsing the per-peer rows to one aggregate.
@@ -464,10 +464,10 @@ def poll_once(
     now = now if now is not None else datetime.now(timezone.utc)
     now_epoch = now.timestamp()
 
-    if crown_session_id is None:
-        crown_session_id = caller_session_id
+    if group_em_session_id is None:
+        group_em_session_id = caller_session_id
 
-    agents = _current_agents(repo_root, caller_session_id, crown_session_id)
+    agents = _current_agents(repo_root, caller_session_id, group_em_session_id)
     agents_by_id = {
         a.get("sessionId"): a for a in agents if isinstance(a.get("sessionId"), str)
     }
@@ -477,7 +477,7 @@ def poll_once(
     declinations: list[dict[str, Any]] = []
     transitioned = transitions(prev_parked, cur_parked)
     for session_id in transitioned:
-        if _cooldown_active(repo_root, crown_session_id, session_id, now_epoch):
+        if _cooldown_active(repo_root, group_em_session_id, session_id, now_epoch):
             declinations.append(
                 _declination(session_id, "cooldown", "answered-within-cooldown")
             )
@@ -485,7 +485,7 @@ def poll_once(
         peer = agents_by_id.get(session_id, {})
         line = _parked_line(
             repo_root,
-            crown_session_id,
+            group_em_session_id,
             session_id,
             verdicts[session_id],
             peer.get("cwd"),
@@ -557,7 +557,7 @@ def save_prev_parked(repo_root: str, parked: dict[str, bool]) -> bool:
 def tick_once(
     repo_root: str,
     caller_session_id: Optional[str] = None,
-    crown_session_id: Optional[str] = None,
+    group_em_session_id: Optional[str] = None,
     stream: Optional[TextIO] = None,
     tick_interval_seconds: float = _CRON_FLOOR_INTERVAL_SECONDS,
     now: Optional[datetime] = None,
@@ -569,7 +569,7 @@ def tick_once(
     returned instead of blocking presents from outside exactly like a quiet
     fleet -- the failure `cross-repo/inbox/2026-09-01-example-game-repo-em-group-em-fleet-watch-wake-on-session-state.md`
     reproduces. A wake that carries its state on disk and exits has no held
-    thing to lapse: the next caller -- the crown's cron floor, or any
+    thing to lapse: the next caller -- the Group-EM's cron floor, or any
     session-state-transition wake wired above this line -- supplies the
     liveness, and the heartbeat record says which clock last fired.
 
@@ -588,8 +588,8 @@ def tick_once(
     """
     if caller_session_id is None:
         caller_session_id = read_pass.caller_session_id()
-    if crown_session_id is None:
-        crown_session_id = caller_session_id
+    if group_em_session_id is None:
+        group_em_session_id = caller_session_id
     out = sys.stdout if stream is None else stream
 
     def emit(line: str) -> None:
@@ -602,7 +602,7 @@ def tick_once(
             load_prev_parked(repo_root),
             now=now,
             emit=emit,
-            crown_session_id=crown_session_id,
+            group_em_session_id=group_em_session_id,
         )
     except Exception:
         try:
@@ -614,7 +614,7 @@ def tick_once(
     save_prev_parked(repo_root, cur_parked)
     watch_heartbeat.stamp(
         repo_root,
-        holder_session_id=crown_session_id or "",
+        holder_session_id=group_em_session_id or "",
         declinations=declinations,
         interval_seconds=tick_interval_seconds,
         tick_source="cron",
@@ -633,7 +633,7 @@ def main(
     stream: Optional[TextIO] = None,
     sleep_fn: Callable[[float], None] = time.sleep,
     max_iterations: Optional[int] = None,
-    crown_session_id: Optional[str] = None,
+    group_em_session_id: Optional[str] = None,
 ) -> None:
     """Arm the watch: print `ARMED`, then poll forever (or `max_iterations`
     times, for tests), emitting one line per PARKED transition.
@@ -644,13 +644,13 @@ def main(
     caught here, reported as a `POLL-ERROR` line, and the loop continues --
     a poll that raises must never silently end the watch (module docstring).
 
-    `crown_session_id` IS A SEPARATE ID ON PURPOSE, and defaults to
+    `group_em_session_id` IS A SEPARATE ID ON PURPOSE, and defaults to
     `caller_session_id`. Two different questions were being answered by one
     value: which session to leave out of the watched roster (this process),
-    and whose offer log already answered a peer (the crown). They are the
-    same session only when the crown holds the poller itself. A crown that
+    and whose offer log already answered a peer (the Group-EM). They are the
+    same session only when the Group-EM holds the poller itself. A Group-EM that
     dispatches a teammate to hold the watch must pass its OWN id here --
-    otherwise the watcher reads an empty send log, every offer the crown
+    otherwise the watcher reads an empty send log, every offer the Group-EM
     already made stops suppressing a line, and one stopped peer gets nudged
     twice. Passed explicitly rather than inferred: a dispatched process's
     `CLAUDE_CODE_SESSION_ID` is the harness's to define, and a watch that is
@@ -663,8 +663,8 @@ def main(
     """
     if caller_session_id is None:
         caller_session_id = read_pass.caller_session_id()
-    if crown_session_id is None:
-        crown_session_id = caller_session_id
+    if group_em_session_id is None:
+        group_em_session_id = caller_session_id
 
     # LATE-BOUND, deliberately. `stream: TextIO = sys.stdout` freezes whatever
     # stdout was at IMPORT time, so anything that replaces it afterwards -- a
@@ -678,7 +678,7 @@ def main(
 
     snapshot_ms, agents = _measure_snapshot_ms(repo_root)
     peer_count = len(agents)
-    holder_name = _holder_name(agents, crown_session_id)
+    holder_name = _holder_name(agents, group_em_session_id)
     interval = _poll_interval_seconds(snapshot_ms)
     # Review: coordinatorcode-reviewer.a9e1410288878bea9 -- the ARMED line is
     # operator-facing; "denominator" is an internal metric name from the
@@ -718,20 +718,20 @@ def main(
                 caller_session_id,
                 prev_parked,
                 emit=emit,
-                crown_session_id=crown_session_id,
+                group_em_session_id=group_em_session_id,
             )
             # A stamp failure is a missed tick, never a reason to stop
             # watching -- `stamp` returns False rather than raising, and the
             # next tick rewrites the whole record anyway.
             watch_heartbeat.stamp(
                 repo_root,
-                holder_session_id=crown_session_id or "",
+                holder_session_id=group_em_session_id or "",
                 declinations=declinations,
                 interval_seconds=interval,
                 # THE PEERS THIS TICK ACTUALLY LOOKED AT, never the default 1.
                 # A watch subscribed to one peer and a watch covering the whole
                 # repo were indistinguishable from every artifact on disk:
-                # measured 2026-09-01 by the crown of this repo, whose record
+                # measured 2026-09-01 by the Group-EM of this repo, whose record
                 # read `subscribed_peers: 1` against a live population of 10-18.
                 # A coverage figure nobody writes is a coverage figure nobody
                 # can question.
@@ -782,9 +782,9 @@ def _cli(argv: "list[str] | None" = None) -> int:
     as nothing at all:
         python -m coordinator_core.group_em.watch --repo-root <path>
 
-    When a dispatched teammate holds the watch rather than the crown itself,
-    the crown's own id goes on too, or its offers stop suppressing lines:
-        python -m coordinator_core.group_em.watch --repo-root <path>             --crown-session-id <the crown's session id>
+    When a dispatched teammate holds the watch rather than the Group-EM itself,
+    the Group-EM's own id goes on too, or its offers stop suppressing lines:
+        python -m coordinator_core.group_em.watch --repo-root <path>             --group-em-session-id <the Group-EM's session id>
     """
     import argparse
 
@@ -807,14 +807,30 @@ def _cli(argv: "list[str] | None" = None) -> int:
         help="Session arming the watch. Defaults to the harness's own session id; "
              "never guessed from roster shape.",
     )
+        # `--crown-session-id` is the pre-2026-09-01 spelling, retained as an
+        # accepted-but-unadvertised alias (DR-084's `_DEPRECATED_ALIASES` shape).
+        # It is NOT cosmetic back-compat: DoE-claude's fleet-watch agent definition
+        # and group-em skill both instruct agents to pass the old spelling, argparse
+        # hard-errors on an unknown flag, and those agents are dispatched and running.
+        # Dropping it strands every live watcher the moment this lands. Retire it once
+        # the sibling's text has moved -- see the memo
+        # cross-repo/archive/...-crown-nomenclature-retired.md. `help=argparse.SUPPRESS`
+        # keeps it out of --help so the canonical spelling is the only one advertised.
+    parser.add_argument(
+        "--group-em-session-id",
+        dest="group_em_session_id",
+        default=None,
+        help="The Group-EM's session id, when a dispatched teammate holds the watch instead of "
+             "the Group-EM itself. Defaults to --caller-session-id. This is the id whose offer "
+             "cooldown suppresses lines and whose name goes on the heartbeat record -- pass it "
+             "whenever the watching process is not the Group-EM, or the same stopped peer gets "
+             "nudged twice.",
+    )
     parser.add_argument(
         "--crown-session-id",
+        dest="group_em_session_id",
         default=None,
-        help="The crown's session id, when a dispatched teammate holds the watch instead of "
-             "the crown itself. Defaults to --caller-session-id. This is the id whose offer "
-             "cooldown suppresses lines and whose name goes on the heartbeat record -- pass it "
-             "whenever the watching process is not the crown, or the same stopped peer gets "
-             "nudged twice.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--once",
@@ -858,7 +874,7 @@ def _cli(argv: "list[str] | None" = None) -> int:
         return tick_once(
             args.repo_root,
             caller_session_id=args.caller_session_id,
-            crown_session_id=args.crown_session_id,
+            group_em_session_id=args.group_em_session_id,
             tick_interval_seconds=args.tick_interval_seconds,
         )
 
@@ -867,7 +883,7 @@ def _cli(argv: "list[str] | None" = None) -> int:
             args.repo_root,
             caller_session_id=args.caller_session_id,
             max_iterations=args.max_iterations,
-            crown_session_id=args.crown_session_id,
+            group_em_session_id=args.group_em_session_id,
         )
     except KeyboardInterrupt:
         # A stopped Monitor is an ordinary end, not a failure -- exit quietly so

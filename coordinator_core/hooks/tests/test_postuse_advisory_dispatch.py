@@ -3,7 +3,7 @@ coordinator_core.hooks.tests.test_postuse_advisory_dispatch — tests for the
 sixth PostToolUse advisory leg folded into `postuse_advisory_dispatch.py`:
 `_check_group_em_watch_arm_sync` and its composition inside `_handler`.
 
-Covers: the universal (no tool_name) gate; the crown check (no session_id, no
+Covers: the universal (no tool_name) gate; the Group-EM check (no session_id, no
 git root, no nomination record, record naming a different session); the
 never-armed transcript scan (armed marker present/absent, unreadable
 transcript); the emitted advisory shape (`persistent=true`, never
@@ -52,8 +52,8 @@ def _isolated_state_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def _crowned_repo(tmp_path, monkeypatch):
-    """Make `SESSION` read as the Group EM crown holder for a fresh repo root.
+def _group_em_repo(tmp_path, monkeypatch):
+    """Make `SESSION` read as the Group EM Group-EM holder for a fresh repo root.
 
     Patches the git-root seam this leg reuses from `_check_runtime_tripwire_sync`
     (`coordinator_core.git.repo_root.show_toplevel`) and writes a real nomination
@@ -117,7 +117,7 @@ def test_silent_without_session_id(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Crown check.
+# Group-EM check.
 # ---------------------------------------------------------------------------
 
 
@@ -153,7 +153,7 @@ def test_silent_when_no_nomination_record(tmp_path, monkeypatch, _installed_grou
     assert pad._check_group_em_watch_arm_sync(SESSION, transcript_path) == ""
 
 
-def test_silent_when_crown_held_by_another_session(tmp_path, monkeypatch, _installed_group_em_watch_launcher):
+def test_silent_when_group_em_held_by_another_session(tmp_path, monkeypatch, _installed_group_em_watch_launcher):
     # Review: review-integrator (finding #1, EM-ratified P1) -- see
     # test_silent_when_no_git_root above.
     repo_root = str(tmp_path / "repo")
@@ -179,8 +179,8 @@ def test_silent_when_crown_held_by_another_session(tmp_path, monkeypatch, _insta
 # ---------------------------------------------------------------------------
 
 
-def test_fires_when_crowned_never_armed_and_launcher_installed(
-    tmp_path, _crowned_repo, _installed_group_em_watch_launcher
+def test_fires_when_group_em_never_armed_and_launcher_installed(
+    tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
     transcript_path = _write_transcript(tmp_path, "some ordinary transcript content\n")
 
@@ -191,7 +191,7 @@ def test_fires_when_crowned_never_armed_and_launcher_installed(
 
 
 def test_silent_when_armed_marker_already_present(
-    tmp_path, _crowned_repo, _installed_group_em_watch_launcher
+    tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
     transcript_path = _write_transcript(
         tmp_path, "ARMED peer_count=3 claude-klabauter peers, snapshot=1.2ms, interval=5.0s\n"
@@ -203,7 +203,7 @@ def test_silent_when_armed_marker_already_present(
 
 
 def test_returns_empty_not_raises_on_unreadable_transcript(
-    tmp_path, _crowned_repo, _installed_group_em_watch_launcher
+    tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
     # Review: review-integrator (finding #1, EM-ratified P1) -- without the
     # launcher fixture this test short-circuited on the launcher probe
@@ -216,7 +216,7 @@ def test_returns_empty_not_raises_on_unreadable_transcript(
     assert result == ""
 
 
-def test_silent_without_transcript_path(tmp_path, _crowned_repo, _installed_group_em_watch_launcher):
+def test_silent_without_transcript_path(tmp_path, _group_em_repo, _installed_group_em_watch_launcher):
     # Review: review-integrator (finding #1, EM-ratified P1) -- see
     # test_returns_empty_not_raises_on_unreadable_transcript above.
     assert pad._check_group_em_watch_arm_sync(SESSION, "") == ""
@@ -228,7 +228,7 @@ def test_silent_without_transcript_path(tmp_path, _crowned_repo, _installed_grou
 
 
 def test_advisory_names_persistent_true_never_false(
-    tmp_path, _crowned_repo, _installed_group_em_watch_launcher
+    tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
     transcript_path = _write_transcript(tmp_path, "no armed marker here\n")
 
@@ -245,7 +245,7 @@ def test_advisory_names_persistent_true_never_false(
 
 
 def test_fires_once_per_session_via_sentinel(
-    tmp_path, _crowned_repo, _installed_group_em_watch_launcher
+    tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
     transcript_path = _write_transcript(tmp_path, "no armed marker here\n")
 
@@ -260,7 +260,7 @@ def test_fires_once_per_session_via_sentinel(
 
 
 def test_never_touches_the_shared_advisory_hook_state_file(
-    tmp_path, _crowned_repo, _installed_group_em_watch_launcher
+    tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
     transcript_path = _write_transcript(tmp_path, "no armed marker here\n")
     shared_state_path = pad._advisory_state_path(tempfile.gettempdir(), SESSION)
@@ -278,7 +278,7 @@ def test_never_touches_the_shared_advisory_hook_state_file(
 # ---------------------------------------------------------------------------
 
 
-def test_stays_silent_when_no_launcher_is_installed(tmp_path, _crowned_repo, monkeypatch):
+def test_stays_silent_when_no_launcher_is_installed(tmp_path, _group_em_repo, monkeypatch):
     empty_home = tmp_path / "empty-settings-home"
     (empty_home / "bin").mkdir(parents=True)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(empty_home))
@@ -288,7 +288,7 @@ def test_stays_silent_when_no_launcher_is_installed(tmp_path, _crowned_repo, mon
 
 
 def test_sentinel_is_not_written_when_the_launcher_is_missing(
-    tmp_path, _crowned_repo, monkeypatch
+    tmp_path, _group_em_repo, monkeypatch
 ):
     empty_home = tmp_path / "empty-settings-home-2"
     (empty_home / "bin").mkdir(parents=True)
@@ -330,7 +330,7 @@ def _emitted_command(advisory):
 
 
 def test_emitted_args_carry_no_posix_only_quoting(
-    tmp_path, _crowned_repo, _installed_group_em_watch_launcher
+    tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
     transcript_path = _write_transcript(tmp_path, "no armed marker here\n")
     result = pad._check_group_em_watch_arm_sync(SESSION, transcript_path)
@@ -340,7 +340,7 @@ def test_emitted_args_carry_no_posix_only_quoting(
 
 
 def test_command_names_the_installed_launcher_not_a_bare_dash_m(
-    tmp_path, _crowned_repo, _installed_group_em_watch_launcher
+    tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
     transcript_path = _write_transcript(tmp_path, "no armed marker here\n")
     result = pad._check_group_em_watch_arm_sync(SESSION, transcript_path)
@@ -376,7 +376,7 @@ def test_unformattable_repo_root_emits_nothing_rather_than_a_wrong_command(
 
 
 def test_sentinel_is_not_written_when_composition_never_completes(
-    tmp_path, _crowned_repo, _installed_group_em_watch_launcher, monkeypatch
+    tmp_path, _group_em_repo, _installed_group_em_watch_launcher, monkeypatch
 ):
     """The once-per-session sentinel must not outlive a failed composition."""
     transcript_path = _write_transcript(tmp_path, "no armed marker here\n")
@@ -501,7 +501,7 @@ class _ExplodingOnUnexpectedKey(dict):
 
 
 def test_handler_reads_no_params_field_beyond_the_six_mapped_fields(
-    tmp_path, _crowned_repo, _installed_group_em_watch_launcher
+    tmp_path, _group_em_repo, _installed_group_em_watch_launcher
 ):
     transcript_path = _write_transcript(tmp_path, "no armed marker here\n")
     params = _ExplodingOnUnexpectedKey(

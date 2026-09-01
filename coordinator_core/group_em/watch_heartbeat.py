@@ -7,7 +7,7 @@ the watcher learns that a watch exists at all. It is read on the DoE plane by
 `GROUP EM WATCH: <verdict>` line on the SessionStart presence hook
 (`coordinator/hooks/hooks.json`, the Group EM watch presence registration).
 Until this module existed, `group_em.watch` -- the standing `Monitor` runnable
-that is supposed to REPLACE hand-ticking -- wrote no such stamp, so a crown
+that is supposed to REPLACE hand-ticking -- wrote no such stamp, so a Group-EM
 that armed it correctly and stopped hand-stamping read to every other session
 in the fleet as a repo with no watcher at all. The file going quiet is that
 reader's `stale`/`absent` signal; a correct arm must not produce it.
@@ -25,9 +25,9 @@ the three the DoE writer already declares (`cron` | `monitor` | `entry`) and
 the only one no writer produced until now. A reader can therefore tell a
 `Monitor`-held watch apart from an entry stamp without any change on its side.
 
-WHO THE HOLDER IS. `holder_session_id` is the CROWN's session id, never the
-watching process's, whenever the two differ (a crown that dispatches a
-teammate to hold the watch -- see `watch.main`'s `crown_session_id`). The
+WHO THE HOLDER IS. `holder_session_id` is the GROUP-EM's session id, never the
+watching process's, whenever the two differ (a Group-EM that dispatches a
+teammate to hold the watch -- see `watch.main`'s `group_em_session_id`). The
 holder is the session accountable for the fleet, and the record exists so
 handover is legible from outside; naming a teammate that dies with its
 dispatch would make the record answer a different question than the one it is
@@ -207,9 +207,9 @@ VERDICT_ARMED = "armed"
 #: resolves only from a cwd that can already import the engine, which the repos
 #: this watch is armed FOR generally cannot -- 2026-09-01, example-game-workbench-repo).
 REARM_COMMAND = (
-    "group-em-watch --repo-root <root> --crown-session-id <your sid>   "
+    "group-em-watch --repo-root <root> --group-em-session-id <your sid>   "
     "(hold it with Monitor, persistent: true; or fire "
-    "`group-em-watch --repo-root <root> --crown-session-id <sid> --once` on a cron floor)"
+    "`group-em-watch --repo-root <root> --group-em-session-id <sid> --once` on a cron floor)"
 )
 
 
@@ -249,7 +249,7 @@ def read_liveness(
     two consumers, never a second spawn at this layer. Omitted, the holder-
     liveness join is skipped entirely and the verdict is freshness-only: a
     registry nobody read cannot retire a holder, and reporting `vacant` on no
-    evidence would send a crown to re-arm over a watcher that is fine.
+    evidence would send a Group-EM to re-arm over a watcher that is fine.
 
     Every verdict but `armed` carries `remedy`. A liveness leg that reports a
     dead watch and no way to restart it just moves the prose one file over.

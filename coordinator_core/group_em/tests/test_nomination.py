@@ -4,7 +4,7 @@ live-incumbent refusal, no-registry-record refusal, and pid-not-running auto-rep
 atomicity, and that liveness never consults a recorded pid.
 
 Every test points at a tmp_path settings-home / record directory. Writing to the real
-`<settings-home>/state/group-em/` would steal the crown from a live peer on this box.
+`<settings-home>/state/group-em/` would steal the Group-EM from a live peer on this box.
 """
 
 from __future__ import annotations
@@ -139,7 +139,7 @@ def test_record_names_another_pid_not_running_auto_replaces(repo_root, record_di
     # The visibility contract: `replaced_holder` is populated, names the replaced
     # session, and is a DISTINCT key from `superseded_incumbent`. A test that only
     # checked `claimed is True` would pass a silently-swallowed replacement -- the
-    # exact failure mode (a session running under a dead session's crown, caught only
+    # exact failure mode (a session running under a dead session's Group-EM, caught only
     # by a human noticing a missing statusline glyph) this field exists to prevent.
     assert result["replaced_holder"] is not None
     assert result["replaced_holder"] != result["superseded_incumbent"]
@@ -149,7 +149,7 @@ def test_record_names_another_pid_not_running_auto_replaces(repo_root, record_di
     assert result["replaced_holder"]["live"] is False
     assert result["replaced_holder"]["live_reason"] == "pid_not_running"
 
-    # The crown was actually claimed -- the record on disk now names the challenger.
+    # The Group-EM was actually claimed -- the record on disk now names the challenger.
     on_disk = nomination.read_record(repo_root, record_dir)
     assert on_disk["session_id"] == "sid-challenger"
 

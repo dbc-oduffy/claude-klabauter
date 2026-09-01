@@ -52,14 +52,14 @@ def _record(tmp_path):
 
 def test_stamp_writes_exactly_the_keys_the_doe_reader_reads(tmp_path):
     assert watch_heartbeat.stamp(
-        str(tmp_path), holder_session_id="crown-1", declinations=[], interval_seconds=5.0
+        str(tmp_path), holder_session_id="group-em-1", declinations=[], interval_seconds=5.0
     )
     assert set(_record(tmp_path)) == _READER_KEYS
 
 
 def test_timestamps_parse_in_the_readers_own_format(tmp_path):
     watch_heartbeat.stamp(
-        str(tmp_path), holder_session_id="crown-1", declinations=[], interval_seconds=5.0
+        str(tmp_path), holder_session_id="group-em-1", declinations=[], interval_seconds=5.0
     )
     record = _record(tmp_path)
     for field in ("last_tick_at", "next_expected_by"):
@@ -73,24 +73,24 @@ def test_tick_source_is_the_readers_reserved_monitor_word(tmp_path):
     (`cron` | `monitor` | `entry`) -- a `Monitor`-held watch is legible to the
     reader with no change on its side."""
     watch_heartbeat.stamp(
-        str(tmp_path), holder_session_id="crown-1", declinations=[], interval_seconds=5.0
+        str(tmp_path), holder_session_id="group-em-1", declinations=[], interval_seconds=5.0
     )
     assert _record(tmp_path)["tick_source"] == "monitor"
 
 
-def test_holder_is_the_crown_and_the_name_is_never_stored(tmp_path):
+def test_holder_is_the_group_em_and_the_name_is_never_stored(tmp_path):
     watch_heartbeat.stamp(
-        str(tmp_path), holder_session_id="crown-1", declinations=[], interval_seconds=5.0
+        str(tmp_path), holder_session_id="group-em-1", declinations=[], interval_seconds=5.0
     )
     record = _record(tmp_path)
-    assert record["holder_session_id"] == "crown-1"
+    assert record["holder_session_id"] == "group-em-1"
     assert record["holder_name"] is None
 
 
 def test_next_expected_by_is_derived_from_the_interval_not_a_fixed_window(tmp_path):
     watch_heartbeat.stamp(
         str(tmp_path),
-        holder_session_id="crown-1",
+        holder_session_id="group-em-1",
         declinations=[],
         interval_seconds=300.0,
         now_epoch=1_000_000.0,
@@ -106,7 +106,7 @@ def test_a_fast_interval_still_gets_the_grace_floor(tmp_path):
     fleet load, and the record would flicker `stale` for no reason."""
     watch_heartbeat.stamp(
         str(tmp_path),
-        holder_session_id="crown-1",
+        holder_session_id="group-em-1",
         declinations=[],
         interval_seconds=5.0,
         now_epoch=1_000_000.0,
@@ -122,12 +122,12 @@ def test_each_stamp_replaces_the_whole_record_never_accumulates(tmp_path):
     "looked, nothing to do" indistinguishable from "did not look"."""
     watch_heartbeat.stamp(
         str(tmp_path),
-        holder_session_id="crown-1",
+        holder_session_id="group-em-1",
         declinations=[{"session_id": "p1", "name": None, "gate": "cooldown", "reason": "r"}],
         interval_seconds=5.0,
     )
     watch_heartbeat.stamp(
-        str(tmp_path), holder_session_id="crown-1", declinations=[], interval_seconds=5.0
+        str(tmp_path), holder_session_id="group-em-1", declinations=[], interval_seconds=5.0
     )
     assert _record(tmp_path)["declinations"] == []
 
@@ -137,14 +137,14 @@ def test_stamp_returns_false_rather_than_raising_when_the_path_is_unusable(tmp_p
     blocker = tmp_path / "state"
     blocker.write_text("not a directory", encoding="utf-8")
     assert watch_heartbeat.stamp(
-        str(tmp_path), holder_session_id="crown-1", declinations=[], interval_seconds=5.0
+        str(tmp_path), holder_session_id="group-em-1", declinations=[], interval_seconds=5.0
     ) is False
 
 
 def test_tick_source_is_the_callers_word_when_a_wake_fired_the_tick(tmp_path):
     """A cron-floor wake and a held poller write the same keys and mean
     different things about what happens if nobody fires again."""
-    watch_heartbeat.stamp(str(tmp_path), holder_session_id="crown-1", declinations=[], interval_seconds=1380.0, tick_source="cron")
+    watch_heartbeat.stamp(str(tmp_path), holder_session_id="group-em-1", declinations=[], interval_seconds=1380.0, tick_source="cron")
     assert _record(tmp_path)["tick_source"] == "cron"
 
 
@@ -186,22 +186,22 @@ def test_the_state_leaf_under_a_real_root_is_still_created(tmp_path):
 
 
 def test_the_record_says_which_process_wrote_it_not_only_who_holds_it(tmp_path):
-    """`holder_session_id` is the crown in every case, including ticks a
+    """`holder_session_id` is the Group-EM in every case, including ticks a
     dispatched teammate writes on its behalf -- so it cannot answer "did I
     write this?". A fleet-watch read back a `subscribed_peers` value its own
-    crown had written minutes earlier and reported it to that crown as
+    Group-EM had written minutes earlier and reported it to that Group-EM as
     independent confirmation (2026-09-01). Whole-file replace plus no writer
     attribution is what makes an echo indistinguishable from a confirmation.
     """
     watch_heartbeat.stamp(
         str(tmp_path),
-        holder_session_id="crown-1",
+        holder_session_id="group-em-1",
         declinations=[],
         interval_seconds=5.0,
         writer_session_id="teammate-9",
     )
     record = _record(tmp_path)
-    assert record["holder_session_id"] == "crown-1"
+    assert record["holder_session_id"] == "group-em-1"
     assert record["writer_session_id"] == "teammate-9"
 
 
@@ -210,6 +210,6 @@ def test_an_unattributed_write_says_so_rather_than_claiming_the_holder(tmp_path)
     default to the holder -- that would manufacture exactly the false
     attribution the field exists to prevent."""
     watch_heartbeat.stamp(
-        str(tmp_path), holder_session_id="crown-1", declinations=[], interval_seconds=5.0
+        str(tmp_path), holder_session_id="group-em-1", declinations=[], interval_seconds=5.0
     )
     assert _record(tmp_path)["writer_session_id"] is None

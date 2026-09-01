@@ -240,7 +240,7 @@ def fetch_live_agents(repo_root: str) -> list[dict[str, Any]]:
 
     `name` was added 2026-09-01 and is the reason a whole downstream feature
     read null. `PeerRow.name` is populated upstream; this projection dropped
-    it, so `watch._holder_name` -- written specifically to put the crown's
+    it, so `watch._holder_name` -- written specifically to put the Group-EM's
     name on the heartbeat for a reader that cannot reach this box's registry
     -- could only ever return `None`, and `state/group-em-watch.json` read
     `holder_name: null` on every tick including ones its own watch stamped.

@@ -17,7 +17,7 @@ NEGATIVE SPEC -- what this deliberately does NOT do:
     (`live_reason: "no_registry_record"` -- absence of registry evidence, not evidence of
     absence, on a fleet that is multi-machine). Both report `superseded_incumbent` for the PM to
     act on; no code path writes over either one's record. This is the exact 2026-08-30 DoE
-    failure this chunk exists to not repeat for a LIVE crown, and the multi-machine ambiguity
+    failure this chunk exists to not repeat for a LIVE Group-EM, and the multi-machine ambiguity
     means an unaccounted-for one gets the same treatment.
 
   - It DOES auto-replace an incumbent with POSITIVE evidence of death
@@ -336,7 +336,7 @@ def claim(
         # incumbent's session_id and its pid is not running). Claim it -- but loudly:
         # the replaced holder is named in its own field, never folded into
         # `superseded_incumbent`, so a caller cannot mistake this for the silent
-        # clean-pass-under-a-dead-crown failure this whole guard exists to prevent.
+        # clean-pass-under-a-dead-Group-EM failure this whole guard exists to prevent.
         replaced_holder = {
             "session_id": incumbent_sid,
             "peer_name": existing.get("peer_name"),

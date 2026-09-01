@@ -390,30 +390,30 @@ def test_cli_runs_a_bounded_watch_and_emits_armed(tmp_path, monkeypatch, capsys)
 
 
 # ---------------------------------------------------------------------------
-# two ids: the watching process is not always the crown
+# two ids: the watching process is not always the Group-EM
 # (cross-repo/inbox/2026-08-31-doe-claude-em-fleet-watch-needs-engine-side-
 # transition-events.md, question 1 -- DoE stands up a teammate to hold this
-# watch so the crown's context stays free for adjudicating)
+# watch so the Group-EM's context stays free for adjudicating)
 # ---------------------------------------------------------------------------
 
 
-def test_roster_excludes_both_the_watcher_and_the_crown():
+def test_roster_excludes_both_the_watcher_and_the_group_em():
     """A teammate sitting in a `Monitor` poll presents exactly like a parked
-    peer, and the crown is the recipient of every line -- neither belongs in
+    peer, and the Group-EM is the recipient of every line -- neither belongs in
     the watched set."""
     agents = [
         {"sessionId": "watcher-1", "status": "idle", "cwd": REPO_ROOT},
-        {"sessionId": "crown-1", "status": "idle", "cwd": REPO_ROOT},
+        {"sessionId": "group-em-1", "status": "idle", "cwd": REPO_ROOT},
         {"sessionId": "peer-1", "status": "idle", "cwd": REPO_ROOT},
     ]
     with mock.patch.object(watch.read_pass, "fetch_live_agents", return_value=agents):
-        peers = watch._current_agents(REPO_ROOT, "watcher-1", "crown-1")
+        peers = watch._current_agents(REPO_ROOT, "watcher-1", "group-em-1")
     assert [p["sessionId"] for p in peers] == ["peer-1"]
 
 
-def test_cooldown_is_read_off_the_crowns_send_log_not_the_watchers():
+def test_cooldown_is_read_off_the_group_ems_send_log_not_the_watchers():
     """The offer log is per-session on disk, so a watcher reading its own
-    empty log would re-flag every peer the crown already answered."""
+    empty log would re-flag every peer the Group-EM already answered."""
     seen = {}
 
     def _fake_read_send_log(repo_root, caller_session_id):
@@ -436,14 +436,14 @@ def test_cooldown_is_read_off_the_crowns_send_log_not_the_watchers():
             "watcher-1",
             {"peer-1": False},
             emit=lambda _line: None,
-            crown_session_id="crown-1",
+            group_em_session_id="group-em-1",
         )
 
-    assert seen["caller"] == "crown-1"
+    assert seen["caller"] == "group-em-1"
 
 
-def test_crown_session_id_defaults_to_the_calling_session():
-    """The ordinary case -- the crown holds the poller itself -- keeps
+def test_group_em_session_id_defaults_to_the_calling_session():
+    """The ordinary case -- the Group-EM holds the poller itself -- keeps
     working with one id, unchanged."""
     seen = {}
 
@@ -504,7 +504,7 @@ def test_declinations_record_the_gate_that_stopped_each_peer():
 
 
 def test_main_stamps_the_watch_presence_record_every_tick(tmp_path):
-    """A crown that arms this runnable and stops hand-stamping must not read
+    """A Group-EM that arms this runnable and stops hand-stamping must not read
     to the rest of the fleet as a repo nobody is watching."""
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, [{"sessionId": f"p{i}"} for i in range(5)])
@@ -514,7 +514,7 @@ def test_main_stamps_the_watch_presence_record_every_tick(tmp_path):
         watch.main(
             str(tmp_path),
             caller_session_id="watcher-1",
-            crown_session_id="crown-1",
+            group_em_session_id="group-em-1",
             stream=io.StringIO(),
             sleep_fn=lambda _s: None,
             max_iterations=1,
@@ -522,7 +522,7 @@ def test_main_stamps_the_watch_presence_record_every_tick(tmp_path):
 
     with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
         record = json.load(fh)
-    assert record["holder_session_id"] == "crown-1"
+    assert record["holder_session_id"] == "group-em-1"
     assert record["tick_source"] == "monitor"
 
 
@@ -606,7 +606,7 @@ def _parked_once(repo_root, prev_on_disk, candidate, emitted, now=None):
         rc = watch.tick_once(
             str(repo_root),
             caller_session_id="waker-1",
-            crown_session_id="crown-1",
+            group_em_session_id="group-em-1",
             stream=stream,
             now=now,
         )
@@ -644,14 +644,14 @@ def test_tick_once_stamps_the_presence_record_with_the_cron_word(tmp_path):
     with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
         record = json.load(fh)
     assert record["tick_source"] == "cron"
-    assert record["holder_session_id"] == "crown-1"
+    assert record["holder_session_id"] == "group-em-1"
 
 
 def test_tick_once_deadline_follows_the_callers_cadence_not_the_poll_interval(tmp_path):
     """A wake that stamped the poll loop's few-second interval would read STALE
     within the minute -- the watch reporting itself absent while working."""
     with mock.patch.object(watch, "poll_once", return_value=({}, [])):
-        watch.tick_once(str(tmp_path), caller_session_id="w", crown_session_id="c", stream=io.StringIO())
+        watch.tick_once(str(tmp_path), caller_session_id="w", group_em_session_id="c", stream=io.StringIO())
     with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
         record = json.load(fh)
     last = datetime.strptime(record["last_tick_at"], "%Y-%m-%dT%H:%M:%SZ")
@@ -664,7 +664,7 @@ def test_tick_once_exits_nonzero_and_loud_when_the_poll_raises(tmp_path):
     zero here rebuilds the exact indistinguishability this mode removes."""
     stream = io.StringIO()
     with mock.patch.object(watch, "poll_once", side_effect=RuntimeError("registry gone")):
-        rc = watch.tick_once(str(tmp_path), caller_session_id="w", crown_session_id="c", stream=stream)
+        rc = watch.tick_once(str(tmp_path), caller_session_id="w", group_em_session_id="c", stream=stream)
     assert rc == 1
     assert "POLL-ERROR" in stream.getvalue()
 
@@ -686,9 +686,9 @@ def test_cli_once_runs_one_tick_and_returns_its_code(tmp_path):
     with mock.patch.object(watch, "tick_once", return_value=0) as ticker, mock.patch.object(
         watch, "main", side_effect=AssertionError("--once must not arm the poll loop")
     ):
-        rc = watch._cli(["--repo-root", str(tmp_path), "--crown-session-id", "crown-1", "--once"])
+        rc = watch._cli(["--repo-root", str(tmp_path), "--group-em-session-id", "group-em-1", "--once"])
     assert rc == 0
-    assert ticker.call_args.kwargs["crown_session_id"] == "crown-1"
+    assert ticker.call_args.kwargs["group_em_session_id"] == "group-em-1"
 
 
 # --- what the heartbeat says about itself ----------------------------------
@@ -700,12 +700,12 @@ def test_the_record_names_the_holder_and_the_coverage_it_actually_had(tmp_path):
     `holder_name` was hardcoded null, so a reader that could not reach this
     box's registry -- another machine, the record read cold -- had a session
     id and nothing else, exactly when self-description is all that is left.
-    `subscribed_peers` was the default 1 on every tick: the crown of this repo
+    `subscribed_peers` was the default 1 on every tick: the Group-EM of this repo
     read `subscribed_peers: 1` against a live population of 10-18 on
     2026-09-01, and a watch covering one peer looked identical to a healthy
     one on every artifact on disk.
     """
-    agents = [{"sessionId": "crown-1", "name": "claude-klabauter-65"}]
+    agents = [{"sessionId": "group-em-1", "name": "claude-klabauter-65"}]
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, agents)
     ), mock.patch.object(
@@ -714,7 +714,7 @@ def test_the_record_names_the_holder_and_the_coverage_it_actually_had(tmp_path):
         watch.main(
             str(tmp_path),
             caller_session_id="watcher-1",
-            crown_session_id="crown-1",
+            group_em_session_id="group-em-1",
             stream=io.StringIO(),
             sleep_fn=lambda _s: None,
             max_iterations=1,
@@ -730,14 +730,14 @@ def test_the_holder_name_is_resolved_once_at_arm_not_per_tick(tmp_path):
     """A name on a heartbeat is self-description, not an address. Paying a
     registry read every tick to keep a string fresh puts the load norm's cost
     on the cheapest thing the watch does."""
-    agents = [{"sessionId": "crown-1", "name": "claude-klabauter-65"}]
+    agents = [{"sessionId": "group-em-1", "name": "claude-klabauter-65"}]
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, agents)
     ) as measured, mock.patch.object(watch, "poll_once", return_value=({}, [])):
         watch.main(
             str(tmp_path),
             caller_session_id="watcher-1",
-            crown_session_id="crown-1",
+            group_em_session_id="group-em-1",
             stream=io.StringIO(),
             sleep_fn=lambda _s: None,
             max_iterations=4,
@@ -751,14 +751,14 @@ def test_a_nameless_wake_carries_the_armed_pollers_name_rather_than_blanking_it(
     depending on which clock last fired."""
     watch.watch_heartbeat.stamp(
         str(tmp_path),
-        holder_session_id="crown-1",
+        holder_session_id="group-em-1",
         declinations=[],
         interval_seconds=5.0,
         holder_name="claude-klabauter-65",
     )
     with mock.patch.object(watch, "poll_once", return_value=({}, [])):
         watch.tick_once(
-            str(tmp_path), caller_session_id="w", crown_session_id="crown-1", stream=io.StringIO()
+            str(tmp_path), caller_session_id="w", group_em_session_id="group-em-1", stream=io.StringIO()
         )
     with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
         record = json.load(fh)
@@ -771,23 +771,23 @@ def test_a_new_holders_stamp_does_not_inherit_the_old_holders_name(tmp_path):
     that resolves to the wrong session."""
     watch.watch_heartbeat.stamp(
         str(tmp_path),
-        holder_session_id="crown-1",
+        holder_session_id="group-em-1",
         declinations=[],
         interval_seconds=5.0,
         holder_name="claude-klabauter-65",
     )
     watch.watch_heartbeat.stamp(
-        str(tmp_path), holder_session_id="crown-2", declinations=[], interval_seconds=5.0
+        str(tmp_path), holder_session_id="Group-EM-2", declinations=[], interval_seconds=5.0
     )
     with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
         record = json.load(fh)
-    assert record["holder_session_id"] == "crown-2"
+    assert record["holder_session_id"] == "Group-EM-2"
     assert record["holder_name"] is None
 
 
 def test_the_parked_line_names_the_peer_and_frames_the_name_as_provenance():
     """A reader cannot act on a session uuid -- `SendMessage` takes a name --
-    so a line carrying only the uuid asks the crown to resolve one from a
+    so a line carrying only the uuid asks the Group-EM to resolve one from a
     registry this tick already read. The name goes on, framed as how the peer
     was known THIS TICK, with `verify before sending` rather than
     `re-resolve from this id`: in the case that matters the printed id is

@@ -437,6 +437,32 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                        worktree bytes (commit_paths invariant
                                        1 -- a deliberate partial stage,
                                        declared, never inferred).
+        prefer_deliberate_stage (bool, optional, DEFAULT FALSE) -- the
+                                       blanket form of `prefer_staged`
+                                       (DR-379): preserve the staged bytes of
+                                       EVERY path in this call that has them,
+                                       without naming the paths up front. Use
+                                       it on a SHARED BRANCH, where a peer's
+                                       deliberate partial stage can exist on a
+                                       path you are committing and you cannot
+                                       enumerate those paths in advance --
+                                       that is exactly the case example-game-repo-em
+                                       lost attribution to on 2026-09-01 (memo
+                                       `example-game-repo-em-close-ceremony-engine-
+                                       defects-seven`, defect 6: a peer's
+                                       whoami.ts/index.ts hunks landed under
+                                       their authorship, uncorrectable after
+                                       the fact). `ops/session/
+                                       safe_commit_offer.py` has passed this
+                                       since DR-379; this op could not, so its
+                                       callers had `prefer_staged` (which
+                                       requires knowing the paths) or nothing,
+                                       and the fleet's answer was to abandon
+                                       the op for a hand-rolled `git commit
+                                       -- <paths>`. It stays DEFAULT FALSE:
+                                       flipping the default is a
+                                       fleet-visible behaviour change and is
+                                       not this seam's call.
 
     Returns:
         {"committed": True, "sha": str, "staged_preferred": [str, ...],
@@ -486,6 +512,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         isinstance(p, str) for p in raw_prefer_staged
     ):
         return _error("params.prefer_staged must be a list of strings")
+
+    # Strictly typed rather than truthiness-coerced: this flag decides WHOSE
+    # BYTES LAND, so `"false"` silently meaning True is the failure mode it
+    # exists to prevent.
+    raw_prefer_deliberate_stage = params.get("prefer_deliberate_stage", False)
+    if not isinstance(raw_prefer_deliberate_stage, bool):
+        return _error("params.prefer_deliberate_stage must be a boolean")
 
     worktree_root = main_worktree_root(repo_root)
 
@@ -554,6 +587,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             message,
             deleted_paths=raw_deleted,
             prefer_staged=raw_prefer_staged,
+            prefer_deliberate_stage=raw_prefer_deliberate_stage,
             blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
         )
     except NothingToCommit as exc:
@@ -622,7 +656,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         warnings.append(
             f"committed worktree content for {len(outcome.worktree_over_staged)} "
             f"path(s) whose index held different content: {paths}. "
-            "Pass prefer_staged to commit the staged content instead."
+            "Pass prefer_staged to name those paths, or "
+            "prefer_deliberate_stage=true to preserve every staged blob in "
+            "this call -- the latter is the shared-branch answer, where the "
+            "differing content is a peer's and you cannot name it up front."
         )
 
     if outcome.no_delta:

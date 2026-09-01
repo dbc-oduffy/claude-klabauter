@@ -662,7 +662,7 @@ def test_the_projection_carries_the_peer_name_it_used_to_drop(monkeypatch):
     """A projection that silently narrows its source is invisible downstream.
 
     `PeerRow.name` is populated upstream and this mapping dropped it, so
-    `watch._holder_name` -- written to put the crown's name on the heartbeat
+    `watch._holder_name` -- written to put the Group-EM's name on the heartbeat
     for a reader that cannot reach this box's registry -- could only ever
     return None, and `state/group-em-watch.json` read `holder_name: null` on
     every tick including ones its own watch stamped. Established by

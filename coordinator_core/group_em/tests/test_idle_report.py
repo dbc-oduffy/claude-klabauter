@@ -233,36 +233,36 @@ def _nomination(monkeypatch, holder):
                         lambda *a, **k: None if holder is None else {"session_id": holder})
 
 
-def test_a_crown_that_no_longer_holds_the_nomination_is_crown_moved(
+def test_a_group_em_that_no_longer_holds_the_nomination_is_moved(
     tmp_path, projects_dir, now, monkeypatch
 ):
-    """The watcher watches on the crown's standing, so a moved crown voids the
+    """The watcher watches on the Group-EM's standing, so a moved Group-EM voids the
     whole tick. It is the REPORT's state, not a peer row -- and it never appears
     as a per-peer verdict."""
     _nomination(monkeypatch, "somebody-else")
-    report = _report(tmp_path, projects_dir, now, crown_session_id="7777aaaa-x")
-    assert report["crown-moved"] is True
-    assert report["verdict"] == idle_report.VERDICT_CROWN_MOVED
-    assert idle_report.VERDICT_CROWN_MOVED in idle_report.render(report)
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
+    assert report["group-em-moved"] is True
+    assert report["verdict"] == idle_report.VERDICT_GROUP_EM_MOVED
+    assert idle_report.VERDICT_GROUP_EM_MOVED in idle_report.render(report)
     assert report["peers"] == []
 
 
-def test_a_crown_still_holding_the_nomination_is_not_moved(
+def test_a_group_em_still_holding_the_nomination_is_not_moved(
     tmp_path, projects_dir, now, monkeypatch
 ):
     _nomination(monkeypatch, "7777aaaa-x")
-    report = _report(tmp_path, projects_dir, now, crown_session_id="7777aaaa-x")
-    assert report["crown-moved"] is False and report["verdict"] is None
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
+    assert report["group-em-moved"] is False and report["verdict"] is None
 
 
-def test_a_missing_nomination_record_is_not_evidence_the_crown_moved(
+def test_a_missing_nomination_record_is_not_evidence_the_group_em_moved(
     tmp_path, projects_dir, now, monkeypatch
 ):
     """Stopping every tick on a missing file is the same false-tidy failure as
-    reporting a live peer dead. CROWN-MOVED needs positive evidence."""
+    reporting a live peer dead. GROUP-EM-MOVED needs positive evidence."""
     _nomination(monkeypatch, None)
-    report = _report(tmp_path, projects_dir, now, crown_session_id="7777aaaa-x")
-    assert report["crown-moved"] is False
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
+    assert report["group-em-moved"] is False
 
 
 def test_the_verdict_vocabulary_is_closed(tmp_path, projects_dir, now):
@@ -271,11 +271,11 @@ def test_the_verdict_vocabulary_is_closed(tmp_path, projects_dir, now):
     assert {
         idle_report.VERDICT_BETWEEN_TURNS, idle_report.VERDICT_WATCH,
         idle_report.VERDICT_ESCALATE, idle_report.VERDICT_OUT_OF_WORK,
-        idle_report.VERDICT_EXITED, idle_report.VERDICT_CROWN_MOVED,
+        idle_report.VERDICT_EXITED, idle_report.VERDICT_GROUP_EM_MOVED,
         idle_report.VERDICT_UNKNOWN,
     } == {
         "between-turns", "watch", "ESCALATE", "OUT-OF-WORK", "EXITED",
-        "CROWN-MOVED", "UNKNOWN",
+        "GROUP-EM-MOVED", "UNKNOWN",
     }
 
 
@@ -288,7 +288,7 @@ def test_the_registry_resolves_the_address_when_it_has_the_session(
     row = _row(_report(tmp_path, projects_dir, now,
                        names={"8888aaaa-x": "claude-klabauter-a9"}), "8888aaaa")
     assert row["address"] == "claude-klabauter-a9 [8888aaaa]"
-    assert row["report-to-crown"] is False
+    assert row["report-to-group-em"] is False
 
 
 def test_a_self_id_in_the_transcript_resolves_when_the_registry_cannot(
@@ -303,13 +303,13 @@ def test_a_self_id_in_the_transcript_resolves_when_the_registry_cannot(
 
 def test_unaddressable_when_nothing_states_the_name(tmp_path, projects_dir, now):
     """The name is what SendMessage needs; nothing else supplies it. On an
-    escalation the verdict stands, the shape holds, and the crown is told."""
+    escalation the verdict stands, the shape holds, and the Group-EM is told."""
     _write(projects_dir, "aaaa9999-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     row = _row(_report(tmp_path, projects_dir, now, names={"aaaa9999-x": None}), "aaaa9999")
     assert row["address"] == idle_report.UNADDRESSABLE
     assert row["verdict"] == idle_report.VERDICT_ESCALATE
     assert row["nudge-shape"] == idle_report.SHAPE_HOLD
-    assert row["report-to-crown"] is True
+    assert row["report-to-group-em"] is True
 
 
 def test_a_name_is_never_inferred_from_the_session_id_prefix(tmp_path, projects_dir, now):
@@ -373,7 +373,7 @@ def test_last_said_is_capped_at_the_emitting_end(tmp_path, projects_dir, now):
 def test_a_completion_ceremony_is_out_of_work_and_assigned_not_nudged(
     tmp_path, projects_dir, now
 ):
-    """A session that has run out needs work from the crown; no nudge fixes it.
+    """A session that has run out needs work from the Group-EM; no nudge fixes it.
     Collapsing this into ESCALATE loses the only distinction that changes who
     acts."""
     _write(projects_dir, "1212aaaa-x", [
@@ -399,24 +399,24 @@ def test_merely_talking_about_the_ceremony_is_not_out_of_work(tmp_path, projects
 
 # --- roster scope ---------------------------------------------------------
 
-def test_the_crown_is_excluded_from_its_own_roster(tmp_path, projects_dir, now):
-    """Reporting the crown to the crown is noise by construction."""
-    crown = "1414aaaa-bbbb-cccc"
-    _write(projects_dir, crown, [_record(40, now)], mtime_minutes_ago=40, now=now)
+def test_the_group_em_is_excluded_from_its_own_roster(tmp_path, projects_dir, now):
+    """Reporting the Group-EM to the Group-EM is noise by construction."""
+    group_em = "1414aaaa-bbbb-cccc"
+    _write(projects_dir, group_em, [_record(40, now)], mtime_minutes_ago=40, now=now)
     _write(projects_dir, "1515aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     report = _report(tmp_path, projects_dir, now,
-                     names={crown: "crown", "1515aaaa-x": "peer"},
-                     crown_session_id=crown)
+                     names={group_em: "group-em", "1515aaaa-x": "peer"},
+                     group_em_session_id=group_em)
     assert [row["session"] for row in report["peers"]] == ["1515aaaa-x"]
 
 
 def test_the_polling_caller_is_excluded_too(tmp_path, projects_dir, now):
     """The two ids are separate on purpose: a teammate can hold the watch while
-    the crown owns the offer log. Neither flags itself."""
+    the Group-EM owns the offer log. Neither flags itself."""
     _write(projects_dir, "1616aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     report = _report(tmp_path, projects_dir, now,
-                     names={"1616aaaa-x": "p", "crown-1": "crown"},
-                     crown_session_id="crown-1", caller_session_id="1616aaaa-x")
+                     names={"1616aaaa-x": "p", "group-em-1": "Group-EM"},
+                     group_em_session_id="group-em-1", caller_session_id="1616aaaa-x")
     assert report["peers"] == []
 
 
@@ -433,12 +433,12 @@ def test_peer_filters_to_one_session(tmp_path, projects_dir, now):
 def test_the_summary_line_carries_every_parameter_the_report_used(
     tmp_path, projects_dir, now
 ):
-    """A report pasted into the crown's context must explain its own judgements
+    """A report pasted into the Group-EM's context must explain its own judgements
     without a second lookup."""
     line = idle_report.summary_line(
-        _report(tmp_path, projects_dir, now, crown_session_id="crown-1"))
+        _report(tmp_path, projects_dir, now, group_em_session_id="group-em-1"))
     for token in ("peers=", "escalate=", "out-of-work=", "unknown=", "exited=",
-                  "floor=5m", "threshold=30m", "crown=crown-1"):
+                  "floor=5m", "threshold=30m", "group-em=group-em-1"):
         assert token in line
 
 
@@ -458,12 +458,12 @@ def test_the_json_arm_carries_the_same_fields(tmp_path, projects_dir, now, monke
     captured = []
     monkeypatch.setattr("builtins.print", lambda *a, **k: captured.append(a[0]))
     assert idle_report._cli(
-        ["--repo-root", str(tmp_path), "--crown-session-id", "crown-1", "--json"]) == 0
+        ["--repo-root", str(tmp_path), "--group-em-session-id", "group-em-1", "--json"]) == 0
     payload = json.loads(captured[0])
     row = payload["peers"][0]
     for field in ("session", "verdict", "content-age", "mtime-age", "divergence",
-                  "answered-by-crown", "nudge-shape", "address", "last-said",
-                  "named-next-move", "report-to-crown", "exited-since"):
+                  "answered-by-group-em", "nudge-shape", "address", "last-said",
+                  "named-next-move", "report-to-group-em", "exited-since"):
         assert field in row
 
 
@@ -536,34 +536,34 @@ def test_a_missing_offer_log_downgrades_to_reporting_not_to_sending(
     """Losing suppression must not become "nudge everyone again". The peers the
     watcher would have nudged come back as UNKNOWN, which routes to report-it."""
     _write(projects_dir, "2525aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
-    monkeypatch.setattr(idle_report, "_read_crown_log", lambda *a, **k: ([], False))
+    monkeypatch.setattr(idle_report, "_read_group_em_log", lambda *a, **k: ([], False))
     row = _row(_report(tmp_path, projects_dir, now,
                        names={"2525aaaa-x": "claude-klabauter-a9"},
-                       crown_session_id="crown-1"), "2525aaaa")
+                       group_em_session_id="group-em-1"), "2525aaaa")
     assert row["verdict"] == idle_report.VERDICT_UNKNOWN
     assert row["reason"] == idle_report.REASON_SUPPRESSION_UNAVAILABLE
     assert row["nudge-shape"] == idle_report.SHAPE_HOLD
 
 
 def test_an_empty_offer_log_is_an_answer_not_a_failure(tmp_path, projects_dir, now):
-    """"This crown has offered nobody" is a real answer and must not downgrade."""
+    """"This Group-EM has offered nobody" is a real answer and must not downgrade."""
     _write(projects_dir, "2626aaaa-x", [_said("I'll now merge.", 40, now)],
            mtime_minutes_ago=40, now=now)
     row = _row(_report(tmp_path, projects_dir, now,
                        names={"2626aaaa-x": "claude-klabauter-a9"},
-                       crown_session_id="crown-1"), "2626aaaa")
+                       group_em_session_id="group-em-1"), "2626aaaa")
     assert row["verdict"] == idle_report.VERDICT_ESCALATE
     assert row["nudge-shape"] == idle_report.SHAPE_PUSH
 
 
-def test_crown_moved_emits_no_peer_rows_at_all(tmp_path, projects_dir, now, monkeypatch):
+def test_group_em_moved_emits_no_peer_rows_at_all(tmp_path, projects_dir, now, monkeypatch):
     """The rows would describe a fleet this watcher no longer has standing over,
     and a row that is present is a row something acts on."""
     _write(projects_dir, "2727aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     _nomination(monkeypatch, "somebody-else")
-    report = _report(tmp_path, projects_dir, now, crown_session_id="2828aaaa-x")
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="2828aaaa-x")
     assert report["peers"] == []
-    assert report["verdict"] == idle_report.VERDICT_CROWN_MOVED
+    assert report["verdict"] == idle_report.VERDICT_GROUP_EM_MOVED
 
 
 def test_the_nudge_shape_set_is_closed(tmp_path, projects_dir, now):
@@ -580,7 +580,7 @@ def test_every_emitted_shape_and_verdict_is_in_its_closed_set(tmp_path, projects
     verdicts = {
         idle_report.VERDICT_BETWEEN_TURNS, idle_report.VERDICT_WATCH,
         idle_report.VERDICT_ESCALATE, idle_report.VERDICT_OUT_OF_WORK,
-        idle_report.VERDICT_EXITED, idle_report.VERDICT_CROWN_MOVED,
+        idle_report.VERDICT_EXITED, idle_report.VERDICT_GROUP_EM_MOVED,
         idle_report.VERDICT_UNKNOWN,
     }
     for row in report["peers"]:

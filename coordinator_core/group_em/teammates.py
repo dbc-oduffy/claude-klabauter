@@ -1,14 +1,14 @@
-"""Teammate-presence probe for a crowned Group EM session.
+"""Teammate-presence probe for a Group-EM session.
 
-PURPOSE. Holding the Group EM crown obliges the session to be running two
+PURPOSE. Holding the Group EM Group-EM obliges the session to be running two
 standing teammates -- `coordinator:group-em-assistant` (the warm assistant)
 and the fleet watcher. Until this module existed, that obligation was purely
 doctrinal: it was named only in DoE-claude's `skills/group-em/SKILL.md`, and
-a crown that simply skipped the dispatch produced no error, no warning, and
+a Group-EM that simply skipped the dispatch produced no error, no warning, and
 no record. `groupem.enter` re-runs on every tick and already emits
 `digest["gate_declaration_required"]`, the shape for an obligation the EM
 cannot silently skip; this module supplies the same shape for teammates, so
-a crowned session holding neither agent carries a VISIBLY UNMET OBLIGATION
+a Group-EM session holding neither agent carries a VISIBLY UNMET OBLIGATION
 instead of a silence.
 
 The engine can only ASSERT. It cannot dispatch an agent on the session's
@@ -17,7 +17,7 @@ engine half. Nothing here writes, spawns, or nudges.
 
 EVIDENCE IS A DISPATCH RECORD, NEVER A CLOCK. Presence is established by the
 EXISTENCE of the teammate's own subagent transcript sidecar under
-`<projects>/<slug>/<crown-session-id>/subagents/agent-<id>.meta.json`, keyed
+`<projects>/<slug>/<group-em-session-id>/subagents/agent-<id>.meta.json`, keyed
 on the agent identity that sidecar records. There is deliberately NO
 staleness threshold, no mtime read, and no freshness window anywhere in this
 module, and adding one is a defect, not an improvement: an obligation that
@@ -108,7 +108,7 @@ PROBE = "subagent-dispatch-record"
 
 
 def subagents_dir(repo_root: str, session_id: str) -> str:
-    """The crown session's own subagents directory.
+    """The Group-EM session's own subagents directory.
 
     Derived from `read_pass._transcript_path_for` rather than re-encoding the
     projects slug here -- one encoder for the whole package, so a drift in
@@ -142,7 +142,7 @@ def _sidecar_identity(path: str) -> tuple[Optional[str], Optional[str]]:
 
 
 def presence(repo_root: str, session_id: Optional[str]) -> dict[str, Any]:
-    """Whether this crowned session holds each standing teammate.
+    """Whether this Group-EM session holds each standing teammate.
 
     Returns:
         {

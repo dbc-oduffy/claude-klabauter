@@ -70,12 +70,12 @@ above rather than four fully isolated legs). A reader adding a further leg
 expecting the same isolation nomination and teammates get should not: it
 inherits whatever the roster chain does.
 
-ORDER IS LOAD-BEARING: crown, then roster, then digest. A REFUSED crown -- `claimed`
+ORDER IS LOAD-BEARING: Group-EM, then roster, then digest. A REFUSED Group-EM -- `claimed`
 false in the nomination verdict -- stops the op BEFORE the roster leg is built, not
 merely before the digest. `send_pass.build_send_digest` arms each emitted peer's
-cooldown as it emits, so a session with no standing to hold the crown building one
+cooldown as it emits, so a session with no standing to hold the Group-EM building one
 anyway would burn an hour of throttle state on peers it had no right to offer, silently
-degrading the legitimate holder's next digest. An AUTO-REPLACED crown (see below) is
+degrading the legitimate holder's next digest. An AUTO-REPLACED Group-EM (see below) is
 NOT a refusal -- `claimed` is true, so roster/digest/baseline all run normally.
 
 FIVE NOMINATION OUTCOMES, TWO OF THEM REFUSALS. `nomination.claim` (see that module's
@@ -94,7 +94,7 @@ and refusing it forever would fire on essentially every invocation after the fir
 (a dead-but-unreaped record is this mode's steady state). The replacement is reported
 LOUDLY via `nomination["replaced_holder"]`, never folded into `superseded_incumbent`.
 
-PAYLOAD SHAPE ON REFUSAL -- ABSENT KEYS, NOT NULL VALUES. On a refused crown (cases 3
+PAYLOAD SHAPE ON REFUSAL -- ABSENT KEYS, NOT NULL VALUES. On a refused Group-EM (cases 3
 and 5 above), `roster` and `digest` (and `baseline`, which itself consumes the roster)
 are OMITTED from the returned dict entirely, and so is `teammates` -- `"roster" not in result`, never
 `result["roster"] is None`. This is deliberate and load-bearing for the consumer, not a
@@ -114,13 +114,13 @@ express them. This op adds no new names for these fields and re-derives nothing:
 `result["nomination"]` is exactly `nomination.claim()`'s return value, unmodified.
 
 Negative-spec:
-    - Never auto-supersedes a crown. `nomination.claim`'s verdict --
+    - Never auto-supersedes a Group-EM. `nomination.claim`'s verdict --
       including a live OR dead `superseded_incumbent`, its `already_held`
       flag, and its `live_reason` -- is passed through verbatim; this op
       never claims over anyone, never lets a caller pass a supersede flag
       on its own initiative, and never reduces any of those fields to a
       bool or renames them.
-    - Never builds the roster or digest on a refused crown, and never
+    - Never builds the roster or digest on a refused Group-EM, and never
       reports them as present-but-null. See "PAYLOAD SHAPE ON REFUSAL"
       above -- a refusal is direction-class and reaches the human via the
       passed-through `superseded_incumbent`, never retried or swallowed
@@ -271,7 +271,7 @@ def _run_baseline(
 def _run_teammates(
     repo_root: str, caller_session_id: str
 ) -> tuple[Optional[dict], Optional[str]]:
-    """Assert the crown's STANDING TEAMMATE obligation -- see
+    """Assert the Group-EM's STANDING TEAMMATE obligation -- see
     `group_em.teammates` for the evidence rule (a dispatch record, never a
     clock) and for why the fleet watcher is reported ahead of the assistant.
 
@@ -305,15 +305,15 @@ def _run_watch_liveness(repo_root: str):
 
     Until this leg existed the remedy was prose -- the `fleet-watch` agent body
     telling the agent to report a failed start -- and prose lost. This is the
-    artifact that discharges it: every crown tick reads the watch's own
+    artifact that discharges it: every Group-EM tick reads the watch's own
     heartbeat and reports `absent`/`vacant`/`stale` with the re-arm command,
     so a dead watcher is a line the EM reads rather than a silence it
     misreads as coverage.
 
     FRESHNESS ONLY -- the registry is deliberately NOT joined here, though
-    `read_liveness` accepts one. The record's holder is the CROWN, never the
+    `read_liveness` accepts one. The record's holder is the GROUP-EM, never the
     teammate process (see `watch_heartbeat`'s own WHO THE HOLDER IS), so from
-    the crown's own tick that join asks whether the caller exists: it can only
+    the Group-EM's own tick that join asks whether the caller exists: it can only
     answer yes, or answer `vacant` wrongly on an enumeration that happens not
     to list self. The holder join earns its keep for a DIFFERENT session
     reading the record; here it would be a false negative dressed as evidence.
@@ -347,11 +347,11 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     `roster` is the kept subset -- see module docstring for why the count is
     top-level and why a consumer cannot read `len(roster)` as a population.
     `teammates` carries `dispatch_required` plus per-agent `present` flags
-    for the crown's two standing teammates (fleet watcher first, then the
+    for the Group-EM's two standing teammates (fleet watcher first, then the
     assistant) -- the `gate_declaration_required` shape for an obligation
     that is a property of the SESSION rather than of one send. Like the
-    other post-crown legs it is OMITTED on a refused crown: a session with
-    no standing to hold the crown owes no teammates.
+    other post-Group-EM legs it is OMITTED on a refused Group-EM: a session with
+    no standing to hold the Group-EM owes no teammates.
     `watch_liveness` answers the OTHER half of the same obligation: whether the
     watch is ticking, read off the heartbeat record's own self-set deadline
     rather than off a dispatch record. Reported beside `teammates`, never
@@ -359,7 +359,7 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     and fails this one, which is precisely the case the pair exists to catch.
     A failed leg (one that RAN and raised) is `None` with a `"<key>_error"`
     sibling string carrying the reason; the other legs still populate (see
-    module docstring). On a REFUSED crown, `roster`/`digest`/`baseline` are
+    module docstring). On a REFUSED Group-EM, `roster`/`digest`/`baseline` are
     OMITTED from the dict entirely -- a leg that never ran is absent, not
     `None` -- see module docstring § PAYLOAD SHAPE ON REFUSAL.
     `nomination["already_held"]` and `nomination["superseded_incumbent"]
@@ -390,16 +390,16 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     _leg(result, "nomination", nomination_outcome)
     nomination_value = nomination_outcome[0]
 
-    # ORDER IS LOAD-BEARING: crown, then roster, then digest. A REFUSED crown --
+    # ORDER IS LOAD-BEARING: Group-EM, then roster, then digest. A REFUSED Group-EM --
     # `claimed` false, whether the incumbent is live or dead -- stops here, before the
     # roster leg even runs, not just before the digest. `send_pass.build_send_digest`
     # arms each emitted peer's cooldown as it emits; a session with no standing to hold
-    # the crown must not burn that throttle state on peers it had no right to offer.
+    # the Group-EM must not burn that throttle state on peers it had no right to offer.
     # Roster and digest are reported ABSENT with a reason, distinguishable from "ran and
     # found nothing" -- never an empty list, never a partially-built digest.
-    crown_refused = isinstance(nomination_value, dict) and nomination_value.get("claimed") is False
+    group_em_refused = isinstance(nomination_value, dict) and nomination_value.get("claimed") is False
 
-    if crown_refused:
+    if group_em_refused:
         # ABSENT, not null: `roster`/`digest`/`baseline` are OMITTED from `result`
         # entirely on this path -- never written as `None`, never given an `_error`
         # sibling. An empty roster is a fact ("looked, found nobody"); an absent one

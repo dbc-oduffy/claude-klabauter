@@ -166,7 +166,7 @@ def test_baseline_tracks_the_peer_set_not_the_candidate_roster(tmp_path, monkeyp
 
 
 def test_live_incumbent_refusal_stops_before_digest(tmp_path, monkeypatch):
-    """The load-bearing assertion: a REFUSED crown (live incumbent) must never call
+    """The load-bearing assertion: a REFUSED Group-EM (live incumbent) must never call
     `build_send_digest` -- the bug is the side effect (cooldown arming), not the return
     shape. Spy on the digest builder rather than only checking its absence in the
     payload."""
@@ -211,8 +211,8 @@ def test_live_incumbent_refusal_stops_before_digest(tmp_path, monkeypatch):
 
     result = gee._group_em_enter({"repo_root": str(tmp_path)})
 
-    assert digest_spy_calls == [], "build_send_digest must NEVER be called on a refused crown"
-    assert roster_spy_calls == [], "roster leg must not be built on a refused crown either"
+    assert digest_spy_calls == [], "build_send_digest must NEVER be called on a refused Group-EM"
+    assert roster_spy_calls == [], "roster leg must not be built on a refused Group-EM either"
     assert baseline_spy_calls == []
 
     assert result["nomination"]["claimed"] is False
@@ -274,7 +274,7 @@ def test_unaccounted_incumbent_refusal_also_stops_before_digest(tmp_path, monkey
 
     result = gee._group_em_enter({"repo_root": str(tmp_path)})
 
-    assert digest_spy_calls == [], "absence of registry evidence must not auto-yield the crown"
+    assert digest_spy_calls == [], "absence of registry evidence must not auto-yield the Group-EM"
     assert result["nomination"]["claimed"] is False
     assert result["nomination"]["already_held"] is False
     assert result["nomination"]["superseded_incumbent"]["live"] is False
@@ -341,7 +341,7 @@ def test_pid_not_running_incumbent_is_auto_replaced_not_refused(tmp_path, monkey
     assert replaced["session_id"] == "dead-incumbent-sid"
     assert replaced["live_reason"] == "pid_not_running"
 
-    # crown was successfully claimed -- roster/digest/baseline all run, keys present.
+    # Group-EM was successfully claimed -- roster/digest/baseline all run, keys present.
     assert digest_spy_calls != [], "an auto-replace must proceed to build the digest"
     assert result["roster"] == []
     assert result["digest"] == {"entries": [], "gate_declaration_required": True}
@@ -423,7 +423,7 @@ def test_reentry_by_holder_is_distinguishable_from_fresh_claim(tmp_path, monkeyp
     assert result["roster"] == []
 
 
-def test_auto_replace_crown_is_not_a_refusal_and_runs_roster(tmp_path, monkeypatch):
+def test_auto_replace_group_em_is_not_a_refusal_and_runs_roster(tmp_path, monkeypatch):
     """`replaced_holder` (case 4 -- pid_not_running) is NOT a refusal: `claimed` is True,
     so roster/digest/baseline must all run, unlike the two refusal cases above."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-11")
@@ -515,7 +515,7 @@ def test_baseline_leg_writes_under_the_acted_on_repo_root_not_claude_klabauter(t
     assert not claude_klabauter_store_after, "baseline snapshot must NOT land under the claude-klabauter checkout"
 
 
-def _crown_with_teammates(tmp_path, monkeypatch, metas, session_id):
+def _group_em_with_teammates(tmp_path, monkeypatch, metas, session_id):
     """Plant `metas` as `.meta.json` sidecars in a fake home's subagents dir for
     `session_id`, and return the repo root to enter with."""
     import json
@@ -567,7 +567,7 @@ def _stub_legs(monkeypatch, session_id, claimed=True):
 def test_teammates_leg_reports_both_agents_present(tmp_path, monkeypatch):
     session_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
     _stub_legs(monkeypatch, session_id)
-    repo_root = _crown_with_teammates(
+    repo_root = _group_em_with_teammates(
         tmp_path,
         monkeypatch,
         [
@@ -584,13 +584,13 @@ def test_teammates_leg_reports_both_agents_present(tmp_path, monkeypatch):
     assert "teammates_error" not in result
 
 
-def test_teammates_leg_reports_a_crown_holding_neither_agent(tmp_path, monkeypatch):
-    """The regression this op exists to end: a crown that skipped the dispatch
+def test_teammates_leg_reports_a_group_em_holding_neither_agent(tmp_path, monkeypatch):
+    """The regression this op exists to end: a Group-EM that skipped the dispatch
     used to produce no error, no warning, and no record. It now carries an
     unmet obligation on every tick, with the fleet watcher named first."""
     session_id = "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff"
     _stub_legs(monkeypatch, session_id)
-    repo_root = _crown_with_teammates(
+    repo_root = _group_em_with_teammates(
         tmp_path, monkeypatch, [{"agentType": "coordinator:staff-eng"}], session_id
     )
 
@@ -605,7 +605,7 @@ def test_teammates_leg_reports_a_crown_holding_neither_agent(tmp_path, monkeypat
 def test_teammates_leg_reports_the_watcher_missing_on_its_own(tmp_path, monkeypatch):
     session_id = "aaaaaaaa-bbbb-cccc-dddd-999999999999"
     _stub_legs(monkeypatch, session_id)
-    repo_root = _crown_with_teammates(
+    repo_root = _group_em_with_teammates(
         tmp_path,
         monkeypatch,
         [{"agentType": "coordinator:group-em-assistant", "name": "gem-assistant"}],
@@ -618,8 +618,8 @@ def test_teammates_leg_reports_the_watcher_missing_on_its_own(tmp_path, monkeypa
     assert result["teammates"]["agents"]["group_em_assistant"]["present"] is True
 
 
-def test_teammates_absent_entirely_on_a_refused_crown(tmp_path, monkeypatch):
-    """A session with no standing to hold the crown owes no teammates -- the key
+def test_teammates_absent_entirely_on_a_refused_group_em(tmp_path, monkeypatch):
+    """A session with no standing to hold the Group-EM owes no teammates -- the key
     is OMITTED, never reported as an unmet obligation it does not carry."""
     session_id = "aaaaaaaa-bbbb-cccc-dddd-777777777777"
     _stub_legs(monkeypatch, session_id, claimed=False)
@@ -651,13 +651,13 @@ def test_teammates_leg_degrades_without_taking_the_others(tmp_path, monkeypatch)
 
 
 def test_watch_liveness_reports_absent_when_nothing_ever_stamped(tmp_path, monkeypatch):
-    """The live failure this leg exists for, from the outside: the crown holds a
+    """The live failure this leg exists for, from the outside: the Group-EM holds a
     dispatch record for a watcher whose subprocess never started, so the
     teammates leg is satisfied and nothing is watching. Measured 2026-09-01 in
     example-game-workbench-repo -- `ListAgents` read `idle` for thirteen minutes."""
     session_id = "aaaaaaaa-bbbb-cccc-dddd-111111111111"
     _stub_legs(monkeypatch, session_id)
-    repo_root = _crown_with_teammates(
+    repo_root = _group_em_with_teammates(
         tmp_path,
         monkeypatch,
         [
@@ -678,7 +678,7 @@ def test_watch_liveness_reports_absent_when_nothing_ever_stamped(tmp_path, monke
 def test_watch_liveness_reports_armed_on_a_fresh_stamp(tmp_path, monkeypatch):
     session_id = "aaaaaaaa-bbbb-cccc-dddd-222222222222"
     _stub_legs(monkeypatch, session_id)
-    repo_root = _crown_with_teammates(tmp_path, monkeypatch, [], session_id)
+    repo_root = _group_em_with_teammates(tmp_path, monkeypatch, [], session_id)
     gee.group_em_watch_heartbeat.stamp(
         repo_root, holder_session_id=session_id, declinations=[], interval_seconds=1380.0
     )
@@ -695,7 +695,7 @@ def test_watch_liveness_reports_stale_past_the_deadline_the_tick_set_itself(tmp_
     itself off its own cadence. Missing a deadline you set is evidence."""
     session_id = "aaaaaaaa-bbbb-cccc-dddd-333333333333"
     _stub_legs(monkeypatch, session_id)
-    repo_root = _crown_with_teammates(tmp_path, monkeypatch, [], session_id)
+    repo_root = _group_em_with_teammates(tmp_path, monkeypatch, [], session_id)
     gee.group_em_watch_heartbeat.stamp(
         repo_root,
         holder_session_id=session_id,
@@ -779,9 +779,9 @@ def test_roster_considered_survives_a_raising_roster_leg(tmp_path, monkeypatch):
     assert result["roster_considered"] == 1
 
 
-def test_roster_considered_is_absent_on_a_refused_crown(tmp_path, monkeypatch):
+def test_roster_considered_is_absent_on_a_refused_group_em(tmp_path, monkeypatch):
     """Same rule as `roster`: a leg that never ran is ABSENT, not zero. A
-    `roster_considered` of 0 under a refused crown would assert an empty fleet
+    `roster_considered` of 0 under a refused Group-EM would assert an empty fleet
     this op had no standing to enumerate."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rc3")
     monkeypatch.setattr(

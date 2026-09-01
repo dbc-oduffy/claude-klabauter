@@ -1,7 +1,7 @@
-"""Tests for `group_em.teammates` -- the crown's standing-teammate assertion.
+"""Tests for `group_em.teammates` -- the Group-EM's standing-teammate assertion.
 
 Both teammates get a present arm and an absent arm, and the two are asserted
-SEPARATELY: a crown missing the fleet watcher is the worse of the two
+SEPARATELY: a Group-EM missing the fleet watcher is the worse of the two
 failures (it makes a stopped fleet look healthy), so a test that only checked
 "some teammate is there" would pass on exactly the case that matters most.
 
@@ -52,8 +52,8 @@ SESSION_ID = "11111111-2222-3333-4444-555555555555"
 
 
 @pytest.fixture
-def crown(tmp_path, monkeypatch):
-    """A fake home whose projects tree holds one crowned session's subagents dir.
+def group_em_home(tmp_path, monkeypatch):
+    """A fake home whose projects tree holds one Group-EM session's subagents dir.
 
     Returns `(repo_root, write_sidecar)` -- call `write_sidecar(stem, meta)` to
     plant one `.meta.json`.
@@ -78,8 +78,8 @@ def crown(tmp_path, monkeypatch):
     return repo_root, write_sidecar
 
 
-def test_both_teammates_present_discharges_the_obligation(crown):
-    repo_root, write_sidecar = crown
+def test_both_teammates_present_discharges_the_obligation(group_em_home):
+    repo_root, write_sidecar = group_em_home
     write_sidecar("agent-aaaa1", ASSISTANT_META)
     write_sidecar("agent-aaaa2", WATCH_META)
     write_sidecar("agent-aaaa3", UNRELATED_META)
@@ -94,8 +94,8 @@ def test_both_teammates_present_discharges_the_obligation(crown):
     assert result["probe"] == "subagent-dispatch-record"
 
 
-def test_absent_assistant_is_reported_alone(crown):
-    repo_root, write_sidecar = crown
+def test_absent_assistant_is_reported_alone(group_em_home):
+    repo_root, write_sidecar = group_em_home
     write_sidecar("agent-aaaa2", WATCH_META)
 
     result = teammates.presence(repo_root, SESSION_ID)
@@ -106,9 +106,9 @@ def test_absent_assistant_is_reported_alone(crown):
     assert result["dispatch_required"] is True
 
 
-def test_absent_fleet_watch_is_reported_alone(crown):
+def test_absent_fleet_watch_is_reported_alone(group_em_home):
     """The worse of the two failures, and the one a single boolean would hide."""
-    repo_root, write_sidecar = crown
+    repo_root, write_sidecar = group_em_home
     write_sidecar("agent-aaaa1", ASSISTANT_META)
 
     result = teammates.presence(repo_root, SESSION_ID)
@@ -119,8 +119,8 @@ def test_absent_fleet_watch_is_reported_alone(crown):
     assert result["dispatch_required"] is True
 
 
-def test_neither_teammate_reports_the_watcher_first(crown):
-    repo_root, write_sidecar = crown
+def test_neither_teammate_reports_the_watcher_first(group_em_home):
+    repo_root, write_sidecar = group_em_home
     write_sidecar("agent-aaaa3", UNRELATED_META)
 
     result = teammates.presence(repo_root, SESSION_ID)
@@ -130,9 +130,9 @@ def test_neither_teammate_reports_the_watcher_first(crown):
     assert result["unreadable"] is False
 
 
-def test_unnamed_assistant_matches_on_agent_type(crown):
+def test_unnamed_assistant_matches_on_agent_type(group_em_home):
     """A dispatch with no `name` still satisfies the obligation via `agentType`."""
-    repo_root, write_sidecar = crown
+    repo_root, write_sidecar = group_em_home
     meta = dict(ASSISTANT_META)
     del meta["name"]
     write_sidecar("agent-aaaa1", meta)
@@ -142,11 +142,11 @@ def test_unnamed_assistant_matches_on_agent_type(crown):
     assert result["agents"]["group_em_assistant"]["present"] is True
 
 
-def test_fleet_watch_matches_on_name_despite_generic_agent_type(crown):
+def test_fleet_watch_matches_on_name_despite_generic_agent_type(group_em_home):
     """`coordinator:fleet-watch` is not a registered agent type on this machine;
     the watcher is dispatched as a NAMED general-purpose agent, and a matcher
     keyed on `agentType` alone would report it permanently absent."""
-    repo_root, write_sidecar = crown
+    repo_root, write_sidecar = group_em_home
     write_sidecar("agent-aaaa2", WATCH_META)
 
     result = teammates.presence(repo_root, SESSION_ID)
@@ -155,8 +155,8 @@ def test_fleet_watch_matches_on_name_despite_generic_agent_type(crown):
     assert result["agents"]["fleet_watch"]["dispatch_records"] == ["agent-aaaa2"]
 
 
-def test_missing_subagents_dir_is_unreadable_not_a_verified_absence(crown):
-    repo_root, _write_sidecar = crown
+def test_missing_subagents_dir_is_unreadable_not_a_verified_absence(group_em_home):
+    repo_root, _write_sidecar = group_em_home
 
     result = teammates.presence(repo_root, SESSION_ID)
 
@@ -165,8 +165,8 @@ def test_missing_subagents_dir_is_unreadable_not_a_verified_absence(crown):
     assert result["missing"] == ["fleet_watch", "group_em_assistant"]
 
 
-def test_no_session_id_is_unreadable(crown):
-    repo_root, _write_sidecar = crown
+def test_no_session_id_is_unreadable(group_em_home):
+    repo_root, _write_sidecar = group_em_home
 
     result = teammates.presence(repo_root, None)
 
@@ -175,8 +175,8 @@ def test_no_session_id_is_unreadable(crown):
     assert result["dispatch_required"] is True
 
 
-def test_malformed_sidecar_never_satisfies_the_obligation(crown):
-    repo_root, write_sidecar = crown
+def test_malformed_sidecar_never_satisfies_the_obligation(group_em_home):
+    repo_root, write_sidecar = group_em_home
     write_sidecar("agent-aaaa1", None)
 
     result = teammates.presence(repo_root, SESSION_ID)
@@ -184,12 +184,12 @@ def test_malformed_sidecar_never_satisfies_the_obligation(crown):
     assert result["missing"] == ["fleet_watch", "group_em_assistant"]
 
 
-def test_presence_reads_no_clock(crown, monkeypatch):
+def test_presence_reads_no_clock(group_em_home, monkeypatch):
     """Presence is keyed on a dispatch record, never on freshness. A sidecar
     stamped far in the past is still evidence, and no mtime/stat-time call is
     made at all -- an obligation that discharged on recency would re-derive
     the very mtime lie this probe exists to avoid."""
-    repo_root, write_sidecar = crown
+    repo_root, write_sidecar = group_em_home
     write_sidecar("agent-aaaa1", ASSISTANT_META)
     write_sidecar("agent-aaaa2", WATCH_META)
     directory = Path(teammates.subagents_dir(repo_root, SESSION_ID))

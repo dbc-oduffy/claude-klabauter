@@ -9,8 +9,8 @@ go and look.
 
 Run it:
 
-    python -m coordinator_core.group_em.idle_report --repo-root <root> --crown-session-id <sid>
-    python -m coordinator_core.group_em.idle_report --repo-root <root> --crown-session-id <sid> --peer <sid-or-prefix>
+    python -m coordinator_core.group_em.idle_report --repo-root <root> --group-em-session-id <sid>
+    python -m coordinator_core.group_em.idle_report --repo-root <root> --group-em-session-id <sid> --peer <sid-or-prefix>
 
 THE CONSUMER OWNS THE OUTPUT SHAPE, and it is written down on their side, in
 the DoE-claude sibling repo: `coordinator/docs/wiki/fleet-watch-idle-report-contract.md`,
@@ -56,7 +56,7 @@ and each is cheap to undo by accident:
        harness reporting something it saw beats any inference. It reaches this
        module only through `observed_exits`, because there is no queryable exit
        event anywhere in the engine -- the session-registry Monitor's
-       `EXITED <name>` line exists in the crown's context, not in state. A
+       `EXITED <name>` line exists in the Group-EM's context, not in state. A
        caller that saw one passes it; nothing is cached to fake having seen one.
     2. Registry absence, as CORROBORATION, under a box-scoped conjunction: the
        transcript sits under THIS repo's project directory (the only place this
@@ -127,7 +127,7 @@ never a scan across the transcript corpus. A name is NEVER inferred from the
 session-id prefix: that mapping is coincidence and is falsified on this very box
 (`claude-klabauter-ad` runs on session `2374d3d0`). No name means
 `UNADDRESSABLE`, and on an escalation that forces `nudge-shape: hold` plus
-`report-to-crown: true` -- the crown reaches the peer, the watcher does not go
+`report-to-group-em: true` -- the Group-EM reaches the peer, the watcher does not go
 hunting for the name.
 """
 
@@ -212,7 +212,7 @@ VERDICT_BETWEEN_TURNS = "between-turns"
 VERDICT_WATCH = "watch"
 VERDICT_ESCALATE = "ESCALATE"
 VERDICT_OUT_OF_WORK = "OUT-OF-WORK"
-VERDICT_CROWN_MOVED = "CROWN-MOVED"
+VERDICT_GROUP_EM_MOVED = "GROUP-EM-MOVED"
 VERDICT_EXITED = "EXITED"
 VERDICT_UNKNOWN = "UNKNOWN"
 
@@ -228,9 +228,9 @@ REASON_CLOCK_UNPARSEABLE = "clock-unparseable"
 #: these omissions degrades into "the agent knows less"; both degrade into "the
 #: agent does the wrong thing, confidently". Without out-of-work detection those
 #: peers arrive as ESCALATE and the watcher nudges a session that has genuinely
-#: run out, which no nudge fixes and only the crown can answer. Without the
-#: crown's offer log, suppression vanishes and the watcher re-nudges peers the
-#: crown answered an hour ago -- the exact thing the two-session-id split
+#: run out, which no nudge fixes and only the Group-EM can answer. Without the
+#: Group-EM's offer log, suppression vanishes and the watcher re-nudges peers the
+#: Group-EM answered an hour ago -- the exact thing the two-session-id split
 #: exists to prevent. So the affected peers become `UNKNOWN` instead, which
 #: routes to REPORT IT: the correct action under partial information, and
 #: omission stays impossible.
@@ -421,23 +421,23 @@ def registry_names() -> Optional[dict]:
     return {sid: getattr(record, "name", None) for sid, record in snapshot.items()}
 
 
-def crown_moved(repo_root: str, crown_session_id: Optional[str]) -> bool:
-    """Has the crown moved off the session this report was armed for?
+def group_em_moved(repo_root: str, group_em_session_id: Optional[str]) -> bool:
+    """Has the Group-EM moved off the session this report was armed for?
 
-    The watcher watches on the crown's standing, so a crown that has moved
+    The watcher watches on the Group-EM's standing, so a Group-EM that has moved
     invalidates the whole tick -- which is why this lives in the oracle rather
-    than as a step the agent remembers to run first. Crown-holding is
+    than as a step the agent remembers to run first. Group-EM-holding is
     established by the nomination record (`group_em.nomination.read_record`),
     the same record `group-em-enter` claims and the same one displacement is
     reported against; nothing here re-derives that from a roster.
 
     POSITIVE EVIDENCE ONLY. True requires a readable record naming a DIFFERENT
-    session. No record, an unreadable one, or no `--crown-session-id` given all
-    answer False: absence of a record is not evidence the crown moved, and
+    session. No record, an unreadable one, or no `--group-em-session-id` given all
+    answer False: absence of a record is not evidence the Group-EM moved, and
     stopping every tick on a missing file would be the same false-tidy failure
     as reporting a live peer dead.
     """
-    if not crown_session_id:
+    if not group_em_session_id:
         return False
     try:
         from coordinator_core.group_em import nomination
@@ -445,44 +445,44 @@ def crown_moved(repo_root: str, crown_session_id: Optional[str]) -> bool:
     except Exception:
         return False
     holder = (record or {}).get("session_id")
-    return bool(holder) and holder != crown_session_id
+    return bool(holder) and holder != group_em_session_id
 
 
-def _read_crown_log(repo_root: str, crown_session_id: Optional[str]) -> tuple:
-    """`(log, available)` -- the crown's offer log, read ONCE per report.
+def _read_group_em_log(repo_root: str, group_em_session_id: Optional[str]) -> tuple:
+    """`(log, available)` -- the Group-EM's offer log, read ONCE per report.
 
     Per-peer reads meant one file open per peer for a file whose contents do not
     change mid-report: pure process time on a box the whole fleet shares.
 
     `available` is False only when the read itself failed. It is NOT False for
-    an empty log, which is a real answer ("this crown has offered nobody"). A
+    an empty log, which is a real answer ("this Group-EM has offered nobody"). A
     failed read means suppression cannot be established, and the peers that
     would have been nudged are downgraded to `UNKNOWN` rather than nudged
     again -- toward reporting, never toward sending.
     """
-    if not crown_session_id:
+    if not group_em_session_id:
         return [], True
     try:
         from coordinator_core.group_em import send_pass
-        return send_pass.read_send_log(repo_root, crown_session_id), True
+        return send_pass.read_send_log(repo_root, group_em_session_id), True
     except Exception:
         return [], False
 
 
-def _crown_answer(log: list, crown_session_id: Optional[str], peer_session_id: str,
+def _group_em_answer(log: list, group_em_session_id: Optional[str], peer_session_id: str,
                   now: float) -> tuple:
-    """`(answered_by_crown, within_cooldown)` from the crown's own offer log.
+    """`(answered_by_group_em, within_cooldown)` from the Group-EM's own offer log.
 
     Suppression rides the report so the watcher never has to remember who it
     nudged across a wake. Reads the SAME log and SAME key `send_pass` arms on
     every offer -- never a second mechanism and never an operator-maintained
-    mute list. A crown we were not given cannot have answered anybody.
+    mute list. A Group-EM we were not given cannot have answered anybody.
     """
-    if not crown_session_id:
+    if not group_em_session_id:
         return None, False
     try:
         from coordinator_core.group_em import send_pass
-        key = send_pass.offer_key(crown_session_id, peer_session_id)
+        key = send_pass.offer_key(group_em_session_id, peer_session_id)
         within = send_pass._cooldown_remaining(
             log, key, now, send_pass.DEFAULT_COOLDOWN_SECONDS
         ) > 0
@@ -543,7 +543,7 @@ def _nudge_shape(verdict: str, addressable: bool, within_cooldown: bool,
     this role that does not undo -- so absent either condition the shape is the
     question. `hold` covers suppression, a gate-shaped stop, and an escalation
     with no address; `assign` belongs to `OUT-OF-WORK` alone and is addressed
-    to the crown, not the peer.
+    to the Group-EM, not the peer.
     """
     if verdict == VERDICT_OUT_OF_WORK:
         return SHAPE_ASSIGN
@@ -587,7 +587,7 @@ def _divergence(age_minutes: Optional[float], mtime_age_minutes: float) -> tuple
 
 
 def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
-              crown_log: list, crown_session_id: Optional[str],
+              group_em_log: list, group_em_session_id: Optional[str],
               observed_exits: frozenset = frozenset(),
               suppression_available: bool = True) -> Optional[dict]:
     """One roster row, or None when the transcript is out of scope entirely.
@@ -632,10 +632,10 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
     last_said = said[-1][:LAST_SAID_CHARS] if said else None
     named_move = next((line for line in reversed(said) if _NEXT_MOVE.search(line)), None)
     named_reason = any(_NAMED_REASON.search(line) for line in said[-3:])
-    answered, within_cooldown = _crown_answer(crown_log, crown_session_id, session_id, now)
+    answered, within_cooldown = _group_em_answer(group_em_log, group_em_session_id, session_id, now)
     if verdict == VERDICT_ESCALATE and not suppression_available:
         # Downgrade toward REPORTING. Nudging here would re-nudge whoever the
-        # crown already answered, which is the failure the offer log prevents.
+        # Group-EM already answered, which is the failure the offer log prevents.
         verdict, reason = VERDICT_UNKNOWN, REASON_SUPPRESSION_UNAVAILABLE
     shape = _nudge_shape(verdict, bool(name), within_cooldown, named_move, named_reason)
     divergence, divergence_minutes = _divergence(age, mtime_age)
@@ -652,7 +652,7 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
         # A corpse that re-escalates every tick reads as a fresh alarm and
         # trains its reader to skim past the real one. Dating the row fixes that.
         "exited-since": _last_record_iso(raw_text) if exited else None,
-        "answered-by-crown": answered or "no",
+        "answered-by-group-em": answered or "no",
         "nudge-shape": shape,
         "address": ("%s [%s]" % (name, session_id[:8])) if name else UNADDRESSABLE,
         # A dead session is never nudged, so it never carries nudge content.
@@ -661,15 +661,15 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
             None if exited or not named_move else named_move[:LAST_SAID_CHARS]
         ),
         # The escalation most worth getting right is the one that comes back
-        # unreachable: the verdict stands, the shape holds, and the crown --
+        # unreachable: the verdict stands, the shape holds, and the Group-EM --
         # who holds ListAgents -- is the one who reaches it.
-        "report-to-crown": verdict in (VERDICT_ESCALATE, VERDICT_OUT_OF_WORK) and not name,
+        "report-to-group-em": verdict in (VERDICT_ESCALATE, VERDICT_OUT_OF_WORK) and not name,
     }
 
 
 def build_report(
     repo_root: str,
-    crown_session_id: Optional[str] = None,
+    group_em_session_id: Optional[str] = None,
     caller_session_id: Optional[str] = None,
     peer: Optional[str] = None,
     now: Optional[float] = None,
@@ -680,17 +680,17 @@ def build_report(
 ) -> dict:
     """The whole answer, as data. The human and `--json` arms both render this.
 
-    `crown_session_id` is the Group EM's session and `caller_session_id` the
-    process running the poll -- the same id only when the crown polls itself,
+    `group_em_session_id` is the Group EM's session and `caller_session_id` the
+    process running the poll -- the same id only when the Group-EM polls itself,
     the same two-id split `group_em.watch` carries. Both are excluded from the
-    roster: reporting the crown to the crown is noise by construction, and the
-    poller flagging itself is worse. It is the crown's offer log, not the
+    roster: reporting the Group-EM to the Group-EM is noise by construction, and the
+    poller flagging itself is worse. It is the Group-EM's offer log, not the
     caller's, that decides a peer has already been answered.
 
     `observed_exits` carries exit transitions the CALLER actually saw (session
     ids or names) -- the primary leg of the EXITED derivation. It is a parameter
     and not a lookup because no queryable exit event exists in the engine: the
-    Monitor's `EXITED <name>` line lands in the crown's context, not in state.
+    Monitor's `EXITED <name>` line lands in the Group-EM's context, not in state.
     Nothing is persisted to simulate having seen one.
 
     `names` / `registry_read` are the injection seam for tests; production
@@ -701,12 +701,12 @@ def build_report(
     if names is None and registry_read:
         names = registry_names()
 
-    moved = crown_moved(repo_root, crown_session_id)
+    moved = group_em_moved(repo_root, group_em_session_id)
     observed_exits = frozenset(observed_exits or ())
-    excluded = {sid.lower() for sid in (crown_session_id, caller_session_id) if sid}
-    crown_log, suppression_available = _read_crown_log(repo_root, crown_session_id)
+    excluded = {sid.lower() for sid in (group_em_session_id, caller_session_id) if sid}
+    group_em_log, suppression_available = _read_group_em_log(repo_root, group_em_session_id)
     rows = []
-    # CROWN-MOVED short-circuits the roster entirely. The rows would describe a
+    # GROUP-EM-MOVED short-circuits the roster entirely. The rows would describe a
     # fleet this watcher no longer has standing over, and a row that is present
     # is a row something acts on. Still exit 0: a void tick, stated, is a whole
     # report.
@@ -716,7 +716,7 @@ def build_report(
             continue
         if peer and not session_id.startswith(peer):
             continue
-        row = _peer_row(path, session_id, now, names, crown_log, crown_session_id,
+        row = _peer_row(path, session_id, now, names, group_em_log, group_em_session_id,
                         observed_exits, suppression_available)
         if row is not None:
             rows.append(row)
@@ -729,16 +729,16 @@ def build_report(
     return {
         "repo-root": repo_root,
         "projects-dir": directory,
-        "crown-session-id": crown_session_id,
+        "group-em-session-id": group_em_session_id,
         "registry-available": names is not None,
         "floor-minutes": FLOOR_MINUTES,
         "threshold-minutes": THRESHOLD_MINUTES,
-        # CROWN-MOVED is the REPORT'S state, not a peer's: it says this whole
+        # GROUP-EM-MOVED is the REPORT'S state, not a peer's: it says this whole
         # tick is void because the standing the watcher watches on is gone. It
         # is a verdict in the consumer's closed table, carried here as the
         # top-level `verdict` so the watcher never has to look for it in rows.
-        "verdict": VERDICT_CROWN_MOVED if moved else None,
-        "crown-moved": moved,
+        "verdict": VERDICT_GROUP_EM_MOVED if moved else None,
+        "group-em-moved": moved,
         "peers": rows,
         "counts": {
             "peers": len(rows),
@@ -752,7 +752,7 @@ def build_report(
 
 def summary_line(report: dict) -> str:
     """The last line, and the only one the watcher must read to know it has a
-    whole report. The thresholds ride on it so a report pasted into the crown's
+    whole report. The thresholds ride on it so a report pasted into the Group-EM's
     context explains its own judgements without a second lookup.
 
     `exited=` is an additive extension to the consumer's spelled contract, for
@@ -762,12 +762,12 @@ def summary_line(report: dict) -> str:
     counts = report["counts"]
     return (
         "peers=%d escalate=%d out-of-work=%d unknown=%d exited=%d "
-        "floor=%.0fm threshold=%.0fm crown=%s%s" % (
+        "floor=%.0fm threshold=%.0fm group-em=%s%s" % (
             counts["peers"], counts["escalate"], counts["out-of-work"],
             counts["unknown"], counts["exited"],
             report["floor-minutes"], report["threshold-minutes"],
-            report["crown-session-id"] or "unset",
-            " CROWN-MOVED" if report["crown-moved"] else "",
+            report["group-em-session-id"] or "unset",
+            " GROUP-EM-MOVED" if report["group-em-moved"] else "",
         )
     )
 
@@ -789,10 +789,10 @@ def _render_row(row: dict) -> list:
     if row["verdict"] in (VERDICT_BETWEEN_TURNS, VERDICT_WATCH):
         return lines
     lines.append("      address: %s" % row["address"])
-    lines.append("      answered-by-crown: %s" % row["answered-by-crown"])
+    lines.append("      answered-by-group-em: %s" % row["answered-by-group-em"])
     lines.append("      nudge-shape: %s" % row["nudge-shape"])
-    if row["report-to-crown"]:
-        lines.append("      report-to-crown: true")
+    if row["report-to-group-em"]:
+        lines.append("      report-to-group-em: true")
     if row["verdict"] != VERDICT_EXITED:
         lines.append("      last-said: %s" % (row["last-said"] or "none"))
         lines.append("      named-next-move: %s" % (row["named-next-move"] or "none"))
@@ -807,10 +807,10 @@ def render(report: dict, peer: Optional[str] = None) -> str:
     cost.
     """
     lines = []
-    if report["crown-moved"]:
+    if report["group-em-moved"]:
         lines.append(
-            "%s: %s no longer holds the crown for %s. This tick is void -- stop and "
-            "tell the Group EM." % (VERDICT_CROWN_MOVED, report["crown-session-id"],
+            "%s: %s no longer holds the Group-EM for %s. This tick is void -- stop and "
+            "tell the Group EM." % (VERDICT_GROUP_EM_MOVED, report["group-em-session-id"],
                                     report["repo-root"]))
     if peer and not report["peers"]:
         lines.append("no live transcript for %s" % peer)
@@ -834,15 +834,28 @@ def _cli(argv: Optional[list] = None) -> int:
         "--repo-root", required=True,
         help="Repository root whose fleet to report. Taken as an argument, never derived "
              "from cwd -- this runs under a harness tool whose working directory is not ours.")
+        # `--crown-session-id` is the pre-2026-09-01 spelling, retained as an
+        # accepted-but-unadvertised alias (DR-084's `_DEPRECATED_ALIASES` shape).
+        # It is NOT cosmetic back-compat: DoE-claude's fleet-watch agent definition
+        # and group-em skill both instruct agents to pass the old spelling, argparse
+        # hard-errors on an unknown flag, and those agents are dispatched and running.
+        # Dropping it strands every live watcher the moment this lands. Retire it once
+        # the sibling's text has moved -- see the memo
+        # cross-repo/archive/...-crown-nomenclature-retired.md. `help=argparse.SUPPRESS`
+        # keeps it out of --help so the canonical spelling is the only one advertised.
     parser.add_argument(
-        "--crown-session-id", default=None,
-        help="The Group EM's session id -- never the watcher's. Excluded from its own "
+        "--group-em-session-id",
+        dest="group_em_session_id", default=None,
+        help="The Group-EM's session id -- never the watcher's. Excluded from its own "
              "roster, and the owner of the offer log that decides a peer is already "
              "answered.")
     parser.add_argument(
+        "--crown-session-id",
+        dest="group_em_session_id", default=None, help=argparse.SUPPRESS)
+    parser.add_argument(
         "--caller-session-id", default=None,
         help="Session running this poll, when a teammate holds the watch instead of the "
-             "crown. Also excluded from the roster.")
+             "Group-EM. Also excluded from the roster.")
     parser.add_argument(
         "--peer", default=None,
         help="One session id (any prefix), for re-running a peer after a nudge to see "
@@ -869,7 +882,7 @@ def _cli(argv: Optional[list] = None) -> int:
     try:
         report = build_report(
             args.repo_root,
-            crown_session_id=args.crown_session_id,
+            group_em_session_id=args.group_em_session_id,
             caller_session_id=args.caller_session_id,
             peer=args.peer,
         )

@@ -1235,14 +1235,14 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 # New (no bash-era equivalent): once-per-session advisory that arms
 # `coordinator_core.group_em.watch` (C2, docs/plans/2026-08-31-the-group-em-
 # tick-carries-standing-obligations.md) for a session that holds the Group EM
-# crown for its repo and has never armed that watch -- the population C2's
-# own docstring names as undischarged: "a crowned Group EM that armed nothing
+# Group-EM for its repo and has never armed that watch -- the population C2's
+# own docstring names as undischarged: "a Group-EM that armed nothing
 # and then stopped ticking". Modelled directly on
 # _check_workflow_monitor_arm_sync (same sentinel-guarded, fail-open-to-
 # silence contract, same _portable_arg quoting reuse) per this chunk's own
 # spec (plan § C10) rather than a second composition path.
 #
-# CROWN CHECK is a real, current fact: `group_em.nomination.read_record`
+# GROUP-EM CHECK is a real, current fact: `group_em.nomination.read_record`
 # read fresh against this tool call, joined on this session's own id -- never
 # cached, never inferred from a prior tick.
 #
@@ -1255,7 +1255,7 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 # per the C10 brief's "we own the PUSH, they own the RECORD" split, and
 # building a second one here would be the duplication that split exists to
 # prevent. So this leg answers the narrower, honestly-answerable question in
-# C10's own title -- "a crowned session that never armed it" -- by scanning
+# C10's own title -- "a Group-EM session that never armed it" -- by scanning
 # THIS session's own transcript for the watch's own one-time `ARMED` line
 # (see `coordinator_core.group_em.watch.main`) and staying silent the moment
 # it has appeared even once. It cannot and does not claim to catch a watch
@@ -1294,14 +1294,14 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 #: mismatch has had no observable behaviour to give it away -- stated as far
 #: as this diff establishes, not as a claim about every possible caller. What
 #: it would do the moment the leg fires: the "already armed" suppression never
-#: matches, and a crowned session that HAD armed the watch is told to arm it
+#: matches, and a Group-EM session that HAD armed the watch is told to arm it
 #: again.
 _GROUP_EM_WATCH_ARMED_MARKER = "ARMED peer_count="
 
 #: Review: review-integrator (finding #2) -- bound on how long a "checked,
-#: nothing to arm" conclusion (no git root / not the crown holder) is
+#: nothing to arm" conclusion (no git root / not the Group-EM holder) is
 #: trusted before the walk+read is paid again. Not "once per session": that
-#: outcome for the crown check is mutable mid-session (see the call site's
+#: outcome for the Group-EM check is mutable mid-session (see the call site's
 #: comment), so this is a load-norm bound, not a durable fact cache.
 _GROUP_EM_WATCH_CHECKED_TTL_SECONDS = 300
 
@@ -1315,7 +1315,7 @@ def _group_em_watch_checked_sentinel_path(tmpdir: str, session_id: str) -> str:
     # SEPARATE sentinel from the "armed" one above. That one means "the
     # advisory fired, never re-check"; this one means "checked this session,
     # concluded there is nothing to arm, for a STABLE reason -- never
-    # re-check". Kept distinct so a later crown claim or a later-installed
+    # re-check". Kept distinct so a later Group-EM claim or a later-installed
     # launcher can still be distinguished from "already armed" if either
     # sentinel is ever inspected independently.
     return os.path.join(tmpdir, f"group-em-watch-checked-noop-{session_id}")
@@ -1347,20 +1347,20 @@ def _group_em_watch_launcher() -> str | None:
 
 
 def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str:
-    """Once-per-session advisory: arm `group_em.watch` for a crowned session
+    """Once-per-session advisory: arm `group_em.watch` for a Group-EM session
     that has never armed it. Returns non-empty advisory text when it fires;
     "" on every early-exit path (no session_id, sentinel already written, no
-    git root, no/foreign crown record, transcript unreadable, the watch's own
+    git root, no/foreign Group-EM record, transcript unreadable, the watch's own
     ARMED marker already present, or no installed launcher). Never raises —
     fail-open on all I/O errors, same posture as the other checks in this
     module (see the durable-state comment above _advisory_state_path).
 
-    The "no git root"/"not crowned" outcomes are additionally bounded by a
+    The "no git root"/"not Group-EMed" outcomes are additionally bounded by a
     `_GROUP_EM_WATCH_CHECKED_TTL_SECONDS` recheck sentinel (review-integrator
-    finding #2) so a non-crowned session does not re-pay the repo-root walk
+    finding #2) so a non-Group-EM session does not re-pay the repo-root walk
     and nomination read on every single call for its whole lifetime; this is
     a cost bound, not a permanent cache, because a session can become the
-    crown holder mid-session.
+    Group-EM holder mid-session.
     """
     if not session_id:
         return ""
@@ -1388,14 +1388,14 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
 
     # Review: review-integrator (finding #2, EM-ratified break-class) -- the
     # "armed" sentinel above only ever gets written on the success path, so
-    # once a launcher ships, a non-crowned session would re-pay the
+    # once a launcher ships, a non-Group-EM session would re-pay the
     # repo-root walk + nomination read below on EVERY PostToolUse event for
     # its whole lifetime (no tool_name gate is possible here, unlike the
-    # Workflow-arm leg, because this leg's crown fact is not tied to any one
-    # tool call). "Not crowned" is NOT a stable fact for a session, though:
+    # Workflow-arm leg, because this leg's Group-EM fact is not tied to any one
+    # tool call). "Not Group-EMed" is NOT a stable fact for a session, though:
     # `group_em.nomination.claim` can supersede a dead incumbent mid-session
-    # (see that module's own docstring), so a session that starts uncrowned
-    # can legitimately become the crown holder later. A permanent negative
+    # (see that module's own docstring), so a session that starts not the Group-EM
+    # can legitimately become the Group-EM holder later. A permanent negative
     # cache would silently disable this leg for that exact recovery case.
     # So this is a bounded RECHECK, not a permanent suppression: skip the
     # walk+read for `_GROUP_EM_WATCH_CHECKED_TTL_SECONDS`, then pay it again.
@@ -1435,8 +1435,8 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
     except Exception:
         return ""  # transient I/O error -- do not cache; retry next call
     if not isinstance(record, dict) or record.get("session_id") != session_id:
-        _touch_checked_sentinel()  # not the crown holder right now -- recheck after the TTL
-        return ""  # not the crown holder for this repo -- nothing to arm
+        _touch_checked_sentinel()  # not the Group-EM holder right now -- recheck after the TTL
+        return ""  # not the Group-EM holder for this repo -- nothing to arm
 
     if not transcript_path or not os.path.isfile(transcript_path):
         return ""  # cannot establish never-armed -- fail toward silence
@@ -1476,7 +1476,7 @@ def _check_group_em_watch_arm_sync(session_id: str, transcript_path: str) -> str
         return ""
 
     return (
-        "GROUP EM WATCH: this session holds the Group EM crown for this repo"
+        "GROUP EM WATCH: this session holds the Group EM Group-EM for this repo"
         " and no watch on the standing peer registry has been armed this"
         " session -- arm it now rather than depending on a tick you remember"
         " to re-run."
