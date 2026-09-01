@@ -16,6 +16,19 @@ input) and this plan's own C5 dispatch brief
 Spec backlink (source script): DoE-claude's own
 `docs/plans/2026-06-18-plan-persistence-hook-automation.md`.
 
+CORRECTION (coordinatorcode-reviewer.a986dd968d6771f99, Finding 1): the two
+spawns named below are the ones THIS ROW owns and eliminates — they are NOT
+the whole spawn picture for a firing payload. `persist_captured_plan`'s own
+routed success path (the dominant case) still shells out to
+`coordinator-doc-new.py --type plan` via `plan_capture_persist.
+invoke_coordinator_doc_new`'s `subprocess.run(..., timeout=60)` — a third,
+larger spawn that survives one level down in code this chunk did not touch.
+Porting that scaffolder in-process is its own plan (`coordinator-doc-new.py`
+is 7226 lines); not attempted here. See
+`coordinator_core/ops/plan_capture_persist.py::invoke_coordinator_doc_new`
+for the residual, and `test_op_returns_post_advisory_shape_for_a_firing_payload`
+in this module's test file for the pinned assertion.
+
 THE TWO SPAWNS THIS ROW ELIMINATES, per the dispatch brief (both already
 reachable in-process, no port needed for either):
   - `git rev-parse --show-toplevel` -> `coordinator_core.git.repo_root.
@@ -104,10 +117,13 @@ inherited or silently fixed:
 Two write paths, in preference order, unchanged from the source script:
   1. `coordinator_core.ops.plan_capture_persist.persist_captured_plan` —
      scaffolds a schema-compliant artifact. Any outcome OTHER than
-     "ok"/"idempotent"/"collision" (including a caught exception; there is
-     no longer a subprocess/timeout/JSON-parse failure mode, but a genuine
-     bug in that function must not crash an advisory hook) falls through to
-     path 2 below — never plan loss.
+     "ok"/"idempotent"/"collision" (including a caught exception; the
+     trampoline CLI's own subprocess/timeout/JSON-parse failure mode is gone
+     — this call is in-process, not shelled — but `persist_captured_plan`
+     ITSELF still shells out one level down to `coordinator-doc-new.py`
+     with a 60s timeout on its routed success path, per the correction
+     above; a genuine bug or a hang in that function must not crash an
+     advisory hook) falls through to path 2 below — never plan loss.
   2. Fallback: the verbatim raw write. Reached whenever path 1 is
      unavailable for ANY reason. Its worst case is exactly the pre-routing
      status quo (a captured-but-gate-invisible plan), never plan loss.
@@ -455,7 +471,12 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     readme_modified = False
     if docs_readme.is_file():
-        readme_line = f"- [`{target_name}`]({'docs/plans/' + target_name})"
+        # Review: coordinatorcode-reviewer.a986dd968d6771f99, Finding 5 —
+        # link target is relative to docs_readme's own directory (docs/), the
+        # same shape plan_capture_persist.readme_row() uses for the routed
+        # path; the prior "docs/plans/..." form double-prefixed docs/ for a
+        # README that already lives in docs/.
+        readme_line = f"- [`{target_name}`](plans/{target_name})"
         try:
             existing_readme = docs_readme.read_text(encoding="utf-8")
         except Exception:

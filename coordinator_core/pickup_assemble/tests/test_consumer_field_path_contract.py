@@ -139,6 +139,29 @@ def _write_handoff(repo: Path, name: str, fm_extra: str = "") -> Path:
     return path
 
 
+def _write_plan(repo: Path, name: str, fm_extra: str = "") -> Path:
+    """A plan document, under `docs/plans/` where a plan actually lives.
+
+    Distinct from `_write_handoff` on PATH, which is the whole point:
+    `compute_execution_stamp_match`'s no-pointer fallback is now guarded on
+    the artifact really being a plan, so only an artifact written here can
+    exercise the "the artifact IS the plan" branch.
+    """
+    path = repo / "docs" / "plans" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fm = (
+        'title: "Test Plan"\n'
+        "created: 2026-01-01\n"
+        "branch: work/test/2026-01-01\n"
+        "status: approved\n"
+        f"{fm_extra}"
+    )
+    path.write_text(f"---\n{fm}---\n\n# Plan\n\nBody.\n", encoding="utf-8")
+    _git(repo, "add", str(path.relative_to(repo)))
+    _git(repo, "commit", "-m", f"add {name}")
+    return path
+
+
 # ---------------------------------------------------------------------------
 # Tier 1 — always-emitted (paths 1-5)
 # ---------------------------------------------------------------------------
@@ -210,35 +233,55 @@ def test_execution_stamp_match_delta_class_absent_on_plain_handoff(tmp_path, mon
 
 def test_execution_stamp_match_delta_class_present_on_stamped_plan_baton(tmp_path, monkeypatch):
     """Path 6 — `gates.execution_stamp_match.delta_class` — pinned
-    CONDITIONALLY, over a baton shaped to carry its own correctly-computed
-    `execution_authorized_sha` (a "the artifact IS the plan" stamp, per
-    `compute_execution_stamp_match`'s no-pointer fallback branch), which
-    resolves to verdict "match" and therefore always carries the
-    `delta_class` key (value `None` on a match — the key's PRESENCE is what
-    is pinned here, never its value, per this module's presence/shape
-    framing). Building a full `## Plan to Execute` pointer + separate plan
-    file was not needed to exercise this key: the no-pointer branch reaches
-    the identical `{..., "delta_class": ..., ...}` gate shape more cheaply.
+    CONDITIONALLY, over a handoff that POINTS at a plan carrying a
+    correctly-computed `execution_authorized_sha`. That resolves to verdict
+    "match" and therefore always carries the `delta_class` key (value `None`
+    on a match -- the key's PRESENCE is what is pinned here, never its
+    value, per this module's presence/shape framing).
+
+    The fixture was a lone handoff carrying its OWN stamp and no pointer
+    until 2026-08-31, on the reasoning that the no-pointer fallback reached
+    the same gate shape more cheaply. It did, but that shape is the
+    mirror-mismatch defect itself: a handoff mirroring its plan's stamp,
+    hashed against its own body, then re-stamped to agree with itself.
+    Guarding that fallback on the artifact really being a plan turned this
+    fixture red -- correctly. A pin that can only be satisfied by the defect
+    still existing has to move when the defect does.
+
+    Repointing it at a plan document directly did not work either, and the
+    reason is worth recording: `brief()` classifies a `docs/plans/` artifact
+    down a different route that never reaches this gate. So the fixture is
+    the canonical shape instead -- pointer plus plan, two files -- which is
+    both what the engine should accept and what the wild actually contains.
+    The consumer contract this file protects is path 6, unchanged and still
+    pinned; only the shape reaching it moved.
     """
     repo = tmp_path / "repo"
     _init_repo(repo)
 
+    # The CANONICAL shape: a handoff that POINTS at its plan, and a plan
+    # that carries the stamp. `compute_execution_stamp_match` reads the
+    # pointer (`governing_plan:` frontmatter, one of its two conventions)
+    # and hashes the PLAN -- which is what the gate is for. The pointing
+    # artifact never has to be the hash target.
+    #
     # Two-pass write: compute the canonical body-sha of the intended final
-    # file text, then bake it into the frontmatter as
+    # plan text, then bake it into that plan's frontmatter as
     # `execution_authorized_sha` so live-computed and stamped hashes match
-    # ("verdict": "match") on the FIRST commit — `compute_execution_stamp_
-    # match` hashes the artifact's own committed body against this field.
-    placeholder = _write_handoff(repo, "stamped.md", fm_extra="execution_authorized_sha: PENDING\n")
-    final_text_template = placeholder.read_text(encoding="utf-8")
-    # The stamp only needs to be computed once: `execution_authorized_sha`
-    # is a frontmatter field, and `frontmatter_body_text` excludes the
-    # frontmatter entirely — so the body hash is identical whether the
-    # placeholder or the real sha string sits in that field.
-    stamped_sha = canonical_body_sha(final_text_template)
-    final_text = final_text_template.replace("PENDING", stamped_sha)
-    placeholder.write_text(final_text, encoding="utf-8")
-    _git(repo, "add", str(placeholder.relative_to(repo)))
-    _git(repo, "commit", "-m", "stamp")
+    # ("verdict": "match") on the first commit. The stamp only needs
+    # computing once: `frontmatter_body_text` excludes the frontmatter
+    # entirely, so the body hash is identical whether the placeholder or
+    # the real sha sits in that field.
+    plan = _write_plan(repo, "target.md", fm_extra="execution_authorized_sha: PENDING\n")
+    plan_template = plan.read_text(encoding="utf-8")
+    stamped_sha = canonical_body_sha(plan_template)
+    plan.write_text(plan_template.replace("PENDING", stamped_sha), encoding="utf-8")
+    _git(repo, "add", str(plan.relative_to(repo)))
+    _git(repo, "commit", "-m", "stamp the plan")
+
+    _write_handoff(
+        repo, "stamped.md", fm_extra="governing_plan: docs/plans/target.md\n"
+    )
 
     monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: False)
     monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
@@ -255,3 +298,55 @@ def test_execution_stamp_match_delta_class_present_on_stamped_plan_baton(tmp_pat
     # exercises the "match" verdict path this test's docstring claims, not
     # merely that the key is present under some other verdict.
     assert do["gates"]["execution_stamp_match"]["verdict"] == "match"
+
+def test_a_handoff_mirroring_a_plan_stamp_yields_no_gate(tmp_path, monkeypatch):
+    """A handoff carrying `execution_authorized_sha` and NO pointer emits
+    no stamp gate at all.
+
+    This is the mirror-mismatch defect, and both halves of it are pinned
+    here. The handoff mirrors its plan's stamp for human readability while
+    naming that plan by neither convention the gate reads -- a baton that
+    identifies its plan by `deliverable_id` alone. The old fallback treated
+    "no pointer" as "this artifact IS the plan", hashed the handoff's own
+    body against a sha that recorded the PLAN's, and produced a mismatch
+    that fed `unstampable`'s re-stamp directive -- which rewrote the
+    handoff's field to match the handoff's body, destroying the only thing
+    the mirror recorded. Afterwards the gate read `match` and said "matches
+    the current plan body" over an artifact that is not a plan and was
+    never compared to one.
+
+    `None` is the honest answer: there is no plan reachable, so there is
+    nothing to verify, and `None` contributes neither a directive nor a
+    judgment point. Asserting the ABSENCE of the gate key is the point --
+    a future fallback that resurrects a guess would show up here as a gate
+    appearing, whatever verdict it carried.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    # A stamp that is genuinely SOME OTHER document's -- the mirror case.
+    # Any well-formed sha that is not this handoff's own body hash will do;
+    # deriving it from different text keeps the intent legible.
+    foreign_sha = canonical_body_sha("---\ntitle: other\n---\n\nA different body.\n")
+    _write_handoff(
+        repo,
+        "mirrored.md",
+        fm_extra=f"execution_authorized_sha: {foreign_sha}\n",
+    )
+
+    monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: False)
+    monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
+
+    result = pa.brief("state/handoffs/mirrored.md", repo_root=repo, decisions={})
+    gates = result.decision_object["gates"]
+
+    assert "execution_stamp_match" not in gates, (
+        "a handoff mirroring a plan stamp must not produce a plan-authorization "
+        f"verdict; got gate keys: {sorted(gates)}"
+    )
+
+    # And nothing may promote a re-stamp of the handoff off the back of it.
+    assert not [
+        d for d in result.decision_object["directives"]
+        if "stamp" in str(d.get("id", "")).lower()
+    ]

@@ -290,3 +290,51 @@ def test_leg_a_does_not_reap_a_broken_symlink(tmp_path):
     )
     pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
     assert not any(p.endswith("link.txt") for p in pathspec)
+
+
+def test_percolate_bookkeeping_tracked_at_head_is_never_a_removal_candidate(
+    tmp_path, monkeypatch
+):
+    """`.percolate/` is STRUCTURALLY NEVER PUBLISHED, so it must be absent from
+    BOTH sides of `row_scope - declared_payload` -- not just from the
+    declaration.
+
+    `_walk_published_payload` prunes this prefix set out of `declared_payload`
+    on purpose. Before this test, `row_scope` did not prune it, so percolate's
+    own `.percolate/round-manifest.json` -- which percolate writes into the
+    mirror and which is TRACKED at the mirror's HEAD -- fell out of the
+    subtraction as a removal candidate, was found present on disk, and refused
+    the round at `_refuse_removals_present_on_disk` before sync.
+
+    Measured on `coordinator-claude` 2026-08-31: every round after a
+    fail-closed one died this way, which meant a fail-closed round was not
+    self-healing -- it converted a gate refusal into a manifest refusal that
+    hid the first one. A flat-mirror row scopes the whole tree, so the bug
+    needs no unusual row shape to fire.
+
+    NEGATIVE SPEC: the fix is the prune, NEVER widening `declared_payload` to
+    name the file (which the refusal's own remedy text suggests). Declaring it
+    would re-admit percolate bookkeeping as publishable payload and, because
+    `declared_payload` is SUBTRACTED from `row_scope`, over-declaring silently
+    disables the removal side -- the failure the walker's own prune exists to
+    prevent.
+    """
+    _no_filter_side_effects(monkeypatch)
+    repo_root = tmp_path / "repo"
+    _init_repo_with_files(
+        repo_root,
+        {
+            "row_a/foo.txt": "hello",
+            ".percolate/round-manifest.json": '{"round_id": "r0"}',
+        },
+    )
+    manifest = _mod._RoundManifest(
+        round_id="r1",
+        declared_payload=frozenset({"row_a/foo.txt"}),
+        # A flat-mirror row's dest_dir IS the mirror root, so the whole tree is
+        # in scope -- the shape the coordinator-claude mirror actually uses.
+        published_dest_dirs=frozenset({"."}),
+    )
+    pathspec = _mod._pathspec_from_manifest(manifest, str(repo_root))[0]
+    assert not any("round-manifest.json" in p for p in pathspec)
+    assert not any(".percolate" in p for p in pathspec)

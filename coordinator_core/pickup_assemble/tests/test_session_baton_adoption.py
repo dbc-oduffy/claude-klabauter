@@ -81,7 +81,7 @@ def _init_repo(repo: Path) -> None:
     _git(repo, "commit", "-m", "init")
 
 
-def _seed_handoff(repo: Path, name: str) -> Path:
+def _seed_handoff(repo: Path, name: str, fm_extra: str = "") -> Path:
     path = repo / "state" / "handoffs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = (
@@ -91,6 +91,7 @@ def _seed_handoff(repo: Path, name: str) -> Path:
         "status: open\n"
         'predecessor: "none"\n'
         "deployment_state: active\n"
+        f"{fm_extra}"
     )
     path.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
     _git(repo, "add", str(path.relative_to(repo)))
@@ -165,3 +166,57 @@ def test_brief_survives_broken_baton_store(tmp_path, as_session, monkeypatch):
 
     assert result is not None
     assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
+
+def test_intent_prefers_session_goal_when_the_handoff_carries_one(tmp_path, as_session):
+    """`session_goal` is the field that means goal, so it wins outright."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md", fm_extra="session_goal: Ship the thing.\n")
+    as_session("sid-goal")
+    _ensure_session_dir(repo, "sid-goal")
+
+    pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
+
+    record = read_baton("sid-goal", cwd=str(repo))
+    assert record["intent"] == "Ship the thing."
+    assert "(from summary)" not in record["intent"]
+
+
+def test_intent_falls_back_to_summary_and_says_so(tmp_path, as_session):
+    """With no `session_goal`, `intent` borrows `summary` -- labelled.
+
+    `session_goal` is optional and, measured 2026-08-31, carried by 0 of 295
+    live handoffs with no producer anywhere in the engine, so the derivation
+    that read it alone could never fire: `intent` was null on 18 of 18 baton
+    records while `title` reached 11 of 11 adopters. `summary` is required by
+    cross-field rule and present on 295 of 295.
+
+    The prefix is the load-bearing part, not decoration. A summary is
+    retrospective and a goal is forward-looking; borrowing one for the other
+    silently would make the record assert something it does not know. This
+    pins that the borrowing is always disclosed on the record itself.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md", fm_extra="summary: What the session did.\n")
+    as_session("sid-sum")
+    _ensure_session_dir(repo, "sid-sum")
+
+    pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
+
+    record = read_baton("sid-sum", cwd=str(repo))
+    assert record["intent"] == "(from summary) What the session did."
+
+
+def test_intent_stays_unset_when_neither_field_is_present(tmp_path, as_session):
+    """No goal and no summary means no intent -- never an invented one."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _seed_handoff(repo, "h1.md")
+    as_session("sid-none")
+    _ensure_session_dir(repo, "sid-none")
+
+    pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
+
+    record = read_baton("sid-none", cwd=str(repo))
+    assert not record.get("intent")

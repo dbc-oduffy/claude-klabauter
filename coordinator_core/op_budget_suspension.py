@@ -577,13 +577,36 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "outcome": "re-affirmed",
         },
         "measured": {"max_ms": 828.1, "p50_ms": 468.8, "n": 2, "unit": "process_ms"},
-        "note": "n=2 — thin, and recorded as thin rather than rounded up.",
+        "note": (
+            "n=2 -- thin, and recorded as thin rather than rounded up. The "
+            "thinness is the SHAPE of the op, not a sampling outage: this is a "
+            "low-frequency high-batch archiver, and its two calls moved 35 "
+            "files. A low invocation count answers 'how often does it run', "
+            "never 'is there a consumer' -- treating it as the latter is the "
+            "category error the superseded disposition below made."
+        ),
         "disposition": (
-            "gravestone -- job was 'delete closed bug entries from the "
-            "backlog file'. Housekeeping on a file nothing blocks on, "
-            "evidenced by only 2 calls total. Comes back only if the "
-            "backlog grows to a size a person stops noticing and tidying "
-            "by hand -- not observed."
+            "REBUILD AT THE BAR (ruling 4) -- corrected 2026-08-31 against a "
+            "fresh count. The superseded text read 'gravestone ... housekeeping "
+            "on a file nothing blocks on, evidenced by only 2 calls total. "
+            "Comes back only if the backlog grows to a size a person stops "
+            "noticing and tidying by hand -- not observed.' That contradicted "
+            "K-021's requirement-affirmed finding in the same repo and cited no "
+            "evidence for its own claim; the reconciliation the rebuild baton "
+            "demanded is below, and it goes against this text. MEASURED at HEAD "
+            "2026-08-31: 43 status:closed entries sit unpruned in "
+            "state/bug-backlog/ (861 total), against the 3 K-021 recorded on "
+            "2026-08-27 -- a 14x growth in four days. 28 archive commits landed "
+            "in archive/bug-backlog/ in the preceding 7 days, every one of them "
+            "by hand, since the op's own last batched runs (299c5ca588, "
+            "51841f32b4) both predate the 2026-08-27 cut. So the trigger the "
+            "old text named -- 'the backlog grows to a size a person stops "
+            "noticing and tidying by hand' -- has BOTH halves observed: the "
+            "pile grows AND people are tidying by hand at 4 commits a day. "
+            "'Nothing blocks on it' is refuted directly by that toil. "
+            "Requirement affirmed; v2 spec and its measured budgets are in "
+            "state/handoffs/2026-08-29-rebuild-fleet-prune-closed-bugs-under-"
+            "the-bar.md."
         ),
         "spinoff": None,
     },

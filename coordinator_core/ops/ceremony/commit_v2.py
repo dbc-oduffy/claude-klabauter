@@ -339,8 +339,22 @@ def _pre_commit_gates(
     unstaged deletion -- an in-scope path with an index entry whose worktree
     file has vacated. Through THIS op that path does not survive to the gate:
     `commit_paths` reads every non-deleted member's bytes to build the tree
-    and refuses with `cannot read <path>` before anything lands. The axis is
-    already covered, louder and earlier, by the committer itself.
+    and refuses before anything lands. The axis is already covered, louder
+    and earlier, by the committer itself.
+
+    QUOTE THE MESSAGE FROM THE RAISE SITE, NOT FROM HERE. This paragraph
+    used to say the refusal reads `cannot read <path>`, which stopped being
+    true at `62fe8736d1`: a named path that git still tracks and the
+    worktree no longer has now refuses with "<path> is gone from the
+    worktree but still tracked -- pass it in `deleted_paths` to commit the
+    deletion", and only a path git does not track falls through to the
+    errno-shaped `cannot read`. The stale quote cost a real reader real
+    time -- doe-claude-em read it on 2026-08-31 while verifying a cross-repo
+    memo, concluded the refusal gave the caller no route, and filed an ask
+    for a fix that had landed in the very tree they were reading. A
+    docstring that quotes a message verbatim is a copy that goes stale
+    silently; `coordinator_core/git/commit.py::commit_paths` is the
+    authority.
 
     It is also the one that could not be made cheap. Its scoped branch calls
     `read_index` unscoped -- 35.16ms of the ~40ms it costs -- and the obvious

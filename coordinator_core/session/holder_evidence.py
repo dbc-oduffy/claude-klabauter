@@ -118,12 +118,21 @@ def liveness_basis(holder_sid: str, cwd: Optional[str] = None) -> str:
     § C3. `_liveness_basis` is kept below as an alias for this module's own
     internal caller (`holder_evidence`).
 
-    Vocabulary (six values; see `live_session_verdicts`'s docstring for the
+    Vocabulary (seven values; see `live_session_verdicts`'s docstring for the
     full per-arm derivation):
       "harness-registry"      — harness-written process identity, stronger
                                  evidence than `"stable-pid"`; `age_sec` is
                                  always `None` on this basis.
       "stable-pid"            — Layer 1 (PPID-authoritative) was consulted.
+      "stable-pid-shared"     — Layer 1 was consulted, but this `stable_pid`
+                                 is carried by more than one session on this
+                                 box, so it proves only that SOMETHING under
+                                 that shared ancestor is alive. An
+                                 indeterminate wearing a live answer's clothes
+                                 is what this value exists to stop; `live`
+                                 stays True (conservative for every caller),
+                                 but the basis no longer claims the answer is
+                                 about this session.
       "recency-window"        — Layer 2 recency fallback, `last_activity`
                                  present and parseable.
       "recency-window-mtime"  — Layer 2 recency fallback with the meta-less/

@@ -2772,3 +2772,99 @@ class TestAC1CharacterizationUnchanged:
                 f"{sid} idle age moved {before_age} -> {after_age} across "
                 f"session_abandoned() — that is a corpus mutation, not the clock"
             )
+
+
+class TestSharedStablePidIsNotAConfidentLiveness:
+    """`stable_pid` is not unique per session, and a verdict derived from a
+    shared one is not a verdict about either session holding it.
+
+    Root: `state/bug-backlog/2026-08-31-liveness-by-stable-pid-cannot-tell-two-
+    sessions-apart.yaml`. Two sessions launched under one ancestor terminal
+    carry the same `stable_pid`; while EITHER is alive, BOTH read live, so a
+    dead holder's path claim never frees -- `clear_claim_if_dead` keeps the row
+    while any holder reads live, and `coordinator-safe-commit` refuses with a
+    remedy ("coordinate with the holder BY NAME") that is unfollowable because
+    a gone session has already left the harness registry.
+
+    These pin the DETECTION only. `live` stays True on a shared handle
+    deliberately: refusing-and-keeping is the correct conservative behaviour for
+    every current caller, so this change makes the answer honest without
+    changing what anyone does with it. A test that asserted `live is False`
+    here would be pinning a caller decision this chunk does not make.
+    """
+
+    def _session(self, base, sid, stable_pid):
+        sdir = base / sid
+        sdir.mkdir(parents=True, exist_ok=True)
+        (sdir / "meta.json").write_text(
+            json.dumps(
+                {
+                    "stable_pid": stable_pid,
+                    "stable_pid_start_epoch": 1,
+                    "last_activity": "2026-09-01T00:00:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return sdir
+
+    def test_shared_pid_is_reported_shared_and_unshared_is_not(self, tmp_path):
+        base = tmp_path / "sessions"
+        self._session(base, "aaaaaaaa-1111-2222-3333-444444444444", "5000")
+        self._session(base, "bbbbbbbb-1111-2222-3333-444444444444", "5000")
+        self._session(base, "cccccccc-1111-2222-3333-444444444444", "6000")
+
+        shared = liveness._shared_stable_pids(str(base))
+
+        assert "5000" in shared, (
+            "a stable_pid carried by two sessions must be reported shared -- "
+            "this is the whole discriminator"
+        )
+        assert "6000" not in shared, (
+            "a stable_pid carried by exactly one session is a confident handle "
+            "and must NOT be degraded to shared"
+        )
+
+    def test_empty_and_missing_dirs_are_not_shared(self, tmp_path):
+        assert liveness._shared_stable_pids(str(tmp_path / "nope")) == frozenset()
+        assert liveness._shared_stable_pids(None) == frozenset()
+
+    def test_cache_revalidates_when_a_session_appears(self, tmp_path):
+        base = tmp_path / "sessions"
+        self._session(base, "aaaaaaaa-1111-2222-3333-444444444444", "5000")
+        assert liveness._shared_stable_pids(str(base)) == frozenset()
+
+        # A second session claiming the same handle must flip the answer. If
+        # the memo keyed on path alone, this would keep returning the stale
+        # empty set and the defect would survive its own fix.
+        self._session(base, "bbbbbbbb-1111-2222-3333-444444444444", "5000")
+        os.utime(base, None)
+
+        assert "5000" in liveness._shared_stable_pids(str(base))
+
+    def test_stray_non_session_dirs_cannot_manufacture_a_shared_handle(self, tmp_path):
+        """A leftover directory must not degrade a live session's handle.
+
+        Found on the real corpus while landing this: `.git/coordinator-sessions/`
+        carries `sess-1` and `test-session` (test leftovers that
+        `TestLiveSessionIdsCorpus` independently flags as phantom sessions), and
+        `sess-1` carries the same `stable_pid` as a LIVE session. Counting it
+        would report that live session's handle as shared -- an indeterminate
+        manufactured entirely by corpus pollution, in a predicate whose whole
+        purpose is to stop liveness answers being about the wrong thing.
+
+        `_NON_SESSION_DIR_NAMES` does not cover these; being absent from it is
+        precisely what the corpus test complains about. So shape is the
+        discriminator, not the denylist.
+        """
+        base = tmp_path / "sessions"
+        real = "11111111-2222-3333-4444-555555555555"
+        self._session(base, real, "7000")
+        self._session(base, "sess-1", "7000")
+        self._session(base, "test-session", "7000")
+
+        assert liveness._shared_stable_pids(str(base)) == frozenset(), (
+            "only UUID-shaped session dirs may count toward sharing -- two "
+            "stray dirs must not make a single live session's handle read "
+            "indeterminate"
+        )

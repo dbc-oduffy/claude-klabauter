@@ -52,6 +52,7 @@ def _patch_registry(monkeypatch, mapping):
 
     monkeypatch.setattr(harness_registry, "snapshot", lambda: mapping)
 
+
 def _session_dir(root: Path) -> Path:
     d = root / ".git" / "coordinator-sessions" / _SID
     d.mkdir(parents=True)

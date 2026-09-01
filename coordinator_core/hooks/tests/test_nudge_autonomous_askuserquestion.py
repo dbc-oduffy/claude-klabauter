@@ -13,6 +13,8 @@ Three obligations, per this chunk's dispatch brief (none catches the others):
 from __future__ import annotations
 
 import importlib
+import os
+import tempfile
 
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
@@ -43,7 +45,10 @@ def test_op_is_classified_compute_only() -> None:
     assert result is OpClass.COMPUTE_ONLY
 
 
-def test_op_returns_script_shape_for_a_firing_payload() -> None:
+# Review: coordinatorcode-reviewer.ad3945b7f5b493ad9 finding 1 — name asserted
+# the opposite of the behavior proven; the firing case is covered separately by
+# test_op_returns_allow_advisory_shape_when_sentinel_present.
+def test_op_suppresses_for_a_non_firing_payload() -> None:
     from coordinator_core.hooks.nudge_autonomous_askuserquestion import _handler
 
     payload = {
@@ -62,13 +67,10 @@ def test_op_returns_script_shape_for_a_firing_payload() -> None:
 
 
 def test_op_returns_allow_advisory_shape_when_sentinel_present(tmp_path, monkeypatch) -> None:
-    import tempfile
-
     from coordinator_core.hooks.nudge_autonomous_askuserquestion import _handler
 
     session_id = "test-session-nudge-askuserquestion-fire"
     sentinel = tempfile.gettempdir()
-    import os
 
     sentinel_path = os.path.join(sentinel, f"autonomous-run-{session_id}")
     with open(sentinel_path, "w", encoding="utf-8") as handle:
@@ -100,11 +102,9 @@ def test_op_suppresses_on_agent_id() -> None:
     assert _handler({"payload": payload}) == {}
 
 
-def test_op_suppresses_on_override_env_from_payload_not_os_environ(monkeypatch) -> None:
+def test_op_suppresses_on_override_env_from_payload_not_os_environ(tmp_path, monkeypatch) -> None:
     """The override MUST be read from params["payload"]["env"], never from this
     process's os.environ — the hook payload contract this chunk's brief pins."""
-    import os
-
     from coordinator_core.hooks.nudge_autonomous_askuserquestion import _handler
 
     monkeypatch.delenv("COORDINATOR_AUTONOMOUS_ASK_OK", raising=False)
@@ -114,12 +114,22 @@ def test_op_suppresses_on_override_env_from_payload_not_os_environ(monkeypatch) 
     }
     assert _handler({"payload": payload}) == {}
 
-    # And the inverse: an ambient os.environ override must NOT suppress —
-    # only the payload's own env does.
-    monkeypatch.setenv("COORDINATOR_AUTONOMOUS_ASK_OK", "1")
-    payload_no_env = {"session_id": "sid-ambient-only", "env": {}}
-    result = _handler({"payload": payload_no_env})
-    # No sentinel, fail-open posture -> non-firing regardless, but for a
-    # different reason than the override -- confirms os.environ was never
-    # consulted for the override bypass specifically.
-    assert result == {}
+    # Review: coordinatorcode-reviewer.ad3945b7f5b493ad9 finding 2 — the prior
+    # inverse case reached the suppression path via fail-open posture, never
+    # via the override branch, so it could not discriminate an accidental
+    # os.environ read. Force the firing branch (sentinel present) so the only
+    # thing that could suppress is an os.environ override being (wrongly)
+    # consulted; asserting "allow" proves it was NOT consulted.
+    session_id = "sid-ambient-only"
+    sentinel_path = os.path.join(tempfile.gettempdir(), f"autonomous-run-{session_id}")
+    with open(sentinel_path, "w", encoding="utf-8") as handle:
+        handle.write("1")
+    try:
+        monkeypatch.setenv("COORDINATOR_AUTONOMOUS_ASK_OK", "1")
+        payload_no_env = {"session_id": session_id, "env": {}}
+        result = _handler({"payload": payload_no_env})
+        # Sentinel present -> firing branch; if os.environ were (wrongly)
+        # consulted this would suppress to {} instead.
+        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+    finally:
+        os.remove(sentinel_path)

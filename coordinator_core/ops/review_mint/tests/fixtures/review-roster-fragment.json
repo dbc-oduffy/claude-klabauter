@@ -6,6 +6,7 @@
     "coordinator:code-reviewer": "BLOCKED",
     "coordinator:review-integrator": "BLOCKED",
     "coordinator:docs-checker": null,
+    "coordinator:apm": null,
     "coordinator:staff-eng": "REJECTED",
     "coordinator:eng-director": "REJECTED",
     "coordinator:staff-data-sci": "REJECTED",
@@ -23,7 +24,8 @@
       "stages": [
         { "gate": true, "agents": ["coordinator:prior-art-checker"], "accepts_signals": "preflight" },
         { "agents": ["coordinator:code-reviewer", "coordinator:staff-eng"], "accepts_signals": "named" },
-        { "agents": ["coordinator:review-integrator"] }
+        { "agents": ["coordinator:review-integrator"] },
+        { "agents": ["coordinator:apm"] }
       ]
     },
     "full": {
@@ -31,7 +33,8 @@
         { "gate": true, "agents": ["coordinator:prior-art-checker"], "accepts_signals": "preflight" },
         { "agents": ["coordinator:code-reviewer", "coordinator:staff-eng"], "accepts_signals": "named" },
         { "agents": ["coordinator:review-integrator"] },
-        { "agents": ["coordinator:eng-director"] }
+        { "agents": ["coordinator:eng-director"] },
+        { "agents": ["coordinator:apm"] }
       ]
     }
   }

@@ -371,7 +371,7 @@ class OwnershipReadout(TypedDict):
         also having to thread `safe_paths` through separately.
       - ``peer``          — every CONTESTED path: one this session holds
         that a peer holds too. Named with an EARNED liveness verdict (see
-        `_peer_liveness`) rather than an asserted one.
+        `_liveness_from_set`) rather than an asserted one.
       - ``unattributed``  — every contested path this call cannot stand
         behind an owner name for, which post-rebuild means: every one of
         them, whenever ``degraded`` is set, and none otherwise. Per DR-258
@@ -893,24 +893,6 @@ def _resolve_agent_touched_candidates(session_id: str, cwd: Optional[str]) -> Li
 # ---------------------------------------------------------------------------
 
 
-def _peer_liveness(peers, cwd: Optional[str]) -> str:
-    """The ONE liveness verdict this module prints for a peer claim, earned
-    rather than asserted (the rule `scope_report._classify_denied_path`
-    already carries, applied here at the other surface that names owners).
-
-    ``"undetermined"`` on an EMPTY live set as well as on a raise:
-    ``live_session_ids``' documented contract returns an empty frozenset on
-    error, which is indistinguishable from "nothing is live", so an empty
-    result is UNKNOWN and never DEAD. In-process (psutil, not git) -- this
-    adds no subprocess to the answer.
-    """
-    try:
-        live = live_session_ids(cwd)
-    except Exception:  # noqa: BLE001 - a readout must never raise
-        return "undetermined"
-    return _liveness_from_set(peers, live)
-
-
 def _liveness_from_set(owner: str, live) -> str:
     """The verdict itself, against an ALREADY-RESOLVED live set -- so a caller
     with many owners to label resolves that set once instead of once per owner
@@ -947,7 +929,7 @@ def full_ownership_map(session_id: str, cwd: Optional[str] = None):
     most of which never look at it. One index rebuild, zero git spawns, same
     as every other answer in this module.
 
-    Liveness on each entry is EARNED (see :func:`_peer_liveness`), never
+    Liveness on each entry is EARNED (see :func:`_liveness_from_set`), never
     asserted. ``claim_source`` is always ``"session"`` -- see
     :class:`PeerOwnedPath` for why the index has no other value left to
     report. Degraded walk: the peer map comes back EMPTY, matching
@@ -961,7 +943,7 @@ def full_ownership_map(session_id: str, cwd: Optional[str] = None):
         return mine, {}
 
     # The live set is resolved ONCE, here, and every entry below is answered
-    # from it. Measured 2026-08-21, job object, k=20: calling `_peer_liveness`
+    # from it. Measured 2026-08-21, job object, k=20: calling the per-owner
     # per entry instead cost 23,910ms of process time on this repo's ~405 peer
     # claims -- 48x the 500ms brightline, in ZERO subprocesses, because
     # `live_session_ids` is documented as deliberately un-memoised (a cached
@@ -1097,7 +1079,7 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
 
     ``ownership`` -- the same four buckets as before (mine / named peer /
     unattributed / degraded), now derived from the claim index. ``peer``
-    carries an EARNED liveness verdict (see :func:`_peer_liveness`); on a
+    carries an EARNED liveness verdict (see :func:`_liveness_from_set`); on a
     degraded call it is emptied outright and every contested path folds into
     ``unattributed``, because a call that cannot stand behind an owner name
     must not print one (AC7).
@@ -1125,6 +1107,22 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
     excluded: List[ExcludedPath] = []
     peer: List[PeerOwnedPath] = []
     unattributed: List[str] = []
+    # Resolved ONCE for the whole loop, then labelled per owner via
+    # `_liveness_from_set` -- the split that function's own docstring exists
+    # for ("a caller with many owners to label resolves that set once instead
+    # of once per owner", and the 23,910ms it removed from
+    # `full_ownership_map`). This site was still resolving the live set per
+    # contested path: profiled at 90ms over six calls of one `compute_offer`,
+    # on the commit hot path the close ceremony traverses twice per pass. The
+    # empty/raise semantics are unchanged -- "empty or raise reads
+    # undetermined, never dead" is the standing contract, and both halves of
+    # it live in `_liveness_from_set` and the `except` here respectively, so a
+    # failed readout still labels every owner `undetermined` exactly as the
+    # deleted per-path helper did.
+    try:
+        _live_now = live_session_ids(cwd)
+    except Exception:  # noqa: BLE001 - a readout must never raise
+        _live_now = None
     for path in sorted(answer.contested):
         holders = answer.contested[path]
         excluded.append(
@@ -1137,7 +1135,7 @@ def compute_offer(session_id: str, cwd: Optional[str] = None) -> SafeCommitOffer
             {
                 "path": path,
                 "owner": holders[0],
-                "liveness": _peer_liveness(holders[0], cwd),
+                "liveness": _liveness_from_set(holders[0], _live_now),
                 # Every claim the index carries is a session claim by the time
                 # it is read: `rebuild` has already resolved an agent's claim
                 # back to the EM session that owns it, so there is no

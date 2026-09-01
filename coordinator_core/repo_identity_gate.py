@@ -177,11 +177,19 @@ def compute_repo_identity_gate(repo_root: Path, sid: Optional[str]) -> dict[str,
     record_session_id: Optional[str] = None
     record: Optional[_harness_registry.RegistryRecord] = None
 
+    # `snapshot()` parses EVERY `sessions/*.json` on the box, so its cost is a
+    # function of how many peer sessions exist, not of this repo -- 34 files
+    # here, 50-70 at the documented load norm. It is taken at most ONCE per
+    # call and reused by the miss-diagnostic below; the two call sites this
+    # replaced scanned the whole registry twice on the same miss.
+    snapshot_cache: "Optional[dict]" = None
+
     self_hit = _harness_registry.self_record()
     if self_hit is not None and self_hit[0] == sid:
         record_session_id, record = self_hit
     else:
-        fallback = _harness_registry.snapshot().get(sid)
+        snapshot_cache = _harness_registry.snapshot()
+        fallback = snapshot_cache.get(sid)
         if fallback is not None:
             record_session_id, record = sid, fallback
 
@@ -199,7 +207,9 @@ def compute_repo_identity_gate(repo_root: Path, sid: Optional[str]) -> dict[str,
             if registry_dir is not None and registry_dir.is_dir():
                 file_count = sum(1 for _ in registry_dir.glob("*.json"))
                 if file_count > 0:
-                    parsed_count = len(_harness_registry.snapshot())
+                    if snapshot_cache is None:
+                        snapshot_cache = _harness_registry.snapshot()
+                    parsed_count = len(snapshot_cache)
                     detail = (
                         f"no registry record for this session "
                         f"(registry holds {file_count} file(s), {parsed_count} parsed)"

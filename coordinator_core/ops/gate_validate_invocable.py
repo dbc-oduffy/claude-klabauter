@@ -203,17 +203,37 @@ def _tests_stub_skipped_gated(
 # inline a real dimension's logic here — that recreates the "five inline
 # implementations" C1 explicitly rules out.
 # ---------------------------------------------------------------------------
+# UNREACHABLE-BY-DEFAULT, for four of the five slots. C2/C3/C5/C7 have all
+# landed and each self-registers at the bottom of this module via an
+# unconditional import, so "types", "docstrings", "review" and "latency" are
+# replaced with their real checks before any caller can observe these stubs.
+# They survive as the fallback the seam is built around -- an import that
+# cannot resolve leaves UNAVAILABLE rather than a missing key -- not as a
+# statement about what is wired.
+#
+# THEIR TEXT MUST NOT SAY "not landed". It did, naming the chunk that had
+# already landed, and cost a session: reading this literal and stopping here
+# yields "the review dimension is a stub, nothing enforces review coverage",
+# which is false and was reported as fact to a PM and a group EM before the
+# registry was inspected at runtime. `register_dimension` at the foot of this
+# module is the second half of the sentence this dict starts.
 _DIMENSION_REGISTRY: dict[str, DimensionCheck] = {
-    "types": _stub_unavailable("types", "mypy strict-override ledger not wired (C2 not landed)"),
+    "types": _stub_unavailable(
+        "types", "mypy strict-override ledger unavailable (C2 landed; this stub is the "
+        "fallback for a failed self-registration import)"
+    ),
     "docstrings": _stub_unavailable(
-        "docstrings", "Ruff D1xx + interrogate not wired (C3 not landed)"
+        "docstrings", "Ruff D1xx + interrogate unavailable (C3 landed; this stub is the "
+        "fallback for a failed self-registration import)"
     ),
     "tests": _tests_stub_skipped_gated,
     "review": _stub_unavailable(
-        "review", "review-stamp assertion not wired (C5 not landed)"
+        "review", "review-stamp assertion unavailable (C5 landed at b40126c036; this stub "
+        "is the fallback for a failed self-registration import)"
     ),
     "latency": _stub_unavailable(
-        "latency", "qsub-01 benchmarks/gate.py budget-manifest reference not wired (C7 not landed)"
+        "latency", "qsub-01 benchmarks/gate.py budget-manifest unavailable (C7 landed at "
+        "b40126c036; this stub is the fallback for a failed self-registration import)"
     ),
 }
 

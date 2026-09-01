@@ -54,11 +54,28 @@ def _init_repo(path) -> None:
     (path / "docs" / "plans").mkdir(parents=True)
 
 
-def test_op_returns_post_advisory_shape_for_a_firing_payload(tmp_path) -> None:
+def test_op_returns_post_advisory_shape_for_a_firing_payload(tmp_path, monkeypatch) -> None:
     from coordinator_core.hooks.plan_persistence_check import _handler
+    from coordinator_core.ops import plan_capture_persist as pcp_mod
 
     repo = tmp_path / "repo"
     _init_repo(repo)
+
+    # Review: coordinatorcode-reviewer.a986dd968d6771f99, Finding 2 — this is
+    # the sole test in this file that lets the real routed path run, so it is
+    # the one place a residual subprocess spawn (Finding 1) would otherwise
+    # go undetected. Spy on the real subprocess.run call (not mocked out —
+    # the scaffold write itself is still exercised) and pin that exactly one
+    # spawn to coordinator-doc-new.py happens, so an eventual in-process port
+    # of that scaffolder breaks this assertion loudly instead of silently.
+    spawn_calls: list = []
+    real_run = pcp_mod.subprocess.run
+
+    def _spy_run(argv, *args, **kwargs):
+        spawn_calls.append(argv)
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(pcp_mod.subprocess, "run", _spy_run)
 
     payload = _base_payload(str(repo))
     result = _handler({"payload": payload})
@@ -74,6 +91,9 @@ def test_op_returns_post_advisory_shape_for_a_firing_payload(tmp_path) -> None:
     written = list((repo / "docs" / "plans").glob("*.md"))
     assert len(written) == 1
     assert "My Plan" in written[0].read_text(encoding="utf-8")
+
+    assert len(spawn_calls) == 1
+    assert "coordinator-doc-new.py" in spawn_calls[0][1]
 
 
 def test_op_suppresses_on_non_exitplanmode_tool_name() -> None:
@@ -165,9 +185,46 @@ def test_op_reads_claude_project_dir_from_payload_env_not_os_environ(tmp_path, m
     assert list((other_repo / "docs" / "plans").glob("*.md")) == []
 
 
-def test_op_slug_collision_does_not_overwrite(tmp_path) -> None:
+def test_op_readme_row_shape_matches_between_routed_and_fallback_paths(tmp_path, monkeypatch) -> None:
+    """Review: coordinatorcode-reviewer.a986dd968d6771f99, Finding 5 — the
+    routed path's README row (plan_capture_persist.readme_row()) and the
+    fallback path's inline-built row must resolve to the same link-target
+    shape for the same docs/README.md, since neither test previously
+    asserted on the row TEXT (only file count/presence)."""
+    import coordinator_core.hooks.plan_persistence_check as mod
+
+    # --- Fallback path: force the routed path to error out. ---
+    fallback_repo = tmp_path / "fallback-repo"
+    _init_repo(fallback_repo)
+    (fallback_repo / "docs" / "README.md").write_text("# Plans\n", encoding="utf-8")
+
+    def _force_error(*args, **kwargs):
+        return {"status": "error", "path": None, "readme_row": None, "reason": "forced"}
+
+    monkeypatch.setattr(mod, "persist_captured_plan", _force_error)
+    payload = _base_payload(str(fallback_repo), plan="# Fallback Plan\n\nBody.")
+    result = mod._handler({"payload": payload})
+    assert result != {}
+    readme_text = (fallback_repo / "docs" / "README.md").read_text(encoding="utf-8")
+    assert "](plans/2" in readme_text and "-fallback-plan.md)" in readme_text
+    assert "](docs/plans/" not in readme_text
+
+    # --- Routed path: let it run for real (no error-forcing). ---
+    routed_repo = tmp_path / "routed-repo"
+    _init_repo(routed_repo)
+    (routed_repo / "docs" / "README.md").write_text("# Plans\n", encoding="utf-8")
+
+    monkeypatch.undo()
+    payload2 = _base_payload(str(routed_repo), plan="# Routed Plan\n\nBody.")
+    result2 = mod._handler({"payload": payload2})
+    assert result2 != {}
+    readme_text2 = (routed_repo / "docs" / "README.md").read_text(encoding="utf-8")
+    assert "](plans/2" in readme_text2 and "-routed-plan.md)" in readme_text2
+    assert "](docs/plans/" not in readme_text2
+
+
+def test_op_slug_collision_does_not_overwrite(tmp_path, monkeypatch) -> None:
     from coordinator_core.hooks.plan_persistence_check import _handler
-    from coordinator_core.ops import plan_capture_persist as pcp_mod
 
     repo = tmp_path / "collision-repo"
     _init_repo(repo)
@@ -177,30 +234,26 @@ def test_op_slug_collision_does_not_overwrite(tmp_path) -> None:
     def _force_error(*args, **kwargs):
         return {"status": "error", "path": None, "readme_row": None, "reason": "forced"}
 
-    orig = pcp_mod.persist_captured_plan
     import coordinator_core.hooks.plan_persistence_check as mod
 
-    mod.persist_captured_plan = _force_error
-    try:
-        payload = _base_payload(str(repo), plan="# Collide\n\nFirst body.")
-        first = mod._handler({"payload": payload})
-        assert first != {}
+    monkeypatch.setattr(mod, "persist_captured_plan", _force_error)
 
-        payload2 = _base_payload(str(repo), plan="# Collide\n\nDifferent body.")
-        second = mod._handler({"payload": payload2})
-        hso = second["hookSpecificOutput"]
-        assert "collision" in hso["additionalContext"].lower()
+    payload = _base_payload(str(repo), plan="# Collide\n\nFirst body.")
+    first = mod._handler({"payload": payload})
+    assert first != {}
 
-        written = list((repo / "docs" / "plans").glob("*.md"))
-        assert len(written) == 1
-        assert written[0].read_text(encoding="utf-8") == "# Collide\n\nFirst body."
-    finally:
-        mod.persist_captured_plan = orig
+    payload2 = _base_payload(str(repo), plan="# Collide\n\nDifferent body.")
+    second = mod._handler({"payload": payload2})
+    hso = second["hookSpecificOutput"]
+    assert "collision" in hso["additionalContext"].lower()
+
+    written = list((repo / "docs" / "plans").glob("*.md"))
+    assert len(written) == 1
+    assert written[0].read_text(encoding="utf-8") == "# Collide\n\nFirst body."
 
 
-def test_op_idempotent_on_byte_identical_refire(tmp_path) -> None:
+def test_op_idempotent_on_byte_identical_refire(tmp_path, monkeypatch) -> None:
     import coordinator_core.hooks.plan_persistence_check as mod
-    from coordinator_core.ops import plan_capture_persist as pcp_mod
 
     repo = tmp_path / "idempotent-repo"
     _init_repo(repo)
@@ -208,17 +261,14 @@ def test_op_idempotent_on_byte_identical_refire(tmp_path) -> None:
     def _force_error(*args, **kwargs):
         return {"status": "error", "path": None, "readme_row": None, "reason": "forced"}
 
-    orig = pcp_mod.persist_captured_plan
-    mod.persist_captured_plan = _force_error
-    try:
-        payload = _base_payload(str(repo), plan="# Same\n\nBody.")
-        first = mod._handler({"payload": payload})
-        assert "PLAN PERSISTED" in first["hookSpecificOutput"]["additionalContext"]
+    monkeypatch.setattr(mod, "persist_captured_plan", _force_error)
 
-        second = mod._handler({"payload": payload})
-        assert "ALREADY PERSISTED" in second["hookSpecificOutput"]["additionalContext"]
-    finally:
-        mod.persist_captured_plan = orig
+    payload = _base_payload(str(repo), plan="# Same\n\nBody.")
+    first = mod._handler({"payload": payload})
+    assert "PLAN PERSISTED" in first["hookSpecificOutput"]["additionalContext"]
+
+    second = mod._handler({"payload": payload})
+    assert "ALREADY PERSISTED" in second["hookSpecificOutput"]["additionalContext"]
 
 
 def test_op_routes_meta_repo_to_engine_root(tmp_path, monkeypatch) -> None:
@@ -226,7 +276,6 @@ def test_op_routes_meta_repo_to_engine_root(tmp_path, monkeypatch) -> None:
     write into this engine's own docs/plans/ (here, a fake substituted engine
     root), never the meta-repo's own docs/ tree."""
     import coordinator_core.hooks.plan_persistence_check as mod
-    from coordinator_core.ops import plan_capture_persist as pcp_mod
 
     meta_repo = tmp_path / "dot-claude-home"
     (meta_repo / ".claude").mkdir(parents=True)
@@ -238,20 +287,17 @@ def test_op_routes_meta_repo_to_engine_root(tmp_path, monkeypatch) -> None:
     def _force_error(*args, **kwargs):
         return {"status": "error", "path": None, "readme_row": None, "reason": "forced"}
 
-    orig = pcp_mod.persist_captured_plan
-    mod.persist_captured_plan = _force_error
+    monkeypatch.setattr(mod, "persist_captured_plan", _force_error)
     monkeypatch.setattr(mod, "_ENGINE_ROOT", fake_engine_root)
-    try:
-        payload = {
-            "tool_name": "ExitPlanMode",
-            "tool_response": {"plan": "# Meta Plan\n\nBody.", "isAgent": False},
-            "cwd": str(meta_repo / ".claude"),
-            "env": {"HOME": str(meta_repo)},
-        }
-        result = mod._handler({"payload": payload})
-        assert result != {}
-        assert not (meta_repo / ".claude" / "docs").exists()
-        written = list((fake_engine_root / "docs" / "plans").glob("*meta-plan*.md"))
-        assert len(written) == 1
-    finally:
-        mod.persist_captured_plan = orig
+
+    payload = {
+        "tool_name": "ExitPlanMode",
+        "tool_response": {"plan": "# Meta Plan\n\nBody.", "isAgent": False},
+        "cwd": str(meta_repo / ".claude"),
+        "env": {"HOME": str(meta_repo)},
+    }
+    result = mod._handler({"payload": payload})
+    assert result != {}
+    assert not (meta_repo / ".claude" / "docs").exists()
+    written = list((fake_engine_root / "docs" / "plans").glob("*meta-plan*.md"))
+    assert len(written) == 1

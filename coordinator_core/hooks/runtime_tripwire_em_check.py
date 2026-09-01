@@ -109,9 +109,12 @@ import re
 from pathlib import Path
 from typing import Mapping, Optional
 
-from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks._envelope import no_advisory, post_advisory
+from coordinator_core.hooks.postuse_advisory_dispatch import (
+    _resolve_subagent_identity,
+)
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.push_failure_verdict import _handler as _push_failure_verdict_handler
 
@@ -134,32 +137,12 @@ _HOOKS_JSON_STALE_REFERENCE_LINE = (
 )
 
 
-# ---------------------------------------------------------------------------
-# resolve_subagent_identity — byte-identical 3-path port, mirroring
-# `coordinator_core.hooks.postuse_advisory_dispatch._resolve_subagent_identity`
-# (which the source script's own docstring names as this file's twin). See
-# module docstring for why this is its own copy, not a shared import.
-# ---------------------------------------------------------------------------
-def _resolve_subagent_identity(agent_id: str, session_id: str) -> str:
-    """Translate a subagent-side agent_id to the canonical EM-side id.
-
-    Three paths:
-        (a) Bare hex  ^[a-f0-9]{12,}$  — unnamed agent fast path; return unchanged.
-        (b) Named teammate  ^a(.+)-[a-f0-9]{16}$  — build "<name>@session-<short8>".
-        (c) Anything else -> "" (fail-closed).
-    """
-    if re.match(r"^[a-f0-9]{12,}$", agent_id):
-        return agent_id
-
-    m = re.match(r"^a(.+)-[a-f0-9]{16}$", agent_id)
-    if m:
-        name = m.group(1)
-        if len(session_id) < 8:
-            return ""
-        short = session_id[:8]
-        return f"{name}@session-{short}"
-
-    return ""
+# Review: overengineering-reviewer (Kira) — this module carried a third
+# in-repo copy of `_resolve_subagent_identity`, difflib-identical to
+# `postuse_advisory_dispatch._resolve_subagent_identity`; now imported from
+# there (see top of module), matching how `stop_dispatch.py` (same
+# workstream) imports private handlers from sibling hooks modules without
+# ceremony.
 
 
 def _fail_open(fn, *args, default=None):
@@ -181,40 +164,20 @@ def _ensure_cursor_dir(cursor_dir: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# _current_branch_cheap — raw `.git/HEAD` read, zero-spawn, verbatim logic
-# from the source script. Resolved via the worktree-PRIVATE gitdir
-# (`resolve_git_common_dir`'s sibling private-dir logic is inlined here
-# rather than imported, matching the source's own `_resolve_git_dir_no_
-# commondir` — HEAD is per-worktree state and must NOT follow the commondir
-# indirection).
+# _current_branch_cheap — raw `.git/HEAD` read, zero-spawn. Resolved via the
+# worktree-PRIVATE gitdir (`coordinator_core.git.git_dir.resolve_git_dir`,
+# same semantic the source script's own `_resolve_git_dir_no_commondir` hand-
+# rolled: never following the `commondir` indirection, since HEAD is
+# per-worktree state).
+# Review: overengineering-reviewer (Kira) — delegated to the shared
+# `resolve_git_dir` rather than re-deriving the `.git`-file-vs-directory
+# indirection by hand, matching the sibling C4 chunk
+# (`watchdog_undischarged_next_move.py`), which made and documented the same
+# call on this identical question.
 # ---------------------------------------------------------------------------
-def _resolve_git_dir_no_commondir(git_root: str) -> str:
-    try:
-        dot_git = os.path.join(git_root, ".git")
-        if os.path.isdir(dot_git):
-            return dot_git
-        if os.path.isfile(dot_git):
-            with open(dot_git, "r", encoding="utf-8", errors="replace") as fh:
-                text = fh.read().strip()
-            if not text.startswith("gitdir:"):
-                return ""
-            gitdir_value = text[len("gitdir:"):].strip()
-            git_dir = (
-                gitdir_value
-                if os.path.isabs(gitdir_value)
-                else os.path.normpath(os.path.join(git_root, gitdir_value))
-            )
-            if not os.path.isdir(git_dir):
-                return ""
-            return git_dir
-        return ""
-    except Exception:
-        return ""
-
-
 def _current_branch_cheap(git_root: str) -> str:
     try:
-        git_dir = _resolve_git_dir_no_commondir(git_root)
+        git_dir = str(resolve_git_dir(git_root))
         if not git_dir:
             return ""
         head_path = os.path.join(git_dir, "HEAD")

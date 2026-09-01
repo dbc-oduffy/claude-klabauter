@@ -27,8 +27,9 @@ names every entry to archive (still not a directory scan), but ALL of them
 land in ONE `archive_and_commit` call, so a sweep costs ONE commit instead of
 N. This is a strictly NEW response shape, never returned unless the caller
 opts in by sending `entry_paths`, so the singular `entry_path` contract above
-(and every existing caller of it, notably queue.close per DR-270) is
-untouched:
+(and every caller of it -- notably queue.close per DR-270, itself
+gravestoned at `c07062c99`, kill-ledger `## K-049`, so this names the
+contract's history and not a live caller) is untouched:
     params:   {repo_root: str (optional), entry_paths: list[str] (required,
                non-empty, mutually exclusive with entry_path), dry_run: bool}
     response: {exit_code: int, archived: None, dest: None,

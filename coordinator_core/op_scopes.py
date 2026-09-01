@@ -202,18 +202,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # push-failures cursor and the hooks.json-staleness cursor. Same "none"
     # class as the other repo_root-less hooks.* ops above.
     "hooks.runtime_tripwire_em_check": "none",
-    # hooks.stop_dispatch (C3) and its four residue/wrapper legs
-    # (guard_kira_verdict_routed, stop_em_report_altitude,
-    # nudge_harness_directive_dispatch, nudge_unrouted_sizing) — repo_root
-    # handler arg unused for all five: each leg resolves its own repo root
-    # from params["payload"]["cwd"] (or has no repo-root need at all, e.g.
-    # the two nudge wrappers over a pure-transcript detector). Same "none"
-    # class as the other repo_root-less hooks.* ops above.
+    # hooks.stop_dispatch (C3) — repo_root handler arg unused: resolves its
+    # own repo root from params["payload"]["cwd"]. Same "none" class as the
+    # other repo_root-less hooks.* ops above.
+    # Review: overengineering-reviewer (Kira) — the four sibling
+    # residue/wrapper op-key rows formerly here (guard_kira_verdict_routed,
+    # stop_em_report_altitude, nudge_harness_directive_dispatch,
+    # nudge_unrouted_sizing) were removed with their registrations; no
+    # consumer found for any of them.
     "hooks.stop_dispatch": "none",
-    "hooks.guard_kira_verdict_routed": "none",
-    "hooks.stop_em_report_altitude": "none",
-    "hooks.nudge_harness_directive_dispatch": "none",
-    "hooks.nudge_unrouted_sizing": "none",
     # hooks.context_pressure_precompact — no repo state accessed: writes its
     # sentinel + state-snapshot only to tempfile.gettempdir(), keyed by
     # session_id, never to a repo/worktree path; repo_root is unused (always

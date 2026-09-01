@@ -2,16 +2,20 @@
 coordinator_core.hooks.tests.test_stop_dispatch — Tier-T test for the Stop
 fan-in port (chunk C3, docs/reference/warm-hook-migration.md).
 
-Five ops land from this one module: the composed fan-in (`hooks.stop_dispatch`),
-the ported residue guard (`hooks.guard_kira_verdict_routed`), and three thin
+One op lands from this module: the composed fan-in (`hooks.stop_dispatch`).
+The ported residue guard (`_guard_kira_verdict_routed_handler`) and three thin
 wrappers over previously-handler-less library modules
-(`hooks.stop_em_report_altitude`, `hooks.nudge_harness_directive_dispatch`,
-`hooks.nudge_unrouted_sizing`).
+(`_stop_em_report_altitude_handler`, `_nudge_harness_directive_dispatch_handler`,
+`_nudge_unrouted_sizing_handler`) remain plain module-level functions the
+fan-in calls directly — they lost their `@register_op` registrations
+(overengineering-reviewer/Kira, 2026-08-31: no registration, dispatch site,
+or cross-module caller found for any of the four op keys, in claude-klabauter or
+DoE-claude) but are otherwise unchanged.
 
 Obligations, per this chunk's dispatch brief:
-  (a) all five ops are registered and resolvable through
+  (a) `hooks.stop_dispatch` is registered and resolvable through
       `warm.hook_http.op_for_path`;
-  (b) each is CLASSIFIED — an explicit assertion of the `classify()` result;
+  (b) it is CLASSIFIED — an explicit assertion of the `classify()` result;
   (c) `guard_kira_verdict_routed` reproduces `guard-kira-verdict-routed.py`'s
       own decision against a captured payload/sidecar corpus (trigger-scope
       skip, clean pass, and the unrouted-verdict BLOCK);
@@ -32,10 +36,6 @@ _MODULE = "coordinator_core.hooks.stop_dispatch"
 
 _OP_NAMES = (
     "hooks.stop_dispatch",
-    "hooks.guard_kira_verdict_routed",
-    "hooks.stop_em_report_altitude",
-    "hooks.nudge_harness_directive_dispatch",
-    "hooks.nudge_unrouted_sizing",
 )
 
 
@@ -57,10 +57,13 @@ def _write_sidecar(share_dir: str, filename: str, frontmatter_lines: list) -> No
         fh.write(body)
 
 
-def test_all_five_ops_register_and_resolve_through_op_for_path() -> None:
+def test_stop_dispatch_op_registers_and_resolves_through_op_for_path() -> None:
     module = importlib.import_module(_MODULE)
     assert hasattr(module, "_handler")
     assert hasattr(module, "_guard_kira_verdict_routed_handler")
+    assert hasattr(module, "_stop_em_report_altitude_handler")
+    assert hasattr(module, "_nudge_harness_directive_dispatch_handler")
+    assert hasattr(module, "_nudge_unrouted_sizing_handler")
 
     from coordinator_core.ipc import _REGISTRY
 
@@ -68,12 +71,19 @@ def test_all_five_ops_register_and_resolve_through_op_for_path() -> None:
         assert name in _REGISTRY, name
         assert op_for_path(HOOK_PATH + "/" + name) == name
 
+    # The four residue/wrapper functions above are deliberately NOT
+    # registered (overengineering-reviewer finding, 2026-08-31): no
+    # consumer names them as ops anywhere in claude-klabauter or DoE-claude.
+    for name in (
+        "hooks.guard_kira_verdict_routed",
+        "hooks.stop_em_report_altitude",
+        "hooks.nudge_harness_directive_dispatch",
+        "hooks.nudge_unrouted_sizing",
+    ):
+        assert name not in _REGISTRY, name
+
 
 def test_classification_matches_each_legs_write_semantics() -> None:
-    assert classify("hooks.guard_kira_verdict_routed") == OpClass.COMPUTE_ONLY
-    assert classify("hooks.stop_em_report_altitude") == OpClass.MUTATING
-    assert classify("hooks.nudge_harness_directive_dispatch") == OpClass.MUTATING
-    assert classify("hooks.nudge_unrouted_sizing") == OpClass.MUTATING
     assert classify("hooks.stop_dispatch") == OpClass.MUTATING
 
 
@@ -197,3 +207,92 @@ def test_aggregate_stop_dispatch_folds_kira_block(tmp_path) -> None:
     result = asyncio.run(_handler({"payload": payload}))
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "unrouted Kira" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# --- CONCATENATE-ALL aggregation parity -------------------------------------
+#
+# The source dispatcher's contract is CONCATENATE-ALL, never first-fires-wins
+# (`_stop_family_runner_contract.py`, and this module's own AGGREGATION
+# CONTRACT docstring). A port that returned on the first firing leg would pass
+# every single-leg test above and every no-signal test -- the divergence is
+# only observable when TWO legs fire at once, which is why this asserts on the
+# second leg's text specifically rather than on the first.
+
+
+def _aggregate(payload):
+    mod = importlib.import_module(_MODULE)
+    handler = mod._handler
+    result = handler({"payload": payload})
+    if asyncio.iscoroutine(result):
+        result = asyncio.run(result)
+    return mod, result
+
+
+def _silence_all_legs(monkeypatch, mod):
+    """Every composed leg silent by default, so a test names exactly the legs
+    it expects to fire rather than inheriting whatever the real legs decide."""
+    for name in (
+        "_runtime_tripwire_em_check_handler",
+        "_watchdog_undischarged_next_move_handler",
+        "_guard_kira_verdict_routed_handler",
+        "_stop_em_report_altitude_handler",
+        "_nudge_harness_directive_dispatch_handler",
+        "_nudge_unrouted_sizing_handler",
+    ):
+        monkeypatch.setattr(mod, name, lambda _p: mod_no_advisory(), raising=True)
+
+
+def mod_no_advisory():
+    from coordinator_core.hooks._envelope import no_advisory
+
+    return no_advisory()
+
+
+def test_two_firing_advisory_legs_both_appear_not_just_the_first(monkeypatch):
+    """CONCATENATE-ALL, advisory arm: both legs' text survives the fold."""
+    from coordinator_core.hooks._envelope import post_advisory
+
+    mod = importlib.import_module(_MODULE)
+    _silence_all_legs(monkeypatch, mod)
+    monkeypatch.setattr(
+        mod, "_watchdog_undischarged_next_move_handler",
+        lambda _p: post_advisory("ALPHA-LEG-TEXT"), raising=True)
+    monkeypatch.setattr(
+        mod, "_nudge_unrouted_sizing_handler",
+        lambda _p: post_advisory("BRAVO-LEG-TEXT"), raising=True)
+
+    # Review: coordinator:code-reviewer — session_id="" is load-bearing:
+    # `_silence_all_legs` does not patch `_receiver_state_sensor_handler`,
+    # so the real handler runs; a falsy session_id keeps it a no-op (see
+    # that module's own "field(...) treats '' as absent" docstring). Do
+    # not fill this in with a non-empty session_id without also patching
+    # the sensor leg.
+    _mod, result = _aggregate({"cwd": "", "session_id": "", "transcript_path": ""})
+    blob = str(result)
+    assert "ALPHA-LEG-TEXT" in blob, f"first firing leg lost: {result!r}"
+    assert "BRAVO-LEG-TEXT" in blob, (
+        f"second firing leg lost -- this is first-fires-wins, not the "
+        f"CONCATENATE-ALL the source dispatcher contracts for: {result!r}"
+    )
+
+
+def test_two_blocking_legs_both_reasons_appear(monkeypatch):
+    """CONCATENATE-ALL, block arm: a deny folds every reason, not the first."""
+    from coordinator_core.hooks._envelope import deny
+
+    mod = importlib.import_module(_MODULE)
+    _silence_all_legs(monkeypatch, mod)
+    monkeypatch.setattr(
+        mod, "_guard_kira_verdict_routed_handler",
+        lambda _p: deny("Stop", "BLOCK-REASON-ONE"), raising=True)
+    monkeypatch.setattr(
+        mod, "_runtime_tripwire_em_check_handler",
+        lambda _p: deny("Stop", "BLOCK-REASON-TWO"), raising=True)
+
+    # Review: coordinator:code-reviewer — session_id="" is load-bearing here
+    # too, see the identical note in the advisory-arm test above.
+    _mod, result = _aggregate({"cwd": "", "session_id": "", "transcript_path": ""})
+    blob = str(result)
+    assert "BLOCK-REASON-ONE" in blob and "BLOCK-REASON-TWO" in blob, (
+        f"a deny must carry every blocking leg's reason, not the first: {result!r}"
+    )

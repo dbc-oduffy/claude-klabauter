@@ -3387,7 +3387,16 @@ def _claim_grant_denied_live_reason(
 
     # Weak or unknown basis — hedge explicitly rather than asserting liveness
     # with a confidence the evidence doesn't support.
-    basis_note = "recency-window only" if basis == "recency-window" else "basis unknown"
+    # `stable-pid-shared` lands here deliberately: a handle two sessions carry
+    # is weak evidence and belongs in the hedged arm, NOT the confident one
+    # above. But it is not "basis unknown" -- the basis is known and names
+    # exactly why it is weak, so say that instead of hedging twice over.
+    if basis == "recency-window":
+        basis_note = "recency-window only"
+    elif basis == "stable-pid-shared":
+        basis_note = "stable_pid shared with another session — proves only that something under that ancestor is alive"
+    else:
+        basis_note = "basis unknown"
     inner_clauses = []
     if age_sec is not None:
         minutes = age_sec // 60
@@ -3649,9 +3658,11 @@ def _adopt_into_baton(
     policy is untouched; it does not run on this path). Only stamps when
     the baton doesn't already carry a title, so a later, different
     adoption in the same session never clobbers the first one. `title`
-    comes straight off the schema-required field; `intent` is derived from
+    comes straight off the schema-required field; `intent` prefers
     `session_goal` (forward-looking, unlike the retrospective `summary`)
-    when the frontmatter carries one — otherwise left unset.
+    and falls back to a `(from summary)`-prefixed `summary`, because
+    `session_goal` is optional and nothing in this engine writes it — see
+    the derivation for the measurement.
 
     Called only from the `claim_at_brief` branches immediately after
     :func:`acquire_brief_claim` — i.e. only when this `brief()` is actually
@@ -3696,9 +3707,27 @@ def _adopt_into_baton(
             title = fm.get("title")
             if title:
                 kwargs["title"] = title
+            # `session_goal` first, because it is the field that actually
+            # means "goal". It is also, measured 2026-08-31, carried by 0 of
+            # 295 live handoffs and written by nothing in this engine -- a
+            # reader with no producer, so on its own this derivation could
+            # never fire and `intent` was null on 18 of 18 baton records
+            # while `title` reached 11 of 11 adopters.
+            #
+            # `summary` is the fallback and NOT a synonym: the schema makes
+            # it a required one-liner (295 of 295 carry it) and it is
+            # retrospective where a goal is forward-looking. Prefixing the
+            # borrowed value keeps those two apart on the record itself,
+            # so a reader is never told a summary is a goal, and a
+            # `session_goal` producer landing later silently wins without
+            # this needing to change.
             intent = fm.get("session_goal")
             if intent:
                 kwargs["intent"] = intent
+            else:
+                summary = fm.get("summary")
+                if summary:
+                    kwargs["intent"] = f"(from summary) {summary}"
 
     try:
         # Review: reviewer(wsc-slice-5) — now_iso() must be called inside this
@@ -7522,6 +7551,26 @@ def _classify_stamp_delta(repo_root: Path, stamp_commit: str, path: str) -> str:
     return "bookkeeping" if saw_change else "substantive"
 
 
+#: The two directories a plan lives in, mirroring
+#: `workstream_complete.directives_lessons_plan._GOVERNING_PLAN_GLOB_DIRS`
+#: rather than inventing a third convention. Path-shaped and O(1): no read,
+#: no spawn, on a per-pickup path.
+_PLAN_DIRS = ("docs/plans/", "tasks/plans/")
+
+
+def _artifact_is_a_plan(artifact_path: str) -> bool:
+    """True iff `artifact_path` names a plan document by its location.
+
+    Guards `compute_execution_stamp_match`'s own-body fallback, whose
+    docstring asserts the artifact IS the plan whenever no pointer is found.
+    A handoff mirroring its plan's `execution_authorized_sha` satisfies the
+    no-pointer condition without satisfying the premise, which is the shape
+    that fell through -- see the `else` arm there for what it cost.
+    """
+    normalized = artifact_path.replace(chr(92), "/").lstrip("./")
+    return normalized.startswith(_PLAN_DIRS)
+
+
 def compute_execution_stamp_match(
     repo_root: Path, fm: dict[str, Any], artifact_path: str
 ) -> Optional[tuple[dict[str, Any], str]]:
@@ -7602,10 +7651,41 @@ def compute_execution_stamp_match(
             return None
         target_rel_path = pointer
         target_text = plan_text
-    else:
+    elif _artifact_is_a_plan(artifact_path):
         stamped_sha = fm.get("execution_authorized_sha")
         if not stamped_sha:
             return None
+    else:
+        # The premise the docstring above states -- "no pointer of either
+        # shape, i.e. the artifact IS the plan" -- was asserted and never
+        # checked, and it is false for a baton that names its plan by
+        # `deliverable_id` alone. Such a handoff carries the plan's stamp as
+        # a human-readable MIRROR while pointing at the plan through neither
+        # convention this function reads, so the fallback hashed the
+        # HANDOFF's body against the PLAN's recorded sha.
+        #
+        # That mismatch then fed `unstampable`'s re-stamp directive, which
+        # rewrote the handoff's own field to match the handoff's own body --
+        # self-consistently "repairing" the mirror by destroying the one
+        # thing it recorded. Afterwards the gate reads `match` and says
+        # "matches the current plan body" over an artifact that is not a
+        # plan and was never compared to one: a green plan-authorization
+        # verdict that verified no plan.
+        #
+        # Measured 2026-08-31: one live specimen,
+        # `state/handoffs/2026-08-07-git-help-browser-settings-shape.md`,
+        # already past the re-stamp and reading `match`.
+        #
+        # There is deliberately NO deliverable_id join here to recover the
+        # pointer. `workstream_complete.directives_lessons_plan ::
+        # resolve_governing_plan_with_source` DELETED exactly that join
+        # (C10, leg 3.5) as an expensive fallback that can return a
+        # confident wrong answer, and re-adding it on this path would
+        # reintroduce the same hazard one seam over. No pointer means
+        # nothing to verify, and nothing to verify is `None` -- which
+        # contributes neither a directive nor a judgment point, the same as
+        # a clean `match`.
+        return None
 
     computed_sha = _git_hash_object_stdin(_frontmatter_body_text(target_text), repo_root)
     if computed_sha is None:

@@ -326,7 +326,43 @@ FROZEN_HIGH_WATER_PICKUP_PROCESS_TIME_MS: float = 200.0
 FROZEN_HIGH_WATER_BATON_OPEN_COUNT: int = 40
 FROZEN_HIGH_WATER_BATON_PROCESS_TIME_MS: float = 250.0
 
-FROZEN_HIGH_WATER_WSC_OPEN_COUNT: int = 45
+#: WSC brief loads the frontmatter schema corpus exactly once per call
+#: (measured: one `load_schemas()` invocation, opening every file in
+#: `coordinator_core/frontmatter/schemas/`). That is one legitimate read, not
+#: redundancy -- there is nothing to delete at the call site. But it means the
+#: raw open count is `brief's own opens + len(schema corpus)`, and the corpus
+#: grows whenever anyone adds a record type. Frozen as a bare integer, this
+#: gate reddened at 56/45 with NOTHING in the close path having regressed:
+#: the schemas grew. A high-water over a quantity someone else's unrelated
+#: work increments is not a ratchet on this brief, so the corpus size is
+#: subtracted out and the frozen number below covers only what the brief
+#: itself opens.
+#:
+#: Deliberately NOT a bump of the old constant. The refusal text invites a
+#: bump "with a stated reason"; "the number went up and I do not know why" is
+#: the absence of a reason, and raising it would have silenced a live signal.
+#: The reason is stated here because it was measured: 40 of the 56 opens were
+#: the corpus, 1:1 with the 40 files on disk.
+def _schema_corpus_open_allowance() -> int:
+    """Files `load_schemas()` opens for the frontmatter schema corpus."""
+    schemas_dir = (
+        Path(__file__).resolve().parents[1] / "frontmatter" / "schemas"
+    )
+    # EXACTLY the two globs `load_schemas()` reads (`*.yaml` and
+    # `*.schema.json`), never a bare `iterdir()`: any other file in that
+    # directory would inflate the allowance and quietly make this gate more
+    # permissive than it reads.
+    try:
+        return sum(
+            1
+            for f in schemas_dir.iterdir()
+            if f.is_file() and (f.name.endswith(".yaml") or f.name.endswith(".schema.json"))
+        )
+    except OSError:
+        return 0
+
+
+FROZEN_HIGH_WATER_WSC_OWN_OPEN_COUNT: int = 20
 FROZEN_HIGH_WATER_WSC_PROCESS_TIME_MS: float = 600.0
 
 
@@ -472,7 +508,13 @@ def test_wsc_brief_stays_under_frozen_high_water(tmp_path, monkeypatch):
     )
 
     assert result
-    _ratchet_check("workstream-complete brief", "open count", open_count, FROZEN_HIGH_WATER_WSC_OPEN_COUNT)
+    own_open_count = open_count - _schema_corpus_open_allowance()
+    _ratchet_check(
+        "workstream-complete brief",
+        "own open count (total minus the frontmatter schema corpus)",
+        own_open_count,
+        FROZEN_HIGH_WATER_WSC_OWN_OPEN_COUNT,
+    )
     _ratchet_check(
         "workstream-complete brief",
         "process time (ms)",

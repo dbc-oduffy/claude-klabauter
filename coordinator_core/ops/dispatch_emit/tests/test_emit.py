@@ -339,6 +339,120 @@ def test_preflight_blocked_token_match_is_anchored_not_substring():
     assert re.search(pattern, genuine_blocked, re.MULTILINE) is not None
 
 
+def _clear_gate_pattern():
+    """The CLEAR arm's regex, lifted out of the emitted JS."""
+    import re
+
+    from coordinator_core.ops.dispatch_emit.emit import _preflight_halt_gate
+
+    gate = _preflight_halt_gate("preflightResult", "Preflight: commit claimability")
+    match = re.search(r"if \(!(/.*/m)\.test\(String\(preflightResult", gate)
+    assert match is not None, "no negated CLEAR gate in the emitted JS"
+    return match.group(1)[1:-2]  # strip leading "/" and trailing "/m"
+
+
+def test_preflight_silence_is_not_a_pass():
+    """The pass verdict must be a POSITIVE token, never the absence of output.
+
+    Until the CLEAR gate existed, the prompt told the agent not to emit a line
+    when everything was claimable, so a clean preflight and a preflight that
+    never ran were the same signal -- and `String(x ?? "")` collapsed a null
+    result, a crashed agent, and a zero-tool-call agent onto it.
+    """
+    import re
+
+    pattern = _clear_gate_pattern()
+    # Each of these must FAIL the CLEAR pattern, so the negated gate halts.
+    for report in (
+        "",  # agent returned null -> String(null ?? "") === ""
+        "agent returned null",
+        "Every path is claimable.",  # fluent, plausible, carries no evidence
+        "Checked all 12 paths. No claim conflicts, no ignore rules, no guards.",
+    ):
+        assert re.search(pattern, report, re.MULTILINE) is None, report
+
+
+def test_preflight_clear_cannot_be_satisfied_by_quoting_the_prompt():
+    """Same anti-fabrication device the commit gate uses: a real hex sha.
+
+    The prompt carries the literal placeholder ``<sha>``, which is not hex
+    however it is decorated, so echoing the instruction back cannot pass.
+    """
+    import re
+
+    pattern = _clear_gate_pattern()
+    quoting_prompt_back = (
+        "All paths are claimable. The instructions said to end my report with "
+        "the line 'PREFLIGHT-CLEAR <sha>' carrying the sha from git rev-parse "
+        "HEAD, so: PREFLIGHT-CLEAR <sha>"
+    )
+    assert re.search(pattern, quoting_prompt_back, re.MULTILINE) is None
+
+
+def test_preflight_clear_accepts_a_real_sha_bare_or_emphasised():
+    import re
+
+    pattern = _clear_gate_pattern()
+    for report in (
+        "Checked every path.\nPREFLIGHT-CLEAR f990938d67",
+        "Checked every path.\nPREFLIGHT-CLEAR f990938d67ab12cd34ef5678901234567890abcd",
+        "Checked every path.\n**PREFLIGHT-CLEAR f990938d67**",
+    ):
+        assert re.search(pattern, report, re.MULTILINE) is not None, report
+
+
+def test_preflight_prompt_asks_for_the_sha_the_clear_gate_requires():
+    """The gate is unsatisfiable unless the prompt names how to get a sha."""
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert "git rev-parse HEAD" in script
+    assert "PREFLIGHT-CLEAR <sha>" in script
+
+
+def test_preflight_blocked_still_wins_over_clear():
+    """A BLOCKED report halts with the blocker reason, not the no-verdict one."""
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    blocked_gate = script.index("PREFLIGHT-BLOCKED[*_]")
+    clear_gate = script.index("!/^[*_]{0,2}PREFLIGHT-CLEAR")
+    assert blocked_gate < clear_gate
+
+
+# ---------------------------------------------------------------------------
+# Terminal completion return
+# ---------------------------------------------------------------------------
+
+
+def test_completed_run_returns_a_positive_record_not_undefined():
+    """A finished run and a run that fell off the end must not look alike.
+
+    The body used to end on `await agent(...)`, so a completed run returned
+    `undefined` -- indistinguishable from a script that never reached its
+    last phase. Same shape as the preflight's absent-output pass verdict.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert "completed: true" in script
+    assert script.rstrip().endswith("};")
+
+
+def test_completion_record_names_the_chunks_the_recovery_triple_greps_for():
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    tail = script[script.index("completed: true"):]
+    assert "chunks: [" in tail
+    assert "waves: 2" in tail
+    # Every chunk in the fixture is named, because chunk ids are the join key
+    # `git log --grep '<chunk-id>:'` uses.
+    for wave in _two_wave_fixture():
+        for row in wave:
+            assert f"'{row.id}'" in tail, row.id
+
+
+def test_completion_return_is_last_so_no_phase_follows_it():
+    """An early completion return would silently skip the phases after it."""
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    completion = script.index("completed: true")
+    assert "phase(" not in script[completion:]
+    assert "await agent(" not in script[completion:]
+
+
 # ---------------------------------------------------------------------------
 # model: 'sonnet' on every agent() call (AC11) — WARN-tier, not caught by AC5
 # ---------------------------------------------------------------------------
@@ -855,16 +969,34 @@ def test_compose_script_composes_a_staged_gate_fragment_without_suppressing_the_
     # A gate stage's structured schema is present, but no early-return branch
     # is ever spliced for this post-execution caller.
     #
-    # Scoped to the REVIEW gate deliberately: a bare `"return" not in script`
-    # was a proxy that stopped meaning what it says once the commit phase
-    # grew its own `return { halted: ... }` gate (example-retrieval-repo-em memo,
-    # 2026-08-20). Assert the absence of a review-gate return, not of every
-    # return in the emitted script.
+    # This assertion has now been narrowed TWICE by the same mechanism, so it
+    # is stated structurally rather than as a third proxy. `"return" not in
+    # script` broke when the commit phase grew `return { halted: ... }`
+    # (example-retrieval-repo-em memo, 2026-08-20). Its replacement -- every return line
+    # not mentioning "commit" -- broke when the script grew a terminal
+    # `return { completed: true, ... }` (2026-08-31), which mentions neither
+    # commits nor reviews. Each proxy failed the same way: it encoded "is not
+    # a review return" as "does not look like the returns I already knew
+    # about", so every NEW legitimate return read as a violation.
+    #
+    # Stated positively instead: a review-gate return would sit inside a
+    # review phase's own block. Slice the script from the first review phase
+    # to the phase that follows the last one, and assert no return there.
     assert "sidecar_path" in script
+    lines = script.splitlines()
+    review_span = [
+        i for i, line in enumerate(lines)
+        if line.strip().startswith("phase(") and "review" in line.lower()
+    ]
+    assert review_span, "no review phase in a script composed with a review roster"
+    # Extend to the next non-review phase() line, or to the end of the script.
+    end = len(lines)
+    for i in range(review_span[-1] + 1, len(lines)):
+        if lines[i].strip().startswith("phase(") and "review" not in lines[i].lower():
+            end = i
+            break
     review_returns = [
-        line
-        for line in script.splitlines()
-        if "return" in line and "commit" not in line.lower()
+        line for line in lines[review_span[0]:end] if "return" in line
     ]
     assert not review_returns, f"review stage spliced an early return: {review_returns}"
 
@@ -1238,9 +1370,13 @@ def test_commit_phase_binds_its_result_and_gates_the_next_wave():
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
     assert "const commitWave1Results = await agent(" in script
     assert "const commitWave2Results = await agent(" in script
-    # 2 commit-phase gates + 1 preflight gate (AC14's own halt, added
-    # alongside this fix -- see test_preflight_call_binds_its_result_and_gates_the_run)
-    assert script.count("return { halted:") == 3
+    # 2 commit-phase gates + 2 preflight gates. The preflight contributes TWO
+    # because a preflight has two ways to fail: it reported a blocker, or it
+    # reported nothing at all. The second was added 2026-08-31 -- until then
+    # the phase's pass verdict was the ABSENCE of output, so a null result, a
+    # crashed agent and a zero-tool-call agent all passed it. See
+    # test_preflight_silence_is_not_a_pass.
+    assert script.count("return { halted:") == 4
 
 
 def test_commit_gate_halts_on_null_and_on_a_tokenless_report():
@@ -1264,7 +1400,14 @@ def _emitted_gate(script: str):
     (2026-08-30) broke assertions that had no opinion about what the gate
     actually accepts. What must not regress is which reports pass.
     """
-    emitted = re.search(r"!/(\^[^/]*)/m\.test", script)
+    # The locator names COMMIT-LANDED explicitly. It used to take the FIRST
+    # negated anchored regex in the script, which was unambiguous only while
+    # the commit gate was the sole negated gate. The preflight CLEAR gate
+    # (2026-08-31) is also negated and is emitted EARLIER, so a positional
+    # locator retargets onto it and these tests quietly begin asserting
+    # things about the wrong gate -- passing or failing for reasons that have
+    # nothing to do with commits.
+    emitted = re.search(r"!/(\^[^/]*COMMIT-LANDED[^/]*)/m\.test", script)
     assert emitted, "commit gate is no longer an anchored regex test"
     return re.compile(emitted.group(1).replace("\\ ", " "), re.M)
 

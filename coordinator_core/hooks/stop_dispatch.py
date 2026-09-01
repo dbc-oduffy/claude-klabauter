@@ -143,18 +143,16 @@ _KIRA_CONTRACT_EPOCH_ISO = "2026-08-30T00:00:00Z"
 _KIRA_AGENT_TYPE = "overengineering-reviewer"
 
 
+# Review: overengineering-reviewer (Kira) — this hand-rolled an upward
+# `.git`-existence walk while the module already imports `show_toplevel`
+# (used ~380 lines below for the receiver_state_sensor leg) and the sibling
+# C4 module wraps the same helper as `_repo_root_for` for this exact job;
+# delegated to it, matching `watchdog_undischarged_next_move._repo_root_for`.
 def _kira_repo_root(payload: dict) -> "Optional[str]":
     cwd = payload.get("cwd") or os.getcwd()
     if not isinstance(cwd, str):
         return None
-    probe = os.path.abspath(cwd)
-    while True:
-        if os.path.exists(os.path.join(probe, ".git")):
-            return probe
-        parent = os.path.dirname(probe)
-        if parent == probe:
-            return None
-        probe = parent
+    return show_toplevel(cwd)
 
 
 def _kira_read_frontmatter(path: str) -> dict:
@@ -419,7 +417,12 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
     return deny("Stop", _KIRA_BLOCK_HEADER + "\n".join(reasons))
 
 
-@register_op("hooks.guard_kira_verdict_routed")
+# Review: overengineering-reviewer (Kira) — no registration, dispatch site,
+# or cross-module caller found for this op key anywhere in claude-klabauter or
+# DoE-claude (DoE's guard-kira-verdict-routed.py shim, if it exists, would
+# import this module's function directly, not the IPC registry); the
+# fan-in below calls `_guard_kira_verdict_routed_handler` as a plain
+# Python object. @register_op removed; the function itself is unchanged.
 def _guard_kira_verdict_routed_handler(params: dict, repo_root=None) -> dict:
     """Registered wrapper for `_guard_kira_verdict_routed` — scope "none",
     `repo_root` handler arg unused (this guard resolves its own repo root
@@ -465,15 +468,17 @@ def _wrap_flat_op(op_fn) -> dict:
     return _handler
 
 
-_stop_em_report_altitude_handler = register_op("hooks.stop_em_report_altitude")(
-    _wrap_flat_op(_em_report_altitude_op)
+# Review: overengineering-reviewer (Kira) — these three keys had no
+# registration, dispatch site, or cross-module caller (grepped across
+# claude-klabauter and DoE-claude); DoE's own hook shims import
+# `coordinator_core.hooks.<module>.op` directly and never go through
+# `_REGISTRY`. @register_op removed from all three; the plain functions
+# the fan-in below actually calls are unchanged.
+_stop_em_report_altitude_handler = _wrap_flat_op(_em_report_altitude_op)
+_nudge_harness_directive_dispatch_handler = _wrap_flat_op(
+    _nudge_harness_directive_dispatch_op
 )
-_nudge_harness_directive_dispatch_handler = register_op(
-    "hooks.nudge_harness_directive_dispatch"
-)(_wrap_flat_op(_nudge_harness_directive_dispatch_op))
-_nudge_unrouted_sizing_handler = register_op("hooks.nudge_unrouted_sizing")(
-    _wrap_flat_op(_nudge_unrouted_sizing_op)
-)
+_nudge_unrouted_sizing_handler = _wrap_flat_op(_nudge_unrouted_sizing_op)
 
 
 # ---------------------------------------------------------------------------
@@ -541,8 +546,10 @@ async def _handler(params: dict, repo_root=None) -> dict:
             continue
         is_block, text = _extract_advisory(result)
         if is_block:
-            if text:
-                block_reasons.append(text)
+            # Review: coordinator:code-reviewer — a block must survive the
+            # fold even with a falsy reason; decoupling is_block from text
+            # would let a deny("Stop", "") evaporate silently.
+            block_reasons.append(text or "<no reason given>")
         elif text:
             advisories.append(text)
 

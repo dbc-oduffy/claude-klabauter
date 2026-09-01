@@ -636,7 +636,9 @@ def do_pathspec(args: "Args") -> None:
     print(f"committed sha={result.get('sha')}", file=sys.stderr)
 
 
-def _holder_context(worktree_root: str, sid: str, path: str) -> str:
+def _holder_context(
+    worktree_root: str, sid: str, path: str, registry_snapshot: Optional[dict] = None
+) -> str:
     """One holder's identity, rendered so the caller can act on the refusal.
 
     A bare `sid[:8]` is not an address, and worse, it is stale by default: a
@@ -669,15 +671,22 @@ def _holder_context(worktree_root: str, sid: str, path: str) -> str:
     distinguish them.
 
     Best-effort in every part: an unreadable baton, a missing sink, or any
-    exception degrades to the bare sid rather than raising. This runs only
-    in the already-contested branch, never on the common path.
+    `Exception` degrades to the bare sid rather than raising. This runs only
+    in the already-contested branch, after `_refuse_contested_pathspec`'s own
+    `_import_session()` call has already put `coordinator_core.session` on
+    `sys.path` -- calling it again here would be redundant AND would break
+    this function's own best-effort contract: `_import_session()` degrades
+    failure via `sys.exit(3)`, which is `SystemExit`, not a subclass of
+    `Exception`, so it would pass straight through the `except Exception`
+    below and kill the whole invocation instead of degrading to the bare sid.
     """
     bits: List[str] = []
     try:
-        _import_session()
-        from coordinator_core.session import harness_registry  # noqa: PLC0415
+        if registry_snapshot is None:
+            from coordinator_core.session import harness_registry  # noqa: PLC0415
 
-        record = harness_registry.snapshot().get(sid)
+            registry_snapshot = harness_registry.snapshot()
+        record = registry_snapshot.get(sid)
     except Exception:
         record = None
     name = getattr(record, "name", None) if record is not None else None
@@ -779,9 +788,19 @@ def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None
         return
     if not contested:
         return
+    # Review: coordinatorcode-reviewer.a075e39a58642def2, Finding 4 -- one
+    # registry read for the whole refusal instead of one per (path, holder)
+    # pair; `_holder_context` still degrades to its own read if this is None.
+    try:
+        from coordinator_core.session import harness_registry  # noqa: PLC0415
+
+        registry_snapshot = harness_registry.snapshot()
+    except Exception:
+        registry_snapshot = None
     for path in sorted(contested):
         owners = "; ".join(
-            _holder_context(worktree_root, o, path) for o in contested[path]
+            _holder_context(worktree_root, o, path, registry_snapshot)
+            for o in contested[path]
         )
         print(
             f"BLOCKED: {path} is also held by live session(s) {owners} -- "

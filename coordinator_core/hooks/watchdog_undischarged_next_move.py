@@ -136,15 +136,21 @@ two existing generic envelope builders (`allow_advisory` / `deny`) against
 event_name="Stop" rather than inventing a seventh shape: both builders are
 already event-name-agnostic (see their own docstrings), and no envelope
 builder in this suite has a Stop-specific shape today because no other
-`hooks.*` op fires on Stop yet. `warm/hook_http.py`'s `SERVED_EVENTS` /
-`BLOCKING_EVENTS` (currently PreToolUse-only) do not yet route a Stop
-registration through the warm door at all — widening that transport is
-explicitly OUT OF SCOPE for this chunk (`warm/hook_http.py` is not in this
-chunk's `writes:` list); this op's return contract is written against "the
-same JSON shape the source script printed to stdout" per the runbook's own
-Step 2 obligation, and the transport-level Stop wiring is inherited as a
-named gap for whichever later chunk widens `SERVED_EVENTS`, the same way C2
-named an env-threading gap for `nudge_autonomous_askuserquestion`.
+`hooks.*` op fires on Stop yet. (Review: coordinator:code-reviewer Finding 2
+-- the claim previously here, that `warm/hook_http.py`'s SERVED_EVENTS /
+BLOCKING_EVENTS gate Stop out of the warm door entirely and that widening
+that gate was this op's own out-of-scope prerequisite, was wrong for this
+op's own routing path.) `supervisor.py :: do_POST`'s SERVED_EVENTS gate
+applies ONLY when `op_name == hook_http.DEFAULT_OP_NAME` (the bare `/hook`
+or `/hook/warm_guard.evaluate` alias); a named path like
+`/hook/hooks.watchdog_undischarged_next_move` is routed and served
+regardless of `hook_event_name`, Stop included -- `route_for_event` never
+runs on this op's own path. The real open dependency is whether DoE-claude's
+`hooks.json` posts the Stop event to this op's own path at all, or is still
+pointed at the retired source script; that cross-repo wiring question is not
+resolved by this chunk, and is inherited as a named gap for whichever chunk
+owns `hooks.json`, the same way C2 named an env-threading gap for
+`nudge_autonomous_askuserquestion`.
 
 Contract:
   PostToolUse payload -- tool_name, tool_input, session_id, cwd, agent_id...
@@ -435,18 +441,36 @@ def _validate_intake_row(row: Any, session_id: str) -> Optional[str]:
     return None
 
 
-def _apply_intake_row(repo_root: str, session_id: str, row: dict) -> bool:
+def _apply_intake_row(repo_root: str, session_id: str, row: dict) -> Optional[bool]:
+    """Returns `True`/`False` for a committed write's outcome, or `None` for
+    a row that had nothing to write (already-open dedupe, no matching
+    obligation to discharge, or a progress/blocked no-op) -- distinct from a
+    write that was attempted and failed. Review: coordinator:code-reviewer
+    Finding 1 -- the caller needs this distinction to tell "nothing to do"
+    apart from "a write did not commit" before deciding whether the intake
+    file is safe to delete."""
     op = row["op"]
     obligation_id = row["obligation_id"]
     if op == "open":
+        records = _read_records(repo_root, session_id)
+        for record in records:
+            if record.get("obligation_id") == obligation_id and record.get("discharged_at") is None:
+                return None
         return _open_obligation(repo_root, session_id, obligation_id, row["seam"], row["next_action"])
     if op == "discharge":
+        records = _read_records(repo_root, session_id)
+        has_match = any(
+            record.get("obligation_id") == obligation_id and record.get("discharged_at") is None
+            for record in records
+        )
+        if not has_match:
+            return None
         return _discharge_obligation(repo_root, session_id, obligation_id)
     # "progress" / "blocked" rows carry no observable effect on THIS op's own
     # read surface (`_find_undischarged_unfired` only reads discharged_at /
     # fired) -- accepted (not rejected) so a valid row of either kind is
     # consumed rather than left to accumulate, but reported as a no-op.
-    return False
+    return None
 
 
 def _drain_intake(repo_root: str, session_id: str) -> None:
@@ -470,6 +494,7 @@ def _drain_intake(repo_root: str, session_id: str) -> None:
     if not has_trailing_partial:
         lines = lines[:-1]
 
+    any_write_failed = False
     try:
         for line in lines:
             line = line.strip()
@@ -481,10 +506,18 @@ def _drain_intake(repo_root: str, session_id: str) -> None:
                 continue
             if _validate_intake_row(row, session_id) is not None:
                 continue
-            _apply_intake_row(repo_root, session_id, row)
+            outcome = _apply_intake_row(repo_root, session_id, row)
+            if outcome is False:
+                any_write_failed = True
     except Exception:
         # A fold that cannot commit keeps the file: rows survive to the next
         # drain, where the replay is idempotent (open/discharge both dedupe).
+        return
+
+    if any_write_failed:
+        # A row failed to commit its write -- keep the file so the next Stop
+        # call on this session retries it (matches the exception-path
+        # guarantee above; see Finding 1).
         return
 
     try:
@@ -613,7 +646,14 @@ def _sizing_route_and_exemption(repo_root: str, rel_path: str):
     """Return (route, exempt). Any read failure returns (None, True) --
     "cannot prove the exemption doesn't apply" fails toward silence."""
     try:
-        with open(os.path.join(repo_root, rel_path), "r", encoding="utf-8") as fh:
+        # Review: coordinator:code-reviewer Finding 5 -- match every other
+        # read in this module (`_read_records`, `_touch_record_jsonl_paths`,
+        # `_touched_txt_paths`, `_drain_intake`), which decodes with
+        # errors="replace" rather than letting UnicodeDecodeError escape
+        # uncaught here.
+        with open(
+            os.path.join(repo_root, rel_path), "r", encoding="utf-8", errors="replace"
+        ) as fh:
             lines = fh.readlines()
     except OSError:
         return None, True

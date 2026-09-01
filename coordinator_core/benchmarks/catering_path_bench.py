@@ -388,7 +388,13 @@ def _measure_procs_floor() -> int:
     """
     global _PROCS_FLOOR
     if _PROCS_FLOOR is None:
-        timed = batched_process_time_ms([sys.executable, "-c", "pass"], k=1, cwd=_REPO_ROOT)
+        # Review: coordinatorcode-reviewer.a075e39a58642def2, Finding 1 --
+        # k=1 is the single-sample mode batched_process_time_ms's own
+        # docstring exists to avoid; a transient spawn landing in that one
+        # sample would corrupt the memoized floor for the whole run. k=10
+        # amortises that jitter, one-time and memoized so the extra process
+        # time is negligible.
+        timed = batched_process_time_ms([sys.executable, "-c", "pass"], k=10, cwd=_REPO_ROOT)
         if timed["rc"] != 0:
             raise RuntimeError(
                 "catering_path_bench: childless floor fixture (python -c pass) "

@@ -175,6 +175,7 @@ def test_the_stamp_has_exactly_one_definition():
     # not commit around (`session-claim-cli who-claims-path` reports
     # d12e25cf live on it; `clear-claim-if-dead` refuses). Tighten this to
     # cover publish.py the moment that claim releases -- tracked in
-    # state/improvement-queue/. Until then the stamp has TWO definitions and
+    # state/debt-backlog/2026-08-31-publish-py-keeps-a-second-definition-of-9f6f6a805216.yaml.
+    # Until then the stamp has TWO definitions and
     # `test_round_leg_stamps_the_same_shape` above is the only thing keeping
     # them agreeing.

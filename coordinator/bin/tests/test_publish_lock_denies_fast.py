@@ -66,7 +66,7 @@ def _wire_common_fakes(publish_mod, monkeypatch, tmp_path, row_dests: "dict[str,
         publish_mod, "_resolve_percolate_root_and_rung", lambda **kw: (tmp_path, "test-rung")
     )
     monkeypatch.setattr(
-        publish_mod, "load_targets", lambda setup_dir, target_filter=None: [
+        publish_mod, "load_targets", lambda setup_dir, target_filter=None, **_: [
             fake_row(name, dest) for name, dest in row_dests.items()
         ]
     )

@@ -89,7 +89,7 @@ def _wire_common_fakes(monkeypatch, tmp_path, *, rows_reached: list):
         publish, "_resolve_percolate_root_and_rung", lambda **kw: (tmp_path, "test-rung")
     )
     monkeypatch.setattr(
-        publish, "load_targets", lambda setup_dir, target_filter=None: [
+        publish, "load_targets", lambda setup_dir, target_filter=None, **_: [
             fake_row(n) for n in _ROW_NAMES
         ]
     )

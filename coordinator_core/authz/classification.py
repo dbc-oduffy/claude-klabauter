@@ -319,24 +319,16 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      call for the same session reads the cursor this call wrote.
     #   5. Side effects observable across process boundaries?  YES.
     "hooks.runtime_tripwire_em_check": OpClass.MUTATING,
-    # hooks.guard_kira_verdict_routed (C3) — COMPUTE_ONLY: reads sidecar
-    # frontmatter under state/subagent-share/<session_id>/ only; writes
-    # nothing of its own (verbatim port of guard-kira-verdict-routed.py's
-    # read-only decision logic).
-    "hooks.guard_kira_verdict_routed": OpClass.COMPUTE_ONLY,
-    # hooks.stop_em_report_altitude / hooks.nudge_harness_directive_dispatch /
-    # hooks.nudge_unrouted_sizing (C3) — MUTATING: each wraps a library op()
-    # that writes its own per-session fire-once sentinel file under the git
-    # common dir (or a demo/test override dir) before returning an advisory.
-    "hooks.stop_em_report_altitude": OpClass.MUTATING,
-    "hooks.nudge_harness_directive_dispatch": OpClass.MUTATING,
-    "hooks.nudge_unrouted_sizing": OpClass.MUTATING,
     # hooks.stop_dispatch (C3) — MUTATING by union: composes
     # hooks.runtime_tripwire_em_check, hooks.watchdog_undischarged_next_move,
-    # hooks.receiver_state_sensor, and the three sentinel-writing wrappers
-    # immediately above, all MUTATING; hooks.guard_kira_verdict_routed is the
-    # only read-only leg. See coordinator_core/hooks/stop_dispatch.py's own
-    # module docstring for the full eight-leg disposition.
+    # and hooks.receiver_state_sensor (all MUTATING), plus the in-module
+    # guard-kira-verdict-routed leg (read-only) and three sentinel-writing
+    # wrappers over library op()s. See coordinator_core/hooks/stop_dispatch.py's
+    # own module docstring for the full eight-leg disposition.
+    # Review: overengineering-reviewer (Kira) — the four sibling op-key rows
+    # formerly here (guard_kira_verdict_routed, stop_em_report_altitude,
+    # nudge_harness_directive_dispatch, nudge_unrouted_sizing) were removed
+    # with their registrations; no consumer found for any of them.
     "hooks.stop_dispatch": OpClass.MUTATING,
     "hooks.subagent_zero_tool_use": OpClass.MUTATING,
     # hooks.subagent_review_mark — MUTATING, same session-runtime write class as

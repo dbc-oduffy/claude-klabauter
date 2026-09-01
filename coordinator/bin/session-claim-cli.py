@@ -74,8 +74,9 @@
 #       exit 1 below):
 #       "liveness_basis:<value>", where <value> is holder_evidence.
 #       liveness_basis()'s vocabulary ("harness-registry" | "stable-pid" |
-#       "recency-window" | "recency-window-mtime" | "harness-registry-
-#       elsewhere" | "unknown") — additive output (AC7/AC8), never emitted
+#       "stable-pid-shared" | "recency-window" | "recency-window-mtime" |
+#       "harness-registry-elsewhere" | "unknown") — additive output
+#       (AC7/AC8), never emitted
 #       on the malformed-SID or transport-failure paths since those carry no
 #       decided verdict to attach a basis to. A basis-derivation failure
 #       degrades to "unknown" on this line; it never changes the line-1

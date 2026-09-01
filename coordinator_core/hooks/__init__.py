@@ -174,7 +174,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.watchdog_undischarged_next_move",  # registers "hooks.watchdog_undischarged_next_move"
     "coordinator_core.hooks.plan_persistence_check",  # registers "hooks.plan_persistence_check"
     "coordinator_core.hooks.runtime_tripwire_em_check",  # registers "hooks.runtime_tripwire_em_check"
-    "coordinator_core.hooks.stop_dispatch",  # registers "hooks.stop_dispatch", "hooks.guard_kira_verdict_routed", "hooks.stop_em_report_altitude", "hooks.nudge_harness_directive_dispatch", "hooks.nudge_unrouted_sizing"
+    "coordinator_core.hooks.stop_dispatch",  # registers "hooks.stop_dispatch"
 ]
 
 

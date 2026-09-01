@@ -1245,6 +1245,7 @@ def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
 
 
 _PREFLIGHT_BLOCKED_TOKEN = "PREFLIGHT-BLOCKED"
+_PREFLIGHT_CLEAR_TOKEN = "PREFLIGHT-CLEAR"
 
 
 def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
@@ -1272,7 +1273,10 @@ def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
         "immediately, naming the refused paths and the denial reason, "
         "before any further phase runs -- and end your report with the line "
         f"'{_PREFLIGHT_BLOCKED_TOKEN} <reason>'. If every path is claimable, "
-        "do NOT emit that line."
+        f"do NOT emit that line; run `git rev-parse HEAD` and end your report "
+        f"with the line '{_PREFLIGHT_CLEAR_TOKEN} <sha>' instead, carrying the "
+        "sha that command actually printed. One of the two lines is required: "
+        "a report carrying neither is treated as a preflight that did not run."
     )
     preflight_var = "preflightResult"
     call = (
@@ -1309,13 +1313,28 @@ def _preflight_halt_gate(preflight_var: str, phase_title: str) -> str:
         f"{phase_title} reported a claimability blocker -- halting before "
         "any wave writes over a path that would be refused."
     )
-    return (
+    no_verdict = (
+        f"{phase_title} returned no verdict -- neither "
+        f"{_PREFLIGHT_CLEAR_TOKEN} with the sha from `git rev-parse HEAD` nor "
+        f"{_PREFLIGHT_BLOCKED_TOKEN} with a reason. An empty, null, or "
+        "prompt-derived report is a preflight that did not run, and is not a "
+        "pass. Halting before any wave writes over paths nothing checked."
+    )
+    blocked = (
         f"  if (/^[*_]{{0,2}}{_PREFLIGHT_BLOCKED_TOKEN}[*_]{{0,2}}"
         f" +\\S.*$/m.test(String({preflight_var} ?? \"\"))) {{\n"
         f"    return {{ halted: {_js_string_literal(reason)} + "
         f'" Agent report: " + String({preflight_var} ?? "agent returned null") }};\n'
         "  }"
     )
+    clear = (
+        f"  if (!/^[*_]{{0,2}}{_PREFLIGHT_CLEAR_TOKEN}[*_]{{0,2}} +[*_]{{0,2}}"
+        f"[0-9a-f]{{7,40}}[*_]{{0,2}} *$/m.test(String({preflight_var} ?? \"\"))) {{\n"
+        f"    return {{ halted: {_js_string_literal(no_verdict)} + "
+        f'" Agent report: " + String({preflight_var} ?? "agent returned null") }};\n'
+        "  }"
+    )
+    return f"{blocked}\n{clear}"
 
 
 def _test_agent_call(scope: list[str], phase_title: str) -> str:
@@ -1608,12 +1627,47 @@ def compose_script(
     else:
         body_blocks.append(_no_test_scope_narration())
 
+    body_blocks.append(_completion_return(waves, phase_titles))
+
     meta_block = _meta_block(name, description, phase_titles)
     body = "\n\n".join(body_blocks)
 
     # Top-level, never `async function run(ctx) { ... }` -- see module
     # docstring § Top-level body, never a defined-but-uninvoked wrapper.
     return f"{meta_block}\n{body}\n"
+
+
+def _completion_return(waves, phase_titles: list[str]) -> str:
+    """The script's terminal `return` -- a POSITIVE completion record.
+
+    Until this existed the emitted body ended on `await agent(...)` and
+    returned ``undefined``. So did a script that threw partway and was
+    caught, and so does any script that simply falls off the end. A completed
+    run was therefore indistinguishable from a run that never reached its
+    last phase, which is the same defect as the preflight's absent-output
+    pass verdict (see ``_preflight_halt_gate`` § the CLEAR gate) wearing
+    different clothes: the good outcome encoded as silence.
+
+    Every halt path already returns ``{ halted: ... }``. Pairing it with an
+    explicit ``{ completed: true, ... }`` is what makes the two readable
+    against each other -- a caller can now tell "finished" from "stopped"
+    from "never got there" without inferring from the absence of a halt.
+
+    The chunk ids are carried because they are the join key the recovery
+    triple's first leg greps for (``git log --grep '<chunk-id>:'``), so a
+    completion report that names them lets an EM check what landed without
+    re-reading the script.
+    """
+    chunk_ids = [row.id for wave in waves for row in wave]
+    ids_js = ", ".join(_js_string_literal(cid) for cid in chunk_ids)
+    return (
+        "  return {\n"
+        "    completed: true,\n"
+        f"    waves: {len(waves)},\n"
+        f"    phases: {len(phase_titles)},\n"
+        f"    chunks: [{ids_js}],\n"
+        "  };"
+    )
 
 
 def _spec_path_for_prompt(plan_path: Path, repo_root: Optional[Path]) -> Path:

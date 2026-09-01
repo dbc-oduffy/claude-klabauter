@@ -18,7 +18,6 @@ from typing import List
 
 import pytest
 
-from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -363,8 +362,15 @@ def _git(args: "List[str]", cwd: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         encoding="utf-8",
         check=True,
+        # ONE creationflags source, not two. `_CREATIONFLAGS` IS
+        # `no_console_creationflags()` (gate_dimension_review.py:122), so
+        # spreading both passed the same keyword twice. On POSIX both spread
+        # to `{}` and the duplicate is invisible; on Windows they carry
+        # `creationflags` and every test using this helper died with
+        # `TypeError: subprocess.run() got multiple values for keyword
+        # argument 'creationflags'` -- a Windows-only red in a repo where
+        # Windows is first-class.
         **gate_dimension_review._CREATIONFLAGS,
-        **no_console_creationflags(),
     )
 
 

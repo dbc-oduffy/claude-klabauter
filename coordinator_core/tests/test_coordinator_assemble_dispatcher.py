@@ -109,7 +109,11 @@ def test_dispatcher_batches_multiple_subcommands_in_one_process(monkeypatch):
         calls.append((name, args, os.getpid()))
         return 0
 
-    monkeypatch.setattr(dispatcher, "run_target", _fake_run_target)
+    # Patch the SOURCE module, not the dispatcher. `main()` does
+    # `from entry_point_shim import ... run_target` at call time (moved
+    # there from module scope by c992b99f73), so the dispatcher module has
+    # no `run_target` attribute to replace and setattr raised AttributeError.
+    monkeypatch.setattr(entry_point_shim, "run_target", _fake_run_target)
 
     def _forbidden(*a, **kw):
         raise AssertionError("dispatcher must not spawn a subprocess for batching")
@@ -142,6 +146,10 @@ def test_dispatcher_first_nonzero_exit_wins(monkeypatch):
     def _fake_run_target(name, args):
         return {"baton-assemble": 0, "consolidate-assemble": 5, "sizing-assemble": 9}[name]
 
-    monkeypatch.setattr(dispatcher, "run_target", _fake_run_target)
+    # Patch the SOURCE module, not the dispatcher. `main()` does
+    # `from entry_point_shim import ... run_target` at call time (moved
+    # there from module scope by c992b99f73), so the dispatcher module has
+    # no `run_target` attribute to replace and setattr raised AttributeError.
+    monkeypatch.setattr(entry_point_shim, "run_target", _fake_run_target)
     rc = dispatcher.main(["baton-assemble", "consolidate-assemble", "sizing-assemble"])
     assert rc == 5

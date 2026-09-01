@@ -95,14 +95,14 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.watchdog_undischarged_next_move":  "coordinator_core.hooks",
     "hooks.plan_persistence_check":           "coordinator_core.hooks",
     "hooks.runtime_tripwire_em_check":        "coordinator_core.hooks",
-    # hooks.stop_dispatch + the residue/wrapper ops it registers alongside
-    # itself (C3, docs/plans/2026-08-31-six-hook-scripts-become-engine-ops.md):
-    # one module import registers all five keys.
+    # hooks.stop_dispatch (C3, docs/plans/2026-08-31-six-hook-scripts-become-engine-ops.md).
+    # Review: overengineering-reviewer (Kira) — the four sibling residue/
+    # wrapper keys this module also defined (guard_kira_verdict_routed,
+    # stop_em_report_altitude, nudge_harness_directive_dispatch,
+    # nudge_unrouted_sizing) had no consumer anywhere in claude-klabauter or
+    # DoE-claude and were removed; re-add the day something actually names
+    # one of them.
     "hooks.stop_dispatch":                    "coordinator_core.hooks",
-    "hooks.guard_kira_verdict_routed":        "coordinator_core.hooks",
-    "hooks.stop_em_report_altitude":          "coordinator_core.hooks",
-    "hooks.nudge_harness_directive_dispatch": "coordinator_core.hooks",
-    "hooks.nudge_unrouted_sizing":            "coordinator_core.hooks",
     "backlog.record":                         "coordinator_core.ops.emit.recorder",
     "goal.append":                            "coordinator_core.ops.goal_append",
     "goal.close_day":                         "coordinator_core.ops.goal_close_day",

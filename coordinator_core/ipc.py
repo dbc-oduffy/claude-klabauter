@@ -155,7 +155,13 @@ Negative-spec (hard-won):
       QUEUE CLOSURE (1, DR-270) — sanctioned MUTATING in-place-mutation-plus-self-commit
         category (deliberate DR-270 carve-out; a third write shape distinct from both
         DR-212's in-place-mutation-no-commit bound and DR-213's additive-create-no-commit
-        bound above):
+        bound above).
+        The op below is GRAVESTONED — killed at `c07062c99`, kill-ledger `## K-049`, and
+        absent from `_REGISTRY` and `OP_MODULE_MAP`. The category is retained because
+        PLAN STATUS TRANSITION below cites it as the defining instance of this write
+        shape; it is a shape definition, not a dispatchable surface. Re-registering
+        `queue.close` from this text is the kill-ledger's named failure — a revival needs
+        a named caller and a from-zero requirement, never this description:
         - queue.close: in-place stamps `status`/`closed_at`/`closed_by` on one named,
                        already-existing state/improvement-queue/*.yaml entry, issues one
                        scoped commit of that single path via

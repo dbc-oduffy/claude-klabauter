@@ -811,6 +811,15 @@ def claim_held_by_me(
 #:                              not weaker — a consumer must not render it in
 #:                              a hedged/unknown arm.
 #:   "stable-pid"            — Layer 1 (PPID-authoritative) was consulted.
+#:   "stable-pid-shared"     — Layer 1 was consulted, but this `stable_pid` is
+#:                              carried by MORE THAN ONE session on this box,
+#:                              so it proves only that SOMETHING under that
+#:                              shared ancestor is alive. An INDETERMINATE, not
+#:                              a confident live. `live` is still reported True
+#:                              (the conservative direction for every caller);
+#:                              what this basis withdraws is the claim that the
+#:                              answer is about THIS session. See
+#:                              `_shared_stable_pids`.
 #:   "recency-window"        — Layer 2 recency fallback, ``last_activity``
 #:                              present and parseable.
 #:   "recency-window-mtime"  — Layer 2 recency fallback, but ``last_activity``
@@ -864,6 +873,93 @@ SessionVerdict = tuple[bool, str, Optional[int]]
 ElsewhereVerdict = tuple[bool, str, Optional[str]]
 
 
+#: `stable_pid` is NOT unique per session. It is the durable handle the harness
+#: re-execs past (the per-session `pid` is the short-lived child), so reading
+#: liveness off it is correct by design -- but two sessions launched under one
+#: ancestor terminal carry the SAME value, and then the handle proves only that
+#: SOMETHING under that ancestor is alive. Measured on this box 2026-09-01: 26
+#: sessions, 17 distinct `stable_pid`s, 2 of them shared by 2 sessions each --
+#: 4 sessions whose liveness answer is not about them. One such pair had a
+#: 7.7h-stale holder reading `live` off its minutes-old sibling and blocking a
+#: scoped commit that no `clear_claim_if_dead` could ever free.
+#:
+#: This set names the shared handles so the verdict can say so. It does NOT
+#: change any liveness ANSWER: a shared handle still reports live, which is the
+#: conservative direction every caller already wants (`safe-commit` refusing and
+#: `clear_claim_if_dead` keeping are both correct on an indeterminate). What
+#: changes is that the answer stops CLAIMING to be about this session.
+#:
+#: Cost: one pass over `<sessions>/*/meta.json`, measured at ~3ms wall / 26
+#: files on this box, memoised per (sessions-dir, mtime) so repeated holder
+#: checks in one process pay it once. `_verdict_for_sdir`'s docstring notes
+#: that `session_verdict` avoids an O(n) whole-corpus scan; this is O(n) in
+#: session COUNT with a ~0.1ms-per-file constant, taken once, against a 500ms
+#: brightline -- and the alternative is a predicate that answers confidently
+#: about the wrong process.
+_SHARED_PID_CACHE: "dict[str, tuple[float, frozenset]]" = {}
+
+
+def _looks_like_session_id(name: str) -> bool:
+    """UUID-shaped, the only thing `_shared_stable_pids` will count."""
+    parts = name.split("-")
+    return (
+        len(name) == 36
+        and len(parts) == 5
+        and [len(p) for p in parts] == [8, 4, 4, 4, 12]
+        and all(c in "0123456789abcdefABCDEF" for p in parts for c in p)
+    )
+
+
+def _shared_stable_pids(base: "Optional[str]") -> frozenset:
+    """`stable_pid` values carried by MORE THAN ONE session on this box.
+
+    `base` is the sessions directory. Callers inside `_verdict_for_sdir` pass
+    `dirname(sdir)` -- the session dir's own parent IS that directory, so the
+    answer needs no `cwd` and no second `core.sessions_dir()` resolution.
+    """
+    import json as _json
+
+    try:
+        if not base or not os.path.isdir(base):
+            return frozenset()
+        stamp = os.stat(base).st_mtime
+    except Exception:
+        return frozenset()
+
+    hit = _SHARED_PID_CACHE.get(base)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+
+    counts: "dict[str, int]" = {}
+    try:
+        for entry in os.listdir(base):
+            # Count only real session dirs. The corpus carries stray
+            # non-UUID children (`sess-1`, `test-session` on this box today --
+            # test leftovers that `TestLiveSessionIdsCorpus` already flags as
+            # phantom sessions), and one of them shares a `stable_pid` with a
+            # LIVE session. Counting it would mark that live session's handle
+            # shared on the strength of a leftover directory: a false
+            # indeterminate manufactured by corpus pollution. The denylist
+            # alone is not enough here -- these names are exactly the ones it
+            # does not carry -- so shape is the discriminator.
+            if entry in _NON_SESSION_DIR_NAMES or not _looks_like_session_id(entry):
+                continue
+            meta = os.path.join(base, entry, "meta.json")
+            try:
+                with open(meta, "r", encoding="utf-8") as fh:
+                    pid = _json.load(fh).get("stable_pid")
+            except Exception:
+                continue
+            if pid:
+                counts[str(pid)] = counts.get(str(pid), 0) + 1
+    except Exception:
+        return frozenset()
+
+    shared = frozenset(k for k, n in counts.items() if n > 1)
+    _SHARED_PID_CACHE[base] = (stamp, shared)
+    return shared
+
+
 def _verdict_for_sdir(
     sid: str,
     sdir: str,
@@ -908,7 +1004,16 @@ def _verdict_for_sdir(
                 live = core.stable_pid_alive(
                     stable_pid, stable_pid_lstart, stable_pid_start_epoch
                 )
-                basis = "stable-pid"
+                # A handle two sessions share cannot answer about either of
+                # them; say so rather than reporting a confident "stable-pid".
+                # `live` is deliberately unchanged -- see `_shared_stable_pids`.
+                basis = (
+                    "stable-pid-shared"
+                    if str(stable_pid) in _shared_stable_pids(
+                        os.path.dirname(sdir)
+                    )
+                    else "stable-pid"
+                )
             except Exception as exc:
                 # Fail open, but never silently (C4a-2, docs/reference/
                 # layer1-liveness-activation.md § Observability) -- the
