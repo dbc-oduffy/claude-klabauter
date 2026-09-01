@@ -291,3 +291,109 @@ class TestResolveClaimedPlanPathUnchanged:
             claimed_plan.resolve_claimed_plan_path(str(tmp_path))
             == "docs/plans/2026-08-10-plan-a.md"
         )
+
+
+class TestArchiveAwareSlugResolution:
+    """A plan claim records a slug, never a location, and nothing releases it
+    when the plan file moves. `fleet.archive_completed_plans` archives on
+    terminal status ALONE, so a session can hold a live claim on a plan that
+    has been git-mv'd to `archive/specs/<YYYY-MM>/` underneath it.
+
+    Measured on this repo 2026-09-01, before the fix: 44 of 79 plan claims
+    named a `docs/plans/` path with no file behind it; 34 were real plans in
+    `archive/specs/`. Downstream, `baton_assemble` stamped `governing_plan`
+    from that value, so batons carried edges to nothing.
+    """
+
+    def _repo(self, tmp_path: Path, monkeypatch) -> Path:
+        repo = tmp_path / "repo"
+        (repo / "docs" / "plans").mkdir(parents=True)
+        monkeypatch.setattr(claimed_plan.core, "git_root", lambda cwd=None: str(repo))
+        return repo
+
+    def test_live_plan_resolves_to_docs_plans(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path, monkeypatch)
+        (repo / "docs" / "plans" / "p.md").write_text("x", encoding="utf-8")
+        assert claimed_plan._resolve_plan_slug_path(str(repo), "p") == "docs/plans/p.md"
+
+    def test_archived_plan_resolves_to_archive_specs(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path, monkeypatch)
+        dest = repo / "archive" / "specs" / "2026-08"
+        dest.mkdir(parents=True)
+        (dest / "p.md").write_text("x", encoding="utf-8")
+        assert (
+            claimed_plan._resolve_plan_slug_path(str(repo), "p")
+            == "archive/specs/2026-08/p.md"
+        )
+
+    def test_archive_specs_wins_over_archive_completed(self, tmp_path, monkeypatch):
+        """Resolution order is the tuple's order, not filesystem order."""
+        repo = self._repo(tmp_path, monkeypatch)
+        for rel in ("archive/specs/2026-08", "archive/completed/2026-07"):
+            (repo / rel).mkdir(parents=True)
+            (repo / rel / "p.md").write_text("x", encoding="utf-8")
+        assert (
+            claimed_plan._resolve_plan_slug_path(str(repo), "p")
+            == "archive/specs/2026-08/p.md"
+        )
+
+    def test_live_plan_wins_over_an_archived_namesake(self, tmp_path, monkeypatch):
+        repo = self._repo(tmp_path, monkeypatch)
+        (repo / "docs" / "plans" / "p.md").write_text("x", encoding="utf-8")
+        dest = repo / "archive" / "specs" / "2026-08"
+        dest.mkdir(parents=True)
+        (dest / "p.md").write_text("x", encoding="utf-8")
+        assert claimed_plan._resolve_plan_slug_path(str(repo), "p") == "docs/plans/p.md"
+
+    def test_archive_handoffs_is_never_searched(self, tmp_path, monkeypatch):
+        """A plan slug and a handoff basename collide often (7 of this repo's
+        claimed slugs also name a file under `archive/handoffs`). Searching it
+        would hand back a HANDOFF as the session's claimed PLAN."""
+        repo = self._repo(tmp_path, monkeypatch)
+        dest = repo / "archive" / "handoffs" / "2026-08"
+        dest.mkdir(parents=True)
+        (dest / "p.md").write_text("x", encoding="utf-8")
+        assert claimed_plan._resolve_plan_slug_path(str(repo), "p") == "docs/plans/p.md"
+
+    def test_unresolvable_slug_falls_back_to_the_live_path(self, tmp_path, monkeypatch):
+        """Never None: the contract is a repo-relative string, always. Deciding
+        what an unresolvable claim MEANS is the caller's job."""
+        repo = self._repo(tmp_path, monkeypatch)
+        assert (
+            claimed_plan._resolve_plan_slug_path(str(repo), "nowhere")
+            == "docs/plans/nowhere.md"
+        )
+
+    def test_unresolvable_root_falls_back_to_the_live_path(self, tmp_path):
+        assert claimed_plan._resolve_plan_slug_path("", "p") == "docs/plans/p.md"
+        assert claimed_plan._resolve_plan_slug_path(None, "p") == "docs/plans/p.md"
+
+    def test_held_claim_on_an_archived_plan_reports_the_archive_path(
+        self, tmp_path, monkeypatch
+    ):
+        """End to end through the enumeration, not just the helper."""
+        sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
+        _set_sid(monkeypatch)
+        repo = self._repo(tmp_path, monkeypatch)
+        dest = repo / "archive" / "specs" / "2026-08"
+        dest.mkdir(parents=True)
+        (dest / "2026-08-01-shipped.md").write_text("x", encoding="utf-8")
+        _write_claim(
+            sessions_dir, "2026-08-01-shipped", "me-sid", "2026-08-01T10:00:00+00:00"
+        )
+
+        held = claimed_plan.list_held_plan_claims(str(tmp_path))
+
+        assert held == [("archive/specs/2026-08/2026-08-01-shipped.md", "2026-08-01T10:00:00+00:00")]
+
+    def test_shape_pointer_still_backs_an_archived_claim(self, tmp_path, monkeypatch):
+        """`_backed_by_claim` compares on the SLUG. The shape pointer is frozen
+        at claim time and always says `docs/plans/`; tier (b) now says
+        `archive/specs/`. A full-path comparison would call every archived
+        plan's pointer unbacked and silently demote tier (a)."""
+        assert claimed_plan._backed_by_claim(
+            "docs/plans/p.md", [("archive/specs/2026-08/p.md", None)]
+        )
+        assert not claimed_plan._backed_by_claim(
+            "docs/plans/p.md", [("archive/specs/2026-08/other.md", None)]
+        )

@@ -1,6 +1,7 @@
 """C3 (plan ``2026-09-01-the-claim-record-carries-the-name``) -- the
 ``OwnerFact.writer_name`` three-rung resolution ladder as rendered by
-``dispatch_checks._format_owner_sentence`` / ``_owner_writer_name_clause``.
+``dispatch_checks._format_owner_sentence`` / ``_owner_display_id`` /
+``_owner_writer_name_clause``.
 
 Oracle: ``_holder_context`` (``coordinator/bin/coordinator-safe-commit.py``,
 landed 3dcf73f06c/586bb605a6) -- PROVENANCE, never ADDRESS. This suite pins
@@ -8,6 +9,12 @@ the three rungs (recorded name, live registry lookup, explicit UNNAMED),
 the negative-spec (never "re-resolve from the stored session UUID", never a
 bare-sid-as-address, "orphan" absent), and the byte-budget boundary the
 plan's C3 body names as part of the work, not an afterthought.
+
+C3 follow-up fix 2 (EM-adjudicated break-class): the original fixtures used
+a 9-character fake sid (``"peer-sid"``), which fit comfortably inside the
+73-byte owner-clause budget and hid the defect that a REAL 36-character
+session id, plus a name, does not. Fixtures below use real-shaped uuids so
+this suite actually exercises the budget the way production does.
 """
 
 from __future__ import annotations
@@ -17,6 +24,12 @@ from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES
 from coordinator_core.session.scope import OwnerFact
 
 import pytest
+
+
+REAL_SID = "46499673-d8dd-4fdd-a514-d8cd34bbba81"
+REAL_SID_2 = "9b6b537a-82d0-44dc-bc46-cc3306238051"
+REAL_SID_3 = "3d18b2c0-3d17-44ca-b91d-24a769c2f511"
+REAL_NAME = "claude-klabauter-65"
 
 
 class TestWriterNameThreeRungLadder:
@@ -32,13 +45,13 @@ class TestWriterNameThreeRungLadder:
             "coordinator_core.session.harness_registry.lookup", _boom
         )
         fact = OwnerFact(
-            owner="peer-sid",
+            owner=REAL_SID,
             liveness="live",
             claim_source="session",
-            writer_name="claude-klabauter-a9",
+            writer_name=REAL_NAME,
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
-        assert "claude-klabauter-a9" in sentence
+        assert REAL_NAME in sentence
         assert "UNNAMED" not in sentence
 
     def test_rung2_falls_back_to_live_registry_lookup_when_unrecorded(
@@ -53,16 +66,20 @@ class TestWriterNameThreeRungLadder:
 
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup",
-            lambda sid: _Record() if sid == "peer-sid" else None,
+            lambda sid: _Record() if sid == REAL_SID else None,
         )
         fact = OwnerFact(
-            owner="peer-sid", liveness="live", claim_source="session", writer_name=None
+            owner=REAL_SID, liveness="live", claim_source="session", writer_name=None
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
         assert "claude-klabauter-b3" in sentence
         # rung-2 (live-resolved) marker is the tilde -- distinct from
         # rung-1's asterisk -- see `_owner_writer_name_clause`'s docstring.
-        assert "claude-klabauter-b3~" in sentence
+        # The subject slot shrinks to the short (8-char) sid once a name
+        # resolves -- see `_owner_display_id`'s docstring.
+        assert REAL_SID[:8] in sentence
+        assert REAL_SID not in sentence
+        assert " -- w:claude-klabauter-b3~" in sentence
         assert "UNNAMED" not in sentence
 
     def test_rung3_unnamed_when_neither_rung_resolves(self, monkeypatch):
@@ -73,7 +90,7 @@ class TestWriterNameThreeRungLadder:
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
         fact = OwnerFact(
-            owner="peer-sid", liveness="dead", claim_source="session", writer_name=None
+            owner=REAL_SID, liveness="dead", claim_source="session", writer_name=None
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
         assert "UNNAMED" in sentence
@@ -87,7 +104,7 @@ class TestWriterNameThreeRungLadder:
             lambda sid: (_ for _ in ()).throw(OSError("registry unreadable")),
         )
         fact = OwnerFact(
-            owner="peer-sid", liveness="live", claim_source="session", writer_name=None
+            owner=REAL_SID, liveness="live", claim_source="session", writer_name=None
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
         assert "UNNAMED" in sentence
@@ -101,9 +118,9 @@ class TestWriterNameNegativeSpec:
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
-        for writer_name in ("claude-klabauter-a9", None):
+        for writer_name in (REAL_NAME, None):
             fact = OwnerFact(
-                owner="peer-sid",
+                owner=REAL_SID,
                 liveness="live",
                 claim_source="session",
                 writer_name=writer_name,
@@ -118,13 +135,15 @@ class TestWriterNameNegativeSpec:
         live at", "reachable now"), and must carry the rung-1 provenance
         marker (asterisk) rather than being printed bare."""
         fact = OwnerFact(
-            owner="peer-sid",
+            owner=REAL_SID,
             liveness="live",
             claim_source="session",
-            writer_name="claude-klabauter-a9",
+            writer_name=REAL_NAME,
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
-        assert "claude-klabauter-a9*" in sentence
+        assert REAL_SID[:8] in sentence
+        assert REAL_SID not in sentence
+        assert " -- w:%s*" % REAL_NAME in sentence
         assert "reachable now" not in sentence.lower()
         assert "is live at" not in sentence.lower()
 
@@ -133,11 +152,11 @@ class TestWriterNameNegativeSpec:
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
         facts = [
-            OwnerFact("peer-sid", "live", "session", "claude-klabauter-a9"),
-            OwnerFact("peer-sid", "dead", "session", None),
-            OwnerFact("em-sid", "live", "agent", "claude-klabauter-c1"),
-            OwnerFact("abcdef0123456789", "undetermined", "agent-race", None),
-            OwnerFact("sibling-sid", "undetermined", "unreadable", None),
+            OwnerFact(REAL_SID, "live", "session", REAL_NAME),
+            OwnerFact(REAL_SID, "dead", "session", None),
+            OwnerFact(REAL_SID_2, "live", "agent", "claude-klabauter-c1"),
+            OwnerFact(REAL_SID_3, "undetermined", "agent-race", None),
+            OwnerFact(REAL_SID_2, "undetermined", "unreadable", None),
         ]
         for fact in facts:
             sentence = dispatch_checks._format_owner_sentence(fact, {})
@@ -152,7 +171,7 @@ class TestWriterNameNegativeSpec:
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
         fact = OwnerFact(
-            owner="em-sid", liveness="live", claim_source="agent", writer_name="agent-name"
+            owner=REAL_SID_2, liveness="live", claim_source="agent", writer_name="agent-name"
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
         assert "dispatched agent" in sentence
@@ -165,7 +184,7 @@ class TestWriterNameBudgetBoundary:
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
         fact = OwnerFact(
-            owner="peer-sid",
+            owner=REAL_SID,
             liveness="live",
             claim_source="session",
             writer_name="short-name",
@@ -187,7 +206,7 @@ class TestWriterNameBudgetBoundary:
         )
         huge_name = "x" * (dispatch_checks._owner_clause_budget_bytes() * 2)
         fact = OwnerFact(
-            owner="peer-sid",
+            owner=REAL_SID,
             liveness="live",
             claim_source="session",
             writer_name=huge_name,
@@ -201,7 +220,113 @@ class TestWriterNameBudgetBoundary:
         # matched here rather than re-litigated.
         assert len(sentence.encode("utf-8")) <= MESSAGE_PROSE_CAP_BYTES
         assert "confirmed live" in sentence
-        assert "peer-sid" in sentence
+
+    def test_real_sid_and_real_name_both_survive_intact_at_rung1(self, monkeypatch):
+        """C3 follow-up fix 2 (EM-adjudicated break-class), superseded by
+        follow-up fix 3 (bug 616e4449f90c): on a REAL 36-character sid with
+        a realistic name, the SHORT sid (not the full uuid) appears in the
+        subject for EVERY class, and the load-bearing liveness/CONTESTED
+        verdict always survives intact -- that prefix must never be the
+        thing a budget cut degrades.
+
+        Fix 3 additionally re-fit the ``session``/``agent`` subject and
+        liveness prose (see ``_format_owner_sentence``'s docstring
+        comments) so the full name ALSO survives intact for all four of
+        those classes, not just the two shortest (live/dead session) fix 2
+        left behind -- this is the bug backlog row's TARGET. The
+        ``agent-race``/``unreadable`` classes are out of that bug's scope
+        (its six named rows are all ``session``/``agent`` x
+        live/dead/undetermined) and keep fix 2's truncate-the-name-tail
+        behavior unchanged here.
+        """
+        monkeypatch.setattr(
+            "coordinator_core.session.harness_registry.lookup", lambda sid: None
+        )
+        cases = [
+            OwnerFact(REAL_SID, "live", "session", REAL_NAME),
+            OwnerFact(REAL_SID, "dead", "session", REAL_NAME),
+            OwnerFact(REAL_SID, "undetermined", "session", REAL_NAME),
+            OwnerFact(REAL_SID_2, "live", "agent", REAL_NAME),
+            OwnerFact(REAL_SID_2, "dead", "agent", REAL_NAME),
+            OwnerFact(REAL_SID_2, "undetermined", "agent", REAL_NAME),
+            OwnerFact(REAL_SID_3, "undetermined", "agent-race", REAL_NAME),
+            OwnerFact(REAL_SID_2, "undetermined", "unreadable", REAL_NAME),
+        ]
+        expected_liveness = {
+            "live": "confirmed live",
+            "dead": "no longer live",
+            "undetermined": "CONTESTED",
+        }
+        name_survives_intact = {
+            ("session", "live"),
+            ("session", "dead"),
+            ("session", "undetermined"),
+            ("agent", "live"),
+            ("agent", "dead"),
+            ("agent", "undetermined"),
+        }
+        for fact in cases:
+            sentence = dispatch_checks._format_owner_sentence(fact, {})
+            assert fact.owner[:8] in sentence, sentence
+            assert fact.owner not in sentence, sentence
+            if fact.claim_source in ("session", "agent"):
+                assert expected_liveness[fact.liveness] in sentence, sentence
+            if (fact.claim_source, fact.liveness) in name_survives_intact:
+                assert REAL_NAME in sentence, sentence
+                assert "…" not in sentence, sentence
+
+    def test_all_six_owner_classes_render_name_and_verdict_intact(
+        self, monkeypatch
+    ):
+        """Bug 616e4449f90c's own TARGET, as a standalone pin: for the six
+        ``session``/``agent`` x live/dead/undetermined owner classes
+        (crossed, not the docstring's six-way claim_source taxonomy), the
+        full writer name AND the liveness verdict both survive intact --
+        neither is truncated to a fragment. Fixtures use a real-shaped
+        36-char sid, per this suite's own module docstring: the original
+        defect survived review on a 9-char fake that never touched the
+        budget."""
+        monkeypatch.setattr(
+            "coordinator_core.session.harness_registry.lookup", lambda sid: None
+        )
+        expected_liveness = {
+            "live": "confirmed live",
+            "dead": "no longer live",
+            "undetermined": "CONTESTED",
+        }
+        for claim_source, sid in (("session", REAL_SID), ("agent", REAL_SID_2)):
+            for liveness in ("live", "dead", "undetermined"):
+                fact = OwnerFact(sid, liveness, claim_source, REAL_NAME)
+                sentence = dispatch_checks._format_owner_sentence(fact, {})
+                assert REAL_NAME in sentence, (claim_source, liveness, sentence)
+                assert expected_liveness[liveness] in sentence, (
+                    claim_source,
+                    liveness,
+                    sentence,
+                )
+                assert "…" not in sentence, (claim_source, liveness, sentence)
+                assert len(sentence.encode("utf-8")) <= (
+                    dispatch_checks._owner_clause_budget_bytes()
+                ), (claim_source, liveness, sentence)
+
+    def test_real_sid_and_real_name_both_survive_intact_at_rung2(self, monkeypatch):
+        """Same as rung-1 sibling test, but resolved via the live-lookup
+        rung rather than a recorded name."""
+
+        class _Record:
+            name = REAL_NAME
+
+        monkeypatch.setattr(
+            "coordinator_core.session.harness_registry.lookup",
+            lambda sid: _Record(),
+        )
+        fact = OwnerFact(
+            owner=REAL_SID, liveness="live", claim_source="session", writer_name=None
+        )
+        sentence = dispatch_checks._format_owner_sentence(fact, {})
+        assert REAL_NAME in sentence, sentence
+        assert "confirmed live" in sentence, sentence
+        assert "…" not in sentence, sentence
 
     def test_every_class_with_a_long_writer_name_stays_within_shipped_budget(
         self, monkeypatch
@@ -211,12 +336,12 @@ class TestWriterNameBudgetBoundary:
         )
         long_name = "n" * 400
         facts = [
-            OwnerFact("peer-sid", "live", "session", long_name),
-            OwnerFact("peer-sid", "dead", "session", long_name),
-            OwnerFact("em-sid", "live", "agent", long_name),
-            OwnerFact("abcdef0123456789", "undetermined", "agent-race", long_name),
-            OwnerFact("sibling-sid", "undetermined", "unreadable", long_name),
-            OwnerFact("peer-sid", "undetermined", "session", long_name),
+            OwnerFact(REAL_SID, "live", "session", long_name),
+            OwnerFact(REAL_SID, "dead", "session", long_name),
+            OwnerFact(REAL_SID_2, "live", "agent", long_name),
+            OwnerFact(REAL_SID_3, "undetermined", "agent-race", long_name),
+            OwnerFact(REAL_SID_2, "undetermined", "unreadable", long_name),
+            OwnerFact(REAL_SID, "undetermined", "session", long_name),
         ]
         for fact in facts:
             sentence = dispatch_checks._format_owner_sentence(fact, {})
@@ -240,7 +365,7 @@ class TestWriterNameBudgetBoundary:
         realistic_long_name = "claude-klabauter-executor-fleet-node" * 3
         assert len(realistic_long_name.encode("utf-8")) >= budget
         fact = OwnerFact(
-            owner="peer-sid",
+            owner=REAL_SID,
             liveness="live",
             claim_source="session",
             writer_name=realistic_long_name,
@@ -263,10 +388,10 @@ class TestOwnerNameProvenanceNote:
 
     def test_note_present_when_owner_sentence_names_someone(self):
         fact = OwnerFact(
-            owner="peer-sid",
+            owner=REAL_SID,
             liveness="live",
             claim_source="session",
-            writer_name="claude-klabauter-a9",
+            writer_name=REAL_NAME,
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
         note = dispatch_checks._owner_name_provenance_note(sentence)
@@ -280,7 +405,7 @@ class TestOwnerNameProvenanceNote:
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
         fact = OwnerFact(
-            owner="peer-sid", liveness="dead", claim_source="session", writer_name=None
+            owner=REAL_SID, liveness="dead", claim_source="session", writer_name=None
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
         assert "UNNAMED" in sentence
@@ -289,30 +414,33 @@ class TestOwnerNameProvenanceNote:
     def test_note_still_fires_when_truncation_eats_into_the_name(
         self, monkeypatch
     ):
-        """The note's trigger is a substring of the ALREADY-TRUNCATED owner
-        sentence, so an oversized name must not push the marker prefix out
-        of the clause and silently suppress the warning. That failure is
-        invisible at the call site -- a truncated name would still be
-        rendered, with nothing saying it is provenance rather than an
-        address, which is the exact reading this warning exists to prevent.
-        Pins the coupling between ``_owner_writer_name_clause``'s marker
-        prefix and ``_owner_name_provenance_note``'s trigger: if either
-        moves without the other, this test fails rather than the warning
-        going quiet."""
+        """The note's trigger is a substring/regex match of the ALREADY-
+        TRUNCATED owner sentence, so an oversized name must not push the
+        marker prefix out of the clause and silently suppress the warning.
+        That failure is invisible at the call site -- a truncated name
+        would still be rendered, with nothing saying it is provenance
+        rather than an address, which is the exact reading this warning
+        exists to prevent. Pins the coupling between
+        ``_owner_display_id``'s marker suffix and
+        ``_owner_name_provenance_note``'s trigger: if either moves without
+        the other, this test fails rather than the warning going quiet."""
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
-        huge_name = "x" * (dispatch_checks._owner_clause_budget_bytes() * 2)
+        # A name short enough that the "]<marker>" suffix survives
+        # _truncate_to_budget intact (unlike the earlier adversarial-huge
+        # case, whose whole point is that the marker gets cut) -- this
+        # test is about the coupling firing when the marker IS present,
+        # not about surviving an oversized name.
         fact = OwnerFact(
-            owner="peer-sid",
+            owner=REAL_SID,
             liveness="live",
             claim_source="session",
-            writer_name=huge_name,
+            writer_name=REAL_NAME,
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
         assert dispatch_checks._owner_name_provenance_note(sentence), (
-            "truncation removed the name marker, silently suppressing the "
-            "provenance warning while still rendering a (truncated) name"
+            "the resolved-name marker did not fire the provenance warning"
         )
 
     def test_note_absent_for_no_claim_found(self):
@@ -332,10 +460,10 @@ class TestOwnerNameProvenanceNote:
         include the provenance warning when a name resolves -- pinning
         the note's *existence* is not enough; it must reach the reader."""
         fact = OwnerFact(
-            owner="peer-sid",
+            owner=REAL_SID,
             liveness="live",
             claim_source="session",
-            writer_name="claude-klabauter-a9",
+            writer_name=REAL_NAME,
         )
         owner_sentence = dispatch_checks._format_owner_sentence(fact, {})
         note = dispatch_checks._owner_name_provenance_note(owner_sentence)

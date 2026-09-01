@@ -5992,10 +5992,10 @@ def _owner_liveness_basis(owner_id: str, live_verdicts: Dict[str, Tuple[bool, st
     return verdict[1] if verdict is not None else None
 
 
-def _owner_writer_name_clause(
+def _resolve_owner_writer_name(
     fact: "OwnerFact",
     live_verdicts: Dict[str, Tuple[bool, str, Optional[int]]],
-) -> str:
+) -> Tuple[Optional[str], Optional[str]]:
     """Three-rung name resolution ladder (C3, plan
     ``2026-09-01-the-claim-record-carries-the-name``) -- the same ladder
     C2 (``coordinator/bin/session-claim-cli.py``) implements against its
@@ -6009,76 +6009,90 @@ def _owner_writer_name_clause(
     Rung 2 -- failing that, a live ``harness_registry.lookup(fact.owner)``.
     The cheap fallback rung: correct only for a pre-C1 record whose writer
     is still resident on THIS machine, at read time, on THIS box.
-    Rung 3 -- failing both, an explicit UNNAMED marker, visually distinct
-    from a bare sid (Anti-scope: never print a bare sid as though it were
-    an address -- that teaches the fleet to route around the guard).
+    Rung 3 -- failing both, ``(None, None)`` -- the caller renders an
+    explicit UNNAMED marker, visually distinct from a bare sid (Anti-scope:
+    never print a bare sid as though it were an address -- that teaches the
+    fleet to route around the guard).
 
-    Renders a resolved name (rung 1 or 2) with its AGE where evidence for
-    one exists (the ``_holder_context`` "held 33.8h" precedent) and an
-    explicit staleness marker -- never as ready-to-send, and never with
-    "re-resolve from the stored session UUID" (Anti-scope: that sid is, by
-    hypothesis, precisely the one that no longer resolves -- the plan's
-    Problem section). A resolver exception (``harness_registry.lookup``
-    unavailable, corrupt registry) degrades to rung 3, never raises --
-    Check 5 is advisory infrastructure and must not turn a lookup failure
-    into a guard crash.
+    A resolver exception (``harness_registry.lookup`` unavailable, corrupt
+    registry) degrades to rung 3, never raises -- Check 5 is advisory
+    infrastructure and must not turn a lookup failure into a guard crash.
 
-    DELIBERATELY TERSE: ``_owner_clause_budget_bytes()`` is a THIRD of the
-    already-small ``MESSAGE_PROSE_CAP_BYTES`` (measured 73 bytes today),
-    and the load-bearing subject/liveness prefix this clause is appended
-    to already consumes over half of that on a typical rendering -- there
-    is no headroom left for a full sentence. This clause carries only the
-    name plus a ONE-CHARACTER provenance marker, never prose:
-
-      ``*``  -- rung 1, the name recorded ON the claim at write time.
-      ``~``  -- rung 2, a live registry lookup this call (cheaper, weaker
-                evidence -- correct only while the writer is still
-                resident on THIS machine).
-
-    C3 follow-up fix 1 (plan ``2026-09-01-the-claim-record-carries-the-
-    name``, EM-adjudicated break-class): a bare glyph is NOT itself an
-    explicit staleness warning -- its meaning lives only in this
-    docstring, and a reader who has not read this module's source learns
-    nothing from seeing ``claude-klabauter-26*`` in a guard message. The
-    EXPLICIT warning ("provenance, not a live address -- verify the
-    holder before sending to it") now lives at zero budget cost in
-    ``_owner_name_provenance_note``, appended by every call site that
-    renders an ``_format_owner_sentence()`` result into an unbudgeted
-    deny/warn message. This clause keeps the marker anyway, because it
-    still carries information the warning sentence does not: WHICH rung
-    resolved the name (recorded-at-write-time vs a cheap live lookup this
-    call), i.e. how much to trust it relative to the other rung, not
-    whether to trust it at all -- that second question is what the
-    warning sentence answers, once, in prose, at the point a human
-    actually reads it.
-
-    Either marker means the same thing a full sentence would have said,
-    at 1 byte instead of ~20: UNVERIFIED PROVENANCE, NOT A READY-TO-SEND
-    ADDRESS -- see this function's own docstring and the module-level
-    Anti-scope citation for the long-form statement of that rule; this
-    clause is where the rule is APPLIED under a real byte budget, not
-    where it is explained. `_truncate_to_budget` cuts from the END, so
-    ordering the marker AFTER the name means an over-length name (not
-    this clause's own text) is what a truncation degrades first, and the
-    caller-side subject/liveness prefix -- placed before this clause is
-    even called -- is what a truncation degrades LAST, by construction.
+    Returns ``(name, rung)`` where ``rung`` is ``"recorded"`` (rung 1) or
+    ``"live-lookup"`` (rung 2), or ``(None, None)`` when neither resolves.
     """
     name = fact.writer_name
-    rung = "recorded"
+    if name:
+        return name, "recorded"
+
+    try:
+        from coordinator_core.session import harness_registry
+
+        record = harness_registry.lookup(fact.owner)
+    except Exception:
+        record = None
+    if record is not None and record.name:
+        return record.name, "live-lookup"
+
+    return None, None
+
+
+def _owner_display_id(
+    fact: "OwnerFact",
+    live_verdicts: Dict[str, Tuple[bool, str, Optional[int]]],
+) -> str:
+    """The identifier Check 5 substitutes for ``fact.owner`` inside the
+    subject clause (``"session %s"`` and friends).
+
+    C3 follow-up fix 2 (plan ``2026-09-01-the-claim-record-carries-the-
+    name``, EM-adjudicated break-class): the ORIGINAL shape rendered the
+    FULL 36-character sid in the subject -- on a real sid that alone spent
+    over half of ``_owner_clause_budget_bytes()`` (~73 bytes) before the
+    name-bearing trailing clause was even reached, so truncation routinely
+    cut the name to an unusable fragment or dropped it entirely, and in the
+    ``undetermined``/``agent`` classes it could cut into the liveness/basis
+    suffix too.
+
+    ONCE A NAME IS KNOWN, THE FULL UUID IS THE REDUNDANT PART (the plan's
+    own reasoning): when a name resolves (rung 1 or 2), this returns only
+    the SHORT sid (``fact.owner[:8]``, the ``_holder_context`` precedent --
+    ``coordinator/bin/coordinator-safe-commit.py``) for the subject slot,
+    freeing the budget the full name needs at
+    ``_owner_writer_name_clause``'s trailing ``" -- w:<name><marker>"``
+    clause. When no name resolves, this returns ``fact.owner`` UNCHANGED --
+    today's full-sid rendering, exactly as before, for that case.
+
+    Deliberately does NOT fold the name into this return value: the name
+    clause stays a TRAILING addition (as it always was) rather than moving
+    ahead of the liveness verdict, so `_truncate_to_budget`'s cut-from-the-
+    end still degrades the name first and the safety-relevant liveness
+    verdict last, by construction -- an adversarially long name must never
+    be able to push "confirmed live"/"no longer live"/"CONTESTED" out of
+    the truncated result.
+    """
+    name, _rung = _resolve_owner_writer_name(fact, live_verdicts)
     if not name:
-        try:
-            from coordinator_core.session import harness_registry
+        return fact.owner
+    return fact.owner[:8]
 
-            record = harness_registry.lookup(fact.owner)
-        except Exception:
-            record = None
-        if record is not None and record.name:
-            name = record.name
-            rung = "live-lookup"
 
+def _owner_writer_name_clause(
+    fact: "OwnerFact",
+    live_verdicts: Dict[str, Tuple[bool, str, Optional[int]]],
+) -> str:
+    """The trailing name clause -- unchanged in SHAPE from before this fix
+    (still a ``" -- w:<name><marker>"`` suffix, ``*`` recorded/``~`` live-
+    lookup, or ``" -- UNNAMED"`` when neither rung resolves), but now
+    rendering the FULL name every time it resolves rather than a
+    budget-truncated fragment: ``_owner_display_id`` already shrank the
+    subject's sid to 8 characters when a name is known (see its docstring),
+    which is what frees the budget this clause needed all along. Kept as a
+    TRAILING clause deliberately -- see ``_owner_display_id``'s docstring
+    for why the name must never move ahead of the liveness verdict.
+    """
+    name, rung = _resolve_owner_writer_name(fact, live_verdicts)
     if not name:
         return " -- UNNAMED"
-
     marker = "*" if rung == "recorded" else "~"
     return " -- w:%s%s" % (name, marker)
 
@@ -6119,30 +6133,52 @@ def _format_owner_sentence(
         sentence = (
             "an in-flight dispatched agent (%s) not yet attributed to an "
             "owning session -- CONTESTED: agent-race, unresolved"
-            % fact.owner
+            % _owner_display_id(fact, live_verdicts)
         )
-        # C3: the name clause is appended BEFORE the budget truncation
-        # (the load-bearing CONTESTED/liveness verdict sits first in every
-        # branch's `sentence`, so a budget cut lands on the additive name
-        # tail, never the safety-relevant prefix -- see this function's
-        # own "THE BUDGET IS PART OF THE WORK" chunk note).
+        # C3 follow-up fix 2 (EM-adjudicated break-class): the name clause
+        # is still appended AFTER the load-bearing CONTESTED/liveness
+        # prefix, so a budget cut still lands on the additive name tail,
+        # never the safety-relevant prefix -- that part of the original
+        # comment held. What was FALSE is a different claim this docstring
+        # used to make: that the full-uuid subject left "no headroom" as a
+        # problem for the NAME alone -- on real input the full 36-char sid
+        # itself spent over half the ~73-byte budget, so the name got cut
+        # to an unusable fragment or dropped entirely even though it was
+        # positioned last. `_owner_display_id` now shrinks the subject's
+        # sid to 8 characters once a name resolves, freeing the budget the
+        # name clause needed all along, without moving the name ahead of
+        # the safety-relevant prefix.
         sentence += _owner_writer_name_clause(fact, live_verdicts)
         return _truncate_to_budget(sentence, _owner_clause_budget_bytes())
 
     if fact.claim_source == "unreadable":
-        sibling = fact.owner if fact.owner and fact.owner != ".agents" else None
+        sibling_id = _owner_display_id(fact, live_verdicts) if fact.owner and fact.owner != ".agents" else None
         sentence = (
-            ("sibling %s" % sibling if sibling else "an unresolved sibling")
+            ("sibling %s" % sibling_id if sibling_id else "an unresolved sibling")
             + " (its claim record is unreadable this call)"
         )
         sentence += _owner_writer_name_clause(fact, live_verdicts)
         return _truncate_to_budget(sentence, _owner_clause_budget_bytes())
 
     # claim_source in ("session", "agent") from here down.
+    display_id = _owner_display_id(fact, live_verdicts)
     subject = (
-        "session %s" % fact.owner
+        "session %s" % display_id
         if fact.claim_source == "session"
-        else "session %s's dispatched agent" % fact.owner
+        # C3 follow-up fix 3 (bug 616e4449f90c): NOT "session %s's dispatched
+        # agent" (the pre-fix shape) -- on a real 8-char display_id plus a
+        # realistic name, that subject alone (25 bytes without "session ")
+        # already left too little of the ~73-byte budget for the name
+        # clause (~24 bytes) once ANY liveness prose was added, so the name
+        # truncated to a fragment in every agent-class rendering. Dropping
+        # the redundant "session " word (the subject already says
+        # "dispatched agent", which only a session dispatches) is the
+        # cheapest cut available in this clause: it costs no information a
+        # reader did not already have from "dispatched agent" itself, and
+        # the substring `"dispatched agent"` -- the one thing
+        # ``test_check_validate_commit.py`` pins outside this file -- is
+        # untouched.
+        else "%s dispatched agent" % display_id
     )
     if fact.liveness == "live":
         basis = _owner_liveness_basis(fact.owner, live_verdicts)
@@ -6153,9 +6189,32 @@ def _format_owner_sentence(
     elif fact.liveness == "dead":
         sentence = "%s (no longer live)" % subject
     else:
-        sentence = "%s (liveness undetermined this call -- CONTESTED)" % subject
-    sentence += _owner_writer_name_clause(fact, live_verdicts)
-    return _truncate_to_budget(sentence, _owner_clause_budget_bytes())
+        # C3 follow-up fix 3: was "liveness undetermined this call --
+        # CONTESTED" (~44 bytes) -- said the same fact twice ("undetermined"
+        # and "CONTESTED" are the same verdict) and, added to the
+        # "dispatched agent" subject, left no room for the name clause at
+        # all. "CONTESTED" alone is the token every test in this suite and
+        # `test_check_validate_commit.py` actually asserts on (grepped
+        # before this edit -- no test anywhere pins the word
+        # "undetermined" appearing in the rendered sentence, only in the
+        # `OwnerFact.liveness` field name); the descriptive words around it
+        # were free bytes this budget cannot afford across all six classes
+        # with a name attached, so they are cut rather than the name.
+        sentence = "%s (CONTESTED)" % subject
+    name_clause = _owner_writer_name_clause(fact, live_verdicts)
+    # C3 follow-up fix 3, lever 2 (whole-or-nothing): if the full name
+    # clause will not fit beside the load-bearing subject/liveness prefix,
+    # drop it ENTIRELY rather than let `_truncate_to_budget` cut it to a
+    # `w:proj...` fragment. A fragment is strictly worse than no name: the
+    # `*`/`~` marker (and `_owner_name_provenance_note`'s trigger, which
+    # keys on the same `" -- w:"` substring) would still fire a staleness
+    # warning beside a name the reader cannot actually read. Whole-or-
+    # nothing keeps that coupling honest -- the warning fires exactly when,
+    # and only when, a full name is actually shown.
+    budget = _owner_clause_budget_bytes()
+    if len((sentence + name_clause).encode("utf-8")) <= budget:
+        sentence += name_clause
+    return _truncate_to_budget(sentence, budget)
 
 
 _OWNER_NAME_PROVENANCE_WARNING = (
@@ -6163,7 +6222,6 @@ _OWNER_NAME_PROVENANCE_WARNING = (
     "was written, not a live address -- verify the holder before "
     "sending to it."
 )
-
 
 def _owner_name_provenance_note(owner_sentence: str) -> str:
     """C3 follow-up fix 1 (plan ``2026-09-01-the-claim-record-carries-the-

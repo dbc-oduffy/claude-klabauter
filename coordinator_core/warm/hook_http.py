@@ -528,6 +528,28 @@ def build_request(event: Mapping[str, Any], method: str, request_id: int = 1) ->
     return json.dumps(request).encode("utf-8")
 
 
+def _decision_to_response(event_name: str, result: Mapping[str, Any]) -> Dict[str, Any]:
+    """Turn a flat verdict mapping (`{}` for no-objection, or `{permissionDecision:
+    "deny", permissionDecisionReason: ...}`) into the hook response body.
+
+    Shared by both entries into this module's response shaping: `interpret_result`
+    narrows a wire JSON-RPC `result` down to this same flat shape first, and
+    `evaluate_cold` builds one directly from `_verdict_from_envelope` without ever
+    putting it on a wire. One narrowing-to-response step, not two copies of it drifting
+    apart as either caller changes.
+    """
+    decision = result.get("permissionDecision") or result.get("decision")
+    if decision == "deny":
+        reason = (
+            result.get("permissionDecisionReason")
+            or result.get("reason")
+            or "denied by coordinator guard"
+        )
+        return deny_response(event_name, reason)
+
+    return allow_response(event_name, result)
+
+
 def interpret_result(event_name: str, frame: bytes) -> Dict[str, Any]:
     """Turn one `_serve_line` response frame into the hook's response body.
 
@@ -555,13 +577,68 @@ def interpret_result(event_name: str, frame: bytes) -> Dict[str, Any]:
     if not isinstance(result, dict):
         return unreachable_response(event_name, "engine returned no result")
 
-    decision = result.get("permissionDecision") or result.get("decision")
-    if decision == "deny":
-        reason = (
-            result.get("permissionDecisionReason")
-            or result.get("reason")
-            or "denied by coordinator guard"
-        )
-        return deny_response(event_name, reason)
+    return _decision_to_response(event_name, result)
 
-    return allow_response(event_name, result)
+
+def evaluate_cold(event: Mapping[str, Any]) -> Dict[str, Any]:
+    """Evaluate a hook event's real guard verdict IN PROCESS, with no listener bound
+    and no subprocess spawned -- the cold counterpart to the served `/hook` path above.
+
+    PM ruling 1 (C3): this module already owns what the bytes mean for both HTTP-shaped
+    transports while `http_listener.py`/`front_door.py` only move them, so the cold
+    entry belongs here too. A caller holding a fired hook event and no reachable
+    listener -- DoE's forwarder is the intended caller, via C7a's memo, never wired from
+    this side -- gets this function instead of shelling out to the cold CLI: a
+    long-lived process that already imported `coordinator_core` pays no interpreter
+    start this way, where the CLI shape pays a full one on the box's worst day (see this
+    chunk's dispatch brief for the measurement backing that claim).
+
+    Runs the IDENTICAL chain the warm-side registered op (`coordinator_core.ops.
+    warm_guard_evaluate._warm_guard_evaluate`) runs -- same `evaluate_payload_json` call,
+    same per-call `policy_file`/`resolution_class` derivation, same envelope narrowing --
+    so a payload evaluated here and a payload evaluated through a live listener produce
+    the same verdict. Imports are local, matching this module's existing hot-path
+    convention (see `_is_compute_only`): a caller that never goes cold never pays for
+    `bash_guards.dispatch`'s or `ops.warm_guard_evaluate`'s import cost.
+
+    Calls `warm.telemetry.record_degrade(kind="cold_run", ...)` (C2) on every invocation
+    -- unconditionally, because reaching this function AT ALL already means "no
+    reachable listener", which is the fact worth a durable row. NOT a fallback: DR-347
+    Ruling 3 forbids THIS module rerouting a served call to cold dispatch on failure
+    (module docstring, negative-spec); this function is the opposite direction -- a
+    caller that has ALREADY decided to go cold, asking for a real verdict instead of an
+    unevaluated command, and telling the durable record so on its way.
+
+    Negative-spec: an event this listener has no route for gets `unserved_response`, never
+    a verdict. Going cold widens WHERE the guard chain can run, never WHAT it will answer
+    about -- so this entry turns an unserveable event away exactly as `route_for_event`
+    makes the served path do, and for the reason that docstring already records: the chain
+    examines `tool_name`/`tool_input`, so an event that carries neither would otherwise come
+    back a confident no-objection about a question it was never asked. A non-string name is
+    unserveable by the same test and is reported without echoing the caller's value back.
+    """
+    event_name = event.get("hook_event_name")
+    if not isinstance(event_name, str):
+        return unserved_response(None)
+    if route_for_event(event_name) is None:
+        return unserved_response(event_name)
+
+    payload = payload_from_event(event)
+
+    from coordinator_core.bash_guards.dispatch import evaluate_payload_json
+    from coordinator_core.ops.warm_guard_evaluate import (
+        _engine_resolution_class,
+        _policy_file_for,
+        _verdict_from_envelope,
+    )
+    from coordinator_core.warm.telemetry import KIND_COLD_RUN, record_degrade
+
+    record_degrade(kind=KIND_COLD_RUN, cause="no reachable warm listener")
+
+    out = evaluate_payload_json(
+        json.dumps(payload),
+        policy_file=_policy_file_for(payload),
+        resolution_class=_engine_resolution_class(),
+    )
+    result = _verdict_from_envelope(out)
+    return _decision_to_response(event_name, result)

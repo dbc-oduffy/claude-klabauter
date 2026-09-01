@@ -560,26 +560,40 @@ def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
     their own `"next-move-ledger.jsonl"` literal, with `obligations` reaching
     into this module's private namespace for one of them. One typo apart, a
     producer and its reader would have been on different files with nothing
-    to catch it -- all three build their paths from the same owner now."""
+    to catch it -- all three now call `subagent_share`'s helpers directly (no
+    module-private alias left to drift), which this exercises end to end: a
+    ledger written at `subagent_share.ledger_path` is readable through both
+    `send_pass.undischarged_obligations` and `obligations.for_peer`.
+
+    Review: overengineering-reviewer (finding #2, minor, accepted) -- this
+    used to compare three separately-bound private aliases for equality;
+    the aliases are gone, so the meaningful check is that a producer and a
+    reader land on the same file, not that two names for one function match.
+    """
+    import json
+
     from coordinator_core.group_em import obligations
-    from coordinator_core.hooks import watchdog_undischarged_next_move as watchdog
     from coordinator_core.session import subagent_share
 
     repo_root, session_id = str(tmp_path), "sess-share"
-    assert (
-        send_pass._session_share_dir(repo_root, session_id)
-        == subagent_share.share_dir(repo_root, session_id)
+    assert send_pass.send_log_path(repo_root, session_id) == subagent_share.send_log_path(
+        repo_root, session_id
     )
-    assert (
-        obligations._ledger_path(repo_root, session_id)
-        == watchdog._ledger_path(repo_root, session_id)
-        == subagent_share.ledger_path(repo_root, session_id)
-    )
-    assert (
-        obligations._intake_path(repo_root, session_id)
-        == watchdog._intake_path(repo_root, session_id)
-        == subagent_share.intake_path(repo_root, session_id)
-    )
+
+    ledger_path = subagent_share.ledger_path(repo_root, session_id)
+    os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
+    with open(ledger_path, "w", encoding="utf-8") as fh:
+        fh.write(
+            json.dumps(
+                {"obligation_id": "ob-1", "discharged_at": None, "fired": False}
+            )
+            + "\n"
+        )
+
+    assert send_pass.undischarged_obligations(repo_root, session_id) == 1
+    assert obligations.for_peer(repo_root, session_id) == [
+        {"obligation_id": "ob-1", "discharged_at": None, "fired": False}
+    ]
 
 
 def test_an_unsafe_session_id_is_still_refused_a_path(tmp_path):

@@ -3,7 +3,7 @@
 Spec backlink: docs/plans/2026-08-30-the-engine-stops-naming-its-own-repo.md § C3.
 
 `publish_lag_message` surfaces broadly (engine floor, cross-repo) regardless
-of the reader's own repo, but its remedy (`percolate-round.py claude-klabauter`)
+of the reader's own repo, but its remedy (`coordinator-publish.py`, naming claude-klabauter)
 belongs to the engine/publish owner, not a reader working in some third repo
 who cannot run it -- same shape as `cc_invoke._announce_engine_cli_split`.
 `_reader_owns_engine_repo` gates only the repo-naming portion; the lag fact

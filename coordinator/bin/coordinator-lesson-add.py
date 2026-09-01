@@ -407,22 +407,15 @@ def main(argv: "list[str] | None" = None) -> int:
     try:
         refuse_newline_argv(args.body, flag_name="--body")
         args.body = resolve_body(args.body, args.body_file)
-        refuse_newline_argv(args.title, flag_name="--title")
         args.title = resolve_body(args.title, args.title_file, flag_name="--title")
-        # AFTER the resolve, not only before it. The refusal above runs on the
-        # RAW argv value, which is None whenever --title-file was used -- so a
-        # multi-line title file sailed through this wrapper and died in the
-        # child as a bare `coordinator-queue-append exited 2`, with the reason
-        # on a stderr stream that (until 2e03652635) was not relayed. Reported
-        # by example-game-repo-em 2026-09-01 (memo
-        # `example-game-repo-em-close-ceremony-engine-defects-seven`, defect 4).
-        #
-        # The remedy is spelled out rather than pointing at --title-file,
-        # because --title-file IS what the operator just used: the constraint
-        # is not the transport, it is that a lesson title becomes a filename
-        # slug (`_slug_from_title`), and no title transport can carry a
-        # newline into a filename losslessly. This mirrors
-        # `coordinator-queue-append`'s own refusal for the same reason.
+        # AFTER the resolve, and ONLY after it. Checking the raw argv value
+        # missed --title-file entirely (it is None then), and the default
+        # remedy it carried -- "pass --title-file instead" -- is the very
+        # advice this refusal exists to contradict. `resolve_body` returns an
+        # inline --title unchanged, so one post-resolve call covers both flags.
+        # The remedy is spelled out because --title-file may be what the
+        # operator just used: the constraint is the filename slug
+        # (`coordinator-queue-append :: _slug_from_title`), not the transport.
         refuse_newline_argv(
             args.title,
             flag_name="--title-file" if args.title_file else "--title",

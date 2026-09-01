@@ -1707,22 +1707,13 @@ def main(argv: list[str]) -> int:
             return int(WorkstreamApplyExitCode.TRANSPORT_FAIL)
 
     exit_code, report = apply(decisions=decisions)
-    # STDOUT IS THE JSON AND NOTHING ELSE. Both prose blocks below are
-    # diagnostics for a human reading their own terminal, and both used to
-    # print to stdout -- the disabled-op lines ahead of the report, the
-    # blocked-remedy lines after it. That made `json.loads(stdout)` fail
-    # whenever either fired, and made every NEW advisory a silent break for
-    # callers that were previously fine. Reported by example-game-repo-em 2026-09-01
-    # against the sibling `brief` path (memo
-    # `example-game-repo-em-close-ceremony-engine-defects-seven`, defect 5); this
-    # path had the same defect twice over, and the "callers must tolerate
-    # non-JSON prefix lines" convention these two sites established is
-    # retired rather than propagated. Ordering is preserved on stderr so a
-    # terminal reader sees the same sequence they always did.
+    # STDOUT IS THE JSON AND NOTHING ELSE -- both prose blocks are diagnostics,
+    # and on stdout they broke `json.loads(stdout)` for every caller.
     for line in render_disabled_op_lines(report):
         print(line, file=sys.stderr)
-    sys.stderr.flush()
     print(json.dumps(report, indent=2, sort_keys=True))
+    # Flushed because stdout is block-buffered when piped: without it the
+    # trailing stderr lines can reach a combined stream ahead of the JSON.
     sys.stdout.flush()
     for line in render_blocked_remedy_lines(report.get("blocked_remedy") or {}):
         print(line, file=sys.stderr)

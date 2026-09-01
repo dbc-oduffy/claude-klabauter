@@ -1590,6 +1590,12 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
     entrypoint — grading it BROKEN made this probe permanently red in every
     source clone.
 
+    Every failure arm's remediation names `dispatch_root`, never a bare
+    command line. The same `python3 -m coordinator_core.invoke ping '{}'`
+    pasted from a source clone returns that DR-331 refusal, so a rootless
+    remediation hands the operator a reproduction of the ruling and points
+    them at `ops/ping.py`, which is never the cause.
+
     Probe detail explicitly states: GREEN proves the entrypoint CAN dispatch,
     NOT that a live session IS connected.  Post-DR-215 there is no resident
     process; session-binding is not a concept here.
@@ -1711,7 +1717,8 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
                     f"coordinator_core.invoke ping returned non-JSON output: {stdout!r}"
                 ),
                 remediation=(
-                    "Run manually: python3 -m coordinator_core.invoke ping '{}'. "
+                    f"Run manually from {dispatch_root}: "
+                    "python3 -m coordinator_core.invoke ping '{}'. "
                     "Verify the invoke entrypoint emits a well-formed JSON result envelope."
                 ),
                 required=False,
@@ -1730,8 +1737,9 @@ def _run_probe_invoke_smoke(claude_klabauter_root: Path | None) -> _ProbeResult:
                     f"(expected result.ok=true): {str(envelope)[:200]!r}"
                 ),
                 remediation=(
-                    "Invoke the coordinator_core.invoke ping op manually and verify it "
-                    "emits a JSON-RPC envelope with result.ok=true. "
+                    f"Run manually from {dispatch_root}: "
+                    "python3 -m coordinator_core.invoke ping '{}' and verify it emits a "
+                    "JSON-RPC envelope with result.ok=true. "
                     "Check coordinator_core/ops/ping.py is intact."
                 ),
                 required=False,
@@ -3393,7 +3401,7 @@ def _run_probe_publish_provenance(claude_klabauter_root: Path | None) -> _ProbeR
             remediation=(
                 "An engine edit in claude-klabauter takes effect only when a publish round lands it — "
                 "editing coordinator_core/ does not change what runs. Publish with: "
-                "python coordinator/bin/percolate-round.py claude-klabauter"
+                "python coordinator/bin/coordinator-publish.py"
             ),
             required=False,
             data={
@@ -3637,7 +3645,8 @@ def _run_probe_invoke_latency(claude_klabauter_root: Path | None) -> _ProbeResul
                     "claude-klabauter.invoke.smoke."
                 ),
                 remediation=(
-                    "Run manually: python3 -m coordinator_core.invoke ping '{}'. "
+                    f"Run manually from {dispatch_root}: "
+                    "python3 -m coordinator_core.invoke ping '{}'. "
                     "Verify claude-klabauter.invoke.smoke passes first."
                 ),
                 required=False,

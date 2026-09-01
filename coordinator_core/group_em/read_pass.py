@@ -596,7 +596,21 @@ def classify_peer(
 
     status = peer.get("status")
     reduced_lines: list = []
-    transcript_activity_epoch: Optional[float] = None
+    # Review: overengineering-reviewer (finding out of this reviewer's own
+    # scope, flagged by it as staff-eng's; applied here per EM instruction)
+    # -- this local used to be named `transcript_activity_epoch`, the exact
+    # name of the module function promoted to public in this same session
+    # (see that function's own docstring). Nothing here called the function,
+    # so nothing broke, but the comment below reads as if it refers to this
+    # variable rather than the shadowed function, and any future call in
+    # this scope would silently get a float instead of the function object.
+    # Renamed to `activity_epoch` here; `classify_fallback_status`'s own
+    # parameter of the same name is left alone -- it forwards its value to
+    # `receiver_state.classify` under the keyword `transcript_activity_epoch`,
+    # a contract this module does not own, and renaming the parameter would
+    # only relocate the shadow, not remove the risk, while adding churn to
+    # every test that calls it by keyword.
+    activity_epoch: Optional[float] = None
     if status == "idle":
         cwd = peer.get("cwd") or repo_root
         if read_tail is not None:
@@ -609,16 +623,16 @@ def classify_peer(
         # file. Falls back to mtime only when no line in that tail carries a
         # timestamp, which is the same upper-bound-not-evidence fallback
         # `transcript_activity_epoch` makes, kept identical on both paths.
-        transcript_activity_epoch = activity_epoch_from_reduced(list(reduced_lines or []))
-        if transcript_activity_epoch is None and read_tail is None:
-            transcript_activity_epoch = _transcript_mtime_epoch(session_id, cwd)
+        activity_epoch = activity_epoch_from_reduced(list(reduced_lines or []))
+        if activity_epoch is None and read_tail is None:
+            activity_epoch = _transcript_mtime_epoch(session_id, cwd)
 
     now_epoch = (now if now is not None else datetime.now(timezone.utc)).timestamp()
     state, reason = classify_fallback_status(
         status,
         reduced_lines,
         now_epoch=now_epoch,
-        transcript_activity_epoch=transcript_activity_epoch,
+        transcript_activity_epoch=activity_epoch,
     )
 
     return {
@@ -636,7 +650,7 @@ def classify_peer(
         # `None` on the reader leg, which never reduced a tail to reuse -- the
         # consumer falls back to reading, which is then a FIRST read, not a
         # second.
-        "activity_epoch": transcript_activity_epoch,
+        "activity_epoch": activity_epoch,
     }
 
 

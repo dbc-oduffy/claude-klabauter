@@ -304,7 +304,9 @@ def _format_claim_age(seconds: float) -> str:
     return f"held {max(seconds, 0.0) / 60.0:.0f}m"
 
 
-def _render_claimant_name(sid: str, path: str, lookup_result, cwd) -> str:
+def _render_claimant_name(sid: str, path: str, lookup_result) -> str:
+    # Review: overengineering-reviewer -- dropped unused `cwd` param, carried
+    # only because the neighbouring `_liveness_basis_for` takes one.
     """The three-rung resolution ladder (C2, docs/plans/2026-09-01-the-claim-
     record-carries-the-name.md): (1) the name RECORDED on the claim at write
     time -- survives the writer exiting, re-pointing its session id, or the
@@ -771,7 +773,7 @@ def _dispatch(argv: list[str]) -> int:
                     file=sys.stderr,
                 )
                 return _TRANSPORT_FAIL
-            name_col = _render_claimant_name(sid, path, lookup_result, cwd)
+            name_col = _render_claimant_name(sid, path, lookup_result)
             rows.append(f"{sid}\t{'live' if live else 'dead'}\t{name_col}")
         for row in rows:
             print(row)

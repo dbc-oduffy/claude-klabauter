@@ -29,6 +29,7 @@ Spec backlink: pln-claude-klabauter-windows-portability-a48fac § C14
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import subprocess as _subprocess
 import sys
@@ -611,3 +612,62 @@ class TestQuestionTheSinkCannotAnswerSentinel:
             f"{fn_name} ({probe_id}): the sentinel heading must be followed by an "
             "actual question-and-why statement, not left empty"
         )
+
+
+# ---------------------------------------------------------------------------
+# Every invoke remediation names the tree it must be run from
+# ---------------------------------------------------------------------------
+
+
+def test_invoke_probe_remediations_name_the_dispatch_root() -> None:
+    """No arm of either invoke probe may hand out a rootless `invoke ping`.
+
+    `_resolve_dispatch_root` exists because the same command returns opposite
+    answers from two trees: from the published mirror it is a 65 ms ok=true,
+    from a source clone it is the DR-331 no-cold-fallback refusal. A
+    remediation that omits the root therefore reproduces the ruling on the
+    operator's own box and reads as a broken entrypoint — sending them to
+    `ops/ping.py`, which is never the cause. Two arms already interpolated
+    `dispatch_root` and two did not; nothing held the other two.
+
+    Source-level, not behavioural: it holds arms added LATER, which a fixture
+    per current arm would not.
+    """
+    mod = _require_module()
+
+    source = Path(mod.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    targets = {"_run_probe_invoke_smoke", "_run_probe_invoke_latency"}
+    rootless: list[tuple[str, int]] = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in targets:
+            continue
+        for call in ast.walk(node):
+            if not isinstance(call, ast.Call):
+                continue
+            for kw in call.keywords or []:
+                if kw.arg != "remediation":
+                    continue
+                # Concatenated literals and f-strings alike: collect the
+                # literal fragments, and separately whether `dispatch_root`
+                # is interpolated anywhere in the same expression.
+                literal = "".join(
+                    n.value for n in ast.walk(kw.value)
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                )
+                if "coordinator_core.invoke" not in literal:
+                    continue
+                names = {
+                    n.id for n in ast.walk(kw.value) if isinstance(n, ast.Name)
+                }
+                if "dispatch_root" not in names:
+                    rootless.append((node.name, kw.value.lineno))
+
+    assert not rootless, (
+        "invoke remediation names `coordinator_core.invoke` without interpolating "
+        f"`dispatch_root`: {rootless}. From a source clone that command returns the "
+        "DR-331 refusal, not a verdict — name the tree the probe itself dispatched "
+        "from (see _resolve_dispatch_root)."
+    )

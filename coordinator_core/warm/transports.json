@@ -70,9 +70,9 @@
       "measurement_note": "curl -> /hook = 10.4 ms / 1.0 procs, k=6, docs/research/spike-verdicts/2026-08-26-op-cli-over-loopback-http.md. The harness's own client is not curl; that document's PowerShell figure (320.3 ms) is the harness-adjacent upper bound, not cited here because it measures pwsh's own process cost, not this transport.",
       "op_surface": "Claude Code hook events only -- coordinator_core/warm/hook_http.py's SERVED_EVENTS (currently == BLOCKING_EVENTS = {\"PreToolUse\"}), not the general op registry the pipe/door/in-process transports reach.",
       "degrades": true,
-      "degrade_observable": false,
-      "degrade_signal": "",
-      "cannot_observe_reason": "Claude Code's own HTTP hook client fails open with no signal when the listener is unreachable (measured live against a dead port, per coordinator_core/warm/hook_http.py's module docstring, obligation 3). This transport's own code runs only once a request has actually been delivered, so it cannot detect or report the down-listener case at all -- coordinator_core/warm/hook_http.py :: unreachable_response documents a request that WAS delivered but could not be served, which is a different, already-observable case; the harness-level fail-open silence is outside this module's reach by construction, not an oversight left unfixed."
+      "degrade_observable": true,
+      "degrade_signal": "coordinator_core/warm/telemetry.py :: record_degrade (called from coordinator_core/warm/http_listener.py :: _Handler.do_POST on a dispatch failure -- kind=\"cold_run\" -- or a dispatch exceeding HOOK_BUDGET_SECS -- kind=\"hook_timeout\" -- appending one attributable row to warm/degrade.jsonl under svc_dir(), PM ruling 2 (2026-09-01)). This is deliberately narrower than the row's own prior cannot_observe_reason: Claude Code's HTTP hook client still fails open with no signal when the listener is unreachable BEFORE a request is delivered -- that harness-level silent gap is not what this signal claims to cover -- but once a request HAS been delivered here, this module's own choice to answer without the served response is now announced, durably, on disk.",
+      "cannot_observe_reason": ""
     },
     {
       "name": "http-front-door",
@@ -90,7 +90,7 @@
       "degrades": true,
       "degrade_observable": false,
       "degrade_signal": "",
-      "cannot_observe_reason": "Same harness-level fail-open gap as http-hook-loopback's cannot_observe_reason: Claude Code's HTTP hook client is silent when nothing answers, and this module's own code (including its loud, typed ElectionLost/ForeignHolderError exceptions) only ever runs once a connection was already accepted -- it cannot see or report the caller-side silent-failure case. A losing election is itself loud (raises, never swallowed) but that is a startup-time fact about which process serves the port, not a per-fire degrade signal."
+      "cannot_observe_reason": "Not the harness-level fail-open gap http-hook-loopback's row used to cite (eng-director #7, 2026-09-01): on this box DoE's http_hook_forwarder holds FIXED_PORT 47623 as a FOREIGN holder (front_door.py's own module docstring, 'THE MARKER IS A CONFORMANCE CLAIM' section) and ensure_front_door() never wins the election in the deployed configuration, so a degrade_signal sited in this module's own request handler is unreachable in practice -- this code does not execute on the box the manifest describes. Flipping this row would assert an observability the manifest cannot back; declining to do so is not a policy claim about DoE's repo, only a refusal to claim a property of code that does not run here."
     }
   ]
 }

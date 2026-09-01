@@ -108,7 +108,6 @@ NEGATIVE SPEC:
 
 from __future__ import annotations
 
-import calendar
 import errno
 import json
 import os
@@ -425,13 +424,18 @@ def elect_front_door(
 # shutdown via `warm.lifecycle`'s single ordered sequence, in-flight
 # accounting via `warm.server.InFlightCounter`.
 #
-# DISCOVERY IS DUPLICATED, NOT IMPORTED, from `supervisor.py`, for the same
-# reason `supervisor.should_spawn`'s own docstring gives for duplicating
-# `breadcrumb.should_spawn`: the two modules publish distinct records (a
-# per-clone ephemeral-port listener vs. this module's fixed-port, one-per-
-# machine door) under distinct filenames in the same per-clone `svc_dir()`,
-# and a caller reading `supervisor`'s record must never be handed this
-# module's shape by accident.
+# DISCOVERY IS DUPLICATED, NOT IMPORTED, from `supervisor.py`. RETIRED
+# RATIONALE, stated rather than left to go stale (C4 unified the
+# `should_spawn` BODY across this module, `supervisor.py`, and
+# `breadcrumb.py` -- see `should_spawn` below and `breadcrumb.
+# should_spawn_decision`'s own docstring -- so this comment no longer points
+# to that duplication as its justification). What is still duplicated here,
+# and correctly so, is the RECORD SHAPE, not the decision algorithm: the two
+# modules publish distinct records (a per-clone ephemeral-port listener vs.
+# this module's fixed-port, one-per-machine door) under distinct filenames in
+# the same per-clone `svc_dir()`, and a caller reading `supervisor`'s record
+# must never be handed this module's shape by accident. The debounce decision
+# over either record is the one shared `should_spawn_decision` body.
 #
 # NEGATIVE SPEC (this section only):
 #   - No routing / op dispatch lives here. `main()`'s handler answers only
@@ -617,27 +621,22 @@ def discovery_is_live(record: dict) -> bool:
 
 def should_spawn(engine_root: Optional[Path] = None, *, now: Optional[float] = None) -> bool:
     """The debounce decision for THIS module's own discovery file --
-    structurally identical to `supervisor.should_spawn` and `breadcrumb.
-    should_spawn`. True iff nothing currently vouches for an in-flight
-    front-door boot."""
+    delegates to `breadcrumb.should_spawn_decision`, this package's one
+    shared decision body (see that function's docstring for the full
+    contract, and `supervisor.should_spawn`'s docstring for why three bodies
+    collapsed into one, C4).
+
+    True iff nothing currently vouches for an in-flight front-door boot --
+    including, as of this chunk, the case where NO record exists at all: a
+    boot-in-flight lock (`breadcrumb.try_claim_boot`) is now consulted for
+    that case rather than handing back an unconditional `True`.
+    """
     record = read_discovery(engine_root)
-    if record is None:
-        return True
-
-    started_at = record.get("started_at")
-    if not isinstance(started_at, str):
-        return True
-    try:
-        started_epoch = calendar.timegm(time.strptime(started_at, "%Y-%m-%dT%H:%M:%SZ"))
-    except ValueError:
-        return True
-
-    current = time.time() if now is None else now
-    age = current - started_epoch
-    if age < 0 or age >= SPAWN_DEBOUNCE_SECS:
-        return True
-
-    return not discovery_is_live(record)
+    return breadcrumb.should_spawn_decision(
+        record,
+        now=now,
+        lock_path=breadcrumb.boot_lock_path(discovery_path(engine_root)),
+    )
 
 
 def listener_url(record: dict) -> Optional[str]:

@@ -1413,6 +1413,29 @@ def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp
     can be defended. See `_MEASURED_*` / `_PROJECTED_*` above for the
     measurement that retired the old one.
 
+    RE-MEASURED 2026-09-01, and the crossing has arrived. In-process, over
+    a fresh fixture of this exact width (2255 claimants x 5 events + 1846
+    sink-less dirs), best-of-3 `time.process_time`: **515.6ms** -- one
+    Windows timer tick over the 500ms bar, against the 390.625ms this
+    docstring recorded on 2026-08-27. So this gate is now legitimately RED,
+    and it is red for the reason the paragraph below predicted rather than
+    for any regression in `rebuild()` itself: nothing prunes claimant
+    directories, and the corpus kept growing. It was NOT caused by the
+    `recorded_name` field added to `rebuild()` on 2026-09-01 (plan
+    `2026-09-01-the-claim-record-carries-the-name`) -- that is per-claimant
+    dict work, and the same measurement with and without it does not move
+    515.6ms by the 125ms the gap would require.
+
+    DO NOT NARROW THIS ASSERTION TO MAKE IT GREEN. The bar is the bar; what
+    is owed is bounding the corpus, per the paragraph below.
+
+    Beware the subprocess harness's own number here: through
+    `batched_process_time_ms` the same walk reported 687.5ms and 928.1ms on
+    two runs the same hour, against 515.6ms measured in-process. The
+    subprocess arm builds the fixture and pays disk cost on a box carrying
+    dozens of concurrent sessions, and the floor subtraction does not remove
+    it. Price the walk in-process before believing a number from this gate.
+
     THE FINDING THAT SURVIVES, and it is not this assertion. Two points on
     the growth curve -- 61.458ms at the corpus that exists (43.7d) and
     390.625ms at one year of the same accumulation -- put the brightline
@@ -1507,7 +1530,9 @@ def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp
         f"AC18 projected-width rebuild(): rebuild_only="
         f"{rebuild_only_ms}ms (total {result['process_time_ms']}ms minus "
         f"{floor['process_time_ms']}ms interpreter+import floor) "
-        f"procs_per_call={result['procs_per_call']} (k={result['k']}) at "
+        f"procs_per_call={result['procs_per_call']} (floor "
+        f"{floor['procs_per_call']}, excess "
+        f"{round(result['procs_per_call'] - floor['procs_per_call'], 3)}) (k={result['k']}) at "
         f"{_PROJECTED_CLAIMANTS} claimants + {_PROJECTED_EMPTY_DIRS} "
         f"sink-less dirs -- {_PROJECTION_HORIZON_DAYS:.0f}d of the growth "
         f"measured over {_MEASURED_WINDOW_DAYS}d "
@@ -1517,9 +1542,28 @@ def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp
         f"AC18 {verdict}."
     )
     print(detail)
-    assert result["procs_per_call"] == pytest.approx(1.0, abs=0.01), (
-        f"a pure-Python rebuild driver must spawn no subprocess of its "
-        f"own. {detail}"
+    # DIFFERENTIAL, not absolute -- for the same reason `rebuild_only_ms`
+    # subtracts the floor rather than asserting against the total. Measured
+    # 2026-09-01: a driver whose entire body is `print('x')`, importing no
+    # coordinator module and calling no `rebuild()`, also reports
+    # `procs_per_call=2.0` through this harness on Windows. The absolute
+    # `== 1.0` form therefore priced the HARNESS, not the code under test,
+    # and could not pass on this box whatever `rebuild()` did -- a live gate
+    # red for a reason no change to `claim_index` could ever clear.
+    #
+    # What the assertion is actually for survives intact and is what is
+    # asserted here: `rebuild()` must spawn NO subprocess BEYOND what
+    # importing its own module graph already costs. The floor driver is
+    # byte-identical to the real one above its `rebuild()` call (see
+    # `_write_rebuild_floor_driver`'s negative spec), so any excess is
+    # `rebuild()`'s and nothing else's. Independently corroborated the same
+    # day by instrumenting `subprocess.run` across a live `rebuild()` over a
+    # synthetic 30-session / 600-event corpus: zero calls.
+    procs_excess = result["procs_per_call"] - floor["procs_per_call"]
+    assert procs_excess == pytest.approx(0.0, abs=0.01), (
+        f"a pure-Python rebuild driver must spawn no subprocess of its own "
+        f"BEYOND its import floor: driver={result['procs_per_call']} "
+        f"floor={floor['procs_per_call']} excess={procs_excess}. {detail}"
     )
     # The real AC18 gate, and it holds at one year of measured growth. It
     # is a LIVE gate now, not `designed_red`: a regression here means the

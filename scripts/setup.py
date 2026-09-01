@@ -2752,11 +2752,16 @@ def start_warm_engine(repo_root: Path) -> None:
         return
 
     engine_root = str(resolved.root)
+    # `SERVER_ENTRY_SCRIPT` is repo-relative and `spawn_detached` resolves it
+    # against `engine_root`, not the operator's cwd. Every advisory below names
+    # that root: the same relative path also exists in a source clone, so a
+    # rootless "python coordinator_core/warm/server.py" starts a server from an
+    # unstamped tree, which DR-315 s2 / DR-331 rule ineligible to serve.
     try:
         spawn_detached(engine_root, SERVER_ENTRY_SCRIPT)
     except Exception as exc:  # noqa: BLE001 — spawn_detached is best-effort itself
         print(f"[ADVISORY] warm engine spawn failed: {exc!r}", file=sys.stderr)
-        print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT}", file=sys.stderr)
+        print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT} — from {engine_root}, not this cwd", file=sys.stderr)
         return
 
     try:
@@ -2771,7 +2776,7 @@ def start_warm_engine(repo_root: Path) -> None:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"[ADVISORY] warm engine verification child failed to run: {exc!r}", file=sys.stderr)
-        print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT}", file=sys.stderr)
+        print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT} — from {engine_root}, not this cwd", file=sys.stderr)
         return
 
     last_line = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
@@ -2783,7 +2788,7 @@ def start_warm_engine(repo_root: Path) -> None:
     if not outcome.get("served"):
         print("[ADVISORY] warm engine started but did not serve a ping within 15s.", file=sys.stderr)
         print("  Warmth stays enabled; a server will be started lazily by the first op that misses the pipe.", file=sys.stderr)
-        print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT}", file=sys.stderr)
+        print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT} — from {engine_root}, not this cwd", file=sys.stderr)
         return
 
     resolved_file = outcome.get("coordinator_core_file")
@@ -2797,7 +2802,7 @@ def start_warm_engine(repo_root: Path) -> None:
     if not under_published_root:
         print("[ADVISORY] warm engine served a ping, but its resolved coordinator_core did not resolve", file=sys.stderr)
         print(f"  under the published root ({engine_root}): got {resolved_file!r}.", file=sys.stderr)
-        print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT}", file=sys.stderr)
+        print(f"  Remediation: run manually: python {SERVER_ENTRY_SCRIPT} — from {engine_root}, not this cwd", file=sys.stderr)
         return
 
     print(f"PASS [warm engine] resident server served a ping; coordinator_core resolved to {resolved_file} (under {engine_root})")

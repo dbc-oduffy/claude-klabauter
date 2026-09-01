@@ -3235,7 +3235,14 @@ class TestAttributionWriterName:
             path="c.py",
         )
 
-        names = scope._touch_record_writer_names(sink)
+        # Re-pointed at the folded reader, which is what production
+        # actually calls -- the single-purpose helper this originally
+        # exercised had no production caller left and is deleted. The
+        # property under test (keyed by canonical TouchEvent.path, None for
+        # an unstamped survivor) is unchanged and still worth pinning.
+        _lines, _degraded, names = (
+            scope._read_touch_record_as_legacy_lines_with_writer_names(sink)
+        )
         assert names["a.py"] == "claude-klabauter-a9"
         assert names["b.py"] is None
 
@@ -3269,10 +3276,16 @@ class TestAttributionWriterName:
             name=None,
         )
 
+        # The legacy-line half is still checked against the surviving
+        # single-purpose adapter. The writer-name half is asserted against
+        # the LITERAL expected mapping, not against a sibling helper: an
+        # oracle that shares an implementation with the function under test
+        # agrees with it when both are wrong, and the helper this test
+        # originally used as its oracle had already been superseded and is
+        # now deleted.
         expected_lines, expected_degraded = scope._read_touch_record_as_legacy_lines(
             sink
         )
-        expected_names = scope._touch_record_writer_names(sink)
 
         lines, degraded, names = scope._read_touch_record_as_legacy_lines_with_writer_names(
             sink
@@ -3280,7 +3293,7 @@ class TestAttributionWriterName:
 
         assert lines == expected_lines
         assert degraded == expected_degraded
-        assert names == expected_names
+        assert names == {"a.py": "claude-klabauter-a9", "b.py": None}
 
     def test_compute_scope_step3_reads_each_live_peers_touch_record_once(
         self, tmp_path, monkeypatch

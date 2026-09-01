@@ -48,6 +48,15 @@
 #                        error    = BROKEN verdict on failure; fleet-wide symptom.
 #                        degraded = DEGRADED verdict on failure; capability unavailable.
 #   remediation      — One-line operator next-step on failure.
+#                      NOT the emitted text: the probe engine reads `cluster` and the
+#                      triage/required flags off this manifest, never `remediation`/`fix`.
+#                      What an operator actually reads is the `remediation=` kwarg on the
+#                      probe's own `_ProbeResult` in bin/claude-klabauter-doctor-probe.py. These two
+#                      fields are a hand-maintained second copy, and a second copy drifts:
+#                      claude-klabauter.publish.provenance still named a route that cannot publish
+#                      this mirror for as long as it took to notice (corrected 2026-09-01,
+#                      one day after 22562a7b fixed the live string). Change the module
+#                      first; mirror it here in the same commit.
 #   restart_gated    — (optional bool, default false) true iff this probe tests a surface
 #                      that only materializes AFTER a Claude Code restart. A restart-gated
 #                      probe failing PRE-restart is expected, not a configuration error;
@@ -137,7 +146,7 @@ triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_publish_provenance"
 required = false
 severity_if_fail = "degraded"
-remediation = "An engine edit in claude-klabauter takes effect only when a publish round lands it — editing coordinator_core/ does not change what runs. Publish with: python coordinator/bin/percolate-round.py claude-klabauter; that round-end write also refreshes the provenance record this probe reads"
+remediation = "An engine edit in claude-klabauter takes effect only when a publish round lands it — editing coordinator_core/ does not change what runs. Publish with: python coordinator/bin/coordinator-publish.py; that round-end write also refreshes the provenance record this probe reads"
 
 [[probe]]
 id = "claude-klabauter.registry.key"

@@ -44,8 +44,10 @@ def _reset_writer_identity_memo():
     or expects the unresolved default (`self_record` unpatched -> None in
     this sandboxed test environment)."""
     touch_record._WRITER_IDENTITY_MEMO = touch_record._UNSET
+    touch_record._WRITER_IDENTITY_MEMO_KEY = touch_record._UNSET
     yield
     touch_record._WRITER_IDENTITY_MEMO = touch_record._UNSET
+    touch_record._WRITER_IDENTITY_MEMO_KEY = touch_record._UNSET
 
 
 def _registry_record(name, pid=1, start_epoch=1000.0, cwd="/repo"):
@@ -806,3 +808,59 @@ def test_per_process_memo_does_not_re_read_the_registry_per_event(tmp_path, monk
     lines = touch_record.iter_complete_lines(sink.read_bytes())
     assert len(lines) == 5
     assert all(decode_line(line).name == "claude-klabauter-a9" for line in lines)
+
+
+def test_memo_re_resolves_when_claude_pid_env_rebinds_mid_process(tmp_path, monkeypatch):
+    """C1 follow-up fix (EM-adjudicated break-class): the memo must be keyed
+    on the identity ``CLAUDE_PID`` selects, not on "have I resolved once in
+    this process". ``coordinator_core.warm.entry_seam`` rebinds
+    ``CLAUDE_PID`` PER REQUEST because one warm engine process serves many
+    sessions -- a process-keyed memo pins the FIRST caller's identity and
+    silently misattributes (or drops) every later caller's name once a
+    second, different session's request lands in the SAME warm process.
+
+    This reproduces the reviewer's probe directly: request 1 resolves under
+    one ``CLAUDE_PID``/session id, request 2 rebinds ``CLAUDE_PID`` to a
+    DIFFERENT live session's pid and passes that session's own sid -- the
+    registry must be re-read (not skipped via the stale memo) and the
+    second request's own name must be stamped, not silently dropped to
+    unnamed and not the first request's name."""
+    records = {
+        "111": ("sid-first", _registry_record("claude-klabauter-a9")),
+        "222": ("sid-second", _registry_record("claude-klabauter-second")),
+    }
+    calls = {"n": 0}
+
+    def _self_record():
+        calls["n"] += 1
+        pid = os.environ.get("CLAUDE_PID")
+        return records[pid]
+
+    monkeypatch.setattr(hr, "self_record", _self_record)
+
+    sink = tmp_path / "touch-record.jsonl"
+
+    monkeypatch.setenv("CLAUDE_PID", "111")
+    append_event(sink, session_id="sid-first", agent_id=None, verb=VERB_TOUCH, path="a.py")
+    assert calls["n"] == 1
+
+    # Same identity again -- the memo must still hit, no second registry
+    # read (this is C1's own amortization requirement, unweakened by this
+    # fix).
+    append_event(sink, session_id="sid-first", agent_id=None, verb=VERB_TOUCH, path="b.py")
+    assert calls["n"] == 1
+
+    # The warm engine rebinds CLAUDE_PID for a second, unrelated session's
+    # request in the SAME process -- the memo must miss and re-resolve.
+    monkeypatch.setenv("CLAUDE_PID", "222")
+    append_event(sink, session_id="sid-second", agent_id=None, verb=VERB_TOUCH, path="c.py")
+    assert calls["n"] == 2
+
+    lines = touch_record.iter_complete_lines(sink.read_bytes())
+    events = [decode_line(line) for line in lines]
+    assert events[0].name == "claude-klabauter-a9"
+    assert events[1].name == "claude-klabauter-a9"
+    assert events[2].name == "claude-klabauter-second"
+
+    before = degrade_counts().get("writer_name_resolution", 0)
+    assert degrade_counts().get("writer_name_resolution", 0) == before

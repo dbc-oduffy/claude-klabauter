@@ -73,7 +73,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from coordinator_core import locked_write
 from coordinator_core.session.core import stable_pid_alive
@@ -93,6 +93,9 @@ __all__ = [
     "unlink_breadcrumb",
     "should_spawn",
     "PIPE_LIVENESS_PROBE_TIMEOUT_MS",
+    "boot_lock_path",
+    "try_claim_boot",
+    "should_spawn_decision",
 ]
 
 # The old `client.START_DEADLINE` value, reused for a different job now
@@ -475,71 +478,224 @@ def _unix_socket_is_alive(
         return True
 
 
+def boot_lock_path(record_path: Path) -> Path:
+    """The boot-in-flight lock sidecar for `record_path` -- same directory,
+    `.boot.lock` suffix appended, never read for content and never a second
+    discovery/breadcrumb shape; only ever locked. Mirrors `warm.election.
+    _acquire_election_lock`'s own `LOCK_SUFFIX` convention (a sidecar beside
+    the resource it guards, not inside it)."""
+    return Path(str(record_path) + ".boot.lock")
+
+
+def try_claim_boot(lock_path: Path) -> bool:
+    """Non-blocking attempt to become the sole owner of an in-flight boot
+    when NOTHING in the discovery/breadcrumb record vouches for one -- the
+    exact succession window `should_spawn_decision` used to hand unconditional
+    `True` out for (see that function's own docstring, and C4's chunk body,
+    `state/dispatch-briefs/2026-09-01-a-guard-that-cannot-reach-warmth-still-r/
+    C4.md`: "All three should_spawn implementations return True
+    unconditionally when their record is absent ... Absence is exactly the
+    succession window, so during it there is no debounce at all").
+
+    Returns True iff this call becomes the owner (the caller should proceed
+    to spawn) OR the primitive itself could not be evaluated (fail-open, see
+    below); False iff another caller currently owns it.
+
+    THE PRIMITIVE IS A BARE KERNEL FILE LOCK, NOT A SECOND ELECTION AND NOT A
+    TTL. `fcntl.flock` (POSIX) / `msvcrt.locking` (Windows) are already this
+    package's proven crashed-holder-releases mechanism --
+    `coordinator_core.locked_write`'s own `TestCrashSafety` /
+    `TestMachineRendezvousCrashRelease` measure it cross-process on this exact
+    box, and `warm.election._acquire_election_lock` already leans on the
+    identical property for its own non-blocking claim. Reusing it here rather
+    than reaching for a Windows-only `CreateMutexW` / `WAIT_ABANDONED` pair
+    buys the SAME "a crashed starter releases automatically, no TTL to choose
+    wrong" guarantee on BOTH platforms with one code path, which is the
+    multi-OS requirement C4's chunk body names -- and there is no TTL to get
+    wrong: choosing one would invert a burst that should self-resolve in
+    seconds into a box-wide outage lasting until the TTL (or a human) frees
+    the primitive, exactly the failure this chunk must not create.
+
+    DELIBERATELY NEVER RELEASED ON THE CLAIMED PATH. The acquired fd is not
+    closed when this function returns True -- it is intentionally leaked for
+    the rest of THIS process's life, which is the debounce's protection
+    window: a second call in the SAME process (a fresh `os.open` of the same
+    path) sees its own still-held lock and correctly reads "already claimed"
+    (False, matching flock/`msvcrt.locking`'s per-open-file-description
+    semantics, not per-process -- two fds to the same file in one process
+    still conflict), and the OS reclaims the lock the moment this process
+    exits, orderly or crashed, so the very next caller succeeds with no
+    reaper and no human intervention.
+
+    FAILS OPEN on every outcome this function cannot resolve -- an
+    uncreatable sidecar directory, a missing lock backend, any error other
+    than "the lock is held right now" -- returning True rather than wedging
+    every future caller behind a primitive that cannot itself be evaluated.
+    Only the one unambiguous "someone else holds it" outcome
+    (`BlockingIOError` on POSIX, `EACCES`/`EDEADLOCK` on Windows) returns
+    False.
+    """
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        flags = os.O_CREAT | (os.O_RDWR if os.name == "nt" else os.O_WRONLY)
+        fd = os.open(str(lock_path), flags, 0o600)
+    except OSError:
+        return True
+
+    claimed = True
+    try:
+        if os.name == "nt":
+            import errno
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            except OSError as exc:
+                if exc.errno in (errno.EACCES, errno.EDEADLOCK):
+                    claimed = False
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                claimed = False
+    except Exception:  # noqa: BLE001 -- fail open: an unreadable primitive must not wedge a caller
+        claimed = True
+
+    if not claimed:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    # else: `fd` is deliberately leaked -- see docstring's "DELIBERATELY
+    # NEVER RELEASED" section.
+    return claimed
+
+
+def should_spawn_decision(
+    record: Optional[dict],
+    *,
+    now: Optional[float] = None,
+    lock_path: Path,
+    extra_liveness: Optional[Callable[[dict], bool]] = None,
+) -> bool:
+    """The ONE debounce-decision body every `should_spawn` wrapper in this
+    package calls -- `breadcrumb.should_spawn`, `supervisor.should_spawn`,
+    `front_door.should_spawn`. Each wrapper differs only in WHICH record it
+    reads and WHICH lock file it names; the decision logic itself, including
+    the boot-in-flight fallback, is this one function.
+
+    RETIRES THE PRIOR "duplicated rather than parameterized" RATIONALE.
+    `supervisor.should_spawn` used to justify its own copy of this logic by
+    naming `breadcrumb.py` as outside ITS chunk's `writes:` -- true then, and
+    retired now: this chunk's own `writes:` names all three modules plus this
+    file, so the reason to keep three bodies is gone (Kira finding #4, EM
+    adjudication: "unify, don't merely share a primitive"). "Each publishes a
+    distinct record" justifies distinct records, not distinct algorithms --
+    the record-reader was already the caller's job before this change, and is
+    exactly the parameter (`record`) this function now takes.
+
+    True iff nothing currently vouches for an in-flight boot: `record` is
+    `None`, malformed, aged past `SPAWN_DEBOUNCE_SECS`, names a dead pid, or
+    (when `extra_liveness` is supplied) fails that additional proof -- in
+    every one of those cases the record itself has nothing left to say, and
+    this function falls through to `try_claim_boot` rather than returning
+    `True` unconditionally (the bug this chunk exists to close: absence is
+    exactly the succession window, and during it there was previously no
+    debounce at all).
+
+    False iff `record` is young (`age` in `[0, SPAWN_DEBOUNCE_SECS)`) AND its
+    `pid` is alive AND (when `extra_liveness` is supplied) that predicate
+    returns True -- a live record fully vouches, no lock is ever touched.
+
+    `extra_liveness`, when supplied and the record's `pid` is otherwise
+    alive-and-young, decides the outcome directly rather than falling
+    through to `try_claim_boot`: a record naming a live-but-wedged process
+    (`breadcrumb`'s own pipe-liveness proof, `_pipe_is_alive`) is a DIFFERENT
+    state from "nothing vouches at all" -- it means a fresh spawn is needed
+    NOW, not that a boot-in-flight lock should be consulted for a window this
+    record already proves is over.
+
+    `now` is an injectable clock for tests (`time.time()`-shaped: unix epoch
+    seconds), matching `started_at`'s wall-clock provenance -- unlike
+    `warm.lifecycle`'s `time.monotonic()` clocks, this comparison is
+    inherently cross-process (one process's `started_at`, another process's
+    `now`), so a monotonic clock (meaningless across processes) would be the
+    wrong choice here.
+    """
+    if record is not None:
+        started_at = record.get("started_at")
+        started_epoch: Optional[int] = None
+        if isinstance(started_at, str):
+            try:
+                started_epoch = calendar.timegm(time.strptime(started_at, "%Y-%m-%dT%H:%M:%SZ"))
+            except ValueError:
+                started_epoch = None
+
+        if started_epoch is not None:
+            current = time.time() if now is None else now
+            age = current - started_epoch
+            if 0 <= age < SPAWN_DEBOUNCE_SECS:
+                pid = record.get("pid")
+                if isinstance(pid, int):
+                    stored_epoch = record.get("stable_pid_start_epoch")
+                    stored_epoch_str = str(stored_epoch) if stored_epoch is not None else ""
+                    try:
+                        alive = stable_pid_alive(pid, stored_start_epoch=stored_epoch_str)
+                    except Exception:
+                        # `stable_pid_alive` can raise `MissingPsutilError` -- a
+                        # HINT consumer must not let that propagate; treat as
+                        # "cannot vouch for this record."
+                        alive = False
+                    if alive:
+                        if extra_liveness is None:
+                            return False
+                        try:
+                            fully_alive = bool(extra_liveness(record))
+                        except Exception:
+                            fully_alive = False
+                        return not fully_alive
+
+    # No record, or nothing in it currently vouches for an in-flight boot:
+    # this is exactly the succession window this chunk closes. Absence used
+    # to mean unconditional True here; it now means "ask the boot-in-flight
+    # primitive," which is the fix.
+    return try_claim_boot(lock_path)
+
+
 def should_spawn(
     engine_root: Optional[Path] = None,
     *,
     now: Optional[float] = None,
 ) -> bool:
-    """The debounce decision: True iff the caller's own spawn trigger
-    should proceed (no live breadcrumb currently vouches for an
-    in-flight spawn); False iff a young, alive breadcrumb means a spawn
-    already happened and this caller should go cold without spawning a
-    second one. See module docstring's "THE DEBOUNCE CHECK".
-
-    `now` is an injectable clock for tests (`time.time()`-shaped: unix
-    epoch seconds), matching `started_at`'s wall-clock provenance --
-    unlike `warm.lifecycle`'s `time.monotonic()` clocks, this comparison
-    is inherently cross-process (one process's `started_at`, another
-    process's `now`), so a monotonic clock (meaningless across processes)
-    would be the wrong choice here.
+    """The debounce decision for THIS module's own breadcrumb file --
+    delegates to `should_spawn_decision`, this package's one shared body (see
+    that function's docstring for the full contract and why it replaced three
+    separate copies).
 
     A young, alive breadcrumb is vouched for ONLY if its pipe also proves
-    live (`_pipe_is_alive`) -- pid-liveness alone means the PROCESS is
-    running, not that it is serving. Without this second proof, a server
-    that is alive but has stopped accepting connections (wedged) would
-    debounce every caller's spawn for the whole `SPAWN_DEBOUNCE_SECS`
-    window on pid-liveness alone, exactly the process-vs-pipe confusion
-    this function exists to close. A breadcrumb with no recorded pipe
-    (or one the probe cannot evaluate) falls back to the pid-only answer,
-    unchanged from before this check existed.
+    live (`_pipe_is_alive`, passed as `extra_liveness` below) -- pid-liveness
+    alone means the PROCESS is running, not that it is serving. Without this
+    second proof, a server that is alive but has stopped accepting
+    connections (wedged) would debounce every caller's spawn for the whole
+    `SPAWN_DEBOUNCE_SECS` window on pid-liveness alone, exactly the
+    process-vs-pipe confusion this check exists to close.
     """
     record = read_breadcrumb(engine_root)
-    if record is None:
-        return True
 
-    started_at = record.get("started_at")
-    if not isinstance(started_at, str):
-        return True
-    try:
-        started_epoch = calendar.timegm(time.strptime(started_at, "%Y-%m-%dT%H:%M:%SZ"))
-    except ValueError:
-        return True
+    def _pipe_extra_liveness(rec: dict) -> bool:
+        pipe = rec.get("pipe")
+        if not isinstance(pipe, str) or not pipe:
+            # No pipe recorded to prove -- fall back to the pid-only answer,
+            # i.e. this predicate does not further disprove liveness.
+            return True
+        return _pipe_is_alive(pipe)
 
-    current = time.time() if now is None else now
-    age = current - started_epoch
-    if age < 0 or age >= SPAWN_DEBOUNCE_SECS:
-        return True
-
-    pid = record.get("pid")
-    if not isinstance(pid, int):
-        return True
-    stored_epoch = record.get("stable_pid_start_epoch")
-    stored_epoch_str = str(stored_epoch) if stored_epoch is not None else ""
-
-    try:
-        alive = stable_pid_alive(pid, stored_start_epoch=stored_epoch_str)
-    except Exception:
-        # `stable_pid_alive` can raise `MissingPsutilError` -- a HINT
-        # consumer must not let that propagate; treat as "cannot vouch
-        # for this breadcrumb," which means spawn.
-        return True
-
-    if not alive:
-        return True
-
-    pipe = record.get("pipe")
-    if not isinstance(pipe, str) or not pipe:
-        # No pipe recorded to prove -- fall back to the pid-only answer.
-        return False
-
-    return not _pipe_is_alive(pipe)
+    return should_spawn_decision(
+        record,
+        now=now,
+        lock_path=boot_lock_path(breadcrumb_path(engine_root)),
+        extra_liveness=_pipe_extra_liveness,
+    )

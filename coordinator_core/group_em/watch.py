@@ -554,6 +554,59 @@ def save_prev_parked(repo_root: str, parked: dict[str, bool]) -> bool:
     )
 
 
+# ---------------------------------------------------------------------------
+# Boilerplate shared verbatim between `main` and `tick_once` -- hoisted per
+# overengineering-reviewer (finding #5, nitpick, accepted). The two entry
+# points are genuinely two lifecycles (loop-vs-exit, prior state on disk vs
+# in memory, loud vs swallowed failure -- see each docstring); only the
+# surrounding id-defaulting, emit closure, and error-line format were a
+# character-identical fork that would drift the first time one of them
+# changed and not the other.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_caller_and_gem_ids(
+    caller_session_id: Optional[str], group_em_session_id: Optional[str]
+) -> tuple[str, str]:
+    """`main` and `tick_once` share this defaulting exactly: an unset caller
+    id resolves off the harness's own `CLAUDE_CODE_SESSION_ID`
+    (`read_pass.caller_session_id()`), never guessed from roster shape; an
+    unset Group-EM id defaults to the caller's own -- see each entry point's
+    own docstring for why the two are a separate question at all.
+
+    BOTH LEGS ANSWER A STRING, including the case the environment cannot.
+    `read_pass.caller_session_id()` returns `Optional[str]` -- it reads an env
+    var that a process launched outside the harness simply does not carry --
+    and both callers hand the result to `poll_once`, which is typed for a
+    string and uses it as a roster exclusion key. An unresolved id excludes
+    nobody, which is the honest degrade; `None` leaking into that key is not,
+    and every downstream reader would have to re-ask the same question.
+    """
+    if caller_session_id is None:
+        caller_session_id = read_pass.caller_session_id() or ""
+    if group_em_session_id is None:
+        group_em_session_id = caller_session_id
+    return caller_session_id, group_em_session_id
+
+
+def _emit_for(stream: TextIO) -> Callable[[str], None]:
+    """The `emit(line)` closure both entry points build over their own
+    resolved output stream -- print + flush, nothing else."""
+
+    def emit(line: str) -> None:
+        print(line, file=stream, flush=True)
+
+    return emit
+
+
+def _poll_error_line() -> str:
+    """The `POLL-ERROR <one-line traceback>` both entry points report from
+    the current exception -- `limit=1`, collapsed to one line so a broken
+    stream cannot make reporting the error fail worse than the error itself.
+    """
+    return "POLL-ERROR " + traceback.format_exc(limit=1).strip().replace("\n", " | ")
+
+
 def tick_once(
     repo_root: str,
     caller_session_id: Optional[str] = None,
@@ -586,14 +639,11 @@ def tick_once(
     is no loop left to carry on into, and a silent zero here would rebuild the
     exact indistinguishability this entry exists to remove.
     """
-    if caller_session_id is None:
-        caller_session_id = read_pass.caller_session_id()
-    if group_em_session_id is None:
-        group_em_session_id = caller_session_id
+    caller_session_id, group_em_session_id = _resolve_caller_and_gem_ids(
+        caller_session_id, group_em_session_id
+    )
     out = sys.stdout if stream is None else stream
-
-    def emit(line: str) -> None:
-        print(line, file=out, flush=True)
+    emit = _emit_for(out)
 
     try:
         cur_parked, declinations = poll_once(
@@ -606,7 +656,7 @@ def tick_once(
         )
     except Exception:
         try:
-            emit("POLL-ERROR " + traceback.format_exc(limit=1).strip().replace("\n", " | "))
+            emit(_poll_error_line())
         except Exception:
             pass
         return 1
@@ -661,10 +711,9 @@ def main(
     supposed to REPLACE hand-ticking, and until it stamped, doing the right
     thing made the fleet's watch-presence surface report no watch at all.
     """
-    if caller_session_id is None:
-        caller_session_id = read_pass.caller_session_id()
-    if group_em_session_id is None:
-        group_em_session_id = caller_session_id
+    caller_session_id, group_em_session_id = _resolve_caller_and_gem_ids(
+        caller_session_id, group_em_session_id
+    )
 
     # LATE-BOUND, deliberately. `stream: TextIO = sys.stdout` freezes whatever
     # stdout was at IMPORT time, so anything that replaces it afterwards -- a
@@ -672,9 +721,7 @@ def main(
     # than to. For a process whose entire product is its stdout lines, a stream
     # captured before the caller existed is the wrong one by default.
     out = sys.stdout if stream is None else stream
-
-    def emit(line: str) -> None:
-        print(line, file=out, flush=True)
+    emit = _emit_for(out)
 
     snapshot_ms, agents = _measure_snapshot_ms(repo_root)
     peer_count = len(agents)
@@ -695,14 +742,16 @@ def main(
     # so the failure lands as a stand-down rather than an error.
     resolved_root = os.path.abspath(str(repo_root))
     watched_repo = os.path.basename(resolved_root) or str(repo_root)
-    # THE RESOLVED PATH GOES ON THE LINE, not just the derived name. The name
-    # SURVIVES a mangled root -- `X:\example-game-workbench-repo` through a shell
-    # becomes the drive-relative `X:example-game-workbench-repo`, which still ends in
-    # `example-game-workbench-repo` -- so an arm pointed at nothing printed the right
-    # repo name beside a plausible snapshot time and read healthy for fifty
-    # minutes (cross-repo/inbox/2026-09-01-example-game-repo-em-group-em-watch-accepts-bad-repo-root-silently.md).
-    # `_cli` now refuses that root outright; the path here is the second line of
-    # defence, for every caller that reaches `main` without passing through it.
+    # THE RESOLVED PATH GOES ON THE LINE, not just the derived name -- the
+    # name alone survives a mangled root and reads healthy anyway; full
+    # incident: `repo_root_arg`'s module docstring. `_cli` refuses that root
+    # outright; this is the second line of defence for callers that reach
+    # `main` without passing through it.
+    #
+    # Review: overengineering-reviewer (finding #4, minor, accepted) -- this
+    # comment used to retell the incident (mangled path, publish-mirror
+    # consequence) at full length, the third of four full retellings across
+    # this diff. Reduced to a pointer.
     emit(
         f"ARMED peer_count={peer_count} {watched_repo} peers at {resolved_root}, "
         f"snapshot={snapshot_ms:.1f}ms, interval={interval:.1f}s"
@@ -747,7 +796,7 @@ def main(
             # exactly the "indistinguishable from a quiet repo" failure this
             # module's COVERAGE contract exists to prevent.
             try:
-                emit("POLL-ERROR " + traceback.format_exc(limit=1).strip().replace("\n", " | "))
+                emit(_poll_error_line())
             except Exception:
                 pass
         iterations += 1

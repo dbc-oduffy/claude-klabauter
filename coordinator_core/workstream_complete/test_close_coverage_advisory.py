@@ -121,11 +121,8 @@ def test_uncovered_set_lands_advisory_without_gating_the_close(
     )
 
     captured = capsys.readouterr()
-    # STDERR, not stdout: this op's stdout contract is its JSON, and an
-    # advisory line on it is a `json.loads(stdout)` failure for every caller
-    # (example-game-repo-em 2026-09-01, defect 5). The empty-stdout assertion is the
-    # half that has teeth -- without it a future revert to `print(message)`
-    # passes, since the prefix assertion alone does not care which stream.
+    # The empty-stdout assertion is the half with teeth: a prefix check
+    # alone does not care which stream carried it.
     assert directives_review._CLOSE_COVERAGE_ADVISORY_PREFIX in captured.err
     assert "uncovered: 1/2 commit(s)" in captured.err
     assert captured.out == ""

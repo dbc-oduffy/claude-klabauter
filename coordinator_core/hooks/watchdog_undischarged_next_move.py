@@ -273,13 +273,14 @@ _INTAKE_OPS = ("open", "progress", "blocked", "discharge")
 # string, so a correction to one copy left the other two writing elsewhere.
 # That module is stdlib-only and does no import-time work: this hook is on the
 # per-turn path for every session on the box.
-_session_share_dir = subagent_share.share_dir
-_ledger_path = subagent_share.ledger_path
-_intake_path = subagent_share.intake_path
+#
+# Review: overengineering-reviewer (finding #2, minor, accepted) -- call
+# sites below now name `subagent_share.<name>` directly; `_session_share_dir`
+# was an alias with no in-module caller and is dropped outright.
 
 
 def _read_records(repo_root: str, session_id: str) -> list:
-    path = _ledger_path(repo_root, session_id)
+    path = subagent_share.ledger_path(repo_root, session_id)
     if not os.path.isfile(path):
         return []
     records = []
@@ -304,7 +305,7 @@ def _write_records(repo_root: str, session_id: str, records: list) -> bool:
     """Atomically replace the ledger file (temp file + `os.replace`, same
     directory) -- atomic on both POSIX and Windows, closing the same
     read-modify-write race DoE's own `_write_records` closes."""
-    path = _ledger_path(repo_root, session_id)
+    path = subagent_share.ledger_path(repo_root, session_id)
     directory = os.path.dirname(path)
     tmp_path = None
     try:
@@ -479,7 +480,7 @@ def _drain_intake(repo_root: str, session_id: str) -> None:
     Never raises; a fold that cannot complete leaves the intake file in
     place for the next Stop call on this session to retry.
     """
-    path = _intake_path(repo_root, session_id)
+    path = subagent_share.intake_path(repo_root, session_id)
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             text = handle.read()

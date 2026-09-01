@@ -127,6 +127,13 @@ __all__ = [
     "election_lost_path",
     "record_election_lost",
     "election_lost_samples",
+    "DEGRADE_FILENAME",
+    "KIND_COLD_RUN",
+    "KIND_HOOK_TIMEOUT",
+    "DEGRADE_KINDS",
+    "degrade_path",
+    "record_degrade",
+    "degrade_samples",
 ]
 
 EXIT_REASON_SKEW = "skew"
@@ -527,6 +534,101 @@ def warm_rate(engine_root: Optional[Path] = None) -> dict:
         "total": total,
         "warm_rate": (warm_count / total) if total else None,
     }
+
+
+DEGRADE_FILENAME = "degrade.jsonl"
+
+#: A request WAS delivered to a transport handler and this process chose
+#: (or was forced) to answer without the served warm response -- the
+#: distinction PM ruling 2 draws against the HARNESS-side silent fail-open
+#: `http-hook-loopback`/`http-front-door`'s own `cannot_observe_reason`
+#: already names: that reason is honest about the caller never reaching us
+#: at all, and silent about what happens once one does. `kind="cold_run"`
+#: is this module's answer for the latter.
+KIND_COLD_RUN = "cold_run"
+
+#: A request WAS served, but the serving took long enough to be
+#: indistinguishable, from the operator's chair, from the box being
+#: unreachable -- the "UserPromptSubmit hook timed out after 5s" case the
+#: PM named. Recorded from inside the handler that measured its own
+#: elapsed time, not inferred from a caller-side timeout.
+KIND_HOOK_TIMEOUT = "hook_timeout"
+
+DEGRADE_KINDS = frozenset({KIND_COLD_RUN, KIND_HOOK_TIMEOUT})
+
+
+def degrade_path(engine_root: Optional[Path] = None) -> Path:
+    """`<svc dir>/degrade.jsonl` -- the durable sink `record_degrade`
+    appends to, resolved through the same `svc_dir()` every other recorder
+    in this module uses. A stderr print into a hook response is not
+    something anyone reads a week later (module NEGATIVE-SPEC's sibling
+    recorders make the identical argument for their own on-disk homes);
+    this file is what makes "running cold for weeks" a fact recoverable
+    from disk rather than a reconstructed session transcript."""
+    return svc_dir(engine_root) / DEGRADE_FILENAME
+
+
+def record_degrade(
+    *,
+    kind: str,
+    cause: str,
+    engine_root: Optional[Path] = None,
+) -> None:
+    """Append one attributable, durable row recording a cold run or a
+    hook-budget overrun -- the sink `transports.json`'s `degrade_signal`
+    field points callers at for `http-hook-loopback` (PM ruling 2).
+
+    `kind` must be one of `DEGRADE_KINDS` (`KIND_COLD_RUN` /
+    `KIND_HOOK_TIMEOUT`); an unrecognized kind is a caller bug and raised
+    loudly here, matching `ServerTelemetry.record_exit`'s identical
+    contract for its own closed `EXIT_REASONS` set -- this instrument must
+    never silently accept a kind nothing downstream can attribute.
+
+    `cause` is a short, free-text, human-attributable reason (naming the
+    call site and what was observed), never omitted -- an empty cause row
+    is exactly the escape clause AC15 exists to close for the schema, and
+    this recorder does not reopen it for its own payload.
+
+    Best-effort: never raises past the point `kind` is validated, mirroring
+    every other recorder in this module -- an instrument may not be the
+    reason the request it is describing also fails.
+    """
+    if kind not in DEGRADE_KINDS:
+        raise ValueError(f"unknown degrade kind: {kind!r}, expected one of {sorted(DEGRADE_KINDS)}")
+    record = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "kind": kind,
+        "cause": cause,
+    }
+    path = degrade_path(engine_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked_write.held_lock(path, holder_label="warm.telemetry.degrade"):
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+def degrade_samples(engine_root: Optional[Path] = None) -> list:
+    """Every recorded degrade row, oldest first. Absent file reads as an
+    empty list; an unparseable row is skipped, not fatal -- matches every
+    other `*_samples` reader in this module."""
+    path = degrade_path(engine_root)
+    rows: list = []
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    return rows
 
 
 class ServerTelemetry:

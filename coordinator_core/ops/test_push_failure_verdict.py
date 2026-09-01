@@ -253,13 +253,20 @@ def _count_git_spawns(monkeypatch, repo: Path) -> tuple[int, dict]:
 
 
 def test_clean_index_costs_exactly_one_git_spawn(tmp_path, monkeypatch):
-    """A clean index answers from ONE `git status --porcelain=v2` spawn.
+    """A clean index answers from ONE spawn.
 
-    This is the op's contract, not an incidental win: it replaced four
-    spawns (two `diff`s, `rev-parse --git-dir`, `rev-list`) measured at
-    546ms total against a 500ms brightline and a 200ms per-process
-    ceiling. `_incoming_files` must stay behind the `if staged:` guard —
-    with an empty index its result is read by no verdict.
+    This is the op's contract, not an incidental win. Originally that one
+    spawn was `git status --porcelain=v2` (itself replacing four spawns —
+    two `diff`s, `rev-parse --git-dir`, `rev-list` — measured at 546ms
+    total against a 500ms brightline and a 200ms per-process ceiling). C5
+    (2026-09-01, state/dispatch-briefs/2026-09-01-a-guard-that-cannot-
+    reach-warmth-still-r/C5.md) moved staged/unstaged off that spawn
+    in-process, so the one spawn a clean index now pays is the narrower
+    `git rev-list --left-right --count @{u}...HEAD` (`_ahead_behind_spawn`)
+    — Step 3's own graph question, which genuinely needs git (see that
+    function's docstring). `_incoming_files` must stay behind the
+    `if staged:` guard — with an empty index its result is read by no
+    verdict.
     """
     _origin, clone = _clone_with_upstream(tmp_path)
 
@@ -269,10 +276,18 @@ def test_clean_index_costs_exactly_one_git_spawn(tmp_path, monkeypatch):
     assert result["verdict"] == "indeterminate"
 
 
-def test_staged_index_costs_exactly_two_git_spawns(tmp_path, monkeypatch):
-    """A non-empty index adds exactly ONE spawn — the incoming-files diff
-    that discriminates `half_applied_merge` from `peer_staged`. Nothing
-    else may re-enter the process budget."""
+def test_staged_index_costs_exactly_one_git_spawn(tmp_path, monkeypatch):
+    """A non-empty index costs exactly ONE spawn — the incoming-files diff
+    that discriminates `half_applied_merge` from `peer_staged`.
+
+    C5 (2026-09-01, state/dispatch-briefs/2026-09-01-a-guard-that-cannot-
+    reach-warmth-still-r/C5.md): staged/unstaged are now read in-process
+    off `.git/index` (`_inprocess_staged_unstaged`), so the combined
+    `git status --porcelain=v2` spawn this op used to pay even on a staged
+    leg is gone — and ahead/behind (Step 3's own fact) is never consulted
+    by Step 2 at all, so it is never paid for on this leg either. This was
+    2 spawns before C5; asserting the reduction, not merely the count, is
+    the point of this test's rename."""
     origin, clone = _clone_with_upstream(tmp_path)
     _push_extra_commits_and_fetch(origin, clone, ["incoming1.txt"])
 
@@ -281,7 +296,7 @@ def test_staged_index_costs_exactly_two_git_spawns(tmp_path, monkeypatch):
 
     count, result = _count_git_spawns(monkeypatch, clone)
 
-    assert count == 2, f"staged index should cost two spawns, made {count}"
+    assert count == 1, f"staged index should cost one spawn, made {count}"
     assert result["verdict"] == "peer_staged"
 
 

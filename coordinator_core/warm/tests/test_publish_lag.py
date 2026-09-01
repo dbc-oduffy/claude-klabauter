@@ -109,7 +109,7 @@ def test_publish_lag_above_threshold_computes_age_and_message(tmp_path, monkeypa
     message = skew.publish_lag_message(lag)
     assert message is not None
     assert "3 commit(s)" in message
-    assert "percolate-round.py claude-klabauter" in message
+    assert "claude-klabauter: python coordinator/bin/coordinator-publish.py" in message
 
 
 def test_publish_lag_below_threshold_minutes_stays_silent(tmp_path, monkeypatch):
@@ -252,4 +252,4 @@ def test_publish_lag_message_scope_sentence_differs_by_site():
     assert "This run executes" not in close
     for msg in (fire, close):
         assert "5 commit(s)" in msg
-        assert "percolate-round.py claude-klabauter" in msg
+        assert "claude-klabauter: python coordinator/bin/coordinator-publish.py" in msg

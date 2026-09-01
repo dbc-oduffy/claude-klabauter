@@ -68,6 +68,7 @@ from pathlib import Path
 from coordinator_core.install.door_install import (
     BARE_FORWARDER_NAME,
     DoorInstallError,
+    ImageCurrencyAudit,
     audit_installed_image_currency,
     is_door_installed,
 )
@@ -433,12 +434,33 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
 
     report.forwarder_expected = len(expected)
     bin_dir = settings_home_path / "bin"
+
+    try:
+        audit = audit_installed_image_currency(bin_dir, expected.keys())
+    except DoorInstallError as exc:
+        report.door_image_audit_error = str(exc)
+        audit = ImageCurrencyAudit(current=[], stale=[], missing=sorted(expected))
+    else:
+        report.door_image_stale = audit.stale
+    door_current = set(audit.current)
+
     missing: list[str] = []
     unverified: list[str] = []
     door_owned: list[str] = []
     byte_copied: list[str] = []
     present_count = 0
     for installed_name, target in sorted(expected.items()):
+        # THE IMAGE IS CHECKED BEFORE THE PYTHON BODY, NOT AFTER IT. Under
+        # ONE ENTRYPOINT PER PLATFORM a cut-over name has NO Python body --
+        # `door_install.remove_superseded_python_forwarders` deletes it on a
+        # successful cutover, deliberately. Reading the body first therefore
+        # scores a correctly-installed box as 367 missing forwarders, which
+        # is what this report did the first time the door leg actually ran
+        # (2026-09-01): `17/384 verified` on a box whose every name resolved.
+        if installed_name in door_current:
+            door_owned.append(installed_name)
+            present_count += 1
+            continue
         path = bin_dir / installed_name
         if not path.is_file():
             missing.append(installed_name)
@@ -458,14 +480,9 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
     report.forwarder_unverified = unverified
     report.forwarder_door_owned = door_owned
     report.forwarder_byte_copied = byte_copied
-
-    try:
-        audit = audit_installed_image_currency(bin_dir, expected.keys())
-    except DoorInstallError as exc:
-        report.door_image_audit_error = str(exc)
-    else:
-        report.door_image_stale = audit.stale
     return report
+
+
 
 
 def format_report_lines(report: SettingsHomeReport) -> list[str]:

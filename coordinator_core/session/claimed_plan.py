@@ -107,6 +107,77 @@ from coordinator_core.session import core, shape
 # that sweep and silently DEREGISTERS those four ops. See the negative-spec.
 
 
+#: Where an archived plan lands, in resolution order. `fleet.archive_completed_
+#: plans` git-mv's a terminal plan into `archive/specs/<YYYY-MM>/`;
+#: `archive/completed/<YYYY-MM>/` is the older destination still holding plans
+#: swept before that op existed. Both are exactly ONE level deep (a `YYYY-MM`
+#: directory), which is why the lookup below globs `*/<slug>.md` rather than
+#: recursing -- an `rglob` over both trees is ~1000 stat calls on this repo to
+#: answer a question a two-entry glob answers exactly.
+#:
+#: `archive/handoffs` is deliberately NOT here, though `pickup_assemble.
+#: ARCHIVE_DIRS` includes it for its own basename walk. A plan slug and a
+#: handoff basename collide often -- 7 of this repo's claimed slugs match a
+#: file under `archive/handoffs` as well -- so searching it would hand back a
+#: HANDOFF as a session's claimed PLAN. Restricted to these two, the same
+#: corpus resolves 34 of 34 archived claims with zero ambiguity (measured
+#: 2026-09-01). Do not widen this tuple to reuse `ARCHIVE_DIRS`; the narrower
+#: set is the correctness property, not an optimization.
+_PLAN_ARCHIVE_DIRS = ("archive/specs", "archive/completed")
+
+
+def _resolve_plan_slug_path(root: Optional[str], slug: str) -> str:
+    """Repo-relative path of the plan named by ``slug``, wherever it now lives.
+
+    The claim store records a SLUG, never a location: ``plan-claims/<slug>/``.
+    Every reader before this helper rebuilt the location by hand as
+    ``f"docs/plans/{slug}.md"``, which is right until the plan is archived --
+    and ``fleet.archive_completed_plans`` archives on terminal status ALONE, so
+    a session holding a live claim can have its plan moved out from under it.
+    The claim stays valid and correct; only the assumed location goes stale.
+    Measured on this repo 2026-09-01: 44 of 79 plan claims named a
+    ``docs/plans/`` path with no file behind it, and 34 of those 44 were a real
+    plan sitting in ``archive/specs/``.
+
+    That mattered because ``baton_assemble``'s mint stamps ``governing_plan``
+    from this value: a baton got an edge to a path resolving to nothing,
+    silently (reported by example-game-repo-em, 2026-09-01, as a follow-up on memo
+    ``plan-baton-link-not-required``).
+
+    Resolution order: the live ``docs/plans/`` path when a file is there, then
+    each ``_PLAN_ARCHIVE_DIRS`` entry in order. Multiple hits inside one
+    archive dir take the lexicographically first -- unobserved on this corpus,
+    and a stable pick beats an arbitrary one.
+
+    UNRESOLVABLE FALLS BACK TO THE LIVE PATH, deliberately: this function's
+    contract is "a repo-relative string, always", matching what every caller
+    already receives, so a slug naming nothing (a scaffold-and-discard, a test
+    fixture left in the store) returns ``docs/plans/<slug>.md`` exactly as
+    before. Deciding what an unresolvable claim MEANS is the caller's job --
+    see ``baton_assemble``'s own existence check before it stamps
+    ``governing_plan``. Returning ``None`` here would push that judgment into a
+    resolver whose never-raises/always-a-string contract three call sites
+    depend on.
+    """
+    live = f"docs/plans/{slug}.md"
+    if not root:
+        return live
+    root_path = Path(root)
+    if (root_path / live).is_file():
+        return live
+    for archive_dir in _PLAN_ARCHIVE_DIRS:
+        base = root_path / archive_dir
+        if not base.is_dir():
+            continue
+        try:
+            hits = sorted(base.glob(f"*/{slug}.md"))
+        except OSError:
+            continue
+        if hits:
+            return hits[0].relative_to(root_path).as_posix()
+    return live
+
+
 def list_held_plan_claims(
     cwd: str | Path | None = None,
 ) -> list[tuple[str, Optional[str]]]:
@@ -165,6 +236,14 @@ def list_held_plan_claims(
     except OSError:
         return []
 
+    # Resolved ONCE, above the loop. `core.git_root` shells out to
+    # `git rev-parse --show-toplevel`, so calling it per claim would be a
+    # per-item git spawn inside an enumeration -- the exact shape
+    # `coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py` exists
+    # to refuse, and a session holding a dozen claims would pay a dozen
+    # process creations (~25ms each) to answer one question.
+    repo_root = core.git_root(cwd_str)
+
     held: list[tuple[str, Optional[str]]] = []
     for entry in entries:
         if not entry.is_dir():
@@ -180,7 +259,7 @@ def list_held_plan_claims(
             claimed_at = (entry / "claimed_at").read_text(encoding="utf-8").strip() or None
         except OSError:
             claimed_at = None
-        held.append((f"docs/plans/{entry.name}.md", claimed_at))
+        held.append((_resolve_plan_slug_path(repo_root, entry.name), claimed_at))
 
     if not held:
         return []
@@ -227,16 +306,31 @@ def _backed_by_claim(path: str, held: list[tuple[str, Optional[str]]]) -> bool:
     The claim store is therefore a superset of what the shape file can
     legitimately name — a pointer outside it outlived its own claim.
 
-    Compares separator-normalized text, not filesystem identity: both sides
-    are repo-relative ``docs/plans/<slug>.md`` strings minted inside this
-    package (``claim_plan``'s f-string, ``list_held_plan_claims``'s), and a
-    stat-based comparison would additionally reject a plan file legitimately
-    renamed or deleted after being claimed.
+    Compares on the SLUG (basename minus ``.md``), not on the full path, and
+    not on filesystem identity. Both sides are repo-relative strings minted
+    inside this package, but they no longer agree on the DIRECTORY: tier (a)'s
+    pointer is whatever ``claim_plan`` wrote at claim time (always
+    ``docs/plans/<slug>.md``), while tier (b) now reports where the plan
+    actually lives, which is an ``archive/specs/`` path once the plan is
+    archived (``_resolve_plan_slug_path``). A full-path comparison would call
+    every archived plan's shape pointer unbacked and silently demote tier (a),
+    which is precedence this function exists to preserve, not to relitigate.
+    The slug is the claim store's own key, so comparing on it compares the
+    thing the two tiers genuinely share.
+
+    A stat-based comparison stays wrong for the reason it always was: it would
+    additionally reject a plan file legitimately renamed or deleted after being
+    claimed.
     """
     if not held:
         return False
-    norm = path.replace("\\", "/").strip()
-    return any(claimed.replace("\\", "/").strip() == norm for claimed, _ in held)
+
+    def _slug(value: str) -> str:
+        tail = value.replace("\\", "/").strip().rsplit("/", 1)[-1]
+        return tail[:-3] if tail.endswith(".md") else tail
+
+    norm = _slug(path)
+    return any(_slug(claimed) == norm for claimed, _ in held)
 
 
 def resolve_claimed_plan_path(cwd: str | Path | None = None) -> str | None:
@@ -278,7 +372,16 @@ def resolve_claimed_plan_path(cwd: str | Path | None = None) -> str | None:
         if isinstance(plan_field, dict):
             path = plan_field.get("path")
             if isinstance(path, str) and path and _backed_by_claim(path, held):
-                return path
+                # Re-resolved, never returned verbatim. The shape pointer is
+                # frozen at claim time and always names `docs/plans/`, so
+                # handing it back would reintroduce the stale-location defect
+                # on this tier alone -- tier (a) would answer with a dead path
+                # for exactly the archived plans tier (b) now resolves
+                # correctly. Precedence is unchanged; only the location is
+                # refreshed.
+                return _resolve_plan_slug_path(
+                    core.git_root(cwd_str), Path(path).stem
+                )
 
     # ---- Tier (b): every plan claim this session holds, earliest first ----
     # Delegates to `list_held_plan_claims` rather than re-scanning

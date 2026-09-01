@@ -71,9 +71,11 @@ _INTAKE_SCHEMA = 1
 # This module used to retype both AND reach into `send_pass`'s private
 # namespace for the join -- one string typo apart from reading a different
 # file than the module writing it.
-_ledger_path = subagent_share.ledger_path
-_intake_path = subagent_share.intake_path
-_safe_session_id = subagent_share.safe_session_id
+#
+# Review: overengineering-reviewer (finding #2, minor, accepted) -- call
+# sites below now name `subagent_share.<name>` directly rather than rebinding
+# aliases, which restored the private-looking-but-foreign symbol the
+# consolidation existed to remove.
 
 
 def for_peer(repo_root: str, session_id: str) -> Optional[list[dict[str, Any]]]:
@@ -87,9 +89,9 @@ def for_peer(repo_root: str, session_id: str) -> Optional[list[dict[str, Any]]]:
     ledger that owes nothing right now) are deliberately distinct; see the
     module docstring's negative spec.
     """
-    if not _safe_session_id(session_id):
+    if not subagent_share.safe_session_id(session_id):
         return None
-    path = _ledger_path(repo_root, session_id)
+    path = subagent_share.ledger_path(repo_root, session_id)
     if not os.path.exists(path):
         return None
     records: list[dict[str, Any]] = []
@@ -159,7 +161,7 @@ def record(
     is the INTAKE APPENDER, not a ledger writer: DoE's own drain claims,
     folds, and deletes what lands here.
     """
-    if not _safe_session_id(session_id):
+    if not subagent_share.safe_session_id(session_id):
         return False
     if not isinstance(producer, str) or not producer:
         return False
@@ -183,7 +185,7 @@ def record(
     if _validate_row(row) is not None:
         return False
 
-    path = _intake_path(repo_root, session_id)
+    path = subagent_share.intake_path(repo_root, session_id)
     line = json.dumps(row, sort_keys=True)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)

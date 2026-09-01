@@ -187,8 +187,12 @@ DEFAULT_MAX_ENTRIES = 5
 # `hooks.watchdog_undischarged_next_move` were each carrying their own copy of
 # the same join and the same filename string, and `obligations` was importing
 # two of them out of THIS module's private namespace.
-_safe_session_id = subagent_share.safe_session_id
-_session_share_dir = subagent_share.share_dir
+#
+# Review: overengineering-reviewer (finding #2, minor, accepted) -- the
+# private aliases previously bound here (`_safe_session_id`,
+# `_session_share_dir`) restored exactly the private-looking-but-foreign
+# symbol the consolidation existed to remove. Call sites now name
+# `subagent_share.<name>` directly.
 
 
 def undischarged_obligations(repo_root: str, session_id: str) -> Optional[int]:
@@ -199,9 +203,13 @@ def undischarged_obligations(repo_root: str, session_id: str) -> Optional[int]:
     Unparseable lines are skipped: a malformed ledger degrades to a lower
     count, never to a crash or an inferred obligation.
     """
-    if not _safe_session_id(session_id):
+    if not subagent_share.safe_session_id(session_id):
         return None
-    path = os.path.join(_session_share_dir(repo_root, session_id), subagent_share.LEDGER_FILENAME)
+    # Review: overengineering-reviewer (finding #3, minor, accepted) -- this
+    # used to re-derive the join by hand instead of calling the owner's
+    # `ledger_path` helper, leaving the stated duplication failure mode half
+    # closed.
+    path = subagent_share.ledger_path(repo_root, session_id)
     if not os.path.exists(path):
         return None
     count = 0
@@ -248,10 +256,14 @@ def send_log_path(repo_root: str, caller_session_id: str) -> str:
     Per-session bookkeeping beside `advisory-fire-counts.jsonl`. Session-
     scoped: a new Group EM starts with an empty cooldown, matching the DACI
     ruling that the Driver role ends with the session.
+
+    One-line delegation to the owner (overengineering-reviewer finding #3):
+    kept as a public wrapper here rather than dropped, since this module's
+    own callers (`read_send_log`, `_record_offer`, `decline`) already spell
+    it as `send_log_path(...)`, not `subagent_share.send_log_path(...)`, and
+    that is a large in-module diff for no readability gain.
     """
-    return os.path.join(
-        _session_share_dir(repo_root, caller_session_id), subagent_share.SEND_LOG_FILENAME
-    )
+    return subagent_share.send_log_path(repo_root, caller_session_id)
 
 
 def offer_key(caller_session_id: str, peer_session_id: str) -> str:
@@ -304,7 +316,7 @@ def _record_offer(
     public counterpart -- do not expose this as a per-peer entry point.
     """
     now = time.time() if now is None else now
-    if not _safe_session_id(caller_session_id) or not _safe_session_id(peer_session_id):
+    if not subagent_share.safe_session_id(caller_session_id) or not subagent_share.safe_session_id(peer_session_id):
         return False
     path = send_log_path(repo_root, caller_session_id)
     line = json.dumps(
@@ -346,7 +358,7 @@ def decline(
     docstring's DECLINATION section) -- declining is not offering.
     """
     now = time.time() if now is None else now
-    if not _safe_session_id(caller_session_id) or not _safe_session_id(peer_session_id):
+    if not subagent_share.safe_session_id(caller_session_id) or not subagent_share.safe_session_id(peer_session_id):
         return False
     if gate not in DECLINE_GATES:
         return False
@@ -544,7 +556,7 @@ def resolve_addressee(
     standing in for `peer_roster.build_roster` without touching the live
     registry in a test. `None` (the default) calls the real thing.
     """
-    if not _safe_session_id(peer_session_id):
+    if not subagent_share.safe_session_id(peer_session_id):
         return None
     roster_fn = build_roster if build_roster is not None else peer_roster.build_roster
     try:
@@ -661,7 +673,7 @@ def build_send_digest(
 
     for verdict in roster:
         raw_session_id = verdict.get("session_id")
-        if not isinstance(raw_session_id, str) or not _safe_session_id(raw_session_id):
+        if not isinstance(raw_session_id, str) or not subagent_share.safe_session_id(raw_session_id):
             suppressed.append(_suppressed(raw_session_id, "unusable-session-id"))
             continue
         peer_session_id: str = raw_session_id
@@ -751,7 +763,7 @@ def build_send_digest(
     open_obligations = [entry["session_id"] for entry in entries]
     for row in suppressed:
         session_id = row["session_id"]
-        if row["why"] != "cooldown" or not _safe_session_id(session_id):
+        if row["why"] != "cooldown" or not subagent_share.safe_session_id(session_id):
             continue
         key = offer_key(caller_session_id, session_id)
         if _log_key_is_open(log, key):

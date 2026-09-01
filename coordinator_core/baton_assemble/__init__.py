@@ -2772,15 +2772,44 @@ def resolve_lineage(
         _governing_plan_raw: Optional[str] = None
         if is_plan_input:
             _governing_plan_raw = artifact_path or None
-        elif _plan_file:
+        elif _plan_file and Path(_plan_file).is_file():
             _governing_plan_raw = _plan_file
-        elif is_own_handoff_record:
+        elif _plan_file:
+            # The claim rung, and ONLY this rung, is checked for existence
+            # before it is trusted. A plan claim records a slug, nothing
+            # releases it when the plan file goes away, and
+            # `coordinator-doc-new --type plan` takes a claim at SCAFFOLD
+            # time -- so a scaffold-and-discard leaves a claim that mints a
+            # baton edge to nothing. Example-game-repo-em, 2026-09-01: a baton minted
+            # with `governing_plan: docs/plans/plan-probe.md`, a throwaway
+            # written to a scratchpad and deleted, while the real plan sat
+            # unnamed in the baton's own `predecessor_handoff`.
+            #
+            # `claimed_plan._resolve_plan_slug_path` has already re-homed an
+            # ARCHIVED plan onto its real `archive/specs/` path by this point,
+            # so a path still missing here is missing for real.
+            #
+            # Deliberately falls THROUGH to the carry rung rather than
+            # returning: a dead claim must not mask a valid edge the
+            # predecessor already recorded.
+            print(
+                f"baton-assemble: ignoring claimed plan {_plan_file} -- no file "
+                f"there. The claim outlived its plan; release it with "
+                f"`session-claim-cli release-artifact plan <slug>`.",
+                file=sys.stderr,
+            )
+        if _governing_plan_raw is None and not is_plan_input and is_own_handoff_record:
             _carried_governing_plan = _fm_field(fm, "governing_plan")
             _governing_plan_raw = (
                 _carried_governing_plan
                 if _carried_governing_plan not in (None, "", "none")
                 else None
             )
+        # No existence check here: the claim rung above is the only untrusted
+        # source (a stale claim store). `is_plan_input` names a file the caller
+        # supplied, and the carry rung propagates a fact the predecessor
+        # already recorded -- dropping either would lose provenance rather
+        # than prevent a dead edge, and the carry is RULED load-bearing.
         lineage["governing_plan"] = (
             _repo_relative_posix(_governing_plan_raw, root) if _governing_plan_raw else None
         )

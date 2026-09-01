@@ -71,7 +71,11 @@ TICK_SOURCE = "monitor"
 #: The three words the DoE reader already declares. A tick that cannot name
 #: itself one of them is a writer bug, not a record to write: an unknown word
 #: reads to that reader as a watch of unknown provenance, which is worse than
-#: a loud failure here.
+#: a loud failure here. This repo's OWN writers produce only two of the
+#: three -- `monitor` (`watch.main`) and `cron` (`watch.tick_once`); `entry`
+#: is the sibling DoE reader's word to write, never ours. The allow-list is
+#: deliberately wider than this repo's own producer set, mirroring the
+#: reader's declared vocabulary rather than narrowing to what we emit.
 TICK_SOURCES = ("cron", "monitor", "entry")
 
 _STAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -108,20 +112,20 @@ def write_atomic(path: str, payload: dict) -> bool:
     tmp_path = None
     try:
         # NEVER MINT A REPO. `makedirs` used to create the WHOLE chain, so a
-        # caller handed a mangled root created a repo-shaped directory wherever
-        # that path landed: measured 2026-09-01, a drive-relative
-        # `X:example-game-workbench-repo` resolved against the writer's cwd and this
-        # function created `<a sibling checkout>/example-game-workbench-repo/state/`
-        # and wrote the heartbeat into it. The stray tree was inside a publish
-        # mirror, where it failed a publish row's content check and blocked the
-        # round for the whole fleet (claude-klabauter-c0).
+        # caller handed a mangled root created a repo-shaped tree wherever that
+        # path landed -- once inside a publish mirror, where it blocked the
+        # round for the whole fleet. Full incident: `group_em.repo_root_arg`'s
+        # module docstring.
         #
-        # An arm-time check on `--repo-root` is the other half of that fix and
-        # is not this half: it only covers callers that came through a CLI. A
-        # writer that can conjure a repo directory is doing something no correct
-        # caller ever needs, so the refusal belongs HERE too -- the repo root
-        # must already exist, and only the `state/` leaf under it is ours to
-        # create.
+        # THIS IS NOT THE SAME FIX as that module's arm-time refusal, which
+        # only covers callers that came through a CLI. A writer able to conjure
+        # a repo directory is doing something no correct caller needs, so the
+        # root must already exist and only the `state/` leaf under it is ours
+        # to create.
+        #
+        # Review: overengineering-reviewer (finding #4, minor, accepted) --
+        # the fourth full retelling of one incident across this diff, reduced
+        # to a pointer plus the part that is this site's own reasoning.
         parent = os.path.dirname(directory)
         if parent and not os.path.isdir(parent):
             return False
@@ -197,7 +201,6 @@ def stamp(
 
 
 VERDICT_ABSENT = "absent"
-VERDICT_VACANT = "vacant"
 VERDICT_STALE = "stale"
 VERDICT_ARMED = "armed"
 
@@ -224,10 +227,9 @@ def _read_record(path: str) -> Optional[dict]:
 
 def read_liveness(
     repo_root: str,
-    agents: Optional[list] = None,
     now_epoch: Optional[float] = None,
 ) -> dict:
-    """Is anything actually watching this repo? `absent` | `vacant` | `stale` | `armed`.
+    """Is anything actually watching this repo? `absent` | `stale` | `armed`.
 
     WHY A SECOND READER EXISTS AT ALL. `group_em.teammates.presence` answers
     "did this session dispatch a watcher", on a dispatch record, and refuses a
@@ -245,11 +247,18 @@ def read_liveness(
     evidence; a file being old is not. That distinction is why the record
     carries the deadline at all.
 
-    `agents`, when given, is the already-fetched registry -- one enumeration,
-    two consumers, never a second spawn at this layer. Omitted, the holder-
-    liveness join is skipped entirely and the verdict is freshness-only: a
-    registry nobody read cannot retire a holder, and reporting `vacant` on no
-    evidence would send a Group-EM to re-arm over a watcher that is fine.
+    FRESHNESS ONLY, deliberately no holder-liveness join. A `vacant` verdict
+    (holder session no longer in the registry) previously existed here behind
+    an `agents` parameter; it had no production caller -- the sole in-repo
+    reader (`ops/group_em_enter.py::_run_watch_liveness`) never passed it, and
+    argued in its own docstring why passing it would be wrong from that
+    caller (the registry join there could only answer "does the caller exist"
+    or false-negative on an enumeration that omits self). A watcher that
+    exited stops stamping and reads `stale` on the next tick anyway, which is
+    the same finding by better evidence.
+    (Review: overengineering-reviewer, finding #1, major, accepted -- dropped
+    rather than kept for a hypothetical different-session reader; add it back
+    only once a real one is named.)
 
     Every verdict but `armed` carries `remedy`. A liveness leg that reports a
     dead watch and no way to restart it just moves the prose one file over.
@@ -280,17 +289,6 @@ def read_liveness(
         "last_tick_at": record.get("last_tick_at"),
         "tick_source": record.get("tick_source"),
     }
-
-    if agents is not None:
-        listed = any(
-            isinstance(a, dict) and a.get("sessionId") == holder_session_id for a in agents
-        )
-        if not listed:
-            # `absent` and `vacant` never collapse, matching the sibling reader:
-            # no file is "nobody ever entered"; a file naming a session that is
-            # gone is "the watcher exited".
-            return {"verdict": VERDICT_VACANT, "seconds_overdue": None,
-                    "remedy": REARM_COMMAND, **base}
 
     deadline = record.get("next_expected_by")
     if not isinstance(deadline, str):

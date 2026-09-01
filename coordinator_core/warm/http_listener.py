@@ -40,8 +40,21 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Optional, Tuple
+
+from coordinator_core.warm import telemetry
+
+#: A budget for THIS module's own dispatch, deliberately well under the
+#: harness's own "UserPromptSubmit hook timed out after 5s" cutoff (PM
+#: ruling 2's own named symptom) -- the point is to record the degrade
+#: from inside the process that caused it, before the caller-side timeout
+#: fires and the only trace left is a message nobody reads a week later.
+#: Not a request-abort deadline: `do_POST` still answers whatever
+#: `_serve_line` returns, however long it took; this only decides whether
+#: the elapsed time gets a durable row.
+HOOK_BUDGET_SECS = 2.0
 
 #: The loopback address, as a LITERAL. Never `"localhost"` -- see the module docstring's
 #: negative spec. Exposed as a function so a test can assert the value rather than trusting
@@ -160,11 +173,35 @@ class _Handler(BaseHTTPRequestHandler):
         frame = _frame_from_request(body, token)
 
         serve_line, serve_kwargs = self.server.serve_binding()  # type: ignore[attr-defined]
+        started = time.monotonic()
         try:
             response = _collect_response(frame, serve_line, serve_kwargs)
         except Exception:  # noqa: BLE001 -- see NEVER FAIL A CALLER in server.py
+            # A request WAS delivered here (past the body read and framing
+            # above) and this process is about to answer without the served
+            # response -- PM ruling 2's own line: "once a request HAS been
+            # delivered and we choose to run cold, that is our degrade to
+            # announce." Recorded before responding so the row lands even if
+            # the client never reads the 500 body.
+            telemetry.record_degrade(
+                kind=telemetry.KIND_COLD_RUN,
+                cause="http_listener.py :: _Handler.do_POST -- _serve_line raised "
+                "while dispatching a delivered request; answering 500 rather than "
+                "the served response",
+            )
             self._respond(500, b'{"error":"dispatch failed"}')
             return
+        elapsed = time.monotonic() - started
+        if elapsed > HOOK_BUDGET_SECS:
+            telemetry.record_degrade(
+                kind=telemetry.KIND_HOOK_TIMEOUT,
+                cause=(
+                    "http_listener.py :: _Handler.do_POST -- dispatch took "
+                    f"{elapsed:.3f}s, exceeding the {HOOK_BUDGET_SECS}s internal "
+                    "budget (the harness's own UserPromptSubmit hook budget is "
+                    "reported at 5s; this fires first so the box can say why)"
+                ),
+            )
         self._respond(200, response)
 
 

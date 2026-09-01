@@ -1,149 +1,130 @@
-"""`ceremony.commit_v2` can preserve a peer's staged blob without naming it.
+"""`ceremony.commit_v2` forwards `prefer_deliberate_stage` to `commit_paths`.
 
-`commit_paths` has taken `prefer_deliberate_stage` since DR-379 and
-`ops/session/safe_commit_offer.py` has passed it, but `commit_v2` did not
-plumb it -- so a caller of the OP had `prefer_staged` (which requires knowing
-the diverging paths up front) or nothing. On a shared branch you cannot know
-them up front: the divergence is a peer's uncommitted work, appearing between
-your read and your commit.
+The SEMANTICS of that flag are `commit_paths`' and are pinned there
+(`git/tests/test_action_guard_default_path.py`, legs (a) and (b)). What
+commit_v2 added is plumbing, so that is what these assert -- re-running the
+three-blob fixture here would pay a real `git init` to re-prove someone else's
+contract.
 
-That gap is what example-game-repo-em lost attribution to on 2026-09-01 (memo
-`example-game-repo-em-close-ceremony-engine-defects-seven`, defect 6) -- a peer's
-whoami.ts and index.ts hunks landed under their authorship in a089fdbe2, not
-correctable afterwards because reverting a hunk you did not write is
-forbidden. Their own remedy was to abandon the op for a hand-rolled
-`git commit -F <msg> -- <paths>`, which costs the op's branch-gate and policy
-legs.
-
-NEGATIVE SPEC: the default is NOT flipped. Worktree-preference remains what an
-undeclared call does -- flipping it is a fleet-visible behaviour change and is
-the PM's, not this seam's. `test_default_is_still_worktree_preference` is the
-half that pins that, and it must not be relaxed into a smoke test of the flag.
-
-Throwaway `tmp_path` repos throughout; the working repo is never touched.
+Reported by example-game-repo-em 2026-09-01 (memo
+`example-game-repo-em-close-ceremony-engine-defects-seven`, defect 6): the mechanism
+existed and `safe_commit_offer` passed it, but callers of the OP had
+`prefer_staged` -- which needs the diverging paths up front -- or nothing.
 """
 
 from __future__ import annotations
 
-import subprocess
-from pathlib import Path
-
 import pytest
 
 from coordinator_core.ops.ceremony import commit_v2
-from coordinator_core.win_portability import no_console_creationflags
-
-pytestmark = [
-    pytest.mark.spawns_process,
-    pytest.mark.cadence,
-]
 
 
-def _git(args, cwd) -> str:
-    return subprocess.run(
-        ["git", *args],
-        cwd=str(cwd),
-        check=True,
-        capture_output=True,
-        text=True,
-        **no_console_creationflags(),
-    ).stdout
+def _spy(monkeypatch):
+    """Capture the kwargs commit_v2 hands `commit_paths`, and stop there."""
+    seen: dict = {}
+
+    def fake_commit_paths(*args, **kwargs):
+        seen.update(kwargs)
+        raise AssertionError("stop-after-capture")
+
+    monkeypatch.setattr(commit_v2, "commit_paths", fake_commit_paths)
+    return seen
 
 
-def _repo(tmp_path: Path) -> Path:
+def _call(repo_root, params):
+    return commit_v2._handler(params, repo_root=repo_root)
+
+
+def test_the_flag_reaches_commit_paths(monkeypatch, tmp_path):
+    seen = _spy(monkeypatch)
+    with pytest.raises(AssertionError, match="stop-after-capture"):
+        _call(tmp_path / ".git", {
+            "paths": ["a.md"],
+            "message": "m",
+            "prefer_deliberate_stage": True,
+        })
+    assert seen["prefer_deliberate_stage"] is True
+
+
+def test_the_default_is_false_when_undeclared(monkeypatch, tmp_path):
+    """The negative spec. Worktree-preference stays what an undeclared call
+    does; flipping it is a fleet-visible change and not this seam's."""
+    seen = _spy(monkeypatch)
+    with pytest.raises(AssertionError, match="stop-after-capture"):
+        _call(tmp_path / ".git", {"paths": ["a.md"], "message": "m"})
+    assert seen["prefer_deliberate_stage"] is False
+
+
+def test_both_declarations_travel_together(monkeypatch, tmp_path):
+    """`prefer_staged` and `prefer_deliberate_stage` are not exclusive --
+    a `prefer_staged` path is settled before the loop the blanket flag walks,
+    so they cannot both act on one path. Pinned because the seam forwards
+    both and nothing else asserts they survive the same call."""
+    seen = _spy(monkeypatch)
+    with pytest.raises(AssertionError, match="stop-after-capture"):
+        _call(tmp_path / ".git", {
+            "paths": ["a.md", "b.md"],
+            "message": "m",
+            "prefer_staged": ["a.md"],
+            "prefer_deliberate_stage": True,
+        })
+    assert seen["prefer_staged"] == ["a.md"]
+    assert seen["prefer_deliberate_stage"] is True
+
+
+def test_a_non_boolean_flag_is_refused_not_coerced(tmp_path):
+    """`"false"` is truthy. A flag deciding whose bytes land must refuse the
+    string rather than read it as True. `isinstance(1, bool)` is False, so a
+    JSON-RPC-delivered int is refused here too."""
+    result = _call(tmp_path / ".git", {
+        "paths": ["a.md"],
+        "message": "m",
+        "prefer_deliberate_stage": "false",
+    })
+    assert result["committed"] is False
+    assert "prefer_deliberate_stage" in result["error"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_the_divergence_warning_names_the_shared_branch_remedy(tmp_path):
+    """The one real-git case, and it is this seam's own output. A warning
+    naming only `prefer_staged` is unactionable on a shared branch, where
+    naming the paths up front is the thing you cannot do -- which is what
+    example-game-repo-em was told before doing the wrong thing about it. Asserted by
+    provoking a real divergence, not by grepping the source for the literal:
+    a string that exists but is never emitted would pass that and fail here.
+    """
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    def git(*args):
+        subprocess.run(["git", *args], cwd=str(repo), check=True,
+                       capture_output=True, **no_console_creationflags())
+
     repo = tmp_path / "repo"
     repo.mkdir()
-    _git(["init", "-q"], repo)
-    _git(["config", "user.email", "t@t.example"], repo)
-    _git(["config", "user.name", "t"], repo)
+    git("init", "-q")
+    git("config", "user.email", "t@t.example")
+    git("config", "user.name", "t")
     (repo / "peer.md").write_bytes(b"seed\n")
-    _git(["add", "--", "peer.md"], repo)
-    _git(["commit", "-qm", "seed"], repo)
-    return repo
+    git("add", "--", "peer.md")
+    git("commit", "-qm", "seed")
 
-
-def _call(repo: Path, params: dict) -> dict:
-    return commit_v2._handler(params, repo_root=repo / ".git")
-
-
-def _diverge(repo: Path) -> None:
-    """A peer's deliberate partial stage: staged bytes, then a further
-    worktree edit on the same path -- the exact shape `worktree_over_staged`
-    reports and the one a shared branch produces."""
+    # A peer's deliberate partial stage: staged bytes, then a further
+    # worktree edit on the same path.
     (repo / "peer.md").write_bytes(b"peer staged this\n")
-    _git(["add", "--", "peer.md"], repo)
+    git("add", "--", "peer.md")
     (repo / "peer.md").write_bytes(b"and then the worktree moved on\n")
 
-
-def _blob_at_head(repo: Path, path: str) -> bytes:
-    return subprocess.run(
-        ["git", "show", f"HEAD:{path}"],
-        cwd=str(repo),
-        check=True,
-        capture_output=True,
-        **no_console_creationflags(),
-    ).stdout
-
-
-def test_prefer_deliberate_stage_commits_the_staged_blob(tmp_path: Path) -> None:
-    repo = _repo(tmp_path)
-    _diverge(repo)
-
-    result = _call(repo, {
-        "paths": ["peer.md"],
-        "message": "preserve the peer's staged bytes",
-        "prefer_deliberate_stage": True,
-    })
+    result = commit_v2._handler(
+        {"paths": ["peer.md"], "message": "undeclared call"},
+        repo_root=repo / ".git",
+    )
 
     assert result["committed"] is True, result
-    assert _blob_at_head(repo, "peer.md") == b"peer staged this\n"
-    # Preserved, therefore NOT passed over: the path moves into
-    # `staged_preferred` and out of the divergence report, so the operator is
-    # not warned about a substitution they asked for.
-    assert result["staged_preferred"] == ["peer.md"]
-    assert result["worktree_over_staged"] == []
-
-
-def test_default_is_still_worktree_preference(tmp_path: Path) -> None:
-    """The negative spec. An undeclared call behaves exactly as before --
-    worktree bytes land and the divergence is REPORTED, not silently taken."""
-    repo = _repo(tmp_path)
-    _diverge(repo)
-
-    result = _call(repo, {
-        "paths": ["peer.md"],
-        "message": "undeclared call",
-    })
-
-    assert result["committed"] is True, result
-    assert _blob_at_head(repo, "peer.md") == b"and then the worktree moved on\n"
     assert result["worktree_over_staged"] == ["peer.md"]
-    assert result["staged_preferred"] == []
-
-
-def test_the_divergence_warning_names_the_shared_branch_remedy(tmp_path: Path) -> None:
-    """A warning naming only `prefer_staged` is unactionable on a shared
-    branch, where naming the paths up front is the thing you cannot do."""
-    repo = _repo(tmp_path)
-    _diverge(repo)
-
-    result = _call(repo, {"paths": ["peer.md"], "message": "undeclared call"})
-
     warning = "\n".join(result["warnings"])
     assert "prefer_deliberate_stage" in warning
     assert "peer.md" in warning
-
-
-def test_a_non_boolean_flag_is_refused_not_coerced(tmp_path: Path) -> None:
-    """`"false"` is truthy. A flag deciding whose bytes land must refuse the
-    string rather than silently read it as True."""
-    repo = _repo(tmp_path)
-
-    result = _call(repo, {
-        "paths": ["peer.md"],
-        "message": "bad flag type",
-        "prefer_deliberate_stage": "false",
-    })
-
-    assert result["committed"] is False
-    assert "prefer_deliberate_stage" in result["error"]

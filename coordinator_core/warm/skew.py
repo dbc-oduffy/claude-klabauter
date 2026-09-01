@@ -564,7 +564,7 @@ def publish_lag_message(lag: PublishLag, *, site: str = "fire") -> Optional[str]
         else "These are not live for any session until a round lands them."
     )
     remedy = (
-        "Publish: python coordinator/bin/percolate-round.py claude-klabauter"
+        "Publish claude-klabauter: python coordinator/bin/coordinator-publish.py"
         if _reader_owns_engine_repo()
         else "Publish: run a percolate round to publish this engine."
     )

@@ -78,7 +78,6 @@ convention per `warm.breadcrumb`'s own docstring) --
 
 from __future__ import annotations
 
-import calendar
 import hmac
 import json
 import os
@@ -457,29 +456,32 @@ def discovery_is_live(record: dict) -> bool:
 
 def should_spawn(engine_root: Optional[Path] = None, *, now: Optional[float] = None) -> bool:
     """The debounce decision for THIS module's own discovery file --
-    structurally identical to `breadcrumb.should_spawn`, duplicated rather
-    than parameterized into that function because `breadcrumb.py` sits
-    outside this chunk's `writes:` (module docstring's negative-spec).
-    True iff nothing currently vouches for an in-flight listener boot.
+    delegates to `breadcrumb.should_spawn_decision`, this package's one
+    shared decision body (see that function's docstring for the full
+    contract).
+
+    RETIRED RATIONALE, stated rather than left to go stale: this docstring
+    used to read "duplicated rather than parameterized into that function
+    because `breadcrumb.py` sits outside this chunk's `writes:`" -- true of
+    the chunk that wrote it, and no longer true of this one. C4's own
+    `writes:` names `supervisor.py`, `breadcrumb.py`, and `front_door.py`
+    together, which is exactly the condition that rationale named as
+    missing. See `breadcrumb.should_spawn_decision`'s docstring for the
+    review finding (Kira #4) this retirement answers.
+
+    True iff nothing currently vouches for an in-flight listener boot --
+    including, as of this chunk, the case where NO record exists at all: a
+    boot-in-flight lock (`breadcrumb.try_claim_boot`) is now consulted for
+    that case rather than handing back an unconditional `True`, which is
+    exactly the succession-window hole `docs/problems/2026-09-01-forwarder-
+    no-backend-denies.md`'s measurement traces this multiplier to.
     """
     record = read_discovery(engine_root)
-    if record is None:
-        return True
-
-    started_at = record.get("started_at")
-    if not isinstance(started_at, str):
-        return True
-    try:
-        started_epoch = calendar.timegm(time.strptime(started_at, "%Y-%m-%dT%H:%M:%SZ"))
-    except ValueError:
-        return True
-
-    current = time.time() if now is None else now
-    age = current - started_epoch
-    if age < 0 or age >= SPAWN_DEBOUNCE_SECS:
-        return True
-
-    return not discovery_is_live(record)
+    return breadcrumb.should_spawn_decision(
+        record,
+        now=now,
+        lock_path=breadcrumb.boot_lock_path(discovery_path(engine_root)),
+    )
 
 
 def listener_url(record: dict) -> Optional[str]:

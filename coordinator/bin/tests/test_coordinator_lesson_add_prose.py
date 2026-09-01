@@ -109,26 +109,12 @@ class MultilineInlineTitleIsRefusedTest(unittest.TestCase):
 
 
 class MultilineTitleFileIsRefusedTest(unittest.TestCase):
-    """A multi-line --title-file is refused HERE, before the child is spawned.
+    """Refused HERE, before the child is spawned -- which is what
+    `assert_not_called` pins, not merely "refused somewhere in the pipeline".
 
-    This test previously asserted the opposite -- that the wrapper forwards a
-    multi-line title to `coordinator-queue-append` verbatim -- and it passed,
-    because the delegation is mocked and the child never runs. What the child
-    actually does with that argv is refuse it (`coordinator-queue-append`'s own
-    `refuse_newline_argv` on `--title`, which has no file sibling because the
-    title becomes the output filename's slug). So the old assertion ratified a
-    transport that cannot work: the operator got a bare
-    `coordinator-queue-append exited 2` with the reason on a stream that was
-    not relayed until 2e03652635.
-
-    Reported by example-game-repo-em 2026-09-01 (memo
-    `example-game-repo-em-close-ceremony-engine-defects-seven`, defect 4), who inferred
-    the re-serialization from the help text alone and was right.
-
-    The refusal must fire in the WRAPPER and the child must never be spawned --
-    that is what `mock_run.assert_not_called()` pins. `_MULTILINE_TITLE` is
-    still the fixture, so a revert to forwarding fails here rather than
-    silently passing.
+    This previously asserted the OPPOSITE (that the wrapper forwards a
+    multi-line title verbatim) and passed, because the child is mocked and
+    never runs; it pinned a transport the child refuses.
     """
 
     def test_multiline_title_file_exits_nonzero_and_never_dispatches(self):

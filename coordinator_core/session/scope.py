@@ -187,8 +187,8 @@ class OwnerFact(NamedTuple):
                        per-event name to carry). ``None`` is NEVER a signal
                        that the writer is dead or absent — it means UNNAMED,
                        the same posture as ``TouchEvent.name`` itself (see
-                       :func:`_touch_record_writer_names`/
-                       :func:`_agent_touch_record_writer_names`, the C3
+                       :func:`_agent_touch_record_writer_names` and
+                       :func:`_read_touch_record_as_legacy_lines_with_writer_names`, the C3
                        direct-TouchEvent reads this field is sourced from —
                        deliberately NOT threaded through
                        ``_read_touch_record_as_legacy_lines``, whose
@@ -1868,34 +1868,6 @@ def _read_agent_touch_record_as_legacy_lines(sink_path: "Path | str") -> Tuple[L
     return jsonl_lines, degraded
 
 
-def _touch_record_writer_names(sink_path: "Path | str") -> Dict[str, Optional[str]]:
-    """C3 (plan ``2026-09-01-the-claim-record-carries-the-name``) — the
-    session-keyed ``OwnerFact.writer_name`` source, keyed by each surviving
-    event's own ``event.path`` (already canonical -- ``touch_record.
-    encode_line`` canonicalizes at write time, AC4).
-
-    Deliberately a SEPARATE direct read of ``touch_record._read_stream_
-    claims`` rather than a third return value bolted onto
-    :func:`_read_touch_record_as_legacy_lines`: that adapter's ``(lines,
-    degraded)`` tuple is shared by out-of-scope callers this chunk's
-    ``writes:`` does not cover (``session/claims.py``, ``session/shape.py``,
-    ``session/stable_pid_watch.py``, ``hooks/nudge_unrouted_sizing.py``,
-    ``ops/ceremony/receipt_emit`` and their tests) -- widening its arity
-    would be an out-of-scope edit at every one of those call sites. This
-    function costs a second, small read of the same family; the shared
-    adapter's own re-render is untouched.
-
-    ``None`` for a path whose surviving event never had a name stamped
-    (see ``touch_record.TouchEvent.name``'s own docstring) -- absence is
-    UNNAMED, never a degrade signal, same posture as the adapter's own
-    ``degraded`` flag (deliberately not returned here: a caller already
-    calls :func:`_read_touch_record_as_legacy_lines` for that signal on
-    the same ``sink_path``, immediately before or after this call).
-    """
-    claims, _degraded, _reasons = touch_record._read_stream_claims(sink_path)
-    return {event.path: event.name for event in claims.values()}
-
-
 def _read_touch_record_as_legacy_lines_with_writer_names(
     sink_path: "Path | str",
 ) -> Tuple[List[str], bool, Dict[str, Optional[str]]]:
@@ -1941,7 +1913,7 @@ def _read_touch_record_as_legacy_lines_with_writer_names(
 
 
 def _agent_touch_record_writer_names(sink_path: "Path | str") -> Dict[str, Optional[str]]:
-    """C3 -- the agent-dir counterpart of :func:`_touch_record_writer_names`,
+    """C3 -- the agent-dir writer-name source, mirroring
     mirroring :func:`_read_agent_touch_record_as_legacy_lines`'s own TOUCH-
     only filter (a RELEASE survivor has no bare-path representation in that
     adapter's rendering, so it is excluded here too, for the same reason).

@@ -217,6 +217,19 @@ class TestPublishProvenanceProbe:
         assert result.status != mod._PASS
         assert result.data["commits_behind"] == 1
 
+        # The remediation must name a route that actually publishes this mirror.
+        # `percolate-round` cannot: claude-klabauter registers nine `claude-klabauter*`
+        # rows against one destination and none is named for the mirror itself,
+        # so a single-target round misses every row -- which is precisely what
+        # `percolate-gate.py::_missing_target_entry_guidance` exists to route an
+        # operator away from. This probe is enrolled in the cold-path module set
+        # (coordinator/tests/test_cold_path_remediation_is_runnable.py), and that
+        # guard checks a remediation is runnable-SHAPED, never that it works --
+        # which is how this string sat pointing at the wrong vehicle while the
+        # sibling surface routed against it.
+        assert "coordinator-publish" in result.remediation
+        assert "percolate-round" not in result.remediation
+
     def test_absent_record_is_not_recorded_never_current(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

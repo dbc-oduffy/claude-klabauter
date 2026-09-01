@@ -213,9 +213,20 @@ def test_verify_installed_provenance_mismatch(tmp_path):
 
 
 def test_verify_installed_provenance_ok(tmp_path):
+    """`ok` now certifies BOTH that the sidecar describes the binary beside
+    it AND that the binary is the committed prebuilt. This test used to
+    plant arbitrary bytes with a matching hash, which is precisely the
+    shape a build-behind install has -- self-consistent and stale -- and
+    that shape is what let a door image predating the
+    `COORDINATOR_DOOR_STDIN_MODE` gate read as healthy while
+    `cross-repo-memo` hung (2026-09-01). It now plants the prebuilt, and
+    the self-consistent-but-stale case is asserted separately in
+    `tests/test_door_image_currency.py`."""
+    if not door_install._PREBUILT_DOOR_EXE.exists():
+        pytest.skip("no committed prebuilt door for this platform in this checkout")
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    door_bytes = b"door bytes"
+    door_bytes = door_install._PREBUILT_DOOR_EXE.read_bytes()
     (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(door_bytes)
     door_install.installed_provenance_path(bin_dst).write_text(
         json.dumps({"image_sha256": hashlib.sha256(door_bytes).hexdigest()}),

@@ -310,15 +310,15 @@ def _run_watch_liveness(repo_root: str):
     so a dead watcher is a line the EM reads rather than a silence it
     misreads as coverage.
 
-    FRESHNESS ONLY -- the registry is deliberately NOT joined here, though
-    `read_liveness` accepts one. The record's holder is the GROUP-EM, never the
-    teammate process (see `watch_heartbeat`'s own WHO THE HOLDER IS), so from
-    the Group-EM's own tick that join asks whether the caller exists: it can only
-    answer yes, or answer `vacant` wrongly on an enumeration that happens not
-    to list self. The holder join earns its keep for a DIFFERENT session
-    reading the record; here it would be a false negative dressed as evidence.
-    A watcher that exited stops stamping and reads `stale` on the next tick
-    anyway, which is the same finding by better evidence.
+    FRESHNESS ONLY -- `read_liveness` no longer offers a holder-registry join
+    at all (overengineering-reviewer finding #1: the join it used to carry
+    had no production caller, this one included). The record's holder is the
+    GROUP-EM, never the teammate process (see `watch_heartbeat`'s own WHO THE
+    HOLDER IS), so from the Group-EM's own tick that join would only ask
+    whether the caller exists, or false-negative on an enumeration that
+    happens not to list self. A watcher that exited stops stamping and reads
+    `stale` on the next tick anyway, which is the same finding by better
+    evidence.
     """
     try:
         return group_em_watch_heartbeat.read_liveness(repo_root), None

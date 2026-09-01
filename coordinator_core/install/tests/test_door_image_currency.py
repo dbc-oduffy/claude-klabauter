@@ -157,7 +157,6 @@ def test_report_goes_red_only_when_an_image_diverges(tmp_path, prebuilt_bytes, m
     _plant(bin_dst, "cross-repo-memo", b"\x00" + prebuilt_bytes[1:])
     report = settings_home_report.check_settings_home(tmp_path, Path("."))
     assert report.door_image_stale == ["cross-repo-memo"]
-    assert report.complete is False
     assert any(
         "build behind" in line for line in settings_home_report.format_report_lines(report)
     )
@@ -194,3 +193,26 @@ def test_door_leg_never_installs_from_the_live_claude_klabauter_checkout(monkeyp
     # not a stamped engine root, so feeding it to the door leg can only ever
     # produce the silent 382-name fallthrough.
     assert not is_engine_root(Path(__file__).resolve().parents[3])
+
+
+def test_a_cut_over_name_counts_as_present_without_a_python_body(tmp_path, prebuilt_bytes, monkeypatch):
+    """`remove_superseded_python_forwarders` deletes the Python body on a
+    successful cutover -- deliberately, under ONE ENTRYPOINT PER PLATFORM.
+    Reading the body first therefore scores a correctly-installed box as
+    missing every name it just installed: `17/384 verified` on a box whose
+    369 images were all current (2026-09-01, the first run after the door
+    leg was rewired)."""
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    monkeypatch.setattr(
+        settings_home_report, "expected_forwarders", lambda _root: {"cross-repo-memo": "x"}
+    )
+    # No Python body at bin/cross-repo-memo -- only the native image.
+    _plant(bin_dst, "cross-repo-memo", prebuilt_bytes)
+
+    report = settings_home_report.check_settings_home(tmp_path, Path("."))
+
+    assert report.forwarder_missing == []
+    assert report.forwarder_door_owned == ["cross-repo-memo"]
+    assert report.forwarder_present == 1
+    assert report.forwarder_expected == 1

@@ -733,17 +733,38 @@ def _maybe_rotate(sink_path: Path) -> None:
         _rotate_oversized(sink_path)
 
 
-#: C1 per-process memo of the resolved writer's own ``(sessionId, name)`` --
-#: re-checked on every call (never import-time-cached against a mutable env,
-#: see ``state/lessons/2026-08-31-never-cache-a-value-derived-from-a-mutable-
-#: env-lazily.yaml``), but the underlying ``harness_registry.self_record()``
-#: registry read runs at most once per process. ``_UNSET`` (not ``None``)
-#: marks "not yet resolved" so a legitimate ``self_record() -> None`` (no
-#: registry record for this process) memoizes too, rather than re-reading
-#: the registry on every single append -- ``append_event``'s dominant
-#: caller, ``hooks/track_touched_files.py``, fires on every write-tool call
-#: fleet-wide (see this function's own docstring).
+#: C1 follow-up fix (plan ``2026-09-01-the-claim-record-carries-the-name``,
+#: EM-adjudicated break-class): memoizing the resolved identity keyed by
+#: PROCESS alone is wrong on a warm engine. ``coordinator_core.warm.
+#: entry_seam`` rebinds the ``CLAUDE_PID`` env var PER REQUEST -- one warm
+#: engine process serves many sessions across its lifetime -- but
+#: ``harness_registry.self_record()`` resolves entirely from that env var
+#: at call time. A process-keyed memo therefore pins the FIRST caller's
+#: identity and every later caller, running under a different rebound
+#: ``CLAUDE_PID`` but the same process, silently reuses it: either matching
+#: a foreign ``session_id`` (never stamped, correctly) or -- the actual
+#: defect -- returning the FIRST caller's own name for every subsequent
+#: caller whose true identity was never looked up at all. This module's own
+#: docstring already cites
+#: ``state/lessons/2026-08-31-never-cache-a-value-derived-from-a-mutable-
+#: env-lazily.yaml`` for exactly this failure mode; the process-keyed memo
+#: violated the lesson it cites.
+#:
+#: Fix: key the memo on the mutable env value itself
+#: (``os.environ.get("CLAUDE_PID")``, a plain dict/env read -- no
+#: subprocess, no filesystem, effectively free next to the ~15.6ms
+#: registry read it guards) rather than on "have I ever resolved before in
+#: this process". A repeated identity (same ``CLAUDE_PID``, the overwhelming
+#: common case within one request's lifetime) still hits the memo and pays
+#: no registry read; a changed identity (a rebind between requests) misses
+#: it and re-resolves -- satisfying both C1's per-process amortization goal
+#: and correctness under the warm engine's per-request rebind. ``_UNSET``
+#: (not ``None``) marks "no memo entry yet" so a legitimate
+#: ``self_record() -> None`` (no registry record for the CURRENT
+#: ``CLAUDE_PID``) still memoizes against ITS OWN key, rather than forcing
+#: a re-read on every call for a process that genuinely has no record.
 _UNSET = object()
+_WRITER_IDENTITY_MEMO_KEY: object = _UNSET
 _WRITER_IDENTITY_MEMO: object = _UNSET
 
 
@@ -761,13 +782,15 @@ def _resolve_writer_name(session_id: str) -> Optional[str]:
     so this is countable, never silent, matching this module's established
     read-side degrade posture.
     """
-    global _WRITER_IDENTITY_MEMO
+    global _WRITER_IDENTITY_MEMO_KEY, _WRITER_IDENTITY_MEMO
     try:
-        if _WRITER_IDENTITY_MEMO is _UNSET:
+        memo_key = os.environ.get("CLAUDE_PID")
+        if memo_key != _WRITER_IDENTITY_MEMO_KEY:
             from coordinator_core.session import harness_registry
 
             resolved = harness_registry.self_record()
             _WRITER_IDENTITY_MEMO = resolved
+            _WRITER_IDENTITY_MEMO_KEY = memo_key
 
         resolved = _WRITER_IDENTITY_MEMO
         if resolved is None:

@@ -2323,6 +2323,12 @@ def test_start_warm_engine_advisory_on_spawn_failure(setup_mod, tmp_path, monkey
     err = capsys.readouterr().err
     assert "[ADVISORY]" in err
     assert "spawn failed" in err
+    # `SERVER_ENTRY_SCRIPT` is repo-relative and resolves against the PUBLISHED
+    # root, never the operator's cwd -- and the same relative path exists in a
+    # source clone, where a server started from it is ineligible to serve
+    # (DR-315 s2 / DR-331). A rootless advisory therefore reads as a working
+    # instruction and starts the wrong thing.
+    assert str(published) in err
 
 
 def test_start_warm_engine_advisory_on_unserved_ping(setup_mod, tmp_path, monkeypatch, capsys):
@@ -2343,6 +2349,12 @@ def test_start_warm_engine_advisory_on_unserved_ping(setup_mod, tmp_path, monkey
     assert "PASS" not in out
     assert "[ADVISORY]" in err
     assert "did not serve a ping" in err
+    # `SERVER_ENTRY_SCRIPT` is repo-relative and resolves against the PUBLISHED
+    # root, never the operator's cwd -- and the same relative path exists in a
+    # source clone, where a server started from it is ineligible to serve
+    # (DR-315 s2 / DR-331). A rootless advisory therefore reads as a working
+    # instruction and starts the wrong thing.
+    assert str(published) in err
 
 
 def test_start_warm_engine_advisory_when_resolved_file_outside_published_root(
@@ -2367,6 +2379,12 @@ def test_start_warm_engine_advisory_when_resolved_file_outside_published_root(
     assert "PASS" not in out
     assert "[ADVISORY]" in err
     assert "did not resolve" in err
+    # `SERVER_ENTRY_SCRIPT` is repo-relative and resolves against the PUBLISHED
+    # root, never the operator's cwd -- and the same relative path exists in a
+    # source clone, where a server started from it is ineligible to serve
+    # (DR-315 s2 / DR-331). A rootless advisory therefore reads as a working
+    # instruction and starts the wrong thing.
+    assert str(published) in err
 
 
 def test_start_warm_engine_pass_on_positive_assertion(setup_mod, tmp_path, monkeypatch, capsys):

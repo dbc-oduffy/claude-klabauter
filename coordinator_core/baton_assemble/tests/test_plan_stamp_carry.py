@@ -175,3 +175,103 @@ def test_governing_plan_stamp_conflict_raises(tmp_path):
             ],
             repo,
         )
+
+
+def test_governing_plan_not_stamped_when_the_claimed_plan_does_not_exist(
+    tmp_path, capsys
+):
+    """A plan claim outlives its plan file, and a dead edge is worse than none.
+
+    `coordinator-doc-new --type plan` takes a plan claim at SCAFFOLD time and
+    nothing releases it when the file goes away, so a scaffold-and-discard
+    leaves a claim behind. Example-game-repo-em hit this 2026-09-01: their baton minted
+    with `governing_plan: docs/plans/plan-probe.md`, a throwaway written to a
+    scratchpad 40 minutes earlier and deleted, while the baton's real plan sat
+    unnamed in its own `predecessor_handoff`.
+
+    The stamp site refuses rather than writing a path that resolves to nothing
+    -- a reader cannot tell a dead edge from a typo, and `governing_plan`'s own
+    contract already makes absence the cheap, truthful, common answer.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    plan_slug = "2026-09-01-scaffolded-then-discarded"
+    plan_rel = f"docs/plans/{plan_slug}.md"
+    _write_artifact(repo / plan_rel, ["deliverable_id: DEL-DISCARDED"])
+    session_claims.claim_plan(plan_slug, cwd=str(repo))
+
+    # The discard: the claim stays, the file goes.
+    (repo / plan_rel).unlink()
+
+    lineage = ba.resolve_lineage("handoff", "", repo)
+
+    assert lineage["governing_plan"] is None
+    assert plan_slug in capsys.readouterr().err
+
+    directives = ba._build_directives("handoff", lineage, root=repo)
+    assert not [d for d in directives if d["id"] == "d1c"], (
+        "no stamp directive may be emitted for an edge that resolves to nothing"
+    )
+
+
+def test_governing_plan_follows_a_plan_archived_out_from_under_the_session(
+    tmp_path,
+):
+    """`fleet.archive_completed_plans` archives on terminal status ALONE, so a
+    session holding a live claim can have its plan git-mv'd to
+    `archive/specs/<YYYY-MM>/` underneath it. The claim stays valid; only the
+    assumed location goes stale.
+
+    Before `claimed_plan._resolve_plan_slug_path`, this case stamped a
+    `docs/plans/` path with nothing behind it -- 34 of this repo's 79 plan
+    claims were in exactly that state (measured 2026-09-01). The archived plan
+    is the RIGHT answer for a baton that executed it, which is why this
+    resolves rather than degrading to the no-stamp branch above.
+    """
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    plan_slug = "2026-08-01-shipped-mid-session"
+    plan_rel = f"docs/plans/{plan_slug}.md"
+    _write_artifact(repo / plan_rel, ["deliverable_id: DEL-ARCHIVED"])
+    session_claims.claim_plan(plan_slug, cwd=str(repo))
+
+    # The archival sweep, as `fleet.archive_completed_plans` performs it.
+    archived_rel = f"archive/specs/2026-08/{plan_slug}.md"
+    (repo / archived_rel).parent.mkdir(parents=True)
+    (repo / plan_rel).rename(repo / archived_rel)
+
+    lineage = ba.resolve_lineage("handoff", "", repo)
+
+    assert lineage["governing_plan"] == archived_rel
+
+
+def test_a_dead_claim_does_not_mask_the_carried_edge(tmp_path):
+    """The claim rung falls THROUGH when its file is missing, rather than
+    short-circuiting to no-stamp. A session holding a scaffold-and-discard
+    claim while continuing a real baton must still carry that baton's own
+    `governing_plan` forward -- otherwise one stale claim silently strips
+    provenance off an unrelated continuation."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+
+    discarded_slug = "2026-09-01-discarded-while-continuing"
+    discarded_rel = f"docs/plans/{discarded_slug}.md"
+    _write_artifact(repo / discarded_rel, ["deliverable_id: DEL-DISCARDED-2"])
+    session_claims.claim_plan(discarded_slug, cwd=str(repo))
+    (repo / discarded_rel).unlink()
+
+    carried_rel = "docs/plans/2026-08-21-really-executing.md"
+    _write_artifact(repo / carried_rel, ["deliverable_id: DEL-CARRY-2"])
+    predecessor = _write_artifact(
+        repo / "state" / "handoffs" / "2026-09-01-continuing.md",
+        [
+            "handoff_id: hnd-continuing-bbb222",
+            "deliverable_id: DEL-CARRY-2",
+            f"governing_plan: {carried_rel}",
+            'predecessor: "none"',
+        ],
+    )
+
+    lineage = ba.resolve_lineage("handoff", str(predecessor), repo)
+
+    assert lineage["governing_plan"] == carried_rel
