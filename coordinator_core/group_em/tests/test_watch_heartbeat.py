@@ -477,3 +477,58 @@ def test_armed_with_real_population_still_renders_the_reassurance(tmp_path):
     )
     assert text.startswith("ALIVE")
     assert "Quiet is the normal state" in text
+
+
+# DEFECT 1 -- THE TRACE CARRIES WHAT A TICK COUNTED, NOT ONLY WHO WROTE IT.
+# `prior_subscribed_peers` and `prior_declination_count` ride alongside the
+# existing identity `prior_*` keys, on the same trigger (`_writer_identity`
+# disjunction), and must degrade to `None` rather than crash against an
+# older-format prior record that never wrote them.
+
+
+def test_the_trace_carries_what_the_destroyed_tick_counted(tmp_path):
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="crown-A",
+        declinations=[{"session_id": "p1", "name": None, "gate": "cooldown", "reason": "r"},
+                      {"session_id": "p2", "name": None, "gate": "cooldown", "reason": "r"}],
+        interval_seconds=30.0, now_epoch=1_000_000.0,
+        subscribed_peers=7, writer_session_id="crown-A-11111111",
+    )
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="crown-B", declinations=[],
+        interval_seconds=30.0, now_epoch=1_000_100.0,
+        writer_session_id="crown-B-22222222",
+    )
+    record = _record(tmp_path)
+    assert record["prior_subscribed_peers"] == 7
+    assert record["prior_declination_count"] == 2
+
+
+def test_an_older_format_prior_record_without_the_new_scalars_does_not_crash(tmp_path):
+    """A prior record written before this fix has no `subscribed_peers`
+    concept the trace can name -- `.get` returns `None`, not a KeyError, and
+    the trace degrades to "unknown" instead of inventing a count."""
+    path = watch_heartbeat.watch_path(str(tmp_path))
+    import os
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({
+            "holder_session_id": "crown-A",
+            "holder_name": None,
+            "last_tick_at": "1970-01-23T03:33:16Z",
+            "tick_source": "cron",
+            "next_expected_by": "1970-01-23T03:34:16Z",
+            "writer_session_id": "crown-A-11111111",
+            # no `subscribed_peers` and no `declinations` keys -- both absent,
+            # the pre-fix shape.
+        }, fh)
+
+    accepted = watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="crown-B", declinations=[],
+        interval_seconds=30.0, now_epoch=2_000_000.0,
+        writer_session_id="crown-B-22222222",
+    )
+    assert accepted is True
+    record = _record(tmp_path)
+    assert record["prior_subscribed_peers"] is None
+    assert record["prior_declination_count"] is None
