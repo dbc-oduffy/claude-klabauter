@@ -354,20 +354,6 @@ def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
     return 1
 
 
-#: Leading bytes of the three native-image formats an install can plausibly
-#: leave behind: Mach-O (both endiannesses and the fat/universal header),
-#: ELF, and PE. A launcher on the interactive chain that starts with any of
-#: them is a compiled image, whatever its name says.
-_NATIVE_IMAGE_MAGIC = (
-    b"\xcf\xfa\xed\xfe",
-    b"\xce\xfa\xed\xfe",
-    b"\xfe\xed\xfa\xcf",
-    b"\xfe\xed\xfa\xce",
-    b"\xca\xfe\xba\xbe",
-    b"\x7fELF",
-    b"MZ",
-)
-
 #: The one launcher on the interactive chain, and the string that proves the
 #: installed copy is still the trampoline rather than something wearing its
 #: name. `claude-doe`'s entire job is to `exec claude --plugin-dir <clone>/
@@ -413,7 +399,7 @@ def check_launch_chain_intact(plugin_root: str, claude_klabauter_root: str) -> i
         return 0
 
     body = launcher.read_bytes()
-    if body.startswith(_NATIVE_IMAGE_MAGIC):
+    if body.startswith(door_install.NATIVE_IMAGE_MAGIC):
         detail = "it is a compiled native image, not the Python trampoline"
     elif _LAUNCH_CHAIN_PROOF.encode("utf-8") not in body:
         detail = f"it never reaches its `{_LAUNCH_CHAIN_PROOF}` line"

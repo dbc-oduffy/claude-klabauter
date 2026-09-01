@@ -71,9 +71,14 @@ from coordinator_core.install.door_install import (
     ImageCurrencyAudit,
     audit_installed_image_currency,
     is_door_installed,
+    is_native_image,
+    launcher_is_installable,
+    name_is_warm_servable,
 )
+from coordinator_core.warm.door import build as door_build
 from coordinator_core.install.substrate import (
     _AGENT_FORWARDER_MARKER,
+    _read_native_forwarder_manifest,
     _RM_FAMILY_FILES,
     BYTE_COPIED_BIN_SOURCES,
     _derive_agent_helper_target_map,
@@ -329,6 +334,44 @@ def _byte_copied_body_matches_source(
         return False
 
 
+def _names_the_installer_gives_an_image(expected_names, bin_dir: Path) -> list[str]:
+    """The subset of `expected_names` the forwarder writer actually installs a
+    native image for -- the only population a currency audit can ask about.
+
+    THE AUDIT USED TO BE HANDED ALL OF THEM, and a name with no image is
+    indistinguishable at that layer from a name whose image is a build
+    behind, so every deliberately-imageless name reported stale forever. It
+    is not a cosmetic miscount: `door_image_stale` fails `complete`, so the
+    install's own completeness report went red on a correct install, and a
+    red that is always red is a red nobody reads.
+
+    THE FILTER IS THE WRITER'S OWN TWO PREDICATES, not a roster.
+    `_write_native_door_forwarder` refuses exactly twice -- a process-
+    replacing entrypoint (`name_is_warm_servable`) and a name the published
+    engine carries no script for (`launcher_is_installable`) -- so asking
+    the same two questions here cannot drift from what the writer did. A
+    hand-kept list, or the door-eligible allowlist, both misclassify in both
+    directions; these two are the writer, quoted.
+
+    THE ENGINE ROOT COMES FROM THE DOOR'S OWN SIDECAR, which is the root the
+    installed images were built against -- the right question, and the only
+    one answerable from a `bin/` alone. Unreadable sidecar drops only the
+    `launcher_is_installable` leg: the warm-servable filter still applies,
+    and the remainder audits as before rather than being silently exempted.
+    """
+    names = [n for n in expected_names if name_is_warm_servable(n)]
+
+    try:
+        engine_root = Path(
+            (bin_dir / door_build.SIDECAR_FILENAME).read_text(encoding="utf-8").strip()
+        )
+    except OSError:
+        return names
+    if not str(engine_root):
+        return names
+    return [n for n in names if launcher_is_installable(engine_root, n)]
+
+
 def _is_door_owned_forwarder_slot(installed_name: str, path: Path, bin_dir: Path) -> bool:
     """True iff `installed_name`/`path` is the `coordinator-invoke` forwarder
     slot AND the native warm-engine door has legitimately claimed it --
@@ -337,12 +380,13 @@ def _is_door_owned_forwarder_slot(installed_name: str, path: Path, bin_dir: Path
     paragraph; `door_uninstall.uninstall_door()` is the reverse leg that
     puts a plain forwarder back when the door is removed).
 
-    Narrower than "does `is_door_installed` say yes anywhere in `bin_dir`":
-    gated first on `installed_name == BARE_FORWARDER_NAME`, so a door
-    correctly installed at `coordinator-invoke`/`coordinator-invoke.exe`
-    can never be read as covering a DIFFERENT forwarder slot whose body
-    happens to also fail `forwarder_body_is_ours` for an unrelated reason
-    (a real corruption). On POSIX `BARE_FORWARDER_NAME` and
+    Still narrower than "does `is_door_installed` say yes anywhere in
+    `bin_dir`". `BARE_FORWARDER_NAME` is exempt on the door's presence
+    alone; every OTHER name must be one this installer recorded writing an
+    image for AND be a native image right now, so a door installed at
+    `coordinator-invoke` can never be read as covering a DIFFERENT
+    forwarder slot whose body fails `forwarder_body_is_ours` for an
+    unrelated reason (a real corruption). On POSIX `BARE_FORWARDER_NAME` and
     `DOOR_INSTALLED_NAME` are the identical bare string, so this is exactly
     the slot the door overwrites; on Windows the door installs at the
     distinct `coordinator-invoke.exe` path and never touches this slot's
@@ -354,9 +398,28 @@ def _is_door_owned_forwarder_slot(installed_name: str, path: Path, bin_dir: Path
     already the load-bearing presence oracle `install_door`/`door_uninstall`
     themselves use, not re-derived here.
     """
-    if installed_name != BARE_FORWARDER_NAME:
+    if not is_door_installed(bin_dir):
         return False
-    return is_door_installed(bin_dir)
+    if installed_name == BARE_FORWARDER_NAME:
+        return True
+
+    # THE PER-NAME IMAGES (C5), WHICH THIS PREDICATE PRE-DATES. Cutting a
+    # name over installs the door under that name, so its body is a
+    # compiled image and `forwarder_body_is_ours` -- which looks for the
+    # Python forwarder marker -- correctly says no. That is the CORRECT end
+    # state, not corruption, and reading it as corruption is not a cosmetic
+    # miscount: on this box the report said `2/376 verified` on a healthy
+    # install, which is a completeness check nobody can act on and everybody
+    # reads past.
+    #
+    # TWO CONDITIONS, AND NEITHER ALONE. The manifest says THIS INSTALLER
+    # wrote an image for this name; the magic bytes say the file sitting
+    # there IS one. Manifest alone would exempt a name whose image was later
+    # replaced by garbage -- exactly the corruption the `installed_name`
+    # gate above was written to keep catching (see this module's own
+    # `test_door_owned_check_does_not_cover_unrelated_corrupt_forwarders`).
+    # Magic alone would exempt any binary someone dropped into `bin/`.
+    return installed_name in _read_native_forwarder_manifest(bin_dir) and is_native_image(path)
 
 
 def _venv_is_the_resolved_interpreter(settings_home_path: Path) -> bool:
@@ -446,7 +509,9 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
     bin_dir = settings_home_path / "bin"
 
     try:
-        audit = audit_installed_image_currency(bin_dir, expected.keys())
+        audit = audit_installed_image_currency(
+            bin_dir, _names_the_installer_gives_an_image(expected.keys(), bin_dir)
+        )
     except DoorInstallError as exc:
         report.door_image_audit_error = str(exc)
         audit = ImageCurrencyAudit(current=[], stale=[])
