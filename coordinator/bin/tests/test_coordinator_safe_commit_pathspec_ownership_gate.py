@@ -156,7 +156,9 @@ def _tiny_repo(tmp_path):
     run("config", "user.name", "t")
     (root / "committed.py").write_text("clean\n", encoding="utf-8")
     (root / "dirty.py").write_text("original\n", encoding="utf-8")
-    run("add", "committed.py", "dirty.py")
+    (root / "sub").mkdir()
+    (root / "sub" / "nested.py").write_text("original\n", encoding="utf-8")
+    run("add", "committed.py", "dirty.py", "sub/nested.py")
     run("commit", "-q", "-m", "seed")
     return root
 
@@ -226,6 +228,39 @@ class TestCleanPathNarrowing:
 
         with pytest.raises(SystemExit):
             mod._refuse_contested_pathspec(["committed.py"], str(tmp_path / "not-a-repo"))
+
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
+    def test_a_backslash_path_dirty_content_still_refuses(self, tmp_path, monkeypatch, capsys):
+        """Review: coordinator:code-reviewer af0c0865daafdd73a, Finding P1 --
+        the subprocess argv used to receive the RAW `paths` argument while
+        everything it was compared against was normalized (backslash ->
+        forward-slash). A backslash-bearing contested path could then fail
+        git's pathspec matching, come back with empty porcelain output
+        (returncode==0, nothing unparseable), and be silently classified
+        `clean` -- exactly the "I could not tell -> safe to commit" flip the
+        function's own docstring forbids. Pins the fix: a path named with a
+        Windows-style backslash for a nested, actually-dirty file must still
+        be recognized as dirty and refuse the commit.
+
+        Real git is the assertion here, not stubbed state: the bug was in
+        how git's OWN pathspec matching treats a literal backslash, which no
+        plain-file fixture can reproduce.
+        """
+        mod = _load_cli_module()
+        root = _tiny_repo(tmp_path)
+        (root / "sub" / "nested.py").write_text("edited\n", encoding="utf-8")
+
+        backslash_path = "sub\\nested.py"
+        clean = mod._paths_with_no_uncommitted_content([backslash_path], str(root))
+        assert clean == set(), (
+            "a backslash-spelled, actually-dirty path must not be reported clean"
+        )
+
+        _stub_session(mod, monkeypatch, contested={backslash_path: ["peer-a"]})
+        with pytest.raises(SystemExit):
+            mod._refuse_contested_pathspec([backslash_path], str(root))
+        assert backslash_path in capsys.readouterr().err
 
     def test_the_probe_spends_one_process_for_the_whole_set(self, tmp_path, monkeypatch):
         """Never one spawn per path -- the amplification gate's rule, and this

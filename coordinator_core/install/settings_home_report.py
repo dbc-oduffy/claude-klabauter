@@ -483,8 +483,6 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
     return report
 
 
-
-
 def format_report_lines(report: SettingsHomeReport) -> list[str]:
     """Human-readable PASS/FAIL lines for the `scripts/setup.py` report step.
 

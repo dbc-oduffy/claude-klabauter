@@ -306,7 +306,7 @@ def _run_watch_liveness(repo_root: str):
     Until this leg existed the remedy was prose -- the `fleet-watch` agent body
     telling the agent to report a failed start -- and prose lost. This is the
     artifact that discharges it: every Group-EM tick reads the watch's own
-    heartbeat and reports `absent`/`vacant`/`stale` with the re-arm command,
+    heartbeat and reports `absent`/`stale` with the re-arm command,
     so a dead watcher is a line the EM reads rather than a silence it
     misreads as coverage.
 

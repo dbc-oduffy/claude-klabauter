@@ -134,6 +134,10 @@ __all__ = [
     "degrade_path",
     "record_degrade",
     "degrade_samples",
+    "PUBLISH_WARM_FILENAME",
+    "publish_warm_path",
+    "record_publish_warm_attempt",
+    "publish_warm_samples",
 ]
 
 EXIT_REASON_SKEW = "skew"
@@ -615,6 +619,89 @@ def degrade_samples(engine_root: Optional[Path] = None) -> list:
     empty list; an unparseable row is skipped, not fatal -- matches every
     other `*_samples` reader in this module."""
     path = degrade_path(engine_root)
+    rows: list = []
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    return rows
+
+
+PUBLISH_WARM_FILENAME = "publish-warm.jsonl"
+
+
+def publish_warm_path(engine_root: Optional[Path] = None) -> Path:
+    """`<svc dir>/publish-warm.jsonl` -- one row per publish-path attempt to
+    warm the round's successor listener (C9,
+    docs/plans/2026-09-01-a-guard-that-cannot-reach-warmth-still-r.md).
+
+    A SEPARATE FILE, not a fold-in to `TELEMETRY_FILENAME` or
+    `ELECTION_LOST_FILENAME`: this row is written by the PUBLISHING
+    process, at `percolate.round.step_commit`'s call site, never by a
+    server life or a losing election -- neither existing file's writer is
+    this one, and folding in would blur which process wrote which row."""
+    return svc_dir(engine_root) / PUBLISH_WARM_FILENAME
+
+
+def record_publish_warm_attempt(
+    *,
+    stamped: bool,
+    listener_reachable: Optional[bool] = None,
+    engine_root: Optional[Path] = None,
+) -> None:
+    """Append one row recording a publish-path attempt to warm the round's
+    successor listener (C9's spawn-attribution row, folded in from C1 per
+    review -- not `record_election_lost`'s mirror, not a `listener_secs`/
+    `ready_secs` split, not a dedicated test file: one row).
+
+    `stamped=False` is the POSITIVELY DETECTED unstamped-destination case
+    (`warm.engine_root.is_engine_root` returned False against
+    `context.dest_repo_root`) -- recorded here explicitly rather than
+    silently returning, which is exactly the gap C9's chunk body names
+    (finding #4: `ensure_listener`'s `is_engine_root` gate returns `None`
+    silently against an unstamped root, which would otherwise make the
+    publish-warm attempt spawn nothing, log nothing, and pass any test
+    asserting only "no exception").
+
+    `listener_reachable` is omitted when `stamped` is False (no listener
+    call was ever attempted); when `stamped` is True it is
+    `supervisor.ensure_listener(...)  is not None` -- True means a live
+    listener already answered, False means the call fell through to its
+    own fail-open spawn-or-debounce path (§ `ensure_listener`'s own
+    docstring: never a raise, never a wait for a boot).
+
+    Best-effort: never raises, matching every other recorder in this
+    module -- this instrument must never be the reason a publish round
+    fails."""
+    record: dict = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "stamped": bool(stamped),
+    }
+    if listener_reachable is not None:
+        record["listener_reachable"] = bool(listener_reachable)
+    path = publish_warm_path(engine_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked_write.held_lock(path, holder_label="warm.telemetry.publish_warm"):
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+def publish_warm_samples(engine_root: Optional[Path] = None) -> list:
+    """Every recorded publish-warm row, oldest first. Absent file reads as
+    an empty list; an unparseable row is skipped, not fatal -- matches
+    every other `*_samples` reader in this module."""
+    path = publish_warm_path(engine_root)
     rows: list = []
     try:
         with path.open("r", encoding="utf-8") as fh:

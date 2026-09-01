@@ -291,7 +291,7 @@ def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
     Delegates entirely to `door_install.verify_installed_provenance` -- see
     that function's own docstring for why the record's `image_sha256`
     field is the oracle rather than mtime. This leg only translates its
-    six-way verdict into this module's print register and return code:
+    seven-way verdict into this module's print register and return code:
 
       - `"ok"` -> 0.
       - `"stale"` -> 1. The sidecar and the binary agree with each other
@@ -306,6 +306,11 @@ def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
         `image_sha256` existed cannot be checked, and failing every box
         whose door predates this change would fail the fleet, not the
         defect.
+      - `"unverifiable"` -> 0, NOTE only, on the same reasoning: the
+        checkout ships no readable prebuilt for this platform, so currency
+        could not be ASKED. Reported rather than passed silently, because
+        indistinguishable-from-verified is the defect this leg exists to
+        catch.
       - `"absent"` -> 1. A door with no readable provenance at all is
         unverifiable, and that unverifiability IS the defect this leg
         exists to catch.
@@ -321,7 +326,7 @@ def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
     if verdict.status == "ok":
         print(f"[door-provenance] {verdict.detail}")
         return 0
-    if verdict.status == "unrecorded":
+    if verdict.status in ("unrecorded", "unverifiable"):
         print(f"[door-provenance] NOTE: {verdict.detail}")
         return 0
     if verdict.status == "no-door":

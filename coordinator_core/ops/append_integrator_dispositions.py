@@ -727,6 +727,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         # POSIX stdin convention has understood the contract, and refusing it would
         # push them back onto a real temp path -- the exact hazard this channel exists
         # to remove. A caller who genuinely means a file named "-" can write "./-".
+        if sys.stdin is None:
+            print(
+                "append-integrator-dispositions: no stdin to read; a dispatched agent "
+                "runs without one. Pass --rationale-file <path>.",
+                file=sys.stderr,
+            )
+            return 2
         rationale = sys.stdin.read()
     elif args.rationale_file:
         try:

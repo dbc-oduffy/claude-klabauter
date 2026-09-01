@@ -74,6 +74,37 @@ and each is cheap to undo by accident:
   invites the agent to decide how probable, which is the improvisation this
   design removes.
 
+- **A REFUSED SESSION IS NOT A STALLED ONE, and the transcript says which.**
+  A rate-limited peer's content clock stops for exactly one reason: the
+  harness refused every request it made. Read as a stall it produces an
+  `ESCALATE` whose only correct action is to ignore it -- and a limit window
+  is fleet-wide, so it escalates every peer at once, on a box ~50 sessions
+  share. Six such verdicts landed in one tick on 2026-09-01, all six false.
+  This is a MISSING CHECK, not a threshold to tune: raising the threshold to
+  90 minutes would have suppressed all six of that tick's verdicts INCLUDING
+  the one real stall, and left the defect standing for the next window.
+  The check is structured, never prose -- the same discipline `_is_out_of_work`
+  keeps, and for the same reason: a session TALKING about rate limits (this
+  fix's own author session did, at length) must not be classified as
+  refused. The evidence is the harness's own `quotaLimits` object on the
+  refusal record, and BOTH its legs are load-bearing:
+    1. `status: "rejected"` with `resetsAt` still in the future. The reset
+       stamp is the freshness token this case needs, so the suppression
+       expires by itself and nothing has to remember to lift it.
+    2. The refusal is still the LAST thing that happened to the session --
+       within `RATE_LIMIT_STALENESS_MINUTES` of the content clock. `resetsAt`
+       alone is NOT enough and this was measured, not reasoned: on 2026-09-01
+       the six refusals carried `resetsAt` 18:30Z and every one of the six
+       resumed at 16:42Z, so the nominal window over-suppresses by ~1.8h.
+       While a session is genuinely still being refused its retries keep
+       appending fresh refusal records, so this leg maintains itself; the
+       moment it succeeds, real records push the clock past the refusal.
+  Only `ESCALATE` is affected. `EXITED` still wins -- a refused peer whose
+  process is gone is a corpse, not a waiting one -- and the downgrade goes to
+  `UNKNOWN`/`rate-limited`, toward REPORTING and never toward SENDING: an
+  honest "I cannot tell" costs the Group-EM one look, a wrong `ESCALATE`
+  costs the fleet a nudge each.
+
 - **`push` is the narrow case and the question is the default.** A session can
   name its next move and still be sitting behind a gate it gave a reason for.
   Pushing a gate is the one harm in this role that does not undo, so `push`
@@ -160,6 +191,15 @@ LAST_SAID_CHARS = 300
 STALE_FILE_MINUTES = 1440.0
 #: Content older than this is a finished session, not a stalled one.
 STALE_CONTENT_MINUTES = 180.0
+#: How far a refusal may sit BEHIND the content clock and still be read as the
+#: last thing that happened to this session. A session still being refused
+#: keeps retrying, so its refusal records stay level with its clock; one that
+#: got through leaves the refusal behind. Measured need: the six refusals of
+#: 2026-09-01 carried a `resetsAt` of 18:30Z and all six resumed at 16:42Z, so
+#: the reset stamp alone over-suppresses by ~1.8h and this leg is what expires
+#: the suppression on the peer's own evidence rather than on the harness's
+#: nominal window.
+RATE_LIMIT_STALENESS_MINUTES = 5.0
 
 #: The clock. An unescaped `"timestamp"` key, so a JSON blob quoted inside a
 #: message body cannot inject one.
@@ -172,6 +212,19 @@ _ASSISTANT_SCAN_LINES = 400
 
 #: A session's own name as some peer wrote it: "claude-klabauter-a9 [3d18b2c0]".
 _SELF_ID = re.compile(r"(claude-klabauter-[0-9a-z]{2})\s*\[([0-9a-f]{6,8})\]", re.IGNORECASE)
+
+#: The harness's own refusal record: `quotaLimits`, its verdict, and the epoch
+#: the window lifts at. Structured spellings only -- a session quoting the
+#: user-facing "You've hit your session limit" sentence in prose is talking
+#: ABOUT a limit, not sitting behind one, and must never be read as refused.
+#: `[^{}]*` holds because `quotaLimits` carries no nested object; a nested one
+#: appearing later fails the match, which reads as "no refusal" -- toward
+#: reporting, the safe direction. Each pattern requires an UNESCAPED quote
+#: before its key, exactly like `_TIMESTAMP`, so a transcript quoting a JSON
+#: blob inside a message body cannot inject one.
+_QUOTA_LIMITS = re.compile(r'(?<!\\)"quotaLimits"\s*:\s*\{([^{}]*)\}')
+_QUOTA_REJECTED = re.compile(r'(?<!\\)"status"\s*:\s*"rejected"')
+_QUOTA_RESETS_AT = re.compile(r'(?<!\\)"resetsAt"\s*:\s*(\d{9,12})')
 
 #: A session naming its own next move -- what a `push` names back at it.
 _NEXT_MOVE = re.compile(
@@ -223,6 +276,11 @@ REASON_LIVENESS_UNRESOLVED = "liveness-unresolved"
 REASON_TRANSCRIPT_UNREADABLE = "transcript-unreadable"
 REASON_NO_RECORDS = "no-records"
 REASON_CLOCK_UNPARSEABLE = "clock-unparseable"
+#: The peer CANNOT act, as distinct from will not: the harness is refusing its
+#: requests and the window has not lifted. A key and not a verdict of its own,
+#: because the consumer's verdict table is closed and this is the answer they
+#: already route to REPORT IT.
+REASON_RATE_LIMITED = "rate-limited"
 #: The two DOWNGRADE keys. A MISSING ENRICHMENT DOWNGRADES TOWARD REPORTING,
 #: NEVER TOWARD SENDING -- the rule that makes a partial build safe. Neither of
 #: these omissions degrades into "the agent knows less"; both degrade into "the
@@ -241,6 +299,7 @@ UNKNOWN_REASONS = frozenset({
     REASON_TRANSCRIPT_UNREADABLE,
     REASON_NO_RECORDS,
     REASON_CLOCK_UNPARSEABLE,
+    REASON_RATE_LIMITED,
     REASON_OUT_OF_WORK_UNDETECTED,
     REASON_SUPPRESSION_UNAVAILABLE,
 })
@@ -401,6 +460,55 @@ def _is_out_of_work(raw_text: str) -> bool:
     return bool(_COMPLETION_ATTRIBUTION.search(tail) or _COMPLETION_COMMAND.search(tail))
 
 
+def rate_limited(raw_text: str, newest: Optional[float], now: float) -> bool:
+    """Is this session's silence a refusal that has not lifted yet?
+
+    True only under BOTH legs, and neither is sufficient alone:
+
+    1. The newest `quotaLimits` object in the tail says `rejected` and its
+       `resetsAt` is still in the future. That stamp is the freshness token --
+       the suppression expires on its own and nothing has to remember to lift
+       it.
+    2. That refusal is still the last thing that happened to the session:
+       within `RATE_LIMIT_STALENESS_MINUTES` of the content clock. Measured
+       need, not caution -- the 2026-09-01 refusals nominally ran to 18:30Z and
+       every peer resumed at 16:42Z, so leg 1 alone keeps suppressing a peer
+       that got back to work an hour and a half ago.
+
+    Only lines carrying `quotaLimits` are looked at, so this costs a regex over
+    the tail and a handful of matches -- never a JSON parse of the tail, the
+    cost `_tail_text` exists to avoid on a box the whole fleet shares.
+
+    `newest` is the content clock (`newest_timestamp`); with none there is no
+    clock to sit the refusal against and the answer is False -- toward
+    reporting, which is where a peer with no clock already goes.
+    """
+    if newest is None:
+        return False
+    latest = None
+    for line in raw_text.split("\n"):
+        if '"quotaLimits"' not in line:
+            continue
+        body = _QUOTA_LIMITS.search(line)
+        stamp = _TIMESTAMP.search(line)
+        if not body or not stamp or not _QUOTA_REJECTED.search(body.group(1)):
+            continue
+        resets = _QUOTA_RESETS_AT.search(body.group(1))
+        if not resets:
+            continue
+        try:
+            refused_at = datetime.datetime.fromisoformat(
+                stamp.group(1).replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            continue
+        if latest is None or refused_at > latest[0]:
+            latest = (refused_at, float(resets.group(1)))
+    if latest is None:
+        return False
+    refused_at, resets_at = latest
+    return resets_at > now and (newest - refused_at) / 60 <= RATE_LIMIT_STALENESS_MINUTES
+
+
 def registry_names() -> Optional[dict]:
     """`{session_id: name}` for every live session, or None if unreadable.
 
@@ -500,7 +608,7 @@ def _group_em_answer(log: list, group_em_session_id: Optional[str], peer_session
 
 def _verdict(age_minutes: Optional[float], in_registry: Optional[bool],
              out_of_work: bool, clock_reason: Optional[str] = None,
-             observed_exit: bool = False) -> tuple:
+             observed_exit: bool = False, refused: bool = False) -> tuple:
     """`(verdict, reason)` from the content clock, registry presence and ceremony.
 
     `observed_exit` is the PRIMARY leg and short-circuits everything: the
@@ -530,6 +638,11 @@ def _verdict(age_minutes: Optional[float], in_registry: Optional[bool],
         return VERDICT_UNKNOWN, REASON_LIVENESS_UNRESOLVED
     if not in_registry:
         return VERDICT_EXITED, None
+    # LAST, and only over `ESCALATE`. A refusal explains a stopped clock; it
+    # never explains a missing process, so `EXITED` above still wins -- a
+    # refused peer whose registry row is gone is a corpse, not a waiting one.
+    if refused:
+        return VERDICT_UNKNOWN, REASON_RATE_LIMITED
     return VERDICT_ESCALATE, None
 
 
@@ -626,7 +739,8 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
     observed_exit = bool(
         observed_exits and (session_id in observed_exits or (name and name in observed_exits))
     )
-    verdict, reason = _verdict(age, in_registry, out_of_work, clock_reason, observed_exit)
+    verdict, reason = _verdict(age, in_registry, out_of_work, clock_reason, observed_exit,
+                               rate_limited(raw_text, newest, now))
 
     said = _assistant_text(raw_text)
     last_said = said[-1][:LAST_SAID_CHARS] if said else None
@@ -834,21 +948,25 @@ def _cli(argv: Optional[list] = None) -> int:
         "--repo-root", required=True,
         help="Repository root whose fleet to report. Taken as an argument, never derived "
              "from cwd -- this runs under a harness tool whose working directory is not ours.")
-        # `--crown-session-id` is the pre-2026-09-01 spelling, retained as an
-        # accepted-but-unadvertised alias (DR-084's `_DEPRECATED_ALIASES` shape).
-        # It is NOT cosmetic back-compat: DoE-claude's fleet-watch agent definition
-        # and group-em skill both instruct agents to pass the old spelling, argparse
-        # hard-errors on an unknown flag, and those agents are dispatched and running.
-        # Dropping it strands every live watcher the moment this lands. Retire it once
-        # the sibling's text has moved -- see the memo
-        # cross-repo/archive/...-crown-nomenclature-retired.md. `help=argparse.SUPPRESS`
-        # keeps it out of --help so the canonical spelling is the only one advertised.
+    # Pre-2026-09-01 spelling; accepted, unadvertised. Rationale + retirement
+    # condition: group_em/tests/test_deprecated_crown_flag_alias.py
+    # Review: overengineering-reviewer -- collapsed duplicated 9-line rationale
+    # to a pointer; full argument lives in the test file (also the delete unit).
     parser.add_argument(
         "--group-em-session-id",
         dest="group_em_session_id", default=None,
         help="The Group-EM's session id -- never the watcher's. Excluded from its own "
              "roster, and the owner of the offer log that decides a peer is already "
              "answered.")
+    # `--crown-session-id` is the pre-2026-09-01 spelling, retained as an
+    # accepted-but-unadvertised alias (DR-084's `_DEPRECATED_ALIASES` shape).
+    # It is NOT cosmetic back-compat: DoE-claude's fleet-watch agent definition
+    # and group-em skill both instruct agents to pass the old spelling, argparse
+    # hard-errors on an unknown flag, and those agents are dispatched and running.
+    # Dropping it strands every live watcher the moment this lands. Retire it once
+    # the sibling's text has moved -- see the memo
+    # cross-repo/archive/...-crown-nomenclature-retired.md. `help=argparse.SUPPRESS`
+    # keeps it out of --help so the canonical spelling is the only one advertised.
     parser.add_argument(
         "--crown-session-id",
         dest="group_em_session_id", default=None, help=argparse.SUPPRESS)

@@ -525,6 +525,9 @@ def test_the_unknown_reason_set_admits_no_confidence_claim(tmp_path, projects_di
     assert idle_report.UNKNOWN_REASONS == frozenset({
         "liveness-unresolved", "transcript-unreadable", "no-records", "clock-unparseable",
         "out-of-work-undetected", "suppression-unavailable",
+        # A key, added for a genuinely new case as the module's docstring
+        # sanctions: "cannot act" is not a confidence claim about "will not".
+        "rate-limited",
     })
 
 
@@ -587,3 +590,126 @@ def test_every_emitted_shape_and_verdict_is_in_its_closed_set(tmp_path, projects
         assert row["verdict"] in verdicts
         assert row["nudge-shape"] in idle_report.NUDGE_SHAPES
         assert row["reason"] is None or row["reason"] in idle_report.UNKNOWN_REASONS
+
+
+# --- the refusal, as distinct from the stall ------------------------------
+#
+# Six ESCALATE verdicts landed in one tick on 2026-09-01 and all six were
+# false: a shared limit window had stopped every peer's clock at once. The
+# fix is a CHECK, not a threshold -- the tick's one real stall (`c7`, 88
+# minutes, closed quick-wrap, a named next move) sat inside the same band, so
+# any threshold that suppressed the five suppressed it too. These tests pin
+# the discriminator, not the suppression.
+
+
+def _refusal(minutes_ago, now, resets_in_minutes=180):
+    """A harness refusal record, in the shape the harness actually writes it."""
+    record = _said("You've hit your session limit \u00b7 resets 7:30pm (Europe/London)",
+                   minutes_ago, now)
+    record["quotaLimits"] = {
+        "status": "rejected",
+        "resetsAt": int(now + resets_in_minutes * 60),
+        "rateLimitType": "five_hour",
+    }
+    record["error"] = "rate_limit"
+    record["apiErrorStatus"] = 429
+    return record
+
+
+def test_a_refused_peer_is_unknown_and_never_escalate(tmp_path, projects_dir, now):
+    """A peer whose clock stopped because the harness refused every request it
+    made has not stalled -- it cannot act. Escalating it fans a nudge into a
+    session structurally incapable of reading it, and a limit window is
+    fleet-wide, so it does that to every peer at once."""
+    _write(projects_dir, "3030aaaa-x", [_record(90, now), _refusal(45, now)],
+           mtime_minutes_ago=45, now=now)
+    row = _row(_report(tmp_path, projects_dir, now, names={"3030aaaa-x": "p"}), "3030aaaa")
+    assert row["verdict"] == idle_report.VERDICT_UNKNOWN
+    assert row["reason"] == idle_report.REASON_RATE_LIMITED
+    assert row["reason"] in idle_report.UNKNOWN_REASONS
+    # Toward REPORTING, never toward SENDING.
+    assert row["nudge-shape"] == idle_report.SHAPE_HOLD
+
+
+def test_a_real_stall_in_the_same_band_still_escalates(tmp_path, projects_dir, now):
+    """THE DISCRIMINATOR. `c7`'s shape from the 2026-09-01 tick: 88 minutes, a
+    closed quick-wrap, a named next move, and no refusal anywhere. Five
+    suppressed, this one surviving -- a fix that quiets this has made the
+    oracle quieter and less useful, which is the failure a raised threshold
+    would have produced."""
+    _write(projects_dir, "3131aaaa-x", [_record(120, now), _refusal(50, now)],
+           mtime_minutes_ago=50, now=now)
+    _write(projects_dir, "3232aaaa-x", [
+        _said("Both reviews in and integrated. Quick-wrap closed.", 90, now),
+        _said("I'll now fold the scoped review's verdict in when it lands.", 88, now),
+    ], mtime_minutes_ago=88, now=now)
+    report = _report(tmp_path, projects_dir, now,
+                     names={"3131aaaa-x": "p", "3232aaaa-x": "q"})
+    assert _row(report, "3131aaaa")["verdict"] == idle_report.VERDICT_UNKNOWN
+    stall = _row(report, "3232aaaa")
+    assert stall["verdict"] == idle_report.VERDICT_ESCALATE
+    assert stall["nudge-shape"] == idle_report.SHAPE_PUSH
+
+
+def test_a_lifted_window_escalates_again_without_anything_lifting_it(
+    tmp_path, projects_dir, now
+):
+    """`resetsAt` is the freshness token: past it, the refusal no longer
+    explains the silence and the verdict comes back on its own. Nothing
+    persists a mute and nothing has to remember to clear one."""
+    _write(projects_dir, "3333aaaa-x", [_refusal(45, now, resets_in_minutes=-10)],
+           mtime_minutes_ago=45, now=now)
+    row = _row(_report(tmp_path, projects_dir, now, names={"3333aaaa-x": "p"}), "3333aaaa")
+    assert row["verdict"] == idle_report.VERDICT_ESCALATE
+
+
+def test_a_refusal_the_session_has_moved_past_does_not_suppress(
+    tmp_path, projects_dir, now
+):
+    """`resetsAt` ALONE over-suppresses, measured: the 2026-09-01 refusals
+    nominally ran to 18:30Z and every peer resumed at 16:42Z. A session still
+    being refused keeps retrying, so its refusal records stay level with its
+    clock; one that got through and then genuinely stalled has left the
+    refusal behind, and that stall is a real one."""
+    _write(projects_dir, "3434aaaa-x", [
+        _refusal(100, now, resets_in_minutes=180),
+        _said("Back in. I'll now run the scoped tests.", 40, now),
+    ], mtime_minutes_ago=40, now=now)
+    row = _row(_report(tmp_path, projects_dir, now, names={"3434aaaa-x": "p"}), "3434aaaa")
+    assert row["verdict"] == idle_report.VERDICT_ESCALATE
+
+
+def test_talking_about_a_rate_limit_is_not_being_rate_limited(
+    tmp_path, projects_dir, now
+):
+    """The same discipline `_is_out_of_work` keeps: structured spellings only.
+    Sessions discuss rate limits constantly -- the session that wrote this fix
+    quoted the sentence dozens of times -- and prose is not evidence."""
+    _write(projects_dir, "3535aaaa-x", [
+        _said("Three peers had a last-said reading \"You've hit your session limit "
+              "\u00b7 resets 7:30pm (Europe/London)\" and quotaLimits status rejected.",
+              50, now),
+    ], mtime_minutes_ago=50, now=now)
+    row = _row(_report(tmp_path, projects_dir, now, names={"3535aaaa-x": "p"}), "3535aaaa")
+    assert row["verdict"] == idle_report.VERDICT_ESCALATE
+
+
+def test_a_refused_peer_the_registry_has_forgotten_is_still_exited(
+    tmp_path, projects_dir, now
+):
+    """A refusal explains a stopped clock, never a missing process. Downgrading
+    a corpse to UNKNOWN would put it back on the roster the `EXITED` verdict
+    exists to date and retire."""
+    _write(projects_dir, "3636aaaa-x", [_refusal(45, now)], mtime_minutes_ago=45, now=now)
+    row = _row(_report(tmp_path, projects_dir, now, names={"other": "p"}), "3636aaaa")
+    assert row["verdict"] == idle_report.VERDICT_EXITED
+
+
+def test_a_refused_peer_below_the_threshold_is_untouched(tmp_path, projects_dir, now):
+    """The check sits over `ESCALATE` alone. A peer refused two minutes ago is
+    between turns, exactly as it was before -- the refusal changes no verdict
+    the watcher was never going to act on."""
+    _write(projects_dir, "3737aaaa-x", [_refusal(2, now)], mtime_minutes_ago=2, now=now)
+    row = _row(_report(tmp_path, projects_dir, now, names={"3737aaaa-x": "p"}), "3737aaaa")
+    assert row["verdict"] == idle_report.VERDICT_BETWEEN_TURNS
+    assert row["reason"] is None

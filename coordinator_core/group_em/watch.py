@@ -55,6 +55,21 @@ operator-maintained mute list (which would drift the moment a peer's
 situation changed): a peer answered on either path is answered on both, and
 the cooldown expires on its own.
 
+CONCURRENT `--once` WAKES ARE NOT LOCKED. `load_prev_parked`/`save_prev_parked`
+are two separate unlocked I/O ops; `watch_heartbeat.write_atomic`'s
+temp-then-`os.replace` only makes each individual write atomic, not the
+read-modify-write pair across them. Two `--once` ticks racing against the
+same `repo_root` can both load the same stale prior map, both independently
+compute the same transition, and both emit the same PARKED line before
+either send suppresses it -- `_cooldown_active` reads `send_pass`'s offer
+log, written only once an offer is actually sent, not by this module on
+line emission. Last writer of `save_prev_parked` wins and silently discards
+the other tick's map update, but that content is re-derivable next tick, so
+this is a duplicate notification, never a wrong `poll_once` decision. No
+lockfile is added here; the dedup burden is named explicitly as the
+Group-EM's send-cooldown's job, not this module's writer's.
+(Review: coordinator:code-reviewer.a04f2c7f6c502b313, P2.)
+
 THE PARKED LINE STATES WHAT WAS OBSERVED AND ASKS -- IT NEVER ASSERTS. A
 verdict here can never buy certainty (a peer that ended its turn awaiting its
 own long-running async work looks identical, on every available signal, to
@@ -338,6 +353,11 @@ def _transcript_idle_seconds(
     only then is a read paid here -- a first read, not a second.
     """
     if activity_epoch is None:
+        # Review: coordinator:code-reviewer.a89481390696514f7 (nitpick, accepted) --
+        # a bare `_` loses the reader's cue that the discarded element is a
+        # trust/confidence flag, not just "the other tuple slot". `_trusted`
+        # documents the discard; Pyright's unused-variable complaint is
+        # satisfied because it still starts with `_`.
         activity_epoch, _trusted = read_pass.transcript_activity_epoch(
             session_id, cwd or repo_root
         )
@@ -373,7 +393,6 @@ def _cooldown_active(
 
 def _parked_line(
     repo_root: str,
-    caller_session_id: str,
     session_id: str,
     verdict: dict[str, Any],
     cwd: Optional[str],
@@ -381,6 +400,11 @@ def _parked_line(
     name: Optional[str] = None,
 ) -> str:
     """Compose one PARKED line -- observed evidence, framed as evidence.
+
+    Review: review-integrator -- `caller_session_id` was accepted but never
+    read in this body (Pyright: reportUnusedVariable-adjacent, unused param);
+    the caller never needed the callee to see its own id here. Removed rather
+    than kept for signature parity nobody was relying on.
 
     `name` IS PROVENANCE, NOT AN ADDRESS, and the line says so. A reader
     cannot act on a session uuid -- `SendMessage` takes a name -- so a line
@@ -485,7 +509,6 @@ def poll_once(
         peer = agents_by_id.get(session_id, {})
         line = _parked_line(
             repo_root,
-            group_em_session_id,
             session_id,
             verdicts[session_id],
             peer.get("cwd"),
@@ -762,7 +785,13 @@ def main(
     while max_iterations is None or iterations < max_iterations:
         declinations: list = []
         try:
-            prev_parked, declinations = poll_once(
+            # Review: coordinator:code-reviewer af0c0865daafdd73a -- the loop
+            # used to reassign `prev_parked` from this return, so every line
+            # below it read the CURRENT map under a name saying previous, and
+            # `subscribed_peers` in particular reported a coverage figure whose
+            # own variable name argued it was stale. The rebind to `prev_parked`
+            # is the last statement of the iteration, where it means what it says.
+            cur_parked, declinations = poll_once(
                 repo_root,
                 caller_session_id,
                 prev_parked,
@@ -784,10 +813,11 @@ def main(
                 # read `subscribed_peers: 1` against a live population of 10-18.
                 # A coverage figure nobody writes is a coverage figure nobody
                 # can question.
-                subscribed_peers=len(prev_parked),
+                subscribed_peers=len(cur_parked),
                 holder_name=holder_name,
                 writer_session_id=caller_session_id,
             )
+            prev_parked = cur_parked
         except Exception:
             # Review: coordinatorcode-reviewer.a9e1410288878bea9 -- reporting
             # an error must never be able to fail worse than the error itself.
@@ -856,15 +886,10 @@ def _cli(argv: "list[str] | None" = None) -> int:
         help="Session arming the watch. Defaults to the harness's own session id; "
              "never guessed from roster shape.",
     )
-        # `--crown-session-id` is the pre-2026-09-01 spelling, retained as an
-        # accepted-but-unadvertised alias (DR-084's `_DEPRECATED_ALIASES` shape).
-        # It is NOT cosmetic back-compat: DoE-claude's fleet-watch agent definition
-        # and group-em skill both instruct agents to pass the old spelling, argparse
-        # hard-errors on an unknown flag, and those agents are dispatched and running.
-        # Dropping it strands every live watcher the moment this lands. Retire it once
-        # the sibling's text has moved -- see the memo
-        # cross-repo/archive/...-crown-nomenclature-retired.md. `help=argparse.SUPPRESS`
-        # keeps it out of --help so the canonical spelling is the only one advertised.
+    # Pre-2026-09-01 spelling; accepted, unadvertised. Rationale + retirement
+    # condition: group_em/tests/test_deprecated_crown_flag_alias.py
+    # Review: overengineering-reviewer -- collapsed duplicated 9-line rationale
+    # to a pointer; full argument lives in the test file (also the delete unit).
     parser.add_argument(
         "--group-em-session-id",
         dest="group_em_session_id",
@@ -880,6 +905,13 @@ def _cli(argv: "list[str] | None" = None) -> int:
         dest="group_em_session_id",
         default=None,
         help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Answer 'is a watch alive for this repo?' in plain words and exit, watching "
+             "nothing. Exit 0 alive, 1 not running, 2 unknown (no watch ever armed, or an "
+             "unreadable record) -- unknown is never reported as healthy.",
     )
     parser.add_argument(
         "--once",
@@ -915,6 +947,20 @@ def _cli(argv: "list[str] | None" = None) -> int:
     except repo_root_arg.RepoRootArgError as exc:
         print(f"group-em-watch: {exc}", file=sys.stderr)
         return 2
+
+    if args.status:
+        # STATUS ANSWERS FOR A HUMAN, and takes no lock, no roster read, no
+        # poll. The record already distinguishes a quiet live watch from a dead
+        # one and from a repo nobody ever armed; before this flag the only
+        # reader of that distinction was another program, so a person asking
+        # "is my watch alive?" got the harness's `idle` -- which every one of
+        # the three states prints. Exit code carries the same three states for
+        # a caller that cannot read prose; 2 is UNKNOWN, never a pass.
+        liveness = watch_heartbeat.read_liveness(args.repo_root)
+        print(watch_heartbeat.human_verdict(liveness))
+        if liveness["verdict"] == watch_heartbeat.VERDICT_ARMED:
+            return 0
+        return 1 if liveness["verdict"] == watch_heartbeat.VERDICT_STALE else 2
 
     if args.once:
         # A single-shot wake reports its own failure through the exit code --

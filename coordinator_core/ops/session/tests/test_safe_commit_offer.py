@@ -961,7 +961,12 @@ class TestAutoCommitSession:
             groups=[{"paths": ["peer.py"], "message": "all-excluded group"}],
         )
         assert report["dropped_groups"] == [
-            {"message": "all-excluded group", "named": 1, "matched": 0}
+            {
+                "message": "all-excluded group",
+                "named": 1,
+                "matched": 0,
+                "dropped": ["peer.py"],
+            }
         ]
 
     # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
@@ -988,9 +993,87 @@ class TestAutoCommitSession:
             groups=[{"paths": ["a.py", "peer.py"], "message": "partial group"}],
         )
         assert report["dropped_groups"] == [
-            {"message": "partial group", "named": 2, "matched": 1}
+            {
+                "message": "partial group",
+                "named": 2,
+                "matched": 1,
+                "dropped": ["peer.py"],
+            }
         ]
         assert report["groups"][0]["paths"] == ["a.py"]
+
+    def test_a_dropped_path_is_named_in_the_outcome_not_only_counted(
+        self, tmp_path
+    ):
+        """The rename-pair loss, reported by claude-klabauter-02 on 2026-09-01.
+
+        `git mv state/<q>/<slug>.yaml archive/<q>/<YYYY-MM>/<slug>.yaml` is the
+        closure shape the quick-wrap checklist PRESCRIBES for a queue entry.
+        Both halves get named in one group; only the deletion is inside the
+        session's computed scope, because nothing claims a path a shell `git
+        mv` created. The deletion committed, the addition was filtered out, and
+        the record then existed in neither place -- while `outcome.status` read
+        `committed`.
+
+        Silently dropping an out-of-scope path stays correct: a caller must not
+        widen its own boundary, and this test does not assert the addition
+        commits. What it asserts is that the caller can SEE which path it lost,
+        from the same object it reads the success off. A count ("2 named, 1
+        matched"), in a field a caller has no reason to walk after a
+        `committed` status, was the whole defect.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "kept.py").write_text("k")
+        (repo / "unclaimed.yaml").write_text("u")
+        scope.touch("mine", "kept.py", cwd=str(repo))
+
+        report = safe_commit_offer.commit_session_offer(
+            "mine",
+            cwd=str(repo),
+            groups=[
+                {
+                    "paths": ["kept.py", "unclaimed.yaml"],
+                    "message": "close the row",
+                }
+            ],
+        )
+
+        outcome = report["outcome"]
+        assert outcome["dropped_paths"] == ["unclaimed.yaml"], (
+            "the outcome must NAME the path it did not commit; a caller "
+            f"reading only the outcome loses it otherwise. saw: {outcome!r}"
+        )
+        assert "unclaimed.yaml" not in outcome["committed_paths"]
+        assert "dropped_paths" in outcome["detail"], (
+            "the success sentence must point at the drop -- an operator acts "
+            f"on `detail`, not on a field they never read. saw: {outcome!r}"
+        )
+
+    def test_no_drop_leaves_the_outcome_and_its_detail_unqualified(
+        self, tmp_path
+    ):
+        """The other half: this must not cry wolf on an ordinary clean call.
+
+        Every path named was in scope, so `dropped_paths` is empty and
+        `detail` gains no qualifying clause at all -- the module's own
+        wolf-crying constraint (see its docstring) applies to this field
+        exactly as it does to `failed_groups`.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "kept.py").write_text("k")
+        scope.touch("mine", "kept.py", cwd=str(repo))
+
+        report = safe_commit_offer.commit_session_offer(
+            "mine",
+            cwd=str(repo),
+            groups=[{"paths": ["kept.py"], "message": "clean group"}],
+        )
+
+        assert report["outcome"]["dropped_paths"] == []
+        assert "dropped_paths" not in report["outcome"]["detail"]
+        assert report["dropped_groups"] == []
 
     # designed_red: blocked on the `ceremony.scoped_git_commit` op SUSPENSION
     # (coordinator_core/op_budget_suspension.py, PM ruling 2026-08-21: measured

@@ -3353,6 +3353,78 @@ class TestAttributionWriterName:
             "live-peer", "live", "session", "claude-klabauter-a9"
         )
 
+    def test_compute_scope_step3b_reads_each_agent_dir_touch_record_once(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression pin for the agent-dir sibling of the C3 double read
+        (state/bug-backlog/2026-09-01-compute-scope-step-3b-decodes-each-
+        agent-1baae22e364b.yaml): Step 3b's attribution branch must call
+        ``touch_record._read_stream_claims`` exactly ONCE for its own two
+        projections (bare-path lines + writer names), not twice.
+
+        This is NOT the only decode of this sink per `compute_scope` call —
+        unlike Step 3's single-read-site session loop, Step 3b legitimately
+        decodes an agent dir's record from up to three DISTINCT call sites
+        for three distinct purposes: the pre-scan (`all_agent_dir_entries`,
+        widens the batched git query), the attribution branch under test
+        here, and the final per-agent claim read below it. This fixture
+        (a live back-pointer already present) skips the race-window branch,
+        so exactly 3 calls -- not 1 -- is the correct folded count: pre-scan
+        (1) + attribution, now folded (1, was 2 before this fix) + final
+        read (1) = 3, down from 4 before this fix. Fewer than 3 would mean
+        a sibling branch stopped reading; exactly 1 would be the wrong bar
+        for this call site (see ``test_folded_helper_returns_same_values_
+        as_the_two_call_form`` above for the direct single-decode unit
+        pin on the folded helper itself). Same fixture shape as
+        ``test_agent_claim_carries_the_recorded_writer_name`` above."""
+        repo = _make_repo(tmp_path)
+        core.init("em-owner", cwd=str(repo))
+        core.init("bystander", cwd=str(repo))
+
+        base = Path(core.sessions_dir(cwd=str(repo)))
+        agent_dir = base / ".agents" / "agent-xyz"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "em-session-id.txt").write_text("em-owner\n", encoding="utf-8")
+        sink = agent_dir / scope._TOUCH_RECORD_FILENAME
+        touch_record.append_event(
+            sink,
+            session_id="em-owner",
+            agent_id="agent-xyz",
+            verb=touch_record.VERB_TOUCH,
+            path="coordinator/agent_owned.py",
+            name="claude-klabauter-c1",
+        )
+        (repo / "coordinator").mkdir()
+        (repo / "coordinator" / "agent_owned.py").write_text("z")
+
+        monkeypatch.setattr(
+            scope.liveness,
+            "live_session_ids",
+            lambda cwd=None: frozenset({"bystander", "em-owner"}),
+        )
+
+        real_read = touch_record._read_stream_claims
+        calls = []
+
+        def _counted_read(sink_path, *args, **kwargs):
+            calls.append(sink_path)
+            return real_read(sink_path, *args, **kwargs)
+
+        monkeypatch.setattr(scope.touch_record, "_read_stream_claims", _counted_read)
+
+        result = scope.compute_scope("bystander", cwd=str(repo))
+
+        agent_calls = [c for c in calls if Path(c) == sink]
+        assert len(agent_calls) == 3, (
+            "compute_scope's pre-scan + Step 3b attribution branch (folded) "
+            f"+ final claim read must decode this agent dir's touch record "
+            f"exactly 3 times total (down from 4 before this fix's fold); "
+            f"saw {len(agent_calls)} calls for {sink}: {agent_calls}"
+        )
+        assert result.attribution["coordinator/agent_owned.py"] == scope.OwnerFact(
+            "em-owner", "live", "agent", "claude-klabauter-c1"
+        )
+
 
 # ---------------------------------------------------------------------------
 # AC8 — defensive read-side normalization (C7): compute_scope's Step 1

@@ -29,10 +29,9 @@
 #     into ONE atomic locked_rmw closure, open->actioned with no in_progress
 #     ever visible on disk between the two calls; see
 #     coordinator_core/ops/memo_transition.py's _resolve docstring)
-#     (the flag vocabulary is the ENGINE's — coordinator_core/archive_stamp.py
-#     :: _DISPOSITION_FLAGS — and this file forwards its tail verbatim. The
-#     three prose-bearing ones take a lossless file sibling here:
-#     --decision-note-file / --actioned-note-file / --supersede-note-file)
+#     # Review: overengineering-reviewer -- dropped the -file-sibling sentence
+#     # here; the usage rows below and _PROSE_DISPOSITION_FLAGS's comment
+#     # already carry it.
 #   release-memo-revert <memo_path>
 #   stamp-plan-implemented <plan_path>
 #   gate-recheck-handoff <handoff_path> <at> [--cleared]
@@ -514,9 +513,9 @@ def _resolve_prose_pair(
 # NOT A MULTI-LINE CHANNEL. `memo_transition._validate_disposition` refuses a
 # note containing a newline or a carriage return, and that refusal stays:
 # `serialize_yaml_scalar` emits an inline YAML scalar, and its negative-spec
-# says so. A multi-line file
-# is therefore still refused, by the engine, loudly. What the file leg buys is
-# LOSSLESS transport of a single-line note carrying a quote or a space, which
+# says so. A multi-line file is therefore still refused, by the engine,
+# loudly. What the file leg buys is LOSSLESS transport of a single-line note
+# carrying a quote or a space, which
 # the `.cmd` forwarder corrupts with nothing observable at any layer above it.
 _PROSE_DISPOSITION_FLAGS = ("--decision-note", "--actioned-note", "--supersede-note")
 
@@ -533,15 +532,26 @@ def _resolve_disposition_prose(
     declaration of what a disposition accepts. Resolved flags are re-appended
     at the tail's end -- `_parse_disposition_args` is order-independent.
 
-    THE WALK IS POSITIONAL, not a membership scan, and deliberately mirrors
-    `_parse_disposition_args`: a recognized flag consumes the token after it,
-    so a note whose literal text is `--actioned-note` stays a value on both
-    sides of the seam rather than being re-read as a flag here and not there.
-
-    A repeated flag is refused rather than resolved. `_parse_disposition_args`
-    is last-wins; quietly landing one of two conflicting notes is the same
-    class of silent partial write `_reject_unknown_flags` exists to stop.
+    THE WALK IS A TRUE MIRROR of `_parse_disposition_args`, not just of its
+    three prose flags: `_DISPOSITION_FLAGS` and `_DISPOSITION_BOOL_FLAGS` are
+    imported LAZILY (this file must answer `--help` and a usage error without
+    a resolvable engine root -- same reason `_resolve_prose_pair` imports
+    `coordinator_core.argv_fidelity` inside its own body, not at module
+    scope), and every token in the tail is classified against that full
+    vocabulary before it is treated as free-standing. Without this, any of
+    the engine's OTHER 2-token flags (`--decision`, `--realized-by`,
+    `--superseded-by`, ...) walked one token at a time here let its own value
+    -- or a missing-value slot -- land on a prose flag's name and get
+    misread as the START of a fresh pair, silently rewriting the tail this
+    function hands back (P1, code-reviewer a5c86ae1f7c7c0a12, Finding 1). A
+    bool flag consumes one token; a non-prose `_DISPOSITION_FLAGS` member
+    consumes two and both are appended VERBATIM -- its value is never
+    inspected, only counted -- so a value that happens to equal a prose flag
+    name stays that flag's value on both sides of the seam, exactly as
+    `_parse_disposition_args` sees it.
     """
+    from coordinator_core.archive_stamp import _DISPOSITION_BOOL_FLAGS, _DISPOSITION_FLAGS
+
     _FILE = "-file"
     out: list[str] = []
     seen: dict[str, list[str | None]] = {}
@@ -553,17 +563,26 @@ def _resolve_disposition_prose(
             base = tok
         elif tok.endswith(_FILE) and tok[: -len(_FILE)] in _PROSE_DISPOSITION_FLAGS:
             base, slot = tok[: -len(_FILE)], 1
-        if base is None:
+        if base is not None:
+            if i + 1 >= len(tail):
+                return None, f"archive-stamp-cli: {tok} requires a value"
+            pair = seen.setdefault(base, [None, None])
+            if pair[slot] is not None:
+                return None, f"archive-stamp-cli: {tok} may only be given once"
+            pair[slot] = tail[i + 1]
+            i += 2
+            continue
+        if tok in _DISPOSITION_BOOL_FLAGS:
             out.append(tok)
             i += 1
             continue
-        if i + 1 >= len(tail):
-            return None, f"archive-stamp-cli: {tok} requires a value"
-        pair = seen.setdefault(base, [None, None])
-        if pair[slot] is not None:
-            return None, f"archive-stamp-cli: {tok} may only be given once"
-        pair[slot] = tail[i + 1]
-        i += 2
+        if tok in _DISPOSITION_FLAGS and i + 1 < len(tail):
+            out.append(tok)
+            out.append(tail[i + 1])
+            i += 2
+            continue
+        out.append(tok)
+        i += 1
 
     for base, (inline, from_file) in seen.items():
         value, err = _resolve_prose_pair(inline, from_file, base)

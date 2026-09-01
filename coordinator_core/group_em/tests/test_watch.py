@@ -545,7 +545,7 @@ def test_parked_line_reuses_the_verdicts_epoch_and_reads_no_second_time():
     ), mock.patch.object(
         watch, "_obligation_summary", return_value="none"
     ):
-        line = watch._parked_line(REPO_ROOT, "caller-1", "peer-1", verdict, REPO_ROOT, now)
+        line = watch._parked_line(REPO_ROOT, "peer-1", verdict, REPO_ROOT, now)
 
     assert "transcript_idle=300s" in line
 
@@ -565,7 +565,7 @@ def test_parked_line_still_reads_when_the_verdict_carries_no_epoch():
     ), mock.patch.object(
         watch, "_obligation_summary", return_value="none"
     ):
-        line = watch._parked_line(REPO_ROOT, "caller-1", "peer-1", verdict, REPO_ROOT, now)
+        line = watch._parked_line(REPO_ROOT, "peer-1", verdict, REPO_ROOT, now)
 
     assert "transcript_idle=120s" in line
 
@@ -877,8 +877,20 @@ def test_the_cli_refuses_a_drive_relative_root(capsys):
     rc = watch._cli(["--repo-root", "X:example-game-workbench-repo"])
     assert rc == 2
     err = capsys.readouterr().err
-    assert "not an absolute path" in err
-    assert "resolves against" in err
+    assert "not an absolute, drive-anchored path" in err
+    assert "resolves to" in err
+
+
+def test_the_cli_refuses_a_driveless_rooted_posix_style_path(capsys):
+    """`ntpath.isabs('/foo/bar')` is True with no drive component -- `abspath`
+    then resolves it against the process's CURRENT DRIVE, the same "binds to
+    wherever the process happens to be standing" hazard as the drive-relative
+    case, just swapping drive for directory (coordinator:code-reviewer,
+    a1574022171f8f1cc, P2)."""
+    rc = watch._cli(["--repo-root", "/foo/bar"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "not an absolute, drive-anchored path" in err
 
 
 def test_the_armed_line_names_the_resolved_path_not_only_the_repo_name(tmp_path):
@@ -909,3 +921,49 @@ def test_the_armed_line_names_the_resolved_path_not_only_the_repo_name(tmp_path)
     armed = lines[0]
     assert armed.startswith("ARMED ")
     assert str(pathlib.Path(tmp_path).resolve()) in armed
+
+
+def test_cli_status_answers_alive_for_a_fresh_record_and_exits_zero(tmp_path, capsys):
+    from coordinator_core.group_em import watch_heartbeat
+
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, holder_name="claude-klabauter-ad",
+    )
+    rc = watch._cli(["--repo-root", str(tmp_path), "--status"])
+    assert rc == 0
+    assert capsys.readouterr().out.startswith("ALIVE")
+
+
+def test_cli_status_exits_two_on_a_repo_no_watch_ever_covered(tmp_path, capsys):
+    # UNKNOWN gets its own code: a caller that reads 0 as "fine" must not read
+    # "nobody ever looked" as fine, which is the collapse this flag exists for.
+    rc = watch._cli(["--repo-root", str(tmp_path), "--status"])
+    assert rc == 2
+    assert capsys.readouterr().out.startswith("UNKNOWN")
+
+
+def test_cli_status_exits_one_when_the_watch_stopped_ticking(tmp_path, capsys):
+    import time as _time
+
+    from coordinator_core.group_em import watch_heartbeat
+
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, now_epoch=_time.time() - 3600,
+    )
+    rc = watch._cli(["--repo-root", str(tmp_path), "--status"])
+    assert rc == 1
+    assert capsys.readouterr().out.startswith("NOT RUNNING")
+
+
+def test_cli_status_watches_nothing_and_reads_no_roster(tmp_path, monkeypatch, capsys):
+    # STATUS IS A READ. If it polled, asking "is my watch alive?" would cost the
+    # box a roster enumeration per ask -- and a poll from a status call would
+    # also stamp, making every ask answer ALIVE.
+    def _refuse(*_a, **_k):
+        raise AssertionError("--status must not enumerate the fleet")
+
+    monkeypatch.setattr(watch, "poll_once", _refuse)
+    assert watch._cli(["--repo-root", str(tmp_path), "--status"]) == 2
+    capsys.readouterr()

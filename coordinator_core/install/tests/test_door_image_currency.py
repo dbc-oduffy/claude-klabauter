@@ -216,3 +216,27 @@ def test_a_cut_over_name_counts_as_present_without_a_python_body(tmp_path, prebu
     assert report.forwarder_door_owned == ["cross-repo-memo"]
     assert report.forwarder_present == 1
     assert report.forwarder_expected == 1
+
+
+def test_an_unanswerable_currency_question_is_not_reported_as_ok(tmp_path, monkeypatch):
+    """The P1 the reviewer found, pinned: an unreadable prebuilt used to fall
+    through to `ok`, so a caller could not tell "verified current" from "could
+    not look" -- while `check_settings_home`'s currency leg FAILED loudly on
+    the identical condition. Two sibling gates, opposite verdicts, one cause,
+    inside the very change that exists to stop that shape."""
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    payload = b"whatever this box installed"
+    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(payload)
+    door_install.installed_provenance_path(bin_dst).write_text(
+        json.dumps({"image_sha256": hashlib.sha256(payload).hexdigest()}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        door_install, "_PREBUILT_DOOR_EXE", tmp_path / "no-prebuilt-for-this-platform"
+    )
+
+    verdict = door_install.verify_installed_provenance(bin_dst)
+
+    assert verdict.status == "unverifiable", verdict
+    assert "could not be checked" in verdict.detail

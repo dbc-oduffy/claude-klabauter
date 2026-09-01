@@ -729,6 +729,20 @@ def _holder_context(
     return " ".join(bits)
 
 
+def _norm(path: object) -> str:
+    """Backslashes to forward slashes, strip leading/trailing `/` -- the one
+    spelling of this rule, used everywhere `_paths_with_no_uncommitted_content`
+    and `_refuse_contested_pathspec` compare a git-porcelain path against a
+    caller-supplied one.
+
+    Review: overengineering-reviewer (finding #6, nitpick, accepted) -- this
+    normalisation used to be spelled out three times (building `wanted`, per
+    porcelain entry, and again filtering `contested`); one drifting from the
+    other two would have quietly stopped `clean`/`contested` from matching.
+    """
+    return str(path).replace("\\", "/").strip("/")
+
+
 def _paths_with_no_uncommitted_content(
     paths: "Sequence[str]", worktree_root: str
 ) -> "Set[str]":
@@ -768,17 +782,36 @@ def _paths_with_no_uncommitted_content(
     against the ~140ms this refusal already costs) -- never one per path, per
     the amplification gate.
     """
-    wanted = {str(p).replace("\\", "/").strip("/") for p in paths if str(p).strip()}
+    wanted = {_norm(p) for p in paths if str(p).strip()}
     if not wanted:
         return set()
     try:
+        # Review: coordinator:code-reviewer af0c0865daafdd73a, Finding P1 --
+        # the subprocess argv MUST carry the same normalized form `wanted`
+        # already is, not raw `paths`. A backslash-bearing contested path
+        # (this is a Windows-first repo) can fail git's pathspec matching as
+        # a literal argument, produce empty porcelain output with
+        # returncode==0, and silently be classified `clean` -- exactly the
+        # "I could not tell -> safe to commit" flip this function's own
+        # docstring forbids. `sorted(wanted)` is the same set `dirty` is
+        # compared against below, deterministic argv order for free.
         result = subprocess.run(
             ["git", "status", "--porcelain", "-z", "--untracked-files=all", "--"]
-            + [str(p) for p in paths],
+            + sorted(wanted),
             cwd=worktree_root,
             capture_output=True,
             text=True,
-            timeout=10,
+            # Review: coordinator:code-reviewer af0c0865daafdd73a, Finding P2
+            # -- was 10s, 20x this repo's 500ms brightline for a call on
+            # every explicit-pathspec commit's hot path. Fails closed to the
+            # empty (refuse-everything) set on timeout, never a corruption
+            # risk, so shortening this costs a spurious refusal under a truly
+            # stuck git, not a wrong answer -- reusing SUSPENSION_BAR_MS
+            # (2000ms, `docs/decisions/DR-344-*`) as the ceiling here, not as
+            # a target: ~80x the ~25ms typical cost this function already
+            # measures, and the same number this repo already treats as
+            # "switch off before this" everywhere else.
+            timeout=2,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -798,12 +831,12 @@ def _paths_with_no_uncommitted_content(
             # silently reduce the dirty set.
             return set()
         status_code, path_field = entry[:2], entry[3:]
-        dirty.add(path_field.replace("\\", "/").strip("/"))
+        dirty.add(_norm(path_field))
         if "R" in status_code or "C" in status_code:
             # A rename/copy entry is followed by its ORIGIN path in its own
             # NUL-separated field; both ends are dirty.
             if index < len(fields):
-                dirty.add(fields[index].replace("\\", "/").strip("/"))
+                dirty.add(_norm(fields[index]))
                 index += 1
             else:
                 return set()
@@ -886,7 +919,7 @@ def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None
         contested = {
             path: holders
             for path, holders in contested.items()
-            if str(path).replace("\\", "/").strip("/") not in clean
+            if _norm(path) not in clean
         }
         if not contested:
             return

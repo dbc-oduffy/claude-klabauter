@@ -470,13 +470,32 @@ class DroppedGroup(TypedDict):
     ``named`` -- how many paths the caller put in this group. ``matched`` --
     how many of them were actually in this session's own computed
     `safe_paths`; `matched < named` is the entry's own reason for existing.
+    ``dropped`` -- WHICH paths those were, sorted.
     Never populated for `_default_groups` output (the unattended-trigger
     fallback): that grouping is computed FROM `safe_paths` itself, so it can
-    never lose a path to this filter -- see `commit_session_offer_async`."""
+    never lose a path to this filter -- see `commit_session_offer_async`.
+
+    WHY A COUNT WAS NOT ENOUGH (2026-09-01, claude-klabauter-02). `named`/
+    `matched` alone answer "how many did I lose", never "which one". A caller
+    closing a queue entry the way the quick-wrap checklist prescribes --
+    `git mv state/<q>/<slug>.yaml archive/<q>/<YYYY-MM>/<slug>.yaml`, both
+    halves named in ONE group -- has the deletion inside its computed scope
+    and the destination outside it, because nothing claims a path created by
+    `git mv` in a shell: no editing tool ran on it. The deletion commits, the
+    addition is filtered out, and the record then exists in neither place. A
+    `2 named, 1 matched` line cannot tell that operator which half survived,
+    so the recovery it enables is a re-derivation rather than a read.
+
+    Still ADVISORY, and deliberately so: naming the path is information, not
+    a gate, and widens the commit boundary by nothing -- the DR-227
+    constraint on `dropped_groups` is untouched. `CommitOutcome`'s own
+    `conflicted_paths` is the standing precedent for naming withheld paths
+    without gating on them."""
 
     message: str
     named: int
     matched: int
+    dropped: List[str]
 
 
 class CommitOutcome(TypedDict):
@@ -525,6 +544,17 @@ class CommitOutcome(TypedDict):
     CAN still populate this if some paths committed alongside the
     withhold -- see that status's own note above).
 
+    ``dropped_paths`` -- every path the caller named in its own ``groups``
+    that was NOT in this session's computed `safe_paths`, flattened across
+    every group and sorted. Non-empty ALONGSIDE a ``"committed"`` status is
+    the normal shape, and is the whole case this field exists for: the call
+    succeeded and also did not commit something the caller asked for. A
+    caller reading only `status` sees success and loses the path; the
+    per-path detail was previously reachable only from `dropped_groups` (a
+    count, no names) or from a diagnostics log file no caller reads. Never a
+    gate, never a widening -- see `DroppedGroup`'s own docstring for the
+    `git mv` case that made a count insufficient.
+
     ``conflicted_paths`` -- populated ONLY by the (c) dirty-conflict check;
     empty for every other status. A path here was in this call's OWN
     computed `safe_paths` but ALSO named in `ownership["peer"]` -- withheld
@@ -552,6 +582,7 @@ class CommitOutcome(TypedDict):
     detail: str
     committed_paths: List[str]
     conflicted_paths: List[str]
+    dropped_paths: List[str]
 
 
 class Reconciliation(TypedDict):
@@ -1755,6 +1786,12 @@ def _empty_commit_offer_report(
             "detail": detail,
             "committed_paths": [],
             "conflicted_paths": [],
+            # Empty on BOTH exits this builder serves, and not an oversight:
+            # each of them commits nothing at all and says so in `status`, so
+            # there is no landed-but-incomplete commit for a dropped path to
+            # be invisible behind. `dropped_paths` exists to qualify a
+            # SUCCESS -- see `CommitOutcome`'s own docstring.
+            "dropped_paths": [],
         },
     }
 
@@ -1854,6 +1891,7 @@ async def commit_session_offer_async(
                 "detail": detail,
                 "committed_paths": [],
                 "conflicted_paths": [],
+                "dropped_paths": [],
             },
         }
 
@@ -1885,6 +1923,7 @@ async def commit_session_offer_async(
                         "message": g["message"],
                         "named": len(named_paths),
                         "matched": len(kept),
+                        "dropped": sorted(set(named_paths) - safe_set),
                     }
                 )
             if kept:
@@ -1956,6 +1995,12 @@ async def commit_session_offer_async(
         if g.get("committed"):
             committed_paths.extend(g["paths"])
 
+    # Flattened across groups so `outcome` alone answers "what did this call
+    # not commit that I asked it to" — the caller should not have to walk
+    # `dropped_groups` to learn it lost a file, and until 2026-09-01 that
+    # walk would have told it only how many.
+    dropped_paths = sorted({p for dg in dropped_groups for p in dg["dropped"]})
+
     if conflicted_paths:
         outcome: CommitOutcome = {
             "status": "dirty_conflict_skipped",
@@ -1967,21 +2012,48 @@ async def commit_session_offer_async(
             ),
             "committed_paths": committed_paths,
             "conflicted_paths": conflicted_paths,
+            "dropped_paths": dropped_paths,
         }
     elif committed_paths:
         outcome = {
             "status": "committed",
-            "detail": "%d path(s) committed across %d group(s)."
-            % (len(committed_paths), sum(1 for g in group_results if g.get("committed"))),
+            # The drop is named in the SAME sentence as the success, not
+            # left to a field the caller may never read: this status is the
+            # one an operator acts on, and a commit that landed while
+            # quietly leaving a named path behind is the shape that loses a
+            # record (see `DroppedGroup`'s `git mv` case).
+            "detail": (
+                "%d path(s) committed across %d group(s)."
+                % (
+                    len(committed_paths),
+                    sum(1 for g in group_results if g.get("committed")),
+                )
+            )
+            + (
+                " %d caller-named path(s) were NOT committed -- outside this "
+                "session's computed scope; see outcome.dropped_paths."
+                % len(dropped_paths)
+                if dropped_paths
+                else ""
+            ),
             "committed_paths": committed_paths,
             "conflicted_paths": [],
+            "dropped_paths": dropped_paths,
         }
     else:
         outcome = {
             "status": "empty",
-            "detail": "no claimed path(s) to commit this call.",
+            "detail": "no claimed path(s) to commit this call."
+            + (
+                " %d caller-named path(s) were dropped as outside this "
+                "session's computed scope; see outcome.dropped_paths."
+                % len(dropped_paths)
+                if dropped_paths
+                else ""
+            ),
             "committed_paths": [],
             "conflicted_paths": [],
+            "dropped_paths": dropped_paths,
         }
 
     return {

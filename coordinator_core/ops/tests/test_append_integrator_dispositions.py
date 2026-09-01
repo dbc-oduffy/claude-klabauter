@@ -946,6 +946,26 @@ class TestCliEntrypoint:
         assert "### Rationale" in text
         assert "piped in through the dash" in text.split("### Rationale", 1)[1]
 
+    def test_cli_refuses_stdin_channel_when_there_is_no_stdin(self, tmp_path, capsys, monkeypatch):
+        """A dispatched agent runs with no stdin, so `sys.stdin` is None and the
+        read raised AttributeError -- a crash the caller could only read as the
+        CLI being broken, with nothing naming the channel that does work. An
+        integrator hit this mid-pass and had to invent the workaround itself."""
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
+        )
+        monkeypatch.setattr(mod.sys, "stdin", None)
+        rc = mod.main([
+            "--sidecar", str(sidecar),
+            "--applied", "F1",
+            "--rationale-stdin",
+            "--root", str(tmp_path),
+        ])
+        assert rc == 2
+        assert "--rationale-file" in capsys.readouterr().err
+        assert "## Integrator Dispositions" not in sidecar.read_text(encoding="utf-8")
+
     def test_cli_refuses_both_rationale_channels_at_once(self, tmp_path, capsys):
         """Two sources for one field is a caller bug, not something to resolve by
         precedence -- silently picking one is how the wrong prose lands."""

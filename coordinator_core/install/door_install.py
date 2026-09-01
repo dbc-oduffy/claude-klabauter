@@ -248,8 +248,8 @@ def installed_provenance_path(bin_dst: Path) -> Path:
 
 class ProvenanceVerdict(NamedTuple):
     """Result of `verify_installed_provenance()` -- `status` is one of
-    `"no-door"`, `"absent"`, `"unrecorded"`, `"mismatch"`, `"stale"`, `"ok"`
-    (see that function's own docstring); `detail` is a human-readable
+    `"no-door"`, `"absent"`, `"unrecorded"`, `"mismatch"`, `"stale"`,
+    `"unverifiable"`, `"ok"` (see that function's own docstring); `detail` is a human-readable
     explanation."""
 
     status: str
@@ -285,7 +285,10 @@ def verify_installed_provenance(bin_dst: Path) -> ProvenanceVerdict:
         both paths, so a reader never has to re-derive either by hand.
       - `"stale"` -- sidecar and binary agree with EACH OTHER, but the
         binary is not the build this tree ships at `_PREBUILT_DOOR_EXE`.
-      - `"ok"` -- they match, and the binary is the current prebuilt.
+      - `"unverifiable"` -- sidecar and binary agree, and the currency
+        question could not be ASKED: no readable prebuilt in this checkout
+        (a platform this tree ships no `door`/`door.exe` for). Distinct
+        from `"ok"` on purpose -- see below.
 
     INTERNAL CONSISTENCY IS NOT CURRENCY, AND THE STALE CASE SATISFIES IT.
     The four statuses above answer "does the sidecar describe the binary
@@ -296,10 +299,19 @@ def verify_installed_provenance(bin_dst: Path) -> ProvenanceVerdict:
     hung on the missing `COORDINATOR_DOOR_STDIN_MODE` gate (2026-09-01).
     The oracle for currency is the committed prebuilt, never the sidecar,
     so the `"stale"` leg below re-derives against `_PREBUILT_DOOR_EXE`
-    rather than against anything the install itself wrote. A missing or
-    unreadable prebuilt leaves the currency question unanswerable and is
-    NOT reported as `ok` on that basis -- the sidecar verdict stands and
-    the currency leg is simply not reached.
+    rather than against anything the install itself wrote.
+
+    AN UNANSWERABLE CURRENCY QUESTION IS ITS OWN STATUS, NOT `ok`. An
+    unreadable prebuilt used to fall through to `ok` here, which is exactly
+    the shape the paragraph above condemns: the caller cannot tell "verified
+    current" from "could not look", and `install_health_run ::
+    check_door_provenance` printed the same clean line for both while
+    `settings_home_report.check_settings_home`'s currency leg FAILED loudly
+    on the identical root cause. Two sibling gates, opposite verdicts, one
+    condition. It returns `"unverifiable"` instead -- reported, never a pass,
+    and (like `"unrecorded"`) not a fleet-wide failure either, since failing
+    every box whose platform ships no prebuilt would fail the fleet rather
+    than the defect.
     """
     bin_dst = Path(bin_dst)
     dest_exe = bin_dst / DOOR_INSTALLED_NAME
@@ -332,9 +344,12 @@ def verify_installed_provenance(bin_dst: Path) -> ProvenanceVerdict:
 
     try:
         prebuilt = hashlib.sha256(_PREBUILT_DOOR_EXE.read_bytes()).hexdigest()
-    except OSError:
+    except OSError as exc:
         return ProvenanceVerdict(
-            "ok", f"{dest_exe} matches its recorded image_sha256"
+            "unverifiable",
+            f"{dest_exe} matches its recorded image_sha256, but currency "
+            f"could not be checked: no readable prebuilt at "
+            f"{_PREBUILT_DOOR_EXE} ({exc})",
         )
     if actual != prebuilt:
         return ProvenanceVerdict(

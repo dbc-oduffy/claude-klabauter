@@ -204,19 +204,47 @@ VERDICT_ABSENT = "absent"
 VERDICT_STALE = "stale"
 VERDICT_ARMED = "armed"
 
+#: Why an `absent` verdict is absent. Never a fourth verdict -- see the branch
+#: in `read_liveness` that sets it.
+ABSENT_NEVER_ARMED = "never-armed"
+ABSENT_UNREADABLE = "unreadable-record"
+
 #: The re-arm command every non-`armed` verdict carries. A liveness report that
 #: says the watch is dead and leaves the reader to reconstruct the invocation is
 #: half a report: the launcher name is the whole point (the `python -m` spelling
 #: resolves only from a cwd that can already import the engine, which the repos
 #: this watch is armed FOR generally cannot -- 2026-09-01, example-game-workbench-repo).
 REARM_COMMAND = (
-    "group-em-watch --repo-root <root> --group-em-session-id <your sid>   "
+    # Review: coordinator:code-reviewer (a6cd5e5f3f553af13) -- trailing
+    # whitespace before the parenthetical was a stray formatting artifact.
+    "group-em-watch --repo-root <root> --group-em-session-id <your sid> "
     "(hold it with Monitor, persistent: true; or fire "
     "`group-em-watch --repo-root <root> --group-em-session-id <sid> --once` on a cron floor)"
 )
 
 
 def _read_record(path: str) -> Optional[dict]:
+    """Best-effort record read; `None` for both "no file" and "unreadable".
+
+    Deliberate collapse at the VERDICT level, and only there: the cross-plane
+    reader this record is written for
+    (`X:/DoE-claude/coordinator/skills/group-em/watch_heartbeat.py::read_watch`,
+    via its own `_read_existing`) makes the identical collapse -- a missing
+    file and a present-but-unparseable one both fall through to its `None`
+    branch and read `absent`. A fourth verdict word here would make this
+    module's vocabulary answer a question that reader cannot ask back.
+
+    The distinction itself is NOT lost, and an earlier revision of this note
+    said it was: `read_liveness` carries `absent_reason` beside the unchanged
+    verdict (`ABSENT_NEVER_ARMED` | `ABSENT_UNREADABLE`), because the two mean
+    the same thing to a program -- nothing is watching -- and different things
+    to the person deciding what to do about it. Arming a watch fixes one of
+    them and not the other. That is a detail on our own reader, not a word in
+    the foreign one's vocabulary, which is why it costs that reader nothing.
+    (Review: review-integrator, carried tradeoff from a sibling integrator's
+    escalation, resolved rather than carried once a human-facing reader
+    existed to need it.)
+    """
     try:
         with open(path, "r", encoding="utf-8") as fh:
             record = json.load(fh)
@@ -264,10 +292,17 @@ def read_liveness(
     dead watch and no way to restart it just moves the prose one file over.
     """
     now_epoch = time.time() if now_epoch is None else now_epoch
-    record = _read_record(watch_path(repo_root))
+    path = watch_path(repo_root)
+    record = _read_record(path)
     if record is None:
+        # `absent` stays ONE verdict -- the sibling reader's vocabulary is not
+        # ours to widen (see `_read_record`). `absent_reason` is a detail beside
+        # it, for the reader that has to tell a human WHY: "nobody ever armed a
+        # watch here" and "a record exists and will not read" both mean nothing
+        # is watching, but only one of them is fixed by arming a watch.
         return {
             "verdict": VERDICT_ABSENT,
+            "absent_reason": ABSENT_UNREADABLE if os.path.exists(path) else ABSENT_NEVER_ARMED,
             "holder_session_id": None,
             "holder_name": None,
             "last_tick_at": None,
@@ -305,3 +340,91 @@ def read_liveness(
         return {"verdict": VERDICT_STALE, "seconds_overdue": round(overdue, 1),
                 "remedy": REARM_COMMAND, **base}
     return {"verdict": VERDICT_ARMED, "seconds_overdue": None, **base}
+
+
+def _age_phrase(seconds: float) -> str:
+    """`41 minutes`, `3 seconds` -- a duration a human reads without a unit key."""
+    seconds = max(0.0, seconds)
+    if seconds < 90:
+        return f"{seconds:.0f} seconds"
+    if seconds < 5400:
+        return f"{seconds / 60:.0f} minutes"
+    return f"{seconds / 3600:.1f} hours"
+
+
+def _tick_age_seconds(last_tick_at: Any, now_epoch: float) -> Optional[float]:
+    """Age of the last tick, or `None` when the record cannot say.
+
+    Both sides are epoch seconds: the stamp is parsed as the UTC it declares
+    (`calendar.timegm`, never `time.mktime`), and `now_epoch` is `time.time()`.
+    A local-clock reading of a `Z` stamp is how this fleet has previously
+    invented an hour of staleness that did not exist.
+    """
+    if not isinstance(last_tick_at, str):
+        return None
+    try:
+        return now_epoch - calendar.timegm(time.strptime(last_tick_at, _STAMP_FORMAT))
+    except ValueError:
+        return None
+
+
+def human_verdict(liveness: dict, now_epoch: Optional[float] = None) -> str:
+    """`read_liveness` rendered for a person who has never heard of a heartbeat.
+
+    WHY A RENDERER, AND NOT A FIELD ON THE RECORD. The three states this repo
+    keeps collapsing -- watcher alive and correctly quiet, watcher dead or
+    never started, no watcher ever armed -- are already distinct in
+    `read_liveness`. The defect they cost us on 2026-09-01 was not that the
+    engine could not tell them apart: it was that the only surface a human had
+    said `idle` for all three, and the instrument that knew better answered
+    only to something able to read a JSON file. So this function adds no
+    signal; it moves the signal that exists into the vocabulary of the question
+    actually being asked, which is "is my watch alive?".
+
+    NEVER GREEN ON NO EVIDENCE. `absent` renders as UNKNOWN, never as healthy
+    and never as an all-clear. "Nothing owed" and "nothing looked" rendering
+    the same is the specific failure that produced this function; a reader who
+    later shortens the absent branch to something reassuring reintroduces it.
+
+    Prose, not a code: the caller decides the exit code (see `watch._cli`'s
+    `--status`), and no consumer should parse these words back into a verdict.
+    """
+    now_epoch = time.time() if now_epoch is None else now_epoch
+    verdict = liveness.get("verdict")
+    holder = liveness.get("holder_name") or liveness.get("holder_session_id") or "unknown holder"
+    remedy = liveness.get("remedy") or REARM_COMMAND
+    age = _tick_age_seconds(liveness.get("last_tick_at"), now_epoch)
+
+    if verdict == VERDICT_ARMED:
+        when = f"{_age_phrase(age)} ago" if age is not None else f"at {liveness.get('last_tick_at')}"
+        lines = [
+            f"ALIVE - a watch is running and checked the fleet {when}.",
+            f"  Held by: {holder}",
+            "  Quiet is the normal state between checks; it is not a fault.",
+        ]
+    elif verdict == VERDICT_STALE:
+        overdue = liveness.get("seconds_overdue")
+        late = (
+            f" and is {_age_phrase(overdue)} past the deadline it set itself"
+            if isinstance(overdue, (int, float))
+            else " and has missed the deadline it set itself"
+        )
+        when = f"{_age_phrase(age)} ago" if age is not None else "at an unreadable time"
+        lines = [
+            f"NOT RUNNING - the watch last checked {when}{late}.",
+            f"  Last held by: {holder}",
+            "  Nothing is watching this repo now. Restart it:",
+            f"    {remedy}",
+        ]
+    else:
+        detail = (
+            "a watch record exists here but cannot be read"
+            if liveness.get("absent_reason") == ABSENT_UNREADABLE
+            else "no watch has ever reported for this repo"
+        )
+        lines = [
+            f"UNKNOWN - {detail}.",
+            "  This is NOT an all-clear: nothing has looked. Arm a watch:",
+            f"    {remedy}",
+        ]
+    return chr(10).join(lines)

@@ -5997,9 +5997,11 @@ def _resolve_owner_writer_name(
     live_verdicts: Dict[str, Tuple[bool, str, Optional[int]]],
 ) -> Tuple[Optional[str], Optional[str]]:
     """Three-rung name resolution ladder (C3, plan
-    ``2026-09-01-the-claim-record-carries-the-name``) -- the same ladder
-    C2 (``coordinator/bin/session-claim-cli.py``) implements against its
-    own read surface, applying ``_holder_context``'s discipline
+    ``2026-09-01-the-claim-record-carries-the-name``) -- POLICY now shared
+    verbatim with C2 (``coordinator/bin/session-claim-cli.py``) via
+    ``coordinator_core.session.name_ladder.resolve_name`` (state/debt-
+    backlog/2026-09-01-shared-name-resolution-ladder-for-sessio-
+    026b33fcd43d.yaml), applying ``_holder_context``'s discipline
     (``coordinator/bin/coordinator-safe-commit.py``, landed 3dcf73f06c/
     586bb605a6) VERBATIM: PROVENANCE, never ADDRESS.
 
@@ -6008,11 +6010,15 @@ def _resolve_owner_writer_name(
     cross-machine read -- the durable answer this plan exists to add.
     Rung 2 -- failing that, a live ``harness_registry.lookup(fact.owner)``.
     The cheap fallback rung: correct only for a pre-C1 record whose writer
-    is still resident on THIS machine, at read time, on THIS box.
+    is still resident on THIS machine, at read time, on THIS box. See
+    ``name_ladder``'s module docstring for its retirement condition.
     Rung 3 -- failing both, ``(None, None)`` -- the caller renders an
     explicit UNNAMED marker, visually distinct from a bare sid (Anti-scope:
     never print a bare sid as though it were an address -- that teaches the
-    fleet to route around the guard).
+    fleet to route around the guard). Check 5's own budget collapses ALL
+    THREE of ``name_ladder``'s rung-3 sub-reasons into this one marker --
+    that collapse is this call site's considered choice, not a gap; see
+    ``name_ladder.resolve_name``'s docstring for what those sub-reasons are.
 
     A resolver exception (``harness_registry.lookup`` unavailable, corrupt
     registry) degrades to rung 3, never raises -- Check 5 is advisory
@@ -6021,20 +6027,21 @@ def _resolve_owner_writer_name(
     Returns ``(name, rung)`` where ``rung`` is ``"recorded"`` (rung 1) or
     ``"live-lookup"`` (rung 2), or ``(None, None)`` when neither resolves.
     """
-    name = fact.writer_name
-    if name:
-        return name, "recorded"
+    from coordinator_core.session import name_ladder
 
     try:
         from coordinator_core.session import harness_registry
 
-        record = harness_registry.lookup(fact.owner)
-    except Exception:
-        record = None
-    if record is not None and record.name:
-        return record.name, "live-lookup"
+        lookup = harness_registry.lookup
+    except Exception:  # noqa: BLE001 - degrade to rung 3, see docstring
 
-    return None, None
+        def lookup(sid):  # noqa: ANN001, ANN202 - see docstring, best-effort
+            raise RuntimeError("harness_registry unavailable")
+
+    name, rung, _reason = name_ladder.resolve_name(fact.writer_name, fact.owner, lookup)
+    if rung == name_ladder.RUNG_UNRESOLVED:
+        return None, None
+    return name, rung
 
 
 def _owner_display_id(

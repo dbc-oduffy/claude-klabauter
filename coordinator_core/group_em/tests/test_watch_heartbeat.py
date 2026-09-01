@@ -213,3 +213,71 @@ def test_an_unattributed_write_says_so_rather_than_claiming_the_holder(tmp_path)
         str(tmp_path), holder_session_id="group-em-1", declinations=[], interval_seconds=5.0
     )
     assert _record(tmp_path)["writer_session_id"] is None
+
+
+# THREE STATES, THREE ANSWERS. The defect these pin: a watch alive and quiet, a
+# watch that died or never started, and a repo nobody ever armed all rendered
+# identically to the only surface a human had (`idle`). A renderer that lets any
+# two of them collapse again is the bug, so each is asserted against the others.
+
+
+def _armed(tmp_path, now):
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, holder_name="claude-klabauter-ad", now_epoch=now,
+    )
+    return watch_heartbeat.read_liveness(str(tmp_path), now_epoch=now + 3.0)
+
+
+def test_a_quiet_live_watch_reads_alive_not_idle(tmp_path):
+    text = watch_heartbeat.human_verdict(_armed(tmp_path, time.time()))
+    assert text.startswith("ALIVE")
+    assert "claude-klabauter-ad" in text
+    # The quiet itself has to be named, or a reader re-reads silence as a fault.
+    assert "Quiet is the normal state" in text
+
+
+def test_a_watch_past_its_own_deadline_reads_not_running_with_the_restart(tmp_path):
+    now = time.time()
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, now_epoch=now - 3600,
+    )
+    liveness = watch_heartbeat.read_liveness(str(tmp_path), now_epoch=now)
+    assert liveness["verdict"] == watch_heartbeat.VERDICT_STALE
+    text = watch_heartbeat.human_verdict(liveness, now_epoch=now)
+    assert text.startswith("NOT RUNNING")
+    assert watch_heartbeat.REARM_COMMAND in text
+
+
+def test_a_repo_no_watch_ever_covered_reads_unknown_never_green(tmp_path):
+    liveness = watch_heartbeat.read_liveness(str(tmp_path))
+    assert liveness["verdict"] == watch_heartbeat.VERDICT_ABSENT
+    assert liveness["absent_reason"] == watch_heartbeat.ABSENT_NEVER_ARMED
+    text = watch_heartbeat.human_verdict(liveness)
+    assert text.startswith("UNKNOWN")
+    assert "NOT an all-clear" in text
+    assert "ALIVE" not in text
+
+
+def test_an_unreadable_record_says_so_rather_than_never_armed(tmp_path):
+    path = watch_heartbeat.watch_path(str(tmp_path))
+    import os
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("{ this is not json")
+    liveness = watch_heartbeat.read_liveness(str(tmp_path))
+    # The verdict stays the sibling reader's single word; only the detail splits.
+    assert liveness["verdict"] == watch_heartbeat.VERDICT_ABSENT
+    assert liveness["absent_reason"] == watch_heartbeat.ABSENT_UNREADABLE
+    assert "cannot be read" in watch_heartbeat.human_verdict(liveness)
+
+
+def test_the_age_is_read_off_the_z_stamp_as_utc_not_the_local_clock(tmp_path):
+    # A `Z` stamp measured against a local clock invents an hour of staleness on
+    # any box that is not UTC. Both sides here are epoch seconds; a three-second
+    # tick must never render as an hour.
+    now = float(int(time.time()))
+    text = watch_heartbeat.human_verdict(_armed(tmp_path, now), now_epoch=now + 3.0)
+    assert "3 seconds ago" in text
+    assert "hours" not in text

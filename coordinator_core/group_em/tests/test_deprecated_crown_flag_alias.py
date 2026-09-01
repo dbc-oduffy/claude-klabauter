@@ -86,6 +86,35 @@ def test_idle_report_does_not_refuse_either_spelling(spelling, tmp_path):
         pytest.fail(f"{spelling} was refused by argparse (exit {exc.code})")
 
 
+def test_watch_both_spellings_on_one_argv_the_later_flag_wins(tmp_path, monkeypatch):
+    """Pins argparse's same-dest overwrite order against a future usage change.
+
+    # Review: coordinator:code-reviewer -- verified safe by reading argparse semantics
+    # (shared dest, later-on-argv overwrites); this pins that behavior rather than
+    # merely trusting it, so a `required=True` or custom Action added later fails loud.
+    Both entry points build their parser inside `_cli`, so this goes through argv like
+    the parametrized cases above, not through direct handler calls.
+    """
+    seen: dict = {}
+    monkeypatch.setattr(
+        watch.repo_root_arg, "resolve_repo_root_arg", lambda v: str(tmp_path)
+    )
+    monkeypatch.setattr(
+        watch, "tick_once", lambda *a, **k: seen.update(k) or 0
+    )
+
+    watch._cli([
+        "--repo-root", str(tmp_path),
+        "--group-em-session-id", "A",
+        "--crown-session-id", "B",
+        "--once",
+    ])
+
+    assert seen.get("group_em_session_id") == "B", (
+        f"passing both spellings on one argv should let the later flag win; saw: {seen!r}"
+    )
+
+
 @pytest.mark.parametrize(
     "module", [watch, idle_report], ids=["watch", "idle_report"]
 )

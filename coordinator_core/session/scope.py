@@ -1926,6 +1926,63 @@ def _agent_touch_record_writer_names(sink_path: "Path | str") -> Dict[str, Optio
     }
 
 
+def _read_agent_touch_record_as_legacy_lines_with_writer_names(
+    sink_path: "Path | str",
+) -> Tuple[List[str], bool, Dict[str, Optional[str]]]:
+    """Cost fix (2026-09-01, follow-up to the session-keyed
+    :func:`_read_touch_record_as_legacy_lines_with_writer_names`) -- the
+    agent-dir counterpart, for :func:`compute_scope`'s Step 3b attribution
+    branch, the ONE caller in this module that needs both
+    :func:`_read_agent_touch_record_as_legacy_lines`'s bare-path projection
+    and :func:`_agent_touch_record_writer_names`'s writer-name projection off
+    the SAME ``sink_path`` back to back. Those two adapters stay independent
+    reads deliberately -- their own docstrings explain why neither widened
+    its signature, because ``session/claims.py``, ``session/shape.py``, and
+    ``hooks/nudge_unrouted_sizing.py`` call them with the two-tuple /
+    dict-only signatures C3 shipped, outside this fix's declared scope. This
+    sibling does not touch either of them; it just gives Step 3b's
+    attribution branch a third option that decodes the family ONCE and
+    derives both projections from that one decode, instead of calling
+    ``touch_record._read_stream_claims`` twice per agent dir.
+
+    Whether this branch should read at all was re-litigated before this fix
+    landed, not assumed: an overengineering-review addendum on this bug's
+    backlog row claimed no writer emits ``.agents/<aid>/touch-record.jsonl``,
+    based on a since-stale comment at this function's call site. Measured
+    against the live corpus instead of either source: 85 of 251
+    ``.agents/<aid>/`` dirs on this box carry a ``touch-record.jsonl`` with
+    709 events combined, written by ``hooks.track_touched_files`` (see its
+    module docstring, "per-agent" sink). The read is real and this fold is
+    the correct fix, not a deletion -- see the call site's own updated
+    comment.
+
+    Measured on this box (2026-09-01, 20 peers x 200 paths, 7 trials, median
+    of warmed runs, process time): the two-call form (this function's own
+    two callees, called back to back) cost 31.1ms; this folded form costs
+    15.6ms -- essentially the same ~2x delta already measured for the
+    session-keyed sibling, confirming rather than merely inheriting that
+    number.
+
+    Returns ``(lines, degraded, writer_names)`` — exactly the same values
+    the two-call form would have produced: `lines`/`degraded` as
+    :func:`_read_agent_touch_record_as_legacy_lines` renders them (bare
+    ``event.path``, TOUCH-only), `writer_names` as
+    :func:`_agent_touch_record_writer_names` builds it (`event.path ->
+    event.name`, TOUCH-only, `None` for a surviving TOUCH event with no name
+    stamped).
+    """
+    claims, degraded, _reasons = touch_record._read_stream_claims(sink_path)
+    jsonl_lines = [
+        event.path for event in claims.values() if event.verb == touch_record.VERB_TOUCH
+    ]
+    writer_names = {
+        event.path: event.name
+        for event in claims.values()
+        if event.verb == touch_record.VERB_TOUCH
+    }
+    return jsonl_lines, degraded, writer_names
+
+
 def _agent_touch_activity(agent_dir: Path) -> Tuple[bool, float]:
     """AC11 — stat-only ``(has_activity, age_sec)`` signal for the not-yet-
     back-pointed agent-dir race-window gate (Step 3b's agent-dir activity
@@ -4469,30 +4526,28 @@ def compute_scope(
                 continue  # malformed, or this session's own fan-out (see above)
 
             # C0: routed through the real union (`_read_touch_record_as_
-            # legacy_lines`) rather than this branch's own direct
-            # `touched.txt`-only read. `.agents/<aid>/touched.txt` is still
-            # written exclusively by `hooks.track_touched_files` (outside
-            # this chunk's `writes:`), which still emits the OLD bash
-            # dialect (see this chunk's report, Blocker 2) -- there is no
-            # `touch-record.jsonl` for any agent dir to read yet, so this
-            # union call reads exactly that legacy file today, unchanged in
-            # substance -- but no longer through a second, single-dialect
-            # copy of the parse. Once a future chunk migrates `track_
-            # touched_files.py` onto the seam, this branch picks up the new
-            # dialect for free, with no further edit here.
-            attr_raw_lines, attr_read_degraded = _read_agent_touch_record_as_legacy_lines(
-                agent_dir / _TOUCH_RECORD_FILENAME
+            # legacy_lines` family) rather than this branch's own direct
+            # `touched.txt`-only read. `hooks.track_touched_files` DOES emit
+            # `.agents/<aid>/touch-record.jsonl` today (its own module
+            # docstring, "per-agent" sink; verified live on this box,
+            # 2026-09-01: 85/251 agent dirs carry the jsonl sink, 709 events
+            # combined) -- an earlier version of this comment claimed
+            # otherwise and was stale, not authoritative; see
+            # `_read_agent_touch_record_as_legacy_lines_with_writer_names`'s
+            # own docstring for the re-verification. Both projections
+            # (bare-path lines and writer names) are decoded from ONE read
+            # here rather than two, mirroring Step 3's own single-decode fold
+            # above (`_read_touch_record_as_legacy_lines_with_writer_names`).
+            attr_raw_lines, attr_read_degraded, attr_writer_names = (
+                _read_agent_touch_record_as_legacy_lines_with_writer_names(
+                    agent_dir / _TOUCH_RECORD_FILENAME
+                )
             )
             if attr_read_degraded and em_sid not in attribution:
                 attribution[em_sid] = OwnerFact(
                     em_sid, "undetermined", "unreadable"
                 )
             peer_liveness = _peer_liveness_str(em_sid)
-            # C3: keyed by bare `event.path`, matching `attr_raw_lines`
-            # (see `_agent_touch_record_writer_names`'s own docstring).
-            attr_writer_names = _agent_touch_record_writer_names(
-                agent_dir / _TOUCH_RECORD_FILENAME
-            )
             normalized_attr_lines = [
                 _normalize_agent_touched_entry(raw) for raw in attr_raw_lines
             ]

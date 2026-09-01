@@ -348,9 +348,17 @@ def _render_claimant_name(sid: str, path: str, lookup_result) -> str:
     additive display output on an already-decided claimant row and must
     never take down the row's ``sid``/``live|dead`` columns.
     """
+    from coordinator_core.session import name_ladder  # noqa: PLC0415
+
     recorded = getattr(lookup_result, "recorded_name", None) or {}
-    name = (recorded.get(path) or {}).get(sid)
-    if name:
+    recorded_name = (recorded.get(path) or {}).get(sid)
+
+    def _lookup(_sid: str):
+        return _import_harness_registry_module().lookup(_sid)
+
+    name, rung, reason = name_ladder.resolve_name(recorded_name, sid, _lookup)
+
+    if rung == name_ladder.RUNG_RECORDED:
         edit_ts = getattr(lookup_result, "edit_ts", None) or {}
         ts = (edit_ts.get(path) or {}).get(sid)
         age = ""
@@ -366,16 +374,12 @@ def _render_claimant_name(sid: str, path: str, lookup_result) -> str:
             f"{name} (recorded name{age} -- provenance only, not a live "
             "address; verify the holder before sending)"
         )
-    try:
-        registry_mod = _import_harness_registry_module()
-        record = registry_mod.lookup(sid)
-    except Exception:  # noqa: BLE001 - see docstring, rung-2 is best-effort
+    if rung == name_ladder.RUNG_LIVE_LOOKUP:
+        return f"{name} (live harness registry lookup)"
+    if reason == name_ladder.REASON_LOOKUP_FAILED:
         return _NAME_UNRESOLVED_MARKER
-    if record is None:
+    if reason == name_ladder.REASON_NO_REGISTRY_RECORD:
         return _NO_REGISTRY_RECORD_MARKER
-    live_name = getattr(record, "name", None)
-    if live_name:
-        return f"{live_name} (live harness registry lookup)"
     return _UNNAMED_MARKER
 
 
