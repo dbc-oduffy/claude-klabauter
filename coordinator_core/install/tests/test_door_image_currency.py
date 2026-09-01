@@ -48,7 +48,7 @@ def prebuilt_bytes() -> bytes:
     return door_install._PREBUILT_DOOR_EXE.read_bytes()
 
 
-def test_audit_discriminates_current_from_stale_and_missing(tmp_path, prebuilt_bytes):
+def test_audit_discriminates_current_from_stale(tmp_path, prebuilt_bytes):
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     _plant(bin_dst, "current-one", prebuilt_bytes)
@@ -65,7 +65,9 @@ def test_audit_discriminates_current_from_stale_and_missing(tmp_path, prebuilt_b
 
     assert audit.current == ["current-one", "current-two"]
     assert audit.stale == ["stale-same-size", "stale-short"]
-    assert audit.missing == ["never-installed"]
+    # An absent slot appears in neither list -- `check_settings_home`'s own
+    # forwarder-missing leg reports it, off a different artifact.
+    assert "never-installed" not in audit.current + audit.stale
 
 
 def test_audit_reads_one_inode_once(tmp_path, prebuilt_bytes, monkeypatch):
@@ -97,19 +99,6 @@ def test_audit_reads_one_inode_once(tmp_path, prebuilt_bytes, monkeypatch):
     assert audit.stale == [] and audit.current == names
     # One read for the prebuilt, one for the shared inode. Never one per name.
     assert len(reads) == 2, reads
-
-
-def test_audit_exempts_static_family_slots(tmp_path):
-    bin_dst = tmp_path / "bin"
-    bin_dst.mkdir()
-    _plant(bin_dst, "claude-home", b"a static family owns this slot")
-
-    assert door_install.audit_installed_image_currency(
-        bin_dst, ["claude-home"]
-    ).stale == ["claude-home"]
-    assert door_install.audit_installed_image_currency(
-        bin_dst, ["claude-home"], exempt_names={"claude-home"}
-    ) == door_install.ImageCurrencyAudit(current=[], stale=[], missing=[])
 
 
 def test_provenance_verdict_separates_currency_from_self_consistency(tmp_path, prebuilt_bytes):

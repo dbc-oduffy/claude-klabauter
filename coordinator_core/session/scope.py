@@ -187,7 +187,7 @@ class OwnerFact(NamedTuple):
                        per-event name to carry). ``None`` is NEVER a signal
                        that the writer is dead or absent — it means UNNAMED,
                        the same posture as ``TouchEvent.name`` itself (see
-                       :func:`_agent_touch_record_writer_names` and
+                       :func:`_read_agent_touch_record_as_legacy_lines_with_writer_names` and
                        :func:`_read_touch_record_as_legacy_lines_with_writer_names`, the C3
                        direct-TouchEvent reads this field is sourced from —
                        deliberately NOT threaded through
@@ -1912,20 +1912,6 @@ def _read_touch_record_as_legacy_lines_with_writer_names(
     return jsonl_lines, degraded, writer_names
 
 
-def _agent_touch_record_writer_names(sink_path: "Path | str") -> Dict[str, Optional[str]]:
-    """C3 -- the agent-dir writer-name source, mirroring
-    mirroring :func:`_read_agent_touch_record_as_legacy_lines`'s own TOUCH-
-    only filter (a RELEASE survivor has no bare-path representation in that
-    adapter's rendering, so it is excluded here too, for the same reason).
-    """
-    claims, _degraded, _reasons = touch_record._read_stream_claims(sink_path)
-    return {
-        event.path: event.name
-        for event in claims.values()
-        if event.verb == touch_record.VERB_TOUCH
-    }
-
-
 def _read_agent_touch_record_as_legacy_lines_with_writer_names(
     sink_path: "Path | str",
 ) -> Tuple[List[str], bool, Dict[str, Optional[str]]]:
@@ -1934,13 +1920,13 @@ def _read_agent_touch_record_as_legacy_lines_with_writer_names(
     agent-dir counterpart, for :func:`compute_scope`'s Step 3b attribution
     branch, the ONE caller in this module that needs both
     :func:`_read_agent_touch_record_as_legacy_lines`'s bare-path projection
-    and :func:`_agent_touch_record_writer_names`'s writer-name projection off
-    the SAME ``sink_path`` back to back. Those two adapters stay independent
-    reads deliberately -- their own docstrings explain why neither widened
-    its signature, because ``session/claims.py``, ``session/shape.py``, and
-    ``hooks/nudge_unrouted_sizing.py`` call them with the two-tuple /
-    dict-only signatures C3 shipped, outside this fix's declared scope. This
-    sibling does not touch either of them; it just gives Step 3b's
+    and its writer-name projection off the SAME ``sink_path`` back to back.
+    That adapter stays independent deliberately -- its own docstring
+    explains why it did not widen its signature, because
+    ``session/claims.py``, ``session/shape.py``, and
+    ``hooks/nudge_unrouted_sizing.py`` call it with the two-tuple
+    signature C3 shipped, outside this fix's declared scope. This
+    sibling does not touch it; it just gives Step 3b's
     attribution branch a third option that decodes the family ONCE and
     derives both projections from that one decode, instead of calling
     ``touch_record._read_stream_claims`` twice per agent dir.
@@ -1966,10 +1952,8 @@ def _read_agent_touch_record_as_legacy_lines_with_writer_names(
     Returns ``(lines, degraded, writer_names)`` — exactly the same values
     the two-call form would have produced: `lines`/`degraded` as
     :func:`_read_agent_touch_record_as_legacy_lines` renders them (bare
-    ``event.path``, TOUCH-only), `writer_names` as
-    :func:`_agent_touch_record_writer_names` builds it (`event.path ->
-    event.name`, TOUCH-only, `None` for a surviving TOUCH event with no name
-    stamped).
+    ``event.path``, TOUCH-only), `writer_names` as `event.path -> event.name`
+    (TOUCH-only, `None` for a surviving TOUCH event with no name stamped).
     """
     claims, degraded, _reasons = touch_record._read_stream_claims(sink_path)
     jsonl_lines = [

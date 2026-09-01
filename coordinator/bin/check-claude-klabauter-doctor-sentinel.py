@@ -44,16 +44,14 @@ launcher is correct, not a gap.
 So: on a claude-klabauter-front box this is a repo-side tool, run as `python
 coordinator/bin/check-claude-klabauter-doctor-sentinel.sh`. The FLEET surface is the
 published spelling, which a klabauter-front box installs and which does get
-a door image. Do NOT read the absent launcher as a missing capability and
-restore a `.cmd` — DR-365 forbids an agent-helper launcher whose primary
-path starts an interpreter, pinned by
-`coordinator_core/install/tests/test_no_interpreter_starting_forwarder_is_
-emitted.py`, and that is exactly what an attempt on 2026-09-01 hit and
-reverted (`d65c415f05`). Widening `launcher_is_installable` to be
-rename-aware is the other tempting non-fix: its narrowing is what keeps the
-extensionless twelve (`chunk-commits`, `static-check`, `with-suite-mutex`,
-the precommit checks) out of the refused set, and the version that could
-not tell them apart "queued all 26 for removal, hook CLIs included".
+a door image. Do not read the absent launcher as a missing capability.
+Restoring a `.cmd` is already refused by
+`test_no_interpreter_starting_forwarder_is_emitted.py` (DR-365); widening
+`launcher_is_installable` to be rename-aware is the tempting non-fix
+nothing pins — its narrowing is what keeps the extensionless twelve
+(`chunk-commits`, `static-check`, `with-suite-mutex`, the precommit checks)
+out of the refused set, and the version that could not tell them apart
+"queued all 26 for removal, hook CLIs included".
 
 Always exits 0 — advisory only, never gating (matches check-plugin-drift.py /
 scan-addon-health.py convention of "probe never fails the ceremony"). This

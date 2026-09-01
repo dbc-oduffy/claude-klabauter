@@ -3,37 +3,14 @@
 # and coordinator_core/bash_guards/dispatch_checks.py's Check 5 owner-name
 # clause. Extracted (state/debt-backlog/2026-09-01-shared-name-resolution-
 # ladder-for-sessio-026b33fcd43d.yaml) after the two independent copies of
-# this ~10-line policy already drifted once within a day of being written:
-# the CLI split rung 3 into three distinguishable outcomes (no registry
-# record vs. lookup failure vs. a resolved-but-nameless record) while the
-# guard collapsed all three into one UNNAMED clause. Sharing the RESOLUTION
-# here makes that drift structurally impossible; the two RENDERERS stay
-# separate and unshared by design (see module docstring below) because they
-# legitimately differ in byte budget and prose.
+# this ~10-line policy already drifted once within a day of being written.
+# Sharing the RESOLUTION here makes that drift structurally impossible.
 #
 # RESOLUTION ONLY, NEVER RENDERING. This module returns facts
 # (name, rung, reason) -- it prints nothing, formats nothing, and knows
-# nothing about a 73-byte clause budget or a TAB-delimited CLI column. Each
-# caller keeps its own renderer:
-#   - session-claim-cli.py's `_render_claimant_name` has no byte budget and
-#     renders full prose with an age/staleness sentence, and still
-#     distinguishes all three rung-3 outcomes with their own markers.
-#   - dispatch_checks.py's `_owner_writer_name_clause` renders inside a
-#     ~73-byte clause and collapses every rung-3 outcome into one
-#     "-- UNNAMED" marker -- that collapse is Check 5's own considered
-#     choice (budget, not oversight) and this module does not second-guess
-#     it by forcing a shared rendering.
-#
-# THE LOOKUP IS INJECTED, NEVER IMPORTED HERE. Both callers already own a
-# per-functional-area import seam for `coordinator_core.session.
-# harness_registry` (session-claim-cli.py's `_import_harness_registry_
-# module`, purpose-built so `who-claims-path` tests can stub rung 2 in
-# isolation; dispatch_checks.py's own late `from coordinator_core.session
-# import harness_registry` inside `_resolve_owner_writer_name`, which its
-# test suite stubs via `monkeypatch.setattr("coordinator_core.session.
-# harness_registry.lookup", ...)`). This module importing harness_registry
-# itself would bypass both seams and break that stubbing -- callers resolve
-# `harness_registry.lookup` on their own terms and pass the callable in.
+# nothing about either caller's byte budget or column shape. Each caller
+# keeps its own renderer and import seam for `coordinator_core.session.
+# harness_registry`; see the call sites for the current shape of both.
 #
 # RUNG 2 IS TRANSITIONAL. It exists only as a cheap fallback for a pre-C1
 # claim record written before C1 (docs/plans/2026-09-01-the-claim-record-
@@ -65,7 +42,7 @@ REASON_UNNAMED_RECORD = "unnamed_record"
 def resolve_name(
     recorded_name: Optional[str],
     sid: str,
-    lookup: Callable[[str], Any],
+    lookup: Optional[Callable[[str], Any]],
 ) -> Tuple[Optional[str], str, Optional[str]]:
     """The three-rung ladder, extracted verbatim from the two call sites
     named in this module's docstring.
@@ -79,7 +56,11 @@ def resolve_name(
     Rung 2 -- failing that, ``lookup(sid)`` (the caller's own
     ``harness_registry.lookup``, injected rather than imported here -- see
     module docstring). Cheap, and correct only for a pre-C1 record whose
-    writer session is still resident.
+    writer session is still resident. ``lookup`` may be ``None`` -- a
+    caller whose own import of the registry module failed passes ``None``
+    rather than synthesising a closure that raises just to be re-caught;
+    this degrades straight to rung 3 (``REASON_LOOKUP_FAILED``), same as a
+    real ``lookup`` that raises.
 
     Rung 3 -- failing both, ``(None, RUNG_UNRESOLVED, reason)`` where
     ``reason`` distinguishes the three sub-cases a caller MAY care about:
@@ -100,6 +81,9 @@ def resolve_name(
     """
     if recorded_name:
         return recorded_name, RUNG_RECORDED, None
+
+    if lookup is None:
+        return None, RUNG_UNRESOLVED, REASON_LOOKUP_FAILED
 
     try:
         record = lookup(sid)

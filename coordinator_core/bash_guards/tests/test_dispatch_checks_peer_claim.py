@@ -73,13 +73,13 @@ class TestWriterNameThreeRungLadder:
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
         assert "claude-klabauter-b3" in sentence
-        # rung-2 (live-resolved) marker is the tilde -- distinct from
-        # rung-1's asterisk -- see `_owner_writer_name_clause`'s docstring.
         # The subject slot shrinks to the short (8-char) sid once a name
-        # resolves -- see `_owner_display_id`'s docstring.
+        # resolves -- see `_owner_display_id`'s docstring. No rung marker
+        # -- rung 1 and rung 2 render identically, see
+        # `_owner_writer_name_clause`'s docstring.
         assert REAL_SID[:8] in sentence
         assert REAL_SID not in sentence
-        assert " -- w:claude-klabauter-b3~" in sentence
+        assert " -- w:claude-klabauter-b3" in sentence
         assert "UNNAMED" not in sentence
 
     def test_rung3_unnamed_when_neither_rung_resolves(self, monkeypatch):
@@ -132,8 +132,7 @@ class TestWriterNameNegativeSpec:
     def test_recorded_name_never_asserted_as_present_tense_reachable(self):
         """A recorded name is provenance, not a live address -- the
         rendering must not claim present-tense reachability (e.g. "is
-        live at", "reachable now"), and must carry the rung-1 provenance
-        marker (asterisk) rather than being printed bare."""
+        live at", "reachable now")."""
         fact = OwnerFact(
             owner=REAL_SID,
             liveness="live",
@@ -143,7 +142,7 @@ class TestWriterNameNegativeSpec:
         sentence = dispatch_checks._format_owner_sentence(fact, {})
         assert REAL_SID[:8] in sentence
         assert REAL_SID not in sentence
-        assert " -- w:%s*" % REAL_NAME in sentence
+        assert " -- w:%s" % REAL_NAME in sentence
         assert "reachable now" not in sentence.lower()
         assert "is live at" not in sentence.lower()
 
@@ -222,58 +221,32 @@ class TestWriterNameBudgetBoundary:
         assert "confirmed live" in sentence
 
     def test_real_sid_and_real_name_both_survive_intact_at_rung1(self, monkeypatch):
-        """C3 follow-up fix 2 (EM-adjudicated break-class), superseded by
-        follow-up fix 3 (bug 616e4449f90c): on a REAL 36-character sid with
-        a realistic name, the SHORT sid (not the full uuid) appears in the
-        subject for EVERY class, and the load-bearing liveness/CONTESTED
-        verdict always survives intact -- that prefix must never be the
-        thing a budget cut degrades.
+        """C3 follow-up fix 2 (EM-adjudicated break-class): on a REAL
+        36-character sid with a realistic name, the SHORT sid (not the full
+        uuid) appears in the subject, and the load-bearing CONTESTED verdict
+        always survives intact -- that prefix must never be the thing a
+        budget cut degrades.
 
-        Fix 3 additionally re-fit the ``session``/``agent`` subject and
-        liveness prose (see ``_format_owner_sentence``'s docstring
-        comments) so the full name ALSO survives intact for all four of
-        those classes, not just the two shortest (live/dead session) fix 2
-        left behind -- this is the bug backlog row's TARGET. The
-        ``agent-race``/``unreadable`` classes are out of that bug's scope
-        (its six named rows are all ``session``/``agent`` x
-        live/dead/undetermined) and keep fix 2's truncate-the-name-tail
-        behavior unchanged here.
+        Scoped to the ``agent-race``/``unreadable`` classes only -- the
+        ``session``/``agent`` x live/dead/undetermined classes this test
+        used to also cover are pinned more strongly (liveness-token AND
+        budget-length assertions) by
+        ``test_all_six_owner_classes_render_name_and_verdict_intact``;
+        duplicating them here added no coverage (Review:
+        overengineering-reviewer). These two classes keep fix 2's
+        truncate-the-name-tail behavior, unchanged here.
         """
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
         cases = [
-            OwnerFact(REAL_SID, "live", "session", REAL_NAME),
-            OwnerFact(REAL_SID, "dead", "session", REAL_NAME),
-            OwnerFact(REAL_SID, "undetermined", "session", REAL_NAME),
-            OwnerFact(REAL_SID_2, "live", "agent", REAL_NAME),
-            OwnerFact(REAL_SID_2, "dead", "agent", REAL_NAME),
-            OwnerFact(REAL_SID_2, "undetermined", "agent", REAL_NAME),
             OwnerFact(REAL_SID_3, "undetermined", "agent-race", REAL_NAME),
             OwnerFact(REAL_SID_2, "undetermined", "unreadable", REAL_NAME),
         ]
-        expected_liveness = {
-            "live": "confirmed live",
-            "dead": "no longer live",
-            "undetermined": "CONTESTED",
-        }
-        name_survives_intact = {
-            ("session", "live"),
-            ("session", "dead"),
-            ("session", "undetermined"),
-            ("agent", "live"),
-            ("agent", "dead"),
-            ("agent", "undetermined"),
-        }
         for fact in cases:
             sentence = dispatch_checks._format_owner_sentence(fact, {})
             assert fact.owner[:8] in sentence, sentence
             assert fact.owner not in sentence, sentence
-            if fact.claim_source in ("session", "agent"):
-                assert expected_liveness[fact.liveness] in sentence, sentence
-            if (fact.claim_source, fact.liveness) in name_survives_intact:
-                assert REAL_NAME in sentence, sentence
-                assert "…" not in sentence, sentence
 
     def test_all_six_owner_classes_render_name_and_verdict_intact(
         self, monkeypatch
@@ -380,8 +353,8 @@ class TestWriterNameBudgetBoundary:
 
 
 class TestOwnerNameProvenanceNote:
-    """C3 follow-up fix 1 (EM-adjudicated break-class): the one-byte
-    ``*``/``~`` marker is not itself an explicit staleness warning -- the
+    """C3 follow-up fix 1 (EM-adjudicated break-class): the ``" -- w:"``
+    name clause is not itself an explicit staleness warning -- the
     warning lives, unbudgeted, in ``_owner_name_provenance_note``, called
     by every deny/warn template that interpolates an
     ``_format_owner_sentence()`` result."""
@@ -416,21 +389,21 @@ class TestOwnerNameProvenanceNote:
     ):
         """The note's trigger is a substring/regex match of the ALREADY-
         TRUNCATED owner sentence, so an oversized name must not push the
-        marker prefix out of the clause and silently suppress the warning.
-        That failure is invisible at the call site -- a truncated name
-        would still be rendered, with nothing saying it is provenance
+        ``" -- w:"`` prefix out of the clause and silently suppress the
+        warning. That failure is invisible at the call site -- a truncated
+        name would still be rendered, with nothing saying it is provenance
         rather than an address, which is the exact reading this warning
         exists to prevent. Pins the coupling between
-        ``_owner_display_id``'s marker suffix and
+        ``_owner_writer_name_clause``'s ``" -- w:"`` prefix and
         ``_owner_name_provenance_note``'s trigger: if either moves without
         the other, this test fails rather than the warning going quiet."""
         monkeypatch.setattr(
             "coordinator_core.session.harness_registry.lookup", lambda sid: None
         )
-        # A name short enough that the "]<marker>" suffix survives
+        # A name short enough that the " -- w:" prefix survives
         # _truncate_to_budget intact (unlike the earlier adversarial-huge
-        # case, whose whole point is that the marker gets cut) -- this
-        # test is about the coupling firing when the marker IS present,
+        # case, whose whole point is that the clause gets cut) -- this
+        # test is about the coupling firing when the clause IS present,
         # not about surviving an oversized name.
         fact = OwnerFact(
             owner=REAL_SID,
@@ -440,7 +413,7 @@ class TestOwnerNameProvenanceNote:
         )
         sentence = dispatch_checks._format_owner_sentence(fact, {})
         assert dispatch_checks._owner_name_provenance_note(sentence), (
-            "the resolved-name marker did not fire the provenance warning"
+            "the resolved-name clause did not fire the provenance warning"
         )
 
     def test_note_absent_for_no_claim_found(self):

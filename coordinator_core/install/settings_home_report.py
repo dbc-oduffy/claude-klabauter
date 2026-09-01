@@ -439,7 +439,7 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
         audit = audit_installed_image_currency(bin_dir, expected.keys())
     except DoorInstallError as exc:
         report.door_image_audit_error = str(exc)
-        audit = ImageCurrencyAudit(current=[], stale=[], missing=sorted(expected))
+        audit = ImageCurrencyAudit(current=[], stale=[])
     else:
         report.door_image_stale = audit.stale
     door_current = set(audit.current)

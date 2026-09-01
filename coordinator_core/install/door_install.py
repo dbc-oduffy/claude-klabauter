@@ -139,7 +139,7 @@ import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Collection, Iterable, NamedTuple, Optional
+from typing import Iterable, NamedTuple, Optional
 
 from coordinator_core.warm.door import build as door_build
 from coordinator_core.warm.engine_root import is_engine_root
@@ -232,6 +232,30 @@ def is_door_installed(bin_dst: Path) -> bool:
     dest_exe = bin_dst / DOOR_INSTALLED_NAME
     dest_sidecar = bin_dst / door_build.SIDECAR_FILENAME
     return dest_exe.exists() and dest_sidecar.exists()
+
+
+def _prebuilt_image_bytes() -> bytes:
+    """The committed prebuilt's bytes -- the single currency oracle, read
+    through one function so its unreadable case has ONE convention.
+
+    Both currency checks (`verify_installed_provenance`'s `stale` leg and
+    `audit_installed_image_currency`) compare installed bytes against this
+    file, and each previously opened it with its own `except OSError`.
+    They disagreed: one returned a status, the other raised, so a checkout
+    shipping no prebuilt for its platform made `check_door_provenance`
+    print a clean line while `check_settings_home` FAILED loudly on the
+    identical cause. That divergence is what produced the `unverifiable`
+    defect -- and it was patched on one side only, because there was no one
+    side to patch. Raising is the convention; a caller that must not fail
+    maps the exception to its own status explicitly, in view of this
+    contract rather than beside it.
+    """
+    try:
+        return _PREBUILT_DOOR_EXE.read_bytes()
+    except OSError as exc:
+        raise DoorInstallError(
+            f"door_install: no readable prebuilt at {_PREBUILT_DOOR_EXE}: {exc}"
+        ) from exc
 
 
 def installed_provenance_path(bin_dst: Path) -> Path:
@@ -343,13 +367,12 @@ def verify_installed_provenance(bin_dst: Path) -> ProvenanceVerdict:
         )
 
     try:
-        prebuilt = hashlib.sha256(_PREBUILT_DOOR_EXE.read_bytes()).hexdigest()
-    except OSError as exc:
+        prebuilt = hashlib.sha256(_prebuilt_image_bytes()).hexdigest()
+    except DoorInstallError as exc:
         return ProvenanceVerdict(
             "unverifiable",
             f"{dest_exe} matches its recorded image_sha256, but currency "
-            f"could not be checked: no readable prebuilt at "
-            f"{_PREBUILT_DOOR_EXE} ({exc})",
+            f"could not be checked: {exc}",
         )
     if actual != prebuilt:
         return ProvenanceVerdict(
@@ -368,19 +391,21 @@ def verify_installed_provenance(bin_dst: Path) -> ProvenanceVerdict:
 class ImageCurrencyAudit(NamedTuple):
     """Per-slot verdict from `audit_installed_image_currency()`. Each field
     is a sorted list of installed NAMES (not paths) -- `current` carries the
-    prebuilt's bytes, `stale` carries some other build's, `missing` has no
-    file at the slot at all."""
+    prebuilt's bytes, `stale` carries some other build's.
+
+    A slot with no file at all is in NEITHER list. It was a third field
+    once; nothing downstream ever read it, and an absent slot is already
+    reported by `settings_home_report.check_settings_home`'s own
+    forwarder-missing leg, which reads the artifact this audit does not
+    look at. A field kept because it completed a taxonomy, rather than
+    because a caller asked, is dead structure."""
 
     current: "list[str]"
     stale: "list[str]"
-    missing: "list[str]"
 
 
 def audit_installed_image_currency(
-    bin_dst: Path,
-    names: "Iterable[str]",
-    *,
-    exempt_names: "Collection[str]" = frozenset(),
+    bin_dst: Path, names: "Iterable[str]"
 ) -> ImageCurrencyAudit:
     """Classifies every argv[0]-dispatched door image slot in `bin_dst`
     against the committed prebuilt -- the currency oracle
@@ -391,18 +416,15 @@ def audit_installed_image_currency(
     (`substrate._write_agent_helper_forwarders`) the image IS the only
     launcher a name gets, so "the slot is populated" is satisfied by an
     image from any build, including one predating the fix the name needs.
-    Measured 2026-09-01: 373 of 374 installed `.exe` images shared one
-    inode from the `d1e570dc1e` build while the installer reported
-    `384/384 verified`, and `cross-repo-memo` hung on every invocation.
     A check whose success signal is satisfied by the failure it exists to
-    catch is worse than no check, because it tells the operator the box is
-    current.
+    catch is worse than no check. Counts and forensics for the 2026-09-01
+    incident live once, in `tests/test_door_image_currency.py`'s module
+    docstring.
 
     THE POPULATION IS DERIVED FROM `names`, NEVER FROM THE INSTALLER'S OWN
     MANIFEST. `_native-forwarder-manifest.json` is written BY the writer
-    whose failure this audit exists to detect -- the run that installed
-    nothing wrote `{"names": []}`, and a manifest-driven audit would have
-    reported zero stale images on exactly the box that had 373. Callers
+    whose failure this audit exists to detect, so a manifest-driven audit
+    reports nothing owed on precisely the box that owes everything. Callers
     pass the same derivation the writer consumes
     (`substrate._derive_agent_helper_target_map`), so a name the writer was
     asked to serve and did not is visible here.
@@ -413,9 +435,10 @@ def audit_installed_image_currency(
     attempt to guess door-shape. It does not need to: under ONE ENTRYPOINT
     PER PLATFORM the correct content of this slot is the current door and
     nothing else, so a foreign file there is a defect on the same terms as
-    an old one. `exempt_names` carries the static bin families that
-    legitimately own their own slot -- mirror the writer's
-    `static_family_names` into it, or they read as stale.
+    an old one. No static-bin-family exemption is offered or needed:
+    `_derive_agent_helper_target_map` excludes the names those families own
+    (`_AGENT_HELPER_RESERVED_NAMES`), so they never reach `names` from the
+    only caller that exists.
 
     ONE READ PER INODE, NOT ONE PER NAME. The slots are hardlinks to a
     single image by construction (`install_named_forwarder`'s spike
@@ -426,26 +449,18 @@ def audit_installed_image_currency(
     one image read.
     """
     bin_dst = Path(bin_dst)
-    try:
-        prebuilt_bytes = _PREBUILT_DOOR_EXE.read_bytes()
-    except OSError as exc:
-        raise DoorInstallError(
-            f"door_install: cannot audit image currency -- no readable "
-            f"prebuilt at {_PREBUILT_DOOR_EXE}: {exc}"
-        ) from exc
+    prebuilt_bytes = _prebuilt_image_bytes()
     prebuilt_size = len(prebuilt_bytes)
 
     current: "list[str]" = []
     stale: "list[str]" = []
-    missing: "list[str]" = []
     seen: "dict[tuple, bool]" = {}
 
-    for name in sorted(set(names) - set(exempt_names)):
+    for name in sorted(set(names)):
         dest = named_forwarder_path(bin_dst, name)
         try:
             st = dest.stat()
         except OSError:
-            missing.append(name)
             continue
         if st.st_size != prebuilt_size:
             stale.append(name)
@@ -458,7 +473,7 @@ def audit_installed_image_currency(
                 seen[key] = False
         (current if seen[key] else stale).append(name)
 
-    return ImageCurrencyAudit(current=current, stale=stale, missing=missing)
+    return ImageCurrencyAudit(current=current, stale=stale)
 
 
 def claim_bare_name(bin_dst: Path) -> "list[Path]":

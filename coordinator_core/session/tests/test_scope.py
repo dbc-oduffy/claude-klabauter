@@ -3083,8 +3083,8 @@ def test_compute_scope_over_real_registry_corpus(entry, frozen_corpus_repo):
 # `_read_touch_record_as_legacy_lines` hands the shared projection-policy
 # functions -- that adapter drops every field beyond verb/ts/path by
 # design (see its own docstring), so writer_name is read through the
-# SEPARATE `_touch_record_writer_names`/`_agent_touch_record_writer_names`
-# seam this chunk adds, keyed by TouchEvent.path.
+# SEPARATE writer-name projection seam this chunk adds (folded into the
+# legacy-lines readers), keyed by TouchEvent.path.
 # ---------------------------------------------------------------------------
 
 
@@ -3246,7 +3246,13 @@ class TestAttributionWriterName:
         assert names["a.py"] == "claude-klabauter-a9"
         assert names["b.py"] is None
 
-        agent_names = scope._agent_touch_record_writer_names(sink)
+        # Re-pointed at the folded agent-dir reader, which is what
+        # production actually calls -- `_agent_touch_record_writer_names`
+        # had zero production callers left and is deleted (Review:
+        # overengineering-reviewer).
+        _agent_lines, _agent_degraded, agent_names = (
+            scope._read_agent_touch_record_as_legacy_lines_with_writer_names(sink)
+        )
         assert agent_names["a.py"] == "claude-klabauter-a9"
         # c.py's last event is a RELEASE -- excluded from the agent-dir
         # bare-path dialect (no TOUCH survivor to render), mirroring
