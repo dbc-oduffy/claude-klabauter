@@ -471,6 +471,29 @@ door_stdin_status_t door_drain_stdin_bounded(
     }
 }
 
+/* =========================================================================
+ * The stdin-bound params route -- see door_core.h for why this argv shape
+ * is decided pre-delivery rather than served warm.
+ * ========================================================================= */
+
+int door_argv_declares_params_stdin(int argc, const char *const *argv) {
+    if (argv == NULL) return 0;
+    for (int i = 1; i < argc; i++) {
+        const char *arg = argv[i];
+        if (arg == NULL) continue;
+        if (strcmp(arg, DOOR_PARAMS_FILE_STDIN_JOINED) == 0) return 1;
+        /* The separated pair. `i + 1 < argc` is the "no value" guard --
+         * a trailing bare flag is argparse's error to report, not this
+         * door's route to change. */
+        if (strcmp(arg, DOOR_PARAMS_FILE_FLAG) == 0 && i + 1 < argc &&
+            argv[i + 1] != NULL &&
+            strcmp(argv[i + 1], DOOR_PARAMS_FILE_STDIN_VALUE) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int build_hook_deny_envelope(buf_t *out, const char *reason) {
     int ok = 1;
     ok &= buf_append_cstr(out,

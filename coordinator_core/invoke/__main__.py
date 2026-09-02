@@ -754,8 +754,42 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
             # characters, which is still syntactically valid JSON and
             # dispatches without error. That is worse than the loud
             # shell-quoting failure this transport exists to replace.
+            #
+            # THE STREAM CAN BE ABSENT ENTIRELY, AND THAT IS NOT AN OSError.
+            # This branch reads the CALLING process's stdin, and the door
+            # forwards argv and cwd across the wire, never stdin (outside
+            # hook mode) -- so warm-served, "the calling process" is a warm
+            # POOL WORKER, spawned via `pythonw.exe`
+            # (`warm/server.py :: _suppress_pool_worker_consoles`) with
+            # `sys.stdin` set to None by CPython; its companion
+            # `_bind_null_std_streams` rebinds stdout and stderr only.
+            # `sys.stdin.buffer` then raises `AttributeError`, which this
+            # `except` does not catch, so it escapes the op handler as a
+            # -32603 -- and a -32603 reaches the door AFTER delivery, where
+            # the only move left is `emit_indeterminate`: the caller is told
+            # a mutation MAY have completed for a request whose params were
+            # never read. Measured 2026-09-02; `state/bug-backlog/
+            # 2026-09-02-warm-engine-door-returns-indeterminate-for-every-
+            # op.yaml` carries the trail.
+            #
+            # The door now decides this route pre-delivery and falls through
+            # cold (door_core.h :: door_argv_declares_params_stdin), so a
+            # current door never reaches here without a stdin. This refusal
+            # is what an OLDER door image -- already installed on peer
+            # machines, and rebuilt only by a publish round -- gets instead:
+            # a pre-dispatch error naming the cause, which is provably
+            # undispatched, rather than an indeterminate verdict about a
+            # mutation that never ran.
+            stdin_stream = getattr(sys, "stdin", None)
+            if stdin_stream is None or getattr(stdin_stream, "buffer", None) is None:
+                _fatal_stderr(
+                    "--params-file - has no stdin to read in this process. The "
+                    "payload is bound to the calling process's stdin and does not "
+                    "cross the warm door's wire. Pass --params-file <path>, or the "
+                    "positional params JSON."
+                )
             try:
-                params_json_str = sys.stdin.buffer.read().decode("utf-8")
+                params_json_str = stdin_stream.buffer.read().decode("utf-8")
             except (OSError, UnicodeDecodeError) as exc:
                 _fatal_stderr(f"Cannot read params JSON from stdin: {exc}")
         else:

@@ -241,6 +241,54 @@ int main(void) {
         free(env.data);
     }
 
+    /* ---- 6. The stdin-bound params route (door_core.h). A door that
+     * misses this shape delivers the request warm, where the payload's
+     * stream does not exist -- and the failure surfaces post-delivery, as
+     * a -32004 telling the caller a mutation may have completed. A door
+     * that over-matches it pays a cold spawn for a route that works warm.
+     * Both directions are asserted. */
+    {
+        const char *pair[] = {"door.exe", "ping", "--params-file", "-"};
+        check_int("params_stdin/separated_pair",
+                  door_argv_declares_params_stdin(4, pair), 1);
+
+        const char *joined[] = {"door.exe", "ping", "--params-file=-"};
+        check_int("params_stdin/joined",
+                  door_argv_declares_params_stdin(3, joined), 1);
+
+        const char *before_op[] = {"door.exe", "--params-file", "-", "ping"};
+        check_int("params_stdin/flag_before_op",
+                  door_argv_declares_params_stdin(4, before_op), 1);
+
+        const char *real_file[] = {"door.exe", "ping", "--params-file", "/tmp/p.json"};
+        check_int("params_stdin/real_path_is_not_stdin",
+                  door_argv_declares_params_stdin(4, real_file), 0);
+
+        /* A trailing bare flag is argparse's error to report; falling
+         * through cold for it would only relocate the same message. */
+        const char *trailing[] = {"door.exe", "ping", "--params-file"};
+        check_int("params_stdin/trailing_bare_flag",
+                  door_argv_declares_params_stdin(3, trailing), 0);
+
+        /* A lone `-` that no `--params-file` introduces. */
+        const char *lone_dash[] = {"door.exe", "ping", "-"};
+        check_int("params_stdin/lone_dash",
+                  door_argv_declares_params_stdin(3, lone_dash), 0);
+
+        /* argv[0] is never forwarded, so an image path that happens to
+         * spell the flag is not a caller declaration. */
+        const char *argv0_only[] = {"--params-file=-"};
+        check_int("params_stdin/argv0_excluded",
+                  door_argv_declares_params_stdin(1, argv0_only), 0);
+
+        const char *positional[] = {"door.exe", "ping", "{}"};
+        check_int("params_stdin/positional_params",
+                  door_argv_declares_params_stdin(3, positional), 0);
+
+        check_int("params_stdin/null_argv",
+                  door_argv_declares_params_stdin(3, NULL), 0);
+    }
+
     printf("%s: %d checks, %d failures\n",
            failures == 0 ? "PASS" : "FAIL", checks, failures);
     return failures == 0 ? 0 : 1;

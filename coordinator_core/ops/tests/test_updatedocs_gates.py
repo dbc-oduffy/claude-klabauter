@@ -625,3 +625,32 @@ def test_memo_prune_gate_survives_an_actual_prune_candidate(tmp_path):
 
     assert result.verdict is udg.GateVerdict.FINDING
     assert result.detail["prunable"] == ["cross-repo/archive/old.md"]
+
+
+def test_gates_resolve_corpora_under_the_worktree_not_the_git_dir(tmp_path):
+    """A corpus must never be joined onto the injected common dir.
+
+    Regression for the defect DoE-claude found on 2026-09-02: `updatedocs.gates`
+    is keyed "common_dir", so the injected `repo_root` is `<worktree>/.git`.
+    Every corpus join landed under `.git`, the walks counted zero, and
+    `distill-threshold` reported CLEAN over a populated tree.
+
+    This asserts on a corpus that EXISTS in the worktree. The per-gate
+    UNAVAILABLE tests cannot catch this: they assert on an absent path, and the
+    failure mode here is a path that resolves somewhere real and wrong.
+    """
+    worktree = tmp_path / "repo"
+    (worktree / ".git").mkdir(parents=True)
+    plans = worktree / "docs" / "plans"
+    plans.mkdir(parents=True)
+    for i in range(3):
+        (plans / f"plan-{i}.md").write_text("# plan\n", encoding="utf-8")
+
+    # Dispatch injects the COMMON DIR, exactly as the live engine does.
+    out = udg._updatedocs_gates({"gates": ["distill-threshold"]}, repo_root=worktree / ".git")
+    gate = out["gates"][0]
+
+    assert gate["detail"]["total"] == 3, (
+        f"gate counted {gate['detail']['total']} of 3 files — corpus resolved off the worktree"
+    )
+    assert gate["verdict"] != "clean" or gate["detail"]["total"] > 0

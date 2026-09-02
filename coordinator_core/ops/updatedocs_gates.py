@@ -49,11 +49,24 @@ were editing those files concurrently) — wiring it is a follow-up chunk, not a
 gap in this op's own contract; `updatedocs.gates` runs a NAMED SUBSET of gates
 via `params["gates"]`, so adding 11h2 later is additive, not a reshape.
 
-Repo-root resolution is an EXPLICIT param (`params["repo_root"]`, default cwd),
-not the injected `_origin_worktree` seam — this op is registered with op-scope
-"none" (see coordinator_core/op_scopes.py's documented default-for-unlisted-ops),
-matching the existing `update-docs-probes.py` CLI contract of an explicit
-`--repo-root` rather than requiring a JSON-RPC dispatch envelope.
+Repo-root resolution: this op is keyed "common_dir" in
+coordinator_core/op_scopes.py, so the injected `repo_root` is the git COMMON
+DIR (`<worktree>/.git`), not a worktree. Every gate below reads worktree-rooted
+corpora (`docs/`, `archive/specs/`, `cross-repo/archive/`), so the handler
+derives the worktree via `main_worktree_root()` exactly as its keying-table
+peers `memo.triage` and `distill.scope` do. `params["repo_root"]` still
+overrides, and `main_worktree_root` is ergonomically widened to accept a
+worktree root unchanged, so an explicit worktree-shaped param stays correct.
+
+NEGATIVE SPEC — do not "simplify" this back to using the injected root
+directly. Joining a corpus onto `<worktree>/.git` yields a path that is absent
+for most gates (UNAVAILABLE, merely useless) but REAL for some, and a gate whose
+corpus resolved to a real-but-wrong directory reports CLEAN over an empty walk.
+That happened: `distill-threshold` returned CLEAN with total 0 against a
+DoE-claude tree holding 634 files in `archive/specs/`, because it counted
+`.git/archive/specs`. UNAVAILABLE-on-missing-corpus tests do NOT cover this —
+they assert on a path that is absent, and this failure needs a path that exists.
+`test_gates_resolve_corpora_under_the_worktree_not_the_git_dir` pins the root.
 
 Every external CLI this op shells out to (the DoE-claude-owned `bin/verify-*`,
 `bin/sync-plugin-wiki`, `bin/reap-stale-subagent-sidecars` scripts) is resolved
@@ -93,6 +106,7 @@ from typing import Any, Callable, Optional
 
 from coordinator_core.external_tool_budget import bound_for
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
 from coordinator_core.updatedocs.directory_md import compute_directory_md_drift
 from coordinator_core.updatedocs.memo_prune import compute_memo_prune_candidates
@@ -1007,7 +1021,19 @@ def _updatedocs_gates(params: dict, repo_root: Optional[Path] = None) -> dict:
                          keyed by gate_id — mirrors update-docs-probes.py's
                          existing --*-cli override flags.
     """
-    root = Path(params.get("repo_root") or repo_root or Path.cwd())
+    # Injected `repo_root` is the git COMMON DIR (op_scopes: "common_dir"), and every
+    # gate reads worktree-rooted corpora — see the module docstring's negative spec.
+    # Only the injected value is translated: an explicit params["repo_root"] is already
+    # worktree-shaped by contract, and main_worktree_root() REFUSES a non-git path
+    # rather than guessing, so applying it there would turn a diagnostic call against a
+    # plain directory into an uncaught ValueError instead of running the gates.
+    explicit = params.get("repo_root")
+    if explicit:
+        root = Path(explicit)
+    elif repo_root is not None:
+        root = main_worktree_root(Path(repo_root))
+    else:
+        root = Path.cwd()
     settings_home = _settings_home(params.get("settings_home"))
     requested = params.get("gates") or list(_GATES.keys())
     unknown = [g for g in requested if g not in _GATES]

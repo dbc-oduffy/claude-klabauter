@@ -185,6 +185,61 @@ door_stdin_status_t door_drain_stdin_bounded(
     door_stdin_reader_t reader, void *reader_ctx, buf_t *out, size_t max_bytes
 );
 
+/* =========================================================================
+ * The stdin-bound params route -- recognised in argv, never delivered warm.
+ *
+ * `coordinator-invoke <op> --params-file -` reads its params payload from
+ * THE CALLING PROCESS'S stdin (`coordinator_core/invoke/__main__.py`, the
+ * `args.params_file == "-"` branch). The door forwards argv and cwd across
+ * the wire and nothing else: it has never forwarded stdin outside hook
+ * mode, so a warm-served `--params-file -` runs that branch inside a warm
+ * POOL WORKER, whose `sys.stdin` is `None` (spawned via `pythonw.exe`,
+ * `warm/server.py :: _suppress_pool_worker_consoles`; the companion
+ * `_bind_null_std_streams` rebinds stdout and stderr only). The resulting
+ * `AttributeError` escapes the handler's `(OSError, UnicodeDecodeError)`
+ * catch, surfaces as a `-32603`, and reaches this door AFTER delivery --
+ * where the only move left is `emit_indeterminate`, telling the caller a
+ * mutation MAY have completed for a request whose params were never read.
+ * Measured 2026-09-02: every route but this one succeeds against the same
+ * server in the same second
+ * (`state/bug-backlog/2026-09-02-warm-engine-door-returns-indeterminate-
+ * for-every-op.yaml`).
+ *
+ * SO THIS ROUTE IS DECIDED PRE-DELIVERY. A door that recognises the flag
+ * pair falls through to the cold entrypoint BEFORE dialling the transport,
+ * which is the one disposition that both works and cannot be
+ * indeterminate: `CreateProcessW`/`execv` hand the child THIS process's
+ * own stdin, so the payload the caller wrote is the payload the CLI reads.
+ * Measured cold cost of the route it replaces: 307ms end-to-end, inside
+ * CLAUDE.md's 500ms brightline.
+ *
+ * NOT A PEEK, AND NOT A READ. This gate never touches the stdin handle --
+ * it reads the caller's own argv, which is a declaration in exactly the
+ * sense the mode gate above demands, and it fires before any fall-through
+ * so no byte of the payload is ever consumed by a process that then hands
+ * the stream to another. Relaying the payload warm (draining stdin here
+ * and adding it to `params`, as hook mode does) was rejected for this
+ * chunk, not overlooked: every fall-through after such a read would spawn
+ * a cold child whose stdin is already drained, which trades an honest
+ * error for a silently wrong payload.
+ * ========================================================================= */
+
+/* The two argv spellings the CLI's own `--params-file` accepts for the
+ * stdin form -- argparse takes both the separated pair and the joined
+ * `=` form. Kept here so neither door hardcodes the text. */
+#define DOOR_PARAMS_FILE_FLAG "--params-file"
+#define DOOR_PARAMS_FILE_STDIN_VALUE "-"
+#define DOOR_PARAMS_FILE_STDIN_JOINED "--params-file=-"
+
+/* True iff `argv[1 .. argc-1]` declares the stdin-bound params route.
+ * `argv[0]` is excluded: this door never forwards it, and an image whose
+ * own path happened to spell the flag is not a caller declaration.
+ *
+ * A trailing bare `--params-file` (no value) is NOT a declaration -- the
+ * CLI's own argparse rejects it, and falling through cold for it would
+ * only move the same error. */
+int door_argv_declares_params_stdin(int argc, const char *const *argv);
+
 /* Builds `{"hookSpecificOutput":{"hookEventName":"PreToolUse",
  * "permissionDecision":"deny","permissionDecisionReason":"<reason>"}}`
  * into `out` (which the caller must `buf_init` first), appending a
