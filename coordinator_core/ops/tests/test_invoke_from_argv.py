@@ -585,6 +585,116 @@ def test_warm_request_carrying_no_identity_shows_the_cli_none(tmp_path, monkeypa
     }
 
 
+# ---------------------------------------------------------------------------
+# (h) `params.entrypoint` set: `--help`/`-h` is intercepted BEFORE `main_fn`
+#     is ever called — the third door (docs/plans/2026-09-02-the-loader-
+#     fires-the-assembly-not-the-em.md, chunk C1 follow-up). This is the
+#     ARGV_SHAPE_NONE class that made `--help` unreachable: `main_fn()` is
+#     called with no argv at all on that shape, so the flag must never reach
+#     `_load_entrypoint_main`/`main_fn` in the first place.
+# ---------------------------------------------------------------------------
+
+
+def _write_fake_entrypoint(tmp_path, name: str, *, argv_shape_none: bool = True) -> None:
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    if argv_shape_none:
+        body = (
+            "def main():\n"
+            "    raise AssertionError('main_fn must not be called for --help')\n"
+            "\n"
+            "\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+        )
+    else:
+        body = (
+            "def main(argv):\n"
+            "    return 0\n"
+            "\n"
+            "\n"
+            "if __name__ == '__main__':\n"
+            "    import sys\n"
+            "    sys.exit(main(sys.argv[1:]))\n"
+        )
+    (bin_dir / f"{name}.py").write_text(body, encoding="utf-8")
+
+
+def test_help_intercepted_for_argv_shape_none_entrypoint(tmp_path):
+    """The live example: `workday-start-inbox-blitz-assemble`'s own
+    `__main__` guard calls `main()` with no arguments, classifying as
+    ARGV_SHAPE_NONE — exactly the shape that discarded `--help` before this
+    fix."""
+    name = "workday-start-inbox-blitz-assemble"
+    _write_fake_entrypoint(tmp_path, name, argv_shape_none=True)
+
+    with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
+        invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
+    ):
+        with mock.patch.object(
+            invoke_from_argv,
+            "_load_entrypoint_main",
+            side_effect=AssertionError("main must never be loaded/called for --help"),
+        ):
+            result = _run_entrypoint(name, ["--help"], str(tmp_path))
+
+    assert result["exit_code"] == 0
+    assert result["stderr"] == ""
+    assert "usage" in result["stdout"].lower()
+    assert name in result["stdout"]
+
+
+def test_help_wins_after_a_subcommand_token(tmp_path):
+    name = "fake-entrypoint-help-subcommand"
+    _write_fake_entrypoint(tmp_path, name, argv_shape_none=False)
+
+    with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
+        invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
+    ):
+        with mock.patch.object(
+            invoke_from_argv,
+            "_load_entrypoint_main",
+            side_effect=AssertionError("main must never be loaded/called for --help"),
+        ):
+            result = _run_entrypoint(name, ["brief", "--help"], str(tmp_path))
+
+    assert result["exit_code"] == 0
+    assert result["stderr"] == ""
+    assert "usage" in result["stdout"].lower()
+
+
+def test_short_help_flag_also_intercepted(tmp_path):
+    name = "fake-entrypoint-help-short"
+    _write_fake_entrypoint(tmp_path, name, argv_shape_none=False)
+
+    with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
+        invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
+    ):
+        with mock.patch.object(
+            invoke_from_argv,
+            "_load_entrypoint_main",
+            side_effect=AssertionError("main must never be loaded/called for --help"),
+        ):
+            result = _run_entrypoint(name, ["-h"], str(tmp_path))
+
+    assert result["exit_code"] == 0
+    assert "usage" in result["stdout"].lower()
+
+
+def test_normal_invocation_still_reaches_main_fn(tmp_path):
+    """No-flag invocation is unaffected — `main_fn` is genuinely called."""
+    name = "fake-entrypoint-normal-invocation"
+    _write_fake_entrypoint(tmp_path, name, argv_shape_none=False)
+
+    with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
+        invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
+    ):
+        result = _run_entrypoint(name, ["some", "args"], str(tmp_path))
+
+    assert result["exit_code"] == 0
+    assert result["stderr"] == ""
+
+
 def test_the_servers_own_session_env_is_restored_after_the_call(tmp_path, monkeypatch):
     """Borrowed, not taken. `os.environ` is process-global in a server ~50
     sessions share — the same restore discipline the cwd and `sys.argv` borrows

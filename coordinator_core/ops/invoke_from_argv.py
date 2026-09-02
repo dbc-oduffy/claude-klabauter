@@ -429,6 +429,23 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
     result the caller sees exactly as an ordinary CLI failure — never a
     JSON-RPC error, never a killed server.
     """
+    # `--help`/`-h` chokepoint (mirrors `entry_point_shim._help_requested`'s
+    # semantics: anywhere in argv wins, position never special-cased). This
+    # MUST run before `_resolve_entrypoint_script`/`_load_entrypoint_main` —
+    # those load the target module and, for an ARGV_SHAPE_NONE entrypoint
+    # (e.g. `workday-start-inbox-blitz-assemble`), `entrypoint_call_args`
+    # would hand `main_fn` no argv at all, discarding `--help` before the
+    # target ever sees it (its own `if __name__ == "__main__":` guard never
+    # runs here either, since the module is loaded via `exec_module`, not
+    # executed as `__main__`). Uniform for every warm-served entrypoint — no
+    # name checks, no per-CLI branch. `main_fn` is never called on this path.
+    if any(a in ("--help", "-h") for a in argv):
+        return {
+            "stdout": f"usage: {entrypoint} [--help]\n",
+            "stderr": "",
+            "exit_code": 0,
+        }
+
     script = _resolve_entrypoint_script(entrypoint)
     shape = _entrypoint_argv_shape(script)
 
