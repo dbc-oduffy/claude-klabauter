@@ -53,6 +53,7 @@ from coordinator_core.percolate.rewrite_basename import (  # noqa: E402
     PUBLISHED_NAME_MAP_BASENAME,
     RenameManifest,
     RenameRecord,
+    published_name_map_key,
 )
 
 
@@ -146,11 +147,20 @@ def test_publish_route_emits_the_name_map_for_the_bin_row(tmp_path):
         "the publish route produced no door name map — an installed forwarder "
         "asking for a renamed target has nothing to translate through"
     )
+    # Stated source-keyed and compared digest-keyed: the shipped map keys on
+    # `published_name_map_key` so no source basename -- and so no scrub-list
+    # codename -- lands in a published mirror byte. Naming the bindings the way
+    # an operator reads them keeps this assertion reviewable.
     assert json.loads(map_path.read_text(encoding="utf-8")) == {
-        "check-claude-klabauter-doctor-sentinel.sh": "check-claude-klabauter-doctor-sentinel.py",
-        "probe-cwd-example-retrieval-repo-relevance.py": (
-            "probe-cwd-example-retrieval-repo-relevance.py"
-        ),
+        published_name_map_key(src): dst
+        for src, dst in {
+            "check-claude-klabauter-doctor-sentinel.sh": (
+                "check-claude-klabauter-doctor-sentinel.py"
+            ),
+            "probe-cwd-example-retrieval-repo-relevance.py": (
+                "probe-cwd-example-retrieval-repo-relevance.py"
+            ),
+        }.items()
     }
 
 

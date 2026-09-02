@@ -86,12 +86,23 @@ class _OSNameProxy:
 
 def _bin_with_map(tmp_path: Path, mapping, *, create_published=True) -> Path:
     """A ``coordinator/bin``-shaped dir carrying *mapping* as publish's name
-    map, with each mapped destination present on disk unless suppressed."""
+    map, with each mapped destination present on disk unless suppressed.
+
+    *mapping* is written SOURCE-KEYED for the reader's benefit and stored
+    digest-keyed, because that is the shipped shape: the published map keys on
+    ``_published_name_map_key`` so no source basename -- and therefore no
+    scrub-list codename -- appears in a mirror byte. Every test below keeps
+    naming targets in the spelling an operator would type; this helper is the
+    single place the encoding lives."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     if mapping is not None:
+        on_disk = {
+            resolve_claude_klabauter._published_name_map_key(src): dst
+            for src, dst in mapping.items()
+        }
         (bin_dir / resolve_claude_klabauter.PUBLISHED_NAME_MAP_BASENAME).write_text(
-            json.dumps(mapping), encoding="utf-8"
+            json.dumps(on_disk), encoding="utf-8"
         )
     if create_published:
         for dst in (mapping or {}).values():

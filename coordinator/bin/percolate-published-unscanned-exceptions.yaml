@@ -87,10 +87,21 @@ exceptions:
       staging tree immediately after the post_rsync phase and "never visited
       by this run's sweep" is the only possible outcome, not evidence of a
       routing gap. Nothing in it needs substituting either: its values ARE
-      published names -- the sweep's own output -- and its keys are source
-      basenames the door must ask for verbatim (see that module's negative
-      spec: the mapping is not derivable from a token rewrite, so it is
-      shipped, never inferred). Same class as
+      published names -- the sweep's own output -- and its keys are sha256
+      digests of the source basenames (rewrite_basename
+      `published_name_map_key`), which carry no substitutable token at all.
+      Keying by digest is what lets this file exist in the mirror: keyed by
+      the source basenames themselves it spelled scrub-list codenames such as
+      `probe-cwd-example-retrieval-repo-relevance.py` in plain text, the
+      residual-pattern leak check refused it, and the whole publish route
+      fail-closed over it (PM ruling, 2026-09-02: redesign the door lookup
+      rather than exempt the map from that check). Same class as
       `coordinator_core/warm/door/door.exe` above: a file the sweep is
       structurally unable to have visited cannot be held against it for not
       having been visited.
+
+      RATIFICATION STATUS: NOT YET RATIFIED. This header requires a human to
+      review and ratify each entry, and this one has not been through that.
+      It is present because the gate fail-closes without it; it must not be
+      read as a decision anyone has actually made. Raised to the PM by
+      claude-klabauter-em on 2026-09-02.

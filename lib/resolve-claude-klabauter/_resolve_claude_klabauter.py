@@ -1259,6 +1259,36 @@ def _resolve_publisher_root() -> str:
 PUBLISHED_NAME_MAP_BASENAME = "published-name-map.json"
 
 
+def _published_name_map_key(src_basename: str) -> str:
+    """The key `src_basename` is filed under in the published map -- lowercase
+    sha256 hex of its UTF-8 bytes.
+
+    The map cannot be keyed by the source basename itself: a source basename is
+    precisely what the mirror's identity scrub removes
+    (`probe-cwd-example-retrieval-repo-relevance.py` spells a scrub-list codename), so a
+    literal-keyed map ships those codenames into the public mirror and the
+    `no-residual-pattern` leak check fail-closes the publish route over it.
+    Digest keys keep the binding while publishing no codename.
+
+    A DELIBERATE DUPLICATE of `coordinator_core/percolate/rewrite_basename.py::
+    published_name_map_key`, and it must stay byte-identical in behaviour. This
+    module is stdlib-only by contract -- installed standalone into a bare
+    `bin/` with no package context, on an exec path where an engine import
+    costs ~75ms before any work happens -- which is the same reason
+    `PUBLISHED_NAME_MAP_BASENAME` above is hardcoded rather than imported. The
+    equality is pinned by `coordinator_core/percolate/tests/
+    test_rename_map_emission.py::test_door_key_helper_matches_engine_helper`,
+    so a drifting edit fails a test instead of silently making every lookup
+    miss.
+
+    `hashlib` is imported at call time, not module scope, for the reason the
+    whole map read sits on the MISS path: a target that resolves under its own
+    name must pay nothing for a mechanism it never reaches.
+    """
+    import hashlib
+    return hashlib.sha256(src_basename.encode("utf-8")).hexdigest()
+
+
 def resolve_target_path(bin_dir: str, target: str) -> str:
     """The path `exec_cli` should run for *target* under an already-resolved
     *bin_dir*, consulting publish's rename map when the asked-for name misses.
@@ -1279,6 +1309,25 @@ def resolve_target_path(bin_dir: str, target: str) -> str:
     nothing. One counter-example makes inference wrong for the whole set
     rather than incomplete on one member, so the map is SHIPPED by the process
     that performs the rename and merely read here.
+
+    LOOKUP IS BY DIGEST (§ `_published_name_map_key`). The map's keys are
+    sha256 of the source basename, never the basename itself, because the
+    source spelling is exactly what the mirror's identity scrub removes -- a
+    literal-keyed map fail-closes the publish route on the residual-pattern
+    leak check and never reaches a mirror at all.
+
+    WHY THE MAP SHIPS IN THE MIRROR RATHER THAN WITH THE INSTALLED DOOR, the
+    alternative considered and declined (2026-09-02): delivering it alongside
+    the door would also keep banned tokens out of the mirror, and the source
+    spellings are already on the box in the forwarder bodies, so it leaks
+    nothing new. It was declined on VINTAGE. This map describes what ONE
+    published mirror actually contains; shipping it with the installer couples
+    it to the installer's vintage instead, so a mirror republished under a
+    changed rename table leaves an install-time map describing names that are
+    no longer there. In the mirror, the map is by construction the vintage of
+    the tree it maps. The stale-map case degrades rather than lying (the
+    `os.path.isfile` check below returns the original path), but degrading is
+    the 127 this whole mechanism exists to remove.
 
     Negative-spec, in order of how easily each would be got wrong:
 
@@ -1309,9 +1358,9 @@ def resolve_target_path(bin_dir: str, target: str) -> str:
             mapping = json.load(fh)
         if not isinstance(mapping, dict):
             return original
-        published = mapping.get(target)
+        published = mapping.get(_published_name_map_key(target))
         if not published and not target.endswith(".py"):
-            published = mapping.get(target + ".py")
+            published = mapping.get(_published_name_map_key(target + ".py"))
         if not isinstance(published, str) or not published:
             return original
         candidate = bin_dir + "/" + published
