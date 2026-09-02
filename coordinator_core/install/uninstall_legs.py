@@ -644,6 +644,30 @@ class UninstallLegError(RuntimeError):
     non-zero exit code, matching the bash function-return contract."""
 
 
+def _claude_dir(claude_home: str) -> Path:
+    """``<claude_home>/.claude`` — the ONE spelling of Convention A's appended
+    segment, so no call site re-decides it.
+
+    `require_home` returns a $HOME SUBSTITUTE (its own docstring: "CLAUDE_HOME
+    names the PARENT of `.claude` and every caller appends that segment"), and
+    for a long time most call sites here did not append it — targeting
+    ``<home>/settings.json``, ``<home>/bin``, ``<home>/coordinator-identity.yaml``
+    while every writer puts those under ``<home>/.claude/``. Those legs silently
+    found nothing and reported success, and ``<home>/bin`` is an operator's own
+    directory on many boxes, so the shape was not merely inert. Verified against
+    a live install 2026-09-02: settings.json, .doe-root, coordinator-identity.yaml,
+    working-repos.yaml, machine-local, plugins/, bin/, shell/ and agents/ are all
+    under ``~/.claude/``.
+
+    NOT every path derived from the home takes this segment — the POSIX profile
+    files (`applicable_rc_files`) and the settings home (`_settings_home_from`)
+    are genuinely siblings of `.claude`, not children. This helper exists so the
+    two classes are told apart by which function a call site uses rather than by
+    whether whoever wrote it remembered.
+    """
+    return Path(claude_home) / ".claude"
+
+
 def _settings_home_from(resolved_home: str) -> str:
     """Derive the settings-home root for an uninstall leg from an ALREADY
     require_home()-resolved home.
@@ -768,7 +792,7 @@ def uninstall_strip_settings_hooks(*, coordinator_root_env: Optional[str] = None
         print(str(exc), file=sys.stderr)
         return False
 
-    settings_json = Path(claude_home) / "settings.json"
+    settings_json = _claude_dir(claude_home) / "settings.json"
     if not settings_json.is_file():
         print(
             f"uninstall_strip_settings_hooks: no settings.json at {settings_json} "
@@ -832,7 +856,7 @@ def uninstall_remove_shim() -> bool:
     overall_ok = True
 
     # ---- (a) #4a: shell shim owned file ----
-    shim_file = Path(claude_home) / "shell" / "claude-doe-shim.sh"
+    shim_file = _claude_dir(claude_home) / "shell" / "claude-doe-shim.sh"
     if shim_file.is_file() or shim_file.is_symlink():
         try:
             shim_file.unlink()
@@ -1260,7 +1284,7 @@ def _uninstall_remove_setup_dir(claude_home: str, errors: List[str]) -> None:
     ``setup/`` itself (or any subdirectory) while a residual has been
     reported and left inside it — the ``rmdir`` cleanup below is best-effort
     and silently no-ops on a non-empty directory."""
-    setup_dir = Path(claude_home) / ".claude" / "setup"
+    setup_dir = _claude_dir(claude_home) / "setup"
     if not setup_dir.is_dir():
         return
 
@@ -1347,7 +1371,7 @@ def _uninstall_remove_setup_overwrite_backups(claude_home: str, errors: List[str
     anything the probe says IS tracked, or that the probe could not
     classify at all (``None`` -- no git on PATH, or the spawn failed).
     Idempotent / a no-op if the directory is already absent."""
-    backups_dir = Path(claude_home) / ".claude" / "setup-overwrite-backups"
+    backups_dir = _claude_dir(claude_home) / "setup-overwrite-backups"
     if not backups_dir.is_dir():
         return
 
@@ -1446,15 +1470,15 @@ def uninstall_remove_substrate(
     # otherwise leave those siblings behind permanently. Reuse the same
     # sweep here rather than reimplementing the prefix match a second time.
     _sweep_orphaned_swap_dirs(Path(sh) / ".coordinator-venv")
-    whoami_compat = Path(claude_home) / "coordinator-whoami"
+    whoami_compat = _claude_dir(claude_home) / "coordinator-whoami"
     _rm_target(whoami_compat, "compat symlink", errors)
     _rmtree_junction_or_target(
-        Path(claude_home) / ".coordinator-venv", "legacy .coordinator-venv", errors
+        _claude_dir(claude_home) / ".coordinator-venv", "legacy .coordinator-venv", errors
     )
-    _sweep_orphaned_swap_dirs(Path(claude_home) / ".coordinator-venv")
+    _sweep_orphaned_swap_dirs(_claude_dir(claude_home) / ".coordinator-venv")
 
     # ---- #6: .doe-root pointer (BOTH modes) ----
-    _rm_target(Path(claude_home) / ".doe-root", ".doe-root", errors)
+    _rm_target(_claude_dir(claude_home) / ".doe-root", ".doe-root", errors)
 
     # ---- installed percolation setup/ dir residuals (BOTH modes, C8/AC9/
     # AC10) ----  A stale setup/ affects root resolution (rung 3) the same
@@ -1474,7 +1498,7 @@ def uninstall_remove_substrate(
         # install every _rm_target call below is simply a no-op (file never
         # existed). Same shape as the "platform-localize.sh: legacy cleanup"
         # note a few lines below.
-        bin_dir = Path(claude_home) / "bin"
+        bin_dir = _claude_dir(claude_home) / "bin"
         # settings-home/bin is the CANONICAL home for these artifacts (DR-071/
         # DR-072) — ~/.claude/bin above is the retired compat mirror. The
         # legacy-name sweep must cover both dirs: settings-home/bin was
@@ -1550,11 +1574,14 @@ def uninstall_remove_substrate(
                 sh_path.rmdir()
             except OSError:
                 pass  # routine: non-empty for the same reason
-        ml_compat = Path(claude_home) / "machine-local"
+        ml_compat = _claude_dir(claude_home) / "machine-local"
         _rm_target(ml_compat, "compat symlink machine-local", errors)
 
         # ---- setup-overwrite-backups/ (full-remove only, C6 backup cleanup) ----
         _uninstall_remove_setup_overwrite_backups(claude_home, errors)
+
+        # ---- navi role file (full-remove only) ----
+        _uninstall_remove_navi_role(claude_home, force, errors)
 
     # ---- #9: operator config (gated, both modes) ----
     if purge_operator_config:
@@ -1566,6 +1593,105 @@ def uninstall_remove_substrate(
     return not errors
 
 
+def _uninstall_remove_navi_role(
+    claude_home: str, force: bool, errors: List[str]
+) -> None:
+    """Removal leg for ``<claude_home>/.claude/agents/navi.md`` — the
+    user-level Navi role file DoE's install step renders (DoE-claude
+    docs/plans/2026-09-02-navi-installable-user-level-nudge-role.md). Runs in
+    full-remove mode only. Idempotent — a no-op when the file is absent.
+
+    Runs on the DEFAULT path rather than behind ``--purge-operator-config``:
+    that flag guards files an operator authors INTO
+    (``coordinator-identity.yaml``, ``working-repos.yaml``,
+    ``CLAUDE.local.md``). The role file carries no operator content and is
+    inert once the plugin is gone, so its removal needs no separate opt-in.
+
+    Guard is `_uninstall_purge_operator_config`'s render-and-compare
+    precedent, simplified: the role asset has NO substitutions, so a fresh
+    render IS the shipped file byte-for-byte and the compare is a plain
+    byte-compare — `render_template` is deliberately not called here.
+
+      - byte-identical to the shipped template, or ``force`` → unlink;
+      - differs, unreadable, or template unresolvable → REPORT and LEAVE
+        (Rule 1: uncertainty routes to reported-and-untouched).
+
+    A left-behind file is NOT a leg failure and deliberately does not append
+    to ``errors``: `cannot-reverse-safely` is a reported OUTCOME, and
+    conflating it with a failed leg would stop `orchestrate_uninstall`'s
+    fail-loud sequencing before the plugin end-state leg over an operator's
+    hand-edit. `_uninstall_purge_operator_config` DOES fail its leg in the
+    same situation, and the asymmetry is deliberate: it only ever runs behind
+    an explicit ``--purge-operator-config``, where an aborted run is the
+    operator's own opt-in; this leg runs by default, where it is not. An
+    ``OSError`` on the unlink is a different class and does append — that is
+    a failure, not a policy outcome.
+
+    Template resolution depends on LEG ORDER: the compare needs the plugin
+    tree still on disk, which holds because `uninstall_remove_substrate`
+    (leg 5) runs before `uninstall_set_plugin_endstate` (leg 6). A
+    reordering degrades every removal here to report-and-leave rather than
+    deleting on an unverifiable comparison — safe, but wrong, so the order
+    is the contract. DoE's uninstall doctrine states that dependency and
+    points at this module for the order itself, rather than holding a second
+    copy of it to drift.
+    """
+    role_file = _claude_dir(claude_home) / "agents" / "navi.md"
+    if not role_file.is_file():
+        return
+
+    if not force:
+        try:
+            coordinator_root = resolve_coordinator_root()
+        except RuntimeError:
+            coordinator_root = ""
+        template = (
+            Path(coordinator_root) / "templates" / "agents" / "navi.md"
+            if coordinator_root
+            else None
+        )
+
+        if template is None or not template.is_file():
+            print(
+                f"uninstall_remove_substrate: leaving {role_file} — the shipped role "
+                "template could not be resolved, so a hand-edit cannot be ruled out. "
+                f"Delete it manually to complete removal: rm {role_file}",
+                file=sys.stderr,
+            )
+            return
+
+        try:
+            unchanged = template.read_bytes() == role_file.read_bytes()
+        except OSError as exc:
+            print(
+                f"uninstall_remove_substrate: leaving {role_file} — could not read it "
+                f"or the shipped template to compare ({exc}). "
+                f"Delete it manually to complete removal: rm {role_file}",
+                file=sys.stderr,
+            )
+            return
+
+        if not unchanged:
+            print(
+                f"uninstall_remove_substrate: leaving {role_file} — differs from the "
+                f"shipped role template at {template}, so it is hand-edited. "
+                f"Delete it manually to complete removal: rm {role_file}",
+                file=sys.stderr,
+            )
+            return
+
+    try:
+        role_file.unlink()
+    except OSError as exc:
+        errors.append(f"failed to remove {role_file}: {exc}")
+        return
+
+    try:
+        role_file.parent.rmdir()
+    except OSError:
+        pass  # routine: another agent role lives there — not ours to empty
+
+
 def _uninstall_purge_operator_config(
     claude_home: str, force: bool, *, plugin_root: Optional[str] = None
 ) -> bool:
@@ -1573,9 +1699,9 @@ def _uninstall_purge_operator_config(
     re-render each file's known-fixed shape and byte-compare against disk;
     any diff is treated as possibly-hand-edited (fail-safe) and refuses
     removal unless force=True."""
-    identity_file = Path(claude_home) / "coordinator-identity.yaml"
-    working_repos_file = Path(claude_home) / "working-repos.yaml"
-    claude_local_file = Path(claude_home) / "CLAUDE.local.md"
+    identity_file = _claude_dir(claude_home) / "coordinator-identity.yaml"
+    working_repos_file = _claude_dir(claude_home) / "working-repos.yaml"
+    claude_local_file = _claude_dir(claude_home) / "CLAUDE.local.md"
     ok = True
 
     # ---- coordinator-identity.yaml: re-render + byte-compare ----
@@ -1753,7 +1879,7 @@ def uninstall_set_plugin_endstate(
         return not errors
 
     # ---- revert-to-marketplace: re-register the flat plugin tree ----
-    flat_plugin_dir = Path(claude_home) / "plugins" / "coordinator-claude"
+    flat_plugin_dir = _claude_dir(claude_home) / "plugins" / "coordinator-claude"
 
     if not flat_plugin_dir.is_dir():
         try:
@@ -2089,7 +2215,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
         # Clause 1 — `uninstall_set_plugin_endstate`'s revert-to-marketplace
         # branch: `shutil.copytree(coordinator_root, flat_plugin_dir)`
         # writes a FRESH copy of the plugin tree to
-        # `<claude-home>/plugins/coordinator-claude` when that flat
+        # `<home>/.claude/plugins/coordinator-claude` when that flat
         # directory is not already present. This manifest describes what
         # INSTALL puts on a machine, and this specific write is the one
         # place this module deviates from that frame — install (see
@@ -2104,7 +2230,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
             entries=(
                 WriteSurfaceEntry(
                     kind="file-path",
-                    path="<claude-home>/plugins/coordinator-claude",
+                    path="<home>/.claude/plugins/coordinator-claude",
                     reason=(
                         "uninstall_set_plugin_endstate (revert-to-marketplace "
                         "mode, --keep-marketplace): shutil.copytree(coordinator_root, "
@@ -2131,14 +2257,26 @@ removals here would add entries to the denominator install never produces,
 corrupting the count a sibling repo's lockstep test quantifies over (per
 this dispatch's own framing).
 
+`_uninstall_remove_navi_role`'s target (`<claude-home>/.claude/agents/
+navi.md`) is deliberately NOT declared here either, and the reason is worth
+stating because it inverts what a reader expects: claude-klabauter removes that file
+but never writes it — DoE's install step renders it. This manifest describes
+what INSTALL puts on a machine, and no claude-klabauter writer puts that one there, so
+there is nothing for this repo to declare. It cannot reach the install
+receipt for the same reason (`receipt.py` derives entries from
+`WriteSurfaceDeclaration`s discovered under claude-klabauter's own scan roots), so no
+`--dry-run` disposition names it; the live leg reports in prose instead. A
+declaration for it belongs to whoever writes it, or to nobody.
+
 The disposition-report API (`classify_entry_disposition`,
 `UninstallDispositionReport`, `render_disposition_report`,
-`render_uninstall_dry_run_report` — landed earlier today) persists nothing
-to disk: `render_disposition_report`/`render_uninstall_dry_run_report`
-return a `str` that callers `print()`; `_load_install_receipt` returns
-`None` unconditionally (C5's receipt module exists but nothing wires
-emission into a live install run yet, per its own docstring) — no file is
-read or written by any of it. None of that API is this writer's surface
+`render_uninstall_dry_run_report`) persists nothing to disk:
+`render_disposition_report`/`render_uninstall_dry_run_report` return a `str`
+that callers `print()`; `_load_install_receipt` delegates to
+`receipt.load_receipt()`, which reads (never writes) the receipt JSON that
+`maximalist._build_and_persist_receipt` now emits on a live install run —
+this docstring previously claimed nothing wired that emission, which stopped
+being true when that call landed. None of that API is this writer's surface
 either.
 
 Clause 1 above is the one exception: a genuine write not traceable to

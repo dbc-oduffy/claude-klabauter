@@ -573,6 +573,73 @@ def test_bucket2_gate_is_registered(gate_id):
     assert gate_id in udg._GATES
 
 
+# ---------------------------------------------------------------------------
+# directory-md-staleness takes its index path from the repo, not from claude-klabauter.
+#
+# The gate hardcoded `coordinator_core/DIRECTORY.md`, so it read UNAVAILABLE
+# forever on every consumer of this ceremony except claude-klabauter — including
+# DoE-claude, whose index is `./DIRECTORY.md`. Reported by doe-claude-3f,
+# state/bug-backlog/2026-09-02-directory-md-staleness-hardcodes-claude_klabauters-index-path.yaml.
+# ---------------------------------------------------------------------------
+
+_INDEX_BODY = "# DIRECTORY\n\nLast refreshed: 2026-09-02\n"
+
+
+def _run_directory_md_gate(root, overrides=None):
+    return udg._GATES["directory-md-staleness"](root, root, overrides or {})
+
+
+def test_directory_md_gate_finds_a_root_level_index(tmp_path):
+    """DoE-claude's shape: the index is `./DIRECTORY.md`."""
+    (tmp_path / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+
+    result = _run_directory_md_gate(tmp_path)
+
+    assert result.verdict is not udg.GateVerdict.UNAVAILABLE
+    assert result.detail["directory_md"] == "DIRECTORY.md"
+
+
+def test_directory_md_gate_finds_a_package_level_index(tmp_path):
+    """claude-klabauter's shape: the index is under a top-level package dir."""
+    pkg = tmp_path / "coordinator_core"
+    pkg.mkdir()
+    (pkg / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+
+    result = _run_directory_md_gate(tmp_path)
+
+    assert result.verdict is not udg.GateVerdict.UNAVAILABLE
+    assert result.detail["directory_md"] == "coordinator_core/DIRECTORY.md"
+
+
+def test_directory_md_gate_prefers_the_root_index_over_a_package_one(tmp_path):
+    (tmp_path / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+    pkg = tmp_path / "coordinator_core"
+    pkg.mkdir()
+    (pkg / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+
+    assert _run_directory_md_gate(tmp_path).detail["directory_md"] == "DIRECTORY.md"
+
+
+def test_directory_md_gate_honours_an_explicit_override(tmp_path):
+    (tmp_path / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+    nested = tmp_path / "engine"
+    nested.mkdir()
+    (nested / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+
+    result = _run_directory_md_gate(tmp_path, {"directory_md": "engine/DIRECTORY.md"})
+
+    assert result.detail["directory_md"] == "engine/DIRECTORY.md"
+
+
+def test_directory_md_discovery_does_not_recurse(tmp_path):
+    """Two levels down is not discovery — it is a walk this gate must not do."""
+    deep = tmp_path / "a" / "b"
+    deep.mkdir(parents=True)
+    (deep / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+
+    assert udg._discover_directory_md(tmp_path) is None
+
+
 def test_bucket2_gates_are_informational_never_blocking(tmp_path):
     """None of the four may halt /update-docs.
 

@@ -104,6 +104,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core import timestamps
 from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.sibling_fact import resolve_leg
 
@@ -160,7 +161,8 @@ class RelocationEntry:
         fields."""
         if self.is_retired:
             successor_note = f"; successor: {self.successor}" if self.successor else "; no successor"
-            return f"deliberately retired at {self.retired_at} ({self.reason}){successor_note}"
+            retired = timestamps.with_age_date(self.retired_at)
+            return f"deliberately retired at {retired} ({self.reason}){successor_note}"
         return f"moved to {self.new_repo}:{self.new_path} ({self.reason})"
 
 

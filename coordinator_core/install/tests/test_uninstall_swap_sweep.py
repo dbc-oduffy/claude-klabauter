@@ -13,7 +13,7 @@ own internal use), so the uninstall leg's sweep no longer requires
 This module asserts that with `coordinator_core.install.ensure_venv` blocked
 from import entirely, `uninstall_remove_substrate` still reclaims orphaned
 `.build-*`/`.stale-*` siblings on BOTH tree targets it sweeps (settings-home
-and the legacy `<claude_home>/.coordinator-venv`) -- the exact two call sites
+and the legacy `<claude_home>/.claude/.coordinator-venv`) -- the exact two call sites
 `uninstall_legs.py` carries. Fails against the pre-C3 tree (`HEAD`), where the
 call sites' lazy `from coordinator_core.install.ensure_venv import
 _sweep_orphaned_swap_dirs` raises `ImportError` the moment `ensure_venv`
@@ -85,7 +85,11 @@ def test_uninstall_sweeps_both_tree_targets_with_ensure_venv_unimportable(
     _isolate_settings_home(monkeypatch, tmp_path)
     _block_ensure_venv_import(monkeypatch)
 
-    claude_home = tmp_path
+    # CLAUDE_HOME names the PARENT of `.claude`; the legacy venv tree target is
+    # `<install_base>/.claude/.coordinator-venv` (substrate's own WRITE_SURFACE
+    # declares that path), so the fixture builds it where substrate put it.
+    claude_home = tmp_path / ".claude"
+    claude_home.mkdir()
     settings_home = tmp_path / ".coordinator-claude-settings"
 
     # ---- settings-home tree target ----

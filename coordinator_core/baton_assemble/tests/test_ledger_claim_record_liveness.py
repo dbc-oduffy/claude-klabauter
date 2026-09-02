@@ -95,19 +95,41 @@ def _seed_ledger_claim(repo_root: Path, session_id: str, claimed_at: str) -> Pat
     return claim_dir
 
 
-def _stub_archive_transition(monkeypatch) -> list:
-    """Fakes only `handoff.archive_transition` -- the claim re-stamp itself
+def _stub_supersede_transition(monkeypatch) -> list:
+    """Fakes the supersede transition d6 composes -- the claim re-stamp itself
     (when it runs at all) still routes through the real `handoff.transition`
     op, matching the established idiom in
     `TestSupersedeReconcilesClaimFromDurableLedger`
-    (`coordinator_core/test_baton_assemble.py`)."""
+    (`coordinator_core/test_baton_assemble.py`).
+
+    KEYED ON `housekeeping.cycle`, NOT `handoff.archive_transition`, AND THAT
+    IS NOT A RENAME. Rewire history is canonically stated in
+    `coordinator_core/tests/test_housekeeping_is_the_one_job.py ::
+    _PERMITTED_DIRECT_IMPORTERS`. This spy matched the dead op key until
+    2026-09-02, so it never fired: `len(calls) == 1` read 0 while the REAL
+    cycle ran underneath the tests it was supposed to be isolating. d6 now
+    reaches `handoff_archive_transition._handler` as a library THROUGH the
+    cycle and reads its result back under `transition`, which is why the fake
+    returns that envelope rather than the op's bare dict.
+
+    RECORDS THE `transition` SUB-DICT, NOT THE WHOLE PARAMS, and that is what
+    keeps a count meaningful after the rewire. The old key named the supersede
+    by itself: one call to `handoff.archive_transition` could only ever be this
+    directive. `housekeeping.cycle` is a general job that d6 happens to compose,
+    so a count alone would also be satisfied by some future call made for an
+    unrelated reason. Callers assert on `mode`/`handoff_path` off what is
+    recorded here.
+    """
     calls: list = []
     real_invoke = ba_apply._invoke_op_in_process
 
     def _routed(op_name, params, repo_root):
-        if op_name == "handoff.archive_transition":
-            calls.append(params)
-            return {"exit_code": 0, "superseded": True, "moved": True}
+        if op_name == "housekeeping.cycle" and params.get("transition"):
+            calls.append(params["transition"])
+            return {
+                "exit_code": 0,
+                "transition": {"superseded": True, "moved": True},
+            }
         return real_invoke(op_name, params, repo_root)
 
     monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _routed)
@@ -134,7 +156,7 @@ class TestLivenessFreeReadIsReachableOnlyOnADeadOrMissingHolder:
         # session that claimed, worked, and exited).
         _seed_ledger_claim(repo, "sid-exited-holder", "2026-08-13T10:00:00Z")
 
-        calls = _stub_archive_transition(monkeypatch)
+        calls = _stub_supersede_transition(monkeypatch)
 
         result = ba_apply._dispatch_handoff_supersede_predecessor(
             [_PRED_REL, "state/handoffs/successor.md", "state/handoffs/successor.md"], repo
@@ -142,6 +164,8 @@ class TestLivenessFreeReadIsReachableOnlyOnADeadOrMissingHolder:
 
         assert result.get("degraded") is None
         assert len(calls) == 1
+        assert calls[0]["mode"] == "supersede"
+        assert calls[0]["handoff_path"] == _PRED_REL
         text = predecessor.read_text(encoding="utf-8")
         assert "status: claimed" in text
         assert "claimed_by: sid-exited-holder" in text
@@ -168,7 +192,7 @@ class TestLivenessFreeReadIsReachableOnlyOnADeadOrMissingHolder:
         # `_dispatch_handoff_supersede_predecessor` is even called.
         assert claimed_or_shipped_at_path(str(repo / _PRED_REL)) is True
 
-        calls = _stub_archive_transition(monkeypatch)
+        calls = _stub_supersede_transition(monkeypatch)
 
         result = ba_apply._dispatch_handoff_supersede_predecessor(
             [_PRED_REL, "state/handoffs/successor.md", "state/handoffs/successor.md"], repo
@@ -176,6 +200,8 @@ class TestLivenessFreeReadIsReachableOnlyOnADeadOrMissingHolder:
 
         assert result.get("degraded") is None
         assert len(calls) == 1
+        assert calls[0]["mode"] == "supersede"
+        assert calls[0]["handoff_path"] == _PRED_REL
         # `_reconcile_claim_from_ledger` was never reached: its "reconciled"
         # print never fired, and the predecessor -- whose real stamp is the
         # `handoff.archive_transition` op's own job, faked away here -- is

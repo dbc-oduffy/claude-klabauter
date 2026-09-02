@@ -122,6 +122,55 @@ def _emit(obj: Mapping[str, Any]) -> Mapping[str, Any]:
 emit = _emit
 
 
+# ---------------------------------------------------------------------------
+# Reader of a PERSISTED envelope's judgment-point shape.
+#
+# `apply_base.judgment_points_by_id` is the in-process sibling: it takes the
+# `judgment_points` list this process just built and indexes it without shape
+# checks, because a producer bug there should raise. This one takes an object
+# re-read from `.git/coordinator-sessions/decisions/*.json`, where a malformed
+# entry is a data state rather than a producer bug, and it lives beside the
+# writer so a rename of `judgment_points` or a point's `id` moves one site
+# instead of silently starving one of its two readers (`resume` +
+# `pickup_assemble.apply`).
+#
+# Review: overengineering-reviewer -- `legal_disposition_values` used to live
+# here too on the same two-readers argument, but it has exactly one
+# production caller (`resume.resume_decisions`, the file it was extracted
+# from); moved back to `resume.py` as `_legal_disposition_values`, private to
+# its sole reader.
+# ---------------------------------------------------------------------------
+
+def judgment_points_by_id(
+    decision_object: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    """Index a persisted decision object's `judgment_points[]` by `id`.
+
+    Pure extraction, no policy: a non-list `judgment_points`, a non-mapping
+    entry, or an entry with a falsy `id` is skipped, and the caller keeps its
+    own register on top -- `resume.resume_decisions` refuses loudly on an
+    answer naming an id absent from the returned map, while
+    `pickup_assemble.apply._read_session_dispositions` reads an empty map as
+    "nothing to add". Neither register belongs here.
+
+    NOT `apply_base.judgment_points_by_id` -- that in-process sibling takes
+    the `list` this process just built (not a persisted `Mapping`) and raises
+    on a malformed entry rather than skipping it. Same base name, opposite
+    argument shape, opposite malformed-entry behavior -- import this one by
+    its full qualified path or an explicit alias, never a bare
+    `judgment_points_by_id` re-export, so a reader can't reach for the wrong
+    one. (Review: code-reviewer -- Finding 4, naming-collision hazard.)
+    """
+    points = decision_object.get("judgment_points")
+    if not isinstance(points, list):
+        return {}
+    return {
+        point["id"]: point
+        for point in points
+        if isinstance(point, Mapping) and point.get("id")
+    }
+
+
 class ExitCodeBase(enum.IntEnum):
     """Base exit-code enumeration pattern shared by every skill's CLI.
 

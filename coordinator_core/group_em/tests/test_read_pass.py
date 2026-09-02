@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import types
 import json
+
+import pytest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
@@ -715,3 +717,87 @@ def test_the_candidate_shortlist_is_a_subset_of_the_full_roster(monkeypatch):
     assert len(full) == 2
     full_ids = {v["session_id"] for v in full}
     assert {v["session_id"] for v in shortlist} <= full_ids
+
+
+class TestFallbackStatusFallThroughNamesWhatItSaw:
+    """An absent status and an unrecognized one are different facts, and the
+    reason string is all a reader gets. Reporting both as "unrecognized" sent
+    one investigation down a transcript to establish that a brand-new session
+    simply had not written receiver-state.json yet."""
+
+    @pytest.mark.parametrize("status", [None, ""], ids=["none", "empty"])
+    def test_absent_status_says_absent(self, status):
+        state, reason = read_pass.classify_fallback_status(status, reduced_lines=[])
+        assert (state, reason) == (read_pass.STATE_UNKNOWN, "status-absent")
+
+    def test_unrecognized_status_names_the_value_it_could_not_map(self):
+        """Without the value, the next reader re-derives it from a transcript."""
+        state, reason = read_pass.classify_fallback_status("wedged", reduced_lines=[])
+        assert state == read_pass.STATE_UNKNOWN
+        assert reason == "unrecognized-status:wedged"
+
+    def test_case_variant_of_a_known_status_is_not_silently_absent(self):
+        """`BUSY` is a missing arm, not a missing status -- the old shared
+        string made those two indistinguishable."""
+        state, reason = read_pass.classify_fallback_status("BUSY", reduced_lines=[])
+        assert (state, reason) == (read_pass.STATE_UNKNOWN, "unrecognized-status:BUSY")
+
+    def test_known_arms_are_untouched(self):
+        assert read_pass.classify_fallback_status("busy", reduced_lines=[]) == (
+            read_pass.STATE_PRODUCING,
+            "status-busy",
+        )
+
+
+class TestShellIsAnExecutingStatus:
+    """`shell` reaches the ladder only from the registry -- `claude agents
+    --json` renders it as `busy` -- so the missing arm was invisible from the
+    surface a reader would naturally sample. Measured 2026-09-02: 5 of 28 live
+    sessions were in it, two of them claude-klabauter peers, all classified
+    UNKNOWN and therefore invisible to the parked derivation."""
+
+    def test_shell_classifies_as_producing_and_names_itself(self):
+        assert read_pass.classify_fallback_status("shell", reduced_lines=[]) == (
+            read_pass.STATE_PRODUCING,
+            "status-shell",
+        )
+
+    def test_the_reason_still_distinguishes_which_executing_status_it_saw(self):
+        """Collapsing both onto one reason would hide which surface the row
+        came from, and the registry/CLI split is the whole reason this arm was
+        missing for as long as it was."""
+        _, busy = read_pass.classify_fallback_status("busy", reduced_lines=[])
+        _, shell = read_pass.classify_fallback_status("shell", reduced_lines=[])
+        assert busy != shell
+
+    def test_an_unknown_status_is_still_unrecognized_not_swept_into_executing(self):
+        assert read_pass.classify_fallback_status("wedged", reduced_lines=[]) == (
+            read_pass.STATE_UNKNOWN,
+            "unrecognized-status:wedged",
+        )
+
+    def test_a_live_shell_contradicts_a_stored_paused_verdict_as_busy_does(
+        self, tmp_path, monkeypatch
+    ):
+        """The same one-word gap sat on the primary leg: a peer whose stored
+        record says PAUSED while the harness reports it executing is
+        contradicted, and `shell` is that claim exactly as `busy` is."""
+        monkeypatch.setattr(
+            read_pass,
+            "read_receiver_state",
+            lambda session_id, repo_root: {
+                "verdict": read_pass.STATE_PAUSED,
+                "reason": "turn-ended",
+                "stamped_at": "2026-09-02T20:00:00Z",
+            },
+        )
+        verdicts = {
+            status: read_pass.classify_peer(
+                str(tmp_path),
+                {"sessionId": "s1", "status": status, "cwd": str(tmp_path)},
+                read_tail=lambda session_id, cwd: [],
+            )
+            for status in ("busy", "shell")
+        }
+        assert verdicts["shell"]["contradicted"] == verdicts["busy"]["contradicted"]
+        assert verdicts["shell"]["candidate"] == verdicts["busy"]["candidate"]

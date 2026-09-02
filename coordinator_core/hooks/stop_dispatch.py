@@ -122,6 +122,7 @@ from coordinator_core.hooks.receiver_state_sensor import _handler as _receiver_s
 from coordinator_core.hooks.runtime_tripwire_em_check import _handler as _runtime_tripwire_em_check_handler
 from coordinator_core.hooks.watchdog_undischarged_next_move import _handler as _watchdog_undischarged_next_move_handler
 from coordinator_core.ipc import register_op
+from coordinator_core.session.machinery_paths import share_dir as _share_dir
 
 # ---------------------------------------------------------------------------
 # guard-kira-verdict-routed.py — verbatim port of its frontmatter-only
@@ -347,7 +348,7 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
             "could not resolve repo root from cwd"
         )
 
-    share_dir = os.path.join(repo_root, "state", "subagent-share", session_id)
+    share_dir = _share_dir(repo_root, session_id)
     try:
         filenames = [
             f

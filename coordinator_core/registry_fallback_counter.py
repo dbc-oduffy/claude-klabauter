@@ -58,6 +58,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.subagent_sandbox import resolve_git_root_cheap
+from coordinator_core.session.machinery_paths import share_dir as _share_dir
 
 _FALLBACK_COUNTS_FILENAME = "registry-fallback-counts.jsonl"
 
@@ -106,7 +107,7 @@ def record_registry_fallback(
     git_root = resolve_git_root_cheap(cwd)
     if not git_root:
         return
-    path = Path(git_root) / "state" / "subagent-share" / session_id / _FALLBACK_COUNTS_FILENAME
+    path = Path(_share_dir(git_root, session_id)) / _FALLBACK_COUNTS_FILENAME
     path.parent.mkdir(parents=True, exist_ok=True)
     record = {
         "op": method,

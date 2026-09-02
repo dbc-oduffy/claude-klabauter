@@ -245,7 +245,6 @@ flock (one sidecar per directory rather than per file).
 
 from __future__ import annotations
 
-import datetime
 import json
 import os
 import time
@@ -849,30 +848,13 @@ def _describe_holder(lock_path: Path) -> str:
         acquired_at = data.get("acquired_at", "unknown time")
     except (ValueError, KeyError, UnicodeDecodeError, TypeError):
         return "holder unknown (corrupt lock metadata)"
+    # Function-local — see `_lock_key`'s note on this module's cold-start budget.
+    from coordinator_core import timestamps
+
     return (
         f"pid={pid} holder={holder!r} "
-        f"acquired_at={acquired_at}{_lock_age_suffix(acquired_at)}"
+        f"acquired_at={timestamps.with_age(acquired_at)}"
     )
-
-
-def _lock_age_suffix(acquired_at: object) -> str:
-    """Renders the holder's age beside its timestamp.
-
-    A UTC stamp read against a local clock is the trap this closes: the offset
-    is present and still misread, and an hour of imagined staleness turns a
-    live round into a stale-lock diagnosis. An age cannot be read in the wrong
-    zone. Absent or unparseable stamps get no suffix rather than a guess.
-    """
-    if not isinstance(acquired_at, str):
-        return ""
-    try:
-        held = datetime.datetime.fromisoformat(acquired_at.replace("Z", "+00:00"))
-    except ValueError:
-        return ""
-    if held.tzinfo is None:
-        return ""
-    age = (datetime.datetime.now(datetime.timezone.utc) - held).total_seconds()
-    return f" age={int(age)}s"
 
 
 @contextmanager

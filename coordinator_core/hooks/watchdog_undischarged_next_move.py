@@ -193,12 +193,12 @@ from coordinator_core.hooks.nudge_autonomous_askuserquestion import (
     _resolve_posture as _resolve_posture_for_cwd,
 )
 from coordinator_core.ipc import register_op
-from coordinator_core.session import subagent_share
+from coordinator_core.session import machinery_paths
 
 #: Corpus-mutator declaration (generator-provenance sweep): `_write_records`
 #: rewrites `state/subagent-share/<session_id>/next-move-ledger.jsonl` and
 #: `_drain_intake` deletes `.../obligations-inbound.jsonl` -- both filenames
-#: come from `subagent_share.ledger_path`/`intake_path`, a session_id-keyed
+#: come from `machinery_paths.ledger_path`/`intake_path`, a session_id-keyed
 #: target set `GENERATES` cannot express (same corpus, same reasoning as
 #: `guard_advisory_counter.py`'s `MUTATES` sibling declaration).
 MUTATES = ["state/subagent-share/**/*.jsonl"]
@@ -276,19 +276,19 @@ _INTAKE_SCHEMA = 1
 _INTAKE_OPS = ("open", "progress", "blocked", "discharge")
 
 
-# Paths come from `session.subagent_share` -- this module, `group_em.send_pass`
+# Paths come from `session.machinery_paths` -- this module, `group_em.send_pass`
 # and `group_em.obligations` each carried the same join and the same filename
 # string, so a correction to one copy left the other two writing elsewhere.
 # That module is stdlib-only and does no import-time work: this hook is on the
 # per-turn path for every session on the box.
 #
 # Review: overengineering-reviewer (finding #2, minor, accepted) -- call
-# sites below now name `subagent_share.<name>` directly; `_session_share_dir`
+# sites below now name `machinery_paths.<name>` directly; `_session_share_dir`
 # was an alias with no in-module caller and is dropped outright.
 
 
 def _read_records(repo_root: str, session_id: str) -> list:
-    path = subagent_share.ledger_path(repo_root, session_id)
+    path = machinery_paths.ledger_path(repo_root, session_id)
     if not os.path.isfile(path):
         return []
     records = []
@@ -313,7 +313,7 @@ def _write_records(repo_root: str, session_id: str, records: list) -> bool:
     """Atomically replace the ledger file (temp file + `os.replace`, same
     directory) -- atomic on both POSIX and Windows, closing the same
     read-modify-write race DoE's own `_write_records` closes."""
-    path = subagent_share.ledger_path(repo_root, session_id)
+    path = machinery_paths.ledger_path(repo_root, session_id)
     directory = os.path.dirname(path)
     tmp_path = None
     try:
@@ -488,7 +488,7 @@ def _drain_intake(repo_root: str, session_id: str) -> None:
     Never raises; a fold that cannot complete leaves the intake file in
     place for the next Stop call on this session to retry.
     """
-    path = subagent_share.intake_path(repo_root, session_id)
+    path = machinery_paths.intake_path(repo_root, session_id)
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as handle:
             text = handle.read()

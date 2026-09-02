@@ -175,6 +175,9 @@ from coordinator_core.archive_stamp import (
 )
 from coordinator_core.claim_state import handoff_claim_dir
 from coordinator_core.contract import apply_base
+from coordinator_core.contract.decision_object.envelope import (
+    judgment_points_by_id as _persisted_judgment_points_by_id,
+)
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     read_fm_field_unquoted,
@@ -671,23 +674,17 @@ def _read_session_dispositions(root: Path, session_id: str, artifact_path: str) 
         return {}
     if not isinstance(payload, dict):
         return {}
-    judgment_points = payload.get("judgment_points")
-    if not isinstance(judgment_points, list):
-        return {}
-
     dispositions: dict[str, Any] = {}
-    for jp in judgment_points:
-        if not isinstance(jp, dict):
-            continue
-        jp_id = jp.get("id")
+    for jp_id, jp in _persisted_judgment_points_by_id(payload).items():
         disposition = jp.get("disposition")
-        if jp_id and disposition:
-            entry: dict[str, Any] = {"disposition": disposition}
-            for key in _DISPOSITION_CONTENT_KEYS:
-                value = jp.get(key)
-                if value:
-                    entry[key] = value
-            dispositions[jp_id] = entry
+        if not disposition:
+            continue
+        entry: dict[str, Any] = {"disposition": disposition}
+        for key in _DISPOSITION_CONTENT_KEYS:
+            value = jp.get(key)
+            if value:
+                entry[key] = value
+        dispositions[jp_id] = entry
     return dispositions
 
 

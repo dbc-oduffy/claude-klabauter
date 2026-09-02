@@ -202,24 +202,44 @@ def test_a_served_event_still_carries_the_wrapper_and_its_event_name():
     assert body["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
 
 
-def test_sessionend_context_moves_top_level_rather_than_being_dropped():
-    """Asserts PLACEMENT ONLY. The context does not reach the model, and cannot.
-
-    Measured post-fix on harness 2.1.258: the shape validates, and neither sentinel
-    surfaced. The cause is the event, not the nesting level -- `SessionEnd` is terminal, so
-    no turn follows for context to be spliced into. The key is kept so `_with_context` does
-    not silently discard what an op asked to say, not because it is a delivery channel; see
-    `hook_http._envelope` for the measurement and for why no better placement exists.
+def test_sessionend_response_carries_no_context_key_at_all():
+    """No placement of `additionalContext` delivers on a terminal event -- nested and
+    top-level were both measured to go nowhere (`hook_http._envelope`,
+    `hook_http._with_context`). Neither a plain nor a pre-nested `additionalContext` from
+    the op survives into the response; there is no channel left to keep it alive for.
     """
-    body = hook_http.allow_response("SessionEnd", {"additionalContext": "ctx"})
-    assert body["additionalContext"] == "ctx"
-    assert "hookSpecificOutput" not in body
+    for result in ({"additionalContext": "ctx"}, {"hookSpecificOutput": {"additionalContext": "ctx"}}):
+        body = hook_http.allow_response("SessionEnd", result)
+        assert "additionalContext" not in body
+        assert "hookSpecificOutput" not in body
 
 
-def test_an_op_that_nested_its_own_output_on_sessionend_keeps_its_context():
-    """An op cannot know the harness refuses its wrapper; lifting beats dropping."""
-    body = hook_http.allow_response(
-        "SessionEnd", {"hookSpecificOutput": {"additionalContext": "ctx"}}
+def test_a_deny_on_a_wrapper_refusing_event_reports_unrun_never_a_bare_deny():
+    """The worst-direction failure this module exists to prevent, closed in code.
+
+    `deny_response` bypasses `_envelope` because a deny IS the nested keys. On an event the
+    harness refuses a wrapper for, emitting them fails validation -- and the harness fails
+    open on a response it cannot read, so the one path whose whole job is to BLOCK would
+    become a silent no-op exactly when it fires.
+
+    Unreachable today: `BLOCKING_EVENTS` is `PreToolUse` alone and no op on a wrapper-
+    refusing event emits a deny. It was documented as unreachable and not enforced, which is
+    the same shape as a guard that reads correct and attests nothing. Mutation check: delete
+    the `EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT` check in `_decision_to_response` and this
+    fails with a `hookSpecificOutput` carrying `permissionDecision: deny`.
+    """
+    body = hook_http._decision_to_response(
+        "SessionEnd", {"permissionDecision": "deny", "permissionDecisionReason": "nope"}
     )
-    assert body["additionalContext"] == "ctx"
     assert "hookSpecificOutput" not in body
+    assert body.get("permissionDecision") is None
+    assert "did not run" in body["systemMessage"]
+
+
+def test_a_deny_on_a_normal_blocking_event_is_untouched():
+    """The guard above must not have narrowed the path that actually denies things."""
+    body = hook_http._decision_to_response(
+        "PreToolUse", {"permissionDecision": "deny", "permissionDecisionReason": "nope"}
+    )
+    assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert body["hookSpecificOutput"]["permissionDecisionReason"] == "nope"

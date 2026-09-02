@@ -251,6 +251,7 @@ from typing import Any, Callable, Dict, FrozenSet, List, NamedTuple, Optional, T
 
 import yaml
 
+from coordinator_core import timestamps
 from coordinator_core.dag import _read_meta
 from coordinator_core.frontmatter.primitives import (
     FrontmatterSplit,
@@ -2275,12 +2276,24 @@ def _leg_identity(leg: Dict[str, Any]) -> str:
     )
 
 
+def _checked_at_clause(checked_at: Any) -> str:
+    """A recheck stamp with the age a reader would otherwise subtract wrong.
+
+    A gate recheck is provenance for a decision being made NOW, so how old
+    it is decides whether it still counts. An absent stamp stays the word
+    `unknown` -- `with_age` on nothing would manufacture a rendering for a
+    field the record never carried."""
+    if not checked_at:
+        return "unknown"
+    return _one_line(timestamps.with_age(checked_at))
+
+
 def _prior_recheck_clause(results: Dict[str, Any]) -> str:
     """`prior gate-recheck <status> at <checked_at>` — the provenance of a
     results block this clear did NOT itself produce."""
     status = _one_line(results.get("status") or "unknown")
-    checked_at = _one_line(results.get("checked_at") or "unknown")
-    return f"prior gate-recheck {status} at {checked_at}"
+    recheck_clause = _checked_at_clause(results.get("checked_at"))
+    return f"prior gate-recheck {status} at {recheck_clause}"
 
 
 def _render_gate_evidence_retirement(
@@ -2339,8 +2352,8 @@ def _render_gate_evidence_retirement(
 
     if rechecked_by_this_clear and results_is_dict:
         status = _one_line(gate_evidence_results.get("status") or "unknown")
-        checked_at = _one_line(gate_evidence_results.get("checked_at") or "unknown")
-        header = f"gate_evidence retired ({status}, checked_at {checked_at})"
+        recheck_clause = _checked_at_clause(gate_evidence_results.get("checked_at"))
+        header = f"gate_evidence retired ({status}, checked_at {recheck_clause})"
         fragments = [
             f"{_leg_identity(leg)} {_one_line(leg.get('status') or 'unknown')}"
             + _leg_authored_detail(leg)

@@ -86,6 +86,7 @@ from pathlib import Path
 import yaml
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
 
 _EXIT_INTERVIEW_QUESTION_RE = re.compile(
     r"-\s*What did you have to work out that the brief could have told you\?"
@@ -270,7 +271,7 @@ def main(argv: list[str]) -> int:
         return 0
 
     root_path = Path(root)
-    subagent_share_dir = root_path / "state" / "subagent-share"
+    subagent_share_dir = Path(_machinery_root(str(root_path))) / "subagent-share"
     if not subagent_share_dir.is_dir():
         return 0
 

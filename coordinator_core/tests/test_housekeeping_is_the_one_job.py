@@ -84,14 +84,40 @@ _LIVE_KEY = "housekeeping.cycle"
 _LEG_MODULE = "coordinator_core.ops.handoff_archive_transition"
 _LEG_ATTR = "_handler"
 
-#: The ONE job, and the only production module permitted to reach the leg
-#: directly. `coordinator_core/archive_stamp.py` was the third door onto this
-#: compute until 2026-08-28 and was redirected through the one job in the
-#: predecessor plan's C4; if it reappears below, the redirect has been
-#: reverted. The permitted module is the cycle now that
-#: `ops/handoff_housekeeping.py` is deleted.
+#: The production modules permitted to reach the leg directly.
+#:
+#: `coordinator_core/housekeeping/cycle.py` is the one job itself.
+#:
+#: CANONICAL HOME for the d6/archive_stamp rewire history (Review:
+#: overengineering-reviewer -- this fact was re-narrated at six independent
+#: sites across the slice; this block is now the one that states it in
+#: full, the other five cite it):
+#:
+#: `coordinator_core/archive_stamp.py` was the third door until 2026-08-28,
+#: was redirected through the one job by the governing plan's C4, and was
+#: DELIBERATELY REPOINTED BACK to a direct library call on 2026-08-30 by
+#: `archive/specs/2026-08/2026-08-30-the-stamp-stops-paying-for-a-sweep-
+#: that.md` (status: implemented) — routing a targeted four-mode stamp
+#: through the whole cycle to reach one library call paid a corpus-wide
+#: sweep the brightline forbids. That plan landed its own replacement
+#: guard rather than leaving the concern uncovered:
+#: `coordinator_core/tests/test_stamp_verbs_stay_off_the_sweep.py` asserts
+#: the direct call walks no corpus (`read_live_corpus`/`open_index`/
+#: `compute_terminal_set`), which is the property the one-door rule was
+#: proxying for. This entry was not added at that landing, so the two
+#: assertions below stood red from 2026-08-30 until 2026-09-02, naming a
+#: redirect the repo had already retired on purpose.
+#:
+#: The wider d6 rewire this same history belongs to: d6 was rewired onto
+#: `handoff.housekeeping` 2026-08-28 and repointed onto `housekeeping.cycle`
+#: 2026-08-30 (C8, docs/plans/2026-08-29-the-housekeeping-cycle-stops-
+#: committing.md); `handoff.archive_transition`/`handoff.housekeeping` are
+#: both permanently dead (`SUSPENDED_OPS`; kill means kill forever, PM
+#: 2026-08-23), and `housekeeping.cycle` reaches `handoff_archive_transition.
+#: _handler` as a library, relaying its result verbatim under `transition`.
 _PERMITTED_DIRECT_IMPORTERS = frozenset({
     "coordinator_core/housekeeping/cycle.py",
+    "coordinator_core/archive_stamp.py",
 })
 
 #: Production trees only. Test modules legitimately import the leg to exercise
@@ -295,24 +321,34 @@ def test_only_the_one_job_reaches_the_archival_leg_directly() -> None:
     )
 
 
-def test_archive_stamp_is_no_longer_a_direct_importer() -> None:
-    """The one redirect this plan actually landed, pinned by name.
+def test_archive_stamp_reaches_the_leg_directly_and_that_is_the_ratified_shape() -> None:
+    """The inverse of what this test asserted until 2026-09-02, and the
+    reversal is the point rather than a repair.
 
-    `archive_stamp._call_handoff_archive_transition` imported the leg and
-    `asyncio.run` it, bypassing `get_op_handler`, the suspension table and every
-    gate. It was rewired on 2026-08-28. Named separately from the set assertion
-    above so a revert reads as "the redirect came back out" rather than as a
-    generic new-importer message that gives the reader no history.
+    Rewire history: see `_PERMITTED_DIRECT_IMPORTERS` above, the canonical
+    site. That plan never updated this file, so this assertion and the set
+    assertion above both stood red for three days, telling a reader the
+    redirect had been reverted by accident when it had been retired on
+    purpose.
+
+    Kept pointing at this module by name, in the opposite direction, rather
+    than deleted: a reader who removes the direct call needs to land here and
+    read why it is direct, and `test_the_permitted_importer_actually_reaches_
+    the_leg` above would then fail with a stale-exemption message that says
+    nothing about the sweep cost.
     """
     path = _REPO_ROOT / "coordinator_core" / "archive_stamp.py"
     source = path.read_text(encoding="utf-8", errors="replace")
 
-    assert not _reaches_the_leg_directly(source), (
-        "coordinator_core/archive_stamp.py reaches "
-        f"{_LEG_MODULE}.{_LEG_ATTR} directly again — the C4 redirect through "
-        f"{_LIVE_KEY} has been reverted, and its three verbs (cs_ship_handoff, "
-        "cs_chain_archive_handoff, cs_supersede_archive_handoff) are back to "
-        "being a third door onto the one job."
+    assert _reaches_the_leg_directly(source), (
+        "coordinator_core/archive_stamp.py no longer reaches "
+        f"{_LEG_MODULE}.{_LEG_ATTR} directly. If that is deliberate, drop it "
+        "from _PERMITTED_DIRECT_IMPORTERS and delete this test in the same "
+        "commit — but first check what the new route costs: it was routed "
+        f"through {_LIVE_KEY} once before, and archive/specs/2026-08/"
+        "2026-08-30-the-stamp-stops-paying-for-a-sweep-that.md repointed it "
+        "back precisely because that route walked the corpus for a targeted "
+        "per-record stamp."
     )
 
 

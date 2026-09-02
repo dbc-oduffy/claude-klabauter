@@ -275,6 +275,7 @@ from coordinator_core.ops.fleet._common import handoff_archive_dest
 from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # AC8: NOT zero-spawn — runs `git rev-parse --show-toplevel` via `_run_git`, one subprocess spawn per resolution
 from coordinator_core.resolution.facade import resolve_operator_config
+from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
 
 from coordinator_core.workstream_complete import completion_verdict as _completion_verdict
 from coordinator_core.workstream_complete import directives_commit_tail
@@ -2268,7 +2269,7 @@ def _compute_review_receipt_gate(
     skips the check — `claimed_at` narrows the claim window, it does not
     disable the gate.
 
-    AC2b's join: a directory listing over `state/subagent-share/<sid>/`
+    AC2b's join: a directory listing over `<machinery_root>/subagent-share/<sid>/`
     (constraint 8 — a path string and a stat, no history walk, no
     `baton_assemble` hop) plus a frontmatter read per candidate. A sidecar
     counts iff it carries a `review_receipt:` BLOCK — the one the dispatch
@@ -2307,7 +2308,7 @@ def _compute_review_receipt_gate(
 
     from coordinator_core.reviewer_vocabulary import CLOSE_RECEIPT_REVIEWERS
 
-    sidecar_dir = root / "state" / "subagent-share" / sid
+    sidecar_dir = Path(_machinery_root(str(root))) / "subagent-share" / sid
     no_receipt_detail = (
         f"no counting review receipt for session {sid!r} under "
         f"{sidecar_dir.as_posix()} (missing, blank, wrong agent type, or "

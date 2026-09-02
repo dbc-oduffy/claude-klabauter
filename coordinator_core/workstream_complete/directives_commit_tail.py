@@ -142,6 +142,8 @@ from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Set, Union
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
 from coordinator_core.session import scope as session_scope
+from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+from coordinator_core.session.machinery_paths import share_dir as _share_dir
 from coordinator_core.warm import skew as _skew
 from coordinator_core.warm.engine_root import current_engine_clone as _current_engine_clone
 from coordinator_core.win_portability import no_console_creationflags
@@ -231,8 +233,8 @@ def _peer_subagent_share_paths(repo_root: Path, sid: str) -> set[str]:
     in `classify_session_authored_files`'s exact-membership check) and
     avoids silently missing whichever shape the caller's git config
     produces."""
-    rel_dir = f"state/subagent-share/{sid}"
-    abs_dir = repo_root / "state" / "subagent-share" / sid
+    abs_dir = Path(_share_dir(str(repo_root), sid))
+    rel_dir = abs_dir.relative_to(repo_root).as_posix()
     paths: set[str] = {f"{rel_dir}/"}
     try:
         if abs_dir.is_dir():
@@ -847,7 +849,7 @@ def _scan_subagent_share_session_dirs(repo_root: Path, this_session_id: str) -> 
     intentionally broader, over-inclusive answer this fallback exists to
     give rather than a confident empty set."""
     paths: list[str] = []
-    share_root = repo_root / "state" / "subagent-share"
+    share_root = Path(_machinery_root(str(repo_root))) / "subagent-share"
     try:
         if share_root.is_dir():
             for entry in share_root.iterdir():

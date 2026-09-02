@@ -64,6 +64,8 @@ from coordinator_core._settings_home import claude_config_dir, machine_local_dir
 from coordinator_core.frontmatter.sentinel_blocks import extract_block as _extract_sentinel_block
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_spawn
 from coordinator_core.session import scope as session_scope
+from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+from coordinator_core.session.machinery_paths import share_dir as _share_dir
 from coordinator_core.snippet_sync.registry import (
     RegistryError,
     get_snippet_entry,
@@ -87,7 +89,7 @@ from coordinator_core.subagent_sandbox.engine import (
 #: key for exactly the named-dispatch population the key exists to serve.
 #: ``@`` is neither a directory separator nor a component of ``.``/``..``,
 #: so admitting it widens no traversal surface.
-MUTATES = ["state/subagent-share/**/*.md", "state/plan-sidecars/*.md"]  # session/agent-id-keyed sidecar docs and pointer index (_write_sidecar_pointer, _provision, _provision_plan_derivable_doc), plan-stem-keyed for the four G2 plan-pipeline emitters; data-dependent filenames, not a fixed artifact
+MUTATES = [".coordinator-local/subagent-share/**/*.md", ".coordinator-local/plan-sidecars/*.md"]  # session/agent-id-keyed sidecar docs and pointer index (_write_sidecar_pointer, _provision, _provision_plan_derivable_doc), plan-stem-keyed for the four G2 plan-pipeline emitters; data-dependent filenames, not a fixed artifact
 
 _SEGMENT_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._@-]")
 
@@ -120,11 +122,14 @@ def _sanitize_segment(seg: str) -> Optional[str]:
 #: reaper sweeps or add commit churn.
 _SIDECAR_POINTER_DIRNAME = ".agent-sidecars"
 
-#: The one prefix a pointer is allowed to name. A pointer file is the only
-#: input to this module that is neither the policy nor the spawn payload, so
-#: it is read as UNTRUSTED: a value that does not start with this, or that
-#: carries any ``..`` component, is discarded rather than followed.
-_SIDECAR_POINTER_PREFIX = "state/subagent-share/"
+def _sidecar_pointer_prefix(git_root: str) -> str:
+    """The one prefix a pointer is allowed to name, repo-root-relative. A
+    pointer file is the only input to this module that is neither the
+    policy nor the spawn payload, so it is read as UNTRUSTED: a value that
+    does not start with this, or that carries any ``..`` component, is
+    discarded rather than followed."""
+    share_root = os.path.join(_machinery_root(git_root), "subagent-share")
+    return os.path.relpath(share_root, git_root).replace(os.sep, "/") + "/"
 
 
 def _sidecar_pointer_path(git_root: str, raw_agent_id: str, kind: str = "report") -> Optional[Path]:
@@ -182,7 +187,7 @@ def _read_sidecar_pointer(git_root: str, raw_agent_id: str, kind: str = "report"
     except OSError:
         return None
     rel = content.splitlines()[0].strip() if content else ""
-    if not rel.startswith(_SIDECAR_POINTER_PREFIX):
+    if not rel.startswith(_sidecar_pointer_prefix(git_root)):
         return None
     if ".." in rel.split("/"):
         return None
@@ -1418,7 +1423,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
             derived_key = f"{sanitized_label}.{agent_id}"
             sanitized_provision_key = _sanitize_segment(derived_key)
 
-    session_dir = Path(git_root) / "state" / "subagent-share" / sanitized_session_id
+    session_dir = Path(_share_dir(git_root, sanitized_session_id))
 
     # CONTINUITY: adopt this agent's EXISTING sidecar when the session id has
     # moved out from under it.
@@ -1451,7 +1456,9 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     # readable at the call sites instead of restating it as a narrowing.
     rel_path = ""
     if sanitized_provision_key is not None:
-        rel_path = f"state/subagent-share/{sanitized_session_id}/{sanitized_provision_key}.md"
+        rel_path = os.path.relpath(
+            session_dir / f"{sanitized_provision_key}.md", git_root
+        ).replace(os.sep, "/")
         if raw_agent_id and not (session_dir / f"{sanitized_provision_key}.md").exists():
             adopted = _read_sidecar_pointer(git_root, raw_agent_id)
             if adopted is not None and adopted != rel_path:
@@ -1561,13 +1568,14 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     # (the dispatching session) -- see session_scope.touch_written_path's
     # docstring for the full rationale and the phantom-live-peer guard it
     # applies.
+    nonce_rel_path = os.path.relpath(doc_path, git_root).replace(os.sep, "/")
     session_scope.touch_written_path(
         str(session_id),
-        f"state/subagent-share/{sanitized_session_id}/{sanitized_label}-{nonce}.md",
+        nonce_rel_path,
         git_root,
     )
 
-    return f"state/subagent-share/{sanitized_session_id}/{sanitized_label}-{nonce}.md"
+    return nonce_rel_path
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

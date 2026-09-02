@@ -49,6 +49,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Optional
 
+from coordinator_core import timestamps
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 # NEGATIVE-SPEC: `fetch_origin_main` is deliberately NOT imported here. It was
 # deleted at the 2026-08-21 timeout kill (docs/problems/2026-08-21-the-over-
@@ -192,7 +193,8 @@ def _read_emission_snapshot(plan_path: str) -> tuple[Optional[dict], list[str]]:
                     "emitted_at": record.get("emitted_at"),
                 }
                 return snapshot, [
-                    f"cockpit-emission.json ({bucket_name}, emitted {record.get('emitted_at')}): "
+                    f"cockpit-emission.json ({bucket_name}, emitted "
+                    f"{timestamps.with_age(record.get('emitted_at'))}): "
                     f"status={snapshot['status']!r} shipped_sha={snapshot['shipped_sha']!r}"
                 ]
     return None, []
@@ -270,7 +272,8 @@ def verify_shipped(
             live_shipped = frontmatter_status == "shipped"
             if snap_shipped != live_shipped:
                 evidence.append(
-                    f"cockpit-emission.json (emitted {emission_snapshot.get('emitted_at')}) "
+                    f"cockpit-emission.json (emitted "
+                    f"{timestamps.with_age(emission_snapshot.get('emitted_at'))}) "
                     "disagrees with live frontmatter"
                 )
 

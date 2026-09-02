@@ -43,10 +43,33 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from coordinator_core.contract.decision_object.envelope import judgment_points_by_id
 from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
 )
+
+
+def _legal_disposition_values(judgment_point: Mapping[str, Any]) -> set[str]:
+    """The disposition values one persisted judgment point actually offers.
+
+    The `dispositions[].value` vocabulary `judgment.build_disposition` writes,
+    read back. An answer naming a value absent from this set is what
+    this module's `resume_decisions` refuses on rather than coercing.
+
+    Review: overengineering-reviewer -- private to this module rather than a
+    shared reader in `envelope.py`: this function has exactly one production
+    caller (below), unlike `judgment_points_by_id`, which genuinely has two
+    (`resume_decisions` here and `pickup_assemble.apply`).
+    """
+    dispositions = judgment_point.get("dispositions")
+    if not isinstance(dispositions, list):
+        return set()
+    return {
+        d["value"]
+        for d in dispositions
+        if isinstance(d, Mapping) and d.get("value") is not None
+    }
 
 
 class ResumeRefused(ValueError):
@@ -80,23 +103,6 @@ def load_decision_object(path: Path | str) -> dict[str, Any]:
             f"decision object at {p} must be a JSON object, got {type(obj).__name__}"
         )
     return obj
-
-
-def _judgment_points_by_id(decision_object: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    points = decision_object.get("judgment_points") or []
-    return {
-        p["id"]: p
-        for p in points
-        if isinstance(p, dict) and p.get("id")
-    }
-
-
-def _legal_disposition_values(judgment_point: Mapping[str, Any]) -> set[str]:
-    return {
-        d.get("value")
-        for d in (judgment_point.get("dispositions") or [])
-        if isinstance(d, Mapping) and d.get("value") is not None
-    }
 
 
 def check_not_stale(decision_object: Mapping[str, Any], *, repo_root: Path | str) -> None:
@@ -212,7 +218,7 @@ def resume_decisions(
     """
     check_not_stale(decision_object, repo_root=repo_root)
 
-    jp_by_id = _judgment_points_by_id(decision_object)
+    jp_by_id = judgment_points_by_id(decision_object)
 
     payload: dict[str, dict[str, Any]] = {}
     for jp_id, answer in answers.items():

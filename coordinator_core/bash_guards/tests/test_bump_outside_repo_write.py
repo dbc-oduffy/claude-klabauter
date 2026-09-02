@@ -1758,7 +1758,10 @@ def test_c1_ac6_deny_message_names_the_session_scratchpad_for_a_subagent(env, mo
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "state" in reason and "subagent-share" in reason
+    # The sandbox root moved to `.coordinator-local/` (C3 -- the trust boundary moved with
+    # it). This asserts the message still NAMES the scratchpad, which is the point of the
+    # test; the old spelling asserted the pre-move literal.
+    assert "coordinator-local" in reason and "subagent-share" in reason
 
 
 def test_c1_ac7_dollar_var_target_class_stays_out_of_scope_and_unchanged(env, monkeypatch):

@@ -910,15 +910,57 @@ def _gate_docs_readme_index_drift(repo_root: Path, _settings: Path, _overrides: 
     )
 
 
+#: Discovery order for a repo's source index, per `source-index-maintenance.md`
+#: ("default location: project root; match project convention if different").
+#: Anything past these two is found by a single one-level listing of the root.
+_DIRECTORY_MD_FIXED_CANDIDATES = ("DIRECTORY.md", "docs/DIRECTORY.md")
+
+
+def _discover_directory_md(repo_root: Path) -> str | None:
+    """Which DIRECTORY.md does THIS repo keep, as a repo-relative path?
+
+    Negative spec: never returns a path hardcoded to one repo's layout. A
+    hardcoded `coordinator_core/DIRECTORY.md` read UNAVAILABLE forever on
+    every consumer of this ceremony except claude-klabauter, which is the
+    silent-failure route this function exists to close.
+
+    Cost: at most two `is_file` probes plus one non-recursive listing of the
+    repo root — no walk, no spawn.
+    """
+    for rel in _DIRECTORY_MD_FIXED_CANDIDATES:
+        if (repo_root / rel).is_file():
+            return rel
+    try:
+        children = sorted(p.name for p in repo_root.iterdir() if p.is_dir())
+    except OSError:
+        return None
+    for name in children:
+        if name.startswith("."):
+            continue
+        if (repo_root / name / "DIRECTORY.md").is_file():
+            return f"{name}/DIRECTORY.md"
+    return None
+
+
 def _gate_directory_md_staleness(repo_root: Path, _settings: Path, overrides: dict) -> GateResult:
     """Do a DIRECTORY.md's asserted counts and refresh date still match disk?
 
-    `overrides["directory_md"]` selects which DIRECTORY.md to check; the default
-    is this repo's only one. Deliberately a parameter — there is no root-level
-    DIRECTORY.md here, and a gate that hardcoded one would report UNAVAILABLE
-    forever on a repo that is not missing anything.
+    `overrides["directory_md"]` pins which DIRECTORY.md to check; absent an
+    override the path is discovered from the repo under inspection
+    (`_discover_directory_md`), never assumed. Repos disagree about where the
+    index lives — root, `docs/`, or a package directory — and a gate that
+    named one layout reports UNAVAILABLE forever on every other.
     """
-    rel = overrides.get("directory_md") or "coordinator_core/DIRECTORY.md"
+    rel = overrides.get("directory_md") or _discover_directory_md(repo_root)
+    if rel is None:
+        missing = repo_root / _DIRECTORY_MD_FIXED_CANDIDATES[0]
+        return GateResult(
+            "directory-md-staleness",
+            GateVerdict.UNAVAILABLE,
+            f"cannot check: no DIRECTORY.md found at the repo root, under docs/, "
+            f"or in any top-level directory of {repo_root}",
+            detail={"missing_path": str(missing)},
+        )
     target = repo_root / rel
     try:
         drift = compute_directory_md_drift(target)

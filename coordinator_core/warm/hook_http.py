@@ -179,33 +179,15 @@ EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT = frozenset({"SessionEnd"})
 def _envelope(event_name: Optional[str]) -> Dict[str, Any]:
     """The `hookSpecificOutput` wrapper, or nothing where the harness refuses one.
 
-    An empty dict here is not "no output" -- `_with_context` reads its absence as the signal
-    to place `additionalContext` top-level instead.
+    `SessionEnd` is TERMINAL: no model turn follows it for context to be spliced into, at
+    any nesting level. NEGATIVE SPEC -- no placement of `additionalContext` delivers on this
+    event, nested or top-level; do not reintroduce one. See DoE-claude
+    `docs/research/spike-verdicts/2026-09-02-harness-dials-posttooluse-and-sessionend-over-http.md`
+    for the measurement.
 
-    WHAT THAT PLACEMENT BUYS, MEASURED: validation, and nothing else. doe-claude-cd ran the
-    post-fix shape on harness 2.1.258 against the same rig (leg 4 of DoE-claude
-    `docs/research/spike-verdicts/2026-09-02-harness-dials-posttooluse-and-sessionend-over-http.md`,
-    `67638b85c`). The response validates clean -- and neither sentinel surfaced, on a rig
-    that had already shown nested `additionalContext` arriving on a non-terminal event, so
-    the negative is real rather than blind.
-
-    THE REASON IS THE EVENT, NOT THE NESTING LEVEL, WHICH IS WHY THERE IS NOTHING LEFT TO
-    TRY. `SessionEnd` is TERMINAL: no model turn follows it for context to be spliced into,
-    at any nesting level. Nested-vs-top-level was never the deciding variable here, so do
-    not "fix" this by finding a better placement -- and do not read the top-level key as a
-    delivery channel when classifying this registration. `additionalContext` is decoration
-    on a terminal event.
-
-    The key stays because the alternative is `_with_context` silently discarding what an op
-    asked to say, and because the shape costs nothing. What the flip actually earns is the
-    two deleted spawns (interpreter start plus the `archive-session-scope.py` trampoline) --
-    that was always the case for it. What this function removes is a validation error on
-    every session close across ~20 concurrent sessions, which is its own real cost.
-
-    Unresolved, and NOT resolvable by the rig that produced the above: whether
-    `systemMessage` reaches an INTERACTIVE operator on this event. Headless `-p` showed
-    nothing, which is plausibly a property of the mode rather than the event; that rig
-    cannot separate the two. Do not record either answer without an instrument that can.
+    What this function removes is a validation error on every session close: `SessionEnd`
+    is dialled and routes, and the whole response fails validation if it carries
+    `hookSpecificOutput` at all -- see `EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT`.
     """
     if event_name in EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT:
         return {}
@@ -222,28 +204,15 @@ def _with_context(body: Dict[str, Any], context: Optional[str]) -> Dict[str, Any
         {"additionalContext": "<sentinel>"}                        -> model: ABSENT
         {"hookSpecificOutput": {"additionalContext": "<sentinel>"}} -> model echoed it
 
-    A top-level copy is therefore not a harmless belt-and-braces duplicate; it is the whole
-    injection silently going nowhere behind a 200. This function existing at all is what
-    stops that shape being reintroduced by someone reading Claude Code's docs, which
-    describe `additionalContext` alongside genuinely top-level `systemMessage`.
-
-    It matters most on the paths that carry a WARNING rather than an injection.
-    `unreachable_response` and `unserved_response` exist to make an unrun guard visible to
-    the model instead of indistinguishable from one that ran and passed (module docstring,
-    obligation 3). Emitted top-level, that warning reached nobody -- the obligation read as
-    discharged in every test while being void over the wire.
-
-    THE ONE EXCEPTION IS NOT A COUNTEREXAMPLE. Where `_envelope` returned nothing, the
-    harness rejects the whole response over a nested shape, so nested is not the working
-    channel and the top-level key is what is left. It is not a second supported placement:
-    measured, it delivers nothing, because those events are terminal and no turn follows --
-    see `_envelope`. Absence of the wrapper is the signal; do not add an event-name check
-    here, or the two will drift apart.
+    NEGATIVE SPEC. Where `_envelope` returned no wrapper (`SessionEnd`), there is no
+    delivering placement left -- top-level was measured to deliver nothing there too
+    (`_envelope`) -- so context is dropped rather than written anywhere. Do not add a
+    top-level fallback branch; that channel has no destination on any event this module
+    has measured.
     """
     if context is None:
         return body
     if "hookSpecificOutput" not in body:
-        body["additionalContext"] = context
         return body
     hso = dict(body["hookSpecificOutput"])
     hso["additionalContext"] = context
@@ -401,7 +370,9 @@ def env_from_headers(
             "(see FORWARDED_ENV_PREFIXES / FORWARDED_ENV_NAMES) -- the registration asked "
             "for a value the op would never have seen" % ", ".join(refused)
         )
-    return {k: v for k, v in candidates.items() if _is_forwardable_name(k)}, None
+    # Review: overengineering-reviewer -- `refused` empty already proves every key in
+    # `candidates` is forwardable; re-filtering the return line re-derives that proof.
+    return dict(candidates), None
 
 
 def forwardable_env(environ: Mapping[str, str]) -> Dict[str, str]:
@@ -534,12 +505,16 @@ def deny_response(event_name: str, reason: str) -> Dict[str, Any]:
     verbatim rather than a generic string -- see obligation 1 in the module docstring.
 
     THIS BUILDER DOES NOT GO THROUGH `_envelope`, DELIBERATELY. A deny IS the nested keys:
-    drop the wrapper and the refusal becomes a 200 that permits. It is unreachable for the
-    events `_envelope` would empty -- `is_blocking_event` gates every caller and
-    `BLOCKING_EVENTS` is `PreToolUse` alone -- so the two cannot collide today. If a member
-    of `EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT` ever becomes blocking, that event cannot be
-    denied over this transport at all, and the registration must stay `command`; it must not
-    be resolved by emitting a wrapper the harness rejects.
+    drop the wrapper and the refusal becomes a 200 that permits. If a member of
+    `EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT` ever becomes blocking, that event cannot be
+    denied over this transport at all, and the registration must stay `command`; it must
+    never be resolved by emitting a wrapper the harness rejects.
+
+    THAT IS NOW ENFORCED IN `_decision_to_response`, NOT ASSERTED HERE. This docstring used
+    to say the collision "cannot happen today" and stop there -- true, and prose-only:
+    `_decision_to_response` called this builder for ANY deny verdict without checking the
+    event. See the guard there for why an unrun-guard response is the right answer and an
+    `assert` is not.
     """
     return {
         "hookSpecificOutput": {
@@ -572,15 +547,11 @@ def allow_response(event_name: str, result: Optional[Mapping[str, Any]] = None) 
         if result.get(key) is not None:
             body[key] = result[key]
     extra = result.get("hookSpecificOutput")
-    # An op that nested its own output on an event the harness refuses a wrapper for gets
-    # the CONTEXT lifted and the rest dropped, rather than a wrapper reinstated behind
-    # `_envelope`'s back: reinstating it fails the whole response, which loses that op's
-    # output too. Silent narrowing, but the alternative is silent total loss.
-    if isinstance(extra, Mapping) and "hookSpecificOutput" not in body:
-        if extra.get("additionalContext") is not None:
-            body["additionalContext"] = extra["additionalContext"]
-        return body
-    if isinstance(extra, Mapping):
+    # An op that nested its own output on an event the harness refuses a wrapper for
+    # (`SessionEnd`) has nowhere for it to go -- reinstating the wrapper fails the whole
+    # response, and no placement of `additionalContext` delivers on a terminal event either
+    # (`_envelope`, `_with_context`). Dropped, not reinstated, not lifted.
+    if isinstance(extra, Mapping) and "hookSpecificOutput" in body:
         merged = dict(extra)
         merged["hookEventName"] = event_name
         merged.pop("permissionDecision", None)
@@ -591,8 +562,6 @@ def allow_response(event_name: str, result: Optional[Mapping[str, Any]] = None) 
     # docstring tells op authors to use. Promote it rather than making every op know. An op
     # that set BOTH keeps its nested value: it is the more specific declaration of the two.
     if body.get("hookSpecificOutput", {}).get("additionalContext") is not None:
-        return body
-    if "hookSpecificOutput" not in body and body.get("additionalContext") is not None:
         return body
     return _with_context(body, result.get("additionalContext"))
 
@@ -690,6 +659,22 @@ def _decision_to_response(event_name: str, result: Mapping[str, Any]) -> Dict[st
             or result.get("reason")
             or "denied by coordinator guard"
         )
+        # A DENY THIS TRANSPORT CANNOT EXPRESS IS REPORTED AS UNRUN, NEVER EMITTED ANYWAY.
+        # `deny_response` bypasses `_envelope` because a deny IS the nested keys; on an
+        # event the harness refuses a wrapper for, emitting them fails validation and the
+        # harness fails open -- so the one path whose whole job is to BLOCK would become a
+        # silent no-op exactly when it fires. Unreachable today (`BLOCKING_EVENTS` is
+        # `PreToolUse` alone, and no op on a wrapper-refusing event emits a deny), which is
+        # precisely why it was prose-only until a reviewer asked what enforces it. An
+        # `assert` would not do: `-O` strips it, and the answer to "cannot express this
+        # verdict" is a loud unrun-guard response, not a crash mid-dispatch.
+        if event_name in EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT:
+            return unreachable_response(
+                event_name,
+                "a guard denied this %s operation, but the harness rejects the response "
+                "shape a deny requires on this event -- the refusal could not be "
+                "delivered" % event_name,
+            )
         return deny_response(event_name, reason)
 
     return allow_response(event_name, result)

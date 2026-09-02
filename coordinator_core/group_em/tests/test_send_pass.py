@@ -16,6 +16,7 @@ import os
 
 
 from coordinator_core.group_em import send_pass
+from coordinator_core.session.machinery_paths import share_dir as _share_dir
 
 
 def _verdict(
@@ -79,7 +80,7 @@ def test_unrecorded_on_failed_cooldown_write(tmp_path, monkeypatch):
 
 def test_away_excluded_by_name_ahead_of_bookkeeping(tmp_path):
     repo_root = str(tmp_path)
-    peer_dir = os.path.join(repo_root, "state", "subagent-share", "peer-away")
+    peer_dir = _share_dir(repo_root, "peer-away")
     os.makedirs(peer_dir, exist_ok=True)
     with open(os.path.join(peer_dir, "next-move-ledger.jsonl"), "w", encoding="utf-8") as fh:
         fh.write(json.dumps({"discharged_at": None, "fired": False}) + "\n")
@@ -97,7 +98,7 @@ def test_away_excluded_by_name_ahead_of_bookkeeping(tmp_path):
 def test_none_obligations_ranks_without_excluding(tmp_path):
     repo_root = str(tmp_path)
     # peer-with-ledger has one open obligation; peer-no-ledger has none (None).
-    ledger_dir = os.path.join(repo_root, "state", "subagent-share", "peer-with-ledger")
+    ledger_dir = _share_dir(repo_root, "peer-with-ledger")
     os.makedirs(ledger_dir, exist_ok=True)
     with open(os.path.join(ledger_dir, "next-move-ledger.jsonl"), "w", encoding="utf-8") as fh:
         fh.write(json.dumps({"discharged_at": None, "fired": False}) + "\n")
@@ -578,9 +579,9 @@ def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
     their own `"next-move-ledger.jsonl"` literal, with `obligations` reaching
     into this module's private namespace for one of them. One typo apart, a
     producer and its reader would have been on different files with nothing
-    to catch it -- all three now call `subagent_share`'s helpers directly (no
+    to catch it -- all three now call `machinery_paths`'s helpers directly (no
     module-private alias left to drift), which this exercises end to end: a
-    ledger written at `subagent_share.ledger_path` is readable through both
+    ledger written at `machinery_paths.ledger_path` is readable through both
     `send_pass.undischarged_obligations` and `obligations.for_peer`.
 
     Review: overengineering-reviewer (finding #2, minor, accepted) -- this
@@ -591,14 +592,14 @@ def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
     import json
 
     from coordinator_core.group_em import obligations
-    from coordinator_core.session import subagent_share
+    from coordinator_core.session import machinery_paths
 
     repo_root, session_id = str(tmp_path), "sess-share"
-    assert send_pass.send_log_path(repo_root, session_id) == subagent_share.send_log_path(
+    assert send_pass.send_log_path(repo_root, session_id) == machinery_paths.send_log_path(
         repo_root, session_id
     )
 
-    ledger_path = subagent_share.ledger_path(repo_root, session_id)
+    ledger_path = machinery_paths.ledger_path(repo_root, session_id)
     os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
     with open(ledger_path, "w", encoding="utf-8") as fh:
         fh.write(
@@ -617,11 +618,11 @@ def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
 def test_an_unsafe_session_id_is_still_refused_a_path(tmp_path):
     """The predicate moved modules; it did not relax. A bare `.`/`..` passes
     the character class alone, which is why the check is not just a regex."""
-    from coordinator_core.session import subagent_share
+    from coordinator_core.session import machinery_paths
 
-    assert subagent_share.safe_session_id("sess-1") is True
+    assert machinery_paths.safe_session_id("sess-1") is True
     for bad in ("..", ".", "", None, "a/b", "a\b", "a:b"):
-        assert subagent_share.safe_session_id(bad) is False
+        assert machinery_paths.safe_session_id(bad) is False
 
 
 # C4 -- state/dispatch-briefs/2026-09-01-the-crowns-standing-surfaces-report-

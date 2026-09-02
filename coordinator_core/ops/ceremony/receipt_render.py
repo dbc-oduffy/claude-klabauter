@@ -34,6 +34,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from coordinator_core import timestamps
+
 _PARTITION_ORDER: tuple[str, ...] = ("acted", "skipped", "failed", "failed_critical", "unknown")
 
 _PARTITION_LABELS: dict[str, str] = {
@@ -78,6 +80,18 @@ def render_op_tail(op_tail: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _emitted_clause(emitted_at: Any) -> str:
+    """The receipt's own stamp with the age a reader would otherwise subtract wrong.
+
+    A receipt header exists so a printed report is self-describing; a UTC
+    stamp alone is not, because the reader checks it against a local clock.
+    An absent field keeps the header's `<unknown>` sentinel rather than being
+    rendered as a stamp that was never there."""
+    if not emitted_at:
+        return "<unknown>"
+    return timestamps.with_age(emitted_at)
+
+
 def render_receipt_summary(receipt: dict[str, Any]) -> str:
     """Return a human-readable rendering of a whole receipt's op_tail.
 
@@ -88,7 +102,7 @@ def render_receipt_summary(receipt: dict[str, Any]) -> str:
     header_lines = [
         f"ceremony: {receipt.get('ceremony', '<unknown>')}",
         f"phase:    {receipt.get('phase', '<unknown>')}",
-        f"emitted:  {receipt.get('emitted_at', '<unknown>')}",
+        f"emitted:  {_emitted_clause(receipt.get('emitted_at'))}",
     ]
     op_tail = receipt.get("op_tail")
     if not isinstance(op_tail, dict):

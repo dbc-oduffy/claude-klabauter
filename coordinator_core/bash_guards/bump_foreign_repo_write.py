@@ -208,6 +208,7 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
 from coordinator_core.bash_guards.commit_tripwires import _same_tree
 from coordinator_core.git.git_dir import common_dir_from_gitdir, resolve_git_common_dir
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
+from coordinator_core.session import machinery_paths
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
 
@@ -1433,11 +1434,12 @@ def _iter_write_sink_candidates(
 
 
 def _sandbox_root_hint(git_root: Optional[str], session_id: str) -> str:
-    """`state/subagent-share/<session_id>/` under `git_root` -- this
-    fleet's own current subagent-share convention (`coordinator_core.
-    subagent_sandbox.provision_report`, e.g. the exact path shape at that
-    module's line ~622), reused here as the message's "sandbox" pointer
-    rather than a literal. Not a claim of enforcement -- see `write_guards.
+    """`<machinery_root>/subagent-share/<session_id>/` under `git_root` --
+    this fleet's own current subagent-share convention, resolved through
+    `machinery_paths.share_dir` (the sole owner of this path shape, per
+    `docs/plans/2026-09-02-state-keeps-the-work-not-the-machinery.md` chunk
+    C3) rather than composed here. Reused as the message's "sandbox"
+    pointer, not a literal. Not a claim of enforcement -- see `write_guards.
     engine.py:32-37` (cited in this wave's sibling modules): the prior
     hard-deny write-outside-sandbox confinement was removed 2026-07-15, so
     this is an OFFERED route, not a guaranteed one; the message text itself
@@ -1447,7 +1449,7 @@ def _sandbox_root_hint(git_root: Optional[str], session_id: str) -> str:
     """
     if not git_root or not session_id:
         return ""
-    return str(Path(git_root) / "state" / "subagent-share" / session_id)
+    return machinery_paths.share_dir(git_root, session_id)
 
 
 # ---------------------------------------------------------------------------

@@ -287,6 +287,7 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
     nearest_existing_ancestor as _nearest_existing_ancestor,
     resolve_relative as _resolve_relative,
 )
+from coordinator_core.session import machinery_paths
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
 
@@ -332,13 +333,15 @@ def _is_under(candidate_cf: str, parent_cf: str) -> bool:
 
 
 def _sandbox_root(git_root: Optional[str], session_id: str) -> str:
-    """`state/subagent-share/<session_id>/` under `git_root` -- mirrors
-    `bump_foreign_repo_write._sandbox_root_hint` exactly (private to that
-    sibling module, restated here rather than imported). Returns `""` when
-    either input is empty -- no fabricated path for an unresolvable case."""
+    """`<machinery_root>/subagent-share/<session_id>/` under `git_root` --
+    resolved through `machinery_paths.share_dir` (the sole owner of this
+    path shape, per `docs/plans/2026-09-02-state-keeps-the-work-not-the-
+    machinery.md` chunk C3), mirroring `bump_foreign_repo_write.
+    _sandbox_root_hint`. Returns `""` when either input is empty -- no
+    fabricated path for an unresolvable case."""
     if not git_root or not session_id:
         return ""
-    return str(Path(git_root) / "state" / "subagent-share" / session_id)
+    return machinery_paths.share_dir(git_root, session_id)
 
 
 def _always_allowed_roots(

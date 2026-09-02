@@ -137,9 +137,12 @@ def test_describe_retired_entry_without_successor() -> None:
         reason="test fixture retirement",
         retired_at="2026-07-27",
     )
-    assert entry.describe() == (
-        "deliberately retired at 2026-07-27 (test fixture retirement); no successor"
-    )
+    described = entry.describe()
+    # The retirement date carries its own age: a reader who checks a "retired
+    # at" date against today is the reader this render exists for.
+    assert described.startswith("deliberately retired at 2026-07-27 (")
+    assert "days ago)" in described
+    assert described.endswith("(test fixture retirement); no successor")
 
 
 def test_describe_retired_entry_with_successor() -> None:
@@ -151,9 +154,10 @@ def test_describe_retired_entry_with_successor() -> None:
         retired_at="2026-07-27",
         successor="check_bin_inventory_gate",
     )
-    assert entry.describe() == (
-        "deliberately retired at 2026-07-27 (test fixture retirement); "
-        "successor: check_bin_inventory_gate"
+    described = entry.describe()
+    assert described.startswith("deliberately retired at 2026-07-27 (")
+    assert described.endswith(
+        "(test fixture retirement); successor: check_bin_inventory_gate"
     )
 
 

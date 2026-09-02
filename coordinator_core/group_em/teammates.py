@@ -77,7 +77,7 @@ import os
 from typing import Any, Optional
 
 from coordinator_core.group_em.read_pass import _transcript_path_for
-from coordinator_core.session import subagent_share
+from coordinator_core.session import machinery_paths
 
 #: Ordered worst-first -- see "THE WATCHER IS THE WORSE ABSENCE" above. Each
 #: entry is `(key, accepted agentType values, accepted name values)`; a
@@ -166,7 +166,7 @@ def presence(repo_root: str, session_id: Optional[str]) -> dict[str, Any]:
     unreadable = False
     directory: Optional[str] = None
 
-    if session_id and subagent_share.safe_session_id(session_id):
+    if session_id and machinery_paths.safe_session_id(session_id):
         directory = subagents_dir(repo_root, session_id)
         try:
             entries = sorted(
