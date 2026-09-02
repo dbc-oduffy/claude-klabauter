@@ -74,6 +74,8 @@ from coordinator_core.warm.door import build as door_build
 
 __all__ = ["uninstall_door"]
 
+GENERATES = []  # every write (`_write_uninstall_fallback_cmd_forwarder`, `_reemit_fallback_forwarder` via `_write_agent_forwarder`) targets `bin_dst`, an explicit caller-supplied installed-bin directory outside this repo's tracked tree -- never a fixed path here
+
 #: The on-disk `coordinator/bin/` filename `install_bin_forwarders`
 #: derives `BARE_FORWARDER_NAME` from (the `.py` stripped to form the
 #: installed name -- `_derive_agent_helper_target_map`'s own convention).

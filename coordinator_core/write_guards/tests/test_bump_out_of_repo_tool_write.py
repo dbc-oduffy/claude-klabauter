@@ -599,11 +599,27 @@ def test_em_repro_payload_unanchored_session_fails_open_and_matches_bash_parity(
     allow is the shared applicability contract's fail-open behaviour, not an
     asymmetry between the Bash and tool-write legs."""
     session_id = "verify-boundary-probe"
-    cwd = r"X:\claude-klabauter"
+    # Foreign-target literal is derived from the RUNNING platform rather than
+    # hardcoded as a Windows drive letter: on POSIX, `X:\...` backslashes are
+    # ordinary filename characters and the literal resolves INSIDE the
+    # session repo, so the guard's "foreign write" premise never holds
+    # (state/bug-backlog/2026-08-22-windows-path-literals-make-two-write-
+    # guard-tests-red-on-posix.yaml). The `nt` leg keeps the EM's original
+    # drive-letter transcript byte-for-byte; the POSIX sibling expresses the
+    # identical foreignness (a path outside the session repo) in POSIX
+    # grammar.
+    if os.name == "nt":
+        cwd = r"X:\claude-klabauter"
+        foreign_file = r"X:\experiments\coordinator.local.md"
+        foreign_dir_for_bash = "X:/experiments"
+    else:
+        cwd = "/opt/claude-klabauter"
+        foreign_file = "/opt/experiments/coordinator.local.md"
+        foreign_dir_for_bash = "/opt/experiments"
     payload = {
         "tool_name": "Edit",
         "tool_input": {
-            "file_path": r"X:\experiments\coordinator.local.md",
+            "file_path": foreign_file,
             "old_string": "a",
             "new_string": "b",
         },
@@ -626,7 +642,10 @@ def test_em_repro_payload_unanchored_session_fails_open_and_matches_bash_parity(
 
     bash_payload = {"session_id": session_id, "cwd": cwd, "agent_id": ""}
     bash_result = check_bump_foreign_repo_write(
-        "git -C X:/experiments checkout -- coordinator.local.md", session_id, cwd, bash_payload
+        f"git -C {foreign_dir_for_bash} checkout -- coordinator.local.md",
+        session_id,
+        cwd,
+        bash_payload,
     )
     assert bash_result is None
 
@@ -640,13 +659,31 @@ def test_em_repro_payload_denies_once_session_has_its_real_anchor_record(tmp_pat
     (`additionalContext`, non-blocking) instead of a real `permissionDecision:
     "deny"`."""
     session_id = "verify-boundary-probe-anchored"
-    cwd = r"X:\claude-klabauter"
+    # See the platform-derivation note above the sibling unanchored test:
+    # the drive-letter literal only expresses a foreign target on `nt`. On
+    # POSIX, a non-existent `/opt/...` literal is not enough on its own --
+    # `_verdict_bumps` only denies a repo-less anchor's write when the
+    # TARGET resolves to its own real git-dir (or a registered repo); a
+    # nonexistent target directory resolves to no git-dir at all and
+    # `check()` fails open (allow), which is a different bug to the one
+    # this test pins. Two REAL git repos (this file's own `_init_repo`
+    # helper, already used by every other repo-boundary test here) give the
+    # POSIX leg a target that genuinely resolves to a foreign git-dir --
+    # the same property the `nt` literal expresses via an unreachable drive.
+    if os.name == "nt":
+        cwd = r"X:\claude-klabauter"
+        foreign_file = r"X:\experiments\coordinator.local.md"
+    else:
+        own_repo = _init_repo(tmp_path, "verify-boundary-own-repo")
+        foreign_repo = _init_repo(tmp_path, "verify-boundary-experiments")
+        cwd = str(own_repo)
+        foreign_file = str(foreign_repo / "coordinator.local.md")
     session_start.write_session_start_record(session_id, launch_cwd=cwd)
     try:
         payload = {
             "tool_name": "Edit",
             "tool_input": {
-                "file_path": r"X:\experiments\coordinator.local.md",
+                "file_path": foreign_file,
                 "old_string": "a",
                 "new_string": "b",
             },

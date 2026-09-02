@@ -26,11 +26,39 @@ site -- without blocking in the accept loop or creating a real named pipe.
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.warm import election, server, skew, supervisor
+
+
+@pytest.fixture(autouse=True)
+def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
+    """Overrides the suite-wide HOME quarantine's `warm-runtime-base`
+    (`coordinator_core/conftest.py::_quarantine_real_home`) with a short,
+    real on-disk root under `/tmp`.
+
+    `server.main()`'s real boot path derives a socket path
+    (`election.socket_path`) before `_patch_boot_seams` stubs the election
+    call itself, and the quarantine's own path is already 90+ bytes deep
+    on macOS before `coordinator/warm/<16-hex-hash>/<token>.sock` is
+    appended -- tripping `election.SUN_PATH_MAX_BYTES` (100) before this
+    module's own boot-sequence assertions run. Same fix as
+    `test_election_posix.py::short_runtime_base` (committed b4e300c8f1);
+    duplicated here rather than lifted into a shared `conftest.py`
+    because this dispatch's scope is this file only.
+    """
+    from coordinator_core.warm import breadcrumb
+
+    base = Path(tempfile.mkdtemp(prefix="wrb-", dir="/tmp"))
+    try:
+        monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
+        yield base
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def _stamp(tmp_path: Path) -> None:
@@ -98,15 +126,25 @@ def test_pipe_server_boots_unchanged_when_ensure_listener_raises(tmp_path, monke
 
     monkeypatch.setattr(supervisor, "ensure_listener", _boom)
 
+    # `main()` dispatches on WHICH ENDPOINT WON the election (server.py's own
+    # comment at the `serve_forever`/`serve_forever_unix` branch), not on a
+    # platform read: on the POSIX box this suite actually runs on, that is
+    # `serve_forever_unix`, never `serve_forever` (the Windows named-pipe
+    # arm `_patch_boot_seams` stubs `election.elect` for but never wins on
+    # this platform). Both are patched so the assertion below is the
+    # platform-appropriate one rather than one hard-coded to Windows.
     served = []
     monkeypatch.setattr(
         server._ServerContext, "serve_forever", lambda self, handle: served.append(handle)
+    )
+    monkeypatch.setattr(
+        server._ServerContext, "serve_forever_unix", lambda self, sock: served.append(sock)
     )
 
     result = server.main()
 
     assert result == 0
-    assert served == [1], "the pipe server must still reach serve_forever, unchanged, after ensure_listener raised"
+    assert len(served) == 1, "the pipe server must still reach its serve_forever arm, unchanged, after ensure_listener raised"
 
 
 def test_pipe_server_boots_unchanged_when_discovery_is_unreadable(tmp_path, monkeypatch):
@@ -125,12 +163,17 @@ def test_pipe_server_boots_unchanged_when_discovery_is_unreadable(tmp_path, monk
     # this also exercises `should_spawn`, so stub the actual spawn out.
     monkeypatch.setattr(supervisor, "spawn_detached", lambda *a, **kw: False)
 
+    # Both arms patched -- see the sibling test above for why the assertion
+    # is on the platform-appropriate arm rather than the Windows one.
     served = []
     monkeypatch.setattr(
         server._ServerContext, "serve_forever", lambda self, handle: served.append(handle)
+    )
+    monkeypatch.setattr(
+        server._ServerContext, "serve_forever_unix", lambda self, sock: served.append(sock)
     )
 
     result = server.main()
 
     assert result == 0
-    assert served == [1]
+    assert len(served) == 1

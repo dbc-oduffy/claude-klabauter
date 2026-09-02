@@ -258,6 +258,82 @@ def _prebuilt_image_bytes() -> bytes:
         ) from exc
 
 
+def _current_source_fingerprint() -> "dict[str, str]":
+    """sha256 of every door translation unit and header THIS tree ships, keyed
+    by filename -- the currency oracle on a platform that ships no prebuilt.
+
+    WHY THIS EXISTS AT ALL. `_PREBUILT_DOOR_EXE` is only half committed:
+    `door.exe` is tracked, the extensionless POSIX `door` is `.gitignore`d
+    (`.gitignore:223`, alongside `door.provenance.json`) because a POSIX image
+    bakes an absolute interpreter path and a last-resort engine root at compile
+    time, so one box's binary is wrong on any other. `install_door`'s own POSIX
+    branch says so directly -- "POSIX has no committed prebuilt to fall back to
+    at all". A currency oracle rooted in that file therefore answers, on every
+    POSIX box: either "no readable prebuilt" (a fresh clone) or, worse, a
+    verdict derived from whatever stale local build artifact a developer's tree
+    happens to be carrying. Measured on machine-b 2026-09-02: an install that
+    had just built all 387 images from current source reported all 387 "a build
+    behind" against a 10-day-old ignored `door`, and the FAIL's remediation was
+    to re-run the installer that had just produced it.
+
+    THE SOURCES ARE THE ORACLE THE BUILD ALREADY RECORDS. `build_posix.py ::
+    write_provenance` stamps these same hashes into the sidecar it writes beside
+    the image, so "was this image built from the source this tree ships" is a
+    question already answerable from two artifacts that both exist on every
+    platform -- no third, half-committed one required. It is also the question
+    the 2026-09-01 incident actually turned on: the hung `cross-repo-memo` image
+    predated a `door_posix.c` fix, which is a source divergence, and it is
+    caught here on both polarities.
+
+    Derived from `build_posix`'s own `_SOURCES`/`_HEADER` rather than a hand-list
+    here, so a new translation unit reaches this oracle with no edit."""
+    from coordinator_core.warm.door import build_posix
+
+    return {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (*build_posix._SOURCES, build_posix._HEADER)
+    }
+
+
+def _reference_image_bytes(bin_dst: Path) -> bytes:
+    """The image every argv[0] slot in `bin_dst` is supposed to be: the door
+    THIS install landed at `DOOR_INSTALLED_NAME`.
+
+    TWO CURRENCY QUESTIONS, NOT ONE, AND THEY COMPOSE. "Is this slot the image
+    the installer wrote" and "is that image the build this tree should produce"
+    are different questions with different oracles, and collapsing them onto the
+    prebuilt made the first one unanswerable on POSIX (see
+    `_current_source_fingerprint`). The slots are hardlinks to the installed door
+    by construction (`install_named_forwarder`'s spike verdict), so the installed
+    door IS the correct per-slot reference; its own currency is
+    `verify_installed_provenance`'s job, which reads the sidecar the same install
+    wrote beside it. Neither leg is weaker for the split: the 2026-09-01 incident
+    -- 373 slots hardlinked to one orphaned inode carrying a pre-fix build while a
+    fresh door sat at the bare name -- is exactly a slot-vs-installed-door
+    divergence, and is caught here rather than needing the prebuilt at all.
+
+    NO DOOR MEANS NO IMAGES TO AUDIT, NOT "AUDIT THEM AGAINST THE PREBUILT".
+    This deliberately does NOT fall back to `_PREBUILT_DOOR_EXE` when the door
+    is absent. A `bin_dst` with no door holds no images this install placed, so
+    every slot in it is a Python forwarder -- and measuring those against a door
+    binary calls all 387 of them "a build behind", which is the same
+    manufactured red this function exists to remove, one directory over. The
+    absent door is its own reported condition on a different artifact
+    (`is_door_installed`, and the forwarder-presence legs); it does not need to
+    be restated once per slot. Raising is the convention `_prebuilt_image_bytes`
+    already set: `check_settings_home` maps `DoorInstallError` to
+    `door_image_audit_error`, a reported unanswerable question, never a silent
+    pass."""
+    installed = Path(bin_dst) / DOOR_INSTALLED_NAME
+    try:
+        return installed.read_bytes()
+    except OSError as exc:
+        raise DoorInstallError(
+            f"door_install: no installed door at {installed} to audit image "
+            f"currency against: {exc}"
+        ) from exc
+
+
 def installed_provenance_path(bin_dst: Path) -> Path:
     """The provenance sidecar path `install_door()` writes/copies its
     provenance record to: `DOOR_INSTALLED_NAME` plus a `.provenance.json`
@@ -366,6 +442,44 @@ def verify_installed_provenance(bin_dst: Path) -> ProvenanceVerdict:
             f"sidecar {provenance_path} records image_sha256={recorded}",
         )
 
+    if sys.platform != "win32":
+        # POSIX ships no prebuilt (see `_current_source_fingerprint`), so the
+        # currency question is asked of the SOURCES the sidecar records, not of
+        # a binary this tree does not carry. Same three outcomes, same names.
+        try:
+            expected_sources = _current_source_fingerprint()
+        except OSError as exc:
+            return ProvenanceVerdict(
+                "unverifiable",
+                f"{dest_exe} matches its recorded image_sha256, but currency "
+                f"could not be checked: door sources unreadable at {_DOOR_DIR}: {exc}",
+            )
+        recorded_sources = record.get("sources")
+        if not isinstance(recorded_sources, dict) or not recorded_sources:
+            return ProvenanceVerdict(
+                "unrecorded",
+                f"{provenance_path} carries no source fingerprint -- predates "
+                "source hashing and cannot be checked against this tree's door sources",
+            )
+        drifted = sorted(
+            name
+            for name, digest in expected_sources.items()
+            if recorded_sources.get(name) != digest
+        )
+        if drifted:
+            return ProvenanceVerdict(
+                "stale",
+                f"installed binary {dest_exe} agrees with its own sidecar "
+                f"({actual}) but was built from different door sources than "
+                f"{_DOOR_DIR} ships ({', '.join(drifted)}) -- the install is a "
+                "build behind; re-run the installer from a stamped engine root",
+            )
+        return ProvenanceVerdict(
+            "ok",
+            f"{dest_exe} matches its recorded image_sha256 and was built from "
+            f"this tree's door sources",
+        )
+
     try:
         prebuilt = hashlib.sha256(_prebuilt_image_bytes()).hexdigest()
     except DoorInstallError as exc:
@@ -449,7 +563,7 @@ def audit_installed_image_currency(
     one image read.
     """
     bin_dst = Path(bin_dst)
-    prebuilt_bytes = _prebuilt_image_bytes()
+    prebuilt_bytes = _reference_image_bytes(bin_dst)
     prebuilt_size = len(prebuilt_bytes)
 
     current: "list[str]" = []
@@ -461,6 +575,17 @@ def audit_installed_image_currency(
         try:
             st = dest.stat()
         except OSError:
+            continue
+        # A PYTHON FORWARDER IS NOT A BUILD-BEHIND IMAGE. This audit answers
+        # "is the image at this slot the one the install landed"; a slot
+        # holding a generated trampoline has no image, so it has no answer
+        # here, and `forwarder_body_is_ours` is the leg that verifies it.
+        # Reporting it `stale` instead made the report contradict itself on
+        # the same name -- verified present on the forwarder line, "a build
+        # behind" two lines down -- with a remediation that could not clear
+        # either. A genuinely stale door image still reaches the comparison
+        # below: it IS a native image, which is exactly what this skips past.
+        if not is_native_image(dest):
             continue
         if st.st_size != prebuilt_size:
             stale.append(name)
@@ -640,6 +765,33 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
         else:
             door_build.build(engine_root, output=dest_exe)
             print(f"[door-install] no prebuilt found -- compiled fresh at {dest_exe}")
+    elif verify_installed_provenance(bin_dst).status == "ok":
+        # A CURRENT POSIX DOOR IS NOT REBUILT, BECAUSE THE POSIX BUILD IS NOT
+        # BYTE-REPRODUCIBLE. Windows gets `/Brepro` (see the linker paragraph
+        # above); the POSIX image bakes an absolute interpreter path and build
+        # metadata, so two compiles of identical sources minutes apart differ.
+        # Rebuilding unconditionally therefore did not merely cost time, it
+        # manufactured the very divergence the currency audit exists to catch:
+        # `install_named_forwarder` landed one image across 387 name slots, then
+        # `scripts/setup.py :: install_warm_door` recompiled this one name over
+        # the top, and `audit_installed_image_currency` -- whose reference is
+        # this path -- reported 386 of 387 correctly-installed slots "a build
+        # behind" with a remediation (re-run the installer) that reproduced the
+        # split exactly. Measured on machine-b 2026-09-02: slots sha
+        # 0cb00c92..., bare name 240b3ec9..., same sources, same box, three
+        # minutes apart. The plan that shipped this leg named the condition and
+        # left it open ("Only the double-build residue is real",
+        # docs/plans/2026-09-01-the-dogfooded-install-stops-lying-about.md
+        # § Anti-scope); this is that residue.
+        #
+        # `verify_installed_provenance` is the right predicate and not a
+        # presence check: `"ok"` on POSIX means the installed image matches its
+        # own sidecar AND was built from the sources this tree ships, so a door
+        # predating a `door_posix.c` fix still rebuilds. Every other status --
+        # `no-door`, `absent`, `unrecorded`, `mismatch`, `stale`,
+        # `unverifiable` -- falls through to the build below, so an
+        # unanswerable question buys no skip.
+        print(f"[door-install] {dest_exe} already current for this tree's door sources -- not rebuilt")
     else:
         # POSIX has no committed prebuilt to fall back to at all (see
         # `door_install_posix_build`'s own docstring on why one is
@@ -959,6 +1111,71 @@ def engine_carries_entrypoint_script(engine_root: Path, name: str) -> bool:
 #: `forwarder_door_census._BIN_DIR` resolves it -- the tree the installed NAME
 #: comes from, as against the engine tree the image dials.
 _GENERATOR_BIN_DIR = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+
+
+#: Leading bytes of the native-image formats a door install can produce:
+#: Mach-O (both endiannesses plus the fat/universal header), ELF, and PE.
+#: The one honest way to ask "is this file a compiled image" without
+#: launching it, and the question two callers need -- the install-health
+#: launch-chain leg (which refuses one under `claude-doe`) and the
+#: settings-home report (which recognises one under a cut-over name as
+#: correct rather than corrupt). Defined here because this module is what
+#: PUTS them there.
+NATIVE_IMAGE_MAGIC = (
+    b"\xcf\xfa\xed\xfe",
+    b"\xce\xfa\xed\xfe",
+    b"\xfe\xed\xfa\xcf",
+    b"\xfe\xed\xfa\xce",
+    b"\xca\xfe\xba\xbe",
+    b"\x7fELF",
+    b"MZ",
+)
+
+
+def is_native_image(path: Path) -> bool:
+    """True iff `path` opens as a compiled native image. Unreadable is
+    False -- this predicate answers "is it an image", never "does it
+    exist", and its callers already distinguish absent from present."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(8).startswith(NATIVE_IMAGE_MAGIC)
+    except OSError:
+        return False
+
+
+#: Names whose CLI REPLACES THE CALLING PROCESS, and which therefore cannot
+#: be served by the warm leg at all -- the door's warm path runs the named
+#: entrypoint's `main()` INSIDE the warm server, so an `os.execv` there
+#: overlays the SERVER, not the caller: the engine every peer on this box is
+#: queued behind disappears mid-request, and the caller gets nothing back.
+#:
+#: `claude-doe` is the whole population today: `coordinator/bin/claude-doe.py`
+#: exists solely to `exec claude --plugin-dir <clone>/coordinator`, and
+#: `docs/reference/interactive-launch-chain.md`'s direct-child invariant is a
+#: second, independent reason -- an interactive TUI handed back over a socket
+#: is not a child of the terminal at all. (`cross-repo-memo` READS as a member
+#: -- it still names `os.execvp` -- but only in a comment recording that its
+#: own cutover removed the call; it is warm-served correctly and is not one.)
+#:
+#: WHY A ROSTER AND NOT AN ORACLE. `launcher_is_installable`'s predicate is
+#: self-maintaining because "is this name in the published payload" is a
+#: question the payload itself answers. "Does this entrypoint exec" has no
+#: such artifact to ask: static-detecting an `os.execv` reachable from
+#: `main()` is a call-graph problem, and the honest fix is for an entrypoint
+#: to DECLARE itself non-servable. Until that marker exists this roster is
+#: the mechanism, and it is deliberately tiny.
+_EXEC_SHAPED_NAMES = frozenset({"claude-doe"})
+
+
+def name_is_warm_servable(name: str) -> bool:
+    """False for a name in `_EXEC_SHAPED_NAMES` -- see that roster for why a
+    process-replacing entrypoint must never be reached through the door.
+
+    NOT the same answer as `launcher_is_installable`, and the callers must
+    not collapse them: an unservable name still WANTS its Python forwarder
+    pair (it is a live PATH tool, just not a warm-servable one), whereas a
+    publish-excluded name wants no launcher at all."""
+    return name not in _EXEC_SHAPED_NAMES
 
 
 def launcher_is_installable(engine_root: Path, name: str) -> bool:

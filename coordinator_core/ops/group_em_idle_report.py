@@ -62,10 +62,7 @@ def _groupem_idle_report(params: dict, repo_root: Optional[Path] = None) -> dict
         observed_exits (list, optional) -- exit transitions the CALLER
             actually saw (session ids or names); see
             `build_report`'s own docstring for why this has no engine-side
-            lookup and must be caller-supplied. Elements must be hashable
-            (session id/name strings) -- an accepted-shape list containing
-            unhashable elements (e.g. dicts) raises a named `ValueError`,
-            never a bare `TypeError`.
+            lookup and must be caller-supplied.
 
     Returns: the `build_report` dict verbatim — see that function's own
     docstring for the full shape (`repo-root`, `verdict`, `group-em-moved`,
@@ -81,19 +78,8 @@ def _groupem_idle_report(params: dict, repo_root: Optional[Path] = None) -> dict
     override = p.get("repo_root")
     target_root = override if isinstance(override, str) and override else str(Path.cwd())
 
-    observed_exits_param = p.get("observed_exits")
-    if isinstance(observed_exits_param, (list, tuple, frozenset, set)):
-        try:
-            observed_exits = frozenset(observed_exits_param)
-        except TypeError as exc:
-            raise ValueError(
-                f"observed_exits must contain hashable session ids or names (strings) -- "
-                f"got an element that could not be hashed: {exc}. A silently-dropped "
-                "mis-shaped observed_exits would make a bad call look identical to a call "
-                "that passed no exits at all."
-            ) from exc
-    else:
-        observed_exits = None
+    observed_exits = p.get("observed_exits")
+    observed_exits = observed_exits if isinstance(observed_exits, (list, tuple, frozenset, set)) else None
 
     return group_em_idle_report.build_report(
         target_root,

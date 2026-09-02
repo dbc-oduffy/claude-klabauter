@@ -46,13 +46,13 @@ _LIB_DIR = os.path.join(_SCRIPT_DIR, "lib")
 # and `cc_invoke` both live in bin/lib, which is not a package and is on no default path.
 # Self-resolve it from __file__, never cwd — this runs as a pre-commit gate from any repo.
 #
-# C8 warm-serve fix: the `sys.path` insert used to run at MODULE scope, which
-# mutated the shared `sys.path` of a warm server ~50 sessions share on every
-# import of this file. Moved into `_ensure_lib_on_path`, called from `main`
-# (and from `_csn_check`/`_resolve_repo_root` directly, since those are the
-# two call sites that actually need `_LIB_DIR` on `sys.path` and either can
-# in principle run before `main` in a future caller) — idempotent, so this
-# costs nothing beyond the membership check it already had.
+# DEFERRED WITH ITS CONSUMERS, not run at module scope. This name warm-serves, and a
+# warm server imports the module once and calls `main` many times, so a module-body
+# `sys.path.insert` mutates the SERVER's interpreter on behalf of one request and keeps
+# it for every later one. Idempotent here and harmless in isolation, but the rule it
+# would need an exception to is the one keeping 363 names inert in a shared process
+# (`coordinator_core.warm.serve_classifier`). The imports were already deferred; the rung
+# they depend on now defers with them.
 def _ensure_lib_on_path() -> None:
     if _LIB_DIR not in sys.path:
         sys.path.insert(0, _LIB_DIR)

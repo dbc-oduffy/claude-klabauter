@@ -62,29 +62,31 @@ def test_empty_string_session_id_also_carries_no_identity():
     assert _caller_of(frame)["session_id"] is None
 
 
-#: The two `CallerContext` fields that do NOT ride inside the `_caller`
-#: object `hook_http.build_request` serialises, per that dataclass's own
-#: docstring: `settings_home` rides its own top-level `_settings_home` wire
-#: field (`warm/settings_home_claim.py`), and `env` is joined onto the
-#: object SERVER-SIDE by `warm.server._serve_line` via `merge_env_axis`
-#: after `resolve_caller_context` already ran -- neither producer leg
-#: (`hook_http.build_request`, `client.py`) has a value to put there at
-#: build time, so both stay unset on the wire object this test reads.
-_CALLER_CONTEXT_FIELDS_NOT_ON_THE_WIRE_OBJECT = frozenset({"settings_home", "env"})
-
-
 def test_caller_object_mirrors_the_caller_context_dataclass():
     """`_caller` IS `CallerContext` serialised -- not a shape merely said to match it.
-    A field added to the dataclass and forgotten here is the drift this asserts against,
-    except the two fields that are never part of THIS wire object by design (see
-    `_CALLER_CONTEXT_FIELDS_NOT_ON_THE_WIRE_OBJECT`)."""
+    A field added to the dataclass and forgotten here is the drift this asserts against.
+
+    `settings_home` is deliberately excluded: it is not a `_caller` field at all -- it
+    rides its own top-level `_settings_home` wire field and `_serve_line` joins it onto
+    the resolved `CallerContext` server-side, before dispatch (`CallerContext`'s own
+    docstring). Excluded DERIVED (dataclass fields minus that documented server-side-join
+    field), never a hand-typed list of the other five, so a seventh field added tomorrow
+    is caught here rather than silently accommodated."""
     import dataclasses
 
+    from coordinator_core.warm import settings_home_claim
     from coordinator_core.warm.caller_context import CallerContext
 
     frame = json.loads(hook_http.build_request({"session_id": "sess-1"}, hook_http.DEFAULT_OP_NAME))
-    dataclass_fields = {f.name for f in dataclasses.fields(CallerContext)}
-    assert set(_caller_of(frame)) == dataclass_fields - _CALLER_CONTEXT_FIELDS_NOT_ON_THE_WIRE_OBJECT
+
+    joined_server_side = {"settings_home"}
+    wire_fields = {f.name for f in dataclasses.fields(CallerContext)} - joined_server_side
+    assert set(_caller_of(frame)) == wire_fields
+
+    # The excluded field is absent from `_caller` by contract, and its carrier is named
+    # by the module that owns it -- not merely omitted by coincidence.
+    assert "settings_home" not in _caller_of(frame)
+    assert settings_home_claim.SETTINGS_HOME_FIELD == "_settings_home"
 
 
 def test_distinct_callers_do_not_cross_contaminate():

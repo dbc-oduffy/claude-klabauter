@@ -432,25 +432,6 @@ def _child_identity_env() -> dict:
 # below for the failure mode this guards against).
 _QUEUE_APPEND_OUTPUT_ROOT_ENV = "QUEUE_APPEND_OUTPUT_ROOT"
 
-# C8 warm-serve fix: this used to be `_ISOLATION_ROOT_WARNED: set[str] = set()`
-# at module scope — a mutable set bound once at import time and shared for the
-# lifetime of a warm server ~50 sessions run inside. A warn-once dedup set at
-# PROCESS scope means the second caller to hit this condition, in an unrelated
-# session, gets no warning at all — the state leaks across invocations that
-# share nothing else. `None` here is an inert module-scope constant (no Call,
-# so it passes the C1 purity predicate); `_reset_isolation_root_warned_state`
-# rebinds it to a fresh set at the top of every `main()` call, so the warn-once
-# behaviour is scoped to one INVOCATION, never the process.
-_ISOLATION_ROOT_WARNED: set[str] | None = None
-
-
-def _reset_isolation_root_warned_state() -> None:
-    """Called once at the top of `main()` — see the comment above
-    `_ISOLATION_ROOT_WARNED` for why this must run per-invocation, not once
-    per process."""
-    global _ISOLATION_ROOT_WARNED
-    _ISOLATION_ROOT_WARNED = set()
-
 
 def _isolation_root(env_var: str, caller_name: str) -> str | None:
     """Local twin of `bin/lib/cli_shared.isolation_root_if_under_test` — see that
@@ -462,25 +443,24 @@ def _isolation_root(env_var: str, caller_name: str) -> str | None:
     env-stripped window and changes which roots resolve. The predicate is four
     lines; the ordering hazard is not worth sharing them.
     """
-    global _ISOLATION_ROOT_WARNED
-    if _ISOLATION_ROOT_WARNED is None:
-        # A caller that reaches this before `main()` has run (e.g. a test
-        # calling `_isolation_root` directly) still gets a working, if
-        # process-lifetime, dedup set — `main()` is what actually scopes it
-        # to one invocation.
-        _ISOLATION_ROOT_WARNED = set()
     value = (os.environ.get(env_var) or "").strip()
     if not value:
         return None
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return value
-    if env_var not in _ISOLATION_ROOT_WARNED:
-        _ISOLATION_ROOT_WARNED.add(env_var)
-        print(
-            f"{caller_name}: ignoring inherited {env_var}={value} — a test-isolation "
-            f"redirect outside a test run. Writing to the resolved repo path instead.",
-            file=sys.stderr,
-        )
+    # WARNS EVERY TIME, not once. The dedup set that used to live at module
+    # scope made this warn-once-per-PROCESS, and this name warm-serves: in a
+    # warm server the process outlives the request, so the first caller
+    # consumed the warning and every later caller was silently redirected with
+    # no signal at all. Per-request is the semantic that was wanted and module
+    # state cannot express it. The path is rare (an inherited isolation env var
+    # outside a test run), so repeating it costs a line on stderr and buys back
+    # the signal.
+    print(
+        f"{caller_name}: ignoring inherited {env_var}={value} — a test-isolation "
+        f"redirect outside a test run. Writing to the resolved repo path instead.",
+        file=sys.stderr,
+    )
     return None
 
 _LESSON_PROMOTE_OUTBOX_ROOT_ENV = "LESSON_PROMOTE_OUTBOX_ROOT"
@@ -1440,7 +1420,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     _bootstrap_engine()
-    _reset_isolation_root_warned_state()
 
     parser = _build_parser()
     args = parser.parse_args(argv)

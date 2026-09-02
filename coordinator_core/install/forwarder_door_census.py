@@ -544,7 +544,13 @@ def resolve_bare_name(stem: str, path_dirs: Sequence[str], pathext: str) -> "lis
     The `.ps1`-first claim is verified, not assumed -- see `_POWERSHELL_FIRST_EXT`'s
     comment for the captured `Get-Command`/PATHEXT trace."""
     exts = [_POWERSHELL_FIRST_EXT]
-    exts += [e for e in pathext.split(os.pathsep) if e]
+    # `;` by literal, never `os.pathsep`. The separator is a property of the
+    # PATHEXT VARIABLE, not of the host reading it: this function is pure over
+    # its arguments and is routinely handed a Windows PATHEXT on POSIX, where
+    # `os.pathsep` is `:` and a real `.COM;.EXE;.BAT` parses as ONE opaque
+    # extension. Every candidate then misses and the function answers "resolves
+    # to nothing" for a correctly installed door.
+    exts += [e for e in pathext.split(";") if e]
     exts.append("")
 
     hits: "list[Path]" = []
@@ -556,6 +562,28 @@ def resolve_bare_name(stem: str, path_dirs: Sequence[str], pathext: str) -> "lis
             if candidate.is_file() and candidate not in hits:
                 hits.append(candidate)
     return hits
+
+
+def _is_same_file(a: Path, b: Path) -> bool:
+    """True when two paths name the same file on disk.
+
+    Never `==`. `resolve_bare_name` builds its candidates by joining PATHEXT's
+    OWN casing onto the stem, so a `.EXE` entry in PATHEXT matches a lowercase
+    `.exe` on disk (NTFS and APFS are both case-insensitive) and comes back
+    spelled `.EXE`. Compared by equality against a lowercase
+    `DOOR_INSTALLED_NAME`, that reports a correctly installed door as BROKEN on
+    casing alone -- on Windows, the platform this report exists to serve.
+
+    Negative spec: do NOT "fix" this by lowercasing either side. The stem can
+    carry any casing, the filesystem may be case-SENSITIVE, and identity is the
+    question being asked. `os.path.samefile` answers it; the `normcase` arm is
+    the fallback for a path that does not exist, where identity is undecidable
+    and spelling is all there is.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.normcase(str(a)) == os.path.normcase(str(b))
 
 
 def bare_name_starts_an_interpreter(winner: Path) -> bool:
@@ -623,7 +651,7 @@ def bare_name_door_report() -> "list[str]":
 
     winner = hits[0]
     lines.append(f"Winner: `{winner}`")
-    if winner != door:
+    if not _is_same_file(winner, door):
         lines.append(
             f"**BROKEN**: expected the settings-home door at `{door}`. Everything "
             f"typing the bare name reaches `{winner.name}` instead. Fix PATH "
@@ -635,7 +663,7 @@ def bare_name_door_report() -> "list[str]":
             f"**BREAK-CLASS**: `{winner}` starts an interpreter per call rather than "
             f"relaying natively (CLAUDE.md § The brightline)."
         )
-    if winner == door and not bare_name_starts_an_interpreter(winner):
+    if _is_same_file(winner, door) and not bare_name_starts_an_interpreter(winner):
         lines.append("OK -- the bare name reaches the native door.")
 
     shadowed = [h for h in hits[1:] if bare_name_starts_an_interpreter(h)]
@@ -730,21 +758,7 @@ def _write_allowlist(verdicts: "list[ForwarderVerdict]", allowlist_path: Path = 
     point working against it. The predicate is duplicated from the
     resolver rather than imported to keep the census free of an
     `ops` import; if the resolver's shape changes, this changes with
-    it.
-
-    Review: coordinator:code-reviewer -- this writer owns ONLY `$comment`
-    and `entrypoints`. Before C13's split
-    (docs/dispatch-briefs/2026-09-01-the-dogfooded-install-stops-lying-
-    about/C13.md) that was the file's whole shape, so a full-payload
-    overwrite was safe. Post-split the file also carries
-    `door_eligible_entrypoints` (substrate.py's independently-editable
-    door-cutover list) and `$comment_split` (the provenance note
-    explaining the split) -- keys this writer does not populate and never
-    did. A naive `write_text` of a payload containing only the two owned
-    keys does not merely leave the other two stale, it DELETES them
-    outright on the very next `--write-allowlist` regen, silently
-    reverting C13's cutover to permanently empty. Preserve whatever this
-    writer does not own from the prior on-disk payload, if any."""
+    it."""
     merged = tuple(
         name
         for name in door_eligible_names(verdicts)
@@ -767,33 +781,8 @@ def _write_allowlist(verdicts: "list[ForwarderVerdict]", allowlist_path: Path = 
         ),
         "entrypoints": list(merged),
     }
-    _preserve_unowned_keys(payload, allowlist_path)
     allowlist_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return merged
-
-
-#: Keys this writer never populates -- carried over from the prior on-disk
-#: payload verbatim so a regen preserves rather than deletes them. See
-#: `_write_allowlist`'s own docstring for why this exists.
-_UNOWNED_PRESERVED_KEYS = ("$comment_split", "door_eligible_entrypoints")
-
-
-def _preserve_unowned_keys(payload: dict, allowlist_path: Path) -> None:
-    """Mutates `payload` in place, copying each `_UNOWNED_PRESERVED_KEYS`
-    entry from `allowlist_path`'s current on-disk content, if the file
-    exists and parses and the key is present there. Absent file, unparsable
-    JSON, or a key genuinely not yet present all leave `payload` untouched
-    for that key -- this is preservation, not population; a file that never
-    had these keys (pre-C13) regenerates exactly as before."""
-    try:
-        existing = json.loads(allowlist_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return
-    if not isinstance(existing, dict):
-        return
-    for key in _UNOWNED_PRESERVED_KEYS:
-        if key in existing:
-            payload[key] = existing[key]
 
 
 def main(argv: Optional["list[str]"] = None) -> int:

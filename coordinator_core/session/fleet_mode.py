@@ -66,6 +66,12 @@ from coordinator_core._settings_home import settings_home
 
 _FLEET_MODE_FILENAME = "fleet-mode.json"
 
+#: Generator-provenance declaration: write_fleet_mode()'s only write is
+#: `settings_home() / _FLEET_MODE_FILENAME` — the operator's coordinator
+#: settings home, never a path inside this repo's tracked tree. No tracked
+#: artifact exists for `GENERATES` to name.
+GENERATES = []
+
 
 def fleet_mode_path() -> Path:
     """Resolve ``<settings_home()>/fleet-mode.json`` — the single home for

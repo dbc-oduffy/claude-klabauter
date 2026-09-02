@@ -242,17 +242,37 @@ def test_should_spawn_false_when_pipe_field_missing_falls_back_to_pid_only(
     assert breadcrumb.should_spawn(tmp_path, now=now) is False
 
 
-def test_pipe_is_alive_fails_open_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Off Windows, or on any unanticipated ctypes failure, the probe must
-    fail OPEN (True) -- a caller that cannot evaluate liveness gets the
-    pid-only answer that predates this check, never a wrongly-triggered
-    respawn or a propagated exception."""
+@pytest.mark.skipif(
+    __import__("os").name != "nt", reason="WinDLL is only reachable on the Windows arm"
+)
+def test_pipe_is_alive_fails_open_on_error_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On an unanticipated `ctypes` failure, the Windows arm must fail OPEN
+    (True) -- a caller that cannot evaluate liveness gets the pid-only
+    answer that predates this check, never a wrongly-triggered respawn or a
+    propagated exception."""
     import ctypes as _ctypes
 
     def _raise(*args, **kwargs):
         raise OSError("no such DLL on this platform")
 
     monkeypatch.setattr(_ctypes, "WinDLL", _raise, raising=False)
+    assert breadcrumb._pipe_is_alive(r"\\.\pipe\fake") is True
+
+
+def test_pipe_is_alive_fails_open_on_error_posix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_pipe_is_alive` now branches on `os.name != "nt"` straight to
+    `_unix_socket_is_alive` -- on THIS platform, a Windows-side `WinDLL`
+    patch is dead code and proves nothing about it. The same fail-open
+    property must hold on the POSIX arm's own error path: an unanticipated
+    error building/using the probe socket (never `ConnectionRefusedError`/
+    `FileNotFoundError`/`NotADirectoryError`, which read DEAD by design)
+    degrades to True, not a propagated exception."""
+    import socket as _socket
+
+    def _raise(*args, **kwargs):
+        raise OSError("no sockets for you")
+
+    monkeypatch.setattr(_socket, "socket", _raise)
     assert breadcrumb._pipe_is_alive(r"\\.\pipe\fake") is True
 
 

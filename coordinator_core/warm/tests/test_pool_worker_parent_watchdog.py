@@ -74,9 +74,19 @@ def test_wait_for_parent_exit_returns_immediately_for_a_dead_parent() -> None:
 def test_wait_for_parent_exit_blocks_while_the_parent_is_alive() -> None:
     """The live case: the watchdog must not fire on a healthy server, or the
     pool would reap its own workers mid-dispatch.
+
+    WATCHES THIS PROCESS'S REAL PARENT, NOT ITSELF. The POSIX arm's liveness
+    test is `os.getppid() == parent_pid` -- a re-parent check, since there is
+    no handle to wait on. Passing `os.getpid()` therefore compared this
+    process's PARENT against this process's OWN pid, which is false on the
+    first iteration, so the watchdog returned immediately and the assertion
+    below failed on every POSIX run. It passed on Windows, whose arm opens a
+    handle to any live pid and would happily wait on this one -- which is why
+    a test asserting the watchdog blocks had never once observed it block on
+    the platform the polling arm exists for.
     """
     thread = threading.Thread(
-        target=server._wait_for_parent_exit, args=(os.getpid(),), daemon=True
+        target=server._wait_for_parent_exit, args=(os.getppid(),), daemon=True
     )
     thread.start()
     thread.join(timeout=2.0)

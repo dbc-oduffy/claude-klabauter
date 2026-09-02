@@ -213,27 +213,39 @@ def test_verify_installed_provenance_mismatch(tmp_path):
 
 
 def test_verify_installed_provenance_ok(tmp_path):
-    """`ok` now certifies BOTH that the sidecar describes the binary beside
-    it AND that the binary is the committed prebuilt. This test used to
-    plant arbitrary bytes with a matching hash, which is precisely the
-    shape a build-behind install has -- self-consistent and stale -- and
-    that shape is what let a door image predating the
-    `COORDINATOR_DOOR_STDIN_MODE` gate read as healthy while
-    `cross-repo-memo` hung (2026-09-01). It now plants the prebuilt, and
-    the self-consistent-but-stale case is asserted separately in
-    `tests/test_door_image_currency.py`."""
-    if not door_install._PREBUILT_DOOR_EXE.exists():
-        pytest.skip("no committed prebuilt door for this platform in this checkout")
+    """`ok` certifies BOTH that the sidecar describes the binary beside it AND
+    that the binary is current. Planting arbitrary bytes with a matching hash
+    is precisely the shape a build-behind install has -- self-consistent and
+    stale -- and that shape is what let a door image predating the
+    `COORDINATOR_DOOR_STDIN_MODE` gate read as healthy while `cross-repo-memo`
+    hung (2026-09-01). The self-consistent-but-stale case is asserted separately
+    in `tests/test_door_image_currency.py`.
+
+    WHAT "CURRENT" MEANS IS PLATFORM-SPECIFIC, because only Windows ships a
+    committed prebuilt to compare against -- the POSIX `door` is `.gitignore`d
+    (`.gitignore:223`), so on POSIX currency is the sidecar's recorded source
+    fingerprint. Keying the skip on `_PREBUILT_DOOR_EXE.exists()` rather than on
+    the platform is what let this test read a developer's stale ignored build
+    artifact as "the committed prebuilt" on every Mac."""
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    door_bytes = door_install._PREBUILT_DOOR_EXE.read_bytes()
+    if sys.platform == "win32":
+        if not door_install._PREBUILT_DOOR_EXE.exists():
+            pytest.skip("no committed prebuilt door for this platform in this checkout")
+        door_bytes = door_install._PREBUILT_DOOR_EXE.read_bytes()
+        record = {"image_sha256": hashlib.sha256(door_bytes).hexdigest()}
+    else:
+        door_bytes = b"whatever this box compiled"
+        record = {
+            "image_sha256": hashlib.sha256(door_bytes).hexdigest(),
+            "sources": door_install._current_source_fingerprint(),
+        }
     (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(door_bytes)
     door_install.installed_provenance_path(bin_dst).write_text(
-        json.dumps({"image_sha256": hashlib.sha256(door_bytes).hexdigest()}),
-        encoding="utf-8",
+        json.dumps(record), encoding="utf-8"
     )
     verdict = door_install.verify_installed_provenance(bin_dst)
-    assert verdict.status == "ok"
+    assert verdict.status == "ok", verdict
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +254,14 @@ def test_verify_installed_provenance_ok(tmp_path):
 
 
 def test_install_door_raises_when_prebuilt_exe_and_sidecar_disagree(tmp_path, monkeypatch):
+    # PREBUILT-BRANCH TEST, SO PLATFORM IS THE SKIP KEY, NOT FILE PRESENCE.
+    # `install_door` routes on platform first and POSIX never reads the prebuilt
+    # pair at all -- it compiles. Skipping on `_PREBUILT_DOOR_EXE.exists()`
+    # instead ran this Windows assertion down the POSIX build branch on any box
+    # carrying the ignored local `door` artifact, where it can only ever report
+    # DID NOT RAISE.
+    if sys.platform != "win32":
+        pytest.skip("install_door only reads the prebuilt exe/sidecar pair on Windows")
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 

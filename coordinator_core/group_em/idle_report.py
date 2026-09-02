@@ -173,7 +173,7 @@ import time
 from typing import Optional
 
 from coordinator_core.group_em import repo_root_arg
-from coordinator_core.group_em import watch_heartbeat
+from coordinator_core.group_em.watch_heartbeat import render_struck_count
 from coordinator_core.ops.discover_working_repos import encode_projects_dir_name
 
 #: Below this, a quiet session is simply between turns. Applied here, never remembered.
@@ -360,19 +360,6 @@ SHAPE_HOLD = "hold"
 NUDGE_SHAPES = frozenset({SHAPE_PUSH, SHAPE_ASK, SHAPE_ASSIGN, SHAPE_HOLD})
 
 UNADDRESSABLE = "UNADDRESSABLE"
-
-#: `named-next-move` vocabulary (DoE-claude bc5b1ba18,
-#: `fleet-watch-idle-report-contract.md` "A whitelist predicate can almost
-#: never emit `none`"). Matching `_NEXT_MOVE` establishes presence; failing to
-#: match establishes NOTHING, because the space of ways to name a next move is
-#: open -- so under this phrase-matching predicate every non-match is
-#: `NEXT_MOVE_UNRESOLVED`, never `NEXT_MOVE_NONE`. `NEXT_MOVE_NONE` is kept
-#: named here because the doc's vocabulary carries it, but no branch in this
-#: module currently derives absence affirmatively (see `_peer_row`), so it is
-#: presently UNREACHABLE from the whitelist path -- that is correct, not a
-#: bug, per the doc's own ruling.
-NEXT_MOVE_NONE = "none"
-NEXT_MOVE_UNRESOLVED = "unresolved"
 
 
 def projects_dir_for(repo_root: str, home: Optional[str] = None) -> str:
@@ -842,18 +829,8 @@ def _peer_row(path: str, session_id: str, now: float, names: Optional[dict],
         "address": ("%s [%s]" % (name, session_id[:8])) if name else UNADDRESSABLE,
         # A dead session is never nudged, so it never carries nudge content.
         "last-said": None if exited else last_said,
-        # `exited` peers carry no nudge content at all (see `last-said` above)
-        # -- not applicable, never computed, so this stays `None`/null rather
-        # than picking a vocabulary value nobody reads. For a LIVE row the
-        # predicate is a phrase whitelist: a match affirmatively establishes
-        # `named_move`, but a non-match establishes nothing about the open
-        # space of ways a session could have named its move, so it renders
-        # `NEXT_MOVE_UNRESOLVED`, never `NEXT_MOVE_NONE` (DoE-claude
-        # bc5b1ba18).
         "named-next-move": (
-            None if exited
-            else named_move[:LAST_SAID_CHARS] if named_move
-            else NEXT_MOVE_UNRESOLVED
+            None if exited or not named_move else named_move[:LAST_SAID_CHARS]
         ),
         # The escalation most worth getting right is the one that comes back
         # unreachable: the verdict stands, the shape holds, and the Group-EM --
@@ -954,9 +931,9 @@ def build_report(
         # the instant the `counts` block above was struck, never a re-read.
         # Spelled `as_of`, not `taken_at` -- the falsifier's `_WHEN_TOKEN` does
         # not match `taken_at` (staff-eng finding 2).
-        # Review: overengineering-reviewer finding 3 -- was a literal copy of
-        # the fromtimestamp/strftime expression; now the shared seam.
-        "as_of": watch_heartbeat.iso_instant(now),
+        "as_of": datetime.datetime.fromtimestamp(
+            now, datetime.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
 
@@ -965,30 +942,32 @@ def summary_line(report: dict) -> str:
     whole report. The thresholds ride on it so a report pasted into the Group-EM's
     context explains its own judgements without a second lookup.
 
-    SUPERSEDED (DoE-claude bc5b1ba18,
-    `fleet-watch-idle-report-contract.md` "Every field on this line is
-    fixed-form"): this line used to argue `exited=` was our own additive
-    field and that rendering it through `render_struck_count`'s parenthetical
-    population gloss was therefore fine. Their amended contract spells
-    `exited=` in the fixed-form string itself and in its own EXITED section --
-    it is THEIR field, not ours, so it renders as a bare int like every other
-    counter here: no prose, no parenthetical gloss, no second token
-    (`counts_struck_at=`) beside `as_of`. Field order and the trailing
-    `as_of=<iso>` (re-derived from `report["as_of"]`, the same instant
-    `counts` was struck against, never a second clock) are exactly their
-    format string; `GROUP-EM-MOVED` still lands before it so `as_of` stays
-    the last thing on the line.
+    `exited=` is an additive extension to the consumer's spelled contract, for
+    the verdict their doc predates. Nothing else on this line moves without a
+    cross-repo memo. Being additive is what lets C11 render `exited=` with
+    C5's `render_struck_count` rather than a bare int: a bare `exited=0` reads
+    as "none exited" over the WHOLE roster, when it is only ever asked of the
+    peers reaching `_verdict`'s registry branches -- naming that population is
+    this row's job, not a co-author's (C5 owns the rendering, this is a
+    consumer of it). `as_of` is the same struck instant `counts` above was
+    taken against, re-derived here rather than re-read as a second clock.
     """
     counts = report["counts"]
+    struck_at = datetime.datetime.strptime(
+        report["as_of"], "%Y-%m-%dT%H:%M:%SZ"
+    ).replace(tzinfo=datetime.timezone.utc).timestamp()
+    exited_rendered = render_struck_count(
+        counts["exited"], "peers whose liveness reached the registry check",
+        struck_at_epoch=struck_at,
+    )
     return (
-        "peers=%d escalate=%d out-of-work=%d exited=%d unknown=%d "
-        "floor=%.0fm threshold=%.0fm group-em=%s%s as_of=%s" % (
+        "peers=%d escalate=%d out-of-work=%d unknown=%d exited=%s "
+        "floor=%.0fm threshold=%.0fm group-em=%s%s" % (
             counts["peers"], counts["escalate"], counts["out-of-work"],
-            counts["exited"], counts["unknown"],
+            counts["unknown"], exited_rendered,
             report["floor-minutes"], report["threshold-minutes"],
             report["group-em-session-id"] or "unset",
             " GROUP-EM-MOVED" if report["group-em-moved"] else "",
-            report["as_of"],
         )
     )
 

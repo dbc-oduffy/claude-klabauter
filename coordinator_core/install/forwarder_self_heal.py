@@ -90,6 +90,64 @@ import sys
 import traceback
 from pathlib import Path
 
+from coordinator_core.install.write_surface import (
+    ShapedClause,
+    StaticClause,
+    WriteSurfaceDeclaration,
+    WriteSurfaceEntry,
+)
+
+WRITE_SURFACE = WriteSurfaceDeclaration(
+    writer_id="forwarder-self-heal",
+    source_module="coordinator_core.install.forwarder_self_heal",
+    clauses=(
+        # Clause 1 — the missing-forwarder writer itself. Which names it
+        # touches is only known at runtime (whatever `coordinator/bin/`
+        # names are absent from `<settings-home>/bin/` THIS invocation),
+        # never enumerable in source — a native door image (`<name>.exe`
+        # on Windows, extensionless `<name>` on POSIX) via
+        # `substrate._cut_over_to_native_door`, or a bare Python forwarder
+        # (extensionless `<name>`) via `substrate._write_agent_forwarder`
+        # on a doorless root. Only names actually missing get written; an
+        # existing forwarder is never rewritten.
+        ShapedClause(
+            discovered_by="_self_heal_forwarders_inner (diff against coordinator/bin/)",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path="<settings_home>/bin/<name>",
+                reason="missing agent/skill forwarder, native door image or bare-Python fallback",
+            ),
+        ),
+        # Clause 2 — the native-forwarder manifest this run's writes are
+        # unioned into (`substrate._union_native_forwarder_manifest`),
+        # under the same lock as clause 1's writes.
+        StaticClause(
+            entries=(
+                WriteSurfaceEntry(
+                    kind="file-path",
+                    path="<settings_home>/bin/_native-forwarder-manifest.json",
+                    reason="read-union-write: records which of clause 1's writes were native door images",
+                ),
+            ),
+        ),
+        # Clause 3 — the failure ledger `_record_failure` appends to, and
+        # only when the swallowed inner work raised. Machine-scoped (not
+        # the repo), per its own docstring: the failure is a property of
+        # the box, not of whichever clone happened to run.
+        StaticClause(
+            entries=(
+                WriteSurfaceEntry(
+                    kind="file-path",
+                    path="<settings_home>/state/forwarder-self-heal-failures.jsonl",
+                    reason="_record_failure: appends one JSON line describing a swallowed self-heal failure",
+                ),
+            ),
+        ),
+    ),
+)
+
+GENERATES = []  # every clause above writes under <settings_home>/..., a machine-local settings home outside this repo's tracked tree -- never a fixed repo artifact
+
 
 def self_heal_forwarders() -> None:
     """Best-effort, silent, non-blocking: write any agent-helper forwarder

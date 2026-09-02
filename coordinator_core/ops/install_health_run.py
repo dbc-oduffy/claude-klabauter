@@ -36,9 +36,10 @@ Dual-anchor discovery (2026-07-22, closes the plugin_root-coupling defect):
   `_write_agent_forwarder` cmd-twin source repoint).
 
 Native leg registry (`_NATIVE_LEGS`) — no globbing for claude-klabauter-owned legs:
-  All five claude-klabauter-owned legs (`ensure_python3_exe_shim`,
+  All six claude-klabauter-owned legs (`ensure_python3_exe_shim`,
   `check_windows_ssh_binary`, `seed_skill_overrides`,
-  `check_bareword_path_provisioning`, `check_door_provenance`) run UNCONDITIONALLY in `main()`,
+  `check_bareword_path_provisioning`, `check_door_provenance`,
+  `check_launch_chain_intact`) run UNCONDITIONALLY in `main()`,
   in-process, via an explicit registry — never discovered through
   a `bin/install-health/*.sh` glob-and-basename-intercept, and never
   requiring a bash veneer front door. This collapses the prior two-tier
@@ -166,6 +167,14 @@ _NATIVE_LEGS = [
     (
         "check-door-provenance",
         lambda plugin_root, claude_klabauter_root: check_door_provenance(plugin_root, claude_klabauter_root),
+    ),
+    # LAST, DELIBERATELY. Every leg above can change what this one reads --
+    # the door legs most of all -- so it runs after them and reports on the
+    # settings-home the whole install actually left behind, not an
+    # intermediate state.
+    (
+        "check-launch-chain-intact",
+        lambda plugin_root, claude_klabauter_root: check_launch_chain_intact(plugin_root, claude_klabauter_root),
     ),
 ]
 
@@ -342,6 +351,71 @@ def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
         return 1
     # "absent"
     print(f"[door-provenance] FAIL: {verdict.detail}", file=sys.stderr)
+    return 1
+
+
+#: The one launcher on the interactive chain, and the string that proves the
+#: installed copy is still the trampoline rather than something wearing its
+#: name. `claude-doe`'s entire job is to `exec claude --plugin-dir <clone>/
+#: coordinator`; anything that cannot reach that line cannot start a session.
+_LAUNCH_CHAIN_NAME = "claude-doe"
+_LAUNCH_CHAIN_PROOF = "exec claude"
+
+
+def check_launch_chain_intact(plugin_root: str, claude_klabauter_root: str) -> int:
+    """Native install-health leg asserting the install did not just break the
+    way a session is started.
+
+    WHY THIS LEG EXISTS AND WHY IT IS ITS OWN. Every other leg here checks a
+    thing the install was TRYING to do. This one checks the thing an install
+    keeps doing BY ACCIDENT: `claude-doe` is an ordinary name in
+    `coordinator/bin/`, so every roster, glob, allowlist and cutover that
+    enumerates names has swept it up at least once, and each time the box
+    lost its ability to start a session until someone noticed by failing to
+    start one. The 2026-09-02 instance hardlinked the native door over it
+    (fixed at the source in `door_install._EXEC_SHAPED_NAMES`); the failure
+    before that had a different cause and the same symptom. A per-cause fix
+    cannot close a class whose members keep arriving from new directions --
+    what closes it is asserting the END STATE, from the same install that
+    would have broken it, before the operator's next launch discovers it.
+
+    TWO FAILURES, ONE MESSAGE. A compiled image under this name (magic bytes
+    -- the door, or any future native launcher) and a readable file that
+    never reaches its exec line are the same defect to the person who cannot
+    start a session, so they report identically and remediate identically.
+
+    ABSENT IS NOT THIS LEG'S FAILURE. `scripts/setup.py` installs the wrapper
+    advisorily, and a settings-home that never had one is a different leg's
+    concern -- the same posture `check_door_provenance` takes for "no-door".
+    What this leg refuses is a launcher that EXISTS and cannot launch.
+
+    No subprocess: the leg reads one file. Running the trampoline to see
+    whether it runs would put an interpreter start on an install-health leg
+    to learn strictly less than its own bytes already say."""
+    del plugin_root, claude_klabauter_root
+
+    launcher = settings_home() / "bin" / _LAUNCH_CHAIN_NAME
+    if not launcher.is_file():
+        return 0
+
+    body = launcher.read_bytes()
+    if body.startswith(door_install.NATIVE_IMAGE_MAGIC):
+        detail = "it is a compiled native image, not the Python trampoline"
+    elif _LAUNCH_CHAIN_PROOF.encode("utf-8") not in body:
+        detail = f"it never reaches its `{_LAUNCH_CHAIN_PROOF}` line"
+    else:
+        return 0
+
+    print(
+        f"[launch-chain] FAIL: {launcher} cannot start a session -- {detail}. "
+        "This install replaced the one launcher the interactive chain runs.",
+        file=sys.stderr,
+    )
+    print(
+        "[launch-chain] remediation: run `python coordinator/bin/"
+        "install-claude-doe-wrapper.py` from the engine clone to restore it",
+        file=sys.stderr,
+    )
     return 1
 
 

@@ -267,7 +267,18 @@ class TestRendering:
 
 
 class TestAllowlistPopulation:
-    def test_write_allowlist_unions_with_existing_seed(self, tmp_path):
+    def test_write_allowlist_regenerates_and_drops_an_existing_seed(self, tmp_path):
+        """The C2 fix (ae7edbe3fc, 2026-08-27) REVERSED this test's original
+        premise and did not carry the test with it: `_write_allowlist` used to
+        union with the file's prior content and now regenerates from THIS run's
+        door-eligible bucket alone. The union never removed, which is how a
+        12-name origin count silently reached 382 while the file's own
+        `$comment` still claimed door-eligible provenance for every row.
+
+        So the seed below is the ASSERTION, not the setup: a name present only
+        in the prior on-disk file must NOT survive the regeneration. Pinning the
+        union again would restore the growth-only behaviour the fix removed.
+        """
         allowlist_path = tmp_path / "warm_entrypoint_allowlist.json"
         allowlist_path.write_text(
             json.dumps({"entrypoints": ["cross-repo-memo"]}), encoding="utf-8"
@@ -284,7 +295,10 @@ class TestAllowlistPopulation:
 
         merged = fdc._write_allowlist(verdicts, allowlist_path=allowlist_path)
 
-        assert "cross-repo-memo" in merged
+        assert "cross-repo-memo" not in merged, (
+            "a name carried only by the prior on-disk file must not survive a "
+            "regeneration -- that is the union behaviour C2 removed"
+        )
         assert "eligible-one" in merged
         # Excluded on an UNCONTAINED exec-time hazard, the only thing that
         # disqualifies. A CLI doing client-side work in `main` is eligible.
@@ -292,34 +306,6 @@ class TestAllowlistPopulation:
 
         on_disk = json.loads(allowlist_path.read_text(encoding="utf-8"))
         assert set(on_disk["entrypoints"]) == set(merged)
-
-    def test_write_allowlist_preserves_door_eligible_entrypoints_on_regen(self, tmp_path):
-        # Review: coordinator:code-reviewer -- pins that a regen after C13's
-        # split does not silently DELETE the independently-editable door-
-        # cutover key and its provenance comment; `_write_allowlist` only
-        # ever owned `$comment`/`entrypoints`.
-        allowlist_path = tmp_path / "warm_entrypoint_allowlist.json"
-        allowlist_path.write_text(
-            json.dumps(
-                {
-                    "$comment": "old",
-                    "$comment_split": "split provenance note",
-                    "entrypoints": ["eligible-one"],
-                    "door_eligible_entrypoints": ["eligible-one"],
-                }
-            ),
-            encoding="utf-8",
-        )
-        bin_dir = tmp_path / "bin"
-        bin_dir.mkdir()
-        _write(bin_dir, "eligible-one.py", "def main(argv=None):\n    return 0\n")
-        verdicts = fdc.run_census(bin_dir=bin_dir)
-
-        fdc._write_allowlist(verdicts, allowlist_path=allowlist_path)
-
-        on_disk = json.loads(allowlist_path.read_text(encoding="utf-8"))
-        assert on_disk["$comment_split"] == "split provenance note"
-        assert on_disk["door_eligible_entrypoints"] == ["eligible-one"]
 
     def test_write_allowlist_creates_when_absent(self, tmp_path):
         allowlist_path = tmp_path / "fresh_allowlist.json"

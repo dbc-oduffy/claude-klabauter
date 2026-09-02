@@ -215,6 +215,15 @@ def _init_throwaway_repo(root: Path) -> None:
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "c7-brightline@example.invalid")
     _git(root, "config", "user.name", "c7-brightline")
+    # Signing off, both verbs: a throwaway fixture must not inherit the
+    # operator's global git config. `tag.gpgsign = true` (set globally on this
+    # box) turns the lightweight `git tag v0.0.1` below into an annotated tag
+    # and it dies "fatal: no tag message?" — exit 128, in fixture setup, before
+    # any assertion runs. Peer fixtures already pin `commit.gpgsign` this way
+    # (e.g. `coordinator_core/test_baton_assemble.py`); this one had only the
+    # identity lines.
+    _git(root, "config", "commit.gpgsign", "false")
+    _git(root, "config", "tag.gpgsign", "false")
     (root / "README.md").write_text("throwaway C7 brightline fixture\n", encoding="utf-8")
     _git(root, "add", "README.md")
     _git(root, "commit", "-q", "-m", "init")

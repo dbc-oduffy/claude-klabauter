@@ -258,6 +258,13 @@ CACHE_SCHEMA_VERSION = 1
 _CACHE_DIRNAME = "coordinator-housekeeping"
 _CACHE_FILENAME = "archive-index.json"
 
+#: Generator-provenance declaration: save_index()'s only write is
+#: `cache_path_for(common_dir)` = `<git common dir>/coordinator-housekeeping/
+#: archive-index.json` — a rebuildable cache under the checkout's git COMMON
+#: dir (same standing as R5's `git_common_dir(...)` exclusion), never a
+#: tracked repo artifact.
+GENERATES = []
+
 
 def cache_path_for(common_dir: Path) -> Path:
     """The archive index cache path for a checkout, given its git common dir

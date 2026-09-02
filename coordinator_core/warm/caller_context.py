@@ -59,14 +59,14 @@ NEGATIVE SPEC.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Any, Mapping, Optional
 
 from coordinator_core.subagent_sandbox.provision_report import (
     resolve_plugin_root as _resolve_plugin_root_ambient,
 )
 
-__all__ = ["CallerContext", "resolve_caller_context", "merge_env_axis"]
+__all__ = ["CallerContext", "resolve_caller_context"]
 
 
 @dataclass(frozen=True)
@@ -107,19 +107,6 @@ class CallerContext:
     agent_id: Optional[str]
     pid: Optional[str]
     settings_home: Optional[str] = None
-    env: Optional[Mapping[str, str]] = None
-    """The ONE declared-env-set axis (C4, docs/plans/2026-09-01-the-warm-
-    door-forwards-a-declared-env-set.md), joined onto this object by
-    `warm.server._serve_line` via `merge_env_axis` below -- never resolved
-    here, since `resolve_caller_context` below has no `_env` payload to
-    read (that field is envelope-level, popped by `_serve_line` alongside
-    `_caller`/`_settings_home`, not nested inside the `_caller` payload this
-    function parses). A name->value mapping of whichever
-    `env_forwarding.FORWARDING_SET` entries the caller's wire carried,
-    covering ALL three declared modes (refuse/override/borrow) in one flat
-    map -- mode dispatch on it happens downstream, in
-    `entry_seam._environ_identity_borrow`, never here. `None` until
-    `merge_env_axis` runs, which is every production `CallerContext`."""
 
 
 def resolve_caller_context(payload: Optional[Mapping[str, Any]] = None) -> CallerContext:
@@ -192,79 +179,4 @@ def resolve_caller_context(payload: Optional[Mapping[str, Any]] = None) -> Calle
         session_id=session_id,
         agent_id=agent_id,
         pid=pid,
-    )
-
-
-def merge_env_axis(caller: CallerContext, env_payload: Any) -> CallerContext:
-    """Fold the declared-env-set axis onto `caller`, DUAL-READING the two
-    wire shapes a request may carry (C4).
-
-    `env_payload` is whatever `warm.server._serve_line` popped off the
-    envelope-level `_env` field (a name->value mapping, from the rewritten
-    door legs) -- when it is a `Mapping`, it IS the resolved env axis,
-    verbatim (string-keyed, string-valued entries only; anything else is
-    dropped rather than trusted). When it is absent (every legacy producer:
-    `warm.client`, `warm.hook_http`, and any door build predating C2/C3),
-    the axis is SYNTHESIZED from the legacy top-level facts this
-    `CallerContext` already carries -- `caller.session_id` (already
-    resolved by `resolve_caller_context` from the `_caller` payload) and
-    `caller.settings_home` (already joined by `_serve_line` from the
-    `_settings_home` field) -- so a legacy-shape request resolves to the
-    SAME effective facts a new-shape request carrying an equivalent `_env`
-    object would (`test_envelope_producer_parity.py ::
-    test_dual_read_legacy_and_env_agree`). This synthesis covers exactly
-    the REFUSE and OVERRIDE modes (`COORDINATOR_SETTINGS_HOME`, the session
-    precedence triple) -- a BORROW-mode entry like
-    `MACHINE_LOCAL_REGISTRY_DIR` has no legacy top-level field to synthesize
-    from and simply does not arrive via a legacy producer, which is
-    expected (the plan's own body: `client.py`/`hook_http.py` are legitimate
-    non-door producers that are not moving to `_env` in this plan).
-
-    Also re-derives `caller.session_id`/`caller.settings_home` FROM the
-    resolved env axis when the new shape carried a value neither legacy
-    field did, so every downstream reader of those two fields (the
-    settings-home refusal gate in `warm.server._run_dispatch`, and the
-    telemetry `sid=` field) sees one coherent answer regardless of which
-    wire shape produced it -- never two call sites disagreeing about what
-    the caller claimed.
-    """
-    from coordinator_core.warm.env_forwarding import FORWARDING_SET, OVERRIDE, REFUSE
-
-    override_names = [entry.name for entry in FORWARDING_SET if entry.mode == OVERRIDE]
-    refuse_names = [entry.name for entry in FORWARDING_SET if entry.mode == REFUSE]
-
-    if isinstance(env_payload, Mapping):
-        env_map = {
-            key: value
-            for key, value in env_payload.items()
-            if isinstance(key, str) and isinstance(value, str) and value
-        }
-    else:
-        env_map = {}
-
-    session_id = caller.session_id
-    for name in override_names:
-        value = env_map.get(name)
-        if value:
-            session_id = value
-            break
-
-    settings_home = caller.settings_home
-    for name in refuse_names:
-        value = env_map.get(name)
-        if value:
-            settings_home = value
-            break
-
-    merged_env = dict(env_map)
-    if session_id and override_names and override_names[0] not in merged_env:
-        merged_env[override_names[0]] = session_id
-    if settings_home and refuse_names and refuse_names[0] not in merged_env:
-        merged_env[refuse_names[0]] = settings_home
-
-    return replace(
-        caller,
-        session_id=session_id,
-        settings_home=settings_home,
-        env=merged_env,
     )

@@ -72,6 +72,15 @@ from coordinator_core.session.liveness import session_live
 
 SCHEMA_VERSION = 1
 
+#: Generator-provenance declaration (generator_provenance.py). `_write_json_
+#: atomic` writes under `settings_home() / "state" / "group-em"` --
+#: `settings_home()` resolves to `${CLAUDE_HOME:-$HOME}/.coordinator-claude-
+#: settings` (or `COORDINATOR_SETTINGS_HOME` when set), never a path inside
+#: this repo's own tracked tree. Same disposition as `async_hook_status.py`'s
+#: `claude_config_dir()`-rooted marker: an operator-home cache, not a repo
+#: artifact.
+GENERATES = []
+
 
 def _safe_stem(text: str) -> str:
     return "".join(c for c in text if c.isalnum() or c in "-_")
@@ -346,14 +355,6 @@ def claim(
             "live_reason": liveness.live_reason,
         }
         record = _build_record(repo_root, session_id, peer_name, nominated_by)
-        # TRACE half only (mirrors `watch_heartbeat.py`'s `stamp`, see module docstring):
-        # persist the replaced incumbent's identity ON DISK, additive keys only, so a cold
-        # read of the record afterwards is never indistinguishable from a first-ever claim.
-        # This is NOT the DECLINE half -- `claim` still auto-replaces here, unconditionally.
-        record["replaced_holder_session_id"] = replaced_holder["session_id"]
-        record["replaced_holder_name"] = replaced_holder["peer_name"]
-        record["replaced_nominated_at"] = replaced_holder["nominated_at"]
-        record["replaced_live_reason"] = replaced_holder["live_reason"]
         _write_json_atomic(_record_path(repo_root, directory), record)
         return {
             "claimed": True,

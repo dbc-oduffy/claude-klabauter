@@ -59,6 +59,43 @@ from pathlib import Path
 from typing import List
 
 from coordinator_core.git.run import run_git
+from coordinator_core.install.write_surface import (
+    StaticClause,
+    WriteSurfaceDeclaration,
+    WriteSurfaceEntry,
+)
+
+WRITE_SURFACE = WriteSurfaceDeclaration(
+    writer_id="git-perf-config",
+    source_module="coordinator_core.install.git_perf_config",
+    clauses=(
+        # Clause 1 — `apply()`'s one adopted key, plus the index extension
+        # the key alone is inert without (module docstring: "the cache
+        # lives INSIDE `.git/index`"). Per-repo, per this module's own
+        # negative spec: never `~/.gitconfig`, and a differing existing
+        # value is reported and left alone, never overwritten.
+        StaticClause(
+            entries=(
+                WriteSurfaceEntry(
+                    kind="git-config-key",
+                    key="core.untrackedCache",
+                    reason="apply(): set true on a fs that passes git's own mtime probe, then extended into .git/index via `update-index --untracked-cache`",
+                ),
+            ),
+        ),
+        # Clause 2 — the three maintenance keys `_apply_maintenance_keys`
+        # sets alongside clause 1, same idempotent/never-clobber contract.
+        # Never unset on uninstall (module docstring: git's compiled
+        # defaults resume harmlessly once the keys are gone).
+        StaticClause(
+            entries=(
+                WriteSurfaceEntry(kind="git-config-key", key="maintenance.strategy"),
+                WriteSurfaceEntry(kind="git-config-key", key="maintenance.auto"),
+                WriteSurfaceEntry(kind="git-config-key", key="maintenance.prefetch.enabled"),
+            ),
+        ),
+    ),
+)
 
 
 def filesystem_supports_untracked_cache(repo: Path) -> bool:

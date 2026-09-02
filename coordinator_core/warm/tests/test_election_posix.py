@@ -26,6 +26,7 @@ running them for the first time.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -44,6 +45,26 @@ posix_only = pytest.mark.skipif(
 #: Windows and would trip the sun_path budget the derivation is being checked
 #: for, turning every path assertion into a failure about the fixture.
 SHORT_BASE = "/run/u"
+
+
+@pytest.fixture
+def short_runtime_base():
+    """The suite-root warm-runtime base, NAMED so a test can build socket
+    paths under it directly.
+
+    `coordinator_core/conftest.py::_quarantine_real_home` already redirects
+    `breadcrumb.RUNTIME_BASE_ENV` to a short, real, per-test root under
+    `/tmp` on POSIX (removed on that fixture's own teardown) -- the fix for
+    exactly the `sun_path` overflow this fixture used to work around by
+    minting a second short tempdir. That fixture is autouse and sets an env
+    var rather than returning a nameable value, so this fixture reads the
+    same env var back and hands it out by name, for the tests below that
+    build paths (`short_runtime_base / "svc" / "tok.sock"`) rather than
+    reading `RUNTIME_BASE_ENV` themselves.
+    """
+    from coordinator_core.warm import breadcrumb
+
+    return Path(os.environ[breadcrumb.RUNTIME_BASE_ENV])
 
 
 # ---------------------------------------------------------------------------
@@ -342,12 +363,14 @@ def test_a_writable_parent_is_repaired_when_it_can_be(tmp_path: Path) -> None:
 
 
 @posix_only
-def test_elect_verifies_the_ancestors_it_was_given_a_base_for(tmp_path: Path, monkeypatch) -> None:
+def test_elect_verifies_the_ancestors_it_was_given_a_base_for(
+    tmp_path: Path, short_runtime_base: Path, monkeypatch
+) -> None:
     """Wiring pin: `elect_unix_socket` must pass `base=` through, or the
     ancestor check exists and never runs on the real boot path."""
     from coordinator_core.warm import breadcrumb
 
-    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path))
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(short_runtime_base))
     path = election.socket_path("tok1", engine_clone=tmp_path)
 
     seen: list = []
@@ -360,10 +383,10 @@ def test_elect_verifies_the_ancestors_it_was_given_a_base_for(tmp_path: Path, mo
 
 
 @posix_only
-def test_elect_wins_binds_and_listens(tmp_path: Path) -> None:
+def test_elect_wins_binds_and_listens(short_runtime_base: Path) -> None:
     import socket
 
-    path = tmp_path / "svc" / "tok.sock"
+    path = short_runtime_base / "svc" / "tok.sock"
     sock = election.elect_unix_socket(path)
     try:
         assert isinstance(sock, socket.socket)
@@ -374,8 +397,8 @@ def test_elect_wins_binds_and_listens(tmp_path: Path) -> None:
 
 
 @posix_only
-def test_elect_loses_to_a_live_owner(tmp_path: Path) -> None:
-    path = tmp_path / "svc" / "tok.sock"
+def test_elect_loses_to_a_live_owner(short_runtime_base: Path) -> None:
+    path = short_runtime_base / "svc" / "tok.sock"
     winner = election.elect_unix_socket(path)
     try:
         with pytest.raises(election.ElectionLost) as excinfo:
@@ -386,13 +409,13 @@ def test_elect_loses_to_a_live_owner(tmp_path: Path) -> None:
 
 
 @posix_only
-def test_elect_reclaims_a_hard_killed_servers_socket(tmp_path: Path) -> None:
+def test_elect_reclaims_a_hard_killed_servers_socket(short_runtime_base: Path) -> None:
     """THE test this whole POSIX arm exists for. A server killed without
     cleanup leaves a socket FILE; `bind()` then fails EADDRINUSE forever
     against a path nothing is listening on, and no amount of retrying fixes
     it. Closing the socket without unlinking reproduces exactly that state.
     """
-    path = tmp_path / "svc" / "tok.sock"
+    path = short_runtime_base / "svc" / "tok.sock"
     dead = election.elect_unix_socket(path)
     dead.close()  # the file survives -- this IS the stale-socket condition
     assert path.exists()
@@ -422,5 +445,5 @@ def test_a_held_election_lock_reads_as_a_loss(tmp_path: Path) -> None:
 
 
 @posix_only
-def test_a_probe_of_a_never_created_path_is_absent(tmp_path: Path) -> None:
-    assert election.probe_endpoint(tmp_path / "nothing.sock") == election.PROBE_ABSENT
+def test_a_probe_of_a_never_created_path_is_absent(short_runtime_base: Path) -> None:
+    assert election.probe_endpoint(short_runtime_base / "nothing.sock") == election.PROBE_ABSENT

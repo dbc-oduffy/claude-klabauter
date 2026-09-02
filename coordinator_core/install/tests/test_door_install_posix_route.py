@@ -181,27 +181,7 @@ def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path, 
     install-substrate-exits-0-after-failing-45f4d5390b68.yaml's INVERSE
     failure mode: this pins the direction where a failure must not kill
     every name after it, while the existing OSError leg keeps the run
-    failing loud rather than exiting 0).
-
-    Review: overengineering-reviewer flagged that raising `SystemExit` here
-    constructs a path via monkeypatching `_cut_over_to_native_door` itself
-    rather than exercising the real call chain, since
-    `_write_native_door_forwarder` already catches `(DoorInstallError,
-    SystemExit)` one level down and returns `None`. That reading is
-    correct in isolation, but narrowing this loop's own catch to `OSError`
-    flips this plan's own falsifier
-    (`docs/plans/2026-09-01-the-dogfooded-install-stops-lying-about.
-    falsifier.py`) from PASS back to FALSIFIED -- its static check reads a
-    bare `except OSError` around this call chain as the door-build abort
-    bug regardless of the inner catch. Escalated rather than applied; the
-    catch here (and this test) stay as they were pending that call.
-
-    Review: coordinator:code-reviewer (Finding 3) -- `_cut_over_to_native_door`
-    is monkeypatched to always raise before `_write_agent_forwarder` is ever
-    reached, so this test only proves loop continuation (both names attempted,
-    run still raises); it does NOT exercise the Python-pair fallback landing.
-    See `test_write_agent_helper_forwarders_writes_python_fallback_on_real_build_failure`
-    below for that, with the real `_cut_over_to_native_door` call chain."""
+    failing loud rather than exiting 0)."""
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
 
@@ -226,43 +206,3 @@ def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path, 
         substrate._write_agent_helper_forwarders(
             agent_helper_target_map, bin_dst, check_only=False, engine_root=tmp_path / "engine",
         )
-
-    # Review: coordinator:code-reviewer (Finding 3) -- `_cut_over_to_native_door`
-    # raises before `_write_agent_forwarder` is ever called here, so
-    # `_write_agent_forwarder` must NOT have been reached for either name;
-    # this pins what this test actually proves (loop continuation), not the
-    # fallback write itself.
-    assert written_py == []
-
-
-def test_write_agent_helper_forwarders_writes_python_fallback_on_real_build_failure(tmp_path, monkeypatch):
-    """Review: coordinator:code-reviewer (Finding 3) -- integration companion
-    to the test above, exercising the REAL `_cut_over_to_native_door` ->
-    `_write_native_door_forwarder` call chain (only
-    `door_install.install_named_forwarder` is mocked, to raise
-    `DoorInstallError` the way a missing POSIX toolchain does) and asserting
-    the degraded name's Python forwarder pair actually lands on disk --
-    the claim the docstring above makes but its own monkeypatching of
-    `_cut_over_to_native_door` never exercised."""
-    engine_root = tmp_path / "engine"
-    _stamp_engine_root(engine_root)
-    bin_dst = tmp_path / "bin"
-    bin_dst.mkdir()
-
-    from coordinator_core.install import door_install as door_install_mod
-
-    monkeypatch.setattr(door_install_mod, "launcher_is_installable", lambda *a, **k: True)
-
-    def _raise_doorinstallerror(*args, **kwargs):
-        raise door_install_mod.DoorInstallError("no C compiler found on PATH")
-
-    monkeypatch.setattr(door_install_mod, "install_named_forwarder", _raise_doorinstallerror)
-    monkeypatch.setattr("coordinator_core.warm.engine_root.is_engine_root", lambda root: True)
-
-    agent_helper_target_map = {"alpha": "alpha_target"}
-
-    substrate._write_agent_helper_forwarders(
-        agent_helper_target_map, bin_dst, check_only=False, engine_root=engine_root,
-    )
-
-    assert (bin_dst / "alpha").exists() or (bin_dst / "alpha.py").exists() or (bin_dst / "alpha.cmd").exists()

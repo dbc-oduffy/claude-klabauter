@@ -215,6 +215,32 @@ def test_a_killed_op_image_is_reaped_by_the_orphan_sweep_even_without_manifest_m
     assert not stale.exists()
 
 
+def test_the_auto_push_forwarder_is_reaped_in_all_three_shapes(monkeypatch, tmp_path):
+    """C8 of docs/plans/2026-08-30-who-pushes-and-when.md deleted
+    `coordinator/bin/coordinator-auto-push.py` and its `bin-inventory.json`
+    row together, leaving three forwarder shapes on disk with nothing to
+    forward to. They are not merely inert: `_resolve_claude_klabauter.exec_cli` exits
+    127 telling the reader to run `scripts/setup.py` to repair a tree that
+    has nothing missing, and every repo's still-installed post-commit hook
+    reaches one of them on every commit (reported from example-cockpit-repo
+    2026-09-01). One stem covers all three shapes, so one roster entry must
+    retire the whole family."""
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    stale = [
+        bin_dst / "coordinator-auto-push",
+        bin_dst / "coordinator-auto-push.cmd",
+        bin_dst / "coordinator-auto-push.ps1",
+    ]
+    for entry in stale:
+        entry.write_text("a forwarder whose target no longer exists\n", encoding="utf-8")
+
+    substrate._sweep_orphaned_agent_helpers(bin_dst, {}, {}, check_only=False)
+
+    assert [e for e in stale if e.exists()] == []
+
+
 def test_a_killed_op_image_check_only_reports_but_does_not_remove(tmp_path):
     """`check_only` stays read-only across every identification path here,
     including the killed-op one -- a probe must not mutate."""

@@ -156,10 +156,17 @@ import time
 from typing import Any, Callable, Optional
 
 from coordinator_core.group_em import read_pass
-from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.session import peer_roster
 from coordinator_core.session.receiver_state import parse_iso_timestamp
 from coordinator_core.session import subagent_share
+
+#: Corpus-mutator declaration (generator-provenance sweep): `_record_offer`
+#: and `decline` append to `state/subagent-share/<session-id>/group-em-send-
+#: log.jsonl`, one file per session id -- a data-dependent set GENERATES
+#: cannot name. Same extension-scoped glob convention as the sibling
+#: counters in this tree (`guard_advisory_counter.py`,
+#: `engine_provenance_counter.py`).
+MUTATES = ["state/subagent-share/**/*.jsonl"]
 
 #: `gate` values `decline()` accepts -- which gate the EM declared against.
 #: No other value is written; `decline()` refuses anything else.
@@ -805,13 +812,4 @@ def build_send_digest(
         "unrecorded": unrecorded,
         "gate_declaration_required": True,
         "open_obligations": open_obligations,
-        # THE STRUCK INSTANT -- the SAME `now` cooldowns/dwell were computed
-        # against, never a second `time.time()` call. Matches
-        # `idle_report.build_report`'s `as_of` key and format exactly (same
-        # precedent, same helper shape): a digest pasted into context or read
-        # minutes later as one leg of a `groupem.enter` payload could report
-        # WHAT it counted but not WHEN.
-        # Review: overengineering-reviewer finding 3 -- was a literal copy of
-        # the fromtimestamp/strftime expression; now the shared seam.
-        "as_of": watch_heartbeat.iso_instant(now),
     }

@@ -113,7 +113,12 @@ def _clone_key_dirs(base: Path) -> set[str]:
     return {entry.name for entry in base.iterdir() if entry.is_dir()}
 
 
-_WRITER_SYMBOLS = ("write_breadcrumb", "telemetry.flush", "write_discovery")
+_WRITER_SYMBOLS = ("write_breadcrumb", "telemetry.flush", "write_discovery"    # Added 2026-09-02: calls `write_discovery` to stand up the predecessor
+    # record a publish-triggered successor warm-up reads. Registered on this
+    # guard's first red against it, same as the two entries above -- the guard
+    # names its own remediation and this is it.
+    "coordinator_core/warm/tests/test_publish_warms_successor.py",
+)
 
 _WARM_TESTS_DIR = _REPO_ROOT / "coordinator_core" / "warm" / "tests"
 

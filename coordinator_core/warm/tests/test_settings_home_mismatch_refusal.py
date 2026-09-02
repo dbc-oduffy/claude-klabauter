@@ -43,12 +43,42 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import tempfile
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from coordinator_core.warm import caller_context, server, settings_home_claim
 from coordinator_core.warm.tests.test_server_loop import _FakeIO, _FakeVersionState, _frame
+
+
+@pytest.fixture(autouse=True)
+def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
+    """Overrides the suite-wide HOME quarantine's `warm-runtime-base`
+    (`coordinator_core/conftest.py::_quarantine_real_home`) with a short,
+    real on-disk root under `/tmp`.
+
+    Only `_sent_request`'s two tests below drive the real
+    `client.try_warm_dispatch` preamble (`election.socket_path`), but the
+    quarantine's own path is already 90+ bytes deep on macOS before
+    `coordinator/warm/<16-hex-hash>/<token>.sock` is appended, tripping
+    `election.SUN_PATH_MAX_BYTES` (100) before those tests' own
+    assertions run. Applied autouse for uniformity with this dispatch's
+    sibling files. Same fix as `test_election_posix.py::
+    short_runtime_base` (committed b4e300c8f1); duplicated here rather
+    than lifted into a shared `conftest.py` because this dispatch's scope
+    is this file only.
+    """
+    from coordinator_core.warm import breadcrumb
+
+    base = Path(tempfile.mkdtemp(prefix="wrb-", dir="/tmp"))
+    try:
+        monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
+        yield base
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 def _serve(frame: bytes, dispatch) -> _FakeIO:

@@ -150,16 +150,7 @@ class CloneSiblingRepoError(RuntimeError):
 
 def _normalize_repo_url(url: str) -> str:
     """Strip a trailing `/` and `.git` suffix so equivalent spellings of the
-    same remote (`.../repo`, `.../repo/`, `.../repo.git`) compare equal.
-
-    Exact-match only beyond that: scheme/host casing and `git@host:` vs
-    `https://host/` spelling are NOT normalized, so two URLs that resolve to
-    the same remote but differ in those respects compare unequal and trip
-    the adopted-clone identity guard. Deliberate — a false-positive refusal
-    is the safer failure direction for a check whose whole point is "don't
-    silently adopt the wrong repo." (Review: code-reviewer -- Finding 5,
-    undocumented exact-match scope.)
-    """
+    same remote (`.../repo`, `.../repo/`, `.../repo.git`) compare equal."""
     normalized = url.strip().rstrip("/")
     if normalized.endswith(".git"):
         normalized = normalized[: -len(".git")]
@@ -169,40 +160,16 @@ def _normalize_repo_url(url: str) -> str:
 def _existing_origin_url(target: Path) -> Optional[str]:
     """Read `origin`'s remote URL from an already-present `target` via
     `git remote get-url origin` — a local-config read, no network fetch.
-    Returns ``None`` when `origin` is unset, i.e. when git ran and answered.
-
-    NEGATIVE SPEC — ``None`` means "git answered, and there is no origin",
-    never "the question could not be asked". An unresolvable `git` and a
-    timed-out read both raise `CloneSiblingRepoError` rather than returning
-    ``None``: returning it would report "this clone has no origin" to
-    `clone_idempotent`'s adopted-clone identity check, which would then
-    refuse the target and name a mismatch that was never observed. The
-    caller's single documented failure mode is that error class (see
-    `CloneSiblingRepoError`, which already claims the git-missing case), so
-    a bare `FileNotFoundError`/`TimeoutExpired` escaping here breaks the
-    contract in the one direction the check exists to keep honest.
-    (Review: code-reviewer -- Finding 1, uncaught spawn failures.)"""
-    try:
-        result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            cwd=str(target),
-            capture_output=True,
-            text=True,
-            timeout=_CLONE_TIMEOUT_SECS,
-            check=False,
-            **no_console_creationflags(),
-        )
-    except FileNotFoundError as exc:
-        raise CloneSiblingRepoError(
-            f"git is not resolvable on PATH, so {target}'s origin could not be "
-            f"read. Install git, or remove the existing target to force a "
-            f"fresh clone."
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise CloneSiblingRepoError(
-            f"reading {target}'s origin timed out after {_CLONE_TIMEOUT_SECS}s. "
-            f"Re-run once the repository is not locked by another process."
-        ) from exc
+    Returns ``None`` if `origin` is unset or the command otherwise fails."""
+    result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=str(target),
+        capture_output=True,
+        text=True,
+        timeout=_CLONE_TIMEOUT_SECS,
+        check=False,
+        **no_console_creationflags(),
+    )
     if result.returncode != 0:
         return None
     return result.stdout.strip()

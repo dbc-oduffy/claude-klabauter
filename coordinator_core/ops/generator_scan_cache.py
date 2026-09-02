@@ -46,7 +46,7 @@ from pathlib import Path
 from coordinator_core.ops.generator_provenance import FileWrites
 
 _CACHE_RELATIVE_PATH = ("state", "cache", "generator-scan-cache.json")
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 def _cache_path(repo_root: Path) -> Path:
@@ -86,6 +86,7 @@ def file_writes_to_json(writes: FileWrites) -> dict:
         "mutates": writes.mutates,
         "write_sites": [_write_site_to_json(site) for site in writes.write_sites],
         "syntax_error": writes.syntax_error,
+        "write_surface_paths": list(writes.write_surface_paths),
     }
 
 
@@ -101,11 +102,17 @@ def file_writes_from_json(data: object) -> FileWrites:
     syntax_error = data["syntax_error"]
     if not isinstance(syntax_error, bool):
         raise ValueError("syntax_error must be a boolean")
+    surface_paths_raw = data["write_surface_paths"]
+    if not isinstance(surface_paths_raw, list) or not all(
+        isinstance(entry, str) for entry in surface_paths_raw
+    ):
+        raise ValueError("write_surface_paths must be a list of strings")
     return FileWrites(
         generates=data["generates"],
         mutates=data["mutates"],
         write_sites=[_write_site_from_json(site) for site in write_sites_raw],
         syntax_error=syntax_error,
+        write_surface_paths=tuple(surface_paths_raw),
     )
 
 
