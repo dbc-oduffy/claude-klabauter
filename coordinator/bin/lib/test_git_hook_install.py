@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import pathlib
 import re
 import shutil
 import subprocess
@@ -148,7 +149,7 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
 # rungs, and losing either must still be caught.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_BODY_SHAPE_CHECKSUM = "98cd38f8e25a78cb40e0990769cb89b62d90e49d1ab869fe78befb81c2cb67cc"
+_EXPECTED_BODY_SHAPE_CHECKSUM = "022eb7f1850411fcb5fabd021682a1e15242ac6d22eeb434f56c5328e78c0af4"
 
 _BAKED_PY_PLACEHOLDER = "<BAKED-INTERPRETER>"
 
@@ -647,3 +648,267 @@ def test_append_block_msys_normalisation_leaves_a_windows_path_alone():
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "C:/Users/someone/bin/tool"
+
+
+# ---------------------------------------------------------------------------
+# POSIX native door image at the BARE settings-home name (2026-09-02, gen 12).
+# `forwarder_self_heal._cut_over_to_native_door` replaces the extensionless
+# settings-home entry with a compiled image on every platform. On Windows the
+# `.exe` probe catches it; on POSIX there is no extension and no `-ef` pair, so
+# the pre-gen-12 chain fed a Mach-O binary to `exec "$_PY"` and every commit in
+# every repo on the box died with a Non-UTF-8 SyntaxError.
+# ---------------------------------------------------------------------------
+
+
+def _native_image_settings_home(tmp_path, marker):
+    """A settings-home bin/ whose bare entry is a real non-`#!` executable."""
+    settings_home = tmp_path / "settings-home"
+    (settings_home / "bin").mkdir(parents=True)
+    forwarder = settings_home / "bin" / "coordinator-prepare-commit-msg"
+    # A REAL native image, not a hand-rolled header: a file that merely starts
+    # with Mach-O magic is not executable, so `exec` would fall back to `sh`
+    # and the test would pass for the wrong reason. `/usr/bin/true` is the
+    # cheapest genuine non-`#!` executable that is present everywhere this
+    # suite runs, and running it is observable as "exit 0 with no WARNING"
+    # against an interpreter chain rigged to warn loudly.
+    shutil.copy(marker, forwarder)  # copy2 would carry SIP st_flags
+    forwarder.chmod(0o755)
+    return settings_home, forwarder
+
+
+def test_shim_body_execs_a_posix_native_forwarder_instead_of_the_interpreter():
+    """The bare-name door image must be exec'd, never handed to `$_PY`."""
+    body = _shim_body(
+        "/fake/coord/bin",
+        "coordinator-prepare-commit-msg",
+        'exec "$_PY" "$SCRIPT" "$@"',
+    )
+    assert "_native() {" in body, "no native-image probe at all — gen 12 regressed"
+    assert body.index("_native() {") < body.index('_native "$_fwd"')
+    # The probe must sit ahead of the interpreter chain, or the settings-home
+    # rung resolves first and the exec never happens.
+    assert body.index('_native "$_fwd" && exec') < body.index('SCRIPT=')
+
+
+def test_append_block_defines_the_native_probe_it_calls():
+    block = _append_block(*_APPEND_BLOCK_ARGS)
+    assert "_native() {" in block, (
+        "_append_block calls _native without emitting its definition. The block "
+        "is appended into a foreign hook, so nothing above it is ours to borrow."
+    )
+    assert block.index("_native() {") < block.index('_native "')
+
+
+def test_native_probe_costs_no_subprocess():
+    """This runs on every commit — DR-344 forbids a spawn here. `read` and
+    `case` are builtins; a `file`/`head`/`od` shell-out would not be."""
+    body = _shim_body(
+        "/fake/coord/bin",
+        "coordinator-prepare-commit-msg",
+        'exec "$_PY" "$SCRIPT" "$@"',
+    )
+    probe = re.search(r"_native\(\) \{.*?\}\n", body, re.S)
+    assert probe
+    for spawner in ("$(", "`", "file ", "head ", "od ", "xxd ", "grep "):
+        assert spawner not in probe.group(0), f"native probe spawns via {spawner!r}"
+
+
+def test_append_block_runs_a_posix_native_forwarder_directly(tmp_path):
+    native = pathlib.Path("/usr/bin/true")
+    if not native.exists():
+        import pytest
+
+        pytest.skip("no native /usr/bin/true on this host")
+    settings_home, _ = _native_image_settings_home(tmp_path, native)
+
+    hook = tmp_path / "prepare-commit-msg"
+    hook.write_text(
+        _with_unresolvable_interpreter(
+            "#!/bin/sh\n" + _append_block(*_APPEND_BLOCK_ARGS) + " || true\n"
+        ),
+        encoding="utf-8",
+    )
+
+    env = dict(os.environ)
+    env["COORDINATOR_SETTINGS_HOME"] = settings_home.as_posix()
+    result = subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
+
+    # The interpreter chain is rigged unresolvable, so reaching it warns
+    # loudly. A clean exit therefore means the forwarder ran and the chain was
+    # never entered -- the exact thing gen 12 restores.
+    assert result.returncode == 0
+    assert "WARNING" not in result.stderr, (
+        f"the bare-name native forwarder was not run; stderr={result.stderr!r}"
+    )
+    assert "SyntaxError" not in result.stderr
+
+
+def test_native_probe_leaves_a_genuine_python_script_to_the_interpreter(tmp_path):
+    """A coordinator-written CLI opens `#!` and must NOT be mistaken for a door
+    image — misclassifying it would exec a Python file as a program."""
+    sh = _sh()
+    if not sh:
+        import pytest
+
+        pytest.skip("no POSIX sh available on this host")
+
+    body = _shim_body(
+        "/fake/coord/bin",
+        "coordinator-prepare-commit-msg",
+        'exec "$_PY" "$SCRIPT" "$@"',
+    )
+    probe = re.search(r"_native\(\) \{.*?\}\n", body, re.S).group(0)
+
+    script = tmp_path / "cli"
+    script.write_text("#!/usr/bin/env python3\nprint(1)\n", encoding="utf-8")
+    script.chmod(0o755)
+    checks = f'{probe}_native "{script.as_posix()}" && printf native || printf script\n'
+    result = subprocess.run([sh, "-c", checks], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "script"
+
+
+# ---------------------------------------------------------------------------
+# THE PAIR TEST (2026-09-02). Everything about the native-door cutover was
+# verified by asking the PRODUCER's own question -- did I write the image, is
+# it manifested, does it resolve, does my report call it healthy -- and the one
+# test that asked a CONSUMER's question
+# (`test_append_block_runs_an_installed_exe_forwarder_directly`) fabricated the
+# WINDOWS artifact shape on a POSIX box, so it went green on macOS against a
+# file named `.exe` containing `#!/bin/sh`, a shape macOS cannot produce. No
+# test on any platform ever ran a consumer against the artifact its own
+# platform actually makes, and 13 repos lost `git commit` for it.
+#
+# The fixture below is therefore derived from the PRODUCER
+# (`door_install.NATIVE_IMAGE_MAGIC`) and branched on the CURRENT platform,
+# never hand-typed from a failure report -- a hand-typed fixture is exactly how
+# the defect survived. Its teeth are
+# `test_pair_fixture_goes_red_without_the_native_probe`: strip
+# `_NATIVE_PROBE_DEF` and this must FAIL. Without that control the pair test
+# passes on a body that never learned the POSIX half, which is the state this
+# suite sat in for four days.
+# ---------------------------------------------------------------------------
+
+_INCIDENT_STRINGS = ("Non-UTF-8", "SyntaxError", "can't open file")
+
+
+def _door_native_magic():
+    """The producer's own magic-byte tuple, imported rather than restated."""
+    repo_root = Path(__file__).resolve().parents[3]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from coordinator_core.install.door_install import NATIVE_IMAGE_MAGIC
+
+    return NATIVE_IMAGE_MAGIC
+
+
+def _install_native_image_as_this_platform_does(tmp_path, script_name):
+    """Write the settings-home entry the cutover produces ON THIS PLATFORM.
+
+    POSIX gets the bare name (no extension to signal anything); Windows gets
+    the `.exe` sibling. The bytes open with a real magic value from
+    `door_install.NATIVE_IMAGE_MAGIC`, so the fixture cannot drift from the
+    producer's own definition of a native image.
+    """
+    magic = _door_native_magic()
+    bin_dir = tmp_path / "settings-home" / "bin"
+    bin_dir.mkdir(parents=True)
+    name = script_name + (".exe" if os.name == "nt" else "")
+    image = bin_dir / name
+    # A real executable is needed for the hook to actually RUN it, and a
+    # hand-rolled magic header is not one. `/usr/bin/true` is a genuine Mach-O
+    # image on macOS; assert it matches the producer's magic so this fixture
+    # fails loudly rather than silently testing the wrong shape.
+    donor = Path("/usr/bin/true")
+    if os.name != "nt" and donor.exists():
+        shutil.copy(donor, image)  # copy2 would carry SIP st_flags
+        assert image.open("rb").read(8).startswith(magic), (
+            "the donor binary does not match door_install.NATIVE_IMAGE_MAGIC — "
+            "the fixture is no longer derived from the producer"
+        )
+    else:
+        image.write_bytes(magic[0] + b"\n")
+    image.chmod(0o755)
+    return tmp_path / "settings-home", image
+
+
+def _run_both_emitted_hooks(tmp_path, settings_home):
+    """Run BOTH emitters' bodies against the fixture, interpreter sabotaged.
+
+    The interpreter chain is made unresolvable so that reaching it is loud: a
+    clean run therefore proves the image was invoked directly.
+    """
+    bodies = {
+        "shim": _shim_body(
+            "/fake/coord/bin",
+            "coordinator-prepare-commit-msg",
+            'exec "$_PY" "$SCRIPT" "$@"',
+        ),
+        "append": "#!/bin/sh\n" + _append_block(*_APPEND_BLOCK_ARGS) + " || true\n",
+    }
+    env = dict(os.environ)
+    env["COORDINATOR_SETTINGS_HOME"] = settings_home.as_posix()
+    env["COORDINATOR_SESSION_ID"] = "pair-test"
+    results = {}
+    for label, body in bodies.items():
+        hook = tmp_path / f"hook-{label}"
+        hook.write_text(_with_unresolvable_interpreter(body), encoding="utf-8")
+        results[label] = subprocess.run(
+            [_sh(), str(hook)], capture_output=True, text=True, env=env, errors="replace"
+        )
+    return results
+
+
+def test_a_cut_over_bin_survives_both_hook_emitters(tmp_path):
+    """Both emitted hook bodies must run a cut-over image, never interpret it."""
+    if not _sh():
+        import pytest
+
+        pytest.skip("no POSIX sh available on this host")
+
+    settings_home, _ = _install_native_image_as_this_platform_does(
+        tmp_path, "coordinator-prepare-commit-msg"
+    )
+    for label, result in _run_both_emitted_hooks(tmp_path, settings_home).items():
+        assert result.returncode == 0, f"{label}: rc={result.returncode} {result.stderr!r}"
+        combined = result.stdout + result.stderr
+        for token in _INCIDENT_STRINGS:
+            assert token not in combined, (
+                f"{label} emitter fed the native image to an interpreter "
+                f"({token!r} in output) — this is the 2026-09-02 defect"
+            )
+        assert "WARNING" not in result.stderr, (
+            f"{label}: the interpreter chain was reached, so the image was not "
+            f"run directly; stderr={result.stderr!r}"
+        )
+
+
+def test_pair_fixture_goes_red_without_the_native_probe(tmp_path, monkeypatch):
+    """THE NEGATIVE CONTROL — the reason the pair test has teeth.
+
+    Remove the native probe and the same fixture must reproduce the incident.
+    If this test ever passes, the pair test above has stopped discriminating
+    and is green on a body that never learned the POSIX half.
+    """
+    if not _sh() or os.name == "nt":
+        import pytest
+
+        pytest.skip("POSIX-only: the control reproduces the POSIX-half defect")
+
+    monkeypatch.setattr(ghi, "_NATIVE_PROBE_DEF", "")
+    settings_home, _ = _install_native_image_as_this_platform_does(
+        tmp_path, "coordinator-prepare-commit-msg"
+    )
+    results = _run_both_emitted_hooks(tmp_path, settings_home)
+
+    reproduced = any(
+        r.returncode != 0
+        or any(t in (r.stdout + r.stderr) for t in _INCIDENT_STRINGS)
+        or "WARNING" in r.stderr
+        for r in results.values()
+    )
+    assert reproduced, (
+        "stripping _NATIVE_PROBE_DEF did NOT break the hook, so the pair test "
+        "above proves nothing — the probe is no longer what makes it pass"
+    )

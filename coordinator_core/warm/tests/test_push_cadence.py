@@ -340,7 +340,7 @@ def test_failed_push_feeds_the_failure_detector(tmp_path, monkeypatch):
     monkeypatch.setattr(
         push_cadence,
         "log_failure",
-        lambda repo_root, branch, route, err_class, attempts, first_err, stderr_text, unconfirmed=False: logged.append(
+        lambda repo_root, branch, route, err_class, attempts, first_err, stderr_text, unconfirmed=None: logged.append(
             (repo_root, branch, route, err_class, attempts, first_err, unconfirmed)
         ),
     )
@@ -349,7 +349,6 @@ def test_failed_push_feeds_the_failure_detector(tmp_path, monkeypatch):
 
     assert len(logged) == 1
     repo_root, branch, route, err_class, attempts, first_err, unconfirmed = logged[0]
-    assert unconfirmed is False
     assert branch == "work/x/2026-08-30"
     assert route == "cadence-sweep"
     assert err_class == "sweep-failed"
@@ -358,6 +357,11 @@ def test_failed_push_feeds_the_failure_detector(tmp_path, monkeypatch):
     # hardcoded 1 for three months and every reader of push-failures.log took
     # that as measured (example-retrieval-repo-em memo, 2026-08-30).
     assert attempts == 3
+    # A fake that accepts and ignores a new argument is how this went stale
+    # in the first place -- assert its VALUE too, not merely its presence.
+    # `outcome.failed` is populated (a `failed` outcome), so this is the
+    # non-unconfirmed leg -- `is_unconfirmed` must be False.
+    assert unconfirmed is False
 
 
 def test_sweep_feed_reports_the_outcomes_own_attempt_count(tmp_path, monkeypatch):

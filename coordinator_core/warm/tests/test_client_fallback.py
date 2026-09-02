@@ -22,6 +22,9 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -33,6 +36,34 @@ from coordinator_core.warm import client
 #: it from here rather than from `client.engine_token`, which by the time
 #: any test body runs is already the stub.
 _REAL_ENGINE_TOKEN = client.engine_token
+
+
+@pytest.fixture(autouse=True)
+def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
+    """Overrides the suite-wide HOME quarantine's `warm-runtime-base`
+    (`coordinator_core/conftest.py::_quarantine_real_home`) with a short,
+    real on-disk root under `/tmp`.
+
+    The quarantine's own path (`.../pytest-of-<user>/pytest-N/home-
+    quarantineNN/warm-runtime-base`) is already 90+ bytes deep on macOS
+    before `election.socket_path` appends `coordinator/warm/<16-hex-
+    hash>/<token>.sock`, tripping `election.SUN_PATH_MAX_BYTES` (100)
+    before any of this module's own preamble/spawn assertions run --
+    most of them indirectly, since the real preamble dies before the
+    test's monkeypatched `_open_pipe` is ever reached.
+
+    Same fix as `test_election_posix.py::short_runtime_base` (committed
+    b4e300c8f1); duplicated here rather than lifted into a shared
+    `conftest.py` because this dispatch's scope is this file only.
+    """
+    from coordinator_core.warm import breadcrumb
+
+    base = Path(tempfile.mkdtemp(prefix="wrb-", dir="/tmp"))
+    try:
+        monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
+        yield base
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

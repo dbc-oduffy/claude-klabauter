@@ -42,9 +42,21 @@ fixture is the backstop for the ones nobody remembered to pair.
 from __future__ import annotations
 
 import os
+import shutil
 import site
+import tempfile
+from pathlib import Path
 
 import pytest
+
+#: The real `os` callables, bound at import BEFORE any test can monkeypatch
+#: them. `_quarantine_real_home`'s teardown needs them: it runs while a test's
+#: own patches are still installed, and several warm tests replace `os.unlink`
+#: with a narrower fake to prove the client never unlinks a refusing socket.
+_REAL_UNLINK = os.unlink
+_REAL_RMDIR = os.rmdir
+_REAL_WALK = os.walk
+_REAL_JOIN = os.path.join
 
 # ---------------------------------------------------------------------------
 # Package-conftest visibility patch (2026-07-28 — bare-file-arg Package-cache
@@ -422,11 +434,77 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     # distinct trees, and suite-wide rather than in a warm-local conftest so a
     # future writer anywhere under `coordinator_core/` inherits the isolation
     # instead of rediscovering the defect.
+    #
+    # SHORT ON POSIX, AND THAT IS NOT A TIDINESS PREFERENCE -- it is the whole
+    # `sun_path` budget. A unix socket address is capped at 104 bytes on macOS
+    # (`election.SUN_PATH_MAX_BYTES` holds the line at 100), and the quarantine
+    # above is ~90 bytes deep before `warm-runtime-base/coordinator/warm/
+    # <16-hex-clone-hash>/<token>.sock` is appended: measured 160-175 bytes.
+    # `election.socket_path` then raises `SocketPathTooLongError` -- correctly,
+    # by its own docstring, "rather than left to bind(), which reports it as an
+    # unexplained OSError" -- during the warm client's PREAMBLE, before any test
+    # body's monkeypatched seam is reached. 31 tests across six files failed
+    # that way on every POSIX box, each reporting some downstream puzzle (a
+    # `None` result, an IndexError on an empty list) rather than the cause.
+    #
+    # Fixed HERE rather than in each file, because here is where the length
+    # comes from. Six files had grown their own copy of the same short-base
+    # fixture before this landed; they are deleted with it. A future warm test
+    # written anywhere under `coordinator_core/` inherits a usable base instead
+    # of rediscovering the defect -- the same argument this fixture's own
+    # comment above already makes for putting the isolation suite-wide.
+    #
+    # Windows keeps the quarantine path unchanged: named pipes have no
+    # `sun_path` equivalent, `%TEMP%` is not `/tmp`, and there is no defect to
+    # fix there.
     from coordinator_core.warm import breadcrumb as _warm_breadcrumb
 
-    monkeypatch.setenv(
-        _warm_breadcrumb.RUNTIME_BASE_ENV, str(quarantine / "warm-runtime-base")
-    )
+    if os.name == "nt":
+        _warm_base = quarantine / "warm-runtime-base"
+    else:
+        # Per-test, so two tests still get distinct trees (this fixture's own
+        # requirement), and removed on teardown so the short root does not
+        # accumulate what the quarantine used to absorb.
+        _warm_base = Path(tempfile.mkdtemp(prefix="cwrb-", dir="/tmp"))
+
+        def _drop_warm_base() -> None:
+            # `ignore_errors=True` covers OSError and nothing else, and this
+            # teardown runs while a test's own monkeypatches are still live.
+            # `shutil.rmtree` calls `os.unlink(name, dir_fd=...)`; a test that
+            # replaced `os.unlink` with a narrower fake (several here do, to
+            # prove the client never unlinks a refusing socket) raises
+            # TypeError straight through the `ignore_errors` guard and turns
+            # a passing test into a teardown ERROR. Removing a throwaway temp
+            # directory must never be the thing that fails a test, so this
+            # swallows everything and leaves at most an empty dir in /tmp.
+            try:
+                shutil.rmtree(_warm_base, ignore_errors=True)
+            except Exception:  # noqa: BLE001 -- see above
+                # Swallowing alone LEAKS: measured 25 stray roots after a few
+                # suite runs, and on a box carrying dozens of concurrent
+                # sessions that accumulates. Retry with the real `os`
+                # callables captured at import, before any test could patch
+                # them, which is the only reason this second attempt can
+                # succeed where the first failed.
+                for parent, dirnames, filenames in _REAL_WALK(_warm_base, topdown=False):
+                    for name in filenames:
+                        try:
+                            _REAL_UNLINK(_REAL_JOIN(parent, name))
+                        except OSError:
+                            pass
+                    for name in dirnames:
+                        try:
+                            _REAL_RMDIR(_REAL_JOIN(parent, name))
+                        except OSError:
+                            pass
+                try:
+                    _REAL_RMDIR(_warm_base)
+                except OSError:
+                    pass
+
+        request.addfinalizer(_drop_warm_base)
+
+    monkeypatch.setenv(_warm_breadcrumb.RUNTIME_BASE_ENV, str(_warm_base))
 
     # Make the throwaway home a FAITHFUL home rather than an empty one for the
     # one read the quarantine would otherwise break outright: the `.doe-root`

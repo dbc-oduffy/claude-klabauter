@@ -251,6 +251,7 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     resolve_json_payload_flag,
 )
 from coordinator_core.ceremony_common.cli_dispatch import (
+    resolve_cli_script_root,
     invoke_cli_main as _shared_invoke_cli_main,
     load_cli_module as _shared_load_cli_module,
 )
@@ -312,7 +313,7 @@ assert set(_LEGACY_CONVERT2_CLI_NAMES) <= set(CONSUMES_MANIFEST), (
 #: every value is this module's own fixed, `Path(__file__)`-relative script
 #: location under `coordinator/bin/`. Resolved once at import time — never
 #: mutated at runtime, never resolved via glob/search.
-_CLI_SCRIPT_ROOT = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+_CLI_SCRIPT_ROOT = resolve_cli_script_root()
 
 
 def _resolve_script_path(name: str) -> Path:

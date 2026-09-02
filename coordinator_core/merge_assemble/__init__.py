@@ -51,6 +51,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.ceremony_common.cli_dispatch import resolve_cli_script_root
+
 # Negative-spec — these three are imported LAZILY, inside the functions that use
 # them, and must not be restored to module scope. Importing this package is an
 # unavoidable side effect of importing its `cli` leaf (Python executes a parent
@@ -86,11 +88,12 @@ BRANCH_STATE_DIVERGED = "diverged"
 #: module's `d0` directive preserves as the first hard-gate (chunk C6 AC).
 NODE_CEREMONY_TEST_RELPATH = ("coordinator", "tests", "plugin-ecosystem", "run.js")
 
-#: `coordinator/bin/` resolved from THIS module's own location (matches
-#: `merge_assemble.apply._BIN_DIR`) — `portability-sweep.py` is a producer
-#: this claude-klabauter install ships (or doesn't), never a path inside the target
-#: repo `repo_root` names (unlike `NODE_CEREMONY_TEST_RELPATH`).
-_BIN_DIR = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+#: `coordinator/bin/` resolved from the engine clone through the one seam
+#: that computes it (matches `merge_assemble.apply._BIN_DIR`, which resolves
+#: through the same call) — `portability-sweep.py` is a producer this claude-klabauter
+#: install ships (or doesn't), never a path inside the target repo
+#: `repo_root` names (unlike `NODE_CEREMONY_TEST_RELPATH`).
+_BIN_DIR = resolve_cli_script_root()
 
 
 def node_ceremony_gate_entrypoint(repo_root: Path) -> Path:

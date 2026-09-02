@@ -83,6 +83,7 @@ __all__ = [
     "verify",
     "DirectoryBoundaryError",
     "assert_directory_excludes_others",
+    "ensure_directory_excludes_others",
 ]
 
 #: The header a fire's credential travels on. Matches this package's existing
@@ -117,9 +118,22 @@ def warm_dir() -> Path:
     with. The credential's scope has to match the door's, and the door's is the
     user.
 
-    `election.ensure_private_dir` already applies its ownership check to this
-    exact directory (`coordinator/`, `warm/`, `<clone-hash>/`), so the boundary
-    here is one the package already asserts rather than a new one.
+    THE BOUNDARY IS NOT INHERITED FROM `election`, AND ASSUMING IT WAS IS WHAT
+    BROKE THIS. This docstring used to claim `election.ensure_private_dir`
+    "already applies its ownership check to this exact directory, so the
+    boundary here is one the package already asserts". It does apply a check --
+    but `_verify_owned_ancestor`'s, which is DELIBERATELY WEAKER than the leaf's
+    and says so in its own docstring: an interposed directory only has to be
+    unwritable by others, and demanding 0700 there "would reject a directory an
+    earlier version of this code legitimately created at 0755". An ownership
+    check is not a mode fix. So under any default umask (022) this directory
+    lands 0755, `assert_directory_excludes_others` refuses forever, and the
+    front door holds no credential on POSIX at all -- every fire answering
+    `credential_absent` on a box where nothing is actually wrong. Measured on
+    macOS 2026-09-02: `~/.cache/coordinator/warm` at 0o755, the assert raising
+    on a healthy machine. `ensure_directory_excludes_others` below is the fix:
+    this module hardens its own directory rather than inferring that someone
+    else did.
     """
     return breadcrumb.runtime_base() / "coordinator" / "warm"
 
@@ -173,6 +187,46 @@ def _windows_sddl(path: Path) -> Optional[str]:
     if not ok:
         return None
     return out.value
+
+
+def ensure_directory_excludes_others() -> Path:
+    """Create the secret's directory AND make it exclude others, returning it.
+
+    The counterpart to `assert_directory_excludes_others`, and the reason that
+    one can now pass. `mkdir`'s mode argument is masked by the umask, so a
+    directory requested 0700 under umask 022 lands 0755 -- the request tells
+    you nothing about what exists, which is exactly why the assert re-reads
+    rather than trusting the create.
+
+    REPAIRS OUR OWN DIRECTORY, REFUSES SOMEONE ELSE'S. A 0755 mode here was
+    never an operator's decision: this package's own `mkdir` produced it under
+    their umask, so fixing it is repair, not policy. A wrong uid or a symlink
+    standing where the directory should be is a different thing entirely, and
+    `election.ensure_private_dir` still raises `InsecureRuntimeDirError` for
+    both -- the refusal survives for the cases that are actually attacks.
+
+    DELEGATES RATHER THAN REIMPLEMENTS. `election.ensure_private_dir` already
+    does create-reread-chmod-reread with the symlink and ownership checks, and
+    a second copy of that sequence in this module is a second thing to get
+    wrong. Called with no `base`, it checks only this leaf, which is the whole
+    question here. Imported function-locally to keep this module's import graph
+    unchanged on the Windows path, where nothing calls it.
+
+    WINDOWS TAKES THE OTHER LEG. There the boundary is the inherited DACL, not
+    mode bits (this module's own docstring), and `ensure_private_dir` is
+    POSIX-shaped (`os.getuid`), so this creates the directory and leaves the
+    DACL to `assert_directory_excludes_others` to verify. Neither leg is a
+    fallback for the other.
+    """
+    directory = warm_dir()
+    if sys.platform == "win32":
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    from coordinator_core.warm.election import ensure_private_dir
+
+    directory.parent.mkdir(parents=True, exist_ok=True)
+    return ensure_private_dir(directory)
 
 
 def assert_directory_excludes_others() -> str:
@@ -243,8 +297,11 @@ def ensure_secret() -> str:
     if existing is not None:
         return existing
 
+    # HARDEN, NOT JUST CREATE. A bare `mkdir` here is what left the directory
+    # at 0755 under a default umask, minting a secret into a directory the
+    # door would then refuse to read from.
+    ensure_directory_excludes_others()
     path = secret_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
     minted = secrets.token_hex(SECRET_NBYTES)
     tmp = path.with_name(path.name + ".tmp")
     fd = os.open(str(tmp), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)

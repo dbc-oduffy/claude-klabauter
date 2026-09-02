@@ -180,7 +180,19 @@ def test_unreadable_central_state_root_degrades_to_empty(tmp_path, monkeypatch):
     real_scandir = os.scandir
 
     def _boom(path):
-        if Path(path) == unreadable_root:
+        # ACCEPTS EVERYTHING `os.scandir` ACCEPTS, because this replaces it
+        # process-wide. `os.scandir` takes an int file descriptor and bytes as
+        # well as a str/PathLike, and `Path(11)` raises TypeError -- so the
+        # narrowing check itself blew up on any unrelated caller that reached
+        # the stub with an fd. That caller exists: the autouse live-hub litter
+        # guard in conftest scans a directory at teardown, inside this
+        # monkeypatch's window, and both tests in this file ERRORed there
+        # deterministically rather than in the leg they were exercising.
+        try:
+            targeted = Path(path) == unreadable_root
+        except TypeError:
+            targeted = False
+        if targeted:
             raise PermissionError("simulated permission denial")
         return real_scandir(path)
 
@@ -360,7 +372,19 @@ def test_unreadable_central_state_root_fails_loud_on_write_leg(tmp_path, monkeyp
     real_scandir = os.scandir
 
     def _boom(path):
-        if Path(path) == unreadable_root:
+        # ACCEPTS EVERYTHING `os.scandir` ACCEPTS, because this replaces it
+        # process-wide. `os.scandir` takes an int file descriptor and bytes as
+        # well as a str/PathLike, and `Path(11)` raises TypeError -- so the
+        # narrowing check itself blew up on any unrelated caller that reached
+        # the stub with an fd. That caller exists: the autouse live-hub litter
+        # guard in conftest scans a directory at teardown, inside this
+        # monkeypatch's window, and both tests in this file ERRORed there
+        # deterministically rather than in the leg they were exercising.
+        try:
+            targeted = Path(path) == unreadable_root
+        except TypeError:
+            targeted = False
+        if targeted:
             raise PermissionError("simulated permission denial")
         return real_scandir(path)
 

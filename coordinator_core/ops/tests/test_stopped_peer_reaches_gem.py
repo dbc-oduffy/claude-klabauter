@@ -49,15 +49,9 @@ def test_obligations_are_named_not_merely_counted() -> None:
         )
 
         sid = "sess-has-ledger-000000000000000"
-        # Review: overengineering-reviewer (finding #2, minor, accepted) --
-        # `send_pass` no longer aliases `subagent_share`'s functions/constants
-        # under a private name; this test named `subagent_share.share_dir`/
-        # `LEDGER_FILENAME` directly.
-        from coordinator_core.session import subagent_share
-
-        share_dir = pathlib.Path(subagent_share.share_dir(tmp, sid))
+        share_dir = pathlib.Path(send_pass._session_share_dir(tmp, sid))
         share_dir.mkdir(parents=True, exist_ok=True)
-        (share_dir / subagent_share.LEDGER_FILENAME).write_text(
+        (share_dir / send_pass._LEDGER_FILENAME).write_text(
             '{"obligation_id": "ob-1", "seam": "review", '
             '"next_action": "ask what it needs", "discharged_at": null, "fired": false}\n'
             '{"obligation_id": "ob-2", "seam": "merge", '

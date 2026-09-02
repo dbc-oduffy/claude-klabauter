@@ -502,13 +502,13 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
     over the wire as the request's top-level `_caller` object and popped
     and resolved into a `warm.caller_context.CallerContext` by `_serve_line`
     before this call -- docs/plans/2026-08-30-every-op-runs-in-the-callers-
-    environment.md § C1b), has its declared env axis (`caller.env`, C4) AND
-    its `pid` bound for the duration of the dispatch via `per_request_state`'s
-    own `env` / `caller_pid` parameters -- see that seam's `caller_pid`
-    docstring for the full identity-attribution defect this closes and why
-    pid is its own parameter rather than a key inside `env`. `None` (no
-    identity carried) is a no-op bind on both axes, reproducing today's
-    server-resolves-its-own-env behaviour exactly.
+    environment.md § C1b), has its `session_id` AND its `pid` bound for the
+    duration of the dispatch via `per_request_state`'s own `session_id` /
+    `caller_pid` parameters -- see that seam's `caller_pid` docstring for the
+    full identity-attribution defect this closes and why it is two
+    parameters rather than one. `None` (no identity carried) is a no-op bind
+    on both axes, reproducing today's server-resolves-its-own-env behaviour
+    exactly.
 
     `isolated` (C3, defaults `False`) is threaded straight through to
     `entry_seam.per_request_state`'s own required `isolated` argument. This
@@ -606,23 +606,14 @@ def _run_dispatch(msg: dict, *, caller: Optional[CallerContext] = None, isolated
     _caller_route = "coordinator_core.warm.server._run_dispatch"
     session_id = caller.session_id if caller is not None else None
     caller_pid = caller.pid if caller is not None else None
-    env_for_bind = caller.env if caller is not None else None
-    # `session_id`/`settings_home` are ALSO passed (not only `env`): a
-    # `CallerContext` built directly (e.g. via `resolve_caller_context`,
-    # bypassing `_serve_line`'s `merge_env_axis` join) carries these two
-    # fields but no `env` mapping -- `per_request_state`'s own merge folds
-    # them in exactly as it does for any other caller of the legacy kwargs.
-    # `caller.env` (when present) already supersedes them for `_serve_line`
-    # callers, since `merge_env_axis` derives `caller.session_id`/
-    # `caller.settings_home` FROM the merged env in the first place.
+    settings_home_for_bind = caller.settings_home if caller is not None else None
     try:
         with per_request_state(
-            env=env_for_bind,
             session_id=session_id,
-            settings_home=caller.settings_home if caller is not None else None,
             caller_pid=caller_pid,
             diagnostics=diagnostics,
             warm_served=True,
+            settings_home=settings_home_for_bind,
             isolated=isolated,
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
@@ -740,16 +731,15 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
     _caller_route = "coordinator_core.warm.server._pool_dispatch_worker"
     session_id = caller.session_id if caller is not None else None
     caller_pid = caller.pid if caller is not None else None
-    env_for_bind = caller.env if caller is not None else None
+    settings_home_for_bind = caller.settings_home if caller is not None else None
     _repair_settings_home_to_pristine()
     try:
         with per_request_state(
-            env=env_for_bind,
             session_id=session_id,
-            settings_home=caller.settings_home if caller is not None else None,
             caller_pid=caller_pid,
             diagnostics=diagnostics,
             warm_served=True,
+            settings_home=settings_home_for_bind,
             isolated=True,
         ):
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
@@ -1289,16 +1279,6 @@ def _serve_line(
     `_settings_home_refusal` for the defect and `warm/settings_home_claim.py`
     for why absence may never refuse.
 
-    Pops `_env` (C4, the declared-env-set envelope object the rewritten door
-    legs emit) and folds it onto `caller` via `caller_context.merge_env_axis`
-    -- the server's ONE dual-read seam, consuming either the new `_env`
-    shape or the legacy `_caller`/`_settings_home` shape this function
-    already joined above, and resolving both to the same effective caller
-    facts (`test_envelope_producer_parity.py ::
-    test_dual_read_legacy_and_env_agree`). See that function's own
-    docstring for the merge; this function's job is only to pop the field
-    and hand it over.
-
     `mark_invocation` runs for EVERY frame this function is handed,
     including a skew-evicting one -- `warm.idle`'s own module docstring
     ("IDLE CLOCK OWNERSHIP") calls this out as deliberate, not a bug to
@@ -1396,20 +1376,6 @@ def _serve_line(
     claimed_home = settings_home_claim.request_claim(msg)
     msg.pop(settings_home_claim.SETTINGS_HOME_FIELD, None)
     caller = replace(caller, settings_home=claimed_home)
-
-    # THE ONE DECLARED-ENV-SET AXIS (C4). Pops the envelope-level `_env`
-    # object (the new door legs' emission, C2/C3) the same way `_caller` and
-    # `_settings_home` are popped above, and folds it onto `caller` via
-    # `caller_context.merge_env_axis` -- which DUAL-READS: a request
-    # carrying `_env` uses it verbatim, a request carrying only the legacy
-    # `_caller`/`_settings_home` fields (every `warm.client`/`warm.hook_http`
-    # request today, since neither producer moves to `_env` in this plan --
-    # see `test_envelope_producer_parity.py`) has an equivalent env axis
-    # synthesized from what was already joined onto `caller` above. Popped
-    # unconditionally, even when absent (`None`), so `dispatch_message`
-    # never sees transport metadata leak into an op's params.
-    env_payload = msg.pop("_env", None)
-    caller = caller_context.merge_env_axis(caller, env_payload)
 
     try:
         from coordinator_core.ipc import resolve_request_repo

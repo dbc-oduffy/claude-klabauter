@@ -245,11 +245,11 @@ def _helper_present(dir_path: str, script_name: str) -> bool:
 def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
     """Resolve the coordinator bin dir to bake into the installed hook body.
 
-    Post-2026-07 executable-surface migration (doctrine-repo commit b644d5a9), the
+    Post-2026-07 executable-surface migration (DoE commit b644d5a9), the
     coordinator-claude *executables* (`coordinator-auto-push`,
     `coordinator-prepare-commit-msg`, ...) live under the engine repo's
     `coordinator/bin/`, while `plugin.mirrors.coordinator-claude.source_path`
-    (the doctrine repo) still correctly means "where is coordinator-claude SOURCE" —
+    (DoE-claude) still correctly means "where is coordinator-claude SOURCE" —
     it is consumed by the OSS-publish target resolution and must NOT be
     repointed at the engine repo. Executable resolution is a genuinely separate
     concern from source resolution, hence the dedicated rung below.
@@ -259,7 +259,7 @@ def _resolve_coord_bin(bin_dir: str, script_name: str) -> str:
     directory — a rung whose directory exists but lacks BOTH forms falls
     through rather than returning a bin dir with nothing runnable in it.
     This is the fix for the 2026-07 silent-breakage: the prior isdir-only
-    guards passed against an emptied-out doctrine-repo bin dir and reproduced the dead
+    guards passed against an emptied-out DoE bin dir and reproduced the dead
     hook on every regeneration. The `.py`-sibling acceptance (2026-08) closes
     a second, narrower gap: a bin/ rename wave retired several extensionless
     scripts in favor of their `.py` twin, and a bare-name-only probe never
@@ -430,11 +430,36 @@ def _resolve_claude_klabauter_bin_sh(bin_dir: str, script_name: str) -> Optional
 # the fleet pushing indefinitely. The bump forces one rewrite pass over
 # every installed repo, on the next self-heal or session-boot install call,
 # to the new no-op body.
-_HOOK_GEN_STAMP = 11
+#
+# Gen 12 (2026-09-02): the `.exe`-only forwarder probe was a Windows-shaped
+# read of a platform-neutral cutover. `forwarder_self_heal`'s
+# `_cut_over_to_native_door` writes the native door image at the BARE name on
+# POSIX -- there is no `.exe` sibling to find and no `-ef` pair for `_have_py`
+# to discriminate on -- so the settings-home rung passed its own existence
+# test and handed a Mach-O binary to `exec "$_PY"`. Every commit in every repo
+# on this box died with `SyntaxError: Non-UTF-8 code starting with '\xcf'` from
+# 01:57 on 2026-09-02, the moment the bin cutover landed under running
+# sessions. `_native_forwarder_lines` closes the POSIX half; the bump forces
+# one rewrite pass over every installed repo.
+_HOOK_GEN_STAMP = 12
 
 
 def _hook_gen_stamp_line() -> str:
     return f"# coordinator-hook-gen: {_HOOK_GEN_STAMP}"
+
+
+# The `.exe` probe answers the Windows half of "is the settings-home entry a
+# native forwarder rather than Python source". POSIX has no extension to test:
+# the door image occupies the bare name itself. Discriminate on content, since
+# a coordinator-written Python CLI always opens `#!`, and a Mach-O/ELF image
+# never does. `read` is a shell builtin -- no spawn, so this stays inside the
+# DR-344 budget the hook pays on every commit. A file that is unreadable or
+# empty answers "not native" and falls through to the interpreter chain, which
+# is the pre-cutover behaviour.
+_NATIVE_PROBE_DEF = (
+    '_native() { [ -x "$1" ] || return 1; IFS= read -r _n1 < "$1" 2>/dev/null '
+    '|| return 1; case "$_n1" in "#!"*) return 1 ;; esac; return 0; }\n'
+)
 
 
 def _shim_body(
@@ -589,6 +614,11 @@ def _shim_body(
         # directly and never enter the interpreter chain at all.
         f'_fwd="{settings_home_script}.exe"\n'
         '[ -f "$_fwd" ] && exec "$_fwd" "$@"\n'
+        # POSIX half of the same artifact: the door image occupies the bare
+        # name, with no extension to test. See `_NATIVE_PROBE_DEF`.
+        + _NATIVE_PROBE_DEF
+        + f'_fwd="{settings_home_script}"\n'
+        '_native "$_fwd" && exec "$_fwd" "$@"\n'
         f'SCRIPT="{settings_home_script}"\n'
         f'_have_py "$SCRIPT" || SCRIPT="{coord_bin_sh}/{script_name}"\n'
         f'_have_py "$SCRIPT" || SCRIPT="{coord_bin_sh}/{script_name}.py"\n'
@@ -703,7 +733,12 @@ def _append_block(
         # so run it and skip the interpreter chain entirely — resolving one
         # costs nothing once the answer is already on disk. RUN, not `exec`:
         # see this function's docstring for why `exec` is forbidden here.
-        f'_fwd="{settings_home_script}.exe"\n'
+        # POSIX half of the same artifact: the door image occupies the bare
+        # name, with no extension to test. See `_NATIVE_PROBE_DEF`.
+        + _NATIVE_PROBE_DEF
+        + f'_fwd="{settings_home_script}.exe"\n'
+        f'[ -f "$_fwd" ] || {{ _native "{settings_home_script}" && '
+        f'_fwd="{settings_home_script}"; }}\n'
         'if [ -f "$_fwd" ]; then "$_fwd" "$@"; else\n'
         + baked_python_lines("_PY") + "\n"
         f'_T="{settings_home_script}"; '

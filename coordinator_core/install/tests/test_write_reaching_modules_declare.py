@@ -524,6 +524,19 @@ _ALLOWLIST: dict[str, str] = {
         "Windows arm). A report module that mutated the machine it is "
         "diagnosing would be the defect, not the declaration gap."
     ),
+    "door_serving_census.py": (
+        "EXEMPT: read-only. `build_census`/`render_census` never spawn a "
+        "process (module docstring: 'never probes unless --probe is "
+        "given') and derive every bucket from `Path.is_file()`/"
+        "`Path.iterdir()` reads over settings-home, this repo's "
+        "`coordinator/bin/`, and the resolved engine root's `coordinator/"
+        "bin/`. The one flagged `subprocess.run` is `_probe`, an opt-in, "
+        "single-name spawn of the ALREADY-INSTALLED door image with "
+        "`--help`, capturing both streams and re-emitting them verbatim -- "
+        "the same read-only exec-proof shape as `path_resolution_report.py`'s "
+        "own `--help`/`--dump-op-timeouts` probes, never called by "
+        "`build_census`/`main()`'s default path."
+    ),
     # --- Known gaps: genuinely write-reaching, genuinely undeclared today.
     # Out of this dispatch's scope to fix (writer WRITE_SURFACE authorship
     # is explicitly out-of-scope) — reported to the dispatching EM instead.

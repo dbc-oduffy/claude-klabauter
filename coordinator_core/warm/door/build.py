@@ -54,12 +54,6 @@ _SOURCE = Path(__file__).resolve().parent / "door.c"
 _CORE_SOURCE = Path(__file__).resolve().parent / "door_core.c"
 _CORE_HEADER = Path(__file__).resolve().parent / "door_core.h"
 
-#: Generated X-macro table of forwarded env-var names, `#include`d by both
-#: `door.c` and `door_posix.c` -- a real compile input (change the table,
-#: get a different binary), so it belongs in `sources` exactly like
-#: `_CORE_HEADER`, not just a data file that happens to sit next to them.
-_ENV_SET_HEADER = Path(__file__).resolve().parent / "door_env_set.h"
-
 #: Must equal door.c's `ENGINE_ROOT_SIDECAR_FILENAME` verbatim -- the two
 #: are never derived from a shared constant because one is a C wide-string
 #: macro and the other a Python `Path` component; keep them in lockstep by
@@ -145,7 +139,7 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def write_image_identity(output_exe: Path, *, image_sha256: str | None = None) -> Path:
+def write_image_identity(output_exe: Path) -> Path:
     """Writes the built door's own image identity next to it, so a server
     it later talks to can tell a rebuilt door apart from the one it
     booted against -- axis 3 (`skew.SKEW_AXIS_DOOR_IMAGE`), additive to
@@ -156,23 +150,17 @@ def write_image_identity(output_exe: Path, *, image_sha256: str | None = None) -
     AFTER the binary is fully written, since a binary cannot embed the
     hash of its own bytes (no fixed point is computed here). Baking it as
     a compile-time define the way `__BUILD_ENGINE_ROOT_W__` is baked would
-    require hashing a binary that does not yet exist. This function ships
-    that value the way `write_sidecar` already ships `engine_root` -- a
-    single-line UTF-8 file next to the exe, read at the door's own
-    runtime -- rather than inventing a new transport for it.
-
-    `image_sha256` keyword: pass the digest `write_provenance` already
-    computed for this same build so the finished binary is hashed once,
-    not twice (Review: overengineering-reviewer -- `build()`/`build_posix
-    .build()` now compute it a single time and pass it to both writers).
-    Defaults to `None`/self-computed for a direct or test caller with no
-    digest handy.
+    require hashing a binary that does not yet exist. This function
+    reuses that already-computed `image_sha256` value instead of a second
+    identity scheme, and ships it the way `write_sidecar` already ships
+    `engine_root` -- a single-line UTF-8 file next to the exe, read at the
+    door's own runtime -- rather than inventing a new transport for it.
 
     Must be called AFTER the binary is fully written (i.e. after
     `_compile()`), for the same reason `image_sha256` itself must be:
     hashing a partially-written file would record the wrong identity.
     """
-    identity = image_sha256 if image_sha256 is not None else _sha256_file(output_exe)
+    identity = _sha256_file(output_exe)
     path = output_exe.parent / DOOR_IMAGE_STAMP_FILENAME
     path.write_text(identity + "\n", encoding="utf-8", newline="")
     return path
@@ -198,8 +186,7 @@ def _compiler_version(kind: str, compiler_path: str) -> str:
 
 
 def write_provenance(
-    output_exe: Path, source_path: Path, kind: str, compiler_path: str, engine_root: Path,
-    *, image_sha256: str | None = None,
+    output_exe: Path, source_path: Path, kind: str, compiler_path: str, engine_root: Path
 ) -> Path:
     """Records, next to `output_exe`, the SHA-256 of the `door.c` this
     binary was built from plus the compiler and its version -- so a
@@ -223,15 +210,12 @@ def write_provenance(
     and prior handoffs that compared this field against a clone's `door.c`
     keep working. But it is no longer the WHOLE answer to "what source
     produced this binary", so `sources` records every file that did:
-    `door.c`, `door_core.c`, `door_core.h`, and `door_env_set.h`. A verifier
-    who checks only the legacy field would now miss a change to the shared
-    core -- which is precisely the safety classification, so the complete
-    set is the one to read. `door_env_set.h` is generated rather than
-    hand-written, but a generated file compiled into the binary is a source
-    like any other: change the table, get a different binary, so it belongs
-    in `sources` exactly like `door_core.h`. Keeping both is the compatible
-    move; silently narrowing `door_c_sha256` to mean "all sources" would
-    break the comparisons that already exist.
+    `door.c`, `door_core.c`, and `door_core.h`. A verifier who checks only
+    the legacy field would now miss a change to the shared core -- which is
+    precisely the safety classification, so the complete set is the one to
+    read. Keeping both is the compatible move; silently narrowing
+    `door_c_sha256` to mean "all sources" would break the comparisons that
+    already exist.
 
     `image_sha256` -- THE FIELD THIS RECORD LACKED UNTIL 2026-08-30, AND WHY
     THAT WAS A DEFECT, NOT AN OMISSION. Every field above describes this
@@ -253,22 +237,14 @@ def write_provenance(
     to disk, so a verifier (human or `door_install.verify_installed_
     provenance`) can hash the binary next to the sidecar and compare
     against a field the record actually carries, rather than trusting an
-    mtime that `copy2` routinely preserves from a much older source.
-
-    `image_sha256` keyword: `build()` computes the digest ONCE and passes
-    it here AND to `write_image_identity`, so the finished binary is
-    hashed a single time per build rather than once per writer (Review:
-    overengineering-reviewer -- the prior shape hashed `output_exe` a
-    second time in `write_image_identity`, on every build, both
-    platforms). Defaults to `None`/self-computed so a direct or test
-    caller that has no digest handy keeps working unchanged."""
+    mtime that `copy2` routinely preserves from a much older source."""
     provenance = {
         "door_c_sha256": _sha256_file(source_path),
         "sources": {
             path.name: _sha256_file(path)
-            for path in (source_path, _CORE_SOURCE, _CORE_HEADER, _ENV_SET_HEADER)
+            for path in (source_path, _CORE_SOURCE, _CORE_HEADER)
         },
-        "image_sha256": image_sha256 if image_sha256 is not None else _sha256_file(output_exe),
+        "image_sha256": _sha256_file(output_exe),
         "compiler": kind,
         "compiler_version": _compiler_version(kind, compiler_path),
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -433,9 +409,8 @@ def build(
         _compile(kind, compiler_path, generated, output)
 
     write_sidecar(output, engine_root)
-    image_sha256 = _sha256_file(output)
-    write_provenance(output, _SOURCE, kind, compiler_path, engine_root, image_sha256=image_sha256)
-    write_image_identity(output, image_sha256=image_sha256)
+    write_provenance(output, _SOURCE, kind, compiler_path, engine_root)
+    write_image_identity(output)
 
     return output
 

@@ -85,15 +85,6 @@ def _exchange(root: Path, settings_home: str | None, reply: bytes = _OK_REPLY):
     return (json.loads(request) if request else {}), proc
 
 
-#: C2 folded the legacy top-level `_settings_home` field into the envelope-level
-#: `_env` object, keyed by the environment-variable name that produced it (see
-#: `test_door_stamps_declared_env_set.py`'s negative-spec block). The subject
-#: this file pins -- the door stamps the settings home its caller named --
-#: is unchanged; only the field it looks in moves.
-_ENV_FIELD = "_env"
-_SETTINGS_HOME_ENV_KEY = "COORDINATOR_SETTINGS_HOME"
-
-
 def test_door_stamps_the_home_its_caller_named(tmp_path: Path) -> None:
     """The defect's door-side half. Without this field the server has no way to
     know the caller named a home at all, and answers against its own."""
@@ -102,7 +93,7 @@ def test_door_stamps_the_home_its_caller_named(tmp_path: Path) -> None:
 
     request, _ = _exchange(root, named_home)
 
-    assert request[_ENV_FIELD][_SETTINGS_HOME_ENV_KEY] == named_home
+    assert request[settings_home_claim.SETTINGS_HOME_FIELD] == named_home
 
 
 def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
@@ -115,26 +106,18 @@ def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
 
     request, _ = _exchange(root, str(tmp_path / "home"))
 
-    assert _ENV_FIELD not in request["params"]
+    assert settings_home_claim.SETTINGS_HOME_FIELD not in request["params"]
 
 
 def test_no_override_stamps_nothing(tmp_path: Path) -> None:
-    """Every ordinary invocation on every box. The settings-home key must be
-    ABSENT from `_env`, not present-and-empty: absence is what the server
-    reads as "this caller has no opinion", and an empty claim would refuse
-    traffic that works today.
-
-    Checked by key rather than by `_env`'s presence: `_env` now carries every
-    resolved declared name, not settings-home alone, and this test's runner
-    has its own real session-id env vars that legitimately resolve into
-    `_env` (pinned by `test_door_stamps_session_id.py`) -- this file's
-    subject is settings-home specifically, not the whole object."""
+    """Every ordinary invocation on every box. The field must be ABSENT, not
+    present-and-empty: absence is what the server reads as "this caller has no
+    opinion", and an empty claim would refuse traffic that works today."""
     root = _make_stub_engine_root(tmp_path)
 
     request, proc = _exchange(root, None)
 
-    env_obj = request.get(_ENV_FIELD, {})
-    assert _SETTINGS_HOME_ENV_KEY not in env_obj
+    assert settings_home_claim.SETTINGS_HOME_FIELD not in request
     assert proc.returncode == 0
     assert proc.stdout == "pong\n"
 

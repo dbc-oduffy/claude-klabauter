@@ -75,7 +75,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import os
-from typing import Any, Iterator, List, Mapping, Optional
+from typing import Any, Iterator, List, Optional
 
 from coordinator_core.session.declared_writes import collecting
 
@@ -193,62 +193,12 @@ def collecting_diagnostics(into: Optional[List[str]] = None) -> Iterator[List[st
 # treated as "no carried identity" on this axis, never mirrored into
 # `os.environ` where every ambient reader downstream would trust it.
 # ---------------------------------------------------------------------------
-from coordinator_core.warm.env_forwarding import BORROW, FORWARDING_SET, OVERRIDE, REFUSE
-
 _ENV_LOWER_TIER_SESSION_NAMES = ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
 _ENV_TOP_TIER_SESSION_NAME = "COORDINATOR_SESSION_ID"
 _ENV_ALL_SESSION_NAMES = (_ENV_TOP_TIER_SESSION_NAME,) + _ENV_LOWER_TIER_SESSION_NAMES
 _ENV_CLAUDE_PID_NAME = "CLAUDE_PID"
 _ENV_SETTINGS_HOME_NAME = "COORDINATOR_SETTINGS_HOME"
-
-# THE THREE MODE GROUPS (C4, env_forwarding.FORWARDING_SET's own SSOT) --
-# named tuples, not re-hand-written lists, so a name added to `FORWARDING_SET`
-# (env_forwarding.py, C1) reaches this seam's mode dispatch with no second
-# edit here. Ordering within each group is `FORWARDING_SET`'s own declared
-# order (module docstring: refuse first, then the override triple in its
-# existing precedence order, then borrow entries) -- `OVERRIDE_NAMES`
-# therefore IS the session-id precedence order `_session_id_from_env` below
-# walks.
-REFUSE_NAMES = tuple(e.name for e in FORWARDING_SET if e.mode == REFUSE)
-OVERRIDE_NAMES = tuple(e.name for e in FORWARDING_SET if e.mode == OVERRIDE)
-BORROW_NAMES = tuple(e.name for e in FORWARDING_SET if e.mode == BORROW)
-
-# `_ENV_BORROWED_NAMES` -- THE RESTORE SET `_environ_identity_borrow`'s
-# `finally` un-mirrors, NOT a forwarding allowlist (those are the three
-# `*_NAMES` tuples above; see env_forwarding.py's own module docstring for
-# why mode is Python-side-only data). Derived from the declared set PLUS
-# exactly one hand-added name: `CLAUDE_PID` is RESTORE-scoped (this borrow
-# WRITES `os.environ["CLAUDE_PID"]` from `caller_pid` below, so the
-# `finally` must save/restore it like every other borrowed name) but never
-# FORWARD-scoped (it is not on the wire as a name in `FORWARDING_SET` --
-# `env_forwarding.py`'s own negative spec: "`CLAUDE_PID` is deliberately NOT
-# an entry here... stays derived from `GetCurrentProcessId()`/`getpid()`,
-# never read from the environment"; `_caller.pid` carries it instead). The
-# two sets coincide everywhere except this one name, and coinciding is not
-# the same claim as being the same set -- see `test_env_forwarding_set.py`'s
-# added assertion, which pins this directly rather than trusting they stay
-# in sync by accident.
-_ENV_BORROWED_NAMES = tuple(e.name for e in FORWARDING_SET) + (_ENV_CLAUDE_PID_NAME,)
-
-
-def _session_id_from_env(env: Optional[Mapping[str, str]]) -> Optional[str]:
-    """The first non-empty value found walking `OVERRIDE_NAMES` in their
-    declared precedence order, or `None`.
-
-    Pure lookup, no UUID shape gate here -- callers that need the gate
-    (`_environ_identity_borrow`'s OVERRIDE branch, and `per_request_state`'s
-    own `session_identity_override` bind) apply `session.core._UUID_RE`
-    themselves, since the ContextVar bind needs this same candidate even
-    when `isolated=False` (unlike the `os.environ` mirror, which is
-    isolated-gated).
-    """
-    if not env:
-        return None
-    for name in OVERRIDE_NAMES:
-        value = env.get(name)
-        if isinstance(value, str) and value:
-            return value
-    return None
+_ENV_BORROWED_NAMES = _ENV_ALL_SESSION_NAMES + (_ENV_CLAUDE_PID_NAME, _ENV_SETTINGS_HOME_NAME)
 
 
 @contextlib.contextmanager
@@ -256,9 +206,10 @@ def _session_id_from_env(env: Optional[Mapping[str, str]]) -> Optional[str]:
 # default was unreachable (one private call site, positional) and
 # inconsistent with its siblings, neither of which defaults.
 def _environ_identity_borrow(
-    env: Optional[Mapping[str, str]],
+    session_id: Optional[str],
     isolated: bool,
     caller_pid: Optional[str],
+    settings_home: Optional[str] = None,
 ) -> Iterator[None]:
     """Mirror the caller's carried identity into `os.environ` for the life
     of one ISOLATED dispatch, restored in a `finally` regardless of how the
@@ -270,44 +221,27 @@ def _environ_identity_borrow(
     connection) from borrowing an identity into state every other in-flight
     request's ambient-env readers would also observe.
 
-    `env` is the ONE declared-env-set axis (C4): a name->value mapping of
-    whichever `env_forwarding.FORWARDING_SET` entries the caller's wire
-    carried, resolved by `caller_context` from either wire shape
-    (`warm.server`'s dual-read) before this function ever sees it. THREE
-    EXPLICIT BRANCHES, one per mode, mirroring `FORWARDING_SET`'s own three
-    modes -- never collapsed into one handling path (DR-404's negative spec,
-    satisfied here by branch shape, not by carrying `mode` as C-facing
-    data -- see `env_forwarding.py`'s own module docstring):
-
-      - `REFUSE_NAMES` (`COORDINATOR_SETTINGS_HOME` only): the PRE-DISPATCH
-        refusal itself lives one layer up, in `warm.server._run_dispatch`'s
-        own settings-home gate (`isolated=False` only -- an isolated caller
-        never reaches that gate, per that function's own docstring). Here,
-        under `isolated=True`, the claimed home is instead MIRRORED for the
-        block's duration on the same shape-gate-or-pop terms as a borrow
-        entry: non-empty and `os.path.isabs`, else popped -- never `stat`-ed
-        (no existence check).
-      - `OVERRIDE_NAMES` (the session-id precedence triple): re-validated
-        against the same UUID shape `session_identity_override` gates on
-        (`session.core._UUID_RE`) rather than trusted as already-valid -- a
-        caller-supplied value that failed that gate must be treated as "no
-        carried identity" here too. The first name in `OVERRIDE_NAMES`
-        (top-tier) is bound when valid; every name in `OVERRIDE_NAMES` is
-        popped otherwise, matching the pre-C4 behaviour byte-for-byte.
-      - `BORROW_NAMES` (every other declared entry, e.g.
-        `MACHINE_LOCAL_REGISTRY_DIR`): shape-gate-or-pop, non-empty only (no
-        per-entry gate is declared beyond presence -- `env_forwarding.py`'s
-        own negative spec: "A per-entry shape-gate field is likewise not
-        carried").
+    `session_id` is re-validated here against the same UUID shape
+    `session_identity_override` gates on (`session.core._UUID_RE`) rather
+    than trusted as already-valid: a caller-supplied value that failed that
+    gate must be treated as "no carried identity" on this axis too, or the
+    two axes could disagree about whether an identity was carried at all.
 
     `caller_pid` is the calling process's own id as carried on the wire
     (`caller_context.CallerContext.pid`). Bound to `CLAUDE_PID` when it is a
     decimal digit string; absent, `None`, or any other shape pops the name
     instead, which is the pre-existing behaviour and never a fabricated
     value. See `per_request_state`'s `caller_pid` parameter for why this is
-    its own axis rather than a field of the declared env set: `CLAUDE_PID`
-    is deliberately not a `FORWARDING_SET` entry (see `_ENV_BORROWED_NAMES`'s
-    own comment above).
+    its own axis rather than a field of `session_id`.
+
+    `settings_home` is the sixth axis: a caller-carried `COORDINATOR_SETTINGS_
+    HOME` claim, bound for the block's duration under `isolated=True` only, on
+    the same inherit-on-absent and shape-gate-or-pop terms as `caller_pid`.
+    Shape gate: non-empty and `os.path.isabs` — a value failing that gate is
+    treated as "no carried home" and the name is POPPED, never mirrored,
+    exactly as an out-of-shape `caller_pid` is popped rather than bound. The
+    path is never `stat`-ed here (see the module's own anti-scope note); shape
+    validation only.
     """
     if not isolated:
         yield
@@ -317,58 +251,23 @@ def _environ_identity_borrow(
 
     saved = {name: os.environ.get(name) for name in _ENV_BORROWED_NAMES}
     try:
-        env = env or {}
-
-        # REFUSE branch (isolated-only mirror -- see docstring above for why
-        # this is not the refusal itself). ABSENT FROM `env` ENTIRELY is
-        # inherit-on-absent -- untouched, not popped: the enclosing scope's
-        # (this worker's own pristine) value stands, since a request that
-        # carried no claim has no opinion. PRESENT (even an empty string, the
-        # one shape a real `_env` wire object never sends -- C2's own HARD AC
-        # -- but a legacy kwarg caller may still pass explicitly) is acted on:
-        # shape-gate-or-pop.
-        for name in REFUSE_NAMES:
-            if name not in env:
-                continue
-            value = env.get(name)
-            if isinstance(value, str) and value and os.path.isabs(value):
-                os.environ[name] = value
-            else:
-                os.environ.pop(name, None)
-
-        # OVERRIDE branch (session-id precedence triple, unchanged UUID gate).
-        # Unlike REFUSE/BORROW, absence is NOT inherit-on-absent here: a
-        # warm-served request that carried no session identity at all must
-        # still strip every ambient session name, matching the pre-C4
-        # behaviour byte-for-byte (`test_no_carried_identity_isolated_
-        # strips_every_name`).
-        valid_sid = _session_id_from_env(env)
-        if valid_sid and not _UUID_RE.fullmatch(valid_sid):
-            valid_sid = None
+        valid_sid = session_id if session_id and _UUID_RE.fullmatch(session_id) else None
         if valid_sid:
-            os.environ[OVERRIDE_NAMES[0]] = valid_sid
-            for name in OVERRIDE_NAMES[1:]:
+            os.environ[_ENV_TOP_TIER_SESSION_NAME] = valid_sid
+            for name in _ENV_LOWER_TIER_SESSION_NAMES:
                 os.environ.pop(name, None)
         else:
-            for name in OVERRIDE_NAMES:
+            for name in _ENV_ALL_SESSION_NAMES:
                 os.environ.pop(name, None)
-
-        # BORROW branch (every other declared entry, e.g.
-        # `MACHINE_LOCAL_REGISTRY_DIR`) -- same inherit-on-absent contract as
-        # REFUSE: a name the caller's wire never mentioned is left alone.
-        for name in BORROW_NAMES:
-            if name not in env:
-                continue
-            value = env.get(name)
-            if isinstance(value, str) and value:
-                os.environ[name] = value
-            else:
-                os.environ.pop(name, None)
-
         if caller_pid is not None and caller_pid.isdigit():
             os.environ[_ENV_CLAUDE_PID_NAME] = caller_pid
         else:
             os.environ.pop(_ENV_CLAUDE_PID_NAME, None)
+        if settings_home is not None:
+            if settings_home and os.path.isabs(settings_home):
+                os.environ[_ENV_SETTINGS_HOME_NAME] = settings_home
+            else:
+                os.environ.pop(_ENV_SETTINGS_HOME_NAME, None)
         yield
     finally:
         for name, value in saved.items():
@@ -382,11 +281,10 @@ def _environ_identity_borrow(
 def per_request_state(
     into: Optional[List[str]] = None,
     *,
-    env: Optional[Mapping[str, str]] = None,
+    session_id: Optional[str] = None,
     diagnostics: Optional[List[str]] = None,
     warm_served: Optional[bool] = None,
     caller_pid: Optional[str] = None,
-    session_id: Optional[str] = None,
     settings_home: Optional[str] = None,
     isolated: bool,
 ) -> Iterator[List[str]]:
@@ -409,37 +307,11 @@ def per_request_state(
     writes`) pass it through unchanged rather than this seam allocating a
     second one.
 
-    `env` (C4) is the ONE axis every `FORWARDING_SET` entry now rides,
-    superseding the separate `session_id` and `settings_home` parameters
-    this signature carried before C4: a name->value mapping of whichever
-    `env_forwarding.FORWARDING_SET` entries the caller's wire carried,
-    already resolved by `warm.caller_context`'s dual-read (the new
-    envelope-level `_env` object, or a legacy-shape caller's `_caller`/
-    `_settings_home` fields folded onto the same shape) before this function
-    ever sees it. `session_id` and `settings_home` are KEPT, not removed --
-    the ~20 non-`warm.server` call sites across `coordinator_core/session/`
-    and `coordinator_core/ops/` predate C4 and are out of this chunk's
-    `writes:` scope, so breaking their signature is not this row's call to
-    make. Given ALONGSIDE `env`, each is folded onto it as one more
-    `FORWARDING_SET`-shaped entry (top-tier session name, `COORDINATOR_
-    SETTINGS_HOME`) before the mode dispatch below ever runs -- `env` wins
-    on a key both supply, so a caller migrated onto the new axis is never
-    silently overridden by a stale positional habit. `warm.server`'s own two
-    production call sites pass `env=` alone, matching the plan's design;
-    every other production and test call site is unaffected. Two independent
-    uses of the merged mapping, both inherit-on-absent (an empty/`None` map
-    is a no-op on both):
-
-      - The session-id candidate (`_session_id_from_env`, walking
-        `env_forwarding.OVERRIDE_NAMES` precedence) is bound via
-        `session_identity_override` UNCONDITIONALLY -- on every `isolated`
-        leg -- exactly as the former `session_id` parameter was: this is a
-        thread-safe ContextVar bind, not an `os.environ` mutation, so it
-        needs no process isolation.
-      - The full `env` mapping is threaded to `_environ_identity_borrow`,
-        which performs the three-branch REFUSE/OVERRIDE/BORROW mode dispatch
-        against it, `isolated=True` only. See that function's own docstring
-        for the per-mode handling this seam does not re-derive here.
+    `session_id`, when given, is the caller's session id to bind for the
+    duration of the block — absent/`None`/non-UUID-shaped is a no-op
+    (`session_identity_override`'s own fail-safe gate), so every existing
+    caller of this function (none of which pass `session_id` today) is
+    byte-for-byte unaffected.
 
     `diagnostics`, when given, is the list `emit_diagnostic()` calls append to
     for the duration of the block — the third axis (see the DIAGNOSTIC-axis
@@ -448,12 +320,12 @@ def per_request_state(
 
     `warm_served` is the fourth axis: True marks the block as running inside
     a warm-server dispatch (`session.core.in_warm_served_request()`). It is a
-    SEPARATE axis from `env` on purpose, because the case that needs
-    it is precisely the one where no session id is carried — a request served
-    warm through a door that sent no session name leaves the identity
+    SEPARATE axis from `session_id` on purpose, because the case that needs
+    it is precisely the one where `session_id` is absent — a request served
+    warm through a door that sent no `_session_id` leaves the identity
     ContextVar unset, which is indistinguishable from a cold invocation, and
     the two want opposite fallbacks. Inherit-on-absent, matching this seam's
-    other axes: `None` (the default) binds nothing and leaves the
+    other three axes: `None` (the default) binds nothing and leaves the
     outer scope's flag untouched, so `cli_entry`'s cold call site (the only
     other production caller) and any nested re-entrant open both inherit the
     enclosing scope's value with no action required; only an explicit
@@ -467,22 +339,33 @@ def per_request_state(
     `caller_pid` is the fifth axis: the CALLING process's own id, carried on
     the wire since C1b and mirrored into `CLAUDE_PID` for the block's
     duration under `isolated=True` only (`_environ_identity_borrow`, same
-    `finally` restore as the declared-set names). It is what `harness_registry.
+    `finally` restore as the session names). It is what `harness_registry.
     self_record()` -- which keys off the pid and not off the session id --
     needs in order to classify an isolated dispatch as the CALLER rather than
     as the engine owner. Omitted/`None` pops the name, the behaviour every
     caller had before this axis existed.
 
-    ITS OWN AXIS RATHER THAN A KEY IN `env`, which is the question
+    ITS OWN AXIS RATHER THAN A FIELD OF `session_id`, which is the question
     the module comment above defers here: `self_record()` keys off the pid
-    ALONE, so a request carrying one and not a session id must still close
-    the defect it can, and `CLAUDE_PID` is deliberately not a
-    `FORWARDING_SET` entry at all (`env_forwarding.py`'s own negative spec --
-    it is derived from `GetCurrentProcessId()`/`getpid()`, never read from
-    the environment). Passing the whole `CallerContext` was the other
-    candidate and is worse here: several of its fields have no consumer in
-    this seam, and it would import `warm.caller_context` into a surface ~47
-    call sites reach.
+    ALONE, so a request carrying one and not the other must still close the
+    defect it can. Folding the pid into the session-id axis would make a
+    valid pid unreachable whenever the session id was absent or failed its
+    UUID gate -- two independent facts sharing one gate, where the caller
+    that has only one of them is precisely the case the axis exists for.
+    Passing the whole `CallerContext` was the other candidate and is worse
+    here: four of its five fields have no consumer in this seam, and it
+    would import `warm.caller_context` into a surface ~47 call sites reach.
+
+    `settings_home` is the sixth axis: a caller-carried `COORDINATOR_SETTINGS_
+    HOME` claim, mirrored into `os.environ` for the block's duration under
+    `isolated=True` only (`_environ_identity_borrow`, same `finally` restore
+    as the other borrowed names), on the same inherit-on-absent terms as
+    `warm_served` and the same shape-gate-or-pop terms as `caller_pid`: a
+    value that is empty, `None`, or not `os.path.isabs` is treated as "no
+    carried home" and the name is POPPED rather than mirrored — a
+    caller-supplied string that failed its shape gate must never become the
+    value every ambient `settings_home()` reader downstream trusts. The path
+    is never `stat`-ed here; shape validation only, no existence check.
 
     `isolated` is a REQUIRED keyword-only argument, with no default: every
     call site must declare its own execution shape rather than inheriting a
@@ -514,31 +397,8 @@ def per_request_state(
         warm_scope = contextlib.nullcontext()
     else:
         warm_scope = warm_served_request(bool(warm_served))
-
-    # Legacy `session_id`/`settings_home` kwargs, when given, are folded
-    # onto `env` as one more `FORWARDING_SET`-shaped mapping -- see this
-    # function's own `env` parameter docstring for why both are kept rather
-    # than removed at C4. `env`'s own values win a key collision.
-    # `is not None`, not truthiness: an explicitly-given empty string still
-    # means "given" for `_environ_identity_borrow`'s inherit-on-absent
-    # contract (REFUSE/BORROW leave a name TRULY UNGIVEN alone, but act on
-    # one that was given and turned out malformed) -- see
-    # `test_malformed_claim_pops_rather_than_binds` vs
-    # `test_absence_binds_nothing`.
-    merged_env: Optional[Mapping[str, str]] = env
-    if session_id is not None or settings_home is not None:
-        merged_env = dict(env) if env else {}
-        if session_id is not None and OVERRIDE_NAMES and OVERRIDE_NAMES[0] not in merged_env:
-            merged_env[OVERRIDE_NAMES[0]] = session_id
-        if settings_home is not None and REFUSE_NAMES and REFUSE_NAMES[0] not in merged_env:
-            merged_env[REFUSE_NAMES[0]] = settings_home
-
-    # `session_identity_override` applies its own UUID shape gate
-    # (`session.core._UUID_RE`) -- not re-validated here, so an out-of-shape
-    # candidate is silently treated as "no override" exactly as it always
-    # was, with no duplicated gate to drift out of sync with that one.
-    with warm_scope, session_identity_override(_session_id_from_env(merged_env)):
-        with _environ_identity_borrow(merged_env, isolated, caller_pid):
+    with warm_scope, session_identity_override(session_id):
+        with _environ_identity_borrow(session_id, isolated, caller_pid, settings_home):
             with collecting(into) as declared:
                 if diagnostics is None:
                     yield declared

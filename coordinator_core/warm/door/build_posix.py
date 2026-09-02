@@ -42,11 +42,6 @@ from .build import write_image_identity, write_sidecar
 _HERE = Path(__file__).resolve().parent
 _SOURCES = (_HERE / "door_posix.c", _HERE / "door_core.c")
 _HEADER = _HERE / "door_core.h"
-#: Generated X-macro table of forwarded env-var names, `#include`d by
-#: `door_posix.c` (and `door.c`) -- a real compile input, so it belongs in
-#: `sources` exactly like `_HEADER`, same reasoning as `build.py ::
-#: _ENV_SET_HEADER`.
-_ENV_SET_HEADER = _HERE / "door_env_set.h"
 
 #: Filename convention matches `build.py`'s `_PROVENANCE_SUFFIX`.
 _PROVENANCE_SUFFIX = ".provenance.json"
@@ -94,9 +89,7 @@ def _compiler_version(compiler_path: str) -> str:
         return f"(version probe failed: {exc!r})"
 
 
-def write_provenance(
-    output: Path, compiler_path: str, engine_root: Path, *, image_sha256: str | None = None,
-) -> Path:
+def write_provenance(output: Path, compiler_path: str, engine_root: Path) -> Path:
     """Records, next to `output`, the SHA-256 of every source file this
     binary was built from plus the compiler and its version -- so a mismatch
     between committed source and a shipped binary is DETECTABLE BY ANYONE
@@ -109,20 +102,13 @@ def write_provenance(
 
     `image_sha256` -- same field, same reasoning as `build.py ::
     write_provenance`'s own paragraph on why an input-only record cannot be
-    checked against the artifact beside it; not restated here. Same
-    keyword contract as `build.py`'s writer too: `build()` computes the
-    digest once and passes it here AND to `write_image_identity`
-    (Review: overengineering-reviewer), so pass it rather than leave it
-    `None` unless you have no digest handy."""
+    checked against the artifact beside it; not restated here."""
     provenance = {
         "sources": {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in (*_SOURCES, _HEADER, _ENV_SET_HEADER)
+            for path in (*_SOURCES, _HEADER)
         },
-        "image_sha256": (
-            image_sha256 if image_sha256 is not None
-            else hashlib.sha256(output.read_bytes()).hexdigest()
-        ),
+        "image_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
         "compiler": compiler_path,
         "compiler_version": _compiler_version(compiler_path),
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -208,15 +194,12 @@ def build(
     # sidecar's format is what makes the C-side clone hash byte-identical to
     # `breadcrumb.svc_dir`'s, and it must not have two implementations.
     write_sidecar(output, engine_root)
-    image_sha256 = hashlib.sha256(output.read_bytes()).hexdigest()
-    write_provenance(output, compiler_path, engine_root, image_sha256=image_sha256)
+    write_provenance(output, compiler_path, engine_root)
     # Same writer, same bytes, same contract as the Windows build -- see
     # `build.py :: write_image_identity`'s own docstring for why this is a
     # sidecar file, not a baked `-D` define (image identity is a hash of
-    # the finished binary, unknowable at compile time). `image_sha256`
-    # passed through from above so the finished binary is hashed once per
-    # build, not once per writer (Review: overengineering-reviewer).
-    write_image_identity(output, image_sha256=image_sha256)
+    # the finished binary, unknowable at compile time).
+    write_image_identity(output)
     return output
 
 

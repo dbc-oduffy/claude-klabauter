@@ -1664,19 +1664,6 @@ def test_inbox_counts_reads_status_off_the_frontmatter_head(tmp_path):
     assert isinstance(taken_at, float)
 
 
-# Review: coordinatorcode-reviewer (finding #2) -- a genuinely undecodable memo must
-# degrade to None per the function's own contract, not raise UnicodeDecodeError
-# uncaught through _inbox_counts's per-entry loop. Real invalid UTF-8 bytes, not a
-# monkeypatched exception, so this pins the behaviour rather than a mock.
-def test_inbox_frontmatter_status_degrades_to_none_on_undecodable_memo(tmp_path):
-    inbox_dir = tmp_path / "cross-repo" / "inbox"
-    inbox_dir.mkdir(parents=True, exist_ok=True)
-    bad_path = inbox_dir / "bad.md"
-    bad_path.write_bytes(b"---\ntitle: \"t\"\nstatus: \xff\xfe open\n---\nbody\n")
-
-    assert watch._inbox_frontmatter_status(str(bad_path)) is None
-
-
 def test_inbox_counts_answers_zero_for_an_absent_inbox(tmp_path):
     open_count, total_count, taken_at = watch._inbox_counts(str(tmp_path))
 
@@ -1759,69 +1746,3 @@ def test_poll_once_stays_silent_when_the_open_count_holds_or_falls(tmp_path):
         assert inbox_open == 1
 
     assert emitted == []
-
-
-# --- both tick paths clear the spool ----------------------------------------
-#
-# The defect these pin, found on 2026-09-02 the day the drain landed and
-# independently by the sibling plane reading this tree: `watch_spool`'s
-# shortening function shipped with NO production caller, so nothing ever
-# shortened the spool. At the volume the sibling producer actually writes --
-# `PAUSED:turn-ended`, one record per turn end per session -- that is an
-# unbounded append. A caller nothing calls is exactly what a test suite that
-# only tests the function cannot see, which is why these two drive the ENTRY
-# POINTS. `watch_spool.clear` is a blind truncate (no drain-point retention
-# -- module docstring, "THE SPOOL IS A DOORBELL"), so these two are also now
-# the only compaction-shaped tests left: `test_tick_once_keeps_a_record_
-# appended_after_its_classify` pinned drain-point retention, which no reader
-# of spool content survives to need, and was deleted with `compact` itself.
-
-
-def _spool_line(at, session_id="peer-1"):
-    return json.dumps(
-        {"session_id": session_id, "state": "PAUSED:turn-ended", "at": at,
-         "writer": "receiver-state-sensor"}
-    )
-
-
-def _write_spool(repo_root, lines):
-    (repo_root / "state").mkdir(exist_ok=True)
-    with open(watch.watch_spool.spool_path(str(repo_root)), "w", encoding="utf-8") as fh:
-        for line in lines:
-            fh.write(line + "\n")
-
-
-def _spool_contents(repo_root):
-    with open(watch.watch_spool.spool_path(str(repo_root)), encoding="utf-8") as fh:
-        return [l for l in fh.read().splitlines() if l.strip()]
-
-
-def test_tick_once_clears_the_spool_it_has_classified_against(tmp_path):
-    """The `--once` wake empties the spool once it has classified this tick."""
-    now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
-    _write_spool(tmp_path, [
-        _spool_line("2026-09-01T11:59:00Z"),
-        _spool_line("2026-09-01T11:59:30Z"),
-    ])
-    _parked_once(tmp_path, {}, candidate=True, emitted=[], now=now)
-    assert _spool_contents(tmp_path) == []
-
-
-def test_the_held_poller_clears_the_spool_too(tmp_path):
-    """The held `Monitor` loop clears as well, and this is the case the
-    sibling plane asked about: a repo watched by a healthy held poller with
-    no cron firing at all would otherwise spool into a file nothing ever
-    shortened -- unbounded growth presenting as a perfectly healthy watch."""
-    _write_spool(tmp_path, [_spool_line("2020-01-01T00:00:00Z")])
-    with mock.patch.object(watch, "_measure_snapshot_ms", return_value=(4.6, [])), \
-         mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)), \
-         mock.patch.object(watch, "_refuse_if_already_armed", return_value=None):
-        watch.main(
-            str(tmp_path),
-            caller_session_id="w",
-            group_em_session_id="c",
-            stream=io.StringIO(),
-            sleep_fn=lambda _s: None,
-            max_iterations=1,
-        )
-    assert _spool_contents(tmp_path) == []

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import socket
 import sys
 import threading
@@ -42,7 +43,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.warm import breadcrumb, election, idle, lifecycle, server
+from coordinator_core.warm import breadcrumb, election, idle, lifecycle, server, skew
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -407,9 +408,31 @@ def _serve_in_background(ctx, listen_socket):
     thread.start()
     return thread
 
+@pytest.fixture()
+def short_tmp_path():
+    """The suite-root warm-runtime base, used here as an ENGINE ROOT too.
+
+    `coordinator_core/conftest.py::_quarantine_real_home` already redirects
+    `breadcrumb.RUNTIME_BASE_ENV` to a short, real, per-test root under
+    `/tmp` on POSIX (removed on that fixture's own teardown) -- the fix for
+    exactly the `sun_path` overflow this fixture used to work around by
+    minting a second short tempdir. These four tests reuse that SAME base as
+    their engine root rather than deriving a fresh one, and add the one thing
+    the suite-root fixture does not provide: a build stamp
+    (`skew.compute_client_token` refuses an unstamped root, the same refusal
+    a real caller meets, so this satisfies it the same way rather than
+    weakening the check).
+    """
+    base = Path(os.environ[breadcrumb.RUNTIME_BASE_ENV])
+    stamp = base / "coordinator_core" / "_engine_stamp"
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text("test-engine-stamp\n", encoding="utf-8")
+    return base
+
+
 
 @posix_only
-def test_a_real_unix_socket_server_answers_a_real_client(tmp_path, monkeypatch) -> None:
+def test_a_real_unix_socket_server_answers_a_real_client(short_tmp_path, monkeypatch) -> None:
     """The end-to-end shape a Mac user's door will meet: elect a socket,
     accept on it, read one framed request, dispatch, write one framed
     response, close.
@@ -419,11 +442,11 @@ def test_a_real_unix_socket_server_answers_a_real_client(tmp_path, monkeypatch) 
     `test_dispatch_concurrency.py` owns and which would cost real process
     spawns here).
     """
-    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path))
-    path = tmp_path / "svc" / "tok.sock"
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(short_tmp_path))
+    path = short_tmp_path / "svc" / "tok.sock"
     listen_socket = election.elect_unix_socket(path)
 
-    ctx = _ctx(name=str(path), engine_root=tmp_path, listen_socket=listen_socket, endpoint_path=path)
+    ctx = _ctx(name=str(path), engine_root=short_tmp_path, listen_socket=listen_socket, endpoint_path=path)
     monkeypatch.setattr(
         type(ctx),
         "_pool_dispatch",
@@ -440,7 +463,18 @@ def test_a_real_unix_socket_server_answers_a_real_client(tmp_path, monkeypatch) 
     client.settimeout(5)
     try:
         client.connect(str(path))
-        request = {"jsonrpc": "2.0", "id": "req-1", "method": "ping", "params": {}}
+        # STAMPED, because the server refuses an unstamped request before it
+        # ever reaches dispatch (-32003, "carried no _engine_token"). This
+        # test could not have known that: it has never executed, so it still
+        # carried the pre-guard request shape. `skew.compute_client_token` is
+        # what `warm.client` stamps, named by the refusal message itself.
+        request = {
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "method": "ping",
+            "params": {},
+            "_engine_token": skew.compute_client_token(short_tmp_path),
+        }
         client.sendall((json.dumps(request) + "\n").encode("utf-8"))
         reader = client.makefile("rb")
         response = json.loads(reader.readline())
@@ -453,7 +487,7 @@ def test_a_real_unix_socket_server_answers_a_real_client(tmp_path, monkeypatch) 
 
 
 @posix_only
-def test_an_abandoned_client_does_not_kill_a_worker(tmp_path, monkeypatch) -> None:
+def test_an_abandoned_client_does_not_kill_a_worker(short_tmp_path, monkeypatch) -> None:
     """The unix-socket form of the failure the Windows arm was losing 30
     workers a session to: a client that hit its own read deadline and closed
     the connection makes the server's response write raise EPIPE. That must
@@ -463,13 +497,13 @@ def test_an_abandoned_client_does_not_kill_a_worker(tmp_path, monkeypatch) -> No
     the guard is gone, the pool has one fewer worker and (with pool_size=1)
     the second request is never answered at all.
     """
-    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path))
-    path = tmp_path / "svc" / "tok.sock"
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(short_tmp_path))
+    path = short_tmp_path / "svc" / "tok.sock"
     listen_socket = election.elect_unix_socket(path)
 
     release = threading.Event()
 
-    ctx = _ctx(name=str(path), engine_root=tmp_path, listen_socket=listen_socket, endpoint_path=path)
+    ctx = _ctx(name=str(path), engine_root=short_tmp_path, listen_socket=listen_socket, endpoint_path=path)
 
     def _slow_dispatch(self, msg, *, caller=None, isolated=False):
         if msg["id"] == "abandoned":
@@ -501,14 +535,14 @@ def test_an_abandoned_client_does_not_kill_a_worker(tmp_path, monkeypatch) -> No
 
 
 @posix_only
-def test_the_elected_socket_sits_in_a_0700_directory(tmp_path, monkeypatch) -> None:
+def test_the_elected_socket_sits_in_a_0700_directory(short_tmp_path, monkeypatch) -> None:
     """The actual security boundary on POSIX. Not the socket's own mode --
     macOS/BSD do not reliably enforce those on connect."""
     import os
     import stat
 
-    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path))
-    path = tmp_path / "svc" / "tok.sock"
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(short_tmp_path))
+    path = short_tmp_path / "svc" / "tok.sock"
 
     old = os.umask(0o022)
     try:
@@ -522,11 +556,11 @@ def test_the_elected_socket_sits_in_a_0700_directory(tmp_path, monkeypatch) -> N
 
 
 @posix_only
-def test_breadcrumb_liveness_reads_a_real_unix_endpoint(tmp_path, monkeypatch) -> None:
+def test_breadcrumb_liveness_reads_a_real_unix_endpoint(short_tmp_path, monkeypatch) -> None:
     """`should_spawn`'s wedged-server check has to work on POSIX too: pid
     liveness alone proves the process is running, not that it is serving."""
-    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path))
-    path = tmp_path / "svc" / "tok.sock"
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(short_tmp_path))
+    path = short_tmp_path / "svc" / "tok.sock"
 
     listen_socket = election.elect_unix_socket(path)
     try:

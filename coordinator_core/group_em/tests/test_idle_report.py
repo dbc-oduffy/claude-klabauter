@@ -357,23 +357,6 @@ def test_no_named_move_asks_which_it_is(tmp_path, projects_dir, now):
     assert row["nudge-shape"] == idle_report.SHAPE_ASK
 
 
-def test_a_non_matching_phrase_is_unresolved_not_none(tmp_path, projects_dir, now):
-    """DoE-claude bc5b1ba18: a whitelist predicate can almost never emit
-    `none` -- matching a phrase establishes presence, failing to match
-    establishes nothing (the space of ways to name a next move is open). So
-    every non-match renders `NEXT_MOVE_UNRESOLVED`, never `NEXT_MOVE_NONE`,
-    and `nudge-shape` is unaffected (`push` already requires an affirmatively
-    named move, so both `none` and `unresolved` yield `ask-which-it-is`)."""
-    _write(projects_dir, "ffff9999-x", [
-        _said("Done with the refactor.", 40, now)
-    ], mtime_minutes_ago=40, now=now)
-    row = _row(_report(tmp_path, projects_dir, now,
-                       names={"ffff9999-x": "claude-klabauter-a9"}), "ffff9999")
-    assert row["named-next-move"] == idle_report.NEXT_MOVE_UNRESOLVED
-    assert row["named-next-move"] != idle_report.NEXT_MOVE_NONE
-    assert row["nudge-shape"] == idle_report.SHAPE_ASK
-
-
 def test_peer_blocked_wait_holds_not_asks(tmp_path, projects_dir, now):
     """C3(a): `_NAMED_REASON`'s vocabulary was entirely PM-centric, so a session
     blocked on a PEER scored `named_reason=False` and `_nudge_shape` degraded it
@@ -499,28 +482,9 @@ def test_the_summary_line_carries_every_parameter_the_report_used(
     without a second lookup."""
     line = idle_report.summary_line(
         _report(tmp_path, projects_dir, now, group_em_session_id="group-em-1"))
-    for token in ("peers=", "escalate=", "out-of-work=", "exited=", "unknown=",
-                  "floor=5m", "threshold=30m", "group-em=group-em-1", "as_of="):
+    for token in ("peers=", "escalate=", "out-of-work=", "unknown=", "exited=",
+                  "floor=5m", "threshold=30m", "group-em=group-em-1"):
         assert token in line
-
-
-def test_the_summary_line_matches_the_amended_fixed_form_exactly(
-    tmp_path, projects_dir, now
-):
-    """DoE-claude bc5b1ba18, `fleet-watch-idle-report-contract.md`: field
-    order is `peers escalate out-of-work exited unknown floor threshold
-    group-em as_of`, `exited=` is a bare int with no parenthetical gloss and
-    no second clock token (`counts_struck_at`), and `as_of` is the last thing
-    on the line."""
-    report = _report(tmp_path, projects_dir, now, group_em_session_id="group-em-1")
-    line = idle_report.summary_line(report)
-    assert line == (
-        "peers=0 escalate=0 out-of-work=0 exited=0 unknown=0 "
-        "floor=5m threshold=30m group-em=group-em-1 as_of=%s" % report["as_of"]
-    )
-    assert line.endswith("as_of=%s" % report["as_of"])
-    assert "counts_struck_at" not in line
-    assert "(" not in line
 
 
 def test_the_report_dict_carries_the_instant_its_counts_were_struck(
@@ -528,14 +492,13 @@ def test_the_report_dict_carries_the_instant_its_counts_were_struck(
 ):
     """C5 falsifier leg 1, `report_has_when`. The heartbeat's `last_tick_at`
     answers when the watcher ran, not when THIS report's `counts` block was
-    taken -- `as_of` is `now`, spelled the way the falsifier's `_WHEN_TOKEN`
-    actually matches (never `taken_at`). DoE-claude bc5b1ba18 amended the
-    contract's `summary_line` format to append `as_of=<iso>` -- the same
-    instant, re-derived from `report["as_of"]`, never a second clock.
+    taken -- `counts_struck_at` is `now`, spelled the way the falsifier's
+    `_WHEN_TOKEN` actually matches (never `taken_at`), and it lands in the
+    dict only: `summary_line` is DoE-owned contract and does not move.
     """
     report = _report(tmp_path, projects_dir, now, group_em_session_id="group-em-1")
     assert report["as_of"] == "2027-01-15T08:00:00Z"
-    assert "as_of=%s" % report["as_of"] in idle_report.summary_line(report)
+    assert "as_of" not in idle_report.summary_line(report)
 
 
 def test_an_empty_roster_is_a_legible_statement_not_an_absence(

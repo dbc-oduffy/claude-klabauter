@@ -190,7 +190,23 @@ def resolve_cli_script_root() -> Path:
     Takes no `repo_root` BY DESIGN (see module docstring): `coordinator/
     bin/` is engine-provisioned and absent from every consumer repo, so a
     caller's target-repo root is never a valid script root. Never
-    `Path.cwd()` either (module docstring, "CWD IS A LOAD-BEARING GAP")."""
+    `Path.cwd()` either (module docstring, "CWD IS A LOAD-BEARING GAP").
+
+    NEGATIVE SPEC — DO NOT DELETE THIS FUNCTION AGAIN. It was deleted once,
+    on 2026-09-01, and replaced with a gravestone arguing that this module
+    "lives at a DIFFERENT depth than any of the three callers" and therefore
+    could not compute a shared root at all. That premise is false, and it is
+    checkable in one grep: this module, `merge_assemble/apply.py`,
+    `merge_assemble/__init__.py`, and the `workday_complete`,
+    `workstream_complete` and `workweek_complete` apply modules are each one
+    directory under `coordinator_core/`, so `parents[2]` is the engine root
+    for all six. The deletion bought nothing and left five copies of one
+    expression, each free to drift back toward a repo-root join. The defect
+    the gravestone described was real — `resolve_cli_script_root(repo_root)`
+    joined `coordinator/bin` onto the TARGET repo and aborted `merge-assemble
+    apply` at its first in-process directive in every consumer repo — but the
+    correction is the no-argument signature above, which makes that call a
+    TypeError rather than a runtime miss, not the removal of the seam."""
     return Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 
 

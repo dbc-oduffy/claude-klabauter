@@ -24,14 +24,73 @@ itself under test rather than stubbed.
 from __future__ import annotations
 
 import errno
+import os
 import socket
 import sys
+import tempfile
+from pathlib import Path
 
 import pytest
 
 from coordinator_core.warm import client
 
 _MSG = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
+
+#: Captured at import time, before any test's `os.unlink`/`os.remove`
+#: monkeypatch (`test_the_client_never_unlinks_a_refusing_socket` below
+#: patches both module-wide) -- `_force_rmtree`'s own teardown must not go
+#: through the patched attributes, or it either records a spurious
+#: "unlink" the test never asked for, or (since the fake in that test takes
+#: one positional arg, not `shutil.rmtree`'s own `dir_fd=`-qualified call)
+#: raises a `TypeError` out of fixture teardown.
+_REAL_UNLINK = os.unlink
+_REAL_RMDIR = os.rmdir
+
+
+def _force_rmtree(path: Path) -> None:
+    try:
+        entries = list(path.iterdir())
+    except OSError:
+        return
+    for child in entries:
+        if child.is_dir() and not child.is_symlink():
+            _force_rmtree(child)
+        else:
+            try:
+                _REAL_UNLINK(str(child))
+            except OSError:
+                pass
+    try:
+        _REAL_RMDIR(str(path))
+    except OSError:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _short_warm_runtime_base(monkeypatch: pytest.MonkeyPatch):
+    """Overrides the suite-wide HOME quarantine's `warm-runtime-base`
+    (`coordinator_core/conftest.py::_quarantine_real_home`) with a short,
+    real on-disk root under `/tmp`.
+
+    The quarantine's own path is already 90+ bytes deep on macOS before
+    `election.socket_path` appends `coordinator/warm/<16-hex-hash>/
+    <token>.sock`, tripping `election.SUN_PATH_MAX_BYTES` (100) before
+    `_endpoint_name` -- under test in this module -- ever computes the
+    real endpoint. Same fix as `test_election_posix.py::short_runtime_base`
+    (committed b4e300c8f1); duplicated here rather than lifted into a
+    shared `conftest.py` because this dispatch's scope is this file only.
+
+    Teardown uses `_force_rmtree`, not `shutil.rmtree`, for the reason
+    `_REAL_UNLINK`'s own docstring gives.
+    """
+    from coordinator_core.warm import breadcrumb
+
+    base = Path(tempfile.mkdtemp(prefix="wrb-", dir="/tmp"))
+    try:
+        monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(base))
+        yield base
+    finally:
+        _force_rmtree(base)
 
 
 @pytest.fixture(autouse=True)
@@ -204,36 +263,52 @@ def test_open_pipe_round_trips_over_a_real_unix_socket(tmp_path) -> None:
     would fail loudly rather than subtly if it were wrong.
 
     NEVER EXECUTED ON THE PLATFORM THIS PROJECT DEVELOPS ON. Stated so a
-    green Windows run is not read as evidence about this test."""
+    green Windows run is not read as evidence about this test.
+
+    Binds its OWN literal `s.sock`, not one derived through
+    `election.socket_path` -- so unlike the rest of this module, `tmp_path`
+    itself (not the suite-wide `warm-runtime-base` quarantine) is the thing
+    that can blow `sun_path` here. It routinely does on macOS, where
+    `tmp_path` is already ~90 bytes deep, so this test binds under a short
+    `tempfile.mkdtemp(dir="/tmp")` root instead -- the shortest real POSIX
+    temp root available, same reasoning as `test_election_posix.py::
+    short_runtime_base`."""
+    import shutil
+    import tempfile
     import threading
+    from pathlib import Path
 
-    path = str(tmp_path / "s.sock")
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    listener.bind(path)
-    listener.listen(1)
-
-    received: list = []
-
-    def _serve() -> None:
-        conn, _ = listener.accept()
-        io = conn.makefile("rwb")
-        conn.close()
-        received.append(io.readline())
-        io.write(b'{"jsonrpc":"2.0","id":1,"result":"pong"}\n')
-        io.flush()
-        io.close()
-
-    t = threading.Thread(target=_serve, daemon=True)
-    t.start()
+    short_dir = Path(tempfile.mkdtemp(prefix="ops-", dir="/tmp"))
     try:
-        fh = client._open_pipe(path)
-        fh.write(b'{"jsonrpc":"2.0","id":1,"method":"ping"}\n')
-        fh.flush()
-        line = fh.readline()
-        fh.close()
-    finally:
-        listener.close()
-    t.join(timeout=5)
+        path = str(short_dir / "s.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(path)
+        listener.listen(1)
 
-    assert received and b'"ping"' in received[0]
-    assert b'"pong"' in line
+        received: list = []
+
+        def _serve() -> None:
+            conn, _ = listener.accept()
+            io = conn.makefile("rwb")
+            conn.close()
+            received.append(io.readline())
+            io.write(b'{"jsonrpc":"2.0","id":1,"result":"pong"}\n')
+            io.flush()
+            io.close()
+
+        t = threading.Thread(target=_serve, daemon=True)
+        t.start()
+        try:
+            fh = client._open_pipe(path)
+            fh.write(b'{"jsonrpc":"2.0","id":1,"method":"ping"}\n')
+            fh.flush()
+            line = fh.readline()
+            fh.close()
+        finally:
+            listener.close()
+        t.join(timeout=5)
+
+        assert received and b'"ping"' in received[0]
+        assert b'"pong"' in line
+    finally:
+        shutil.rmtree(short_dir, ignore_errors=True)

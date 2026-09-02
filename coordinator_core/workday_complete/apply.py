@@ -102,6 +102,7 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     resolve_json_payload_flag,
 )
 from coordinator_core.ceremony_common.cli_dispatch import (
+    resolve_cli_script_root,
     invoke_cli_main as _shared_invoke_cli_main,
     load_cli_module as _shared_load_cli_module,
 )
@@ -134,7 +135,7 @@ WorkdayApplyExitCode = build_ceremony_halt_exit_codes("WorkdayApplyExitCode")
 #: Every key is a literal member of `brief.CONSUMES_MANIFEST`, written here
 #: by hand; every value is this module's own fixed, `Path(__file__)`-relative
 #: script location under `coordinator/bin/`. Never mutated at runtime.
-_CLI_SCRIPT_ROOT = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+_CLI_SCRIPT_ROOT = resolve_cli_script_root()
 
 _CLI_DISPATCH: dict[str, Path] = {
     name: _CLI_SCRIPT_ROOT / f"{name}.py" for name in CONSUMES_MANIFEST

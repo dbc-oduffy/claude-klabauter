@@ -33,7 +33,6 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core import launchable
 from coordinator_core.launchable import resolve_launchable
 
 __all__ = [
@@ -83,15 +82,18 @@ def resolve_sentinel_cli() -> str:
 
 def _run_sentinel_cli(args: List[str]) -> int:
     script = resolve_sentinel_cli()
-    # The installed misc-session-and-guards is extensionless but is always a Python
-    # script (produced from coordinator/bin/misc-session-and-guards.py). On Windows
-    # keep resolve_launchable's .cmd-twin/shebang-sniffing behaviour (a bare path is
-    # unexecutable there); on POSIX prefix sys.executable so the call doesn't depend
-    # on the installed copy's own shebang + exec bit (which C4 strips upstream).
-    if launchable._is_windows():
-        argv = [*resolve_launchable(script), *args]
-    else:
-        argv = [sys.executable, script, *args]
+    # "Extensionless under settings-home therefore Python source" stopped being
+    # true on 2026-09-02, when the native-door cutover replaced every manifested
+    # name in that directory with a compiled image at the bare name -- Mach-O on
+    # POSIX, with no `.exe` to signal it. The former POSIX branch prefixed
+    # sys.executable unconditionally on that premise and fed python a binary,
+    # taking `/autonomous on|off` down on every cut-over box.
+    # `resolve_launchable` already discriminates correctly: it prefixes an
+    # interpreter for a non-executable `.py` only, and returns a bare path for a
+    # native image, which is exactly why the other ~370 cut-over names survived.
+    # Delegate on both platforms rather than carrying a second, drift-prone
+    # answer to the same question.
+    argv = [*resolve_launchable(script), *args]
     try:
         result = subprocess.run(
             argv,

@@ -1189,6 +1189,15 @@ class _FrontDoorContext:
         answers `credential_absent` until an operator fixes the directory.
         """
         try:
+            # REPAIR, THEN ASSERT -- in that order, and the order is the fix.
+            # The 0755 this used to refuse on was never an operator's choice:
+            # `ensure_secret`'s own `mkdir` produced it under their umask, so
+            # the door was refusing a directory IT had created and telling the
+            # operator to go fix it. Hardening our own directory first leaves
+            # the refusal below for what it was written for -- a wrong owner, a
+            # symlink, a Windows DACL that grants Everyone -- none of which
+            # `ensure_directory_excludes_others` will silence.
+            door_credential.ensure_directory_excludes_others()
             door_credential.assert_directory_excludes_others()
         except Exception as exc:  # noqa: BLE001 -- never brick the door
             print(

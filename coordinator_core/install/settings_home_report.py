@@ -184,11 +184,8 @@ _FIXED_MEMBERS: tuple[tuple[str, str, str, str, bool], ...] = (
         "machine-local/.claude-klabauter-live-root (optional rung-1.5 perf cache; absence is normal)",
         "machine-local/.claude-klabauter-live-root",
         "file",
-        # Review: code-reviewer — "Fail-loud" retained the old rung-2 citation
-        # verbatim alongside "absence is normal," which reads as
-        # self-contradictory; requalified as historical.
-        "DoE docs/install/AGENT.md historically named this rung-2 fail-loud; "
-        "superseded by claude-klabauter coordinator_core/engine_root.py rung 1.5 (absence is a normal fallback)",
+        "DoE docs/install/AGENT.md § Fail-loud claude-klabauter resolution, rung 2; "
+        "claude-klabauter coordinator_core/engine_root.py rung 1.5 (absence is a normal fallback)",
         False,
     ),
     (

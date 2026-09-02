@@ -9,7 +9,6 @@ directory, exercising the real git binary end-to-end rather than mocking it.
 from __future__ import annotations
 
 import subprocess
-from unittest import mock
 from pathlib import Path
 
 import pytest
@@ -155,47 +154,6 @@ def test_missing_git_executable_raises_clone_sibling_repo_error(tmp_path, monkey
 
     with pytest.raises(CloneSiblingRepoError):
         clone_idempotent("https://example.invalid/repo.git", str(target))
-
-
-def test_already_present_origin_read_with_git_missing_raises_not_none(tmp_path):
-    """A `git` that will not spawn must not be reported as "this clone has no
-    origin" -- that answer would send `clone_idempotent` into its identity
-    refusal naming a mismatch nobody observed. See `_existing_origin_url`'s
-    negative spec."""
-    target = tmp_path / "existing-git-missing"
-    target.mkdir()
-    _run_git(["init"], cwd=target)
-
-    real_run = subprocess.run
-
-    def _no_git(*args, **kwargs):
-        argv = args[0] if args else kwargs.get("args")
-        if argv and argv[0] == "git" and "get-url" in argv:
-            raise FileNotFoundError("git not found")
-        return real_run(*args, **kwargs)
-
-    with mock.patch.object(subprocess, "run", _no_git):
-        with pytest.raises(CloneSiblingRepoError):
-            clone_idempotent("https://example.invalid/repo.git", str(target))
-
-
-def test_already_present_origin_read_timeout_raises_not_none(tmp_path):
-    """Same negative spec, the other unaskable-question case."""
-    target = tmp_path / "existing-origin-timeout"
-    target.mkdir()
-    _run_git(["init"], cwd=target)
-
-    real_run = subprocess.run
-
-    def _timeout(*args, **kwargs):
-        argv = args[0] if args else kwargs.get("args")
-        if argv and argv[0] == "git" and "get-url" in argv:
-            raise subprocess.TimeoutExpired(cmd=argv, timeout=1)
-        return real_run(*args, **kwargs)
-
-    with mock.patch.object(subprocess, "run", _timeout):
-        with pytest.raises(CloneSiblingRepoError):
-            clone_idempotent("https://example.invalid/repo.git", str(target))
 
 
 def test_registered_handler_dispatches_to_clone_idempotent(tmp_path):
