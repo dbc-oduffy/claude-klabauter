@@ -12,12 +12,19 @@ import stat
 import subprocess
 import sys
 
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.install import door_install_posix_build as posix_install
 from coordinator_core.warm.door import build_posix
 from coordinator_core.win_portability import no_console_creationflags
 
+
+#: The real engine root, derived from this file rather than from cwd so the
+#: execution leg below works under any invocation directory.
+#: tests/ -> install/ -> coordinator_core/ -> repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="door_install_posix_build is POSIX-only"
@@ -98,8 +105,33 @@ def test_build_or_advise_advisory_command_actually_runs(tmp_path, monkeypatch):
     marker = "build it later with: "
     assert marker in result.advisory
     command = result.advisory.split(marker, 1)[1].strip()
-    argv = command.split()
+    tokens = command.split()
+
+    # Leading `KEY=VALUE` tokens are shell env assignments, not argv. The
+    # advisory carries `PYTHONPATH=<engine root>` because the module route
+    # alone is not enough: a bare `python3 -m coordinator_core.warm.door.
+    # build_posix` dies on `ModuleNotFoundError: No module named
+    # 'coordinator_core'` unless the engine root is importable, and an operator
+    # reading this advisory is by definition not sitting inside the engine tree.
+    #
+    # Honouring the prefix here rather than asserting it away is the point. This
+    # test's whole job is "the command AS WRITTEN runs", and the previous
+    # version modelled a command as bare argv -- so it asserted `argv[0] ==
+    # "python3"`, could not express an env prefix, and went red the moment the
+    # advisory was fixed to actually work. A test that cannot represent the
+    # correct answer will keep reporting the fix as the failure.
+    env_prefix: "dict[str, str]" = {}
+    while tokens and "=" in tokens[0] and not tokens[0].startswith("-"):
+        key, _, value = tokens[0].partition("=")
+        env_prefix[key] = value
+        tokens = tokens[1:]
+
+    argv = tokens
     assert argv[0] == "python3"
+    assert env_prefix.get("PYTHONPATH") == str(engine_root.resolve()), (
+        "the advisory must make the engine root importable, or the module route "
+        f"it names cannot resolve: {command}"
+    )
 
     # The execution check below proves "it runs"; these two prove "it is the
     # module route". Both are needed: the defect that shipped green was a
@@ -118,6 +150,25 @@ def test_build_or_advise_advisory_command_actually_runs(tmp_path, monkeypatch):
         text=True,
         timeout=60,
         cwd=str(tmp_path),
+        # Run the command's own SHAPE -- `PYTHONPATH=<root> python3 -m ...` --
+        # rather than a bare argv, because running it without the prefix is what
+        # the operator never does and what let this check pass on a command that
+        # could not work.
+        #
+        # The PYTHONPATH value is swapped to the real engine root for the
+        # execution leg only. `engine_root` above is a stamped tmp_path skeleton
+        # with no `coordinator_core/warm/` in it, so the advisory's literal value
+        # is right for the assertion (it must name the root it was given) and
+        # useless for actually importing the module. The two legs check
+        # different things: the assertion above proves the advisory names the
+        # right root, this proves the command FORM resolves when the root is
+        # genuine. `cwd=tmp_path` keeps the repo from being importable by
+        # accident, so PYTHONPATH is the only thing that can resolve it.
+        env={
+            **os.environ,
+            **env_prefix,
+            "PYTHONPATH": str(_REPO_ROOT),
+        },
         **no_console_creationflags(),
     )
     assert completed.returncode == 0, (

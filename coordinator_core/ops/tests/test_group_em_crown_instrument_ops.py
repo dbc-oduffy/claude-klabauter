@@ -161,6 +161,24 @@ def test_idle_report_returns_same_answer_as_underlying_function(tmp_path, monkey
     assert calls["kwargs"]["peer"] == "sid-"
 
 
+def test_idle_report_observed_exits_unhashable_raises_named_value_error(tmp_path, monkeypatch):
+    """P2 pin: an accepted shape (a list) with unhashable contents (dicts) must
+    raise a named `ValueError`, not propagate the bare `TypeError` frozenset()
+    itself raises."""
+
+    def _fake_build_report(repo_root, **kwargs):
+        raise AssertionError("must not reach build_report on a mis-shaped observed_exits")
+
+    monkeypatch.setattr(gei.group_em_idle_report, "build_report", _fake_build_report)
+
+    with pytest.raises(ValueError) as excinfo:
+        gei._groupem_idle_report(
+            {"repo_root": str(tmp_path), "observed_exits": [{"session_id": "x"}]}
+        )
+
+    assert "observed_exits must contain hashable" in str(excinfo.value)
+
+
 def test_stamp_refuses_when_no_holder_can_be_resolved(tmp_path, monkeypatch):
     """A crown row that names no crown is worse than no row.
 
@@ -208,6 +226,32 @@ def test_stamp_refuses_a_writer_naming_itself_as_someone_else(tmp_path, monkeypa
         )
 
     assert "disagrees with this caller's resolved identity" in str(excinfo.value)
+    assert not (tmp_path / "state" / "group-em-watch.json").exists()
+
+
+def test_stamp_refuses_an_unverifiable_writer_claim_with_no_resolved_caller(tmp_path, monkeypatch):
+    """P1 fail-closed pin: an unresolvable caller must not disarm the guard.
+
+    Supplying `holder_session_id` explicitly sidesteps the earlier
+    unresolvable-holder raise, so this reaches the writer-identity branch
+    with `resolved_caller` falsy -- previously the `elif resolved_caller and
+    ...` guard short-circuited to False here and let ANY writer_session_id
+    through unverified. It must now raise instead.
+    """
+    monkeypatch.setattr(ges.group_em_read_pass, "caller_session_id", lambda: None)
+
+    with pytest.raises(ValueError) as excinfo:
+        ges._groupem_stamp(
+            {
+                "repo_root": str(tmp_path),
+                "holder_session_id": "explicit-holder-1234",
+                "declinations": [],
+                "interval_seconds": 30.0,
+                "writer_session_id": "unverifiable-writer-5678",
+            }
+        )
+
+    assert "unresolvable" in str(excinfo.value)
     assert not (tmp_path / "state" / "group-em-watch.json").exists()
 
 

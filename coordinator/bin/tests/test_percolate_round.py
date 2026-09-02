@@ -2572,7 +2572,12 @@ def _wire_lock_test_fakes(publish_mod, monkeypatch, tmp_path, row_dests: "dict[s
         publish_mod, "_resolve_percolate_root_and_rung", lambda **kw: (tmp_path, "test-rung")
     )
     monkeypatch.setattr(
-        publish_mod, "load_targets", lambda setup_dir, target_filter=None: [
+        # `**_` absorbs `err=` (and any future keyword) so this fake tracks the
+        # real `load_targets` signature rather than pinning one call site's
+        # argument list: `_declared_repo_roots_carrying_coordinator_core`
+        # passes `err=io.StringIO()` to keep a second unfiltered resolution
+        # from reprinting main()'s shadow-collision diagnostics.
+        publish_mod, "load_targets", lambda setup_dir, target_filter=None, **_: [
             fake_row(name, dest) for name, dest in row_dests.items()
         ]
     )

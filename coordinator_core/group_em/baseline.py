@@ -74,18 +74,21 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
-from coordinator_core.group_em.watch_heartbeat import _iso
+from coordinator_core.group_em.watch_heartbeat import ABSENT_NEVER_ARMED, ABSENT_UNREADABLE
+from coordinator_core.group_em.watch_heartbeat import iso_instant as _iso
 
 PeerRecord = Mapping[str, Any]
 PeerSet = Mapping[str, PeerRecord]
 
-#: Why `_load_previous` returned no usable baseline. Mirrors
-#: `watch_heartbeat.ABSENT_NEVER_ARMED` / `ABSENT_UNREADABLE`: "no file yet"
-#: and "a file exists but is torn/corrupt" are different events to whoever
-#: reads `first_tick_reason` even though both degrade to the same
-#: `first_tick: True` treatment for the diff itself.
-FIRST_TICK_NEVER_ARMED = "never-armed"
-FIRST_TICK_UNREADABLE = "unreadable-record"
+#: Why `_load_previous` returned no usable baseline. Aliases of
+#: `watch_heartbeat.ABSENT_NEVER_ARMED` / `ABSENT_UNREADABLE` -- imported,
+#: not re-declared (overengineering-reviewer finding 4): "no file yet" and
+#: "a file exists but is torn/corrupt" are different events to whoever reads
+#: `first_tick_reason` even though both degrade to the same `first_tick:
+#: True` treatment for the diff itself. Local names read better at this
+#: module's call sites, so they stay as aliases rather than a rename.
+FIRST_TICK_NEVER_ARMED = ABSENT_NEVER_ARMED
+FIRST_TICK_UNREADABLE = ABSENT_UNREADABLE
 
 
 def _repo_root() -> Path:

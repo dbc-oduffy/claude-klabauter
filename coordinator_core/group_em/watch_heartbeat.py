@@ -86,32 +86,22 @@ def watch_path(repo_root: str) -> str:
     return os.path.join(repo_root, _WATCH_RELATIVE_PATH)
 
 
-def _iso(epoch: float) -> str:
+def iso_instant(epoch: float) -> str:
+    """The `_STAMP_FORMAT` instant string -- the one seam every `as_of`/
+    `taken_at`/`counts_struck_at` caller composes against.
+
+    // Review: overengineering-reviewer finding 3 -- promoted from private
+    // `_iso` after `baseline.py` was found reaching across the module
+    // boundary for the private name; three other call sites (idle_report,
+    // send_pass, group_em_enter) hand-spelled the same expression rather
+    // than importing it at all.
+    """
     return time.strftime(_STAMP_FORMAT, time.gmtime(epoch))
 
 
-def render_struck_count(count: int, population: str, struck_at_epoch: Optional[float] = None) -> str:
-    """`<count> (<population>) counts_struck_at=<instant>` -- the one spelling.
-
-    THE RENDERING HELPER C5 OWNS (plan chunk C5, overengineering-reviewer
-    finding 1, ACCEPTED). A rendered count that carries the instant it was
-    struck and the population it was computed over was about to be authored
-    three times (C5, C6, C11) against overlapping surfaces, which would have
-    landed three differently-shaped timestamp fields. This is the one place
-    that composition happens; a caller with its own count and population
-    calls this rather than re-inventing the join.
-
-    `population` is a short PROSE label -- "peers seen including this
-    caller", "peers subscribed, caller excluded" -- never a code, so the
-    line reads without a lookup table (module docstring's C5 gap: two
-    populations shared one word and cost three instruments in one night).
-
-    `struck_at_epoch` defaults to `time.time()` at call time, not at import:
-    a caller composing this string is doing so AT the instant its count was
-    taken, and a frozen default would silently drift from that.
-    """
-    struck_at_epoch = time.time() if struck_at_epoch is None else struck_at_epoch
-    return f"{count} ({population}) counts_struck_at={_iso(struck_at_epoch)}"
+#: Back-compat alias for the private spelling; nothing outside this module
+#: should import it, but code inside the module keeps the short name.
+_iso = iso_instant
 
 
 def next_expected_by(now_epoch: float, interval_seconds: float) -> str:

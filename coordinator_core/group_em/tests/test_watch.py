@@ -1664,6 +1664,19 @@ def test_inbox_counts_reads_status_off_the_frontmatter_head(tmp_path):
     assert isinstance(taken_at, float)
 
 
+# Review: coordinatorcode-reviewer (finding #2) -- a genuinely undecodable memo must
+# degrade to None per the function's own contract, not raise UnicodeDecodeError
+# uncaught through _inbox_counts's per-entry loop. Real invalid UTF-8 bytes, not a
+# monkeypatched exception, so this pins the behaviour rather than a mock.
+def test_inbox_frontmatter_status_degrades_to_none_on_undecodable_memo(tmp_path):
+    inbox_dir = tmp_path / "cross-repo" / "inbox"
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    bad_path = inbox_dir / "bad.md"
+    bad_path.write_bytes(b"---\ntitle: \"t\"\nstatus: \xff\xfe open\n---\nbody\n")
+
+    assert watch._inbox_frontmatter_status(str(bad_path)) is None
+
+
 def test_inbox_counts_answers_zero_for_an_absent_inbox(tmp_path):
     open_count, total_count, taken_at = watch._inbox_counts(str(tmp_path))
 

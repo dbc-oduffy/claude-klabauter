@@ -532,3 +532,35 @@ def test_an_older_format_prior_record_without_the_new_scalars_does_not_crash(tmp
     record = _record(tmp_path)
     assert record["prior_subscribed_peers"] is None
     assert record["prior_declination_count"] is None
+
+
+def test_stamp_accepts_a_writer_that_differs_from_the_holder_by_design(tmp_path):
+    """Review: coordinator:code-reviewer (a2a408f1eb356878e) Finding 3 -- pins
+    a deliberate boundary, not an oversight.
+
+    `stamp` validates only that `writer_session_id` is non-empty; it does NOT
+    check that the writer agrees with `holder_session_id` or anything else.
+    The writer/caller identity-agreement guard closed in `360194cdfb` lives
+    entirely at the op layer (`coordinator_core/ops/group_em_stamp.py`,
+    pinned in `coordinator_core/ops/tests/test_group_em_crown_instrument_ops.py`),
+    confirmed by the sibling reviewer covering `coordinator_core/ops/`.
+
+    EM decision: do not add the guard here. The op is the untrusted surface
+    -- an arbitrary JSON-RPC caller -- while `stamp`'s in-process callers are
+    the crown's own code passing its own ids. Pushing the check into `stamp`
+    would make the standing tick re-verify its own identity on every
+    heartbeat, on a hot path under a hard sub-500ms budget, against a caller
+    already inside the trust boundary. A same-crown monitor legitimately
+    writes with a differing `tick_source`/writer, and the extended trace's
+    three-way disjunction depends on exactly this permissiveness -- a guard
+    here would break the trace, not harden it. A future reader finding this
+    permissiveness should not "fix" it in this function.
+    """
+    accepted = watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="crown-A", declinations=[],
+        interval_seconds=5.0, writer_session_id="crown-B-differs-entirely",
+    )
+    assert accepted is True
+    record = _record(tmp_path)
+    assert record["holder_session_id"] == "crown-A"
+    assert record["writer_session_id"] == "crown-B-differs-entirely"

@@ -177,6 +177,24 @@ def test_pid_not_running_replace_leaves_no_trace_on_a_prior_first_claim(
     assert "replaced_live_reason" not in on_disk
 
 
+# Review: coordinatorcode-reviewer (finding #3) -- pin the `_build_record` scoping
+# invariant with an on-disk assertion rather than resting on the claim() return dict,
+# which would pass even if `replaced_*` leaked into the refresh path.
+def test_same_session_refresh_leaves_no_replaced_trace_on_disk(repo_root, record_dir):
+    """A same-session refresh (`already_held: True`) must not carry any `replaced_*`
+    key forward on disk -- `_build_record` never emits them, and this asserts the
+    written record itself, not the `claim()` return value."""
+    nomination.claim(repo_root, "sid-us", directory=record_dir)
+    result = nomination.claim(repo_root, "sid-us", directory=record_dir)
+    assert result["already_held"] is True
+
+    on_disk = nomination.read_record(repo_root, record_dir)
+    assert "replaced_holder_session_id" not in on_disk
+    assert "replaced_holder_name" not in on_disk
+    assert "replaced_nominated_at" not in on_disk
+    assert "replaced_live_reason" not in on_disk
+
+
 def test_reentry_by_holder_still_reports_already_held_true(repo_root, record_dir):
     """Re-entry by the current holder is unchanged by the auto-replace split -- it must
     never be mistaken for a replacement of itself."""

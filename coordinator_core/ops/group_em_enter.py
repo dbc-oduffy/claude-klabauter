@@ -156,7 +156,6 @@ Negative-spec:
 
 from __future__ import annotations
 
-import datetime
 import os
 import time
 from pathlib import Path
@@ -401,9 +400,9 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     # Legs that accept a caller-supplied clock (`watch_heartbeat.read_liveness`)
     # are passed this exact value; no second clock is struck anywhere below.
     now_epoch = time.time()
-    result["as_of"] = datetime.datetime.fromtimestamp(
-        now_epoch, datetime.timezone.utc
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Review: overengineering-reviewer finding 3 -- was a literal copy of the
+    # fromtimestamp/strftime expression; now the shared seam.
+    result["as_of"] = group_em_watch_heartbeat.iso_instant(now_epoch)
 
     nomination_outcome = (
         _run_nomination(target_root, caller_session_id)

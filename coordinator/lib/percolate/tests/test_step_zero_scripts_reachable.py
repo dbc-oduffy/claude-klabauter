@@ -12,10 +12,10 @@ closure evidence: the PROJECTION (what `setup/publish-targets.portable`'s
 rows actually resolve into), not the commit that landed the scripts or a
 grep of DoE's INSTALL.md prose.
 
-Mechanism (mirrors `test_post_transform_projection_parses.py`'s own
-`_parse_portable_rows`/`_iter_portable_rows` technique -- same source file,
-same field indices, a separate small read rather than an import across
-sibling test modules):
+Mechanism (uses `coordinator.lib.percolate.targets.parse_portable_rows`, the
+same shared parser `test_post_transform_projection_parses.py` calls --
+Review: overengineering-reviewer -- rather than each test module keeping its
+own field-indexed copy):
 
   1. Parse every row of `setup/publish-targets.portable` into
      `(name, source_subdir, allowlist)`.
@@ -51,7 +51,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator.lib.percolate.targets import _iter_portable_rows
+from coordinator.lib.percolate.targets import parse_portable_rows as _parse_portable_rows
 
 pytestmark = [pytest.mark.cadence]
 
@@ -65,21 +65,11 @@ _STEP_ZERO_SCRIPTS = ("chain-walk.py", "normalize-env.py", "install-maximalist.p
 
 _UNPUBLISHED_SOURCE_SUBDIR = "coordinator/scripts"
 
-
-def _parse_portable_rows(path: Path) -> list[dict[str, str]]:
-    """Parse `setup/publish-targets.portable`-shaped rows into
-    `{"name", "source_subdir", "allowlist"}` dicts. Field indices mirror
-    `test_post_transform_projection_parses._parse_portable_rows` exactly
-    (both derive from the same 8-field pipe-delimited row shape documented
-    in this file's own header)."""
-    rows = []
-    for raw_row in _iter_portable_rows(path):
-        fields = raw_row.split("|")
-        name = fields[0].strip()
-        source_subdir = fields[3].strip() if len(fields) > 3 else ""
-        allowlist_csv = fields[6].strip() if len(fields) > 6 else ""
-        rows.append({"name": name, "source_subdir": source_subdir, "allowlist": allowlist_csv})
-    return rows
+# `_parse_portable_rows` moved to `coordinator.lib.percolate.targets ::
+# parse_portable_rows` (Review: overengineering-reviewer -- this module and
+# `test_post_transform_projection_parses.py` each carried their own copy of
+# the same field-indexed parser for one on-disk row format; both now import
+# the shared production-side helper instead).
 
 
 def test_portable_targets_file_exists():

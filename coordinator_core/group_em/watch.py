@@ -245,6 +245,10 @@ def _inbox_frontmatter_status(path: str) -> Optional[str]:
     an unreadable memo is not an open one, but it is also not silently
     dropped from `total_count` -- the caller counts the file either way.
     """
+    # Review: coordinatorcode-reviewer (finding #2) -- UnicodeDecodeError is a
+    # ValueError subclass, not OSError; an undecodable memo must degrade to
+    # None per this function's own contract, not propagate through
+    # `_inbox_counts`'s uncaught per-entry call and abort the poll tick.
     try:
         with open(path, "r", encoding="utf-8") as fh:
             for i, line in enumerate(fh):
@@ -253,7 +257,7 @@ def _inbox_frontmatter_status(path: str) -> Optional[str]:
                 stripped = line.strip()
                 if stripped.startswith("status:"):
                     return stripped[len("status:"):].strip().strip("'\"")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     return None
 
@@ -290,12 +294,21 @@ def _inbox_counts(repo_root: str) -> tuple[int, int, float]:
 
 
 def _inbox_line(open_count: int, total_count: int, taken_at_epoch: float) -> str:
-    """One INBOX line, composed on C5's `render_struck_count` -- the one
-    rendering shape (count + population name + struck instant), spelled
+    """One INBOX line: count + population name + struck instant, spelled
     `counts_struck_at`, not a bespoke `taken_at` (C6 brief, C5's ownership).
+
+    Review: overengineering-reviewer finding 1 (ACCEPTED) -- `render_struck_count`
+    is inlined here, its one remaining production consumer. The helper existed to
+    stop three surfaces spelling count+population+instant three ways; DoE-claude's
+    contract ruling took `summary_line` off it and the ARMED line spells its own
+    divergent format, so the unification premise no longer held and the helper was
+    surviving on the finding that created it.
     """
     population = f"inbox memos open, of {total_count} total"
-    return f"INBOX {watch_heartbeat.render_struck_count(open_count, population, taken_at_epoch)}"
+    return (
+        f"INBOX {open_count} ({population}) "
+        f"counts_struck_at={watch_heartbeat.iso_instant(taken_at_epoch)}"
+    )
 
 
 #: The carried parked map, next to the heartbeat record it accompanies. A held
@@ -1205,7 +1218,9 @@ def main(
     # tell a real fleet change from a gap inferred between two differently-
     # defined lines (module's C5 note).
     armed_struck_epoch = time.time() if now_epoch is None else now_epoch
-    armed_struck_at = watch_heartbeat._iso(armed_struck_epoch)
+    # Review: coordinatorcode-reviewer (finding #1) -- external module, use the
+    # promoted public name; `_iso` is the private alias `iso_instant` retired.
+    armed_struck_at = watch_heartbeat.iso_instant(armed_struck_epoch)
     emit(
         f"ARMED peer_count={peer_count} {watched_repo} peers at {resolved_root}, "
         f"snapshot={snapshot_ms:.1f}ms, interval={interval:.1f}s, "

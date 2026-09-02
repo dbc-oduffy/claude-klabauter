@@ -307,16 +307,38 @@ def probe_gh() -> str:
 # _co_probe_node
 # ---------------------------------------------------------------------------
 def probe_node() -> str:
+    """ADVISORY in every mode -- node is no longer a coordinator prerequisite.
+
+    PM ruling, 2026-08-28: "I don't think it is optional any longer, as we have
+    gone very python heavy instead, and as such we can take out those hard
+    probes for node state." The fleet's daily loop is Python; nothing in install
+    or the session hot path needs a Node runtime, and this repo forbids one for
+    its own work outright.
+
+    Advisory rather than DELETED, because node is not unused: DoE-claude's
+    ceremony-gate JS suite (`.test.js` under `coordinator/tests/`, which pytest
+    does not collect) still runs under it. That makes node
+    required-for-ceremonies and not-required-for-install -- so the row stays and
+    reports what is on the box, while the real requirement belongs to the
+    ceremony gate that needs it, not to a prerequisite probe every operator hits.
+
+    The severity is set HERE rather than left to
+    `setup_chain_walker._DEMOTE_TO_ADVISORY_POST_CONSUMER`. That demotion applies
+    only to `post-consumer` mode, so `--preflight` (strict) went on reporting
+    node as `(hard)` while the doc-facing story said optional -- one mechanism
+    saying two different things depending on which path an operator took. A
+    prerequisite's severity is the probe's own fact, not the caller's.
+    """
     result = _run(["node", "--version"])
     remediation = "install Node.js LTS: `winget install OpenJS.NodeJS.LTS` (Windows) / `brew install node` (macOS)"
     if result is None:
-        return emit_line("node", "fail", "hard", "node (Node.js) not found on PATH", remediation)
+        return emit_line("node", "fail", "advisory", "node (Node.js) not found on PATH", remediation)
     if result.returncode != 0 or not (result.stdout or "").strip():
         return emit_line(
-            "node", "fail", "hard",
+            "node", "fail", "advisory",
             "node found but `node --version` failed or produced empty output", remediation,
         )
-    return emit_line("node", "pass", "hard", (result.stdout or "").strip(), "")
+    return emit_line("node", "pass", "advisory", (result.stdout or "").strip(), "")
 
 
 # ---------------------------------------------------------------------------

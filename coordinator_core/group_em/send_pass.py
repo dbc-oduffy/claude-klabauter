@@ -149,7 +149,6 @@ elsewhere.
 
 from __future__ import annotations
 
-import datetime
 import hashlib
 import json
 import os
@@ -157,6 +156,7 @@ import time
 from typing import Any, Callable, Optional
 
 from coordinator_core.group_em import read_pass
+from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.session import peer_roster
 from coordinator_core.session.receiver_state import parse_iso_timestamp
 from coordinator_core.session import subagent_share
@@ -811,7 +811,7 @@ def build_send_digest(
         # precedent, same helper shape): a digest pasted into context or read
         # minutes later as one leg of a `groupem.enter` payload could report
         # WHAT it counted but not WHEN.
-        "as_of": datetime.datetime.fromtimestamp(
-            now, datetime.timezone.utc
-        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        # Review: overengineering-reviewer finding 3 -- was a literal copy of
+        # the fromtimestamp/strftime expression; now the shared seam.
+        "as_of": watch_heartbeat.iso_instant(now),
     }

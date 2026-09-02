@@ -1130,7 +1130,91 @@ def _resolve(
             continue
         return f"tracked:{_normalize_target(target_literal)}"
 
-    return "unresolved" if (unresolved_seen and not is_test_module) else None
+    if unresolved_seen and not is_test_module:
+        # The AST could not resolve the destination, but the author may already
+        # have declared it. A `WRITE_SURFACE` static path that git reports as
+        # tracked is the SAME fact the `tracked:` basis carries -- stated by the
+        # writer instead of inferred -- so it is the stronger evidence, not the
+        # weaker. Only a TRACKED match is honoured: an untracked declared path is
+        # an unverifiable claim, and taking it would let a module drop out of the
+        # counted population on its own say-so.
+        for declared in _static_write_surface_paths(tree):
+            normalized = _normalize_target(declared)
+            if tracked is not None and normalized in tracked:
+                return f"tracked:{normalized}"
+        return "unresolved"
+    return None
+
+
+_WRITE_SURFACE_PATH_KINDS = frozenset(
+    {"file-path", "rc-block", "hook-gate-region", "line-membership"}
+)
+"""The path-shaped half of `write_surface.WRITE_SURFACE_KINDS`. The key-shaped
+kinds (`git-config-key`, `machine-local-key`, `os-env-var`,
+`structured-file-key`) name a key inside some file, never a repo-relative
+artifact path, so they can never resolve a write target here."""
+
+
+def _static_write_surface_paths(tree: ast.Module) -> tuple[str, ...]:
+    """Literal repo-relative paths a module declares through `WRITE_SURFACE`.
+
+    `WRITE_SURFACE` (`coordinator_core.install.write_surface`) is the
+    install-side protocol answering "what did install touch on disk". It is a
+    DIFFERENT question from `GENERATES`, which exists to support staleness, and
+    reading it here never discharges the `GENERATES` duty. It answers one
+    narrower question this module actually asks: did the author already tell us,
+    statically, where a write lands? A `StaticClause` entry whose `kind` is
+    path-shaped and whose `path` is a string literal is exactly that answer, and
+    ignoring it made `_module_is_generator` report "writes through an unresolved
+    path expression" about a module that had spelled its destination out in
+    source.
+
+    `ShapedClause` entries are deliberately skipped: their `entry_template`
+    carries placeholders (`"repos.<derived-key>"`), so a template `path` is a
+    shape, never a resolvable target.
+
+    Read structurally rather than with `ast.literal_eval`, since a declaration is
+    a tree of dataclass CALLS, not a literal. Matched on callee name alone --
+    an aliased import would be missed, which costs a missed resolution (today's
+    behaviour) and never a wrong one.
+    """
+    for node in ast.walk(tree):
+        targets: list[ast.expr] = []
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        if not any(isinstance(t, ast.Name) and t.id == "WRITE_SURFACE" for t in targets):
+            continue
+        value = node.value
+        if value is None:
+            continue
+
+        paths: list[str] = []
+        for clause in ast.walk(value):
+            if not (isinstance(clause, ast.Call) and _call_name(clause) == "StaticClause"):
+                continue
+            for entry in ast.walk(clause):
+                if not (isinstance(entry, ast.Call) and _call_name(entry) == "WriteSurfaceEntry"):
+                    continue
+                kwargs = {
+                    kw.arg: kw.value for kw in entry.keywords if kw.arg is not None
+                }
+                kind = _str_const(kwargs.get("kind")) if "kind" in kwargs else None
+                path_literal = _str_const(kwargs.get("path")) if "path" in kwargs else None
+                if kind in _WRITE_SURFACE_PATH_KINDS and path_literal:
+                    paths.append(path_literal)
+        return tuple(paths)
+    return ()
+
+
+def _call_name(call: ast.Call) -> str | None:
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
 
 
 def _extract_generates(tree: ast.Module) -> object | None:

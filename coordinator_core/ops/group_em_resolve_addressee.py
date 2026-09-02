@@ -20,6 +20,27 @@ list, `coordinator_core/ops/_registry_map.py`'s `OP_MODULE_MAP`,
 
 Spec backlink: `state/dispatch-briefs/2026-09-01-the-crowns-standing-surfaces-report-themselves/C7.md`.
 
+Why this op survives a redundancy finding (2026-09-01, EM-adjudicated):
+    `session.peer_roster` returns rows already carrying `name` per
+    `session_id`, off the same `peer_roster.build_roster` this op's function
+    reads — so on the data alone this op is a one-row filter behind a fourth
+    op name and four registrations, and an overengineering review said
+    exactly that. The finding's premise was verified and is CORRECT. It was
+    overruled anyway, on what the two surfaces answer rather than on what
+    they read: `peer_roster` answers *what is the roster*, and a caller
+    filtering it to no row learns only that no row matched. This op answers
+    *may I address this peer, and by what name*, and its `None` is a REFUSAL
+    carrying the no-fallback rule in the negative-spec above. That rule is
+    not derivable from an absent row — a wire caller told to filter the
+    roster itself must re-derive it, and the failure mode when they do not
+    is addressing a bare session id, which is the precise defect
+    `send_pass`'s no-persisted-address rule exists to prevent.
+    Deleting the op would make the wrong path as cheap as the right one, on
+    a surface whose whole job is refusing. The redundancy is real and is the
+    price of the refusal living at the boundary rather than in each caller.
+    Do not re-raise this without new evidence about the REFUSAL semantics;
+    evidence about the data being duplicated is already accounted for here.
+
 Negative-spec:
     - Never falls back to the bare `peer_session_id` when the underlying
       function returns `None` — `None` is a REFUSAL per
