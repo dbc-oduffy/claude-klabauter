@@ -119,6 +119,8 @@ __all__ = [
     "probe_endpoint",
     "reclaim_stale_socket",
     "elect_unix_socket",
+    "elect_exclusive_lock",
+    "release_exclusive_lock",
     "socket_identity",
     "unlink_if_owned",
 ]
@@ -640,6 +642,49 @@ def _acquire_election_lock(path: Path):
             raise ElectionLost(str(path)) from exc
         raise
     return fd
+
+
+def elect_exclusive_lock(path: Path) -> int:
+    """POSIX counterpart of ``elect`` for a caller whose election is a pure
+    LOCK and never a transport.
+
+    ``elect`` wins a named-pipe FIRST INSTANCE, which is simultaneously the
+    Windows exclusion primitive and the endpoint clients dial. A caller that
+    only needs the exclusion half -- ``warm.supervisor``, whose own transport
+    is a TCP port it binds separately -- has no socket to elect on POSIX and
+    must not invent one just to hold a lock. This is that exclusion half on
+    its own: the same ``flock`` ``elect_unix_socket`` takes around its
+    bind sequence, taken over ``<path>.lock`` and handed back to be held for
+    as long as the caller means to exclude its peers.
+
+    Raises ``ElectionLost`` when another process holds it -- the same one
+    outcome that means "someone else won" in both other election arms, so a
+    caller's ``except election.ElectionLost`` covers every platform.
+    Released by ``release_exclusive_lock``, and by the kernel on process
+    death regardless.
+
+    ``ensure_private_dir`` runs first, exactly as in ``elect_unix_socket``
+    and for both of its reasons: ``_acquire_election_lock`` opens a sidecar
+    IN that directory, so the directory must exist before the lock can be
+    taken at all, and the directory is the connect-permission boundary this
+    package verifies rather than requests.
+    """
+    if not _is_posix():
+        raise RuntimeError("elect_exclusive_lock is POSIX-only")
+
+    from coordinator_core.warm.breadcrumb import runtime_base
+
+    path = Path(path)
+    ensure_private_dir(path.parent, base=runtime_base())
+    return _acquire_election_lock(path)
+
+
+def release_exclusive_lock(fd) -> None:
+    """Drop a lock won by ``elect_exclusive_lock``. Best-effort and never
+    raises, mirroring ``_release_election_lock``'s own contract: the kernel
+    releases it on process exit regardless, so a failure here can never leave
+    it held past this process's life."""
+    _release_election_lock(fd)
 
 
 def _release_election_lock(fd) -> None:

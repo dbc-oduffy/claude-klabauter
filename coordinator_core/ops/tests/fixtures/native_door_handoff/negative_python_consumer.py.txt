@@ -1,0 +1,28 @@
+"""PLANTED NEGATIVE CONTROL -- the same job, done correctly.
+
+Identical composition, identical call site, one difference: the launch argv
+comes from `resolve_launchable`, which returns a bare path for a native
+image and prefixes an interpreter only for a non-executable `.py`. This is
+what the four fixed sites landed on and why ~370 other cut-over names never
+broke.
+
+A guard that flags this file is over-firing on correct code, which is how
+guards get routed around. `.py.txt` for the same reason as its positive
+twin.
+"""
+import subprocess
+
+from coordinator_core._settings_home import settings_home
+from coordinator_core.launchable import resolve_launchable
+
+
+def resolve_sentinel_cli():
+    return settings_home() / "bin" / "misc-session-and-guards"
+
+
+def run_sentinel(cli_path, args):
+    return subprocess.run([*resolve_launchable(str(cli_path)), *args])
+
+
+def main():
+    return run_sentinel(resolve_sentinel_cli(), ["autonomous-sentinel", "enable"])

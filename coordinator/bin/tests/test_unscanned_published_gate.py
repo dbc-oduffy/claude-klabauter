@@ -575,6 +575,7 @@ class TestLoadUnscannedExceptions:
             ".github/scripts/check-persona-names.py",
             "bin/depersonalize-identity.example.yaml",
             "coordinator_core/warm/door/door.exe",
+            "coordinator/bin/published-name-map.json",
         }
         assert "AC4" in loaded[".github/scripts/check-persona-names.py"]
         assert "AC5" in loaded[".github/scripts/check-persona-names.py"]

@@ -69,6 +69,15 @@ _EITHER_VENDOR_GAME_DEV = (
     "game-dev@coordinator-claude",
 )
 
+# The machine-local keys naming a UE-context checkout. ALL are optional: an
+# unset key means "that repo is not on this machine", never drift. Ordered
+# most- to least-canonical purely for readable output; nothing depends on it.
+_UE_CONTEXT_REPO_KEYS = (
+    "repos.example_game_workbench_repo",
+    "repos.example_retrieval_repo",
+    "repos.example-sim-repo",
+)
+
 
 def _ml_get(key: str) -> Optional[str]:
     """Resolve `key` via the direct-registry reader
@@ -141,34 +150,34 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
     does not need to change.
     """
 
-    def resolve_key(key: str) -> Optional[str]:
-        val = _ml_get(key)
-        if val is None:
-            print(f"ERROR: machine-local key '{key}' not set on this machine", file=sys.stderr)
-            print(
-                "Remediation: populate the key in <settings-home>/machine-local/"
-                "registry.local.toml",
-                file=sys.stderr,
-            )
-            print(
-                "  Default settings-home: ~/.coordinator-claude-settings "
-                "(override via COORDINATOR_SETTINGS_HOME)",
-                file=sys.stderr,
-            )
-            print(
-                "  See coordinator/docs/wiki/machine-local-registry.md § "
-                "Verifying registry health",
-                file=sys.stderr,
-            )
-            return None
-        return val
-
-    example_game_repo_root = resolve_key("repos.example_game_workbench_repo")
-    if example_game_repo_root is None:
-        return 1
-    example_retrieval_repo_root = resolve_key("repos.example_retrieval_repo")
-    if example_retrieval_repo_root is None:
-        return 1
+    # AN UNREGISTERED UE REPO IS NOT DRIFT. These keys used to be REQUIRED --
+    # an unset one printed a remediation and returned 1. That made this check
+    # fail by construction on every machine that does not carry the source
+    # author's UE layout, which is most of the fleet, and this module's own
+    # docstring says as much ("its peer dirs are specific to the source
+    # author's local machine layout"). Wired into doctor probe P-9, that
+    # produced a permanent amber nobody could clear, and a doctor that is
+    # always amber is one operators stop reading.
+    #
+    # A second, less obvious caller hits the same wall: the PUBLISHED engine.
+    # Percolate depersonalizes private repo codenames on the way to the mirror
+    # (`coordinator_core/percolate/codename_provenance_seed.py`), so the copy
+    # every box actually resolves asks for `repos.<placeholder>` -- a key no
+    # registry has or should have. Treating an unresolved key as "not
+    # applicable" makes that case a clean skip rather than a false failure,
+    # WITHOUT reaching around the redaction, which is a publish contract this
+    # module has no business subverting.
+    #
+    # `repos.example-sim-repo` was already optional on exactly this reasoning; the
+    # other two now match it. What is NOT optional is the global-settings
+    # assertion below -- that invariant is machine-independent, it is the drift
+    # this check exists to catch, and it runs whether or not any UE repo is
+    # registered here.
+    named_dirs: List[str] = []
+    for key in _UE_CONTEXT_REPO_KEYS:
+        root = _ml_get(key)
+        if root:
+            named_dirs.append(root)
 
     # Same Windows landmine as the legacy resolver rung above, second site:
     # native Windows shells do not set HOME, and os.environ.get("HOME", "")
@@ -191,12 +200,6 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
     #
     # It moves to its own assertion below rather than being dropped, because a
     # silent skip cannot catch the re-bootstrap that turns it back on.
-    named_dirs: List[str] = [example_game_repo_root, example_retrieval_repo_root]
-
-    example_sim_repo_root = _ml_get("repos.example-sim-repo")
-    if example_sim_repo_root:
-        named_dirs.append(example_sim_repo_root)
-
     fail = False
     if not _global_settings_is_ue_off(os.path.join(home, ".claude", "settings.json")):
         fail = True
@@ -255,6 +258,13 @@ def main(argv: List[str], script_dir: Optional[str] = None) -> int:
             fail = True
 
     if not fail:
-        print("all known UE-context dirs carry the expected override")
+        if named_dirs:
+            print("all known UE-context dirs carry the expected override")
+        else:
+            print(
+                "not applicable — no UE-context repo is registered on this machine "
+                f"({', '.join(_UE_CONTEXT_REPO_KEYS)} all unset); the global "
+                "settings.json UE-off assertion ran and passed"
+            )
         return 0
     return 1

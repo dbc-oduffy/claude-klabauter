@@ -86,13 +86,32 @@ def _isolated_registry(monkeypatch, tmp_path):
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_registry))
 
 
-def test_missing_required_key(monkeypatch, tmp_path, capsys):
-    # No keys seeded -- registry is empty.
+def test_no_ue_repo_registered_is_not_applicable(monkeypatch, tmp_path, capsys):
+    """An empty registry means no UE repo lives here — a clean skip, not drift.
+
+    These keys were REQUIRED until 2026-09-02, so this check failed by
+    construction on every machine without the source author's UE layout (most
+    of the fleet) and on the published engine, whose depersonalized copy asks
+    for a placeholder key no registry can hold. Doctor probe P-9 turned that
+    into a permanent amber. The global-settings assertion still runs — it is
+    machine-independent — which is why this passes rather than skipping wholesale.
+    """
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     rc = vuo.main([])
-    assert rc == 1
-    err = capsys.readouterr().err
-    assert "machine-local key 'repos.example_game_workbench_repo' not set" in err
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "not applicable" in out
+    assert "repos.example_game_workbench_repo" in out
+
+
+def test_partial_registration_walks_only_what_is_registered(monkeypatch, tmp_path, capsys):
+    """One UE repo registered and correct passes; the absent ones are not drift."""
+    example_game_repo_dir, _example_retrieval_repo, home = _setup_success_tree(tmp_path)
+    _seed_registry(tmp_path, **{"repos.example_game_workbench_repo": str(example_game_repo_dir)})
+    monkeypatch.setenv("HOME", str(home))
+    rc = vuo.main([])
+    assert rc == 0
+    assert "all known UE-context dirs" in capsys.readouterr().out
 
 
 def test_missing_directory_fails_loud(monkeypatch, tmp_path, capsys):

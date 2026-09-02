@@ -1,0 +1,29 @@
+"""PLANTED POSITIVE CONTROL -- the defect, preserved deliberately.
+
+This is the exact shape that took `git commit` down on 2026-09-02: a
+resolver composes the EXTENSIONLESS settings-home bin entry, a second
+function receives it as a parameter, and prefixes this interpreter onto it.
+On a cut-over box that path is a Mach-O image and python reports
+`SyntaxError: Non-UTF-8 code starting with '\xcf'`.
+
+`.py.txt`, not `.py`, so no collector, importer or other guard in this tree
+ever treats it as source. It exists to be flagged. If
+check_native_door_interpreter_handoff stops flagging it, the guard has
+stopped working -- fix the guard, never this file.
+"""
+import subprocess
+import sys
+
+from coordinator_core._settings_home import settings_home
+
+
+def resolve_sentinel_cli():
+    return settings_home() / "bin" / "misc-session-and-guards"
+
+
+def run_sentinel(cli_path, args):
+    return subprocess.run([sys.executable, str(cli_path), *args])
+
+
+def main():
+    return run_sentinel(resolve_sentinel_cli(), ["autonomous-sentinel", "enable"])

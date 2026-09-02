@@ -169,3 +169,69 @@ def test_day_branch_assert_defaults_repo_root_to_cwd(monkeypatch, tmp_path):
     _wsdbr.cmd_day_branch_assert(argparse.Namespace(repo_root=None))
 
     assert calls == [os.getcwd()]
+
+
+# ---------------------------------------------------------------------------
+# The publish leg (2026-09-02). `/workday-start` must leave a day branch that
+# EXISTS and IS PUBLISHED, in one move, with no operator step in between.
+#
+# Before this leg nothing published a boot-cut day branch at all:
+# `assert_day_branch` runs `session_ensure_branch(caller="boot")`, whose
+# contract is no network call, and the `auto_push.push_once` its comment
+# named had had no per-commit caller since C6/C7 of
+# docs/plans/2026-08-30-who-pushes-and-when.md.
+# ---------------------------------------------------------------------------
+
+
+def test_day_branch_assert_publishes_after_asserting(monkeypatch, capsys):
+    """The outcome, not a nudge: the subcommand asserts the branch AND
+    publishes it in the same invocation. A design whose failure mode is "the
+    operator sees a line and runs a command" does not pass this."""
+    calls = {}
+
+    def _fake_assert(repo_root, machine, today, **kw):
+        return DayBranchAssertResult(CUT, "work/m/2026-09-02", "day-branch: cut work/m/2026-09-02")
+
+    def _fake_publish(repo_root, **kw):
+        calls["repo_root"] = repo_root
+        return ("published", "work/m/2026-09-02 -> origin/work/m/2026-09-02")
+
+    monkeypatch.setattr(
+        "coordinator_core.hooks.day_branch_assert.assert_day_branch", _fake_assert
+    )
+    monkeypatch.setattr(
+        "coordinator_core.ops.ceremony.push.publish_day_branch", _fake_publish
+    )
+
+    rc = _wsdbr.cmd_day_branch_assert(argparse.Namespace(repo_root="/tmp/x"))
+
+    assert rc == 0
+    assert calls["repo_root"] == "/tmp/x"
+    out = capsys.readouterr().out
+    assert "day-branch: cut work/m/2026-09-02" in out
+    assert "day-branch: published" in out
+
+
+def test_day_branch_assert_publish_is_attempted_even_when_the_cut_failed(monkeypatch):
+    """A FAILED cut does not skip the publish. The two failures are
+    independent -- on 2026-09-02 the branch EXISTED (so there was something
+    to publish) while the assert reported the tree still on main -- and
+    short-circuiting here would have reproduced exactly that gap."""
+    monkeypatch.setattr(
+        "coordinator_core.hooks.day_branch_assert.assert_day_branch",
+        lambda *a, **kw: DayBranchAssertResult(FAILED, "main", "banner text"),
+    )
+    seen = {"called": False}
+
+    def _fake_publish(repo_root, **kw):
+        seen["called"] = True
+        return ("declined-not-day-branch", "main is not a canonical day branch")
+
+    monkeypatch.setattr(
+        "coordinator_core.ops.ceremony.push.publish_day_branch", _fake_publish
+    )
+
+    rc = _wsdbr.cmd_day_branch_assert(argparse.Namespace(repo_root="/tmp/x"))
+
+    assert seen["called"] is True
+    assert rc == 1

@@ -90,6 +90,52 @@ def test_try_claim_boot_absent_record_matches_should_spawn_decision(tmp_path):
     assert decided is True
 
 
+def test_a_live_holders_claim_expires_after_the_boot_window(tmp_path):
+    """A holder that is STILL ALIVE must stop vouching once its claim ages
+    past `BOOT_CLAIM_MAX_SECS` -- the defect measured 2026-09-02.
+
+    The claimed fd is deliberately leaked for the claiming process's life
+    (see `try_claim_boot`), which is right for the short-lived hook process
+    the primitive was designed around and wrong for the long-lived ones that
+    also call it: `warm.server` and DoE's `http_hook_forwarder.py` both reach
+    `supervisor.ensure_listener`, and both run for hours. On this box one such
+    forwarder (pid 16555, alive over an hour) held `warm-http.json.boot.lock`,
+    so `supervisor.should_spawn` answered False in EVERY process on the
+    machine, no HTTP listener could be spawned by anyone, and
+    `ensure_listener` returned None indefinitely -- one claim turned into the
+    box-wide outage this primitive's own docstring forbids creating.
+
+    Injected clock, not a real `time.sleep(2)`: the wait would put two idle
+    seconds on a gate that runs on a machine hosting 50+ concurrent sessions,
+    and the thing under test is the comparison, not the passage of time.
+
+    Companion to the crash test below, which pins the OTHER half: a DEAD
+    holder still releases instantly, with no window to wait out.
+    """
+    lock_path = tmp_path / "warm-http.json.boot.lock"
+    claimed_at = 1_000_000.0
+
+    assert breadcrumb.try_claim_boot(lock_path, now=claimed_at) is True
+
+    inside = claimed_at + breadcrumb.BOOT_CLAIM_MAX_SECS - 0.01
+    assert breadcrumb.try_claim_boot(lock_path, now=inside) is False, (
+        "a claim inside the boot window must still vouch -- the burst debounce "
+        "is the whole point of the primitive"
+    )
+
+    past = claimed_at + breadcrumb.BOOT_CLAIM_MAX_SECS + 0.01
+    assert breadcrumb.should_spawn_decision(None, lock_path=lock_path, now=past) is True, (
+        "a claim older than the boot window must stop vouching even though its "
+        "holder is alive and still holds the lock -- otherwise one long-lived "
+        "caller blocks every spawn on the box for as long as it lives"
+    )
+
+    # Proceeding past an expired claim RESTARTS the window rather than leaving
+    # the claim permanently expired: a permanent herd is not a fix for a
+    # permanent block.
+    assert breadcrumb.try_claim_boot(lock_path, now=past + 0.01) is False
+
+
 _HOLDER_SCRIPT = """
 import sys
 sys.path.insert(0, {repo_root!r})

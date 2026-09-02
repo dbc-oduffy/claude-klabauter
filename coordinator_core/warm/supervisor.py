@@ -81,6 +81,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -132,6 +133,7 @@ __all__ = [
     "listener_url",
     "check_health",
     "supervisor_pipe_name",
+    "supervisor_lock_path",
     "ensure_listener",
     "main",
 ]
@@ -649,6 +651,58 @@ def supervisor_pipe_name(
     return election.pipe_name(f"http.{token}", engine_clone=root, user_sid=user_sid)
 
 
+def supervisor_lock_path(engine_root: Optional[Path] = None) -> Path:
+    """The POSIX per-machine election's lock path -- the exclusion this
+    module wins on a platform with no named pipes.
+
+    `<svc dir>/http.<engine token>`, whose `.lock` sidecar
+    (`election.elect_exclusive_lock`) is the file actually locked. Same
+    per-clone, per-user directory the discovery record lives in, and the same
+    `"http."` token prefix `supervisor_pipe_name` uses, for the same reason:
+    `warm.server`'s own POSIX election binds `<svc dir>/<token>.sock` from an
+    UNPREFIXED token, so the prefix is what keeps the two transports'
+    exclusions from colliding on one clone.
+
+    Not a socket path and never bound -- this election is a pure LOCK here
+    (see `main`), so nothing dials this name and it is deliberately not run
+    through `election.socket_path`'s `sun_path` budget.
+    """
+    root = engine_root if engine_root is not None else _default_engine_clone()
+    token = skew.compute_client_token(root)
+    return breadcrumb.svc_dir(root) / f"http.{token}"
+
+
+def _elect_supervisor_slot(engine_root: Path) -> Any:
+    """Win this clone's single-supervisor slot and return the handle that
+    holds it -- or raise `election.ElectionLost`, which carries the
+    contested endpoint, if a peer already holds it.
+
+    ONE ELECTION, TWO PRIMITIVES, mirroring `warm.server._run_guarded`'s own
+    `_elect_windows_pipe` / `_elect_unix_socket_endpoint` split. Windows takes
+    a named pipe's FIRST INSTANCE; POSIX takes the `flock`
+    `election.elect_exclusive_lock` wraps. Neither handle is ever served on:
+    unlike `warm.server`, this module's transport is the TCP port `main`
+    binds separately, so the election here is exclusion and nothing else --
+    which is why the POSIX arm is a bare lock rather than a second socket.
+
+    WHY THIS EXISTS AT ALL, measured 2026-09-02: `main` used to call
+    `election.current_user_sid()` unconditionally, which raises
+    `RuntimeError("current_user_sid is Windows-only")` on every POSIX box.
+    Every supervisor spawned by `ensure_listener` therefore died in step 1,
+    before binding and before writing a discovery record -- silently, because
+    `spawn_detached` DEVNULLs the child's stdio and never reads its exit
+    code, so the only symptom was `ensure_listener` returning None forever
+    and every hot-path invocation falling through to cold. Nothing caught it
+    because every test of this election is `skipif(sys.platform != "win32")`.
+    """
+    if sys.platform == "win32":
+        sid = election.current_user_sid()
+        name = supervisor_pipe_name(engine_root, user_sid=sid)
+        return election.elect(name, user_sid=sid)
+
+    return election.elect_exclusive_lock(supervisor_lock_path(engine_root))
+
+
 def record_is_skewed(record: dict, root: Path) -> bool:
     """PUBLIC alias of `_record_is_skewed`, for a caller that reads discovery
     DIRECTLY rather than through `ensure_listener`.
@@ -820,13 +874,21 @@ def _self_stable_pid_start_epoch() -> Optional[int]:
 
 
 def _release_election_handle(handle: Optional[Any]) -> None:
-    """Best-effort `_winapi.CloseHandle(handle)`, the one release sequence
-    for the won election lock -- called from `_ServerContext.ctx_shutdown`
-    and from `main()`'s credential-refusal `return 3` path. See `main()`'s
-    comment at the `elect()` call for why the handle is held rather than
-    closed immediately after winning."""
+    """Best-effort release of the won election lock -- called from
+    `_ServerContext.ctx_shutdown` and from `main()`'s credential-refusal
+    `return 3` path. See `main()`'s comment at the election call for why the
+    handle is held rather than released immediately after winning.
+
+    Releases whichever primitive `_elect_supervisor_slot` won on this
+    platform: a pipe HANDLE on Windows, an `flock`'d fd on POSIX. Dispatching
+    on the platform rather than on the handle's type keeps this the exact
+    inverse of the arm that produced it -- both are opaque ints."""
     if handle is None:
         return
+    if sys.platform != "win32":
+        election.release_exclusive_lock(handle)
+        return
+
     import _winapi
 
     try:
@@ -1478,9 +1540,11 @@ def main() -> int:
     """The supervisor process entrypoint `ensure_listener`'s spawn trigger
     targets. Boot sequence, mirroring `warm.server.main`'s numbered steps:
 
-    1. Elect this generation's DISTINCT (`http.`-prefixed) pipe as a
-       per-machine lock -- `ElectionLost` means another process already
-       supervises this clone's http route; exits 0, touches nothing.
+    1. Elect this generation's DISTINCT (`http.`-prefixed) endpoint as a
+       per-machine lock -- a named pipe on Windows, an `flock` on POSIX
+       (`_elect_supervisor_slot`, which is also where the POSIX arm's absence
+       until 2026-09-02 is recorded). `ElectionLost` means another process
+       already supervises this clone's http route; exits 0, touches nothing.
     2. Bind a real TCP listener on `127.0.0.1:0` -- port 0 is an
        OS-assigned ephemeral port, the port-discovery scope item's actual
        mechanism: no fixed port to collide across 50-70 concurrent
@@ -1497,16 +1561,14 @@ def main() -> int:
        ends the process.
     """
     root = _default_engine_clone()
-    sid = election.current_user_sid()
-    name = supervisor_pipe_name(root, user_sid=sid)
 
     try:
-        handle = election.elect(name, user_sid=sid)
-    except election.ElectionLost:
+        handle = _elect_supervisor_slot(root)
+    except election.ElectionLost as exc:
         print(
-            f"[warm-http-supervisor] election lost for {name!r}; another "
+            f"[warm-http-supervisor] election lost for {exc.endpoint!r}; another "
             "process already supervises this clone's http route, exiting",
-            file=__import__("sys").stderr,
+            file=sys.stderr,
         )
         return 0
 
@@ -1523,6 +1585,9 @@ def main() -> int:
     # ctx_shutdown` (alongside `unlink_discovery`) or on the credential-
     # refusal `return 3` path below, so the lock is held for exactly this
     # process's lifetime, matching the comment this replaces' original intent.
+    # The POSIX arm holds its `flock`'d fd for the same span for the same
+    # reason: an `flock` released early frees the name to the next caller
+    # exactly as a closed pipe handle does.
 
     from http.server import ThreadingHTTPServer
 

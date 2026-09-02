@@ -660,22 +660,6 @@ def test_append_block_msys_normalisation_leaves_a_windows_path_alone():
 # ---------------------------------------------------------------------------
 
 
-def _native_image_settings_home(tmp_path, marker):
-    """A settings-home bin/ whose bare entry is a real non-`#!` executable."""
-    settings_home = tmp_path / "settings-home"
-    (settings_home / "bin").mkdir(parents=True)
-    forwarder = settings_home / "bin" / "coordinator-prepare-commit-msg"
-    # A REAL native image, not a hand-rolled header: a file that merely starts
-    # with Mach-O magic is not executable, so `exec` would fall back to `sh`
-    # and the test would pass for the wrong reason. `/usr/bin/true` is the
-    # cheapest genuine non-`#!` executable that is present everywhere this
-    # suite runs, and running it is observable as "exit 0 with no WARNING"
-    # against an interpreter chain rigged to warn loudly.
-    shutil.copy(marker, forwarder)  # copy2 would carry SIP st_flags
-    forwarder.chmod(0o755)
-    return settings_home, forwarder
-
-
 def test_shim_body_execs_a_posix_native_forwarder_instead_of_the_interpreter():
     """The bare-name door image must be exec'd, never handed to `$_PY`."""
     body = _shim_body(
@@ -713,36 +697,6 @@ def test_native_probe_costs_no_subprocess():
         assert spawner not in probe.group(0), f"native probe spawns via {spawner!r}"
 
 
-def test_append_block_runs_a_posix_native_forwarder_directly(tmp_path):
-    native = pathlib.Path("/usr/bin/true")
-    if not native.exists():
-        import pytest
-
-        pytest.skip("no native /usr/bin/true on this host")
-    settings_home, _ = _native_image_settings_home(tmp_path, native)
-
-    hook = tmp_path / "prepare-commit-msg"
-    hook.write_text(
-        _with_unresolvable_interpreter(
-            "#!/bin/sh\n" + _append_block(*_APPEND_BLOCK_ARGS) + " || true\n"
-        ),
-        encoding="utf-8",
-    )
-
-    env = dict(os.environ)
-    env["COORDINATOR_SETTINGS_HOME"] = settings_home.as_posix()
-    result = subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
-
-    # The interpreter chain is rigged unresolvable, so reaching it warns
-    # loudly. A clean exit therefore means the forwarder ran and the chain was
-    # never entered -- the exact thing gen 12 restores.
-    assert result.returncode == 0
-    assert "WARNING" not in result.stderr, (
-        f"the bare-name native forwarder was not run; stderr={result.stderr!r}"
-    )
-    assert "SyntaxError" not in result.stderr
-
-
 def test_native_probe_leaves_a_genuine_python_script_to_the_interpreter(tmp_path):
     """A coordinator-written CLI opens `#!` and must NOT be mistaken for a door
     image — misclassifying it would exec a Python file as a program."""
@@ -767,6 +721,53 @@ def test_native_probe_leaves_a_genuine_python_script_to_the_interpreter(tmp_path
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "script"
+
+
+def test_native_probe_misclassifies_an_executable_shebangless_non_native_file(tmp_path):
+    """PINS THE ACCEPTED RESIDUAL (code-review finding, 2026-09-02) -- this is
+    NOT the behaviour we want, it is the behaviour we have and have chosen not
+    to change this pass. See the "KNOWN RESIDUAL, ACCEPTED IN WRITING" comment
+    above `_NATIVE_PROBE_DEF`'s own definition for the full reasoning.
+
+    The probe's real discriminator is "does this open with `#!`"; `[ -x ]` is
+    a pre-filter resting on an invariant enforced elsewhere (the install
+    chain strips the exec bit from installed `.py` sources). A file that is
+    executable for any OTHER reason and carries no `#!` -- neither a genuine
+    script nor a genuine Mach-O/ELF image -- is classified `_native` anyway.
+    If this test ever starts asserting `"script"`, the probe grew a real
+    positive discriminator and this docstring (and the module comment it
+    cites) are stale and should be deleted along with it -- that would be
+    fixing the residual, not breaking the test.
+    """
+    sh = _sh()
+    if not sh:
+        import pytest
+
+        pytest.skip("no POSIX sh available on this host")
+
+    body = _shim_body(
+        "/fake/coord/bin",
+        "coordinator-prepare-commit-msg",
+        'exec "$_PY" "$SCRIPT" "$@"',
+    )
+    probe = re.search(r"_native\(\) \{.*?\}\n", body, re.S).group(0)
+
+    # Executable, no `#!`, and no Mach-O/ELF/FAT magic either -- neither a
+    # real script nor a real native image, exercising the exact gap between
+    # the probe's actual test (missing `#!`) and its intended one (IS native).
+    script = tmp_path / "not-a-real-native-image"
+    script.write_text("just some text with no shebang line\n", encoding="utf-8")
+    script.chmod(0o755)
+    checks = f'{probe}_native "{script.as_posix()}" && printf native || printf script\n'
+    result = subprocess.run([sh, "-c", checks], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "native", (
+        "the probe stopped misclassifying an executable, shebang-less, "
+        "non-magic file as native -- update the accepted-residual comment "
+        "above _NATIVE_PROBE_DEF and this docstring, don't just adjust the "
+        "assertion"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -67,19 +67,15 @@ in-process via `machine_resolver.merged_flat_registry()`, resolved once per run 
 shared. P-4 and P-10 keep one spawn each because the resolver CLI is what those two
 probes are about — that is a subject, not a lookup.
 
-Known pre-existing manifest/sentinel skew (NOT a bug introduced by this port — ported
-as-is, byte-parity target): doctor-probes.toml declares a P-16 probe (cluster
-"machine-local", hardware.cores/hardware.ram_gb presence), but the bash oracle's
-body (coordinator-doctor-sentinel.sh @ HEAD, 989 lines) has no `is_active "P-16"`
-probe block at all — the manifest is ahead of the sentinel body. This port faithfully
-reproduces that skew (no probe_p16 function exists here either); fixing it would be a
-behavior change outside this port's parity-preserving scope. P-20/P-21/P-22 were added
-to the manifest post-port (bash-version gate, durable-root-pointer confirmation,
-publish-targets drift) and initially carried the same skew — no probe_p20/p21/p22
-function existed here, so `--full` silently never evaluated them. P-20 (bash-version
-gate) and P-21 (durable-root-pointer confirmation) are now wired (probe_p20/probe_p21
-below, 2026-08-17); P-22 (publish-targets drift) remains unwired and is tracked in
-`_UNWIRED_PROBE_IDS` alongside P-16.
+Manifest/sentinel skew, now closed. doctor-probes.toml declared probes the bash
+oracle (coordinator-doctor-sentinel.sh @ HEAD, 989 lines) never carried a body for,
+and this port reproduced that skew faithfully rather than fixing it inside a
+parity-preserving scope: P-16 (hardware SSOT) inherited it, and P-20/P-21/P-22 were
+added to the manifest post-port and acquired it, so `--full` silently never evaluated
+any of them. All four are wired now (probe_p16/probe_p20/probe_p21/probe_p22 below;
+P-20/P-21 2026-08-17, P-16/P-22 2026-09-02) and `_UNWIRED_PROBE_IDS` is empty. A
+manifest id added without a body here is a defect the ledger's guard catches, not a
+state to settle into.
 
 Contract to preserve — LOAD-BEARING, cross-plugin (not one of the 8 T0-frozen
 contracts, but equally so): the sentinel JSON schema (ran_at, verdict, red_probes,
@@ -99,6 +95,7 @@ Port of: coordinator-doctor-sentinel.sh (DoE b5a4192c, 2026-07-20)
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -267,16 +264,17 @@ def _default_manifest_path(bin_dir_sibling: Optional[Path]) -> Path:
 # forbids. They now report `inconclusive` instead, and the honest amber stands
 # until somebody writes the bodies.
 #
-# P-16 is a documented, deliberate byte-parity skew inherited from the bash port.
-# P-20/P-21/P-22 were added to the manifest with no matching wiring here and went
-# unnoticed because nothing compared the two sets. P-20 (bash-version gate) and
-# P-21 (durable-root-pointer confirmation) are now wired (probe_p20/probe_p21) and
-# have been dropped from this ledger; P-22 (publish-targets drift) remains unwired.
+# The ledger is EMPTY, and that is the intended terminal state. P-16 (hardware SSOT)
+# arrived as a byte-parity skew inherited from the bash port; P-20/P-21/P-22 were
+# added to the manifest with no matching wiring here and went unnoticed because
+# nothing compared the two sets. All four now have bodies and have been dropped from
+# this list.
 #
 # This list is a debt ledger, not an escape hatch: shrink it by wiring a probe,
-# never grow it to silence a new one.
+# never grow it to silence a new one. An entry added here is a promise to a reader
+# that the amber is honest — it is never the cheaper way past a red.
 # Guard: coordinator/tests/test_doctor_manifest_ssot.py
-_UNWIRED_PROBE_IDS = ("P-16", "P-22")
+_UNWIRED_PROBE_IDS: tuple = ()
 
 
 def _is_runnable_file(path: Path) -> bool:
@@ -747,16 +745,69 @@ def probe_p5(whoami_ok: Optional[bool], py_ident: str, sh: Path) -> List[ProbeNo
     ]
 
 
+#: Envelope modules under `coordinator_whoami` that are NOT per-plugin
+#: implementations: the generic surfaces probed by their own probes (P-6s runs
+#: `session`; the machine envelope runs `machine`). Safe to name literally --
+#: neither carries a repo codename, which is precisely why both survived the
+#: publish transform that broke the one below.
+_WHOAMI_GENERIC_ENVELOPE_MODULES = frozenset({"session", "machine"})
+
+
+def _whoami_plugin_modules(sh: Path) -> List[str]:
+    """The per-plugin `coordinator_whoami` subpackages installed on this
+    machine, DISCOVERED FROM DISK rather than named in source.
+
+    WHY THIS IS NOT A LITERAL. P-6 used to spawn `-m
+    coordinator_whoami.<repo-name>` with the repo name written out here.
+    `coordinator_whoami` is installed under settings-home, OUTSIDE the engine
+    tree, so publish's depersonalization rewrote our reference to it and
+    renamed nothing at the other end -- the mirror every box resolves spawned
+    an import that cannot succeed and reported it as "module crash or missing
+    CLI". The engine's internal renames stay self-consistent because files move
+    with their references; this one reached across a package boundary. A
+    depersonalized name must never reach an identifier that has to resolve, so
+    the name is now read from the installed package at runtime and appears in
+    no source byte the transform can touch.
+
+    It also matches what the package documents: per-plugin implementations live
+    in subpackages and a second plugin is expected to "author a sibling
+    subpackage". A hardcoded name could never have probed that sibling; this
+    enumerates it.
+
+    Gates on `__main__.py`, which is exactly what `-m` requires -- a directory
+    without one is not runnable and would fail for a reason that says nothing
+    about envelope health. Zero-spawn (one `iterdir`), and an unreadable or
+    absent package degrades to `[]`, which the caller reports as inconclusive
+    rather than a fabricated pass.
+    """
+    pkg = sh / "coordinator-whoami" / "coordinator_whoami"
+    try:
+        names = sorted(entry.name for entry in pkg.iterdir() if entry.is_dir())
+    except OSError:
+        return []
+    return [
+        name
+        for name in names
+        if not name.startswith("_")
+        and name not in _WHOAMI_GENERIC_ENVELOPE_MODULES
+        and (pkg / name / "__main__.py").is_file()
+    ]
+
+
 def probe_p6(
-    whoami_ok: Optional[bool], py_bin: str, py_args: List[str], py_ident: str
+    whoami_ok: Optional[bool], py_bin: str, py_args: List[str], py_ident: str, sh: Path
 ) -> List[ProbeNote]:
     """Deliberate isolation boundary, not a candidate for an in-process
-    import — runs ``coordinator_whoami.example_retrieval_repo`` under ``py_bin``, a
-    resolved candidate interpreter distinct from the one running this
-    module, so the probe reflects that interpreter's own environment, not
+    import — runs each per-plugin ``coordinator_whoami`` envelope module under
+    ``py_bin``, a resolved candidate interpreter distinct from the one running
+    this module, so the probe reflects that interpreter's own environment, not
     this process's. See
     ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
-    for the recorded verdict."""
+    for the recorded verdict.
+
+    Which modules those are is discovered, not declared — see
+    ``_whoami_plugin_modules`` for why a literal name here was break-class on
+    the published engine."""
     if whoami_ok is None:
         return _inconclusive("P-6", f"P-5's import check could not run under {py_ident}")
     if not whoami_ok:
@@ -765,46 +816,60 @@ def probe_p6(
                 "P-6",
                 "red",
                 f"coordinator_whoami not importable under {py_ident} — cannot probe "
-                "example_retrieval_repo envelope (fix P-5 first)",
+                "per-plugin envelopes (fix P-5 first)",
             )
         ]
-    try:
-        from coordinator_core.win_portability import no_console_creationflags
-
-        proc = subprocess.run(
-            [py_bin, *py_args, "-m", "coordinator_whoami.example_retrieval_repo"],
-            capture_output=True,
-            text=True,
-            timeout=_PROBE_SPAWN_BUDGET_SECS,
-            **no_console_creationflags(),
-        )
-        out = proc.stdout or ""
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    modules = _whoami_plugin_modules(sh)
+    if not modules:
         return _inconclusive(
-            "P-6", f"could not run {py_bin} -m coordinator_whoami.example_retrieval_repo — {_exec_detail(exc)}"
+            "P-6",
+            f"no per-plugin coordinator_whoami envelope module found under {sh}"
+            "/coordinator-whoami — nothing to probe",
         )
-    if not out.strip():
-        return [
-            ProbeNote(
-                "P-6",
-                "red",
-                "coordinator_whoami.example_retrieval_repo produced no output — module crash or missing CLI",
+
+    notes: List[ProbeNote] = []
+    for module in modules:
+        target = f"coordinator_whoami.{module}"
+        try:
+            from coordinator_core.win_portability import no_console_creationflags
+
+            proc = subprocess.run(
+                [py_bin, *py_args, "-m", target],
+                capture_output=True,
+                text=True,
+                timeout=_PROBE_SPAWN_BUDGET_SECS,
+                **no_console_creationflags(),
             )
-        ]
-    try:
-        d = json.loads(out)
-        if not isinstance(d, dict) or d.get("contract_version") != 1:
-            raise ValueError
-    except (json.JSONDecodeError, ValueError):
-        return [
-            ProbeNote(
-                "P-6",
-                "red",
-                "coordinator_whoami.example_retrieval_repo envelope invalid — check registry keys + "
-                "contract docs",
+            out = proc.stdout or ""
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            notes.extend(
+                _inconclusive(
+                    "P-6", f"could not run {py_bin} -m {target} — {_exec_detail(exc)}"
+                )
             )
-        ]
-    return []
+            continue
+        if not out.strip():
+            notes.append(
+                ProbeNote(
+                    "P-6",
+                    "red",
+                    f"{target} produced no output — module crash or missing CLI",
+                )
+            )
+            continue
+        try:
+            d = json.loads(out)
+            if not isinstance(d, dict) or d.get("contract_version") != 1:
+                raise ValueError
+        except (json.JSONDecodeError, ValueError):
+            notes.append(
+                ProbeNote(
+                    "P-6",
+                    "red",
+                    f"{target} envelope invalid — check registry keys + contract docs",
+                )
+            )
+    return notes
 
 
 def probe_p6s(
@@ -992,8 +1057,8 @@ def probe_p9(sh_bin: Path) -> List[ProbeNote]:
             ProbeNote(
                 "P-9",
                 "amber",
-                "verify-ue-overrides.py emitted remediation — check "
-                "repos.example_game_workbench_repo",
+                "verify-ue-overrides.py emitted remediation — run it (no flags) to see "
+                "which UE-context settings.json drifted",
             )
         ]
     return []
@@ -1492,6 +1557,136 @@ def probe_p19(lib_dir: Optional[Path], coordinator_root: Optional[Path]) -> List
     return []
 
 
+def probe_p16(ml_dir: Path) -> List[ProbeNote]:
+    """Verify the hardware SSOT (`hardware.cores` / `hardware.ram_gb`) is
+    provisioned in machine-local.
+
+    Those two keys are the input every worker-cap calculation in the fleet
+    divides by; absent, the callers fall back to a conservative or simply
+    wrong parallelism budget, which is why the manifest rates this
+    `degraded` rather than `error` — the coordinator's own substrate keeps
+    working, the capacity budgets downstream of it do not.
+
+    Reads the `hardware` concern files directly rather than spawning
+    `machine-local get`: this probe is `weight = "cheap"` and sits in a
+    suite whose whole port exists to stay spawn-free. Precedence mirrors
+    every other machine-local read — the per-machine `.local` file wins over
+    the tracked baseline, and an empty string is not-found (the baseline
+    deliberately declares no keys so "not provisioned yet" cannot be masked
+    as "provisioned to empty"; see hardware.toml's own header).
+
+    An unreadable concern file is `inconclusive`, never a fail: this probe
+    reports on provisioning, and cannot distinguish an absent key from a
+    file it could not parse.
+    """
+    from coordinator_core.machine_resolver import load_flat_registry_file
+
+    flat: dict = {}
+    for fname in ("hardware.toml", "hardware.local.toml"):
+        path = ml_dir / fname
+        if not path.is_file():
+            continue
+        try:
+            flat.update(load_flat_registry_file(path))
+        except Exception as exc:  # noqa: BLE001 — a probe never crashes the suite
+            return _inconclusive(
+                "P-16", f"could not read {fname} — {type(exc).__name__}: {exc}"
+            )
+
+    missing = [
+        key
+        for key in ("hardware.cores", "hardware.ram_gb")
+        if not str(flat.get(key, "")).strip()
+    ]
+    if missing:
+        return [
+            ProbeNote(
+                "P-16",
+                "amber",
+                f"hardware SSOT incomplete — {', '.join(missing)} absent from "
+                "machine-local; downstream worker-cap budgets fall back to a guess",
+            )
+        ]
+    return []
+
+
+def probe_p22(claude_klabauter_root: Path) -> List[ProbeNote]:
+    """Verify the DoE-tracked `setup/publish-targets.portable` has not
+    diverged from the live-install copy (via
+    `verify-publish-targets-portable-sync.py`, in-process).
+
+    That checker is a `coordinator/bin/` CLI rather than a
+    `coordinator_core.ops` module, so unlike P-9/P-11 it cannot simply be
+    imported by name — it is loaded from its path under `claude_klabauter_root` and
+    its `main()` called through `_call_native_main`, keeping the no-spawn
+    contract the rest of this suite holds. `coordinator/bin` goes onto
+    `sys.path` because the CLI bootstraps its own `lib/` sibling from there.
+
+    Exit 0 covers both a clean comparison AND the documented clean skip (no
+    live-install copy resolvable on this machine), which is the correct
+    verdict for either: there is no drift to report. A non-zero exit is the
+    divergence the manifest's remediation describes.
+
+    AN ABSENT CHECKER IS NORMAL ON A PUBLISHED ENGINE, and the manifest ships
+    to engines that will never carry it. The checker is DENIED from the mirror
+    on purpose (`setup/publish-allowlist-declarations.yaml`: it reads
+    `setup/publish-targets.portable` against the live install, "meaningless
+    without the publish machinery it audits"). Reporting that as inconclusive
+    would put a permanent amber on every published box for a file that is
+    absent by design — the same shape as P-9 demanding a repo key most machines
+    correctly lack, and the reason this probe is scoped rather than skipped
+    wholesale.
+
+    The discriminator is the publish DRIVER, denied from the mirror in the same
+    breath as the checker: no driver means this engine cannot publish, so there
+    is no publish tree to audit and nothing was missed. A driver present
+    WITHOUT its checker is a real gap in an authoring tree, and stays
+    inconclusive. Two `is_file` calls, no spawn.
+    """
+    bin_dir = claude_klabauter_root / "coordinator" / "bin"
+    script = bin_dir / "verify-publish-targets-portable-sync.py"
+    if not script.is_file():
+        if not (bin_dir / "publish.py").is_file():
+            return []
+        return _inconclusive(
+            "P-22",
+            f"publish driver is present under {bin_dir} but its "
+            "publish-targets checker is not — an authoring tree missing one of a pair",
+        )
+
+    bin_dir = str(script.parent)
+    added = bin_dir not in sys.path
+    if added:
+        sys.path.insert(0, bin_dir)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_doctor_p22_verify_publish_targets_portable_sync", script
+        )
+        if spec is None or spec.loader is None:
+            return _inconclusive("P-22", f"could not build an import spec for {script}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        rc, out, err = _call_native_main(module.main, [])
+    except _NativeCallFailed as exc:
+        return _inconclusive("P-22", str(exc))
+    except Exception as exc:  # noqa: BLE001 — a probe never crashes the suite
+        return _inconclusive(
+            "P-22", f"could not load {script.name} — {type(exc).__name__}: {exc}"
+        )
+    finally:
+        if added:
+            try:
+                sys.path.remove(bin_dir)
+            except ValueError:
+                pass
+
+    if rc != 0:
+        detail = (err or out or "").strip().splitlines()
+        first = detail[0] if detail else f"exit {rc}"
+        return [ProbeNote("P-22", "amber", f"publish-targets.portable diverged — {first}")]
+    return []
+
+
 def probe_p20() -> List[ProbeNote]:
     """Verify the bash resolved FIRST on PATH is version >= 4 (macOS ships 3.2
     at /bin/bash, ahead of any homebrew bash unless PATH is fixed).
@@ -1966,7 +2161,7 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
     _run_probe("P-3", lambda: probe_p3(registry_keys_lazy.get()))
     _run_probe("P-4", lambda: probe_p4(ml_cmd, sh_bin))
     _run_probe("P-5", lambda: probe_p5(whoami_lazy.get(), py_ident, sh))
-    _run_probe("P-6", lambda: probe_p6(whoami_lazy.get(), py_bin, py_args, py_ident))
+    _run_probe("P-6", lambda: probe_p6(whoami_lazy.get(), py_bin, py_args, py_ident, sh))
     _run_probe("P-6s", lambda: probe_p6s(whoami_lazy.get(), py_bin, py_args, py_ident))
     _run_probe("P-7", lambda: probe_p7(claude_home))
     _run_probe("P-8", lambda: probe_p8(plugins_root))
@@ -1976,12 +2171,14 @@ def _run(mode: str, arg: str) -> Tuple[List[str], List[str], int]:
     _run_probe("P-12", lambda: probe_p12(bin_dir_sibling, claude_home))
     _run_probe("P-13", lambda: probe_p13(claude_home, plugins_root, coordinator_root))
     _run_probe("P-15", lambda: probe_p15(scripts_lib_dir))
+    _run_probe("P-16", lambda: probe_p16(ml_dir))
     _run_probe("P-17", lambda: probe_p17(scripts_lib_dir))
     _run_probe("P-14", lambda: probe_p14(ml_cmd, ch_cmd, sh_bin))
     _run_probe("P-18", lambda: probe_p18(original_claude_home))
     _run_probe("P-19", lambda: probe_p19(lib_dir_sibling, coordinator_root))
     _run_probe("P-20", lambda: probe_p20())
     _run_probe("P-21", lambda: probe_p21())
+    _run_probe("P-22", lambda: probe_p22(_this_claude_klabauter_root()))
     _run_probe(
         "P-23",
         lambda: probe_p23(

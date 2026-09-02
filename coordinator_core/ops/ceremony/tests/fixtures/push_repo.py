@@ -7,12 +7,20 @@ suites. Hoisted out of `test_push.py` (Review: overengineering-reviewer --
 near-identical `_git`/`_init_repo` pair; the seam for a shared fixture
 already existed via `fixtures/` and was not used).
 
-Always builds a real bare `origin` and pushes `-u` to it, so
-`branch.<name>.remote`/`.merge` genuinely exist in every consumer -- the
-former `with_upstream=False` branch (a deliberately-unusable
-`origin-unused.git` URL) was a config axis with a single true consumer and
-did not earn its keep (Review: overengineering-reviewer, speculative-
-generality finding).
+Builds a real bare `origin`, and by default pushes `-u` to it so
+`branch.<name>.remote`/`.merge` genuinely exist in the consumer.
+
+`set_upstream=False` re-introduces the no-upstream axis a 2026-08-30
+overengineering review removed for want of consumers. It has three now, all
+in `test_push_no_upstream_publish.py`, and the axis it expresses is the one
+production defect that suite pins: a day branch that exists on disk with no
+`branch.<name>.remote`/`.merge` at all. It differs from the removed version
+in kind -- the remote is real and reachable, so a publish genuinely lands,
+where the old `origin-unused.git` URL could only ever fail.
+
+`branch` selects the branch name, because whether a name satisfies
+`daily_branch.is_canonical_branch` is precisely what the publish path gates
+on, and `work/x` does not.
 """
 
 from __future__ import annotations
@@ -32,10 +40,12 @@ def _git(args, cwd) -> None:
     )
 
 
-def init_push_repo(tmp_path: Path) -> Path:
+def init_push_repo(
+    tmp_path: Path, *, branch: str = "work/x", set_upstream: bool = True
+) -> Path:
     """A `work/x` repo with a real bare `origin` remote, pushed `-u`.
 
-    Enough for `_remote_configured_locally`/`branch_gate` to pass, and for
+    Enough for `_default_remote_name_local`/`branch_gate` to pass, and for
     `_resolve_upstream_local` to read genuine `branch.<name>.remote`/
     `.merge` keys out of `.git/config` -- required by any test that reaches
     the fetch/rebase ladder. `push` itself is mocked in every push-retry
@@ -49,10 +59,11 @@ def init_push_repo(tmp_path: Path) -> Path:
     _git(["init", "-q"], repo)
     _git(["config", "user.email", "t@t.example"], repo)
     _git(["config", "user.name", "t"], repo)
-    _git(["checkout", "-q", "-b", "work/x"], repo)
+    _git(["checkout", "-q", "-b", branch], repo)
     (repo / "README.md").write_text("seed", encoding="utf-8")
     _git(["add", "--", "README.md"], repo)
     _git(["commit", "-q", "-m", "seed"], repo)
     _git(["remote", "add", "origin", str(origin)], repo)
-    _git(["push", "-q", "-u", "origin", "work/x"], repo)
+    if set_upstream:
+        _git(["push", "-q", "-u", "origin", branch], repo)
     return repo

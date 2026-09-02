@@ -46,6 +46,27 @@ import pytest
 from coordinator_core import _settings_home
 from coordinator_core.install import door_install, door_route_signal
 
+#: This suite is a read-only oracle against the LIVE warm plane, so it opts out
+#: of `conftest._quarantine_real_home`.
+#:
+#: Capturing `_REAL_ENGINE_ROOT` and `_REAL_DOOR_PATH` at collection time --
+#: which this file already did -- closes only half the hole. `ensure_listener`
+#: re-resolves the service directory INTERNALLY, off the quarantined
+#: `COORDINATOR_WARM_RUNTIME_BASE`, so `discovery_path()` landed in a per-test
+#: temp dir and no listener on the box could ever be visible here. The guard was
+#: unsatisfiable by construction: red on every box, forever, for a reason that
+#: had nothing to do with the route it asserts.
+#:
+#: Worse than red. Each poll's `should_spawn` answered True inside the
+#: quarantine, so a failing run spawned real detached supervisors against the
+#: real engine root -- exactly the litter `ensure_listener`'s own docstring
+#: warns about.
+#:
+#: Negative spec: nothing here may WRITE under the real home. The marker means
+#: "resolve the real home" for a read-only assertion; a test that mutates live
+#: machine config under it reintroduces the bug the quarantine exists to stop.
+pytestmark = pytest.mark.real_home
+
 #: The repo root this test suite actually runs against -- three levels up
 #: from this file (tests/ -> install/ -> coordinator_core/ -> repo root),
 #: matching `door_route_signal`'s REPO-SCOPING requirement that a caller

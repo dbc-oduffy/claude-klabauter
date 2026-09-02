@@ -758,13 +758,30 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         "measured": {"max_ms": 578.1, "p50_ms": 406.2, "n": 585, "unit": "process_ms"},
         "note": "n=585, the best-evidenced row in this batch.",
         "disposition": (
-            "gravestone -- but the JOB survives; only claude-klabauter's ownership of "
-            "it does not. Job was 'answer questions about the roadmap on "
-            "demand'. PM: 'can be handled by example-retrieval-repo, they do lots of "
-            "query stuff.' 585 calls made this the most-used row in the "
-            "whole set, and it is still not claude-klabauter's job -- a query surface "
-            "belongs to the repo that owns querying. This routes to "
-            "example-retrieval-repo as a cross-repo note, not a v2 owed here."
+            "SUPERSEDED 2026-09-02 -- claude-klabauter owns the v2 and is building it. "
+            "PM: 'let\'s do the work. we own it. Example-retrieval-repo can do other "
+            "stuff.' Sized M at state/sizings/2026-09-02-roadmap-serve-v2-"
+            "and-the-identity-corpus.yaml; spike verdict viable at docs/"
+            "research/spike-verdicts/2026-09-02-roadmap-serve-v2-read-shape.md."
+            " "
+            "The 2026-08-27 ruling this replaces read: 'gravestone -- but the "
+            "JOB survives; only claude-klabauter\'s ownership of it does not. Job was "
+            "\'answer questions about the roadmap on demand\'. PM: \'can be "
+            "handled by example-retrieval-repo, they do lots of query stuff.\' ... This "
+            "routes to example-retrieval-repo as a cross-repo note, not a v2 owed here.' "
+            "It is kept here rather than deleted because it was correct on its "
+            "own premises and a reader needs to see what changed. "
+            "Four things did. Its cost premise is retired: it was made against "
+            "406.2ms p50, and the v2 measures 22.6ms process for all twelve "
+            "roadmap ids in ONE process (batched_process_time_ms, k=20). Its "
+            "job description does not match the consumer: the only live caller "
+            "is example-cockpit-repo\'s build-store ingest, a build step, not an "
+            "operator asking a question on demand. The corpus is claude-klabauter\'s own "
+            "-- the read is over state/roadmap/, which CLAUDE.md makes this "
+            "repo\'s authoritative disk-truth and forbids example-retrieval-repo writing "
+            "into. And example-retrieval-repo does not index this repo at all, so routing "
+            "the job there asked them to build indexing rather than to host an "
+            "existing capability."
         ),
         "spinoff": None,
     },

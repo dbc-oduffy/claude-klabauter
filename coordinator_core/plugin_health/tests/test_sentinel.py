@@ -241,7 +241,12 @@ def test_p9_nonzero_rc_reports_amber(tmp_path, monkeypatch):
     monkeypatch.setattr(S.verify_ue_overrides, "main", lambda *a, **k: 1)
     (note,) = S.probe_p9(tmp_path / "sh_bin")
     assert note.severity == "amber"
-    assert "repos.example_game_workbench_repo" in note.message
+    # Deliberately NOT a private repo codename. Publish depersonalizes those on
+    # the way to the mirror, so a key name hardcoded in operator-facing text
+    # reaches the published engine as a placeholder no registry can hold. The
+    # message points at the CLI, which names the real key at runtime.
+    assert "verify-ue-overrides.py" in note.message
+    assert "example_game_workbench_repo" not in note.message
 
 
 def test_p9_main_raising_routes_to_inconclusive_never_silent_green(tmp_path, monkeypatch):
@@ -1198,7 +1203,7 @@ def test_whoami_unrunnable_reports_inconclusive_not_a_red_import_failure():
     assert note.message.startswith("inconclusive(")
     assert "not importable" not in note.message
 
-    (note,) = S.probe_p6(None, "python3", [], "python 3.11")
+    (note,) = S.probe_p6(None, "python3", [], "python 3.11", Path("/nonexistent-sh"))
     assert note.message.startswith("inconclusive(")
     (note,) = S.probe_p6s(None, "python3", [], "python 3.11")
     assert note.message.startswith("inconclusive(")
@@ -1210,3 +1215,52 @@ def test_whoami_observed_import_failure_is_still_red():
     (note,) = S.probe_p5(False, "python 3.11 at /usr/bin/python3", Path("/sh"))
     assert note.severity == "red"
     assert "not importable" in note.message
+
+
+def test_p6_module_name_is_discovered_never_a_source_literal(tmp_path):
+    """P-6's envelope module name must be read from disk, never written here.
+
+    `coordinator_whoami` installs OUTSIDE the engine tree, so publish's
+    depersonalization rewrote a hardcoded `coordinator_whoami.<repo>` reference
+    and renamed nothing at the other end: the mirror every box resolves spawned
+    an import that could not succeed. Discovery is what makes that
+    unrepresentable, so both halves are pinned -- the enumeration works, and no
+    per-plugin module name survives as a literal in the sentinel source.
+    """
+    pkg = tmp_path / "coordinator-whoami" / "coordinator_whoami"
+    for name in ("some_plugin", "session", "schemas", "_private"):
+        (pkg / name).mkdir(parents=True)
+    for name in ("some_plugin", "session", "_private"):
+        (pkg / name / "__main__.py").write_text("", encoding="utf-8")
+
+    # `session` is a generic envelope with its own probe (P-6s); `schemas` is
+    # not runnable; `_private` is not a public subpackage.
+    assert S._whoami_plugin_modules(tmp_path) == ["some_plugin"]
+
+    # An absent package is inconclusive-shaped (empty), never a fabricated pass.
+    assert S._whoami_plugin_modules(tmp_path / "nope") == []
+
+    source = Path(S.__file__).read_text(encoding="utf-8")
+    assert "coordinator_whoami.example_retrieval_repo" not in source
+
+
+def test_p22_absent_checker_on_a_published_engine_is_not_a_finding(tmp_path):
+    """A published engine carries neither the checker nor the publish driver.
+
+    Both are denied from the mirror on purpose, so an inconclusive here would
+    be a permanent amber on every published box for a file that is absent by
+    design. The pair is the discriminator: no driver means nothing to audit.
+    """
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    assert S.probe_p22(tmp_path) == []
+
+
+def test_p22_driver_without_its_checker_is_inconclusive(tmp_path):
+    """An authoring tree missing one of the pair is a real gap, not a skip."""
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "publish.py").write_text("", encoding="utf-8")
+    (note,) = S.probe_p22(tmp_path)
+    assert note.severity == "amber"
+    assert note.message.startswith("inconclusive(")

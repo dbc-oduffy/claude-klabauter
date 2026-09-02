@@ -1,0 +1,20 @@
+"""PLANTED POSITIVE CONTROL -- the shell half of the same defect.
+
+The hook that broke every commit was not Python: it was a `sh` body BUILT
+from Python string literals, resolving the settings-home rung into `$_T` and
+then running `"$_PY" "$_T"`. An AST-only guard cannot see this, which is
+precisely why the shell arm exists. `.py.txt` so nothing else reads it.
+"""
+
+
+def hook_body(script_name):
+    settings_home_script = (
+        '${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/'
+        f'{script_name}'
+    )
+    return (
+        "#!/bin/sh\n"
+        '_PY=python3\n'
+        f'_T="{settings_home_script}"\n'
+        'exec "$_PY" "$_T" "$@"\n'
+    )

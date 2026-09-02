@@ -5427,6 +5427,35 @@ def push(
     return _git(args, cwd=cwd, timeout=timeout)
 
 
+def push_set_upstream(
+    cwd: Union[str, Path],
+    remote_name: str,
+    branch: str,
+    *,
+    timeout: float = REMOTE_BUDGET_SECS,
+) -> GitResult:
+    """`git push --set-upstream <remote_name> <branch>` — the PUBLISH form.
+
+    Distinct from `push` above because it does two things `push` cannot: it
+    names the refspec explicitly (so it works on a branch git has no
+    tracking configuration for) and it writes `branch.<branch>.remote` /
+    `.merge` on success, which is what makes every LATER bare `push` on
+    this branch work. That config write is the whole point — a day branch
+    that reaches the remote once but keeps no upstream is republished by
+    nothing.
+
+    Negative spec: no `--force`, no `--force-with-lease`, no `+` refspec.
+    This is a create-or-fast-forward publish; a remote branch that would be
+    rewritten by it must be reported to the caller as an ordinary reject,
+    never overwritten. Callers own the decision of WHICH branches may be
+    published (`coordinator_core.daily_branch.is_canonical_branch`) — this
+    primitive publishes whatever it is handed and gates nothing.
+    """
+    return _git(
+        ["push", "--set-upstream", remote_name, branch], cwd=cwd, timeout=timeout
+    )
+
+
 def fetch(
     cwd: Union[str, Path], remote_name: str, *, timeout: float = REMOTE_BUDGET_SECS
 ) -> GitResult:

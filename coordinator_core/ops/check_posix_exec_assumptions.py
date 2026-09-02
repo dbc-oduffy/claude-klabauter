@@ -15,12 +15,12 @@ confidence -- the tier determines whether a class can block or only report:
     stripped shebang, extensionless `#!`-exec, git mode 100755). Large
     pre-existing debt fleet-wide, so these are BLOCKING but ratcheted
     against a frozen, shrink-only baseline.
-  - **Tier C, promoted** (part of `CLASSES`) — `path_separator` and
-    `posix_mode_bits` are code-content patterns, AST-detected, that started
-    life BLOCKING, were briefly DEMOTED to report-only on 2026-07-28 over
+  - **Tier C, promoted** (part of `CLASSES`) — `posix_mode_bits` is a
+    code-content pattern, AST-detected, that started
+    life BLOCKING, was briefly DEMOTED to report-only on 2026-07-28 over
     one specific defect (a blocking class firing on `os.access()` inside
     `if os.name != "nt":` -- correctly platform-guarded code, not debt),
-    and were PROMOTED BACK to blocking the same day once that defect was
+    and was PROMOTED BACK to blocking the same day once that defect was
     fixed: `_is_windows_guarded()` (below) recognizes a nested `If` guard,
     the harder short-circuit `and`-chain shape (the actual
     `retire-claude-bin.py` case), and (2026-08-13) a bare, `else:`-less
@@ -33,6 +33,16 @@ confidence -- the tier determines whether a class can block or only report:
     are), which surfaces as an immediately-resolvable EXEMPTIONS case
     rather than a silent trap -- see the per-class failure-message text in
     `check_against_baseline`.
+
+    `path_separator` SHARED that 2026-07-28 demote-then-repromote history
+    and no longer shares this disposition -- do not read this bullet as
+    describing it. On 2026-08-14 its three detection arms were dropped
+    OUTRIGHT after a live re-measurement found 27/28 ratchet hits false,
+    and it is today a retained class name and baseline slot with NO
+    detector at all: nothing in `_scan_python_file` ever calls
+    `_record("path_separator", ...)`. The decidable residue became the
+    separate REPORT-ONLY `posix_path_assumption` class. See that class's
+    own entry below for the measurement and the reasoning.
   - **Tier C, narrowed and promoted** (part of `CLASSES`) —
     `unresolved_cross_path`, promoted to BLOCKING 2026-08-13 (eng-director
     ruling, `state/audits/2026-08-13-the Director of Engineering-carveout-and-cross-path-ruling.md`
@@ -560,7 +570,13 @@ _NO_WINDOW = no_console_creationflags()
 
 # Blocking classes: ratcheted against the frozen baseline, gate the build.
 #
-# `path_separator` and `posix_mode_bits` were briefly DEMOTED to report-only
+# `path_separator` is a NAME AND BASELINE SLOT ONLY -- it is listed here as
+# BLOCKING but has carried no detector since 2026-08-14, when its three arms
+# were dropped outright over a 27/28 false-positive measurement. Everything
+# the rest of this comment says about promotion applies to `posix_mode_bits`
+# alone; the module docstring's Tier C bullet carries the full history.
+#
+# `posix_mode_bits` was briefly DEMOTED to report-only
 # on 2026-07-28 over one specific defect: the class fired on `os.access()`
 # inside `if os.name != "nt":` -- correctly platform-guarded code, not debt.
 # That defect is now FIXED (`_is_windows_guarded()` below, covering a

@@ -81,6 +81,7 @@ from coordinator_core.warm.engine_root import current_engine_clone
 
 __all__ = [
     "SPAWN_DEBOUNCE_SECS",
+    "BOOT_CLAIM_MAX_SECS",
     "RUNTIME_BASE_ENV",
     "BREADCRUMB_FILENAME",
     "TRANSPORT_PIPE",
@@ -109,6 +110,27 @@ __all__ = [
 # The old `client.START_DEADLINE` value, reused for a different job now
 # that no client ever waits on it -- see module docstring.
 SPAWN_DEBOUNCE_SECS = 2.0
+
+#: How long a CLAIMED boot vouches for itself (`try_claim_boot`) before a
+#: denied caller treats the claim as abandoned and re-stamps. Its own
+#: constant, not `SPAWN_DEBOUNCE_SECS` reused for a second meaning
+#: (code-reviewer Finding 3, 2026-09-02): the two answer related but
+#: distinct questions -- `SPAWN_DEBOUNCE_SECS` is "is a just-published record
+#: still fresh", `BOOT_CLAIM_MAX_SECS` is "has an in-flight boot had long
+#: enough to publish one" -- and sharing a number meant a boot that
+#: legitimately overran it under the box's own stated load (50-70 concurrent
+#: sessions, § Load norm) got treated as failed and re-triggered a spawn.
+#: Sized the same as `SPAWN_DEBOUNCE_SECS` for now (value unchanged by this
+#: fix); it is free to diverge once a real worst-case boot duration is
+#: measured, without also perturbing the record-freshness window.
+BOOT_CLAIM_MAX_SECS = 2.0
+
+#: Byte 0 of a boot-lock file is the LOCK BYTE and never carries data:
+#: `msvcrt.locking` is MANDATORY on Windows, so a denied caller cannot read
+#: the region the holder locked. The claim stamp therefore starts at byte 1,
+#: outside every lock this module takes, and is readable by a denied caller
+#: on both platforms through one code path.
+_CLAIM_STAMP_OFFSET = 1
 
 BREADCRUMB_FILENAME = "warm.json"
 
@@ -587,7 +609,71 @@ def boot_lock_path(record_path: Path) -> Path:
     return Path(str(record_path) + ".boot.lock")
 
 
-def try_claim_boot(lock_path: Path) -> bool:
+def _write_claim_stamp(fd: int, now: Optional[float]) -> None:
+    """Record a claim instant in an already-open boot-lock fd, at
+    `_CLAIM_STAMP_OFFSET` so it never overlaps the lock byte.
+
+    Best-effort: a stamp that cannot be written degrades this claim to the
+    mtime fallback `_claim_has_expired` already implements, never to an
+    exception on a path whose whole contract is that it fails open.
+
+    Concurrent callers can both find the claim expired and both re-stamp
+    (intentional -- see `_claim_has_expired`'s docstring); those two writes
+    race unsynchronized, since a caller only reaches here after being DENIED
+    the exclusive lock. That can interleave into a stamp that fails to parse
+    as a float (code-reviewer Finding 4, 2026-09-02). Named explicitly so a
+    reader doesn't have to re-derive it: a torn re-stamp degrades to the same
+    mtime fallback as an unwritable one, never to a crash.
+    """
+    payload = f"{time.time() if now is None else now:.3f}\n".encode("ascii")
+    try:
+        os.lseek(fd, _CLAIM_STAMP_OFFSET, os.SEEK_SET)
+        os.write(fd, payload)
+        os.ftruncate(fd, _CLAIM_STAMP_OFFSET + len(payload))
+    except OSError:
+        pass
+
+
+def _claim_has_expired(fd: int, now: Optional[float]) -> bool:
+    """Whether the claim stamped in this boot-lock fd has aged past
+    `BOOT_CLAIM_MAX_SECS` -- the question a caller DENIED the lock asks
+    before concluding that a boot is genuinely in flight.
+
+    An age outside `(-BOOT_CLAIM_MAX_SECS, BOOT_CLAIM_MAX_SECS)` reads as
+    expired. A stamp FURTHER ahead than one window is a clock that moved, not
+    a boot still running, and treating it as vouching would wedge every
+    caller until the clock caught up. A stamp slightly ahead is the ordinary
+    case, not an anomaly, and the window is two-sided for exactly that
+    reason: the writer stamps `time.time()` microseconds after a concurrent
+    reader sampled its own, so a one-sided `0 <= age` guard read a live
+    winner's claim as expired and let the whole burst through (measured:
+    7 of 8 racers spawning, 2026-09-02).
+
+    Falls back to the file's mtime when no stamp parses (see `try_claim_boot`
+    for the two cases that produces), and returns False -- "the holder still
+    vouches" -- if even that cannot be read, keeping False the answer for
+    every outcome where a holder is demonstrably present.
+    """
+    raw = b""
+    try:
+        os.lseek(fd, _CLAIM_STAMP_OFFSET, os.SEEK_SET)
+        raw = os.read(fd, 32)
+    except OSError:
+        raw = b""
+
+    try:
+        stamp = float(raw.decode("ascii").strip())
+    except (UnicodeDecodeError, ValueError):
+        try:
+            stamp = os.fstat(fd).st_mtime
+        except OSError:
+            return False
+
+    age = (time.time() if now is None else now) - stamp
+    return not (-BOOT_CLAIM_MAX_SECS < age < BOOT_CLAIM_MAX_SECS)
+
+
+def try_claim_boot(lock_path: Path, *, now: Optional[float] = None) -> bool:
     """Non-blocking attempt to become the sole owner of an in-flight boot
     when NOTHING in the discovery/breadcrumb record vouches for one -- the
     exact succession window `should_spawn_decision` used to hand unconditional
@@ -616,16 +702,52 @@ def try_claim_boot(lock_path: Path) -> bool:
     seconds into a box-wide outage lasting until the TTL (or a human) frees
     the primitive, exactly the failure this chunk must not create.
 
-    DELIBERATELY NEVER RELEASED ON THE CLAIMED PATH. The acquired fd is not
-    closed when this function returns True -- it is intentionally leaked for
-    the rest of THIS process's life, which is the debounce's protection
-    window: a second call in the SAME process (a fresh `os.open` of the same
-    path) sees its own still-held lock and correctly reads "already claimed"
-    (False, matching flock/`msvcrt.locking`'s per-open-file-description
-    semantics, not per-process -- two fds to the same file in one process
-    still conflict), and the OS reclaims the lock the moment this process
-    exits, orderly or crashed, so the very next caller succeeds with no
-    reaper and no human intervention.
+    THE LOCK IS NOT RELEASED ON THE CLAIMED PATH; THE CLAIM STILL EXPIRES.
+    The acquired fd is deliberately leaked for the rest of THIS process's
+    life -- that is what makes the OS reclaim the lock the moment this
+    process exits, orderly or crashed, so the very next caller succeeds with
+    no reaper and no human intervention (`flock`/`msvcrt.locking` are
+    per-open-file-description, not per-process, so even a second call in this
+    same process is denied the lock rather than silently re-winning it).
+
+    BUT HOLDING THE LOCK IS NOT THE SAME AS VOUCHING FOR A BOOT, corrected
+    2026-09-02 on measured evidence. The original form had no expiry at all:
+    a claim vouched for exactly as long as the claiming process lived. That
+    is right for the short-lived hook process this primitive was designed
+    around and WRONG for a long-lived one, and long-lived callers exist --
+    `warm.server` and DoE's `http_hook_forwarder.py` both reach
+    `supervisor.ensure_listener`, and both run for hours. MEASURED on this
+    box 2026-09-02: `http_hook_forwarder.py` (pid 16555, alive 1h+) held
+    `warm-http.json.boot.lock`, so `supervisor.should_spawn` answered False
+    in EVERY process on the machine, no HTTP listener could be spawned by
+    anyone, and `ensure_listener` returned None indefinitely. One process's
+    single claim had become the box-wide outage this primitive's own
+    docstring forbids creating -- unbounded, because nothing expired it.
+
+    So the winner STAMPS its claim instant into the lock file (at
+    `_CLAIM_STAMP_OFFSET`, never over the lock byte), and a denied caller
+    reads that stamp: a claim younger than `BOOT_CLAIM_MAX_SECS` still
+    vouches (False), an older one has expired and this caller proceeds
+    (True) even though the holder still holds the lock. The expiry bound is
+    the boot window, not a TTL chosen for this primitive -- a claim exists to
+    cover ONE boot, and a boot that has published no record within the window
+    has failed. Crash release keeps its original instant, wait-free behaviour:
+    a dead holder's lock is free, so the next caller wins it outright and
+    never consults a stamp at all.
+
+    A caller that proceeds past an EXPIRED claim re-stamps the file, so the
+    window restarts. Without that, every subsequent call past an expired
+    claim would return True and spawn -- trading a permanent block for a
+    permanent herd. Concurrent callers can both re-stamp and both proceed;
+    the burst is bounded at one window's worth, which is the same bound the
+    lock itself gives.
+
+    An empty or unparseable stamp falls back to the lock file's mtime. That
+    covers a lock file written by a build older than this stamp (its holder
+    is by definition one of the wedged processes above) and the microscopic
+    window between a winner taking the lock and writing its stamp -- in which
+    the file was just created, so its mtime is fresh and the caller is
+    correctly denied.
 
     FAILS OPEN on every outcome this function cannot resolve -- an
     uncreatable sidecar directory, a missing lock backend, any error other
@@ -633,12 +755,17 @@ def try_claim_boot(lock_path: Path) -> bool:
     every future caller behind a primitive that cannot itself be evaluated.
     Only the one unambiguous "someone else holds it" outcome
     (`BlockingIOError` on POSIX, `EACCES`/`EDEADLOCK` on Windows) returns
-    False.
+    False -- and only while that holder's stamped claim is still inside
+    `BOOT_CLAIM_MAX_SECS`.
+
+    `now` is an injectable `time.time()`-shaped clock, matching
+    `should_spawn_decision`'s own: the comparison is inherently cross-process
+    (one process stamps, another reads), so a monotonic clock would be the
+    wrong choice here for the same reason it is there.
     """
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        flags = os.O_CREAT | (os.O_RDWR if os.name == "nt" else os.O_WRONLY)
-        fd = os.open(str(lock_path), flags, 0o600)
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
     except OSError:
         return True
 
@@ -664,14 +791,20 @@ def try_claim_boot(lock_path: Path) -> bool:
     except Exception:  # noqa: BLE001 -- fail open: an unreadable primitive must not wedge a caller
         claimed = True
 
-    if not claimed:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-    # else: `fd` is deliberately leaked -- see docstring's "DELIBERATELY
-    # NEVER RELEASED" section.
-    return claimed
+    if claimed:
+        _write_claim_stamp(fd, now)
+        # `fd` is deliberately leaked -- see the docstring's "THE LOCK IS NOT
+        # RELEASED ON THE CLAIMED PATH" section.
+        return True
+
+    expired = _claim_has_expired(fd, now)
+    if expired:
+        _write_claim_stamp(fd, now)
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return expired
 
 
 def should_spawn_decision(
@@ -762,7 +895,7 @@ def should_spawn_decision(
     # this is exactly the succession window this chunk closes. Absence used
     # to mean unconditional True here; it now means "ask the boot-in-flight
     # primitive," which is the fix.
-    return try_claim_boot(lock_path)
+    return try_claim_boot(lock_path, now=now)
 
 
 def should_spawn(

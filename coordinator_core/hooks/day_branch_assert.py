@@ -60,6 +60,11 @@ from typing import NamedTuple, Optional
 #: Every arm of the dispatch table below, named. Nothing falls off the end.
 CUT = "FRESH-CUT"
 ADOPTED = "ADOPTED-EXISTING"
+#: Today's branch existed but lagged HEAD -- the ordinary state after
+#: `/merging-to-main` returns the tree to `main` -- and its ref was advanced
+#: to HEAD and checked out. See `session_ensure_branch.ADVANCED_TO_HEAD` for
+#: why that is content-neutral and what it deliberately does NOT cover.
+ADVANCED = "ADVANCED-TO-HEAD"
 INHERITED = "INHERITED"
 COMPLIANT = "COMPLIANT"
 WARN = "WARN"
@@ -94,8 +99,9 @@ def assert_day_branch(
     Dispatch table, exhaustive:
 
       ``main``                          -> case (A): cut / adopt-existing /
-                                           inherit, inside the tree-keyed cut
-                                           lock, with no network call.
+                                           advance-to-HEAD / inherit, inside
+                                           the tree-keyed cut lock, with no
+                                           network call.
       detached HEAD                     -> case (B): warn (always
                                            non-compliant).
       non-``main``, auto-push compliant -> silent return, zero further work.
@@ -143,6 +149,10 @@ def _case_a(repo_root, machine, today, *, env, stderr) -> DayBranchAssertResult:
     if result.result == "ADOPTED-EXISTING":
         return DayBranchAssertResult(
             ADOPTED, result.new_branch, f"day-branch: on {result.new_branch}"
+        )
+    if result.result == "ADVANCED-TO-HEAD":
+        return DayBranchAssertResult(
+            ADVANCED, result.new_branch, f"day-branch: advanced {result.new_branch} to HEAD"
         )
     if result.result == "INHERITED":
         return DayBranchAssertResult(

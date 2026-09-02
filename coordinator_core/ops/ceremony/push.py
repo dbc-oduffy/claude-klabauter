@@ -1130,7 +1130,7 @@ def _emit_push_policy_line(
 
 def _read_git_config_text(root: Path) -> str:
     """Best-effort `.git/config` text for *root*'s COMMON dir, `""` on any
-    read failure -- never raises. Feeds `_remote_configured_locally` /
+    read failure -- never raises. Feeds `_default_remote_name_local` /
     `_resolve_upstream_local` (C2b, `push_with_retry`'s local-half spawn
     elimination): both only need PRESENCE of a section and two scalar keys,
     not a faithful `configparser`-equivalent read, so a tolerant line-based
@@ -1148,15 +1148,136 @@ def _read_git_config_text(root: Path) -> str:
         return ""
 
 
-_REMOTE_SECTION_RE = re.compile(r'(?im)^[ \t]*\[remote\s+"')
+_REMOTE_NAME_RE = re.compile(r'(?im)^[ \t]*\[remote[ \t]+"([^"\\]+)"\][ \t]*$')
+
+#: git's own refusal when a bare `git push` runs on a branch carrying no
+#: `branch.<name>.remote`/`.merge` configuration. NARROW ON PURPOSE -- this
+#: predicate authorises a publish, so it must match the ONE failure a publish
+#: actually repairs and nothing adjacent. A non-fast-forward reject, an auth
+#: failure, a size-limit refusal and a timeout all leave `_is_no_upstream_
+#: refusal` False and take the unchanged ladder.
+_PAT_NO_UPSTREAM = re.compile(
+    r"has no upstream branch|no upstream configured for branch", re.IGNORECASE
+)
 
 
-def _remote_configured_locally(root: Path) -> bool:
-    """True iff `.git/config` declares at least one `[remote "..."]` section
-    -- the in-process equivalent of `git remote`'s "any output" check,
-    0 spawns (module docstring's `_read_git_config_text`).
+def _default_remote_name_local(root: Path) -> Optional[str]:
+    """The remote to publish a first push to: `origin` when configured, else
+    the first `[remote "..."]` section `.git/config` declares. `None` when
+    none is -- 0 spawns, same tolerant scan as `_resolve_upstream_local`.
+
+    Preferring `origin` by NAME rather than by file order is deliberate: a
+    config that also declares a fork or a mirror must still publish the day
+    branch where every peer session fetches from, and section order in
+    `.git/config` is an artifact of the order remotes were added.
     """
-    return bool(_REMOTE_SECTION_RE.search(_read_git_config_text(root)))
+    names = _REMOTE_NAME_RE.findall(_read_git_config_text(root))
+    if not names:
+        return None
+    return "origin" if "origin" in names else names[0]
+
+
+def _is_no_upstream_refusal(reason: str) -> bool:
+    """True iff *reason* is git declining a push SOLELY because the branch
+    has no configured upstream.
+
+    Negative spec: this is not a general "push failed" predicate and must
+    never be widened into one. It gates the one recovery that writes to the
+    remote without the caller having asked for a specific refspec, so every
+    string it accepts is a string on which `push --set-upstream` is the
+    correct, non-destructive next move. A rejected or non-fast-forward push
+    is NOT such a string -- publishing over one would be the force-push this
+    subsystem refuses to own.
+    """
+    return bool(_PAT_NO_UPSTREAM.search(reason or ""))
+
+
+def publish_day_branch(
+    worktree_root: Union[str, Path],
+    *,
+    branch: Optional[str] = None,
+    timeout: Optional[float] = None,
+) -> Tuple[str, str]:
+    """Give today's day branch an upstream, publishing it if it has none.
+
+    THE ARTIFACT that discharges "a day branch is always published" (project
+    CLAUDE.md § North star: name the artifact, never "the operator
+    remembers"). Idempotent and cheap on the overwhelmingly common path: a
+    branch that already carries `branch.<name>.remote`/`.merge` returns
+    `("already-published", ...)` after two config-file READS and zero
+    spawns, so the ~50 concurrent sessions that boot after the day's first
+    publish pay nothing and make no network call.
+
+    Returns `(outcome, detail)` where outcome is one of:
+      ``published``          -- `git push --set-upstream` ran and succeeded.
+      ``already-published``  -- an upstream was already configured.
+      ``declined-not-day-branch`` -- *branch* is not a canonical day branch.
+      ``declined-no-remote`` -- no `[remote "..."]` in `.git/config`.
+      ``declined-unresolvable`` -- HEAD is detached or unnameable.
+      ``failed``             -- the publish ran and git refused it.
+
+    NEGATIVE SPEC -- blast radius. The publish is gated on
+    `coordinator_core.daily_branch.is_canonical_branch`, the repo's own
+    day-branch oracle, NEVER on a `work/`-prefix test of this module's own.
+    Anything the oracle declines (a `-N` collision suffix, `main`, a named
+    workstream branch, a mixed-case ref) is returned as
+    ``declined-not-day-branch`` with nothing sent to the remote. A caller
+    wanting to publish some other branch must do so explicitly elsewhere;
+    widening this predicate turns one authorised publish into a general
+    branch-propagation mechanism, which is not what it was authorised for.
+
+    NEGATIVE SPEC -- never a force. `git_native.push_set_upstream` carries no
+    `--force`, no lease, no `+` refspec. A remote branch that would be
+    rewritten comes back as ``failed`` and stays that way; nothing here
+    retries it.
+
+    NEGATIVE SPEC -- detached HEAD is untouched. `resolve_branch` returning
+    `None` is `declined-unresolvable`, never a guess at what to publish.
+
+    Race safety across concurrent sessions: the pre-check is the
+    serialisation. Two sessions that both observe "no upstream" race one
+    `push --set-upstream` of the SAME sha to the SAME ref; git's own ref
+    update is atomic, the loser either fast-forwards to a no-op or takes an
+    ordinary reject it does not retry, and both end with the config keys
+    written. That is why this deliberately does NOT take
+    `day_branch_cut_lock`: serialising ~50 sessions behind one network round
+    trip would cost far more than the duplicate push it prevents, and the
+    lock's own contract is a sub-second local mutex, never a network hold.
+    """
+    from coordinator_core.daily_branch import is_canonical_branch, parse_branch_span
+
+    root = Path(worktree_root)
+    name = branch if branch is not None else resolve_branch(str(root))
+    if not name:
+        return ("declined-unresolvable", "HEAD is detached or unnameable")
+    # BOTH oracles, and `parse_branch_span` is not redundant:
+    # `is_canonical_branch` is the CREATION oracle and accepts `main` (via
+    # `is_allowed_branch`, whose contract is "main, or a day/span branch").
+    # `parse_branch_span` is the shape half alone, so it excludes `main` --
+    # and `main` is precisely the branch this function must never publish.
+    # A test asserting `main` declines caught exactly that on the first run.
+    if not (is_canonical_branch(name) and parse_branch_span(name) is not None):
+        return (
+            "declined-not-day-branch",
+            f"{name} is not a canonical day branch; nothing published",
+        )
+    if _resolve_upstream_local(root, name) is not None:
+        return ("already-published", f"{name} already tracks an upstream")
+    remote = _default_remote_name_local(root)
+    if remote is None:
+        return ("declined-no-remote", "no remote configured")
+
+    result = (
+        git_native.push_set_upstream(root, remote, name)
+        if timeout is None
+        else git_native.push_set_upstream(root, remote, name, timeout=timeout)
+    )
+    if result.ok:
+        return ("published", f"{name} -> {remote}/{name}")
+    return (
+        "failed",
+        condense_git_diagnostic(result.stderr) or f"exit_code={result.returncode}",
+    )
 
 
 class _UpstreamInfo(Tuple[str, str, str]):
@@ -1424,7 +1545,7 @@ def push_with_retry(
     """
     root = Path(worktree_root)
 
-    if not _remote_configured_locally(root):
+    if _default_remote_name_local(root) is None:
         return PushOutcome(exit_code=0, skipped=["push:no-remote"])
 
     branch = resolve_branch(str(root))
@@ -1469,6 +1590,10 @@ def push_with_retry(
     # through the retry loop (a timeout is never retryable, see below, so
     # control cannot reach the fetch/rebase branches with this still True).
     last_indeterminate = False
+    # ONE publish per ladder, never a loop: see the `_is_no_upstream_refusal`
+    # arm below. A second attempt could only repeat a refusal git already gave
+    # for a reason `--set-upstream` does not address.
+    set_upstream_attempted = False
 
     deadline = None if budget_secs is None else time.monotonic() + float(budget_secs)
 
@@ -1518,6 +1643,56 @@ def push_with_retry(
         # breaks immediately below -- the flag never survives into the
         # fetch/rebase branches.
         last_indeterminate = _is_indeterminate_push_result(push_result)
+
+        # The day branch that exists but was never published. `git push` with
+        # no refspec refuses outright on a branch carrying no
+        # `branch.<name>.remote`/`.merge`, and before this arm that refusal
+        # was terminal: the cadence swept the same branch every 600s, took the
+        # same refusal, and logged it, while 100+ commits sat with no remote
+        # copy -- the exact crash-insurance hole the day branch exists to
+        # close (observed 2026-09-02 on `work/machine-b/2026-09-02`).
+        #
+        # NARROW BY CONSTRUCTION, three independent gates: the branch must
+        # have had NO upstream to begin with (`upstream_info is None` -- a
+        # branch that HAS one never reaches here, so this can never re-point
+        # an existing upstream); the refusal must be git's own no-upstream
+        # message (`_is_no_upstream_refusal` -- a reject, a non-fast-forward,
+        # an auth failure and a timeout all fall through unchanged); and the
+        # branch must satisfy the repo's day-branch oracle. Exactly one extra
+        # push, no force, and no re-entry into the fetch/rebase ladder.
+        if (
+            upstream_info is None
+            and not set_upstream_attempted
+            and _is_no_upstream_refusal(reason)
+        ):
+            set_upstream_attempted = True
+            publish_timeout = _remaining_or_none(deadline)
+            if publish_timeout is not None and publish_timeout <= 0:
+                last_reason = _budget_exhausted_reason(attempt + 1, budget_secs, last_reason)
+                break
+            publish_outcome, publish_detail = publish_day_branch(
+                root, branch=branch, timeout=publish_timeout
+            )
+            if publish_outcome == "published":
+                new_sha = None
+                head_result = git_native.rev_parse_head(root)
+                if head_result.ok and head_result.stdout.strip():
+                    new_sha = head_result.stdout.strip()
+                # `pre_push_upstream_sha` stays None: there was no upstream
+                # tip before this call, so `pushed_range`/`pushed_count`
+                # correctly report the "unknown" sentinel rather than
+                # claiming a range this publish cannot bound.
+                pushed_range, pushed_count = _resolve_pushed_range(
+                    root, pre_push_upstream_sha, new_sha
+                )
+                return PushOutcome(
+                    exit_code=0,
+                    acted=["push"],
+                    pushed_range=pushed_range,
+                    pushed_count=pushed_count,
+                )
+            last_reason = f"{reason} (publish declined: {publish_detail})"
+            break
 
         if err_class == "ref-lock":
             # `exit_code=0` is load-bearing, not an oversight -- a ref-lock
