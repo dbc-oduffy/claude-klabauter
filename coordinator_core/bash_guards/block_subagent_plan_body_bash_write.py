@@ -280,7 +280,7 @@ def _deny_reason_executor(
             f"BLOCKED: subagent_type {subagent_type!r} is not on coordinator's\n"
             "enumerated agent roster, so it can't write docs/plans/*.md via Bash.\n\n"
             "Status stamps use instead:\n"
-            "  state/subagent-share/<path>.md (report_sidecar)\n\n"
+            "  .coordinator-local/subagent-share/<path>.md (report_sidecar)\n\n"
             "Type is legitimate? It belongs on the roster. Body edit was your\n"
             "deliverable? Ask the EM to dispatch an enumerated kind."
             + ("\n\n" + _note if _note else "")
@@ -288,7 +288,7 @@ def _deny_reason_executor(
     return (
         "BLOCKED: coordinator:executor can't write docs/plans/*.md via Bash.\n\n"
         "Status stamps use instead:\n"
-        "  state/subagent-share/<path>.md (report_sidecar)\n\n"
+        "  .coordinator-local/subagent-share/<path>.md (report_sidecar)\n\n"
         "Body edit was your deliverable? Wrong agent — ask the EM to route to\n"
         "enricher/review-integrator."
         + ("\n\n" + _note if _note else "")

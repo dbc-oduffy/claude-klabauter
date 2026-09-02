@@ -130,6 +130,22 @@ def test_extract_owners_subagent_share_dir_convention():
     assert owners == [artifact_owner.OwnerRecord("abc-123-def", "subagent_share_dir")]
 
 
+def test_extract_owners_subagent_share_dir_under_relocated_machinery_root():
+    """The live root after the machinery relocation. Pinned separately from the
+    pre-relocation spelling above: a pattern matching only one of the two reads
+    "no owner" for the whole other corpus, and says nothing while doing it."""
+    text = "---\ntitle: x\n---\n\nbody\n"
+    for path in (
+        ".coordinator-local/subagent-share/abc-123-def/coordinatorexecutor-xyz.md",
+        r".coordinator-local\subagent-share\abc-123-def\coordinatorexecutor-xyz.md",
+        "/repo/.coordinator-local/subagent-share/abc-123-def/r.md",
+    ):
+        owners = artifact_owner.extract_owners(path, text)
+        assert owners == [
+            artifact_owner.OwnerRecord("abc-123-def", "subagent_share_dir")
+        ], path
+
+
 def test_extract_owners_no_owner_field_returns_empty():
     text = "---\ntitle: x\n---\n\nbody\n"
     owners = artifact_owner.extract_owners("state/handoffs/x.md", text)

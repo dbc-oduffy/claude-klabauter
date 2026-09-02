@@ -736,7 +736,15 @@ def append_dispositions(
     else:
         rel_normalized = normalized
 
-    if "subagent-share/" not in rel_normalized:
+    # Segment-anchored, not a bare substring. The check must span the
+    # relocation (`state/` and `.coordinator-local/` both host real sidecars
+    # today), but `"subagent-share/" in path` also admits `my-subagent-share/`
+    # and any other directory merely ENDING in the bucket name. Requiring the
+    # bucket to be a whole path segment keeps the widening to exactly the two
+    # legitimate roots. (Review: code-reviewer, P3 on 196fbbc71e.)
+    if not any(
+        segment == "subagent-share" for segment in rel_normalized.split("/")
+    ):
         raise DispositionsError(
             "target must live under <machinery_root>/subagent-share/<session_id>/ "
             f"(the reviewer's own provisioned sidecar) — got: {sidecar_path}\n"

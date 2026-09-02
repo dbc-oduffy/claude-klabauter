@@ -169,7 +169,17 @@ _STEM_KEYED_CLAIM_CLASSES = frozenset({"plan"})
 
 _AGENT_SESSIONS_ENTRY_RE = re.compile(r'^\s*-\s*["\']?([^"\'|]+)')
 
-_SUBAGENT_SHARE_DIR_RE = re.compile(r'(?:^|[/\\])state[/\\]subagent-share[/\\]([^/\\]+)(?:[/\\]|$)')
+#: Either machinery root is accepted. The bucket moved from `state/subagent-share/`
+#: to `.coordinator-local/subagent-share/` (docs/plans/2026-09-02-state-keeps-the-
+#: work-not-the-machinery.md); a pattern pinned to the old root matches no live
+#: sidecar, and convention 6's owner read then returns "no owner" for every one of
+#: them -- silently, because an unmatched path is indistinguishable from an artifact
+#: that is simply not a sidecar. Both spellings stay accepted rather than swapping:
+#: pre-relocation paths persist in committed citations and archived records, and a
+#: reader that refuses them re-breaks the corpus the relocation left readable.
+_SUBAGENT_SHARE_DIR_RE = re.compile(
+    r'(?:^|[/\\])(?:state|\.coordinator-local)[/\\]subagent-share[/\\]([^/\\]+)(?:[/\\]|$)'
+)
 
 
 def _basename_cross_platform(artifact_path: str) -> str:
