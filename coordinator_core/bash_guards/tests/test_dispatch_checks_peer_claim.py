@@ -501,3 +501,80 @@ class TestOwnerNameProvenanceNote:
             % ("foo.py", owner_sentence, note)
         )
         assert "provenance" in warn_msg.lower()
+
+
+class TestLivenessBasisYieldsToName:
+    """The live arm's BASIS clause must never be the reason a name is
+    dropped.
+
+    Every test above passes ``{}`` for ``live_verdicts``, so
+    ``_owner_liveness_basis`` returns ``None`` and the basis clause is
+    never rendered -- which is exactly how the defect survived the whole
+    C3 suite. Reported from example-cockpit-repo 2026-09-02: a blocked EM was
+    handed ``session b4681734 (confirmed live via harness-registry)`` with
+    no ``-- w:`` and no ``-- UNNAMED``, the bare-sid-as-address rendering
+    the ladder's anti-scope forbids, because the 21-byte basis clause
+    consumed the bytes the 24-byte name clause needed.
+    """
+
+    @staticmethod
+    def _verdicts(sid, basis):
+        return {sid: (True, basis, None)}
+
+    @pytest.mark.parametrize(
+        "name",
+        ["example-cockpit-repo-0f", "example-game-workbench-repo-70", "example-market-data-repo-a9"],
+    )
+    def test_long_fleet_names_survive_the_basis_clause(self, name):
+        fact = OwnerFact(
+            owner=REAL_SID, liveness="live", claim_source="session", writer_name=name
+        )
+        sentence = dispatch_checks._format_owner_sentence(
+            fact, self._verdicts(REAL_SID, "harness-registry")
+        )
+        assert " -- w:%s" % name in sentence
+        assert len(sentence.encode("utf-8")) <= dispatch_checks._owner_clause_budget_bytes()
+
+    def test_basis_is_kept_when_it_costs_the_name_nothing(self):
+        fact = OwnerFact(
+            owner=REAL_SID,
+            liveness="live",
+            claim_source="session",
+            writer_name="doe-claude-b8",
+        )
+        sentence = dispatch_checks._format_owner_sentence(
+            fact, self._verdicts(REAL_SID, "harness-registry")
+        )
+        assert "via harness-registry" in sentence
+        assert " -- w:doe-claude-b8" in sentence
+
+    def test_unnamed_marker_still_renders_under_a_basis(self, monkeypatch):
+        """Negative control: dropping the basis must not be confused with
+        having no name. An unresolvable owner still says UNNAMED."""
+        monkeypatch.setattr(
+            "coordinator_core.session.harness_registry.lookup", lambda sid: None
+        )
+        fact = OwnerFact(
+            owner=REAL_SID, liveness="live", claim_source="session", writer_name=None
+        )
+        sentence = dispatch_checks._format_owner_sentence(
+            fact, self._verdicts(REAL_SID, "harness-registry")
+        )
+        assert "UNNAMED" in sentence
+
+    def test_no_live_owner_clause_ever_ends_in_a_bare_sid(self):
+        """The invariant the reported defect broke, stated once: a live
+        owner clause carries an address or an explicit UNNAMED -- never a
+        sid alone."""
+        for basis in ("harness-registry", "harness-registry-elsewhere", "stable-pid"):
+            for name in (None, "x-3", "example-cockpit-repo-0f", "example-game-workbench-repo-70"):
+                fact = OwnerFact(
+                    owner=REAL_SID,
+                    liveness="live",
+                    claim_source="session",
+                    writer_name=name,
+                )
+                sentence = dispatch_checks._format_owner_sentence(
+                    fact, self._verdicts(REAL_SID, basis)
+                )
+                assert (" -- w:" in sentence) or ("UNNAMED" in sentence), sentence

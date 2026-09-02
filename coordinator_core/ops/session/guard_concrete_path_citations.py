@@ -1118,6 +1118,7 @@ _EVIDENCE_ARTIFACT_PATH_PREFIXES: Tuple[str, ...] = (
     # under state/".
     "state/review-findings/",
     "state/subagent-share/",
+    ".coordinator-local/subagent-share/",
 )
 
 # A THIRD, narrower evidence-artifact class: byte-exact serialization/

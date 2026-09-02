@@ -201,7 +201,7 @@ from coordinator_core.session import machinery_paths
 #: come from `machinery_paths.ledger_path`/`intake_path`, a session_id-keyed
 #: target set `GENERATES` cannot express (same corpus, same reasoning as
 #: `guard_advisory_counter.py`'s `MUTATES` sibling declaration).
-MUTATES = ["state/subagent-share/**/*.jsonl"]
+MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 
 # ---------------------------------------------------------------------------
 # Static seam table (emission side) -- verbatim port of the source script's

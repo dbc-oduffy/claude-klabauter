@@ -311,7 +311,9 @@ def main(argv: Optional[list] = None) -> int:
         print(f"reap-stale-subagent-sidecars.py: session liveness engine not importable: {exc}", file=sys.stderr)
         return 2
 
-    share_dir = os.path.join(repo_root, "state", "subagent-share")
+    from coordinator_core.session.machinery_paths import machinery_root
+
+    share_dir = os.path.join(machinery_root(repo_root), "subagent-share")
     if not os.path.isdir(share_dir):
         print(f"reap-stale-subagent-sidecars.py: {share_dir} does not exist; nothing to do")
         return 0

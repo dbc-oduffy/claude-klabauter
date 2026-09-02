@@ -69,6 +69,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.session.machinery_paths import machinery_root
 from coordinator_core.win_portability import leaf_spawn_creationflags
 
 _LOG_PREFIX = "extract-cited-sidecars"
@@ -145,26 +146,51 @@ def _list_candidates(root: str) -> List[str]:
     return _walk_fallback(root)
 
 
+#: Every `subagent-share` root a CITATION may legitimately resolve against,
+#: current convention first.
+#:
+#: Both, not one. This module answers "does this cited sidecar still exist",
+#: and the corpus it is asked about spans the relocation: sidecars written
+#: before the move are under `state/`, sidecars written after are under the
+#: machinery root, and a citation to either was valid when it was written.
+#: Resolving against only the new root reports the entire pre-move corpus as
+#: dangling -- caught by `tests/test_no_dangling_machinery_citations.py`,
+#: whose whole job is to notice a citation that used to work and stopped.
+#: Drop the legacy entry only when the old directories are actually gone.
+def _share_roots(root: str) -> List[str]:
+    return [
+        os.path.join(machinery_root(root), "subagent-share"),
+        os.path.join(root, "state", "subagent-share"),
+    ]
+
+
 def _on_disk_session_ids(root: str) -> set:
-    share_dir = os.path.join(root, "state", "subagent-share")
-    if not os.path.isdir(share_dir):
-        return set()
-    return {
-        name for name in os.listdir(share_dir)
-        if os.path.isdir(os.path.join(share_dir, name))
-    }
+    found = set()
+    for share_root in _share_roots(root):
+        if not os.path.isdir(share_root):
+            continue
+        found.update(
+            name for name in os.listdir(share_root)
+            if os.path.isdir(os.path.join(share_root, name))
+        )
+    return found
 
 
 def _sidecar_filenames(root: str, session_id: str) -> List[str]:
-    session_dir = os.path.join(root, "state", "subagent-share", session_id)
-    if not os.path.isdir(session_dir):
-        return []
-    out = []
-    for dirpath, _dirnames, filenames in os.walk(session_dir):
-        rel_dir = os.path.relpath(dirpath, session_dir).replace(os.sep, "/")
-        for fname in filenames:
-            rel = f"{rel_dir}/{fname}" if rel_dir != "." else fname
-            out.append(rel)
+    """Every filename for `session_id`, unioned across both roots.
+
+    A session that straddles the relocation has files under each; returning
+    only one root's would report the other's as absent.
+    """
+    out = set()
+    for share_root in _share_roots(root):
+        session_dir = os.path.join(share_root, session_id)
+        if not os.path.isdir(session_dir):
+            continue
+        for dirpath, _dirnames, filenames in os.walk(session_dir):
+            rel_dir = os.path.relpath(dirpath, session_dir).replace(os.sep, "/")
+            for fname in filenames:
+                out.add(f"{rel_dir}/{fname}" if rel_dir != "." else fname)
     return sorted(out)
 
 

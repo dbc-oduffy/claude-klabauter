@@ -106,7 +106,7 @@ from coordinator_core.session.declared_writes import declare_write
 # appends a disposition block to whichever open reviewer findings sidecar the
 # caller names (state/subagent-share/<session>/*.md, see the CLI --sidecar
 # help text) -- the sidecar set is data-dependent, not a fixed artifact.
-MUTATES = ["state/subagent-share/**/*.md"]
+MUTATES = [".coordinator-local/subagent-share/**/*.md"]
 
 #: The disposition buckets, in the canonical emission order. The FIRST FIVE
 #: match `agents/review-integrator.md` § Sidecar Disposition Annotation's
@@ -736,9 +736,9 @@ def append_dispositions(
     else:
         rel_normalized = normalized
 
-    if "state/subagent-share/" not in rel_normalized:
+    if "subagent-share/" not in rel_normalized:
         raise DispositionsError(
-            "target must live under state/subagent-share/<session_id>/ "
+            "target must live under <machinery_root>/subagent-share/<session_id>/ "
             f"(the reviewer's own provisioned sidecar) — got: {sidecar_path}\n"
             "This is almost always a sign the wrong path was passed — e.g. "
             "your OWN run-report sidecar rather than the reviewer's findings "

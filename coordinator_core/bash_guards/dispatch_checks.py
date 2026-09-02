@@ -6087,6 +6087,22 @@ def _owner_writer_name_clause(name: Optional[str]) -> str:
     return " -- w:%s" % name
 
 
+def _name_clause_fits(sentence: str, writer_name: Optional[str]) -> bool:
+    """Whether ``sentence`` still has room for its whole name clause inside
+    the owner-clause budget. Shared by ``_with_name_clause`` (which appends
+    it) and by ``_format_owner_sentence``'s live arm (which uses it to
+    decide whether the liveness BASIS can be afforded at all) -- one
+    predicate so the two cannot disagree about what fits.
+
+    Negative-spec: never approximate this with a length constant. The
+    clause, the subject and the budget all move independently, and a
+    hardcoded threshold is how the live arm silently started dropping
+    names for long repo names while every test still passed.
+    """
+    clause = _owner_writer_name_clause(writer_name)
+    return len((sentence + clause).encode("utf-8")) <= _owner_clause_budget_bytes()
+
+
 def _with_name_clause(sentence: str, writer_name: Optional[str]) -> str:
     """Append the name clause whole-or-nothing, then cap to the owner-clause
     budget. THE single exit for every owner class in
@@ -6109,7 +6125,7 @@ def _with_name_clause(sentence: str, writer_name: Optional[str]) -> str:
     """
     clause = _owner_writer_name_clause(writer_name)
     budget = _owner_clause_budget_bytes()
-    if len((sentence + clause).encode("utf-8")) <= budget:
+    if _name_clause_fits(sentence, writer_name):
         sentence += clause
     return _truncate_to_budget(sentence, budget)
 
@@ -6200,6 +6216,25 @@ def _format_owner_sentence(
             subject,
             " via %s" % basis if basis else "",
         )
+        # The BASIS yields to the NAME, same call the CONTESTED arm below
+        # already makes: " via harness-registry" is 21 bytes of diagnostic
+        # provenance, and on a real sid it spent exactly the bytes the name
+        # clause needed. Measured 2026-09-02 against the published engine:
+        # `session b4681734 (confirmed live via harness-registry)` is 54
+        # bytes of a 73-byte budget, so a `-- w:example-cockpit-repo-0f` clause
+        # (24) did not fit and `_with_name_clause` dropped it WHOLE --
+        # rendering a bare sid with no `-- w:` and no `-- UNNAMED`, the one
+        # output this clause's anti-scope forbids, to the exact reader who
+        # is blocked and needs the address. `example-game-repo-em` (11 bytes) fit
+        # and `example-cockpit-repo-0f` (18) did not, so the fleet's longer repo
+        # names lost the name and the shorter ones kept it.
+        #
+        # Basis is a debugging aid for whoever maintains the liveness
+        # ladder; the name is the blocked operator's only route to the
+        # peer holding their tree. Keep the basis when it is free, drop it
+        # the moment it costs the name.
+        if basis and not _name_clause_fits(sentence, writer_name):
+            sentence = "%s (confirmed live)" % subject
     elif fact.liveness == "dead":
         sentence = "%s (no longer live)" % subject
     else:

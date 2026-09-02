@@ -167,7 +167,7 @@ from coordinator_core.session import machinery_paths
 #: cannot name. Same extension-scoped glob convention as the sibling
 #: counters in this tree (`guard_advisory_counter.py`,
 #: `engine_provenance_counter.py`).
-MUTATES = ["state/subagent-share/**/*.jsonl"]
+MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 
 #: `gate` values `decline()` accepts -- which gate the EM declared against.
 #: No other value is written; `decline()` refuses anything else.

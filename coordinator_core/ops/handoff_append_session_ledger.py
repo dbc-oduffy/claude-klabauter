@@ -434,7 +434,7 @@ async def _handler(
             f"session's effort as nothing in session_ledger.aggregate_chain_loe, "
             f"and the one-row-per-session freeze leaves no second append to "
             f"correct it. Count that session's agent sidecars "
-            f"(state/subagent-share/{session_id}/) and supply "
+            f"(.coordinator-local/subagent-share/{session_id}/) and supply "
             f"agent_dispatches / opus_dispatches"
         )
     else:

@@ -72,7 +72,7 @@ _INTAKE_SCHEMA = 1
 #: file per session id, a data-dependent set GENERATES cannot name. Same
 #: extension-scoped glob convention as the sibling counters in this tree
 #: (`guard_advisory_counter.py`, `engine_provenance_counter.py`).
-MUTATES = ["state/subagent-share/**/*.jsonl"]
+MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 
 # The filenames and the share-directory join live in `session.machinery_paths`.
 # This module used to retype both AND reach into `send_pass`'s private

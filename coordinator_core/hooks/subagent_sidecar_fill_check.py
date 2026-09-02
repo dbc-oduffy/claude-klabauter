@@ -149,7 +149,7 @@ def _compose_message(session_id: str, flagged: List[str]) -> str:
     noun = "sidecar" if n == 1 else "sidecars"
     return (
         f"{n} {noun} still status: open with no agent-authored body under "
-        f"state/subagent-share/{session_id}/. Run: check-sidecar-fill --session {session_id}"
+        f".coordinator-local/subagent-share/{session_id}/. Run: check-sidecar-fill --session {session_id}"
     )
 
 

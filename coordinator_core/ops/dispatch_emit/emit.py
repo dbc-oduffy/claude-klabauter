@@ -931,7 +931,13 @@ def _escape_for_js_template_literal(text: str) -> str:
 #: matches nothing here halts. Adding a prefix buys back silence on exactly
 #: that prefix and nothing else -- widen it only for a surface the dispatch
 #: layer itself writes, never for a surface a chunk might.
-_BOOKKEEPING_PREFIXES: tuple[str, ...] = ("state/subagent-share/",)
+_BOOKKEEPING_PREFIXES: tuple[str, ...] = (
+    ".coordinator-local/subagent-share/",
+    # Retained deliberately, not residue: the PUBLISHED engine still
+    # writes the pre-relocation path, and this is a positive allowlist
+    # whose miss HALTS a wave. Drop it once the mirror carries the move.
+    "state/subagent-share/",
+)
 
 _BOOKKEEPING_PREFIX_RENDER = ", ".join(f"`{prefix}**`" for prefix in _BOOKKEEPING_PREFIXES)
 
