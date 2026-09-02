@@ -7122,14 +7122,17 @@ def check_validate_commit(
                                 "this session and %s, and a live peer's claim "
                                 "wins — recording it again will not clear this."
                                 "%s\n\n"
-                                "Unstage it (git restore --staged %s). If this "
-                                "session is the real author, the peer's claim is "
-                                "what has to go: it is this session's write "
-                                "recorded under the wrong id, not a peer edit."
+                                "Unstage it (git restore --staged %s). Two "
+                                "causes: this session's write was recorded "
+                                "under the wrong id, or a peer commit landed "
+                                "in this file after this session's last read "
+                                "and this write discarded it. "
+                                "git log --oneline -3 -- %s tells you which."
                                 % (
                                     staged_file,
                                     owner_sentence,
                                     _owner_name_provenance_note(owner_sentence),
+                                    staged_file,
                                     staged_file,
                                 )
                             )

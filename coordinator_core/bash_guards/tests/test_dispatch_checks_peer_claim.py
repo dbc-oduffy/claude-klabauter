@@ -449,7 +449,16 @@ class TestOwnerNameProvenanceNote:
         human-facing message (the CONTESTED strict-mode deny, the plain
         strict-mode deny, and the warn-only advisory) must actually
         include the provenance warning when a name resolves -- pinning
-        the note's *existence* is not enough; it must reach the reader."""
+        the note's *existence* is not enough; it must reach the reader.
+
+        KNOWN WEAK (2026-09-02): the three templates below are COPIES of
+        the shipped strings, not reads of them, so this assertion cannot
+        fail if a call site in ``dispatch_checks`` drops ``%s`` for the
+        note -- the vacuous-pin shape ``state/lessons/2026-08-19-a-
+        suppressor-pin-can-pass-vacuously.md`` was written about. Backlog
+        row: 2026-09-02-the-provenance-note-pin-copies-the-message. The
+        copies are kept in sync by hand until then; the contested one was
+        updated with the message fix that names two causes."""
         fact = OwnerFact(
             owner=REAL_SID,
             liveness="live",
@@ -465,11 +474,13 @@ class TestOwnerNameProvenanceNote:
             "this session and %s, and a live peer's claim "
             "wins — recording it again will not clear this."
             "%s\n\n"
-            "Unstage it (git restore --staged %s). If this "
-            "session is the real author, the peer's claim is "
-            "what has to go: it is this session's write "
-            "recorded under the wrong id, not a peer edit."
-            % ("foo.py", owner_sentence, note, "foo.py")
+            "Unstage it (git restore --staged %s). Two "
+            "causes: this session's write was recorded "
+            "under the wrong id, or a peer commit landed "
+            "in this file after this session's last read "
+            "and this write discarded it. "
+            "git log --oneline -3 -- %s tells you which."
+            % ("foo.py", owner_sentence, note, "foo.py", "foo.py")
         )
         assert "provenance" in contested_msg.lower()
 

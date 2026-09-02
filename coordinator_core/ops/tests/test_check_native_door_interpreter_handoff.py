@@ -57,10 +57,7 @@ def test_control_fixtures_are_exactly_the_declared_pair():
 
 def test_positive_python_control_is_flagged():
     findings = guard.classify_python_source(
-        "positive_python_consumer.py",
-        _fixture("positive_python_consumer.py.txt"),
-        producers={"resolve_sentinel_cli"},
-        params={"run_sentinel": {"#0"}},
+        "positive_python_consumer.py", _fixture("positive_python_consumer.py.txt")
     )
     assert findings, "the planted defect was not flagged -- the guard is asleep"
     assert any("argv literal prefixes an interpreter" in f.shape for f in findings)
@@ -69,10 +66,7 @@ def test_positive_python_control_is_flagged():
 
 def test_negative_python_control_is_not_flagged():
     findings = guard.classify_python_source(
-        "negative_python_consumer.py",
-        _fixture("negative_python_consumer.py.txt"),
-        producers={"resolve_sentinel_cli"},
-        params={"run_sentinel": {"#0"}},
+        "negative_python_consumer.py", _fixture("negative_python_consumer.py.txt")
     )
     assert findings == [], f"resolve_launchable delegation must pass: {findings}"
 
@@ -340,3 +334,45 @@ def test_absent_extension_dispatch_fires_without_any_taint():
     findings = guard.classify_python_source("x.py", source)
     assert len(findings) == 1
     assert findings[0].lineno == 5
+
+
+def test_the_taint_is_file_local_and_that_is_the_contract():
+    """The rebuild (2026-09-02) replaced a repo-wide producer/parameter
+    registry with a file-local one. That is a deliberate narrowing, pinned
+    here so it reads as a contract rather than as an accident.
+
+    Why it is safe: every site this census has ever had to reason about
+    composes and hands off inside ONE file -- the planted control, and both
+    live exempted sites (`wsc-session-disposition` resolves the bin path in
+    `find_session_claim_cli` and prefixes the interpreter in
+    `_session_claim_cli_argv`, same module). The one real defect the census
+    ever found, the DoE plane's `forwarder_argv`, carries no composition at
+    all and belongs to the suffix arm, which needs no taint. The repo-wide
+    form, keyed by unqualified callee name, never produced a finding in
+    either root while reporting seven false sites until a "defined in exactly
+    one file" rule was added to suppress them.
+
+    A cross-file consumer is therefore a KNOWN blind spot, not an oversight.
+    If one ever occurs, widen this deliberately -- and note that the suffix
+    arm already covers the parameter-taking shape it would most likely take.
+    """
+    producer_file = (
+        "from coordinator_core._settings_home import settings_home\n"
+        "def resolve_cli():\n"
+        "    return settings_home() / 'bin' / 'session-claim-cli'\n"
+    )
+    consumer_file = (
+        "import sys, subprocess\n"
+        "def run(cli_path):\n"
+        "    return subprocess.run([sys.executable, str(cli_path)])\n"
+    )
+    assert guard.producers_in_source(producer_file) == {"resolve_cli"}
+    assert guard.classify_python_source("consumer.py", consumer_file) == [], (
+        "the consumer names no composition of its own, so it is out of scope "
+        "by design -- see this test's docstring before 'fixing' it"
+    )
+    # Put the same two halves in ONE file and the arm fires, which is the
+    # boundary this test exists to draw.
+    assert guard.classify_python_source(
+        "both.py", producer_file + "\n" + consumer_file + "\ndef main():\n    return run(resolve_cli())\n"
+    )
