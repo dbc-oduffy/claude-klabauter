@@ -1,0 +1,27 @@
+"""Planted POSITIVE control for the suffix-dispatch arm.
+
+Reconstructs the shape of the DoE plane's pre-fix `_forwarder_resolve.py`:
+the settings-home composition happens in the CALLER, this file takes the bin
+directory as a parameter, and it decides native-vs-script from the suffix
+alone. On POSIX the door image is the extensionless bare name, so it lands in
+the false branch and gets handed to the interpreter.
+"""
+
+import sys
+from pathlib import Path
+
+_NATIVE_SUFFIXES = (".exe",)
+
+
+def resolve_sentinel(bin_dir: Path, name: str):
+    for suffix in ("", ".exe"):
+        candidate = bin_dir / f"{name}{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def sentinel_argv(script_path: Path, tail=()):
+    if script_path.suffix.lower() in _NATIVE_SUFFIXES:
+        return [str(script_path), *tail]
+    return [sys.executable, str(script_path), *tail]

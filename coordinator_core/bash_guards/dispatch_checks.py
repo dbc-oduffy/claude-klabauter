@@ -6751,6 +6751,98 @@ def check_validate_commit(
                         pass
                 _warned_paths: List[str] = []
 
+                # C11 defect-1 fix (2026-09-02, example-cockpit-repo-em): a
+                # dispatched subagent's own edit was reading as foreign. The
+                # `_own_content_hashes` map above is built from THIS
+                # session's OWN touch-record sink only; when an executor or
+                # review-integrator THIS session dispatched edits a file the
+                # EM had already recorded a hash for, the subagent's
+                # PostToolUse hook (hooks/track_touched_files.py::_handler)
+                # appends the new hash under the SUBAGENT's own session id,
+                # into the agent-keyed sink `.agents/<aid>/touch-record.jsonl`
+                # -- never into the EM's own record -- so the EM's recorded
+                # hash goes stale and the file below reads as "a foreign
+                # edit landed" even though it is this session's own
+                # dispatched work.
+                #
+                # Fix: a hash recorded by an agent dir whose
+                # `em-session-id.txt` back-pointer resolves to THIS
+                # session_id counts as this session's own provenance too --
+                # the exact self/other boundary
+                # `session/scope.py::release_committed_claims` already draws
+                # (its `.agents` scan + back-pointer read), reused rather
+                # than inventing a second rule.
+                #
+                # LAZY BY CONSTRUCTION -- the `.agents` walk is O(agent dirs
+                # on disk): measured 14µs/dir, 1893 dirs on this box (state/
+                # audits/2026-08-25-the-two-unattributed-pids-are-conhost-
+                # and-the-release-leg-is-a-directory-walk.md § Thread 2). It
+                # must NOT run on every commit, so it is built on the FIRST
+                # own-session hash disagreement only and memoised in
+                # `_agent_owned_hashes_cache` for the rest of this loop --
+                # mirrors `_head_tracked_paths_lazy`'s own list-cell cache
+                # a few lines below. The clean path (every own-recorded hash
+                # matches disk) never calls this and pays zero extra
+                # syscalls -- exactly today's cost.
+                #
+                # Fail-open: any read/import failure anywhere in this lookup
+                # means the state is unprovable, so it must NOT deny -- the
+                # caller below only trusts a hash this function actually
+                # returned; any failure here yields an empty map, which is
+                # indistinguishable from "no self-agent hash found" and
+                # falls through to the existing deny, same fail-open
+                # contract as `compute_content_hash`'s own read above.
+                _agent_owned_hashes_cache: List[Dict[str, str]] = []
+
+                def _agent_owned_content_hashes() -> Dict[str, str]:
+                    if _agent_owned_hashes_cache:
+                        return _agent_owned_hashes_cache[0]
+                    _built: Dict[str, str] = {}
+                    try:
+                        _agents_base = os.path.join(sessions_root, ".agents")
+                        if os.path.isdir(_agents_base):
+                            from coordinator_core.session import (
+                                touch_record as _touch_record_mod_agent,
+                            )
+                            for _entry in os.scandir(_agents_base):
+                                try:
+                                    if not _entry.is_dir():
+                                        continue
+                                except OSError:
+                                    continue
+                                try:
+                                    with open(
+                                        os.path.join(
+                                            _entry.path, "em-session-id.txt"
+                                        ),
+                                        "r",
+                                        encoding="utf-8",
+                                    ) as _fh:
+                                        _em_sid = _fh.readline().strip()
+                                except OSError:
+                                    continue
+                                if _em_sid != session_id:
+                                    continue  # not this session's own fan-out
+                                _agent_sink = os.path.join(
+                                    _entry.path,
+                                    _touch_record_mod_agent.RECORD_FILENAME,
+                                )
+                                try:
+                                    _agent_projection = (
+                                        _touch_record_mod_agent.project_live_claims(
+                                            _agent_sink, cwd=_cwd
+                                        )
+                                    )
+                                except Exception:
+                                    continue
+                                for _apath, _aevent in _agent_projection.claims.items():
+                                    if _aevent.content_hash is not None:
+                                        _built[_apath] = _aevent.content_hash
+                    except Exception:
+                        _built = {}
+                    _agent_owned_hashes_cache.append(_built)
+                    return _built
+
                 # C11 (plan 2026-08-27-a-pathspec-is-not-a-scope): the third
                 # granularity -- a foreign hunk landed inside a file THIS
                 # session genuinely owns (the `bf6099f85` shape). C10 records
@@ -6893,17 +6985,33 @@ def check_validate_commit(
                             # denies on a `None` read (same fail-open posture
                             # as `compute_content_hash`'s own contract).
                             if _current_hash is not None and _current_hash != _own_hash:
+                                # First disagreement -- pay the lazy `.agents`
+                                # walk (see `_agent_owned_content_hashes`'s own
+                                # docstring above). A self-back-pointed
+                                # dispatched agent that recorded exactly this
+                                # disk-now content is this session's own
+                                # provenance, not a foreign edit.
+                                _agent_hash = _agent_owned_content_hashes().get(
+                                    staged_file
+                                )
+                                if _agent_hash is not None and _agent_hash == _current_hash:
+                                    continue
+                                _fh_note = operator_override_note(
+                                    "COORDINATOR_SCOPE_STRICT_OFF",
+                                    payload=payload,
+                                    git_root=git_root,
+                                )
                                 return _deny(
                                     "BLOCKED (foreign hunk): %s is staged and this "
                                     "session owns it, but its on-disk content no "
                                     "longer matches the content this session last "
-                                    "recorded for it -- a foreign edit landed "
-                                    "inside a file this session owns.\n\n"
+                                    "recorded for it.\n\n"
                                     "Confirm the staged content is genuinely this "
                                     "session's own work (git diff --cached -- %s) "
                                     "before committing, or coordinate with "
                                     "whoever else touched it."
                                     % (staged_file, staged_file)
+                                    + ("\n\n" + _fh_note if _fh_note else "")
                                 )
                         continue
 

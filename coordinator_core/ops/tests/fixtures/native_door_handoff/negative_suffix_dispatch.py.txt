@@ -1,0 +1,29 @@
+"""Planted NEGATIVE control for the suffix-dispatch arm.
+
+Two shapes that must never fire, guarding the asymmetry the arm depends on:
+
+  - `safe_argv` tests that the suffix POSITIVELY IS `.py` and interprets on
+    the TRUE branch. A door image never occupies such a name, so this is
+    correct and must stay green.
+  - `exec_bit_argv` carries the negative suffix test, but pairs it with an
+    exec-bit check, which is shape 3 of the module docstring -- already
+    declared correct, and REDing it would train authors around the guard.
+"""
+
+import os
+import sys
+from pathlib import Path
+
+_NATIVE_SUFFIXES = (".exe",)
+
+
+def safe_argv(script_path: Path, tail=()):
+    if script_path.suffix == ".py":
+        return [sys.executable, str(script_path), *tail]
+    return [str(script_path), *tail]
+
+
+def exec_bit_argv(script_path: Path, tail=()):
+    if script_path.suffix.lower() in _NATIVE_SUFFIXES or os.access(str(script_path), os.X_OK):
+        return [str(script_path), *tail]
+    return [sys.executable, str(script_path), *tail]

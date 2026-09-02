@@ -27,11 +27,18 @@ depends on (an extension) is absent on both.
 
 WHAT IS SCANNED. Tracked source in one or more repo roots -- this repo by
 default, plus the DoE-claude plane when it resolves (see ``resolve_roots``).
-Candidate files are selected with five ``git grep`` invocations per root;
+Candidate files are selected with seven ``git grep`` invocations per root
+(four settings-home, two for the suffix arm, one for the shell arm);
 nothing spawns a process per file.
 
-MEASURED COST, STATED NOT HIDDEN. 3.9s user + 2.7s sys over this repo alone,
-7.8s process time over both roots, on the normal-tier box under live load.
+MEASURED COST, STATED NOT HIDDEN. 11.0s process time over both roots
+(6.6s user + 4.4s sys) on the normal-tier box under live load. The
+suffix-dispatch arm accounts for 2.9s of that: the same run measured 8.1s
+immediately before it landed, and the arm's selector is what the extra buys.
+An earlier shape of that selector cost 6.8s and was cut by intersecting on
+the arm's own preconditions -- see `suffix_arm_files`. The figure before the
+third arm existed, kept because a later reader will want the delta: 3.9s user
++ 2.7s sys over this repo alone, 7.8s over both roots.
 That is OVER the 500ms brightline and is not claimed otherwise. What it is:
 a whole-tree census over 39k tracked files, run at CADENCE gates (the two
 slow tests carry ``@pytest.mark.cadence``), never on a session, commit or
@@ -42,7 +49,7 @@ under 500ms is an INCREMENTAL scan over the staged diff, not a faster
 whole-tree walk -- build that if and when a hot-path caller needs it, and do
 not mistake the whole-tree run for one.
 
-THE TWO ARMS.
+THE THREE ARMS.
 
   - **Python arm** (``classify_python_source``): a light intra-repo taint.
     A *composition* is ``os.path.join(<settings-home>, "bin", ...)``, a
@@ -65,6 +72,20 @@ THE TWO ARMS.
     of shell/launcher files AND of ``.py`` files, because the hook that
     broke every commit was a shell body built from Python string literals:
     an AST-only guard cannot see it.
+  - **Suffix-dispatch arm** (``_suffix_dispatch_sites``): a scope that
+    decides native-vs-script FROM THE PATH'S SUFFIX and prefixes an
+    interpreter on the branch where a NATIVE-image suffix test came out
+    FALSE. Needs no taint and no settings-home token, which is the point:
+    both other arms select candidates by co-occurrence, so a helper that
+    takes the bin DIRECTORY AS A PARAMETER is unselectable by them, and
+    stage two cannot rescue it because a producer is only ever discovered
+    inside a stage-one file. The DoE plane's ``_forwarder_resolve.py`` was
+    exactly that -- 5th consumer of the class, composition in four callers,
+    interpreter prefix in the callee, zero occurrences of either selector
+    token -- and the census read GREEN on a reconstructed pre-fix tree until
+    this arm existed. See the arm's own section comment for the asymmetry
+    (``.py``-positive safe, ``.exe``-negative defective) that keeps it
+    precise.
 
 THE REMEDY, AND WHY IT IS ONE NAME. ``coordinator_core.launchable.
 resolve_launchable`` already returns a bare path for a native image and
@@ -164,6 +185,32 @@ _SOURCE_EXEC_CALLS = frozenset({"run_path", "spec_from_file_location", "exec", "
 _TEXT_READ_ATTRS = frozenset({"read_text"})
 
 _MAGIC_REFUSAL_TOKENS = ("NATIVE_IMAGE_MAGIC", "native_image", "is_native_image")
+
+# Suffixes a door image can actually occupy. A test that enumerates THESE and
+# treats the complement as Python is the defect `_is_positive_suffix_test`
+# describes and refuses to clear; `_suffix_dispatch_sites` is what finds it.
+#
+# `.py` is deliberately absent -- a positive `.py` test is the safe form.
+# `.com` is deliberately absent too, and not as an oversight: the installer
+# emits `<name>.exe` and nothing else, so `.com` would be speculative
+# coverage, and it is an ACTIVELY BAD selector token because it matches every
+# `github.com` in a tree (2316 files here against 1335 for `.exe` alone).
+# Add a suffix here only when the installer actually emits one.
+_NATIVE_IMAGE_SUFFIXES = frozenset({".exe"})
+
+# Selector tokens for the suffix-dispatch arm. A file with no native-image
+# suffix literal cannot carry this shape, so it is never parsed.
+_SUFFIX_ARM_FILE_TOKENS = tuple(sorted(_NATIVE_IMAGE_SUFFIXES))
+
+# The arm's other precondition: it only ever fires on a test that READS a
+# suffix, so a file naming none of these cannot carry the shape. Kept in step
+# with `_reads_a_suffix` and `_native_suffix_test`, which are what actually
+# decide -- these are the file-level shadow of those two.
+_SUFFIX_READ_FILE_TOKENS = (".suffix", "splitext", "endswith")
+
+_SUFFIX_DISPATCH_SHAPE = (
+    "interpreter prefixed on the branch where a native-image suffix test was FALSE"
+)
 
 _TEXT_ARM_SUFFIXES = frozenset({"", ".sh", ".bash", ".cmd", ".ps1", ".py"})
 
@@ -785,6 +832,187 @@ def _is_positive_suffix_test(node: ast.AST) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Suffix-dispatch arm -- the defect `_is_positive_suffix_test` names but no
+# other arm detects
+# ---------------------------------------------------------------------------
+#
+# WHY THIS ARM EXISTS, AND WHY IT IS NOT TAINTED. The two taint arms select
+# candidate files by co-occurrence: a file must name the settings home AND a
+# ``bin`` segment before it is even parsed. A helper that takes the bin
+# DIRECTORY AS A PARAMETER names neither, so the one file where the handoff
+# physically lives is unselectable by construction -- and stage two cannot
+# rescue it either, because stage two pulls in files naming a PRODUCER, and a
+# producer can only be discovered inside a stage-one file. The DoE plane's
+# ``_forwarder_resolve.py`` was exactly this: 5th consumer of the class, the
+# composition in four callers, the interpreter prefix in the callee, zero
+# occurrences of either selector token. Measured on a reconstructed pre-fix
+# tree (peer session, 2026-09-02): stage one selected 8 candidates in that
+# root including all four callers, and the census still read green.
+#
+# So this arm asks a question that needs no taint and no co-occurrence, and
+# is decidable from one function's syntax alone: does this scope decide
+# native-vs-script FROM THE PATH'S SUFFIX, and prefix an interpreter on the
+# branch where a NATIVE-image suffix test came out FALSE? That is the
+# standing assumption the module's negative-spec forbids by name -- "never
+# decide from the absence of a file extension" -- stated there since the
+# guard landed but, until now, only ever used to REFUSE an exemption, never
+# to raise a finding.
+#
+# THE ASYMMETRY IS THE WHOLE PRECISION STORY, and it is inherited from
+# `_is_positive_suffix_test` rather than reinvented: testing that a suffix IS
+# ``.py`` and interpreting on the TRUE branch is always safe, because a door
+# image never occupies such a name. Testing that a suffix is ``.exe`` and
+# interpreting on the FALSE branch is the defect, because on POSIX the image
+# is the extensionless bare name and lands in that branch. Only the second
+# form fires here. A scope that also sniffs magic bytes, checks an exec bit,
+# or delegates to `resolve_launchable` is already exempt by shapes 1-3 and is
+# not re-flagged.
+
+
+def _root_name(node: ast.AST) -> Optional[str]:
+    """The leftmost `Name` of an attribute/call/subscript chain --
+    ``script_path`` for ``str(script_path.suffix.lower())``."""
+    seen = 0
+    while seen < 12:
+        seen += 1
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            node = node.value
+        elif isinstance(node, ast.Subscript):
+            node = node.value
+        elif isinstance(node, ast.Call):
+            if node.args and not _dotted(node.func).endswith("endswith"):
+                node = node.args[0] if isinstance(node.func, ast.Name) else node.func
+            else:
+                node = node.func
+        else:
+            return None
+    return None
+
+
+def _reads_a_suffix(node: ast.AST) -> bool:
+    dotted = _dotted(node)
+    if dotted.endswith("suffix") or ".suffix." in dotted + ".":
+        return True
+    if isinstance(node, ast.Call):
+        func = _dotted(node.func)
+        if func.endswith("splitext") or func.endswith("suffix"):
+            return True
+        return any(_reads_a_suffix(arg) for arg in node.args) or _reads_a_suffix(node.func)
+    if isinstance(node, ast.Attribute):
+        return _reads_a_suffix(node.value)
+    if isinstance(node, ast.Subscript):
+        return _reads_a_suffix(node.value)
+    return False
+
+
+def _module_string_groups(tree: ast.Module) -> Dict[str, Set[str]]:
+    """Module-level ``NAME = (".exe",)`` constants, so a test written against
+    a named tuple resolves to the same literals as an inline one. Module
+    scope only -- a value reassigned per call is not a constant."""
+    groups: Dict[str, Set[str]] = {}
+    for stmt in tree.body:
+        if not isinstance(stmt, ast.Assign) or len(stmt.targets) != 1:
+            continue
+        target = stmt.targets[0]
+        if not isinstance(target, ast.Name):
+            continue
+        if not isinstance(stmt.value, (ast.Tuple, ast.List, ast.Set)):
+            continue
+        literals = {_const_str(elt) for elt in stmt.value.elts}
+        if literals and all(lit is not None for lit in literals):
+            groups[target.id] = {lit for lit in literals if lit is not None}
+    return groups
+
+
+def _native_suffix_test(node: ast.AST, groups: Dict[str, Set[str]]) -> Optional[str]:
+    """``<name>`` if `node` tests whether ``<name>``'s suffix is one of the
+    NATIVE-image suffixes, else None. The literal set must be non-empty and
+    must contain nothing but native-image suffixes -- a test mentioning
+    ``.py`` is the safe positive form and is never claimed here."""
+
+    def _resolve(operand: ast.AST) -> Set[str]:
+        literal = _const_str(operand)
+        if literal is not None:
+            return {literal}
+        if isinstance(operand, ast.Name):
+            return set(groups.get(operand.id, ()))
+        if isinstance(operand, (ast.Tuple, ast.List, ast.Set)):
+            out: Set[str] = set()
+            for elt in operand.elts:
+                out |= _resolve(elt)
+            return out
+        return set()
+
+    if isinstance(node, ast.Compare) and node.ops:
+        if not isinstance(node.ops[0], (ast.In, ast.Eq)):
+            return None
+        if not _reads_a_suffix(node.left):
+            return None
+        literals: Set[str] = set()
+        for comparator in node.comparators:
+            literals |= _resolve(comparator)
+        if literals and literals <= _NATIVE_IMAGE_SUFFIXES:
+            return _root_name(node.left)
+        return None
+
+    if isinstance(node, ast.Call) and _dotted(node.func).endswith("endswith"):
+        literals = set()
+        for arg in node.args:
+            literals |= _resolve(arg)
+        if literals and literals <= _NATIVE_IMAGE_SUFFIXES:
+            return _root_name(node.func)
+        return None
+
+    return None
+
+
+def _interpreter_argv_over(node: ast.AST, name: str) -> Optional[ast.AST]:
+    """The argv literal inside `node` that prefixes an interpreter onto a
+    value derived from `name`. Slot 1 only, for the reason `_use_shape`
+    gives: a later element is an argument TO the script, not the script."""
+    for sub in ast.walk(node):
+        if not isinstance(sub, (ast.List, ast.Tuple)) or len(sub.elts) < 2:
+            continue
+        if not _is_interpreter_expr(sub.elts[0]):
+            continue
+        if _root_name(sub.elts[1]) == name:
+            return sub
+    return None
+
+
+def _suffix_dispatch_sites(analysis: "_ModuleAnalysis") -> List[Tuple[str, ast.AST]]:
+    """``(scope name, argv node)`` for every negative-suffix dispatch in this
+    module. Independent of producers and params -- that independence is the
+    point of the arm."""
+    groups = _module_string_groups(analysis.tree) if isinstance(analysis.tree, ast.Module) else {}
+    sites: List[Tuple[str, ast.AST]] = []
+    for index, (scope_name, scope_node, _body) in enumerate(analysis.scopes):
+        if _is_exempt_among(analysis.own[index]):
+            continue
+        for stmts in _statement_lists(scope_node):
+            for position, stmt in enumerate(stmts):
+                if not isinstance(stmt, ast.If):
+                    continue
+                tested = _native_suffix_test(stmt.test, groups)
+                if tested is None:
+                    continue
+                # The false branch is `orelse` when written, and the
+                # statements AFTER the `if` when the true branch exits --
+                # the bare guard-clause shape the live defect used.
+                false_branch: List[ast.stmt] = list(stmt.orelse)
+                if not false_branch and _unconditionally_exits(stmt.body):
+                    false_branch = list(stmts[position + 1 :])
+                for candidate in false_branch:
+                    argv = _interpreter_argv_over(candidate, tested)
+                    if argv is not None:
+                        sites.append((scope_name, argv))
+                        break
+    return sites
+
+
 def producers_in_source(text: str) -> Set[str]:
     """Function names in ``text`` that RETURN a settings-home ``bin/`` path.
 
@@ -864,6 +1092,21 @@ def _findings_for(
                     shape=shape,
                 )
             )
+    seen = {(f.lineno, f.scope) for f in findings}
+    for scope_name, argv in _suffix_dispatch_sites(analysis):
+        lineno = getattr(argv, "lineno", 0)
+        if (lineno, scope_name) in seen:
+            continue
+        seen.add((lineno, scope_name))
+        findings.append(
+            Finding(
+                root_label=root_label,
+                relpath=analysis.relpath,
+                lineno=lineno,
+                scope=scope_name,
+                shape=_SUFFIX_DISPATCH_SHAPE,
+            )
+        )
     return findings
 
 
@@ -1000,9 +1243,10 @@ def _read(root: str, relpath: str) -> Optional[str]:
 def scan_root(root: str, *, root_label: Optional[str] = None) -> List[Finding]:
     """Every interpreter-mediated settings-home ``bin/`` site under ``root``.
 
-    Candidate selection is two ``git grep`` invocations: one for the
-    settings-home token, one for the producer names the first stage found.
-    No process is spawned per file.
+    Candidate selection is a fixed set of ``git grep`` invocations: the
+    settings-home compositions, the producer names the first stage found,
+    the suffix arm's own precondition pair, and the shell arm. No process is
+    spawned per file.
     """
     label = root_label or os.path.basename(os.path.abspath(root))
 
@@ -1038,6 +1282,48 @@ def scan_root(root: str, *, root_label: Optional[str] = None) -> List[Finding]:
         )
         if not _excluded(p)
     ]
+
+    # Fifth grep: the suffix-dispatch arm's own selector. It shares nothing
+    # with the four above ON PURPOSE -- those demand a settings-home token,
+    # which is precisely what the parameter-taking helper does not have. A
+    # file must name an interpreter AND a native-image suffix literal to
+    # carry this shape, so `--all-match` over those two is the whole filter.
+    # Two greps intersected, NOT one `--all-match`: `--all-match` is
+    # all-of-the-patterns, so a single invocation would demand every
+    # interpreter token AND every suffix literal in the same file and select
+    # nothing. Each grep here is an OR over its own token set; the AND is the
+    # set intersection below.
+    def _any_of(tokens: Sequence[str]) -> List[str]:
+        args = ["grep", "-lI", "-F"]
+        for token in tokens:
+            args += ["-e", token]
+        args += ["--", "*.py"]
+        return _git(root, args)
+
+    # Deliberately NOT merged into `stage_one`. The taint arms' candidate
+    # population is a measured precision decision; widening it as a side
+    # effect of this arm re-opens it without review. Measured when this arm
+    # landed: merging surfaced one finding in `launchable.py:_shebang_
+    # launcher`, and that one is FALSE -- it reads a single line with
+    # `errors="replace"`, so a Mach-O yields no shebang match and an empty
+    # prefix, which is a header sniff wearing a text read's clothes. These
+    # files feed `_suffix_dispatch_sites` and nothing else.
+    # Two greps intersected on the arm's OWN preconditions, which is why this
+    # is exact rather than a heuristic narrowing: the shape needs a
+    # native-image suffix literal AND a suffix read, both by construction.
+    # Measured here -- `.exe` alone selects 1335 files, a suffix-read token
+    # alone 676, the intersection 234. The interpreter half is applied in
+    # Python at the parse site instead of as a third grep: its cheapest token
+    # is `python`, which matched 2694 files and cost more than the reads it
+    # would have saved.
+    # `stage_one` files are subtracted because `_findings_for` already runs
+    # the suffix arm over every module the taint arms parsed.
+    suffix_arm_selected = set(_any_of(_SUFFIX_ARM_FILE_TOKENS)) & set(
+        _any_of(_SUFFIX_READ_FILE_TOKENS)
+    )
+    suffix_arm_files = sorted(
+        p for p in suffix_arm_selected - set(stage_one) if not _excluded(p)
+    )
 
     analyses: Dict[str, _ModuleAnalysis] = {}
     for relpath in stage_one:
@@ -1089,6 +1375,33 @@ def scan_root(root: str, *, root_label: Optional[str] = None) -> List[Finding]:
     findings: List[Finding] = []
     for relpath, analysis in analyses.items():
         findings += _findings_for(analysis, label, producers, params.for_file(relpath))
+
+    # The suffix arm over its own population. A file already analysed above
+    # was covered there; the rest are parsed only for this question.
+    for relpath in suffix_arm_files:
+        if relpath in analyses:
+            continue
+        text = _read(root, relpath)
+        if text is None:
+            continue
+        # The interpreter half of the selector, applied here rather than as a
+        # second whole-tree grep -- see `suffix_arm_files` for the measurement.
+        if not any(token in text for token in _INTERPRETER_FILE_TOKENS):
+            continue
+        try:
+            analysis = _ModuleAnalysis(relpath, ast.parse(text))
+        except SyntaxError:
+            continue
+        for scope_name, argv in _suffix_dispatch_sites(analysis):
+            findings.append(
+                Finding(
+                    root_label=label,
+                    relpath=relpath,
+                    lineno=getattr(argv, "lineno", 0),
+                    scope=scope_name,
+                    shape=_SUFFIX_DISPATCH_SHAPE,
+                )
+            )
 
     # Pathspec-scoped, and not by taste: unscoped, this grep reads every one
     # of ~39k tracked blobs and measured 6.5s of SYSTEM time on its own. The

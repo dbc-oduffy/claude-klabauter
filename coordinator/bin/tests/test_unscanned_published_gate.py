@@ -511,8 +511,18 @@ class TestLoadUnscannedExceptions:
 
     def test_real_repo_exceptions_file_has_only_ratified_entries(self):
         """Sanity check against the REAL, checked-in exceptions file (not a
-        fixture): every entry present is one a human has actually ratified, and
-        no other.
+        fixture): every entry present is one that has been admitted on the
+        record, and no other.
+
+        The bar is no longer a human signature per entry. That rule was retired
+        by PM ruling on 2026-09-02 -- unenforceable in substance, since an entry
+        could be added with none and nothing would know, and in practice it left
+        a load-bearing entry (the door name map, entry 4) sitting unmarked and
+        holding a publish round open while nobody was available to be the
+        required human. What replaced it is a STRUCTURAL bar the EM discharges
+        on the record: name why the sweep could not have visited this file, in
+        terms that survive the file being renamed. See the exceptions file's own
+        header for the two admissible shapes.
 
         Entry 1, `.github/scripts/check-persona-names.py`, ADR'd as AC4/AC5 of
         docs/plans/2026-08-03-mirror-native-content-homed-and-injected.md (the
@@ -529,6 +539,16 @@ class TestLoadUnscannedExceptions:
         relative (`bin/...`, not `coordinator/bin/...`), which is what
         `dispatch_end_of_run_unscanned_published_check` compares against; the
         `coordinator/`-prefixed form would load fine and match nothing.
+
+        Entry 4, `coordinator/bin/published-name-map.json`, is the door-facing
+        src->published basename map, admitted at EM level on 2026-09-02. It
+        reaches the same disposition as entry 3 by the other admissible route:
+        the binary has no text surface for the sweep to visit, whereas this file
+        does not yet EXIST when the sweep runs -- it is generated from the
+        rename manifest that sweep produces. Its keys are sha256 digests rather
+        than source basenames precisely so that shipping it leaks no scrub-list
+        codename; keyed literally it fail-closed the residual-pattern check and
+        with it the whole publish route.
 
         Entry 3, `coordinator_core/warm/door/door.exe`, is the prebuilt
         warm-door client (landed 2026-08-21 in 33abaf951). It differs in KIND

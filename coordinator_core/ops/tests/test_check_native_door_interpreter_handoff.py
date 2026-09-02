@@ -33,6 +33,8 @@ _CONTROLS = (
     "negative_python_consumer.py.txt",
     "positive_shell_emitter.py.txt",
     "negative_shell_emitter.py.txt",
+    "positive_suffix_dispatch.py.txt",
+    "negative_suffix_dispatch.py.txt",
 )
 
 
@@ -212,6 +214,11 @@ def test_scan_root_flags_exactly_the_positive_controls(tmp_path):
     assert flagged == {
         "pkg/positive_python_consumer.py",
         "pkg/positive_shell_emitter.py",
+        # Selected by the suffix arm's OWN grep pair, not by the settings-home
+        # greps -- this fixture names no settings-home token at all, which is
+        # the property that made the live defect unselectable before the arm
+        # existed. Its presence here is the end-to-end proof of that selector.
+        "pkg/positive_suffix_dispatch.py",
     }
 
 
@@ -282,3 +289,54 @@ def test_module_is_runnable_as_a_module():
     it needs -- no bin/ launcher, no `.cmd` twin, no publish-allowlist row."""
     assert hasattr(guard, "main")
     assert sys.version_info >= (3, 11)
+
+
+# ---------------------------------------------------------------------------
+# Suffix-dispatch arm -- the parameter-taking helper the taint arms cannot see
+# ---------------------------------------------------------------------------
+
+
+def test_suffix_dispatch_positive_control_is_flagged():
+    """No producers, no params: the whole point of this arm is that it needs
+    neither. A helper that takes the bin directory as a parameter names no
+    settings-home token, so the taint arms never select it."""
+    findings = guard.classify_python_source(
+        "positive_suffix_dispatch.py", _fixture("positive_suffix_dispatch.py.txt")
+    )
+    assert findings, "the planted suffix dispatch was not flagged -- the arm is asleep"
+    assert all("suffix test was FALSE" in f.shape for f in findings)
+    assert {f.scope for f in findings} == {"sentinel_argv"}
+
+
+def test_suffix_dispatch_negative_control_is_not_flagged():
+    findings = guard.classify_python_source(
+        "negative_suffix_dispatch.py", _fixture("negative_suffix_dispatch.py.txt")
+    )
+    assert findings == [], f"positive .py and exec-bit forms must pass: {findings}"
+
+
+def test_positive_py_suffix_test_never_fires():
+    """The asymmetry this arm rests on, asserted directly rather than only
+    through a fixture: interpreting because a suffix IS `.py` is safe, because
+    a door image never occupies such a name."""
+    source = (
+        "import sys\n"
+        "def argv(p):\n"
+        "    if p.suffix == '.py':\n"
+        "        return [sys.executable, str(p)]\n"
+        "    return [str(p)]\n"
+    )
+    assert guard.classify_python_source("x.py", source) == []
+
+
+def test_absent_extension_dispatch_fires_without_any_taint():
+    source = (
+        "import sys\n"
+        "def argv(p):\n"
+        "    if p.suffix == '.exe':\n"
+        "        return [str(p)]\n"
+        "    return [sys.executable, str(p)]\n"
+    )
+    findings = guard.classify_python_source("x.py", source)
+    assert len(findings) == 1
+    assert findings[0].lineno == 5

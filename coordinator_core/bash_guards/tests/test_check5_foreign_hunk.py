@@ -92,6 +92,36 @@ def _claim(root: str, sid: str, path: str, content_hash: Optional[str] = None) -
     )
 
 
+def _claim_agent(
+    root: str,
+    agent_id: str,
+    back_pointer_sid: str,
+    event_sid: str,
+    path: str,
+    content_hash: Optional[str] = None,
+) -> None:
+    """Record ``path`` under ``.agents/<agent_id>/touch-record.jsonl``, with
+    ``em-session-id.txt`` back-pointed at ``back_pointer_sid`` -- mirrors
+    ``track_touched_files.py::_handler``'s own agent-keyed write shape (see
+    ``test_check_validate_commit.py``'s dispatched-agent test), extended
+    with this chunk's C10 ``content_hash`` field."""
+    from coordinator_core.session import touch_record
+
+    agent_dir = Path(root) / ".git" / "coordinator-sessions" / ".agents" / agent_id
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "em-session-id.txt").write_text(
+        back_pointer_sid + "\n", encoding="utf-8"
+    )
+    touch_record.append_event(
+        touch_record.sink_path(agent_dir),
+        session_id=event_sid,
+        agent_id=agent_id,
+        verb=touch_record.VERB_TOUCH,
+        path=path,
+        content_hash=content_hash,
+    )
+
+
 class TestCheckFiveForeignHunk:
     def test_matching_hash_no_deny(self, tmp_path):
         """The recorded fingerprint matches disk-now -- a genuine own-write,
@@ -179,3 +209,129 @@ class TestCheckFiveForeignHunk:
         out = result["hookSpecificOutput"]
         assert out["permissionDecision"] == "allow"
         assert "SCOPE:" in out["additionalContext"]
+
+    def test_self_dispatched_agent_hash_allows_commit(self, tmp_path):
+        """Defect 1 fix: the EM's own recorded fingerprint is stale relative
+        to disk because a dispatched subagent this EM's own session spawned
+        overwrote the file and recorded ITS OWN hash under the agent-keyed
+        sink `.agents/<aid>/touch-record.jsonl`, back-pointed at THIS
+        session via `em-session-id.txt`. That is this session's own
+        provenance -- must ALLOW, not read as a foreign edit."""
+        from coordinator_core.session.touch_record import compute_content_hash
+
+        root = _init_repo(tmp_path)
+        sid = "my-sess"
+        assert core.init(sid, cwd=root)
+        _push_started_at_to_future(root, sid)
+
+        (tmp_path / "foo.txt").write_text(
+            "the dispatched agent's own edit\n", encoding="utf-8"
+        )
+        _git(root, "add", "foo.txt")
+        disk_hash = compute_content_hash(tmp_path / "foo.txt")
+
+        # The EM's own record is now stale -- it never saw the agent's edit.
+        _claim(root, sid, "foo.txt", content_hash="0" * 64)
+        # The dispatched agent's own PostToolUse write, back-pointed at
+        # THIS session, recorded the content that is actually on disk now.
+        _claim_agent(root, "agent1", sid, sid, "foo.txt", content_hash=disk_hash)
+
+        result = dispatch_checks.check_validate_commit(
+            'git commit -m "add foo"', sid, cwd=root
+        )
+        assert result is None
+
+    def test_foreign_backpointer_agent_hash_still_denies(self, tmp_path):
+        """Negative case for the defect 1 fix: an agent dir recording the
+        matching disk-now hash but back-pointed at a DIFFERENT (peer)
+        session must never forgive -- the self/other boundary must hold."""
+        from coordinator_core.session.touch_record import compute_content_hash
+
+        root = _init_repo(tmp_path)
+        sid = "my-sess"
+        peer_sid = "peer-sess"
+        assert core.init(sid, cwd=root)
+        assert core.init(peer_sid, cwd=root)
+        _push_started_at_to_future(root, sid)
+
+        (tmp_path / "foo.txt").write_text(
+            "a peer's own dispatched edit\n", encoding="utf-8"
+        )
+        _git(root, "add", "foo.txt")
+        disk_hash = compute_content_hash(tmp_path / "foo.txt")
+
+        _claim(root, sid, "foo.txt", content_hash="0" * 64)
+        # Back-pointed at the PEER, not this session -- not this session's
+        # own fan-out, must still deny.
+        _claim_agent(
+            root, "agent2", peer_sid, peer_sid, "foo.txt", content_hash=disk_hash
+        )
+
+        result = dispatch_checks.check_validate_commit(
+            'git commit -m "add foo"', sid, cwd=root
+        )
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        assert "foreign hunk" in out["permissionDecisionReason"].lower()
+
+    def test_deny_renders_pointer_for_em_audience(self, tmp_path):
+        """Defect 2 fix: this deny is the only guard in its family that
+        used to end with '...or coordinate with whoever else touched it'
+        and name no route out. It must now splice the audience-gated
+        pointer (``operator_override_note``) for a positively-resolved EM
+        payload."""
+        root = _init_repo(tmp_path)
+        sid = "my-sess"
+        assert core.init(sid, cwd=root)
+        _push_started_at_to_future(root, sid)
+
+        (tmp_path / "foo.txt").write_text("own content\n", encoding="utf-8")
+        _git(root, "add", "foo.txt")
+        _claim(root, sid, "foo.txt", content_hash="0" * 64)
+
+        em_payload = {"session_id": sid}
+        result = dispatch_checks.check_validate_commit(
+            'git commit -m "add foo"', sid, cwd=root, payload=em_payload
+        )
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        reason = out["permissionDecisionReason"]
+        assert "foreign hunk" in reason.lower()
+        # Accuracy fix (defect 1's last bullet): the text must not assert a
+        # foreign edit landed when the guard cannot demonstrate that -- it
+        # only names the mismatch itself.
+        assert "a foreign edit landed" not in reason.lower()
+
+    def test_deny_renders_nothing_extra_for_subagent_audience(self, tmp_path):
+        """Same deny, but with a payload that resolves to a subagent
+        audience (a non-empty ``agent_id``) -- ``operator_override_note``
+        returns '' for any non-EM audience, so no pointer is appended."""
+        root = _init_repo(tmp_path)
+        sid = "my-sess"
+        assert core.init(sid, cwd=root)
+        _push_started_at_to_future(root, sid)
+
+        (tmp_path / "foo.txt").write_text("own content\n", encoding="utf-8")
+        _git(root, "add", "foo.txt")
+        _claim(root, sid, "foo.txt", content_hash="0" * 64)
+
+        subagent_payload = {
+            "session_id": sid,
+            "agent_id": "abcdef0123456789",
+        }
+        em_payload = {"session_id": sid}
+
+        subagent_result = dispatch_checks.check_validate_commit(
+            'git commit -m "add foo"', sid, cwd=root, payload=subagent_payload
+        )
+        em_result = dispatch_checks.check_validate_commit(
+            'git commit -m "add foo"', sid, cwd=root, payload=em_payload
+        )
+        assert subagent_result is not None and em_result is not None
+        subagent_reason = subagent_result["hookSpecificOutput"][
+            "permissionDecisionReason"
+        ]
+        em_reason = em_result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert len(subagent_reason) < len(em_reason)

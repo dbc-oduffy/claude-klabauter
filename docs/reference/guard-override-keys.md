@@ -35,10 +35,38 @@ rather than carve out an exception. See § "Human-only affordances"
 immediately below and § "Exact deny-message wording" for what actually
 shipped.
 
-## Human-only affordances — an in-session agent cannot exercise these
+## Reachability — corrected 2026-09-02, break-class
 
-None of the routes below are actions a dispatched agent can take — they are
-what a human operator, watching the session, can do. <!-- Review:
+This section previously read "Human-only affordances — an in-session agent
+cannot exercise these", and that claim was false for the unlock sentinel. The
+sentinel is an ordinary file under the platform temp directory; writing it takes
+a `touch`, which any agent with Bash can do. It was measured, not reasoned
+about: claude-klabauter-em cleared `block-stash-destruction` and
+`bump-foreign-repo-write` with two `touch` calls on 2026-09-02, on PM
+authorisation ("that guard has to be breachable, realistically, for exactly this
+sort of use case"), and dropped a mode-only stash the guard had been refusing.
+
+State what actually constrains this channel, because it is not inaccessibility:
+the sentinel is scoped to ONE guard in ONE session, is consumed and unlinked on
+the first deny it clears, and authorises exactly one blocked action. An agent
+reaching for it is taking a deliberate, narrow, single-use step that a reader of
+the transcript can see. That is the safeguard. "An agent cannot write a file in
+the temp directory" never was one, and a doc asserting it invited a reader to
+model the boundary as stronger than it is.
+
+OPEN, and NOT settled by the correction above: whether the EM SHOULD self-grant
+here, and for which guards. The 2026-09-02 ruling authorised one use for one
+case; it did not license routine self-clearing of the irreversible-harm cohort.
+Raised for a PM decision rather than assumed either way by this edit.
+
+The routes below remain what a human operator can do, and routes 1 and 2 stay
+genuinely human-only in mechanism.
+
+### The routes
+
+Routes 1 and 2 below are not actions a dispatched agent can take — they are
+what a human operator, watching the session, can do. The unlock sentinel
+(§ Reachability above) is the exception, and is agent-reachable in mechanism. <!-- Review:
 code-reviewer (slice 4) — P1: dropped the "EM as granting role for a
 rendered wiki pointer" claim; no deny-time render exists for any audience,
 EM included, post-item-10. --> The PM's 2026-08-13 ruling proposed a narrow
