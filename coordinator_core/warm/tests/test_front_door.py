@@ -28,7 +28,7 @@ from typing import Any, List
 
 import pytest
 
-from coordinator_core.warm import front_door, skew, supervisor
+from coordinator_core.warm import breadcrumb, front_door, skew, supervisor
 
 pytestmark_win = pytest.mark.skipif(sys.platform != "win32", reason="SO_EXCLUSIVEADDRUSE is Windows-only")
 
@@ -545,7 +545,7 @@ def test_should_spawn_false_when_young_and_alive_front_door(
     now = 2_000_000_000.0
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 0.5))
     _write_started_at_front_door(tmp_path, pid=999, stable_epoch=111, started_at=started_at)
-    monkeypatch.setattr(front_door, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
     assert front_door.should_spawn(tmp_path, now=now) is False
 
 
@@ -652,6 +652,7 @@ def test_ensure_front_door_none_and_no_spawn_when_recent_boot_already_vouched_fo
         "probe_existing_holder",
         lambda port, timeout=front_door.PROBE_TIMEOUT_SECS, opener=None: None,
     )
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
     spawned = []
     monkeypatch.setattr(front_door, "spawn_detached", lambda *a, **kw: spawned.append(a) or True)
 
@@ -684,6 +685,7 @@ def test_ensure_front_door_falls_through_to_spawn_branch_on_lower_generation(
         "probe_existing_holder",
         lambda *a, **kw: probed.append(a) or front_door.door_health_payload(),
     )
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
     spawned = []
     monkeypatch.setattr(front_door, "spawn_detached", lambda *a, **kw: spawned.append(a) or True)
 

@@ -540,6 +540,37 @@ def commit_paths(
         path_list + delete_list, False, str(root)
     )
 
+    # MID-SEQUENCE REFUSAL, and it has to sit HERE -- before the index read,
+    # before the first object write, before the CAS. This function builds a
+    # commit with exactly one parent (HEAD). In a repo partway through a
+    # merge, cherry-pick, or revert, the pending operation's other parent is
+    # recorded ONLY in `<gitdir>/MERGE_HEAD` (etc.), so landing that
+    # single-parent commit silently drops it: the merge disappears from
+    # history, the sequencer file is left dangling, and the index -- still
+    # carrying stage != 0 entries -- then fails `splice_index`, surfacing as
+    # `IndexStaleAfterCommit` AFTER the wrong commit is already unreachable-
+    # by-nothing. Observed 2026-09-02: a percolate round pulled
+    # origin/candidate into `claude-klabauter`, conflicted on 31 generated
+    # paths, and committed over the top; the merge parent survived only
+    # because the pending commit was still on the remote.
+    #
+    # Three `exists()` calls on a path already resolved, zero spawns: an
+    # ordinary commit into a settled repo pays three stats.
+    for _seq_file, _seq_verb in (
+        ("MERGE_HEAD", "merge"),
+        ("CHERRY_PICK_HEAD", "cherry-pick"),
+        ("REVERT_HEAD", "revert"),
+    ):
+        if (gitdir / _seq_file).exists():
+            raise CommitRefused(
+                f"{repo} is partway through a {_seq_verb} "
+                f"(`{_seq_file}` is present) -- refusing to commit, because "
+                "this route writes a single-parent commit and would drop the "
+                f"pending parent from history. Finish the {_seq_verb} (`git "
+                f"commit`) or abandon it (`git {_seq_verb} --abort`), then "
+                "run this again."
+            )
+
     # THE ONE INDEX READ, and it decides nothing about mechanism: it answers
     # invariant 1 for exactly the k paths in this call. Scoped, so it never
     # materialises an entry outside `paths`.

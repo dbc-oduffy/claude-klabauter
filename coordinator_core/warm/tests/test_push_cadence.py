@@ -340,15 +340,16 @@ def test_failed_push_feeds_the_failure_detector(tmp_path, monkeypatch):
     monkeypatch.setattr(
         push_cadence,
         "log_failure",
-        lambda repo_root, branch, route, err_class, attempts, first_err, stderr_text: logged.append(
-            (repo_root, branch, route, err_class, attempts, first_err)
+        lambda repo_root, branch, route, err_class, attempts, first_err, stderr_text, unconfirmed=False: logged.append(
+            (repo_root, branch, route, err_class, attempts, first_err, unconfirmed)
         ),
     )
 
     push_cadence._sweep_one(repo)
 
     assert len(logged) == 1
-    repo_root, branch, route, err_class, attempts, first_err = logged[0]
+    repo_root, branch, route, err_class, attempts, first_err, unconfirmed = logged[0]
+    assert unconfirmed is False
     assert branch == "work/x/2026-08-30"
     assert route == "cadence-sweep"
     assert err_class == "sweep-failed"

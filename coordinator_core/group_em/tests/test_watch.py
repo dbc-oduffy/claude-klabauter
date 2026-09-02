@@ -1759,3 +1759,77 @@ def test_poll_once_stays_silent_when_the_open_count_holds_or_falls(tmp_path):
         assert inbox_open == 1
 
     assert emitted == []
+
+
+# --- both tick paths compact the spool -------------------------------------
+#
+# The defect these pin, found on 2026-09-02 the day the drain landed and
+# independently by the sibling plane reading this tree: `watch_spool.compact`
+# shipped with NO production caller, so nothing ever shortened the spool. At
+# the volume the sibling producer actually writes -- `PAUSED:turn-ended`, one
+# record per turn end per session -- that is an unbounded append. It stayed
+# invisible because the 8 KiB tail read makes the wake cost fixed regardless,
+# so every instrument reported healthy while the file grew without limit.
+# A caller nothing calls is exactly what a test suite that only tests the
+# function cannot see, which is why these two drive the ENTRY POINTS.
+
+
+def _spool_line(at, session_id="peer-1"):
+    return json.dumps(
+        {"session_id": session_id, "state": "PAUSED:turn-ended", "at": at,
+         "writer": "receiver-state-sensor"}
+    )
+
+
+def _write_spool(repo_root, lines):
+    (repo_root / "state").mkdir(exist_ok=True)
+    with open(watch.watch_spool.spool_path(str(repo_root)), "w", encoding="utf-8") as fh:
+        for line in lines:
+            fh.write(line + "\n")
+
+
+def _spool_contents(repo_root):
+    with open(watch.watch_spool.spool_path(str(repo_root)), encoding="utf-8") as fh:
+        return [l for l in fh.read().splitlines() if l.strip()]
+
+
+def test_tick_once_compacts_the_records_it_has_accounted_for(tmp_path):
+    """The `--once` wake shortens the spool it just classified against."""
+    now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+    _write_spool(tmp_path, [
+        _spool_line("2026-09-01T11:59:00Z"),
+        _spool_line("2026-09-01T11:59:30Z"),
+    ])
+    _parked_once(tmp_path, {}, candidate=True, emitted=[], now=now)
+    assert _spool_contents(tmp_path) == []
+
+
+def test_tick_once_keeps_a_record_appended_after_its_classify(tmp_path):
+    """A park spooled between the classify and the compaction has been seen by
+    nobody: the drain point is the tick's own instant, never `time.time()` at
+    the moment compaction runs, so that record must survive to the next tick."""
+    now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
+    later = _spool_line("2026-09-01T12:00:30Z", session_id="peer-late")
+    _write_spool(tmp_path, [_spool_line("2026-09-01T11:59:00Z"), later])
+    _parked_once(tmp_path, {}, candidate=True, emitted=[], now=now)
+    assert _spool_contents(tmp_path) == [later]
+
+
+def test_the_held_poller_compacts_too(tmp_path):
+    """The held `Monitor` loop drains as well, and this is the case the
+    sibling plane asked about: a repo watched by a healthy held poller with
+    no cron firing at all would otherwise spool into a file nothing ever
+    shortened -- unbounded growth presenting as a perfectly healthy watch."""
+    _write_spool(tmp_path, [_spool_line("2020-01-01T00:00:00Z")])
+    with mock.patch.object(watch, "_measure_snapshot_ms", return_value=(4.6, [])), \
+         mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)), \
+         mock.patch.object(watch, "_refuse_if_already_armed", return_value=None):
+        watch.main(
+            str(tmp_path),
+            caller_session_id="w",
+            group_em_session_id="c",
+            stream=io.StringIO(),
+            sleep_fn=lambda _s: None,
+            max_iterations=1,
+        )
+    assert _spool_contents(tmp_path) == []

@@ -191,6 +191,7 @@ from coordinator_core.group_em import read_pass
 from coordinator_core.group_em import repo_root_arg
 from coordinator_core.group_em import send_pass
 from coordinator_core.group_em import watch_heartbeat
+from coordinator_core.group_em import watch_spool
 from coordinator_core.session.receiver_state import read_receiver_state
 
 #: Keep the watcher's own duty cycle far under the load norm's 200ms-needs-
@@ -1029,6 +1030,32 @@ def _poll_error_line() -> str:
     return "POLL-ERROR " + traceback.format_exc(limit=1).strip().replace("\n", " | ")
 
 
+def _compact_spool(repo_root: str, tick_now: datetime) -> None:
+    """Drop the spool records this tick has now accounted for.
+
+    BOTH TICK PATHS COMPACT, and that is the whole answer to "who drains the
+    spool": `tick_once` (the `--once` wake) and `main`'s held loop alike. A
+    repo whose watch is a healthy held `Monitor` and whose cron never fires
+    would otherwise spool into a file nothing ever shortened -- and at the
+    volume the sibling plane's producer actually writes (`PAUSED:turn-ended`,
+    one record per turn end per session) that is unbounded growth presenting
+    as a perfectly healthy watch. The debounce is `--once`'s alone, because a
+    held poller has no reason to defer to its own heartbeat; the COMPACTION
+    is not, because it is the classify that discharges a record, and both
+    paths classify.
+
+    The drain point is the instant THIS tick classified, never `time.time()`
+    at the moment of the call: a record appended between the classify and
+    here has not been seen by anybody and must survive to the next tick.
+
+    Never raises and never gates -- `watch_spool.compact` returns False on an
+    I/O failure rather than raising, and a spool that could not be shortened
+    costs disk space, never correctness. Same posture as `watch_heartbeat.stamp`:
+    a failed housekeeping write must not be able to end a working watch.
+    """
+    watch_spool.compact(repo_root, tick_now.timestamp())
+
+
 def tick_once(
     repo_root: str,
     caller_session_id: Optional[str] = None,
@@ -1068,7 +1095,26 @@ def tick_once(
     out = sys.stdout if stream is None else stream
     emit = _emit_for(out)
 
+    # PRE-FLIGHT DEBOUNCE, before any roster read or classification. A wake
+    # whose spool holds nothing newer than the heartbeat's own `last_tick_at`
+    # has nothing new to classify -- `watch_spool.should_suppress_wake` is a
+    # cheap two-file read that answers this without touching the registry.
+    # Deliberately outside `poll_once`, which stays the one-job classifier
+    # (`watch_spool` module docstring, "THE DEBOUNCE").
+    if watch_spool.should_suppress_wake(repo_root):
+        emit(
+            "DEBOUNCED spool holds nothing newer than the last tick -- "
+            "skipping classification this wake"
+        )
+        return 0
+
     prev_parked = load_prev_parked(repo_root)
+
+    # ONE instant for the whole tick, captured before the classify and reused
+    # as the compaction drain point below. `poll_once` would otherwise take
+    # its own, and a drain point even microseconds ahead of the classify
+    # would discard a record that classify never saw.
+    tick_now = now if now is not None else datetime.now(timezone.utc)
 
     try:
         # `prev_inbox_open=None`: a single-tick wake carries no memory
@@ -1081,7 +1127,7 @@ def tick_once(
             repo_root,
             caller_session_id,
             prev_parked,
-            now=now,
+            now=tick_now,
             emit=emit,
             group_em_session_id=group_em_session_id,
             prev_names=load_prev_peers(repo_root),
@@ -1121,6 +1167,7 @@ def tick_once(
         # no name to write. `stamp` carries the armed poller's forward rather
         # than blanking it -- a cheaper answer than a registry read per wake.
     )
+    _compact_spool(repo_root, tick_now)
     return 0
 
 
@@ -1238,6 +1285,7 @@ def main(
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
         declinations: list = []
+        tick_now = datetime.now(timezone.utc)
         try:
             # Review: coordinator:code-reviewer af0c0865daafdd73a -- the loop
             # used to reassign `prev_parked` from this return, so every line
@@ -1249,6 +1297,7 @@ def main(
                 repo_root,
                 caller_session_id,
                 prev_parked,
+                now=tick_now,
                 emit=emit,
                 group_em_session_id=group_em_session_id,
                 prev_names=prev_names,
@@ -1282,6 +1331,7 @@ def main(
                 holder_name=holder_name,
                 writer_session_id=caller_session_id,
             )
+            _compact_spool(repo_root, tick_now)
             prev_parked = cur_parked
             prev_names = peer_notes
             prev_inbox_open = cur_inbox_open

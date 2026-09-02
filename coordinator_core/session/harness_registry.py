@@ -35,8 +35,13 @@ harness itself refuses — see `coordinator_core.session.reachability`'s
 module docstring and `messaging_available()`.
 
 THE GATE-OFF CENSUS ABOVE IS DATED, AND THE GATE HAS SINCE FLIPPED ON THIS
-BOX. Re-measured 2026-09-02 through `snapshot()`: 15/15 records carry
-`messaging_socket_path`, against 2026-08-14's 44/44 omitting it. The
+BOX. Re-measured 2026-09-02: EVERY record carries `messaging_socket_path`,
+against 2026-08-14's 44/44 omitting it. The ratio is the finding; the
+count is not, and is why no count is written here -- live sessions come
+and go by the minute (15/15 and 13/13 minutes apart on one box), and the
+raw `sessions/*.json` denominator and `snapshot()`'s parsed-and-deduped
+one do not have to agree. Name which reader produced a figure before
+comparing it to another. The
 reasoning is unchanged — an omitting registry still does not mean the key
 drifted — but a reader must not take either figure as the current state of
 any box. Re-measure; never quote a census from this docstring.
