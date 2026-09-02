@@ -34,6 +34,13 @@ substitute from `sessionId`/`pid`, would manufacture an address the
 harness itself refuses — see `coordinator_core.session.reachability`'s
 module docstring and `messaging_available()`.
 
+THE GATE-OFF CENSUS ABOVE IS DATED, AND THE GATE HAS SINCE FLIPPED ON THIS
+BOX. Re-measured 2026-09-02 through `snapshot()`: 15/15 records carry
+`messaging_socket_path`, against 2026-08-14's 44/44 omitting it. The
+reasoning is unchanged — an omitting registry still does not mean the key
+drifted — but a reader must not take either figure as the current state of
+any box. Re-measure; never quote a census from this docstring.
+
 The gate's DEFAULT is a remote feature flag — verified against the
 shipped CLI bundle 2026-08-15 (Claude Code 2.1.233,
 `~/.local/share/claude/versions/2.1.233`): the bind is gated by
