@@ -532,3 +532,71 @@ def test_run_posix_argv_unchanged_by_the_windows_branch(tmp_path, monkeypatch):
     monkeypatch.setattr(udg.subprocess, "run", _spy)
     udg._run(cli, ["--x"])
     assert captured["argv"] == [str(cli), "--x"]
+
+
+# ---------------------------------------------------------------------------
+# (j) The four bucket-2 doc-index / prune gates
+#
+# One UNAVAILABLE test per gate, each asserting explicitly that the verdict is
+# not CLEAN. The 2026-09-02 boundary audit found "engine unreachable"
+# indistinguishable from "found nothing" at nine of ten fallback sites in the
+# ceremony this file serves; these four are where a tenth would be added, so
+# the distinction is pinned per gate rather than once for the group.
+# ---------------------------------------------------------------------------
+
+_BUCKET2_GATES = (
+    "docs-readme-index-drift",
+    "directory-md-staleness",
+    "plans-prune-candidates",
+    "archive-memo-prune-candidates",
+)
+
+
+@pytest.mark.parametrize("gate_id", _BUCKET2_GATES)
+def test_bucket2_gate_is_unavailable_not_clean_when_target_absent(gate_id, tmp_path):
+    """An absent corpus is UNAVAILABLE, never CLEAN.
+
+    tmp_path is an empty directory: every one of these gates' targets is
+    missing. A gate that reported CLEAN here would be telling the ceremony
+    "nothing to do" about a corpus it never looked at.
+    """
+    result = udg._GATES[gate_id](tmp_path, tmp_path, {})
+    assert result.verdict is udg.GateVerdict.UNAVAILABLE
+    assert result.verdict is not udg.GateVerdict.CLEAN
+    assert result.severity is None
+    assert "missing_path" in result.detail
+
+
+@pytest.mark.parametrize("gate_id", _BUCKET2_GATES)
+def test_bucket2_gate_is_registered(gate_id):
+    assert gate_id in udg._GATES
+
+
+def test_bucket2_gates_are_informational_never_blocking(tmp_path):
+    """None of the four may halt /update-docs.
+
+    Doc-index drift is not a reason to stop the ceremony. This is the concrete
+    guard against repeating Phase 11h2's unconditional halt, whose blocking
+    severity was attached to the phase rather than to the finding.
+    """
+    docs = tmp_path / "docs"
+    (docs / "plans").mkdir(parents=True)
+    (docs / "README.md").write_text("# Index\n\n## Plans\n", encoding="utf-8")
+    (tmp_path / "cross-repo" / "archive").mkdir(parents=True)
+    (tmp_path / "coordinator_core").mkdir()
+    (tmp_path / "coordinator_core" / "DIRECTORY.md").write_text("# map\n", encoding="utf-8")
+    (docs / "plans" / "p.md").write_text("---\nstatus: implemented\n---\n", encoding="utf-8")
+
+    results = [udg._GATES[g](tmp_path, tmp_path, {}) for g in _BUCKET2_GATES]
+    for result in results:
+        assert result.severity is not udg.Severity.BLOCKING
+
+    rolled = udg.rollup(results)
+    assert rolled["halt"] is False
+    assert rolled["blocking"] == []
+
+
+def test_bucket2_gate_ids_do_not_bypass_the_unknown_id_guard():
+    """Adding four gates must not weaken the no-silent-skip contract."""
+    with pytest.raises(ValueError):
+        udg._updatedocs_gates({"gates": ["docs-readme-index-drift", "not-a-real-gate"]})

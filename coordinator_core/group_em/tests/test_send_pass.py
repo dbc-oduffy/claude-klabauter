@@ -700,3 +700,43 @@ def test_digest_counts_sum_to_population_classified_including_contradicted(tmp_p
         row["session_id"] for row in digest["suppressed"] if row["why"] == "contradicted"
     }
     assert contradicted_ids == {"peer-live-busy", "peer-stale-unresolved"}
+
+
+class _Row:
+    def __init__(self, session_id, name):
+        self.session_id = session_id
+        self.name = name
+
+
+def test_resolve_addressee_refuses_a_name_two_live_sessions_answer_to(tmp_path):
+    """`SendMessage` addresses BY NAME, so returning a name two sessions share
+    hands the caller an address that can land on the wrong one. Stable key in,
+    volatile address out -- only when the address is unambiguous.
+    """
+    rows = [_Row("peer-sid", "twin"), _Row("other-sid", "twin")]
+    got = send_pass.resolve_addressee(
+        str(tmp_path), "peer-sid", build_roster=lambda repo_root=None: rows
+    )
+    assert got is None
+
+
+def test_resolve_addressee_returns_the_name_when_it_is_unique(tmp_path):
+    rows = [_Row("peer-sid", "alpha"), _Row("other-sid", "beta")]
+    got = send_pass.resolve_addressee(
+        str(tmp_path), "peer-sid", build_roster=lambda repo_root=None: rows
+    )
+    assert got == "alpha"
+
+
+def test_resolve_addressee_raises_on_the_wrong_build_roster(tmp_path):
+    """Two same-named `build_roster`s live in one package with incompatible row
+    shapes. Injecting the dict-yielding one made every `getattr` return None --
+    an unaddressable fleet reported as a clean refusal, raising nothing.
+    """
+    dict_rows = [{"session_id": "peer-sid", "name": "alpha"}]
+    import pytest
+
+    with pytest.raises(TypeError, match="same name, different shape"):
+        send_pass.resolve_addressee(
+            str(tmp_path), "peer-sid", build_roster=lambda repo_root=None: dict_rows
+        )

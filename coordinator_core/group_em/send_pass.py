@@ -598,10 +598,45 @@ def resolve_addressee(
     except Exception:
         return None
     for row in rows:
+        if isinstance(row, dict):
+            # THE TWO `build_roster`s ARE NOT INTERCHANGEABLE, and nothing in
+            # the seam's type hint enforces that. `session.peer_roster.
+            # build_roster` yields `PeerRow` objects; `group_em.read_pass.
+            # build_roster` -- same name, same package -- yields dicts. Inject
+            # the second here and every `getattr` below returns `None`, so the
+            # function reports "no live name" for every peer while raising
+            # nothing: an unaddressable fleet that reads as a clean refusal.
+            # Loud is the correct behaviour for a wiring error.
+            raise TypeError(
+                "resolve_addressee needs session.peer_roster.build_roster "
+                "(PeerRow rows); got dict rows, which is group_em.read_pass."
+                "build_roster -- same name, different shape"
+            )
+
+    resolved = None
+    for row in rows:
         if getattr(row, "session_id", None) == peer_session_id:
             name = getattr(row, "name", None)
-            return name if isinstance(name, str) and name else None
-    return None
+            resolved = name if isinstance(name, str) and name else None
+            break
+    if resolved is None:
+        return None
+
+    # REFUSE AN AMBIGUOUS ADDRESS. Returning the name of the session asked
+    # about is not enough: `SendMessage` addresses BY NAME, so handing back a
+    # name two live sessions answer to gives the caller an address that can
+    # land on the wrong one. Stable key in, volatile address out -- but only
+    # when the address is unambiguous. `None` here is the same hard refusal
+    # every other branch returns, never a fallback to the session id.
+    holders = {
+        getattr(row, "session_id", None)
+        for row in rows
+        if getattr(row, "name", None) == resolved
+    }
+    holders.discard(None)
+    if len(holders) > 1:
+        return None
+    return resolved
 
 
 

@@ -93,6 +93,22 @@ from typing import Any, Callable, Optional
 
 from coordinator_core.external_tool_budget import bound_for
 from coordinator_core.ipc import register_op
+from coordinator_core.updatedocs.directory_md import (
+    DirectoryMdUnavailable,
+    compute_directory_md_drift,
+)
+from coordinator_core.updatedocs.memo_prune import (
+    MemoPruneTargetMissing,
+    compute_memo_prune_candidates,
+)
+from coordinator_core.updatedocs.plan_prune import (
+    PlanPruneTargetMissing,
+    compute_plan_prune_candidates,
+)
+from coordinator_core.updatedocs.readme_index import (
+    ReadmeIndexUnavailable,
+    compute_readme_index_drift,
+)
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -770,6 +786,203 @@ def _gate_reap_stale_sidecars(repo_root: Path, settings_home: Path, overrides: d
 
 
 # ---------------------------------------------------------------------------
+# Gates: doc-index drift and prune candidates (bucket-2 extraction)
+#
+# Four detectors backed by coordinator_core.updatedocs. Each compute function
+# raises a typed missing-path error rather than returning an empty result, and
+# each gate below converts that to UNAVAILABLE — never CLEAN. That mapping is
+# the point of these four: the 2026-09-02 boundary audit found "engine
+# unreachable" indistinguishable from "found nothing" at nine of ten fallback
+# sites in the ceremony this file serves, and a detector that reports an absent
+# corpus as "nothing to do" adds a tenth.
+#
+# All four are INFORMATIONAL. Drift in a doc index is not a reason to halt
+# /update-docs; the audit's evidence against Phase 11h2's unconditional halt
+# applies here too.
+# ---------------------------------------------------------------------------
+
+
+def _gate_docs_readme_index_drift(repo_root: Path, _settings: Path, _overrides: dict) -> GateResult:
+    """Which docs/ artifacts are missing from, or dead in, docs/README.md."""
+    try:
+        drift = compute_readme_index_drift(repo_root)
+    except ReadmeIndexUnavailable as exc:
+        return GateResult(
+            "docs-readme-index-drift",
+            GateVerdict.UNAVAILABLE,
+            f"cannot check: {exc.missing_path} does not exist",
+            detail={"missing_path": str(exc.missing_path)},
+        )
+
+    drifted = [s for s in drift.sections if s.missing or s.dead]
+    if not drifted:
+        return GateResult(
+            "docs-readme-index-drift",
+            GateVerdict.CLEAN,
+            "docs/README.md indexes every artifact and links nothing absent",
+        )
+
+    total_missing = sum(len(s.missing) for s in drifted)
+    total_dead = sum(len(s.dead) for s in drifted)
+    return GateResult(
+        "docs-readme-index-drift",
+        GateVerdict.FINDING,
+        f"{len(drifted)} section(s) drifted — {total_missing} unindexed, {total_dead} dead link(s)",
+        severity=Severity.INFORMATIONAL,
+        detail={
+            "sections": [
+                {
+                    "section": s.section,
+                    "linked": s.linked,
+                    "on_disk": s.on_disk,
+                    "missing": s.missing,
+                    "dead": s.dead,
+                    "missing_titles": s.missing_titles,
+                }
+                for s in drifted
+            ],
+        },
+    )
+
+
+def _gate_directory_md_staleness(repo_root: Path, _settings: Path, overrides: dict) -> GateResult:
+    """Do a DIRECTORY.md's asserted counts and refresh date still match disk?
+
+    `overrides["directory_md"]` selects which DIRECTORY.md to check; the default
+    is this repo's only one. Deliberately a parameter — there is no root-level
+    DIRECTORY.md here, and a gate that hardcoded one would report UNAVAILABLE
+    forever on a repo that is not missing anything.
+    """
+    rel = overrides.get("directory_md") or "coordinator_core/DIRECTORY.md"
+    target = repo_root / rel
+    try:
+        drift = compute_directory_md_drift(target)
+    except DirectoryMdUnavailable as exc:
+        return GateResult(
+            "directory-md-staleness",
+            GateVerdict.UNAVAILABLE,
+            f"cannot check: {exc.missing_path} does not exist",
+            detail={"missing_path": str(exc.missing_path)},
+        )
+
+    mismatched = [c for c in drift.count_claims if not c.matches]
+    detail = {
+        "directory_md": rel,
+        "refreshed_on": drift.refreshed_on.isoformat() if drift.refreshed_on else None,
+        "age_days": drift.age_days,
+        "mismatched_counts": [
+            {"claim_site": c.claim_site, "asserted": c.asserted, "actual": c.actual}
+            for c in mismatched
+        ],
+    }
+
+    reasons = []
+    if drift.refreshed_on is None:
+        # Not the same as "refreshed today" — an unparseable date means the
+        # document's own freshness claim could not be read, which is a finding
+        # about the document, not a clean bill of health.
+        reasons.append("no readable `Last refreshed:` date")
+    if mismatched:
+        reasons.append(f"{len(mismatched)} count claim(s) disagree with disk")
+
+    if not reasons:
+        return GateResult(
+            "directory-md-staleness",
+            GateVerdict.CLEAN,
+            f"{rel} is internally consistent with disk",
+            detail=detail,
+        )
+    return GateResult(
+        "directory-md-staleness",
+        GateVerdict.FINDING,
+        f"{rel}: " + "; ".join(reasons),
+        severity=Severity.INFORMATIONAL,
+        detail=detail,
+    )
+
+
+def _gate_plans_prune_candidates(repo_root: Path, _settings: Path, overrides: dict) -> GateResult:
+    """Which docs/plans/ entries satisfy all three ripeness-safety legs.
+
+    Reports candidates with per-leg evidence. Prunes nothing: the disposal
+    decision stays with the ceremony and its existing guards.
+    """
+    kwargs = {}
+    if "age_days" in overrides:
+        kwargs["age_days"] = overrides["age_days"]
+    try:
+        result = compute_plan_prune_candidates(repo_root, **kwargs)
+    except PlanPruneTargetMissing as exc:
+        return GateResult(
+            "plans-prune-candidates",
+            GateVerdict.UNAVAILABLE,
+            f"cannot check: {exc.missing_path} does not exist",
+            detail={"missing_path": str(exc.missing_path)},
+        )
+
+    detail = {
+        "prunable": [c.path for c in result.prunable],
+        "indeterminate": [c.path for c in result.indeterminate],
+        "retained_count": len(result.retained),
+    }
+    if not result.prunable and not result.indeterminate:
+        return GateResult(
+            "plans-prune-candidates",
+            GateVerdict.CLEAN,
+            "no plan is prune-eligible and none is indeterminate",
+            detail=detail,
+        )
+    return GateResult(
+        "plans-prune-candidates",
+        GateVerdict.FINDING,
+        f"{len(result.prunable)} prune candidate(s), {len(result.indeterminate)} indeterminate",
+        severity=Severity.INFORMATIONAL,
+        detail=detail,
+    )
+
+
+def _gate_archive_memo_prune_candidates(repo_root: Path, _settings: Path, overrides: dict) -> GateResult:
+    """Which cross-repo/archive memos satisfy the prune predicate.
+
+    Zero prunable is a legitimate, expected answer on a young archive — which
+    is exactly why an absent archive directory must reach the caller as
+    UNAVAILABLE and not as this gate's CLEAN.
+    """
+    kwargs = {}
+    if "age_days" in overrides:
+        kwargs["age_days"] = overrides["age_days"]
+    try:
+        result = compute_memo_prune_candidates(repo_root, **kwargs)
+    except MemoPruneTargetMissing as exc:
+        return GateResult(
+            "archive-memo-prune-candidates",
+            GateVerdict.UNAVAILABLE,
+            f"cannot check: {exc.missing_path} does not exist",
+            detail={"missing_path": str(exc.missing_path)},
+        )
+
+    detail = {
+        "prunable": [c.path for c in result.prunable],
+        "indeterminate": [c.path for c in result.indeterminate],
+        "retained_count": len(result.retained),
+    }
+    if not result.prunable and not result.indeterminate:
+        return GateResult(
+            "archive-memo-prune-candidates",
+            GateVerdict.CLEAN,
+            f"no archive memo is prune-eligible ({len(result.retained)} retained)",
+            detail=detail,
+        )
+    return GateResult(
+        "archive-memo-prune-candidates",
+        GateVerdict.FINDING,
+        f"{len(result.prunable)} prune candidate(s), {len(result.indeterminate)} indeterminate",
+        severity=Severity.INFORMATIONAL,
+        detail=detail,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Battery registry
 # ---------------------------------------------------------------------------
 
@@ -784,6 +997,10 @@ _GATES: dict[str, _GateFn] = {
     "11h-skill-anchor-links": _gate_skill_anchor_links,
     "11i-queue-prune-sweep": _gate_queue_prune_sweep,
     "11j-reap-stale-sidecars": _gate_reap_stale_sidecars,
+    "docs-readme-index-drift": _gate_docs_readme_index_drift,
+    "directory-md-staleness": _gate_directory_md_staleness,
+    "plans-prune-candidates": _gate_plans_prune_candidates,
+    "archive-memo-prune-candidates": _gate_archive_memo_prune_candidates,
 }
 """Deferred, deliberately absent: 11h2 (cross-reference coverage) — its backing
 `verify_coverage.py` / `coverage_gate.py` was out of scope for this dispatch.
