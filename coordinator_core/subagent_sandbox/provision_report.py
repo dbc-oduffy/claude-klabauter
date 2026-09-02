@@ -87,6 +87,8 @@ from coordinator_core.subagent_sandbox.engine import (
 #: key for exactly the named-dispatch population the key exists to serve.
 #: ``@`` is neither a directory separator nor a component of ``.``/``..``,
 #: so admitting it widens no traversal surface.
+MUTATES = ["state/subagent-share/**/*.md", "state/plan-sidecars/*.md"]  # session/agent-id-keyed sidecar docs and pointer index (_write_sidecar_pointer, _provision, _provision_plan_derivable_doc), plan-stem-keyed for the four G2 plan-pipeline emitters; data-dependent filenames, not a fixed artifact
+
 _SEGMENT_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._@-]")
 
 #: Sanitized segments that must still be rejected even though the

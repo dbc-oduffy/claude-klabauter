@@ -160,6 +160,20 @@ _ENGINE_ROOT = Path(__file__).resolve().parents[2]
 #: absolutize it the way DoE-claude's `_message_envelope.py` does.
 _WIKI_ANCHOR = "coordinator/docs/wiki/guard-message-concision.md#plan-persistence-check"
 
+#: Generator-provenance declaration (generator_provenance.py). This op fires
+#: for whichever repo the calling session's `ExitPlanMode` happened in
+#: (`repo_root_path`, resolved via `show_toplevel()` off the caller's own
+#: cwd -- meta-repo routing can redirect it to `_ENGINE_ROOT` instead, see
+#: the meta-repo branch above), and the filename it writes is `<today>-
+#: <slug>.md` where `slug` is derived from the plan text (`_derive_slug`).
+#: Neither the target repo nor the target filename is fixed ahead of time,
+#: same shape as DoE-claude's `coordinator-doc-new.py` (acknowledged in
+#: `state/generator-provenance/unresolved-writers.json` for the identical
+#: reason: "mints an operator/title-derived doc path ... a data-dependent
+#: target set; GENERATES cannot express it"). `docs/README.md`'s append is
+#: likewise conditional on which repo's README got selected.
+GENERATES = []
+
 
 # ---------------------------------------------------------------------------
 # claude-home / meta-repo detection (payload-env ladder, see module

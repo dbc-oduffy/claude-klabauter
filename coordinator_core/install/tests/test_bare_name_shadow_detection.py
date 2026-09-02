@@ -24,6 +24,7 @@ to be present, which the installer knows and a probe does not.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from coordinator_core.install import door_install
@@ -56,13 +57,54 @@ def test_shadow_beside_an_installed_door_is_reported(tmp_path: Path) -> None:
     assert _DOOR in warnings[0]
 
 
-def test_no_door_means_no_warning(tmp_path: Path) -> None:
+def test_no_door_means_no_warning(tmp_path: Path, monkeypatch) -> None:
     """The fallback-forwarder state, not a defect: with no door installed the
     `.ps1` is what keeps the bare name answering at all. Warning here would tell
-    an operator to delete the only thing still serving the name."""
+    an operator to delete the only thing still serving the name.
+
+    DRIVEN AS WINDOWS ON EVERY BOX, because the state under test is
+    unrepresentable on POSIX rather than merely untested there. Since the
+    native-door cutover, `DOOR_INSTALLED_NAME` is `coordinator-invoke.exe` on
+    Windows but the extensionless `coordinator-invoke` on POSIX -- the SAME
+    string as `BARE_FORWARDER_NAME`. "A fallback forwarder with no door beside
+    it" and "an installed door" are then the same directory, and the detector
+    (correctly) cannot tell them apart. `_detect_bare_name_shadows` is reached
+    only from `_check_windows`, so nothing in production ever asks it this
+    question on POSIX.
+
+    Patching the constant is the honest simulation: it drives the detector's
+    real branch with the two-name arrangement Windows actually installs, and
+    nothing about the on-disk shape is invented -- the files are the ones a
+    Windows box carries. The POSIX name collapse that makes the patch necessary
+    is itself pinned by `test_posix_door_and_fallback_forwarder_share_one_name`
+    below, so the platform is covered rather than excused.
+    """
+    monkeypatch.setattr(door_install, "DOOR_INSTALLED_NAME", "coordinator-invoke.exe")
     bin_dir = _bin(tmp_path, door_install.BARE_FORWARDER_NAME, _SHADOW)
 
     assert _detect_bare_name_shadows([str(bin_dir / door_install.BARE_FORWARDER_NAME)]) == []
+
+
+def test_posix_door_and_fallback_forwarder_share_one_name() -> None:
+    """The platform fact the test above has to patch around, asserted rather
+    than assumed.
+
+    On Windows the door (`coordinator-invoke.exe`) and the bare fallback
+    forwarder (`coordinator-invoke`) are two distinct filenames, which is what
+    makes "no door installed" a state the detector can recognise. On POSIX the
+    cutover collapsed them onto one extensionless name. If a later change
+    reintroduces a POSIX suffix -- or drops the Windows one -- this fails
+    loudly instead of letting the sibling test's patch quietly stop matching
+    the platform it claims to simulate.
+    """
+    if sys.platform == "win32":
+        assert door_install.DOOR_INSTALLED_NAME != door_install.BARE_FORWARDER_NAME
+        assert door_install.DOOR_INSTALLED_NAME == door_install.BARE_FORWARDER_NAME + ".exe"
+    else:
+        assert door_install.DOOR_INSTALLED_NAME == door_install.BARE_FORWARDER_NAME, (
+            "the POSIX door is the extensionless bare name itself; a suffix here "
+            "would mean the native-door cutover's POSIX shape changed"
+        )
 
 
 def test_door_without_a_shadow_is_quiet(tmp_path: Path) -> None:

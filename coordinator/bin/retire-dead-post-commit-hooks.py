@@ -87,6 +87,8 @@ _FRESH_TAIL = 'exec "$_PY" "$SCRIPT" "$@"'
 #: the undo is a rename in place with no path to reconstruct.
 _BACKUP_SUFFIX = ".retired"
 
+GENERATES = []  # every write (_retire_one's backup + excise/unlink) targets <repo>/.git/hooks/post-commit and its .retired sibling, in each registered repo's own untracked .git dir -- never a fixed artifact tracked in this repo
+
 
 def _hooks_dir(root: Path) -> "Path | None":
     """The `hooks/` directory governing `root`, or None if this is not a

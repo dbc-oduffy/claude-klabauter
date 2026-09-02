@@ -195,6 +195,14 @@ from coordinator_core.hooks.nudge_autonomous_askuserquestion import (
 from coordinator_core.ipc import register_op
 from coordinator_core.session import subagent_share
 
+#: Corpus-mutator declaration (generator-provenance sweep): `_write_records`
+#: rewrites `state/subagent-share/<session_id>/next-move-ledger.jsonl` and
+#: `_drain_intake` deletes `.../obligations-inbound.jsonl` -- both filenames
+#: come from `subagent_share.ledger_path`/`intake_path`, a session_id-keyed
+#: target set `GENERATES` cannot express (same corpus, same reasoning as
+#: `guard_advisory_counter.py`'s `MUTATES` sibling declaration).
+MUTATES = ["state/subagent-share/**/*.jsonl"]
+
 # ---------------------------------------------------------------------------
 # Static seam table (emission side) -- verbatim port of the source script's
 # own table. See the source script's module docstring for the full rationale

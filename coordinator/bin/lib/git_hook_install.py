@@ -441,7 +441,7 @@ def _resolve_claude_klabauter_bin_sh(bin_dir: str, script_name: str) -> Optional
 # 01:57 on 2026-09-02, the moment the bin cutover landed under running
 # sessions. `_native_forwarder_lines` closes the POSIX half; the bump forces
 # one rewrite pass over every installed repo.
-_HOOK_GEN_STAMP = 12
+_HOOK_GEN_STAMP = 13
 
 
 def _hook_gen_stamp_line() -> str:
@@ -608,7 +608,24 @@ def _shim_body(
         # survives: `-ef` is TRUE for `foo` vs `foo.exe` exactly when the bare
         # name IS the forwarder, and FALSE for a genuine extensionless script
         # (whose `.exe` does not exist). Never replace this with `[ -f ]`.
-        '_have_py() { [ -f "$1" ] && ! [ "$1" -ef "$1.exe" ]; }\n'
+        #
+        # The shebang read is the POSIX half of the same guard, and it is
+        # load-bearing rather than belt-and-braces. `-ef` discriminates only
+        # where a `.exe` sibling exists, so on macOS and Linux a native
+        # extensionless forwarder passes every test above and the chain hands
+        # a Mach-O/ELF image to `exec "$_PY" "$SCRIPT"`. The interpreter dies
+        # on a SyntaxError and the hook's non-zero exit ABORTS THE COMMIT --
+        # machine-wide, in every repo the fleet heal touched, reported from
+        # 13 repos on one box (example-cockpit-repo-em, 2026-09-02). `_native`
+        # above is not the backstop for this: it gates on `[ -x ]`, so a
+        # forwarder whose executable bit is missing falls straight through to
+        # here. Reading the first line with the `read` BUILTIN, never
+        # `head`/`grep`, keeps this inside the DR-344 per-commit budget --
+        # this function is called on up to eight rungs per hook invocation,
+        # and a two-spawn body would put sixteen processes on the commit
+        # path. A file that is unreadable or empty answers "not a script",
+        # matching `_NATIVE_PROBE_DEF`'s own fall-through.
+        '_have_py() { [ -f "$1" ] && ! [ "$1" -ef "$1.exe" ] && { IFS= read -r _h1 < "$1" 2>/dev/null || return 1; case "$_h1" in "#!"*) return 0 ;; *) return 1 ;; esac; }; }\n'
         # An installed `.exe` forwarder is the INTENDED post-install artifact.
         # Running it through an interpreter is a category error, so exec it
         # directly and never enter the interpreter chain at all.
@@ -728,7 +745,7 @@ def _append_block(
         # WINDOWS TRAP comment for the MSYS `.exe`-sibling mechanism. Emitted
         # here rather than shared: an append block lands inside a foreign hook
         # and can assume nothing defined above it.
-        '{ _have_py() { [ -f "$1" ] && ! [ "$1" -ef "$1.exe" ]; }\n'
+        '{ _have_py() { [ -f "$1" ] && ! [ "$1" -ef "$1.exe" ] && { IFS= read -r _h1 < "$1" 2>/dev/null || return 1; case "$_h1" in "#!"*) return 0 ;; *) return 1 ;; esac; }; }\n'
         # An installed `.exe` forwarder is the intended post-install artifact,
         # so run it and skip the interpreter chain entirely — resolving one
         # costs nothing once the answer is already on disk. RUN, not `exec`:

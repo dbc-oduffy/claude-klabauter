@@ -213,6 +213,7 @@ Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-claude-klabauter-pi
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -232,6 +233,15 @@ _PROG = "forwarder-drift"
 # forwarder — see module docstring for why content is matched instead of
 # re-deriving substrate.py's own name-exclusion policy here.
 _FORWARDER_MARKER = "# coordinator-claude bin forwarder for "
+
+_NATIVE_FORWARDER_MANIFEST = "_native-forwarder-manifest.json"
+"""Sidecar the native-launcher producer writes beside the binaries it emits.
+
+A native forwarder is a compiled executable image, so it carries no ASCII
+marker for `_installed_forwarder_names` to find, and a marker-only scan reads
+every one of them as absent. This manifest is the producer's own record of
+which names it installed, and it is the only way to see them without parsing
+Mach-O/PE headers."""
 
 # Minimum remedy (AC5): `python3 -m coordinator_core.install.substrate`
 # requires CLAUDE_PLUGIN_ROOT pointed at the DoE-claude clone's coordinator/
@@ -575,7 +585,14 @@ def _installed_forwarder_names(bin_dir: Path) -> Set[str]:
     62 — a 512-byte window has ~8x headroom, and because the marker is ASCII
     the byte-window-vs-character-window distinction cannot bite. A future
     edit back to `read_text()` is the regression this comment exists to
-    prevent."""
+    prevent.
+
+    The marker scan alone is NOT the whole installed set. Most forwarders are
+    now compiled native launchers carrying no ASCII marker, so this unions the
+    scan with `_native_forwarder_names`' manifest reading. On the machine this
+    union was added for, the marker scan saw 16 of 387 installed forwarders and
+    the probe reported the rest as missing or orphaned — seven of them under
+    the "NOTHING GATES ON IT" wording, every one a false alarm."""
     if not bin_dir.is_dir():
         return set()
     marker = _FORWARDER_MARKER.encode("utf-8")
@@ -590,7 +607,31 @@ def _installed_forwarder_names(bin_dir: Path) -> Set[str]:
             continue
         if marker in head:
             names.add(entry.name)
-    return names
+    return names | _native_forwarder_names(bin_dir)
+
+
+def _native_forwarder_names(bin_dir: Path) -> Set[str]:
+    """Names the native-launcher producer recorded in its manifest sidecar,
+    restricted to those whose file is actually present in *bin_dir*.
+
+    Negative-spec: a manifest name whose file is NOT on disk is deliberately
+    NOT counted as installed. The manifest records what the producer wrote,
+    never what survived; trusting it unconditionally would turn a genuinely
+    deleted forwarder into a silent pass, which is the exact failure this
+    probe exists to catch.
+
+    Fails open to the empty set on a missing, unreadable, or malformed
+    manifest — a probe that cannot read one of its inputs must not
+    manufacture a finding out of that gap."""
+    manifest = bin_dir / _NATIVE_FORWARDER_MANIFEST
+    try:
+        raw = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    declared = raw.get("names") if isinstance(raw, dict) else None
+    if not isinstance(declared, list):
+        return set()
+    return {name for name in declared if isinstance(name, str) and (bin_dir / name).exists()}
 
 
 def _derive_names(agent_bin: Path) -> Set[str]:

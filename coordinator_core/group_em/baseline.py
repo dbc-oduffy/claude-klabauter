@@ -58,6 +58,16 @@ import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
+#: Corpus-mutator declaration (generator-provenance sweep): `_write_atomic`
+#: rewrites `state/subagent-share/<caller_session_id>/group-em-baseline-
+#: <repo_key>.json`, one file per (repo-key, session) pair -- a
+#: data-dependent set no fixed GENERATES artifact could name. `repo_root`
+#: itself is caller-supplied (see `diff_and_persist`), same house pattern as
+#: the sibling counters beside this file (`guard_advisory_counter.py`,
+#: `engine_provenance_counter.py`); the extension-scoped glob matches this
+#: repo's own tracked `state/subagent-share/` tree the same way theirs does.
+MUTATES = ["state/subagent-share/**/*.json"]
+
 PeerRecord = Mapping[str, Any]
 PeerSet = Mapping[str, PeerRecord]
 

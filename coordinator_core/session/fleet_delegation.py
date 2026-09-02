@@ -195,6 +195,13 @@ DELEGABLE = frozenset(
 #: single location-naming constant every public function routes through.
 _GRANT_FILENAME = "fleet-delegation.json"
 
+#: Generator-provenance declaration: write_fleet_delegation()'s only write is
+#: `_grant_file()` = `settings_home() / _GRANT_FILENAME` — the operator's
+#: coordinator settings home (COORDINATOR_SETTINGS_HOME / CLAUDE_HOME /
+#: `~/.coordinator-claude-settings`), never a path inside this repo's tracked
+#: tree. No tracked artifact exists for `GENERATES` to name.
+GENERATES = []
+
 #: Tolerance for the ``granted_at`` freshness check (Review: staff-eng
 #: (the Staff Engineer), finding 4) — +/- 5 minutes of wall clock at write time. A
 #: FUTURE ``granted_at`` outside this window is itself a rejection.

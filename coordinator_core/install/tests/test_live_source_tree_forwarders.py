@@ -10,6 +10,9 @@ See `_install_live_source_tree_forwarders` in
 """
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.install import substrate
@@ -18,11 +21,27 @@ from coordinator_core.install.substrate import (
     _live_source_tree_resolver,
 )
 
+#: The real manifest, copied into each fabricated tree rather than stubbed.
+#: `_install_live_source_tree_forwarders` resolves the static bin-family name
+#: set through `_static_bin_family_names(claude_klabauter_root)` (added 2026-08-30,
+#: substrate.py `389fb3268e`), which importlib-loads
+#: `<root>/coordinator/lib/bin-templates-manifest.py` and raises
+#: `SubstrateFatalError` when it is absent. Every real claude-klabauter root and every
+#: published mirror carries the file, so a tree without it is not a smaller
+#: fixture -- it is a shape that cannot exist. A hand-written stub would pin
+#: this test against a name set the installer never sees; the committed file
+#: is self-contained (stdlib `typing` only) and is what the product reads.
+_REAL_BIN_TEMPLATES_MANIFEST = (
+    Path(__file__).resolve().parents[3] / "coordinator" / "lib" / "bin-templates-manifest.py"
+)
+
 
 def _make_tree(root, *, resolver_stem: str, bin_names: "list[str]"):
-    lib = root / "coordinator" / "lib" / resolver_stem.replace("_resolve_", "resolve-").replace("_", "-")
+    lib_root = root / "coordinator" / "lib"
+    lib = lib_root / resolver_stem.replace("_resolve_", "resolve-").replace("_", "-")
     lib.mkdir(parents=True)
     (lib / f"{resolver_stem}.py").write_text("def exec_cli(target):\n    pass\n", encoding="utf-8")
+    shutil.copyfile(_REAL_BIN_TEMPLATES_MANIFEST, lib_root / "bin-templates-manifest.py")
     bin_dir = root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
     for n in bin_names:

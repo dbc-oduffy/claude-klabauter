@@ -146,6 +146,8 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
     ),
 )
 
+GENERATES = []  # every clause above writes under <settings_home>/..., a machine-local settings home outside this repo's tracked tree -- never a fixed repo artifact
+
 
 def self_heal_forwarders() -> None:
     """Best-effort, silent, non-blocking: write any agent-helper forwarder

@@ -267,7 +267,18 @@ class TestRendering:
 
 
 class TestAllowlistPopulation:
-    def test_write_allowlist_unions_with_existing_seed(self, tmp_path):
+    def test_write_allowlist_regenerates_and_drops_an_existing_seed(self, tmp_path):
+        """The C2 fix (ae7edbe3fc, 2026-08-27) REVERSED this test's original
+        premise and did not carry the test with it: `_write_allowlist` used to
+        union with the file's prior content and now regenerates from THIS run's
+        door-eligible bucket alone. The union never removed, which is how a
+        12-name origin count silently reached 382 while the file's own
+        `$comment` still claimed door-eligible provenance for every row.
+
+        So the seed below is the ASSERTION, not the setup: a name present only
+        in the prior on-disk file must NOT survive the regeneration. Pinning the
+        union again would restore the growth-only behaviour the fix removed.
+        """
         allowlist_path = tmp_path / "warm_entrypoint_allowlist.json"
         allowlist_path.write_text(
             json.dumps({"entrypoints": ["cross-repo-memo"]}), encoding="utf-8"
@@ -284,7 +295,10 @@ class TestAllowlistPopulation:
 
         merged = fdc._write_allowlist(verdicts, allowlist_path=allowlist_path)
 
-        assert "cross-repo-memo" in merged
+        assert "cross-repo-memo" not in merged, (
+            "a name carried only by the prior on-disk file must not survive a "
+            "regeneration -- that is the union behaviour C2 removed"
+        )
         assert "eligible-one" in merged
         # Excluded on an UNCONTAINED exec-time hazard, the only thing that
         # disqualifies. A CLI doing client-side work in `main` is eligible.

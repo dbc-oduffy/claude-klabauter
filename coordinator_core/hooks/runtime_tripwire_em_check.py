@@ -118,6 +118,16 @@ from coordinator_core.hooks.postuse_advisory_dispatch import (
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.push_failure_verdict import _handler as _push_failure_verdict_handler
 
+#: Generator-provenance declaration (generator_provenance.py's AST sweep):
+#: this module's only writes are `_check_push_failures`'s
+#: `push-failures-cursor.txt` and `_check_hooks_json_staleness`'s
+#: `hooks-json-boot-hash.txt`, both under
+#: `resolve_git_common_dir(...)/coordinator-sessions/<session_id>/` -- a
+#: per-session cursor inside the git COMMON dir, never a tracked repo path
+#: (same standing as R5's `git_common_dir(...)` exclusion). No tracked
+#: artifact exists for `GENERATES` to name.
+GENERATES = []
+
 # ---------------------------------------------------------------------------
 # Charset guard — verbatim from the source script (`_ID_CHARSET_RE`).
 # ---------------------------------------------------------------------------

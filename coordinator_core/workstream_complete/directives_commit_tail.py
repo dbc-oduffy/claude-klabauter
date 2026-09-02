@@ -149,6 +149,8 @@ from coordinator_core.workstream_complete import directives_memo_lifecycle as _m
 
 _NO_CONSOLE = no_console_creationflags()
 
+MUTATES = ["state/handoffs/*.md"]  # revert_ship_stamps/revert_close_stamps restore pre-stamp bytes into whichever baton candidates resolve_ship_stamp_candidates/resolve_close_stamp_candidates named as "state/handoffs/{basename}"; the actual stamp writes route through archive_stamp/handoff.transition, not this module
+
 
 class CommitTailOutcome(NamedTuple):
     """`run_close_commit`'s own return shape (C3, repointed off the killed

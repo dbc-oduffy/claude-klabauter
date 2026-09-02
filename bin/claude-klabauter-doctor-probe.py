@@ -785,9 +785,7 @@ def _run_probe_dialect_guard_armed(claude_klabauter_root: Path | None) -> _Probe
     settings-home log alone. This probe reads that same record's path
     (`dialect_parser_unavailable_log_path()`) for its remediation, rather
     than inventing a second one, and surfaces the degrade record's path
-    alongside it as `data["durable_degrade_record_exists"]` (Review:
-    overengineering-reviewer -- a path string alone carries no signal about
-    whether an event occurred).
+    alongside it in `data["durable_degrade_record"]`.
 
     Checks bare `python3` on PATH — what `hooks.json` runs every bash guard
     hook under — plus `sys.executable` (the interpreter running THIS
@@ -842,24 +840,17 @@ def _run_probe_dialect_guard_armed(claude_klabauter_root: Path | None) -> _Probe
         if not armed:
             disarmed.append(f"{label} ({interpreter}): {detail}")
 
-    # `durable_degrade_record_exists` reports whether a row has actually
-    # landed, not merely where one WOULD land — a path string carries no
-    # degrade signal on its own, since `degrade_path` resolves to the same
-    # location whether or not this guard (or anything else) ever wrote to
-    # it (Review: overengineering-reviewer — the prior shape printed the
-    # path unconditionally, in both the ARMED and DISARMED branches below).
     try:
         from coordinator_core.warm.telemetry import degrade_path
 
-        _degrade_path = degrade_path(claude_klabauter_root)
-        durable_degrade_record_exists = _degrade_path.exists()
+        durable_degrade_record = str(degrade_path(claude_klabauter_root))
     except Exception:  # noqa: BLE001 — advisory field, never fails the probe
-        durable_degrade_record_exists = None
+        durable_degrade_record = None
 
     data = {
         "checked": checked,
         "durable_record": str(dialect_parser_unavailable_log_path()),
-        "durable_degrade_record_exists": durable_degrade_record_exists,
+        "durable_degrade_record": durable_degrade_record,
     }
 
     if not disarmed:
@@ -898,10 +889,8 @@ def _run_probe_dialect_guard_armed(claude_klabauter_root: Path | None) -> _Probe
             "PowerShell dialect guard DISARMED under: " + "; ".join(disarmed)
             + f". Durable record: {data['durable_record']}"
             + (
-                ". Durable degrade record (DR-402): present"
-                if data["durable_degrade_record_exists"]
-                else ". Durable degrade record (DR-402): not yet written"
-                if data["durable_degrade_record_exists"] is False
+                f". Durable degrade record (DR-402): {data['durable_degrade_record']}"
+                if data["durable_degrade_record"]
                 else ""
             )
         ),

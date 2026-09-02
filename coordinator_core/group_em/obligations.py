@@ -67,6 +67,13 @@ _INTAKE_OPS = ("open", "progress", "blocked", "discharge")
 
 _INTAKE_SCHEMA = 1
 
+#: Corpus-mutator declaration (generator-provenance sweep): `record` appends
+#: to `state/subagent-share/<session-id>/obligations-inbound.jsonl` -- one
+#: file per session id, a data-dependent set GENERATES cannot name. Same
+#: extension-scoped glob convention as the sibling counters in this tree
+#: (`guard_advisory_counter.py`, `engine_provenance_counter.py`).
+MUTATES = ["state/subagent-share/**/*.jsonl"]
+
 # The filenames and the share-directory join live in `session.subagent_share`.
 # This module used to retype both AND reach into `send_pass`'s private
 # namespace for the join -- one string typo apart from reading a different

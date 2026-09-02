@@ -89,6 +89,14 @@ from pathlib import Path
 
 from coordinator_core.session import harness_registry
 
+#: Generator-provenance declaration (generator_provenance.py). `SettleLedger.
+#: save` writes `json.dumps(...)` to `self.path`, a `Path` the caller passes
+#: to `__init__` -- there is no in-module default and, as of this writing,
+#: no non-test caller in this repo constructs `SettleLedger` with a concrete
+#: path at all. GENERATES cannot name a fixed artifact for a destination
+#: this module never anchors anywhere itself.
+GENERATES = []
+
 # The harness's own idle notifier folds `shell` into idle
 # (`status === "idle" || status === "shell"`), so nothing downstream should
 # treat it as a third state. We match that fold deliberately.

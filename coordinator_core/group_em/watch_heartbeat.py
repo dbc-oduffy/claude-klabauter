@@ -57,6 +57,21 @@ from typing import Any, Optional
 
 _WATCH_RELATIVE_PATH = os.path.join("state", "group-em-watch.json")
 
+#: Generator-provenance declaration (generator_provenance.py). `write_atomic`
+#: rewrites `<repo_root>/state/group-em-watch.json` on every tick, but the
+#: destination has no genuine GENERATES contract: `repo_root` is a required
+#: parameter with no in-module default (`stamp`'s only caller-facing knob),
+#: so this module never anchors the write to its own tree the way e.g.
+#: `orientation/regenerate_cache.py` does; and the record's freshness is
+#: elapsed-time-since-`last_tick_at` (`is_fresh_and_foreign`, `VERDICT_STALE`
+#: below), never staleness-relative-to-a-source-file the way GENERATES'
+#: `sources`/`stamp_key` contract expects -- there is no source set whose
+#: mtime this heartbeat is regenerated from. A MUTATES glob is the wrong
+#: tool too: the target is one concrete filename, which this module's own
+#: validator (`_valid_mutates_shape` in generator_provenance.py) reserves
+#: for GENERATES. Declared empty rather than inventing either.
+GENERATES = []
+
 #: How long past this tick a reader should still call the watch armed. The
 #: watch's own poll interval is derived at arm time (see
 #: `watch._poll_interval_seconds`), so the deadline is a multiple of THAT

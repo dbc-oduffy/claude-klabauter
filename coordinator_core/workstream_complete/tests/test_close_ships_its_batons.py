@@ -275,6 +275,16 @@ def _load_falsifier_module():
     return module
 
 
+def _enclosing_function(tree: ast.Module, lineno: int) -> "ast.FunctionDef | None":
+    """The narrowest `def` containing *lineno*, or None at module scope."""
+    best: "ast.FunctionDef | None" = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.lineno <= lineno <= (node.end_lineno or node.lineno):
+            if best is None or node.lineno > best.lineno:
+                best = node
+    return best
+
+
 def _enclosing_function_source(tree: ast.Module, text: str, lineno: int) -> str:
     """The source text of the `def` that CONTAINS `lineno`, narrowest match
     first -- used to tell "a scan call that happens to live in this module"
@@ -315,7 +325,8 @@ def test_no_unbounded_corpus_walk_in_the_ship_stamp_writer_modules():
         visitor = falsifier.CallVisitor()
         visitor.visit(tree)
         for lineno, name in visitor.scan_calls:
-            hit = (path.name, lineno, name)
+            enclosing = _enclosing_function(tree, lineno)
+            hit = (path.name, enclosing.name if enclosing else "<module>", name)
             func_source = _enclosing_function_source(tree, text, lineno)
             if "handoffs" in func_source:
                 offending.append(hit)
@@ -332,7 +343,9 @@ def test_no_unbounded_corpus_walk_in_the_ship_stamp_writer_modules():
     # A NEW benign-looking hit is still worth a human look even though it
     # does not fail this guard on its own -- surfaced here rather than
     # swallowed by a bare `assert offending == []`.
-    assert benign == [("directives_commit_tail.py", 237, "abs_dir.rglob")], benign
+    assert benign == [
+        ("directives_commit_tail.py", "_peer_subagent_share_paths", "abs_dir.rglob")
+    ], benign
 
 
 def test_falsifier_ship_candidates_module_writes_the_two_files_the_plan_scoped():

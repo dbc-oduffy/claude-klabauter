@@ -76,6 +76,12 @@ from pathlib import Path
 from typing import List
 
 
+#: Generator-provenance declaration: `_write_index_atomically`'s only write is
+#: `state/cache/queue-grants-index.json` (via `_grant_index_path`) — derived
+#: state under gitignored `state/cache/` (module docstring's "Does NOT treat
+#: the index as a source of truth"), never a tracked repo artifact.
+GENERATES = []
+
 _QUEUE_DIRS = ("improvement-queue", "debt-backlog", "bug-backlog")
 
 #: Matches the `status:` FIELD set to `deferred`, anchored at column 0 so it can only

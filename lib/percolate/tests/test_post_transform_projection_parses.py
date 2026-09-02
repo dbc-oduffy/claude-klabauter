@@ -61,7 +61,7 @@ import pytest
 import yaml
 
 from coordinator.lib.percolate.allowlist import parse_allowlist_csv, split_inclusion_exclusion
-from coordinator.lib.percolate.targets import parse_portable_rows as _parse_portable_rows
+from coordinator.lib.percolate.targets import _iter_portable_rows
 from coordinator_core.percolate import engine
 from coordinator_core.percolate.store import load_store, resolve_target
 from coordinator_core.wire_paths import rel_id
@@ -73,6 +73,22 @@ _PORTABLE_TARGETS_PATH = _REPO_ROOT / "setup" / "publish-targets.portable"
 _STORE_PATH = _REPO_ROOT / "setup" / "percolate-hooks" / "percolate-store.yaml"
 
 _STRUCTURED_SUFFIXES = {".yaml", ".yml", ".json", ".toml"}
+
+
+def _parse_portable_rows(path: Path) -> list[dict[str, str]]:
+    """Parse `setup/publish-targets.portable`-shaped rows into
+    `{"name", "source_subdir", "allowlist"}` dicts -- mirrors
+    `test_scrub_table_shape_publish_surface._parse_portable_rows` field-for-field
+    (both derive from the same file, kept as separate small reads rather than an
+    import across sibling test modules)."""
+    rows = []
+    for raw_row in _iter_portable_rows(path):
+        fields = raw_row.split("|")
+        name = fields[0].strip()
+        source_subdir = fields[3].strip() if len(fields) > 3 else ""
+        allowlist_csv = fields[6].strip() if len(fields) > 6 else ""
+        rows.append({"name": name, "source_subdir": source_subdir, "allowlist": allowlist_csv})
+    return rows
 
 
 def _resolve_published_files(source_root: Path, allowlist_csv: str) -> list[Path]:

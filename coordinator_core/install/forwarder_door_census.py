@@ -544,7 +544,13 @@ def resolve_bare_name(stem: str, path_dirs: Sequence[str], pathext: str) -> "lis
     The `.ps1`-first claim is verified, not assumed -- see `_POWERSHELL_FIRST_EXT`'s
     comment for the captured `Get-Command`/PATHEXT trace."""
     exts = [_POWERSHELL_FIRST_EXT]
-    exts += [e for e in pathext.split(os.pathsep) if e]
+    # `;` by literal, never `os.pathsep`. The separator is a property of the
+    # PATHEXT VARIABLE, not of the host reading it: this function is pure over
+    # its arguments and is routinely handed a Windows PATHEXT on POSIX, where
+    # `os.pathsep` is `:` and a real `.COM;.EXE;.BAT` parses as ONE opaque
+    # extension. Every candidate then misses and the function answers "resolves
+    # to nothing" for a correctly installed door.
+    exts += [e for e in pathext.split(";") if e]
     exts.append("")
 
     hits: "list[Path]" = []
@@ -556,6 +562,28 @@ def resolve_bare_name(stem: str, path_dirs: Sequence[str], pathext: str) -> "lis
             if candidate.is_file() and candidate not in hits:
                 hits.append(candidate)
     return hits
+
+
+def _is_same_file(a: Path, b: Path) -> bool:
+    """True when two paths name the same file on disk.
+
+    Never `==`. `resolve_bare_name` builds its candidates by joining PATHEXT's
+    OWN casing onto the stem, so a `.EXE` entry in PATHEXT matches a lowercase
+    `.exe` on disk (NTFS and APFS are both case-insensitive) and comes back
+    spelled `.EXE`. Compared by equality against a lowercase
+    `DOOR_INSTALLED_NAME`, that reports a correctly installed door as BROKEN on
+    casing alone -- on Windows, the platform this report exists to serve.
+
+    Negative spec: do NOT "fix" this by lowercasing either side. The stem can
+    carry any casing, the filesystem may be case-SENSITIVE, and identity is the
+    question being asked. `os.path.samefile` answers it; the `normcase` arm is
+    the fallback for a path that does not exist, where identity is undecidable
+    and spelling is all there is.
+    """
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.normcase(str(a)) == os.path.normcase(str(b))
 
 
 def bare_name_starts_an_interpreter(winner: Path) -> bool:
@@ -623,7 +651,7 @@ def bare_name_door_report() -> "list[str]":
 
     winner = hits[0]
     lines.append(f"Winner: `{winner}`")
-    if winner != door:
+    if not _is_same_file(winner, door):
         lines.append(
             f"**BROKEN**: expected the settings-home door at `{door}`. Everything "
             f"typing the bare name reaches `{winner.name}` instead. Fix PATH "
@@ -635,7 +663,7 @@ def bare_name_door_report() -> "list[str]":
             f"**BREAK-CLASS**: `{winner}` starts an interpreter per call rather than "
             f"relaying natively (CLAUDE.md § The brightline)."
         )
-    if winner == door and not bare_name_starts_an_interpreter(winner):
+    if _is_same_file(winner, door) and not bare_name_starts_an_interpreter(winner):
         lines.append("OK -- the bare name reaches the native door.")
 
     shadowed = [h for h in hits[1:] if bare_name_starts_an_interpreter(h)]

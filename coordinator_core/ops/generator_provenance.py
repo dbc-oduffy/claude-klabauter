@@ -272,12 +272,20 @@ class FileWrites:
     `syntax_error` is carried for shape parity with a future bytes-keyed
     cache entry that failed to parse at all -- `_scan_file_writes` always
     takes an already-parsed `tree`, so it is always `False` here.
+
+    `write_surface_paths` carries `_static_write_surface_paths`' result for
+    the same reason every other field is here rather than recomputed in
+    `_resolve`: it is a pure function of the parsed source, so it belongs on
+    the cached side of the split. It is populated only when some write site
+    is unresolved -- that is the sole branch that reads it, and the walk is
+    not worth paying on a module whose targets all resolved.
     """
 
     generates: object
     mutates: object
     write_sites: list[str | None]
     syntax_error: bool
+    write_surface_paths: tuple[str, ...] = ()
 
 
 def _looks_like_tmp(target: str) -> bool:
@@ -1084,6 +1092,9 @@ def _scan_file_writes(tree: ast.AST) -> FileWrites:
         mutates=_extract_mutates(tree),
         write_sites=sites,
         syntax_error=False,
+        write_surface_paths=(
+            _static_write_surface_paths(tree) if any(site is None for site in sites) else ()
+        ),
     )
 
 
@@ -1138,7 +1149,7 @@ def _resolve(
         # weaker. Only a TRACKED match is honoured: an untracked declared path is
         # an unverifiable claim, and taking it would let a module drop out of the
         # counted population on its own say-so.
-        for declared in _static_write_surface_paths(tree):
+        for declared in writes.write_surface_paths:
             normalized = _normalize_target(declared)
             if tracked is not None and normalized in tracked:
                 return f"tracked:{normalized}"

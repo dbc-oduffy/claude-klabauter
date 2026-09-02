@@ -257,6 +257,8 @@ from coordinator_core.session import scope as session_scope
 
 _LOG = logging.getLogger(__name__)
 
+MUTATES = ["docs/plans/*.md", "archive/completed/**/*.md"]  # _fold_sha_into_entry_on_disk folds a landed commit sha into whichever caller-supplied completion_entry_path resolves under (contained to _FOLD_ALLOWED_ROOT_SUFFIXES); data-dependent target, not a fixed artifact
+
 OP_NAME = "ceremony.post_commit_tail"
 
 #: Tail-result label for the origin-stub-close leg — mirrors `wsc_tail.py`'s

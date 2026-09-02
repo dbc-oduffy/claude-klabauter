@@ -85,7 +85,10 @@ def test_clean_match_no_drift(tmp_path: Path, two_bin_dirs):
     assert result.ok is True
     assert result.skipped is False
     assert result.lines[0].startswith("[info]")  # advisory disposition, emitted every run
-    assert all(line.startswith("[ok]") for line in result.lines[1:])
+    # `[skip]` is a clean outcome, not drift: the extension axis checks a
+    # Windows-only citation shape and skips itself on every other host, so
+    # demanding `[ok]` on every line made this assertion pass only on Windows.
+    assert all(line.startswith(("[ok]", "[skip]")) for line in result.lines[1:])
     assert any("2 derived == 2 installed" in line for line in result.lines)
 
 

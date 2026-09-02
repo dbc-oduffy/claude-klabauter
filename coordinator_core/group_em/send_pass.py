@@ -160,6 +160,14 @@ from coordinator_core.session import peer_roster
 from coordinator_core.session.receiver_state import parse_iso_timestamp
 from coordinator_core.session import subagent_share
 
+#: Corpus-mutator declaration (generator-provenance sweep): `_record_offer`
+#: and `decline` append to `state/subagent-share/<session-id>/group-em-send-
+#: log.jsonl`, one file per session id -- a data-dependent set GENERATES
+#: cannot name. Same extension-scoped glob convention as the sibling
+#: counters in this tree (`guard_advisory_counter.py`,
+#: `engine_provenance_counter.py`).
+MUTATES = ["state/subagent-share/**/*.jsonl"]
+
 #: `gate` values `decline()` accepts -- which gate the EM declared against.
 #: No other value is written; `decline()` refuses anything else.
 DECLINE_GATES = frozenset({"gate1", "gate2"})
