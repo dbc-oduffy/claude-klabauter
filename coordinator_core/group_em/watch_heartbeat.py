@@ -252,6 +252,17 @@ def is_fresh_and_foreign(
         return False
     if now_epoch >= deadline_epoch:
         return False
+    if "writer_session_id" not in record:
+        # A record from a producer that predates this field carries no opinion
+        # about its writer, and absence is writer-UNKNOWN rather than a second
+        # party. Reading it as one refuses the entering crown its own watch for
+        # a whole `next_expected_by` interval -- the self-lockout this refusal
+        # exists to prevent, arrived at from the other side. Measured: the
+        # doctrine plane's `coordinator/skills/group-em/watch_heartbeat.py`
+        # still ships the pre-`writer_session_id` `stamp` signature, so every
+        # `groupem.enter` stamp lands here keyless and locked the entering
+        # session out of arming for 23 minutes.
+        return record.get("holder_session_id") != holder_session_id
     return (record.get("holder_session_id"), record.get("writer_session_id")) != (
         holder_session_id,
         writer_session_id,

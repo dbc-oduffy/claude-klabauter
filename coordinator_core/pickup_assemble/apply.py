@@ -183,6 +183,7 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.locked_write import locked_rmw
 from coordinator_core.pickup_assemble import (
     DISPOSITION_CONTENT_KEYS,
@@ -1468,6 +1469,36 @@ def _claim_dir_identity(claim_dir: Path) -> tuple:
     return (_recorded_claim_session_id(claim_dir), mtime)
 
 
+def _terminal_deployment_state(handoff_path: Path) -> Optional[str]:
+    """The record's `deployment_state` when it is one of
+    `HANDOFF_TERMINAL_DEPLOYMENT` ({shipped, abandoned, continued, closed}),
+    else `None` — `drop`'s discriminator for skipping the frontmatter leg
+    while still running the ledger release.
+
+    Reads `HANDOFF_TERMINAL_DEPLOYMENT` rather than the two-member
+    {in_flight, ready_to_fire} allowlist `cs_unclaim_handoff` itself checks:
+    the two are complements only across the states the schema actually
+    admits, and a record carrying `awaiting_gate` — neither terminal nor
+    unclaimable — must NOT take the skip path. It falls through to the
+    primitive, which refuses it loudly, because an awaiting-gate baton is a
+    live one whose claim release is not the caller's to decide silently.
+
+    `None` on unreadable/absent frontmatter, which routes to the primitive
+    and its own error — never inventing a terminal verdict from a failed
+    read."""
+    try:
+        text = handoff_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    split = split_frontmatter(text)
+    if split is None:
+        return None
+    deployment = read_fm_field_unquoted(split.fm_text, "deployment_state")
+    if isinstance(deployment, str) and deployment.strip() in HANDOFF_TERMINAL_DEPLOYMENT:
+        return deployment.strip()
+    return None
+
+
 def drop(
     artifact_path: str,
     *,
@@ -1492,6 +1523,22 @@ def drop(
     `APPLY_EXIT_PARTIAL_MUTATION` with `released: True`, `unclaimed` as the
     class inverse actually returned, and `commit_sha: None`, naming the
     underlying git error rather than letting it escape as a traceback.
+
+    TERMINAL BATON (2026-09-02): a handoff already stamped a member of
+    `HANDOFF_TERMINAL_DEPLOYMENT` runs the LEDGER leg only —
+    `release_artifact` fires, `cs_unclaim_handoff` is skipped, no commit is
+    made, and the report carries `frontmatter_revert: "skipped-terminal"`
+    with `unclaimed: None` and the observed `deployment_state`. The
+    primitive's own {in_flight, ready_to_fire} precondition is NOT relaxed:
+    unclaim resets to `open` + `ready_to_fire`, which on a shipped record
+    would un-ship it, so the frontmatter is meant to stay exactly where it
+    is. What was wrong was aborting the whole verb on that refusal, which
+    stranded the claim `brief` had already taken — `brief`'s claim grant
+    fires unconditionally and AHEAD of the `jshipped` judgment point, so
+    `pickup`'s own `confirm-shipped-stand-down` answer is reached holding a
+    claim and `drop` is the only route named to release it. `awaiting_gate`
+    is not terminal and does not take this path; it still reaches the
+    primitive and its loud refusal.
 
     HOLDER GATE (2026-08-30): before either composed primitive runs, and
     before `_scoped_commit`, `drop` reads the claim ledger dir ONCE for a
@@ -1869,6 +1916,39 @@ def drop(
         # mutation returns below because `release_artifact` has not run yet.
         if class_ == "handoff":
             resolved_handoff_path = _assert_in_repo_root(Path(artifact_path_value), root)
+            # TERMINAL BATON — registry leg only. `cs_unclaim_handoff` is
+            # defined as the "back on the shelf" reset to `open` +
+            # `ready_to_fire`, so it refuses any `deployment_state` outside
+            # {in_flight, ready_to_fire} — correctly: applying it to a
+            # shipped/continued/closed record would un-ship it. But `drop`
+            # composes TWO legs, and only the frontmatter one is out of
+            # scope here; the ledger release still has to run. Aborting the
+            # whole verb on the first leg's refusal strands the claim that
+            # `brief`'s own claim gate took: the brief-stage grant fires
+            # unconditionally and ahead of the `jshipped` judgment point, so
+            # a `confirm-shipped-stand-down` answer is REACHED holding a
+            # claim, and this was the only route named to release it.
+            # Negative-spec: do NOT relax the primitive's guard to admit
+            # terminal states — the frontmatter is meant to stay put; it is
+            # the composition that skips the leg, not the leg that widens.
+            terminal_deployment = _terminal_deployment_state(resolved_handoff_path)
+            if terminal_deployment is not None:
+                unclaimed = None
+                release_artifact(class_, basename, cwd=str(root))
+                # No frontmatter mutation happened, so there is nothing for
+                # `_scoped_commit` to commit — skipping it also spares the
+                # git spawn the brightline counts.
+                return APPLY_EXIT_OK, {
+                    "class": class_,
+                    "basename": basename,
+                    "released": True,
+                    "unclaimed": None,
+                    "frontmatter_revert": "skipped-terminal",
+                    "deployment_state": terminal_deployment,
+                    "claim_stage": CLAIM_STAGE_APPLY,
+                    "commit_sha": None,
+                    "abandonment_basis": gate_abandonment_basis,
+                }
             unclaimed = _normalize_primitive_result(cs_unclaim_handoff(str(resolved_handoff_path)))
             if not unclaimed:
                 return APPLY_EXIT_PARTIAL_MUTATION, {

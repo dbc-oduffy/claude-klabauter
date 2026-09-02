@@ -440,6 +440,33 @@ def test_a_fresh_foreign_record_is_declined_and_survives_unchanged(tmp_path):
     assert _record(tmp_path) == before
 
 
+def test_a_keyless_record_under_the_same_holder_does_not_lock_the_crown_out(tmp_path):
+    """The doctrine plane's `stamp` predates `writer_session_id`, so every
+    `groupem.enter` record lands here without the key. Read as a second party,
+    it refuses the entering session its OWN watch for a whole
+    `next_expected_by` interval -- measured at 23 minutes with nothing
+    watching and `--status` still reporting ALIVE.
+    """
+    record = {
+        "holder_session_id": "group-em-1",
+        "holder_name": None,
+        "last_tick_at": "2026-09-02T17:12:05Z",
+        "next_expected_by": "2026-09-02T17:35:05Z",
+        "subscribed_peers": 0,
+        "declinations": [],
+        "tick_source": "entry",
+    }
+    fresh = calendar.timegm(time.strptime("2026-09-02T17:15:00Z", "%Y-%m-%dT%H:%M:%SZ"))
+    assert "writer_session_id" not in record
+    assert watch_heartbeat.is_fresh_and_foreign(
+        record, fresh, "group-em-1", "monitor-writer"
+    ) is False
+    # A DIFFERENT holder in the same keyless record is still a live peer crown.
+    assert watch_heartbeat.is_fresh_and_foreign(
+        record, fresh, "group-em-2", "monitor-writer"
+    ) is True
+
+
 def test_a_stale_foreign_record_is_not_declined(tmp_path):
     """The previous writer is gone; declining here would deadlock the watch."""
     watch_heartbeat.stamp(

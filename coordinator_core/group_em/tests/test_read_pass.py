@@ -685,3 +685,33 @@ def test_the_projection_carries_the_peer_name_it_used_to_drop(monkeypatch):
     assert projected == [
         {"sessionId": "peer-1", "status": "idle", "cwd": REPO_ROOT, "name": "claude-klabauter-65"}
     ]
+
+
+def test_build_roster_is_exported_under_the_name_the_doctrine_plane_calls():
+    """The cross-plane contract names `build_roster`; entry calls it by that
+    name and degrades a raised leg into `Roster: 0 peer(s)`. Exporting only
+    the shortlist made an AttributeError look like a quiet fleet -- reported
+    on two repos the same day, each with four live peers.
+    """
+    assert callable(getattr(read_pass, "build_roster", None))
+
+
+def test_the_candidate_shortlist_is_a_subset_of_the_full_roster(monkeypatch):
+    """`build_candidate_roster` filters `build_roster` rather than
+    re-enumerating: two enumerations of one population can disagree between
+    the calls, and the digest is specified to run over the FULL population.
+    """
+    agents = [
+        {"sessionId": "caller", "cwd": "/repo", "name": "self", "status": "busy"},
+        {"sessionId": "peer-a", "cwd": "/repo", "name": "a", "status": "idle"},
+        {"sessionId": "peer-b", "cwd": "/repo", "name": "b", "status": "busy"},
+    ]
+    full = read_pass.build_roster(
+        "/repo", agents=agents, caller_session_id_value="caller"
+    )
+    shortlist = read_pass.build_candidate_roster(
+        "/repo", agents=agents, caller_session_id_value="caller"
+    )
+    assert len(full) == 2
+    full_ids = {v["session_id"] for v in full}
+    assert {v["session_id"] for v in shortlist} <= full_ids

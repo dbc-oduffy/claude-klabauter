@@ -690,6 +690,43 @@ def classify_peer(
     }
 
 
+def build_roster(
+    repo_root: str,
+    agents: Optional[list[dict[str, Any]]] = None,
+    caller_session_id_value: Optional[str] = None,
+    now: Optional[datetime] = None,
+    read_tail: Optional[Callable[[str, str], list[str]]] = None,
+) -> list[dict[str, Any]]:
+    """The FULL classified peer population for `repo_root` -- every peer this
+    pass enumerated, with its verdict, admitted or not.
+
+    THE NAME IS A CROSS-PLANE CONTRACT, not a convenience alias. The doctrine
+    plane's `coordinator/skills/group-em/SKILL.md` specifies
+    `build_roster(repo_root)` for the classified population and
+    `build_candidate_roster(repo_root)` for the paused-only shortlist, and its
+    Send-pass section specifies that the digest runs over THIS function's full
+    population, explicitly not the shortlist. `group-em-enter.py` calls it by
+    that name. Until now the engine exported only the shortlist, so the call
+    raised `AttributeError` and entry's leg-level degradation rendered it as
+    `Roster: 0 peer(s), 0 candidate(s)` -- reported on two repos the same day,
+    each with four live peers.
+
+    An empty list here means "enumerated, nobody present". It must never be
+    how a raised leg looks: a caller that cannot tell those apart is the
+    silent-zero this roster exists to remove (SKILL.md § Send pass -- a digest
+    of 0 says "quiet fleet" and "nobody was ever enumerated" identically).
+    """
+    if agents is None:
+        agents = fetch_live_agents(repo_root)
+    if caller_session_id_value is None:
+        caller_session_id_value = caller_session_id()
+
+    peers = enumerate_repo_peers(agents, caller_session_id_value)
+    return [
+        classify_peer(repo_root, peer, now=now, read_tail=read_tail) for peer in peers
+    ]
+
+
 def build_candidate_roster(
     repo_root: str,
     agents: Optional[list[dict[str, Any]]] = None,
@@ -717,15 +754,13 @@ def build_candidate_roster(
     This is a candidate list for a human to adjudicate, not a filtered
     verdict about who "shouldn't" be paused.
     """
-    if agents is None:
-        agents = fetch_live_agents(repo_root)
-    if caller_session_id_value is None:
-        caller_session_id_value = caller_session_id()
-
-    peers = enumerate_repo_peers(agents, caller_session_id_value)
-    verdicts = [
-        classify_peer(repo_root, peer, now=now, read_tail=read_tail) for peer in peers
-    ]
+    verdicts = build_roster(
+        repo_root,
+        agents=agents,
+        caller_session_id_value=caller_session_id_value,
+        now=now,
+        read_tail=read_tail,
+    )
     return [
         verdict
         for verdict in verdicts

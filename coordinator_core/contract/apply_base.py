@@ -1274,6 +1274,23 @@ def record_ledger_entry(
     try:
         kind, weight_basis = _ledger_kind_and_weight(str(repo_root), paths)
         committer_id = committer_id_override or _committer_id_for_ledger(repo_root)
+        if not committer_id:
+            # `resolve_session_id` documents empty as its legal "unresolvable"
+            # return that callers gate on, and `resolve_owner_handoff_id` hard-
+            # raises on it. Reached whenever this runs somewhere the caller's
+            # session identity never arrived -- notably a warm-served op, whose
+            # process env is the supervisor's and whose per-request
+            # `session_identity_override` scope was never bound. Billed to
+            # nobody is the same outcome as `handoff_id is None` below, so take
+            # that arm; the WARNING is what keeps the miss from being silent,
+            # since a swallowed traceback reads as a ledger bug rather than an
+            # identity one.
+            _LOG.warning(
+                "contract.apply_base: no committer identity for %s; ledger "
+                "row skipped (the commit already landed and is unaffected)",
+                sha,
+            )
+            return
         handoff_id, _degraded = resolve_owner_handoff_id(committer_id, Path(repo_root))
         if handoff_id:
             _ledger_append_entry(

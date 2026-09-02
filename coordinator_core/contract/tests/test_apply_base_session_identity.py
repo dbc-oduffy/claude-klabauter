@@ -242,3 +242,43 @@ def test_cold_resolution_returns_none_with_no_identity_anywhere(monkeypatch):
     for var in apply_base.SESSION_ENV_READ_ORDER:
         monkeypatch.delenv(var, raising=False)
     assert apply_base.resolve_explicit_session_id(None) is None
+
+
+def test_record_ledger_entry_gates_on_unresolvable_committer(monkeypatch, caplog, tmp_path):
+    """`resolve_session_id` documents empty as its legal "unresolvable"
+    return that callers gate on; `resolve_owner_handoff_id` hard-raises on
+    it. Before this gate, a warm-served commit -- whose process env is the
+    supervisor's and whose per-request identity scope was never bound --
+    reached the owner resolver with `""` and produced a `ValueError`
+    traceback under the "commit ledger write failed" warning, reading as a
+    ledger bug rather than an identity one. Observed live on an
+    `archive-stamp-cli action-memo` commit, 2026-09-02.
+
+    Asserts the gate, not the message text beyond its identity token: the
+    owner resolver is never reached, nothing is appended, and the miss is
+    still WARNed rather than silently dropped.
+    """
+    import logging
+
+    resolver_calls: list[object] = []
+    append_calls: list[object] = []
+
+    monkeypatch.setattr(
+        "coordinator_core.commit_ledger.resolve_owner.resolve_owner_handoff_id",
+        lambda *a, **k: resolver_calls.append(a) or ("h", False),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.commit_ledger.store.append_entry",
+        lambda *a, **k: append_calls.append(a),
+    )
+    monkeypatch.setattr(
+        apply_base, "_ledger_kind_and_weight", lambda *a, **k: ("artifact", None)
+    )
+    monkeypatch.setattr(apply_base, "_committer_id_for_ledger", lambda _root: "")
+
+    with caplog.at_level(logging.WARNING):
+        apply_base.record_ledger_entry(tmp_path, ["some/path.md"], "deadbeef")
+
+    assert resolver_calls == []
+    assert append_calls == []
+    assert any("no committer identity" in r.getMessage() for r in caplog.records)
