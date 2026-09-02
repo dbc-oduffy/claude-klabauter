@@ -1030,30 +1030,38 @@ def _poll_error_line() -> str:
     return "POLL-ERROR " + traceback.format_exc(limit=1).strip().replace("\n", " | ")
 
 
-def _compact_spool(repo_root: str, tick_now: datetime) -> None:
-    """Drop the spool records this tick has now accounted for.
+def _compact_spool(repo_root: str) -> None:
+    """Empty the spool now that this tick has classified off the live registry.
 
-    BOTH TICK PATHS COMPACT, and that is the whole answer to "who drains the
+    BOTH TICK PATHS CLEAR, and that is the whole answer to "who drains the
     spool": `tick_once` (the `--once` wake) and `main`'s held loop alike. A
     repo whose watch is a healthy held `Monitor` and whose cron never fires
     would otherwise spool into a file nothing ever shortened -- and at the
     volume the sibling plane's producer actually writes (`PAUSED:turn-ended`,
     one record per turn end per session) that is unbounded growth presenting
-    as a perfectly healthy watch. The debounce is `--once`'s alone, because a
-    held poller has no reason to defer to its own heartbeat; the COMPACTION
-    is not, because it is the classify that discharges a record, and both
-    paths classify.
+    as a perfectly healthy watch. Both paths classify off the live registry
+    every tick -- no debounce, no drain-point retention (`watch_spool` module
+    docstring, "THE SPOOL IS A DOORBELL") -- so there is nothing in the spool
+    either path still needs by the time this runs, and `watch_spool.clear`
+    is a blind truncate rather than a filtered drain. No `tick_now`/drain
+    point is threaded through any more: a prior revision needed one to
+    filter retained records by `at`; `clear` reads nothing, so there is no
+    point left to compute.
 
-    The drain point is the instant THIS tick classified, never `time.time()`
-    at the moment of the call: a record appended between the classify and
-    here has not been seen by anybody and must survive to the next tick.
-
-    Never raises and never gates -- `watch_spool.compact` returns False on an
-    I/O failure rather than raising, and a spool that could not be shortened
-    costs disk space, never correctness. Same posture as `watch_heartbeat.stamp`:
-    a failed housekeeping write must not be able to end a working watch.
+    NEVER RAISES, and the `except` below is what makes that true rather than
+    inherited. `watch_spool.clear` catches the I/O classes it names and
+    returns False, which covers the failures anyone predicted; it does not
+    promise the ones nobody did. This runs inside `main`'s held loop, where an
+    uncaught exception does not cost a tick -- it ends the watch process, and a
+    watch that died while housekeeping reads from outside exactly like a quiet
+    fleet. A spool that could not be cleared costs disk space, never
+    correctness. Same posture as `watch_heartbeat.stamp`: a failed housekeeping
+    write must not be able to end a working watch.
     """
-    watch_spool.compact(repo_root, tick_now.timestamp())
+    try:
+        watch_spool.clear(repo_root)
+    except Exception:
+        pass
 
 
 def tick_once(
@@ -1095,25 +1103,13 @@ def tick_once(
     out = sys.stdout if stream is None else stream
     emit = _emit_for(out)
 
-    # PRE-FLIGHT DEBOUNCE, before any roster read or classification. A wake
-    # whose spool holds nothing newer than the heartbeat's own `last_tick_at`
-    # has nothing new to classify -- `watch_spool.should_suppress_wake` is a
-    # cheap two-file read that answers this without touching the registry.
-    # Deliberately outside `poll_once`, which stays the one-job classifier
-    # (`watch_spool` module docstring, "THE DEBOUNCE").
-    if watch_spool.should_suppress_wake(repo_root):
-        emit(
-            "DEBOUNCED spool holds nothing newer than the last tick -- "
-            "skipping classification this wake"
-        )
-        return 0
-
     prev_parked = load_prev_parked(repo_root)
 
     # ONE instant for the whole tick, captured before the classify and reused
-    # as the compaction drain point below. `poll_once` would otherwise take
-    # its own, and a drain point even microseconds ahead of the classify
-    # would discard a record that classify never saw.
+    # for the heartbeat stamp below -- `poll_once` would otherwise take its
+    # own. No longer feeds a compaction drain point: `_compact_spool` clears
+    # unconditionally now (`watch_spool` module docstring, "THE SPOOL IS A
+    # DOORBELL").
     tick_now = now if now is not None else datetime.now(timezone.utc)
 
     try:
@@ -1167,7 +1163,7 @@ def tick_once(
         # no name to write. `stamp` carries the armed poller's forward rather
         # than blanking it -- a cheaper answer than a registry read per wake.
     )
-    _compact_spool(repo_root, tick_now)
+    _compact_spool(repo_root)
     return 0
 
 
@@ -1331,7 +1327,7 @@ def main(
                 holder_name=holder_name,
                 writer_session_id=caller_session_id,
             )
-            _compact_spool(repo_root, tick_now)
+            _compact_spool(repo_root)
             prev_parked = cur_parked
             prev_names = peer_notes
             prev_inbox_open = cur_inbox_open

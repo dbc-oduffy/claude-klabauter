@@ -23,15 +23,23 @@ substitution machinery layered ABOVE `_invoke_cli_main` in that file (in
 proper does not carry stdin support, matching neither more nor less than
 noted in the Contested Behaviours section below.
 
-Repo root, not `Path(__file__)` or process cwd (staff-eng finding,
-accepted, critical): each trio member computes its own script root as
-`Path(__file__).resolve().parents[2] / "coordinator" / "bin"` — safe there
-because each `apply.py` lives at a fixed depth under the repo root. This
-module lives in `ceremony_common/`, at a DIFFERENT depth than any of the
-three callers, so the same `Path(__file__)` computation would resolve to
-the wrong directory here. `resolve_cli_script_root` therefore takes
-`repo_root` as an explicit parameter and computes the join from it —
-never from this module's own file location, never from `Path.cwd()`.
+ENGINE root, not the target repo root and not process cwd. The scripts
+this module loads are ENGINE-PROVISIONED: `coordinator/bin/` ships with
+the claude-klabauter install this module is part of, and by construction does not
+exist in a consumer repo. `resolve_cli_script_root` therefore computes
+`Path(__file__).resolve().parents[2] / "coordinator" / "bin"` from this
+module's own location — the same depth every trio `apply.py` uses, and
+the same idiom as the `_BIN_DIR` constants in `merge_assemble`'s
+package `__init__` and its `apply` module. It takes NO `repo_root`: a caller's
+`repo_root` names the repo the CLI OPERATES ON (threaded through `args`
+and, for spawning callers, `cwd`), never the tree the CLI SHIPS IN.
+Conflating the two is the defect this signature exists to make
+unspellable — an earlier `resolve_cli_script_root(repo_root)` joined
+`coordinator/bin` onto the consumer root, which aborted the merge
+ceremony's `apply` at its first in-process directive in every repo that
+is not the engine checkout (three independent consumer repos reported it
+on 2026-09-02). `Path.cwd()` remains wrong for the separate reason
+below.
 
 CWD IS A LOAD-BEARING GAP THE TRIO NEVER HAD. Verified against the actual
 emitted directives (`build_directives(Path('.'), tag_prefix='v',
@@ -164,8 +172,8 @@ from coordinator_core.ceremony_common.cli_rejection import (
 #: `spec_from_file_location`/`SourceFileLoader` and plays no part in the
 #: cache key. This is defence-in-depth, not a fix for a live defect: today
 #: every trio caller resolves scripts from this module's own
-#: `resolve_cli_script_root` (a fixed `coordinator/bin` under an explicit
-#: `repo_root`), so two different on-disk scripts never collide under one
+#: `resolve_cli_script_root` (a fixed `coordinator/bin` under the engine
+#: root), so two different on-disk scripts never collide under one
 #: `module_name` in practice. Keying by path anyway means a future change
 #: to how callers resolve scripts can't silently reintroduce a stale-cache
 #: hit. Neither mtime nor file content participates in the key — a script
@@ -174,13 +182,16 @@ from coordinator_core.ceremony_common.cli_rejection import (
 _LOADED_MODULES: dict[str, ModuleType] = {}
 
 
-def resolve_cli_script_root(repo_root: Path) -> Path:
+def resolve_cli_script_root() -> Path:
     """The `coordinator/bin` directory holding every consumes-manifest
-    script, joined from an explicit `repo_root` — never from `Path(
-    __file__)` (this module's own location does not sit at the same depth
-    under the repo root as any of the three trio callers) and never from
-    `Path.cwd()` (see module docstring, "CWD IS A LOAD-BEARING GAP")."""
-    return repo_root / "coordinator" / "bin"
+    script, resolved from THIS module's own location — the engine clone
+    that ships both this module and those scripts.
+
+    Takes no `repo_root` BY DESIGN (see module docstring): `coordinator/
+    bin/` is engine-provisioned and absent from every consumer repo, so a
+    caller's target-repo root is never a valid script root. Never
+    `Path.cwd()` either (module docstring, "CWD IS A LOAD-BEARING GAP")."""
+    return Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 
 
 def load_cli_module(module_name: str, script_path: Path) -> ModuleType:

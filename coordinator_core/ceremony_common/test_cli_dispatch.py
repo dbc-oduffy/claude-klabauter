@@ -26,9 +26,17 @@ def _write_script(tmp_path: Path, name: str, body: str) -> Path:
     return script_path
 
 
-def test_resolve_cli_script_root_joins_from_explicit_repo_root(tmp_path: Path):
-    root = resolve_cli_script_root(tmp_path)
-    assert root == tmp_path / "coordinator" / "bin"
+def test_resolve_cli_script_root_anchors_on_the_engine_clone(tmp_path: Path):
+    """Engine-anchored, and no `repo_root` parameter to conflate with it —
+    see the module docstring's ENGINE-root paragraph and
+    `merge_assemble/tests/test_producer_root_is_engine_not_target_repo.py`
+    for the consumer-repo failure the old repo-root join produced."""
+    import coordinator_core.ceremony_common.cli_dispatch as cli_dispatch
+
+    engine_root = Path(cli_dispatch.__file__).resolve().parents[2]
+    assert resolve_cli_script_root() == engine_root / "coordinator" / "bin"
+    with pytest.raises(TypeError):
+        resolve_cli_script_root(tmp_path)  # type: ignore[call-arg]
 
 
 def test_load_cli_module_loads_extensionless_script(tmp_path: Path):

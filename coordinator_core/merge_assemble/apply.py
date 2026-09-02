@@ -98,10 +98,12 @@ DirectiveResult = apply_base.DirectiveResult
 _resolve_explicit_session_id = apply_base.resolve_explicit_session_id
 _session_identity = apply_base.session_identity
 
-#: `coordinator/bin/` — resolved from THIS module's own location, never
-#: from a target repo's `repo_root` (which may differ from the claude-klabauter
-#: install this module ships from).
-_BIN_DIR = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+#: `coordinator/bin/` — resolved from the ENGINE clone, never from a
+#: target repo's `repo_root` (which may differ from the claude-klabauter install
+#: this module ships from, and in every consumer repo has no
+#: `coordinator/bin/` at all). Both dispatch paths — `_run_py_script`
+#: and `_dispatch_in_process` — resolve their script here.
+_BIN_DIR = resolve_cli_script_root()
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -141,12 +143,14 @@ def _dispatch_result(cli: str, proc: subprocess.CompletedProcess) -> dict[str, A
     return {"cli": cli, "returncode": proc.returncode, "stdout": proc.stdout.strip()}
 
 
-def _dispatch_in_process(cli: str, script_name: str, args: list[str], repo_root: Path) -> dict[str, Any]:
+def _dispatch_in_process(cli: str, script_name: str, args: list[str]) -> dict[str, Any]:
     """Shared body for merge_assemble's three IN-PROCESS verbs (C2 AC3):
-    resolves `<repo_root>/coordinator/bin/<script_name>.py` via
-    `ceremony_common.cli_dispatch.resolve_cli_script_root` — `repo_root`
-    always explicit, never `Path(__file__)`/`Path.cwd()` (that module's own
-    docstring, "CWD IS A LOAD-BEARING GAP") — loads it once per process via
+    resolves `<engine>/coordinator/bin/<script_name>.py` via `_BIN_DIR`
+    (`ceremony_common.cli_dispatch.resolve_cli_script_root`), exactly as
+    `_run_py_script` does — the script SHIPS in the engine; `repo_root`
+    names only the repo the CLI OPERATES ON and reaches the CLI through
+    `args`, never through the script path. Never `Path.cwd()` (that
+    module's own docstring, "CWD IS A LOAD-BEARING GAP") — loads it once per process via
     `load_cli_module` (cached by module name across calls in this same
     engine process), and invokes its `main()` via `invoke_cli_main`. No
     subprocess, ever, for the three callers of this function.
@@ -172,7 +176,7 @@ def _dispatch_in_process(cli: str, script_name: str, args: list[str], repo_root:
     resolved nonzero exit: still `RuntimeError`, mapped from the
     primitive's returned integer exit code exactly as it was from a
     `subprocess.CompletedProcess.returncode`."""
-    script_path = resolve_cli_script_root(repo_root) / f"{script_name}.py"
+    script_path = _BIN_DIR / f"{script_name}.py"
     if not script_path.is_file():
         raise UnrecognizedDirective(
             f"{cli}: no producer at {script_path} — cannot dispatch in-process"
@@ -272,7 +276,7 @@ def _dispatch_merge_recovery_and_tag_cut(args: list[str], repo_root: Path) -> di
             "script but is never dispatched here)"
         )
     return _dispatch_in_process(
-        "merge-recovery-and-tag-cut", "merge-recovery-and-tag-cut", resolved_args, repo_root
+        "merge-recovery-and-tag-cut", "merge-recovery-and-tag-cut", resolved_args
     )
 
 
@@ -306,7 +310,7 @@ def _dispatch_portability_sweep(args: list[str], repo_root: Path) -> dict[str, A
     if it is ever invoked anyway). The gate still reports `"unavailable"`,
     never `"passed"`, either way — converging this verb does not change
     that."""
-    return _dispatch_in_process("portability-sweep", "portability-sweep", args, repo_root)
+    return _dispatch_in_process("portability-sweep", "portability-sweep", args)
 
 
 def _dispatch_check_no_illegal_paths(args: list[str], repo_root: Path) -> dict[str, Any]:
@@ -317,7 +321,7 @@ def _dispatch_check_no_illegal_paths(args: list[str], repo_root: Path) -> dict[s
     handler injects `str(repo_root)` as that positional so the in-process
     call — which never chdirs — targets `repo_root`."""
     return _dispatch_in_process(
-        "check-no-illegal-paths", "check-no-illegal-paths", [str(repo_root), *args], repo_root
+        "check-no-illegal-paths", "check-no-illegal-paths", [str(repo_root), *args]
     )
 
 
