@@ -688,3 +688,35 @@ class TestContendedLockWaitSecs:
     def test_malformed_or_non_positive_falls_back(self, monkeypatch, raw):
         monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, raw)
         assert locked_write.contended_lock_wait_secs(default=42.0) == 42.0
+
+
+class TestLockHolderAgeSuffix:
+    """A UTC stamp read against a local clock is how a ten-minute-old lock
+    reads as seventy minutes old. The offset is present in the stamp and gets
+    misread anyway, so the describer carries an age that cannot be read in the
+    wrong zone."""
+
+    def test_offset_stamp_yields_an_age(self):
+        from datetime import datetime, timedelta, timezone
+
+        held = datetime.now(timezone.utc) - timedelta(seconds=600)
+        suffix = locked_write._lock_age_suffix(held.isoformat())
+        assert suffix.startswith(" age=")
+        assert 595 <= int(suffix.removeprefix(" age=").removesuffix("s")) <= 605
+
+    def test_z_stamp_yields_the_same_age(self):
+        from datetime import datetime, timedelta, timezone
+
+        held = datetime.now(timezone.utc) - timedelta(seconds=300)
+        z_form = held.isoformat().replace("+00:00", "Z")
+        suffix = locked_write._lock_age_suffix(z_form)
+        assert 295 <= int(suffix.removeprefix(" age=").removesuffix("s")) <= 305
+
+    @pytest.mark.parametrize(
+        "stamp",
+        ["2026-09-02T19:00:02", "unknown time", "", None, 17],
+        ids=["naive", "sentinel", "empty", "none", "nonstring"],
+    )
+    def test_unusable_stamp_says_nothing_rather_than_guessing(self, stamp):
+        """A wrong age is worse than no age -- it is the failure this closes."""
+        assert locked_write._lock_age_suffix(stamp) == ""

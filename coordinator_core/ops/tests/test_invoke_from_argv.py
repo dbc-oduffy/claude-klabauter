@@ -586,113 +586,249 @@ def test_warm_request_carrying_no_identity_shows_the_cli_none(tmp_path, monkeypa
 
 
 # ---------------------------------------------------------------------------
-# (h) `params.entrypoint` set: `--help`/`-h` is intercepted BEFORE `main_fn`
-#     is ever called — the third door (docs/plans/2026-09-02-the-loader-
-#     fires-the-assembly-not-the-em.md, chunk C1 follow-up). This is the
-#     ARGV_SHAPE_NONE class that made `--help` unreachable: `main_fn()` is
-#     called with no argv at all on that shape, so the flag must never reach
-#     `_load_entrypoint_main`/`main_fn` in the first place.
+# (h) `params.entrypoint` set: `--help`/`-h` renders a target's REAL usage on
+#     the warm door — the third door
+#     (docs/plans/2026-09-02-the-loader-fires-the-assembly-not-the-em.md,
+#     chunk C1 follow-up), corrected after a first pass synthesized a stub
+#     line for EVERY entrypoint and silently replaced 11 targets' real usage
+#     with `usage: <name> [--help]` on the warm door only (never reproduced
+#     cold), hiding a live, published flag (`baton-assemble
+#     --expect-discovery-tier`).
+#
+#     Fixtures rather than the real `coordinator/bin/baton-assemble.py` /
+#     `plan-assemble.py`: those two route through `entry_point_shim`'s
+#     engine-mapped entries, which resolve the claude-klabauter root via a
+#     machine-local registry read this suite's own root `conftest.py`
+#     deliberately quarantines the real HOME directory from — calling their
+#     real `--help` inside THIS test process silently hits that
+#     resolution failure and (correctly, per `_render_usage_text`'s own
+#     fallback chain) falls back to a synthesized line, which would make
+#     these tests pass on a false basis. The fixtures below exercise the
+#     exact same `_run_entrypoint` code path (real `_load_entrypoint_main` +
+#     real `main_fn(["--help"])` call under the real lock/chdir span) against
+#     a target whose own module body has no such external dependency —
+#     `workday-start-inbox-blitz-assemble` (the real ARGV_SHAPE_NONE member)
+#     is used directly below since its short-circuit never loads a module at
+#     all and so carries no such fragility.
+#
+#     `main_fn` IS entered with `["--help"]` standing in for the caller's
+#     real argv for ARGV_SHAPE_FULL/TAIL targets, exactly as the cold door's
+#     `entry_point_shim.run_target` does; it is NEVER entered for
+#     ARGV_SHAPE_NONE, which cannot receive a flag at all.
 # ---------------------------------------------------------------------------
 
 
-def _write_fake_entrypoint(tmp_path, name: str, *, argv_shape_none: bool = True) -> None:
-    bin_dir = tmp_path / "coordinator" / "bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    if argv_shape_none:
+def _write_delegating_entrypoint(bin_dir: Path, name: str, *, real_help_branch: bool) -> None:
+    """A TAIL/FULL-shaped fixture. `real_help_branch=True` mirrors
+    `baton-assemble`'s shape (an explicit, first-checked `--help` branch
+    that prints real multi-line usage and returns before any op-reaching
+    code runs). `real_help_branch=False` mirrors `plan-assemble`'s shape (no
+    explicit branch — falls through to argparse, which prints its usage line
+    to stderr ALONGSIDE a genuine 'unrecognized argument' parse-error line)."""
+    if real_help_branch:
         body = (
-            "def main():\n"
-            "    raise AssertionError('main_fn must not be called for --help')\n"
+            "import builtins\n"
             "\n"
             "\n"
-            "if __name__ == '__main__':\n"
-            "    main()\n"
-        )
-    else:
-        body = (
             "def main(argv):\n"
+            "    if '--help' in argv or '-h' in argv:\n"
+            "        print('usage: " + name + " brief <kind> [--flag-added-later]')\n"
+            "        print('  a real, multi-line usage block')\n"
+            "        return 0\n"
+            "    builtins._ENTRYPOINT_OP_ENTERED = True\n"
             "    return 0\n"
             "\n"
             "\n"
             "if __name__ == '__main__':\n"
             "    import sys\n"
-            "    sys.exit(main(sys.argv[1:]))\n"
+            "    sys.exit(main(sys.argv))\n"
+        )
+    else:
+        body = (
+            "import argparse\n"
+            "import builtins\n"
+            "\n"
+            "\n"
+            "def main(argv):\n"
+            "    parser = argparse.ArgumentParser(prog='" + name + "', add_help=False)\n"
+            "    parser.add_argument('--route')\n"
+            "    try:\n"
+            "        parser.parse_args(argv)\n"
+            "    except SystemExit:\n"
+            "        return 2\n"
+            "    builtins._ENTRYPOINT_OP_ENTERED = True\n"
+            "    return 0\n"
+            "\n"
+            "\n"
+            "if __name__ == '__main__':\n"
+            "    import sys\n"
+            "    sys.exit(main(sys.argv))\n"
         )
     (bin_dir / f"{name}.py").write_text(body, encoding="utf-8")
 
 
-def test_help_intercepted_for_argv_shape_none_entrypoint(tmp_path):
-    """The live example: `workday-start-inbox-blitz-assemble`'s own
-    `__main__` guard calls `main()` with no arguments, classifying as
-    ARGV_SHAPE_NONE — exactly the shape that discarded `--help` before this
-    fix."""
-    name = "workday-start-inbox-blitz-assemble"
-    _write_fake_entrypoint(tmp_path, name, argv_shape_none=True)
+def test_help_delegates_to_a_full_shaped_targets_own_real_usage(tmp_path):
+    """The regression this follow-up exists to close: a delegating target's
+    real, multi-line usage must survive the warm door, not collapse to a
+    one-line stub — proven against a fixture with its own explicit `--help`
+    branch (the shape `baton-assemble` uses)."""
+    import builtins
 
-    with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
-        invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
-    ):
-        with mock.patch.object(
-            invoke_from_argv,
-            "_load_entrypoint_main",
-            side_effect=AssertionError("main must never be loaded/called for --help"),
+    name = "fake-entrypoint-full-shape-help"
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    _write_delegating_entrypoint(bin_dir, name, real_help_branch=True)
+
+    builtins._ENTRYPOINT_OP_ENTERED = False
+    try:
+        with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
+            invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
         ):
             result = _run_entrypoint(name, ["--help"], str(tmp_path))
 
+        assert result["exit_code"] == 0
+        assert result["stderr"] == ""
+        assert "brief <kind>" in result["stdout"]
+        assert "--flag-added-later" in result["stdout"], (
+            "a live flag on the target's own usage text must be visible "
+            "through the warm door — a stub line would hide it"
+        )
+        assert len(result["stdout"].splitlines()) > 1, (
+            "a real usage render is not a single synthesized line"
+        )
+        assert builtins._ENTRYPOINT_OP_ENTERED is False, (
+            "a --help gesture must never reach the target's op-performing branch"
+        )
+    finally:
+        del builtins._ENTRYPOINT_OP_ENTERED
+
+
+def test_help_delegates_for_a_tail_shaped_target_without_leaking_the_parse_error(tmp_path):
+    """`plan-assemble` has no explicit `--help` branch of its own and falls
+    through to its hand-rolled parser's usage/parse-error path — the exact
+    trap that already cost C1 a round (usage on stderr ALONGSIDE a genuine
+    'unrecognized argument' line). Only the real usage line may surface."""
+    name = "fake-entrypoint-tail-shape-help"
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    _write_delegating_entrypoint(bin_dir, name, real_help_branch=False)
+
+    with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
+        invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
+    ):
+        result = _run_entrypoint(name, ["--help"], str(tmp_path))
+
     assert result["exit_code"] == 0
     assert result["stderr"] == ""
-    assert "usage" in result["stdout"].lower()
-    assert name in result["stdout"]
+    assert f"usage: {name}" in result["stdout"]
+    assert "--route" in result["stdout"]
+    assert "unrecognized argument" not in result["stdout"].lower()
+
+
+def test_help_synthesizes_only_for_the_argv_shape_none_entrypoint():
+    """Positive assertion naming the shape, not an absence: synthesis is
+    used ONLY for `workday-start-inbox-blitz-assemble` (the real
+    ARGV_SHAPE_NONE member — its own `main()` takes no argv and always runs
+    its full body regardless of what it is "called with", so it has no
+    external-dependency fragility a fixture would need to dodge), and
+    `main_fn` is never entered to produce it — proven by making the loader
+    raise if called at all."""
+    name = "workday-start-inbox-blitz-assemble"
+    script = Path(invoke_from_argv._ENGINE_ROOT) / "coordinator" / "bin" / f"{name}.py"
+    shape = invoke_from_argv._entrypoint_argv_shape(script)
+    from coordinator_core.warm import serve_classifier
+
+    assert shape == serve_classifier.ARGV_SHAPE_NONE, (
+        f"{name} must be the ARGV_SHAPE_NONE fixture this test relies on; "
+        f"got {shape!r} — this target's own __main__ guard shape changed"
+    )
+
+    with mock.patch.object(
+        invoke_from_argv,
+        "_load_entrypoint_main",
+        side_effect=AssertionError("main_fn must never be loaded/called for --help on this shape"),
+    ):
+        result = _run_entrypoint(name, ["--help"], _PROJECT_ROOT)
+
+    assert result["exit_code"] == 0
+    assert result["stderr"] == ""
+    assert result["stdout"] == f"usage: {name} [--help]\n"
 
 
 def test_help_wins_after_a_subcommand_token(tmp_path):
-    name = "fake-entrypoint-help-subcommand"
-    _write_fake_entrypoint(tmp_path, name, argv_shape_none=False)
+    """Position is not special-cased — `--help` reached after a real
+    subcommand token still renders the target's real usage."""
+    import builtins
 
-    with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
-        invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
-    ):
-        with mock.patch.object(
-            invoke_from_argv,
-            "_load_entrypoint_main",
-            side_effect=AssertionError("main must never be loaded/called for --help"),
+    name = "fake-entrypoint-help-subcommand"
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    _write_delegating_entrypoint(bin_dir, name, real_help_branch=True)
+
+    builtins._ENTRYPOINT_OP_ENTERED = False
+    try:
+        with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
+            invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
         ):
             result = _run_entrypoint(name, ["brief", "--help"], str(tmp_path))
 
-    assert result["exit_code"] == 0
-    assert result["stderr"] == ""
-    assert "usage" in result["stdout"].lower()
+        assert result["exit_code"] == 0
+        assert result["stderr"] == ""
+        assert "brief <kind>" in result["stdout"]
+        assert builtins._ENTRYPOINT_OP_ENTERED is False
+    finally:
+        del builtins._ENTRYPOINT_OP_ENTERED
 
 
-def test_short_help_flag_also_intercepted(tmp_path):
+def test_short_help_flag_also_delegates(tmp_path):
     name = "fake-entrypoint-help-short"
-    _write_fake_entrypoint(tmp_path, name, argv_shape_none=False)
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    _write_delegating_entrypoint(bin_dir, name, real_help_branch=True)
 
     with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
         invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
     ):
-        with mock.patch.object(
-            invoke_from_argv,
-            "_load_entrypoint_main",
-            side_effect=AssertionError("main must never be loaded/called for --help"),
-        ):
-            result = _run_entrypoint(name, ["-h"], str(tmp_path))
+        result = _run_entrypoint(name, ["-h"], str(tmp_path))
 
     assert result["exit_code"] == 0
-    assert "usage" in result["stdout"].lower()
+    assert "brief <kind>" in result["stdout"]
 
 
 def test_normal_invocation_still_reaches_main_fn(tmp_path):
-    """No-flag invocation is unaffected — `main_fn` is genuinely called."""
+    """No-flag invocation is unaffected — `main_fn` is genuinely called,
+    proven by a fake target that mutates a shared record when actually
+    entered (rather than merely asserting exit_code, which a --help
+    short-circuit could also satisfy)."""
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
     name = "fake-entrypoint-normal-invocation"
-    _write_fake_entrypoint(tmp_path, name, argv_shape_none=False)
+    (bin_dir / f"{name}.py").write_text(
+        "import builtins\n"
+        "\n"
+        "\n"
+        "def main(argv):\n"
+        "    builtins._ENTRYPOINT_NORMAL_INVOCATION_SEEN = list(argv)\n"
+        "    return 0\n",
+        encoding="utf-8",
+    )
 
-    with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
-        invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
-    ):
-        result = _run_entrypoint(name, ["some", "args"], str(tmp_path))
+    import builtins
 
-    assert result["exit_code"] == 0
-    assert result["stderr"] == ""
+    builtins._ENTRYPOINT_NORMAL_INVOCATION_SEEN = None
+    try:
+        with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
+            invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
+        ):
+            result = _run_entrypoint(name, ["some", "args"], str(tmp_path))
+
+        assert result["exit_code"] == 0
+        assert result["stderr"] == ""
+        assert builtins._ENTRYPOINT_NORMAL_INVOCATION_SEEN == ["some", "args"], (
+            "main_fn must actually run and see the real argv for a no-flag call"
+        )
+    finally:
+        del builtins._ENTRYPOINT_NORMAL_INVOCATION_SEEN
 
 
 def test_the_servers_own_session_env_is_restored_after_the_call(tmp_path, monkeypatch):

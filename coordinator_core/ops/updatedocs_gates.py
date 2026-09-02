@@ -201,6 +201,58 @@ _CLI_SITE = "coordinator_core/ops/updatedocs_gates.py :: _run"
 _DEFAULT_CLI_TIMEOUT_SECONDS = bound_for(_CLI_SITE)
 
 
+def _windows_pathext() -> tuple[str, ...]:
+    """The host's own list of directly-executable suffixes, lowercased.
+
+    Read from `PATHEXT` rather than hard-coded so a box that publishes its
+    entrypoints under a non-default extension resolves them; the fallback is
+    the Windows default value of that variable."""
+    raw = os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD"
+    return tuple(e.strip().lower() for e in raw.split(os.pathsep) if e.strip().startswith("."))
+
+
+def _resolve_cli(bin_dir: Path, name: str) -> Path:
+    """Resolves a `bin/` entrypoint name to the file the host actually ships.
+
+    The gate battery names its CLIs the way the authoring repo writes them —
+    extensionless (`verify-skill-anchor-links`) or `.py`
+    (`check-rag-state.py`). A deployed tree may publish the same entrypoint
+    under a platform extension instead: on Windows the coordinator installer
+    emits native forwarders (`verify-skill-anchor-links.exe`), so an
+    exact-name `is_file()` test reports "CLI not found" for a CLI that is
+    present.
+
+    Candidate order follows the host's own executability rule rather than a
+    per-OS name list. On Windows the `PATHEXT` forms come first — an
+    extensionless file is not executable there at all, so a co-located
+    extensionless script must lose to the forwarder that can actually run —
+    then the name as written, the launcher-shim `.ps1`, and the source
+    `.py`/extensionless forms. On POSIX the name as written wins and no
+    extension is invented: `.exe` is never a candidate off Windows.
+
+    Returns the canonical `bin_dir / name` when nothing resolves, so the
+    caller's UNAVAILABLE message names the path it looked for."""
+    base = name[:-3] if name.endswith(".py") else name
+    candidates: list[str] = []
+    if sys.platform == "win32":
+        candidates.extend(base + ext for ext in _windows_pathext())
+        candidates.append(name)
+        candidates.append(base + ".ps1")
+    else:
+        candidates.append(name)
+    candidates.extend((base, base + ".py"))
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        resolved = bin_dir / candidate
+        if resolved.is_file():
+            return resolved
+    return bin_dir / name
+
+
 def _windows_exec_argv(cli_path: Path, args: list[str]) -> Optional[list[str]]:
     """Resolves the Windows-executable argv form of an extensionless CLI.
     `CreateProcess` (what `subprocess.run` uses under the hood on Windows)
@@ -214,6 +266,16 @@ def _windows_exec_argv(cli_path: Path, args: list[str]) -> Optional[list[str]]:
     read stays a last resort rather than competing with an already-generated
     shim. Returns None (never raises) when nothing resolves; the caller
     treats that exactly like today's direct-exec OSError — UNAVAILABLE."""
+    suffix = cli_path.suffix.lower()
+    if suffix and cli_path.is_file():
+        if suffix in _windows_pathext():
+            return [str(cli_path), *args]
+        if suffix == ".ps1":
+            powershell = shutil.which("powershell") or shutil.which("pwsh")
+            if powershell is None:
+                return None
+            return [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(cli_path), *args]
+
     cmd_sibling = Path(str(cli_path) + ".cmd")
     if cmd_sibling.is_file():
         return [str(cmd_sibling), *args]
@@ -365,7 +427,7 @@ def _gate_repomap(repo_root: Path, settings_home: Path, overrides: dict) -> Gate
     bin_dir = settings_home / "bin"
     rag_state = overrides.get("rag_state")
     if not rag_state:
-        check_rag_state_cli = Path(overrides["check_rag_state_cli"]) if overrides.get("check_rag_state_cli") else bin_dir / "check-rag-state.py"
+        check_rag_state_cli = Path(overrides["check_rag_state_cli"]) if overrides.get("check_rag_state_cli") else _resolve_cli(bin_dir, "check-rag-state.py")
         proc = _run(check_rag_state_cli, [])
         rag_state = proc.stdout.strip() if proc and proc.returncode == 0 else "unknown"
         if not rag_state:
@@ -374,7 +436,7 @@ def _gate_repomap(repo_root: Path, settings_home: Path, overrides: dict) -> Gate
     if rag_state == "fresh":
         return GateResult("repomap-gate", GateVerdict.CLEAN, "repomap skipped (RAG present + fresh)")
 
-    generate_repomap_cli = Path(overrides["generate_repomap_cli"]) if overrides.get("generate_repomap_cli") else bin_dir / "generate-repomap.py"
+    generate_repomap_cli = Path(overrides["generate_repomap_cli"]) if overrides.get("generate_repomap_cli") else _resolve_cli(bin_dir, "generate-repomap.py")
     if not generate_repomap_cli.is_file():
         return GateResult(
             "repomap-gate",
@@ -472,7 +534,7 @@ def _gate_distill_threshold(repo_root: Path, _settings: Path, overrides: dict) -
 
 
 def _gate_lens_orthogonality(_repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
-    cli = Path(overrides["cli"]) if overrides.get("cli") else settings_home / "bin" / "verify-parallel-review-lens-orthogonality"
+    cli = Path(overrides["cli"]) if overrides.get("cli") else _resolve_cli(settings_home / "bin", "verify-parallel-review-lens-orthogonality")
     if not cli.exists():
         return GateResult("11f-lens-orthogonality", GateVerdict.UNAVAILABLE, f"CLI not found at {cli}")
     proc = _run(cli, [])
@@ -498,7 +560,7 @@ _VALIDATED_RE = re.compile(r"(\d+)\s+validated", re.IGNORECASE)
 
 
 def _gate_plugin_wiki(_repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
-    cli = Path(overrides["cli"]) if overrides.get("cli") else settings_home / "bin" / "sync-plugin-wiki"
+    cli = Path(overrides["cli"]) if overrides.get("cli") else _resolve_cli(settings_home / "bin", "sync-plugin-wiki")
     if not cli.exists():
         return GateResult("11g-plugin-wiki", GateVerdict.UNAVAILABLE, f"CLI not found at {cli}")
     proc = _run(cli, [])
@@ -575,7 +637,7 @@ def _gate_skill_anchor_links(_repo_root: Path, settings_home: Path, overrides: d
     """Never collapse exit 1 into exit 2 — "found dead anchors" and "could not
     check" are different verdicts (the incident this whole op exists to
     prevent from recurring)."""
-    cli = Path(overrides["cli"]) if overrides.get("cli") else settings_home / "bin" / "verify-skill-anchor-links"
+    cli = Path(overrides["cli"]) if overrides.get("cli") else _resolve_cli(settings_home / "bin", "verify-skill-anchor-links")
     if not cli.exists():
         return GateResult("11h-skill-anchor-links", GateVerdict.UNAVAILABLE, f"CLI not found at {cli}")
     proc = _run(cli, [])
@@ -654,7 +716,7 @@ _YAML_QUEUE_FAMILIES = (
 def _gate_queue_prune_sweep(repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
     bin_dir = settings_home / "bin"
     override_cli = overrides.get("prune_cli")
-    prune_cli = Path(override_cli) if override_cli else bin_dir / "prune-resolved-queue-entries.py"
+    prune_cli = Path(override_cli) if override_cli else _resolve_cli(bin_dir, "prune-resolved-queue-entries.py")
     queues = overrides.get("queues") or list(_DEFAULT_QUEUES)
 
     overall_fail = False
@@ -710,7 +772,7 @@ def _gate_queue_prune_sweep(repo_root: Path, settings_home: Path, overrides: dic
         if not dir_path.is_dir():
             continue
         any_yaml_present = True
-        cli_path = bin_dir / cli_name
+        cli_path = _resolve_cli(bin_dir, cli_name)
         if not cli_path.is_file():
             overall_fail = True
             lines.append(f"YAML prune CLI missing for {family_dir}: {cli_path}")
@@ -761,7 +823,7 @@ _REAPED_RE = re.compile(r"reaped\s+(\d+)", re.IGNORECASE)
 
 
 def _gate_reap_stale_sidecars(repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
-    cli = Path(overrides["cli"]) if overrides.get("cli") else settings_home / "bin" / "reap-stale-subagent-sidecars"
+    cli = Path(overrides["cli"]) if overrides.get("cli") else _resolve_cli(settings_home / "bin", "reap-stale-subagent-sidecars")
     if not cli.exists():
         return GateResult("11j-reap-stale-sidecars", GateVerdict.UNAVAILABLE, f"CLI not found at {cli}")
     proc = _run(cli, ["--repo-root", str(repo_root)])

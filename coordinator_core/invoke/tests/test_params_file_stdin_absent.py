@@ -1,19 +1,14 @@
 """`--params-file -` refuses honestly when the process has no stdin to read.
 
-THE FAILURE THIS REPLACES. `sys.stdin` is `None` in a warm pool worker --
-spawned via `pythonw.exe` (`warm/server.py :: _suppress_pool_worker_consoles`),
-whose companion `_bind_null_std_streams` rebinds stdout and stderr and
-deliberately not stdin. `sys.stdin.buffer` therefore raised `AttributeError`,
-which the read's `(OSError, UnicodeDecodeError)` catch does not cover, so it
-escaped the op handler as a `-32603` -- and a `-32603` is not in
-`is_provably_undispatched`'s set, so the door that carried it answered `-32004`
-"the op may have COMPLETED" for a request whose params were never read. Trail:
+Why this failure shape exists at all: door_core.h ::
+door_argv_declares_params_stdin (the full pythonw / AttributeError / -32603
+/ -32004 causal chain lives there, once). Trail:
 `state/bug-backlog/2026-09-02-warm-engine-door-returns-indeterminate-for-every-op.yaml`.
 
 WHY THIS EXISTS ALONGSIDE THE DOOR'S OWN GATE. A current door decides this
 route pre-delivery and falls through cold, so it never reaches this branch
-without a stdin (`door_core.h :: door_argv_declares_params_stdin`, pinned by
-`coordinator_core/warm/door/tests/test_params_file_stdin_route.py`). Door
+without a stdin, pinned by
+`coordinator_core/warm/door/tests/test_params_file_stdin_route.py`. Door
 images are compiled binaries installed per machine and refreshed only by a
 publish round, so every peer still running the previous image keeps sending
 this shape until then. What they get now is a PRE-DISPATCH refusal naming the
@@ -28,11 +23,24 @@ import json
 
 from coordinator_core.invoke.__main__ import _dispatch_argv
 
+# THE `.buffer` LEG IS HERE BECAUSE TWO REVIEWERS DISAGREED ABOUT IT.
+# overengineering-reviewer had it dropped as covering no caller this diff
+# names; code-reviewer then named the shapes it does cover -- `io.StringIO`,
+# an embedding host's stream wrapper. It stays because the failure it guards
+# is not "a test asserts a hypothetical": a text stream standing in for
+# `sys.stdin` raises `AttributeError` at `.buffer`, which the read's own
+# `(OSError, UnicodeDecodeError)` catch does not cover, so it escapes as a
+# -32603 -- the same escape that made a warm-served `--params-file -` answer
+# -32004 in the first place. Reopening that class is what the leg costs.
 
-class _NoBuffer:
-    """A stream object present but carrying no binary buffer -- the shape a
-    replacement stream (a test harness's capture, a `StringIO`) presents. It
-    fails the same way `None` does and must be refused the same way."""
+
+class _TextOnlyStdin:
+    """A stream present but carrying no binary buffer -- `io.StringIO`'s shape,
+    and an embedding host's. It fails the same way `None` does at `.buffer`,
+    so it must be refused the same way and not one layer later."""
+
+    def read(self) -> str:  # pragma: no cover -- must never be reached
+        raise AssertionError("the refusal must fire before any read")
 
 
 def test_absent_stdin_refuses_before_dispatch(monkeypatch, tmp_path):
@@ -49,8 +57,11 @@ def test_absent_stdin_refuses_before_dispatch(monkeypatch, tmp_path):
     assert "--params-file <path>" in envelope["error"]["message"]
 
 
-def test_a_stream_without_a_buffer_refuses_identically(monkeypatch, tmp_path):
-    monkeypatch.setattr("sys.stdin", _NoBuffer(), raising=False)
+def test_a_text_only_stdin_refuses_identically(monkeypatch, tmp_path):
+    """The named shape from the disagreement above, pinned. Without the
+    `.buffer` leg this raises `AttributeError` out of the op handler and the
+    caller is told its op may have completed."""
+    monkeypatch.setattr("sys.stdin", _TextOnlyStdin(), raising=False)
     _, stderr, exit_code = _dispatch_argv(
         ["ping", "--params-file", "-"], str(tmp_path), allow_warm=False
     )

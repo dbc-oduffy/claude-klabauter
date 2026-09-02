@@ -640,7 +640,18 @@ static long door_stdin_read_chunk(void *reader_ctx, char *buf, size_t cap) {
  * conversion failure is treated as "not declared": this gate only ever
  * chooses the cold leg, so failing it open costs nothing the door was not
  * already going to attempt, and the `-32004` it exists to prevent is
- * unreachable for an argv this door could not even render. */
+ * unreachable for an argv this door could not even render.
+ *
+ * Review: overengineering-reviewer -- this converts argv to UTF-8 and
+ * discards the result; the request builder in `main()`'s step 6 converts
+ * the same argv again, per warm request, on the 105ms hot path. Accepted
+ * explicitly rather than threading one shared converted-argv array
+ * through the ~20 fall-through exit points between this gate and that
+ * builder: that span already frees several other resources (SID, stamp
+ * bytes, pipe handles) per exit, and adding a shared array's lifetime
+ * across all of them is a `main()`-wide restructuring, not a local edit,
+ * for a duplicate conversion of an argv list that is typically a handful
+ * of short strings. */
 static int door_argv_declares_params_stdin_w(int argc, wchar_t **wargv) {
     if (argc <= 1 || wargv == NULL) return 0;
     const char **argv_u8 = (const char **)calloc((size_t)argc, sizeof(char *));

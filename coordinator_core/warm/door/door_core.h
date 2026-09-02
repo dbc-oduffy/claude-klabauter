@@ -229,7 +229,10 @@ door_stdin_status_t door_drain_stdin_bounded(
  * `=` form. Kept here so neither door hardcodes the text. */
 #define DOOR_PARAMS_FILE_FLAG "--params-file"
 #define DOOR_PARAMS_FILE_STDIN_VALUE "-"
-#define DOOR_PARAMS_FILE_STDIN_JOINED "--params-file=-"
+/* Review: overengineering-reviewer -- composed from the two macros above
+ * (C string-literal concatenation) rather than re-typed, so the joined
+ * spelling cannot drift from the separated pair it must match. */
+#define DOOR_PARAMS_FILE_STDIN_JOINED DOOR_PARAMS_FILE_FLAG "=" DOOR_PARAMS_FILE_STDIN_VALUE
 
 /* True iff `argv[1 .. argc-1]` declares the stdin-bound params route.
  * `argv[0]` is excluded: this door never forwards it, and an image whose

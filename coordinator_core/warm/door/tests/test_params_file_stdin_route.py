@@ -1,16 +1,8 @@
 """`--params-file -` is decided pre-delivery and never crosses the door's wire.
 
-WHY THIS FILE EXISTS. The door forwards argv and cwd; outside hook mode it
-forwards no stdin. `coordinator-invoke <op> --params-file -` reads its params
-payload from THE CALLING PROCESS'S stdin, so a warm-served invocation ran that
-read inside a warm pool worker -- `pythonw.exe`-spawned, `sys.stdin is None`
-(`warm/server.py :: _bind_null_std_streams` rebinds stdout and stderr only).
-The `AttributeError` escaped the handler's `(OSError, UnicodeDecodeError)`
-catch as a `-32603`, and a `-32603` reaches the door AFTER delivery, where the
-only move left is `emit_indeterminate`. Every `--params-file -` invocation on
-this box therefore answered `-32004` -- "the op may have COMPLETED" -- for a
-request whose params were never read, while the same op through every other
-param route succeeded against the same server in the same second. Trail:
+Why this route exists and what it replaces: door_core.h ::
+door_argv_declares_params_stdin (the full pythonw / AttributeError / -32603
+/ -32004 causal chain lives there, once). Trail:
 `state/bug-backlog/2026-09-02-warm-engine-door-returns-indeterminate-for-every-op.yaml`.
 
 DISCRIMINATION IS THE POINT. A live server answers throughout the behavioural
@@ -74,11 +66,28 @@ def test_the_flag_spelling_lives_only_in_shared_core():
     for macro, value in (
         ("DOOR_PARAMS_FILE_FLAG", "--params-file"),
         ("DOOR_PARAMS_FILE_STDIN_VALUE", "-"),
-        ("DOOR_PARAMS_FILE_STDIN_JOINED", "--params-file=-"),
     ):
         match = re.search(rf'^#define\s+{macro}\s+"([^"]*)"\s*$', header, re.MULTILINE)
         assert match, f"{macro} is not defined in door_core.h -- renamed or removed"
         assert match.group(1) == value
+
+    # Review: overengineering-reviewer -- DOOR_PARAMS_FILE_STDIN_JOINED is
+    # composed from the two macros above (string-literal concatenation),
+    # not a third hand-typed literal, so drift between it and the pair it
+    # must match is no longer representable. This row confirms the
+    # composition rather than re-asserting a value that can no longer
+    # diverge.
+    joined_match = re.search(
+        r"^#define\s+DOOR_PARAMS_FILE_STDIN_JOINED\s+"
+        r"DOOR_PARAMS_FILE_FLAG\s+\"=\"\s+DOOR_PARAMS_FILE_STDIN_VALUE\s*$",
+        header,
+        re.MULTILINE,
+    )
+    assert joined_match, (
+        "DOOR_PARAMS_FILE_STDIN_JOINED is not composed from "
+        "DOOR_PARAMS_FILE_FLAG and DOOR_PARAMS_FILE_STDIN_VALUE -- renamed, "
+        "removed, or re-typed as a standalone literal"
+    )
 
     for door in (_DOOR_WINDOWS_C, _DOOR_POSIX_C):
         source = _read(door)

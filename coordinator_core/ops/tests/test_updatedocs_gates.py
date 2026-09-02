@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -654,3 +655,101 @@ def test_gates_resolve_corpora_under_the_worktree_not_the_git_dir(tmp_path):
         f"gate counted {gate['detail']['total']} of 3 files — corpus resolved off the worktree"
     )
     assert gate["verdict"] != "clean" or gate["detail"]["total"] > 0
+
+
+# ---------------------------------------------------------------------------
+# (l) CLI resolution is platform-aware
+#
+# The deployed coordinator settings tree publishes each bin/ entrypoint as a
+# native forwarder (`verify-skill-anchor-links.exe`) while this module names
+# them the way the authoring repo writes them (extensionless, or `.py`). An
+# exact-name resolver reported "CLI not found" for four gates whose binaries
+# were present, which reads UNAVAILABLE — the verdict reserved for "could not
+# look" — from a box where the gate could have run. These pin resolution
+# against a platform-blind resolver, in both directions: Windows must find the
+# PATHEXT form, POSIX must never invent one.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_cli_finds_the_pathext_executable_when_the_bare_name_is_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(udg.sys, "platform", "win32")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    forwarder = tmp_path / "verify-skill-anchor-links.exe"
+    forwarder.write_bytes(b"MZ")
+    assert udg._resolve_cli(tmp_path, "verify-skill-anchor-links") == forwarder
+
+
+def test_resolve_cli_prefers_the_executable_over_a_co_located_extensionless_script(tmp_path, monkeypatch):
+    """On Windows an extensionless file cannot be exec'd at all.
+
+    A settings tree that carries both forms for one entrypoint must resolve to
+    the forwarder — resolving to the script would spawn nothing and report
+    UNAVAILABLE with the executable sitting beside it.
+    """
+    monkeypatch.setattr(udg.sys, "platform", "win32")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    (tmp_path / "sync-plugin-wiki").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    forwarder = tmp_path / "sync-plugin-wiki.exe"
+    forwarder.write_bytes(b"MZ")
+    assert udg._resolve_cli(tmp_path, "sync-plugin-wiki") == forwarder
+
+
+def test_resolve_cli_maps_a_py_name_onto_the_forwarder_that_replaced_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(udg.sys, "platform", "win32")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    forwarder = tmp_path / "check-rag-state.exe"
+    forwarder.write_bytes(b"MZ")
+    assert udg._resolve_cli(tmp_path, "check-rag-state.py") == forwarder
+
+
+def test_resolve_cli_never_invents_a_windows_extension_on_posix(tmp_path, monkeypatch):
+    """`.exe` beside a POSIX CLI is not that CLI."""
+    monkeypatch.setattr(udg.sys, "platform", "linux")
+    (tmp_path / "sync-plugin-wiki.exe").write_bytes(b"MZ")
+    assert udg._resolve_cli(tmp_path, "sync-plugin-wiki") == tmp_path / "sync-plugin-wiki"
+
+
+def test_resolve_cli_keeps_the_name_as_written_when_it_exists_on_posix(tmp_path, monkeypatch):
+    monkeypatch.setattr(udg.sys, "platform", "linux")
+    cli = tmp_path / "sync-plugin-wiki"
+    cli.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    assert udg._resolve_cli(tmp_path, "sync-plugin-wiki") == cli
+
+
+def test_resolve_cli_returns_the_canonical_path_when_nothing_resolves(tmp_path):
+    """UNAVAILABLE must still name the path the gate looked for."""
+    assert udg._resolve_cli(tmp_path, "sync-plugin-wiki") == tmp_path / "sync-plugin-wiki"
+
+
+def test_windows_exec_argv_execs_a_pathext_binary_directly(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    forwarder = tmp_path / "reap-stale-subagent-sidecars.exe"
+    forwarder.write_bytes(b"MZ")
+    assert udg._windows_exec_argv(forwarder, ["--repo-root", "x"]) == [str(forwarder), "--repo-root", "x"]
+
+
+def test_reap_sidecars_gate_runs_against_the_forwarder_instead_of_reporting_cli_not_found(tmp_path, monkeypatch):
+    """End-to-end for the four gates the platform-blind resolver silenced.
+
+    `_run` is stubbed because a fabricated `.exe` cannot be spawned; what this
+    asserts is that the gate reached a spawn at all, with the forwarder's path,
+    rather than short-circuiting to UNAVAILABLE on an exact-name miss.
+    """
+    monkeypatch.setattr(udg.sys, "platform", "win32")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    bin_dir = tmp_path / "settings" / "bin"
+    bin_dir.mkdir(parents=True)
+    forwarder = bin_dir / "reap-stale-subagent-sidecars.exe"
+    forwarder.write_bytes(b"MZ")
+
+    spawned: dict[str, Path] = {}
+
+    def _fake_run(cli_path, args, **kwargs):
+        spawned["cli"] = cli_path
+        return subprocess.CompletedProcess([str(cli_path), *args], 0, "reaped 0 sidecars", "")
+
+    monkeypatch.setattr(udg, "_run", _fake_run)
+    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path / "settings", {})
+
+    assert spawned["cli"] == forwarder
+    assert result.verdict is not udg.GateVerdict.UNAVAILABLE

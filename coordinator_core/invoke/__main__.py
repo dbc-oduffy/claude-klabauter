@@ -756,30 +756,30 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
             # shell-quoting failure this transport exists to replace.
             #
             # THE STREAM CAN BE ABSENT ENTIRELY, AND THAT IS NOT AN OSError.
-            # This branch reads the CALLING process's stdin, and the door
-            # forwards argv and cwd across the wire, never stdin (outside
-            # hook mode) -- so warm-served, "the calling process" is a warm
-            # POOL WORKER, spawned via `pythonw.exe`
-            # (`warm/server.py :: _suppress_pool_worker_consoles`) with
-            # `sys.stdin` set to None by CPython; its companion
-            # `_bind_null_std_streams` rebinds stdout and stderr only.
-            # `sys.stdin.buffer` then raises `AttributeError`, which this
-            # `except` does not catch, so it escapes the op handler as a
-            # -32603 -- and a -32603 reaches the door AFTER delivery, where
-            # the only move left is `emit_indeterminate`: the caller is told
-            # a mutation MAY have completed for a request whose params were
-            # never read. Measured 2026-09-02; `state/bug-backlog/
-            # 2026-09-02-warm-engine-door-returns-indeterminate-for-every-
-            # op.yaml` carries the trail.
+            # Why this route lands here with no stdin to read:
+            # door_core.h :: door_argv_declares_params_stdin (the full
+            # pythonw / AttributeError / -32603 / -32004 causal chain lives
+            # there, once).
             #
-            # The door now decides this route pre-delivery and falls through
-            # cold (door_core.h :: door_argv_declares_params_stdin), so a
-            # current door never reaches here without a stdin. This refusal
-            # is what an OLDER door image -- already installed on peer
-            # machines, and rebuilt only by a publish round -- gets instead:
-            # a pre-dispatch error naming the cause, which is provably
-            # undispatched, rather than an indeterminate verdict about a
-            # mutation that never ran.
+            # SITE-SPECIFIC: a current door decides this route pre-delivery
+            # and falls through cold before this branch ever runs, so this
+            # refusal fires only for an OLDER door image -- already
+            # installed on peer machines, refreshed only by a publish round
+            # -- which still delivers the request warm. What that caller
+            # gets is a pre-dispatch error naming the cause, which is
+            # provably undispatched, in place of the indeterminate verdict
+            # this branch replaces.
+            # TWO REVIEWERS DISAGREED ON THE `.buffer` LIMB; IT STAYS.
+            # overengineering-reviewer had it dropped as covering no named
+            # caller, which was true of this diff. code-reviewer then named
+            # the shapes it does cover -- `io.StringIO`, an embedding host's
+            # stream wrapper -- and the asymmetry decides it: a text stream
+            # standing in for `sys.stdin` raises `AttributeError` here, which
+            # this branch's own `except` does not catch, and that is
+            # precisely the escape-as--32603 path the refusal exists to
+            # close. A guard against the failure class costs one `getattr`;
+            # reopening the class costs a caller an indeterminate verdict
+            # about a mutation that never ran.
             stdin_stream = getattr(sys, "stdin", None)
             if stdin_stream is None or getattr(stdin_stream, "buffer", None) is None:
                 _fatal_stderr(
