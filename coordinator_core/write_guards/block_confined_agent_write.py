@@ -36,8 +36,10 @@ Fires on any of ``MATCHERS`` when:
   (2) the resolved subagent identity's back-pointer ``subagent_type``
       satisfies ``is_confined_findings_agent`` (currently:
       ``coordinator:code-reviewer``), AND
-  (3) the resolved target path is NOT contained under
-      ``<git_root>/state/subagent-share/<em_session_id>/``, where
+  (3) the resolved target path is NOT contained under EITHER of the
+      agent's sandbox roots — ``machinery_paths.share_dir(git_root,
+      <em_session_id>)`` or the legacy
+      ``<git_root>/state/subagent-share/<em_session_id>/`` — where
       ``<em_session_id>`` is the firing payload's own ``session_id`` (the
       EM session that dispatched this agent — verified this session against
       a real ``.git/coordinator-sessions/.agents/<agent_id>/em-session-
@@ -118,6 +120,7 @@ from coordinator_core.bash_guards._helpers import (
     operator_override_note,
 )
 from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.session.machinery_paths import share_dir
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._subagent_identity import (
@@ -141,9 +144,13 @@ GENERATES = []
 #: this guard's override key.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_CONFINED_AGENT_WRITE"
 
-#: The sandbox root, relative to git_root, a confined agent's writes are
-#: contained to. The EM session id segment is appended per-payload.
-_SANDBOX_PARENT = ("state", "subagent-share")
+#: The LEGACY sandbox root, relative to git_root. Retained beside the
+#: machinery-root resolver rather than replaced by it: hooks are read at
+#: boot, so a session provisioned before the engine republished is still
+#: writing here while a session started after it writes under the
+#: machinery root. Both are live simultaneously and the guard cannot tell
+#: which one provisioned the agent it is judging.
+_LEGACY_SANDBOX_PARENT = ("state", "subagent-share")
 
 #: tool_input keys that can carry the target path, in probe order.
 #: NotebookEdit uses notebook_path; the rest use file_path. Mirrors
@@ -240,9 +247,22 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not file_path:
         return None
 
-    sandbox_root = Path(
-        casefold_path(str(Path(git_root, *_SANDBOX_PARENT, session_id)))
-    )
+    # BOTH roots are legitimate sandboxes during the relocation, and the
+    # agent does not choose which one it was handed. Provisioning resolves
+    # the machinery root; a session whose hooks were read at boot, before the
+    # engine republished, is still provisioned under the legacy root. Honour
+    # whichever the payload names -- measured 2026-09-02, a code-reviewer was
+    # told its sidecar was at `.coordinator-local/subagent-share/<sid>/` and
+    # then refused permission to write there, which left its findings with no
+    # artifact at all and a receipt gate reading a blank body.
+    #
+    # This widens containment by exactly the address the same bucket moved
+    # to. It admits no new BUCKET: a path outside both share dirs is refused
+    # as before.
+    sandbox_roots = [
+        Path(casefold_path(share_dir(git_root, session_id))),
+        Path(casefold_path(str(Path(git_root, *_LEGACY_SANDBOX_PARENT, session_id)))),
+    ]
     # A tool-supplied file_path is contractually absolute (every MATCHERS
     # tool requires it), but a relative string is joined against git_root
     # rather than left to resolve() against this PROCESS's cwd (which need
@@ -250,7 +270,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # would be the wrong direction for a containment check.
     candidate_raw = file_path if Path(file_path).is_absolute() else str(Path(git_root, file_path))
     candidate = Path(casefold_path(candidate_raw))
-    if contained_path(candidate, [sandbox_root]) is not None:
+    if contained_path(candidate, sandbox_roots) is not None:
         return None
 
     return {

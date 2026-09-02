@@ -44,6 +44,7 @@ from coordinator_core.install import junction
 
 from coordinator_core.install._shared import (
     RequireHomeError,
+    claude_dir as _claude_dir,
     ml_set,
     require_home,
     resolve_coordinator_root,
@@ -642,30 +643,6 @@ def render_uninstall_dry_run_report(receipt: "InstallReceipt | None") -> str:
 class UninstallLegError(RuntimeError):
     """Raised by a leg on unrecoverable failure — CLI entry converts to a
     non-zero exit code, matching the bash function-return contract."""
-
-
-def _claude_dir(claude_home: str) -> Path:
-    """``<claude_home>/.claude`` — the ONE spelling of Convention A's appended
-    segment, so no call site re-decides it.
-
-    `require_home` returns a $HOME SUBSTITUTE (its own docstring: "CLAUDE_HOME
-    names the PARENT of `.claude` and every caller appends that segment"), and
-    for a long time most call sites here did not append it — targeting
-    ``<home>/settings.json``, ``<home>/bin``, ``<home>/coordinator-identity.yaml``
-    while every writer puts those under ``<home>/.claude/``. Those legs silently
-    found nothing and reported success, and ``<home>/bin`` is an operator's own
-    directory on many boxes, so the shape was not merely inert. Verified against
-    a live install 2026-09-02: settings.json, .doe-root, coordinator-identity.yaml,
-    working-repos.yaml, machine-local, plugins/, bin/, shell/ and agents/ are all
-    under ``~/.claude/``.
-
-    NOT every path derived from the home takes this segment — the POSIX profile
-    files (`applicable_rc_files`) and the settings home (`_settings_home_from`)
-    are genuinely siblings of `.claude`, not children. This helper exists so the
-    two classes are told apart by which function a call site uses rather than by
-    whether whoever wrote it remembered.
-    """
-    return Path(claude_home) / ".claude"
 
 
 def _settings_home_from(resolved_home: str) -> str:
@@ -1901,7 +1878,7 @@ def uninstall_set_plugin_endstate(
             try:
                 flat_plugin_dir.parent.mkdir(parents=True, exist_ok=True)
             except OSError:
-                errors.append(f"failed to create {claude_home}/plugins")
+                errors.append(f"failed to create {_claude_dir(claude_home)}/plugins")
             try:
                 shutil.copytree(coordinator_root, flat_plugin_dir)
             except OSError as exc:

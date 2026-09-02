@@ -1029,7 +1029,13 @@ def test_resolve_coordinator_root_doe_root_pointer_rung_uses_userprofile(tmp_pat
 
     coordinator_dir = userprofile_home / "coordinator"
     coordinator_dir.mkdir()
-    (userprofile_home / ".doe-root").write_text(str(userprofile_home), encoding="utf-8")
+    # CLAUDE_HOME/USERPROFILE names the PARENT of `.claude`; the pointer the
+    # installer writes lives at `<home>/.claude/.doe-root` (verified against a
+    # live install), and `_shared.claude_dir` is now the one spelling of that.
+    (userprofile_home / ".claude").mkdir()
+    (userprofile_home / ".claude" / ".doe-root").write_text(
+        str(userprofile_home), encoding="utf-8"
+    )
 
     assert _shared.resolve_coordinator_root() == str(coordinator_dir)
 

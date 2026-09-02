@@ -600,13 +600,39 @@ class TestBulkForeignIndexRefusal:
         assert "restore --staged" not in self._msg()
         assert "Unstage it" not in self._msg()
 
-    def test_it_states_that_no_commit_form_succeeds(self):
+    def test_it_states_that_no_git_commit_form_succeeds(self):
         """Measured: `git commit -- <pathspec>` was refused too, because this
         check reads the whole index. An operator who is not told that will try
-        the pathspec form and conclude the guard is broken."""
+        the pathspec form and conclude the guard is broken.
+
+        NARROWED from "no commit form succeeds" (the claim this test pinned
+        when it landed at 71c28ef903) to "no `git commit` form": the wider
+        claim is false, and the message now says so. `coordinator-safe-commit.py`
+        routes through `ceremony.commit_v2` on the default axis, where
+        `commit_paths` commits worktree bytes for declared paths and passes
+        over every staged path it did not name -- so an operator's own paths
+        DO commit while a peer holds the index. Pinned by
+        `coordinator_core/git/tests/test_action_guard_default_path.py ::
+        test_default_axis_ignores_a_foreign_staged_path`. The unqualified
+        sentence sent a blocked operator to wait on a peer when a safe route
+        existed, which is the window this message exists to close.
+        """
         msg = self._msg()
-        assert "no commit form succeeds" in msg
+        assert "no `git commit` form succeeds" in msg
         assert "pathspec does not narrow" in msg
+        # The narrowing is only honest if the alternative is actually named.
+        assert "coordinator-safe-commit.py" in msg
+
+    def test_it_names_the_safe_route_with_its_glob_warning_attached(self):
+        """The route and the "literal paths" qualifier travel together or not
+        at all. A glob expands in the shell before the route sees it, so a
+        peer's file inside the expansion arrives as a DECLARED path and is
+        committed as instructed -- the 2026-08-29 incident shape (29927e684).
+        Naming the route without the qualifier converts this refusal into
+        instructions for reproducing that incident."""
+        for msg in (self._msg(), self._msg(77)):
+            assert "coordinator-safe-commit.py" in msg
+            assert "never a glob" in msg
 
     def test_it_reports_the_size_that_makes_this_branch_apply(self):
         assert "11534 staged paths" in self._msg()

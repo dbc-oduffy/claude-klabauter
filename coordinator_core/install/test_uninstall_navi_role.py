@@ -93,35 +93,38 @@ def test_hand_edited_role_file_is_reported_and_left(tmp_path, shipped, capsys):
     assert "hand-edited" in stderr
 
 
-def test_unresolvable_template_reports_and_leaves(tmp_path, monkeypatch, capsys):
+# Review: overengineering-reviewer(Kira) finding 2 — both setups land on the
+# same `template is None or not template.is_file()` branch with identical
+# assertions; parametrized rather than kept as two near-duplicate tests.
+@pytest.mark.parametrize(
+    "setup",
+    [
+        pytest.param("unresolvable", id="unresolvable-root"),
+        pytest.param("missing-file", id="root-resolves-asset-missing"),
+    ],
+)
+def test_template_unavailable_reports_and_leaves(tmp_path, monkeypatch, capsys, setup):
+    """Whether the root itself fails to resolve, or resolves but the asset
+    is not in it (the pre-C1 state, and the state of any install whose
+    plugin tree predates the role), the leg reports and leaves."""
     role_file = _place(tmp_path)
 
-    def _unresolvable(*_a, **_k):
-        raise RuntimeError("no coordinator root on this machine")
+    if setup == "unresolvable":
+        def _unresolvable(*_a, **_k):
+            raise RuntimeError("no coordinator root on this machine")
 
-    monkeypatch.setattr(uninstall_legs, "resolve_coordinator_root", _unresolvable)
+        monkeypatch.setattr(uninstall_legs, "resolve_coordinator_root", _unresolvable)
+    else:
+        (tmp_path / "plugin").mkdir()
+        monkeypatch.setattr(
+            uninstall_legs, "resolve_coordinator_root", lambda *a, **k: str(tmp_path / "plugin")
+        )
+
     errors: list[str] = []
 
     uninstall_legs._uninstall_remove_navi_role(str(tmp_path), False, errors)
 
     assert role_file.exists(), "an unverifiable compare must never delete"
-    assert errors == []
-    assert "could not be resolved" in capsys.readouterr().err
-
-
-def test_missing_template_file_reports_and_leaves(tmp_path, monkeypatch, capsys):
-    """Root resolves, but the asset is not in it — the pre-C1 state, and the
-    state of any install whose plugin tree predates the role."""
-    role_file = _place(tmp_path)
-    (tmp_path / "plugin").mkdir()
-    monkeypatch.setattr(
-        uninstall_legs, "resolve_coordinator_root", lambda *a, **k: str(tmp_path / "plugin")
-    )
-    errors: list[str] = []
-
-    uninstall_legs._uninstall_remove_navi_role(str(tmp_path), False, errors)
-
-    assert role_file.exists()
     assert errors == []
     assert "could not be resolved" in capsys.readouterr().err
 
@@ -137,17 +140,30 @@ def test_force_removes_a_hand_edited_role_file(tmp_path, shipped):
 
 
 def test_force_does_not_need_a_resolvable_template(tmp_path, monkeypatch):
-    """--force must not depend on the plugin tree still being on disk."""
+    """--force must not depend on the plugin tree still being on disk.
+
+    # Review: overengineering-reviewer(Kira) finding 2 — the prior version
+    # monkeypatched resolve_coordinator_root to raise, but `if not force`
+    # short-circuits before resolution is ever reached, so the raise could
+    # never fire; this asserted nothing beyond test_force_removes_a_hand_
+    # edited_role_file. Pinning the real intent directly: force must not
+    # even call resolve_coordinator_root, so a future refactor that hoists
+    # resolution above the force check fails here.
+    """
     role_file = _place(tmp_path, b"rewritten\n")
 
-    def _unresolvable(*_a, **_k):
+    calls: list[tuple] = []
+
+    def _spy(*a, **k):
+        calls.append((a, k))
         raise RuntimeError("gone")
 
-    monkeypatch.setattr(uninstall_legs, "resolve_coordinator_root", _unresolvable)
+    monkeypatch.setattr(uninstall_legs, "resolve_coordinator_root", _spy)
 
     uninstall_legs._uninstall_remove_navi_role(str(tmp_path), True, [])
 
     assert not role_file.exists()
+    assert calls == [], "force must not resolve the template at all"
 
 
 def test_unlink_failure_is_a_leg_error_not_a_policy_outcome(tmp_path, shipped, monkeypatch):

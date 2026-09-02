@@ -395,3 +395,83 @@ class TestToolNameDefenseInDepth:
         payload = _payload(tmp_path, target, tool_name="Write")
         result = guard.check(payload)
         assert result is None
+
+
+class TestBothSandboxRootsAreHonoured:
+    """Provisioning resolves the machinery root; a session whose hooks were
+    read at boot before the engine republished is still provisioned under the
+    legacy root. Both are live at once and the guard cannot tell which one
+    handed the agent its path.
+
+    Measured 2026-09-02: a dispatched code-reviewer was told its sidecar was
+    at `.coordinator-local/subagent-share/<sid>/`, tried twice to Edit it, and
+    was denied -- leaving its findings with no artifact at all, and a receipt
+    gate that would count a spliced receipt over a blank body, which is
+    exactly what AC5 exists to catch."""
+
+    SID = "sess-12345678"
+
+    def _machinery_sidecar(self, repo_root: Path) -> str:
+        from coordinator_core.session import machinery_paths
+
+        return str(Path(machinery_paths.share_dir(str(repo_root), self.SID)) / "r.md")
+
+    @pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit", "NotebookEdit"])
+    def test_machinery_root_sidecar_is_allowed(self, tmp_path, monkeypatch, tool_name):
+        monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard,
+            "_read_backpointer_subagent_type",
+            _stub_subagent_type("coordinator:code-reviewer"),
+        )
+        payload = _payload(
+            tmp_path, self._machinery_sidecar(tmp_path), tool_name=tool_name
+        )
+        assert guard.check(payload) is None
+
+    def test_legacy_root_sidecar_is_still_allowed(self, tmp_path, monkeypatch):
+        """The boot-snapshot half. Swapping one root for the other would have
+        fixed the new sessions and broken every session provisioned before the
+        engine republished."""
+        monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard,
+            "_read_backpointer_subagent_type",
+            _stub_subagent_type("coordinator:code-reviewer"),
+        )
+        payload = _payload(tmp_path, _sandbox_path(tmp_path, self.SID, "r.md"))
+        assert guard.check(payload) is None
+
+    def test_a_path_outside_both_roots_is_still_denied(self, tmp_path, monkeypatch):
+        """The containment guarantee itself. Widening to a second root must
+        admit the same bucket at its new address and nothing else."""
+        monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard,
+            "_read_backpointer_subagent_type",
+            _stub_subagent_type("coordinator:code-reviewer"),
+        )
+        outside = str(tmp_path / "coordinator_core" / "write_guards" / "engine.py")
+        verdict = guard.check(_payload(tmp_path, outside, tool_name="Edit"))
+        assert verdict is not None
+        assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_a_sibling_sessions_sandbox_is_denied_under_the_new_root_too(
+        self, tmp_path, monkeypatch
+    ):
+        """Per-session confinement must survive the widening -- the new root
+        is one directory, and every session's sidecars sit side by side in it."""
+        from coordinator_core.session import machinery_paths
+
+        monkeypatch.setattr(guard, "resolve_repo_root", _stub_git_root(tmp_path))
+        monkeypatch.setattr(
+            guard,
+            "_read_backpointer_subagent_type",
+            _stub_subagent_type("coordinator:code-reviewer"),
+        )
+        other = str(
+            Path(machinery_paths.share_dir(str(tmp_path), "sess-99999999")) / "r.md"
+        )
+        verdict = guard.check(_payload(tmp_path, other, tool_name="Edit"))
+        assert verdict is not None
+        assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"

@@ -241,6 +241,34 @@ def _join_backslash_newlines(cmd: str) -> str:
 _BULK_FOREIGN_INDEX_PATHS = 50
 
 
+#: The one commit route that still succeeds while a peer holds the index, named
+#: in both strict-scope refusals so a blocked operator has an exit that is not
+#: "destroy the peer's staging".
+#:
+#: WHY IT IS SAFE TO NAME, since pointing at a route that escapes a guard is
+#: otherwise exactly this file's anti-scope: `coordinator-safe-commit.py` routes
+#: through `ceremony.commit_v2` WITHOUT `prefer_deliberate_stage`, and on that
+#: default axis `coordinator_core/git/commit.py :: commit_paths` commits worktree
+#: bytes for the paths the caller declared and passes over every staged path it
+#: did not name. A peer's staged blob on an undeclared path is ignored rather
+#: than swept -- the failure mode is prevented by construction, not by a check
+#: that could be skipped. Pinned by `coordinator_core/git/tests/
+#: test_action_guard_default_path.py :: test_default_axis_ignores_a_foreign_
+#: staged_path`, and classified `predicate-consulted-by-construction` in
+#: `docs/research/2026-08-30-the-guard-escape-table.md`.
+#:
+#: NEGATIVE SPEC: "literal paths, never a glob" is load-bearing, not style. The
+#: substitution window is paths the caller NAMED; a glob expands in the shell
+#: before the route sees it, so a peer's file inside the expansion arrives as a
+#: declared path and is committed as instructed. That is the 2026-08-29 incident
+#: shape (29927e684) and the one way this route can still take a peer's work.
+#: Never soften the clause to just "your own paths".
+_SAFE_COMMIT_ROUTE_CLAUSE = (
+    'Your own paths still commit: coordinator-safe-commit.py "<subject>" '
+    "-- <literal paths>; name them literally, never a glob."
+)
+
+
 def _bulk_foreign_index_refusal(
     staged_count: int,
     staged_file: str,
@@ -263,9 +291,15 @@ def _bulk_foreign_index_refusal(
         "BLOCKED (strict scope): the index holds %d staged paths and %s is "
         "not in this session's touch list — owned by %s.%s\n\n"
         "At this size the index is another session's in-flight change, and no "
-        "commit form succeeds until they land or unstage it — a pathspec does "
-        "not narrow what this check reads. Ask them."
-        % (staged_count, staged_file, owner_sentence, provenance_note)
+        "`git commit` form succeeds until they land or unstage it — a pathspec "
+        "does not narrow what this check reads. Ask them. %s"
+        % (
+            staged_count,
+            staged_file,
+            owner_sentence,
+            provenance_note,
+            _SAFE_COMMIT_ROUTE_CLAUSE,
+        )
     )
 
 
@@ -7223,13 +7257,16 @@ def check_validate_commit(
                         return _deny(
                             "BLOCKED (strict scope): %s is staged but not in "
                             "this session's touch list — owned by %s.%s\n\n"
-                            "Unstage it (git restore --staged %s) or, if it "
-                            "genuinely belongs to this session's work, record it "
-                            "as touched first."
+                            "%s\n\n"
+                            "If it genuinely belongs to this session's work, "
+                            "record it as touched first. Unstaging it (git "
+                            "restore --staged %s) discards content the owner "
+                            "has not committed."
                             % (
                                 staged_file,
                                 owner_sentence,
                                 _owner_name_provenance_note(owner_sentence),
+                                _SAFE_COMMIT_ROUTE_CLAUSE,
                                 staged_file,
                             )
                         )
