@@ -16,17 +16,28 @@ strictly SHORTENS a stale server's remaining life.
 Two independent mismatch axes feed eviction, both compared live, never
 behind a drain-armed idle gate:
 
-  1. Primary (commit-level), `compute_client_token()`: (st_mtime_ns,
-     st_size) of `.git/HEAD` and of the ref it names. Two stats, no
-     subprocess. Called by BOTH the client (per dispatch -- see
-     `warm.client.engine_token`, C15's seam this module fills) and the
-     server (per request, same function, same cost) so both sides always
-     compare the CURRENT git state, not a cached one. `.git/index` is
-     deliberately excluded (staff-eng finding 3): ordinary `git add` /
-     status-refresh rewrites it from any of the 50-70 sessions sharing
-     this checkout, not only an engine-source commit, which would make the
-     token COARSER than engine-source change -- the opposite of what a
-     skew signal needs.
+  1. Primary (GENERATION BINDING, not staleness), `compute_client_token()`:
+     a stat-only fingerprint of `coordinator_core/_engine_stamp`'s bytes,
+     so it changes exactly when a publish round ships new engine code and
+     at no other time. No subprocess. Called by BOTH the client (per
+     dispatch -- see `warm.client.engine_token`, C15's seam this module
+     fills) and the server (per request, same function, same cost), so
+     both sides always compare current state, not a cached one.
+
+     CORRECTED 2026-09-02, and the correction is the point. This paragraph
+     used to describe the token as (st_mtime_ns, st_size) of `.git/HEAD`
+     and the ref it names, with a note about excluding `.git/index`. That
+     is the git-ref implementation `compute_client_token`'s own docstring
+     calls "the (now deleted) git-ref fallback" -- deleted 2026-08-19 when
+     an engine root became a stamped build. The stale paragraph survived
+     here and cost real time: on 2026-09-02 two sessions independently read
+     it, concluded from "deliberately coarser than engine-source change"
+     that no predicate could retire a stale server, and filed that as the
+     defect. It is the opposite of true -- axis 2 below is purpose-built
+     for staleness and the real question was why it did not fire. Read
+     `compute_client_token`'s docstring, not this summary, when the two
+     disagree; a summary that outlives its function sends readers at the
+     wrong mechanism.
 
   2. Secondary (source-level, server-side only, `ServerVersionState`):
      catches a bare editor save or other uncommitted edit that never moves

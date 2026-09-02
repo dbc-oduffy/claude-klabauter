@@ -41,7 +41,13 @@ disguise" the parent baton exists to remove):
                        session's first dispatch (`hooks.track_dispatched_
                        agents`) — its absence here means "this session
                        dispatched nothing," a real, meaningful zero, not an
-                       unmeasured unknown.
+                       unmeasured unknown. THAT PREMISE HOLDS ONLY WHILE THE
+                       APPENDING SESSION IS THE SESSION THE ROW IS FOR: supply
+                       the `session_id` param and it inverts, absence becomes
+                       unmeasured, and the op REFUSES rather than writing
+                       `0d / 0o` — see the handler's own comment for the
+                       measured case. On that path the counts come from the
+                       `agent_dispatches` / `opus_dispatches` params.
     tshirt             `loe_thresholds.compute_tshirt(agent_dispatches,
                        opus_dispatches, em_tokens=None, thresholds)` — the
                        same any-criterion table `aggregate_chain_loe` uses.
@@ -108,6 +114,10 @@ Negative-spec:
       refuses outright rather than risk a silent duplicate.
     - Does NOT touch any file outside `state/handoffs/`/`archive/handoffs/` —
       inherited from `handoff_correct_body`'s own containment.
+    - Does NOT write a zero it did not measure: on the `session_id`-override
+      path with no `dispatched-agents.txt` and no supplied counts, it refuses.
+      A `0d / 0o` row parses perfectly and sums to nothing in
+      `session_ledger.aggregate_chain_loe`, so a wrong row here is silent.
     - Does NOT retrofit an existing chain — this is an append-only door onto
       the target's OWN `## Session Ledger` block, one call, one row.
 """
@@ -150,6 +160,43 @@ _MAX_CONTEXT_EXPANSION_LINES = 30
 
 def _err(msg: str) -> dict:
     return {"exit_code": 1, "applied": False, "error": msg}
+
+
+def _explicit_counts(params: dict) -> "tuple[Optional[tuple[int, int]], Optional[str]]":
+    """Resolve the caller-supplied `(agent_dispatches, opus_dispatches)` pair.
+
+    Returns `(None, None)` when neither is supplied (the ordinary case, where
+    the counts are read off disk), `((ad, od), None)` when both are, and
+    `(None, "<reason>")` on any malformed input.
+
+    The two are ONE measurement and are taken as a pair: `opus_dispatches`
+    alone is not a fact about anything, and `agent_dispatches` alone would
+    write an opus count of zero with the same false confidence this param pair
+    exists to remove. `bool` is rejected explicitly — it is an `int` subclass,
+    so `True` would otherwise pass every check below and write `1d`.
+    """
+    supplied = {k: params[k] for k in ("agent_dispatches", "opus_dispatches") if k in params
+                and params[k] is not None}
+    if not supplied:
+        return None, None
+    if len(supplied) == 1:
+        missing = ({"agent_dispatches", "opus_dispatches"} - set(supplied)).pop()
+        return None, (
+            f"{next(iter(supplied))} was supplied without {missing} — the two are "
+            f"one measurement and are supplied together"
+        )
+    ad, od = supplied["agent_dispatches"], supplied["opus_dispatches"]
+    for name, val in (("agent_dispatches", ad), ("opus_dispatches", od)):
+        if isinstance(val, bool) or not isinstance(val, int):
+            return None, f"{name} must be an integer when supplied"
+        if val < 0:
+            return None, f"{name} must be >= 0 when supplied"
+    if od > ad:
+        return None, (
+            f"opus_dispatches ({od}) exceeds agent_dispatches ({ad}) — the opus "
+            f"count is a subset of the dispatch count"
+        )
+    return (ad, od), None
 
 
 def _resolve_read_path(
@@ -275,6 +322,16 @@ async def _handler(
                               the CALLING session via the same resolver
                               `handoff.correct_body` uses for its own
                               ownership gate.
+        agent_dispatches (int) — OPTIONAL, supplied WITH `opus_dispatches`
+                              (the two are one measurement). Recovery/backfill
+                              use only, and REQUIRED on that path when the
+                              named session has no `dispatched-agents.txt` on
+                              this host — see the refusal in the handler for
+                              why absence there is unmeasured rather than
+                              zero. Wins over the on-disk read when both
+                              exist: the caller measured a session this host
+                              did not run.
+        opus_dispatches (int) — OPTIONAL, the opus subset of the above.
         override_reason (str) — OPTIONAL. Forwarded verbatim to
                               `handoff.correct_body` (see that op's own param
                               doc) — consulted only when the calling session
@@ -287,8 +344,11 @@ async def _handler(
     appended line, without its trailing newline), `ledger_session_id`
     (whose row this is — may differ from the authorizing `session_id` only
     when a caller supplies `session_id` as a param override),
-    `agent_dispatches`, `opus_dispatches`, and `tshirt` naming the resolved
-    values actually written.
+    `agent_dispatches`, `opus_dispatches`, `dispatch_source` (`params` /
+    `agents_file` / `absent_means_zero` — which of the three resolutions the
+    counts came from, so a later reader of a surprising row can tell a
+    measured zero from a read one), and `tshirt` naming the resolved values
+    actually written.
     """
     handoff_path_raw: str = params.get("handoff_path") or ""
     if not handoff_path_raw:
@@ -332,17 +392,59 @@ async def _handler(
     # caller's repo at all. Scoping explicitly to `worktree` is what makes
     # this resolve the CALLING repo's own session hub rather than
     # whichever repo the daemon process happened to start in.
+    counts_supplied, counts_err = _explicit_counts(params)
+    if counts_err:
+        return _err(counts_err)
+
     base = _session_core.sessions_dir(cwd=str(worktree))
     if base:
         agents_file = Path(base) / session_id / "dispatched-agents.txt"
         ad, od = _count_dispatches_from_agents_file(agents_file)
     else:
         ad, od = None, None
-    # Absence -> a real zero, not an unmeasured unknown — see module docstring's
-    # "Nd / No" paragraph for why this op's absence-handling diverges from
-    # `_dispatch_fallback_record`'s (a past-session-reconstruction reader).
-    agent_dispatches = ad if ad is not None else 0
-    opus_dispatches = od if od is not None else 0
+
+    if counts_supplied is not None:
+        # The caller measured, so the caller wins: a present file keyed to an
+        # id whose session ran on another host is not the better source.
+        agent_dispatches, opus_dispatches = counts_supplied
+        dispatch_source = "params"
+    elif ad is not None:
+        agent_dispatches, opus_dispatches = ad, (od or 0)
+        dispatch_source = "agents_file"
+    elif session_id_override:
+        # THE ABSENCE-IS-A-REAL-ZERO RULE DOES NOT REACH THE OVERRIDE BRANCH.
+        # It is sound only because the normal path is invoked BY the live
+        # session it appends a row FOR (module docstring's "Nd / No"). Supply
+        # `session_id` and that premise inverts: the row is FOR a session that
+        # died on another host or died with its hub, so its
+        # `dispatched-agents.txt` is absent BY CONSTRUCTION and the recovery
+        # path writes `XS | 0d / 0o` not sometimes but always. Measured in
+        # example-store-repo 2026-09-02: session ...203689 backfilled as 0d / 0o with
+        # 15 agent sidecars (2 opus) on disk, `compute_tshirt(15, 2, None)` = M.
+        # It is worse than one wrong row -- `aggregate_chain_loe` sums these,
+        # a `0d / 0o` row parses perfectly, and the session renders as no
+        # effort at all, which is the silent zero the ledger's own inline
+        # comment warns about, reached through `exit_code: 0`. And the row is
+        # unrepairable here: the duplicate guard below refuses a second append
+        # for the same sid6.
+        return _err(
+            f"session_id override {session_id!r} names a session with no "
+            f"dispatched-agents.txt on this host, so its dispatch counts are "
+            f"unmeasured, not zero — writing zero here would render the "
+            f"session's effort as nothing in session_ledger.aggregate_chain_loe, "
+            f"and the one-row-per-session freeze leaves no second append to "
+            f"correct it. Count that session's agent sidecars "
+            f"(state/subagent-share/{session_id}/) and supply "
+            f"agent_dispatches / opus_dispatches"
+        )
+    else:
+        # Absence -> a real zero, not an unmeasured unknown — see module
+        # docstring's "Nd / No" paragraph for why this op's absence-handling
+        # diverges from `_dispatch_fallback_record`'s (a past-session-
+        # reconstruction reader). Reached only on the non-override path, where
+        # the appending session IS the session the row is for.
+        agent_dispatches, opus_dispatches = 0, 0
+        dispatch_source = "absent_means_zero"
     tshirt = compute_tshirt(agent_dispatches, opus_dispatches, None)
 
     row_line = format_oneline_row(created, session_id, tshirt, agent_dispatches, opus_dispatches, summary)
@@ -410,5 +512,6 @@ async def _handler(
         result["ledger_session_id"] = session_id
         result["agent_dispatches"] = agent_dispatches
         result["opus_dispatches"] = opus_dispatches
+        result["dispatch_source"] = dispatch_source
         result["tshirt"] = tshirt
     return result

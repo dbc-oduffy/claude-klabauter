@@ -60,12 +60,15 @@ sessions; its own process environment and cwd belong to none of them. In
 particular `CLAUDE_HOME`/`HOME`/`USERPROFILE`/`CLAUDE_PROJECT_DIR` (the four
 vars `docs/reference/warm-hook-migration.md` names as this script's own
 env-var finding) are read here from `payload["env"]`, never
-`os.environ.get(...)` — `hook_http.FORWARDED_ENV_PREFIXES` does not yet
-carry any of the four (only `COORDINATOR_ALLOW_/OVERRIDE_/PROBE_/SCOPE_`),
-so an http-flipped registration will not thread them end-to-end until that
-list is widened. Not fixed here (outside this chunk's `writes:`); the final
-env list is reported in this chunk's own completion report so C7's memo can
-carry it forward.
+`os.environ.get(...)`. CLOSED 2026-09-02: all four are named in
+`hook_http.FORWARDED_ENV_NAMES` and thread end-to-end over an http
+registration built per `docs/reference/warm-hook-migration.md` § Step 3.
+Until then `FORWARDED_ENV_PREFIXES` dropped every one of them after the
+header arrived, so a correctly-written registration still left this op
+resolving home against the ENGINE host — silently. Adding a fifth env read
+here means adding its name to that list too; a name outside it is now
+refused loudly rather than dropped, so the failure is visible, but it is
+still a failure.
 
 Three behavior changes from the source script, named rather than silently
 inherited or silently fixed:

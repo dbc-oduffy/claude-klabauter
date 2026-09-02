@@ -600,3 +600,28 @@ def test_bucket2_gate_ids_do_not_bypass_the_unknown_id_guard():
     """Adding four gates must not weaken the no-silent-skip contract."""
     with pytest.raises(ValueError):
         udg._updatedocs_gates({"gates": ["docs-readme-index-drift", "not-a-real-gate"]})
+
+
+def test_memo_prune_gate_survives_an_actual_prune_candidate(tmp_path):
+    """Regression: the gate raised AttributeError the moment a memo qualified.
+
+    It iterated `c.path` over MemoPruneResult's `list[str]`, copied from the
+    plan gate above it whose lists hold candidate objects. Eighty-seven tests
+    and a correctness review missed it because no test ever drove a PRUNABLE
+    memo through the gate — the live corpus yields zero, so every run took the
+    empty path.
+    """
+    import os
+    import time
+
+    archive = tmp_path / "cross-repo" / "archive"
+    archive.mkdir(parents=True)
+    memo = archive / "old.md"
+    memo.write_text("---\nstatus: actioned\n---\n", encoding="utf-8")
+    old = time.time() - 200 * 86400
+    os.utime(memo, (old, old))
+
+    result = udg._GATES["archive-memo-prune-candidates"](tmp_path, tmp_path, {})
+
+    assert result.verdict is udg.GateVerdict.FINDING
+    assert result.detail["prunable"] == ["cross-repo/archive/old.md"]

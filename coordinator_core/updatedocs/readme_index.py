@@ -23,12 +23,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.updatedocs._common import UpdatedocsTargetMissing, read_head
+
 _LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 _SECTION_HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 _FRONTMATTER_TITLE_RE = re.compile(r"^title:\s*(.+?)\s*$", re.MULTILINE)
 _FIRST_HEADING_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
-
-_TITLE_READ_BYTES = 800
 
 # Section name (as it appears verbatim after `## ` in docs/README.md) -> the
 # corpus subdirectory of `docs/`, relative, non-recursive `*.md` glob. An empty
@@ -42,21 +43,6 @@ SECTION_CORPORA: dict[str, str] = {
     "Decisions": "decisions",
     "Reference Documentation": "",
 }
-
-
-class ReadmeIndexUnavailable(Exception):
-    """Raised when a required path (docs/ or docs/README.md) does not exist.
-
-    Carries `missing_path` so the caller (the gate layer) can report exactly
-    which path was absent rather than a bare "something is missing" message.
-    This module never swallows this into an empty-but-clean result and never
-    builds a `GateResult` itself — that mapping (UNAVAILABLE, never CLEAN)
-    belongs to `coordinator_core.ops.updatedocs_gates`.
-    """
-
-    def __init__(self, missing_path: Path):
-        self.missing_path = missing_path
-        super().__init__(f"required path does not exist: {missing_path}")
 
 
 @dataclass(frozen=True)
@@ -81,45 +67,28 @@ class ReadmeIndexDrift:
     sections: list[SectionDrift]
 
 
-def _strip_frontmatter(text: str) -> tuple[str | None, str]:
-    """Split a possible leading `---`-delimited frontmatter block off `text`.
-
-    Returns (frontmatter_text_or_None, body_text). Tolerates a frontmatter block
-    truncated by the caller's read-size cap: if no closing `---` is found within
-    the given chunk, the whole chunk is treated as (possibly partial)
-    frontmatter and the body is empty, rather than raising.
-    """
-    if not text.startswith("---"):
-        return None, text
-    rest = text[3:]
-    close = rest.find("\n---")
-    if close == -1:
-        return rest, ""
-    return rest[:close], rest[close + 4 :]
-
-
 def _extract_title(path: Path) -> str:
     """Three-tier title fallback: frontmatter `title:` -> first `# ` heading ->
-    filename stem. Reads at most the first ~800 bytes of the file. Never
-    raises and never returns an empty title — a file with neither frontmatter
-    `title:` nor a `# ` heading falls through to its filename stem.
+    filename stem. Reads at most the bounded head of the file (via the shared
+    `_common.read_head`, imported rather than a third hand-rolled frontmatter
+    splitter). Never raises and never returns an empty title — a file with
+    neither frontmatter `title:` nor a `# ` heading falls through to its
+    filename stem.
     """
-    try:
-        with path.open("rb") as handle:
-            chunk = handle.read(_TITLE_READ_BYTES)
-    except OSError:
+    text = read_head(path)
+    if not text:
         return path.stem
 
-    text = chunk.decode("utf-8", errors="replace")
-    frontmatter, body = _strip_frontmatter(text)
+    split = split_frontmatter(text)
 
-    if frontmatter is not None:
-        match = _FRONTMATTER_TITLE_RE.search(frontmatter)
+    if split is not None:
+        match = _FRONTMATTER_TITLE_RE.search(split.fm_text)
         if match:
             title = match.group(1).strip().strip('"').strip("'").strip()
             if title:
                 return title
 
+    body = split.body_with_leading_newline if split is not None else text
     match = _FIRST_HEADING_RE.search(body)
     if match:
         heading = match.group(1).strip()
@@ -185,17 +154,17 @@ def compute_readme_index_drift(repo_root: Path) -> ReadmeIndexDrift:
     """Compare `docs/README.md`'s links against the on-disk corpus for each
     indexed section, per `SECTION_CORPORA`.
 
-    Raises `ReadmeIndexUnavailable` if `docs/` or `docs/README.md` is absent.
+    Raises `UpdatedocsTargetMissing` if `docs/` or `docs/README.md` is absent.
     Never builds a partial/empty-but-clean result in that case.
     """
     repo_root = Path(repo_root)
     docs_dir = repo_root / "docs"
     if not docs_dir.is_dir():
-        raise ReadmeIndexUnavailable(docs_dir)
+        raise UpdatedocsTargetMissing(docs_dir)
 
     readme_path = docs_dir / "README.md"
     if not readme_path.is_file():
-        raise ReadmeIndexUnavailable(readme_path)
+        raise UpdatedocsTargetMissing(readme_path)
 
     readme_text = readme_path.read_text(encoding="utf-8", errors="replace")
     bodies = _section_bodies(readme_text)

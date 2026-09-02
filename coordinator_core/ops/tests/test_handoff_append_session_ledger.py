@@ -269,5 +269,148 @@ class RefusalTest(unittest.TestCase):
             self.assertIn("Session Ledger", result["error"])
 
 
+# ---------------------------------------------------------------------------
+# (h) The session_id override never writes an unmeasured zero
+# ---------------------------------------------------------------------------
+
+
+_FOREIGN_SESSION = "380f3042-4c95-4646-b5cc-a3bea9203689"
+
+
+class BackfillCountsTest(unittest.TestCase):
+    """The override exists for a session that died on another host or with its
+    hub, so its `dispatched-agents.txt` is absent BY CONSTRUCTION — the
+    absence-is-a-real-zero rule that governs the ordinary path must not reach
+    this one. Measured regression (example-store-repo, 2026-09-02): a backfill of
+    session ...203689 wrote `XS | 0d / 0o` for a session with 15 sidecars on
+    disk, and `aggregate_chain_loe` sums that row as no effort at all."""
+
+    def test_override_with_absent_agents_file_refuses_rather_than_writing_zero(self):
+        with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+            repo = _make_git_repo(Path(tmp))
+            hpath = _seed(repo, "2026-08-21-test.md")
+            before = hpath.read_text(encoding="utf-8")
+
+            result = _call(
+                repo,
+                {
+                    "handoff_path": "state/handoffs/2026-08-21-test.md",
+                    "summary": "Executed all seven chunks",
+                    "session_id": _FOREIGN_SESSION,
+                },
+            )
+
+            self.assertEqual(result["exit_code"], 1, result)
+            self.assertFalse(result["applied"])
+            self.assertIn("unmeasured", result["error"])
+            self.assertIn("agent_dispatches", result["error"])
+            self.assertEqual(hpath.read_text(encoding="utf-8"), before)
+
+    def test_supplied_counts_drive_the_row_and_the_tshirt(self):
+        with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+            repo = _make_git_repo(Path(tmp))
+            hpath = _seed(repo, "2026-08-21-test.md")
+
+            result = _call(
+                repo,
+                {
+                    "handoff_path": "state/handoffs/2026-08-21-test.md",
+                    "summary": "Executed all seven chunks",
+                    "session_id": _FOREIGN_SESSION,
+                    "agent_dispatches": 15,
+                    "opus_dispatches": 2,
+                },
+            )
+
+            self.assertEqual(result["exit_code"], 0, result)
+            self.assertEqual(result["agent_dispatches"], 15)
+            self.assertEqual(result["opus_dispatches"], 2)
+            self.assertEqual(result["dispatch_source"], "params")
+            self.assertNotEqual(result["tshirt"], "XS")
+            self.assertEqual(result["ledger_session_id"], _FOREIGN_SESSION)
+
+            recs = parse_session_ledgers(hpath.read_text(encoding="utf-8"))
+            self.assertEqual(recs[0]["session_id"], _FOREIGN_SESSION[-6:])
+            self.assertEqual(recs[0]["agent_dispatches"], "15")
+            self.assertEqual(recs[0]["opus_dispatches"], "2")
+
+    def test_supplied_counts_win_over_an_on_disk_file(self):
+        with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+            repo = _make_git_repo(Path(tmp))
+            _seed(repo, "2026-08-21-test.md")
+            _write_dispatched_agents(
+                repo, _FOREIGN_SESSION, ["abc123def456	sonnet	general-purpose	1000"],
+            )
+
+            result = _call(
+                repo,
+                {
+                    "handoff_path": "state/handoffs/2026-08-21-test.md",
+                    "summary": "s",
+                    "session_id": _FOREIGN_SESSION,
+                    "agent_dispatches": 15,
+                    "opus_dispatches": 2,
+                },
+            )
+
+            self.assertEqual(result["exit_code"], 0, result)
+            self.assertEqual(result["agent_dispatches"], 15)
+            self.assertEqual(result["dispatch_source"], "params")
+
+    def test_ordinary_path_still_reads_absence_as_a_real_zero(self):
+        with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+            repo = _make_git_repo(Path(tmp))
+            _seed(repo, "2026-08-21-test.md")
+
+            result = _call(
+                repo, {"handoff_path": "state/handoffs/2026-08-21-test.md", "summary": "s"}
+            )
+
+            self.assertEqual(result["exit_code"], 0, result)
+            self.assertEqual(result["dispatch_source"], "absent_means_zero")
+
+    def test_half_a_measurement_is_refused(self):
+        with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+            repo = _make_git_repo(Path(tmp))
+            _seed(repo, "2026-08-21-test.md")
+
+            result = _call(
+                repo,
+                {
+                    "handoff_path": "state/handoffs/2026-08-21-test.md",
+                    "summary": "s",
+                    "session_id": _FOREIGN_SESSION,
+                    "agent_dispatches": 15,
+                },
+            )
+
+            self.assertEqual(result["exit_code"], 1)
+            self.assertIn("opus_dispatches", result["error"])
+
+    def test_malformed_counts_are_refused(self):
+        cases = [
+            ({"agent_dispatches": True, "opus_dispatches": 0}, "integer"),
+            ({"agent_dispatches": "15", "opus_dispatches": 2}, "integer"),
+            ({"agent_dispatches": -1, "opus_dispatches": 0}, ">= 0"),
+            ({"agent_dispatches": 2, "opus_dispatches": 5}, "exceeds"),
+        ]
+        for counts, fragment in cases:
+            with self.subTest(counts=counts):
+                with tempfile.TemporaryDirectory(prefix="append-ledger-") as tmp:
+                    repo = _make_git_repo(Path(tmp))
+                    _seed(repo, "2026-08-21-test.md")
+
+                    params = {
+                        "handoff_path": "state/handoffs/2026-08-21-test.md",
+                        "summary": "s",
+                        "session_id": _FOREIGN_SESSION,
+                    }
+                    params.update(counts)
+                    result = _call(repo, params)
+
+                    self.assertEqual(result["exit_code"], 1, result)
+                    self.assertIn(fragment, result["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

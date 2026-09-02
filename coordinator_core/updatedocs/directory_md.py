@@ -9,7 +9,7 @@ module never generates or rewrites any part of `DIRECTORY.md`.
 
 Negative spec: this module never builds a `GateResult` and never writes to
 `DIRECTORY.md` or any other file. An absent or unreadable target raises
-`DirectoryMdUnavailable` — the gate layer (`coordinator_core.ops.updatedocs_gates`)
+`UpdatedocsTargetMissing` — the gate layer (`coordinator_core.ops.updatedocs_gates`)
 is the only place that maps that to UNAVAILABLE; collapsing "could not check" into
 "found nothing" is exactly the defect the mechanization-boundary audit found failing
 at nine of ten sites.
@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
+
 _LAST_REFRESHED_RE = re.compile(r"Last refreshed:\s*(\d{4}-\d{2}-\d{2})")
 
 # Matches assertions of the shape "19 `conftest.py`/test-support files across the
@@ -31,24 +33,6 @@ _LAST_REFRESHED_RE = re.compile(r"Last refreshed:\s*(\d{4}-\d{2}-\d{2})")
 # somewhere later on the same line. Only counts the document explicitly states are
 # parsed; nothing here infers a count the document does not claim.
 _COUNT_ASSERTION_RE = re.compile(r"(\d+)\s+`([\w.]+\.\w+)`[^\n]*?\bfiles\b")
-
-
-class DirectoryMdUnavailable(Exception):
-    """Raised when the target DIRECTORY.md-shaped file cannot be read.
-
-    Carries the missing/unreadable path so the caller (a gate function) can convert
-    this into an UNAVAILABLE verdict rather than swallowing it into a clean result.
-    """
-
-    def __init__(self, missing_path: Path) -> None:
-        self.missing_path = missing_path
-        # `path` retained as an alias: the attribute name across all four
-        # sibling errors in this package is `missing_path`, and the gate layer
-        # reads that one uniformly.
-        self.path = missing_path
-        super().__init__(
-            f"DIRECTORY.md-shaped file not found or unreadable: {missing_path}"
-        )
 
 
 @dataclass(frozen=True)
@@ -114,17 +98,17 @@ def compute_directory_md_drift(directory_md_path: Path) -> DirectoryMdDrift:
 
     Raises
     ------
-    DirectoryMdUnavailable
+    UpdatedocsTargetMissing
         If `directory_md_path` does not exist or cannot be read.
     """
     directory_md_path = Path(directory_md_path)
     if not directory_md_path.is_file():
-        raise DirectoryMdUnavailable(directory_md_path)
+        raise UpdatedocsTargetMissing(directory_md_path)
 
     try:
         text = directory_md_path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise DirectoryMdUnavailable(directory_md_path) from exc
+        raise UpdatedocsTargetMissing(directory_md_path) from exc
 
     refreshed_on = _parse_refreshed_on(text)
     age_days = (date.today() - refreshed_on).days if refreshed_on is not None else None

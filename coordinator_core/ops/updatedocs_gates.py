@@ -93,22 +93,11 @@ from typing import Any, Callable, Optional
 
 from coordinator_core.external_tool_budget import bound_for
 from coordinator_core.ipc import register_op
-from coordinator_core.updatedocs.directory_md import (
-    DirectoryMdUnavailable,
-    compute_directory_md_drift,
-)
-from coordinator_core.updatedocs.memo_prune import (
-    MemoPruneTargetMissing,
-    compute_memo_prune_candidates,
-)
-from coordinator_core.updatedocs.plan_prune import (
-    PlanPruneTargetMissing,
-    compute_plan_prune_candidates,
-)
-from coordinator_core.updatedocs.readme_index import (
-    ReadmeIndexUnavailable,
-    compute_readme_index_drift,
-)
+from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
+from coordinator_core.updatedocs.directory_md import compute_directory_md_drift
+from coordinator_core.updatedocs.memo_prune import compute_memo_prune_candidates
+from coordinator_core.updatedocs.plan_prune import compute_plan_prune_candidates
+from coordinator_core.updatedocs.readme_index import compute_readme_index_drift
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -806,7 +795,7 @@ def _gate_docs_readme_index_drift(repo_root: Path, _settings: Path, _overrides: 
     """Which docs/ artifacts are missing from, or dead in, docs/README.md."""
     try:
         drift = compute_readme_index_drift(repo_root)
-    except ReadmeIndexUnavailable as exc:
+    except UpdatedocsTargetMissing as exc:
         return GateResult(
             "docs-readme-index-drift",
             GateVerdict.UNAVAILABLE,
@@ -857,7 +846,7 @@ def _gate_directory_md_staleness(repo_root: Path, _settings: Path, overrides: di
     target = repo_root / rel
     try:
         drift = compute_directory_md_drift(target)
-    except DirectoryMdUnavailable as exc:
+    except UpdatedocsTargetMissing as exc:
         return GateResult(
             "directory-md-staleness",
             GateVerdict.UNAVAILABLE,
@@ -901,43 +890,63 @@ def _gate_directory_md_staleness(repo_root: Path, _settings: Path, overrides: di
     )
 
 
-def _gate_plans_prune_candidates(repo_root: Path, _settings: Path, overrides: dict) -> GateResult:
-    """Which docs/plans/ entries satisfy all three ripeness-safety legs.
+def _prune_gate(
+    gate_id: str,
+    compute_fn: Callable[..., Any],
+    repo_root: Path,
+    overrides: dict,
+) -> GateResult:
+    """Shared body for the two prune gates below.
 
-    Reports candidates with per-leg evidence. Prunes nothing: the disposal
-    decision stays with the ceremony and its existing guards.
+    Both predicates now emit the identical `prunable`/`retained`/
+    `indeterminate` list[str] shape (Kira's finding 1/2 unification), so the
+    two `_gate_*` functions differed only in gate id, compute function, and
+    one CLEAN message string. This is the table that difference collapses to;
+    `_gate_plans_prune_candidates` / `_gate_archive_memo_prune_candidates`
+    below close over it with their own name and compute function.
     """
     kwargs = {}
     if "age_days" in overrides:
         kwargs["age_days"] = overrides["age_days"]
     try:
-        result = compute_plan_prune_candidates(repo_root, **kwargs)
-    except PlanPruneTargetMissing as exc:
+        result = compute_fn(repo_root, **kwargs)
+    except UpdatedocsTargetMissing as exc:
         return GateResult(
-            "plans-prune-candidates",
+            gate_id,
             GateVerdict.UNAVAILABLE,
             f"cannot check: {exc.missing_path} does not exist",
             detail={"missing_path": str(exc.missing_path)},
         )
 
     detail = {
-        "prunable": [c.path for c in result.prunable],
-        "indeterminate": [c.path for c in result.indeterminate],
+        "prunable": list(result.prunable),
+        "indeterminate": list(result.indeterminate),
         "retained_count": len(result.retained),
     }
     if not result.prunable and not result.indeterminate:
         return GateResult(
-            "plans-prune-candidates",
+            gate_id,
             GateVerdict.CLEAN,
-            "no plan is prune-eligible and none is indeterminate",
+            f"no candidate is prune-eligible ({len(result.retained)} retained)",
             detail=detail,
         )
     return GateResult(
-        "plans-prune-candidates",
+        gate_id,
         GateVerdict.FINDING,
         f"{len(result.prunable)} prune candidate(s), {len(result.indeterminate)} indeterminate",
         severity=Severity.INFORMATIONAL,
         detail=detail,
+    )
+
+
+def _gate_plans_prune_candidates(repo_root: Path, _settings: Path, overrides: dict) -> GateResult:
+    """Which docs/plans/ entries satisfy all three ripeness-safety legs.
+
+    Prunes nothing: the disposal decision stays with the ceremony and its
+    existing guards.
+    """
+    return _prune_gate(
+        "plans-prune-candidates", compute_plan_prune_candidates, repo_root, overrides
     )
 
 
@@ -948,37 +957,8 @@ def _gate_archive_memo_prune_candidates(repo_root: Path, _settings: Path, overri
     is exactly why an absent archive directory must reach the caller as
     UNAVAILABLE and not as this gate's CLEAN.
     """
-    kwargs = {}
-    if "age_days" in overrides:
-        kwargs["age_days"] = overrides["age_days"]
-    try:
-        result = compute_memo_prune_candidates(repo_root, **kwargs)
-    except MemoPruneTargetMissing as exc:
-        return GateResult(
-            "archive-memo-prune-candidates",
-            GateVerdict.UNAVAILABLE,
-            f"cannot check: {exc.missing_path} does not exist",
-            detail={"missing_path": str(exc.missing_path)},
-        )
-
-    detail = {
-        "prunable": [c.path for c in result.prunable],
-        "indeterminate": [c.path for c in result.indeterminate],
-        "retained_count": len(result.retained),
-    }
-    if not result.prunable and not result.indeterminate:
-        return GateResult(
-            "archive-memo-prune-candidates",
-            GateVerdict.CLEAN,
-            f"no archive memo is prune-eligible ({len(result.retained)} retained)",
-            detail=detail,
-        )
-    return GateResult(
-        "archive-memo-prune-candidates",
-        GateVerdict.FINDING,
-        f"{len(result.prunable)} prune candidate(s), {len(result.indeterminate)} indeterminate",
-        severity=Severity.INFORMATIONAL,
-        detail=detail,
+    return _prune_gate(
+        "archive-memo-prune-candidates", compute_memo_prune_candidates, repo_root, overrides
     )
 
 

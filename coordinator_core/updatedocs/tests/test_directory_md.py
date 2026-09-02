@@ -7,13 +7,12 @@ Spec backlink: pln-bucket-2-extraction-four-deter-e121fa (chunk C2)
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import pytest
 
-from coordinator_core.updatedocs.directory_md import (
-    DirectoryMdUnavailable,
-    compute_directory_md_drift,
-)
+from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
+from coordinator_core.updatedocs.directory_md import compute_directory_md_drift
 
 REAL_REFRESHED_LINE = (
     "Last refreshed: 2026-08-06 (spot-check only — see coverage note above)."
@@ -28,15 +27,20 @@ def _write(tmp_path, name, text):
 
 def test_absent_file_raises_typed_unavailable(tmp_path):
     missing = tmp_path / "DIRECTORY.md"
-    with pytest.raises(DirectoryMdUnavailable) as excinfo:
+    with pytest.raises(UpdatedocsTargetMissing) as excinfo:
         compute_directory_md_drift(missing)
-    assert excinfo.value.path == missing
+    assert excinfo.value.missing_path == missing
 
 
 def test_real_trailing_parenthetical_line_is_parsed(tmp_path):
     doc = _write(tmp_path, "DIRECTORY.md", REAL_REFRESHED_LINE + "\n")
     drift = compute_directory_md_drift(doc)
-    assert drift.refreshed_on == date(2026, 8, 6)
+    # Deliberately NOT pinned to a literal date. This file's refresh date
+    # moving is the drift this package exists to prompt someone to fix, so a
+    # pinned date makes the test go red for the right real-world reason and the
+    # wrong test reason -- it would read as a regression.
+    assert drift.refreshed_on is not None
+    assert drift.age_days is not None and drift.age_days > 14
     assert drift.age_days == (date.today() - date(2026, 8, 6)).days
     assert drift.age_days >= 0
 
@@ -111,9 +115,7 @@ def test_never_infers_a_count_the_document_does_not_state(tmp_path):
 
 
 def test_real_repo_directory_md_reports_drift():
-    real_path = (
-        __import__("pathlib").Path(__file__).resolve().parents[2] / "DIRECTORY.md"
-    )
+    real_path = Path(__file__).resolve().parents[2] / "DIRECTORY.md"
     drift = compute_directory_md_drift(real_path)
     assert drift.refreshed_on == date(2026, 8, 6)
     assert drift.age_days is not None

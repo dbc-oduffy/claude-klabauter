@@ -10,10 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.updatedocs.readme_index import (
-    ReadmeIndexUnavailable,
-    compute_readme_index_drift,
-)
+from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
+from coordinator_core.updatedocs.readme_index import compute_readme_index_drift
 
 
 def _write(path: Path, text: str) -> None:
@@ -22,14 +20,14 @@ def _write(path: Path, text: str) -> None:
 
 
 def test_raises_when_docs_dir_absent(tmp_path):
-    with pytest.raises(ReadmeIndexUnavailable) as excinfo:
+    with pytest.raises(UpdatedocsTargetMissing) as excinfo:
         compute_readme_index_drift(tmp_path)
     assert excinfo.value.missing_path == tmp_path / "docs"
 
 
 def test_raises_when_readme_absent(tmp_path):
     (tmp_path / "docs").mkdir()
-    with pytest.raises(ReadmeIndexUnavailable) as excinfo:
+    with pytest.raises(UpdatedocsTargetMissing) as excinfo:
         compute_readme_index_drift(tmp_path)
     assert excinfo.value.missing_path == tmp_path / "docs" / "README.md"
 
@@ -156,9 +154,13 @@ def test_title_extraction_falls_through_to_stem_when_neither_present(tmp_path):
     assert title == "bare-file-no-title"
 
 
-def test_title_extraction_reads_at_most_800_bytes(tmp_path, monkeypatch):
+def test_title_extraction_reads_a_bounded_head_not_the_whole_file(tmp_path):
+    """`_extract_title` now shares `_common.read_head`'s bound (8192 bytes,
+    grown once to 65536 if a frontmatter close delimiter hasn't appeared) --
+    finding 5's `_common.py` lift replaced the module's own 800-byte reader.
+    A heading placed well past the growth ceiling must still fall through to
+    the filename-stem fallback, proving the read stays bounded rather than
+    reading the whole file."""
     path = tmp_path / "huge.md"
-    _write(path, "x" * 5000 + "\n# Late Heading\n")
-    # The heading is well past byte 800, so it must not be found — the stem
-    # fallback proves only a bounded prefix was read.
+    _write(path, "x" * 70_000 + "\n# Late Heading\n")
     assert _extract_title(path) == "huge"

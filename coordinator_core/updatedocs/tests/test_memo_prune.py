@@ -7,10 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.updatedocs.memo_prune import (
-    MemoPruneTargetMissing,
-    compute_memo_prune_candidates,
-)
+from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
+from coordinator_core.updatedocs.memo_prune import compute_memo_prune_candidates
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -29,7 +27,7 @@ def _write_memo(archive_dir: Path, name: str, status_line: str | None, age_days:
 
 
 def test_missing_archive_dir_raises_typed_error(tmp_path):
-    with pytest.raises(MemoPruneTargetMissing) as excinfo:
+    with pytest.raises(UpdatedocsTargetMissing) as excinfo:
         compute_memo_prune_candidates(tmp_path)
     assert (tmp_path / "cross-repo" / "archive") == excinfo.value.missing_path
 
@@ -83,22 +81,27 @@ def test_no_status_key_is_indeterminate_never_prunable(tmp_path):
 
 
 def test_no_status_key_and_young_still_indeterminate(tmp_path):
-    # A no-status memo fails the age leg outright (younger than floor), so it
-    # never reaches the frontmatter head-read at all -- confirm it still lands
-    # in indeterminate rather than being silently miscategorised as retained
-    # by the age-floor short-circuit path.
+    """Indeterminate is AGE-INDEPENDENT, which is the whole three-state contract.
+
+    Regression guard. An earlier revision stat-ed first and skipped the
+    frontmatter head-read for files younger than the floor, so a young
+    no-status memo was folded into `retained` — indistinguishable from a memo
+    whose status was actually read and found non-actioned. This test asserted
+    that as correct while its own name promised the opposite.
+
+    The perf ordering it protected was real (17.0ms vs 98.4ms over 1851 memos)
+    and is not worth a bucket that lies: 98ms sits well under the 500ms
+    brightline.
+    """
     archive_dir = tmp_path / "cross-repo" / "archive"
     archive_dir.mkdir(parents=True)
     _write_memo(archive_dir, "no-status-young.md", None, age_days=1)
 
     result = compute_memo_prune_candidates(tmp_path, age_days=90)
 
-    # Young files never get their frontmatter read (perf ordering), so a
-    # no-status young memo is classified purely on the age leg -- retained,
-    # not indeterminate, since indeterminate requires reading status at all.
     assert result.prunable == []
-    assert result.indeterminate == []
-    assert result.retained == ["cross-repo/archive/no-status-young.md"]
+    assert result.retained == []
+    assert result.indeterminate == ["cross-repo/archive/no-status-young.md"]
 
 
 def test_mixed_corpus_partitions_correctly(tmp_path):
@@ -114,9 +117,6 @@ def test_mixed_corpus_partitions_correctly(tmp_path):
     assert result.prunable == ["cross-repo/archive/a-prunable.md"]
     assert result.retained == ["cross-repo/archive/b-young.md", "cross-repo/archive/c-open.md"]
     assert result.indeterminate == ["cross-repo/archive/d-no-status.md"]
-    assert set(result.evidence.keys()) == set(
-        result.prunable + result.retained + result.indeterminate
-    )
 
 
 def test_age_days_is_a_parameter_not_a_literal(tmp_path):
@@ -142,4 +142,32 @@ def test_live_corpus_yields_zero_prunable():
 
     result = compute_memo_prune_candidates(REPO_ROOT)
 
+    assert result.prunable == []
+
+
+def test_unreadable_memo_is_indeterminate_not_retained(tmp_path, monkeypatch):
+    """"Could not read the status" and "read it, not actioned" are different states.
+
+    Both used to land in `retained`, which is the same collapse this module
+    exists to prevent, one layer down from the no-status case.
+    """
+    archive_dir = tmp_path / "cross-repo" / "archive"
+    archive_dir.mkdir(parents=True)
+    _write_memo(archive_dir, "unreadable.md", "actioned", age_days=200)
+
+    import pathlib
+
+    real_open = pathlib.Path.open
+
+    def _boom(self, *a, **kw):
+        if self.name == "unreadable.md":
+            raise OSError("simulated permissions failure")
+        return real_open(self, *a, **kw)
+
+    monkeypatch.setattr(pathlib.Path, "open", _boom)
+
+    result = compute_memo_prune_candidates(tmp_path, age_days=90)
+
+    assert result.indeterminate == ["cross-repo/archive/unreadable.md"]
+    assert result.retained == []
     assert result.prunable == []

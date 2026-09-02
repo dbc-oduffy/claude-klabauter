@@ -175,3 +175,51 @@ def test_system_message_and_suppress_output_stay_top_level():
     body = hook_http.interpret_result("Stop", frame)
     assert body["systemMessage"] == "for the operator"
     assert body["suppressOutput"] is True
+
+
+# --- Events the harness refuses a `hookSpecificOutput` wrapper for -----------------------
+#
+# `hookEventName` is validated against a closed enum that does not contain every event the
+# harness DIALS. `SessionEnd` dials, routes, runs the op -- and the response then fails
+# validation on the echoed name, taking the op's `additionalContext` with it. Measured by
+# doe-claude-cd on harness 2.1.258 (two-arm paired control, one field different). These
+# tests pin the shape, not the enum: see `EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT`'s own
+# negative spec for why the set is a list of measurements rather than a copy of the enum.
+
+
+def test_sessionend_responses_omit_the_wrapper_the_harness_rejects():
+    for body in (
+        hook_http.allow_response("SessionEnd"),
+        hook_http.unreachable_response("SessionEnd", "engine down"),
+        hook_http.unserved_response("SessionEnd"),
+    ):
+        assert "hookSpecificOutput" not in body
+
+
+def test_a_served_event_still_carries_the_wrapper_and_its_event_name():
+    """The narrowing is per-event, not a general retreat from the nested shape."""
+    body = hook_http.allow_response("PostToolUse")
+    assert body["hookSpecificOutput"]["hookEventName"] == "PostToolUse"
+
+
+def test_sessionend_context_moves_top_level_rather_than_being_dropped():
+    """Asserts PLACEMENT ONLY. The context does not reach the model, and cannot.
+
+    Measured post-fix on harness 2.1.258: the shape validates, and neither sentinel
+    surfaced. The cause is the event, not the nesting level -- `SessionEnd` is terminal, so
+    no turn follows for context to be spliced into. The key is kept so `_with_context` does
+    not silently discard what an op asked to say, not because it is a delivery channel; see
+    `hook_http._envelope` for the measurement and for why no better placement exists.
+    """
+    body = hook_http.allow_response("SessionEnd", {"additionalContext": "ctx"})
+    assert body["additionalContext"] == "ctx"
+    assert "hookSpecificOutput" not in body
+
+
+def test_an_op_that_nested_its_own_output_on_sessionend_keeps_its_context():
+    """An op cannot know the harness refuses its wrapper; lifting beats dropping."""
+    body = hook_http.allow_response(
+        "SessionEnd", {"hookSpecificOutput": {"additionalContext": "ctx"}}
+    )
+    assert body["additionalContext"] == "ctx"
+    assert "hookSpecificOutput" not in body

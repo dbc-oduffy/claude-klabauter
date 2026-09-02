@@ -2087,6 +2087,28 @@ def _sanitize_mint_slug(raw: str) -> str:
     return slug or "fan-in"
 
 
+# `resolve_lineage`'s `expected_discovery_tier` kwarg (C2, 2026-09-02):
+# cascade-STEP vocabulary -> the set of raw `discovery` labels that
+# satisfy it. Only `"predecessor"` needs an alias -- both `"artifact"` and
+# `"plan-input"` are the SAME predecessor-carry step, split into two
+# `discovery` labels by `is_plan_input`'s relabel (see
+# `_tracking_read_frontmatter_field`'s docstring). Every other expected
+# value (`"plan"`, `"mint"`, `"explicit"`, ...) is compared to `discovery`
+# directly -- see `resolve_lineage.__doc__`'s `expected_discovery_tier`
+# paragraph.
+_DISCOVERY_TIER_EXPECTATION_ALIASES: dict[str, set[str]] = {
+    "predecessor": {"artifact", "plan-input"},
+}
+
+# CLI-facing (`baton-assemble brief --expect-discovery-tier`) legal-value
+# set -- the CASCADE STEP vocabulary `resolve_lineage`'s own docstring
+# names for `expected_discovery_tier` (`"plan"` / `"predecessor"` /
+# `"mint"`), enforced at parse time so an unrecognized value refuses before
+# ever reaching the cascade rather than passing through to a `discovery`
+# comparison that can never match.
+_DISCOVERY_TIER_EXPECTATION_VALUES: set[str] = {"plan", "predecessor", "mint"}
+
+
 def resolve_lineage(
     kind: str,
     artifact_path: str,
@@ -2097,6 +2119,7 @@ def resolve_lineage(
     *,
     excise_rung: Optional[str] = None,
     session_id: Optional[str] = None,
+    expected_discovery_tier: Optional[str] = None,
 ) -> dict[str, Any]:
     """Resolve the `kind`-selected parent-discovery order into a lineage dict.
 
@@ -2208,6 +2231,32 @@ def resolve_lineage(
     empty and the predecessor was self-resolved from the claim ledger (the
     AUTO-DISCOVERED rung is the one cut). The caller (`brief`) computes
     which value to pass; this function only applies it.
+
+    `expected_discovery_tier` (C2, 2026-09-02, the-loader-fires-the-
+    assembly-not-the-em plan -- checkable expectation over an outcome the
+    cascade already reports): OPT-IN, `None` by default, and every existing
+    caller passes nothing -- an absent expectation reproduces today's exact
+    result on the same input, byte-identically. The cascade itself is
+    UNCHANGED by this parameter: order, tier labels, and the existing
+    negative spec above all stay verbatim; this only adds a refusal over
+    the tier the cascade already answered from. Named in the CASCADE
+    STEP vocabulary (`"plan"` / `"predecessor"` / `"mint"`), not always the
+    raw `discovery` label -- `"predecessor"` accepts either `"artifact"` or
+    `"plan-input"`, since both are the predecessor-carry step under two
+    different `discovery` labels (see `_tracking_read_frontmatter_field`'s
+    own docstring for why that step's `discovery` label bifurcates); every
+    other expected value is compared to `discovery` directly. A mismatch
+    raises `ValueError` naming both the expected and the actual tier --
+    this is the fix for the defect where passing the governing plan where
+    the predecessor baton was wanted was LEGAL (the plan tier answers
+    first, by design) and silently produced a brief with no predecessor and
+    no supersede directive, distinguished from the correct invocation only
+    by a warn-only stderr line. Deliberately independent of the EXISTING
+    `deliverable_collision` warn-only advisory (`_scan_deliverable_
+    collision`, below) -- that warning fires on a different, unrelated
+    case (a competing live baton already holding the same `deliverable_id`)
+    and promoting IT to an error would fix this defect by inventing
+    another; this parameter never touches it.
     """
     # `was_bare_slug` distinguishes the bare-slug mint convention (fresh
     # output target -- legitimately absent on disk, nothing to archive-
@@ -3170,6 +3219,27 @@ def resolve_lineage(
             "-- proceeding with this authoring anyway (warn-only).",
             file=sys.stderr,
         )
+
+    # C2 (2026-09-02): opt-in refusal over the tier the cascade already
+    # answered from -- see this parameter's own docstring paragraph above
+    # for the vocabulary and the defect this closes. Checked LAST, after
+    # `discovery` is fully finalized (including the `is_plan_input` relabel
+    # to `"plan-input"` above), so this can never race that relabel.
+    if expected_discovery_tier is not None:
+        _acceptable_tiers = _DISCOVERY_TIER_EXPECTATION_ALIASES.get(
+            expected_discovery_tier, {expected_discovery_tier}
+        )
+        if lineage["discovery"] not in _acceptable_tiers:
+            raise ValueError(
+                "baton_assemble.resolve_lineage: expected the parent-"
+                f"discovery cascade to answer from tier {expected_discovery_tier!r} "
+                f"but it answered from tier {lineage['discovery']!r} "
+                f"(kind={kind!r}, artifact_path={artifact_path!r}) -- passing "
+                "the wrong artifact for the intended tier is legal (the "
+                "cascade answers plan -> predecessor -> mint regardless of "
+                "caller intent) and previously produced a silently-wrong "
+                "brief; pass the artifact for the expected tier instead."
+            )
 
     return lineage
 
@@ -5084,6 +5154,7 @@ def brief(
     title: Optional[str] = None,
     explicit_deliverable_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    expected_discovery_tier: Optional[str] = None,
 ) -> BriefResult:
     """`brief <kind> [artifact-path] [--decisions <json>] [--title <text>]
     [--deliverable-id <id>]` -- the single-shot decision-object computation
@@ -5149,7 +5220,14 @@ def brief(
     present (`None` on every other path) and non-`None` only when THIS
     call self-resolved to zero held claims -- an explicit, self-describing
     signal that downstream consumers must not read as "predecessor
-    unknown" or invent a lineage for."""
+    unknown" or invent a lineage for.
+
+    `expected_discovery_tier` (C2, 2026-09-02): threaded straight through,
+    unmodified, to `resolve_lineage`'s own kwarg of the same name -- see
+    that function's docstring for the vocabulary and the opt-in/refusal
+    contract. `None` by default; every existing caller of `brief` passes
+    nothing, so this parameter changes nothing about `brief`'s own
+    behavior for them."""
     if kind not in KINDS:
         raise ValueError(f"baton_assemble.brief: unrecognized kind {kind!r} (expected one of {KINDS})")
     if explicit_deliverable_id and kind == "handoff":
@@ -5328,6 +5406,7 @@ def brief(
             explicit_deliverable_id=explicit_deliverable_id,
             excise_rung=_excise_rung,
             session_id=session_id,
+            expected_discovery_tier=expected_discovery_tier,
         )
     except DivergentDeliverableIdError as _divergence_exc:
         # Actionable, not terminal. The refusal to auto-pick is UNCHANGED --
@@ -5654,7 +5733,7 @@ def validate_decisions_shape(decisions: Any) -> Optional[str]:
 
 
 _USAGE_LINES = (
-    "usage: {prog} brief <kind> [artifact-path] [--decisions <json> | --decisions-file <path>] [--title <text>]",
+    "usage: {prog} brief <kind> [artifact-path] [--decisions <json> | --decisions-file <path>] [--title <text>] [--expect-discovery-tier plan|predecessor|mint]",
     "       {prog} apply <kind> [artifact-path] [--session-id <id>] [--decisions <json> | --decisions-file <path>] [--title <text>]",
     "       (artifact-path is optional for kind=handoff on BOTH verbs -- self-resolves",
     "        the predecessor from the current session's own claim ledger)",
@@ -5665,6 +5744,11 @@ _USAGE_LINES = (
     "       --deliverable-id ID  (spinoff only) Existing deliverable_id to carry (never",
     "        re-mint). Rejected for kind=handoff, which resolves its own via the",
     "        claimed-plan -> predecessor -> mint cascade.",
+    "       --expect-discovery-tier plan|predecessor|mint  (brief only) Declare which",
+    "        cascade step this invocation expects to answer from; a mismatch (e.g. the",
+    "        claimed plan answering when the predecessor baton was wanted) refuses",
+    "        instead of silently producing a brief with no predecessor. Omit to keep",
+    "        today's unchecked behavior -- every existing caller passes nothing.",
 )
 
 
@@ -5746,6 +5830,7 @@ def main(argv: list[str]) -> int:
     decisions: dict[str, Any] = {}
     title: Optional[str] = None
     deliverable_id: Optional[str] = None
+    expected_discovery_tier: Optional[str] = None
     conflict = detect_conflicting_payload_channels(tail)
     if conflict is not None:
         print(f"baton-assemble: {conflict}", file=sys.stderr)
@@ -5757,6 +5842,19 @@ def main(argv: list[str]) -> int:
             if i + 1 >= len(tail):
                 return _usage("baton-assemble")
             deliverable_id = tail[i + 1]
+            i += 2
+        elif tok == "--expect-discovery-tier":
+            if i + 1 >= len(tail):
+                return _usage("baton-assemble")
+            expected_discovery_tier = tail[i + 1]
+            if expected_discovery_tier not in _DISCOVERY_TIER_EXPECTATION_VALUES:
+                print(
+                    "baton-assemble: --expect-discovery-tier must be one of "
+                    f"{sorted(_DISCOVERY_TIER_EXPECTATION_VALUES)!r}, got "
+                    f"{expected_discovery_tier!r}",
+                    file=sys.stderr,
+                )
+                return EXIT_USAGE
             i += 2
         elif (payload := resolve_json_payload_flag(tail, i)).consumed:
             if payload.error is not None:
@@ -5800,6 +5898,8 @@ def main(argv: list[str]) -> int:
     _brief_kwargs: dict[str, Any] = {"title": title}
     if deliverable_id is not None:
         _brief_kwargs["explicit_deliverable_id"] = deliverable_id
+    if expected_discovery_tier is not None:
+        _brief_kwargs["expected_discovery_tier"] = expected_discovery_tier
     try:
         result = brief(kind, artifact_path, decisions, **_brief_kwargs)
     except TransportFailure as exc:
