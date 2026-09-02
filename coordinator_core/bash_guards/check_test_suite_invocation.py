@@ -2364,6 +2364,78 @@ def _deny_reason_mutex(detected: str, cmd_safe: str, holder: Dict[str, Any]) -> 
 _GRANT_DETAIL_POINTER = "this guard's own GRANT-leg doctrine (no wiki page yet)"
 
 
+def _resolved_sid_for_diagnosis() -> Optional[str]:
+    """The session id THIS guard process resolves, for the ungranted-record
+    deny below and nothing else.
+
+    Never feeds the authorization decision -- that stays entirely inside
+    `grant.check_tier_u_grant`, which resolves its own sid. This exists so a
+    false-negative grant check can report the two sids side by side instead
+    of leaving the reader to reconstruct them, which is what made the
+    2026-09-02 report (example-retrieval-repo-ue-addon-em) unresolvable from the deny
+    text alone. Fails to `None`, never raises: a diagnostic may not be able
+    to break a deny it is only annotating."""
+    try:
+        from coordinator_core.session import core as _session_core
+
+        return _session_core.resolve_session_id(None)
+    except Exception:
+        return None
+
+
+def _ungranted_record_failing_gate(
+    record: Dict[str, Any], resolved_sid: Optional[str], cwd: Optional[str]
+) -> str:
+    """WHICH of `check_tier_u_grant`'s gates rejected this record.
+
+    Mirrors that function's gate ORDER exactly (granted_by -> ceremony
+    cross-field -> stored-sid match -> liveness) so the answer is the one it
+    actually returned on, not merely a true statement about the record. Kept
+    as a mirror rather than a refactor of the predicate itself: this is a
+    diagnostic for a deny that has already been decided, and giving the
+    authorization path a second caller whose failure mode is cosmetic is a
+    worse trade than restating four cheap comparisons. If that function's
+    gates change, this drifts to "a gate this guard cannot name", which is
+    honest rather than wrong -- the final `return` below.
+
+    Never raises and never re-decides: the deny stands regardless of what
+    this returns."""
+    try:
+        from coordinator_core.session import grant as _grant
+
+        granted_by = record.get("granted_by")
+        if granted_by not in _grant._VALID_GRANTED_BY:
+            return (
+                "granted_by is %r, which is not a granter this engine "
+                "recognises" % (granted_by,)
+            )
+        ceremony = record.get("ceremony")
+        if granted_by == "ceremony" and not ceremony:
+            return "granted_by is 'ceremony' but the record names no ceremony"
+        if granted_by == "pm" and ceremony:
+            return "granted_by is 'pm' but the record also names a ceremony"
+        stored = record.get("session_id")
+        if stored != resolved_sid:
+            return (
+                "the grant was written for a different session than this "
+                "guard process resolved -- writer/reader disagreement, an "
+                "engine defect"
+            )
+        from coordinator_core.session import liveness as _liveness
+
+        if not _liveness.session_live(resolved_sid or "", cwd):
+            return (
+                "the sids match, but the session that minted this grant no "
+                "longer reads live -- mint a new grant"
+            )
+        return (
+            "no gate this guard mirrors rejected it, so the authorization "
+            "path has a gate this text does not know about -- report this line"
+        )
+    except Exception:
+        return "undetermined (the diagnostic itself failed; the deny stands)"
+
+
 def _deny_reason_grant(
     detected: str,
     cmd_safe: str,
@@ -2371,6 +2443,8 @@ def _deny_reason_grant(
     is_tie: bool = False,
     payload: Optional[Dict[str, Any]] = None,
     git_root: Optional[str] = None,
+    ungranted_record: Optional[Dict[str, Any]] = None,
+    ungranted_cwd: Optional[str] = None,
 ) -> str:
     """Deny text for the grant leg. ``is_tie`` marks a repo whose configured
     ``fast_test_cmd`` and ``full_test_cmd`` resolved to the identical command
@@ -2481,6 +2555,55 @@ def _deny_reason_grant(
     surrounding phrasing) even though the sentence around them was rebuilt.
     """
     _override_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
+    if ungranted_record is not None:
+        # A grant EXISTS and still read ungranted. Both branches below tell
+        # the reader to go get a grant; here that instruction is false, and
+        # the one route it offers -- retyping a PM utterance into
+        # `tier-u-grant-cli grant pm` -- asks the reader to author an
+        # authorization the PM did not give. Example-retrieval-repo-ue-addon-em hit
+        # exactly that on 2026-09-02, declined to type it, and was right to.
+        #
+        # `check_tier_u_grant` returns the record on a DENIAL precisely so
+        # this case can be told apart from "no grant at all" (its own
+        # docstring says so); the call site captured it into `_record` and
+        # threw it away, so the two rendered identically and the reader had
+        # no way to tell which they were looking at.
+        #
+        # Names the stored fields and stops -- it does not diagnose a cause.
+        # The reader can see their own session and repo; this guard cannot,
+        # and a guess here would have been wrong on the reported incident.
+        # Deliberately outside the word budget the two branches below share:
+        # that ceiling governs text shown to a reader who must go get a
+        # grant, and this text is reached only by a reader those two would
+        # actively mislead.
+        _stored_sid = ungranted_record.get("session_id")
+        _granted_by = ungranted_record.get("granted_by")
+        _diag_sid = _resolved_sid_for_diagnosis()
+        return (
+            (
+                "A Tier-U grant record exists here but did not authorize this "
+                "run -- asking for another will not change that.\n"
+                "  grant session_id: %s\n"
+                "  granted_by:       %s\n"
+                "  this process sid: %s\n\n"
+                "  why:              %s\n\n"
+                "  Detected: %s\n"
+                "  Command:  %s\n\n"
+                "Full grant detail: %s"
+                % (
+                    _stored_sid or "<absent>",
+                    _granted_by or "<absent>",
+                    _diag_sid or "<unresolvable>",
+                    _ungranted_record_failing_gate(
+                        ungranted_record, _diag_sid, ungranted_cwd
+                    ),
+                    detected,
+                    cmd_safe,
+                    _GRANT_DETAIL_POINTER,
+                )
+            )
+            + ("\n\n%s" % _override_note if _override_note else "")
+        )
     if is_tie:
         return (
             (
@@ -2970,7 +3093,23 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     (d) the machine-wide suite mutex is held by another run. Checked in that
     order -- identity, then grant, then wrapper, then mutex.
     """
-    if os.environ.get(_OVERRIDE_ENV_VAR, "0") == "1":
+    # Read the override off the PER-CALL payload, not this process's environ.
+    # Ambient was correct only while every guard evaluation was a fresh child of
+    # the caller's own shell. It is not: `warm/hook_http.py :: evaluate_cold`
+    # runs this chain inside DoE's resident forwarder, and the warm rung runs it
+    # inside the resident server -- both environs belong to whoever spawned them.
+    # Ambient there fails in both directions at once: a caller's legitimate
+    # pre-launch override is invisible, and whatever the resident process started
+    # under disarms this guard for every session on the box. `_override`'s own
+    # docstring (C14c, `32d5224ed`) is the canonical statement of that hazard; it
+    # falls back to `os.environ` when the payload carries no `env`, so every
+    # direct/test call site is unchanged. Imported lazily: the dispatcher has
+    # already loaded that module in-process by the time any guard runs, so this
+    # costs a dict lookup, and a module-scope import would pull it in for the
+    # standalone-import callers that do not need it.
+    from coordinator_core.bash_guards.dispatch_checks import _override
+
+    if _override(_OVERRIDE_ENV_VAR, payload=payload):
         return None
 
     # Widened alongside ``MATCHERS`` (see that constant's comment): a
@@ -3119,8 +3258,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             and _matches_declared_fast_test_cmd(segments_argv, configured)
         )
         granted = declared_unscoped_fast_tier
+        # `grant_record` is what `check_tier_u_grant` returns EVEN ON A
+        # DENIAL, by its own documented contract, so a deny can tell "no
+        # grant" apart from "a grant that did not authorize this". It was
+        # captured into `_record` and discarded here until 2026-09-02, which
+        # is why a live grant rendered as an absent one -- see
+        # `_deny_reason_grant`'s `ungranted_record` branch. Stays None on the
+        # R6-declaration path, which never consults a grant at all.
+        grant_record: Optional[Dict[str, Any]] = None
         if not granted:
-            granted, _record = _tier_u_grant(cwd)
+            granted, grant_record = _tier_u_grant(cwd)
         if not granted:
             # A tie repo (fast_test_cmd == full_test_cmd, either declared
             # explicitly or arrived at via the resolver's rc=3 fallback --
@@ -3146,8 +3293,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # warranted) has somewhere to land without re-deriving
             # `matched_tiers` at the call site.
             if "U" in matched_tiers:
-                return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root))
-            return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root))
+                return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root, ungranted_record=grant_record, ungranted_cwd=cwd))
+            return _deny(_deny_reason_grant(detected, cmd_safe, is_tie=is_tie, payload=payload, git_root=repo_root, ungranted_record=grant_record, ungranted_cwd=cwd))
 
         # WRAPPER leg (new, sited strictly after identity and grant, and
         # strictly before the mutex leg below): a granted Tier-U/F command

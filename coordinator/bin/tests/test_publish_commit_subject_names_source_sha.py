@@ -104,7 +104,10 @@ def test_every_percolate_commit_subject_site_stamps():
     import ast  # noqa: PLC0415
 
     sites = {
-        "publish.py": ("_commit_published_dests", "_pinned_source_sha_suffix"),
+        # review-integrator, 2026-09-01: publish.py collapsed
+        # `_pinned_source_sha_suffix` into `_source_sha_suffix` (optional
+        # `round_pinned_shas` param) per overengineering-reviewer finding 1.
+        "publish.py": ("_commit_published_dests", "_source_sha_suffix"),
         "percolate-round.py": ("_build_commit_subject", "_source_sha_suffix"),
         "percolate-mirror.py": ("main", "_source_sha_suffix"),
     }

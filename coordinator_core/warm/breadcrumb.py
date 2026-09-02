@@ -120,10 +120,14 @@ SPAWN_DEBOUNCE_SECS = 2.0
 #: enough to publish one" -- and sharing a number meant a boot that
 #: legitimately overran it under the box's own stated load (50-70 concurrent
 #: sessions, § Load norm) got treated as failed and re-triggered a spawn.
-#: Sized the same as `SPAWN_DEBOUNCE_SECS` for now (value unchanged by this
-#: fix); it is free to diverge once a real worst-case boot duration is
-#: measured, without also perturbing the record-freshness window.
-BOOT_CLAIM_MAX_SECS = 2.0
+#: The divergence that constant invited has now been measured
+#: (`server-boot.jsonl`, 318 rows): 0.16-1.0s to listener, 0.7-3.4s to ready.
+#: 30s is roughly 10x the slowest boot this package has ever recorded, so a
+#: genuinely slow boot on a loaded box is never cut off, and the failure
+#: direction is deliberately asymmetric -- too LOW costs one redundant spawn,
+#: which the freshly-published record then debounces; too HIGH costs the
+#: 20-hour box-wide outage `try_claim_boot` describes.
+BOOT_CLAIM_MAX_SECS = 30.0
 
 #: Byte 0 of a boot-lock file is the LOCK BYTE and never carries data:
 #: `msvcrt.locking` is MANDATORY on Windows, so a denied caller cannot read

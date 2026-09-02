@@ -133,28 +133,52 @@ __all__ = [
 #: docstring's HOST section for why that ordering matters.
 PUSH_CADENCE_INTERVAL_SECS = 600.0
 
-#: The idle-tick sweep's own ceiling (DR-401, 2026-09-01, re-derived from
-#: `CADENCE_PUSH_RETRY_BUDGET_SECS` rising 6.0 -> 16.0 -- C5's premise for
-#: 6.0 is superseded, see `push.py`'s constant docstring). `sweep_repos`
-#: still refuses to START a repo it cannot finish inside this deadline (see
-#: that function's own docstring), so this stays a REAL bound on worst-case
-#: occupancy. At the new `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0s) this keeps
-#: C5's own "2 slow (has-outstanding-work, needs-the-ladder) repos served
-#: per tick" guarantee (34.0 / 16.0 ~= 2.1, same shape as C5's 14.0/6.0
-#: ~= 2.3), rather than leaving 14.0 pointed at an arithmetic that no
-#: longer even guarantees ONE repo (14.0 < 16.0 would refuse every repo).
-#: A repo with nothing outstanding costs ~0 via `push_outstanding`'s
-#: zero-spawn arm and is unaffected by this number either way.
-SWEEP_TOTAL_CEILING_SECS = 34.0
+#: The idle-tick sweep's own ceiling (DR-401, 2026-09-01, re-derived a
+#: SECOND time same-day after an EM ruling reversed the first re-derivation
+#: below -- see DR-401's amended "Ripple" section for the full history).
+#: Sized for exactly ONE slow (has-outstanding-work, needs-the-ladder) repo
+#: per idle tick, not two: `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0) is the
+#: floor a single repo needs to clear reliably (`sweep_repos` refuses to
+#: START a repo it cannot finish inside this deadline, so anything at or
+#: below 16.0 would refuse every repo -- see that function's own
+#: docstring); this adds 2.0s on top, covering the sweep's own per-repo
+#: overhead beyond the push itself -- one extra git spawn for
+#: `head_branch` inside `_feed_failure_detector` (a `git rev-parse`-class
+#: call, DR-344's own `git --version` benchmark puts a bare spawn at
+#: ~25ms, so 2.0s is generous headroom, not a tight fit) plus the sweep
+#: lock's file I/O (sub-millisecond). A second slow repo in the same tick
+#: is deliberately NOT budgeted for: it waits for the unconditional retry
+#: at `PUSH_CADENCE_INTERVAL_SECS` (600s) instead -- correctness never
+#: depends on any one tick succeeding (DR-401's own "Why 16.0, not
+#: floor-plus-margin" reasoning). This keeps worst-case idle-tick occupancy
+#: near C5's original 14.0s magnitude rather than C5's ratio times the new
+#: floor (34.0), honoring the load norm's "an op occupying the box for
+#: seconds is real load for ~50-70 queued peers"
+#: (`docs/wiki/machine-load-norm.md`). A repo with nothing outstanding
+#: costs ~0 via `push_outstanding`'s zero-spawn arm and is unaffected by
+#: this number either way, so the two-slow-repo case this sizing declines
+#: to cover needs two repos to BOTH have outstanding work AND both be slow
+#: in the same tick -- the rare case, not the norm. No multi-repo-same-tick
+#: freshness requirement is named anywhere in DR-401 or this module; if one
+#: is ever actually named, this number is the one to revisit.
+SWEEP_TOTAL_CEILING_SECS = 18.0
 
 #: The exit-path sweep's ceiling is tighter than the idle-tick one -- an
 #: unbounded exit sweep directly lengthens warm-restart latency (module
-#: docstring's SWEEP COST BUDGET section). Re-derived (DR-401, 2026-09-01)
-#: from the new `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0s), keeping C5's own
-#: ratio: 2x the per-repo budget, one tick tighter than the idle ceiling's
-#: own 2-repo guarantee, and still strictly under `SWEEP_TOTAL_CEILING_SECS`
-#: (34.0).
-EXIT_SWEEP_CEILING_SECS = 32.0
+#: docstring's SWEEP COST BUDGET section: a same-token successor cannot
+#: bind until the whole shutdown sequence completes). Re-derived (DR-401,
+#: 2026-09-01, second re-derivation -- see `SWEEP_TOTAL_CEILING_SECS`'s
+#: docstring for the history) for the SAME one-repo-per-tick sizing:
+#: `CADENCE_PUSH_RETRY_BUDGET_SECS` (16.0) plus 1.0s -- half the overhead
+#: margin `SWEEP_TOTAL_CEILING_SECS` carries, kept tighter on purpose
+#: (exit-path latency is the more sensitive of the two per this module's
+#: own SWEEP COST BUDGET reasoning) while still leaving enough room to
+#: admit the one repo the exit sweep exists to serve (the predecessor's
+#: unpushed-at-handoff state, module docstring's THE REPO SET section) --
+#: a ceiling at or below 16.0 would refuse it outright, the same floor
+#: violation this whole record exists to fix. Strictly under
+#: `SWEEP_TOTAL_CEILING_SECS` (18.0).
+EXIT_SWEEP_CEILING_SECS = 17.0
 
 #: A zero-arg callable returning the repos (worktree roots) this server has
 #: actually served, in the order first served. `on_idle_tick`'s caller

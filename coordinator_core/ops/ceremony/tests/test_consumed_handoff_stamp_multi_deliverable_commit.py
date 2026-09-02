@@ -86,14 +86,14 @@ def sid_env(monkeypatch):
 
 
 def test_ungrouped_two_baton_pathspec_commits_untrailered(repo, sid_env):
-    """Inverted by DR-328 (2026-08-19). This test formerly asserted that an
+    """Inverted by DR-406 (2026-08-19). This test formerly asserted that an
     ungrouped two-baton pathspec RAISES `DivergentDeliverableIdError`, and its
     docstring warned that "a future change that relaxed the resolver into
     guessing would make the grouping look unnecessary while silently
     mis-attributing every multi-baton commit".
 
     That warning was right about guessing and wrong about the only alternative.
-    DR-328's C2 did not relax the resolver into guessing -- it relaxed it into
+    DR-406's C2 did not relax the resolver into guessing -- it relaxed it into
     OMITTING, per producer-contract § 3: on a divergent pathspec the commit
     lands carrying no `Deliverable-Id:` trailer at all, so nothing is
     mis-attributed. The commit is then attributed via `Session-Id:`, which C9

@@ -324,6 +324,7 @@ def test_ensure_listener_none_and_no_spawn_when_recent_boot_already_vouched_for(
     monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
     monkeypatch.setattr(supervisor, "discovery_is_live", lambda record: True)
     monkeypatch.setattr(supervisor, "check_health", lambda url, **kw: False)
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
     spawned = []
     monkeypatch.setattr(supervisor, "spawn_detached", lambda *a, **kw: spawned.append(a) or True)
 

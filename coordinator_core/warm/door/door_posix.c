@@ -99,6 +99,7 @@
  */
 
 #include "door_core.h"
+#include "door_env_set.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -1307,121 +1308,80 @@ int main(int argc, char **argv) {
     req_ok &= buf_append_cstr(&req, engine_token);
     req_ok &= buf_append_cstr(&req, "\"");
 
-    /* ADDITIVE, AND ONLY WHEN THIS CALLER ASKED FOR A HOME (2026-08-29) --
-     * the POSIX half of the same stamp `door.c` carries; see that file for
-     * the full rationale. In brief: the warm server resolves its settings
-     * home ONCE, from the environment of whoever spawned it, and is keyed on
-     * (user, engine-clone, engine-token), never on the home -- so without
-     * this field a caller that set COORDINATOR_SETTINGS_HOME is answered
-     * against a home it did not name, silently, and that home is where
-     * guard-DISARMING state lives.
-     * Backlog: state/bug-backlog/2026-08-29-the-warm-server-answers-against-
-     * its-spaw-f1bcc4154ca4.yaml (P0).
+    /* ADDITIVE, DECLARED-SET FORWARDING (2026-09-02) -- one generic loop
+     * over `door_env_set.h`'s `DOOR_ENV_SET` table, replacing the two
+     * hand-written blocks this file used to carry here: the
+     * `COORDINATOR_SETTINGS_HOME` single-name stamp (2026-08-29) and the
+     * `session_env_precedence` walk (2026-08-30). Both facts are now just
+     * entries on the one declared set (`coordinator_core/warm/
+     * env_forwarding.py`), and this file has no per-name code left to keep
+     * in lockstep with its Windows sibling (`door.c`) -- the whole point of
+     * widening the two doors together rather than one at a time (see that
+     * file's own comment on why a POSIX-only or Windows-only change ships a
+     * boundary that behaves differently per host).
      *
-     * Unset or empty is OMITTED, never sent as "" -- the server reads absence
-     * as "no opinion" and serves unchanged, which is every ordinary call.
-     * The RAW value crosses, because `_settings_home.settings_home()` returns
-     * this variable verbatim when set; deriving anything here would be a
-     * second resolver. Envelope level, sibling of `_engine_token`: transport
-     * metadata the server pops before dispatch, never an op param. */
+     * Spec: docs/plans/2026-09-01-the-warm-door-forwards-a-declared-env-set.md
+     * chunk C3. Envelope level, sibling of `_engine_token`/`_caller`:
+     * transport metadata the server pops before dispatch
+     * (`warm/entry_seam.py`), never an op param.
+     *
+     * NO MODE DISPATCH HAPPENS HERE. `refuse` (`COORDINATOR_SETTINGS_HOME`),
+     * `override` (the session-id triple), and `borrow` (everything else,
+     * e.g. `MACHINE_LOCAL_REGISTRY_DIR`) are Python-side concerns resolved
+     * at the one server seam (`warm/entry_seam.py`, chunk C4). This door
+     * only reports which of the declared names resolved in ITS caller's
+     * environment and to what raw value -- exactly the same "declare, don't
+     * interpret" split the pre-existing `_settings_home` block already
+     * followed.
+     *
+     * Unset or empty is OMITTED, never sent as "" -- the server reads
+     * absence as "this caller has no opinion" on that name and serves
+     * unchanged, which is every ordinary call and matches the two blocks
+     * this replaces byte-for-byte on the plain path (no override set
+     * anywhere emits no `_env` key at all). The RAW value crosses for every
+     * resolved name; validating or interpreting any of them here would be a
+     * second resolver -- see `warm/entry_seam.py` for the one place that
+     * validation belongs. */
     if (req_ok) {
-        const char *settings_home_env = getenv("COORDINATOR_SETTINGS_HOME");
-        if (settings_home_env != NULL && settings_home_env[0] != '\0') {
-            req_ok &= buf_append_cstr(&req, ",\"_settings_home\":\"");
-            req_ok &= buf_append_json_escaped(
-                &req, settings_home_env, strlen(settings_home_env));
+        #define X(name) #name,
+        static const char *const kDoorEnvSet[] = { DOOR_ENV_SET(X) };
+        #undef X
+        const size_t door_env_set_count =
+            sizeof(kDoorEnvSet) / sizeof(kDoorEnvSet[0]);
+
+        int env_obj_open = 0;
+        for (size_t i = 0; req_ok && i < door_env_set_count; i++) {
+            const char *value = getenv(kDoorEnvSet[i]);
+            if (value == NULL || value[0] == '\0') continue;
+            if (!env_obj_open) {
+                req_ok &= buf_append_cstr(&req, ",\"_env\":{");
+                env_obj_open = 1;
+            } else {
+                req_ok &= buf_append_cstr(&req, ",");
+            }
             req_ok &= buf_append_cstr(&req, "\"");
+            req_ok &= buf_append_cstr(&req, kDoorEnvSet[i]);
+            req_ok &= buf_append_cstr(&req, "\":\"");
+            req_ok &= buf_append_json_escaped(&req, value, strlen(value));
+            req_ok &= buf_append_cstr(&req, "\"");
+        }
+        if (env_obj_open) {
+            req_ok &= buf_append_cstr(&req, "}");
         }
     }
 
-
-    /*
-     * ADDITIVE, AND ONLY WHEN THIS CALLER HAS AN IDENTITY (2026-08-30) --
-     * the same shape and the same reason as `_settings_home` directly
-     * above, one field over. The warm server's environment holds the
-     * session of whoever SPAWNED it, never the caller of any given
-     * request, so `session.core.resolve_session_id()` inside a served op
-     * returns the SERVER OWNER's session id. Without this field every
-     * dispatch through the native door is attributed to that stranger --
-     * and it is not only a paper-trail defect: `handoff.correct_body`
-     * passes its possession gate with `basis=author` on the identity this
-     * resolver hands it, so a caller is authorized as the author of an
-     * artifact it never wrote. Reported cross-repo by doe-claude-em
-     * (cross-repo/inbox/2026-08-29-doe-claude-em-session-identity-
-     * resolves-three-ways-one-lands-on-your-session.md and its addendum):
-     * thirteen `handoff.correct_body` writes and one `memo.send` receipt,
-     * every one stamped with a live claude-klabauter session id.
-     *
-     * WHY THE DOOR AND NOT EACH OP. `warm/client.py ::
-     * _try_warm_dispatch_inner` has stamped `_session_id` since the seam
-     * was built, and `warm/server.py :: _serve_line` already pops it and
-     * binds it through `entry_seam.per_request_state`; only the native
-     * door was silent. That asymmetry is why the same op resolves
-     * correctly cold and wrongly warm -- the shape that certifies green
-     * against the route that works. Twenty-odd ops attribute through
-     * `resolve_session_id()`; stamping at the seam fixes all of them,
-     * where patching them one at a time fixes whichever were noticed.
-     *
-     * THE PRECEDENCE IS `session.core.SESSION_ENV_PRECEDENCE`, walked in
-     * order, first non-empty wins. A door reading only one of the three
-     * would disagree with the resolver it stands in for, which is the
-     * precise defect that constant's own comment records (slice D, F1: a
-     * guard reading only COORDINATOR_SESSION_ID told a real session that
-     * had only CLAUDE_CODE_SESSION_ID set "Not your claim").
-     *
-     * THE RAW VALUE, NOT A VALIDATED ONE. `session.core.
-     * session_identity_override` already gates on UUID shape and binds
-     * nothing for a value that fails it, so a malformed id costs one
-     * no-op bind, and validating here would be a second resolver.
-     *
-     * Unset or empty is OMITTED, never sent as an empty string -- the
-     * server reads absence as "this caller could not identify itself" and
-     * binds nothing, which is today's behaviour byte-for-byte. Envelope
-     * level, sibling of `_engine_token`: transport metadata the server
-     * pops before dispatch, never an op param.
-     *
-     * THE IDENTITY SET, NOT ONE FIELD, AND UNDER `_caller`. C1b of
-     * docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md
-     * widened both production legs to one top-level `_caller` object whose
-     * fields ARE `coordinator_core.warm.caller_context.CallerContext`, and
-     * retired the bare `_session_id` key with NO alias -- `_serve_line`
-     * reads `_caller` only. This POSIX twin widens with its Windows sibling
-     * (`door.c`) or a POSIX caller's identity is dropped on the floor by a
-     * server that no longer looks at the key it sends. `pid` is always
-     * carried and is why the widening matters beyond the session id:
-     * `harness_registry.self_record()` keys off `CLAUDE_PID`, and the
-     * warm-identity cohort sweep names three live defects that resolve
-     * self-classification that way.
-     */
+    /* `_caller.pid` -- NOT a forwarded name (`CLAUDE_PID` is deliberately
+     * off `DOOR_ENV_SET`, derived from `getpid()` per `env_forwarding.py`'s
+     * own docstring), so it stays its own field rather than folding into
+     * the loop above. This is the whole of what `_caller` carries now that
+     * the session-id triple moved onto the declared set as `override`-mode
+     * entries in `_env`. */
     if (req_ok) {
-        static const char *const session_env_precedence[] = {
-            "COORDINATOR_SESSION_ID",
-            "CLAUDE_SESSION_ID",
-            "CLAUDE_CODE_SESSION_ID",
-        };
-        const size_t session_env_count =
-            sizeof(session_env_precedence) / sizeof(session_env_precedence[0]);
-        const char *sid = NULL;
         char pid_buf[32];
-        for (size_t i = 0; i < session_env_count; i++) {
-            const char *candidate = getenv(session_env_precedence[i]);
-            if (candidate == NULL || candidate[0] == '\0') {
-                continue;
-            }
-            sid = candidate;
-            break;
-        }
         snprintf(pid_buf, sizeof(pid_buf), "%ld", (long)getpid());
-
         req_ok &= buf_append_cstr(&req, ",\"_caller\":{\"pid\":\"");
         req_ok &= buf_append_cstr(&req, pid_buf);
-        req_ok &= buf_append_cstr(&req, "\"");
-        if (sid != NULL) {
-            req_ok &= buf_append_cstr(&req, ",\"session_id\":\"");
-            req_ok &= buf_append_json_escaped(&req, sid, strlen(sid));
-            req_ok &= buf_append_cstr(&req, "\"");
-        }
-        req_ok &= buf_append_cstr(&req, "}");
+        req_ok &= buf_append_cstr(&req, "\"}");
     }
 
     req_ok &= buf_append_cstr(&req, "}\n");

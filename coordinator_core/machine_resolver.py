@@ -109,6 +109,7 @@ from __future__ import annotations
 
 import datetime
 import functools
+import logging
 import os
 import re
 import subprocess
@@ -122,6 +123,8 @@ from coordinator_core._repo_root_probe import (
     resolve_repo_root as _resolve_repo_root,
 )
 from coordinator_core.daily_branch import sanitize_slug
+
+_LOG = logging.getLogger(__name__)
 
 _GIT_TIMEOUT = 10
 
@@ -407,6 +410,86 @@ def merged_flat_registry() -> dict:
     merged.update(load_flat_registry_file(reg_dir / "registry.toml"))
     merged.update(load_flat_registry_file(reg_dir / "registry.local.toml"))
     return merged
+
+
+_DECLARED_ROSTER_FILENAME = "registry.toml"
+"""The seeded, roster-declaring half of the two-file registry. `registry.toml`
+is created once from the shipped `registry.toml.example` and carries the
+`repos.*` keys the fleet declares; `registry.local.toml` carries whatever this
+machine has since pointed at a path, including receive-only aliases nothing
+declares. That asymmetry is the only on-disk signal separating a repo's
+canonical registry key from an alias for the same path — see
+`canonical_repo_key_for_root`."""
+
+
+def declared_repo_keys() -> frozenset:
+    """The `repos.*` keys declared in the seeded `registry.toml` roster.
+
+    Membership, not value: a key declared with an empty string is still
+    declared, which is exactly the distinction `load_flat_registry_file`
+    exists to preserve and `registry_get`'s merged view collapses away.
+
+    Best-effort like every other reader here — an absent or unreadable
+    `registry.toml` yields an empty set, which degrades
+    `canonical_repo_key_for_root` to its deterministic tie-break rather than
+    raising into an identity path that must never raise.
+    """
+    return frozenset(
+        key
+        for key in load_flat_registry_file(registry_dir() / _DECLARED_ROSTER_FILENAME)
+        if key.startswith("repos.")
+    )
+
+
+def canonical_repo_key_for_root(root, repo_key_paths: dict) -> Optional[str]:
+    """The ONE `repos.*` key that owns `root`, or None when none matches.
+
+    Several registry keys legitimately point at one repo: a repo carries its
+    canonical key plus any receive-only alias under which siblings may address
+    it (`repos.claude_klabauter` alongside `repos.project_example_orchestration_hub`,
+    `repos.example-sim-repo` alongside `repos.example_sim_repo_md`). Every caller that turns a
+    path back into an identity — a memo's `from:` line above all — must pick the
+    same key for the same repo, on every machine, whatever order the registry
+    happens to enumerate.
+
+    Ranking: a key declared in the seeded roster (`declared_repo_keys`) beats
+    one that exists only in `registry.local.toml`, because the roster is what
+    the fleet declares and the local file is where an alias gets pointed at a
+    path afterwards. Remaining ties resolve lexicographically and log, so the
+    answer is stable rather than merely arbitrary.
+
+    Negative-spec: this does NOT dedupe the registry and does not make an alias
+    unresolvable. An alias stays a valid address a sibling may send TO; it just
+    never wins the reverse mapping, where exactly one answer is correct.
+    """
+    from coordinator_core.win_portability import same_path
+
+    matches = sorted(
+        key
+        for key, path in repo_key_paths.items()
+        if path and same_path(str(path), str(root))
+    )
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+
+    preferred = [key for key in matches if key in declared_repo_keys()]
+    if len(preferred) == 1:
+        return preferred[0]
+
+    chosen = (preferred or matches)[0]
+    _LOG.warning(
+        "canonical_repo_key_for_root: %s is registered under %d keys (%s) and "
+        "the seeded roster does not single one out; taking %r by lexicographic "
+        "tie-break. Declare the canonical key in registry.toml to fix the "
+        "identity this repo sends under.",
+        root,
+        len(matches),
+        ", ".join(matches),
+        chosen,
+    )
+    return chosen
 
 
 def registry_value(key: str, flat: dict) -> Optional[str]:

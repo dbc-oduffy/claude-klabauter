@@ -56,7 +56,7 @@ this repo. Do not re-implement or fork a second copy of
 `DivergentDeliverableIdError` anywhere else — `coordinator/bin/handoff-
 deliverable-carry.py` imports from this module rather than carrying its own copy.
 
-Sanctioned exception (DR-328, 2026-08-19): `coordinator_core.ops.ceremony.
+Sanctioned exception (DR-406, 2026-08-19): `coordinator_core.ops.ceremony.
 git_native.DeliverableIdAssertionConflictError` is a deliberate SIBLING of
 `DivergentDeliverableIdError` (not a subclass, not a fork of it) — it serves a
 different consumer (a commit-time caller-vs-message-trailer assertion

@@ -1663,12 +1663,12 @@ class DeliverableIdAssertionConflictError(RuntimeError):
 
     2026-08-10 PM ruling ("FAIL LOUD by raising the existing ...
     DivergentDeliverableIdError") governed the carry-or-mint system this
-    class splits away from; the 2026-08-19 PM ruling (DR-328) supersedes
+    class splits away from; the 2026-08-19 PM ruling (DR-406) supersedes
     it, naming this split so a commit assertion conflict gets its own
     class instead of borrowing the carry system's. See `docs/decisions/
-    DR-328` and this plan's chunk C4 authorization.
+    DR-406` and this plan's chunk C4 authorization.
 
-    `caller_facing_validation` (DR-328 chunk C7): this class's message
+    `caller_facing_validation` (DR-406 chunk C7): this class's message
     already names both disagreeing ids and what the caller must do, so it
     opts into `ipc.py`'s existing duck-type marker rather than inventing a
     parallel signal -- that module's `CallerFacingValidationError` docstring
@@ -1709,12 +1709,12 @@ def _check_deliverable_id_precedence(
     DISAGREES. FAIL LOUD, never silently pick either side. Both `commit_
     scoped` branches propagate this raised, uncaught -- a deliberate,
     NAMED exception to this module's usual "every wrapper returns a
-    GitResult, never raises" convention. DR-328 (2026-08-19) split this
+    GitResult, never raises" convention. DR-406 (2026-08-19) split this
     off `DivergentDeliverableIdError` as a SIBLING, not a subclass -- see
     `DeliverableIdAssertionConflictError`'s own docstring for why; the
     original 2026-08-10 PM ruling ("FAIL LOUD by raising the existing ...
     DivergentDeliverableIdError") governed the carry system this class
-    split away from and is superseded here by DR-328's naming of this
+    split away from and is superseded here by DR-406's naming of this
     split.
     """
     existing = _trailer_value(msg_text, "Deliverable-Id:")

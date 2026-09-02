@@ -667,12 +667,40 @@ def evaluate_cold(event: Mapping[str, Any]) -> Dict[str, Any]:
             _policy_file_for,
             _verdict_from_envelope,
         )
+        from coordinator_core.session.core import session_identity_override
 
-        out = evaluate_payload_json(
-            json.dumps(payload),
-            policy_file=_policy_file_for(payload),
-            resolution_class=_engine_resolution_class(),
-        )
+        # THE CALLER'S IDENTITY IS BOUND HERE OR IT IS LOST HERE. This rung is
+        # the only one that evaluates the chain with no per-request scope around
+        # it: the warm rung reaches the chain through `warm/server.py ::
+        # _run_dispatch`, which opens `entry_seam.per_request_state(session_id=
+        # caller.session_id)` from the `_caller` object `build_request` stamps.
+        # This function has no such wrapper, so without this bind every guard
+        # that asks `session.core.resolve_session_id()` gets the environ of
+        # whichever process happens to host this call -- DoE's resident
+        # forwarder, whose environ names the session that spawned it and no
+        # other. That is not a degraded answer, it is a confidently wrong one:
+        # `session/grant.py :: check_tier_u_grant` then reads a DIFFERENT
+        # session's grant file, so a live grant reads as absent for its own
+        # holder and, should the spawning session ever hold one in the caller's
+        # repo, as present for everybody else. Reported cross-repo by
+        # example-retrieval-repo-em, 2026-09-02; diagnosis in state/bug-backlog/
+        # 2026-09-02-warm-server-environ-decides-every-callers-session-identity.yaml.
+        #
+        # Measured, and the reason this rung is not the rare case it reads as:
+        # the box's forwarder had served 7988 of 7988 PreToolUse events here,
+        # `forwarded_by_event: {}`, because the HTTP listener's discovery record
+        # was absent. A fallback carrying 100% of traffic is the primary path.
+        #
+        # `session_identity_override` validates the value itself (UUID shape) and
+        # no-ops on None, so a payload with no session id degrades to exactly
+        # today's behaviour rather than fabricating an identity.
+        sid = payload.get("session_id")
+        with session_identity_override(sid if isinstance(sid, str) else None):
+            out = evaluate_payload_json(
+                json.dumps(payload),
+                policy_file=_policy_file_for(payload),
+                resolution_class=_engine_resolution_class(),
+            )
         result = _verdict_from_envelope(out)
         return _decision_to_response(event_name, result)
     except Exception as exc:  # noqa: BLE001 -- breadth is the point; see docstring

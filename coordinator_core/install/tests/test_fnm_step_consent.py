@@ -100,6 +100,26 @@ def test_fnm_step_declines_brew_leg_without_prompting_when_non_interactive(
     assert called == {}
 
 
+def test_fnm_step_honours_harness_switch_even_with_consent_opt_in(monkeypatch):
+    # Review: code-reviewer Finding 2 -- the harness switch
+    # (COORDINATOR_DISABLE_MACHINE_MUTATION) and the human-consent gate
+    # (COORDINATOR_INSTALL_FNM) are two independently-maintained checks in
+    # `_fnm_step`; this pins that the harness switch is still honoured even
+    # when consent has been granted, so a reorder of `_fnm_step`'s body
+    # can't silently drop it.
+    monkeypatch.setenv("COORDINATOR_INSTALL_FNM", "1")
+    monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
+    monkeypatch.setattr(substrate.shutil, "which", lambda name: (
+        "/usr/local/bin/brew" if name == "brew" else None
+    ))
+
+    def _fake_run(argv, **kwargs):
+        raise AssertionError("brew must not run when the harness switch refuses mutation")
+
+    monkeypatch.setattr(substrate, "_run", _fake_run)
+    substrate._fnm_step(check_only=False)
+
+
 def test_fnm_step_sets_homebrew_env_vars_on_consented_install(monkeypatch):
     """When consent IS given, the brew invocation must carry
     HOMEBREW_NO_AUTO_UPDATE=1 and HOMEBREW_NO_INSTALL_CLEANUP=1 -- `_run`

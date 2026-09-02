@@ -21,6 +21,29 @@ __pycache__/
 # reach a public repo via a blanket `git add`.
 state/
 
+# `state/` is not a stray in the sense the paragraph above assumed, and the
+# distinction matters to whoever next tries to stop it reappearing: the
+# writers are not doing a blanket `git add`, they are rooting themselves on
+# THE CWD'S GIT ROOT. `engine_provenance_counter.record_engine_provenance`
+# resolves `resolve_git_root_cheap(cwd)` and appends under `<that
+# root>/state/`; `sweep-boot`'s orientation cache, the group-EM watch, and
+# the session-hierarchy and test-red writers take the same shape. So ANY
+# session that runs with cwd inside the mirror -- routine maintenance, a
+# stray test run -- leaves state behind, and no ignore rule prevents that.
+# Ignoring is the whole remedy available here; the tree is swept when it
+# grows (2026-09-02: 19 files removed, archived to claude-klabauter
+# `state/audits/2026-09-02-claude-klabauter-mirror-state-residue/`).
+# Eliminating it means changing where those writers root, across several
+# writers -- a design change, not an ignore entry.
+
+# Coordinator scratch, same class as `state/`: cwd-rooted working space, no
+# publish row ships it, never payload. Present in the mirror on 2026-09-02
+# (`scratch/benchmark-clones/`) and unignored until then -- it stayed out of
+# `git status` only because it happened to be EMPTY, and git does not report
+# empty directories. One file inside it would have made it a dirty-dest
+# finding on every round.
+scratch/
+
 # Same class, two more strays observed 2026-08-15: a session's own `.claude/`
 # scaffolding, and `Saved/ProjectRag/` -- a ~190MB example-retrieval-repo index (graph.db
 # plus structural sqlite and its -shm/-wal siblings) left by someone indexing

@@ -134,6 +134,13 @@
  * path and both sources to the compiler. */
 #include "door_core.h"
 
+/* THE DECLARED ENV FORWARDING SET's names, X-macro'd -- generated from
+ * `coordinator_core/warm/env_forwarding.py`'s `FORWARDING_SET`, shared
+ * verbatim with `door_posix.c` (see `door_env_set.h`'s own docstring).
+ * This leg's `X` expands each name into a `wchar_t*` literal, consumed by
+ * the `_env` loop further down. */
+#include "door_env_set.h"
+
 /* ---- baked at build time by build.py (placeholder substitution, same
  * convention as coordinator/bin/coordinator-invoke.cmd's __PYTHON_BIN__). */
 #ifndef PYTHON_BIN_W
@@ -1316,9 +1323,9 @@ int main(void) {
 
     /* HOOK MODE'S PAYLOAD (door_core.h). Inside `params`, sibling of
      * `argv`/`cwd` above -- an OP ARGUMENT, exactly like `entrypoint`
-     * below and UNLIKE the envelope-level `_caller`/`_settings_home`
-     * fields further down: the payload is what the served op reads to do
-     * its job, never transport metadata the server pops before dispatch.
+     * below and UNLIKE the envelope-level `_caller`/`_env` fields further
+     * down: the payload is what the served op reads to do its job, never
+     * transport metadata the server pops before dispatch.
      * Freed immediately after appending -- `buf_append_json_escaped`
      * copies the bytes, so `stdin_payload.data` has no further use. */
     if (req_ok && have_stdin_payload) {
@@ -1378,121 +1385,108 @@ int main(void) {
     req_ok &= buf_append_cstr(&req, engine_token);
     req_ok &= buf_append_cstr(&req, "\"");
 
-    /* ADDITIVE, AND ONLY WHEN THIS CALLER ASKED FOR A HOME (2026-08-29).
-     * The warm server resolves its settings home ONCE, from the environment
-     * of whoever spawned it, and is keyed on (user, engine-clone,
-     * engine-token) -- never on the home. Without this field a caller that
-     * set COORDINATOR_SETTINGS_HOME is answered against a home it did not
-     * name, silently: verified through THIS binary on 2026-08-29,
-     * `fleet.mode_show` reporting a null fleet value while the overridden
-     * home held a set record. The settings home is where guard-DISARMING
-     * state lives (`bash_guards/_blanket_disarm.py :: marker_path`,
-     * `authz/classification.py`, `secrets/`), so a wrong answer there
-     * answers in the direction that disarms.
-     * Backlog: state/bug-backlog/2026-08-29-the-warm-server-answers-against-
-     * its-spaw-f1bcc4154ca4.yaml (P0, step 1 of two).
+    /* THE DECLARED ENV FORWARDING SET (C2, docs/plans/2026-09-01-the-warm-
+     * door-forwards-a-declared-env-set.md). Replaces the two hand-written
+     * blocks this file used to carry separately -- a `_settings_home`
+     * single-name block and a `session_env_precedence` three-name,
+     * first-non-empty-wins walk -- with ONE loop over `door_env_set.h`'s
+     * generated `DOOR_ENV_SET` table
+     * (`coordinator_core/warm/env_forwarding.py`'s `FORWARDING_SET` is the
+     * SSOT that table is regenerated from; see that module's docstring for
+     * why a single generated list ends the two-hand-kept-blocks drift this
+     * row exists to close). Emits an envelope-level `_env` object -- sibling
+     * of `_engine_token`/`_caller` below, NOT inside `params`: transport
+     * metadata the server pops before dispatch (`_serve_line`), never an
+     * argument any op reads, same placement rationale `_settings_home` used
+     * to carry alone.
      *
-     * OMITTED ENTIRELY when the variable is unset or empty, which is every
-     * ordinary invocation. The server reads absence as "this caller has no
-     * opinion" and serves exactly as it does today -- BACKWARD COMPATIBILITY
-     * IS AN AC here for the same reason it is for `entrypoint` above, and
-     * the plain user path (no override anywhere) must stay byte-identical.
+     * UNLIKE the retired `session_env_precedence` walk, this is not
+     * first-non-empty-wins over a fixed slot -- every declared name that
+     * resolves gets its OWN key in `_env`, keyed by its own environment-
+     * variable name verbatim (`COORDINATOR_SESSION_ID`, `CLAUDE_SESSION_ID`,
+     * and `CLAUDE_CODE_SESSION_ID` can all be present at once; which one
+     * wins, if any conflict, is the server-side seam's call, not this
+     * door's).
      *
-     * THE RAW VALUE, NOT A DERIVED ONE. `coordinator_core/_settings_home.py
-     * :: settings_home()` returns this variable VERBATIM when it is set (its
-     * override rung validates and returns, it does not canonicalise), so
-     * passing the raw wide value through `wide_to_utf8` is what makes the
-     * two sides of the server's comparison the same string. Deriving or
-     * normalising anything here would be a second resolver.
+     * BYTE-IDENTICAL ON THE PLAIN PATH (HARD AC). A name absent or empty in
+     * the caller's environment is OMITTED from `_env` entirely, never sent
+     * as an empty string -- the server reads absence as "this caller has no
+     * opinion", exactly as the two retired blocks already behaved. If NO
+     * declared name resolves, `_env` itself is omitted rather than sent as
+     * `{}`, so a caller with no override set anywhere produces the same
+     * wire bytes as before this change.
      *
-     * ENVELOPE LEVEL, sibling of `_engine_token` -- NOT inside `params`,
-     * which is the opposite of `entrypoint`'s placement above and
-     * deliberately so: this is transport metadata the server pops before
-     * dispatch (`_serve_line`), never an argument any op reads. */
+     * SIZING (HARD AC): the two-call length-probe-then-read pattern the two
+     * retired blocks already used, kept and made generic rather than
+     * replaced with a single-call read -- a value that will not fit its
+     * probed buffer sends NOTHING for that name rather than a truncated
+     * one; a truncated path is the worst possible value to stamp (the
+     * `_settings_home` block's own prior rationale, unchanged here). */
     if (req_ok) {
-        /* `GetEnvironmentVariableW`, matching `resolve_engine_root`'s own read
-         * above rather than introducing `_wgetenv` (deprecated by the UCRT,
-         * and a second env-reading family in one file). Sized in two calls --
-         * the length probe, then the read -- because a TRUNCATED home would be
-         * the worst possible value to stamp: a claim naming a directory nobody
-         * asked for, which the server would then refuse or, worse, match by
-         * accident. A read that will not fit sends NOTHING, which the server
-         * reads as "no opinion" and serves as it does today. */
-        DWORD sh_len = GetEnvironmentVariableW(L"COORDINATOR_SETTINGS_HOME", NULL, 0);
-        if (sh_len > 1) {
-            wchar_t *settings_home_w = (wchar_t *)malloc(sh_len * sizeof(wchar_t));
-            if (settings_home_w == NULL) {
-                req_ok = 0;
-            } else {
-                DWORD got = GetEnvironmentVariableW(
-                    L"COORDINATOR_SETTINGS_HOME", settings_home_w, sh_len);
-                if (got > 0 && got < sh_len && settings_home_w[0] != L'\0') {
-                    req_ok &= buf_append_cstr(&req, ",\"_settings_home\":\"");
-                    if (req_ok) {
-                        int settings_home_u8_len;
-                        char *settings_home_u8 =
-                            wide_to_utf8(settings_home_w, &settings_home_u8_len);
-                        if (!settings_home_u8) {
-                            req_ok = 0;
-                        } else {
-                            req_ok &= buf_append_json_escaped(
-                                &req, settings_home_u8, (size_t)settings_home_u8_len);
-                            free(settings_home_u8);
-                        }
-                    }
-                    req_ok &= buf_append_cstr(&req, "\"");
-                }
-                free(settings_home_w);
+#define X(name) L"" #name,
+        static const wchar_t *const kDoorEnvNames[] = { DOOR_ENV_SET(X) };
+#undef X
+        const size_t kDoorEnvCount = sizeof(kDoorEnvNames) / sizeof(kDoorEnvNames[0]);
+        int env_opened = 0;
+        for (size_t i = 0; i < kDoorEnvCount && req_ok; i++) {
+            DWORD val_len = GetEnvironmentVariableW(kDoorEnvNames[i], NULL, 0);
+            if (val_len <= 1) {
+                continue; /* unset or empty -- omit, never an empty string */
             }
+            wchar_t *val_w = (wchar_t *)malloc((size_t)val_len * sizeof(wchar_t));
+            if (val_w == NULL) {
+                req_ok = 0;
+                break;
+            }
+            DWORD got = GetEnvironmentVariableW(kDoorEnvNames[i], val_w, val_len);
+            if (got == 0 || got >= val_len || val_w[0] == L'\0') {
+                /* Did not fit the probed buffer, or raced to empty --
+                 * omit rather than stamp a truncated value. */
+                free(val_w);
+                continue;
+            }
+            int val_u8_len;
+            char *val_u8 = wide_to_utf8(val_w, &val_u8_len);
+            free(val_w);
+            if (!val_u8) {
+                req_ok = 0;
+                break;
+            }
+            int name_u8_len;
+            char *name_u8 = wide_to_utf8(kDoorEnvNames[i], &name_u8_len);
+            if (!name_u8) {
+                free(val_u8);
+                req_ok = 0;
+                break;
+            }
+
+            req_ok &= buf_append_cstr(&req, env_opened ? ",\"" : ",\"_env\":{\"");
+            req_ok &= buf_append_json_escaped(&req, name_u8, (size_t)name_u8_len);
+            req_ok &= buf_append_cstr(&req, "\":\"");
+            req_ok &= buf_append_json_escaped(&req, val_u8, (size_t)val_u8_len);
+            req_ok &= buf_append_cstr(&req, "\"");
+            free(name_u8);
+            free(val_u8);
+            env_opened = 1;
+        }
+        if (env_opened) {
+            req_ok &= buf_append_cstr(&req, "}");
         }
     }
 
-
-    /*
-     * ADDITIVE, EVERY CALL (2026-08-30, widened to the caller's identity
-     * SET -- docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md
-     * § C1b). Was a bare `_session_id` string, envelope-level; is now one
-     * `_caller` object, envelope-level, whose fields ARE
-     * `coordinator_core.warm.caller_context.CallerContext` -- `pid` and
-     * (when resolvable) `session_id`. `warm/client.py`'s Python leg widens
-     * the SAME way, over the SAME dataclass, so the two production callers
-     * of `_serve_line` cannot describe caller identity two different ways.
-     *
-     * NO DEPRECATED `_session_id` ALIAS. `_serve_line` reads `_caller` only
-     * as of this change -- we publish and install the door binary and the
-     * server ourselves, in lockstep (`state/lessons/a-door-fix-is-inert-
-     * until-the-installed-exe-images-are-rewritten.md`), so the
-     * mixed-version state an alias would defend against does not occur
-     * here.
-     *
-     * `pid` IS ALWAYS SENT -- `GetCurrentProcessId()` never fails, unlike a
-     * session id, which is only ever a caller-set environment variable.
-     * `harness_registry.self_record()` keys off `CLAUDE_PID`; without this
-     * field every self-classification a served op performs attributes to
-     * whoever spawned the server, not to this calling process (cohort sweep,
-     * `state/audits/2026-08-30-warm-identity-cohort-sweep.md`).
-     *
-     * `session_id`, WHEN RESOLVABLE, keeps every rationale the prior
-     * `_session_id` block stated: the warm server's own environment holds
-     * the session of whoever SPAWNED it, never the caller of any given
-     * request, so `session.core.resolve_session_id()` inside a served op
-     * would otherwise return the SERVER OWNER's session id -- not only a
-     * paper-trail defect: `handoff.correct_body` passes its possession gate
-     * with `basis=author` on the identity this resolver hands it, so a
-     * caller could be authorized as the author of an artifact it never
-     * wrote (cross-repo/inbox/2026-08-29-doe-claude-em-session-identity-
-     * resolves-three-ways-one-lands-on-your-session.md and its addendum).
-     * `session.core.SESSION_ENV_PRECEDENCE`'s three names, walked in order,
-     * first non-empty wins, RAW (not validated -- `session.core.
-     * session_identity_override` already gates on UUID shape and no-ops on
-     * a value that fails it, so validating here would be a second
-     * resolver). Unset or empty is OMITTED from the object, never sent as
-     * an empty string -- the server reads absence as "this caller could not
-     * identify itself" and binds nothing, today's behaviour byte-for-byte.
-     *
-     * Envelope level, sibling of `_engine_token`: transport metadata the
-     * server pops before dispatch (`_serve_line`), never an op param.
-     */
+    /* `_caller.pid` (2026-08-30, docs/plans/2026-08-30-every-op-runs-in-
+     * the-callers-environment.md § C1b). `pid` IS ALWAYS SENT --
+     * `GetCurrentProcessId()` never fails, unlike an environment-sourced
+     * value. `harness_registry.self_record()` keys off `CLAUDE_PID`;
+     * without this field every self-classification a served op performs
+     * attributes to whoever spawned the server, not to this calling
+     * process (cohort sweep, `state/audits/2026-08-30-warm-identity-cohort-
+     * sweep.md`). The session-id triple this object used to carry
+     * (`session_env_precedence`, first-non-empty-wins) moved into `_env`
+     * above (C2) -- `_caller` no longer resolves or reads any environment
+     * variable itself, only the pid this process already knows. Envelope
+     * level, sibling of `_engine_token`/`_env`: transport metadata the
+     * server pops before dispatch (`_serve_line`), never an op param. */
     if (req_ok) {
         char pid_u8[32];
         int pid_len = snprintf(pid_u8, sizeof(pid_u8), "%lu",
@@ -1500,51 +1494,10 @@ int main(void) {
         if (pid_len <= 0 || (size_t)pid_len >= sizeof(pid_u8)) {
             req_ok = 0;
         }
-
-        char *sid_u8 = NULL;
-        int sid_u8_len = 0;
-        if (req_ok) {
-            static const wchar_t *const session_env_precedence[] = {
-                L"COORDINATOR_SESSION_ID",
-                L"CLAUDE_SESSION_ID",
-                L"CLAUDE_CODE_SESSION_ID",
-            };
-            for (int i = 0; i < 3; i++) {
-                DWORD sid_len = GetEnvironmentVariableW(session_env_precedence[i], NULL, 0);
-                if (sid_len <= 1) {
-                    continue;
-                }
-                wchar_t *sid_w = (wchar_t *)malloc(sid_len * sizeof(wchar_t));
-                if (sid_w == NULL) {
-                    req_ok = 0;
-                    break;
-                }
-                DWORD got = GetEnvironmentVariableW(
-                    session_env_precedence[i], sid_w, sid_len);
-                if (got > 0 && got < sid_len && sid_w[0] != L'\0') {
-                    sid_u8 = wide_to_utf8(sid_w, &sid_u8_len);
-                    if (!sid_u8) {
-                        req_ok = 0;
-                    }
-                }
-                free(sid_w);
-                break;
-            }
-        }
-
         if (req_ok) {
             req_ok &= buf_append_cstr(&req, ",\"_caller\":{\"pid\":\"");
             req_ok &= buf_append_cstr(&req, pid_u8);
-            req_ok &= buf_append_cstr(&req, "\"");
-            if (sid_u8 != NULL) {
-                req_ok &= buf_append_cstr(&req, ",\"session_id\":\"");
-                req_ok &= buf_append_json_escaped(&req, sid_u8, (size_t)sid_u8_len);
-                req_ok &= buf_append_cstr(&req, "\"");
-            }
-            req_ok &= buf_append_cstr(&req, "}");
-        }
-        if (sid_u8 != NULL) {
-            free(sid_u8);
+            req_ok &= buf_append_cstr(&req, "\"}");
         }
     }
 

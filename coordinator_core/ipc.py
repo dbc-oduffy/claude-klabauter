@@ -2444,7 +2444,7 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
 
     So: for an op that MAY MUTATE, report indeterminacy rather than failure,
     reusing the envelope `warm/client.py` already landed one seam out --
-    `WARM_DISPATCH_INDETERMINATE` and `_MUTATION_INDETERMINATE_MESSAGE`,
+    `WARM_DISPATCH_INDETERMINATE` and `_OP_TIMEOUT_INDETERMINATE_MESSAGE`,
     classified by that module's fail-closed `_op_may_mutate` (an unknown op
     answers True, because one honest error costs less than a mutation executed
     twice). A COMPUTE_ONLY op keeps the plain `INTERNAL_ERROR`: re-running a
@@ -2471,7 +2471,7 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
     try:
         from coordinator_core.warm.client import (  # noqa: PLC0415 - see docstring
             WARM_DISPATCH_INDETERMINATE,
-            _MUTATION_INDETERMINATE_MESSAGE,
+            _OP_TIMEOUT_INDETERMINATE_MESSAGE,
             _op_may_mutate,
         )
     except Exception:  # pragma: no cover - defensive, see negative-spec
@@ -2491,7 +2491,7 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
             "error": {
                 "code": WARM_DISPATCH_INDETERMINATE,
                 "message": (
-                    f"{_MUTATION_INDETERMINATE_MESSAGE} "
+                    f"{_OP_TIMEOUT_INDETERMINATE_MESSAGE} "
                     f"(op {method!r} timed out after {op_timeout}s)"
                 ),
             },

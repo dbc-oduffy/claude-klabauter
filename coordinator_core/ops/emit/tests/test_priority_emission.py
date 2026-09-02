@@ -93,7 +93,7 @@ def test_contract_version_carries_the_priority_ledger_bump() -> None:
     wrong.
 
     The floor used to carry a second clause, `major == 3`, justified as "a major bump
-    breaks cockpit's ingest either direction". That clause was a PROXY, and DR-353
+    breaks cockpit's ingest either direction". That clause was a PROXY, and DR-407
     retired the premise under it: cockpit-contract 4.0.0 drops `file_attribution`
     deliberately, and cockpit's `checkSchemaVersion()` hard-throwing on the major IS
     the intended signal to re-vendor, with cockpit's own ratified assent on record
@@ -103,7 +103,7 @@ def test_contract_version_carries_the_priority_ledger_bump() -> None:
 
     What this test protects is unchanged and is the only thing it ever protected: the
     priority-ledger fields are not retro-classified below 3.4.0. It says nothing about
-    whether a later major is permitted — that is DR-353's question, not this test's.
+    whether a later major is permitted — that is DR-407's question, not this test's.
     """
     from coordinator_core.contract.cockpit_schema.emit_schema import CONTRACT_VERSION
 

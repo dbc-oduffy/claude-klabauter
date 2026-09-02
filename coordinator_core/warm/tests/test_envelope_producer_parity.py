@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import ast
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -89,10 +90,22 @@ _DOOR_POSIX_C = _ENGINE_ROOT / "coordinator_core" / "warm" / "door" / "door_posi
 
 _INNER_FUNC_NAME = "_try_warm_dispatch_inner"
 
-#: `_publish_lane` is a recorded, deliberate asymmetry, not a defect this
-#: module exists to flag -- see module docstring LEG 2. Any other one-sided
-#: field is unpinned and must fail `test_envelope_field_sets_match`.
-_KNOWN_ONE_SIDED_FIELDS = frozenset({"_publish_lane"})
+#: `_publish_lane`, `_env`, and `_settings_home` are the three recorded,
+#: deliberate asymmetries, not defects this module exists to flag -- see
+#: module docstring LEG 2. `_env` (C2/C3/C4, docs/plans/2026-09-01-the-warm-
+#: door-forwards-a-declared-env-set.md) is stamped by both doors and by
+#: neither `client.py` nor `hook_http.py` -- LEG 6's own comment block above
+#: documents this as a PERMANENT split (eng-director F1: server dual-read,
+#: not producer migration), not migration debt with a scheduled removal.
+#: `_settings_home` (`settings_home_claim.SETTINGS_HOME_FIELD`) is the
+#: mirror case: the two doors folded their own top-level stamp of it into a
+#: REFUSE-mode `_env` entry as part of the same C2/C3 rewrite, while
+#: `client.py` keeps stamping the legacy top-level field per the same
+#: PERMANENT dual-read split -- so it is one-sided (client-only) now for
+#: the identical, documented reason `_env` is one-sided (door-only). Any
+#: other one-sided field is unpinned and must fail
+#: `test_envelope_field_sets_match`.
+_KNOWN_ONE_SIDED_FIELDS = frozenset({"_publish_lane", "_env", "_settings_home"})
 
 
 def _resolve_key(node: ast.expr, local_str_bindings: "dict[str, str] | None" = None) -> "str | None":
@@ -372,8 +385,25 @@ _C_APPEND_FUNCS = frozenset({"buf_append_cstr", "buf_append_json_escaped"})
 #: a value, the close brace of a NESTED envelope-level object (`_caller`, added
 #: by C1b of docs/plans/2026-08-30-every-op-runs-in-the-callers-environment.md),
 #: and the envelope's own terminator. Anything else quoted must parse as a field
-#: or stop the run.
+#: or stop the run -- AT ENVELOPE LEVEL (depth 0) only; a nested object's own
+#: interior literals (e.g. `_env`'s runtime-composed `":"` name/value
+#: separator) are validated for brace bookkeeping alone, never against this
+#: allow-list -- see `_c_envelope_fields`'s depth>0 branch.
 _C_KNOWN_NON_FIELD_LITERALS = frozenset({'\\"', "}", "}\\n"})
+
+#: A ternary C expression whose TWO branches are both string literals --
+#: `door.c`'s runtime-composed `_env` opener (`env_opened ? ",\"" :
+#: ",\"_env\":{\""`) takes this shape: which branch executes depends on
+#: whether the envelope-level object is already open, a fact this STATIC
+#: reader cannot observe. Both branches are read the same way a plain
+#: literal already is (field-pattern match + brace delta); the branch with
+#: the larger-magnitude brace delta is the one that structurally OPENS or
+#: CLOSES the nesting (the other branch is the "already open" continuation,
+#: which nets to zero by construction) and is what this call leaves `depth`
+#: at.
+_C_TERNARY_STRING_BRANCHES = re.compile(
+    r'^[^"]*\?\s*("(?:[^"\\]|\\.)*")\s*:\s*("(?:[^"\\]|\\.)*")\s*$'
+)
 
 #: Brace depth at which a field name is ENVELOPE-level. The region is anchored
 #: to OPEN at envelope level (its first append closes `params` and writes
@@ -425,6 +455,18 @@ def _c_envelope_fields(region: str) -> set[str]:
         if func_name == "buf_append_json_escaped":
             continue
         arg = raw_arg.strip()
+        ternary_match = _C_TERNARY_STRING_BRANCHES.match(arg)
+        if ternary_match:
+            branch_deltas = []
+            for branch in ternary_match.groups():
+                literal = branch[1:-1] if branch.endswith('"') else branch[1:]
+                for m in _C_FIELD_PATTERN.finditer(literal):
+                    at = max(0, depth + _brace_delta(literal[: m.start()]))
+                    if at == _C_ENVELOPE_DEPTH:
+                        fields.add(m.group(1))
+                branch_deltas.append(_brace_delta(literal))
+            depth = max(0, depth + max(branch_deltas, key=abs))
+            continue
         if not arg.startswith('"'):
             continue
         literal = arg[1:-1] if arg.endswith('"') else arg[1:]
@@ -446,6 +488,21 @@ def _c_envelope_fields(region: str) -> set[str]:
             depth = max(0, depth + _brace_delta(literal))
             continue
         if literal in _C_KNOWN_NON_FIELD_LITERALS:
+            depth = max(0, depth + _brace_delta(literal))
+            continue
+        if depth > _C_ENVELOPE_DEPTH:
+            # NESTED-OBJECT INTERIOR, not envelope level -- the same
+            # reasoning the `at == _C_ENVELOPE_DEPTH` gate above already
+            # applies to field COLLECTION, extended to literal VALIDATION.
+            # A member of `_caller` or `_env` never contributes an
+            # envelope-level field regardless of what shape its own
+            # key/value wiring takes, so a literal fragment that composes a
+            # NESTED member's key at runtime (e.g. `_env`'s per-name
+            # `":"` separator, written this way because the name itself
+            # comes from `buf_append_json_escaped`, not a compile-time
+            # literal) is tracked for brace bookkeeping only -- it cannot
+            # hide a genuinely new ENVELOPE-level field, because an
+            # envelope-level field can only ever be introduced at depth 0.
             depth = max(0, depth + _brace_delta(literal))
             continue
         raise AssertionError(
@@ -538,17 +595,23 @@ def test_both_doors_agree_with_each_other():
 
 
 def test_the_exception_list_is_closed_and_pinned():
-    """`_KNOWN_ONE_SIDED_FIELDS` is exactly `{"_publish_lane"}` -- pinned so
-    a second one-sided field cannot be added to the exception set without
-    this failing and forcing a reviewer to look at it, and so a field
-    silently REMOVED from the exception set (making it start being
-    enforced) is equally visible."""
-    assert _KNOWN_ONE_SIDED_FIELDS == frozenset({"_publish_lane"}), (
+    """`_KNOWN_ONE_SIDED_FIELDS` is exactly `{"_publish_lane", "_env",
+    "_settings_home"}` -- pinned so a FOURTH one-sided field cannot be added
+    to the exception set without this failing and forcing a reviewer to
+    look at it, and so a field silently REMOVED from the exception set
+    (making it start being enforced) is equally visible."""
+    assert _KNOWN_ONE_SIDED_FIELDS == frozenset(
+        {"_publish_lane", "_env", "_settings_home"}
+    ), (
         "the exception list changed without this pin being updated -- "
-        f"got {sorted(_KNOWN_ONE_SIDED_FIELDS)}. `_publish_lane` is the "
-        "one field this module accepts as one-sided (publish_lane."
-        "PUBLISH_LANE_OPS is a closed list of one, ceremony.scoped_git_"
-        "commit, killed under DR-344); any other entry is undocumented"
+        f"got {sorted(_KNOWN_ONE_SIDED_FIELDS)}. `_publish_lane` (publish_"
+        "lane.PUBLISH_LANE_OPS is a closed list of one, ceremony.scoped_"
+        "git_commit, killed under DR-344), `_env` (LEG 6 above: both doors "
+        "stamp it, `client.py`/`hook_http.py` permanently do not), and "
+        "`_settings_home` (folded into a door-side `_env` REFUSE entry, "
+        "still a legacy top-level field on `client.py`) are the three "
+        "fields this module accepts as one-sided; any other entry is "
+        "undocumented"
     )
 
     # `_publish_lane` is genuinely one-sided against the REAL sources today
@@ -682,3 +745,73 @@ def test_c_field_scan_is_anchored_not_whole_file():
     # Sanity: `entrypoint` really is in the file (so the assertion above is
     # not vacuously true because the field was removed from door.c).
     assert '"entrypoint"' in c_source
+
+
+# ---------------------------------------------------------------------------
+# LEG 6 (C4, docs/plans/2026-09-01-the-warm-door-forwards-a-declared-env-set.md):
+# `test_dual_read_legacy_and_env_agree` -- the server DUAL-READS. Distinct
+# from LEGS 1-5 above, which pin the two PRODUCER shapes (`client.py`,
+# `door.c`) never drifting from each other; this leg pins that the SERVER'S
+# consumption of either shape resolves to the same effective caller facts.
+# `client.py`/`hook_http.py` are legitimate non-door producers that keep
+# stamping the legacy top-level `_caller`/`_settings_home` fields and are
+# NOT moving to `_env` in this plan (eng-director F1, DECIDED: server
+# dual-read, not producer migration) -- this is PERMANENT, not migration
+# debt (overengineering-reviewer finding 7), so this leg has no scheduled
+# removal.
+# ---------------------------------------------------------------------------
+
+
+def test_dual_read_legacy_and_env_agree():
+    """A request carrying the NEW envelope-level `_env` object resolves to
+    the same effective `CallerContext` facts (`session_id`, `settings_home`,
+    and the merged `env` mapping) as an equivalent legacy-shape request
+    carrying only `_caller.session_id`/`_settings_home` -- `warm.caller_
+    context.merge_env_axis`'s own dual-read contract, exercised against the
+    real function, no stand-in."""
+    from coordinator_core.warm.caller_context import CallerContext, merge_env_axis
+
+    session_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    settings_home = str((Path.cwd() / "carried-settings-home").resolve())  # abs-path-ok: synthetic fixture, never resolved
+
+    base = CallerContext(
+        plugin_root=None,
+        cwd=None,
+        session_id=None,
+        agent_id=None,
+        pid=None,
+    )
+
+    # New shape: the request carried an `_env` object naming both entries.
+    new_shape_caller = merge_env_axis(
+        base,
+        {"COORDINATOR_SESSION_ID": session_id, "COORDINATOR_SETTINGS_HOME": settings_home},
+    )
+
+    # Legacy shape: no `_env` at all, but `_serve_line` already joined
+    # `session_id`/`settings_home` onto `caller` from the top-level
+    # `_caller`/`_settings_home` fields before `merge_env_axis` ever runs.
+    legacy_shape_caller = merge_env_axis(
+        replace(base, session_id=session_id, settings_home=settings_home),
+        None,
+    )
+
+    assert new_shape_caller.session_id == legacy_shape_caller.session_id == session_id
+    assert new_shape_caller.settings_home == legacy_shape_caller.settings_home == settings_home
+    assert new_shape_caller.env == legacy_shape_caller.env
+
+
+def test_dual_read_absence_agrees_too():
+    """Neither wire shape carrying anything resolves to the same (empty)
+    effective facts either -- the plain path stays byte-identical to today
+    regardless of which producer served it."""
+    from coordinator_core.warm.caller_context import CallerContext, merge_env_axis
+
+    base = CallerContext(plugin_root=None, cwd=None, session_id=None, agent_id=None, pid=None)
+
+    from_new_shape = merge_env_axis(base, {})
+    from_legacy_shape = merge_env_axis(base, None)
+
+    assert from_new_shape.session_id == from_legacy_shape.session_id is None
+    assert from_new_shape.settings_home == from_legacy_shape.settings_home is None
+    assert from_new_shape.env == from_legacy_shape.env == {}

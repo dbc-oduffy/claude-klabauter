@@ -760,21 +760,71 @@ def _mutation_deadline_for(method: Any) -> float:
     return derived
 
 
+#: WHAT THIS MESSAGE MAY CLAIM, and why it no longer claims delivery
+#: (example-retrieval-repo-ue-addon-em, 2026-09-02): it used to open "this MUTATING op's
+#: request was delivered to the warm engine". `delivered` is set after
+#: `flush()` returns, which proves the bytes left THIS process -- not that the
+#: engine read them, and not that it dispatched them. A complete frame sitting
+#: unread in the pipe buffer is indistinguishable here from one the server is
+#: mid-way through executing.
+#:
+#: That reporter hit the unread case on a first warm call: they reconciled,
+#: found nothing had happened, and an identical retry landed all six
+#: directives cleanly. The refusal was still the RIGHT action -- this client
+#: cannot tell the two apart, and re-running a mutation that WAS executing is
+#: the double-commit this exists to prevent -- but the sentence asserting
+#: delivery was not something the client knew. Their own note names the cost:
+#: a message that overclaims on the common case trains its readers to skip it,
+#: and this one must be read every time it fires.
+#:
+#: So the text now states the uncertainty it actually has and keeps every
+#: instruction unchanged. NEGATIVE SPEC: do not restore a delivery claim here
+#: without a server-side read/dispatch acknowledgement to support it -- an ack
+#: is the only thing that would make the stronger sentence true, and no part
+#: of today's framing gives this client one.
 _MUTATION_INDETERMINATE_MESSAGE = (
-    "warm dispatch indeterminate: this MUTATING op's request was delivered to "
-    "the warm engine, which did not answer in time. The op may have COMPLETED "
-    "-- a slow op is not a hung one, and the engine does not stop when this "
-    "client stops waiting. Reconcile against real state (e.g. `git log`) "
-    "before re-running; re-running blind is how a duplicate commit happens. "
-    "Deliberately NOT retried and NOT re-run cold here: a delivered mutation "
-    "re-executed is exactly the double-execution this refusal prevents "
+    "warm dispatch indeterminate: this MUTATING op's request was written to "
+    "the warm engine's pipe, which did not answer in time. Whether the engine "
+    "read it is unknown from here, so the op may have COMPLETED, or may never "
+    "have started -- a slow op is not a hung one, and the engine does not stop "
+    "when this client stops waiting. Reconcile against real state (e.g. `git "
+    "log`) before re-running; re-running blind is how a duplicate commit "
+    "happens, and finding no trace means it is safe to re-run. Deliberately "
+    "NOT retried and NOT re-run cold here: a mutation the engine IS executing, "
+    "re-executed, is the double-execution this refusal prevents "
+    "(state/bug-backlog/2026-08-19-scoped-git-commit-still-reports-a-landed-"
+    "d4c7d9dc8e14.yaml)."
+)
+
+
+#: The SERVER-SIDE sibling, for `ipc._op_timeout_envelope`. Kept here, next to
+#: the client message and imported from there, so the two stay one edit apart
+#: rather than two copies that drift -- the same single-home reasoning that
+#: constant's own consumer records.
+#:
+#: It exists because the two sites know DIFFERENT things and must not share a
+#: sentence. This client cannot tell whether the engine read its bytes at all;
+#: `ipc`'s timeout fires INSIDE the engine, around an op it has already read
+#: and dispatched, so "may never have started" would be false there. Until
+#: 2026-09-02 `ipc` imported the client's text verbatim and inherited a
+#: delivery claim that happened to be true for it and not for the client --
+#: correcting the client's overclaim is what made the shared sentence
+#: untenable for both.
+_OP_TIMEOUT_INDETERMINATE_MESSAGE = (
+    "warm dispatch indeterminate: this MUTATING op was dispatched inside the "
+    "warm engine and exceeded its own budget before returning. The op may have "
+    "COMPLETED -- the engine does not stop executing when its budget expires. "
+    "Reconcile against real state (e.g. `git log`) before re-running; "
+    "re-running blind is how a duplicate commit happens. Deliberately NOT "
+    "retried here: re-executing a dispatched mutation whose outcome is unknown "
+    "is exactly the double-execution this refusal prevents "
     "(state/bug-backlog/2026-08-19-scoped-git-commit-still-reports-a-landed-"
     "d4c7d9dc8e14.yaml)."
 )
 
 
 def _indeterminate_envelope(msg: dict, detail: str) -> dict:
-    """A JSON-RPC error envelope for a delivered-but-unanswered mutation.
+    """A JSON-RPC error envelope for a written-but-unanswered mutation.
 
     Returned rather than raised, and returned rather than `None`, because both
     alternatives are wrong in the same direction: `None` is this module's

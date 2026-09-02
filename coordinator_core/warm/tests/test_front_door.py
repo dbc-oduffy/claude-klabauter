@@ -653,6 +653,7 @@ def test_ensure_front_door_none_and_no_spawn_when_recent_boot_already_vouched_fo
         "probe_existing_holder",
         lambda port, timeout=front_door.PROBE_TIMEOUT_SECS, opener=None: None,
     )
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
     spawned = []
     monkeypatch.setattr(front_door, "spawn_detached", lambda *a, **kw: spawned.append(a) or True)
 
@@ -686,6 +687,7 @@ def test_ensure_front_door_falls_through_to_spawn_branch_on_lower_generation(
         "probe_existing_holder",
         lambda *a, **kw: probed.append(a) or front_door.door_health_payload(),
     )
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
     spawned = []
     monkeypatch.setattr(front_door, "spawn_detached", lambda *a, **kw: spawned.append(a) or True)
 

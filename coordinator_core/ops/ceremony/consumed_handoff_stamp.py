@@ -652,7 +652,7 @@ class StampOutcome:
     empty_consumed_set: bool = False  # R2 loud-report flag (AC7)
     follow_up_committed_sha: Optional[str] = None
     #: Every follow-up commit this leg landed, in the order it landed them.
-    #: SUPERSEDED 2026-08 (DR-328 retired `deliverable_id` as a commit-scoping
+    #: SUPERSEDED 2026-08 (DR-406 retired `deliverable_id` as a commit-scoping
     #: key; C10 of `2026-08-19-commit-scoping-keys-on-the-baton.md` retired
     #: the per-deliverable partition on this path accordingly): this is no
     #: longer one commit per distinct `deliverable_id`. There is now ONE
@@ -721,11 +721,11 @@ def group_stamped_by_deliverable_id(
     tier 0) refused to guess which of two differing `deliverable_id` values
     applies and raised `DivergentDeliverableIdError`. That refusal was once
     asserted here as "right and stays" — it is not: C2/C4 supersede it (tier
-    0 no longer raises on a divergent multi-deliverable pathspec), and DR-328
+    0 no longer raises on a divergent multi-deliverable pathspec), and DR-406
     (the PM's 2026-08-19 scaling ruling) is why. This partition itself was
     retired from production use in C10 as a direct consequence — grouping to
     dodge a refusal that no longer fires is no longer needed. Recorded here
-    rather than deleted (per this plan's DR-328 discipline, see C6's AC13
+    rather than deleted (per this plan's DR-406 discipline, see C6's AC13
     treatment): a deleted rule leaves no trace of why it stopped applying,
     and that silence is exactly how the 2026-08-10 ruling became a trap this
     plan had to be rescued from.
@@ -769,7 +769,7 @@ async def post_commit_stamp_and_ship(
 
     On a non-empty stamped set, commits ONLY the stamped frontmatter files,
     in an explicit-pathspec follow-up commit (AC17) — never left as an
-    unswept dirty working-tree edit. SUPERSEDED 2026-08 (DR-328 retired
+    unswept dirty working-tree edit. SUPERSEDED 2026-08 (DR-406 retired
     `deliverable_id` as a commit-scoping key; C10 of
     `2026-08-19-commit-scoping-keys-on-the-baton.md` retired the
     per-deliverable partition on this path): this is no longer one commit
@@ -954,7 +954,7 @@ def _commit_and_push_follow_up(
     contract. A pathspec spanning two `deliverable_id` values is now
     expected and handled by `commit_scoped`'s trailer resolution (tier 0 no
     longer raises `DivergentDeliverableIdError` on a divergent
-    multi-deliverable pathspec, per C2/C4 and DR-328, the PM's 2026-08-19
+    multi-deliverable pathspec, per C2/C4 and DR-406, the PM's 2026-08-19
     scaling ruling) rather than being an ask this function's caller had to
     avoid.
 

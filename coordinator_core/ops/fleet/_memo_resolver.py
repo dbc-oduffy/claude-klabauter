@@ -183,6 +183,7 @@ from typing import Optional, Tuple
 
 from coordinator_core._settings_home import machine_local_dir, normalize_native_path
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.machine_resolver import canonical_repo_key_for_root
 
 _LOG = logging.getLogger(__name__)
 
@@ -1062,6 +1063,10 @@ def resolve_self_em_id(self_root: Path) -> str:
     263-284`).
 
     Path-matches `self_root` against every registered `repos.*` entry
+    through `machine_resolver.canonical_repo_key_for_root`, which picks the
+    canonical key when a repo is registered under several (its own key plus
+    the receive-only aliases siblings may address it by) — enumeration order
+    used to decide that, and the two callers enumerate in different orders
     (central included — a repo registered under `repos.doe_claude` resolves
     to `_repo_key_to_self_em_id('repos.doe_claude')`, i.e.
     `'doe-claude-em'` today, the SAME id `em_id_for_root`'s dedicated
@@ -1092,9 +1097,9 @@ def resolve_self_em_id(self_root: Path) -> str:
         all_repos = read_registry_repos()
     except RegistryReadError:
         return basename_fallback
-    for repo_key, path_str in all_repos.items():
-        if same_repo_path(self_root, Path(path_str)):
-            return _repo_key_to_self_em_id(repo_key)
+    repo_key = canonical_repo_key_for_root(self_root, all_repos)
+    if repo_key is not None:
+        return _repo_key_to_self_em_id(repo_key)
     return basename_fallback
 
 

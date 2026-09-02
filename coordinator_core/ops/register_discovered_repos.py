@@ -103,6 +103,7 @@ finds on the machine running install. `<derived-key>` is `_derive_key`'s
 lowercase, non-alnum-collapsed basename. Only-if-absent: a key already
 present in `repos.*` is never clobbered, so this clause's runtime set is a
 subset of "discovered minus already-registered," not "discovered."
+Retired keys (`_RETIRED_KEYS`) are excluded from the set entirely.
 """
 
 
@@ -124,6 +125,28 @@ def _journal_registered(keys: Sequence[str]) -> None:
         WriteSurfaceEntry(kind="machine-local-key", key=f"repos.{key}") for key in keys
     )
     record_resolution(WRITE_SURFACE.writer_id, _SHAPED_CLAUSE_INDEX, entries)
+
+
+_RETIRED_KEYS = frozenset({"coordinator_claude"})
+"""`repos.*` keys the fleet has retired: discovery must never re-provision one.
+
+`repos.coordinator_claude` is retired by `ops.setup_chain_walker`
+(`_COORDINATOR_ROOT_LADDER_REMEDIATION`) -- coordinator-claude's location is
+`publish.mirrors.coordinator_claude.path` (a publish mirror) or
+`engine.working_repos.doe_claude` (the working checkout), never a `repos.*`
+rung. `_derive_key` collapses a BASENAME, so any `coordinator-claude` clone on
+the box derives this key, and `_prefer_platform_install_paths` then re-points
+it at the platform's `installPath` -- which for the `coordinator` plugin is
+`~/.claude` itself, the Claude Central home the PM ruled is not a working repo
+(2026-09-02). `repos.*` is how the fleet enumerates working trees, so the stray
+key sends fleet-sweeping sessions into a tree that is not for active work, and
+it self-heals in the wrong direction: an operator who unsets it gets it back at
+the next `coordinator:install`, silently.
+
+Negative spec: this excludes the key from being WRITTEN, never removes one an
+operator or a prior run already set -- the only-if-absent contract owns that
+value, and unsetting it is `machine-local unset`'s job, not this bridge's.
+"""
 
 
 def _derive_key(basename: str) -> str:
@@ -335,6 +358,13 @@ def main(argv: Sequence[str], self_dir: Optional[Path] = None) -> int:
             # silence erodes trust in "why didn't repo X register" (Finding 2).
             print(
                 f"{_PROG}: skipping {repo_path!r} — basename yields an empty key",
+                file=sys.stderr,
+            )
+            continue
+        if key in _RETIRED_KEYS:
+            print(
+                f"{_PROG}: skipping {repo_path!r} — repos.{key} is a retired key; "
+                f"see publish.mirrors.{key}.path / engine.working_repos.*",
                 file=sys.stderr,
             )
             continue

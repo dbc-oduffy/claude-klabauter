@@ -1121,3 +1121,184 @@ def test_no_miss_body_leaves_a_foreign_sidecar_write_unforbidden():
     assert bodies["sentinel"].rstrip().endswith(SIDECAR_PATH_MARKER_PREFIX + "/x/y.md")
     assert bodies["named"].rstrip().endswith(SIDECAR_MISS_MARKER)
     assert bodies["unnamed"].rstrip().endswith(SIDECAR_MISS_MARKER)
+
+
+# ---------------------------------------------------------------------------
+# The miss sentinel for an UNNAMED dispatch. Regression cover for 2026-09-01:
+# a review-integrator ran with no provisioned sidecar, so nothing on disk
+# carried an `integrator_receipt`, and `_guard_kira_verdict_routed` could not
+# tell "an integrator ran and skipped only the stamp" from "no integrator ran".
+# The guard took the second branch and advised re-dispatching work already done.
+# ---------------------------------------------------------------------------
+
+
+def _miss_payload(tmp_path, agent_id, agent_type="coordinator:review-integrator"):
+    return {
+        "session_id": "f5dc95eb-e5ef-4e36-aff7-afd769f5e709",
+        "agent_id": agent_id,
+        "agent_type": agent_type,
+        "cwd": str(tmp_path),
+    }
+
+
+def _sentinels(tmp_path):
+    share = tmp_path / "state" / "subagent-share"
+    if not share.is_dir():
+        return []
+    return sorted(share.rglob("*.md"))
+
+
+def _force_sidecar_eligible(monkeypatch, mod, *types):
+    """`load_policy(None)` resolves the sidecar policy out of the DoE plugin
+    root, which is not derivable under a tmp_path repo -- it returns an EMPTY
+    `report_sidecar`, so `_resolve_sidecar_leg` returns before reaching any
+    sentinel arm. Patch eligibility so these tests exercise this module's
+    logic rather than the ambient policy lookup."""
+
+    class _Policy:
+        report_sidecar = set(types)
+
+    monkeypatch.setattr(mod, "load_policy", lambda *a, **k: _Policy())
+
+
+def test_unnamed_integrator_miss_writes_a_sentinel_carrying_the_receipt(tmp_path, monkeypatch):
+    """The receipt is the whole point: without it the guard scans the file past
+    and a dispatch that ran reads as one that never happened."""
+    import subprocess
+
+    from coordinator_core.hooks import cater_subagent_start as mod
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
+    _force_sidecar_eligible(monkeypatch, mod, "coordinator:review-integrator")
+
+    path, text = mod._resolve_sidecar_leg(
+        _miss_payload(tmp_path, "aa57aa79ac1fd7c00"),
+        str(tmp_path),
+        "aa57aa79ac1fd7c00",
+        "coordinator:review-integrator",
+        "coordinator:review-integrator",
+    )
+
+    assert path, "an unnamed integrator whose provisioning missed got no sentinel"
+    written = _sentinels(tmp_path)
+    assert len(written) == 1
+    doc = written[0].read_text(encoding="utf-8")
+    assert "provisioning: missed" in doc
+    assert "integrator_receipt:" in doc
+    assert "aa57aa79ac1fd7c00" in doc
+    assert mod.SIDECAR_PATH_MARKER_PREFIX in text
+
+
+def test_the_sentinel_puts_the_stop_guard_on_the_do_not_redispatch_branch(tmp_path, monkeypatch):
+    """End-to-end on the decision that matters. `_kira_unstamped_integrators`
+    selects sidecars carrying a receipt and no `integrated_from`; that set is
+    what separates the guard's two messages."""
+    import subprocess
+
+    from coordinator_core.hooks import cater_subagent_start as mod
+    from coordinator_core.hooks import stop_dispatch as sd
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
+    _force_sidecar_eligible(monkeypatch, mod, "coordinator:review-integrator")
+
+    mod._resolve_sidecar_leg(
+        _miss_payload(tmp_path, "aa57aa79ac1fd7c00"),
+        str(tmp_path),
+        "aa57aa79ac1fd7c00",
+        "coordinator:review-integrator",
+        "coordinator:review-integrator",
+    )
+    sentinel = _sentinels(tmp_path)[0]
+
+    in_scope = [
+        (
+            sentinel.name,
+            {
+                "agent_type": "coordinator:review-integrator",
+                "integrator_receipt": {"agent_id": "aa57aa79ac1fd7c00"},
+            },
+        )
+    ]
+    assert sd._kira_unstamped_integrators(in_scope) == [sentinel.name]
+
+
+def test_named_raw_fallback_shape_still_gets_no_sentinel(tmp_path, monkeypatch):
+    """The existing gate stays intact. A named dispatch's raw
+    `a<name>-<16hex>` id carries hex no EM can derive, and its consumer IS the
+    polling EM -- the new arm must not reach it."""
+    import subprocess
+
+    from coordinator_core.hooks import cater_subagent_start as mod
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
+    _force_sidecar_eligible(monkeypatch, mod, "coordinator:review-integrator")
+
+    mod._resolve_sidecar_leg(
+        _miss_payload(tmp_path, "areview-agent-0123456789abcdef"),
+        str(tmp_path),
+        "areview-agent-0123456789abcdef",
+        "coordinator:review-integrator",
+        "coordinator:review-integrator",
+    )
+
+    assert _sentinels(tmp_path) == []
+
+
+def test_sentinel_write_is_idempotent_for_a_refired_dispatch(tmp_path, monkeypatch):
+    import subprocess
+
+    from coordinator_core.hooks import cater_subagent_start as mod
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
+    _force_sidecar_eligible(monkeypatch, mod, "coordinator:review-integrator")
+
+    first, _ = mod._resolve_sidecar_leg(
+        _miss_payload(tmp_path, "aa57aa79ac1fd7c00"),
+        str(tmp_path),
+        "aa57aa79ac1fd7c00",
+        "coordinator:review-integrator",
+        "coordinator:review-integrator",
+    )
+    second, _ = mod._resolve_sidecar_leg(
+        _miss_payload(tmp_path, "aa57aa79ac1fd7c00"),
+        str(tmp_path),
+        "aa57aa79ac1fd7c00",
+        "coordinator:review-integrator",
+        "coordinator:review-integrator",
+    )
+
+    assert first == second
+    assert len(_sentinels(tmp_path)) == 1
+
+
+def test_a_non_receipt_type_gets_a_sentinel_without_a_receipt_block(tmp_path, monkeypatch):
+    """Only the receipt-bearing populations get a receipt. A sentinel for any
+    other eligible type is still worth writing -- it is the agent's own place
+    to persist findings instead of a sibling's file -- but it must not claim a
+    receipt it has no basis for."""
+    import subprocess
+
+    from coordinator_core.hooks import cater_subagent_start as mod
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
+    _force_sidecar_eligible(monkeypatch, mod, "coordinator:executor")
+
+    mod._resolve_sidecar_leg(
+        _miss_payload(tmp_path, "ab12cd34ef567890", agent_type="coordinator:executor"),
+        str(tmp_path),
+        "ab12cd34ef567890",
+        "coordinator:executor",
+        "coordinator:executor",
+    )
+
+    written = _sentinels(tmp_path)
+    assert len(written) == 1
+    doc = written[0].read_text(encoding="utf-8")
+    assert "provisioning: missed" in doc
+    assert "integrator_receipt:" not in doc
+    assert "review_receipt:" not in doc

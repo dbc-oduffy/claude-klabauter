@@ -1942,7 +1942,7 @@ def init(
         # path (``stable_pid_alive``'s pre-2026-07-27-meta fallback above).
         #
         # ``_harness_process_comm`` — NOT ``psutil.Process.name()`` directly
-        # (C3, DR-302): on this build ``name()`` reports the version string
+        # (C3, DR-404): on this build ``name()`` reports the version string
         # (``2.1.231``), so it prefers the basename of ``cmdline()[0]``
         # (``claude``) and falls back to ``name()`` only when ``cmdline()``
         # is unreadable or empty. Read that function's docstring before

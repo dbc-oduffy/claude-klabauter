@@ -2128,7 +2128,9 @@ def check_coordinator_claude_dep(repo_root: Path, args: Args) -> None:
 
 def resolve_claude_klabauter_root(repo_root: Path, args: Args) -> tuple[Path, str]:
     """Resolve CLAUDE_KLABAUTER_ROOT and describe the source used: --claude-klabauter-live-root flag
-    -> CLAUDE_KLABAUTER_ROOT env -> repo-root auto-discovery. This resolution feeds
+    -> COORDINATOR_ENGINE_ROOT env -> CLAUDE_KLABAUTER_ROOT env (retired, advisory)
+    -> repo-root auto-discovery. Review: code-reviewer — docstring drifted
+    from the four-rung ladder the code already implements. This resolution feeds
     BOTH dependency provisioning (which pyproject.toml / sys.path tree to
     read) and registration/verification — Review: code-reviewer 2026-07-21
     Finding 7 (P2): --claude-klabauter-live-root previously redirected registration/
@@ -2941,12 +2943,13 @@ def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: s
             file=sys.stderr,
         )
         print(f"  Durable record: {dialect_parser_unavailable_log_path()}", file=sys.stderr)
-        try:
-            from coordinator_core.warm.telemetry import degrade_path
-
-            print(f"  Durable degrade record (DR-402): {degrade_path()}", file=sys.stderr)
-        except Exception:  # noqa: BLE001 -- advisory step, never fails the install
-            pass
+        # No second "Durable degrade record" line here (Review:
+        # overengineering-reviewer) -- it printed `degrade_path()`
+        # unconditionally, whether or not `record_degrade` had actually
+        # written a row, which carries no degrade signal beyond the path
+        # already named above. `bin/claude-klabauter-doctor-probe.py`'s
+        # `durable_degrade_record_exists` field is the surface that reports
+        # presence; this installer step does not duplicate it.
         if any_missing_package:
             print(
                 "  Remediation: install tree_sitter and tree_sitter_pwsh under the named "

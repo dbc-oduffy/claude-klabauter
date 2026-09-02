@@ -307,6 +307,34 @@ class TestAllowlistPopulation:
         on_disk = json.loads(allowlist_path.read_text(encoding="utf-8"))
         assert set(on_disk["entrypoints"]) == set(merged)
 
+    def test_write_allowlist_preserves_door_eligible_entrypoints_on_regen(self, tmp_path):
+        # Review: coordinator:code-reviewer -- pins that a regen after C13's
+        # split does not silently DELETE the independently-editable door-
+        # cutover key and its provenance comment; `_write_allowlist` only
+        # ever owned `$comment`/`entrypoints`.
+        allowlist_path = tmp_path / "warm_entrypoint_allowlist.json"
+        allowlist_path.write_text(
+            json.dumps(
+                {
+                    "$comment": "old",
+                    "$comment_split": "split provenance note",
+                    "entrypoints": ["eligible-one"],
+                    "door_eligible_entrypoints": ["eligible-one"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        _write(bin_dir, "eligible-one.py", "def main(argv=None):\n    return 0\n")
+        verdicts = fdc.run_census(bin_dir=bin_dir)
+
+        fdc._write_allowlist(verdicts, allowlist_path=allowlist_path)
+
+        on_disk = json.loads(allowlist_path.read_text(encoding="utf-8"))
+        assert on_disk["$comment_split"] == "split provenance note"
+        assert on_disk["door_eligible_entrypoints"] == ["eligible-one"]
+
     def test_write_allowlist_creates_when_absent(self, tmp_path):
         allowlist_path = tmp_path / "fresh_allowlist.json"
         bin_dir = tmp_path / "bin"

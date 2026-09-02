@@ -6,7 +6,7 @@ Covers:
   - C1 §0: `coordinator_core.ops.deliverable_carry`
     (`DivergentDeliverableIdError`) is no longer imported anywhere in this
     hook — it was dead weight on the hot path (imported, never raised or
-    caught by name; DR-328 made the omit explicit) that dragged in
+    caught by name; DR-406 made the omit explicit) that dragged in
     `coordinator_core.ops.__init__`'s ~594-module eager sweep.
   - C1(b): `_resolve_git_dir()` derives the git-dir with ZERO subprocess
     spawns and reproduces `git rev-parse --git-dir`'s PER-WORKTREE answer
@@ -110,7 +110,7 @@ def test_deliverable_carry_import_not_reintroduced():
 
 def test_divergent_deliverable_id_error_not_a_live_import():
     """The identifier is allowed to survive in prose (module docstring and
-    the DR-328 history note on `_resolve_deliverable_id_from_paths`) — it
+    the DR-406 history note on `_resolve_deliverable_id_from_paths`) — it
     must not appear as an actual `ImportFrom` name anywhere in the file."""
     import ast
 

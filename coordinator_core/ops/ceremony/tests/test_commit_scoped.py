@@ -1088,7 +1088,7 @@ def test_agree_branch_deliverable_id_none_is_byte_identical_to_default(tmp_path)
 
 
 # AC18 -- message-trailer-agrees (one line, no duplicate) / disagrees
-# (raises DeliverableIdAssertionConflictError, DR-328's commit-side sibling
+# (raises DeliverableIdAssertionConflictError, DR-406's commit-side sibling
 # of DivergentDeliverableIdError), on both branches.
 
 
