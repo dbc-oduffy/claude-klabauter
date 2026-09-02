@@ -2772,8 +2772,9 @@ def test_install_warm_door_read_anchored_to_repo_root_not_engine_root(setup_mod,
     assert "PASS [door]" in out
 
 
+@pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
 def test_install_warm_door_claims_the_bare_name(
-    setup_mod, tmp_path, monkeypatch, capsys
+    setup_mod, tmp_path, monkeypatch, capsys, platform
 ):
     """`install_warm_door` must still strip the shadowing `.ps1` sibling
     after the C3 collapse — `claim_bare_name` is unconditional now (no
@@ -2784,7 +2785,13 @@ def test_install_warm_door_claims_the_bare_name(
     `scripts/setup.py --i-am-agent` run landed the door and left
     `coordinator-invoke.ps1` in place, which PowerShell would resolve
     ahead of the door's `.exe`.
+
+    Review: code-reviewer Finding 5 — the collapse's whole point is that
+    this path is platform-independent; parametrized over win32/darwin/linux
+    (rather than the removed single `darwin` pin) so that claim is
+    machine-checked, not incidental to whichever OS runs CI.
     """
+    monkeypatch.setattr(setup_mod.sys, "platform", platform)
     import coordinator_core.install.door_route_signal as door_route_signal_mod
 
     published = tmp_path / "published"

@@ -730,7 +730,21 @@ def _write_allowlist(verdicts: "list[ForwarderVerdict]", allowlist_path: Path = 
     point working against it. The predicate is duplicated from the
     resolver rather than imported to keep the census free of an
     `ops` import; if the resolver's shape changes, this changes with
-    it."""
+    it.
+
+    Review: coordinator:code-reviewer -- this writer owns ONLY `$comment`
+    and `entrypoints`. Before C13's split
+    (docs/dispatch-briefs/2026-09-01-the-dogfooded-install-stops-lying-
+    about/C13.md) that was the file's whole shape, so a full-payload
+    overwrite was safe. Post-split the file also carries
+    `door_eligible_entrypoints` (substrate.py's independently-editable
+    door-cutover list) and `$comment_split` (the provenance note
+    explaining the split) -- keys this writer does not populate and never
+    did. A naive `write_text` of a payload containing only the two owned
+    keys does not merely leave the other two stale, it DELETES them
+    outright on the very next `--write-allowlist` regen, silently
+    reverting C13's cutover to permanently empty. Preserve whatever this
+    writer does not own from the prior on-disk payload, if any."""
     merged = tuple(
         name
         for name in door_eligible_names(verdicts)
@@ -753,8 +767,33 @@ def _write_allowlist(verdicts: "list[ForwarderVerdict]", allowlist_path: Path = 
         ),
         "entrypoints": list(merged),
     }
+    _preserve_unowned_keys(payload, allowlist_path)
     allowlist_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return merged
+
+
+#: Keys this writer never populates -- carried over from the prior on-disk
+#: payload verbatim so a regen preserves rather than deletes them. See
+#: `_write_allowlist`'s own docstring for why this exists.
+_UNOWNED_PRESERVED_KEYS = ("$comment_split", "door_eligible_entrypoints")
+
+
+def _preserve_unowned_keys(payload: dict, allowlist_path: Path) -> None:
+    """Mutates `payload` in place, copying each `_UNOWNED_PRESERVED_KEYS`
+    entry from `allowlist_path`'s current on-disk content, if the file
+    exists and parses and the key is present there. Absent file, unparsable
+    JSON, or a key genuinely not yet present all leave `payload` untouched
+    for that key -- this is preservation, not population; a file that never
+    had these keys (pre-C13) regenerates exactly as before."""
+    try:
+        existing = json.loads(allowlist_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(existing, dict):
+        return
+    for key in _UNOWNED_PRESERVED_KEYS:
+        if key in existing:
+            payload[key] = existing[key]
 
 
 def main(argv: Optional["list[str]"] = None) -> int:

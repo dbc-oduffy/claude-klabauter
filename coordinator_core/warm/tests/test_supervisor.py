@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.warm import skew, supervisor
+from coordinator_core.warm import breadcrumb, skew, supervisor
 
 pytestmark_win = pytest.mark.skipif(sys.platform != "win32", reason="election.elect is Windows-only")
 
@@ -156,7 +156,7 @@ def test_should_spawn_false_when_young_and_alive(tmp_path: Path, monkeypatch: py
     now = 2_000_000_000.0
     started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 0.5))
     _write_started_at(tmp_path, pid=999, stable_epoch=111, started_at=started_at)
-    monkeypatch.setattr(supervisor, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
     assert supervisor.should_spawn(tmp_path, now=now) is False
 
 
@@ -323,6 +323,7 @@ def test_ensure_listener_none_and_no_spawn_when_recent_boot_already_vouched_for(
     # young enough that `should_spawn` must not fire a second spawn.
     monkeypatch.setattr(supervisor, "discovery_is_live", lambda record: True)
     monkeypatch.setattr(supervisor, "check_health", lambda url, **kw: False)
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
     spawned = []
     monkeypatch.setattr(supervisor, "spawn_detached", lambda *a, **kw: spawned.append(a) or True)
 

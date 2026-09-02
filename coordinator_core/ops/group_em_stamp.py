@@ -34,6 +34,15 @@ Negative-spec:
       through unmodified).
     - Never supplies a default `interval_seconds` — the caller's own tick
       cadence is not this veneer's to guess.
+    - Never lets an unresolvable caller identity (`caller_session_id()` ->
+      None/"") disarm the writer-disagreement guard. An explicit
+      `writer_session_id` with no resolved caller to check it against is an
+      UNVERIFIABLE claim, not a free pass -- this op fails closed on it
+      rather than silently accepting the claimed identity, matching
+      `holder_session_id`'s own unresolvable-caller refusal above. A caller
+      with no env session id and no explicit `writer_session_id` is
+      unaffected -- `watch_heartbeat.stamp` itself requires the argument,
+      so this closes only the impersonation path, not any legitimate one.
 """
 
 from __future__ import annotations
@@ -102,12 +111,34 @@ def _groupem_stamp(params: dict, repo_root: Optional[Path] = None) -> dict:
             "this record exists to close."
         )
 
+    resolved_caller = group_em_read_pass.caller_session_id()
     writer_override = p.get("writer_session_id")
     writer_session_id: Optional[str] = (
         writer_override if isinstance(writer_override, str) and writer_override else None
     )
     if writer_session_id is None:
-        writer_session_id = group_em_read_pass.caller_session_id()
+        writer_session_id = resolved_caller
+    elif resolved_caller and writer_session_id != resolved_caller:
+        raise ValueError(
+            f"writer_session_id {writer_session_id!r} disagrees with this caller's resolved "
+            f"identity {resolved_caller!r}. `writer_session_id` is what `is_fresh_and_foreign` "
+            "compares to decide whether to decline, and what `_writer_identity` compares to "
+            "decide whether to persist a `prior_*` trace -- so a writer naming itself as "
+            "someone else bypasses the decline AND suppresses the trace in one move, which is "
+            "the silent destruction this record exists to prevent. A guard authenticated by "
+            "the party it guards is not a guard. Omit the param to be identified, or correct it."
+        )
+    elif not resolved_caller:
+        raise ValueError(
+            f"writer_session_id {writer_session_id!r} was supplied explicitly but this "
+            "caller's own identity is unresolvable (no CLAUDE_CODE_SESSION_ID in the "
+            "environment) -- there is nothing to check the claim against. Accepting it "
+            "unverified would let any caller claim any writer identity, which is exactly the "
+            "impersonation this guard exists to prevent, so it fails closed here instead. This "
+            "costs nothing legitimate: a no-env caller that omits `writer_session_id` is "
+            "unaffected -- `watch_heartbeat.stamp` requires the argument on its own. Omit the "
+            "param, or run where the caller's identity resolves."
+        )
 
     declinations = p.get("declinations")
     declinations = declinations if isinstance(declinations, list) else []

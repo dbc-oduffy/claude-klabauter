@@ -193,7 +193,7 @@ class TestC2InProcessConvergence:
     ) -> None:
         captured: dict[str, list[str]] = {}
 
-        def _fake_dispatch_in_process(cli, script_name, args, repo_root):
+        def _fake_dispatch_in_process(cli, script_name, args):
             captured["args"] = args
             return {"cli": cli, "returncode": 0, "stdout": ""}
 

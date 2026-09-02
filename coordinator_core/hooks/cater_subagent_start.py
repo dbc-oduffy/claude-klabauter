@@ -192,11 +192,16 @@ from coordinator_core.subagent_sandbox.engine import (
 #: distinct (validating) job.
 _NAMED_TEAMMATE_CANONICAL_SHAPE_RE = re.compile(r"^.+@session-.+$")
 from coordinator_core.subagent_sandbox.provision_report import (
+    _INTEGRATOR_AGENT_TYPE,
     _exit_interview_section,
     _frontmatter,
+    _is_close_receipt_reviewer,
+    _is_review_integrator,
     _provision,
     _receipt_agent_type,
     _sanitize_segment,
+    _splice_integrator_receipt,
+    _splice_review_receipt,
     assemble_contract_blocks_for_payload,
 )
 
@@ -734,6 +739,33 @@ def _write_miss_sentinel(
         )
         doc_text = frontmatter + body
 
+        # The receipt makes the sentinel LEGIBLE to the routing guard, which
+        # is most of why the miss leg is worth a file at all. `_provision`
+        # splices these onto an ordinary sidecar at dispatch; a sentinel
+        # without them is a file the guard scans past, leaving a dispatch that
+        # ran indistinguishable from one that never happened. Same seam, same
+        # resolved-not-raw stamped type, and the same by-construction mutual
+        # exclusion (`_INTEGRATOR_AGENT_TYPE` is not in CLOSE_RECEIPT_REVIEWERS)
+        # -- see `provision_report._splice_integrator_receipt`.
+        if _is_close_receipt_reviewer(agent_type, ""):
+            from coordinator_core.reviewer_vocabulary import CLOSE_RECEIPT_REVIEWERS
+
+            doc_text = _splice_review_receipt(
+                doc_text,
+                str(session_id),
+                agent_id or "",
+                _receipt_agent_type(agent_type or "", "", CLOSE_RECEIPT_REVIEWERS),
+                spawned_at,
+            )
+        elif _is_review_integrator(agent_type, ""):
+            doc_text = _splice_integrator_receipt(
+                doc_text,
+                str(session_id),
+                agent_id or "",
+                _receipt_agent_type(agent_type or "", "", {_INTEGRATOR_AGENT_TYPE}),
+                spawned_at,
+            )
+
         tmp_path = session_dir / f"{leaf}.tmp-{secrets.token_hex(4)}.md"
         with open(tmp_path, "x", encoding="utf-8", newline="\n") as handle:
             handle.write(doc_text)
@@ -889,8 +921,39 @@ def _resolve_sidecar_leg(
     # programmatically today, so this is a correctness-of-record fix rather
     # than a live-defect one -- but the sentinel is a file an EM opens and
     # reads, and it named the wrong agent.
+    # THIRD ARM -- an UNNAMED dispatch also gets a sentinel, and the
+    # derivability argument above does not forbid it.
+    #
+    # That argument is about ONE consumer: an EM polling a path it must be
+    # able to derive, for which an underivable sentinel is "a file nobody
+    # comes for". A second consumer post-dates it and finds files a different
+    # way. `hooks/stop_dispatch.py :: _guard_kira_verdict_routed` SCANS
+    # `state/subagent-share/<session>/` and classifies on frontmatter, never
+    # on a derived path -- and its two branches diverge on exactly this file's
+    # existence. `_kira_unstamped_integrators` selects sidecars carrying an
+    # `integrator_receipt` and no `integrated_from`, which is what separates
+    # "an integrator ran and skipped only the stamp -- do NOT re-dispatch it"
+    # from "no integrator ran -- owed route: review-integrator". With no file
+    # at all, a dispatch that ran correctly reads as one that never happened,
+    # and the guard advises re-dispatching work that is already done.
+    #
+    # It is also the sidecar-less agent's own place to write. Without one, the
+    # observed alternatives are both bad: skip the stamp (routing invisible),
+    # or write into a still-running sibling's file -- a present, parseable
+    # stamp about someone else's work, which is strictly worse than absence
+    # (P1, state/bug-backlog/2026-08-31-missing-sidecar-provisioning-sends-an-
+    # integrator-receipt-into-a-siblings-file.yaml).
+    #
+    # Deliberately NOT widening either gate above: the raw `a<name>-<16hex>`
+    # fallback is a NAMED dispatch and stays excluded (its 16 hex digits are
+    # underivable and its consumer IS the polling EM), pinned by
+    # `test_raw_fallback_shape_gets_no_sentinel`. An unnamed id carries no
+    # `@` and matches neither named shape, so this arm cannot reach it.
     sentinel_path = ""
-    if agent_id and _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id):
+    if agent_id and (
+        _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id)
+        or not _is_named_teammate_agent_id(agent_id)
+    ):
         sentinel_path = _write_miss_sentinel(
             payload,
             cwd,

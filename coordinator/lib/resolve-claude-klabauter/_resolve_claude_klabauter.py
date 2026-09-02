@@ -163,43 +163,53 @@ def _ml_dir() -> Path:
 
 
 def _resolve_claude_klabauter_root(ml_dir: Path) -> str:
-    """Resolve the claude-klabauter root path via the registry-then-sentinel
-    ladder, validating it before return.
+    """Resolve the claude-klabauter root path via the env-then-registry-then-
+    sentinel ladder, validating it before return.
 
-    Rung 1 (preferred): registry.toml (tracked baseline) then
-    registry.local.toml (per-machine override, wins on collision) — key
-    "repos.claude_klabauter" in either the nested [repos] table or the flat
-    quoted-dotted-key form ``machine-local set`` writes. Empty-string is a
-    miss, not a hit (never overwrites a value already resolved from the
-    other file).
+    Rung 0 (highest, C4 — Review: code-reviewer Finding 4, this shim's own
+    error message promised this rung as a bootstrap remedy but never
+    implemented it): ``COORDINATOR_ENGINE_ROOT`` env var, if set and
+    non-empty. Mirrors ``coordinator_core.engine_root.coordinator_engine_
+    root``'s Rung 1 — duplicated here, not imported, because this file is a
+    standalone bootstrap script that must run before claude-klabauter (and therefore
+    ``coordinator_core``) is importable; see the module docstring and
+    ``_is_executable``'s docstring for the same deliberate-duplication
+    precedent.
+
+    Rung 1: registry.toml (tracked baseline) then registry.local.toml
+    (per-machine override, wins on collision) — key "repos.claude_klabauter"
+    in either the nested [repos] table or the flat quoted-dotted-key form
+    ``machine-local set`` writes. Empty-string is a miss, not a hit (never
+    overwrites a value already resolved from the other file).
 
     Rung 2 (fallback): .claude-klabauter-live-root sentinel — honored when the registry key
     above is absent or the file itself is missing.
 
     Raises ClaudeKlabauterResolutionError (with a fail-loud, distinct message) when:
-      - neither rung resolves anything,
+      - no rung resolves anything,
       - the resolved value contains a '..' traversal segment,
       - the resolved value does not exist on disk as a directory.
     """
-    claude_klabauter_root = ""
-    for fname in ("registry.toml", "registry.local.toml"):
-        registry_path = ml_dir / fname
-        if not registry_path.is_file():
-            continue
-        try:
-            import tomllib
-            with open(registry_path, "rb") as f:
-                registry_data = tomllib.load(f)
-        except Exception:
-            continue
-        nested = registry_data.get("repos", {})
-        if isinstance(nested, dict):
-            v = nested.get("claude_klabauter")
-            if isinstance(v, str) and v:
-                claude_klabauter_root = v
-        flat = registry_data.get("repos.claude_klabauter")
-        if isinstance(flat, str) and flat:
-            claude_klabauter_root = flat
+    claude_klabauter_root = os.environ.get("COORDINATOR_ENGINE_ROOT", "")
+    if not claude_klabauter_root:
+        for fname in ("registry.toml", "registry.local.toml"):
+            registry_path = ml_dir / fname
+            if not registry_path.is_file():
+                continue
+            try:
+                import tomllib
+                with open(registry_path, "rb") as f:
+                    registry_data = tomllib.load(f)
+            except Exception:
+                continue
+            nested = registry_data.get("repos", {})
+            if isinstance(nested, dict):
+                v = nested.get("claude_klabauter")
+                if isinstance(v, str) and v:
+                    claude_klabauter_root = v
+            flat = registry_data.get("repos.claude_klabauter")
+            if isinstance(flat, str) and flat:
+                claude_klabauter_root = flat
 
     if not claude_klabauter_root:
         sentinel_path = ml_dir / ".claude-klabauter-live-root"

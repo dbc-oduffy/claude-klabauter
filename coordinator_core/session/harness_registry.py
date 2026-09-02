@@ -34,6 +34,18 @@ substitute from `sessionId`/`pid`, would manufacture an address the
 harness itself refuses — see `coordinator_core.session.reachability`'s
 module docstring and `messaging_available()`.
 
+THE GATE-OFF CENSUS ABOVE IS DATED, AND THE GATE HAS SINCE FLIPPED ON THIS
+BOX. Re-measured 2026-09-02: EVERY record carries `messaging_socket_path`,
+against 2026-08-14's 44/44 omitting it. The ratio is the finding; the
+count is not, and is why no count is written here -- live sessions come
+and go by the minute (15/15 and 13/13 minutes apart on one box), and the
+raw `sessions/*.json` denominator and `snapshot()`'s parsed-and-deduped
+one do not have to agree. Name which reader produced a figure before
+comparing it to another. The
+reasoning is unchanged — an omitting registry still does not mean the key
+drifted — but a reader must not take either figure as the current state of
+any box. Re-measure; never quote a census from this docstring.
+
 The gate's DEFAULT is a remote feature flag — verified against the
 shipped CLI bundle 2026-08-15 (Claude Code 2.1.233,
 `~/.local/share/claude/versions/2.1.233`): the bind is gated by
@@ -340,6 +352,27 @@ opened, so `waiting` is structurally UNREACHABLE and this field reads
 `None` on every record (measured: 0 of 40 here). That is a property of the
 fleet's configuration, not evidence the harness stopped publishing it. Do
 not delete this parse because a census returned zero.
+
+<!-- Relocated doctrine, not new policy, and NOT a record of a deletion:
+     `group_em.session_state_trigger` (413 lines, no caller) is PROPOSED for
+     gravestoning at DR-403, which the PM has not ruled on. These two rules
+     are stated here because they govern any FUTURE CONSUMER of this field
+     and belong beside the field either way -- whether that wrapper survives
+     or not. -->
+A FUTURE CONSUMER of `waiting_for` (there is none today) is bound by two
+rules, which this parser itself does not need because it classifies
+nothing:
+
+    1. TRIGGER, NEVER VERDICT. `waiting_for` may WIDEN which sessions a
+       caller looks at this tick. It may never narrow, exclude, or mark a
+       peer live/dead on its own.
+    2. THE VERDICT IS NOT `waiting_for`'s. Whether a peer is genuinely
+       parked or blocked stays with the derived predicate
+       (`read_pass.classify_peer`, `session.receiver_state`); this field
+       says "look here first", never "this one is stopped".
+
+Full doctrine, costs, and the `claude agents --json` cross-check:
+`docs/reference/harness-session-state-surface.md`.
 """
 
 from __future__ import annotations

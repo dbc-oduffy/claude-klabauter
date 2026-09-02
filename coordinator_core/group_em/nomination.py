@@ -346,6 +346,14 @@ def claim(
             "live_reason": liveness.live_reason,
         }
         record = _build_record(repo_root, session_id, peer_name, nominated_by)
+        # TRACE half only (mirrors `watch_heartbeat.py`'s `stamp`, see module docstring):
+        # persist the replaced incumbent's identity ON DISK, additive keys only, so a cold
+        # read of the record afterwards is never indistinguishable from a first-ever claim.
+        # This is NOT the DECLINE half -- `claim` still auto-replaces here, unconditionally.
+        record["replaced_holder_session_id"] = replaced_holder["session_id"]
+        record["replaced_holder_name"] = replaced_holder["peer_name"]
+        record["replaced_nominated_at"] = replaced_holder["nominated_at"]
+        record["replaced_live_reason"] = replaced_holder["live_reason"]
         _write_json_atomic(_record_path(repo_root, directory), record)
         return {
             "claimed": True,

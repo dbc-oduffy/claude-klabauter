@@ -63,7 +63,30 @@ def _bootstrap_imports() -> None:
 # When set, the dedup scan looks under <QUEUE_APPEND_OUTPUT_ROOT>/state/lessons/
 # (matching where coordinator-queue-append writes when this env var is set).
 _QUEUE_APPEND_OUTPUT_ROOT_ENV = "QUEUE_APPEND_OUTPUT_ROOT"
-_ISOLATION_ROOT_WARNED: set[str] = set()
+
+# C8 warm-serve fix: this used to be `_ISOLATION_ROOT_WARNED: set[str] = set()`
+# at module scope — a mutable set bound once at import time and shared for the
+# lifetime of a warm server ~50 sessions run inside. A warn-once dedup set at
+# PROCESS scope means the second caller to hit this condition, in an unrelated
+# session, gets no warning at all — the state leaks across invocations that
+# share nothing else. `None` here is an inert module-scope constant (no Call,
+# so it passes the C1 purity predicate); `_reset_isolation_root_warned_state`
+# rebinds it to a fresh set at the top of every `main()` call, so the warn-once
+# behaviour is scoped to one INVOCATION, never the process. Deliberately NOT
+# folded into `_bootstrap_imports` above: that function's own docstring notes
+# it is called from `main()` for module-import-stays-inert reasons only, and
+# this reset is unrelated to which non-stdlib names are bound — kept separate
+# so a future reader does not conflate "bind dependencies" with "reset
+# per-invocation state".
+_ISOLATION_ROOT_WARNED: set[str] | None = None
+
+
+def _reset_isolation_root_warned_state() -> None:
+    """Called once at the top of `main()` — see the comment above
+    `_ISOLATION_ROOT_WARNED` for why this must run per-invocation, not once
+    per process."""
+    global _ISOLATION_ROOT_WARNED
+    _ISOLATION_ROOT_WARNED = set()
 
 
 def _isolation_root(env_var: str, caller_name: str) -> str | None:
@@ -76,6 +99,13 @@ def _isolation_root(env_var: str, caller_name: str) -> str | None:
     env-stripped window and changes which roots resolve. The predicate is four
     lines; the ordering hazard is not worth sharing them.
     """
+    global _ISOLATION_ROOT_WARNED
+    if _ISOLATION_ROOT_WARNED is None:
+        # A caller that reaches this before `main()` has run (e.g. a test
+        # calling `_isolation_root` directly) still gets a working, if
+        # process-lifetime, dedup set — `main()` is what actually scopes it
+        # to one invocation.
+        _ISOLATION_ROOT_WARNED = set()
     value = (os.environ.get(env_var) or "").strip()
     if not value:
         return None
@@ -306,6 +336,7 @@ def _dedup_check(new_title):
 
 def main(argv: "list[str] | None" = None) -> int:
     _bootstrap_imports()
+    _reset_isolation_root_warned_state()
     parser = argparse.ArgumentParser(
         prog="coordinator-lesson-add",
         description=(

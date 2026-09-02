@@ -153,6 +153,47 @@ def test_record_names_another_pid_not_running_auto_replaces(repo_root, record_di
     on_disk = nomination.read_record(repo_root, record_dir)
     assert on_disk["session_id"] == "sid-challenger"
 
+    # The trace, not just the ephemeral return dict: re-read the record from disk and
+    # confirm the replaced incumbent's identity was persisted there. A caller that
+    # discards the return value must still be able to see, on a cold read, that this
+    # was a replacement -- never indistinguishable from a repo nobody ever held.
+    assert on_disk["replaced_holder_session_id"] == "sid-incumbent"
+    assert on_disk["replaced_holder_name"] == "incumbent-peer"
+    assert on_disk["replaced_nominated_at"] == result["replaced_holder"]["nominated_at"]
+    assert on_disk["replaced_live_reason"] == "pid_not_running"
+
+
+def test_pid_not_running_replace_leaves_no_trace_on_a_prior_first_claim(
+    repo_root, record_dir, monkeypatch
+):
+    """A record that was never replaced (the ordinary first-claim/self-refresh path)
+    must NOT carry any `replaced_*` keys -- additive only, on the replace branch alone."""
+    nomination.claim(repo_root, "sid-solo", directory=record_dir)
+
+    on_disk = nomination.read_record(repo_root, record_dir)
+    assert "replaced_holder_session_id" not in on_disk
+    assert "replaced_holder_name" not in on_disk
+    assert "replaced_nominated_at" not in on_disk
+    assert "replaced_live_reason" not in on_disk
+
+
+# Review: coordinatorcode-reviewer (finding #3) -- pin the `_build_record` scoping
+# invariant with an on-disk assertion rather than resting on the claim() return dict,
+# which would pass even if `replaced_*` leaked into the refresh path.
+def test_same_session_refresh_leaves_no_replaced_trace_on_disk(repo_root, record_dir):
+    """A same-session refresh (`already_held: True`) must not carry any `replaced_*`
+    key forward on disk -- `_build_record` never emits them, and this asserts the
+    written record itself, not the `claim()` return value."""
+    nomination.claim(repo_root, "sid-us", directory=record_dir)
+    result = nomination.claim(repo_root, "sid-us", directory=record_dir)
+    assert result["already_held"] is True
+
+    on_disk = nomination.read_record(repo_root, record_dir)
+    assert "replaced_holder_session_id" not in on_disk
+    assert "replaced_holder_name" not in on_disk
+    assert "replaced_nominated_at" not in on_disk
+    assert "replaced_live_reason" not in on_disk
+
 
 def test_reentry_by_holder_still_reports_already_held_true(repo_root, record_dir):
     """Re-entry by the current holder is unchanged by the auto-replace split -- it must

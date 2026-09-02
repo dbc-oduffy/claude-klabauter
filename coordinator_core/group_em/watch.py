@@ -191,6 +191,7 @@ from coordinator_core.group_em import read_pass
 from coordinator_core.group_em import repo_root_arg
 from coordinator_core.group_em import send_pass
 from coordinator_core.group_em import watch_heartbeat
+from coordinator_core.group_em import watch_spool
 from coordinator_core.session.receiver_state import read_receiver_state
 
 #: Keep the watcher's own duty cycle far under the load norm's 200ms-needs-
@@ -245,6 +246,10 @@ def _inbox_frontmatter_status(path: str) -> Optional[str]:
     an unreadable memo is not an open one, but it is also not silently
     dropped from `total_count` -- the caller counts the file either way.
     """
+    # Review: coordinatorcode-reviewer (finding #2) -- UnicodeDecodeError is a
+    # ValueError subclass, not OSError; an undecodable memo must degrade to
+    # None per this function's own contract, not propagate through
+    # `_inbox_counts`'s uncaught per-entry call and abort the poll tick.
     try:
         with open(path, "r", encoding="utf-8") as fh:
             for i, line in enumerate(fh):
@@ -253,7 +258,7 @@ def _inbox_frontmatter_status(path: str) -> Optional[str]:
                 stripped = line.strip()
                 if stripped.startswith("status:"):
                     return stripped[len("status:"):].strip().strip("'\"")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
     return None
 
@@ -290,12 +295,21 @@ def _inbox_counts(repo_root: str) -> tuple[int, int, float]:
 
 
 def _inbox_line(open_count: int, total_count: int, taken_at_epoch: float) -> str:
-    """One INBOX line, composed on C5's `render_struck_count` -- the one
-    rendering shape (count + population name + struck instant), spelled
+    """One INBOX line: count + population name + struck instant, spelled
     `counts_struck_at`, not a bespoke `taken_at` (C6 brief, C5's ownership).
+
+    Review: overengineering-reviewer finding 1 (ACCEPTED) -- `render_struck_count`
+    is inlined here, its one remaining production consumer. The helper existed to
+    stop three surfaces spelling count+population+instant three ways; DoE-claude's
+    contract ruling took `summary_line` off it and the ARMED line spells its own
+    divergent format, so the unification premise no longer held and the helper was
+    surviving on the finding that created it.
     """
     population = f"inbox memos open, of {total_count} total"
-    return f"INBOX {watch_heartbeat.render_struck_count(open_count, population, taken_at_epoch)}"
+    return (
+        f"INBOX {open_count} ({population}) "
+        f"counts_struck_at={watch_heartbeat.iso_instant(taken_at_epoch)}"
+    )
 
 
 #: The carried parked map, next to the heartbeat record it accompanies. A held
@@ -1016,6 +1030,40 @@ def _poll_error_line() -> str:
     return "POLL-ERROR " + traceback.format_exc(limit=1).strip().replace("\n", " | ")
 
 
+def _compact_spool(repo_root: str) -> None:
+    """Empty the spool now that this tick has classified off the live registry.
+
+    BOTH TICK PATHS CLEAR, and that is the whole answer to "who drains the
+    spool": `tick_once` (the `--once` wake) and `main`'s held loop alike. A
+    repo whose watch is a healthy held `Monitor` and whose cron never fires
+    would otherwise spool into a file nothing ever shortened -- and at the
+    volume the sibling plane's producer actually writes (`PAUSED:turn-ended`,
+    one record per turn end per session) that is unbounded growth presenting
+    as a perfectly healthy watch. Both paths classify off the live registry
+    every tick -- no debounce, no drain-point retention (`watch_spool` module
+    docstring, "THE SPOOL IS A DOORBELL") -- so there is nothing in the spool
+    either path still needs by the time this runs, and `watch_spool.clear`
+    is a blind truncate rather than a filtered drain. No `tick_now`/drain
+    point is threaded through any more: a prior revision needed one to
+    filter retained records by `at`; `clear` reads nothing, so there is no
+    point left to compute.
+
+    NEVER RAISES, and the `except` below is what makes that true rather than
+    inherited. `watch_spool.clear` catches the I/O classes it names and
+    returns False, which covers the failures anyone predicted; it does not
+    promise the ones nobody did. This runs inside `main`'s held loop, where an
+    uncaught exception does not cost a tick -- it ends the watch process, and a
+    watch that died while housekeeping reads from outside exactly like a quiet
+    fleet. A spool that could not be cleared costs disk space, never
+    correctness. Same posture as `watch_heartbeat.stamp`: a failed housekeeping
+    write must not be able to end a working watch.
+    """
+    try:
+        watch_spool.clear(repo_root)
+    except Exception:
+        pass
+
+
 def tick_once(
     repo_root: str,
     caller_session_id: Optional[str] = None,
@@ -1057,6 +1105,13 @@ def tick_once(
 
     prev_parked = load_prev_parked(repo_root)
 
+    # ONE instant for the whole tick, captured before the classify and reused
+    # for the heartbeat stamp below -- `poll_once` would otherwise take its
+    # own. No longer feeds a compaction drain point: `_compact_spool` clears
+    # unconditionally now (`watch_spool` module docstring, "THE SPOOL IS A
+    # DOORBELL").
+    tick_now = now if now is not None else datetime.now(timezone.utc)
+
     try:
         # `prev_inbox_open=None`: a single-tick wake carries no memory
         # across wakes (same posture as `prev_parked` in the module
@@ -1068,7 +1123,7 @@ def tick_once(
             repo_root,
             caller_session_id,
             prev_parked,
-            now=now,
+            now=tick_now,
             emit=emit,
             group_em_session_id=group_em_session_id,
             prev_names=load_prev_peers(repo_root),
@@ -1108,6 +1163,7 @@ def tick_once(
         # no name to write. `stamp` carries the armed poller's forward rather
         # than blanking it -- a cheaper answer than a registry read per wake.
     )
+    _compact_spool(repo_root)
     return 0
 
 
@@ -1205,7 +1261,9 @@ def main(
     # tell a real fleet change from a gap inferred between two differently-
     # defined lines (module's C5 note).
     armed_struck_epoch = time.time() if now_epoch is None else now_epoch
-    armed_struck_at = watch_heartbeat._iso(armed_struck_epoch)
+    # Review: coordinatorcode-reviewer (finding #1) -- external module, use the
+    # promoted public name; `_iso` is the private alias `iso_instant` retired.
+    armed_struck_at = watch_heartbeat.iso_instant(armed_struck_epoch)
     emit(
         f"ARMED peer_count={peer_count} {watched_repo} peers at {resolved_root}, "
         f"snapshot={snapshot_ms:.1f}ms, interval={interval:.1f}s, "
@@ -1223,6 +1281,7 @@ def main(
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
         declinations: list = []
+        tick_now = datetime.now(timezone.utc)
         try:
             # Review: coordinator:code-reviewer af0c0865daafdd73a -- the loop
             # used to reassign `prev_parked` from this return, so every line
@@ -1234,6 +1293,7 @@ def main(
                 repo_root,
                 caller_session_id,
                 prev_parked,
+                now=tick_now,
                 emit=emit,
                 group_em_session_id=group_em_session_id,
                 prev_names=prev_names,
@@ -1267,6 +1327,7 @@ def main(
                 holder_name=holder_name,
                 writer_session_id=caller_session_id,
             )
+            _compact_spool(repo_root)
             prev_parked = cur_parked
             prev_names = peer_notes
             prev_inbox_open = cur_inbox_open

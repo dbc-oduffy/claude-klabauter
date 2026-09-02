@@ -56,6 +56,15 @@ def test_emitting_entry_arms_cooldown_same_call(tmp_path):
     assert reasons["peer-one"] == "cooldown"
 
 
+def test_digest_carries_as_of_struck_from_the_same_now(tmp_path):
+    repo_root = str(tmp_path)
+    roster = [_verdict("peer-as-of")]
+
+    digest = send_pass.build_send_digest(repo_root, roster, "caller-as-of", now=1_700_000_000.0)
+
+    assert digest["as_of"] == "2023-11-14T22:13:20Z"
+
+
 def test_unrecorded_on_failed_cooldown_write(tmp_path, monkeypatch):
     repo_root = str(tmp_path)
     roster = [_verdict("peer-two")]

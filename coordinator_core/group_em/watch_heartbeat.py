@@ -86,32 +86,22 @@ def watch_path(repo_root: str) -> str:
     return os.path.join(repo_root, _WATCH_RELATIVE_PATH)
 
 
-def _iso(epoch: float) -> str:
+def iso_instant(epoch: float) -> str:
+    """The `_STAMP_FORMAT` instant string -- the one seam every `as_of`/
+    `taken_at`/`counts_struck_at` caller composes against.
+
+    // Review: overengineering-reviewer finding 3 -- promoted from private
+    // `_iso` after `baseline.py` was found reaching across the module
+    // boundary for the private name; three other call sites (idle_report,
+    // send_pass, group_em_enter) hand-spelled the same expression rather
+    // than importing it at all.
+    """
     return time.strftime(_STAMP_FORMAT, time.gmtime(epoch))
 
 
-def render_struck_count(count: int, population: str, struck_at_epoch: Optional[float] = None) -> str:
-    """`<count> (<population>) counts_struck_at=<instant>` -- the one spelling.
-
-    THE RENDERING HELPER C5 OWNS (plan chunk C5, overengineering-reviewer
-    finding 1, ACCEPTED). A rendered count that carries the instant it was
-    struck and the population it was computed over was about to be authored
-    three times (C5, C6, C11) against overlapping surfaces, which would have
-    landed three differently-shaped timestamp fields. This is the one place
-    that composition happens; a caller with its own count and population
-    calls this rather than re-inventing the join.
-
-    `population` is a short PROSE label -- "peers seen including this
-    caller", "peers subscribed, caller excluded" -- never a code, so the
-    line reads without a lookup table (module docstring's C5 gap: two
-    populations shared one word and cost three instruments in one night).
-
-    `struck_at_epoch` defaults to `time.time()` at call time, not at import:
-    a caller composing this string is doing so AT the instant its count was
-    taken, and a frozen default would silently drift from that.
-    """
-    struck_at_epoch = time.time() if struck_at_epoch is None else struck_at_epoch
-    return f"{count} ({population}) counts_struck_at={_iso(struck_at_epoch)}"
+#: Back-compat alias for the private spelling; nothing outside this module
+#: should import it, but code inside the module keeps the short name.
+_iso = iso_instant
 
 
 def next_expected_by(now_epoch: float, interval_seconds: float) -> str:
@@ -285,6 +275,34 @@ def stamp(
     reason}` -- never an accumulating history: that is what lets a reader tell
     "looked, nothing to do" apart from "did not look". A tick that emitted and
     declined nothing passes `[]`.
+
+    NO LOCK SPANS READ-DECIDE-WRITE, AND THIS IS A KNOWN, UNCLOSED GAP.
+    `write_atomic` makes the WRITE atomic; it does not make the sequence
+    "read `prior_record`, decide via `is_fresh_and_foreign`, write" atomic.
+    Two crowns racing inside that window both read the same pre-replacement
+    record, both pass the decline, and the later `os.replace` wins: its
+    `prior_*` keys name the record it actually read, which by the time it
+    lands is no longer the record on disk -- a THIRD instrument's write, the
+    first racer's, is destroyed with no trace naming it at all. `send_pass`'s
+    `build_send_digest` documents an analogous race and bounds it because
+    that record is caller-scoped (one path, one writer at a time in
+    practice); this record is repo-scoped and SHARED across every crown in
+    the fleet, so that bound does not apply here. No lock is added: this
+    module sits on a hot path under a hard sub-500ms budget, and a lock
+    spanning a read-decide-write across a shared file is a bigger change
+    than a heartbeat writer warrants. The residual cost is exactly the
+    clobber described above, on every tick, for as long as this gap stands.
+
+    WHAT THE EXTENDED TRACE DOES AND DOES NOT DO (DEFECT 1). `prior_*`
+    (including `prior_subscribed_peers` and `prior_declination_count`, added
+    alongside the identity fields) makes a destroyed record's identity AND
+    its rough shape legible and attributable after the fact. It does not
+    make the destroyed record RECOVERABLE -- the actual `declinations` rows
+    and any other prior content are gone the moment `os.replace` lands, trace
+    or no trace. A reader who wants "what changed" from this file across
+    ticks needs the un-added history this record deliberately does not keep
+    (see "never an accumulating history", above); this trace answers "what
+    was destroyed", never "what changed".
     """
     if tick_source not in TICK_SOURCES:
         raise ValueError(
@@ -342,6 +360,21 @@ def stamp(
         payload["prior_holder_name"] = prior_record.get("holder_name")
         payload["prior_tick_source"] = prior_record.get("tick_source")
         payload["prior_last_tick_at"] = prior_record.get("last_tick_at")
+        # DEFECT 1 FIX. The trace above names WHO wrote the destroyed record;
+        # these two scalars name WHAT it counted. `subscribed_peers` and
+        # `declinations` are the substantive product of a tick -- without
+        # these, the trace answers "whose record did I replace" but not "what
+        # did I destroy". `declinations` itself is not carried (a list, and
+        # this trace is deliberately additive scalars only -- see the module
+        # docstring's "prior_* keys" note); its length is. An older-format
+        # prior record that lacks either key (pre-this-fix) reads back `None`
+        # via `.get`, not a crash -- the trace degrades to "unknown" rather
+        # than inventing a count that was never written.
+        prior_declinations = prior_record.get("declinations")
+        payload["prior_subscribed_peers"] = prior_record.get("subscribed_peers")
+        payload["prior_declination_count"] = (
+            len(prior_declinations) if isinstance(prior_declinations, list) else None
+        )
 
     return write_atomic(watch_file, payload)
 

@@ -1554,12 +1554,25 @@ def _write_native_door_forwarder(
     try:
         dest = door_install.install_named_forwarder(bin_dst, engine_root, name, check_only=check_only)
     except (door_install.DoorInstallError, SystemExit) as exc:
-        print(
-            f"[install-substrate] {name}: no native door forwarder -- "
-            f"door build failed ({exc}). Left on its Python forwarder; "
-            "fix the toolchain/build and re-run to cut it over.",
-            file=sys.stderr,
-        )
+        # Review: coordinator:code-reviewer (Finding 1) -- check_only=True
+        # raises DoorInstallError as its own normal "not yet cut over"
+        # signal (door_install.py :: install_named_forwarder short-circuits
+        # before any build is attempted); that is not a build failure and
+        # must not be printed as one, or a check-only audit misreports every
+        # not-yet-cut-over name as a toolchain/compile failure.
+        if check_only:
+            print(
+                f"[install-substrate] {name}: not yet cut over to its native "
+                f"door forwarder ({exc}).",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"[install-substrate] {name}: no native door forwarder -- "
+                f"door build failed ({exc}). Left on its Python forwarder; "
+                "fix the toolchain/build and re-run to cut it over.",
+                file=sys.stderr,
+            )
         return None
     if not check_only:
         door_install.remove_shadowing_ps1_sibling(bin_dst, name)
@@ -3736,6 +3749,19 @@ def _write_agent_helper_forwarders(
     # never a bare `except Exception`, so a per-name failure keeps landing in
     # `failed` (and therefore the non-zero exit / summary line below) instead
     # of silently vanishing the way the backlog row above describes.
+    #
+    # REVIEW (overengineering-reviewer, applied-then-reverted): the reviewer
+    # read `_write_native_door_forwarder`'s own inner catch of
+    # `(DoorInstallError, SystemExit)` as closing this path, so the outer
+    # catch here would never fire for either type and could safely narrow to
+    # `OSError`. Narrowing was applied and re-verified against this plan's
+    # own falsifier (`docs/plans/2026-09-01-the-dogfooded-install-stops-
+    # lying-about.falsifier.py`), which flipped from PASS back to FALSIFIED:
+    # its static check does not know about the inner catch and reads a
+    # bare `except OSError` around this call chain as the abort bug the
+    # prime exit criterion's door-build leg exists to close. Escalated
+    # rather than silently trusting either instrument over the other --
+    # see the review-integrator's ESCALATION note.
     failed: "list[tuple[str, BaseException]]" = []
     from coordinator_core.install import door_install
     _PER_NAME_DEGRADE_EXCEPTIONS = (OSError, door_install.DoorInstallError, SystemExit)
@@ -4886,7 +4912,10 @@ def _fnm_mutation_declined(*, leg_desc: str, prompt_verb: str) -> bool:
     if os.environ.get("COORDINATOR_INSTALL_FNM") == "1":
         return False
 
-    interactive = sys.stdin.isatty() and os.environ.get("COORDINATOR_NON_INTERACTIVE") != "1"
+    # Review: code-reviewer — sys.stdin can be replaced by a stream with no
+    # isatty (embedded/frozen launchers, a mocked stream elsewhere); fall
+    # back to the safe non-interactive/decline branch instead of raising.
+    interactive = getattr(sys.stdin, "isatty", lambda: False)() and os.environ.get("COORDINATOR_NON_INTERACTIVE") != "1"
     if interactive:
         print(f"[setup] fnm is absent. {leg_desc}")
         try:
@@ -4979,6 +5008,9 @@ def _fnm_step(check_only: bool) -> None:
     if blocked:
         print(f"[install-substrate] REFUSED: {blocked}", file=sys.stderr)
         return
+    # Review: code-reviewer — brew and curl are mutually exclusive legs;
+    # declining brew must not fall through to curl (this if/elif chain is
+    # load-bearing for that invariant).
     if shutil.which("brew"):
         if _fnm_brew_leg_declined():
             # _fnm_brew_leg_declined printed the reason and the manual alternative.
@@ -5752,7 +5784,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
-    overlay = {"COORDINATOR_ENGINE_ROOT": args.engine_root} if args.engine_root else {}
+    # Review: code-reviewer Finding 1 — `is not None`, not truthiness: an
+    # explicit `--engine-root ""` must not silently degrade to whatever rung
+    # would otherwise fire; it is passed through so downstream path
+    # validation rejects it loudly instead.
+    overlay = (
+        {"COORDINATOR_ENGINE_ROOT": args.engine_root}
+        if args.engine_root is not None
+        else {}
+    )
+    if args.engine_root is not None and (
+        not args.engine_root or not Path(args.engine_root).is_dir()
+    ):
+        # Review: code-reviewer Finding 2 — validate at parse time so a
+        # typo'd path fails here, at the flag that caused it, rather than
+        # degrading into a less legible failure downstream in run().
+        print(
+            f"install-substrate: --engine-root {args.engine_root!r} is not "
+            "an existing directory",
+            file=sys.stderr,
+        )
+        return 1
     try:
         with env_overlay(overlay):
             return run(

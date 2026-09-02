@@ -62,18 +62,33 @@ pytestmark = [
 #: (`_session_id not in ...`) went FALSE-GREEN instead, which is the worse
 #: half. Asserted here through the object, one accessor, so a future rename
 #: breaks in one place.
+#: C2 folded the legacy `_caller.session_id` field into the envelope-level
+#: `_env` object, keyed by whichever `SESSION_ENV_PRECEDENCE` name resolved
+#: (see `test_door_stamps_declared_env_set.py`'s negative-spec block). The
+#: subject this file pins -- the door stamps the session id its caller is,
+#: first-non-empty-wins over `SESSION_ENV_PRECEDENCE` -- is unchanged; only
+#: the field it looks in moves.
 _CALLER_FIELD = "_caller"
 _SESSION_ID_KEY = "session_id"
+_ENV_FIELD = "_env"
 
 
 def _stamped_session_id(request: dict):
     """The caller session id as it reaches `_serve_line`, or None if the door
     stamped no identity at all -- absence, never an empty string
-    (`test_no_resolvable_identity_stamps_nothing_and_still_serves`)."""
-    caller = request.get(_CALLER_FIELD)
-    if not isinstance(caller, dict):
+    (`test_no_resolvable_identity_stamps_nothing_and_still_serves`).
+
+    First-non-empty-wins over `SESSION_ENV_PRECEDENCE`, read out of `_env`
+    now that the door stamps every resolved declared name by its own key
+    rather than a single pre-resolved `_caller.session_id` slot."""
+    env_obj = request.get(_ENV_FIELD)
+    if not isinstance(env_obj, dict):
         return None
-    return caller.get(_SESSION_ID_KEY)
+    for var in SESSION_ENV_PRECEDENCE:
+        value = env_obj.get(var)
+        if value:
+            return value
+    return None
 
 #: Shaped like a real session id because `session.core.session_identity_override`
 #: gates on UUID shape and binds nothing for a value that fails it -- a test
@@ -198,8 +213,7 @@ def test_the_stamp_is_envelope_level_not_an_op_param(tmp_path: Path) -> None:
 
     request, _ = _exchange(root, {"CLAUDE_CODE_SESSION_ID": _CALLER_SID})
 
-    assert _CALLER_FIELD not in request["params"]
-    assert _SESSION_ID_KEY not in request["params"]
+    assert _ENV_FIELD not in request["params"]
 
 
 def test_no_resolvable_identity_stamps_nothing_and_still_serves(tmp_path: Path) -> None:

@@ -15,7 +15,7 @@ from coordinator_core.ops import group_em_enter as gee
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 
 
-def test_payload_has_exactly_seven_keys(tmp_path, monkeypatch):
+def test_payload_has_exactly_eight_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-1")
     monkeypatch.setattr(
         gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: []
@@ -39,7 +39,7 @@ def test_payload_has_exactly_seven_keys(tmp_path, monkeypatch):
     result = gee._group_em_enter({"repo_root": str(tmp_path)})
 
     assert set(result.keys()) == {
-        "nomination", "roster", "roster_considered", "digest", "baseline", "teammates",
+        "as_of", "nomination", "roster", "roster_considered", "digest", "baseline", "teammates",
         "watch_liveness"
     }
 
@@ -89,6 +89,9 @@ def test_each_leg_degrades_independently(tmp_path, monkeypatch):
         "changed": [],
         "first_tick": True,
     }
+    # `as_of` is load-bearing through every degrade path per the module
+    # docstring -- a nomination-leg failure must not blank it.
+    assert result.get("as_of")
 
 
 def test_roster_failure_degrades_digest_but_not_baseline(tmp_path, monkeypatch):
@@ -121,6 +124,9 @@ def test_roster_failure_degrades_digest_but_not_baseline(tmp_path, monkeypatch):
     assert result["baseline"] is not None
     assert "baseline_error" not in result
     assert result["nomination"]["claimed"] is True
+    # roster AND digest both failed/degraded in this one call -- `as_of` is
+    # ONE clock for the whole call, not per-leg, so it must survive both.
+    assert result.get("as_of")
 
 
 def test_baseline_tracks_the_peer_set_not_the_candidate_roster(tmp_path, monkeypatch):
@@ -230,6 +236,9 @@ def test_live_incumbent_refusal_stops_before_digest(tmp_path, monkeypatch):
     assert "roster_error" not in result
     assert "digest_error" not in result
     assert "baseline_error" not in result
+    # A refusal is the earliest-stopping path there is -- `as_of` must still
+    # be present since it is claimed to survive EVERY degrade/refusal path.
+    assert result.get("as_of")
 
 
 def test_unaccounted_incumbent_refusal_also_stops_before_digest(tmp_path, monkeypatch):
@@ -286,6 +295,7 @@ def test_unaccounted_incumbent_refusal_also_stops_before_digest(tmp_path, monkey
     assert "roster_error" not in result
     assert "digest_error" not in result
     assert "baseline_error" not in result
+    assert result.get("as_of")
 
 
 def test_pid_not_running_incumbent_is_auto_replaced_not_refused(tmp_path, monkeypatch):
@@ -669,6 +679,7 @@ def test_teammates_leg_degrades_without_taking_the_others(tmp_path, monkeypatch)
     assert result["teammates_error"] == "RuntimeError: probe exploded"
     assert result["roster"] == []
     assert result["digest"] == {"entries": [], "gate_declaration_required": True}
+    assert result.get("as_of")
 
 
 # --- watch_liveness: dispatched is not ticking -----------------------------
