@@ -933,9 +933,13 @@ def _escape_for_js_template_literal(text: str) -> str:
 #: layer itself writes, never for a surface a chunk might.
 _BOOKKEEPING_PREFIXES: tuple[str, ...] = (
     ".coordinator-local/subagent-share/",
-    # Retained deliberately, not residue: the PUBLISHED engine still
-    # writes the pre-relocation path, and this is a positive allowlist
-    # whose miss HALTS a wave. Drop it once the mirror carries the move.
+    # Retained deliberately, not residue: a published engine on the old
+    # path still writes here, and a miss in a POSITIVE allowlist HALTS a
+    # wave. Delete this entry when `state/subagent-share/` no longer
+    # exists in this working tree -- a condition observable from inside
+    # this repo, unlike "once the mirror catches up", which named a tree
+    # nothing here can check and so would have made this permanent while
+    # reading as temporary. (Review: overengineering-reviewer, finding 1.)
     "state/subagent-share/",
 )
 

@@ -229,6 +229,46 @@ def _join_backslash_newlines(cmd: str) -> str:
 #: `_wrapped_shell_c_payloads` (not shared via cross-module import -- this
 #: file's own established no-cross-module-coupling precedent for small
 #: tokenizer-adjacent helpers).
+#: Staged-path count above which the per-file unstage remedy stops being
+#: advice and becomes an instruction to destroy a peer's in-flight work.
+#:
+#: Measured 2026-09-02: a peer's bulk untracking left 11,534 foreign paths
+#: staged on the shared branch. Every commit form in this tree refused for as
+#: long as that stood -- including `git commit -- <pathspec>`, because this
+#: check reads the whole index and a pathspec does not narrow it. The refusal
+#: named one `git restore --staged <file>` per file, which at that size is an
+#: hour of work whose successful completion is the loss of the peer's change.
+_BULK_FOREIGN_INDEX_PATHS = 50
+
+
+def _bulk_foreign_index_refusal(
+    staged_count: int,
+    staged_file: str,
+    owner_sentence: str,
+    provenance_note: str,
+) -> str:
+    """The strict-scope refusal for an index that is another session's.
+
+    Separate from the per-file refusal because the two say different true
+    things and only one of them is true at this size. Extracted so the text
+    can be asserted directly: built inline it was unreachable from a test
+    without standing up git state, which is why the original wording shipped
+    unexamined.
+
+    NEGATIVE SPEC: this message must never name `git restore --staged`. That
+    is the remedy the per-file branch offers, and following it here is how an
+    operator destroys 11,534 paths of a peer's work one command at a time.
+    """
+    return (
+        "BLOCKED (strict scope): the index holds %d staged paths and %s is "
+        "not in this session's touch list — owned by %s.%s\n\n"
+        "At this size the index is another session's in-flight change, and no "
+        "commit form succeeds until they land or unstage it — a pathspec does "
+        "not narrow what this check reads. Ask them."
+        % (staged_count, staged_file, owner_sentence, provenance_note)
+    )
+
+
 _SHELL_C_WRAPPER_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 _MAX_SHELL_C_UNWRAP_DEPTH = 4
 
@@ -7169,6 +7209,15 @@ def check_validate_commit(
                                     _owner_name_provenance_note(owner_sentence),
                                     staged_file,
                                     staged_file,
+                                )
+                            )
+                        if len(commit_scope) > _BULK_FOREIGN_INDEX_PATHS:
+                            return _deny(
+                                _bulk_foreign_index_refusal(
+                                    len(commit_scope),
+                                    staged_file,
+                                    owner_sentence,
+                                    _owner_name_provenance_note(owner_sentence),
                                 )
                             )
                         return _deny(

@@ -177,11 +177,7 @@ def _on_disk_session_ids(root: str) -> set:
 
 
 def _sidecar_filenames(root: str, session_id: str) -> List[str]:
-    """Every filename for `session_id`, unioned across both roots.
-
-    A session that straddles the relocation has files under each; returning
-    only one root's would report the other's as absent.
-    """
+    """Every filename for `session_id`, unioned across both roots."""
     out = set()
     for share_root in _share_roots(root):
         session_dir = os.path.join(share_root, session_id)

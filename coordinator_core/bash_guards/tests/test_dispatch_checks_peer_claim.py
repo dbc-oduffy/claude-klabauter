@@ -578,3 +578,48 @@ class TestLivenessBasisYieldsToName:
                     fact, self._verdicts(REAL_SID, basis)
                 )
                 assert (" -- w:" in sentence) or ("UNNAMED" in sentence), sentence
+
+
+class TestBulkForeignIndexRefusal:
+    """At 11,534 foreign staged paths (measured 2026-09-02 on this branch) the
+    per-file unstage remedy stops being advice: following it to completion
+    destroys a peer's in-flight change. These pin what the refusal must and
+    must not say at that size."""
+
+    NOTE = " (name via harness-registry)"
+
+    def _msg(self, count=11534):
+        return dispatch_checks._bulk_foreign_index_refusal(
+            count, "state/subagent-share/x/y.md", "abc123 -- w:claude-klabauter-6c", self.NOTE
+        )
+
+    def test_it_never_names_the_per_file_remedy(self):
+        """The negative spec. Following `git restore --staged` per file here is
+        an hour of work whose successful completion is the loss of the peer's
+        change."""
+        assert "restore --staged" not in self._msg()
+        assert "Unstage it" not in self._msg()
+
+    def test_it_states_that_no_commit_form_succeeds(self):
+        """Measured: `git commit -- <pathspec>` was refused too, because this
+        check reads the whole index. An operator who is not told that will try
+        the pathspec form and conclude the guard is broken."""
+        msg = self._msg()
+        assert "no commit form succeeds" in msg
+        assert "pathspec does not narrow" in msg
+
+    def test_it_reports_the_size_that_makes_this_branch_apply(self):
+        assert "11534 staged paths" in self._msg()
+        assert "77 staged paths" in self._msg(77)
+
+    def test_it_names_the_peer_so_the_operator_can_ask_them(self):
+        """`Ask them` is only actionable if the message says who."""
+        msg = self._msg()
+        assert "claude-klabauter-6c" in msg
+        assert "Ask them" in msg
+
+    def test_the_provenance_note_is_carried_not_dropped(self):
+        assert self.NOTE in self._msg()
+
+    def test_the_threshold_sits_above_a_session_and_below_a_bulk_change(self):
+        assert 10 < dispatch_checks._BULK_FOREIGN_INDEX_PATHS < 500
