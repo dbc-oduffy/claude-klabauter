@@ -187,6 +187,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, Optional, TextIO
 
 from coordinator_core.group_em import obligations
+from coordinator_core import memo_corpus
 from coordinator_core.group_em import read_pass
 from coordinator_core.group_em import repo_root_arg
 from coordinator_core.group_em import send_pass
@@ -219,10 +220,6 @@ _POLL_INTERVAL_CEILING_SECONDS = 300.0
 #: `send_pass.build_send_digest`'s own default -- the watch reuses the SAME
 #: clock rather than a second cooldown window, per the module docstring.
 _COOLDOWN_SECONDS = send_pass.DEFAULT_COOLDOWN_SECONDS
-
-#: Where the memo inbox lives, relative to a repo root -- the same tree
-#: `cross-repo-memo` delivers into and `records_query` reads.
-_INBOX_RELATIVE_PATH = os.path.join("cross-repo", "inbox")
 
 #: Measured (C6 brief): 145 files, `os.scandir` 0.16ms median / 0.34ms max,
 #: reading the first 14 lines of every file 9.4ms total. Frontmatter's
@@ -277,9 +274,18 @@ def _inbox_counts(repo_root: str) -> tuple[int, int, float]:
     rather than raising -- the same posture as `load_prev_parked`'s
     absent-file answer: a poll that has not yet seen an inbox is not a
     poll error.
+
+    Resolves `memo_corpus_root` fresh on every call rather than caching the
+    inbox path at module import -- this watcher runs for hours, launched by
+    another Group EM, and is not restarted as part of a migration
+    procedure, so a process-lifetime binding here would freeze at whatever
+    root existed at import and never observe a later migration. The extra
+    `is_dir()`-backed resolution is free against the tick's own seconds-scale
+    budget.
     """
     taken_at_epoch = time.time()
-    inbox_dir = os.path.join(str(repo_root), _INBOX_RELATIVE_PATH)
+    corpus_root = memo_corpus.memo_corpus_root(str(repo_root))
+    inbox_dir = os.path.join(corpus_root, "inbox")
     total_count = 0
     open_count = 0
     try:

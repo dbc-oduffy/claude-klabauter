@@ -168,9 +168,45 @@ def kill_ledger_path(repo_root: str) -> str:
     return os.path.join(machinery_root(repo_root), "kill-ledger.md")
 
 
+def memo_outbox_dir(repo_root: str) -> str:
+    """`<machinery_root>/memo-outbox` -- moved, not killed (PM Adjudication
+    4): the canonical WRITE root for `memo.draft`/`memo.compose`/`memo.send`/
+    `memo.reconcile_outbox`. `state/memo-outbox/` (the pre-2026-09-03 root)
+    stayed off `.gitignore`'s bucket list -- see `legacy_memo_outbox_dir`'s
+    own docstring for why callers must still READ it.
+    """
+    return os.path.join(machinery_root(repo_root), "memo-outbox")
+
+
+def memo_outbox_sent_dir(repo_root: str) -> str:
+    """`<memo_outbox_dir>/sent` -- the relocated sent-copy bucket."""
+    return os.path.join(memo_outbox_dir(repo_root), "sent")
+
+
 def memo_outbox_sent_ledger_path(repo_root: str) -> str:
     """`<machinery_root>/memo-outbox/sent-ledger.jsonl` -- moved, not killed."""
-    return os.path.join(machinery_root(repo_root), "memo-outbox", "sent-ledger.jsonl")
+    return os.path.join(memo_outbox_dir(repo_root), "sent-ledger.jsonl")
+
+
+def legacy_memo_outbox_dir(repo_root: str) -> str:
+    """`<repo_root>/state/memo-outbox` -- the RETIRED outbox root. READ ONLY:
+
+    this repo's `memo.draft`/`memo.compose`/`memo.send`/
+    `memo.reconcile_outbox` handlers stopped writing new content here on
+    2026-09-03 (the C3 migration declared the outbox moved but never
+    repointed a single writer, so every one of them kept hardcoding this
+    tuple and `.gitignore` never listed it -- 984 files got committed on
+    every `memo.send` as a result). Existing drafts staged before the
+    repoint, and this repo's `sent/` history, still live here and are not
+    migrated by this accessor's introduction -- a reader must still resolve
+    against this root as a fallback after `memo_outbox_dir` comes up empty.
+    """
+    return os.path.join(repo_root, "state", "memo-outbox")
+
+
+def legacy_memo_outbox_sent_dir(repo_root: str) -> str:
+    """`<legacy_memo_outbox_dir>/sent` -- the retired sent-copy bucket."""
+    return os.path.join(legacy_memo_outbox_dir(repo_root), "sent")
 
 
 @lru_cache(maxsize=None)

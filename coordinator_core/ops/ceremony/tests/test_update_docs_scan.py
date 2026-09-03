@@ -371,6 +371,31 @@ def test_crossrepo_archive_actioned_floor(tmp_path, monkeypatch):
     assert prune_by_path["cross-repo/archive/recent-actioned-memo.md"]["prunable"] is False
 
 
+def test_crossrepo_archive_actioned_floor_migrated_corpus(tmp_path, monkeypatch):
+    """C2 (2026-09-03-the-engine-follows-the-memo-channel-home): the
+    `crossrepo_archive` cohort must classify the C10a-migrated
+    `state/cross-repo/archive/` corpus, not just the legacy
+    `cross-repo/archive/` this file's sibling test seeds."""
+    now = _dt.datetime(2026, 7, 23, 12, 0, 0, tzinfo=_dt.timezone.utc)
+    repo_root = _seed_repo(tmp_path, now=now)
+    monkeypatch.setattr(uds, "_now_utc", lambda: now)
+
+    archive_dir = repo_root / "state" / "cross-repo" / "archive"
+    archive_dir.mkdir(parents=True)
+
+    old_actioned = archive_dir / "old-actioned-memo.md"
+    old_actioned_at = (now - _dt.timedelta(days=91)).isoformat().replace("+00:00", "Z")
+    old_actioned.write_text(
+        f"---\nstatus: actioned\npicked_up_at: '{old_actioned_at}'\n---\nbody\n"
+    )
+
+    common_dir = repo_root / ".git"
+    reply = _run(uds._ceremony_update_docs_scan({}, repo_root=common_dir))
+
+    prune_by_path = {row["path"]: row for row in reply["phase8b_prune"]}
+    assert prune_by_path["state/cross-repo/archive/old-actioned-memo.md"]["prunable"] is True
+
+
 def test_threshold_constants_are_named_module_constants():
     """AC8 grep-assert: thresholds are data (module constants), not inline
     literals — this pins the constant NAMES so a future edit that inlines the

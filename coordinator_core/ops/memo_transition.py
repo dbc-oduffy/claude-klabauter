@@ -143,6 +143,7 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
 from coordinator_core.win_portability import no_console_creationflags
@@ -1364,8 +1365,9 @@ def _apply_action_fields(fm_text: str, params: dict) -> str:
 # superseded_by pointer validation — mirrors
 # memo_send._normalize_in_reply_to / _validate_in_reply_to_exists (that
 # module's exact resolution logic, not re-invented here): the pointer must
-# name a memo THIS repo actually holds, in its own cross-repo/inbox/ or
-# cross-repo/archive/ (searched recursively — archive is nested by date).
+# name a memo THIS repo actually holds, in its own memo-corpus inbox/ or
+# archive/ (resolved via memo_corpus_root, searched recursively — archive is
+# nested by date).
 # ---------------------------------------------------------------------------
 
 def _normalize_superseded_by(value: str) -> str:
@@ -1377,11 +1379,14 @@ def _normalize_superseded_by(value: str) -> str:
 
 def _validate_superseded_by_exists(git_root: Path, superseded_by: str) -> dict | None:
     """Fail-loud gate: ``superseded_by`` must name a memo THIS repo actually
-    holds (its own ``cross-repo/inbox/`` or ``cross-repo/archive/``, the
-    latter searched recursively). Runs BEFORE any write — a typo'd pointer is
-    worse than none. Returns None on pass, else an ``_err()`` envelope."""
-    inbox_dir = git_root / "cross-repo" / "inbox"
-    archive_dir = git_root / "cross-repo" / "archive"
+    holds (its own memo-corpus ``inbox/`` or ``archive/``, resolved via
+    ``memo_corpus_root`` so this stays correct across the state/cross-repo
+    migration, the latter searched recursively). Runs BEFORE any write — a
+    typo'd pointer is worse than none. Returns None on pass, else an
+    ``_err()`` envelope."""
+    corpus_root = Path(memo_corpus_root(str(git_root)))
+    inbox_dir = corpus_root / "inbox"
+    archive_dir = corpus_root / "archive"
 
     if (inbox_dir / superseded_by).is_file():
         return None
@@ -1393,8 +1398,8 @@ def _validate_superseded_by_exists(git_root: Path, superseded_by: str) -> dict |
     return _err(
         f"action: superseded_by={superseded_by!r} does not match any memo in "
         f"this repo's own {inbox_dir} or {archive_dir} (searched recursively) — "
-        f"superseded_by must name a memo present in cross-repo/inbox/ or "
-        f"cross-repo/archive/. Check for a typo."
+        f"superseded_by must name a memo present in this repo's memo-corpus "
+        f"inbox/ or archive/. Check for a typo."
     )
 
 

@@ -78,6 +78,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core import memo_corpus
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import (
     build_dry_run_result,
@@ -91,7 +92,10 @@ _LOG = logging.getLogger(__name__)
 
 _MODE = "blitz_buckets"
 
-_INBOX_DIRNAME = ("cross-repo", "inbox")
+#: The inbox leaf under the resolved memo-corpus root -- the root itself now
+#: resolves through `memo_corpus.memo_corpus_root`, not a hardcoded
+#: `cross-repo` literal (C4b: repoint construction, not a comparison).
+_INBOX_LEAF = "inbox"
 
 # Statuses that mean "still needs a disposition". `actioned`/`closed`/
 # `superseded`/`action_taken`/`reviewed` are all terminal-or-past-triage and are
@@ -998,7 +1002,9 @@ def _memo_blitz_buckets(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "cross-repo/inbox/ and requires a resolved worktree "
                 "(common_dir-keyed op).",
             )
-        inbox_dir = main_worktree_root(Path(repo_root)).joinpath(*_INBOX_DIRNAME)
+        worktree_root = main_worktree_root(Path(repo_root))
+        corpus_root = memo_corpus.memo_corpus_root(str(worktree_root))
+        inbox_dir = Path(corpus_root) / _INBOX_LEAF
 
     candidates = _build_candidates(
         inbox_dir, open_threshold, age_days_threshold, datetime.date.today()

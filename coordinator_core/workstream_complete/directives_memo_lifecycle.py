@@ -124,6 +124,7 @@ from typing import Any, Optional
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.repo_root import git_common_dir
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.win_portability import no_console_creationflags
 
 _NO_CONSOLE = no_console_creationflags()
@@ -196,7 +197,7 @@ def list_open_memos(repo_root: Path) -> list[dict[str, str]]:
     one-layer-unquoted convention applies uniformly rather than leaving a
     quoting inconsistency between the three fields.
     """
-    inbox = repo_root / "cross-repo" / "inbox"
+    inbox = Path(memo_corpus_root(str(repo_root))) / "inbox"
     if not inbox.is_dir():
         return []
     memos: list[dict[str, str]] = []
@@ -317,7 +318,7 @@ def _scan_archived_memos(repo_root: Path) -> list[dict[str, str]]:
     claim/action verbs write with `numeric_quoting=True`, so
     `read_fm_field_unquoted` is required here for the same comparison-safe
     reason `list_open_memos` above uses it for `status`."""
-    archive_dir = repo_root / "cross-repo" / "archive"
+    archive_dir = Path(memo_corpus_root(str(repo_root))) / "archive"
     if not archive_dir.is_dir():
         return []
     memos: list[dict[str, str]] = []
@@ -363,11 +364,24 @@ def _session_commit_shas(repo_root: Path, since_iso: Optional[str]) -> "frozense
 
 
 def _inbox_to_archive_renames(repo_root: Path, since_iso: Optional[str]) -> dict[str, str]:
-    """`basename -> archive path` for every `cross-repo/inbox/*` ->
-    `cross-repo/archive/*` rename in range, enumerated via `git log
+    """`basename -> archive path` for every `<memo-inbox>/*` ->
+    `<memo-archive>/*` rename in range, enumerated via `git log
     --diff-filter=R -M --name-status` — `R100`-shaped output has no false
     positives from an ordinary edit, per the 2026-07-30 cross-repo memo this
-    function's own module docstring backlinks to."""
+    function's own module docstring backlinks to.
+
+    Checks BOTH the current-resolution prefix (`memo_corpus_root`, which may
+    now read `state/cross-repo/`) AND the legacy `cross-repo/` literal
+    unconditionally -- unlike a filesystem-construction site, this scans
+    `git log` HISTORY, which may span commits from before this worktree's own
+    migration as well as after it. Resolving only the current root would
+    silently drop a real rename that happened on the legacy side of the
+    migration boundary."""
+    resolved_root = Path(memo_corpus_root(str(repo_root)))
+    resolved_rel = resolved_root.relative_to(repo_root).as_posix()
+    inbox_prefixes = {f"{resolved_rel}/inbox/", "cross-repo/inbox/"}
+    archive_prefixes = {f"{resolved_rel}/archive/", "cross-repo/archive/"}
+
     args = ["log", "--diff-filter=R", "-M", "--name-status", "--format="]
     if since_iso:
         args.append(f"--since={since_iso}")
@@ -383,7 +397,9 @@ def _inbox_to_archive_renames(repo_root: Path, since_iso: Optional[str]) -> dict
         if len(parts) != 3:
             continue
         _status, old_path, new_path = parts
-        if old_path.startswith("cross-repo/inbox/") and new_path.startswith("cross-repo/archive/"):
+        if any(old_path.startswith(p) for p in inbox_prefixes) and any(
+            new_path.startswith(p) for p in archive_prefixes
+        ):
             result[Path(new_path).name] = new_path
     return result
 
@@ -499,6 +515,8 @@ _KEEP_LIST_PATTERNS: tuple[str, ...] = (
     "archive/handoffs/*/*",
     "cross-repo/inbox/*",
     "cross-repo/archive/*",
+    "state/cross-repo/inbox/*",
+    "state/cross-repo/archive/*",
 )
 
 

@@ -133,7 +133,9 @@ from coordinator_core.ops.fleet._memo_resolver import (
     suggest_nearest_receiver as _suggest_nearest_receiver,
 )
 from coordinator_core.ops.fleet._memo_summary import has_prose_body, is_placeholder_summary
+from coordinator_core.ops.fleet.memo_draft import legacy_outbox_dir, outbox_dir, resolve_outbox_draft_path
 from coordinator_core.ops.session_context import resolve_current_session_id
+from coordinator_core.session import machinery_paths as _machinery_paths
 
 _LOG = logging.getLogger(__name__)
 
@@ -210,8 +212,6 @@ def _delivery_commit_message(topic: str, from_id: str, sent_by: str) -> str:
 # being silently dropped (mirrors the pre-kill C9/A11 fix's discipline).
 _KNOWN_PARAM_KEYS = frozenset({"dry_run", "topic"})
 
-_OUTBOX_DIRNAME = ("state", "memo-outbox")
-_SENT_SUBDIRNAME = ("state", "memo-outbox", "sent")
 _SENT_LEDGER_FILENAME = "sent-ledger.jsonl"
 
 #: Rows the sent-ledger retains. It is a BOUNDED RING, not a record of
@@ -225,7 +225,7 @@ _SENT_LEDGER_FILENAME = "sent-ledger.jsonl"
 #: The durable record of a send is threefold and none of it lives in this
 #: file: the delivered memo in the receiver's own tree, the delivery commit
 #: in the receiver's history, and this repo's own never-evicted
-#: `state/memo-outbox/sent/<topic>.md` copy. The one production reader that
+#: `.coordinator-local/memo-outbox/sent/<topic>.md` copy. The one production reader that
 #: treated a row as a permanent registration --
 #: `fact_contract_gate.engine_gap_marker.memo_exists` -- now falls through
 #: to that sent copy (`_sent_copy_has`), so an evicted row cannot turn a
@@ -254,15 +254,27 @@ _SENT_LEDGER_MAX_ROWS = 250
 #: predating the field, and any hand-written line). Both bounds run on every
 #: append, so neither can be the one that quietly stopped applying.
 _SENT_LEDGER_MAX_AGE_DAYS = 30
-_SENT_LEDGER_RELPATH = "/".join((*_OUTBOX_DIRNAME, _SENT_LEDGER_FILENAME))
 
 # Generator-provenance: writes+commits into a registry-enumerated RECEIVER
 # repo's cross-repo/inbox/ tree (a different repo, not fixed), and moves
-# +ledgers into the CALLING repo's own state/memo-outbox/ tree — a
-# data-dependent set of tracked paths across two repos, never one fixed
-# target. Recovered from the deleted original's own declaration (git show
-# 677d433eb) — the plan names this as the contract to preserve verbatim.
-MUTATES = ["state/memo-outbox/sent-ledger.jsonl", "cross-repo/inbox/*.md"]
+# +ledgers into the CALLING repo's own outbox tree (new
+# `.coordinator-local/memo-outbox/` root; an already-staged draft found at
+# the retired `state/memo-outbox/` root is deleted from there, never
+# rewritten there) — a data-dependent set of tracked paths across two
+# repos, never one fixed target. Recovered from the deleted original's own
+# declaration (git show 677d433eb) — the plan names this as the contract to
+# preserve verbatim, extended for the 2026-09-03 outbox relocation. The
+# receiver-inbox leg is itself data-dependent per `memo_corpus.receiver_inbox_root`
+# (C10a migration window): an unmigrated receiver still resolves to the legacy
+# `cross-repo/inbox/`, a migrated one to `state/cross-repo/inbox/` — both
+# patterns are named here rather than the stale single legacy literal, since
+# either can be the actual write target depending on the receiver probed.
+MUTATES = [
+    ".coordinator-local/memo-outbox/sent-ledger.jsonl",
+    "state/memo-outbox/*.md",
+    "cross-repo/inbox/*.md",
+    "state/cross-repo/inbox/*.md",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -313,15 +325,20 @@ def _validate_send_params(params: dict):
 # ---------------------------------------------------------------------------
 
 def _draft_path(sender_worktree: Path, topic: str) -> Path:
-    return sender_worktree.joinpath(*_OUTBOX_DIRNAME, f"{topic}.md")
+    """Resolve the staged draft: new `.coordinator-local/memo-outbox/` root
+    first, retired `state/memo-outbox/` root second (2026-09-03
+    relocation) — a draft staged before the repoint is still sendable."""
+    return resolve_outbox_draft_path(sender_worktree, topic)
 
 
 def _sent_path(sender_worktree: Path, topic: str) -> Path:
-    return sender_worktree.joinpath(*_SENT_SUBDIRNAME, f"{topic}.md")
+    """The sender-side sent-copy WRITE target — always the new root."""
+    return Path(_machinery_paths.memo_outbox_sent_dir(str(sender_worktree))) / f"{topic}.md"
 
 
 def _sent_ledger_path(sender_worktree: Path) -> Path:
-    return sender_worktree.joinpath(*_OUTBOX_DIRNAME, _SENT_LEDGER_FILENAME)
+    """The sent-ledger WRITE target — always the new root."""
+    return Path(_machinery_paths.memo_outbox_sent_ledger_path(str(sender_worktree)))
 
 
 def _portable_delivered_to_form(receiver_repo_path: Path, delivered_path: Path) -> str:
@@ -654,17 +671,19 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     # direct `coordinator-invoke memo.send` is covered too.
     normalized_body = _normalize_body(body)
     if normalized_body:
-        outbox_dir = sender_worktree.joinpath(*_OUTBOX_DIRNAME)
-        colliding_topic = _find_duplicate_draft_topic(
-            outbox_dir, topic, normalized_body,
-        )
-        if colliding_topic is not None:
-            return build_setup_error_result(
-                _MODE, dry_run,
-                f"memo.send: staged body is byte-identical to draft "
-                f"{colliding_topic!r} in {outbox_dir} — rewrite this body, "
-                f"or discard the stale draft, before sending.",
+        # Scanned across BOTH outbox roots (2026-09-03 relocation) — a
+        # sibling staged before the repoint is still a real duplicate.
+        for sibling_dir in (outbox_dir(sender_worktree), legacy_outbox_dir(sender_worktree)):
+            colliding_topic = _find_duplicate_draft_topic(
+                sibling_dir, topic, normalized_body,
             )
+            if colliding_topic is not None:
+                return build_setup_error_result(
+                    _MODE, dry_run,
+                    f"memo.send: staged body is byte-identical to draft "
+                    f"{colliding_topic!r} in {sibling_dir} — rewrite this body, "
+                    f"or discard the stale draft, before sending.",
+                )
 
     today = datetime.date.today().isoformat()
     # Resolved ONCE and threaded to all three carriers: the delivered memo's
@@ -767,7 +786,12 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             "id": str(target_file), "reason": f"write-failed: {exc}",
         }])
 
-    rel_path = "cross-repo/inbox/" + filename
+    # target_file was resolved via `_resolve_receiver_inbox` ->
+    # `memo_corpus.receiver_inbox_root` above, so it already reflects
+    # whichever root (legacy `cross-repo/` or migrated `state/cross-repo/`)
+    # THIS receiver actually resolves to — never a fixed `cross-repo/inbox/`
+    # literal, which is wrong for any receiver that has migrated.
+    rel_path = os.path.relpath(target_file, receiver_repo_path).replace(os.sep, "/")
     msg_file = _write_msg_file(
         _delivery_commit_message(topic, from_id, sent_by)
     )
@@ -921,13 +945,21 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             }],
         )
 
-    sent_relpath = "/".join((*_SENT_SUBDIRNAME, f"{topic}.md"))
-    outbox_relpath = "/".join((*_OUTBOX_DIRNAME, f"{topic}.md"))
+    # Relative to `sender_worktree` from the ACTUAL resolved locations, not
+    # a fixed root: `draft_path` may be under either outbox root
+    # (`_draft_path`'s dual-root resolution), while `sent_path`/`ledger_path`
+    # are always the new root (their own accessors never resolve legacy).
+    def _relpath(p: Path) -> str:
+        return os.path.relpath(str(p), str(sender_worktree)).replace(os.sep, "/")
+
+    sent_relpath = _relpath(sent_path)
+    outbox_relpath = _relpath(draft_path)
+    ledger_relpath = _relpath(ledger_path)
     sender_message = apply_missing_trailers(
         f"memo.send: {topic} delivered to {to}\n\n"
         f"Moves the outbox draft to sent/ and appends the sent-ledger row.\n",
         sender_worktree,
-        [sent_relpath, _SENT_LEDGER_RELPATH, outbox_relpath],
+        [sent_relpath, ledger_relpath, outbox_relpath],
     )
     # THE OUTBOX PATH IS NAMED ONLY IF HEAD KNOWS IT.
     # It is named so the MOVE's deletion leg lands -- but a draft staged by
@@ -955,7 +987,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     )
 
     # WORKTREE BYTES, NOT THE STAGED BLOB, AND THAT IS THE WHOLE POINT HERE.
-    # `_SENT_LEDGER_RELPATH` is fleet-shared: every sending session appends
+    # `ledger_relpath` names a fleet-shared file: every sending session appends
     # its row to the same file (a bounded ring -- see
     # `_SENT_LEDGER_MAX_ROWS`), and the `locked_rmw` above
     # holds a cross-process exclusive lock across the read-modify-write, so
@@ -979,7 +1011,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     try:
         outcome = commit_paths(
             sender_worktree,
-            [sent_relpath, _SENT_LEDGER_RELPATH],
+            [sent_relpath, ledger_relpath],
             sender_message,
             deleted_paths=sender_deleted,
             blob_fallback=partial(

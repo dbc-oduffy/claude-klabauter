@@ -29,7 +29,13 @@ from coordinator_core.ops.fleet.memo_reconcile_outbox import (
     _validate_params,
 )
 
+#: Fixtures deliberately stage drafts at the RETIRED root -- the op's
+#: canonical write root moved to `.coordinator-local/memo-outbox/`
+#: (2026-09-03), and every test in this module doubles as a read-compat
+#: proof: a draft staged at the old root before the move must still be
+#: found and reconciled, landing in the NEW `sent/` dir (`_NEW_SENT`).
 _OUTBOX = ("state", "memo-outbox")
+_NEW_SENT = (".coordinator-local", "memo-outbox", "sent")
 
 
 @pytest.fixture
@@ -103,7 +109,9 @@ class TestSweep:
         assert [a["filename"] for a in result["acted"]] == ["delivered.md"]
         outbox = worktree.joinpath(*_OUTBOX)
         assert not (outbox / "delivered.md").exists()
-        assert (outbox / "sent" / "delivered.md").is_file()
+        assert (worktree.joinpath(*_NEW_SENT) / "delivered.md").is_file(), (
+            "a legacy-root draft must still be reconciled, landing in the NEW sent/"
+        )
         assert (outbox / "live.md").is_file(), "a draft's home IS the outbox"
 
     def test_every_non_draft_status_is_delivered_history(self, worktree):
@@ -144,7 +152,7 @@ class TestSweep:
 
     def test_existing_sent_copy_is_never_clobbered(self, worktree):
         _write_memo(worktree, "dupe.md", "sent")
-        sent = worktree.joinpath(*_OUTBOX, "sent")
+        sent = worktree.joinpath(*_NEW_SENT)
         sent.mkdir(parents=True)
         (sent / "dupe.md").write_text("the authoritative archived copy\n", encoding="utf-8")
 

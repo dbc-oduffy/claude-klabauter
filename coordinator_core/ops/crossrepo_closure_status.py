@@ -73,6 +73,7 @@ import yaml
 
 from coordinator_core.distill.delete_guard import resolve_realized_by
 from coordinator_core.ipc import register_op
+from coordinator_core.memo_corpus import memo_corpus_root
 
 __all__ = [
     "collect_memo_records",
@@ -332,15 +333,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree_root = main_worktree_root(repo_root)
 
-    def _resolve(param_name: str, default_rel: Tuple[str, ...]) -> Path:
+    def _resolve(param_name: str, default_base: Path, *default_rel: str) -> Path:
         override = params.get(param_name)
         if isinstance(override, str) and override:
             return Path(override)
-        return worktree_root.joinpath(*default_rel)
+        return default_base.joinpath(*default_rel)
 
-    inbox_dir = _resolve("inbox_dir", ("cross-repo", "inbox"))
-    archive_dir = _resolve("archive_dir", ("cross-repo", "archive"))
-    commitments_dir = _resolve("commitments_dir", ("state", "cross-repo-commitments"))
+    corpus_root = Path(memo_corpus_root(str(worktree_root)))
+    inbox_dir = _resolve("inbox_dir", corpus_root, "inbox")
+    archive_dir = _resolve("archive_dir", corpus_root, "archive")
+    commitments_dir = _resolve("commitments_dir", worktree_root, "state", "cross-repo-commitments")
 
     memo_records, memo_degraded = collect_memo_records([inbox_dir, archive_dir], worktree_root)
     commitment_records, commitment_degraded = collect_commitment_entries(commitments_dir)

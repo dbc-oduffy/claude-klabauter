@@ -208,12 +208,27 @@ _COMPOSITE_ENTRYPOINTS = {
 #: A wrapper that stops spawning must land in this set AND gain a zero-spawn
 #: guard in the same commit -- moving it here alone would silently retire the
 #: only assertion standing over it.
+#: `dirty_relpaths_from_porcelain()` (2026-09-03, extracted shared tail of
+#: the fleet family's worktree-dirty retention gates) never calls
+#: `subprocess.run` itself -- it composes the already-covered
+#: `status_porcelain()` wrapper (which DOES appear in `_WRAPPER_INVOCATIONS`)
+#: with fail-closed handling and porcelain parsing, so the (a) harness's
+#: `mock_run.call_count == 1`-against-THIS-function assertion would be a
+#: false claim about a function that calls another wrapper, not `subprocess.
+#: run`, directly. Covered directly instead by
+#: `coordinator_core/ops/fleet/tests/test_archive_sizings.py` (AC5, via
+#: `archive_sizings._dirty_sizing_relpaths`) and `coordinator_core/ops/
+#: fleet/tests/test_archive_terminal_handoffs.py` (C3, via
+#: `archive_terminal_handoffs._dirty_handoff_relpaths`) -- both callers'
+#: own fail-closed/parse/rename-record test coverage exercises this
+#: function's real body, patching `status_porcelain` one level below it.
 _NON_SUBPROCESS_HELPERS = {
     "directory_pathspecs",
     "directory_pathspec_diagnostic",
     "parse_check_ignore_stdin_z",
     "deferred_publisher_span",
     "rev_parse_head",
+    "dirty_relpaths_from_porcelain",
 }
 
 #: `check_ignore()` is a thin single-`git`-call wrapper like everything in

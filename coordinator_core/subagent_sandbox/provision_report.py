@@ -7,7 +7,7 @@ Where the enforcement engine intercepts a subagent's *write attempts*
 mid-session (PreToolUse), this module runs once at *spawn time* and, for
 agent/subagent types the policy has opted into ``report_sidecar``,
 provisions a per-session run-report markdown doc under
-``state/subagent-share/<session_id>/`` and emits its repo-relative path on
+``.coordinator-local/subagent-share/<session_id>/`` and emits its repo-relative path on
 stdout as ``{"report_sidecar": "<path>"}``. It shares the engine's policy
 loader, git-root resolver, and OR-resolved agent/subagent type legs
 (imported verbatim, never re-derived) but owns its own single-segment path
@@ -40,8 +40,8 @@ injection seam above; it changes the *value* an existing eligible
 key). For ``prior-art-checker``/``plan-coverage-checker``/
 ``external-pattern-checker``/``docs-checker`` ONLY, and only when the spawn
 payload also carries a non-empty ``plan_path``, ``_provision`` writes the
-sidecar to the deterministic ``state/plan-sidecars/<plan-stem>.<lens>.md``
-path instead of the session-keyed ``state/subagent-share/<session_id>/``
+sidecar to the deterministic ``.coordinator-local/plan-sidecars/<plan-stem>.<lens>.md``
+path instead of the session-keyed ``.coordinator-local/subagent-share/<session_id>/``
 home. Every other eligible ``subagent_type`` -- reviewer personas, and
 these same four agents' non-plan dispatch shapes (e.g. docs-checker's
 code-review dispatch, which carries no ``plan_path``) -- is unaffected and
@@ -137,7 +137,7 @@ def _sidecar_pointer_path(git_root: str, raw_agent_id: str, kind: str = "report"
     """Pointer file for ``raw_agent_id``, or ``None`` if it cannot key one.
 
     ``kind`` namespaces the index by PRODUCER, because two producers write
-    into ``state/subagent-share/`` for the same agent with different leaf
+    into ``.coordinator-local/subagent-share/`` for the same agent with different leaf
     suffixes -- this module (``<key>.md``) and ``coordinator-doc-new --type
     subagent-sidecar`` (``<key>.subagent-sidecar.md``). A single flat key
     would hand one producer's spawn the other's document.
@@ -175,7 +175,7 @@ def _read_sidecar_pointer(git_root: str, raw_agent_id: str, kind: str = "report"
     """Repo-relative path of this agent's EXISTING sidecar, or ``None``.
 
     Every failure mode -- no pointer, unreadable, malformed, naming a path
-    outside ``state/subagent-share/``, or naming a file that is no longer
+    outside ``.coordinator-local/subagent-share/``, or naming a file that is no longer
     there (the reaper is entitled to have swept it) -- returns ``None``, which
     the caller reads as "nothing to adopt" and provisions normally. A stale
     pointer can therefore only ever cost a wasted read.
@@ -227,7 +227,7 @@ def _write_sidecar_pointer(
 #: ...) are excluded not for having "review" in the role but because their
 #: output is a session judgment on work in flight, keyed to the session that
 #: asked -- as is every other ``report_sidecar``-eligible type, which keeps
-#: the session-keyed ``state/subagent-share/<session_id>/`` home.
+#: the session-keyed ``.coordinator-local/subagent-share/<session_id>/`` home.
 #: A key here is only followed when the spawn payload ALSO carries a
 #: non-empty ``plan_path`` -- this is what keeps e.g. docs-checker's
 #: code-review dispatch (no ``plan_path`` on that payload shape) on the
@@ -384,7 +384,7 @@ def _frontmatter(agent_type: str, spawned_at: str, lead_session_id: Optional[str
 #: why dispatch-time is the load-bearing choice (a blank-vs-filled
 #: distinction the close-time join depends on). Reuses `review_trail_write`'s
 #: own closed `_DELEGATE_REVIEWERS` vocabulary BY NAME, never a re-derived
-#: second classifier (chunk brief, state/dispatch-briefs/2026-08-27-the-
+#: second classifier (chunk brief, .coordinator-local/dispatch-briefs/2026-08-27-the-
 #: review-gate-measures-the-whole-session/C2.md) -- the same vocabulary
 #: `hooks/subagent_review_mark.py::_is_reviewer` already reuses this way, so
 #: a third independent copy of "what counts as a delegate reviewer" never
@@ -863,7 +863,7 @@ def resolve_plugin_root() -> Optional[str]:
 
     Shared by this module's contract-block assembly leg and
     ``coordinator_core.hooks.cater_subagent_start._resolve_role_append_snippet_path``
-    (C4/C5, state/dispatch-briefs/2026-08-21-catering-costs-what-the-work-
+    (C4/C5, .coordinator-local/dispatch-briefs/2026-08-21-catering-costs-what-the-work-
     costs/): both legs need "where does the coordinator-claude plugin's
     content live", not "where is the session's own repo" -- conflating the
     two is the defect this resolver exists to fix. ``_assemble_contract_blocks``
@@ -1128,7 +1128,7 @@ def assemble_contract_blocks_for_payload(
         )
         return None
 
-    # Non-spawning root read (C2, state/dispatch-briefs/2026-08-21-
+    # Non-spawning root read (C2, .coordinator-local/dispatch-briefs/2026-08-21-
     # catering-costs-what-the-work-costs/C2.md): eligible per
     # `resolve_git_root_cheap`'s own stated rule -- this leg (module
     # docstring: "deliberately NOT threaded through from _provision")
@@ -1434,7 +1434,7 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     # CONTINUITY: adopt this agent's EXISTING sidecar when the session id has
     # moved out from under it.
     #
-    # The home is `state/subagent-share/<session_id>/<label>.<agent_id>.md` and
+    # The home is `.coordinator-local/subagent-share/<session_id>/<label>.<agent_id>.md` and
     # the idempotency below is a FileExistsError catch, so the continuity key
     # is the PAIR (session_id, agent_id). `/clear` mints a fresh session id
     # WITHOUT ending the process, so a subagent that outlives one re-fires

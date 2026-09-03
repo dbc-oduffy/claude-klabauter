@@ -1345,6 +1345,10 @@ def _handoff_kind_off_enum_fires(schema_name: Optional[str], schema: dict, front
 def _grouping_approval_fires(prospective_content: str) -> bool:
     """True when the deny sibling's grouping-approval branch would fire.
 
+    That branch is an always-WARN finding since the 2026-09-03 PM ruling, not
+    a deny — but it is still rendered exclusively by the sibling, in both
+    modes, so this predicate's job (stand down, unconditionally) is unchanged.
+
     Mirrors `_evaluate_grouping_approval` in the deny sibling exactly — same
     input, same predicate, same fail-open on error — so the two can never
     both fire on one payload. Kept as a boolean rather than sharing the
@@ -1585,11 +1589,14 @@ def check(payload: dict) -> Optional[dict]:
     if _check_lineage_reachability_fires(frontmatter, schema_name, repo_root, abs_file_path):
         return None
 
-    # Grouping approval (2026-07-29) is the third UNCONDITIONAL deny, so it
-    # is the deny sibling's territory too and this one stands down in
-    # lockstep. `test_at_most_one_sibling_fires_per_payload` is what keeps
-    # that honest: if this branch were omitted, both siblings would fire on
-    # the same payload and that differential test would red.
+    # Grouping approval (2026-07-29) is the deny sibling's territory, and
+    # this one stands down in lockstep. It is no longer a deny there — the
+    # 2026-09-03 PM ruling downgraded it to an always-WARN finding (shape
+    # "warn") — but the OWNERSHIP is unchanged: the sibling renders that
+    # warning in BOTH modes, precisely so this stand-down can stay
+    # unconditional. Do not "restore symmetry" by rendering the warning here
+    # too; `test_at_most_one_sibling_fires_per_payload` is what keeps that
+    # honest, and both siblings firing on one payload would red it.
     #
     # Deliberately schema-name-agnostic, unlike the fourth deny's handoff-kind
     # check below (which gates on `schema_name == "handoff"`): claude-klabauter has no

@@ -98,6 +98,26 @@ def test_relocated_bucket_accessors_join_onto_machinery_root():
     )
 
 
+def test_memo_outbox_accessors_join_onto_machinery_root():
+    root = machinery_paths.machinery_root(REPO_ROOT)
+    assert machinery_paths.memo_outbox_dir(REPO_ROOT) == os.path.join(root, "memo-outbox")
+    assert machinery_paths.memo_outbox_sent_dir(REPO_ROOT) == os.path.join(
+        root, "memo-outbox", "sent"
+    )
+    assert machinery_paths.memo_outbox_sent_ledger_path(REPO_ROOT) == os.path.join(
+        machinery_paths.memo_outbox_dir(REPO_ROOT), "sent-ledger.jsonl"
+    )
+
+
+def test_legacy_memo_outbox_accessors_are_repo_root_relative_not_machinery_root():
+    assert machinery_paths.legacy_memo_outbox_dir(REPO_ROOT) == os.path.join(
+        REPO_ROOT, "state", "memo-outbox"
+    )
+    assert machinery_paths.legacy_memo_outbox_sent_dir(REPO_ROOT) == os.path.join(
+        REPO_ROOT, "state", "memo-outbox", "sent"
+    )
+
+
 def test_module_never_creates_a_directory(tmp_path):
     repo_root = str(tmp_path)
     machinery_paths.share_dir(repo_root, "sid-3")

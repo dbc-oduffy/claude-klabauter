@@ -261,7 +261,7 @@ class TestDryRun:
         assert len(result["candidates"]) == 1
         assert result["candidates"][0]["collision"] is False
         assert list((receiver_repo / "cross-repo" / "inbox").glob("*.md")) == []
-        assert not (sender_repo / "state" / "memo-outbox" / "sent").exists()
+        assert not (sender_repo / ".coordinator-local" / "memo-outbox" / "sent").exists()
 
     def test_unknown_receiver_is_setup_error(self, tmp_path, monkeypatch):
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -310,16 +310,20 @@ class TestEndToEndDelivery:
         status = _git(receiver_repo, "status", "--porcelain")
         assert status.stdout.decode("utf-8").strip() == ""
 
-        # Write 2: sender-side sent/ copy + ledger row, original draft gone.
+        # Write 2: sender-side sent/ copy + ledger row (new root), original
+        # draft gone from the legacy root it was staged at (`_write_draft`
+        # stages at `state/memo-outbox/` -- read-compatibility proof: a
+        # legacy-root draft is still found, sent, and its sent-side receipt
+        # lands at the new `.coordinator-local/memo-outbox/` root).
         assert not (sender_repo / "state" / "memo-outbox" / "happy-topic.md").exists()
-        sent_path = sender_repo / "state" / "memo-outbox" / "sent" / "happy-topic.md"
+        sent_path = sender_repo / ".coordinator-local" / "memo-outbox" / "sent" / "happy-topic.md"
         assert sent_path.exists()
         sent_split = split_frontmatter(sent_path.read_text(encoding="utf-8"))
         assert read_fm_field_unquoted(sent_split.fm_text, "status") == "sent"
         assert read_fm_field_unquoted(sent_split.fm_text, "sent_at")
         assert read_fm_field_unquoted(sent_split.fm_text, "delivered_to")
 
-        ledger_path = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        ledger_path = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
         rows = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
         assert len(rows) == 1
         assert rows[0]["topic"] == "happy-topic"
@@ -344,8 +348,8 @@ class TestEndToEndDelivery:
         assert "happy-topic.md" in stat_text
         assert "sent-ledger.jsonl" in stat_text
         # The three writes are IN the commit, not merely on disk beside it.
-        _git(sender_repo, "cat-file", "-e", "HEAD:state/memo-outbox/sent/happy-topic.md")
-        _git(sender_repo, "cat-file", "-e", "HEAD:state/memo-outbox/sent-ledger.jsonl")
+        _git(sender_repo, "cat-file", "-e", "HEAD:.coordinator-local/memo-outbox/sent/happy-topic.md")
+        _git(sender_repo, "cat-file", "-e", "HEAD:.coordinator-local/memo-outbox/sent-ledger.jsonl")
         gone = _git(
             sender_repo, "cat-file", "-e", "HEAD:state/memo-outbox/happy-topic.md",
             check=False,
@@ -384,7 +388,7 @@ class TestEndToEndDelivery:
         result = _memo_send({"dry_run": False, "topic": "no-sentby-topic"}, repo_root=sender_repo)
 
         assert result["exit_code"] == 0, result
-        ledger_path = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        ledger_path = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
         row = json.loads(ledger_path.read_text(encoding="utf-8").splitlines()[0])
         delivery_msg = _git(
             receiver_repo, "log", "-1", "--format=%B"
@@ -595,10 +599,10 @@ class TestNoReceiverHooksFire:
         # never refreshes the shared one (see the note in
         # `test_happy_path_three_writes`), so the committed paths still read as
         # staged-deleted afterwards. That is the design, not a failed commit.
-        sent_path = sender_repo / "state" / "memo-outbox" / "sent" / "untracked-topic.md"
+        sent_path = sender_repo / ".coordinator-local" / "memo-outbox" / "sent" / "untracked-topic.md"
         assert sent_path.exists()
-        _git(sender_repo, "cat-file", "-e", "HEAD:state/memo-outbox/sent/untracked-topic.md")
-        _git(sender_repo, "cat-file", "-e", "HEAD:state/memo-outbox/sent-ledger.jsonl")
+        _git(sender_repo, "cat-file", "-e", "HEAD:.coordinator-local/memo-outbox/sent/untracked-topic.md")
+        _git(sender_repo, "cat-file", "-e", "HEAD:.coordinator-local/memo-outbox/sent-ledger.jsonl")
         assert not (sender_repo / "state" / "memo-outbox" / "untracked-topic.md").exists()
 
     def test_receiver_side_hooks_never_fire(self, tmp_path, monkeypatch):
@@ -657,8 +661,8 @@ class TestReceiverCommitDeclineFailsLoud:
         ]
         assert inbox_files == []
         assert (sender_repo / "state" / "memo-outbox" / "declined-topic.md").exists()
-        assert not (sender_repo / "state" / "memo-outbox" / "sent").exists()
-        ledger_path = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        assert not (sender_repo / ".coordinator-local" / "memo-outbox" / "sent").exists()
+        ledger_path = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
         assert not ledger_path.exists()
 
 
@@ -769,7 +773,10 @@ class TestRegistration:
 
     def test_mutates_declaration_matches_deleted_originals_contract(self):
         assert memo_send_module.MUTATES == [
-            "state/memo-outbox/sent-ledger.jsonl", "cross-repo/inbox/*.md",
+            ".coordinator-local/memo-outbox/sent-ledger.jsonl",
+            "state/memo-outbox/*.md",
+            "cross-repo/inbox/*.md",
+            "state/cross-repo/inbox/*.md",
         ]
 
 
@@ -811,7 +818,7 @@ class TestSharedLedgerCommitsTheWorktreeUnion:
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "ledger-union", track=False)
 
-        ledger = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        ledger = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
         ledger.parent.mkdir(parents=True, exist_ok=True)
 
         def _rows(*topics: str) -> str:
@@ -821,7 +828,7 @@ class TestSharedLedgerCommitsTheWorktreeUnion:
 
         # HEAD carries two rows...
         ledger.write_text(_rows("first", "second"), encoding="utf-8", newline="\n")
-        _git(sender_repo, "add", "state/memo-outbox/sent-ledger.jsonl")
+        _git(sender_repo, "add", ".coordinator-local/memo-outbox/sent-ledger.jsonl")
         _git(sender_repo, "commit", "-m", "peer: two ledger rows")
 
         # ...and the INDEX is left pinned to an OLDER one-row blob. This is the
@@ -833,7 +840,7 @@ class TestSharedLedgerCommitsTheWorktreeUnion:
         # which is why a naive reproduction of this bug passes against the
         # broken code.
         ledger.write_text(_rows("first"), encoding="utf-8", newline="\n")
-        _git(sender_repo, "add", "state/memo-outbox/sent-ledger.jsonl")
+        _git(sender_repo, "add", ".coordinator-local/memo-outbox/sent-ledger.jsonl")
 
         # A concurrent peer appends to the worktree, as `locked_rmw` does --
         # so the worktree, and only the worktree, holds the union.
@@ -843,7 +850,7 @@ class TestSharedLedgerCommitsTheWorktreeUnion:
         )
 
         staged_blob = subprocess.run(
-            ["git", "ls-files", "-s", "state/memo-outbox/sent-ledger.jsonl"],
+            ["git", "ls-files", "-s", ".coordinator-local/memo-outbox/sent-ledger.jsonl"],
             cwd=str(sender_repo), capture_output=True, text=True, check=True,
             **no_console_creationflags(),
         ).stdout.split()[1]
@@ -854,7 +861,7 @@ class TestSharedLedgerCommitsTheWorktreeUnion:
         assert result["acted"][0]["sender_committed"] is True, result
 
         head_ledger = subprocess.run(
-            ["git", "show", "HEAD:state/memo-outbox/sent-ledger.jsonl"],
+            ["git", "show", "HEAD:.coordinator-local/memo-outbox/sent-ledger.jsonl"],
             cwd=str(sender_repo), capture_output=True, text=True, check=True,
             **no_console_creationflags(),
         ).stdout
@@ -885,7 +892,7 @@ class TestLedgerIsABoundedRing:
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "ring-topic")
 
-        ledger = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        ledger = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
         ledger.parent.mkdir(parents=True, exist_ok=True)
         ledger.write_text(
             "".join(
@@ -944,7 +951,7 @@ class TestLedgerIsABoundedRing:
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "no-newline-topic")
 
-        ledger = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        ledger = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
         ledger.parent.mkdir(parents=True, exist_ok=True)
         ledger.write_text(
             json.dumps({"topic": "truncated-row", "to": "peer-em"}),
@@ -985,7 +992,7 @@ class TestLedgerIsBoundedInTimeToo:
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _write_draft(sender_repo, "age-topic")
 
-        ledger = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        ledger = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
         ledger.parent.mkdir(parents=True, exist_ok=True)
         ledger.write_text(
             "".join(json.dumps(r) + "\n" for r in rows),

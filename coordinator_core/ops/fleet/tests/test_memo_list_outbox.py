@@ -239,6 +239,52 @@ class TestNoWriteProof:
 # 5. Store-less-ness architecture test (mirrors memo_list.py's TestNoMemoIndex)
 # ===========================================================================
 
+class TestDualRootRead:
+    """2026-09-03 outbox relocation: writes moved to
+    `.coordinator-local/memo-outbox/`, but hundreds of drafts still sit at
+    the retired `state/memo-outbox/` — enumeration must still find them."""
+
+    def test_legacy_root_draft_is_enumerated(self, tmp_path):
+        sender = _make_sender_git_repo(tmp_path)
+        common_dir = sender / ".git"
+        legacy_outbox = sender / "state" / "memo-outbox"
+        legacy_outbox.mkdir(parents=True)
+        (legacy_outbox / "legacy-topic.md").write_text(
+            '---\ntitle: "legacy"\nto: "example-retrieval-repo-em"\nstatus: draft\n---\n\nbody\n',
+            encoding="utf-8",
+        )
+
+        result = _run(_memo_list_outbox({"dry_run": True}, repo_root=common_dir))
+
+        assert result["exit_code"] == 0
+        filenames = [c["filename"] for c in result["candidates"]]
+        assert "legacy-topic.md" in filenames
+
+    def test_new_and_legacy_root_drafts_both_enumerated(self, tmp_path):
+        sender = _make_sender_git_repo(tmp_path)
+        common_dir = sender / ".git"
+        legacy_outbox = sender / "state" / "memo-outbox"
+        legacy_outbox.mkdir(parents=True)
+        (legacy_outbox / "legacy-topic.md").write_text(
+            '---\ntitle: "legacy"\nto: "example-retrieval-repo-em"\nstatus: draft\n---\n\nbody\n',
+            encoding="utf-8",
+        )
+
+        draft_result = _run(_memo_draft(
+            _base_draft_params(topic="new-root-topic"), repo_root=common_dir,
+        ))
+        assert draft_result["exit_code"] == 0
+        new_outbox = sender / ".coordinator-local" / "memo-outbox"
+        assert (new_outbox / "new-root-topic.md").is_file(), (
+            "memo.draft must write the NEW root, never the retired one"
+        )
+
+        result = _run(_memo_list_outbox({"dry_run": True}, repo_root=common_dir))
+
+        filenames = {c["filename"] for c in result["candidates"]}
+        assert filenames == {"legacy-topic.md", "new-root-topic.md"}
+
+
 class TestNoMemoIndex:
     def test_no_memo_index(self):
         import coordinator_core.ops.fleet.memo_list_outbox as memo_list_outbox_mod

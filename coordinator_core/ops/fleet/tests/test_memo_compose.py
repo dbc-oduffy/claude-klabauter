@@ -190,7 +190,7 @@ class TestNoExistingDraft:
             {"dry_run": False, "topic": "nope", "body": "hello"}, repo_root=common_dir,
         ))
         assert result["exit_code"] == 1
-        assert not (sender / "state" / "memo-outbox" / "nope.md").exists()
+        assert not (sender / ".coordinator-local" / "memo-outbox" / "nope.md").exists()
 
 
 # ===========================================================================
@@ -201,7 +201,7 @@ class TestDryRunPreview:
     def test_dry_run_previews_derived_summary_without_writing(self, tmp_path):
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         before = target.read_text(encoding="utf-8")
 
         body = "## Context\n\nThe fix lands cleanly.\n"
@@ -229,7 +229,7 @@ class TestActRewritesDraft:
         ))
         assert result["exit_code"] == 0
 
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         content = target.read_text(encoding="utf-8")
         split = split_frontmatter(content)
         assert split is not None
@@ -255,7 +255,7 @@ class TestActRewritesDraft:
         ))
         assert result["exit_code"] == 0
 
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         split = split_frontmatter(target.read_text(encoding="utf-8"))
         assert read_fm_field(split.fm_text, "summary") == '"Explicit summary wins."'
 
@@ -268,7 +268,7 @@ class TestActRewritesDraft:
         (the former `[:_SUMMARY_MAX_CHARS - 1] + "…"` clamp is gone)."""
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
 
         body = "Derived summary sentence lands here. More body follows.\n"
         long_summary = "S" * 163
@@ -299,7 +299,7 @@ class TestActRewritesDraft:
         summary, and name BOTH conditions in the message."""
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         before = target.read_text(encoding="utf-8")
 
         long_summary = "S" * (_SUMMARY_MAX_CHARS + 1)
@@ -320,7 +320,7 @@ class TestActRewritesDraft:
     def test_status_not_draft_is_setup_error(self, tmp_path):
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
 
         content = target.read_text(encoding="utf-8")
         content = content.replace("status: draft", "status: open")
@@ -336,7 +336,7 @@ class TestActRewritesDraft:
     def test_repeated_compose_calls_keep_status_draft(self, tmp_path):
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
 
         for i in range(3):
             result = _run(_memo_compose(
@@ -355,7 +355,7 @@ class TestActRewritesDraft:
         — compose must fail loud rather than write an empty summary field."""
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         before = target.read_text(encoding="utf-8")
 
         result = _run(_memo_compose(
@@ -382,7 +382,7 @@ class TestActRewritesDraft:
         ))
         assert result["exit_code"] == 0
 
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         content = target.read_text(encoding="utf-8")
         split = split_frontmatter(content)
         assert read_fm_field(split.fm_text, "summary") == '"A derivable prose sentence."'
@@ -394,7 +394,7 @@ class TestActRewritesDraft:
         to derivation, not around DEC-1."""
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         before = target.read_text(encoding="utf-8")
 
         result = _run(_memo_compose(
@@ -505,7 +505,7 @@ class TestCarriedDraftFields:
             repo_root=sender / ".git",
         ))
         assert result["exit_code"] == 0, result
-        draft = sender / "state" / "memo-outbox" / "some-topic.md"
+        draft = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         return parse_yaml(split_frontmatter(draft.read_text(encoding="utf-8")).fm_text)
 
     def test_scoped_to_survives_compose(self, tmp_path):
@@ -548,7 +548,7 @@ class TestCarriedDraftFields:
         from coordinator_core.frontmatter.schema_validate import parse_yaml
 
         sender = _draft_first(tmp_path, topic="sent-by-not-carried")
-        draft_path = sender / "state" / "memo-outbox" / "sent-by-not-carried.md"
+        draft_path = sender / ".coordinator-local" / "memo-outbox" / "sent-by-not-carried.md"
 
         # Simulate a draft that somehow carries a sent_by line (e.g. hand-
         # edited, or a future regression) — hand-inject it directly onto

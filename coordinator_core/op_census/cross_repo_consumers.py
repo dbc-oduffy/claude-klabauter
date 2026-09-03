@@ -44,6 +44,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
+from coordinator_core.memo_corpus import memo_corpus_root
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SHAPE_OP_NAME = "op_name"
@@ -100,7 +102,7 @@ def scan_cross_repo_consumers(
     hits: Dict[str, List[ConsumerHit]] = {name: [] for name in names}
     needles = {name: _needles_for(name) for name in names}
 
-    cross_repo_root = repo_root / "cross-repo"
+    cross_repo_root = Path(memo_corpus_root(str(repo_root)))
     boxes: List[Tuple[str, Path]] = [("inbox", cross_repo_root / "inbox")]
     if include_archive:
         boxes.append(("archive", cross_repo_root / "archive"))

@@ -119,7 +119,8 @@ from coordinator_core.git.git_state import (
 )
 from coordinator_core.ops.ceremony.git_native import (
     _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS,
-    status_porcelain,
+    REASON_WORKTREE_DIRTY,
+    dirty_relpaths_from_porcelain,
 )
 from coordinator_core.ops.fleet._common import (
     Move,
@@ -155,7 +156,12 @@ _FAMILY = "handoff"
 # `continue` makes "every rail still refuses" and "every rail silently
 # drops everything" indistinguishable from outside, which is how AC-2 was
 # ticked on a mechanism that reported nothing.
-_SCAN_REASON_WORKTREE_DIRTY = "worktree-dirty: uncommitted changes, retained pending commit"
+#: Re-exported under this module's own scan-rail naming convention — the
+#: single definition lives in `coordinator_core.ops.ceremony.git_native`
+#: (`REASON_WORKTREE_DIRTY`), shared with `archive_sizings.py`'s identical
+#: gate rather than duplicated (the two copies used to read byte-for-byte
+#: the same string from two module-local constants).
+_SCAN_REASON_WORKTREE_DIRTY = REASON_WORKTREE_DIRTY
 _SCAN_REASON_NOT_TERMINAL = "not-terminal"
 _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
 _SCAN_REASON_CONSUMED_BY_LIVE = "consumed-by-live-session: consumed_by names a live session"
@@ -714,30 +720,11 @@ def _dirty_handoff_relpaths(
     else:
         scoped_paths = list(fallback_pathspecs)
 
-    result = status_porcelain(worktree, scoped_paths)
-    if not result.ok:
-        _LOG.warning(
-            "archive_terminal_handoffs: git status --porcelain -- %s failed "
-            "(rc=%s) — degrading to fail-closed (all %d survivor(s) treated "
-            "as dirty)",
-            scoped_paths, result.returncode, len(ordered),
-        )
-        return set(ordered)
-    dirty: set = set()
-    for line in result.stdout.splitlines():
-        if len(line) < 4:
-            continue
-        # Porcelain v1: 2-char status code, one space, then the path (a rename
-        # record's " -> " new-path half is what matters for OUR purposes —
-        # either side being dirty is enough to exclude).
-        rel = line[3:].strip()
-        if " -> " in rel:
-            old, _, new = rel.partition(" -> ")
-            dirty.add(old.strip().strip('"'))
-            dirty.add(new.strip().strip('"'))
-        else:
-            dirty.add(rel.strip('"'))
-    return dirty
+    return dirty_relpaths_from_porcelain(
+        worktree, scoped_paths,
+        fail_closed_defaults=ordered,
+        caller="archive_terminal_handoffs",
+    )
 
 
 # ---------------------------------------------------------------------------

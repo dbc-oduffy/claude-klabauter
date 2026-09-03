@@ -1295,6 +1295,16 @@
               }
             ]
           },
+          "roadmap_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "handoff_id": {
             "type": "string"
           },
@@ -10170,5 +10180,5 @@
     "malformed_records"
   ],
   "additionalProperties": false,
-  "version": "4.1.0"
+  "version": "4.3.0"
 }

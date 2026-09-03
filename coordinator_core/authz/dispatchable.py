@@ -104,6 +104,15 @@ ASSEMBLER_DISPATCHABLE: "types.MappingProxyType[str, frozenset[str]]" = types.Ma
         "coordinator-fold-execution-record",
         "regenerate-orientation-cache",
         "check-machine-local-regeneratability",
+        # The close's mandatory terminal-baton drain (PM ruling 2026-09-03,
+        # cross-repo/inbox/2026-09-03-doe-claude-em-close-verbs-must-emit-a-
+        # terminal-handoff-drain-directive.md).
+        "sweep-terminal-handoffs",
+        # The sizings sibling of the terminal-handoff drain above (C3,
+        # docs/plans/2026-09-03-close-verb-archival-stops-asking-for-wri.md):
+        # nothing else fired `fleet.archive_terminal_sizings` — this CLI is
+        # the only caller.
+        "sweep-terminal-sizings",
         "review-brightline-gate",
         "freeze-review-diff",
         "fan-out-integrator",

@@ -258,6 +258,58 @@ def test_file_exists_ambiguous_archive_match_is_not_guessed_at(registered_repo: 
     assert observation["observed"] is False
 
 
+def test_reasoned_fallback_refuses_a_non_bare_basename(registered_repo: Path) -> None:
+    """`_resolve_archive_handoffs_fallback_reasoned` is the single, hardened
+    definition every caller (this module's own two path-keyed legs, and
+    quick_wrap_assemble's `_c3_ancestry`) now reads from. A basename
+    carrying a traversal segment is refused before any filesystem access,
+    never resolved -- promoted verbatim from quick_wrap_assemble's own
+    predecessor guard (2026-09-03 consolidation)."""
+    path, reason = sibling_fact._resolve_archive_handoffs_fallback_reasoned(
+        registered_repo, "../escape.md"
+    )
+    assert path is None
+    assert "not a bare filename" in reason
+
+
+def test_reasoned_fallback_refuses_an_empty_basename(registered_repo: Path) -> None:
+    path, reason = sibling_fact._resolve_archive_handoffs_fallback_reasoned(registered_repo, "")
+    assert path is None
+    assert "not a bare filename" in reason
+
+
+def test_reasoned_fallback_reports_absent_subtree(registered_repo: Path) -> None:
+    path, reason = sibling_fact._resolve_archive_handoffs_fallback_reasoned(
+        registered_repo, "shipped.md"
+    )
+    assert path is None
+    assert reason == "archive/handoffs subtree absent"
+
+
+def test_file_exists_archive_match_that_is_a_directory_never_resolves(registered_repo: Path) -> None:
+    """Hardening promoted from quick_wrap_assemble's own probe (2026-09-03):
+    an `rglob` match that is itself a DIRECTORY (not a file) named the same
+    as the target basename must never resolve as the archived record — the
+    `is_file()` filter this module's `_resolve_archive_handoffs_fallback_
+    reasoned` now applies on every match. Strictly narrower than the
+    predecessor (which had no such filter): a directory match now reads as
+    "no match" rather than a false positive, never the reverse."""
+    archived_dir = registered_repo / "archive" / "handoffs" / "2026-08"
+    archived_dir.mkdir(parents=True)
+    # A DIRECTORY named exactly like the target basename — not the file.
+    (archived_dir / "shipped.md").mkdir()
+
+    leg = {
+        "leg_id": "L1",
+        "kind": "file_exists",
+        "repo": "fixture-repo",
+        "path": "state/handoffs/shipped.md",
+    }
+    observation = resolve_leg(leg)
+    assert observation["read_ok"] is True
+    assert observation["observed"] is False
+
+
 def test_frontmatter_field_resolves_via_archive_when_moved(registered_repo: Path) -> None:
     archived_dir = registered_repo / "archive" / "handoffs" / "2026-08"
     archived_dir.mkdir(parents=True)

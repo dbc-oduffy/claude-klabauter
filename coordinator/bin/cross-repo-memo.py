@@ -1461,34 +1461,22 @@ def _normalize_repo_name(name: str) -> str:
 def _receiver_inbox_root(repo_path: str) -> "tuple[str, bool]":
     """Resolve the cross-repo inbox root for ONE specific receiver repo.
 
-    Fleet-wide convention move (PM ruling 2026-09-02, C10a notice): the
-    canonical inbox root is moving from `<repo>/cross-repo/` to
-    `<repo>/state/cross-repo/`, repo-by-repo, during a migration window — not
-    all at once. A fixed `<repo>/cross-repo/` literal is wrong for every
-    sender the moment ANY receiver has moved, so this probes the SPECIFIC
-    receiver repo passed in rather than assuming a fleet-wide constant:
-    prefers the new `state/cross-repo/` root when it exists on disk, falls
-    back to the legacy `cross-repo/` root otherwise (receiver not yet
-    migrated, or a pre-move sibling on an older machine).
-
-    Returns `(root, root_isdir)` — `root_isdir` is the `os.path.isdir(root)`
-    result this probe already computed (Review: overengineering-reviewer —
-    the caller was re-running the identical `isdir` check the new-root
-    branch here had just performed, which was tautologically True on that
-    branch). The legacy-root branch does NOT verify existence (unchanged
-    behavior — a legacy root's existence is the caller's business).
+    Thin forwarder onto the engine's own `coordinator_core.memo_corpus.
+    receiver_inbox_root` (C7, once C1/C5 land that module) — this CLI no
+    longer carries a second implementation of the C10a migration-window
+    probe. See that function's docstring for the resolution rule and the
+    CACHE ASYMMETRY constraint (never process-lifetime-memoized).
 
     Spec backlink: docs/plans/2026-09-02-state-keeps-the-work-not-the-machinery.md § C8
+    Spec backlink: docs/plans/2026-09-03-the-engine-follows-the-memo-channel-home.md § C7
     """
-    # Review: coordinator:code-reviewer (F2) — this state/ is the current,
-    # CORRECT root for the C10a memo-channel convention move (see docstring
-    # above), unrelated to the separate state/ -> .coordinator-local/
-    # machinery relocation elsewhere in the repo. Do not "fix" this literal.
-    new_root = os.path.join(repo_path, "state", "cross-repo")
-    if os.path.isdir(new_root):
-        return new_root, True
-    legacy_root = os.path.join(repo_path, "cross-repo")
-    return legacy_root, os.path.isdir(legacy_root)
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
+    cc_invoke.ensure_engine_on_path(__file__)
+    from coordinator_core.memo_corpus import receiver_inbox_root
+
+    return receiver_inbox_root(repo_path)
 
 
 def _looks_like_coordinator_receiver(path: str) -> bool:

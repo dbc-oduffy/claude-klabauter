@@ -95,8 +95,8 @@ from coordinator_core.ops.fleet._common import (
     main_worktree_root,
 )
 from coordinator_core.ops.fleet.memo_draft import (
-    _OUTBOX_DIRNAME,
     compose_draft_frontmatter,
+    resolve_outbox_draft_path,
 )
 from coordinator_core.ops.fleet._memo_compose import _TOPIC_SLUG_RE, _yaml_quote
 from coordinator_core.ops.fleet._memo_summary import (
@@ -117,10 +117,13 @@ from coordinator_core.frontmatter.schema_validate import parse_yaml
 # field is a one-line change with one obvious place to make it.
 _CARRIED_DRAFT_FIELDS = ("in_reply_to", "scoped_to", "space", "supersedes")
 
-# Generator-provenance: rewrites the CALLING repo's own
-# state/memo-outbox/<topic>.md draft in place -- one file per topic, a
-# data-dependent set of tracked paths.
-MUTATES = ["state/memo-outbox/*.md"]
+# Generator-provenance: rewrites the CALLING repo's own outbox draft in
+# place -- one file per topic, a data-dependent set of tracked paths.
+# Resolved against the new `.coordinator-local/memo-outbox/` root first,
+# the retired `state/memo-outbox/` root second (`resolve_outbox_draft_path`)
+# -- an existing draft is rewritten wherever it actually lives, never
+# relocated by this op.
+MUTATES = [".coordinator-local/memo-outbox/*.md", "state/memo-outbox/*.md"]
 
 
 def _read_carried_fields(fm_text: str) -> dict:
@@ -301,8 +304,8 @@ def _memo_compose(params: dict, repo_root=None) -> dict:
             "worktree (common_dir-keyed op).",
         )
     caller_worktree = main_worktree_root(Path(repo_root))
-    outbox_dir = caller_worktree.joinpath(*_OUTBOX_DIRNAME)
-    target_path = outbox_dir / f"{topic}.md"
+    target_path = resolve_outbox_draft_path(caller_worktree, topic)
+    outbox_dir = target_path.parent
 
     if not target_path.is_file():
         return build_setup_error_result(

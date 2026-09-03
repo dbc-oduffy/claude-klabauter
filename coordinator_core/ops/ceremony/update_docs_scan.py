@@ -55,6 +55,7 @@ from coordinator_core.distill.curation_status import compute_curation_status
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS, register_op
 from coordinator_core.lifecycle_constants import SPEC_SKIP_STATUSES
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -319,7 +320,7 @@ def _classify_plans_cohort(
 def _classify_crossrepo_archive_cohort(
     worktree_root: Path, *, now: _dt.datetime
 ) -> list[dict[str, Any]]:
-    archive_dir = worktree_root / "cross-repo" / "archive"
+    archive_dir = Path(memo_corpus_root(str(worktree_root))) / "archive"
     if not archive_dir.is_dir():
         return []
 

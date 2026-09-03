@@ -155,6 +155,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.memo_corpus import receiver_inbox_root
 from coordinator_core.ops.fleet._common import (
     build_dry_run_result,
     build_setup_error_result,
@@ -548,7 +549,14 @@ def _enumerate_candidates() -> list:
             # `publish_mirror` entry below.
             continue
         repo_path = Path(repo_path_str)
-        inbox_dir = repo_path / "cross-repo" / "inbox"
+        # This is where a memo.send to `repo_key` WOULD land -- share the
+        # SAME per-receiver probe `_memo_resolver`'s resolve_receiver_inbox
+        # uses (via `receiver_inbox_root`), not an independently re-spelled
+        # `cross-repo/inbox` literal. Two independent resolutions here would
+        # let `--list-receivers` advertise a target_inbox a send would not
+        # actually use, with nothing going red (C5 constraint).
+        corpus_root_str, _ = receiver_inbox_root(str(repo_path))
+        inbox_dir = Path(corpus_root_str) / "inbox"
         matched_central_ids = _central_ids_for_repo_key(
             central_ids, manifest_aliases, repo_key
         )

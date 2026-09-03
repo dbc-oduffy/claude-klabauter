@@ -31,9 +31,30 @@ class _RoadmapRollUp(BaseModel):
     """
     Derived-at-emit single-initiative scalar roll-up computed by claude-klabauter's
     roadmap_dag.py over all stubs belonging to this roadmap. `total` is the
-    stub count; `by_status` maps each DeliverableStatus value to its count;
-    `pct_shipped` is shipped/total (0-100, two decimal places) or null when
-    total is zero. Anonymous nested shape (inlined, no $ref).
+    stub count; `pct_shipped` is shipped/total (0-100, two decimal places) or
+    null when total is zero. Anonymous nested shape (inlined, no $ref).
+
+    **`by_status` is keyed on `DeploymentState`, NOT `DeliverableStatus`.**
+    `_compute_roll_up` counts each DAG node's `deployment_state`, so the keys
+    a consumer must handle are the six `DeploymentState` members —
+    `awaiting_gate`, `ready_to_fire`, `in_flight`, `shipped`, `continued`,
+    `closed` — plus the literal `unknown`, which `_compute_roll_up` emits as
+    its fallback for a node carrying no status and which is deliberately NOT
+    a `DeploymentState` member. `shipped` is the only string the two
+    vocabularies share, so a consumer that maps `by_status` through
+    `DeliverableStatus` silently drops every other count while still
+    producing a plausible-looking total; that is not hypothetical — it is the
+    defect this docstring's earlier `DeliverableStatus` claim caused
+    downstream (example-cockpit-repo memo, 2026-09-03).
+
+    The key type stays `dict[str, float]` rather than narrowing to the
+    literal set: the emitted `schema/*.json` is byte-frozen against
+    DoE-claude (CLAUDE.md § Architecture), so adding `propertyNames` here is
+    a bilateral version-bump negotiation, and a closed key set would also
+    have to carry `unknown` and re-open on every future `DeploymentState`
+    widening. This paragraph is the contract; class-level docstrings are
+    stripped by `emit_schema._strip_pydantic_noise`, so it costs no emitted
+    bytes.
     """
 
     model_config = ConfigDict(extra="forbid")

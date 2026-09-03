@@ -1,7 +1,7 @@
 """
 coordinator_core.updatedocs.memo_prune — the cross-repo archive memo prune predicate.
 
-Purpose: pure compute over `cross-repo/archive/*.md`, implementing the audit's B6
+Purpose: pure compute over `<memo_corpus_root>/archive/*.md`, implementing the audit's B6
 row from `artifact-pruning.md` § Step 1: a memo is prunable when its frontmatter
 `status:` reads `actioned` AND its mtime is older than `age_days`. Returns
 `MemoPruneResult` with `prunable`/`retained`/`indeterminate` as sorted path
@@ -37,6 +37,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_field_unquoted,
     split_frontmatter,
 )
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing, read_head
 
 DEFAULT_AGE_DAYS = 90
@@ -70,7 +71,7 @@ def compute_memo_prune_candidates(
     under `repo_root`.
     """
     repo_root = Path(repo_root)
-    archive_dir = repo_root / "cross-repo" / "archive"
+    archive_dir = Path(memo_corpus_root(str(repo_root))) / "archive"
     if not archive_dir.is_dir():
         raise UpdatedocsTargetMissing(archive_dir)
 

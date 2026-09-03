@@ -175,7 +175,20 @@ def _validate_space_param(op_mode: str, value: Any, dry_run: bool):
 #: An absolute path containing one of these is truncated to it; anything else
 #: absolute falls back to its basename. Ordered longest-first so the most
 #: specific anchor wins.
-_SUPERSEDES_ANCHORS = ("cross-repo/inbox/", "cross-repo/archive/", "state/memo-outbox/")
+#:
+#: Both outbox roots are anchors, not a swap: `.coordinator-local/memo-outbox/`
+#: is where memo.draft/send now write, but `supersedes` values are authored
+#: on a PEER machine and read back much later, so a reference minted before
+#: the 2026-09-03 relocation legitimately still says `state/memo-outbox/` --
+#: dropping that anchor would silently stop truncating those, falling
+#: through to the "absolute, no anchor" basename-only case instead. Both
+#: stay live for as long as any live `supersedes` value can cite either.
+_SUPERSEDES_ANCHORS = (
+    "cross-repo/inbox/",
+    "cross-repo/archive/",
+    ".coordinator-local/memo-outbox/",
+    "state/memo-outbox/",
+)
 
 #: A value that begins like a filesystem-absolute path on EITHER platform --
 #: POSIX `/x` or Windows `X:\x` / `X:/x`. Deliberately platform-agnostic: the

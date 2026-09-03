@@ -134,8 +134,8 @@ class TestMemoSendDeclaresTouches:
         assert "_scope_touch_paths" in result
         touched = {Path(p) for p in result["_scope_touch_paths"]}
 
-        sent_path = sender_repo / "state" / "memo-outbox" / "sent" / "declare-topic.md"
-        ledger_path = sender_repo / "state" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        sent_path = sender_repo / ".coordinator-local" / "memo-outbox" / "sent" / "declare-topic.md"
+        ledger_path = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
         assert sent_path in touched
         assert ledger_path in touched
         # Never the receiver-side inbox path — a different repo's own write,
@@ -189,7 +189,7 @@ class TestMemoReconcileOutboxDeclaresTouches:
         touched = {Path(p) for p in result["_scope_touch_paths"]}
 
         source = worktree.joinpath(*_OUTBOX, "delivered.md")
-        target = worktree.joinpath(*_OUTBOX, "sent", "delivered.md")
+        target = worktree / ".coordinator-local" / "memo-outbox" / "sent" / "delivered.md"
         assert source in touched, "the vacated source is a deletion this session owns too"
         assert target in touched
         # A draft that never moved contributes no touch entries.

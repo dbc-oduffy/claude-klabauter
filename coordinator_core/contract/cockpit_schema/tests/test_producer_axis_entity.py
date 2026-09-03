@@ -65,6 +65,7 @@ VALID = {
     "origin_handoff": None,
     "origin_plan_id": None,
     "origin_goal_id": None,
+    "roadmap_id": None,
     "handoff_id": "hnd-fixture-000000",
     "handoff_id_derivation": "derived",
     "pm_priority": None,

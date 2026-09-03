@@ -351,7 +351,7 @@ GENERATES = [
 # this bump, same as every bump above: it pulls from DoE's tagged release.
 # Spec backlinks: DoE-claude docs/decisions/DR-192-cockpit-competitor-summary-category-gains-first-party.md,
 #   state/cross-repo/inbox/2026-09-03-doe-claude-em-cockpit-category-first-party-widen.md
-CONTRACT_VERSION = "4.1.0"
+CONTRACT_VERSION = "4.3.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

@@ -60,6 +60,29 @@ Archive destination: archive/sizings/YYYY-MM/ (YYYY-MM from the sizing
 record's OWN FILENAME prefix, e.g. 2026-08-13-foo.yaml → 2026-08 — never
 from today's date; mirrors archive_plans._derive_yyyy_mm).
 
+Worktree-dirty retention gate (AC5): at T3 act, `_dirty_sizing_relpaths`
+retains (never moves) any surviving candidate carrying uncommitted worktree
+or index changes — one batched `git status --porcelain` call scoped to the
+CLASSIFICATION-time survivor set (source-still-present, status-still-
+terminal — see `_handle_act`'s own pass-1/pass-2 split), mirroring
+archive_terminal_handoffs.py's own scan-time Rail 1
+(`_dirty_handoff_relpaths`), added here 2026-09-03 (this module previously
+had no dirty check at all). It runs BEFORE the AC6 forward-pointer refusal,
+the cannot-derive-date guard, dest-collision handling, and any `Move`
+construction — not merely before the eventual commit — which is what makes
+its "earlier, larger window" claim (below) actually true of where it sits,
+rather than true only in wall-clock terms of a check still positioned right
+beside the act. Deliberately NOT the drift check `_common.archive_and_commit`
+used to carry internally and retired 2026-08-26 by PM ruling — that removal
+covers a different, later, narrower window (between a stat-based check
+immediately before the commit and the commit a moment after) which the PM
+ruling accepts as safe for an already-terminal, already-claim-checked record
+a sweep that refuses live-claimed records selected; this gate, sitting at
+classification time, covers the materially larger window between whichever
+peer session last touched the file and this sweep noticing it during
+classification. T1 preview does not apply this gate — it stays status-only,
+per this module's own preview/act split.
+
 Spec backlinks:
   - Plan (C1): docs/plans/2026-08-13-terminal-sizings-boot-sweep-family.md
   - DR-293:    the ruling naming this family's shape and never-infer boundary
@@ -85,6 +108,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import logging
 import re
 import os
 from pathlib import Path
@@ -93,6 +117,10 @@ from typing import Dict, List, Optional, Set, Tuple
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle_constants import PLAN_TERMINAL_STATUS, SIZING_TERMINAL_STATUS
+from coordinator_core.ops.ceremony.git_native import (
+    REASON_WORKTREE_DIRTY,
+    dirty_relpaths_from_porcelain,
+)
 from coordinator_core.ops.fleet._common import (
     Move,
     _REASON_DEST_CONFLICT,
@@ -109,6 +137,9 @@ from coordinator_core.ops.fleet._common import (
     validate_params,
 )
 
+_LOG = logging.getLogger(__name__)
+_LOG.addHandler(logging.NullHandler())
+
 _TERMINAL_STATUSES: frozenset = SIZING_TERMINAL_STATUS
 
 # Regex to extract YYYY-MM from a filename prefix (e.g. 2026-08-13-foo.yaml → "2026-08").
@@ -117,6 +148,15 @@ _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
 # Distinct, named refusal reason for AC6's forward-pointer gate — never
 # conflated with any dest-collision or terminality-drift reason string.
 _REASON_FORWARD_PLAN_NOT_TERMINAL = "forward-plan-not-terminal"
+
+# Named reason for the worktree-dirty retention gate (AC5). Re-exported
+# under this module's own naming convention — the single definition lives
+# in `coordinator_core.ops.ceremony.git_native` (`REASON_WORKTREE_DIRTY`),
+# shared with `archive_terminal_handoffs.py`'s identical gate (its own
+# `_SCAN_REASON_WORKTREE_DIRTY` is the same alias) rather than duplicated —
+# the two used to read byte-for-byte the same string from two independent
+# module-local constants.
+_REASON_WORKTREE_DIRTY = REASON_WORKTREE_DIRTY
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +260,50 @@ def _forward_plan_refusal_reason(
             f"{plan_status!r}, not terminal"
         )
     return None
+
+
+def _dirty_sizing_relpaths(worktree_root: Path, candidate_relpaths: List[str]) -> Set[str]:
+    """Return the subset of `candidate_relpaths` carrying uncommitted changes.
+
+    ONE scoped `git status --porcelain -- <candidate_relpaths>` call (AC5) —
+    applied at CLASSIFICATION time, over the batch already narrowed to the
+    survivors of the act-time terminality re-verify (source-still-present,
+    status-still-terminal) and nothing else: this runs BEFORE the AC6
+    forward-pointer refusal, the cannot-derive-date guard, dest-collision
+    handling, or any `Move` is built — mirroring exactly where
+    archive_terminal_handoffs.py's own Rail 1 (`_dirty_handoff_relpaths`)
+    sits relative to that module's classification pass, immediately after
+    Branch A/B qualification and before any candidate-specific refinement.
+    This is NOT archive_and_commit's own internal drift check, which was
+    retired outright by PM ruling 2026-08-26 (see
+    coordinator_core.ops.fleet._common.archive_and_commit's docstring, the
+    "PM RULING, 2026-08-26" block): that removal covers the window between
+    THIS call's own kin (a stat-based check immediately before the commit)
+    and the commit a moment later, which the PM ruling accepts as safe for
+    a record already terminal, already claim-checked, and selected by a
+    sweep that refuses live-claimed records — "a peer editing a closed
+    record inside a one-call window is not a shape this fleet produces."
+    Sitting at classification time instead, this gate covers a materially
+    different, much larger window: the time between whichever peer session
+    last touched the file and this sweep NOTICING it during its own
+    classification pass, seconds to minutes earlier than the commit the
+    retired check sat beside — exactly the case a concurrent ~20-session
+    tree needs retained rather than moved out from under an in-progress
+    edit, and exactly the window the retired ruling never spoke to.
+
+    FAIL-CLOSED on any git failure: a non-zero exit or launch failure treats
+    every candidate as dirty (retained), never as clean — an empty dirty set
+    from a failed call would silently let every candidate sail through
+    unexcluded, which is the opposite of what this gate exists to do.
+
+    Scoped only to `candidate_relpaths` (never the whole `state/sizings`
+    tree) — this is called from _handle_act, over the act-time-terminal
+    survivor set, which is already bounded by the incoming candidate_ids
+    list, so there is no whole-corpus scan or chunking machinery to port
+    from the handoffs sibling (see this module's own Anti-scope: reuse the
+    primitives, do not fork the 1500-line module).
+    """
+    return dirty_relpaths_from_porcelain(worktree_root, candidate_relpaths, caller="archive_sizings")
 
 
 # ---------------------------------------------------------------------------
@@ -331,13 +415,18 @@ async def _handle_act(
        AC12-pinned — see _common._REASON_DEST_CONFLICT's docstring).
     2. Act-time terminality re-verify: drifted non-terminal → skipped
        reason:"terminality-drift:...".
-    3. AC6 forward-pointer refusal: live plan FK → skipped with the
+    3. Worktree-dirty retention (AC5, `_dirty_sizing_relpaths`): applied at
+       CLASSIFICATION time, immediately after step 2 and before any of steps
+       4-6 below — see `_dirty_sizing_relpaths`' own docstring for why this
+       position (not "just before the commit") is what makes its claimed
+       window real.
+    4. AC6 forward-pointer refusal: live plan FK → skipped with the
        distinct _REASON_FORWARD_PLAN_NOT_TERMINAL reason.
-    4. No YYYY-MM prefix → skipped reason:"cannot-derive-date".
-    5. Dest-collision: differing dst → skipped reason:_REASON_DEST_CONFLICT
+    5. No YYYY-MM prefix → skipped reason:"cannot-derive-date".
+    6. Dest-collision: differing dst → skipped reason:_REASON_DEST_CONFLICT
        (never "already-archived", never clobbered); byte-identical dst →
        force-move (converge).
-    6. Otherwise: build Move and add to batch.
+    7. Otherwise: build Move and add to batch.
 
     After all checks, calls archive_and_commit once for the full batch (ONE
     commit).
@@ -346,10 +435,13 @@ async def _handle_act(
     skipped: List[dict] = []
     failed: List[dict] = []
 
-    candidate_moves: Dict[str, Move] = {}
-
     sizings_dir_safe = sizings_dir.resolve()
 
+    # Pass 1 — classification: path-traversal refusal, source-gone idempotent
+    # skip, and act-time terminality re-verify only. Nothing past this point
+    # is resource-specific (AC6, dest-collision, Move construction) — those
+    # are refinement, not classification, and stay in pass 2.
+    classified: List[Tuple[str, Path]] = []
     for cid in candidate_ids:
         sizing_path = worktree_root / cid
 
@@ -375,6 +467,27 @@ async def _handle_act(
                 "id": cid,
                 "reason": f"terminality-drift: status is now {status!r}",
             })
+            continue
+
+        classified.append((cid, sizing_path))
+
+    # Worktree-dirty retention gate (AC5) — CLASSIFICATION TIME: scoped to
+    # the classification survivors above, applied once as a single batched
+    # status call before any resource-specific refinement (AC6, dest-
+    # collision, Move construction) runs. A peer's uncommitted edit on a
+    # candidate is retained here rather than moved out from under them.
+    dirty: Set[str] = set()
+    if classified:
+        dirty = _dirty_sizing_relpaths(worktree_root, [cid for cid, _p in classified])
+
+    candidate_moves: Dict[str, Move] = {}
+
+    # Pass 2 — refinement: AC6 forward-pointer, cannot-derive-date,
+    # dest-collision, Move construction, over the classification+dirty
+    # survivors only.
+    for cid, sizing_path in classified:
+        if cid in dirty:
+            skipped.append({"id": cid, "reason": REASON_WORKTREE_DIRTY})
             continue
 
         # AC6 forward-pointer refusal gate at T3 (applied at both T1 and T3).

@@ -145,6 +145,15 @@ class TestDenyAndAllow:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
+    def test_state_nested_cross_repo_write_denied(self, _fake_home):
+        """C6: the current `state/cross-repo` root -- where memos actually
+        live -- was matched by neither guard pre-fix; this is the DENY
+        instrument the brief requires, not just an allow-path check."""
+        target = str(_fake_home / ".claude" / "state" / "cross-repo" / "inbox" / "x.md")
+        result = guard.check(_payload(target))
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
     def test_case_varied_target_denied(self, _fake_home):
         # macOS/APFS is case-insensitive-but-case-preserving: a Write to
         # Cross-Repo/Inbox lands inside the same real guarded cross-repo/

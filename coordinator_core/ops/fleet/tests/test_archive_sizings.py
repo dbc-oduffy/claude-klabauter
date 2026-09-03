@@ -15,6 +15,9 @@ Coverage map:
   - AC4 collision matrix: source-gone -> already-archived; byte-identical
     dst -> converges (force-move); differing dst -> _REASON_DEST_CONFLICT,
     dst untouched
+  - AC5 worktree-dirty retention gate: a dirty survivor is retained (never
+    moved), a clean survivor still moves, T1 preview is unaffected (stays
+    status-only)
   - AC6 forward-pointer refusal gate: non-terminal plan FK refuses in
     place; null/absent FK proceeds; terminal plan FK proceeds. Family
     never writes to the plan file.
@@ -24,6 +27,7 @@ Coverage map:
 
 Spec backlinks:
   - Plan (C3): docs/plans/2026-08-13-terminal-sizings-boot-sweep-family.md
+  - Plan (AC5): docs/plans/2026-09-03-close-verb-archival-stops-asking-for-wri.md
   - archive_git_free_seam.py: the non-spawning fixture this module drives
   - test_archive_git_free_seam_smoke.py: the worked example this module follows
 
@@ -32,12 +36,23 @@ Negative-spec:
   - Does NOT assert anything about archive_and_commit's own git mechanics —
     that stays behind the patched mover seam per archive_git_free_seam's
     documented discriminator.
+  - Does NOT spawn a real `git status` either — `_dirty_sizing_relpaths`
+    delegates to `coordinator_core.ops.ceremony.git_native.
+    dirty_relpaths_from_porcelain`, whose own `status_porcelain` call is
+    patched (on the `git_native` module itself, not on `archive_sizings`)
+    by `_act` below the same way `archive_git_free_seam.
+    patched_disposition_seam` patches the mover, since `archive_git_free_
+    seam.py` is a fixed shared fixture out of this chunk's scope and does
+    not itself know about this module's newest git call site.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
+from coordinator_core.ops.ceremony import git_native
+from coordinator_core.ops.ceremony.git_native import GitResult
 from coordinator_core.ops.fleet import archive_sizings
 from coordinator_core.ops.fleet._common import _REASON_DEST_CONFLICT
 from coordinator_core.ops.fleet.tests.archive_git_free_seam import (
@@ -48,6 +63,11 @@ from coordinator_core.ops.fleet.tests.archive_git_free_seam import (
 
 _TERMINAL_BODY = "---\nstatus: shipped\ntitle: {title}\n---\n"
 _NON_TERMINAL_BODY = "---\nstatus: draft\ntitle: {title}\n---\n"
+
+#: Default fake `status_porcelain` reply for `_act` below: a clean tree
+#: (no output, rc=0) — never a real `git status` subprocess. See this
+#: module's own Negative-spec.
+_CLEAN_STATUS = GitResult(returncode=0, stdout="", stderr="")
 
 
 def _write_sizing(worktree: Path, name: str, body: str) -> Path:
@@ -65,8 +85,13 @@ def _write_plan(worktree: Path, rel: str, status: str) -> Path:
     return plan_path
 
 
-def _act(worktree: Path, candidate_ids, *, mover=None):
-    with patched_disposition_seam(archive_sizings, worktree=worktree, mover=mover) as m:
+def _act(worktree: Path, candidate_ids, *, mover=None, status_result: GitResult = _CLEAN_STATUS):
+    """`status_result` defaults to a clean tree so AC5's dirty gate never
+    fires for the pre-existing (AC2-AC7) test population above — pass a
+    dirty `GitResult` to exercise AC5's own retention path.
+    """
+    with patched_disposition_seam(archive_sizings, worktree=worktree, mover=mover) as m, \
+            patch.object(git_native, "status_porcelain", lambda cwd, paths=None: status_result):
         result = run(archive_sizings._archive_terminal_sizings(
             {"mode": "already-terminal", "dry_run": False, "candidate_ids": candidate_ids},
             repo_root=str(worktree),
@@ -308,3 +333,119 @@ def test_ac6_dry_run_preview_excludes_forward_pointer_refused_candidate(tmp_path
     preview_result, _ = _preview(worktree)
     ids = {c["id"] for c in preview_result["candidates"]}
     assert ids == {"state/sizings/2026-01-15-plain.yaml"}
+
+
+# ---------------------------------------------------------------------------
+# AC5 worktree-dirty retention gate
+# ---------------------------------------------------------------------------
+
+
+def test_ac5_dirty_candidate_retained_not_moved(tmp_path: Path) -> None:
+    worktree = tmp_path / "repo"
+    cid = "state/sizings/2026-01-15-dirty.yaml"
+    src = _write_sizing(worktree, "2026-01-15-dirty.yaml", _TERMINAL_BODY.format(title="dirty"))
+    original_bytes = src.read_bytes()
+
+    dirty_status = GitResult(
+        returncode=0, stdout=f" M {cid}\n", stderr="",
+    )
+    result, mover = _act(worktree, [cid], status_result=dirty_status)
+
+    assert result["acted"] == []
+    assert result["skipped"] == [{"id": cid, "reason": archive_sizings._REASON_WORKTREE_DIRTY}]
+    assert mover.captured is None
+    # Retained, not flipped.
+    assert src.exists()
+    assert src.read_bytes() == original_bytes
+
+
+def test_ac5_clean_candidate_still_moves(tmp_path: Path) -> None:
+    worktree = tmp_path / "repo"
+    cid = "state/sizings/2026-01-15-clean.yaml"
+    _write_sizing(worktree, "2026-01-15-clean.yaml", _TERMINAL_BODY.format(title="clean"))
+
+    result, mover = _act(worktree, [cid])
+
+    assert result["acted"] == [{"id": cid, "archived": True}]
+    assert result["skipped"] == []
+    assert mover.captured is not None
+
+
+def test_ac5_dirty_status_call_failure_fails_closed_retains_candidate(tmp_path: Path) -> None:
+    worktree = tmp_path / "repo"
+    cid = "state/sizings/2026-01-15-status-failed.yaml"
+    src = _write_sizing(
+        worktree, "2026-01-15-status-failed.yaml", _TERMINAL_BODY.format(title="x"),
+    )
+    original_bytes = src.read_bytes()
+
+    failed_status = GitResult(returncode=128, stdout="", stderr="fatal: not a git repository")
+    result, mover = _act(worktree, [cid], status_result=failed_status)
+
+    assert result["acted"] == []
+    assert result["skipped"] == [{"id": cid, "reason": archive_sizings._REASON_WORKTREE_DIRTY}]
+    assert mover.captured is None
+    assert src.read_bytes() == original_bytes
+
+
+def test_ac5_rename_record_dirties_both_sides(tmp_path: Path) -> None:
+    """A porcelain `R  old -> new` record must exclude the candidate
+    whichever side of the rename it names — the branch this gate's shared
+    tail (`git_native.dirty_relpaths_from_porcelain`) inherited verbatim
+    from `archive_terminal_handoffs.py`'s own rename handling, previously
+    exercised nowhere in this module's own suite."""
+    worktree = tmp_path / "repo"
+    cid = "state/sizings/2026-01-15-renamed.yaml"
+    src = _write_sizing(worktree, "2026-01-15-renamed.yaml", _TERMINAL_BODY.format(title="renamed"))
+    original_bytes = src.read_bytes()
+
+    rename_status = GitResult(
+        returncode=0,
+        stdout=f"R  state/sizings/2026-01-15-old-name.yaml -> {cid}\n",
+        stderr="",
+    )
+    result, mover = _act(worktree, [cid], status_result=rename_status)
+
+    assert result["acted"] == []
+    assert result["skipped"] == [{"id": cid, "reason": archive_sizings._REASON_WORKTREE_DIRTY}]
+    assert mover.captured is None
+    assert src.exists()
+    assert src.read_bytes() == original_bytes
+
+
+def test_ac5_mixed_batch_only_dirty_candidate_retained(tmp_path: Path) -> None:
+    """Two candidates in one act call, one dirty and one clean — only the
+    dirty one is retained; the clean one still moves. Every existing AC5
+    test passes exactly one candidate_id, so a divergence that swapped
+    which side of the dirty set got excluded would have gone uncaught."""
+    worktree = tmp_path / "repo"
+    dirty_cid = "state/sizings/2026-01-15-mix-dirty.yaml"
+    clean_cid = "state/sizings/2026-01-15-mix-clean.yaml"
+    dirty_src = _write_sizing(worktree, "2026-01-15-mix-dirty.yaml", _TERMINAL_BODY.format(title="dirty"))
+    original_bytes = dirty_src.read_bytes()
+    _write_sizing(worktree, "2026-01-15-mix-clean.yaml", _TERMINAL_BODY.format(title="clean"))
+
+    mixed_status = GitResult(returncode=0, stdout=f" M {dirty_cid}\n", stderr="")
+    result, mover = _act(worktree, [dirty_cid, clean_cid], status_result=mixed_status)
+
+    assert result["acted"] == [{"id": clean_cid, "archived": True}]
+    assert result["skipped"] == [{"id": dirty_cid, "reason": archive_sizings._REASON_WORKTREE_DIRTY}]
+    assert dirty_src.exists()
+    assert dirty_src.read_bytes() == original_bytes
+
+
+def test_ac5_preview_unaffected_by_dirty_gate_stays_status_only(tmp_path: Path) -> None:
+    """T1 preview never runs the dirty check at all — this test does not
+    even patch `status_porcelain`, so a preview call that DID reach it would
+    spawn a real `git status` against a non-repo tmp_path and fail loudly
+    (or, worse, silently fail-open on an unhandled exception) rather than
+    quietly passing. A passing preview here is itself the assertion that
+    T1 never touches the gate.
+    """
+    worktree = tmp_path / "repo"
+    _write_sizing(worktree, "2026-01-15-preview-only.yaml", _TERMINAL_BODY.format(title="x"))
+
+    preview_result, _ = _preview(worktree)
+
+    ids = {c["id"] for c in preview_result["candidates"]}
+    assert ids == {"state/sizings/2026-01-15-preview-only.yaml"}

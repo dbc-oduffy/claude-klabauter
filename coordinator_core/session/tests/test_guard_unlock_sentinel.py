@@ -176,7 +176,12 @@ class TestAnnotateDenyDoesNotNameACodename:
         reason_without_checkout = out_without_checkout["hookSpecificOutput"]["permissionDecisionReason"]
 
         assert reason_with_checkout == reason_without_checkout
-        assert reason_with_checkout == "denied: reason"
+        # 2026-09-03 (item 11): the rendered tail is now the guard NAME, so the
+        # byte-literal pin moved off "denied: reason". The invariant this test
+        # exists for is unchanged and asserted above: DoE-checkout presence must
+        # not change the text. Codename absence is re-asserted here directly.
+        assert "DoE-claude" not in reason_with_checkout
+        assert reason_with_checkout.startswith("denied: reason")
 
 
 class TestAnnotateDenyDoesNotInlineTheUnlockRecipe:
@@ -202,11 +207,34 @@ class TestAnnotateDenyDoesNotInlineTheUnlockRecipe:
     def test_session_id_is_not_rendered(self):
         assert SID not in self._reason()
 
-    def test_guard_name_is_not_rendered(self):
-        assert GUARD not in self._reason()
+    def test_guard_name_is_rendered(self):
+        """INVERTED 2026-09-03 (item 11). The guard name was removed by item 7
+        as one of TWO data points ("the two data points a filename-shape line
+        would let them assemble into the same recipe by hand") -- name plus
+        `session_id`, alongside the filename shape. It was never a recipe on
+        its own, and the other two pieces stay removed (asserted by the
+        siblings in this class), so nothing is assemblable from a bare name.
 
-    def test_reason_returned_unchanged(self):
-        assert self._reason() == "denied: reason"
+        It is restored because it is IDENTITY: `session.em_guard_grant`'s CLI
+        takes the guard name as its first argument, so with the name rendered
+        nowhere the EM-exercisable in-band route could not be invoked from the
+        deny that triggered it."""
+        assert GUARD in self._reason()
+
+    def test_name_alone_does_not_assemble_the_recipe(self):
+        """The load-bearing invariant behind item 11: rendering the name is
+        safe only while the OTHER pieces stay absent. If a future edit
+        reintroduces `session_id` or the filename shape next to the name, the
+        recipe item 7 removed is back and this test is the tripwire."""
+        reason = self._reason()
+        assert GUARD in reason
+        assert SID not in reason
+        assert gus._SENTINEL_PREFIX not in reason
+
+    def test_guard_reason_is_preserved_verbatim_as_the_prefix(self):
+        """The guard's own reason must still be the FIRST thing read (item 3's
+        ordering rule: reason first, annotation second)."""
+        assert self._reason().startswith("denied: reason")
 
     def test_assembled_sentinel_path_literal_is_not_rendered(self, tmp_path, monkeypatch):
         monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
@@ -219,7 +247,18 @@ class TestAnnotateDenyAgentIdSuppression:
     unchanged, but the EM decision now routes through
     ``identity.resolves_em_audience`` and its inverted fail direction —
     only a positively-resolved EM audience emits; absence/malformed/
-    exception all degrade to terse."""
+    exception all degrade to terse.
+
+    REFRAMED 2026-09-03 (item 11). Item 10 deleted the identity resolution
+    entirely, so since then these cases have differed in no observable way and
+    the monkeypatched resolvers are not consulted at all. What the class now
+    asserts is the property that outlived the mechanism and is the one worth
+    keeping: AUDIENCE DOES NOT CHANGE THE RENDERED TEXT. A subagent, an EM, an
+    unresolvable agent_id and a raising resolver all get the same guard NAME
+    and no affordance beyond it — the subagent channel gains nothing it could
+    act on, which is the whole point the suppression logic used to serve. The
+    EM-only in-band route lives in `_write_bump_message.render_em_message`,
+    which has its own audience split; it is never rendered here."""
 
     def _reason(self, **kwargs):
         out = {"hookSpecificOutput": {"permissionDecisionReason": "denied: reason"}}
@@ -233,7 +272,7 @@ class TestAnnotateDenyAgentIdSuppression:
             identity_mod, "resolve_subagent_identity", lambda agent_id, session_id: "some-agent"
         )
         reason = self._reason(agent_id="some-agent-id")
-        assert reason == "denied: reason"
+        assert reason == self._reason(agent_id="")
 
     def test_absent_agent_id_resolved_em_still_renders_nothing(self):
         """Inverted 2026-08-13 (C4d, docs/plans/2026-08-13-guard-messages-
@@ -246,7 +285,7 @@ class TestAnnotateDenyAgentIdSuppression:
         block used to carry), so a resolved EM audience now gets the reason
         back byte-identical too, same as every other case."""
         reason = self._reason(agent_id="")
-        assert reason == "denied: reason"
+        assert reason.startswith("denied: reason")
         assert "human-only affordance" not in reason
         assert "doctrine violation" not in reason
 
@@ -261,7 +300,7 @@ class TestAnnotateDenyAgentIdSuppression:
             identity_mod, "resolve_subagent_identity", lambda agent_id, session_id: ""
         )
         reason = self._reason(agent_id="not-a-real-agent-id")
-        assert reason == "denied: reason"
+        assert reason == self._reason(agent_id="")
 
     def test_exception_during_resolution_degrades_to_terse(self, monkeypatch):
         """AC-3 inversion: the `except Exception: pass` branch used to fall
@@ -275,7 +314,8 @@ class TestAnnotateDenyAgentIdSuppression:
 
         monkeypatch.setattr(identity_mod, "resolve_subagent_identity", _raise)
         reason = self._reason(agent_id="")
-        assert reason == "denied: reason"
+        assert reason.startswith("denied: reason")
+        assert GUARD in reason
 
 
 class TestConsumeNeverRaises:

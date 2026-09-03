@@ -245,6 +245,14 @@ def classify_artifact(frontmatter_text: str, path: Path, repo_root: Path) -> str
         parts = path.resolve().relative_to(repo_root.resolve()).parts
     except ValueError:
         parts = path.parts
+    # Widened, not replaced (C4b, Anti-scope: "widen, don't replace" -- the
+    # ratified survivor in the plan's amended Part-A exemption set): the
+    # `"cross-repo"` leaf name is shared by BOTH the legacy `<repo>/cross-repo/`
+    # root and the migrated `<repo>/state/cross-repo/` root, so this membership
+    # test already admits a memo parented under `state/` without any literal
+    # substitution -- do not narrow it to a prefix check that would require
+    # `state` to precede `cross-repo`, since that would stop matching the
+    # legacy (pre-migration) layout this same check must keep classifying.
     if "cross-repo" in parts:
         return "memo"
     if "handoffs" in parts:

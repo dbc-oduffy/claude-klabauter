@@ -201,6 +201,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.session import core as _session_core
 from coordinator_core.ops.ceremony.git_native import check_ignore
 from coordinator_core.ops.emit._slug import machine_slug
+from coordinator_core.memo_corpus import receiver_inbox_root
 from coordinator_core.ops.fleet._common import (
     _make_git_env,
     check_repo_root,
@@ -671,21 +672,35 @@ def _deliver_envelope(target_root: Path, owning_repo: Optional[str], event: dict
             "path from an absent addressing key"
         )
     filename = f"tracker-event-{event_id}.md"
-    rel_path = f"cross-repo/inbox/{filename}"
-    target_path = target_root / "cross-repo" / "inbox" / filename
+    # Single resolver call — `_memo_resolver`/C5: the receiver's inbox root
+    # is probed ONCE here via `receiver_inbox_root` (per-receiver, C10a
+    # migration-window aware), and every downstream consumer of that root
+    # (the write path, the confinement assertion, the D2(7) gitignore check)
+    # derives from THIS one result rather than re-spelling `cross-repo/inbox`
+    # independently. Resolving the root a second time (rather than deriving
+    # three times from one call) is the one shape that would introduce a
+    # TOCTOU here.
+    corpus_root_str, _ = receiver_inbox_root(str(target_root))
+    inbox_root = (Path(corpus_root_str) / "inbox").resolve()
+    target_path = inbox_root / filename
 
     # Confinement: the composed path must resolve inside the receiver's
     # inbox and nowhere else. Hardens against a future editor reintroducing
     # a caller-controlled path component into `filename` above — this
     # assertion, not just the minted-id addressing, is what a regression
     # trips (P1-2, review-driven correction, 2026-08-20).
-    inbox_root = (target_root / "cross-repo" / "inbox").resolve()
     if target_path.resolve().parent != inbox_root:
         raise PushSuggestionRefused(
             f"tracker.push_suggestion: composed delivery path "
             f"{target_path} resolves outside the receiver's inbox "
             f"{inbox_root} — refusing; nothing was written"
         )
+
+    # `rel_path` is DERIVED from the same resolved target, never re-spelled
+    # against a separate `cross-repo/inbox/` literal — a second, independently
+    # spelled `rel_path` is exactly the fail-open the D2(7) gitignore guard
+    # was hardened against (staff-eng finding #5).
+    rel_path = target_path.resolve().relative_to(target_root.resolve()).as_posix()
 
     # D2(7) gitignore delivery guard — refuse-on-ignored, BEFORE any write.
     # `check_ignore`'s own contract is three-valued: 0 = ignored,

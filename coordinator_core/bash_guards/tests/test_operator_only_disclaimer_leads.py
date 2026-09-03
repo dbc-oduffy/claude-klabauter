@@ -196,6 +196,9 @@ class TestOperatorOverrideNoteDisclaimer:
         )
 
 
+TAIL = "\n\nGuard: `fake_guard`."
+
+
 class TestAnnotateDenyDisclaimer:
     """`session.guard_unlock_sentinel.annotate_deny` -- the in-session,
     one-shot sentinel-unlock block that USED TO be appended AFTER a firing
@@ -210,7 +213,18 @@ class TestAnnotateDenyDisclaimer:
     surface is itself a gate-referent), so `annotate_deny` now always
     returns `out` unchanged. Every "leads"/"trails" assertion in this class
     is inverted accordingly: there is no longer a second half to order
-    against the guard's own reason."""
+    against the guard's own reason.
+
+    UPDATED AGAIN 2026-09-03 (item 11): a second half exists once more, and
+    it is exactly one fact -- the firing guard's NAME. Item 9's "B8 fires on
+    even the narrowed sentence" generalized from the ONE candidate it tried;
+    B8 leg (d) is about pointers into the override-key/unlock doc surface,
+    and ``Guard: `<name>`.`` is not one (measured, not assumed -- see
+    `test_the_rendered_tail_is_register_clean` below). The ordering
+    assertions are therefore live again and are the point of this class: the
+    guard's own reason still LEADS, the name TRAILS. What stays gone is the
+    recipe -- no sentinel path, no filename shape, no session id, no doc
+    pointer -- asserted by `test_no_resolved_sentinel_path_or_recipe`."""
 
     def _fire(self, tmp_path, monkeypatch):
         import tempfile
@@ -253,14 +267,19 @@ class TestAnnotateDenyDisclaimer:
         more."""
         out = self._fire(tmp_path, monkeypatch)
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert reason == "BLOCKED: some guard fired."
+        head, sep, tail = reason.partition("\n\n")
+        assert head == "BLOCKED: some guard fired."
+        assert tail == "Guard: `fake_guard`.", (
+            "the appended half must be the guard NAME and nothing else "
+            "-- got: %r" % tail
+        )
 
     def test_original_reason_still_present_unchanged(self, tmp_path, monkeypatch):
         """The reason must still be reachable, now byte-identical (item 9)
         rather than merely ahead of an appended block."""
         out = self._fire(tmp_path, monkeypatch)
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert reason == "BLOCKED: some guard fired."
+        assert reason.startswith("BLOCKED: some guard fired.")
 
     def test_retired_disclaimer_register_does_not_reappear(self, tmp_path, monkeypatch):
         out = self._fire(tmp_path, monkeypatch)
@@ -348,15 +367,26 @@ class TestAnnotateDenyDisclaimer:
             "annotate_deny() must not name the bare session_id -- "
             "got: %r" % reason
         )
-        assert "fake_guard" not in reason, (
-            "annotate_deny() must not name the bare guard_name -- "
-            "got: %r" % reason
+        # 2026-09-03 (item 11): the guard NAME is now rendered by design and
+        # is the one piece of this list that moved. Everything above stays
+        # asserted-absent, which is what keeps the name safe: a name with no
+        # session_id, no filename prefix and no temp root assembles nothing.
+        assert "fake_guard" in reason, (
+            "the firing guard must be named -- `session.em_guard_grant` takes "
+            "it as its first CLI argument, so a deny that withholds it makes "
+            "the in-band route unusable -- got: %r" % reason
         )
 
     def test_missing_session_id_skips_the_line_entirely(self, tmp_path, monkeypatch):
         """Documented negative case: a missing session_id must not render a
-        sentinel path keyed to an empty session -- the envelope is returned
-        unchanged, with no unlock block, since there is nothing to disclaim."""
+        sentinel path keyed to an empty session.
+
+        REFRAMED 2026-09-03 (item 11). The rendered tail is the guard NAME,
+        which is not session-keyed, so an absent session_id no longer
+        suppresses it -- and must not, or a deny raised before session
+        resolution would name nothing at all. The invariant this test exists
+        for is unchanged and asserted below: nothing keyed to the empty
+        session is rendered."""
         import tempfile
 
         monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
@@ -369,7 +399,9 @@ class TestAnnotateDenyDisclaimer:
         out = gus.annotate_deny(envelope, session_id="", guard_name="fake_guard", doc_display="doc")
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert _UNLOCK_BLOCK_LEAD not in reason
-        assert reason == "BLOCKED: some guard fired."
+        assert reason == "BLOCKED: some guard fired." + TAIL
+        assert str(gus.sentinel_path("", "fake_guard")) not in reason
+        assert gus._SENTINEL_PREFIX not in reason
 
 
 class TestAnnotateDenyAgentIdSuppression:
@@ -408,9 +440,9 @@ class TestAnnotateDenyAgentIdSuppression:
         out = self._fire(tmp_path, monkeypatch, agent_id="abcdef012345")
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert _UNLOCK_BLOCK_LEAD not in reason
-        assert reason == "BLOCKED: some guard fired.", (
-            "a resolved subagent must get the deny reason back byte-"
-            "identical, with no unlock block appended -- got: %r" % reason
+        assert reason == "BLOCKED: some guard fired." + TAIL, (
+            "a resolved subagent gets the guard NAME and nothing more -- no "
+            "unlock block, no affordance it could act on -- got: %r" % reason
         )
 
     def test_absent_agent_id_resolved_em_still_renders_nothing(self, tmp_path, monkeypatch):
@@ -421,7 +453,7 @@ class TestAnnotateDenyAgentIdSuppression:
         out = self._fire(tmp_path, monkeypatch, agent_id="")
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert _UNLOCK_BLOCK_LEAD not in reason
-        assert reason == "BLOCKED: some guard fired."
+        assert reason == "BLOCKED: some guard fired." + TAIL
 
     def test_malformed_agent_id_degrades_to_terse(self, tmp_path, monkeypatch):
         """AC-3 inversion (2026-08-13, C3): a malformed/unrecognised

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
 from coordinator_core.updatedocs.memo_prune import compute_memo_prune_candidates
 
@@ -27,9 +28,13 @@ def _write_memo(archive_dir: Path, name: str, status_line: str | None, age_days:
 
 
 def test_missing_archive_dir_raises_typed_error(tmp_path):
+    """Neither `state/cross-repo/` nor `cross-repo/` exists under tmp_path,
+    so `memo_corpus_root`'s write-when-neither-exists rule returns the NEW
+    root (`state/cross-repo/`) -- see its own docstring. The missing path
+    this raises must match that resolution, not the legacy literal."""
     with pytest.raises(UpdatedocsTargetMissing) as excinfo:
         compute_memo_prune_candidates(tmp_path)
-    assert (tmp_path / "cross-repo" / "archive") == excinfo.value.missing_path
+    assert Path(memo_corpus_root(str(tmp_path))) / "archive" == excinfo.value.missing_path
 
 
 def test_actioned_and_old_is_prunable(tmp_path):
@@ -132,13 +137,14 @@ def test_age_days_is_a_parameter_not_a_literal(tmp_path):
 
 
 def test_live_corpus_yields_zero_prunable():
-    """Measured truth (plan C4): over the real repo's 1851-file
-    cross-repo/archive corpus, this predicate yields ZERO prunable memos
-    today. The gate is correct and inert -- do not loosen the predicate to
-    manufacture a non-empty result against real data."""
-    archive_dir = REPO_ROOT / "cross-repo" / "archive"
+    """Measured truth (plan C4, re-verified against the memo_corpus_root-
+    resolved corpus by 2026-09-03's C2): over the real repo's memo-archive
+    corpus, this predicate yields ZERO prunable memos today. The gate is
+    correct and inert -- do not loosen the predicate to manufacture a
+    non-empty result against real data."""
+    archive_dir = Path(memo_corpus_root(str(REPO_ROOT))) / "archive"
     if not archive_dir.is_dir():
-        pytest.skip("cross-repo/archive not present in this checkout")
+        pytest.skip("memo-corpus archive not present in this checkout")
 
     result = compute_memo_prune_candidates(REPO_ROOT)
 

@@ -2087,7 +2087,7 @@ class TestMemoSendDeclaresOutboxWrites:
         assert "error" not in d, d
         assert d["result"]["exit_code"] == 0
 
-        ledger_rel = "state/memo-outbox/sent-ledger.jsonl"
+        ledger_rel = ".coordinator-local/memo-outbox/sent-ledger.jsonl"
         assert (sender / ledger_rel).is_file(), "sanity: the ledger must have actually been written"
 
         offer = safe_commit_offer.compute_offer("mine", cwd=str(sender))
