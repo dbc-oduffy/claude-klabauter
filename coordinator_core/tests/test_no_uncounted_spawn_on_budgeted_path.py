@@ -6067,6 +6067,29 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # 4 -> 3, 2026-08-30 (two-ratchet-gates C3): scope.py::_git_run's removal from
     # the reachable set.
     "fleet.archive_actioned_memos": 3,
+    # Added 2026-09-03. RECORDS the live reachable count, and does not endorse it.
+    # `fleet.reap_review_trail_rest` landed at `0c7f7a3f42` with no pin, so this
+    # whole file was red and every other pin in it unguarded until one was added.
+    # Ten reachable sites: `_empty_private_index_breach`, `_git._invoke`,
+    # `_is_tracked`, `_is_tracked_batch`, `_list_candidate_files`,
+    # `_machine_local_get`, `rm_and_commit` x3, `run_git`.
+    #
+    # WHAT THIS NUMBER IS NOT (corrected 2026-09-03, claude-klabauter-6c): ten is
+    # IMPORT-GRAPH REACHABILITY -- what the call graph can reach -- not process
+    # starts per invocation. An earlier version of this comment multiplied it by
+    # DR-344's 25ms-per-git-process and asserted ~250ms against the 500ms
+    # brightline. That inference does not hold: a reachable site is not an
+    # executed one, and no runtime figure for this op exists yet. Ten is a sound
+    # UPPER BOUND and nothing more.
+    #
+    # Settling it needs one instrumented invocation counting actual process
+    # starts, then this pin lowered to that. Lowering is the expected outcome,
+    # not a revert. Tracked at
+    # state/debt-backlog/2026-09-03-fleet-reap-review-trail-rest-settle-spaw-248862aa6b0a.yaml.
+    "fleet.reap_review_trail_rest": 10,
+    # Added 2026-09-03: one dynamic site, `invoke_coordinator_doc_new`. Pre-dates
+    # this pass; it surfaced only because the file's other failures were cleared.
+    "hooks.plan_persistence_check": 1,
     "git.maintenance": 1,
     "housekeeping.cycle": 5,
     "session.safe_commit_offer": 1,

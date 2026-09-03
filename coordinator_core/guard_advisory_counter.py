@@ -7,8 +7,10 @@ no payload, no command text, no file path, no session content. Do not widen
 this record shape without a fresh PM ruling; C21's own plan body is written
 to give a later reader something to argue against.
 
-Written to a per-session file, `state/subagent-share/<session_id>/
-advisory-fire-counts.jsonl`, mirroring the fleet's existing subagent-share
+Written to a per-session file under `machinery_paths.share_dir` —
+`<machinery root>/subagent-share/<session_id>/advisory-fire-counts.jsonl`;
+the accessor is the authority on that root, which has moved once already and
+must never be restated here. Mirrors the fleet's existing subagent-share
 convention (`bash_guards/bump_outside_repo_write.py::_sandbox_root`,
 `bash_guards/bump_foreign_repo_write.py::_sandbox_root_hint`) — a shared
 append target across the six-plus sessions this repo routinely carries at

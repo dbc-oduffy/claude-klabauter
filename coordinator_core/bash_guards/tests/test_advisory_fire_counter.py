@@ -10,7 +10,8 @@ directions:
 
   (a) a flipped guard firing produces exactly one appended
       `{"guard", "at"}` record in
-      `state/subagent-share/<session_id>/advisory-fire-counts.jsonl`.
+      `<machinery root>/subagent-share/<session_id>/advisory-fire-counts.jsonl`,
+      resolved through `machinery_paths.share_dir` rather than restated here.
   (b) an induced write failure (an unwritable per-session directory) leaves
       the guard's own returned envelope unchanged.
 
@@ -27,9 +28,12 @@ import sys
 
 import pytest
 
+from pathlib import Path
+
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards._advisory_value import AdvisoryValue
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
+from coordinator_core.session.machinery_paths import share_dir
 
 _ADVISORY_ENVELOPE = {
     "hookSpecificOutput": {
@@ -76,7 +80,7 @@ def _fake_hard_deny_entry(name="fake-hard-deny-guard"):
 
 
 def _counts_path(git_root, session_id):
-    return git_root / "state" / "subagent-share" / session_id / "advisory-fire-counts.jsonl"
+    return Path(share_dir(str(git_root), session_id)) / "advisory-fire-counts.jsonl"
 
 
 class TestFlippedGuardProducesOneRecord:
@@ -111,7 +115,7 @@ class TestFlippedGuardProducesOneRecord:
         out = dispatch.evaluate_payload_json(json.dumps(payload))
 
         assert out == _ADVISORY_ENVELOPE
-        assert not (tmp_path / "state" / "subagent-share").exists()
+        assert not Path(share_dir(str(tmp_path), "unused")).parent.exists()
 
 
 class TestHardDenyNeverCounted:
@@ -135,14 +139,14 @@ class TestHardDenyNeverCounted:
         # of a feature. Narrowed to the advisory stream, which is what
         # "never counted" is about; the two files exist precisely so the streams
         # never mix.
-        session_dir = tmp_path / "state" / "subagent-share" / "sess-c21"
+        session_dir = Path(share_dir(str(tmp_path), "sess-c21"))
         assert not (session_dir / "advisory-fire-counts.jsonl").exists()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits only")
 class TestWriteFailureLeavesEnvelopeUnchanged:
     def test_unwritable_session_dir_does_not_alter_returned_envelope(self, tmp_path, monkeypatch):
-        session_dir = tmp_path / "state" / "subagent-share" / "sess-c21"
+        session_dir = Path(share_dir(str(tmp_path), "sess-c21"))
         session_dir.mkdir(parents=True)
         original_mode = session_dir.stat().st_mode
         entry = _fake_advisory_entry()

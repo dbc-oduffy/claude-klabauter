@@ -285,28 +285,37 @@ def test_reap_findings_scope_excludes_json_trail_records() -> None:
     """Monotonicity guard (module docstring's "Freshness rule, resident-set
     edition"): the reviewed-set store never observes a deletion, which is
     safe only because DR-218's reapers are scoped to
-    `state/review-trail/findings/*.md` sidecars and never touch the
-    creditable `state/review-trail/*.json` (or `archive/review-trail/
-    *.json`) records this dimension's reviewed set is built from. This test
-    pins that scope directly against the reaper modules' own constant, so a
-    future widening of either reaper to the `*.json` corpus fails this test
-    instead of silently defeating the append-only assumption above."""
-    import coordinator_core.ops.fleet._findings_reap as findings_reap
-    import coordinator_core.ops.fleet.reap_integrated_findings as reap_integrated
-    import coordinator_core.ops.fleet.reap_unintegrated_findings as reap_unintegrated
+    `<review-trail-root>/findings/*.md` sidecars and never touch the
+    creditable `*.json` (or `archive/review-trail/*.json`) records this
+    dimension's reviewed set is built from. This test pins that scope
+    against the reap core's own live path source (`scan_findings`'s
+    `findings/` join under `machinery_paths.review_trail_dir`), not a
+    retired literal constant (Review: overengineering-reviewer -- the prior
+    `_FINDINGS_SUBPATH` pin went dead in production when `scan_findings` was
+    rewritten to derive its root from `review_trail_dir`; this pin tracks
+    that live source directly so a future widening still fails loudly)."""
+    import inspect
 
-    assert findings_reap._FINDINGS_SUBPATH == ("state", "review-trail", "findings")
-    # Both reap legs (a: integrated, b: unintegrated) must scan through the
-    # same shared, findings-scoped subpath -- neither leg may point directly
-    # at "state/review-trail" (the *.json record corpus) or any other path.
-    for mod in (reap_integrated, reap_unintegrated):
-        subpath = getattr(mod, "_FINDINGS_SUBPATH", findings_reap._FINDINGS_SUBPATH)
-        assert subpath == ("state", "review-trail", "findings")
-        assert subpath[-1] == "findings", (
-            "a reap leg scoped to the review-trail root (not the findings/ "
-            "subdir) could delete or rewrite a *.json record this "
-            "dimension's reviewed-set store credits permanently"
-        )
+    import coordinator_core.ops.fleet._findings_reap as findings_reap
+    from coordinator_core.session.machinery_paths import review_trail_dir
+
+    import os
+
+    assert review_trail_dir("repo") == os.path.join(
+        "repo", ".coordinator-local", "review-trail"
+    )
+    # scan_findings must join "findings" onto review_trail_dir()'s result --
+    # never point directly at the review-trail root (the *.json record
+    # corpus) or any other path. Pinned against the function's own source
+    # rather than a standalone constant, so a future rewrite that drops the
+    # "findings" join fails this test instead of silently widening scope.
+    source = inspect.getsource(findings_reap.scan_findings)
+    assert 'review_trail_dir(str(worktree_root))) / "findings"' in source, (
+        "scan_findings must scope its walk to the findings/ subdir under "
+        "the live review-trail root -- widening to the review-trail root "
+        "itself could delete or rewrite a *.json record this dimension's "
+        "reviewed-set store credits permanently"
+    )
 
 
 def test_review_drops_blank_changed_files_entries_no_dot_slash_normalization(

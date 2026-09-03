@@ -329,7 +329,29 @@ GENERATES = [
 # Spec backlinks: docs/decisions/DR-353-cockpit-contract-4-0-0-is-an-em-call-not-a-pm-gate.md,
 #   docs/decisions/DR-351-the-emission-is-deleted-not-halted.md,
 #   cross-repo/inbox/2026-08-23-example-cockpit-repo-em-file-attributions-is-dropped-your-deliberation-rests-on-a-superseded-record.md
-CONTRACT_VERSION = "4.0.0"
+# MINOR bump 4.0.0 -> 4.1.0: widens competitor-summary's `category` enum by one
+# member, `first_party`. Shape is otherwise untouched — no new field, no
+# nullability change, no `required[]` movement, D9 present-as-null intact.
+#
+# MINOR, not MAJOR: `category` is nullable and both vendored readers are
+# same-major-forward-tolerant (example-cockpit-repo `checkSchemaVersion()`,
+# example-retrieval-repo `_check_schema_version()`), so no consumer throws on the bump
+# itself. The live risk is not crash-safety but ordering — cockpit's generated
+# reader is `.strict()` over the closed three-member enum, so a producer
+# emitting `first_party` before cockpit and example-retrieval-repo re-vendor quarantines
+# every such row per-row, silently, with both suites green. Hence D21's tiered
+# arm protocol: DoE lands the bundle and sends re-vendor memos BEFORE
+# example-market-data-repo begins emitting the member.
+#
+# Shape decided by DoE, bytes produced here, per DR-060 — DoE retired its own
+# emitter and kept the committed artifact plus the version-bump gate, so this
+# is the first exercise of the "DoE decides the shape, claude-klabauter's engine produces
+# it" split. Claude-klabauter's own vendored copy under
+# `coordinator_core/ops/emit/_vendor/cockpit-contract/` is NOT refreshed by
+# this bump, same as every bump above: it pulls from DoE's tagged release.
+# Spec backlinks: DoE-claude docs/decisions/DR-192-cockpit-competitor-summary-category-gains-first-party.md,
+#   state/cross-repo/inbox/2026-09-03-doe-claude-em-cockpit-category-first-party-widen.md
+CONTRACT_VERSION = "4.1.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

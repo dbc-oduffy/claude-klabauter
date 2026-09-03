@@ -72,8 +72,8 @@ from coordinator_core.ops.fleet._findings_reap import (
     reap_findings,
     scan_findings,
     scan_review_trail_rest,
+    validate_reap_params,
 )
-from coordinator_core.session.machinery_paths import REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS
 
 _LOG = logging.getLogger(__name__)
 
@@ -81,6 +81,16 @@ _LOG = logging.getLogger(__name__)
 # marker-absent (DR-218). Leg-(b)-specific — the age gate does not apply to
 # leg (a)'s marker-present predicate.
 _AGE_THRESHOLD_DAYS = 14
+
+#: C12 (state-keeps-the-work-not-the-machinery): review-trail is CLOSED
+#: (nothing writes it once C7 relocated it) -- a file whose filename-derived
+#: authored date (never mtime; see _findings_reap._extract_authored_date's
+#: fail-closed-to-keep cascade) is older than this many days is reap-eligible
+#: for the third, size/date-only leg, UNLESS a citation census finds it cited
+#: (fleet.reap_review_trail_rest's hard pre-delete gate). Real value shipped
+#: per the integration-pass EM call superseding the sentinel-disabled shape
+#: (PM: "numbers aren't important").
+REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS = 90
 
 
 # ---------------------------------------------------------------------------
@@ -201,54 +211,18 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # Review: code-reviewer — fail-closed dry_run validation (slice2 F1). dry_run
     # must be an explicit bool; omission or a wrong type must NOT silently default
     # to False (the destructive ACT/git-rm path), matching the fail-closed shape
-    # of the repo_root-None / D3-mismatch setup errors below.
-    dry_run_raw = params.get("dry_run")
-    if not isinstance(dry_run_raw, bool):
-        _LOG.error(
-            "fleet.reap_unintegrated_findings: dry_run must be an explicit bool, got %r",
-            dry_run_raw,
-        )
-        return {
-            "exit_code": 1,
-            "dry_run": False,
-            "candidates": [],
-            "reaped": [],
-            "skipped": [],
-            "failed": [],
-        }
-    dry_run = dry_run_raw
-
-    if repo_root is None:
-        # Review: code-reviewer — slice2 F5: log the setup error, mirroring
-        # archive_shipped_handoffs' sibling early-return.
-        _LOG.error(
-            "fleet.reap_unintegrated_findings: repo_root is None — cannot resolve worktree"
-        )
-        return {
-            "exit_code": 1,
-            "dry_run": dry_run,
-            "candidates": [],
-            "reaped": [],
-            "skipped": [],
-            "failed": [],
-        }
-
-    common_dir = Path(repo_root) if not isinstance(repo_root, Path) else repo_root
-    worktree = main_worktree_root(common_dir)
-
-    mismatch = check_repo_root(params.get("repo_root"), common_dir)
-    if mismatch:
-        # Review: code-reviewer — slice2 F5: log the D3 mismatch reason, mirroring
-        # archive_shipped_handoffs' sibling early-return.
-        _LOG.error("fleet.reap_unintegrated_findings: %s", mismatch)
-        return {
-            "exit_code": 1,
-            "dry_run": dry_run,
-            "candidates": [],
-            "reaped": [],
-            "skipped": [],
-            "failed": [],
-        }
+    # of the repo_root-None / D3-mismatch setup errors below. Hoisted into
+    # `validate_reap_params` (Review: overengineering-reviewer finding 1) so
+    # this preamble is defined once for every reap-family handler.
+    worktree, dry_run, err = validate_reap_params(
+        "fleet.reap_unintegrated_findings",
+        params,
+        repo_root,
+        main_worktree_root_fn=main_worktree_root,
+        check_repo_root_fn=check_repo_root,
+    )
+    if err is not None:
+        return err
 
     if dry_run:
         candidates = [
@@ -337,58 +311,24 @@ def _review_trail_rest_subject_builder(n: int) -> str:
 async def _handler_review_trail_rest(params: dict, repo_root: Optional[Path] = None) -> dict:
     """fleet.reap_review_trail_rest -- reap the rest of the (CLOSED,
     post-C7) review-trail corpus by filename-derived date cap
-    (`machinery_paths.REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS`), gated on a
+    (`REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS`, below), gated on a
     citation-census hard pre-delete gate. Same custom dry_run:true/false
     shape as `fleet.reap_unintegrated_findings` (DEC-1 -- no cockpit
-    two-phase mode/candidate_ids envelope here either); see that handler's
-    own docstring for the shared shape rationale.
+    two-phase mode/candidate_ids envelope here either); see
+    `validate_reap_params` for the shared preamble both handlers use.
 
     A missing/absent review-trail tree is NOT an error -- both scan legs
     degrade to [] for a missing dir.
     """
-    dry_run_raw = params.get("dry_run")
-    if not isinstance(dry_run_raw, bool):
-        _LOG.error(
-            "fleet.reap_review_trail_rest: dry_run must be an explicit bool, got %r",
-            dry_run_raw,
-        )
-        return {
-            "exit_code": 1,
-            "dry_run": False,
-            "candidates": [],
-            "reaped": [],
-            "skipped": [],
-            "failed": [],
-        }
-    dry_run = dry_run_raw
-
-    if repo_root is None:
-        _LOG.error(
-            "fleet.reap_review_trail_rest: repo_root is None -- cannot resolve worktree"
-        )
-        return {
-            "exit_code": 1,
-            "dry_run": dry_run,
-            "candidates": [],
-            "reaped": [],
-            "skipped": [],
-            "failed": [],
-        }
-
-    common_dir = Path(repo_root) if not isinstance(repo_root, Path) else repo_root
-    worktree = main_worktree_root(common_dir)
-
-    mismatch = check_repo_root(params.get("repo_root"), common_dir)
-    if mismatch:
-        _LOG.error("fleet.reap_review_trail_rest: %s", mismatch)
-        return {
-            "exit_code": 1,
-            "dry_run": dry_run,
-            "candidates": [],
-            "reaped": [],
-            "skipped": [],
-            "failed": [],
-        }
+    worktree, dry_run, err = validate_reap_params(
+        "fleet.reap_review_trail_rest",
+        params,
+        repo_root,
+        main_worktree_root_fn=main_worktree_root,
+        check_repo_root_fn=check_repo_root,
+    )
+    if err is not None:
+        return err
 
     classify = _make_classify_review_trail_rest(worktree)
 

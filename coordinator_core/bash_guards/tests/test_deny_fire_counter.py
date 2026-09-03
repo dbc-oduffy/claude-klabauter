@@ -17,7 +17,10 @@ from __future__ import annotations
 
 import json
 
+from pathlib import Path
+
 from coordinator_core.bash_guards import dispatch
+from coordinator_core.session.machinery_paths import share_dir
 
 _DENY_ENVELOPE = {
     "hookSpecificOutput": {
@@ -50,7 +53,7 @@ def _fake_chain(name="fake-hard-deny-guard"):
 
 
 def _deny_counts_path(git_root, session_id):
-    return git_root / "state" / "subagent-share" / session_id / "deny-fire-counts.jsonl"
+    return Path(share_dir(str(git_root), session_id)) / "deny-fire-counts.jsonl"
 
 
 class TestUnclearedHardDenyProducesOneRecord:
@@ -86,7 +89,7 @@ class TestUnclearedHardDenyProducesOneRecord:
         out = dispatch.evaluate_payload_json(payload_text)
 
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert not (tmp_path / "state" / "subagent-share").exists()
+        assert not Path(share_dir(str(tmp_path), "unused")).parent.exists()
 
 
 class TestClearedHardDenyProducesOneRecordAndChainContinues:

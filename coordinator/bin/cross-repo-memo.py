@@ -1458,7 +1458,7 @@ def _normalize_repo_name(name: str) -> str:
     return re.sub(r"[-_]+", "", name.strip().lower())
 
 
-def _receiver_inbox_root(repo_path: str) -> str:
+def _receiver_inbox_root(repo_path: str) -> "tuple[str, bool]":
     """Resolve the cross-repo inbox root for ONE specific receiver repo.
 
     Fleet-wide convention move (PM ruling 2026-09-02, C10a notice): the
@@ -1471,12 +1471,24 @@ def _receiver_inbox_root(repo_path: str) -> str:
     back to the legacy `cross-repo/` root otherwise (receiver not yet
     migrated, or a pre-move sibling on an older machine).
 
+    Returns `(root, root_isdir)` — `root_isdir` is the `os.path.isdir(root)`
+    result this probe already computed (Review: overengineering-reviewer —
+    the caller was re-running the identical `isdir` check the new-root
+    branch here had just performed, which was tautologically True on that
+    branch). The legacy-root branch does NOT verify existence (unchanged
+    behavior — a legacy root's existence is the caller's business).
+
     Spec backlink: docs/plans/2026-09-02-state-keeps-the-work-not-the-machinery.md § C8
     """
+    # Review: coordinator:code-reviewer (F2) — this state/ is the current,
+    # CORRECT root for the C10a memo-channel convention move (see docstring
+    # above), unrelated to the separate state/ -> .coordinator-local/
+    # machinery relocation elsewhere in the repo. Do not "fix" this literal.
     new_root = os.path.join(repo_path, "state", "cross-repo")
     if os.path.isdir(new_root):
-        return new_root
-    return os.path.join(repo_path, "cross-repo")
+        return new_root, True
+    legacy_root = os.path.join(repo_path, "cross-repo")
+    return legacy_root, os.path.isdir(legacy_root)
 
 
 def _looks_like_coordinator_receiver(path: str) -> bool:
@@ -1495,10 +1507,14 @@ def _looks_like_coordinator_receiver(path: str) -> bool:
     # directory. isdir would wrongly reject a legitimate worktree receiver.
     if not os.path.exists(os.path.join(path, ".git")):
         return False
-    inbox_root = _receiver_inbox_root(path)
+    # Review: overengineering-reviewer — `root_isdir` reuses the isdir
+    # result `_receiver_inbox_root` already computed rather than re-probing
+    # it here (the re-probe was tautologically True whenever the probe had
+    # selected the new root).
+    inbox_root, root_isdir = _receiver_inbox_root(path)
     return (
         os.path.isdir(os.path.join(inbox_root, "inbox"))
-        or os.path.isdir(inbox_root)
+        or root_isdir
         or os.path.isfile(os.path.join(path, "coordinator.local.md"))
     )
 
@@ -1777,27 +1793,10 @@ def _warn_if_unregistered_sender() -> None:
 # call sites share one implementation each.
 
 
-def _check_summary_over_cap(summary: str | None) -> str | None:
-    """Shared --summary over-cap check for every live send path.
-
-    Fails loud on an over-cap EXPLICITLY authored --summary rather than
-    silently truncating it mid-sentence (2026-07-22 body-drop verdict memo,
-    cross-repo/inbox/2026-07-22-claude-central-em-snippet-sync-adoption-and-
-    body-drop-verdict.md).
-
-    Returns the stderr diagnostic string when `summary` exceeds
-    `_SUMMARY_MAX_CHARS`, else None (pass).
-    """
-    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-    from memo_compose import _SUMMARY_MAX_CHARS
-
-    if summary is not None and len(summary) > _SUMMARY_MAX_CHARS:
-        return (
-            f"cross-repo-memo: --summary is {len(summary)} chars, cap is "
-            f"{_SUMMARY_MAX_CHARS} — shorten it or omit --summary to derive "
-            f"one from the body instead."
-        )
-    return None
+# The --summary over-cap check that used to sit here went with the one-shot
+# flag form. The cap is enforced for every send path by the frontmatter
+# validator's cross-field rule, `schema_validate._memo_cf_summary_length_cap`
+# — that rule is the only enforcer, so do not read its absence here as a gap.
 
 
 def _sender_identity_guard_and_warn() -> str | None:

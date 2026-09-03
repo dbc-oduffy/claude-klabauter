@@ -64,7 +64,12 @@ def _dated(days_ago: int) -> str:
 
 def _write(root: Path, days_ago: int, *, integrated: bool = False,
            stem: str = "a-finding") -> Path:
-    findings = root / "state" / "review-trail" / "findings"
+    # Review: overengineering-reviewer -- scan_findings is single-root
+    # (current, post-C7 `.coordinator-local/review-trail/`) now; the legacy
+    # `state/review-trail/` root this helper used to write under measurably
+    # holds zero files for this leg's corpus, so a fixture writing there no
+    # longer exercises the scanner it is meant to test.
+    findings = root / ".coordinator-local" / "review-trail" / "findings"
     findings.mkdir(parents=True, exist_ok=True)
     path = findings / f"{_dated(days_ago)}-{stem}.md"
     body = "# Findings\n\nsomething a reviewer said\n"

@@ -53,16 +53,6 @@ import re
 from functools import lru_cache
 from typing import Any, Pattern
 
-#: C12 (state-keeps-the-work-not-the-machinery): review-trail is CLOSED
-#: (nothing writes it once C7 relocated it) -- a file whose filename-derived
-#: authored date (never mtime; see _findings_reap._extract_authored_date's
-#: fail-closed-to-keep cascade) is older than this many days is reap-eligible
-#: for the third, size/date-only leg, UNLESS a citation census finds it cited
-#: (fleet.reap_review_trail_rest's hard pre-delete gate). Real value shipped
-#: per the integration-pass EM call superseding the sentinel-disabled shape
-#: (PM: "numbers aren't important").
-REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS = 90
-
 LEDGER_FILENAME = "next-move-ledger.jsonl"
 INTAKE_FILENAME = "obligations-inbound.jsonl"
 SEND_LOG_FILENAME = "group-em-send-log.jsonl"

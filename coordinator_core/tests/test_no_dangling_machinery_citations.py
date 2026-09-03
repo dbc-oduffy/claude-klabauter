@@ -67,7 +67,12 @@ from coordinator_core.ops.extract_cited_sidecars import (
     _list_candidates,
 )
 
-_REVIEW_TRAIL_RE = re.compile(r"state/review-trail/[A-Za-z0-9_.\-/]+[A-Za-z0-9_]")
+# Review: coordinator:code-reviewer (F1) — widened to match both the pre-C6
+# root and the current .coordinator-local root; the old state/-only pattern
+# left new citations against the relocated root invisible to this ratchet.
+_REVIEW_TRAIL_RE = re.compile(
+    r"(?:state|\.coordinator-local)/review-trail/[A-Za-z0-9_.\-/]+[A-Za-z0-9_]"
+)
 
 _LIVE_AUDIT_PATH = "state/audits/2026-09-02-cited-subagent-share-sidecars.md"
 _BASELINE_PATH = "state/audits/2026-09-02-dangling-citation-baseline.json"

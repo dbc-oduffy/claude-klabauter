@@ -18,6 +18,7 @@ import os
 
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
+from coordinator_core.session import machinery_paths
 
 _OP_NAME = "hooks.watchdog_undischarged_next_move"
 
@@ -29,7 +30,7 @@ def _make_repo(tmp_path):
 
 
 def _ledger_path(repo_root: str, session_id: str) -> str:
-    return os.path.join(repo_root, "state", "subagent-share", session_id, "next-move-ledger.jsonl")
+    return machinery_paths.ledger_path(repo_root, session_id)
 
 
 def test_op_registers_and_resolves_through_op_for_path() -> None:
@@ -310,7 +311,7 @@ def test_plan_skill_plan_route_opens_plan_review(tmp_path) -> None:
 
 
 def _intake_path(repo_root: str, session_id: str) -> str:
-    return os.path.join(repo_root, "state", "subagent-share", session_id, "obligations-inbound.jsonl")
+    return machinery_paths.intake_path(repo_root, session_id)
 
 
 def test_drain_intake_folds_open_and_discharge_rows_and_removes_the_file(tmp_path) -> None:

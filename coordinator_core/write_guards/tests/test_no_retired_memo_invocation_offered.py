@@ -183,8 +183,8 @@ _REPO_ROOT_DOCS = pathlib.Path(__file__).resolve().parents[3]
 #: An allow-list states that distinction instead of approximating it by subtraction.
 _INSTRUCTIONAL_GLOBS = (
     "bin/*.md",
-    "cross-repo/*.md",
-    "cross-repo/*/README.md",
+    "state/cross-repo/*.md",
+    "state/cross-repo/*/README.md",
     "docs/reference/*.md",
     "*.md",
 )
@@ -225,16 +225,21 @@ def test_no_live_doc_offers_a_retired_invocation():
 def test_the_allowlist_covers_the_surfaces_this_was_found_on():
     """Regression pin: both files `doe-claude-cb` found must be in scope.
 
-    `cross-repo/README.md` carried the dead form under a heading reading "Legacy
+    The channel README carried the dead form under a heading reading "Legacy
     one-shot" -- a fallback presented as live, directly beneath the working path.
     An allow-list that silently stopped matching it would restore the blind spot
     without failing anything.
+
+    The two channel surfaces moved to `state/cross-repo/` in f24febad50, which
+    retired the legacy root outright rather than leaving a second home. The pin
+    follows them; naming the retired paths here would fail on their absence, not
+    on a narrowed allow-list.
     """
     covered = {rel.as_posix() for _, rel in _instructional_docs()}
     for required in (
-        "cross-repo/README.md",
+        "state/cross-repo/README.md",
         "bin/cross-repo-memo.md",
-        "cross-repo/inbox/README.md",
+        "state/cross-repo/inbox/README.md",
         "docs/reference/em-callable-ops.md",
     ):
         assert required in covered, (required, sorted(covered)[:20])
@@ -249,5 +254,5 @@ def test_the_allowlist_excludes_the_record_surfaces():
     assert not any(c.startswith("tasks/") for c in covered)
     # Memo bodies other repos authored.
     assert not any(
-        c.startswith("cross-repo/inbox/") and not c.endswith("README.md") for c in covered
+        c.startswith("state/cross-repo/inbox/") and not c.endswith("README.md") for c in covered
     )
