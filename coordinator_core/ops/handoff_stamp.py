@@ -786,7 +786,14 @@ _CLOSED_REASONS = frozenset({"cancelled", "displaced", "stale"})
 # implied provenance triple in the same write. `continued` and `closed`
 # remain unconditionally terminal — this set's membership is unchanged, only
 # one caller's use of it gained a same-write bypass for one specific member.
-_TERMINAL_DEPLOYMENT_STATES = frozenset({"shipped", "continued", "closed"})
+#
+# Review: coordinator:code-reviewer — this vendored copy had drifted to
+# 3 members, silently omitting "abandoned"; now imports
+# lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT directly (a leaf module,
+# zero coordinator_core imports/side effects) instead of vendoring.
+from coordinator_core.lifecycle_constants import (
+    HANDOFF_TERMINAL_DEPLOYMENT as _TERMINAL_DEPLOYMENT_STATES,
+)
 
 # ---------------------------------------------------------------------------
 # _DeploymentStateRepairPolicy — allowed-roots PLUS permitted terminal-lock

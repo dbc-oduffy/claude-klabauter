@@ -49,7 +49,8 @@ is the cooldown, throttling this session's own offers, never a peer.
 
 NEGATIVE SPEC -- deliberately absent:
 
-- **No send, no write to any peer's state.** Only this session's own log.
+- **No send, no write to any peer's state.** Only the HOLDER's log, written
+  by the holder or on the holder's behalf under the holder's key (DR-408).
 - **No `PAUSED:away` nudge, ever** -- excluded by name and by allow-list, and
   reported as `never-send-reason` ahead of any bookkeeping cause. `away` was
   unobserved in the 2026-08-30 window, so the exclusion is structural and
@@ -161,12 +162,13 @@ from coordinator_core.session import peer_roster
 from coordinator_core.session.receiver_state import parse_iso_timestamp
 from coordinator_core.session import machinery_paths
 
-#: Corpus-mutator declaration (generator-provenance sweep): `_record_offer`
-#: and `decline` append to `state/subagent-share/<session-id>/group-em-send-
-#: log.jsonl`, one file per session id -- a data-dependent set GENERATES
-#: cannot name. Same extension-scoped glob convention as the sibling
-#: counters in this tree (`guard_advisory_counter.py`,
-#: `engine_provenance_counter.py`).
+#: Corpus-mutator declaration (generator-provenance sweep): `_record_offer`,
+#: `record_offers` and `decline` append to `state/subagent-share/<session-
+#: id>/group-em-send-log.jsonl` -- only the HOLDER's log, written by the
+#: holder or on the holder's behalf under the holder's key (DR-408), one
+#: file per session id -- a data-dependent set GENERATES cannot name. Same
+#: extension-scoped glob convention as the sibling counters in this tree
+#: (`guard_advisory_counter.py`, `engine_provenance_counter.py`).
 MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 
 #: `gate` values `decline()` accepts -- which gate the EM declared against.
@@ -285,7 +287,8 @@ def send_suppression_reason(verdict: dict[str, Any]) -> Optional[str]:
 
 
 def send_log_path(repo_root: str, caller_session_id: str) -> str:
-    """This session's own record of which peers it has already offered.
+    """Only the HOLDER's log, written by the holder or on the holder's
+    behalf under the holder's key (DR-408).
 
     Per-session bookkeeping beside `advisory-fire-counts.jsonl`. Session-
     scoped: a new Group EM starts with an empty cooldown, matching the DACI
@@ -346,8 +349,10 @@ def _record_offer(
 
     Internal: `build_send_digest` calls this per emitted entry, so the cooldown
     arms itself rather than depending on the caller. Failure is reported, never
-    raised -- the caller must be able to say so. There is deliberately no
-    public counterpart -- do not expose this as a per-peer entry point.
+    raised -- the caller must be able to say so. `record_offers` is the public,
+    batched, attributed counterpart for a delegated caller (DR-408); this stays
+    internal because `build_send_digest`'s per-entry emission has no nudger to
+    attribute and no batch to join.
     """
     now = time.time() if now is None else now
     if not machinery_paths.safe_session_id(caller_session_id) or not machinery_paths.safe_session_id(peer_session_id):
@@ -368,6 +373,78 @@ def _record_offer(
     except OSError:
         return False
     return True
+
+
+def record_offers(
+    repo_root: str,
+    holder_session_id: str,
+    peer_session_ids: list[str],
+    offered_by: str,
+    now: Optional[float] = None,
+) -> list[str]:
+    """Record N offers UNDER THE HOLDER'S KEY in one call, attributed to
+    `offered_by` (DR-408). Returns the `peer_session_ids` NOT recorded
+    (refused or write-failed), `[]` when every row landed -- matching
+    `_record_offer`'s report-not-raise contract, batched.
+
+    "Under the holder's key" means the HOLDER occupies BOTH `offer_key` and
+    `send_log_path` positions -- both are derived from `holder_session_id`
+    for every row, regardless of who is nudging. `offered_by` (the nudging
+    session) appears ONLY as the row's attribution field; it never salts
+    `offer_key` and never selects `send_log_path`. A caller that passes the
+    nudger as the key-deriving id here produces a log file and a key no
+    reader ever looks at.
+
+    `safe_session_id` gates the holder, the nudger, and EVERY peer id -- a
+    delegated caller is not a reason to loosen the check that keeps a
+    session id from becoming a path. A malformed holder or `offered_by`
+    refuses the whole batch; a malformed peer id is refused per-row, the
+    rest of the batch still lands.
+
+    Emits a SINGLE `write()` of all recorded lines joined, not one
+    `open(..., 'a')` + `write()` per row -- free given the entry point is
+    batched by construction, and it removes the concurrent-writer torn-line
+    hazard a per-row append would otherwise reintroduce on a box running a
+    machine-wide watcher as a second writer to the same log path.
+    """
+    now = time.time() if now is None else now
+    if not machinery_paths.safe_session_id(holder_session_id) or not machinery_paths.safe_session_id(
+        offered_by
+    ):
+        return list(peer_session_ids)
+
+    lines: list[str] = []
+    recorded: list[str] = []
+    unrecorded: list[str] = []
+    for peer_session_id in peer_session_ids:
+        if not machinery_paths.safe_session_id(peer_session_id):
+            unrecorded.append(peer_session_id)
+            continue
+        lines.append(
+            json.dumps(
+                {
+                    "outcome": "offer",
+                    "offer_key": offer_key(holder_session_id, peer_session_id),
+                    "offered_at": now,
+                    "offered_by": offered_by,
+                },
+                sort_keys=True,
+            )
+        )
+        recorded.append(peer_session_id)
+
+    if not lines:
+        return unrecorded
+
+    path = send_log_path(repo_root, holder_session_id)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError:
+        return unrecorded + recorded
+
+    return unrecorded
 
 
 def decline(
@@ -424,11 +501,20 @@ def _log_key_is_open(log: list[dict[str, Any]], key: str) -> bool:
     Legacy rows written before this chunk carry no `outcome` at all; they
     are read as `"offer"` rows (their only prior meaning) so an existing log
     does not spuriously go quiet the moment this ships.
+
+    ATTRIBUTED ROWS ARE EXCLUDED (C3b), symmetric with `idle_report.
+    _group_em_answer`'s `stamps` comprehension. `open_obligations` tells the
+    Group EM what IT owes; a row carrying `offered_by` is a delegated nudge
+    -- it creates an obligation for the nudger, not the holder, and counting
+    it here would report an open obligation for an act that was never the
+    Group EM's, the same foreign-attribution defect this chunk closes.
     """
     last_offer_at: Optional[float] = None
     last_decline_at: Optional[float] = None
     for record in log:
         if record.get("offer_key") != key:
+            continue
+        if record.get("offered_by") is not None:
             continue
         outcome = record.get("outcome", "offer")
         if outcome == "declination":
@@ -594,7 +680,13 @@ def resolve_addressee(
         return None
     roster_fn = build_roster if build_roster is not None else peer_roster.build_roster
     try:
-        rows = roster_fn(repo_root=repo_root)
+        # MATERIALIZED, not merely fetched. Two loops below walk `rows`: the
+        # dict-shape wiring guard, then the actual match. A one-shot iterator
+        # would be exhausted by the first, leaving the second to see nothing
+        # and return `None` -- the same answer a genuine absence produces, so
+        # a generator-shaped seam would degrade into a silent refusal instead
+        # of the loud failure the guard below exists to raise.
+        rows = list(roster_fn(repo_root=repo_root))
     except Exception:
         return None
     for row in rows:

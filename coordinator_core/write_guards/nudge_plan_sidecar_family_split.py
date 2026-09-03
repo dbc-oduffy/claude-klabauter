@@ -95,7 +95,15 @@ _ROW_39_LENSES = frozenset(_PLAN_DERIVABLE_LENS.values())
 #: Anchors ``state/plan-sidecars/<filename>`` at a path-segment boundary,
 #: mirroring ``nudge_tasks_state_folder_split._TASKS_PREFIX_RE``'s anchoring
 #: discipline so a coincidental substring does not false-positive.
-_SIDECAR_DIR_RE = re.compile(r"(?:^|/)state/plan-sidecars/([^/]+)$")
+#: Both roots. The bucket relocated to `.coordinator-local/plan-sidecars/`;
+#: an advisory pinned to the old root stops firing without failing, exactly
+#: as the two hard-deny sidecar guards did. Kept as a local pattern rather
+#: than a seam accessor because this is the only plan-sidecar path matcher
+#: in the tree -- one call site does not make a convention, and
+#: `machinery_paths.plan_sidecars_dir` already owns the directory itself.
+_SIDECAR_DIR_RE = re.compile(
+    r"(?:^|/)(?:state|\.coordinator-local)/plan-sidecars/([^/]+)$"
+)
 
 #: The archival rename-on-existing timestamp segment, e.g.
 #: ``2026-07-27T19-46-54Z`` — verified against real files on disk (colons

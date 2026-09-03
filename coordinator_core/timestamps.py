@@ -78,7 +78,13 @@ def age_phrase(seconds: float) -> str:
     return f"{seconds / 3600:.1f} hours"
 
 
-def age_days(stamp: Any, now_epoch: Optional[float] = None) -> Optional[float]:
+# Review: overengineering-reviewer -- this pair (plus `day_phrase`) is a
+# general calendar-age facility with exactly one caller in the tree today
+# (`with_age_date`, itself serving only `relocation_ledger.retired_at`).
+# Kept private rather than deleted: privatizing matches the module's actual
+# exported surface to its actual consumers without foreclosing a second date
+# field, which is the trigger to re-generalise, not the first.
+def _age_days(stamp: Any, now_epoch: Optional[float] = None) -> Optional[float]:
     """Days between a `YYYY-MM-DD` calendar date and now, or `None`.
 
     Separate from `age_seconds` on purpose. A bare date is a DAY, not an
@@ -103,7 +109,7 @@ def age_days(stamp: Any, now_epoch: Optional[float] = None) -> Optional[float]:
     return (reference - parsed).total_seconds() / 86400.0
 
 
-def day_phrase(days: float) -> str:
+def _day_phrase(days: float) -> str:
     """`today`, `1 day`, `36 days` -- a whole-day count, never a false decimal."""
     whole = int(max(0.0, days))
     if whole == 0:
@@ -120,12 +126,12 @@ def with_age_date(stamp: Any, now_epoch: Optional[float] = None) -> str:
     respect: the stored bytes are reproduced verbatim, nothing is converted,
     and a date that cannot be read renders marked rather than guessed at.
     """
-    days = age_days(stamp, now_epoch)
+    days = _age_days(stamp, now_epoch)
     if days is None:
         return f"{stamp} ({UNREADABLE_AGE})"
     if int(max(0.0, days)) == 0:
-        return f"{stamp} ({day_phrase(days)})"
-    return f"{stamp} ({day_phrase(days)} ago)"
+        return f"{stamp} ({_day_phrase(days)})"
+    return f"{stamp} ({_day_phrase(days)} ago)"
 
 
 def with_age(stamp: Any, now_epoch: Optional[float] = None) -> str:

@@ -122,6 +122,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
+from coordinator_core.session import machinery_paths
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._subagent_identity import (
     _read_backpointer_subagent_type,
@@ -137,13 +138,19 @@ GENERATES = []
 
 _INTERCEPTED_TOOLS = {"Write", "Edit", "NotebookEdit", "MultiEdit"}
 
-#: Leg 1 -- pure-string applicability gate. Captures the session-id
-#: directory segment and the leaf basename; the leaf's own
+#: Leg 1 -- pure-string applicability gate. Captures the sidecar root, the
+#: session-id directory segment and the leaf basename; the leaf's own
 #: ``<label>.<agent_id>.md`` split happens separately below, on the FIRST
 #: ``.`` (``partition``), not a greedy split.
-_SIDECAR_LEAF_RE = re.compile(
-    r"(^|/)state/subagent-share/(?P<session>[^/]+)/(?P<leaf>[^/]+)$"
-)
+#:
+#: Owned by ``machinery_paths.subagent_share_leaf_pattern`` -- this module
+#: calls the accessor rather than re-deriving the bucket's spelling, the
+#: same way ``session/artifact_owner.py`` consumes the id accessor. The
+#: hand-rolled single-root regex this replaces was anchored on
+#: ``state/subagent-share/`` and stopped matching every live sidecar when
+#: the bucket relocated: a hard-deny guard whose applicability gate matches
+#: nothing allows everything, and does so without erroring.
+_SIDECAR_LEAF_RE = machinery_paths.subagent_share_leaf_pattern()
 
 #: Same single-segment whitelist ``provision_report._SEGMENT_WHITELIST_RE``
 #: uses to sanitize the ``<label>`` component -- re-derived here rather than
@@ -180,11 +187,13 @@ def _normalize_path(file_path: str) -> str:
 
 
 def _split_sidecar_leaf(normalized_path: str) -> Optional[Dict[str, str]]:
-    """Leg 1: does ``normalized_path`` resolve under
-    ``state/subagent-share/<session>/`` with a leaf splitting into
+    """Leg 1: does ``normalized_path`` resolve under either machinery root's
+    ``subagent-share/<session>/`` with a leaf splitting into
     ``<label>.<agent_id>.md``?
 
-    Returns ``{"session": ..., "label": ..., "agent_id": ...}`` on a match,
+    Returns ``{"root": ..., "session": ..., "label": ..., "agent_id": ...}``
+    on a match ("root" so the denial message echoes the path the caller
+    actually wrote rather than a hardcoded one),
     ``None`` otherwise (not leaf-shaped, or not under the sidecar
     directory -- this guard's applicability gate, not a deny path).
     """
@@ -204,7 +213,12 @@ def _split_sidecar_leaf(normalized_path: str) -> Optional[Dict[str, str]]:
     label, _, agent_id = stem.partition(".")
     if not label or not agent_id:
         return None
-    return {"session": match.group("session"), "label": label, "agent_id": agent_id}
+    return {
+        "root": match.group("root"),
+        "session": match.group("session"),
+        "label": label,
+        "agent_id": agent_id,
+    }
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -282,8 +296,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if own_id and leaf_info["agent_id"].casefold() == own_id.casefold():
             return None
 
-    own_leaf = "state/subagent-share/%s/%s.%s.md" % (
-        leaf_info["session"], leaf_info["label"], resolved_agent_id
+    own_leaf = "%s/subagent-share/%s/%s.%s.md" % (
+        leaf_info["root"], leaf_info["session"], leaf_info["label"], resolved_agent_id
     )
     # Register (docs/wiki/guard-messaging.md): one fact, once, plus the
     # terse alternative. The indented block is PATH ENTRIES ONLY -- every

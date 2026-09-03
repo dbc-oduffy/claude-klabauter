@@ -158,6 +158,12 @@ def claude_dir(claude_home: str) -> Path:
     This helper exists so the two classes are told apart by which function a
     call site uses rather than by whether whoever wrote it remembered.
 
+    An EMPTY ``claude_home`` yields ``.claude`` RELATIVE TO CWD, not an
+    absolute path -- `resolve_coordinator_root`'s rung 4 passes "" when
+    `require_home` raises, and only survives it because the caller gates on
+    `.is_file()`. Do not introduce a caller that writes or deletes through
+    this helper without an absolute-home check of its own.
+
     Lives here rather than in `uninstall_legs` because the segment is not an
     uninstall fact: `resolve_coordinator_root`'s own `.doe-root` rung reads it
     too, and that reader was missed by the first sweep precisely because the

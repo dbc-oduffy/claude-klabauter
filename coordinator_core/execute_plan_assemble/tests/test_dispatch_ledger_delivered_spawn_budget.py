@@ -58,26 +58,36 @@ def _manifest_spawn_budget() -> dict:
 
 
 def _count_git_calls(fn):
-    """Patches the real `subprocess` module's own `run` attribute -- not a
-    per-module copy -- so this still sees every spawn regardless of which
-    module reaches it: `_dispatch_ledger_delivered`'s two sites now route
-    through `coordinator_core.git.run.run_git`, which does its own
+    """Patches the real `subprocess` module's own `Popen` attribute -- not a
+    per-module copy, and not `run` -- so this sees every spawn regardless of
+    which module or which API reaches it: `_dispatch_ledger_delivered`'s two
+    sites route through `coordinator_core.git.run.run_git`, which does its own
     function-local `import subprocess` (G7's shared-runner migration), so a
-    patch scoped to `coas.subprocess` (the pre-migration target) would miss
-    both calls entirely."""
-    calls = {"n": 0}
-    orig = subprocess.run
+    patch scoped to `coas.subprocess` would miss both calls entirely.
 
-    def _counting_run(cmd, *a, **kw):
-        if isinstance(cmd, list) and cmd and cmd[0] == "git":
+    WHY `Popen` AND NOT `run`. This counter watched `subprocess.run` until
+    2026-09-03. `56250c56e0` hand-rolled `run_git` over `Popen` so the timeout
+    actually bounds the call on Windows -- a correct change that this counter
+    could not see, so it counted ZERO where it budgets two. The half that
+    budgets zero kept PASSING: an assertion of `spawns == 0` against a counter
+    watching nothing is true no matter how many processes start. Every
+    `subprocess.run`/`.call`/`.check_call`/`.check_output`/`Popen(...)` in the
+    engine constructs a `Popen`, so this is the one chokepoint that cannot be
+    stepped around by an API change -- the same reason
+    `telemetry/spawn_counter.py` counts `subprocess.Popen` rather than `run`."""
+    calls = {"n": 0}
+    orig = subprocess.Popen
+
+    def _counting_popen(cmd, *a, **kw):
+        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "git":
             calls["n"] += 1
         return orig(cmd, *a, **kw)
 
-    subprocess.run = _counting_run
+    subprocess.Popen = _counting_popen
     try:
         result = fn()
     finally:
-        subprocess.run = orig
+        subprocess.Popen = orig
     return result, calls["n"]
 
 

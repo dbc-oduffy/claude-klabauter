@@ -12,10 +12,11 @@ import json
 import os
 
 from coordinator_core.group_em import obligations
+from coordinator_core.session import machinery_paths
 
 
 def _ledger_dir(repo_root, session_id):
-    path = os.path.join(repo_root, "state", "subagent-share", session_id)
+    path = machinery_paths.share_dir(repo_root, session_id)
     os.makedirs(path, exist_ok=True)
     return path
 
@@ -78,7 +79,7 @@ class TestForPeerReturnsNames:
 
 class TestRecordAppendsIntakeRow:
     def _intake_path(self, repo_root, session_id):
-        return os.path.join(repo_root, "state", "subagent-share", session_id, "obligations-inbound.jsonl")
+        return machinery_paths.intake_path(repo_root, session_id)
 
     def test_open_row_shape(self, tmp_path):
         repo_root = str(tmp_path)

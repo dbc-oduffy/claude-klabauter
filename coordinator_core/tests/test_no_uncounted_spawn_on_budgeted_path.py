@@ -301,6 +301,51 @@ from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
 #: (verified: 0 newly-undeclared site keys), so `test_unenrolled_spawn_bearing_ops_are_declared_
 #: in_the_frozen_inventory` needed no new entries for them. 185 -> 145 enrolled rows.
 _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    # Enrolled 2026-09-03, same EM-adjudication step 2 as the 2026-08-30 four
+    # below: each resolves to a function-granular reachable spawn set that is
+    # EMPTY, so it needs no legitimization and no static pin. Three of them
+    # (`hooks.stop_dispatch`, `hooks.watchdog_undischarged_next_move`,
+    # and the `groupem.*` trio's shared reader) reach nothing precisely BECAUSE
+    # the machinery relocation repointed them onto `session.machinery_paths` and
+    # took a git spawn off a per-turn hook path. Left in the residual they read
+    # as unaccounted-for; enrolled, a spawn site appearing at any of them is a
+    # regression this file will surface on the next run.
+    "groupem.idle_report": (
+        "coordinator_core/ops/group_em_idle_report.py",
+        ("_groupem_idle_report",),
+    ),
+    "groupem.resolve_addressee": (
+        "coordinator_core/ops/group_em_resolve_addressee.py",
+        ("_groupem_resolve_addressee",),
+    ),
+    "groupem.stamp": (
+        "coordinator_core/ops/group_em_stamp.py",
+        ("_groupem_stamp",),
+    ),
+    "handoff.repair_deployment_state": (
+        "coordinator_core/ops/handoff_stamp.py",
+        ("_repair_live_deployment_state_handler",),
+    ),
+    "hooks.nudge_autonomous_askuserquestion": (
+        "coordinator_core/hooks/nudge_autonomous_askuserquestion.py",
+        ("_handler",),
+    ),
+    "hooks.runtime_tripwire_em_check": (
+        "coordinator_core/hooks/runtime_tripwire_em_check.py",
+        ("_handler",),
+    ),
+    "hooks.sessionend_archive_session": (
+        "coordinator_core/hooks/sessionend_archive_session.py",
+        ("_handler",),
+    ),
+    "hooks.stop_dispatch": (
+        "coordinator_core/hooks/stop_dispatch.py",
+        ("_handler",),
+    ),
+    "hooks.watchdog_undischarged_next_move": (
+        "coordinator_core/hooks/watchdog_undischarged_next_move.py",
+        ("_handler",),
+    ),
     # Enrolled 2026-08-30: each of these four resolves to a function-granular
     # reachable spawn set that is EMPTY. An op that reaches no spawn site needs
     # no legitimization and no static pin -- it is enrolled directly, per this
@@ -1252,7 +1297,17 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         # not `close_out_and_stamp.subprocess.run`, which no longer exists once that module
         # dropped its own `import subprocess`) -- still the same global module attribute either
         # way, so leg 1 (mechanism) still holds and legs 2/3 (assertion, execution) are unchanged.
-        counter=_GLOBAL_SUBPROCESS_RUN,
+        # Counter moved from `subprocess.run` to `subprocess.Popen` on 2026-09-03,
+        # so this legitimation moves with it. `56250c56e0` hand-rolled `run_git`
+        # over `Popen` to bound the timeout on Windows; the counter kept watching
+        # `run` and therefore counted ZERO, while this entry went on asserting the
+        # site was counted. The half of that budget test asserting `spawns == 0`
+        # passed throughout -- a zero-assertion against a counter watching nothing
+        # is true however many processes start. `_GLOBAL_SUBPROCESS_SPAWN` is the
+        # honest constant now: its mechanism pin admits both, and the counter
+        # genuinely observes both (it patches `Popen`, which every `run`/`call`/
+        # `check_output`/`Popen` in the engine constructs).
+        counter=_GLOBAL_SUBPROCESS_SPAWN,
         counted_by="coordinator_core/execute_plan_assemble/tests/"
         "test_dispatch_ledger_delivered_spawn_budget.py",
         executed="Measured 2026-08-19: origin-recorded at close_out_and_stamp.py:611 (now "
@@ -1566,7 +1621,13 @@ _CLUSTER_D3_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
+    #: `run_git` reached via `git.git_state`'s `head_blobs`/`read_index`, which
+    #: `push_failure_verdict` imports directly. Read-only plumbing (`rev-list`,
+    #: `diff --name-only`) through the one sanctioned runner, so the op's
+    #: COMPUTE_ONLY class in `authz/classification.py` still holds — that class
+    #: is about write semantics, not about whether a subprocess starts.
     "git.push_failure_verdict": (
+        ("coordinator_core/git/run.py", "run_git", "git", 0),
         ("coordinator_core/ops/ceremony/git_native.py", "_git._invoke", "<dynamic>", 0),
     ),
     "handoff.archive_transition": (
@@ -1759,7 +1820,9 @@ def test_cluster_d3_open_disposition_matches_live_measurement():
         "_CLUSTER_D3_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 59, (
+    # 59 -> 60 on 2026-09-03: `git.push_failure_verdict` reaches `git/run.py::run_git`
+    # via `git.git_state`'s `head_blobs`/`read_index`, which it imports directly.
+    assert total_pairs == 60, (
         f"_CLUSTER_D3_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
         "59: 869247ab3a (two-ratchet-gates C3) routed session/scope.py::_git_run onto "
         "git/run.py::run_git, which rewrote the scope.py row of all SIXTEEN ops that carried "
@@ -2208,9 +2271,13 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
     "handoff.scaffold_from_queue": (
         ("coordinator_core/person_resolver.py", "_git_config_uncached", "git", 0),
     ),
-    "hooks.cater_subagent_start": (
-        ("coordinator_core/subagent_sandbox/engine.py", "_resolve_git_root_uncached", "git", 0),
-    ),
+    #: Empty since the machinery relocation (`5a9bb6c5ba`, that plan's C2/C3/C6/C10a):
+    #: repointing this hook onto `session.machinery_paths` took
+    #: `subagent_sandbox/engine.py::_resolve_git_root_uncached` off its reachable
+    #: set, so the git spawn it carried is gone from a per-turn hook path. A
+    #: removal, not a suppression — re-derived from the live tree, and the
+    #: companion budget test named in this dict's own header still guards the leg.
+    "hooks.cater_subagent_start": (),
     "memo.fate_backfill": (
         ("coordinator_core/distill/delete_guard.py", "_git_object_exists", "git", 0),
     ),
@@ -2290,7 +2357,9 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
         "_CLUSTER_D5_OPEN_DISPOSITION has drifted from the live tree's own cluster reachability "
         "(re-derive and update the dict, do not silently widen or narrow it):\n" + "\n".join(mismatches)
     )
-    assert total_pairs == 38, (
+    # 38 -> 37 on 2026-09-03: the machinery relocation (`5a9bb6c5ba`) took
+    # `_resolve_git_root_uncached` off `hooks.cater_subagent_start`'s reachable set.
+    assert total_pairs == 37, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
         "38 left after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
@@ -6040,7 +6109,13 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "cartography.file_index": 2,
     "ceremony.update_docs_scan": 2,
     "changelog.backfill_gaps": 2,
-    "hooks.cater_subagent_start": 2,
+    #: Lowered 2 -> 1 on 2026-09-03. The machinery relocation (`5a9bb6c5ba`)
+    #: repointed this hook onto `session.machinery_paths` and took
+    #: `subagent_sandbox/engine.py::_resolve_git_root_uncached` off its reachable
+    #: set, removing a git spawn from a per-turn hook path. A ceiling left above
+    #: the live number is not a safety margin -- it is room for a regression to
+    #: land without this ratchet noticing.
+    "hooks.cater_subagent_start": 1,
     "priority.drain": 2,
     "changelog.inject_anchor": 2,
     "ci.run_semgrep_scan": 2,

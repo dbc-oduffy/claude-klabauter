@@ -562,12 +562,50 @@ class TestLivenessBasisYieldsToName:
         )
         assert "UNNAMED" in sentence
 
+    def test_an_unfittable_resolved_name_truncates_rather_than_vanishing(self):
+        """A resolved name too long for the budget renders a MARKED truncation,
+        never nothing and never UNNAMED.
+
+        The three-way precedence this pins, worst-last: full name > truncated
+        name > UNNAMED > bare sid. UNNAMED is rung 3's marker and means no name
+        resolved; reusing it for a name that resolved but did not fit would make
+        the two indistinguishable.
+        """
+        long_name = "an-absurdly-long-session-name-that-no-registry-would-ever-hand-out"
+        fact = OwnerFact(
+            owner=REAL_SID,
+            liveness="live",
+            claim_source="session",
+            writer_name=long_name,
+        )
+        sentence = dispatch_checks._format_owner_sentence(
+            fact, self._verdicts(REAL_SID, "harness-registry")
+        )
+        assert " -- w:" in sentence
+        assert "UNNAMED" not in sentence
+        assert long_name not in sentence  # it truncated
+        assert long_name[:12] in sentence  # but enough survives to read
+        assert len(sentence.encode("utf-8")) <= dispatch_checks._owner_clause_budget_bytes()
+
     def test_no_live_owner_clause_ever_ends_in_a_bare_sid(self):
         """The invariant the reported defect broke, stated once: a live
         owner clause carries an address or an explicit UNNAMED -- never a
         sid alone."""
         for basis in ("harness-registry", "harness-registry-elsewhere", "stable-pid"):
-            for name in (None, "x-3", "example-cockpit-repo-0f", "example-game-workbench-repo-70"):
+            # Names deliberately span the whole-or-nothing threshold, which
+            # measured at 35 bytes on 2026-09-03. The three fleet names this
+            # test originally carried (19/25/22 bytes) ALL sat under it, so it
+            # asserted a universal it never exercised: a resolved name over the
+            # threshold rendered neither " -- w:" nor UNNAMED, which is the bare
+            # sid this very assertion forbids. The last two entries are over.
+            for name in (
+                None,
+                "x-3",
+                "example-cockpit-repo-0f",
+                "example-game-workbench-repo-70",
+                "a-repo-name-thirty-five-bytes-long!",
+                "an-absurdly-long-session-name-that-no-registry-would-ever-hand-out",
+            ):
                 fact = OwnerFact(
                     owner=REAL_SID,
                     liveness="live",

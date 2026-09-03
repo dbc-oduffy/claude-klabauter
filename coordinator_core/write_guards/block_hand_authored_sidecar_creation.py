@@ -102,6 +102,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from coordinator_core.session import machinery_paths
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 
@@ -112,9 +113,29 @@ PRIORITY = 60
 #: Escape hatch — recovery-only, mirrors sibling guards' override pattern.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_HAND_SIDECAR_WRITE"
 
-#: Path-tail shape: state/subagent-share/<session-id>/<name>.md — the
+#: Path-tail shape: <root>/subagent-share/<session-id>/<name>.md -- the
 #: session-keyed sidecar home every provisioning path writes into.
-_SIDECAR_PATH_RE = re.compile(r"(^|/)state/subagent-share/[^/]+/[^/]+\.md$")
+#:
+#: Owned by ``machinery_paths.subagent_share_leaf_pattern`` (see
+#: ``block_foreign_family_sidecar_write``'s leg-1 note for why the
+#: hand-rolled single-root form this replaces was silently dead). The
+#: ``.md`` test moves off the regex and onto the captured leaf so it can be
+#: casefolded: the prior ``\.md$`` was case-SENSITIVE, so a ``.MD`` leaf on
+#: NTFS or default APFS -- the same file, as far as the filesystem is
+#: concerned -- fell through to ALLOW. Sibling guard
+#: ``block_foreign_family_sidecar_write`` already casefolds this test, on a
+#: code-reviewer finding; this brings the two into line rather than leaving
+#: one of a matched pair with the gap.
+_SIDECAR_LEAF_RE = machinery_paths.subagent_share_leaf_pattern()
+
+
+def _leaf_match(normalized_path: str):
+    """Sidecar-leaf applicability: either machinery root, `.md` leaf,
+    casefolded. Returns the match (truthy) or None."""
+    match = _SIDECAR_LEAF_RE.search(normalized_path)
+    if match is None or not match.group("leaf").casefold().endswith(".md"):
+        return None
+    return match
 
 
 def _normalize(file_path: str) -> str:
@@ -162,7 +183,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         normalized = _normalize(file_path)
-        if not _SIDECAR_PATH_RE.search(normalized):
+        if not _leaf_match(normalized):
             return None
 
         # New-file gate: an overwrite of an already-provisioned sidecar is a

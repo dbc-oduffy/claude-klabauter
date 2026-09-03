@@ -27,6 +27,21 @@ NEGATIVE SPEC -- what this deliberately does not do:
   EXEMPT with a named reason, not silently skipped.
 - It does not key exemptions by line number. Line numbers in this tree are
   stale within the hour; the key is (module path, field name).
+
+KNOWN GAP -- what this guard does NOT catch. `_bare_at_field` inspects only
+the AST node sitting directly inside the interpolation. It has no data-flow
+tracing, so an `_at`-suffixed value assigned to a plain-named local and then
+interpolated is invisible to the walk:
+
+    stamp = record.get("checked_at")
+    msg = f"checked at {stamp}"
+
+`stamp` is a bare `Name` that does not end in `_at`; no violation is
+recorded and no `EXEMPT` entry is ever needed. This guard stops a bare `_at`
+render written directly, and does not stop one reached through an
+intermediate variable of any other name -- ordinary variable extraction
+defeats it. Treat a clean `test_no_bare_timestamp_reaches_a_reader` run as
+evidence for the direct case only, not as proof that no aliased site exists.
 """
 
 from __future__ import annotations
@@ -150,9 +165,15 @@ def _scan_module(path: str) -> list[tuple[int, str]]:
     return found
 
 
-def scan_engine() -> list[tuple[str, int, str]]:
-    """Every unexempted bare timestamp render under `coordinator_core/`."""
-    violations: list[tuple[str, int, str]] = []
+# Review: overengineering-reviewer -- this walk and `scan_engine`'s were
+# byte-identical in traversal/exclusion rules and parsed every non-test file
+# under coordinator_core/ twice per run. One shared walk, filtered two ways,
+# halves the parse cost and removes the risk of the two rules drifting apart.
+def _engine_renders() -> list[tuple[str, int, str]]:
+    """Every `(rel path, lineno, field)` bare-render candidate under
+    `coordinator_core/`, unfiltered by `EXEMPT` -- callers decide what to do
+    with a candidate that is or isn't in the table."""
+    renders: list[tuple[str, int, str]] = []
     for dirpath, dirnames, filenames in os.walk(_ENGINE_ROOT):
         dirnames[:] = [d for d in dirnames if d != "__pycache__"]
         for filename in filenames:
@@ -163,10 +184,17 @@ def scan_engine() -> list[tuple[str, int, str]]:
             if "/tests/" in rel or rel.startswith("tests/"):
                 continue
             for lineno, field in _scan_module(full):
-                if (rel, field) in EXEMPT:
-                    continue
-                violations.append((rel, lineno, field))
-    return violations
+                renders.append((rel, lineno, field))
+    return renders
+
+
+def scan_engine() -> list[tuple[str, int, str]]:
+    """Every unexempted bare timestamp render under `coordinator_core/`."""
+    return [
+        (rel, lineno, field)
+        for rel, lineno, field in _engine_renders()
+        if (rel, field) not in EXEMPT
+    ]
 
 
 def test_no_bare_timestamp_reaches_a_reader():
@@ -185,18 +213,7 @@ def test_no_bare_timestamp_reaches_a_reader():
 
 def test_every_exemption_still_names_a_real_render():
     """A stale exemption is a hole with a reason attached."""
-    live: set[tuple[str, str]] = set()
-    for dirpath, dirnames, filenames in os.walk(_ENGINE_ROOT):
-        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
-        for filename in filenames:
-            if not filename.endswith(".py") or filename.startswith("test_"):
-                continue
-            full = os.path.join(dirpath, filename)
-            rel = os.path.relpath(full, _ENGINE_ROOT).replace(os.sep, "/")
-            if "/tests/" in rel or rel.startswith("tests/"):
-                continue
-            for _lineno, field in _scan_module(full):
-                live.add((rel, field))
+    live = {(rel, field) for rel, _lineno, field in _engine_renders()}
     orphaned = sorted(key for key in EXEMPT if key not in live)
     assert not orphaned, (
         "EXEMPT names renders that no longer exist -- delete them, or the next "

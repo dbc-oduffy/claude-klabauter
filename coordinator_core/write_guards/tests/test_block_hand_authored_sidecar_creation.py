@@ -49,8 +49,11 @@ commits: []
 """
 
 
-def _payload(tmp_path, *, filename="2026-08-16-repaired-sidecar.md", content, existing=False):
-    sidecar_dir = tmp_path / "state" / "subagent-share" / "sess-1"
+def _payload(
+    tmp_path, *, filename="2026-08-16-repaired-sidecar.md", content,
+    existing=False, root="state",
+):
+    sidecar_dir = tmp_path / root / "subagent-share" / "sess-1"
     sidecar_dir.mkdir(parents=True, exist_ok=True)
     target = sidecar_dir / filename
     if existing:
@@ -151,3 +154,50 @@ def test_allows_overwrite_when_file_path_relative_to_payload_cwd(tmp_path):
         "cwd": str(tmp_path),
     }
     assert guard.check(payload) is None
+
+
+@pytest.mark.parametrize("root", ["state", ".coordinator-local"])
+def test_denies_hand_authored_under_live_sidecar_root(tmp_path, root):
+    """Both sidecar roots reach the deny path.
+
+    Every other fixture here spells `state/`, the PRE-relocation root.
+    Provisioning writes under `.coordinator-local/subagent-share/` now, so
+    this guard's path gate matched none of the writes it exists to police
+    and denied nothing, with the suite green throughout. The
+    `.coordinator-local` case fails against the old single-root regex.
+    """
+    payload = _payload(tmp_path, content=_HAND_AUTHORED_NO_FRONTMATTER, root=root)
+    result = guard.check(payload)
+    assert result is not None, f"a hand-authored sidecar under {root}/ must be denied"
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("root", ["state", ".coordinator-local"])
+def test_provisioned_shape_allowed_under_both_roots(tmp_path, root):
+    """Widening the gate must not deny a properly provisioned sidecar.
+
+    A NEW-file write deliberately (no `existing=True`): an existing file is
+    allowed by the new-file gate before the path gate is consulted at all,
+    so that variant would pass identically against a dead guard and pin
+    nothing. This one reaches the path gate and then the frontmatter check.
+    """
+    payload = _payload(tmp_path, content=_PROVISIONED_SHAPE, root=root)
+    assert guard.check(payload) is None
+
+
+def test_uppercase_md_leaf_is_not_a_way_past_the_gate(tmp_path):
+    """`.MD` names the same file on NTFS and default APFS.
+
+    The prior `\\.md$` regex was case-sensitive, so this fell through to
+    ALLOW. The sibling guard already casefolds this test on a code-reviewer
+    finding; this pins the pair in line.
+    """
+    payload = _payload(
+        tmp_path,
+        filename="2026-08-16-repaired-sidecar.MD",
+        content=_HAND_AUTHORED_NO_FRONTMATTER,
+        root=".coordinator-local",
+    )
+    result = guard.check(payload)
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"

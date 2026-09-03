@@ -65,6 +65,7 @@ from coordinator_core.frontmatter.sentinel_blocks import extract_block as _extra
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_spawn
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+from coordinator_core.session.machinery_paths import plan_sidecars_dir as _plan_sidecars_dir
 from coordinator_core.session.machinery_paths import share_dir as _share_dir
 from coordinator_core.snippet_sync.registry import (
     RegistryError,
@@ -1259,9 +1260,14 @@ def _provision_plan_derivable_doc(
         )
         return None
 
-    plan_sidecars_dir = Path(git_root) / "state" / "plan-sidecars"
+    plan_sidecars_root = Path(_plan_sidecars_dir(git_root))
 
-    doc_path = plan_sidecars_dir / f"{plan_stem}.{lens}.md"
+    doc_path = plan_sidecars_root / f"{plan_stem}.{lens}.md"
+    # Repo-relative, derived from the resolved path rather than re-spelled as
+    # a literal -- the same `relpath` idiom the session-keyed writer below
+    # uses. A hand-written second spelling is what let the write side and
+    # `harvest_exit_interviews`'s read side drift apart in the first place.
+    rel_doc_path = os.path.relpath(doc_path, git_root).replace(os.sep, "/")
     spawned_at = datetime.now(timezone.utc).isoformat()
     # Review: overengineering-reviewer — redundant second `_declared_plan_disagrees_with_stem`
     # scan removed here; see this commit's message for why.
@@ -1269,7 +1275,7 @@ def _provision_plan_derivable_doc(
         agent_type, spawned_at, doc_type, lead_session_id=session_id, plan_path=plan_path
     )
 
-    plan_sidecars_dir.mkdir(parents=True, exist_ok=True)
+    plan_sidecars_root.mkdir(parents=True, exist_ok=True)
 
     try:
         with open(doc_path, "x", encoding="utf-8", newline="\n") as handle:
@@ -1280,7 +1286,7 @@ def _provision_plan_derivable_doc(
         # session_scope.touch_written_path's docstring for the full
         # rationale and the phantom-live-peer guard it applies.
         session_scope.touch_written_path(
-            session_id, f"state/plan-sidecars/{plan_stem}.{lens}.md", git_root
+            session_id, rel_doc_path, git_root
         )
     except FileExistsError:
         # Intended idempotent hit: a second run against the same plan +
@@ -1302,7 +1308,7 @@ def _provision_plan_derivable_doc(
             )
             return None
 
-    return f"state/plan-sidecars/{plan_stem}.{lens}.md"
+    return rel_doc_path
 
 
 def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optional[str]) -> Optional[str]:

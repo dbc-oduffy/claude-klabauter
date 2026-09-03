@@ -39,12 +39,20 @@ Spec backlink: docs/plans/2026-05-23-cross-repo-single-surface-and-canonical-sca
 Prior spec: docs/plans/2026-05-21-cross-repo-memo-discoverability.md § Chunk 2
 
 Purpose: Write ONE dirty delivery memo into the RECEIVER's repo at
-  <receiver-repo>/cross-repo/inbox/YYYY-MM-DD-<topic>.md
+  <receiver-repo>/state/cross-repo/inbox/YYYY-MM-DD-<topic>.md
 left uncommitted (dirty) so it surfaces in the receiver's `git status`.
 
+Receiver inbox root (fleet-wide convention move, PM ruling 2026-09-02): the
+canonical inbox root is `<receiver-repo>/state/cross-repo/`, moving there
+repo-by-repo during a migration window announced in C10a. A fixed
+`<receiver-repo>/cross-repo/` literal is wrong for every sender the moment
+ANY receiver has moved — see `_receiver_inbox_root()` below, which resolves
+the root PER RECEIVER (probes that specific repo) rather than assuming a
+fleet-wide constant.
+
 Single-delivery-copy model (PM ruling 2026-05-23):
-- Sender writes ONE memo into receiver's cross-repo/ directory — NO sender copy,
-  NO archive/cross-repo/ write at send time.
+- Sender writes ONE memo into receiver's (per-receiver-resolved) cross-repo
+  directory — NO sender copy, NO archive write at send time.
 - The CLI prints the receiver path and a "hand the PM this path for relay" line.
 - The receiver reads the dirty file, acts on it, flips status: open → actioned
   in place via a normal Edit + commit. Terminal state — no move, no closure
@@ -115,7 +123,7 @@ import textwrap
 import time as _time
 from pathlib import Path
 
-GENERATES = []  # writes ONE dirty memo into the RECEIVER's (sibling) repo tree at <receiver-repo>/cross-repo/inbox/ — never into claude-klabauter's own tree
+GENERATES = []  # writes ONE dirty memo into the RECEIVER's (sibling) repo tree at <receiver-repo>/state/cross-repo/inbox/ (per-receiver-resolved, see _receiver_inbox_root) — never into claude-klabauter's own tree
 
 # ---------------------------------------------------------------------------
 # Shared memo composer — extracted to bin/lib/memo_compose.py (example-initiative tc-0 C4)
@@ -1450,6 +1458,27 @@ def _normalize_repo_name(name: str) -> str:
     return re.sub(r"[-_]+", "", name.strip().lower())
 
 
+def _receiver_inbox_root(repo_path: str) -> str:
+    """Resolve the cross-repo inbox root for ONE specific receiver repo.
+
+    Fleet-wide convention move (PM ruling 2026-09-02, C10a notice): the
+    canonical inbox root is moving from `<repo>/cross-repo/` to
+    `<repo>/state/cross-repo/`, repo-by-repo, during a migration window — not
+    all at once. A fixed `<repo>/cross-repo/` literal is wrong for every
+    sender the moment ANY receiver has moved, so this probes the SPECIFIC
+    receiver repo passed in rather than assuming a fleet-wide constant:
+    prefers the new `state/cross-repo/` root when it exists on disk, falls
+    back to the legacy `cross-repo/` root otherwise (receiver not yet
+    migrated, or a pre-move sibling on an older machine).
+
+    Spec backlink: docs/plans/2026-09-02-state-keeps-the-work-not-the-machinery.md § C8
+    """
+    new_root = os.path.join(repo_path, "state", "cross-repo")
+    if os.path.isdir(new_root):
+        return new_root
+    return os.path.join(repo_path, "cross-repo")
+
+
 def _looks_like_coordinator_receiver(path: str) -> bool:
     """Verify-before-deliver gate (rule 5) for the parent-folder-scan fallback.
 
@@ -1457,16 +1486,19 @@ def _looks_like_coordinator_receiver(path: str) -> bool:
     before it can receive a memo — a coincidentally-named non-receiver
     directory is rejected outright (treated as no-match by the caller).
     Requires BOTH: a real git repo (`.git/` present) AND at least one of
-    `cross-repo/inbox/`, `cross-repo/`, or a `coordinator.local.md` marker.
+    `<inbox-root>/inbox/`, `<inbox-root>/`, or a `coordinator.local.md`
+    marker — `<inbox-root>` is `_receiver_inbox_root(path)`, per-receiver
+    resolved rather than a fixed `cross-repo/` literal (see that function).
     """
     # Review: code-review F5 — use os.path.exists rather than os.path.isdir:
     # in a git-worktree sibling, .git is a FILE (gitdir: pointer), not a
     # directory. isdir would wrongly reject a legitimate worktree receiver.
     if not os.path.exists(os.path.join(path, ".git")):
         return False
+    inbox_root = _receiver_inbox_root(path)
     return (
-        os.path.isdir(os.path.join(path, "cross-repo", "inbox"))
-        or os.path.isdir(os.path.join(path, "cross-repo"))
+        os.path.isdir(os.path.join(inbox_root, "inbox"))
+        or os.path.isdir(inbox_root)
         or os.path.isfile(os.path.join(path, "coordinator.local.md"))
     )
 
@@ -3640,9 +3672,9 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     epilog = textwrap.dedent("""\
         INBOUND memos (closing one someone sent YOU):
           This tool only manages OUTBOUND memo drafts. To close/action a memo
-          already sitting in your own cross-repo/inbox/, use archive-stamp-cli
-          instead:
-            archive-stamp-cli resolve-memo cross-repo/inbox/<memo-file>.md
+          already sitting in your own state/cross-repo/inbox/, use
+          archive-stamp-cli instead:
+            archive-stamp-cli resolve-memo state/cross-repo/inbox/<memo-file>.md
     """)
 
     parser = argparse.ArgumentParser(
@@ -3683,8 +3715,8 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
         help="OPTIONAL. Basename (or path — normalized to basename) of the "
              "inbound memo this draft will reply to when sent. Written as "
              "`in_reply_to:` in the draft's frontmatter and threaded through "
-             "`send`; existence against this repo's own cross-repo/inbox/ or "
-             "cross-repo/archive/ is checked at send time, not draft time.",
+             "`send`; existence against this repo's own state/cross-repo/inbox/ or "
+             "state/cross-repo/archive/ is checked at send time, not draft time.",
     )
     # scoped_to sub-fields — OPTIONAL for every kind (presence-triggered
     # completeness, not kind-gated): omit all four and the draft is valid
@@ -3920,9 +3952,9 @@ def main(argv: list[str] | None = None) -> int:
                 f"cross-repo-memo: '{first}' is not a cross-repo-memo verb — "
                 f"this tool manages OUTBOUND memos (draft, compose, list, "
                 f"discard, send). To close/action an INBOUND memo already "
-                f"sitting in your cross-repo/inbox/, use "
+                f"sitting in your state/cross-repo/inbox/, use "
                 f"archive-stamp-cli resolve-memo <memo_path> instead:\n"
-                f"  archive-stamp-cli resolve-memo cross-repo/inbox/<memo-file>.md",
+                f"  archive-stamp-cli resolve-memo state/cross-repo/inbox/<memo-file>.md",
                 file=sys.stderr,
             )
             return 2

@@ -344,7 +344,16 @@ _VALID_MODES = frozenset({"chain", "stamp_shipped", "stamp_only", "supersede"})
 # (frontmatter/schemas/handoff.schema.json): "shipped" | "continued" |
 # "closed" are the three lifecycle terminals; "awaiting_gate" |
 # "ready_to_fire" | "in_flight" are not.
-_TERMINAL_DEPLOYMENT_STATES = frozenset({"shipped", "continued", "closed"})
+#
+# Review: coordinator:code-reviewer — this vendored copy had drifted to
+# 3 members, silently omitting "abandoned" (the old-vocabulary terminal
+# deployment_state), so a baton in that state was treated as non-terminal
+# here while every SSOT-importing caller treated it as terminal. Now
+# imports lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT directly (a leaf
+# module, zero coordinator_core imports/side effects) instead of vendoring.
+from coordinator_core.lifecycle_constants import (
+    HANDOFF_TERMINAL_DEPLOYMENT as _TERMINAL_DEPLOYMENT_STATES,
+)
 
 # Vendored handoff schema — same path handoff_transition.py resolves,
 # duplicated here (not imported) since the supersede-verb-split mutation is

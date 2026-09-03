@@ -67,9 +67,13 @@ from coordinator_core.ops.fleet._common import check_repo_root, main_worktree_ro
 from coordinator_core.ops.fleet._findings_reap import (
     _MARKER_RE,
     _extract_authored_date,
+    _review_trail_roots,
+    cited_review_trail_relpaths,
     reap_findings,
     scan_findings,
+    scan_review_trail_rest,
 )
+from coordinator_core.session.machinery_paths import REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS
 
 _LOG = logging.getLogger(__name__)
 
@@ -265,6 +269,147 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # envelope; see module docstring), not an omission.
     current = [p for p, _ in _scan_reapable(worktree)]
     reaped, skipped, failed = await _reap(worktree, current)
+    return {
+        "exit_code": 2 if failed else 0,
+        "dry_run": False,
+        "candidates": [],
+        "reaped": reaped,
+        "skipped": skipped,
+        "failed": failed,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Third leg (C12): review-trail is CLOSED (nothing writes it once C7
+# relocated it) -- size/date-only, no liveness/marker term, gated on BOTH
+# the DR-218 filename-derived date cascade AND a citation census hard
+# pre-delete gate (skip a cited candidate regardless of age). Covers the
+# rest of the review-trail corpus beyond findings/*.md, which legs (a)/(b)
+# already own.
+# ---------------------------------------------------------------------------
+
+
+def _make_classify_review_trail_rest(worktree_root: Path):
+    """Builds the third-leg classify predicate, closing over ONE
+    citation-census walk (`cited_review_trail_relpaths`) computed here so a
+    scan over hundreds of review-trail files does not re-walk the candidate
+    corpus per file. Same fail-closed-to-keep shape as `classify_unintegrated`:
+    unparseable filename, too-young, or cited all return None (KEEP).
+    """
+    cited = cited_review_trail_relpaths(worktree_root)
+
+    def _classify(path: Path) -> Optional[str]:
+        d = _extract_authored_date(path.name)
+        if d is None:
+            return None  # fail-closed-to-keep: cannot determine age, never reap
+
+        today = datetime.now(timezone.utc).date()
+        threshold = today - timedelta(days=REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS)
+        if d > threshold:
+            return None  # too young
+
+        for root_dir in _review_trail_roots(worktree_root):
+            try:
+                rel = path.relative_to(root_dir).as_posix()
+            except ValueError:
+                continue
+            if rel in cited:
+                return None  # HARD pre-delete gate: cited, skip regardless of age
+            break
+
+        return (
+            f"aged > {REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS}d; "
+            f"authored {d.isoformat()}"
+        )
+
+    return _classify
+
+
+def _review_trail_rest_subject_builder(n: int) -> str:
+    return (
+        f"fleet: reap {n} aged review-trail record(s) (rest-of-corpus, C12)\n\n"
+        f"Reaped via fleet.reap_review_trail_rest (date cap "
+        f"{REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS}d, citation-census-gated)."
+    )
+
+
+@register_op("fleet.reap_review_trail_rest")
+async def _handler_review_trail_rest(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """fleet.reap_review_trail_rest -- reap the rest of the (CLOSED,
+    post-C7) review-trail corpus by filename-derived date cap
+    (`machinery_paths.REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS`), gated on a
+    citation-census hard pre-delete gate. Same custom dry_run:true/false
+    shape as `fleet.reap_unintegrated_findings` (DEC-1 -- no cockpit
+    two-phase mode/candidate_ids envelope here either); see that handler's
+    own docstring for the shared shape rationale.
+
+    A missing/absent review-trail tree is NOT an error -- both scan legs
+    degrade to [] for a missing dir.
+    """
+    dry_run_raw = params.get("dry_run")
+    if not isinstance(dry_run_raw, bool):
+        _LOG.error(
+            "fleet.reap_review_trail_rest: dry_run must be an explicit bool, got %r",
+            dry_run_raw,
+        )
+        return {
+            "exit_code": 1,
+            "dry_run": False,
+            "candidates": [],
+            "reaped": [],
+            "skipped": [],
+            "failed": [],
+        }
+    dry_run = dry_run_raw
+
+    if repo_root is None:
+        _LOG.error(
+            "fleet.reap_review_trail_rest: repo_root is None -- cannot resolve worktree"
+        )
+        return {
+            "exit_code": 1,
+            "dry_run": dry_run,
+            "candidates": [],
+            "reaped": [],
+            "skipped": [],
+            "failed": [],
+        }
+
+    common_dir = Path(repo_root) if not isinstance(repo_root, Path) else repo_root
+    worktree = main_worktree_root(common_dir)
+
+    mismatch = check_repo_root(params.get("repo_root"), common_dir)
+    if mismatch:
+        _LOG.error("fleet.reap_review_trail_rest: %s", mismatch)
+        return {
+            "exit_code": 1,
+            "dry_run": dry_run,
+            "candidates": [],
+            "reaped": [],
+            "skipped": [],
+            "failed": [],
+        }
+
+    classify = _make_classify_review_trail_rest(worktree)
+
+    if dry_run:
+        candidates = [
+            {"id": rel_id(p, worktree), "note": note}
+            for p, note in scan_review_trail_rest(worktree, classify)
+        ]
+        return {
+            "exit_code": 0,
+            "dry_run": True,
+            "candidates": candidates,
+            "reaped": [],
+            "skipped": [],
+            "failed": [],
+        }
+
+    current = [p for p, _ in scan_review_trail_rest(worktree, classify)]
+    reaped, skipped, failed = await reap_findings(
+        worktree, current, classify, subject_builder=_review_trail_rest_subject_builder,
+    )
     return {
         "exit_code": 2 if failed else 0,
         "dry_run": False,

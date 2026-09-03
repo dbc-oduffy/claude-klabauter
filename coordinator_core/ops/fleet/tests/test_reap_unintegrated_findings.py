@@ -49,10 +49,12 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops.fleet import _findings_reap
 from coordinator_core.ops.fleet import reap_unintegrated_findings as reaper
 
 _MARKER = "## Integrator Dispositions"
 _AGE = reaper._AGE_THRESHOLD_DAYS
+_RT_CAP = reaper.REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS
 
 
 def _dated(days_ago: int) -> str:
@@ -160,3 +162,107 @@ def test_dry_run_true_lists_candidates_and_mutates_nothing(tmp_path, monkeypatch
     ]
     assert result["reaped"] == [] and result["failed"] == []
     assert aged.exists(), "dry_run:true deleted a file"
+
+
+# ---------------------------------------------------------------------------
+# Third leg (C12): rest-of-corpus, size/date-only, citation-census-gated
+# ---------------------------------------------------------------------------
+
+
+def _write_review_trail(root: Path, days_ago: int, *, stem: str = "record") -> Path:
+    rt = root / ".coordinator-local" / "review-trail"
+    rt.mkdir(parents=True, exist_ok=True)
+    path = rt / f"{_dated(days_ago)}-{stem}.json"
+    path.write_text("{}", encoding="utf-8")
+    return path
+
+
+def test_review_trail_rest_reaps_aged_uncited_file(tmp_path):
+    aged = _write_review_trail(tmp_path, _RT_CAP + 5, stem="aged")
+    classify = reaper._make_classify_review_trail_rest(tmp_path)
+    assert classify(aged) is not None
+
+
+def test_review_trail_rest_keeps_too_young_file(tmp_path):
+    young = _write_review_trail(tmp_path, _RT_CAP - 1, stem="young")
+    classify = reaper._make_classify_review_trail_rest(tmp_path)
+    assert classify(young) is None
+
+
+def test_review_trail_rest_keeps_cited_file_regardless_of_age(tmp_path):
+    """The hard pre-delete gate: a citation outside state/ names this path,
+    so it survives even though it clears the date cap by a wide margin."""
+    aged = _write_review_trail(tmp_path, _RT_CAP + 100, stem="cited")
+    rel = aged.relative_to(tmp_path / ".coordinator-local" / "review-trail").as_posix()
+    citer = tmp_path / "docs" / "citer.md"
+    citer.parent.mkdir(parents=True, exist_ok=True)
+    citer.write_text(f"see .coordinator-local/review-trail/{rel}\n", encoding="utf-8")
+
+    classify = reaper._make_classify_review_trail_rest(tmp_path)
+    assert classify(aged) is None
+
+
+def test_review_trail_rest_unparseable_filename_fails_closed_to_keep(tmp_path):
+    rt = tmp_path / ".coordinator-local" / "review-trail"
+    rt.mkdir(parents=True, exist_ok=True)
+    undated = rt / "no-date-here.json"
+    undated.write_text("{}", encoding="utf-8")
+
+    classify = reaper._make_classify_review_trail_rest(tmp_path)
+    assert classify(undated) is None
+
+
+def test_scan_review_trail_rest_excludes_the_findings_subtree(tmp_path):
+    """findings/*.md is legs (a)/(b)'s corpus, not the third leg's --
+    scan_review_trail_rest must never re-select it."""
+    aged = _write_review_trail(tmp_path, _RT_CAP + 5, stem="aged")
+    findings_file = (
+        tmp_path / ".coordinator-local" / "review-trail" / "findings"
+        / f"{_dated(_RT_CAP + 5)}-a-finding.md"
+    )
+    findings_file.parent.mkdir(parents=True, exist_ok=True)
+    findings_file.write_text("# Findings\n", encoding="utf-8")
+
+    classify = reaper._make_classify_review_trail_rest(tmp_path)
+    found = {path for path, _note in _findings_reap.scan_review_trail_rest(tmp_path, classify)}
+    assert found == {aged}
+
+
+def test_review_trail_rest_missing_directory_is_not_an_error(tmp_path):
+    classify = reaper._make_classify_review_trail_rest(tmp_path)
+    assert _findings_reap.scan_review_trail_rest(tmp_path, classify) == []
+
+
+def test_review_trail_rest_dry_run_lists_candidates_and_mutates_nothing(tmp_path, monkeypatch):
+    aged = _write_review_trail(tmp_path, _RT_CAP + 5, stem="aged")
+    _write_review_trail(tmp_path, 1, stem="young")
+    monkeypatch.setattr(reaper, "main_worktree_root", lambda _common: tmp_path)
+    monkeypatch.setattr(reaper, "check_repo_root", lambda _param, _common: None)
+
+    result = asyncio.run(
+        reaper._handler_review_trail_rest({"dry_run": True}, repo_root=tmp_path / ".git")
+    )
+
+    assert result["exit_code"] == 0 and result["dry_run"] is True
+    assert [c["id"] for c in result["candidates"]] == [
+        aged.relative_to(tmp_path).as_posix()
+    ]
+    assert result["reaped"] == [] and result["failed"] == []
+    assert aged.exists(), "dry_run:true deleted a file"
+
+
+@pytest.mark.parametrize("params", [{}, {"dry_run": "true"}, {"dry_run": 1}])
+def test_review_trail_rest_dry_run_must_be_an_explicit_bool(tmp_path, params):
+    result = asyncio.run(
+        reaper._handler_review_trail_rest(params, repo_root=tmp_path / ".git")
+    )
+    assert result["exit_code"] == 1
+    assert result["reaped"] == [] and result["failed"] == []
+
+
+def test_review_trail_rest_missing_repo_root_is_a_setup_error_not_a_reap(tmp_path):
+    result = asyncio.run(
+        reaper._handler_review_trail_rest({"dry_run": False}, repo_root=None)
+    )
+    assert result["exit_code"] == 1
+    assert result["reaped"] == []

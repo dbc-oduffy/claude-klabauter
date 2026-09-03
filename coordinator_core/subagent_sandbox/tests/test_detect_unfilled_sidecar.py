@@ -116,7 +116,7 @@ def test_scan_paths_flags_open_and_unfilled(tmp_path):
 
 
 def test_scan_session_dir_reads_the_named_session_only(tmp_path):
-    share = tmp_path / "state" / "subagent-share"
+    share = tmp_path / ".coordinator-local" / "subagent-share"
     session_a = share / "session-a"
     session_b = share / "session-b"
     session_a.mkdir(parents=True)
@@ -137,7 +137,7 @@ def test_scan_session_dir_reads_the_named_session_only(tmp_path):
 
 
 def test_scan_session_dir_rejects_traversal_outside_subagent_share(tmp_path):
-    share = tmp_path / "state" / "subagent-share"
+    share = tmp_path / ".coordinator-local" / "subagent-share"
     share.mkdir(parents=True)
     outside = tmp_path / "outside"
     outside.mkdir()

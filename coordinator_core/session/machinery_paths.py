@@ -50,7 +50,18 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any
+from functools import lru_cache
+from typing import Any, Pattern
+
+#: C12 (state-keeps-the-work-not-the-machinery): review-trail is CLOSED
+#: (nothing writes it once C7 relocated it) -- a file whose filename-derived
+#: authored date (never mtime; see _findings_reap._extract_authored_date's
+#: fail-closed-to-keep cascade) is older than this many days is reap-eligible
+#: for the third, size/date-only leg, UNLESS a citation census finds it cited
+#: (fleet.reap_review_trail_rest's hard pre-delete gate). Real value shipped
+#: per the integration-pass EM call superseding the sentinel-disabled shape
+#: (PM: "numbers aren't important").
+REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS = 90
 
 LEDGER_FILENAME = "next-move-ledger.jsonl"
 INTAKE_FILENAME = "obligations-inbound.jsonl"
@@ -86,9 +97,21 @@ def machinery_root(repo_root: str) -> str:
     return os.path.join(repo_root, ".coordinator-local")
 
 
+def share_root(repo_root: str) -> str:
+    """`<machinery_root>/subagent-share` -- the parent every per-session share
+    directory hangs off.
+
+    Exists because callers that enumerate sessions (a reaper, a citation
+    guard) need the bucket itself, not one session's directory, and were
+    otherwise rebuilding the join by hand against a stale `state/` literal --
+    the exact drift this module owns.
+    """
+    return os.path.join(machinery_root(repo_root), "subagent-share")
+
+
 def share_dir(repo_root: str, session_id: str) -> str:
     """`<machinery_root>/subagent-share/<session_id>`."""
-    return os.path.join(machinery_root(repo_root), "subagent-share", session_id)
+    return os.path.join(share_root(repo_root), session_id)
 
 
 def ledger_path(repo_root: str, session_id: str) -> str:
@@ -158,3 +181,63 @@ def kill_ledger_path(repo_root: str) -> str:
 def memo_outbox_sent_ledger_path(repo_root: str) -> str:
     """`<machinery_root>/memo-outbox/sent-ledger.jsonl` -- moved, not killed."""
     return os.path.join(machinery_root(repo_root), "memo-outbox", "sent-ledger.jsonl")
+
+
+@lru_cache(maxsize=None)
+def subagent_share_leaf_pattern() -> Pattern[str]:
+    """Compiled pattern matching a sidecar LEAF under either machinery root,
+    capturing `root`, `session` and `leaf` as named groups.
+
+    Same convention as `subagent_share_id_pattern` -- either root, `/` and
+    `\\` alike -- differing only in what it captures: that accessor stops at
+    the session-id segment, this one requires a leaf basename after it and
+    hands back all three parts. The write guards need the leaf (they parse
+    `<label>.<agent_id>.md` out of it) and the root (their denial message
+    echoes the path the caller actually wrote, not a hardcoded one), which
+    is why they could not consume the id accessor and hand-rolled their own
+    single-root regexes instead -- and were silently retired by the
+    relocation when they did. The convention lives here so a bucket move is
+    one edit, not a sweep of every guard that happens to spell it.
+
+    `root` is captured, not merely accepted: a caller that echoes a path
+    back to an operator must name the root that operator actually used, and
+    both roots are live (pre-relocation paths persist in committed
+    citations and archived records).
+    """
+    return re.compile(
+        r"(?:^|[/\\])(?P<root>state|\.coordinator-local)[/\\]subagent-share"
+        r"[/\\](?P<session>[^/\\]+)[/\\](?P<leaf>[^/\\]+)$"
+    )
+
+
+@lru_cache(maxsize=None)
+def subagent_share_id_pattern() -> Pattern[str]:
+    """Compiled pattern matching the `subagent-share` bucket under EITHER
+    root (`state/` or `.coordinator-local/`), accepting `/` and `\\` alike
+    regardless of host OS, and capturing as group(1) the session-id segment
+    that follows the bucket.
+
+    Either machinery root is accepted. The bucket moved from
+    `state/subagent-share/` to `.coordinator-local/subagent-share/`
+    (docs/plans/2026-09-02-state-keeps-the-work-not-the-machinery.md); a
+    pattern pinned to the old root matches no live sidecar, and a reader
+    keyed on it then returns "no owner" for every one of them -- silently,
+    because an unmatched path is indistinguishable from an artifact that is
+    simply not a sidecar. Both spellings stay accepted rather than
+    swapping: pre-relocation paths persist in committed citations and
+    archived records, and a reader that refuses them re-breaks the corpus
+    the relocation left readable.
+
+    Distinct from `record_homes.home_pattern`: that accessor deliberately
+    has no capture group (membership only), while every caller here exists
+    to recover the session id that follows the bucket, so this pattern
+    captures it as group(1) rather than being called for its match alone.
+
+    Tradeoff (inherited, not rediscovered): a genuine POSIX filename
+    containing a literal backslash byte is split on that byte too -- the
+    subagent-share id universe (machine-authored session ids) never
+    contains one.
+    """
+    return re.compile(
+        r"(?:^|[/\\])(?:state|\.coordinator-local)[/\\]subagent-share[/\\]([^/\\]+)(?:[/\\]|$)"
+    )

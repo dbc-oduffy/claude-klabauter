@@ -61,6 +61,15 @@ class TestAgePhrase:
     def test_durations_render_without_a_unit_key(self, seconds, expected):
         assert timestamps.age_phrase(seconds) == expected
 
+    # Review: coordinatorcode-reviewer -- a negative-age instant (the stamp
+    # names a moment that hasn't happened yet) clamps to 0 and is
+    # indistinguishable from "just now". Pinning this as current, deliberate
+    # behavior rather than leaving it unrecorded: a wrong sign is a real
+    # future defect, but it is not this one, and the clamp must show up in a
+    # diff rather than change silently.
+    def test_a_future_instant_clamps_to_zero_rather_than_going_negative(self):
+        assert timestamps.age_phrase(-3600.0) == "0 seconds"
+
 
 class TestWithAge:
     def test_the_stamp_is_reproduced_verbatim_beside_its_age(self):
@@ -97,6 +106,14 @@ class TestDateFields:
 
     def test_the_same_day_says_today_rather_than_zero_days_ago(self):
         assert timestamps.with_age_date("2026-09-02", self.NOW) == "2026-09-02 (today)"
+
+    # Review: coordinatorcode-reviewer -- a future-dated field (days < 0)
+    # clamps to the same "(today)" rendering as a same-day one; nothing
+    # previously recorded that this is current behavior rather than an
+    # oversight. Pinning it here so the clamp is visible in a diff -- not
+    # asserting it is the right behavior, only that it is the intended one.
+    def test_a_future_date_renders_today_rather_than_negative_days(self):
+        assert timestamps.with_age_date("2026-09-03", self.NOW) == "2026-09-03 (today)"
 
     @pytest.mark.parametrize(
         "stamp",

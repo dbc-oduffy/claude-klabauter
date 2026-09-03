@@ -61,6 +61,7 @@ from pathlib import Path
 from typing import Dict, List, Set, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.session import machinery_paths
 from coordinator_core.ops.extract_cited_sidecars import (
     _UUID_CITATION_RE,
     _list_candidates,
@@ -125,13 +126,13 @@ def _find_review_trail_citations(contents: Dict[str, str]) -> Dict[str, List[str
 
 
 def _on_disk_session_ids(root: str) -> Set[str]:
-    share_dir = os.path.join(root, "state", "subagent-share")
-    if not os.path.isdir(share_dir):
+    bucket = machinery_paths.share_root(root)
+    if not os.path.isdir(bucket):
         return set()
     return {
         name
-        for name in os.listdir(share_dir)
-        if os.path.isdir(os.path.join(share_dir, name))
+        for name in os.listdir(bucket)
+        if os.path.isdir(os.path.join(bucket, name))
     }
 
 
@@ -148,7 +149,7 @@ def test_no_new_dangling_uuid_citation():
     assert not missing_live, (
         "REGRESSION: the following UUIDs were recorded live in "
         f"{_LIVE_AUDIT_PATH} but no longer resolve under "
-        "state/subagent-share/ -- a citation that used to work stopped "
+        "the machinery share root -- a citation that used to work stopped "
         f"working: {missing_live[:20]}"
         + (" ... (truncated)" if len(missing_live) > 20 else "")
     )

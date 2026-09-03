@@ -2,7 +2,7 @@
 `gem-01`, baton `gem-14`, chunk C1).
 
 PURPOSE. `send_pass.undischarged_obligations` already reads the ledger
-DoE-claude writes (`state/subagent-share/<sid>/next-move-ledger.jsonl`) and
+DoE-claude writes (`.coordinator-local/subagent-share/<sid>/next-move-ledger.jsonl`) and
 returns a *count*. What the standing watch (chunk C2) needs is the *names*
 behind that count -- `for_peer` below returns the rows themselves, not a
 scalar. And the ledger has almost nothing to count: measured before this
@@ -22,7 +22,7 @@ dispatch brief for the full account -- recorded there rather than quietly
 corrected, because the shape of the error is the lesson.
 
 Instead this module appends to a file only this plane writes --
-`state/subagent-share/<session-id>/obligations-inbound.jsonl` -- which DoE's
+`.coordinator-local/subagent-share/<session-id>/obligations-inbound.jsonl` -- which DoE's
 own drain claims, folds, and deletes. One writer per file, one rewrite path,
 no shared file, no lock. Contract, producer-facing:
 `coordinator/docs/wiki/obligations-inbound-intake.md` in `repos.doe_claude`
@@ -68,7 +68,7 @@ _INTAKE_OPS = ("open", "progress", "blocked", "discharge")
 _INTAKE_SCHEMA = 1
 
 #: Corpus-mutator declaration (generator-provenance sweep): `record` appends
-#: to `state/subagent-share/<session-id>/obligations-inbound.jsonl` -- one
+#: to `.coordinator-local/subagent-share/<session-id>/obligations-inbound.jsonl` -- one
 #: file per session id, a data-dependent set GENERATES cannot name. Same
 #: extension-scoped glob convention as the sibling counters in this tree
 #: (`guard_advisory_counter.py`, `engine_provenance_counter.py`).

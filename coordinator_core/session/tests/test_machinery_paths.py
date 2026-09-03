@@ -175,3 +175,48 @@ def test_every_tracked_state_first_segment_is_on_the_allowlist():
         f"tracked state/ segments missing from the allowlist and the "
         f"relocation set: {sorted(unaccounted)}"
     )
+
+
+def test_subagent_share_id_pattern_captures_the_id_under_either_root():
+    """The read-side accessor C4 added, tested directly rather than only
+    through `artifact_owner`'s use of it. Both roots and both separator
+    spellings, because a pattern that matches only the spelling its author
+    happened to type is the defect at `2acd5ca032` -- it reported "no owner"
+    for every live sidecar and said nothing while doing it.
+    """
+    pat = machinery_paths.subagent_share_id_pattern()
+    for path in (
+        ".coordinator-local/subagent-share/sid-9/report.md",
+        r".coordinator-local\subagent-share\sid-9\report.md",
+        "state/subagent-share/sid-9/report.md",
+        r"state\subagent-share\sid-9\report.md",
+        "/repo/.coordinator-local/subagent-share/sid-9/report.md",
+    ):
+        m = pat.search(path)
+        assert m is not None, path
+        assert m.group(1) == "sid-9", path
+
+
+def test_subagent_share_id_pattern_does_not_match_a_foreign_bucket():
+    """A directory that merely SITS beside the bucket is not the bucket.
+    Asserted because the failure mode this accessor exists to prevent is a
+    silent one: an over-broad pattern captures a wrong id and every caller
+    downstream believes it.
+    """
+    pat = machinery_paths.subagent_share_id_pattern()
+    for path in (
+        ".coordinator-local/review-trail/sid-9/report.md",
+        ".coordinator-local/ceremony/sid-9.md",
+        "subagent-share-notes/sid-9/report.md",
+    ):
+        assert pat.search(path) is None, path
+
+
+def test_subagent_share_id_pattern_is_cached():
+    """Compiled once per process, not per call: this module is on the
+    per-turn Stop-family hook path its own docstring names.
+    """
+    assert (
+        machinery_paths.subagent_share_id_pattern()
+        is machinery_paths.subagent_share_id_pattern()
+    )

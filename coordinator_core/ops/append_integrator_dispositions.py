@@ -968,6 +968,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     sidecar_path = Path(args.sidecar)
+    # A drive letter with no root is drive-RELATIVE, so `is_absolute()` is
+    # False and the join below silently produces `<git_root>/X:foo...`. That
+    # is what a Windows absolute path becomes when a POSIX shell consumes its
+    # backslashes as escapes -- measured 2026-09-02, an integrator passing an
+    # unquoted Windows path from Bash reached this CLI with the separators
+    # gone and got a baffling not-found on a path it never typed. Refusing
+    # here names the cause once; joining it produces a path nobody can trace
+    # back to their own argv.
+    if sidecar_path.drive and not sidecar_path.root:
+        print(
+            f"append-integrator-dispositions: --sidecar {args.sidecar!r} is "
+            "drive-relative (a drive letter with no leading separator), not "
+            "absolute. This is what a Windows path becomes when a POSIX shell "
+            "consumes its backslashes: quote the path, or pass a repo-relative "
+            "forward-slash path with --root.",
+            file=sys.stderr,
+        )
+        return 2
     if not sidecar_path.is_absolute():
         sidecar_path = git_root / sidecar_path
 

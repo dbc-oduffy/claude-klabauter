@@ -75,10 +75,14 @@ def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    path = tmp_path / "repo"
-    path.mkdir(parents=True, exist_ok=True)
+# Review: overengineering-reviewer -- the seed repo was rebuilt per test case
+# (~50 git spawns for 13 cases) to exercise an in-process precondition that
+# touches no git state; `_seed` already keys each test's handoff by a distinct
+# filename, so one repo shared across the module preserves isolation at 4
+# spawns total instead of 4 per case.
+@pytest.fixture(scope="module")
+def repo(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    path = tmp_path_factory.mktemp("repo")
     _git(path, "init")
     _git(path, "config", "commit.gpgsign", "false")
     (path / "README.md").write_text("init\n", encoding="utf-8")
@@ -167,6 +171,11 @@ def test_terminal_baton_refuses_claim(repo: Path, deployment_state: str) -> None
     assert handoff.read_bytes() == before
 
 
+# Review: coordinator:code-reviewer — HANDOFF_TERMINAL_DEPLOYMENT is used here
+# only as a convenience sample of non-{in_flight,ready_to_fire} values; unlike
+# _claim above, _unclaim's check is a positive allowlist unrelated to the
+# terminal set, and did NOT change in this diff. Each of these 4 values is
+# rejected for the same reason any other non-member value would be.
 @pytest.mark.parametrize("deployment_state", sorted(HANDOFF_TERMINAL_DEPLOYMENT))
 def test_terminal_baton_refuses_unclaim(repo: Path, deployment_state: str) -> None:
     handoff = _seed(

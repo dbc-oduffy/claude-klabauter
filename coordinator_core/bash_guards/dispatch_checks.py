@@ -6050,11 +6050,27 @@ def _owner_clause_budget_bytes() -> int:
 
 def _truncate_to_budget(text: str, max_bytes: int) -> str:
     """Byte-safe truncation (never split a multi-byte UTF-8 codepoint) with
-    a trailing ellipsis marker when truncated."""
+    a trailing ellipsis marker when truncated.
+
+    The marker is charged AGAINST ``max_bytes``, not added on top of it.
+    Measured 2026-09-03: the pre-fix form truncated to ``max_bytes`` and then
+    appended a 3-byte "…", so every truncating call returned ``max_bytes + 3``
+    -- a budget the function is named for enforcing and silently overshot.
+    Callers that chain it (owner clause -> whole message) compounded the
+    overshoot once per layer.
+
+    NEGATIVE SPEC: do not "fix" a caller by subtracting 3 before calling. The
+    reservation belongs here, once, or the next caller repeats the arithmetic
+    and gets it wrong in a new place.
+    """
     encoded = text.encode("utf-8")
     if len(encoded) <= max_bytes:
         return text
-    return encoded[:max_bytes].decode("utf-8", errors="ignore") + "…"
+    marker = "…"
+    room = max_bytes - len(marker.encode("utf-8"))
+    if room <= 0:
+        return encoded[:max_bytes].decode("utf-8", errors="ignore")
+    return encoded[:room].decode("utf-8", errors="ignore") + marker
 
 
 def _owner_liveness_basis(owner_id: str, live_verdicts: Dict[str, Tuple[bool, str, Optional[int]]]) -> Optional[str]:
@@ -6200,7 +6216,37 @@ def _with_name_clause(sentence: str, writer_name: Optional[str]) -> str:
     clause = _owner_writer_name_clause(writer_name)
     budget = _owner_clause_budget_bytes()
     if _name_clause_fits(sentence, writer_name):
-        sentence += clause
+        return _truncate_to_budget(sentence + clause, budget)
+
+    # A RESOLVED name that does not fit must still leave a marker. Dropping
+    # the clause outright renders subject + verdict and nothing else -- a
+    # bare sid presented as though it were an address, which is the single
+    # output this whole cluster exists to prevent and which
+    # `_format_owner_sentence`'s own anti-scope forbids by name. Measured
+    # 2026-09-03: the drop began at a 35-byte writer_name, with or without a
+    # basis clause; the longest name in the live registry is 25 bytes, so
+    # this was latent rather than firing -- and
+    # `test_no_live_owner_clause_ever_ends_in_a_bare_sid` asserted the
+    # universal from three names (19/25/22) that all sat under the
+    # threshold, proving less than it claimed.
+    #
+    # Precedence, worst-last: a full name beats a truncated one, a truncated
+    # one beats UNNAMED, and every one of them beats a bare sid. The old
+    # whole-or-nothing rule ranked a fragment BELOW nothing on the grounds
+    # that `_owner_name_provenance_note` fires on the `" -- w:"` substring
+    # and would warn beside an unreadable name. That trade is real but it
+    # was priced against the wrong alternative: the fallback is not "no
+    # name", it is "no address at all". A marked truncation warns beside a
+    # partial name; the drop warns beside nothing and reads as though no
+    # name existed.
+    #
+    # NEGATIVE SPEC: never fall back to `" -- UNNAMED"` here. That marker is
+    # rung 3's -- it states that NO name resolved -- and reusing it for a
+    # name that resolved but did not fit makes the two indistinguishable to
+    # every reader and to the provenance note.
+    if writer_name:
+        if budget - len(sentence.encode("utf-8")) - len(" -- w:") > 4:
+            return _truncate_to_budget(sentence + " -- w:%s" % writer_name, budget)
     return _truncate_to_budget(sentence, budget)
 
 
@@ -7218,6 +7264,24 @@ def check_validate_commit(
 
                     if scope_strict and not compute_scope_raised and _owner_is_provable:
                         _record_scope_event("deny", _warned_paths)
+                        # BULK IS TESTED FIRST, ahead of the CONTESTED and
+                        # unclaimed arms, because the index size decides
+                        # whether ANY per-file remedy is appropriate and the
+                        # per-path facts do not. Ordered after the CONTESTED
+                        # arm, a bulk index whose first offending path happened
+                        # to be contested still emitted `git restore --staged
+                        # <file>` -- the exact per-file destruction this
+                        # threshold exists to stop, reachable by nothing more
+                        # than which path the loop reached first.
+                        if len(commit_scope) > _BULK_FOREIGN_INDEX_PATHS:
+                            return _deny(
+                                _bulk_foreign_index_refusal(
+                                    len(commit_scope),
+                                    staged_file,
+                                    owner_sentence,
+                                    _owner_name_provenance_note(owner_sentence),
+                                )
+                            )
                         if staged_file in _own_claimed_paths:
                             # CONTESTED, not unclaimed. Say so, and do NOT print
                             # the record-it-as-touched remedy: this session
@@ -7243,15 +7307,6 @@ def check_validate_commit(
                                     _owner_name_provenance_note(owner_sentence),
                                     staged_file,
                                     staged_file,
-                                )
-                            )
-                        if len(commit_scope) > _BULK_FOREIGN_INDEX_PATHS:
-                            return _deny(
-                                _bulk_foreign_index_refusal(
-                                    len(commit_scope),
-                                    staged_file,
-                                    owner_sentence,
-                                    _owner_name_provenance_note(owner_sentence),
                                 )
                             )
                         return _deny(

@@ -665,9 +665,13 @@ def _claim(handoff_path: str, session_id: str, at: str, worktree: Path, repo_roo
         current_holder = _read_fm_field_new_or_old(split.fm_text, "claimed_by", "consumed_by")
 
         if (deployment or "").strip().lower() in HANDOFF_TERMINAL_DEPLOYMENT:
+            # Review: coordinator:code-reviewer — only "continued" has a
+            # successor (continued_into); "shipped"/"closed"/"abandoned"
+            # don't, so the advice no longer assumes one exists.
             raise MutateAbort(
                 f'claim refused — deployment_state "{deployment}" is terminal '
-                f"({handoff_path}). Pick up its successor, or mint a new handoff."
+                f"({handoff_path}). If it was continued, pick up its "
+                "successor (continued_into); otherwise mint a new handoff."
             )
 
         # Idempotency (D5): no-op ONLY at the FULL target state AND the

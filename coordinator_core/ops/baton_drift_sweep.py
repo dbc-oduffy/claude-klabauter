@@ -277,9 +277,16 @@ from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.handoff_archive_transition import _handoff_live_holder_session
 from coordinator_core.ops.handoff_children import _collect_handoff_paths
 
-# Mirrors handoff_archive_transition._TERMINAL_DEPLOYMENT_STATES (vendored, not
-# imported — see module docstring).
-_TERMINAL_DEPLOYMENT_STATES = frozenset({"shipped", "continued", "closed"})
+# Review: coordinator:code-reviewer — vendored 3-member copy (missing
+# "abandoned") drifted from handoff_archive_transition's own vendored copy,
+# which itself predates this fix. Importing lifecycle_constants directly
+# (a leaf module with zero coordinator_core imports/side effects — see its
+# own docstring) avoids both the drift and the op-registration side effect
+# this module's docstring cited as the reason to vendor from
+# handoff_archive_transition instead.
+from coordinator_core.lifecycle_constants import (
+    HANDOFF_TERMINAL_DEPLOYMENT as _TERMINAL_DEPLOYMENT_STATES,
+)
 
 #: Primary-spine only (see module docstring Negative-spec).
 _EDGE_KINDS = frozenset({"predecessor"})

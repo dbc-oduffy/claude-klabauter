@@ -130,6 +130,164 @@ def test_max_entries_ceiling_reports_truncated(tmp_path):
     assert len(rate_ceiling_ids) == 4
 
 
+def test_record_offers_batches_under_holder_key_with_nudger_attribution(tmp_path):
+    """AC1: one invocation records N peers and arms the cooldown
+    `_group_em_answer` reads, under the holder's key, with the nudger named
+    on each row."""
+    repo_root = str(tmp_path)
+
+    unrecorded = send_pass.record_offers(
+        repo_root, "holder-one", ["peer-a", "peer-b"], "nudger-one", now=1000.0
+    )
+
+    assert unrecorded == []
+    log = send_pass.read_send_log(repo_root, "holder-one")
+    assert len(log) == 2
+    for row, peer in zip(log, ["peer-a", "peer-b"]):
+        assert row["outcome"] == "offer"
+        assert row["offered_by"] == "nudger-one"
+        assert row["offer_key"] == send_pass.offer_key("holder-one", peer)
+
+    remaining = send_pass._cooldown_remaining(
+        log, send_pass.offer_key("holder-one", "peer-a"), 1001.0, send_pass.DEFAULT_COOLDOWN_SECONDS
+    )
+    assert remaining > 0
+
+    # The nudger's own log stays untouched -- the batch lands only under the
+    # holder's key, never the nudger's.
+    assert send_pass.read_send_log(repo_root, "nudger-one") == []
+
+
+def test_record_offers_offer_key_derives_from_holder_not_nudger(tmp_path):
+    """AC1b: the written row's `offer_key` equals `offer_key(holder, peer)`
+    when the nudger differs from the holder -- asserts the key derivation
+    itself, not just that suppression happens to work."""
+    repo_root = str(tmp_path)
+
+    send_pass.record_offers(repo_root, "holder-two", ["peer-x"], "nudger-two", now=1000.0)
+
+    log = send_pass.read_send_log(repo_root, "holder-two")
+    assert log[0]["offer_key"] == send_pass.offer_key("holder-two", "peer-x")
+    assert log[0]["offer_key"] != send_pass.offer_key("nudger-two", "peer-x")
+
+
+def test_record_offers_refuses_malformed_id_in_any_position(tmp_path):
+    """AC2: a malformed session id in any position is refused, reported not
+    raised -- matching `_record_offer`'s existing contract."""
+    repo_root = str(tmp_path)
+
+    # Malformed holder refuses the whole batch.
+    unrecorded = send_pass.record_offers(
+        repo_root, "../escape", ["peer-y"], "nudger-three", now=1000.0
+    )
+    assert unrecorded == ["peer-y"]
+    assert send_pass.read_send_log(repo_root, "../escape") == []
+
+    # Malformed nudger refuses the whole batch too.
+    unrecorded = send_pass.record_offers(
+        repo_root, "holder-three", ["peer-y"], "../escape", now=1000.0
+    )
+    assert unrecorded == ["peer-y"]
+
+    # A malformed peer id is refused per-row; the rest of the batch lands.
+    unrecorded = send_pass.record_offers(
+        repo_root, "holder-four", ["peer-good", "../escape"], "nudger-four", now=1000.0
+    )
+    assert unrecorded == ["../escape"]
+    log = send_pass.read_send_log(repo_root, "holder-four")
+    assert len(log) == 1
+    assert log[0]["offer_key"] == send_pass.offer_key("holder-four", "peer-good")
+
+
+def test_record_offers_single_write_call(tmp_path, monkeypatch):
+    """The batched entry point emits ONE `write()` of all N lines joined,
+    never one `open(..., 'a')` + `write()` per row."""
+    repo_root = str(tmp_path)
+    writes: list[str] = []
+    real_open = open
+
+    class _CountingHandle:
+        def __init__(self, handle):
+            self._handle = handle
+
+        def write(self, data):
+            writes.append(data)
+            return self._handle.write(data)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._handle.close()
+
+    def fake_open(path, mode="r", encoding=None, errors=None):
+        handle = real_open(path, mode, encoding=encoding, errors=errors)
+        if mode == "a":
+            return _CountingHandle(handle)
+        return handle
+
+    monkeypatch.setattr(send_pass, "open", fake_open, raising=False)
+
+    send_pass.record_offers(
+        repo_root, "holder-five", ["peer-1", "peer-2", "peer-3"], "nudger-five", now=1000.0
+    )
+
+    assert len(writes) == 1
+    assert writes[0].count("offer_key") == 3
+
+
+def test_record_offer_row_without_attribution_still_suppresses(tmp_path):
+    """AC3: a row written WITHOUT attribution (the Group EM's own send
+    digest) still reads back and still suppresses. The field is additive,
+    never required."""
+    repo_root = str(tmp_path)
+    roster = [_verdict("peer-plain")]
+
+    digest = send_pass.build_send_digest(repo_root, roster, "caller-plain", now=1000.0)
+    assert [e["session_id"] for e in digest["entries"]] == ["peer-plain"]
+
+    log = send_pass.read_send_log(repo_root, "caller-plain")
+    assert "offered_by" not in log[0]
+
+    digest2 = send_pass.build_send_digest(repo_root, roster, "caller-plain", now=1001.0)
+    assert digest2["entries"] == []
+    reasons = {s["session_id"]: s["why"] for s in digest2["suppressed"]}
+    assert reasons["peer-plain"] == "cooldown"
+
+
+def test_log_key_is_open_excludes_attributed_rows(tmp_path):
+    """AC8b/C3b: `open_obligations` tells the Group EM what IT owes. An
+    offer row carrying `offered_by` (a delegated nudge, C1) creates an
+    obligation for the nudger, not the holder -- `_log_key_is_open` must
+    read it as closed (not open), symmetric with `idle_report.
+    _group_em_answer`'s `stamps` exclusion."""
+    key = send_pass.offer_key("holder-six", "peer-six")
+    attributed_log = [
+        {"outcome": "offer", "offer_key": key, "offered_at": 1000.0, "offered_by": "nudger-six"},
+    ]
+    assert send_pass._log_key_is_open(attributed_log, key) is False
+
+    # An unattributed offer for the same key is still open -- the exclusion
+    # is scoped to attributed rows only, never a blanket change.
+    plain_log = [
+        {"outcome": "offer", "offer_key": key, "offered_at": 1000.0},
+    ]
+    assert send_pass._log_key_is_open(plain_log, key) is True
+
+
+def test_log_key_is_open_ac8b_end_to_end_via_build_send_digest(tmp_path):
+    """AC8b end-to-end: a delegated row recorded via `record_offers` under
+    cooldown must not surface in `open_obligations`."""
+    repo_root = str(tmp_path)
+    send_pass.record_offers(
+        repo_root, "holder-seven", ["peer-seven"], "nudger-seven", now=1000.0
+    )
+    roster = [_verdict("peer-seven")]
+    digest = send_pass.build_send_digest(repo_root, roster, "holder-seven", now=1001.0)
+    assert digest["entries"] == []
+    assert "peer-seven" not in digest["open_obligations"]
+
+
 def test_no_per_peer_public_entry_point():
     """The module must expose no function offering a single peer directly --
     `build_send_digest` is the sole route to an entry (negative spec)."""
