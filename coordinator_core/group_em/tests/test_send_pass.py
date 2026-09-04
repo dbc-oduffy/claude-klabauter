@@ -16,6 +16,7 @@ import os
 
 
 from coordinator_core.group_em import send_pass
+from coordinator_core.session.machinery_paths import share_dir as _share_dir
 
 
 def _verdict(
@@ -79,7 +80,7 @@ def test_unrecorded_on_failed_cooldown_write(tmp_path, monkeypatch):
 
 def test_away_excluded_by_name_ahead_of_bookkeeping(tmp_path):
     repo_root = str(tmp_path)
-    peer_dir = os.path.join(repo_root, "state", "subagent-share", "peer-away")
+    peer_dir = _share_dir(repo_root, "peer-away")
     os.makedirs(peer_dir, exist_ok=True)
     with open(os.path.join(peer_dir, "next-move-ledger.jsonl"), "w", encoding="utf-8") as fh:
         fh.write(json.dumps({"discharged_at": None, "fired": False}) + "\n")
@@ -97,7 +98,7 @@ def test_away_excluded_by_name_ahead_of_bookkeeping(tmp_path):
 def test_none_obligations_ranks_without_excluding(tmp_path):
     repo_root = str(tmp_path)
     # peer-with-ledger has one open obligation; peer-no-ledger has none (None).
-    ledger_dir = os.path.join(repo_root, "state", "subagent-share", "peer-with-ledger")
+    ledger_dir = _share_dir(repo_root, "peer-with-ledger")
     os.makedirs(ledger_dir, exist_ok=True)
     with open(os.path.join(ledger_dir, "next-move-ledger.jsonl"), "w", encoding="utf-8") as fh:
         fh.write(json.dumps({"discharged_at": None, "fired": False}) + "\n")
@@ -127,6 +128,164 @@ def test_max_entries_ceiling_reports_truncated(tmp_path):
         s["session_id"] for s in digest["suppressed"] if s["why"] == "rate-ceiling"
     }
     assert len(rate_ceiling_ids) == 4
+
+
+def test_record_offers_batches_under_holder_key_with_nudger_attribution(tmp_path):
+    """AC1: one invocation records N peers and arms the cooldown
+    `_group_em_answer` reads, under the holder's key, with the nudger named
+    on each row."""
+    repo_root = str(tmp_path)
+
+    unrecorded = send_pass.record_offers(
+        repo_root, "holder-one", ["peer-a", "peer-b"], "nudger-one", now=1000.0
+    )
+
+    assert unrecorded == []
+    log = send_pass.read_send_log(repo_root, "holder-one")
+    assert len(log) == 2
+    for row, peer in zip(log, ["peer-a", "peer-b"]):
+        assert row["outcome"] == "offer"
+        assert row["offered_by"] == "nudger-one"
+        assert row["offer_key"] == send_pass.offer_key("holder-one", peer)
+
+    remaining = send_pass._cooldown_remaining(
+        log, send_pass.offer_key("holder-one", "peer-a"), 1001.0, send_pass.DEFAULT_COOLDOWN_SECONDS
+    )
+    assert remaining > 0
+
+    # The nudger's own log stays untouched -- the batch lands only under the
+    # holder's key, never the nudger's.
+    assert send_pass.read_send_log(repo_root, "nudger-one") == []
+
+
+def test_record_offers_offer_key_derives_from_holder_not_nudger(tmp_path):
+    """AC1b: the written row's `offer_key` equals `offer_key(holder, peer)`
+    when the nudger differs from the holder -- asserts the key derivation
+    itself, not just that suppression happens to work."""
+    repo_root = str(tmp_path)
+
+    send_pass.record_offers(repo_root, "holder-two", ["peer-x"], "nudger-two", now=1000.0)
+
+    log = send_pass.read_send_log(repo_root, "holder-two")
+    assert log[0]["offer_key"] == send_pass.offer_key("holder-two", "peer-x")
+    assert log[0]["offer_key"] != send_pass.offer_key("nudger-two", "peer-x")
+
+
+def test_record_offers_refuses_malformed_id_in_any_position(tmp_path):
+    """AC2: a malformed session id in any position is refused, reported not
+    raised -- matching `_record_offer`'s existing contract."""
+    repo_root = str(tmp_path)
+
+    # Malformed holder refuses the whole batch.
+    unrecorded = send_pass.record_offers(
+        repo_root, "../escape", ["peer-y"], "nudger-three", now=1000.0
+    )
+    assert unrecorded == ["peer-y"]
+    assert send_pass.read_send_log(repo_root, "../escape") == []
+
+    # Malformed nudger refuses the whole batch too.
+    unrecorded = send_pass.record_offers(
+        repo_root, "holder-three", ["peer-y"], "../escape", now=1000.0
+    )
+    assert unrecorded == ["peer-y"]
+
+    # A malformed peer id is refused per-row; the rest of the batch lands.
+    unrecorded = send_pass.record_offers(
+        repo_root, "holder-four", ["peer-good", "../escape"], "nudger-four", now=1000.0
+    )
+    assert unrecorded == ["../escape"]
+    log = send_pass.read_send_log(repo_root, "holder-four")
+    assert len(log) == 1
+    assert log[0]["offer_key"] == send_pass.offer_key("holder-four", "peer-good")
+
+
+def test_record_offers_single_write_call(tmp_path, monkeypatch):
+    """The batched entry point emits ONE `write()` of all N lines joined,
+    never one `open(..., 'a')` + `write()` per row."""
+    repo_root = str(tmp_path)
+    writes: list[str] = []
+    real_open = open
+
+    class _CountingHandle:
+        def __init__(self, handle):
+            self._handle = handle
+
+        def write(self, data):
+            writes.append(data)
+            return self._handle.write(data)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._handle.close()
+
+    def fake_open(path, mode="r", encoding=None, errors=None):
+        handle = real_open(path, mode, encoding=encoding, errors=errors)
+        if mode == "a":
+            return _CountingHandle(handle)
+        return handle
+
+    monkeypatch.setattr(send_pass, "open", fake_open, raising=False)
+
+    send_pass.record_offers(
+        repo_root, "holder-five", ["peer-1", "peer-2", "peer-3"], "nudger-five", now=1000.0
+    )
+
+    assert len(writes) == 1
+    assert writes[0].count("offer_key") == 3
+
+
+def test_record_offer_row_without_attribution_still_suppresses(tmp_path):
+    """AC3: a row written WITHOUT attribution (the Group EM's own send
+    digest) still reads back and still suppresses. The field is additive,
+    never required."""
+    repo_root = str(tmp_path)
+    roster = [_verdict("peer-plain")]
+
+    digest = send_pass.build_send_digest(repo_root, roster, "caller-plain", now=1000.0)
+    assert [e["session_id"] for e in digest["entries"]] == ["peer-plain"]
+
+    log = send_pass.read_send_log(repo_root, "caller-plain")
+    assert "offered_by" not in log[0]
+
+    digest2 = send_pass.build_send_digest(repo_root, roster, "caller-plain", now=1001.0)
+    assert digest2["entries"] == []
+    reasons = {s["session_id"]: s["why"] for s in digest2["suppressed"]}
+    assert reasons["peer-plain"] == "cooldown"
+
+
+def test_log_key_is_open_excludes_attributed_rows(tmp_path):
+    """AC8b/C3b: `open_obligations` tells the Group EM what IT owes. An
+    offer row carrying `offered_by` (a delegated nudge, C1) creates an
+    obligation for the nudger, not the holder -- `_log_key_is_open` must
+    read it as closed (not open), symmetric with `idle_report.
+    _group_em_answer`'s `stamps` exclusion."""
+    key = send_pass.offer_key("holder-six", "peer-six")
+    attributed_log = [
+        {"outcome": "offer", "offer_key": key, "offered_at": 1000.0, "offered_by": "nudger-six"},
+    ]
+    assert send_pass._log_key_is_open(attributed_log, key) is False
+
+    # An unattributed offer for the same key is still open -- the exclusion
+    # is scoped to attributed rows only, never a blanket change.
+    plain_log = [
+        {"outcome": "offer", "offer_key": key, "offered_at": 1000.0},
+    ]
+    assert send_pass._log_key_is_open(plain_log, key) is True
+
+
+def test_log_key_is_open_ac8b_end_to_end_via_build_send_digest(tmp_path):
+    """AC8b end-to-end: a delegated row recorded via `record_offers` under
+    cooldown must not surface in `open_obligations`."""
+    repo_root = str(tmp_path)
+    send_pass.record_offers(
+        repo_root, "holder-seven", ["peer-seven"], "nudger-seven", now=1000.0
+    )
+    roster = [_verdict("peer-seven")]
+    digest = send_pass.build_send_digest(repo_root, roster, "holder-seven", now=1001.0)
+    assert digest["entries"] == []
+    assert "peer-seven" not in digest["open_obligations"]
 
 
 def test_no_per_peer_public_entry_point():
@@ -578,9 +737,9 @@ def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
     their own `"next-move-ledger.jsonl"` literal, with `obligations` reaching
     into this module's private namespace for one of them. One typo apart, a
     producer and its reader would have been on different files with nothing
-    to catch it -- all three now call `subagent_share`'s helpers directly (no
+    to catch it -- all three now call `machinery_paths`'s helpers directly (no
     module-private alias left to drift), which this exercises end to end: a
-    ledger written at `subagent_share.ledger_path` is readable through both
+    ledger written at `machinery_paths.ledger_path` is readable through both
     `send_pass.undischarged_obligations` and `obligations.for_peer`.
 
     Review: overengineering-reviewer (finding #2, minor, accepted) -- this
@@ -591,14 +750,14 @@ def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
     import json
 
     from coordinator_core.group_em import obligations
-    from coordinator_core.session import subagent_share
+    from coordinator_core.session import machinery_paths
 
     repo_root, session_id = str(tmp_path), "sess-share"
-    assert send_pass.send_log_path(repo_root, session_id) == subagent_share.send_log_path(
+    assert send_pass.send_log_path(repo_root, session_id) == machinery_paths.send_log_path(
         repo_root, session_id
     )
 
-    ledger_path = subagent_share.ledger_path(repo_root, session_id)
+    ledger_path = machinery_paths.ledger_path(repo_root, session_id)
     os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
     with open(ledger_path, "w", encoding="utf-8") as fh:
         fh.write(
@@ -617,11 +776,11 @@ def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
 def test_an_unsafe_session_id_is_still_refused_a_path(tmp_path):
     """The predicate moved modules; it did not relax. A bare `.`/`..` passes
     the character class alone, which is why the check is not just a regex."""
-    from coordinator_core.session import subagent_share
+    from coordinator_core.session import machinery_paths
 
-    assert subagent_share.safe_session_id("sess-1") is True
+    assert machinery_paths.safe_session_id("sess-1") is True
     for bad in ("..", ".", "", None, "a/b", "a\b", "a:b"):
-        assert subagent_share.safe_session_id(bad) is False
+        assert machinery_paths.safe_session_id(bad) is False
 
 
 # C4 -- state/dispatch-briefs/2026-09-01-the-crowns-standing-surfaces-report-
@@ -700,3 +859,43 @@ def test_digest_counts_sum_to_population_classified_including_contradicted(tmp_p
         row["session_id"] for row in digest["suppressed"] if row["why"] == "contradicted"
     }
     assert contradicted_ids == {"peer-live-busy", "peer-stale-unresolved"}
+
+
+class _Row:
+    def __init__(self, session_id, name):
+        self.session_id = session_id
+        self.name = name
+
+
+def test_resolve_addressee_refuses_a_name_two_live_sessions_answer_to(tmp_path):
+    """`SendMessage` addresses BY NAME, so returning a name two sessions share
+    hands the caller an address that can land on the wrong one. Stable key in,
+    volatile address out -- only when the address is unambiguous.
+    """
+    rows = [_Row("peer-sid", "twin"), _Row("other-sid", "twin")]
+    got = send_pass.resolve_addressee(
+        str(tmp_path), "peer-sid", build_roster=lambda repo_root=None: rows
+    )
+    assert got is None
+
+
+def test_resolve_addressee_returns_the_name_when_it_is_unique(tmp_path):
+    rows = [_Row("peer-sid", "alpha"), _Row("other-sid", "beta")]
+    got = send_pass.resolve_addressee(
+        str(tmp_path), "peer-sid", build_roster=lambda repo_root=None: rows
+    )
+    assert got == "alpha"
+
+
+def test_resolve_addressee_raises_on_the_wrong_build_roster(tmp_path):
+    """Two same-named `build_roster`s live in one package with incompatible row
+    shapes. Injecting the dict-yielding one made every `getattr` return None --
+    an unaddressable fleet reported as a clean refusal, raising nothing.
+    """
+    dict_rows = [{"session_id": "peer-sid", "name": "alpha"}]
+    import pytest
+
+    with pytest.raises(TypeError, match="same name, different shape"):
+        send_pass.resolve_addressee(
+            str(tmp_path), "peer-sid", build_roster=lambda repo_root=None: dict_rows
+        )

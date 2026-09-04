@@ -224,7 +224,11 @@ def test_inverse_strip_removes_generated_preserves_other(tmp_path):
         },
         "enabledPlugins": {"coordinator-claude": True},
     }
-    settings_json = tmp_path / "settings.json"
+    # CLAUDE_HOME names the PARENT of `.claude` and every leg appends that
+    # segment (`uninstall_legs._claude_dir`), so the fixture lives where a
+    # real install puts it.
+    settings_json = tmp_path / ".claude" / "settings.json"
+    settings_json.parent.mkdir(parents=True, exist_ok=True)
     settings_json.write_text(json.dumps(settings), encoding="utf-8")
     out_path = tmp_path / "out.json"
 
@@ -261,7 +265,11 @@ def test_full_strip_leg_idempotent_reruns(tmp_path, monkeypatch):
         },
         "enabledPlugins": {},
     }
-    settings_json = tmp_path / "settings.json"
+    # CLAUDE_HOME names the PARENT of `.claude` and every leg appends that
+    # segment (`uninstall_legs._claude_dir`), so the fixture lives where a
+    # real install puts it.
+    settings_json = tmp_path / ".claude" / "settings.json"
+    settings_json.parent.mkdir(parents=True, exist_ok=True)
     settings_json.write_text(json.dumps(settings), encoding="utf-8")
 
     assert uninstall_legs.uninstall_strip_settings_hooks() is True
@@ -1021,7 +1029,13 @@ def test_resolve_coordinator_root_doe_root_pointer_rung_uses_userprofile(tmp_pat
 
     coordinator_dir = userprofile_home / "coordinator"
     coordinator_dir.mkdir()
-    (userprofile_home / ".doe-root").write_text(str(userprofile_home), encoding="utf-8")
+    # CLAUDE_HOME/USERPROFILE names the PARENT of `.claude`; the pointer the
+    # installer writes lives at `<home>/.claude/.doe-root` (verified against a
+    # live install), and `_shared.claude_dir` is now the one spelling of that.
+    (userprofile_home / ".claude").mkdir()
+    (userprofile_home / ".claude" / ".doe-root").write_text(
+        str(userprofile_home), encoding="utf-8"
+    )
 
     assert _shared.resolve_coordinator_root() == str(coordinator_dir)
 
@@ -1051,7 +1065,7 @@ def test_install_bin_resolvers_no_longer_writes_compat_mirror(tmp_path, monkeypa
     """`_install_bin_resolvers` takes no `compat_bin_dst` param post-retirement
     and must never create or write into a ``~/.claude/bin/``-shaped directory
     — the Step 3c-compat block that used to do so was deleted outright."""
-    would_be_compat_dir = tmp_path / "claude_home" / "bin"
+    would_be_compat_dir = tmp_path / "claude_home" / ".claude" / "bin"
     bin_dst = tmp_path / "bin_dst"
     bin_dst.mkdir()
 
@@ -1128,7 +1142,7 @@ def test_uninstall_leg7_removes_legacy_compat_mirror_artifacts(tmp_path, monkeyp
     nonexistent path, so that sweep sub-leg silently no-op'd (``derived_names``
     was always ``()`` via the ``RuntimeError`` fallback) and was never asserted.
     """
-    compat_bin_dst = tmp_path / "claude_home" / "bin"
+    compat_bin_dst = tmp_path / "claude_home" / ".claude" / "bin"
     compat_bin_dst.mkdir(parents=True)
 
     legacy_names = (
@@ -1218,7 +1232,8 @@ def test_purge_operator_config_claude_local_pristine_render_matches_and_deletes(
         [("PM_NAME", ""), ("WORKING_REPOS", "")],
     )
     assert rc == 0 and err is None
-    claude_local = claude_home / "CLAUDE.local.md"
+    claude_local = claude_home / ".claude" / "CLAUDE.local.md"
+    claude_local.parent.mkdir(parents=True, exist_ok=True)
     claude_local.write_bytes(rendered_text.encode("utf-8"))
 
     monkeypatch.setenv("COORDINATOR_ROOT", str(coordinator_root))
@@ -1239,12 +1254,15 @@ def test_purge_operator_config_claude_local_hand_edited_refused_without_force(tm
         "Hello {{PM_NAME}}!\n", encoding="utf-8"
     )
 
-    (claude_home / "CLAUDE.local.md").write_text("hand-edited content, not a render\n", encoding="utf-8")
+    (claude_home / ".claude").mkdir()
+    (claude_home / ".claude" / "CLAUDE.local.md").write_text(
+        "hand-edited content, not a render\n", encoding="utf-8"
+    )
 
     monkeypatch.setenv("COORDINATOR_ROOT", str(coordinator_root))
 
     assert uninstall_legs._uninstall_purge_operator_config(str(claude_home), False) is False
-    assert (claude_home / "CLAUDE.local.md").exists()
+    assert (claude_home / ".claude" / "CLAUDE.local.md").exists()
     err = capsys.readouterr().err
     assert "possibly hand-edited. Refusing to remove without --force" in err
 
@@ -1254,7 +1272,10 @@ def test_purge_operator_config_claude_local_force_removes_without_render(tmp_pat
     bash oracle's force-short-circuit — no render call is even attempted)."""
     claude_home = tmp_path / "claude_home"
     claude_home.mkdir()
-    (claude_home / "CLAUDE.local.md").write_text("anything\n", encoding="utf-8")
+    (claude_home / ".claude").mkdir()
+    (claude_home / ".claude" / "CLAUDE.local.md").write_text(
+        "anything\n", encoding="utf-8"
+    )
 
     def _boom(*a, **kw):
         raise AssertionError("render must not be called under --force")
@@ -1262,7 +1283,7 @@ def test_purge_operator_config_claude_local_force_removes_without_render(tmp_pat
     monkeypatch.setattr(uninstall_legs.render_template, "render", _boom)
 
     assert uninstall_legs._uninstall_purge_operator_config(str(claude_home), True) is True
-    assert not (claude_home / "CLAUDE.local.md").exists()
+    assert not (claude_home / ".claude" / "CLAUDE.local.md").exists()
 
 
 def test_plugin_endstate_revert_to_marketplace_runs_localize_in_process_no_bash(tmp_path, monkeypatch):
@@ -1346,7 +1367,7 @@ def test_uninstall_leg7_still_removes_from_retired_claude_bin_mirror_too(tmp_pat
     regress the pre-existing ~/.claude/bin compat-mirror legacy sweep — both
     directories are covered by the same per-name loop now."""
     claude_home = tmp_path / "claude_home"
-    claude_bin = claude_home / "bin"
+    claude_bin = claude_home / ".claude" / "bin"
     claude_bin.mkdir(parents=True)
     (claude_bin / "platform-localize.sh").write_text("stub", encoding="utf-8")
 
@@ -1589,3 +1610,75 @@ def test_uninstall_setup_overwrite_backups_leg_reports_foreign_tracked(tmp_path,
     assert errors == []
     assert backups_dir.is_dir(), "a git-tracked backups dir must survive, never be deleted"
     assert (backups_dir / "tracked_file.txt").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Convention guard — CLAUDE_HOME is the PARENT of `.claude`
+# ---------------------------------------------------------------------------
+
+
+def test_legs_target_under_dot_claude_never_the_home_itself(tmp_path, monkeypatch):
+    """Every destructive target these legs derive lives under `<home>/.claude/`,
+    never beside it.
+
+    This is a real regression, not a hypothetical: most call sites here once
+    read `Path(claude_home) / "settings.json"` while every writer puts that file
+    at `<home>/.claude/settings.json`, so the legs found nothing and reported
+    success. `<home>/bin` makes the shape worse than inert — that is an
+    operator's own directory on many boxes, not ours to sweep. The decoys below
+    are the assertion that earns this test.
+    """
+    home = tmp_path / "home"
+    dot_claude = home / ".claude"
+    (dot_claude / "bin").mkdir(parents=True)
+    (dot_claude / "bin" / "platform-localize.sh").write_text("ours", encoding="utf-8")
+    (dot_claude / ".doe-root").write_text("ours", encoding="utf-8")
+
+    # Decoys directly under the home — an operator's own files, off limits.
+    (home / "bin").mkdir()
+    (home / "bin" / "platform-localize.sh").write_text("theirs", encoding="utf-8")
+    (home / ".doe-root").write_text("theirs", encoding="utf-8")
+
+    monkeypatch.setenv("CLAUDE_HOME", str(home))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home-absent"))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry-absent"))
+    monkeypatch.setenv("PATH", str(tmp_path / "nonexistent-bin-dir"))
+
+    assert uninstall_legs.uninstall_remove_substrate("full-remove") is True
+
+    assert not (dot_claude / "bin" / "platform-localize.sh").exists()
+    assert not (dot_claude / ".doe-root").exists()
+    assert (home / "bin" / "platform-localize.sh").read_text(encoding="utf-8") == "theirs"
+    assert (home / ".doe-root").read_text(encoding="utf-8") == "theirs"
+
+
+def test_strip_settings_hooks_reads_the_installed_settings_json(tmp_path, monkeypatch):
+    """The strip leg must find `<home>/.claude/settings.json` — the path
+    `gen_settings_hooks.resolve_settings_out_path` actually writes — and must
+    not be satisfied by a decoy beside it."""
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    coordinator_root = tmp_path / "coordinator"
+    (coordinator_root / "hooks").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_HOME", str(home))
+    monkeypatch.setenv("COORDINATOR_ROOT", str(coordinator_root))
+
+    generated = {
+        "hooks": {
+            "PreToolUse": [
+                {"hooks": [{"type": "command", "command": f"python3 {coordinator_root}/hooks/scripts/foo.py"}]},
+            ]
+        },
+        "enabledPlugins": {},
+    }
+    installed = home / ".claude" / "settings.json"
+    installed.write_text(json.dumps(generated), encoding="utf-8")
+    decoy = home / "settings.json"
+    decoy.write_text(json.dumps(generated), encoding="utf-8")
+
+    assert uninstall_legs.uninstall_strip_settings_hooks() is True
+
+    assert json.loads(installed.read_text(encoding="utf-8"))["hooks"] == {}
+    assert json.loads(decoy.read_text(encoding="utf-8"))["hooks"] != {}, (
+        "the leg stripped a file beside .claude — the pre-fix target"
+    )

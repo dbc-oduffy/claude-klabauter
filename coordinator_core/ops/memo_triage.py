@@ -126,6 +126,7 @@ from typing import Iterable, List, Optional, Set, Tuple
 import yaml
 
 from coordinator_core.ipc import register_op
+from coordinator_core.memo_corpus import memo_corpus_root
 
 _LOG = logging.getLogger(__name__)
 
@@ -631,8 +632,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "memo.triage" handler.
 
     Params:
-        archive_dir (str, optional): override for cross-repo/archive/ — mostly
-            for test isolation. Defaults to ``<worktree_root>/cross-repo/archive``.
+        archive_dir (str, optional): override for the memo-corpus archive/ —
+            mostly for test isolation. Defaults to
+            ``memo_corpus_root(<worktree_root>)/archive``.
         project_slug (str, optional): the auto-memory project-slug directory
             name under ``~/.claude/projects/`` — e.g.
             ``-Users-example-operator-X-claude-klabauter``. Absent → auto-memory corpus is
@@ -662,7 +664,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     archive_override = params.get("archive_dir")
     archive_dir = (
         Path(archive_override) if isinstance(archive_override, str) and archive_override
-        else worktree_root / "cross-repo" / "archive"
+        else Path(memo_corpus_root(str(worktree_root))) / "archive"
     )
 
     project_slug = params.get("project_slug")

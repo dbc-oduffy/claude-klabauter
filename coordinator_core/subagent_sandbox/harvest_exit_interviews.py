@@ -37,6 +37,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
+from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+from coordinator_core.session.machinery_paths import plan_sidecars_dir as _plan_sidecars_dir
 from coordinator_core.subagent_sandbox.provision_report import _exit_interview_section
 
 #: Matches the Exit interview heading through the next top-level heading
@@ -166,8 +168,8 @@ def harvest(repo_root: Path, session: Optional[str]) -> Tuple[str, int, int]:
 
     Returns (report_text, included_count, skipped_empty_count).
     """
-    share_root = repo_root / "state" / "subagent-share"
-    plan_sidecars_root = repo_root / "state" / "plan-sidecars"
+    share_root = Path(_machinery_root(str(repo_root))) / "subagent-share"
+    plan_sidecars_root = Path(_plan_sidecars_dir(str(repo_root)))
     files = _iter_sidecar_files(share_root, session) + _iter_plan_sidecar_files(plan_sidecars_root)
 
     sections: List[str] = []

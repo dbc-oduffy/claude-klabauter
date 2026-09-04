@@ -265,6 +265,158 @@ def test_a_missing_nomination_record_is_not_evidence_the_group_em_moved(
     assert report["group-em-moved"] is False
 
 
+# --- holder liveness (C3) --------------------------------------------------
+
+def _liveness(monkeypatch, live, reason):
+    from coordinator_core.group_em import nomination
+    monkeypatch.setattr(
+        nomination, "is_live",
+        lambda record: nomination.LivenessResult(live, reason),
+    )
+
+
+def test_a_nominated_but_dead_holder_is_reported_dead(
+    tmp_path, projects_dir, now, monkeypatch
+):
+    """AC6: the baseline probe, inverted. A holder still nominated (so
+    `group_em_moved` says nothing) whose PROCESS IS CONFIRMED GONE reads dead.
+
+    `pid_not_running` is the only reason that earns `live: False`. This test
+    previously used `no_registry_record` and asserted dead -- it encoded the
+    AC7 violation rather than catching it, and the falsifier went green on top
+    of it. Registry absence gets its own test below, asserting the opposite.
+    """
+    _nomination(monkeypatch, "7777aaaa-x")
+    _liveness(monkeypatch, False, "pid_not_running")
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
+    assert report["group-em-moved"] is False
+    assert report["holder-liveness"] == {"live": False, "reason": "pid_not_running"}
+
+
+def test_registry_absence_is_unresolved_never_dead(
+    tmp_path, projects_dir, now, monkeypatch
+):
+    """AC7: a holder absent from THIS box's registry is not dead.
+
+    Registry absence is box-scoped -- a Group EM alive on another machine, or
+    one whose messaging gate is off, is absent here and looks exactly like a
+    corpse. `nomination`'s own docstring calls this "absence of registry
+    evidence, not evidence of absence, on a fleet that is multi-machine", and
+    `claim` refuses to supersede on it. `live` is therefore TRI-STATE and this
+    case answers `None`, never `False`.
+    """
+    _nomination(monkeypatch, "7777aaaa-x")
+    _liveness(monkeypatch, False, "no_registry_record")
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
+    assert report["holder-liveness"] == {"live": None, "reason": "no_registry_record"}
+    assert report["holder-liveness"]["live"] is not False
+
+
+def test_confirmed_dead_holder_raises_the_suppression_basis_flag_and_renders(
+    tmp_path, projects_dir, now, monkeypatch
+):
+    """The "instead of" clause: the decay must SPEAK, on the arm a watcher reads.
+
+    The original defect was not that suppression decayed -- it is that it
+    decayed silently behind a stale `answered-by-group-em` stamp. `holder_live`
+    was computed and never consumed, and the field reached `--json` only, so on
+    the rendered arm the report still said nothing.
+    """
+    _nomination(monkeypatch, "7777aaaa-x")
+    _liveness(monkeypatch, False, "pid_not_running")
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
+    assert report["suppression-basis-unreliable"] is True
+    rendered = idle_report.render(report)
+    assert "HOLDER-NOT-LIVE" in rendered
+    assert "decaying, not holding" in rendered
+
+
+def test_unresolved_holder_never_raises_the_basis_flag(
+    tmp_path, projects_dir, now, monkeypatch
+):
+    """AC7 again, on the new flag: absence of evidence must not raise an alarm.
+
+    A holder alive on another box is absent from THIS registry. Raising the
+    basis flag on `None` would report decaying suppression for a Group EM that
+    is running perfectly well elsewhere.
+    """
+    _nomination(monkeypatch, "7777aaaa-x")
+    _liveness(monkeypatch, False, "no_registry_record")
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
+    assert report["holder-liveness"]["live"] is None
+    assert report["suppression-basis-unreliable"] is False
+    assert "HOLDER-NOT-LIVE" not in idle_report.render(report)
+
+
+def test_live_holder_never_raises_the_basis_flag(
+    tmp_path, projects_dir, now, monkeypatch
+):
+    _nomination(monkeypatch, "7777aaaa-x")
+    _liveness(monkeypatch, True, "live")
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
+    assert report["suppression-basis-unreliable"] is False
+    assert "HOLDER-NOT-LIVE" not in idle_report.render(report)
+
+
+def test_a_nominated_live_holder_reports_live(tmp_path, projects_dir, now, monkeypatch):
+    _nomination(monkeypatch, "7777aaaa-x")
+    _liveness(monkeypatch, True, "live")
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
+    assert report["holder-liveness"] == {"live": True, "reason": "live"}
+
+
+def test_no_group_em_session_id_never_derives_holder_liveness(
+    tmp_path, projects_dir, now, monkeypatch
+):
+    """AC7: no `--group-em-session-id` must not report a live holder dead --
+    it must not report anything at all."""
+    _nomination(monkeypatch, "7777aaaa-x")
+    _liveness(monkeypatch, False, "no_registry_record")
+    report = _report(tmp_path, projects_dir, now)
+    assert report["holder-liveness"] is None
+
+
+def test_an_unreadable_nomination_record_does_not_derive_holder_liveness(
+    tmp_path, projects_dir, now, monkeypatch
+):
+    """AC7: an unreadable nomination record must not report a live holder dead."""
+    _nomination(monkeypatch, None)
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
+    assert report["holder-liveness"] is None
+
+
+def test_a_record_naming_a_different_holder_does_not_derive_holder_liveness(
+    tmp_path, projects_dir, now, monkeypatch
+):
+    """That case belongs to `group_em_moved`, not this field -- reporting it here
+    too would be a second, redundant story about the same fact."""
+    _nomination(monkeypatch, "somebody-else")
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
+    assert report["group-em-moved"] is True
+    assert report["holder-liveness"] is None
+
+
+def test_is_live_is_called_with_the_record_never_a_bare_session_id(
+    tmp_path, projects_dir, now, monkeypatch
+):
+    """The signature hazard the brief names by hand: `is_live(sid)` raises
+    `AttributeError` on a bare string, silently swallowed into fail-open. This
+    pins that the record itself -- not the id -- is what reaches `is_live`."""
+    from coordinator_core.group_em import nomination
+
+    captured = {}
+
+    def _fake_is_live(record):
+        captured["record"] = record
+        return nomination.LivenessResult(False, "pid_not_running")
+
+    monkeypatch.setattr(nomination, "is_live", _fake_is_live)
+    _nomination(monkeypatch, "7777aaaa-x")
+    report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
+    assert captured["record"] == {"session_id": "7777aaaa-x"}
+    assert report["holder-liveness"] == {"live": False, "reason": "pid_not_running"}
+
+
 def test_the_verdict_vocabulary_is_closed(tmp_path, projects_dir, now):
     """Emitting a verdict the consumer's table has no row for is the moment the
     agent starts improvising again, which is what this instrument removes."""
@@ -885,3 +1037,107 @@ def test_a_refused_peer_below_the_threshold_is_untouched(tmp_path, projects_dir,
     row = _row(_report(tmp_path, projects_dir, now, names={"3737aaaa-x": "p"}), "3737aaaa")
     assert row["verdict"] == idle_report.VERDICT_BETWEEN_TURNS
     assert row["reason"] is None
+
+
+# --- C3b: attributed rows excluded from `_group_em_answer` ----------------
+
+def test_group_em_answer_ac8_delegated_row_suppresses_but_does_not_attribute(now):
+    """AC8: a delegated row (carrying `offered_by`) still arms suppression
+    (`within_cooldown` True) but must NOT read back as a Group-EM answer."""
+    from coordinator_core.group_em import send_pass
+
+    key = send_pass.offer_key("group-em-1", "peer-1")
+    log = [
+        {"outcome": "offer", "offer_key": key, "offered_at": now - 60, "offered_by": "nudger-1"},
+    ]
+    answered, within = idle_report._group_em_answer(log, "group-em-1", "peer-1", now)
+    assert within is True
+    assert answered is None
+
+
+def test_group_em_answer_ac9_unattributed_row_is_byte_identical(now):
+    """AC9: a Group-EM-authored row (no `offered_by`) is untouched -- this
+    chunk must be invisible on that path."""
+    from coordinator_core.group_em import send_pass
+
+    key = send_pass.offer_key("group-em-2", "peer-2")
+    log = [
+        {"outcome": "offer", "offer_key": key, "offered_at": now - 60},
+    ]
+    answered, within = idle_report._group_em_answer(log, "group-em-2", "peer-2", now)
+    assert within is True
+    assert answered is not None
+
+
+# --- C2: `--record-offer` -------------------------------------------------
+
+def test_record_offer_requires_both_ids(tmp_path, projects_dir, capsys):
+    """An unattributed row would be indistinguishable from one the Group-EM
+    wrote itself -- refused loudly, before anything is recorded."""
+    assert idle_report._cli(
+        ["--repo-root", str(tmp_path), "--record-offer", "3838aaaa-x"]) == 2
+    assert "--record-offer requires" in capsys.readouterr().err
+
+
+def test_record_offer_requires_caller_session_id_too(tmp_path, projects_dir, capsys):
+    assert idle_report._cli([
+        "--repo-root", str(tmp_path), "--group-em-session-id", "group-em-1",
+        "--record-offer", "3838aaaa-x",
+    ]) == 2
+    assert "--record-offer requires" in capsys.readouterr().err
+
+
+def test_record_offer_suppresses_the_same_tick_it_recorded_in(
+    tmp_path, projects_dir, now, monkeypatch
+):
+    """Recorded first, then the report is built from the post-record log, in
+    ONE invocation -- the same tick that recorded a peer must read it back
+    suppressed, which is what prevents a double-nudge inside one tick.
+
+    `--caller-session-id` here ("caller-1") differs from `--group-em-session-id`
+    ("group-em-1") -- a delegated write (C1), attributed via `offered_by`.
+    C3b: `answered-by-group-em` must NOT report it as a Group-EM answer --
+    that field means the Group EM itself answered, and a delegated nudge
+    under this name would be the foreign-attribution defect this chunk
+    closes. (Suppression-widening itself is pinned directly against
+    `_group_em_answer` in the C3b-dedicated tests below -- `--record-offer`
+    here calls `send_pass.record_offers` with the real wall clock, not this
+    fixture's `now`, so `within_cooldown` is not reliably assertable through
+    this CLI path.)"""
+    _write(projects_dir, "3838aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
+    monkeypatch.setattr(idle_report, "projects_dir_for", lambda *a, **k: str(projects_dir))
+    monkeypatch.setattr(idle_report, "registry_names", lambda: {"3838aaaa-x": "peer-1"})
+    monkeypatch.setattr(idle_report, "time", type("T", (), {"time": staticmethod(lambda: now)}))
+    captured = []
+    monkeypatch.setattr("builtins.print", lambda *a, **k: captured.append(a[0]))
+    assert idle_report._cli([
+        "--repo-root", str(tmp_path), "--group-em-session-id", "group-em-1",
+        "--caller-session-id", "caller-1",
+        "--record-offer", "3838aaaa-x", "--json",
+    ]) == 0
+    payload = json.loads(captured[0])
+    row = next(r for r in payload["peers"] if r["session"] == "3838aaaa-x")
+    assert row["answered-by-group-em"] == "no"
+
+
+def test_record_offer_is_one_call_for_n_peers(tmp_path, projects_dir, now, monkeypatch):
+    """AC4: recording N peers in one invocation is ONE `record_offers` call,
+    never one per peer -- the batched-by-construction contract this CLI arm
+    exists to expose."""
+    from coordinator_core.group_em import send_pass
+
+    calls = []
+    monkeypatch.setattr(
+        send_pass, "record_offers",
+        lambda repo_root, holder, peers, offered_by, **k: calls.append(list(peers)) or [],
+    )
+    monkeypatch.setattr(idle_report, "projects_dir_for", lambda *a, **k: str(projects_dir))
+    monkeypatch.setattr(idle_report, "registry_names", lambda: {})
+    captured = []
+    monkeypatch.setattr("builtins.print", lambda *a, **k: captured.append(a[0]))
+    assert idle_report._cli([
+        "--repo-root", str(tmp_path), "--group-em-session-id", "group-em-1",
+        "--caller-session-id", "caller-1",
+        "--record-offer", "3939aaaa-x", "--record-offer", "3940aaaa-x",
+    ]) == 0
+    assert calls == [["3939aaaa-x", "3940aaaa-x"]]

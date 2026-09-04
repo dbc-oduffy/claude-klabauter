@@ -7,7 +7,7 @@ Where the enforcement engine intercepts a subagent's *write attempts*
 mid-session (PreToolUse), this module runs once at *spawn time* and, for
 agent/subagent types the policy has opted into ``report_sidecar``,
 provisions a per-session run-report markdown doc under
-``state/subagent-share/<session_id>/`` and emits its repo-relative path on
+``.coordinator-local/subagent-share/<session_id>/`` and emits its repo-relative path on
 stdout as ``{"report_sidecar": "<path>"}``. It shares the engine's policy
 loader, git-root resolver, and OR-resolved agent/subagent type legs
 (imported verbatim, never re-derived) but owns its own single-segment path
@@ -40,8 +40,8 @@ injection seam above; it changes the *value* an existing eligible
 key). For ``prior-art-checker``/``plan-coverage-checker``/
 ``external-pattern-checker``/``docs-checker`` ONLY, and only when the spawn
 payload also carries a non-empty ``plan_path``, ``_provision`` writes the
-sidecar to the deterministic ``state/plan-sidecars/<plan-stem>.<lens>.md``
-path instead of the session-keyed ``state/subagent-share/<session_id>/``
+sidecar to the deterministic ``.coordinator-local/plan-sidecars/<plan-stem>.<lens>.md``
+path instead of the session-keyed ``.coordinator-local/subagent-share/<session_id>/``
 home. Every other eligible ``subagent_type`` -- reviewer personas, and
 these same four agents' non-plan dispatch shapes (e.g. docs-checker's
 code-review dispatch, which carries no ``plan_path``) -- is unaffected and
@@ -64,6 +64,9 @@ from coordinator_core._settings_home import claude_config_dir, machine_local_dir
 from coordinator_core.frontmatter.sentinel_blocks import extract_block as _extract_sentinel_block
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_spawn
 from coordinator_core.session import scope as session_scope
+from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+from coordinator_core.session.machinery_paths import plan_sidecars_dir as _plan_sidecars_dir
+from coordinator_core.session.machinery_paths import share_dir as _share_dir
 from coordinator_core.snippet_sync.registry import (
     RegistryError,
     get_snippet_entry,
@@ -87,7 +90,7 @@ from coordinator_core.subagent_sandbox.engine import (
 #: key for exactly the named-dispatch population the key exists to serve.
 #: ``@`` is neither a directory separator nor a component of ``.``/``..``,
 #: so admitting it widens no traversal surface.
-MUTATES = ["state/subagent-share/**/*.md", "state/plan-sidecars/*.md"]  # session/agent-id-keyed sidecar docs and pointer index (_write_sidecar_pointer, _provision, _provision_plan_derivable_doc), plan-stem-keyed for the four G2 plan-pipeline emitters; data-dependent filenames, not a fixed artifact
+MUTATES = [".coordinator-local/subagent-share/**/*.md", ".coordinator-local/plan-sidecars/*.md"]  # session/agent-id-keyed sidecar docs and pointer index (_write_sidecar_pointer, _provision, _provision_plan_derivable_doc), plan-stem-keyed for the four G2 plan-pipeline emitters; data-dependent filenames, not a fixed artifact
 
 _SEGMENT_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._@-]")
 
@@ -120,18 +123,21 @@ def _sanitize_segment(seg: str) -> Optional[str]:
 #: reaper sweeps or add commit churn.
 _SIDECAR_POINTER_DIRNAME = ".agent-sidecars"
 
-#: The one prefix a pointer is allowed to name. A pointer file is the only
-#: input to this module that is neither the policy nor the spawn payload, so
-#: it is read as UNTRUSTED: a value that does not start with this, or that
-#: carries any ``..`` component, is discarded rather than followed.
-_SIDECAR_POINTER_PREFIX = "state/subagent-share/"
+def _sidecar_pointer_prefix(git_root: str) -> str:
+    """The one prefix a pointer is allowed to name, repo-root-relative. A
+    pointer file is the only input to this module that is neither the
+    policy nor the spawn payload, so it is read as UNTRUSTED: a value that
+    does not start with this, or that carries any ``..`` component, is
+    discarded rather than followed."""
+    share_root = os.path.join(_machinery_root(git_root), "subagent-share")
+    return os.path.relpath(share_root, git_root).replace(os.sep, "/") + "/"
 
 
 def _sidecar_pointer_path(git_root: str, raw_agent_id: str, kind: str = "report") -> Optional[Path]:
     """Pointer file for ``raw_agent_id``, or ``None`` if it cannot key one.
 
     ``kind`` namespaces the index by PRODUCER, because two producers write
-    into ``state/subagent-share/`` for the same agent with different leaf
+    into ``.coordinator-local/subagent-share/`` for the same agent with different leaf
     suffixes -- this module (``<key>.md``) and ``coordinator-doc-new --type
     subagent-sidecar`` (``<key>.subagent-sidecar.md``). A single flat key
     would hand one producer's spawn the other's document.
@@ -169,7 +175,7 @@ def _read_sidecar_pointer(git_root: str, raw_agent_id: str, kind: str = "report"
     """Repo-relative path of this agent's EXISTING sidecar, or ``None``.
 
     Every failure mode -- no pointer, unreadable, malformed, naming a path
-    outside ``state/subagent-share/``, or naming a file that is no longer
+    outside ``.coordinator-local/subagent-share/``, or naming a file that is no longer
     there (the reaper is entitled to have swept it) -- returns ``None``, which
     the caller reads as "nothing to adopt" and provisions normally. A stale
     pointer can therefore only ever cost a wasted read.
@@ -182,7 +188,7 @@ def _read_sidecar_pointer(git_root: str, raw_agent_id: str, kind: str = "report"
     except OSError:
         return None
     rel = content.splitlines()[0].strip() if content else ""
-    if not rel.startswith(_SIDECAR_POINTER_PREFIX):
+    if not rel.startswith(_sidecar_pointer_prefix(git_root)):
         return None
     if ".." in rel.split("/"):
         return None
@@ -221,7 +227,7 @@ def _write_sidecar_pointer(
 #: ...) are excluded not for having "review" in the role but because their
 #: output is a session judgment on work in flight, keyed to the session that
 #: asked -- as is every other ``report_sidecar``-eligible type, which keeps
-#: the session-keyed ``state/subagent-share/<session_id>/`` home.
+#: the session-keyed ``.coordinator-local/subagent-share/<session_id>/`` home.
 #: A key here is only followed when the spawn payload ALSO carries a
 #: non-empty ``plan_path`` -- this is what keeps e.g. docs-checker's
 #: code-review dispatch (no ``plan_path`` on that payload shape) on the
@@ -378,7 +384,7 @@ def _frontmatter(agent_type: str, spawned_at: str, lead_session_id: Optional[str
 #: why dispatch-time is the load-bearing choice (a blank-vs-filled
 #: distinction the close-time join depends on). Reuses `review_trail_write`'s
 #: own closed `_DELEGATE_REVIEWERS` vocabulary BY NAME, never a re-derived
-#: second classifier (chunk brief, state/dispatch-briefs/2026-08-27-the-
+#: second classifier (chunk brief, .coordinator-local/dispatch-briefs/2026-08-27-the-
 #: review-gate-measures-the-whole-session/C2.md) -- the same vocabulary
 #: `hooks/subagent_review_mark.py::_is_reviewer` already reuses this way, so
 #: a third independent copy of "what counts as a delegate reviewer" never
@@ -857,7 +863,7 @@ def resolve_plugin_root() -> Optional[str]:
 
     Shared by this module's contract-block assembly leg and
     ``coordinator_core.hooks.cater_subagent_start._resolve_role_append_snippet_path``
-    (C4/C5, state/dispatch-briefs/2026-08-21-catering-costs-what-the-work-
+    (C4/C5, .coordinator-local/dispatch-briefs/2026-08-21-catering-costs-what-the-work-
     costs/): both legs need "where does the coordinator-claude plugin's
     content live", not "where is the session's own repo" -- conflating the
     two is the defect this resolver exists to fix. ``_assemble_contract_blocks``
@@ -1122,7 +1128,7 @@ def assemble_contract_blocks_for_payload(
         )
         return None
 
-    # Non-spawning root read (C2, state/dispatch-briefs/2026-08-21-
+    # Non-spawning root read (C2, .coordinator-local/dispatch-briefs/2026-08-21-
     # catering-costs-what-the-work-costs/C2.md): eligible per
     # `resolve_git_root_cheap`'s own stated rule -- this leg (module
     # docstring: "deliberately NOT threaded through from _provision")
@@ -1254,9 +1260,14 @@ def _provision_plan_derivable_doc(
         )
         return None
 
-    plan_sidecars_dir = Path(git_root) / "state" / "plan-sidecars"
+    plan_sidecars_root = Path(_plan_sidecars_dir(git_root))
 
-    doc_path = plan_sidecars_dir / f"{plan_stem}.{lens}.md"
+    doc_path = plan_sidecars_root / f"{plan_stem}.{lens}.md"
+    # Repo-relative, derived from the resolved path rather than re-spelled as
+    # a literal -- the same `relpath` idiom the session-keyed writer below
+    # uses. A hand-written second spelling is what let the write side and
+    # `harvest_exit_interviews`'s read side drift apart in the first place.
+    rel_doc_path = os.path.relpath(doc_path, git_root).replace(os.sep, "/")
     spawned_at = datetime.now(timezone.utc).isoformat()
     # Review: overengineering-reviewer — redundant second `_declared_plan_disagrees_with_stem`
     # scan removed here; see this commit's message for why.
@@ -1264,7 +1275,7 @@ def _provision_plan_derivable_doc(
         agent_type, spawned_at, doc_type, lead_session_id=session_id, plan_path=plan_path
     )
 
-    plan_sidecars_dir.mkdir(parents=True, exist_ok=True)
+    plan_sidecars_root.mkdir(parents=True, exist_ok=True)
 
     try:
         with open(doc_path, "x", encoding="utf-8", newline="\n") as handle:
@@ -1275,7 +1286,7 @@ def _provision_plan_derivable_doc(
         # session_scope.touch_written_path's docstring for the full
         # rationale and the phantom-live-peer guard it applies.
         session_scope.touch_written_path(
-            session_id, f"state/plan-sidecars/{plan_stem}.{lens}.md", git_root
+            session_id, rel_doc_path, git_root
         )
     except FileExistsError:
         # Intended idempotent hit: a second run against the same plan +
@@ -1297,7 +1308,7 @@ def _provision_plan_derivable_doc(
             )
             return None
 
-    return f"state/plan-sidecars/{plan_stem}.{lens}.md"
+    return rel_doc_path
 
 
 def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optional[str]) -> Optional[str]:
@@ -1418,12 +1429,12 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
             derived_key = f"{sanitized_label}.{agent_id}"
             sanitized_provision_key = _sanitize_segment(derived_key)
 
-    session_dir = Path(git_root) / "state" / "subagent-share" / sanitized_session_id
+    session_dir = Path(_share_dir(git_root, sanitized_session_id))
 
     # CONTINUITY: adopt this agent's EXISTING sidecar when the session id has
     # moved out from under it.
     #
-    # The home is `state/subagent-share/<session_id>/<label>.<agent_id>.md` and
+    # The home is `.coordinator-local/subagent-share/<session_id>/<label>.<agent_id>.md` and
     # the idempotency below is a FileExistsError catch, so the continuity key
     # is the PAIR (session_id, agent_id). `/clear` mints a fresh session id
     # WITHOUT ending the process, so a subagent that outlives one re-fires
@@ -1451,7 +1462,9 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     # readable at the call sites instead of restating it as a narrowing.
     rel_path = ""
     if sanitized_provision_key is not None:
-        rel_path = f"state/subagent-share/{sanitized_session_id}/{sanitized_provision_key}.md"
+        rel_path = os.path.relpath(
+            session_dir / f"{sanitized_provision_key}.md", git_root
+        ).replace(os.sep, "/")
         if raw_agent_id and not (session_dir / f"{sanitized_provision_key}.md").exists():
             adopted = _read_sidecar_pointer(git_root, raw_agent_id)
             if adopted is not None and adopted != rel_path:
@@ -1561,13 +1574,14 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     # (the dispatching session) -- see session_scope.touch_written_path's
     # docstring for the full rationale and the phantom-live-peer guard it
     # applies.
+    nonce_rel_path = os.path.relpath(doc_path, git_root).replace(os.sep, "/")
     session_scope.touch_written_path(
         str(session_id),
-        f"state/subagent-share/{sanitized_session_id}/{sanitized_label}-{nonce}.md",
+        nonce_rel_path,
         git_root,
     )
 
-    return f"state/subagent-share/{sanitized_session_id}/{sanitized_label}-{nonce}.md"
+    return nonce_rel_path
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

@@ -945,7 +945,7 @@ def _check_first_agent_dispatch_sync(session_id: str, tool_name: str) -> str:
         "COORDINATOR SIDECAR ADVISORY: coordinator-themed subagents write their"
         " full findings to a sidecar file on disk as part of their design, not"
         " only in their return message to you."
-        f" Sidecar directory for this session: state/subagent-share/{session_id}/"
+        f" Sidecar directory for this session: .coordinator-local/subagent-share/{session_id}/"
         " If a dispatched agent's reply is missing, truncated, or it goes idle"
         " without reporting, read the sidecar there before assuming the work"
         " was lost or re-dispatching it."

@@ -141,6 +141,7 @@ from coordinator_core.frontmatter.primitives import (
 )
 from coordinator_core import lifecycle
 from coordinator_core.machine_resolver import registry_get
+from coordinator_core.memo_corpus import receiver_inbox_root
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.fleet._memo_resolver import (
     AmbiguousReceiverError,
@@ -5862,7 +5863,13 @@ def compute_reply_closure(frontmatter: dict[str, Any], memo_path: str, repo_root
             "unconfirmed_candidates": [],
         }
 
-    cross_repo_dir = sender_root / "cross-repo"
+    # Same per-receiver probe `_memo_resolver`/`resolve_receiver_inbox` roots
+    # its own resolution on (C5) — a hardcoded `sender_root / "cross-repo"`
+    # here would keep searching a migrated sender's LEGACY tree after that
+    # sender moved to `state/cross-repo/`, inheriting claude-klabauter's own layout
+    # rather than the sender's actual one.
+    corpus_root_str, _ = receiver_inbox_root(str(sender_root))
+    cross_repo_dir = Path(corpus_root_str)
     if not cross_repo_dir.is_dir():
         return {
             "verdict": "unknown",
@@ -8522,6 +8529,167 @@ def brief(
     if classification in ("handoff", "spinoff"):
         artifact_live_path = root / artifact["path"]
         aging_verdict = compute_aging_verdict(artifact_live_path)
+
+        # Supersession gate — residency in state/handoffs/ is not
+        # pickupability. `archival._is_terminal_or_archived_child` correctly
+        # RETAINS a `deployment_state: continued` predecessor on disk while
+        # its successor is still `in_flight` (2026-07-17 reverse-membership
+        # fix) — that retention is archival's call and stays untouched here.
+        # But `brief()` never read `continued_into` at all, so a retained
+        # predecessor briefed as an ordinary live pickup target reads
+        # `coast: clear` and reclaims a holder-absent claim nobody wanted
+        # back, telling the EM to dispatch a superseded baton's directives
+        # against a moved premise. Gated BEFORE `claim_at_brief` below, not
+        # after: a claim taken here would be a reclaim on a baton already
+        # continued into a successor, closing that leg in the same move
+        # rather than needing a second fix.
+        if fm.get("deployment_state") == "continued":
+            # Read straight off `fm`, which the guard above has already
+            # proven carries `deployment_state: continued`.
+            # `_continued_into_target` was called here originally; it
+            # re-opens and re-parses this same artifact to return the
+            # identical value, and its one added capability —
+            # archive-awareness — cannot apply, because reaching this branch
+            # means the artifact is live, not archived. That made it a file
+            # read and a YAML parse on the 500ms brightline pickup path
+            # buying nothing (coordinator:overengineering-reviewer,
+            # 2026-09-03). Whether the pointer actually RESOLVES on disk is
+            # still checked separately and archive-aware, via
+            # `_resolve_lineage_artifact_path` — mirroring
+            # `_resume_pending_unification`'s own "resolved on disk first,
+            # a dangling edge is named, not acted on" precedent.
+            #
+            # `continued_into` itself is NOT guaranteed truthy here —
+            # `deployment_state == "continued"` with a missing/blank
+            # `continued_into` is a malformed/partially-migrated record,
+            # not "not superseded" (coordinator:code-reviewer, 2026-09-03,
+            # Finding 1). Both an absent pointer and a dangling one route to
+            # this same gate and are named as distinct anomalies below —
+            # different repairs for whoever reads it.
+            continued_into = fm.get("continued_into") or None
+            successor_resolved = _resolve_lineage_artifact_path(root, continued_into) if continued_into else None
+            dangling = successor_resolved is None
+            successor_path = (
+                str(successor_resolved.relative_to(root)).replace("\\", "/")
+                if successor_resolved is not None
+                else None
+            )
+            if dangling:
+                if continued_into is None:
+                    # `deployment_state: continued` with `continued_into`
+                    # missing/blank entirely — a malformed or
+                    # partially-migrated record, distinct from a pointer
+                    # that names a successor and simply cannot find it: the
+                    # repair here is "populate continued_into", not
+                    # "chase down where it points" (coordinator:code-reviewer,
+                    # 2026-09-03, Finding 1).
+                    question = (
+                        f"{artifact['path']} is marked deployment_state: continued but has no "
+                        "continued_into pointer at all — the field is missing or blank. Pick "
+                        "up this predecessor anyway, or treat the missing pointer as broken "
+                        "and investigate?"
+                    )
+                    evidence = "continued_into: absent/blank — deployment_state: continued with no successor recorded"
+                    narration = (
+                        f"{artifact['path']} is marked deployment_state: continued but "
+                        "continued_into is missing or blank — this predecessor was superseded "
+                        "but no successor pointer was ever recorded."
+                    )
+                    next_move = (
+                        "Populate the missing continued_into pointer by hand before picking up "
+                        "this predecessor — do not treat residency in state/handoffs/ as license "
+                        "to act on it."
+                    )
+                else:
+                    question = (
+                        f"{artifact['path']} is stamped continued_into: {continued_into!r}, "
+                        "but that successor does not resolve on disk (or in any archive dir) — "
+                        "the pointer is dangling. Pick up this predecessor anyway, or treat the "
+                        "pointer as broken and investigate?"
+                    )
+                    evidence = f"continued_into: {continued_into!r} — dangling, does not resolve"
+                    narration = (
+                        f"{artifact['path']} is marked deployment_state: continued with a "
+                        f"dangling continued_into pointer ({continued_into!r} does not resolve "
+                        "on disk or in any archive dir) — this predecessor was superseded but "
+                        "its successor cannot be found."
+                    )
+                    next_move = (
+                        "Resolve the dangling continued_into pointer by hand before picking up "
+                        "this predecessor — do not treat residency in state/handoffs/ as license "
+                        "to act on it."
+                    )
+            else:
+                question = (
+                    f"{artifact['path']} is stamped continued_into: {successor_path} — this "
+                    "baton was superseded. Pick up the successor instead, or deliberately "
+                    "proceed on this predecessor?"
+                )
+                evidence = f"continued_into: {continued_into!r} -> resolves to {successor_path}"
+                narration = (
+                    f"{artifact['path']} is deployment_state: continued, superseded by "
+                    f"{successor_path} — residency in state/handoffs/ is not pickupability."
+                )
+                next_move = f"Pick up {successor_path} instead of this superseded predecessor."
+            supersession_jp = build_judgment_point(
+                "j-supersession",
+                question,
+                evidence,
+                [
+                    {
+                        "value": "redirect-to-successor",
+                        "resolves": [],
+                        "guidance": (
+                            "Re-run brief against the successor path instead of this "
+                            "superseded predecessor."
+                            if not dangling
+                            else "No successor resolves — this disposition is unavailable "
+                            "until the dangling pointer is repaired."
+                        ),
+                    },
+                    {
+                        "value": "proceed-anyway",
+                        "resolves": [],
+                        "guidance": (
+                            "Deliberately read/act on this predecessor despite the "
+                            "supersession — the caller has seen the pointer and means it."
+                        ),
+                    },
+                ],
+                None,
+                reason="insufficient-evidence",
+            )
+            supersession_judgment_points = [supersession_jp]
+            return _emit_elision_aware(
+                {
+                    "artifact": artifact,
+                    "preflight": {
+                        "tree_quiescence": tree_quiescence,
+                        "staleness": staleness,
+                        "closure_signals": [],
+                    },
+                    "gates": {
+                        "branch": branch_gate,
+                        "aging_verdict": aging_verdict,
+                        "supersession": {
+                            "continued_into": continued_into,
+                            "successor_resolves": not dangling,
+                            "successor_path": successor_path,
+                            "verdict": "blocked",
+                        },
+                        "coast": compute_coast(
+                            supersession_judgment_points, tree_quiescence=tree_quiescence
+                        ),
+                    },
+                    "directives": [],
+                    "judgment_points": supersession_judgment_points,
+                    "decisions": decisions,
+                    "narration": narration,
+                    "next_move": next_move,
+                },
+                EXIT_BUSINESS_FAIL,
+            )
+
         # Claim FIRST, then read the claim state: both reads below must see
         # the post-acquisition truth, or this brief would narrate "no
         # competing claim" about a lock it just took itself.

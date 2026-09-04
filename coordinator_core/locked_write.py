@@ -848,7 +848,13 @@ def _describe_holder(lock_path: Path) -> str:
         acquired_at = data.get("acquired_at", "unknown time")
     except (ValueError, KeyError, UnicodeDecodeError, TypeError):
         return "holder unknown (corrupt lock metadata)"
-    return f"pid={pid} holder={holder!r} acquired_at={acquired_at}"
+    # Function-local — see `_lock_key`'s note on this module's cold-start budget.
+    from coordinator_core import timestamps
+
+    return (
+        f"pid={pid} holder={holder!r} "
+        f"acquired_at={timestamps.with_age(acquired_at)}"
+    )
 
 
 @contextmanager

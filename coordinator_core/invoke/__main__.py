@@ -754,8 +754,42 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
             # characters, which is still syntactically valid JSON and
             # dispatches without error. That is worse than the loud
             # shell-quoting failure this transport exists to replace.
+            #
+            # THE STREAM CAN BE ABSENT ENTIRELY, AND THAT IS NOT AN OSError.
+            # Why this route lands here with no stdin to read:
+            # door_core.h :: door_argv_declares_params_stdin (the full
+            # pythonw / AttributeError / -32603 / -32004 causal chain lives
+            # there, once).
+            #
+            # SITE-SPECIFIC: a current door decides this route pre-delivery
+            # and falls through cold before this branch ever runs, so this
+            # refusal fires only for an OLDER door image -- already
+            # installed on peer machines, refreshed only by a publish round
+            # -- which still delivers the request warm. What that caller
+            # gets is a pre-dispatch error naming the cause, which is
+            # provably undispatched, in place of the indeterminate verdict
+            # this branch replaces.
+            # TWO REVIEWERS DISAGREED ON THE `.buffer` LIMB; IT STAYS.
+            # overengineering-reviewer had it dropped as covering no named
+            # caller, which was true of this diff. code-reviewer then named
+            # the shapes it does cover -- `io.StringIO`, an embedding host's
+            # stream wrapper -- and the asymmetry decides it: a text stream
+            # standing in for `sys.stdin` raises `AttributeError` here, which
+            # this branch's own `except` does not catch, and that is
+            # precisely the escape-as--32603 path the refusal exists to
+            # close. A guard against the failure class costs one `getattr`;
+            # reopening the class costs a caller an indeterminate verdict
+            # about a mutation that never ran.
+            stdin_stream = getattr(sys, "stdin", None)
+            if stdin_stream is None or getattr(stdin_stream, "buffer", None) is None:
+                _fatal_stderr(
+                    "--params-file - has no stdin to read in this process. The "
+                    "payload is bound to the calling process's stdin and does not "
+                    "cross the warm door's wire. Pass --params-file <path>, or the "
+                    "positional params JSON."
+                )
             try:
-                params_json_str = sys.stdin.buffer.read().decode("utf-8")
+                params_json_str = stdin_stream.buffer.read().decode("utf-8")
             except (OSError, UnicodeDecodeError) as exc:
                 _fatal_stderr(f"Cannot read params JSON from stdin: {exc}")
         else:

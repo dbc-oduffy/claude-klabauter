@@ -66,8 +66,16 @@ for the literal tuple; grouped here by which submodule names each CLI:
     (archive-stamp-cli, archive-session-scope.py, both already listed above) ->
         `directives_memo_lifecycle.py` (C2c) contributes no CLI beyond those
         two already-manifested names.
-    regenerate-orientation-cache, check-machine-local-regeneratability.py ->
-        `directives_session_hygiene.py` (C2i). Step 2.96's completeness-
+    regenerate-orientation-cache, check-machine-local-regeneratability.py,
+        sweep-terminal-handoffs.py, sweep-terminal-sizings.py ->
+        `directives_session_hygiene.py` (C2i). The handoff sweep is the
+        close's mandatory terminal-baton drain (PM ruling 2026-09-03,
+        carried by cross-repo/inbox/2026-09-03-doe-claude-em-close-verbs-
+        must-emit-a-terminal-handoff-drain-directive.md) — unconditional,
+        emitted last. The sizings sweep is its sibling (C3,
+        docs/plans/2026-09-03-close-verb-archival-stops-asking-for-wri.md):
+        `fleet.archive_terminal_sizings` already existed with no caller —
+        emitted last, immediately after the handoff sweep. Step 2.96's completeness-
         checklist WARN gate has NO backing CLI (a pure read+render, per that
         module's own Design note) and is surfaced as `gates.completeness_
         checklist`, never a `directives[]` entry.
@@ -275,6 +283,7 @@ from coordinator_core.ops.fleet._common import handoff_archive_dest
 from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # AC8: NOT zero-spawn — runs `git rev-parse --show-toplevel` via `_run_git`, one subprocess spawn per resolution
 from coordinator_core.resolution.facade import resolve_operator_config
+from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
 
 from coordinator_core.workstream_complete import completion_verdict as _completion_verdict
 from coordinator_core.workstream_complete import directives_commit_tail
@@ -381,6 +390,8 @@ CONSUMES_MANIFEST: tuple[str, ...] = (
     "coordinator-fold-execution-record",
     "regenerate-orientation-cache",
     "check-machine-local-regeneratability",
+    "sweep-terminal-handoffs",
+    "sweep-terminal-sizings",
     "review-brightline-gate",
     "freeze-review-diff",
     "fan-out-integrator",
@@ -1525,6 +1536,20 @@ def build_directives(
     # (`directives_commit_tail.build_archive_session_claim_directive`) has
     # been removed as unreferenced — only the CLI it wrapped survives.
 
+    # -- The terminal-handoff drain (PM ruling 2026-09-03) --
+    # LAST in the list deliberately: every stamp this ceremony performs has
+    # to have landed before the sweep classifies, or a record stamped
+    # terminal this session is still pre-terminal when the drain looks at
+    # it. See `build_terminal_handoff_sweep_directive`'s own docstring for
+    # why it is unconditional and why it carries no predicate.
+    directives.append(directives_session_hygiene.build_terminal_handoff_sweep_directive())
+
+    # -- The terminal-sizings drain (C3, sibling of the drain above) --
+    # Emitted immediately after the handoff drain, for the identical
+    # last-in-list reasoning. See
+    # `build_terminal_sizing_sweep_directive`'s own docstring.
+    directives.append(directives_session_hygiene.build_terminal_sizing_sweep_directive())
+
     return directives
 
 
@@ -2268,7 +2293,7 @@ def _compute_review_receipt_gate(
     skips the check — `claimed_at` narrows the claim window, it does not
     disable the gate.
 
-    AC2b's join: a directory listing over `state/subagent-share/<sid>/`
+    AC2b's join: a directory listing over `<machinery_root>/subagent-share/<sid>/`
     (constraint 8 — a path string and a stat, no history walk, no
     `baton_assemble` hop) plus a frontmatter read per candidate. A sidecar
     counts iff it carries a `review_receipt:` BLOCK — the one the dispatch
@@ -2307,7 +2332,7 @@ def _compute_review_receipt_gate(
 
     from coordinator_core.reviewer_vocabulary import CLOSE_RECEIPT_REVIEWERS
 
-    sidecar_dir = root / "state" / "subagent-share" / sid
+    sidecar_dir = Path(_machinery_root(str(root))) / "subagent-share" / sid
     no_receipt_detail = (
         f"no counting review receipt for session {sid!r} under "
         f"{sidecar_dir.as_posix()} (missing, blank, wrong agent type, or "

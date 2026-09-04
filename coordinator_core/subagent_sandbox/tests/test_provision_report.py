@@ -66,7 +66,7 @@ BARE_HEX_AGENT_ID = "abc123def4567890"
 NAMED_AGENT_ID = "aReviewBot-0123456789abcdef"
 
 _EMIT_RE = re.compile(
-    r'^state/subagent-share/(?P<session>[^/]+)/(?P<label>[^/]+)-(?P<nonce>[0-9a-f]{8})\.md$'
+    r'^\.coordinator-local/subagent-share/(?P<session>[^/]+)/(?P<label>[^/]+)-(?P<nonce>[0-9a-f]{8})\.md$'
 )
 
 
@@ -86,7 +86,7 @@ def _derived_path(session_id: str, label: str, agent_id: str = BARE_HEX_AGENT_ID
     `<name>@session-<short>`.
     """
     return (
-        f"state/subagent-share/{_sanitize_expected(session_id)}/"
+        f".coordinator-local/subagent-share/{_sanitize_expected(session_id)}/"
         f"{_sanitize_expected(label)}.{agent_id}.md"
     )
 
@@ -233,7 +233,7 @@ def test_eligible_agent_type_creates_doc_and_emits_json(
 
     doc_path = git_repo / envelope["report_sidecar"]
     assert doc_path.is_file()
-    assert doc_path.parent == git_repo / "state" / "subagent-share" / session_id
+    assert doc_path.parent == git_repo / ".coordinator-local" / "subagent-share" / session_id
 
 
 def test_eligible_via_subagent_type_backpointer_leg(
@@ -262,6 +262,31 @@ def test_eligible_via_subagent_type_backpointer_leg(
     assert doc_path.is_file()
 
 
+def _assert_no_sidecar_anywhere(git_repo: Path) -> None:
+    """No sidecar was written under `git_repo`, at ANY root.
+
+    Deliberately names no bucket. The predecessor of this helper was
+    `assert not (git_repo / "state" / "subagent-share").exists()`, which
+    stopped meaning anything the moment the bucket relocated: a negative
+    assertion anchored on a path nothing writes goes green at the exact
+    moment it stops being true, and reads as a passing test rather than as a
+    check that no longer fires (review: coordinator:code-reviewer / a8, on
+    46bd404f9a). Repointing it to `.coordinator-local` would only re-arm the
+    same trap for the next move.
+
+    A sidecar is `.md`; the only other file these callers put in the tree is
+    the policy `.yaml`. So this is exact, and it is strictly stronger than
+    the path check it replaces -- it also catches a write to a root that does
+    not exist yet.
+    """
+    stray = sorted(
+        path.relative_to(git_repo).as_posix()
+        for path in git_repo.rglob("*.md")
+        if ".git" not in path.relative_to(git_repo).parts
+    )
+    assert stray == [], f"expected no sidecar to be written anywhere; found {stray}"
+
+
 def test_ineligible_type_no_doc_empty_stdout_exit_zero(
     git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
@@ -272,7 +297,7 @@ def test_ineligible_type_no_doc_empty_stdout_exit_zero(
 
     assert exit_code == 0
     assert out == ""
-    assert not (git_repo / "state" / "subagent-share").exists()
+    _assert_no_sidecar_anywhere(git_repo)
 
 
 def test_fail_open_on_absent_policy(
@@ -326,7 +351,7 @@ def test_missing_session_id_emits_nothing(
 
     assert exit_code == 0
     assert out == ""
-    assert not (git_repo / "state" / "subagent-share").exists()
+    _assert_no_sidecar_anywhere(git_repo)
 
 
 def test_unhashable_agent_type_fails_open(
@@ -346,7 +371,7 @@ def test_unhashable_agent_type_fails_open(
 
     assert exit_code == 0
     assert out == ""
-    assert not (git_repo / "state" / "subagent-share").exists()
+    _assert_no_sidecar_anywhere(git_repo)
 
 
 # ---------------------------------------------------------------------------
@@ -388,9 +413,9 @@ def test_label_with_traversal_segments_sanitized_stays_inside_session_dir(
 
     doc_path = git_repo / emitted_path
     assert doc_path.is_file()
-    assert doc_path.parent == git_repo / "state" / "subagent-share" / session_id
-    # Nothing escaped state/subagent-share/ -- only the one session dir exists.
-    share_root = git_repo / "state" / "subagent-share"
+    assert doc_path.parent == git_repo / ".coordinator-local" / "subagent-share" / session_id
+    # Nothing escaped the share root -- only the one session dir exists.
+    share_root = git_repo / ".coordinator-local" / "subagent-share"
     all_files = list(share_root.rglob("*.md"))
     assert all_files == [doc_path]
 
@@ -415,9 +440,9 @@ def test_label_exactly_dotdot_emits_nothing(
 
     assert exit_code == 0
     assert out == ""
-    assert not (git_repo / "state" / "subagent-share").exists()
+    _assert_no_sidecar_anywhere(git_repo)
     # Nothing was written one level above subagent-share/ either.
-    assert not (git_repo / "state" / "sess-dotdot-label").exists()
+    assert not (git_repo / ".coordinator-local" / "sess-dotdot-label").exists()
 
 
 def test_malicious_session_id_traversal_confined_single_segment_no_escape(
@@ -428,7 +453,7 @@ def test_malicious_session_id_traversal_confined_single_segment_no_escape(
     '..' the module explicitly rejects, so a doc IS provisioned, but the
     key safety property holds: the sanitized session_id is one literal path
     segment with no '/' in it, so the doc can only land directly under
-    state/subagent-share/, never escape upward or into a sibling tree."""
+    the share root, never escape upward or into a sibling tree."""
     payload = _payload(
         agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id="../escape"
     )
@@ -445,7 +470,7 @@ def test_malicious_session_id_traversal_confined_single_segment_no_escape(
     assert session_segment == "..escape"
     assert "/" not in session_segment
 
-    share_root = git_repo / "state" / "subagent-share"
+    share_root = git_repo / ".coordinator-local" / "subagent-share"
     doc_path = git_repo / emitted_path
     assert doc_path.is_file()
     assert doc_path.parent == share_root / "..escape"
@@ -466,7 +491,7 @@ def test_session_id_sanitizes_to_empty_emits_nothing(
 
     assert exit_code == 0
     assert out == ""
-    assert not (git_repo / "state" / "subagent-share").exists()
+    _assert_no_sidecar_anywhere(git_repo)
 
 
 def test_label_sanitizes_to_empty_emits_nothing(
@@ -495,7 +520,7 @@ def test_label_sanitizes_to_empty_emits_nothing(
 
     assert exit_code == 0
     assert out == ""
-    assert not (git_repo / "state" / "subagent-share").exists()
+    _assert_no_sidecar_anywhere(git_repo)
 
 
 # ---------------------------------------------------------------------------
@@ -551,7 +576,9 @@ def test_provision_key_deterministic_path_not_nonce(
     lines = out.splitlines()
     assert len(lines) == 1
     envelope = json.loads(lines[0])
-    assert envelope == {"report_sidecar": f"state/subagent-share/{session_id}/myplan.C1.md"}
+    assert envelope == {
+        "report_sidecar": f".coordinator-local/subagent-share/{session_id}/myplan.C1.md"
+    }
 
     doc_path = git_repo / envelope["report_sidecar"]
     assert doc_path.is_file()
@@ -585,7 +612,7 @@ def test_provision_key_idempotent_reopen_same_path_preserves_content(
 
     assert path_1 == path_2
 
-    share_root = git_repo / "state" / "subagent-share"
+    share_root = git_repo / ".coordinator-local" / "subagent-share"
     all_files = list(share_root.rglob("*.md"))
     assert all_files == [doc_path]
 
@@ -610,12 +637,12 @@ def test_provision_key_traversal_sanitized_confined_single_segment(
     envelope = json.loads(lines[0])
     emitted_path = envelope["report_sidecar"]
 
-    assert emitted_path == f"state/subagent-share/{session_id}/..escape.md"
+    assert emitted_path == f".coordinator-local/subagent-share/{session_id}/..escape.md"
     assert "/" not in Path(emitted_path).name
 
     doc_path = git_repo / emitted_path
     assert doc_path.is_file()
-    share_root = git_repo / "state" / "subagent-share"
+    share_root = git_repo / ".coordinator-local" / "subagent-share"
     assert doc_path.resolve().is_relative_to(share_root.resolve())
     all_files = list(share_root.rglob("*.md"))
     assert all_files == [doc_path]
@@ -638,7 +665,7 @@ def test_provision_key_exactly_dotdot_fails_open(
     # The session dir itself is mkdir'd unconditionally upstream of the
     # provision_key branch (pre-existing D1 behavior) -- what matters here
     # is that NO doc got written for the rejected provision_key.
-    share_root = git_repo / "state" / "subagent-share"
+    share_root = git_repo / ".coordinator-local" / "subagent-share"
     if share_root.exists():
         assert list(share_root.rglob("*.md")) == []
 
@@ -664,7 +691,7 @@ def test_provision_key_sanitizes_to_empty_fails_open(
     assert out == ""
     # Same mkdir-happens-before-provision_key-check caveat as the
     # exactly-'..' case above -- assert no doc, not "no directory tree".
-    share_root = git_repo / "state" / "subagent-share"
+    share_root = git_repo / ".coordinator-local" / "subagent-share"
     if share_root.exists():
         assert list(share_root.rglob("*.md")) == []
 
@@ -906,9 +933,19 @@ def test_dispatch_feed_frontmatter_validates_against_run_report_schema() -> None
     text = _build_doc_text(agent_type=REPORT_SIDECAR_TYPE, spawned_at="2026-07-13T00:00:00Z")
     frontmatter = parse_frontmatter(text)["frontmatter"]
 
+    from coordinator_core.session.machinery_paths import share_dir
+
     schemas = load_schemas(schemas_dir)
-    match = match_schema_for_path("state/subagent-share/probe-session/probe.md", schemas)
-    assert match is not None, "no schema matched state/subagent-share/*/*.md"
+    # Probe path derived from the WRITER's own seam, never spelled here: a
+    # hardcoded root makes this test assert that the schema matches a path
+    # production may no longer write, which is how run-report's glob came to
+    # match zero of 11,327 live records while this test stayed green. Derived,
+    # it follows the bucket if it moves again. Not circular -- `share_dir` is
+    # the write side, the schema glob is the read side, and the point is that
+    # the two agree.
+    probe_path = (Path(share_dir("", "probe-session")) / "probe.md").as_posix().lstrip("/")
+    match = match_schema_for_path(probe_path, schemas)
+    assert match is not None, f"no schema matched {probe_path}"
 
     result = validate_frontmatter_obj(frontmatter, match["schema"])
     assert result["ok"], (
@@ -1380,12 +1417,12 @@ def test_plan_derivable_emitter_with_plan_path_routes_to_plan_sidecars(
     assert exit_code == 0
     envelope = json.loads(out.splitlines()[0])
     assert envelope["report_sidecar"] == (
-        "state/plan-sidecars/2026-07-24-some-plan.prior-art-check.md"
+        ".coordinator-local/plan-sidecars/2026-07-24-some-plan.prior-art-check.md"
     )
 
     doc_path = git_repo / envelope["report_sidecar"]
     assert doc_path.is_file()
-    assert doc_path.parent == git_repo / "state" / "plan-sidecars"
+    assert doc_path.parent == git_repo / ".coordinator-local" / "plan-sidecars"
     text = doc_path.read_text(encoding="utf-8")
     assert "## Exit interview" in text
     assert "## Questions" in text  # assessment template
@@ -1413,7 +1450,9 @@ def test_all_registered_emitters_resolve_expected_lens(
 
     assert exit_code == 0
     envelope = json.loads(out.splitlines()[0])
-    assert envelope["report_sidecar"] == f"state/plan-sidecars/my-plan.{lens}.md"
+    assert envelope["report_sidecar"] == (
+        f".coordinator-local/plan-sidecars/my-plan.{lens}.md"
+    )
 
 
 def test_docs_checker_without_plan_path_keeps_session_keyed_home(
@@ -1489,7 +1528,7 @@ def test_plan_derivable_idempotent_reopen_preserves_content(
     assert path_1 == path_2
     assert doc_path.read_text(encoding="utf-8") == modified_content
 
-    plan_sidecars_root = git_repo / "state" / "plan-sidecars"
+    plan_sidecars_root = git_repo / ".coordinator-local" / "plan-sidecars"
     assert list(plan_sidecars_root.glob("*.md")) == [doc_path]
 
 
@@ -1510,10 +1549,10 @@ def test_plan_path_traversal_stem_confined_single_segment(
     assert exit_code == 0
     envelope = json.loads(out.splitlines()[0])
     emitted_path = envelope["report_sidecar"]
-    assert emitted_path == "state/plan-sidecars/passwd.external-pattern.md"
+    assert emitted_path == ".coordinator-local/plan-sidecars/passwd.external-pattern.md"
 
     doc_path = git_repo / emitted_path
-    plan_sidecars_root = git_repo / "state" / "plan-sidecars"
+    plan_sidecars_root = git_repo / ".coordinator-local" / "plan-sidecars"
     assert doc_path.resolve().is_relative_to(plan_sidecars_root.resolve())
 
 
@@ -1898,7 +1937,9 @@ def test_sidecar_is_adopted_when_the_session_id_changes_under_a_live_agent(
     assert resumed == original, "the resumed spawn must be handed its own sidecar back"
     assert "the findings" in (git_repo / resumed).read_text(encoding="utf-8")
     # And no empty second sidecar -- not even an empty session directory for it.
-    assert not (git_repo / "state" / "subagent-share" / "sess-after-clear").exists()
+    assert not (
+        git_repo / ".coordinator-local" / "subagent-share" / "sess-after-clear"
+    ).exists()
 
 
 def test_a_different_agent_under_the_same_session_never_adopts(
@@ -1950,7 +1991,10 @@ def test_a_pointer_naming_a_reaped_sidecar_provisions_fresh(
     "hostile",
     [
         "../../../../etc/passwd",
-        "state/subagent-share/../../../etc/passwd",
+        # Live root deliberately: on the OLD root this would be discarded
+        # for being foreign as well as for traversing, and would stop
+        # isolating the `..` component as the reason.
+        ".coordinator-local/subagent-share/../../../etc/passwd",
         "/etc/passwd",
         "docs/plans/not-a-sidecar.md",
         "",
@@ -1965,7 +2009,7 @@ def test_a_hostile_pointer_value_is_never_followed(
 ) -> None:
     """The pointer file is the only input to this module that is neither the
     policy nor the spawn payload, so it is read as untrusted: anything not
-    under `state/subagent-share/`, or carrying a `..` component, is discarded
+    under the sidecar share root, or carrying a `..` component, is discarded
     rather than followed."""
     pointer = _sidecar_pointer_path(str(git_repo), BARE_HEX_AGENT_ID)
     assert pointer is not None
@@ -1978,7 +2022,7 @@ def test_a_hostile_pointer_value_is_never_followed(
     exit_code, out = _run(payload, policy_path, git_repo, monkeypatch, capsys)
     assert exit_code == 0
     emitted = json.loads(out.splitlines()[0])["report_sidecar"]
-    assert emitted.startswith("state/subagent-share/sess-hostile-ptr/")
+    assert emitted.startswith(".coordinator-local/subagent-share/sess-hostile-ptr/")
     assert (git_repo / emitted).is_file()
 
 
@@ -2036,7 +2080,9 @@ def test_the_pointer_index_is_untracked_and_outside_the_reaped_tree(
         pointer.parent
         == git_repo / ".git" / "coordinator-sessions" / ".agent-sidecars" / "report"
     )
-    assert not (git_repo / "state" / "subagent-share" / ".agent-sidecars").exists()
+    assert not (
+        git_repo / ".coordinator-local" / "subagent-share" / ".agent-sidecars"
+    ).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -2118,7 +2164,7 @@ def test_recovery_does_not_fire_for_an_unnamed_agent(
     pointer = _sidecar_pointer_path(str(git_repo), BARE_HEX_AGENT_ID)
     assert pointer is not None
     pointer.parent.mkdir(parents=True, exist_ok=True)
-    stale = "state/subagent-share/old-session/coordinatorcode-reviewer.abc.md"
+    stale = ".coordinator-local/subagent-share/old-session/coordinatorcode-reviewer.abc.md"
     (git_repo / stale).parent.mkdir(parents=True, exist_ok=True)
     (git_repo / stale).write_text("prior life\n", encoding="utf-8")
     pointer.write_text(stale + "\n", encoding="utf-8")

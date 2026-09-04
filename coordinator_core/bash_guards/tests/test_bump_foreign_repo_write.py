@@ -2469,3 +2469,83 @@ def test_ac14_own_repo_write_survives_every_root_resolution_missing(repos, monke
         "OWN-REPO WRITE DENIED: unresolvable roots were read as a different repo. "
         "Envelope: %r" % (result,)
     )
+
+
+# --- Redirection tokens must not reach the dual-mode read predicates -------
+#
+# The dispatcher splits segments on `|`, so a pipe never reaches a git
+# segment's args. `2>&1` is not a separator, so it does. It starts with a
+# digit rather than `-`, so the positional helpers counted it as the
+# subcommand's first positional and every arity- or subword-shaped read
+# predicate flipped to write on it. Reproducer, before the fix:
+#     git -C <repo> remote -v          -> allowed
+#     git -C <repo> remote -v 2>&1     -> DENIED
+# Same command, same repo, two characters apart. Found by doe-claude-em after
+# both of us stopped one variation short all evening — we varied the git verb
+# and never the shell shape.
+
+
+@pytest.mark.parametrize(
+    "subcommand,args",
+    [
+        ("remote", ["-v"]),
+        ("notes", []),
+        ("submodule", ["status"]),
+        ("config", ["some.key"]),
+    ],
+)
+def test_redirect_token_does_not_flip_a_read_to_a_write(subcommand, args):
+    """The read verdict must be identical with and without a trailing
+    redirect. Asserted as an equality against the clean verdict rather than
+    against `False`, so this cannot pass by the predicate becoming
+    permissive in both directions."""
+    clean = guard._git_invocation_is_write(subcommand, list(args))
+    redirected = guard._git_invocation_is_write(subcommand, list(args) + ["2>&1"])
+
+    assert clean is False, "fixture is not a read spelling: %s %s" % (subcommand, args)
+    assert redirected == clean, (
+        "`git %s %s 2>&1` classified differently from the same command without "
+        "the redirect — the redirect token is reaching the read predicate"
+        % (subcommand, " ".join(args))
+    )
+
+
+@pytest.mark.parametrize(
+    "subcommand,args",
+    [
+        ("remote", ["add", "origin", "url"]),
+        ("remote", ["set-url", "origin", "url"]),
+        ("notes", ["add"]),
+        ("config", ["some.key", "value"]),
+    ],
+)
+def test_redirect_token_does_not_silence_a_write(subcommand, args):
+    """The other half, and the one that matters: filtering redirects must
+    not make a genuine write look like a read. A guard that stops denying
+    `git remote add` fails in the direction that costs something."""
+    assert guard._git_invocation_is_write(subcommand, list(args)) is True
+    assert guard._git_invocation_is_write(subcommand, list(args) + ["2>&1"]) is True
+
+
+@pytest.mark.parametrize(
+    "tok,expected",
+    [
+        ("2>&1", True),
+        (">", True),
+        (">>", True),
+        ("<", True),
+        ("2>", True),
+        ("1>&2", True),
+        ("&>", True),
+        (">out.txt", True),
+        ("origin", False),
+        ("show", False),
+        ("-v", False),
+        ("some.key", False),
+        ("v2>x", False),
+    ],
+)
+def test_is_redirect_token_classification(tok, expected):
+    """`v2>x` is the negative that matters: the match is anchored, so a token
+    merely CONTAINING a redirect operator is still an argument."""
+    assert guard._is_redirect_token(tok) is expected

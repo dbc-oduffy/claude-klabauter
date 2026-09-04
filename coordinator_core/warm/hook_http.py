@@ -98,7 +98,7 @@ def unserved_response(event_name: Optional[str]) -> Dict[str, Any]:
     label = event_name or "an unnamed event"
     return _with_context(
         {
-            "hookSpecificOutput": {"hookEventName": event_name},
+            **_envelope(event_name),
             "systemMessage": "coordinator: no warm route for %s -- hook did not run" % label,
             "suppressOutput": False,
         },
@@ -159,6 +159,40 @@ DENIED_OP_PREFIXES = ("ceremony.",)
 #: see `_with_context`.
 PASSTHROUGH_RESULT_KEYS = ("systemMessage", "suppressOutput")
 
+#: Events whose response the harness REJECTS if it carries `hookSpecificOutput` at all.
+#:
+#: `hookEventName` is validated against a closed enum, and not every event the harness will
+#: DIAL is a member of it. `SessionEnd` is dialled, routes, and runs the op -- and then the
+#: whole response fails validation on the echoed name, taking the op's `additionalContext`
+#: with it. Measured by doe-claude-cd on harness 2.1.258, two-arm paired control against one
+#: listener differing in exactly one field: echoing the name fails, omitting
+#: `hookSpecificOutput` validates clean (DoE-claude
+#: `docs/research/spike-verdicts/2026-09-02-harness-dials-posttooluse-and-sessionend-over-http.md`).
+#:
+#: NEGATIVE SPEC -- THIS IS A LIST OF MEASURED REJECTIONS, NOT A MODEL OF THE ENUM. Do not
+#: "complete" it from the harness's published enum: an event absent from that enum today is
+#: not evidence the harness rejects it, and an event present is not evidence it is dialled.
+#: Both halves are measurements, taken per event, and only `SessionEnd` has been taken.
+EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT = frozenset({"SessionEnd"})
+
+
+def _envelope(event_name: Optional[str]) -> Dict[str, Any]:
+    """The `hookSpecificOutput` wrapper, or nothing where the harness refuses one.
+
+    `SessionEnd` is TERMINAL: no model turn follows it for context to be spliced into, at
+    any nesting level. NEGATIVE SPEC -- no placement of `additionalContext` delivers on this
+    event, nested or top-level; do not reintroduce one. See DoE-claude
+    `docs/research/spike-verdicts/2026-09-02-harness-dials-posttooluse-and-sessionend-over-http.md`
+    for the measurement.
+
+    What this function removes is a validation error on every session close: `SessionEnd`
+    is dialled and routes, and the whole response fails validation if it carries
+    `hookSpecificOutput` at all -- see `EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT`.
+    """
+    if event_name in EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT:
+        return {}
+    return {"hookSpecificOutput": {"hookEventName": event_name}}
+
 
 def _with_context(body: Dict[str, Any], context: Optional[str]) -> Dict[str, Any]:
     """Attach `additionalContext` where the harness actually reads it: NESTED inside
@@ -170,20 +204,17 @@ def _with_context(body: Dict[str, Any], context: Optional[str]) -> Dict[str, Any
         {"additionalContext": "<sentinel>"}                        -> model: ABSENT
         {"hookSpecificOutput": {"additionalContext": "<sentinel>"}} -> model echoed it
 
-    A top-level copy is therefore not a harmless belt-and-braces duplicate; it is the whole
-    injection silently going nowhere behind a 200. This function existing at all is what
-    stops that shape being reintroduced by someone reading Claude Code's docs, which
-    describe `additionalContext` alongside genuinely top-level `systemMessage`.
-
-    It matters most on the paths that carry a WARNING rather than an injection.
-    `unreachable_response` and `unserved_response` exist to make an unrun guard visible to
-    the model instead of indistinguishable from one that ran and passed (module docstring,
-    obligation 3). Emitted top-level, that warning reached nobody -- the obligation read as
-    discharged in every test while being void over the wire.
+    NEGATIVE SPEC. Where `_envelope` returned no wrapper (`SessionEnd`), there is no
+    delivering placement left -- top-level was measured to deliver nothing there too
+    (`_envelope`) -- so context is dropped rather than written anywhere. Do not add a
+    top-level fallback branch; that channel has no destination on any event this module
+    has measured.
     """
     if context is None:
         return body
-    hso = dict(body.get("hookSpecificOutput") or {})
+    if "hookSpecificOutput" not in body:
+        return body
+    hso = dict(body["hookSpecificOutput"])
     hso["additionalContext"] = context
     body["hookSpecificOutput"] = hso
     return body
@@ -194,6 +225,36 @@ def _with_context(body: Dict[str, Any], context: Optional[str]) -> Dict[str, Any
 #: middle, and it is a prefix match rather than a fixed list because guards add override
 #: keys without telling this module.
 FORWARDED_ENV_PREFIXES = ("COORDINATOR_ALLOW_", "COORDINATOR_OVERRIDE_", "COORDINATOR_PROBE_", "COORDINATOR_SCOPE_")
+
+#: Exact names the HEADER channel carries in addition to the prefixes above -- the env diet
+#: of the ops that actually run over this transport, enumerated rather than pattern-matched.
+#:
+#: WHY A SECOND LIST RATHER THAN A WIDER PREFIX. The prefixes model a NAMESPACE the guards
+#: own and extend without telling this module, so a prefix is the only workable allowlist for
+#: them. These five are the opposite shape: they are OS/harness names this module does not
+#: own, they will never grow by convention, and a prefix that admitted `HOME` would admit
+#: every `HOME*` a session ever exports. Enumerating them is the narrower door, not the wider
+#: one. Add a name here only when an op is measured reading it from `payload["env"]`.
+#:
+#: `hooks.plan_persistence_check` reads the first four; `hooks.nudge_autonomous_askuserquestion`
+#: reads the fifth. Both ops' module docstrings named this list's absence as the reason their
+#: env reads could not survive a `command`->`http` flip -- this closes that, and those
+#: docstrings' "does not yet carry this" notes are stale as of this commit.
+FORWARDED_ENV_NAMES = frozenset(
+    {
+        "CLAUDE_HOME",
+        "HOME",
+        "USERPROFILE",
+        "CLAUDE_PROJECT_DIR",
+        "COORDINATOR_AUTONOMOUS_ASK_OK",
+    }
+)
+
+
+def _is_forwardable_name(name: str) -> bool:
+    return name in FORWARDED_ENV_NAMES or any(
+        name.startswith(p) for p in FORWARDED_ENV_PREFIXES
+    )
 
 
 OVERRIDE_CHANNEL_HEADER = "X-Coordinator-Env-Channel"
@@ -261,12 +322,27 @@ def env_from_headers(
       `X-Coordinator-Env-Canary` -- `${COORDINATOR_PROBE_CANARY}`, a var the launcher always
       exports non-empty. Interpolated, so a setting-level veto empties it. Channel declared
       AND canary empty is a veto that has certainly eaten every other override header too,
-      and is the one case that returns a `disarm_reason`.
+      and returns a `disarm_reason` (one of two causes -- see THIRD DISARM CAUSE below).
 
     Do NOT "simplify" this to a single header. A lone literal cannot detect the veto (it is
     not interpolated, so it survives one); a lone canary cannot tell a veto from a
     registration that never declared the channel, and would fail every legacy registration
     closed. The pair is the mechanism.
+
+    THIRD DISARM CAUSE -- A NAME THIS ENGINE DOES NOT CARRY. A header under this prefix is
+    not ambient environment that happened to be present: someone wrote the header AND the
+    matching `allowedEnvVars` entry, so its arrival is an explicit request. Silently dropping
+    a name outside `FORWARDED_ENV_PREFIXES`/`FORWARDED_ENV_NAMES` therefore fails in the same
+    PERMISSIVE direction as the canary veto -- the registration reads as correctly threaded,
+    the op reads a missing override as "not requested", and nothing errors on either side.
+    That is not a hypothetical: `docs/reference/warm-hook-migration.md` § Step 3 prescribed
+    exactly such a registration for four names this filter dropped, which is how the gap was
+    found. An unforwardable name is refused LOUDLY, like the veto, and for the same reason:
+    a request this engine cannot honour must never read as one it honoured.
+
+    Refusing rather than carrying is also why widening the filter was not the fix. The
+    registration author and the engine must agree on the diet; the disagreement is the
+    defect, and only one of the two can say so out loud.
     """
     lowered = {k.lower(): v for k, v in headers.items()}
 
@@ -287,7 +363,16 @@ def env_from_headers(
         for key, value in lowered.items()
         if key.startswith(prefix) and key not in reserved and value != ""
     }
-    return forwardable_env(candidates), None
+    refused = sorted(k for k in candidates if not _is_forwardable_name(k))
+    if refused:
+        return {}, (
+            "override channel declared with %s, which this engine does not carry "
+            "(see FORWARDED_ENV_PREFIXES / FORWARDED_ENV_NAMES) -- the registration asked "
+            "for a value the op would never have seen" % ", ".join(refused)
+        )
+    # Review: overengineering-reviewer -- `refused` empty already proves every key in
+    # `candidates` is forwardable; re-filtering the return line re-derives that proof.
+    return dict(candidates), None
 
 
 def forwardable_env(environ: Mapping[str, str]) -> Dict[str, str]:
@@ -297,6 +382,19 @@ def forwardable_env(environ: Mapping[str, str]) -> Dict[str, str]:
     this process's own environment here is precisely the defect C14c re-keyed `_override`
     to make avoidable, and doing it inside the forwarder would reintroduce it one layer up
     where no existing test would notice.
+
+    THIS IS THE AMBIENT PATH, AND IT FILTERS SILENTLY ON PURPOSE -- do not "make it
+    consistent" with `env_from_headers`'s loud refusal. Its input is a WHOLE environment
+    nobody enumerated, where the non-forwardable names are the overwhelming majority and
+    their exclusion is the routine case, not a disagreement to report. The header channel is
+    the opposite: every name there was written down twice by a human, so one this engine
+    cannot carry is a mismatch worth stopping for. Same allowlist, different callers,
+    different correct answer on a miss.
+
+    It also does not consult `FORWARDED_ENV_NAMES`. Those five are OS/harness names present
+    in essentially every ambient environment; admitting them here would forward a real
+    session's `HOME` off any caller that passed its own environ, which is the invisible-
+    disarm case one layer up. They are reachable only by explicit header.
     """
     return {
         k: v
@@ -405,6 +503,18 @@ def deny_response(event_name: str, reason: str) -> Dict[str, Any]:
 
     `permissionDecisionReason` reaches the model, so it carries the operator-facing reason
     verbatim rather than a generic string -- see obligation 1 in the module docstring.
+
+    THIS BUILDER DOES NOT GO THROUGH `_envelope`, DELIBERATELY. A deny IS the nested keys:
+    drop the wrapper and the refusal becomes a 200 that permits. If a member of
+    `EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT` ever becomes blocking, that event cannot be
+    denied over this transport at all, and the registration must stay `command`; it must
+    never be resolved by emitting a wrapper the harness rejects.
+
+    THAT IS NOW ENFORCED IN `_decision_to_response`, NOT ASSERTED HERE. This docstring used
+    to say the collision "cannot happen today" and stop there -- true, and prose-only:
+    `_decision_to_response` called this builder for ANY deny verdict without checking the
+    event. See the guard there for why an unrun-guard response is the right answer and an
+    `assert` is not.
     """
     return {
         "hookSpecificOutput": {
@@ -430,14 +540,18 @@ def allow_response(event_name: str, result: Optional[Mapping[str, Any]] = None) 
     listener availability, with no test and no availability sampling able to see it: the op
     ran, the round trip succeeded, and the output was dropped one layer above the op.
     """
-    body: Dict[str, Any] = {"hookSpecificOutput": {"hookEventName": event_name}}
+    body: Dict[str, Any] = dict(_envelope(event_name))
     if not isinstance(result, Mapping):
         return body
     for key in PASSTHROUGH_RESULT_KEYS:
         if result.get(key) is not None:
             body[key] = result[key]
     extra = result.get("hookSpecificOutput")
-    if isinstance(extra, Mapping):
+    # An op that nested its own output on an event the harness refuses a wrapper for
+    # (`SessionEnd`) has nowhere for it to go -- reinstating the wrapper fails the whole
+    # response, and no placement of `additionalContext` delivers on a terminal event either
+    # (`_envelope`, `_with_context`). Dropped, not reinstated, not lifted.
+    if isinstance(extra, Mapping) and "hookSpecificOutput" in body:
         merged = dict(extra)
         merged["hookEventName"] = event_name
         merged.pop("permissionDecision", None)
@@ -447,7 +561,7 @@ def allow_response(event_name: str, result: Optional[Mapping[str, Any]] = None) 
     # that returns the plain documented key has not, and that is the shape the module
     # docstring tells op authors to use. Promote it rather than making every op know. An op
     # that set BOTH keeps its nested value: it is the more specific declaration of the two.
-    if body["hookSpecificOutput"].get("additionalContext") is not None:
+    if body.get("hookSpecificOutput", {}).get("additionalContext") is not None:
         return body
     return _with_context(body, result.get("additionalContext"))
 
@@ -468,7 +582,7 @@ def unreachable_response(event_name: str, detail: str) -> Dict[str, Any]:
     """
     return _with_context(
         {
-            "hookSpecificOutput": {"hookEventName": event_name},
+            **_envelope(event_name),
             "systemMessage": "coordinator: guard did not run (%s)" % detail,
             "suppressOutput": False,
         },
@@ -545,6 +659,22 @@ def _decision_to_response(event_name: str, result: Mapping[str, Any]) -> Dict[st
             or result.get("reason")
             or "denied by coordinator guard"
         )
+        # A DENY THIS TRANSPORT CANNOT EXPRESS IS REPORTED AS UNRUN, NEVER EMITTED ANYWAY.
+        # `deny_response` bypasses `_envelope` because a deny IS the nested keys; on an
+        # event the harness refuses a wrapper for, emitting them fails validation and the
+        # harness fails open -- so the one path whose whole job is to BLOCK would become a
+        # silent no-op exactly when it fires. Unreachable today (`BLOCKING_EVENTS` is
+        # `PreToolUse` alone, and no op on a wrapper-refusing event emits a deny), which is
+        # precisely why it was prose-only until a reviewer asked what enforces it. An
+        # `assert` would not do: `-O` strips it, and the answer to "cannot express this
+        # verdict" is a loud unrun-guard response, not a crash mid-dispatch.
+        if event_name in EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT:
+            return unreachable_response(
+                event_name,
+                "a guard denied this %s operation, but the harness rejects the response "
+                "shape a deny requires on this event -- the refusal could not be "
+                "delivered" % event_name,
+            )
         return deny_response(event_name, reason)
 
     return allow_response(event_name, result)

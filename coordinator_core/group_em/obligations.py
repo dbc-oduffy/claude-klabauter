@@ -2,7 +2,7 @@
 `gem-01`, baton `gem-14`, chunk C1).
 
 PURPOSE. `send_pass.undischarged_obligations` already reads the ledger
-DoE-claude writes (`state/subagent-share/<sid>/next-move-ledger.jsonl`) and
+DoE-claude writes (`.coordinator-local/subagent-share/<sid>/next-move-ledger.jsonl`) and
 returns a *count*. What the standing watch (chunk C2) needs is the *names*
 behind that count -- `for_peer` below returns the rows themselves, not a
 scalar. And the ledger has almost nothing to count: measured before this
@@ -22,7 +22,7 @@ dispatch brief for the full account -- recorded there rather than quietly
 corrected, because the shape of the error is the lesson.
 
 Instead this module appends to a file only this plane writes --
-`state/subagent-share/<session-id>/obligations-inbound.jsonl` -- which DoE's
+`.coordinator-local/subagent-share/<session-id>/obligations-inbound.jsonl` -- which DoE's
 own drain claims, folds, and deletes. One writer per file, one rewrite path,
 no shared file, no lock. Contract, producer-facing:
 `coordinator/docs/wiki/obligations-inbound-intake.md` in `repos.doe_claude`
@@ -58,7 +58,7 @@ import os
 import time
 from typing import Any, Optional
 
-from coordinator_core.session import subagent_share
+from coordinator_core.session import machinery_paths
 
 #: Valid intake ops, mirroring DoE's own closed `_INTAKE_OPS` vocabulary at
 #: the landed sha. Kept as our own tuple rather than importing theirs --
@@ -68,19 +68,19 @@ _INTAKE_OPS = ("open", "progress", "blocked", "discharge")
 _INTAKE_SCHEMA = 1
 
 #: Corpus-mutator declaration (generator-provenance sweep): `record` appends
-#: to `state/subagent-share/<session-id>/obligations-inbound.jsonl` -- one
+#: to `.coordinator-local/subagent-share/<session-id>/obligations-inbound.jsonl` -- one
 #: file per session id, a data-dependent set GENERATES cannot name. Same
 #: extension-scoped glob convention as the sibling counters in this tree
 #: (`guard_advisory_counter.py`, `engine_provenance_counter.py`).
-MUTATES = ["state/subagent-share/**/*.jsonl"]
+MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 
-# The filenames and the share-directory join live in `session.subagent_share`.
+# The filenames and the share-directory join live in `session.machinery_paths`.
 # This module used to retype both AND reach into `send_pass`'s private
 # namespace for the join -- one string typo apart from reading a different
 # file than the module writing it.
 #
 # Review: overengineering-reviewer (finding #2, minor, accepted) -- call
-# sites below now name `subagent_share.<name>` directly rather than rebinding
+# sites below now name `machinery_paths.<name>` directly rather than rebinding
 # aliases, which restored the private-looking-but-foreign symbol the
 # consolidation existed to remove.
 
@@ -96,9 +96,9 @@ def for_peer(repo_root: str, session_id: str) -> Optional[list[dict[str, Any]]]:
     ledger that owes nothing right now) are deliberately distinct; see the
     module docstring's negative spec.
     """
-    if not subagent_share.safe_session_id(session_id):
+    if not machinery_paths.safe_session_id(session_id):
         return None
-    path = subagent_share.ledger_path(repo_root, session_id)
+    path = machinery_paths.ledger_path(repo_root, session_id)
     if not os.path.exists(path):
         return None
     records: list[dict[str, Any]] = []
@@ -168,7 +168,7 @@ def record(
     is the INTAKE APPENDER, not a ledger writer: DoE's own drain claims,
     folds, and deletes what lands here.
     """
-    if not subagent_share.safe_session_id(session_id):
+    if not machinery_paths.safe_session_id(session_id):
         return False
     if not isinstance(producer, str) or not producer:
         return False
@@ -192,7 +192,7 @@ def record(
     if _validate_row(row) is not None:
         return False
 
-    path = subagent_share.intake_path(repo_root, session_id)
+    path = machinery_paths.intake_path(repo_root, session_id)
     line = json.dumps(row, sort_keys=True)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)

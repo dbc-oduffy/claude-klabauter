@@ -24,7 +24,7 @@ def _write_index(tmp_path, entries):
     exactly that until 2026-08-29, passing because the sweep replaced their
     hand-written expiry with an empty one rather than because the assertion held.
     """
-    cache_dir = tmp_path / "state" / "cache"
+    cache_dir = tmp_path / ".coordinator-local" / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / "queue-grants-index.json").write_text(
         json.dumps({"watermark_mtime": 0.0, "grants": entries}), encoding="utf-8"
@@ -117,7 +117,7 @@ def test_event_trigger_expiry_is_skipped_not_raised(tmp_path):
 def test_malformed_index_rebuilds_rather_than_raising(tmp_path):
     """A corrupt cache costs one bootstrap, never a wrong answer."""
     _write_record(tmp_path, "state/debt-backlog/a.yaml", deferred_until="2020-01-01")
-    cache_dir = tmp_path / "state" / "cache"
+    cache_dir = tmp_path / ".coordinator-local" / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / "queue-grants-index.json").write_text("not json{{", encoding="utf-8")
     assert "a.yaml" in egs.emit_expired_grants(tmp_path)
@@ -329,7 +329,7 @@ class TestGrantIndexIsMaintained:
             root, "debt-backlog", "parked", status="deferred", deferred_until="'2026-01-31'"
         )
         egs.refresh_grant_index(root)
-        index = root / "state" / "cache" / "queue-grants-index.json"
+        index = root / ".coordinator-local" / "cache" / "queue-grants-index.json"
         index.write_text("{ not json at all", encoding="utf-8")
         assert "parked.yaml" in egs.emit_expired_grants(root)
 

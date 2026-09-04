@@ -329,7 +329,108 @@ GENERATES = [
 # Spec backlinks: docs/decisions/DR-353-cockpit-contract-4-0-0-is-an-em-call-not-a-pm-gate.md,
 #   docs/decisions/DR-351-the-emission-is-deleted-not-halted.md,
 #   cross-repo/inbox/2026-08-23-example-cockpit-repo-em-file-attributions-is-dropped-your-deliberation-rests-on-a-superseded-record.md
-CONTRACT_VERSION = "4.0.0"
+# MINOR bump 4.0.0 -> 4.1.0: widens competitor-summary's `category` enum by one
+# member, `first_party`. Shape is otherwise untouched — no new field, no
+# nullability change, no `required[]` movement, D9 present-as-null intact.
+#
+# MINOR, not MAJOR: `category` is nullable and both vendored readers are
+# same-major-forward-tolerant (example-cockpit-repo `checkSchemaVersion()`,
+# example-retrieval-repo `_check_schema_version()`), so no consumer throws on the bump
+# itself. The live risk is not crash-safety but ordering — cockpit's generated
+# reader is `.strict()` over the closed three-member enum, so a producer
+# emitting `first_party` before cockpit and example-retrieval-repo re-vendor quarantines
+# every such row per-row, silently, with both suites green. Hence D21's tiered
+# arm protocol: DoE lands the bundle and sends re-vendor memos BEFORE
+# example-market-data-repo begins emitting the member.
+#
+# Shape decided by DoE, bytes produced here, per DR-060 — DoE retired its own
+# emitter and kept the committed artifact plus the version-bump gate, so this
+# is the first exercise of the "DoE decides the shape, claude-klabauter's engine produces
+# it" split. Claude-klabauter's own vendored copy under
+# `coordinator_core/ops/emit/_vendor/cockpit-contract/` is NOT refreshed by
+# this bump, same as every bump above: it pulls from DoE's tagged release.
+# Spec backlinks: DoE-claude docs/decisions/DR-192-cockpit-competitor-summary-category-gains-first-party.md,
+#   state/cross-repo/inbox/2026-09-03-doe-claude-em-cockpit-category-first-party-widen.md
+# MINOR bump 4.1.0 -> 4.2.0: adds `roadmap_id` to HandoffSummary. Written into
+# this changelog after the fact (2026-09-04, f5a08be1f3's follow-up): the bump
+# landed in 9e91bb19d4 with its rationale in the commit message and the memo
+# only, leaving this file jumping 4.1.0 -> 4.3.0 with no record of either
+# version — the same gap D39/D40 had to backfill in the 3.x line. Reconstructed
+# from those commits, not re-derived.
+#
+# `kind: roadmap-baton` carries no `origin_*` ancestry: `_scaffold_roadmap_baton`
+# emits `predecessor: none` unconditionally and acquires a predecessor only at
+# succession, so its roadmap is its only parent edge from mint. Without the field
+# on the wire, consumers cannot place those rows in a lineage DAG at all — 48 of
+# 89 fleet-wide were undrawable (example-cockpit-repo-em measurement). `roadmap_id` is
+# an already-emitted kind (RoadmapSummary), so a bare id resolves with no new node
+# kind or resolver consumer-side. Named `roadmap_id`, not `origin_roadmap_id`: it
+# is the frontmatter field authored on the record, and `origin_*` denotes a
+# spawned-from edge stamped at fork time, which this is not — it is a durable
+# membership FK, true from mint.
+# Ref: cross-repo/inbox/2026-09-03-example-cockpit-repo-em-handoff-predecessor-defaults-to-none.md
+#
+# MINOR bump 4.2.0 -> 4.3.0: reshapes that same `roadmap_id` from D9-required to
+# nullable-optional (d3b73d70c1). Requested by example-cockpit-repo-em, the consumer
+# that pays the coupling: the fleet emits asynchronously and per-repo by design
+# (8+ producers, own vintages, no coordination point), so a REQUIRED additive
+# field bars every consumer from validating at the new version until the LAST
+# producer re-emits — a fleet-wide lockstep bought for one field. Optional lets
+# each producer light it up independently and reaches the same end state.
+#
+# The enforcement it appeared to buy was never real: cockpit's ingest records no
+# schema version (all 10 repos null) and does not validate snapshots against the
+# vendored schema on the read path. Precedent is inside this same entity —
+# `forked_from`, `additional_predecessors` and `disposed_successors` are all
+# nullable-optional with the same `x-zod-nullable-optional` shape, and are the
+# same thing: ancestry fields that arrived after consumers already existed.
+# `roadmap_id` now emits byte-identical to `forked_from`.
+#
+# A new version, not a re-cut of 4.2.0: 4.2.0's required shape was already
+# committed and named in the memo already delivered to DoE-claude, and the
+# version-desync guard refused the reshape without a bump — one version number
+# must not carry two shapes. 4.2.0 is superseded in place rather than rewritten.
+# Both bumps are discharged by ONE DoE regen at 4.4.0 (doe-claude-18, 2026-09-04:
+# their tree is still at 4.1.0, committed clean at 59bd273b2, so the single 4.4.0
+# regen covers 4.2.0 and 4.3.0 and those two memos resolve as superseded).
+#
+# MINOR bump 4.3.0 -> 4.4.0: adds one OPTIONAL, nullable field —
+# `actioned_at` (IsoDate) on CrossRepoMemoSummary (entities/
+# cross_repo_memo_summary.py). Nothing else moves: no `required[]` change, no
+# nullability change to an existing field, no enum widened. Same additive class
+# as the 3.9.0 `baton_class` and 3.13.0 `human_*` bumps above.
+#
+# The gap it closes: every other memo lifecycle field on that entity (`status`,
+# `archived`) is CURRENT-STATE, so a consumer could reconstruct "how many memos
+# exist now" but never "how many were open on date D". Example-cockpit-repo shipped
+# their tactical backlog-depth chart with three honest lines and no memo line
+# rather than infer a closure date from `picked_up_at` (a pickup is not a
+# completion) or file mtime (invents a date nobody recorded) — see
+# example-cockpit-repo/state/memo-outbox/memo-closure-timestamp-missing-from-cross-repo-
+# memo-summary.md (their commit 8754b2171), relayed to this session directly.
+#
+# NOT just a contract bump. The field was unrecordable at the SOURCE: only the
+# rarely-used `close` verb stamped a timestamp (`closed_at`/`action_taken_at`);
+# the mainline `action`/`resolve` verbs flipped `status: actioned` and stamped
+# nothing, which is why 77% of cockpit's actioned corpus has no recoverable
+# closure date and why `distill/delete_guard.py::_candidate_actioned_date`
+# resorts to a per-file `git log --follow` proxy. `memo_transition.
+# _apply_action_fields` now stamps `actioned_at` on the terminal write, so
+# coverage grows from here. Landing the column alone would have shipped cockpit
+# a field that stayed null forever.
+#
+# NO BACKFILL (D9: nulls on existing rows are correct). Coverage starts sparse;
+# cockpit's reader treats an absent closure date as UNKNOWN rather than zero and
+# keeps the series absent until coverage is real, so the bump is safe to land
+# ahead of their re-vendor. Their `parseLenient` strips an unrecognized key
+# silently, so emitting the field before they re-vendor is inert for them, not
+# a per-row quarantine (unlike the 4.0.0 -> 4.1.0 enum widen above, where the
+# strict reader's failure mode was silent row loss).
+#
+# Same D39 source-first sequence as every bump above: claude-klabauter regenerates, DoE
+# commits the bundle and advances the release tag, claude-klabauter re-vendors. DoE-claude
+# and example-cockpit-repo warned by memo BEFORE this edit ships, not after.
+CONTRACT_VERSION = "4.4.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

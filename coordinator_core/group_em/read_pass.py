@@ -143,6 +143,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping, Optional
 
+from coordinator_core import timestamps
 from coordinator_core.session import peer_roster
 from coordinator_core.session.receiver_state import activity_epoch_from_reduced
 from coordinator_core.session.receiver_state import parse_iso_timestamp
@@ -150,9 +151,27 @@ from coordinator_core.session.receiver_state import classify as receiver_state_c
 from coordinator_core.session.receiver_state import read_receiver_state
 from coordinator_core.session.receiver_state import reduce_transcript_tail
 
-#: The peer is actively producing -- either `status == "busy"` directly, or
-#: an `idle` peer whose transcript tail shows live conversational activity.
+#: The peer is actively producing -- either the harness reports it executing
+#: (`EXECUTING_STATUSES`), or an `idle` peer whose transcript tail shows live
+#: conversational activity.
 STATE_PRODUCING = "PRODUCING"
+
+#: Harness statuses that each assert the same fact: this session is executing
+#: right now. `busy` is the general one; `shell` is the narrower claim that the
+#: session is inside a shell call, and it reaches this module ONLY from the
+#: registry -- `claude agents --json` collapses it into `busy`, so a reader
+#: sampling that surface cannot see the arm is missing.
+#:
+#: Measured 2026-09-02 on this box: 5 of 28 live sessions sat in `shell`,
+#: including two of three claude-klabauter peers, and every one of them fell
+#: through to `unrecognized-status:shell` -> `STATE_UNKNOWN`. Plain UNKNOWN
+#: rows are invisible to the parked derivation, so ~18% of the fleet was in a
+#: status the ladder had no rung for -- not misclassified, unclassifiable.
+#:
+#: The under-read is safe in one direction only (an executing peer is never
+#: falsely reported parked) and that is exactly why it survived: the sensor
+#: looked healthy while it had stopped answering for a fifth of its input.
+EXECUTING_STATUSES = frozenset({"busy", "shell"})
 
 #: The wire spelling of a paused verdict, on both legs -- the reader leg
 #: returns this directly; the fallback leg maps `receiver_state.classify`'s
@@ -441,9 +460,16 @@ def classify_fallback_status(
     COLLAPSE note. `delegation_evidence` is always passed `False`: this module has no
     delegation signal to offer and none of its own negative spec (no CPU-delta leg, no
     `state`/`waitingFor` dependence) changes by declining to guess one.
+
+    The two fall-through arms are distinct facts and are reported as such. A
+    falsy `status` is ABSENT -- normal for a session too new to have written
+    `receiver-state.json` -- and reads `status-absent`. A non-empty value with
+    no arm is genuinely unrecognized and reads `unrecognized-status:<value>`,
+    naming the value so the next reader knows which arm is missing rather than
+    re-deriving it from a transcript.
     """
-    if status == "busy":
-        return STATE_PRODUCING, "status-busy"
+    if status in EXECUTING_STATUSES:
+        return STATE_PRODUCING, f"status-{status}"
     if status == "idle":
         verdict = receiver_state_classify(
             reduced_lines or [],
@@ -456,7 +482,9 @@ def classify_fallback_status(
         if verdict.verdict == "PAUSED":
             return STATE_PAUSED, f"tail-{verdict.reason}"
         return STATE_UNKNOWN, "tail-unresolved"
-    return STATE_UNKNOWN, "unrecognized-status"
+    if not status:
+        return STATE_UNKNOWN, "status-absent"
+    return STATE_UNKNOWN, f"unrecognized-status:{status}"
 
 
 def classify_peer(
@@ -511,7 +539,9 @@ def classify_peer(
         reader_reason = reader_record.get("reason")
         live_status = peer.get("status")
 
-        live_busy_contradicts = reader_verdict == STATE_PAUSED and live_status == "busy"
+        live_busy_contradicts = (
+            reader_verdict == STATE_PAUSED and live_status in EXECUTING_STATUSES
+        )
 
         # Idle-side close (defect B): a stale PAUSED snapshot with harness
         # `idle` is exactly the failure mode `live_busy_contradicts` cannot
@@ -600,7 +630,8 @@ def classify_peer(
                     "reason": (
                         "stale-producing-unresolved (frozen "
                         f"{reader_reason!r} at stamped_at="
-                        f"{reader_record.get('stamped_at')!r}, transcript "
+                        f"{timestamps.with_age(reader_record.get('stamped_at'))}"
+                        ", transcript "
                         "active since)"
                     ),
                     "candidate": False,

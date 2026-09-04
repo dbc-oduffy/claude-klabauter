@@ -111,7 +111,9 @@ def test_peer_sidecar_with_foreign_plan_frontmatter_is_not_handed_back(
     second emitter to append to -- the compounding write the incident's
     hand-repair had to undo."""
     stem = "2026-07-31-exec-cli-posix-leg-convergence"
-    clobbered = git_repo / "state" / "plan-sidecars" / f"{stem}.{PLAN_LENS_SUFFIX}.md"
+    clobbered = (
+        git_repo / ".coordinator-local" / "plan-sidecars" / f"{stem}.{PLAN_LENS_SUFFIX}.md"
+    )
     clobbered.parent.mkdir(parents=True, exist_ok=True)
     clobbered.write_text(
         "---\n"
@@ -133,8 +135,11 @@ def test_peer_sidecar_with_foreign_plan_frontmatter_is_not_handed_back(
 
     assert exit_code == 0
     emitted = json.loads(out.splitlines()[0])["report_sidecar"]
-    assert emitted.startswith("state/subagent-share/")
-    assert not emitted.startswith("state/plan-sidecars/")
+    assert emitted.startswith(".coordinator-local/subagent-share/")
+    # Names the LIVE root deliberately: left on `state/`, this passes
+    # vacuously now that the writer no longer emits there, and stops
+    # pinning the fall-back-to-session-keyed behaviour it exists for.
+    assert not emitted.startswith(".coordinator-local/plan-sidecars/")
     assert clobbered.read_text(encoding="utf-8") == before
 
 
@@ -154,7 +159,7 @@ def test_agreeing_sidecar_is_still_reused_idempotently(
     exit_code_1, out_1 = _run(payload, policy_path, git_repo, monkeypatch, capsys)
     assert exit_code_1 == 0
     first = json.loads(out_1.splitlines()[0])["report_sidecar"]
-    assert first == f"state/plan-sidecars/{stem}.{PLAN_LENS_SUFFIX}.md"
+    assert first == f".coordinator-local/plan-sidecars/{stem}.{PLAN_LENS_SUFFIX}.md"
     assert _plan_frontmatter_value((git_repo / first).read_text(encoding="utf-8")) == plan_path
 
     exit_code_2, out_2 = _run(payload, policy_path, git_repo, monkeypatch, capsys)
@@ -182,8 +187,10 @@ def test_plan_path_rewritten_by_sanitization_falls_open(
 
     assert exit_code == 0
     emitted = json.loads(out.splitlines()[0])["report_sidecar"]
-    assert emitted.startswith("state/subagent-share/")
-    assert not (git_repo / "state" / "plan-sidecars").exists()
+    assert emitted.startswith(".coordinator-local/subagent-share/")
+    # Live root deliberately -- see the note on the startswith check
+    # above; asserting the OLD directory is absent proves nothing.
+    assert not (git_repo / ".coordinator-local" / "plan-sidecars").exists()
 
 
 def test_frontmatter_reader_ignores_body_plan_lines() -> None:

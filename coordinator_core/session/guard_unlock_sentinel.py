@@ -80,16 +80,33 @@ Negative-spec:
       than the gated EM-side writer, hand-typing by a human operator remains
       the only route to this sentinel.
     - Do NOT re-inline the sentinel's filename shape, its drop location, or
-      the per-firing ``session_id``/``guard_name`` values into
-      ``annotate_deny``'s rendered text. This was tried once (2026-08-12)
-      and reverted (2026-08-13, C3, item 7 in ``annotate_deny``'s
-      docstring) — the recipe stays out; only the wiki/doc pointers render.
-    - Do NOT let ``annotate_deny`` default to EMITTING the unlock block on
-      an unresolved/malformed/exception-raising identity resolution. AC-3
-      (2026-08-13, C3, item 8 in ``annotate_deny``'s docstring) inverted
-      this: only a positively-resolved EM audience
-      (``session.identity.resolves_em_audience``) emits; every other case,
-      including any exception, degrades to terse.
+      the per-firing ``session_id`` into ``annotate_deny``'s rendered text,
+      and do NOT render a pointer into the override-key/unlock doc surface
+      (``message_register._rules`` B8 leg (d) grades that a gate-referent).
+      This was tried once (2026-08-12) and reverted (2026-08-13, C3, item 7
+      in ``annotate_deny``'s docstring) — the recipe stays out.
+      AMENDED 2026-09-03 (item 11): ``guard_name`` is NO LONGER in this
+      prohibition and is now rendered. It was removed by item 7 as one of
+      *two* data points that, next to the filename shape, let a reader
+      assemble the path by hand; the other two stay out, so a bare name
+      assembles nothing. It is restored because it is the argument
+      ``em_guard_grant``'s CLI takes — withholding it made the sanctioned
+      in-band route unusable from the deny that triggers it. Keep the
+      distinction the rest of this bullet rests on: IDENTITY (what fired)
+      renders; the RECIPE (how to clear it) does not.
+    - Do NOT let ``annotate_deny`` gate its render on identity resolution.
+      AC-3 (2026-08-13, C3, item 8) once inverted the fail direction here so
+      that only a positively-resolved EM audience emitted; item 10 then
+      deleted the resolution entirely once the render was empty. As of item
+      11 the rendered fact is the guard NAME, which is audience-independent
+      by construction — a subagent may read which guard blocked it (that is
+      what makes its "report to the dispatching EM" route accurate) and
+      gains no affordance from knowing. Re-adding an audience branch here
+      would resurrect a resolver on every deny path to withhold a label that
+      is safe for both audiences. The audience-SPLIT that still matters is
+      the in-band grant ROUTE, and it lives in
+      ``bash_guards._write_bump_message.render_em_message`` — EM-class only,
+      never rendered by this module.
 """
 
 from __future__ import annotations
@@ -101,17 +118,20 @@ from typing import Any, Dict, Optional
 
 _SENTINEL_PREFIX = "coordinator-guard-unlock-"
 
-#: Portable, never-resolved pointer, unconditional as of this dispatch (the
-#: PM-ratified admission of the dedicated wiki page has not yet landed in
-#: DoE's seed set; see docs/decisions/ for the ruling): the settings root is
-#: a real, portable path on every coordinator machine (unlike an
-#: in-process-resolved home directory -- see this module's own Negative-spec
-#: and ``_helpers.OVERRIDE_KEYS_DOC_DISPLAY``'s 2026-08-05 history for why an
-#: interpolated absolute path is the wrong shape here). Left as ``~/...``
-#: literally -- never expanded via ``Path.home()`` or ``os.path.expanduser``
-#: -- because expansion would reintroduce exactly the machine-specific leak
-#: this form exists to avoid.
-_SETTINGS_ROOT_WIKI_POINTER = "~/.coordinator-claude-settings/coordinator-claude/docs/wiki/"
+#: REMOVED 2026-09-03: ``_SETTINGS_ROOT_WIKI_POINTER``, the settings-root
+#: wiki-directory pointer this module used to render. It went unread when
+#: item 9 stopped rendering any doc pointer here, and it can never come
+#: back: ``message_register._rules`` B8 leg (d) grades a pointer into the
+#: override-key/unlock doc surface a gate-referent, which is what item 9
+#: measured. Item 11's render carries the guard NAME instead, and no path.
+#:
+#: DR-290 form 2 (the literal, never-expanded settings-root pointer) is NOT
+#: lost with it -- ``bash_guards._override_doc.OVERRIDE_KEYS_DOC_DISPLAY``
+#: is that exact string plus the page filename, is live, and is the pointer
+#: readers actually receive. Cite THAT constant as the canonical form; the
+#: three comments here and in ``_override_doc`` that used to cite this one
+#: as the shape that "already ships" were describing an exemplar that had
+#: stopped shipping.
 
 _UNSAFE_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 
@@ -460,14 +480,76 @@ def annotate_deny(
         plan's AC table) rather than kept pointed at a seam that no longer
         renders.
 
+    11. (2026-09-03) The block renders again, reduced to ONE fact items 3-10
+        never actually weighed: the NAME of the guard that fired.
+
+        Item 9 concluded "there is no narrower rendered form left between
+        the old disclosure paragraph and nothing" after B8 leg (d) fired on
+        a bare doc/wiki-pointer sentence. That conclusion generalized from a
+        single candidate. B8 leg (d) is about POINTERS INTO THE OVERRIDE-KEY/
+        UNLOCK DOC SURFACE -- it fires on the doc reference, not on prose per
+        se. Measured 2026-09-03 against `run_rule("B8", ...)`: the wiki-
+        pointer sentence flags (gate-referent), while ``Guard: `<name>`.``
+        returns clean. A narrower clean form existed the whole time; items
+        9/10 landed on "nothing" without testing one.
+
+        WHAT THIS DOES NOT REINTRODUCE, and why the earlier items stand:
+        no sentinel path, no filename shape, no drop location, no
+        `session_id`, no doc/wiki pointer, no imperative verb, no
+        create-then-retry sequencing, no statement that an unlock exists.
+        Every removal items 3/4/7/9 made is still in force. A guard name is
+        IDENTITY, not an affordance -- it names the thing that fired, not a
+        button; nothing can be written with it; and it is the same label the
+        crash path (`bash_guards.dispatch._crash_deny`) has always rendered,
+        so it is not new disclosure on this surface at all.
+
+        WHY IT IS LOAD-BEARING RATHER THAN NICE-TO-HAVE. `session.
+        em_guard_grant` is the EM-exercisable in-band route for exactly the
+        `_GRANTABLE_GUARDS` pair, and its CLI takes the guard name as its
+        first argument. With the name rendered nowhere, that route was
+        unusable in principle: an EM could know the route exists and still
+        not be able to fill in its argument from the deny it just received.
+        The affordance ratcheted to zero across items 3->10 -- each step
+        defensible, the sum leaving a hard deny that named neither what
+        blocked it nor any next step -- and the only surface still naming
+        the guard was the operator-shaped sentinel channel, inverting
+        guard-proportionality: the human-only door was findable and the
+        agent-takeable one was not. Driving incident: example-cockpit-repo-em,
+        2026-09-03, PM-commissioned write to a new directory, denied with no
+        machine-takeable next step ("my word should be enough" -- PM).
+
+        Subagent channel: unchanged in substance. A subagent is told to
+        report to its dispatching EM (`_write_bump_message.
+        render_subagent_message`); the guard's name is what makes that
+        report accurate, and it names no mechanism the subagent could use.
+        The in-band grant ROUTE stays EM-class-only and is rendered by
+        `render_em_message`, not here.
+
     Never raises. A malformed envelope is returned unchanged: this function
     only ever runs on a deny that has already been decided, and an
     augmentation that crashed would turn that settled deny into an engine
     crash.
     """
-    # Item 10 (2026-08-13, staff-eng review): every call returns `out`
-    # unmodified -- no render step exists for any audience (item 9), so the
-    # identity-resolution logic items 5/8/9 kept as "cheap insurance" has
-    # been removed rather than run for zero effect on every deny.
-    del session_id, guard_name, doc_display, agent_id, git_root
+    # Item 11 (2026-09-03): render the firing guard's NAME, nothing else.
+    # Not a reversal of items 3/4/7/9 -- those removed the bypass RECIPE and
+    # the pointer at the unlock doc surface, and both stay removed. A guard
+    # name is IDENTITY, not an affordance: nothing can be written with it,
+    # no button is named by it, and B8 grades it clean (measured, see the
+    # docstring's item 11) precisely because it is not a gate-referent.
+    del doc_display, agent_id, git_root, session_id
+    if not guard_name:
+        return out
+    try:
+        hso = out.get("hookSpecificOutput")
+        if not isinstance(hso, dict):
+            return out
+        reason = hso.get("permissionDecisionReason")
+        if not isinstance(reason, str) or not reason:
+            return out
+        hso["permissionDecisionReason"] = "%s\n\nGuard: `%s`." % (
+            reason.rstrip(),
+            guard_name,
+        )
+    except Exception:
+        return out
     return out

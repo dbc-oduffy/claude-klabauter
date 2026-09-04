@@ -141,7 +141,11 @@ class TestOrphanCleanupOnCommitPipelineError:
         predecessor.parent.mkdir(parents=True)
         predecessor.write_text("pre-existing content\n", encoding="utf-8")
 
-        def _fake_brief(kind, artifact_path, *, decisions=None, repo_root=None, title=None):
+        # `**_` absorbs every keyword `brief` gains later. Pinned to an exact
+        # signature this double went red the moment `brief` gained `session_id`
+        # (e78d7e83ee) and stayed red silently; this test asserts orphan-cleanup
+        # behaviour and has no stake in the parameter list.
+        def _fake_brief(kind, artifact_path, *, decisions=None, repo_root=None, title=None, **_):
             class _FakeBriefResult:
                 decision_object = {
                     "directives": [],

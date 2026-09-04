@@ -55,6 +55,8 @@ import tempfile
 import time
 from typing import Any, Optional
 
+from coordinator_core import timestamps
+
 _WATCH_RELATIVE_PATH = os.path.join("state", "group-em-watch.json")
 
 #: Generator-provenance declaration (generator_provenance.py). `write_atomic`
@@ -549,32 +551,6 @@ def read_liveness(
     return {"verdict": VERDICT_ARMED, "seconds_overdue": None, **base}
 
 
-def _age_phrase(seconds: float) -> str:
-    """`41 minutes`, `3 seconds` -- a duration a human reads without a unit key."""
-    seconds = max(0.0, seconds)
-    if seconds < 90:
-        return f"{seconds:.0f} seconds"
-    if seconds < 5400:
-        return f"{seconds / 60:.0f} minutes"
-    return f"{seconds / 3600:.1f} hours"
-
-
-def _tick_age_seconds(last_tick_at: Any, now_epoch: float) -> Optional[float]:
-    """Age of the last tick, or `None` when the record cannot say.
-
-    Both sides are epoch seconds: the stamp is parsed as the UTC it declares
-    (`calendar.timegm`, never `time.mktime`), and `now_epoch` is `time.time()`.
-    A local-clock reading of a `Z` stamp is how this fleet has previously
-    invented an hour of staleness that did not exist.
-    """
-    if not isinstance(last_tick_at, str):
-        return None
-    try:
-        return now_epoch - calendar.timegm(time.strptime(last_tick_at, _STAMP_FORMAT))
-    except ValueError:
-        return None
-
-
 def human_verdict(liveness: dict, now_epoch: Optional[float] = None) -> str:
     """`read_liveness` rendered for a person who has never heard of a heartbeat.
 
@@ -606,10 +582,14 @@ def human_verdict(liveness: dict, now_epoch: Optional[float] = None) -> str:
     verdict = liveness.get("verdict")
     holder = liveness.get("holder_name") or liveness.get("holder_session_id") or "unknown holder"
     remedy = liveness.get("remedy") or REARM_COMMAND
-    age = _tick_age_seconds(liveness.get("last_tick_at"), now_epoch)
+    age = timestamps.age_seconds(liveness.get("last_tick_at"), now_epoch)
 
     if verdict == VERDICT_ARMED:
-        when = f"{_age_phrase(age)} ago" if age is not None else f"at {liveness.get('last_tick_at')}"
+        when = (
+            f"{timestamps.age_phrase(age)} ago"
+            if age is not None
+            else f"at {timestamps.with_age(liveness.get('last_tick_at'))}"
+        )
         lines = [
             f"ALIVE - a watch is running and checked the fleet {when}.",
             f"  Held by: {holder}",
@@ -626,11 +606,11 @@ def human_verdict(liveness: dict, now_epoch: Optional[float] = None) -> str:
     elif verdict == VERDICT_STALE:
         overdue = liveness.get("seconds_overdue")
         late = (
-            f" and is {_age_phrase(overdue)} past the deadline it set itself"
+            f" and is {timestamps.age_phrase(overdue)} past the deadline it set itself"
             if isinstance(overdue, (int, float))
             else " and has missed the deadline it set itself"
         )
-        when = f"{_age_phrase(age)} ago" if age is not None else "at an unreadable time"
+        when = f"{timestamps.age_phrase(age)} ago" if age is not None else "at an unreadable time"
         lines = [
             f"NOT RUNNING - the watch last checked {when}{late}.",
             f"  Last held by: {holder}",

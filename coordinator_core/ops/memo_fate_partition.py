@@ -79,6 +79,7 @@ from coordinator_core.distill.log_append import render_row
 from coordinator_core.distill.manifest_schema import SCHEMA_VERSION
 from coordinator_core.frontmatter.schema_validate import _memo_cf_distill_fate
 from coordinator_core.ipc import register_op
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops._path_guard import contained_path, safe_id
 
 __all__ = [
@@ -337,8 +338,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             op-generated. Confines the shard write to
             state/scratch/artifact-distillation/<run_id>/fate-partition.json
             (DR-228 § D6(i)).
-        archive_dir (str, optional): override for cross-repo/archive/ — test
-            isolation, mirrors memo_triage.py's convention.
+        archive_dir (str, optional): override for the memo-corpus archive/ —
+            test isolation, mirrors memo_triage.py's convention.
 
     Returns: the ``partition_memos`` outcome dict (see docstring above), with
         an additional ``"shard_path"`` key (rel-posix to worktree_root) naming
@@ -372,7 +373,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     archive_dir = (
         Path(archive_override)
         if isinstance(archive_override, str) and archive_override
-        else worktree_root / "cross-repo" / "archive"
+        else Path(memo_corpus_root(str(worktree_root))) / "archive"
     )
 
     records, degraded = collect_memo_records(archive_dir, worktree_root)

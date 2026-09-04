@@ -2,7 +2,7 @@
 coordinator_core.subagent_sandbox.tests.test_harvest_exit_interviews --
 scoped pytest harness for the exit-interview grep-and-concatenate harvest.
 
-Builds a fake state/subagent-share/<sid>/ tree with one answered sidecar
+Builds a fake <machinery-root>/subagent-share/<sid>/ tree with one answered sidecar
 and one still-blank sidecar, then asserts the harvester includes the
 answered one's content, excludes the blank one's, and reports exactly one
 skipped-empty.
@@ -80,7 +80,7 @@ dispatch_feed: null  # forward-declared, INERT until pcli-04 emitter
 
 
 def _write_sidecar(tmp_path: Path, session: str, name: str, content: str) -> Path:
-    session_dir = tmp_path / "state" / "subagent-share" / session
+    session_dir = tmp_path / ".coordinator-local" / "subagent-share" / session
     session_dir.mkdir(parents=True, exist_ok=True)
     doc_path = session_dir / name
     doc_path.write_text(content, encoding="utf-8")
@@ -88,7 +88,7 @@ def _write_sidecar(tmp_path: Path, session: str, name: str, content: str) -> Pat
 
 
 def _write_plan_sidecar(tmp_path: Path, name: str, content: str) -> Path:
-    plan_sidecars_dir = tmp_path / "state" / "plan-sidecars"
+    plan_sidecars_dir = tmp_path / ".coordinator-local" / "plan-sidecars"
     plan_sidecars_dir.mkdir(parents=True, exist_ok=True)
     doc_path = plan_sidecars_dir / name
     doc_path.write_text(content, encoding="utf-8")
@@ -124,9 +124,15 @@ def test_harvest_session_filter_restricts_to_one_session(tmp_path: Path) -> None
 
 
 def test_harvest_includes_plan_derivable_sidecars(tmp_path: Path) -> None:
-    """state/plan-sidecars/ (canonical spec § 2.7, the plan-derivable emitters'
-    plan-derivable home) must be harvested alongside the session-keyed
-    subagent-share tree, not just the latter."""
+    """The plan-derivable home (canonical spec § 2.7) must be harvested
+    alongside the session-keyed subagent-share tree, not just the latter.
+
+    Both fixtures build under `.coordinator-local/`, the root the reader
+    resolves through `machinery_paths`. They spelled `state/` until the
+    relocation moved the reader and left them behind, which is what made
+    this module red. They follow the seam rather than the writer: pointing
+    them back at `state/` would have turned them green against a writer
+    still emitting where nothing reads."""
     _write_sidecar(tmp_path, "session-1", "a.md", _ANSWERED_DOC)
     _write_plan_sidecar(tmp_path, "my-plan.prior-art-check.md", _ANSWERED_DOC)
 
@@ -153,8 +159,8 @@ def test_harvest_plan_sidecars_included_regardless_of_session_filter(tmp_path: P
 
 
 def test_harvest_plan_sidecars_absent_directory_no_crash(tmp_path: Path) -> None:
-    """No state/plan-sidecars/ directory at all (a repo predating this
-    convention) must not raise -- fail open to zero plan-sidecar hits."""
+    """No plan-sidecars directory at all (a repo predating this convention)
+    must not raise -- fail open to zero plan-sidecar hits."""
     _write_sidecar(tmp_path, "session-1", "a.md", _ANSWERED_DOC)
 
     report_text, included, skipped_empty = harvest(tmp_path, session=None)

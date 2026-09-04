@@ -169,6 +169,7 @@ import glob
 import json
 import os
 import re
+import sys
 import time
 from typing import Optional
 
@@ -595,6 +596,65 @@ def group_em_moved(repo_root: str, group_em_session_id: Optional[str]) -> bool:
     return bool(holder) and holder != group_em_session_id
 
 
+def holder_liveness(repo_root: str, group_em_session_id: Optional[str]) -> Optional[dict]:
+    """Is the session this whole tick is armed for actually alive, or a corpse still nominated?
+
+    An ADDITIVE per-report field (C3, DR-408 second finding) -- ours to add, unlike the
+    per-peer field names, verdict vocabulary, `push` trigger and `UNADDRESSABLE` disposition
+    this module's header assigns to the consumer. It describes OUR input (the holder we were
+    armed for), never their output vocabulary, and is carried alongside `group-em-moved`
+    rather than folded into it: a moved holder and a dead-but-still-nominated one are different
+    facts, and `group_em_moved` already owns the first.
+
+    POSITIVE EVIDENCE ONLY, the same discipline `group_em_moved` keeps: no
+    `--group-em-session-id`, an unreadable nomination record, or a record naming a DIFFERENT
+    session as holder (that is `group_em_moved`'s story to tell, not this field's) all answer
+    `None` -- "not established", never "dead". A live holder must never be reported dead for
+    want of data.
+
+    `nomination.is_live` takes the RECORD `nomination.read_record` returns, never a bare
+    session id -- passing a string raises `AttributeError: 'str' object has no attribute
+    'get'`, silently swallowed by this function's own `except Exception` into the same
+    fail-open `None`. The record read here is the SAME one `group_em_moved` reads (one
+    `nomination.read_record` call per site, matching this module's own no-second-read
+    discipline elsewhere), so this field's verdict is about the exact session the tick rests
+    on, never re-derived from `group_em_session_id` alone.
+    """
+    if not group_em_session_id:
+        return None
+    try:
+        from coordinator_core.group_em import nomination
+        record = nomination.read_record(repo_root)
+    except Exception:
+        return None
+    if not record:
+        return None
+    holder = record.get("session_id")
+    if not holder or holder != group_em_session_id:
+        return None
+    try:
+        result = nomination.is_live(record)
+    except Exception:
+        return None
+    # `live` IS TRI-STATE, and the False arm is the narrow one: True (registry
+    # row, pid confirmed), False (positive evidence the process is gone), None
+    # (we looked and could not establish it). Only `pid_not_running` is evidence
+    # of death. `no_registry_record` is REGISTRY ABSENCE, which is box-scoped --
+    # `nomination`'s own docstring calls it "absence of registry evidence, not
+    # evidence of absence, on a fleet that is multi-machine", and `claim`
+    # REFUSES to supersede on it. Collapsing the two into one boolean reports a
+    # Group EM alive on another machine, or one whose messaging gate is off, as
+    # dead: the exact failure AC7 forbids and this function's own docstring
+    # promises against. Found by the criterion-only reader at close-out, after
+    # the falsifier had already gone green on a `live: False` that was itself
+    # wrong.
+    if result.live:
+        return {"live": True, "reason": result.live_reason}
+    if result.live_reason == "pid_not_running":
+        return {"live": False, "reason": result.live_reason}
+    return {"live": None, "reason": result.live_reason}
+
+
 def _read_group_em_log(repo_root: str, group_em_session_id: Optional[str]) -> tuple:
     """`(log, available)` -- the Group-EM's offer log, read ONCE per report.
 
@@ -624,6 +684,19 @@ def _group_em_answer(log: list, group_em_session_id: Optional[str], peer_session
     nudged across a wake. Reads the SAME log and SAME key `send_pass` arms on
     every offer -- never a second mechanism and never an operator-maintained
     mute list. A Group-EM we were not given cannot have answered anybody.
+
+    ATTRIBUTED ROWS ARE EXCLUDED FROM `stamps` (C3b). `answered-by-group-em`
+    means what its own docstring-adjacent field name says: answered by the
+    Group EM itself. C1's delegated write carries `offered_by` -- the
+    nudger's session id, never the holder's -- on rows written under the
+    holder's key. Counting one of those toward `stamps` would report a
+    poller's nudge under a field name that says the Group EM did it, the
+    foreign-attribution defect this chunk closes (DR-372/DR-374's retired
+    review-trail guard existed for the same reason). Suppression itself
+    (`within`, via `_cooldown_remaining`) is untouched -- it keys on
+    `offer_key` alone and never reads attribution, so C1 writing under the
+    holder's key already widens suppression for free; this function adds no
+    code on that side.
     """
     if not group_em_session_id:
         return None, False
@@ -635,7 +708,9 @@ def _group_em_answer(log: list, group_em_session_id: Optional[str], peer_session
         ) > 0
         stamps = [
             record.get("offered_at") for record in log
-            if record.get("offer_key") == key and isinstance(record.get("offered_at"), (int, float))
+            if record.get("offer_key") == key
+            and isinstance(record.get("offered_at"), (int, float))
+            and record.get("offered_by") is None
         ]
     except Exception:
         return None, False
@@ -897,6 +972,7 @@ def build_report(
         names = registry_names()
 
     moved = group_em_moved(repo_root, group_em_session_id)
+    holder_live = holder_liveness(repo_root, group_em_session_id)
     observed_exits = frozenset(observed_exits or ())
     excluded = {sid.lower() for sid in (group_em_session_id, caller_session_id) if sid}
     group_em_log, suppression_available = _read_group_em_log(repo_root, group_em_session_id)
@@ -934,6 +1010,24 @@ def build_report(
         # top-level `verdict` so the watcher never has to look for it in rows.
         "verdict": VERDICT_GROUP_EM_MOVED if moved else None,
         "group-em-moved": moved,
+        # C3, additive, ours: `None` when not established (no group-em-session-id,
+        # unreadable nomination record, or a record naming a different holder --
+        # `group-em-moved`'s story). Otherwise `{"live": bool, "reason": str}` from
+        # `nomination.is_live`, read off the SAME record `group_em_moved` reads.
+        "holder-liveness": holder_live,
+        # THE "INSTEAD OF" CLAUSE, and the reason `holder_live` is read rather
+        # than merely computed. The defect was never that suppression decayed --
+        # it is that it decayed SILENTLY, with a stale `answered-by-group-em`
+        # stamp still reading like a Group EM that had just answered. This flag
+        # is what makes the decay speak. Report-level and additive, the same
+        # ownership as `holder-liveness`: it describes OUR input, never the
+        # consumer's per-peer field names or verdict vocabulary, which this
+        # module's header assigns to them and which are untouched here.
+        # True ONLY on confirmed death (`live is False`); an unresolved holder
+        # (`None`) is not evidence and must not raise this.
+        "suppression-basis-unreliable": bool(
+            holder_live is not None and holder_live.get("live") is False
+        ),
         "peers": rows,
         "counts": {
             # C11: a peer marked `registry: absent` is a fact the row already
@@ -1038,6 +1132,15 @@ def render(report: dict, peer: Optional[str] = None) -> str:
             "%s: %s no longer holds the Group-EM for %s. This tick is void -- stop and "
             "tell the Group EM." % (VERDICT_GROUP_EM_MOVED, report["group-em-session-id"],
                                     report["repo-root"]))
+    if report.get("suppression-basis-unreliable"):
+        holder = report.get("holder-liveness") or {}
+        lines.append(
+            "HOLDER-NOT-LIVE: %s is nominated for %s but its process is confirmed gone (%s). "
+            "Every `answered-by-group-em` stamp below comes from that session's frozen log and "
+            "ages out with nothing arming new ones -- suppression here is decaying, not holding. "
+            "This is reported, never inferred: an unresolved holder does not raise this line."
+            % (report.get("group-em-session-id"), report.get("repo-root"),
+               holder.get("reason")))
     if peer and not report["peers"]:
         lines.append("no live transcript for %s" % peer)
     for row in report["peers"]:
@@ -1093,7 +1196,24 @@ def _cli(argv: Optional[list] = None) -> int:
     parser.add_argument(
         "--json", action="store_true",
         help="Emit the same facts as a machine-readable object, for the Monitor and tests.")
+    parser.add_argument(
+        "--record-offer", dest="record_offer", action="append", default=None,
+        metavar="PEER-SESSION-ID",
+        help="Record an offer to this peer, under the Group-EM's key, attributed to "
+             "--caller-session-id, before the report is built -- repeatable, one process "
+             "for N peers. Recorded first so the SAME invocation's report reads the peers "
+             "just recorded as suppressed, which is what prevents a double-nudge inside one "
+             "tick. Requires BOTH --group-em-session-id and --caller-session-id: an "
+             "unattributed row would be indistinguishable from one the Group-EM wrote itself.")
     args = parser.parse_args(argv)
+
+    if args.record_offer and (not args.group_em_session_id or not args.caller_session_id):
+        import sys as _sys
+
+        print(
+            "group-em-idle-report: --record-offer requires both --group-em-session-id and "
+            "--caller-session-id", file=_sys.stderr)
+        return 2
 
     # Same refusal as `watch._cli`, for the same reason and the same shell: this
     # oracle is run by the same agent, with the same `--repo-root` spelling, and
@@ -1110,6 +1230,27 @@ def _cli(argv: Optional[list] = None) -> int:
     # failed run is indistinguishable from a quiet fleet, which is the one
     # reading this instrument must never permit.
     try:
+        if args.record_offer:
+            from coordinator_core.group_em import send_pass
+
+            # A DISCARDED RETURN IS SUPPRESSION SILENTLY OFF -- the exact
+            # failure this arm exists to prevent. `record_offers` reports
+            # failure by RETURNING the peer ids it did not record (a malformed
+            # id, or an OSError on the append), never by raising; dropping that
+            # value means a batch that recorded NOTHING exits 0 with a
+            # normal-looking report and no cooldown armed, and the next tick
+            # re-nudges every one of them. Found by the criterion-only reader.
+            unrecorded = send_pass.record_offers(
+                args.repo_root, args.group_em_session_id, args.record_offer,
+                args.caller_session_id,
+            )
+            if unrecorded:
+                print(
+                    "record-offer: FAILED to record %d of %d peer(s): %s"
+                    % (len(unrecorded), len(args.record_offer), ", ".join(sorted(unrecorded))),
+                    file=sys.stderr,
+                )
+                return 2
         report = build_report(
             args.repo_root,
             group_em_session_id=args.group_em_session_id,

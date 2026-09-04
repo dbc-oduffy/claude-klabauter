@@ -76,6 +76,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from coordinator_core.ipc import register_op
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
 
 logger = logging.getLogger(__name__)
@@ -423,12 +424,14 @@ def _handler(params: dict, repo_root=None) -> dict:
         age_threshold_days = _DEFAULT_AGE_THRESHOLD_DAYS
     today = _resolve_today(params.get("today"))
 
-    memos, inbox_degraded = _read_inbox_memos(root / "cross-repo" / "inbox")
+    corpus_root = Path(memo_corpus_root(str(root)))
+    inbox_dir = corpus_root / "inbox"
+    memos, inbox_degraded = _read_inbox_memos(inbox_dir)
     owning_text, owning_scan_errors = _read_owning_text(root)
     owning_text_slug, slug_scan_errors = _read_owning_text(root, _SLUG_OWNING_GLOBS)
     scan_errors = owning_scan_errors + slug_scan_errors
     if inbox_degraded:
-        scan_errors = [f"{root / 'cross-repo' / 'inbox'}: unreadable"] + scan_errors
+        scan_errors = [f"{inbox_dir}: unreadable"] + scan_errors
 
     return classify_orphan_memos(
         memos,

@@ -81,7 +81,16 @@ PRIORITY = 210
 #: matches. Case-insensitive: Windows/macOS default filesystems are
 #: case-insensitive, so a differently-cased candidate is the same on-disk
 #: file (mirrors the sibling memo guards' case-fold rationale).
-_OUTBOX_DRAFT_RE = re.compile(r"(^|/)state/memo-outbox/[^/]+\.md$", re.IGNORECASE)
+#: BOTH outbox roots. This pinned only `state/memo-outbox/` until
+#: 2026-09-03; writers moved to `.coordinator-local/memo-outbox/` that
+#: day, so a hand-authored draft at the new root got no shape nudge at
+#: all while this guard's own suite stayed green -- a guard policing an
+#: address the engine had stopped writing to. Same fail-open shape as
+#: `block_home_dir_memo_delivery` / `block_oss_mirror_memo_delivery`
+#: carried until C6 of the memo-channel plan widened them.
+_OUTBOX_DRAFT_RE = re.compile(
+    r"(^|/)(state|\.coordinator-local)/memo-outbox/[^/]+\.md$", re.IGNORECASE
+)
 
 #: Read cap for Edit/MultiEdit pre-image reconstruction — outbox drafts are
 #: small hand-authored markdown files, matching sibling guards' caps.

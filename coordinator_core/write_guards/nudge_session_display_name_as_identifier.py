@@ -196,6 +196,7 @@ _IN_SCOPE_MARKERS = (
 #: these (e.g. a nested `archive/` mirror of a scoped directory).
 _OUT_OF_SCOPE_MARKERS = (
     "state/subagent-share/",
+    ".coordinator-local/subagent-share/",
     "archive/",
     "docs/research/",
 )

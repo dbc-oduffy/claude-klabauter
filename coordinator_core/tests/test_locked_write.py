@@ -22,6 +22,7 @@ Spec backlink: pln-ceremony-as-pipeline-2-invert--fd1b98 § C1
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -688,3 +689,54 @@ class TestContendedLockWaitSecs:
     def test_malformed_or_non_positive_falls_back(self, monkeypatch, raw):
         monkeypatch.setenv(locked_write.CONTENDED_LOCK_WAIT_ENV, raw)
         assert locked_write.contended_lock_wait_secs(default=42.0) == 42.0
+
+
+class TestLockHolderCarriesAnAge:
+    """A UTC stamp read against a local clock is how a ten-minute-old lock
+    reads as seventy minutes old. The offset is present in the stamp and gets
+    misread anyway, so the describer carries an age that cannot be read in the
+    wrong zone.
+
+    The age itself is `coordinator_core.timestamps`' job and is covered in
+    `test_timestamps.py`; what is pinned here is that `_describe_holder` --
+    the one string a contended caller actually reads -- routes through it.
+    """
+
+    def _metadata(self, tmp_path, acquired_at):
+        lock_path = tmp_path / "held.lock"
+        payload = json.dumps(
+            {"pid": 4242, "holder": "publisher", "acquired_at": acquired_at}
+        ).encode("utf-8")
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT)
+        try:
+            os.lseek(fd, locked_write._METADATA_OFFSET, os.SEEK_SET)
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+        return lock_path
+
+    def test_the_holder_line_carries_an_age_beside_the_stamp(self, tmp_path):
+        from datetime import datetime, timedelta, timezone
+
+        held = datetime.now(timezone.utc) - timedelta(seconds=600)
+        described = locked_write._describe_holder(self._metadata(tmp_path, held.isoformat()))
+        assert held.isoformat() in described
+        assert "10 minutes ago" in described
+
+    def test_a_z_stamp_ages_the_same_as_an_offset_stamp(self, tmp_path):
+        from datetime import datetime, timedelta, timezone
+
+        held = datetime.now(timezone.utc) - timedelta(seconds=300)
+        z_form = held.isoformat().replace("+00:00", "Z")
+        assert "5 minutes ago" in locked_write._describe_holder(self._metadata(tmp_path, z_form))
+
+    @pytest.mark.parametrize(
+        "stamp",
+        ["2026-09-02T19:00:02", "unknown time", ""],
+        ids=["naive", "sentinel", "empty"],
+    )
+    def test_an_unusable_stamp_is_marked_rather_than_guessed(self, tmp_path, stamp):
+        """A wrong age is worse than no age -- it is the failure this closes."""
+        described = locked_write._describe_holder(self._metadata(tmp_path, stamp))
+        assert "age unreadable" in described
+        assert "ago" not in described

@@ -386,6 +386,51 @@ def entrypoint_call_args(shape: str, script: Path, argv: list) -> tuple:
     return (list(argv),)
 
 
+def _synthesize_usage(entrypoint: str) -> str:
+    """Minimal usage line for an ARGV_SHAPE_NONE entrypoint — the one class
+    genuinely unable to receive a `--help` flag (see `_run_entrypoint`'s
+    docstring). Ported in shape from `entry_point_shim._synthesize_usage`;
+    not imported from there — that module lives under `coordinator/bin/lib/`
+    and is not cleanly importable from `coordinator_core` without coupling
+    the warm door to the cold shim's own load path."""
+    return f"usage: {entrypoint} [--help]\n"
+
+
+def _usage_lines(text: str) -> str:
+    """Returns only the usage-bearing lines of `text` (case-insensitive
+    substring "usage"), joined with a trailing newline, or "" if none.
+
+    Ported in shape from `entry_point_shim._usage_lines` — see that
+    function's own docstring for why this filter exists: a hand-rolled
+    parser (`plan-assemble`, `workday-complete-assemble`) prints its real
+    usage line to stderr ALONGSIDE a genuine parse-error line
+    (`"...: unrecognized argument '--help'"`), and only the usage line
+    belongs in a successful help gesture's output."""
+    lines = [ln for ln in text.splitlines() if "usage" in ln.lower()]
+    return ("\n".join(lines) + "\n") if lines else ""
+
+
+def _render_usage_text(entrypoint: str, stdout_text: str, stderr_text: str) -> str:
+    """The usage text to return for `entrypoint`'s `--help` gesture, given
+    what calling its own `main_fn(["--help"])` (or the shape-appropriate
+    equivalent) printed. Ported in shape from `entry_point_shim._render_help`'s
+    stdout/stderr/synthesize fallback chain — never used for the
+    ARGV_SHAPE_NONE class, which returns `_synthesize_usage` directly from
+    `_run_entrypoint` without ever calling `main_fn`.
+
+    Preference order, same as the cold door: a real stdout usage block wins;
+    else the filtered usage line(s) buried in stderr beside a parse-error
+    line; else synthesize — a target whose own `--help` handling raised or
+    printed nothing usage-shaped never surfaces an empty/error string
+    instead of at least a minimal usage line."""
+    if stdout_text.strip() and "usage" in stdout_text.lower():
+        return stdout_text
+    stderr_usage = _usage_lines(stderr_text)
+    if stderr_usage:
+        return stderr_usage
+    return _synthesize_usage(entrypoint)
+
+
 def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
     """Runs `coordinator/bin/<entrypoint>.py`'s OWN `main(argv)` in-process.
 
@@ -428,9 +473,46 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
     `SystemExit` and `Exception`, converting either into a `{"exit_code": N}`
     result the caller sees exactly as an ordinary CLI failure — never a
     JSON-RPC error, never a killed server.
+
+    `--help`/`-h` (mirrors `entry_point_shim._help_requested`'s semantics:
+    anywhere in argv wins, position never special-cased) is intercepted
+    below via `call_argv`, substituting a bare `["--help"]` for the real
+    argv before `entrypoint_call_args` computes what `main_fn` receives —
+    NOT by skipping the call outright. Skipping it (an earlier version of
+    this fix) silently replaced 11 targets' real usage text with a useless
+    stub on the warm door only, restoring exactly the "guess the flag
+    surface" complaint this whole plan exists to close; see this module's
+    own `docs/plans/2026-09-02-the-loader-fires-the-assembly-not-the-em.md`
+    follow-up. `main_fn` still runs for a TAIL/FULL-shaped target on a help
+    gesture (each of these targets checks `--help` as an EXPLICIT,
+    first-checked branch of its own hand-rolled dispatch, or falls through
+    to its own usage/parse-error path — see `_render_usage_text` below,
+    ported in shape from `entry_point_shim._render_help`), but is NEVER
+    called for an ARGV_SHAPE_NONE target (`workday-start-inbox-blitz-
+    assemble` is the sole current member): that shape's `main()` takes no
+    argv and always runs its full body regardless of what it is "called
+    with", so invoking it to fetch help would BE the live-decision-object
+    defect this whole op exists to close, and a synthesized line is the
+    only safe answer there — never used elsewhere, per `_synthesize_usage`.
     """
     script = _resolve_entrypoint_script(entrypoint)
     shape = _entrypoint_argv_shape(script)
+
+    help_requested = any(a in ("--help", "-h") for a in argv)
+    if help_requested and shape == "none":
+        return {
+            "stdout": _synthesize_usage(entrypoint),
+            "stderr": "",
+            "exit_code": 0,
+        }
+
+    # For a help gesture on any other shape, `main_fn` is still called (see
+    # docstring), but with a bare `["--help"]` standing in for the caller's
+    # real argv -- exactly what `entry_point_shim._render_help` hands the
+    # cold-path entry function -- so a target's own parser sees only the
+    # flag it needs to render its usage, never the caller's partial/invalid
+    # arguments.
+    call_argv = ["--help"] if help_requested else argv
 
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
@@ -462,13 +544,13 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
             # `coordinator-queue-append` accepts an `argv` parameter and then
             # calls a bare `parser.parse_args()` mid-body, and no shape read
             # off its guard would reveal that.
-            sys.argv = [str(script)] + list(argv)
+            sys.argv = [str(script)] + list(call_argv)
             with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(
                 stderr_buf
             ):
                 try:
                     main_fn = _load_entrypoint_main(script, entrypoint)
-                    exit_code = main_fn(*entrypoint_call_args(shape, script, argv))
+                    exit_code = main_fn(*entrypoint_call_args(shape, script, call_argv))
                 except SystemExit as exc:
                     code = exc.code
                     exit_code = 0 if code is None else (code if isinstance(code, int) else 1)
@@ -486,6 +568,17 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
             os.chdir(previous_cwd)
             sys.path[:] = previous_sys_path
             sys.argv[:] = previous_sys_argv
+
+    if help_requested:
+        # Uniform with the cold door (`entry_point_shim.run_target`): a help
+        # gesture always reports exit_code 0 and never surfaces the target's
+        # own parse-error stderr, regardless of what calling it with
+        # `["--help"]` actually returned/printed.
+        return {
+            "stdout": _render_usage_text(entrypoint, stdout_buf.getvalue(), stderr_buf.getvalue()),
+            "stderr": "",
+            "exit_code": 0,
+        }
 
     return {
         "stdout": stdout_buf.getvalue(),

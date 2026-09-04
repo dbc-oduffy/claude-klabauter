@@ -184,6 +184,7 @@ from typing import Optional, Tuple
 from coordinator_core._settings_home import machine_local_dir, normalize_native_path
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.machine_resolver import canonical_repo_key_for_root
+from coordinator_core.memo_corpus import receiver_inbox_root
 
 _LOG = logging.getLogger(__name__)
 
@@ -1020,7 +1021,14 @@ def resolve_receiver_inbox(
     if not repo_path_str:
         return None, None, all_repos
     receiver_repo_path = Path(repo_path_str)
-    inbox_dir = receiver_repo_path / "cross-repo" / "inbox"
+    # Per-receiver probe (C5, C10a migration window): the receiver's OWN
+    # corpus root — never this repo's `memo_corpus_root`, never a hardcoded
+    # `cross-repo` literal — decides where its inbox lives; a migrated peer
+    # resolves to `state/cross-repo/inbox`, an unmigrated one to the legacy
+    # `cross-repo/inbox`. `memo_list.py`'s enumeration and this function are
+    # now the SAME call, not two independent resolutions that could disagree.
+    corpus_root_str, _ = receiver_inbox_root(str(receiver_repo_path))
+    inbox_dir = Path(corpus_root_str) / "inbox"
     return inbox_dir, receiver_repo_path, all_repos
 
 

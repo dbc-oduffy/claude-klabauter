@@ -303,7 +303,7 @@ def compute_run_report_sidecar_gate(
 ) -> RunReportSidecarGate:
     """Step 2.6b sub-steps 1 and 3 in one read-only computation:
     `d-detect-run-report-sidecars` (glob
-    `state/subagent-share/<sid>/<plan-slug>.<chunk-id>.md`) and
+    `<machinery-root>/subagent-share/<sid>/<plan-slug>.<chunk-id>.md`) and
     `d-delete-folded-sidecars` (rule-based filter on each sidecar's own
     `status:` frontmatter — `blocked`/`thrashing` preserved, everything
     else foldable). Neither is a `directives[].cli` entry (Design notes
@@ -317,7 +317,16 @@ def compute_run_report_sidecar_gate(
     """
     if not plan_slug:
         return RunReportSidecarGate(detected=(), foldable=(), preserved=())
-    sidecar_dir = repo_root / "state" / "subagent-share" / sid
+    # The SEVENTEENTH relocation reader: the sweep that fixed "the sixteen
+    # relocation readers the census never covered" (196fbbc71e) missed this one,
+    # and it is the worst place to miss one. The skip-silently contract below is
+    # correct for a session that genuinely has no sidecars, and it is
+    # indistinguishable from this function pointing at a directory that no longer
+    # exists -- so a stale root here does not fail, it folds nothing, quietly,
+    # every run. Resolve through the owner rather than rebuilding the join.
+    from coordinator_core.session import machinery_paths
+
+    sidecar_dir = Path(machinery_paths.share_dir(str(repo_root), sid))
     if not sidecar_dir.is_dir():
         return RunReportSidecarGate(detected=(), foldable=(), preserved=())
 

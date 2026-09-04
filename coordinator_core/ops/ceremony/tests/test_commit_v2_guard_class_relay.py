@@ -28,9 +28,10 @@ reaches it. `test_class_flip_stages_a_real_memo_draft_on_disk` below exercises
 that path end to end against a throwaway repo.
 
 Do not assert against any pre-existing file in the working repo's
-`state/memo-outbox/`: a file's presence there proves a file exists, never that
-this code staged it. Every emission assertion builds its own repo under
-`tmp_path` and checks a draft that did not exist a moment earlier.
+`.coordinator-local/memo-outbox/`: a file's presence there proves a file
+exists, never that this code staged it. Every emission assertion builds its
+own repo under `tmp_path` and checks a draft that did not exist a moment
+earlier.
 
 All git operations run against a throwaway repo created fresh under
 `tmp_path` — never the working repo.
@@ -242,7 +243,7 @@ def test_class_flip_stages_a_real_memo_draft_on_disk(tmp_path):
     topic = entry["memo_topic"]
     assert topic is not None
 
-    draft_path = repo / "state" / "memo-outbox" / f"{topic}.md"
+    draft_path = repo / ".coordinator-local" / "memo-outbox" / f"{topic}.md"
     assert draft_path.is_file()
     content = draft_path.read_text(encoding="utf-8")
     assert "to: \"doe-claude-em\"" in content or "to: doe-claude-em" in content

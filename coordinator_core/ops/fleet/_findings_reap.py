@@ -50,12 +50,63 @@ from datetime import date
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from coordinator_core.ops.fleet._common import _make_git_env, rel_id, rm_and_commit
+from coordinator_core.ops.fleet._common import (
+    _make_git_env,
+    check_repo_root,
+    main_worktree_root,
+    rel_id,
+    rm_and_commit,
+)
+from coordinator_core.session.machinery_paths import review_trail_dir
 
 _LOG = logging.getLogger(__name__)
 
-# Location of the review-findings sidecars, relative to the main worktree root.
-_FINDINGS_SUBPATH = ("state", "review-trail", "findings")
+# C12: review-trail-shaped citation token -- either root (pre-C7-move
+# state/review-trail/... or post-move .coordinator-local/review-trail/...),
+# capturing the part AFTER "review-trail/" so a citation to either root
+# normalizes to the same on-disk-relative key.
+_REVIEW_TRAIL_CITATION_RE = re.compile(
+    r"(?:state|\.coordinator-local)/review-trail/([A-Za-z0-9_.\-/]+[A-Za-z0-9_])"
+)
+
+
+def _review_trail_roots(worktree_root: Path) -> List[Path]:
+    """Both review-trail roots -- current (`.coordinator-local/review-trail`,
+    C7) first, legacy (`state/review-trail`) second -- mirroring
+    `extract_cited_sidecars._share_roots`: a file written before C7's move
+    and a file written after are both real, and this reap core must find
+    either."""
+    return [
+        Path(review_trail_dir(str(worktree_root))),
+        worktree_root.joinpath("state", "review-trail"),
+    ]
+
+
+def cited_review_trail_relpaths(worktree_root: Path) -> set:
+    """Every review-trail-relative path cited anywhere in the durable
+    corpus outside `state/` -- the pre-delete citation census the DR-218
+    third leg gates on (C12 row body: "share the implementation, do not
+    write it twice" -- reuses `extract_cited_sidecars`'s candidate-corpus
+    walk, C5's own scan corpus, rather than re-deriving it). Normalized to
+    the part AFTER `review-trail/` so a citation to either root (pre- or
+    post-C7-move) matches the same on-disk file.
+
+    Computed ONCE per call (one candidate-corpus walk, one read per
+    candidate file) -- callers building a classify predicate should call
+    this once and close over the result, never per-candidate-file.
+    """
+    from coordinator_core.ops.extract_cited_sidecars import _list_candidates
+
+    cited: set = set()
+    for rel_path in _list_candidates(str(worktree_root)):
+        full = worktree_root / rel_path
+        try:
+            text = full.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in _REVIEW_TRAIL_CITATION_RE.finditer(text):
+            cited.add(m.group(1))
+    return cited
 
 # "## Integrator Dispositions" as an anchored heading line — marker-PRESENT means
 # leg (a) (integrated, DoE-owned) owns the sidecar.
@@ -110,26 +161,134 @@ def _extract_authored_date(filename: str) -> Optional[date]:
 ClassifyFn = Callable[[Path], Optional[str]]
 
 
+def _empty_envelope(exit_code: int, dry_run: bool) -> dict:
+    return {
+        "exit_code": exit_code,
+        "dry_run": dry_run,
+        "candidates": [],
+        "reaped": [],
+        "skipped": [],
+        "failed": [],
+    }
+
+
+def validate_reap_params(
+    op_name: str,
+    params: dict,
+    repo_root: Optional[Path],
+    *,
+    main_worktree_root_fn: Callable[[Path], Path] = main_worktree_root,
+    check_repo_root_fn: Callable[[object, Path], Optional[str]] = check_repo_root,
+) -> Tuple[Optional[Path], bool, Optional[dict]]:
+    """Shared setup preamble for reap-family op handlers (Review:
+    overengineering-reviewer finding 1 -- `_handler` and
+    `_handler_review_trail_rest` carried this same explicit-bool dry_run
+    guard, repo_root-None guard, D3 mismatch guard, and four identical
+    error envelopes verbatim; hoisted here so a third leg never re-derives
+    it a third time).
+
+    `main_worktree_root_fn`/`check_repo_root_fn` are looked-up-by-name
+    callables, not hardcoded to this module's own imports -- callers pass
+    their OWN module-level `main_worktree_root`/`check_repo_root` names
+    (looked up at call time) so a caller-side test monkeypatching those
+    names on the handler module still takes effect here.
+
+    Returns `(worktree_root, dry_run, error_envelope)`. `error_envelope` is
+    `None` on success (in which case `worktree_root` is the resolved main
+    worktree root and `dry_run` is the validated bool); callers must
+    early-return `error_envelope` unchanged the moment it is not `None` --
+    `worktree_root` is not meaningful in that case.
+    """
+    dry_run_raw = params.get("dry_run")
+    if not isinstance(dry_run_raw, bool):
+        _LOG.error(
+            "%s: dry_run must be an explicit bool, got %r", op_name, dry_run_raw
+        )
+        return None, False, _empty_envelope(1, False)
+    dry_run = dry_run_raw
+
+    if repo_root is None:
+        _LOG.error("%s: repo_root is None -- cannot resolve worktree", op_name)
+        return None, dry_run, _empty_envelope(1, dry_run)
+
+    common_dir = Path(repo_root) if not isinstance(repo_root, Path) else repo_root
+    worktree = main_worktree_root_fn(common_dir)
+
+    mismatch = check_repo_root_fn(params.get("repo_root"), common_dir)
+    if mismatch:
+        _LOG.error("%s: %s", op_name, mismatch)
+        return None, dry_run, _empty_envelope(1, dry_run)
+
+    return worktree, dry_run, None
+
+
 def scan_findings(worktree_root: Path, classify: ClassifyFn) -> List[Tuple[Path, str]]:
-    """Scan state/review-trail/findings/*.md, calling classify(path) on each.
+    """Scan `.coordinator-local/review-trail/findings/*.md` (the CURRENT,
+    post-C7 root only), calling classify(path) on each.
 
     classify(path) -> Optional[str]: a note string means REAPABLE (the note
     is carried through to the wire candidates[].note field); None means KEEP.
 
     Returns [(path, note), ...] for every file classify() marks reapable.
     A missing findings directory degrades to [] (not an error).
-    """
-    findings_dir = worktree_root.joinpath(*_FINDINGS_SUBPATH)
-    if not findings_dir.is_dir():
-        return []
 
+    # Review: overengineering-reviewer -- single-root by design. The legacy
+    # `state/review-trail/` root measurably holds zero files for THIS leg's
+    # corpus; `_review_trail_roots`'s dual-root walk exists for
+    # `scan_review_trail_rest` (C12's rest-of-corpus leg, where a genuine
+    # two-live-roots problem exists), not for this scanner -- extending the
+    # dual walk here was unpaid-for generality this leg did not need.
+    """
     results: List[Tuple[Path, str]] = []
+    findings_dir = Path(review_trail_dir(str(worktree_root))) / "findings"
+    if not findings_dir.is_dir():
+        return results
     for p in sorted(findings_dir.glob("*.md")):
         if not p.is_file():
             continue
         note = classify(p)
         if note is not None:
             results.append((p, note))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Third leg -- rest-of-corpus, size/date-only, citation-census-gated (C12)
+# ---------------------------------------------------------------------------
+
+
+def scan_review_trail_rest(worktree_root: Path, classify: ClassifyFn) -> List[Tuple[Path, str]]:
+    """Scan the rest of the (post-C7-CLOSED) review-trail corpus -- every
+    file NOT under `findings/`, which legs (a)/(b) already own -- calling
+    `classify(path)` on each. Same classify-callback shape as
+    `scan_findings`: a note string means REAPABLE, None means KEEP.
+
+    Both review-trail roots are walked and de-duplicated on their
+    root-relative path (a file present under only one root, the steady-state
+    case, is reported once; a file that happens to exist under both is not
+    double-counted). A missing/absent review-trail tree degrades to []
+    (not an error), matching `scan_findings`.
+    """
+    results: List[Tuple[Path, str]] = []
+    seen: set = set()
+    for root_dir in _review_trail_roots(worktree_root):
+        if not root_dir.is_dir():
+            continue
+        for p in sorted(root_dir.rglob("*")):
+            if not p.is_file():
+                continue
+            try:
+                rel_to_root = p.relative_to(root_dir).as_posix()
+            except ValueError:
+                continue
+            if rel_to_root == "findings" or rel_to_root.startswith("findings/"):
+                continue  # owned by legs (a)/(b)
+            if rel_to_root in seen:
+                continue
+            seen.add(rel_to_root)
+            note = classify(p)
+            if note is not None:
+                results.append((p, note))
     return results
 
 

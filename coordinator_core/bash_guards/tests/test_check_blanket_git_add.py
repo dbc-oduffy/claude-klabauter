@@ -627,3 +627,79 @@ def test_hazard_registry_repo_roots_empty_when_registry_missing(monkeypatch, tmp
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_dir))
 
     assert guard._hazard_registry_repo_roots() == []
+
+
+# ---------------------------------------------------------------------------
+# `-u` with a pathspec: the narrower spelling of an already-permitted command.
+#
+# `git add -u -- X` is a STRICT SUBSET of `git add -- X` (same paths, minus
+# the untracked files), and the latter has always been permitted. Refusing the
+# narrower spelling protected nothing and pushed committers toward the coarser
+# form -- which is not hypothetical: example-store-repo `176ce18` was committed with
+# a literal three-file pathspec, exactly the discipline SC-DR-014 asks for, and
+# still swept ~164 lines of a peer's in-progress work, because a file pathspec
+# scopes to the FILE and not to the committer's hunks within it. Reported twice
+# in one evening by example-store-repo-em (2026-09-03 cross-repo/inbox,
+# `scoped-commit-guard-the-permitted-form-has-now-caused-the-harm-twice`).
+#
+# `-A` keeps denying with or without a pathspec: it has no subset relation to
+# a permitted form.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "git add -u -- registry/schema.sql",
+        "git add -u -- registry/schema.sql registry/materialize.ts",
+        "git add --update -- registry/schema.sql",
+        "git add -u --pathspec-from-file=list.txt",
+        "git add -u --pathspec-file-nul",
+    ],
+)
+def test_dash_u_with_a_pathspec_allows(monkeypatch, tmp_path, cmd):
+    _allows_in_hazard_repo(monkeypatch, tmp_path, cmd)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        # A bare `--` narrows nothing -- the whole tree is still in scope.
+        "git add -u --",
+        # Root-shaped pathspecs are `.` written differently. These are the
+        # cases the relaxation must NOT reach: a scoped `-u` now falls
+        # through to the path checks instead of short-circuiting past them,
+        # and these pin that it actually lands there.
+        "git add -u -- .",
+        "git add -u -- ./",
+        "git add -u -- :/",
+        "git add -u -- :/.",
+        # `-A` is not `-u`: no subset relation, so a pathspec does not buy it
+        # the same exemption.
+        "git add -A -- registry/schema.sql",
+        "git add --all -- registry/schema.sql",
+        # Bundled spellings carrying `A` alongside `u` still deny on the `A`.
+        "git add -Au -- registry/schema.sql",
+    ],
+)
+def test_dash_u_relaxation_does_not_reach_these(monkeypatch, tmp_path, cmd):
+    _denies(monkeypatch, tmp_path, cmd)
+
+
+@pytest.mark.parametrize(
+    "after,expected",
+    [
+        ("-u -- a.py", True),
+        ("-u -- a.py b.py", True),
+        ("-u --pathspec-from-file=l.txt", True),
+        ("-u --pathspec-from-file", True),
+        ("-u --pathspec-file-nul", True),
+        ("-u", False),
+        ("-u --", False),
+        ("-A", False),
+    ],
+)
+def test_add_has_narrowing_pathspec(after, expected):
+    """A bare `--` is the negative that matters: it looks like scope and
+    narrows nothing."""
+    assert guard._add_has_narrowing_pathspec(after) is expected

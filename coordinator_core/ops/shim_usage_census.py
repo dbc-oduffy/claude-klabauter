@@ -52,10 +52,10 @@ module could produce is caught and swallowed at the point of use. The read
 side (`census()`) is bounded by file size but never raises either -- a
 missing or corrupt series degrades to "never observed", not an exception.
 
-Where the series lives: `state/shim-usage-census.jsonl`, sibling to
-`state/cost-census.jsonl` and `state/raw-cmdline-transport-ledger.jsonl`
--- the same flat-append-only-JSONL-under-state/ convention already
-established twice in this repo, reused rather than invented.
+Where the series lives: `.coordinator-local/shim-usage-census.jsonl`
+(`machinery_paths.machinery_root`) -- the gitignored per-machine machinery
+root, not the tracked `state/` corpus; see `machinery_paths.py`'s own
+docstring for why this class of file lives there.
 
 Negative-spec:
     - Never spawns a subprocess (repo-root resolution walks; `git.
@@ -84,10 +84,11 @@ from coordinator_core.engine_root import (
     is_published_engine_mirror,
 )
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.session.machinery_paths import machinery_root
 
 
 def _series_path(repo_root: Path) -> Path:
-    return repo_root / "state" / "shim-usage-census.jsonl"
+    return Path(machinery_root(str(repo_root))) / "shim-usage-census.jsonl"
 
 
 def record_invocation(
@@ -130,8 +131,8 @@ def _resolve_repo_root() -> Optional[Path]:
     Normally cwd's git toplevel: a shim used inside a sibling repo is that
     repo's usage, and its series belongs there. The exception is the published
     engine mirror. A shim invoked with cwd inside it appended to
-    `<mirror>/state/shim-usage-census.jsonl`, which is gitignored there and
-    tracked nowhere -- the series was being written to a sink no reader can
+    `<mirror>/.coordinator-local/shim-usage-census.jsonl`, which is gitignored
+    there and tracked nowhere -- the series was being written to a sink no reader can
     open, and `census()` reading from any real repo could never see those rows.
     A mirror is a build artifact, not a repo whose shim usage anyone asked
     about, so those invocations are redirected to the engine source tree where

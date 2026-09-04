@@ -778,6 +778,14 @@ def test_classify_artifact_path_prefix_fallback(tmp_path: Path):
     assert delete_guard.classify_artifact("", handoff_path, tmp_path) == "handoff"
 
 
+def test_classify_artifact_path_prefix_fallback_migrated_root(tmp_path: Path):
+    # C4b: the membership test widened, not replaced -- `state/cross-repo/`
+    # (the migrated root) must classify as "memo" alongside the legacy
+    # `cross-repo/` root, via the same shared "cross-repo" leaf segment.
+    memo_path = tmp_path / "state" / "cross-repo" / "archive" / "x.md"
+    assert delete_guard.classify_artifact("", memo_path, tmp_path) == "memo"
+
+
 def test_classify_artifact_unresolvable_returns_none(tmp_path: Path):
     assert (
         delete_guard.classify_artifact("status: open\n", tmp_path / "misc.md", tmp_path)

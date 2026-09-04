@@ -49,7 +49,8 @@ is the cooldown, throttling this session's own offers, never a peer.
 
 NEGATIVE SPEC -- deliberately absent:
 
-- **No send, no write to any peer's state.** Only this session's own log.
+- **No send, no write to any peer's state.** Only the HOLDER's log, written
+  by the holder or on the holder's behalf under the holder's key (DR-408).
 - **No `PAUSED:away` nudge, ever** -- excluded by name and by allow-list, and
   reported as `never-send-reason` ahead of any bookkeeping cause. `away` was
   unobserved in the 2026-08-30 window, so the exclusion is structural and
@@ -159,15 +160,16 @@ from coordinator_core.group_em import read_pass
 from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.session import peer_roster
 from coordinator_core.session.receiver_state import parse_iso_timestamp
-from coordinator_core.session import subagent_share
+from coordinator_core.session import machinery_paths
 
-#: Corpus-mutator declaration (generator-provenance sweep): `_record_offer`
-#: and `decline` append to `state/subagent-share/<session-id>/group-em-send-
-#: log.jsonl`, one file per session id -- a data-dependent set GENERATES
-#: cannot name. Same extension-scoped glob convention as the sibling
-#: counters in this tree (`guard_advisory_counter.py`,
-#: `engine_provenance_counter.py`).
-MUTATES = ["state/subagent-share/**/*.jsonl"]
+#: Corpus-mutator declaration (generator-provenance sweep): `_record_offer`,
+#: `record_offers` and `decline` append to `state/subagent-share/<session-
+#: id>/group-em-send-log.jsonl` -- only the HOLDER's log, written by the
+#: holder or on the holder's behalf under the holder's key (DR-408), one
+#: file per session id -- a data-dependent set GENERATES cannot name. Same
+#: extension-scoped glob convention as the sibling counters in this tree
+#: (`guard_advisory_counter.py`, `engine_provenance_counter.py`).
+MUTATES = [".coordinator-local/subagent-share/**/*.jsonl"]
 
 #: `gate` values `decline()` accepts -- which gate the EM declared against.
 #: No other value is written; `decline()` refuses anything else.
@@ -205,7 +207,7 @@ DEFAULT_COOLDOWN_SECONDS = 3600
 DEFAULT_MAX_ENTRIES = 5
 
 # The share-directory layout and the id predicate live in
-# `session.subagent_share` -- this module, `group_em.obligations` and
+# `session.machinery_paths` -- this module, `group_em.obligations` and
 # `hooks.watchdog_undischarged_next_move` were each carrying their own copy of
 # the same join and the same filename string, and `obligations` was importing
 # two of them out of THIS module's private namespace.
@@ -214,7 +216,7 @@ DEFAULT_MAX_ENTRIES = 5
 # private aliases previously bound here (`_safe_session_id`,
 # `_session_share_dir`) restored exactly the private-looking-but-foreign
 # symbol the consolidation existed to remove. Call sites now name
-# `subagent_share.<name>` directly.
+# `machinery_paths.<name>` directly.
 
 
 def undischarged_obligations(repo_root: str, session_id: str) -> Optional[int]:
@@ -225,13 +227,13 @@ def undischarged_obligations(repo_root: str, session_id: str) -> Optional[int]:
     Unparseable lines are skipped: a malformed ledger degrades to a lower
     count, never to a crash or an inferred obligation.
     """
-    if not subagent_share.safe_session_id(session_id):
+    if not machinery_paths.safe_session_id(session_id):
         return None
     # Review: overengineering-reviewer (finding #3, minor, accepted) -- this
     # used to re-derive the join by hand instead of calling the owner's
     # `ledger_path` helper, leaving the stated duplication failure mode half
     # closed.
-    path = subagent_share.ledger_path(repo_root, session_id)
+    path = machinery_paths.ledger_path(repo_root, session_id)
     if not os.path.exists(path):
         return None
     count = 0
@@ -285,7 +287,8 @@ def send_suppression_reason(verdict: dict[str, Any]) -> Optional[str]:
 
 
 def send_log_path(repo_root: str, caller_session_id: str) -> str:
-    """This session's own record of which peers it has already offered.
+    """Only the HOLDER's log, written by the holder or on the holder's
+    behalf under the holder's key (DR-408).
 
     Per-session bookkeeping beside `advisory-fire-counts.jsonl`. Session-
     scoped: a new Group EM starts with an empty cooldown, matching the DACI
@@ -294,10 +297,10 @@ def send_log_path(repo_root: str, caller_session_id: str) -> str:
     One-line delegation to the owner (overengineering-reviewer finding #3):
     kept as a public wrapper here rather than dropped, since this module's
     own callers (`read_send_log`, `_record_offer`, `decline`) already spell
-    it as `send_log_path(...)`, not `subagent_share.send_log_path(...)`, and
+    it as `send_log_path(...)`, not `machinery_paths.send_log_path(...)`, and
     that is a large in-module diff for no readability gain.
     """
-    return subagent_share.send_log_path(repo_root, caller_session_id)
+    return machinery_paths.send_log_path(repo_root, caller_session_id)
 
 
 def offer_key(caller_session_id: str, peer_session_id: str) -> str:
@@ -346,11 +349,13 @@ def _record_offer(
 
     Internal: `build_send_digest` calls this per emitted entry, so the cooldown
     arms itself rather than depending on the caller. Failure is reported, never
-    raised -- the caller must be able to say so. There is deliberately no
-    public counterpart -- do not expose this as a per-peer entry point.
+    raised -- the caller must be able to say so. `record_offers` is the public,
+    batched, attributed counterpart for a delegated caller (DR-408); this stays
+    internal because `build_send_digest`'s per-entry emission has no nudger to
+    attribute and no batch to join.
     """
     now = time.time() if now is None else now
-    if not subagent_share.safe_session_id(caller_session_id) or not subagent_share.safe_session_id(peer_session_id):
+    if not machinery_paths.safe_session_id(caller_session_id) or not machinery_paths.safe_session_id(peer_session_id):
         return False
     path = send_log_path(repo_root, caller_session_id)
     line = json.dumps(
@@ -368,6 +373,78 @@ def _record_offer(
     except OSError:
         return False
     return True
+
+
+def record_offers(
+    repo_root: str,
+    holder_session_id: str,
+    peer_session_ids: list[str],
+    offered_by: str,
+    now: Optional[float] = None,
+) -> list[str]:
+    """Record N offers UNDER THE HOLDER'S KEY in one call, attributed to
+    `offered_by` (DR-408). Returns the `peer_session_ids` NOT recorded
+    (refused or write-failed), `[]` when every row landed -- matching
+    `_record_offer`'s report-not-raise contract, batched.
+
+    "Under the holder's key" means the HOLDER occupies BOTH `offer_key` and
+    `send_log_path` positions -- both are derived from `holder_session_id`
+    for every row, regardless of who is nudging. `offered_by` (the nudging
+    session) appears ONLY as the row's attribution field; it never salts
+    `offer_key` and never selects `send_log_path`. A caller that passes the
+    nudger as the key-deriving id here produces a log file and a key no
+    reader ever looks at.
+
+    `safe_session_id` gates the holder, the nudger, and EVERY peer id -- a
+    delegated caller is not a reason to loosen the check that keeps a
+    session id from becoming a path. A malformed holder or `offered_by`
+    refuses the whole batch; a malformed peer id is refused per-row, the
+    rest of the batch still lands.
+
+    Emits a SINGLE `write()` of all recorded lines joined, not one
+    `open(..., 'a')` + `write()` per row -- free given the entry point is
+    batched by construction, and it removes the concurrent-writer torn-line
+    hazard a per-row append would otherwise reintroduce on a box running a
+    machine-wide watcher as a second writer to the same log path.
+    """
+    now = time.time() if now is None else now
+    if not machinery_paths.safe_session_id(holder_session_id) or not machinery_paths.safe_session_id(
+        offered_by
+    ):
+        return list(peer_session_ids)
+
+    lines: list[str] = []
+    recorded: list[str] = []
+    unrecorded: list[str] = []
+    for peer_session_id in peer_session_ids:
+        if not machinery_paths.safe_session_id(peer_session_id):
+            unrecorded.append(peer_session_id)
+            continue
+        lines.append(
+            json.dumps(
+                {
+                    "outcome": "offer",
+                    "offer_key": offer_key(holder_session_id, peer_session_id),
+                    "offered_at": now,
+                    "offered_by": offered_by,
+                },
+                sort_keys=True,
+            )
+        )
+        recorded.append(peer_session_id)
+
+    if not lines:
+        return unrecorded
+
+    path = send_log_path(repo_root, holder_session_id)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError:
+        return unrecorded + recorded
+
+    return unrecorded
 
 
 def decline(
@@ -392,7 +469,7 @@ def decline(
     docstring's DECLINATION section) -- declining is not offering.
     """
     now = time.time() if now is None else now
-    if not subagent_share.safe_session_id(caller_session_id) or not subagent_share.safe_session_id(peer_session_id):
+    if not machinery_paths.safe_session_id(caller_session_id) or not machinery_paths.safe_session_id(peer_session_id):
         return False
     if gate not in DECLINE_GATES:
         return False
@@ -424,11 +501,20 @@ def _log_key_is_open(log: list[dict[str, Any]], key: str) -> bool:
     Legacy rows written before this chunk carry no `outcome` at all; they
     are read as `"offer"` rows (their only prior meaning) so an existing log
     does not spuriously go quiet the moment this ships.
+
+    ATTRIBUTED ROWS ARE EXCLUDED (C3b), symmetric with `idle_report.
+    _group_em_answer`'s `stamps` comprehension. `open_obligations` tells the
+    Group EM what IT owes; a row carrying `offered_by` is a delegated nudge
+    -- it creates an obligation for the nudger, not the holder, and counting
+    it here would report an open obligation for an act that was never the
+    Group EM's, the same foreign-attribution defect this chunk closes.
     """
     last_offer_at: Optional[float] = None
     last_decline_at: Optional[float] = None
     for record in log:
         if record.get("offer_key") != key:
+            continue
+        if record.get("offered_by") is not None:
             continue
         outcome = record.get("outcome", "offer")
         if outcome == "declination":
@@ -590,18 +676,59 @@ def resolve_addressee(
     standing in for `peer_roster.build_roster` without touching the live
     registry in a test. `None` (the default) calls the real thing.
     """
-    if not subagent_share.safe_session_id(peer_session_id):
+    if not machinery_paths.safe_session_id(peer_session_id):
         return None
     roster_fn = build_roster if build_roster is not None else peer_roster.build_roster
     try:
-        rows = roster_fn(repo_root=repo_root)
+        # MATERIALIZED, not merely fetched. Two loops below walk `rows`: the
+        # dict-shape wiring guard, then the actual match. A one-shot iterator
+        # would be exhausted by the first, leaving the second to see nothing
+        # and return `None` -- the same answer a genuine absence produces, so
+        # a generator-shaped seam would degrade into a silent refusal instead
+        # of the loud failure the guard below exists to raise.
+        rows = list(roster_fn(repo_root=repo_root))
     except Exception:
         return None
     for row in rows:
+        if isinstance(row, dict):
+            # THE TWO `build_roster`s ARE NOT INTERCHANGEABLE, and nothing in
+            # the seam's type hint enforces that. `session.peer_roster.
+            # build_roster` yields `PeerRow` objects; `group_em.read_pass.
+            # build_roster` -- same name, same package -- yields dicts. Inject
+            # the second here and every `getattr` below returns `None`, so the
+            # function reports "no live name" for every peer while raising
+            # nothing: an unaddressable fleet that reads as a clean refusal.
+            # Loud is the correct behaviour for a wiring error.
+            raise TypeError(
+                "resolve_addressee needs session.peer_roster.build_roster "
+                "(PeerRow rows); got dict rows, which is group_em.read_pass."
+                "build_roster -- same name, different shape"
+            )
+
+    resolved = None
+    for row in rows:
         if getattr(row, "session_id", None) == peer_session_id:
             name = getattr(row, "name", None)
-            return name if isinstance(name, str) and name else None
-    return None
+            resolved = name if isinstance(name, str) and name else None
+            break
+    if resolved is None:
+        return None
+
+    # REFUSE AN AMBIGUOUS ADDRESS. Returning the name of the session asked
+    # about is not enough: `SendMessage` addresses BY NAME, so handing back a
+    # name two live sessions answer to gives the caller an address that can
+    # land on the wrong one. Stable key in, volatile address out -- but only
+    # when the address is unambiguous. `None` here is the same hard refusal
+    # every other branch returns, never a fallback to the session id.
+    holders = {
+        getattr(row, "session_id", None)
+        for row in rows
+        if getattr(row, "name", None) == resolved
+    }
+    holders.discard(None)
+    if len(holders) > 1:
+        return None
+    return resolved
 
 
 
@@ -707,7 +834,7 @@ def build_send_digest(
 
     for verdict in roster:
         raw_session_id = verdict.get("session_id")
-        if not isinstance(raw_session_id, str) or not subagent_share.safe_session_id(raw_session_id):
+        if not isinstance(raw_session_id, str) or not machinery_paths.safe_session_id(raw_session_id):
             suppressed.append(_suppressed(raw_session_id, "unusable-session-id"))
             continue
         peer_session_id: str = raw_session_id
@@ -797,7 +924,7 @@ def build_send_digest(
     open_obligations = [entry["session_id"] for entry in entries]
     for row in suppressed:
         session_id = row["session_id"]
-        if row["why"] != "cooldown" or not subagent_share.safe_session_id(session_id):
+        if row["why"] != "cooldown" or not machinery_paths.safe_session_id(session_id):
             continue
         key = offer_key(caller_session_id, session_id)
         if _log_key_is_open(log, key):

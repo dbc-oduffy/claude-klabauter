@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.session import machinery_paths as _machinery_paths
 from coordinator_core.ops.fleet._common import (
     build_act_result,
     build_dry_run_result,
@@ -93,15 +94,83 @@ from coordinator_core.ops.fleet._memo_compose import (
 
 _MODE = "draft"
 
-# Outbox path components — mirrors DoE's state/memo-outbox/<topic>.md convention
-# (coordinator_core/ops/workday_start_cross_repo_memo_outbox_surface.py resolves
-# the SAME directory for its stale-draft nudge; do not diverge from that path).
-_OUTBOX_DIRNAME = ("state", "memo-outbox")
-
 # Generator-provenance: O_EXCL-creates a NEW draft at the CALLING repo's own
-# state/memo-outbox/<topic>.md -- one file per topic, a data-dependent set of
-# tracked paths.
-MUTATES = ["state/memo-outbox/*.md"]
+# .coordinator-local/memo-outbox/<topic>.md -- one file per topic, a
+# data-dependent set of tracked paths.
+MUTATES = [".coordinator-local/memo-outbox/*.md"]
+
+
+def outbox_dir(caller_worktree: Path) -> Path:
+    """The CANONICAL (write) outbox dir for `caller_worktree` --
+    `.coordinator-local/memo-outbox/`. Every NEW write in this op family
+    targets this directory only; see `legacy_outbox_dir` for the retired
+    read-fallback root."""
+    return Path(_machinery_paths.memo_outbox_dir(str(caller_worktree)))
+
+
+def legacy_outbox_dir(caller_worktree: Path) -> Path:
+    """The RETIRED outbox dir for `caller_worktree` -- `state/memo-outbox/`.
+    Read-only fallback: content staged here before the 2026-09-03 repoint is
+    still resolved by `resolve_outbox_draft_path`, never written to fresh."""
+    return Path(_machinery_paths.legacy_memo_outbox_dir(str(caller_worktree)))
+
+
+def resolve_outbox_draft_path(caller_worktree: Path, topic: str) -> Path:
+    """Locate `<topic>.md` for `caller_worktree`'s outbox: the new
+    `.coordinator-local/memo-outbox/` root first, the retired
+    `state/memo-outbox/` root second, falling back to the new root's path
+    (not-yet-existing -- the create case) when neither has it.
+
+    Read-compatibility for the 2026-09-03 outbox relocation: every WRITE in
+    this op family (memo.draft/memo.compose/memo.send/
+    memo.reconcile_outbox) targets the new root only, but hundreds of drafts
+    and this repo's whole `sent/` history still sit at the old one, so a
+    reader that only checked the new root would silently go blind to all of
+    them.
+    """
+    new_path = outbox_dir(caller_worktree) / f"{topic}.md"
+    if new_path.exists():
+        return new_path
+    legacy_path = legacy_outbox_dir(caller_worktree) / f"{topic}.md"
+    if legacy_path.exists():
+        return legacy_path
+    return new_path
+
+
+def merged_outbox_drafts(caller_worktree: Path) -> list[Path]:
+    """Every `*.md` draft in `caller_worktree`'s outbox, merged across the new
+    `.coordinator-local/memo-outbox/` root and the retired `state/memo-outbox/`
+    root (2026-09-03 relocation). Sorted by filename within each root; new-root
+    entries first.
+
+    A topic present at BOTH roots surfaces the new-root copy only -- the new
+    root is canonical and a same-topic file can only exist at both if a caller
+    hand-placed one, not through this op family's own writes.
+
+    Read-only: `Path.glob` re-reads each directory fresh on every call -- no
+    caching, no persisted index (Q-d store-less-ness invariant). A missing
+    outbox directory at either root yields no candidates from that root, not
+    an error.
+
+    Review: overengineering-reviewer (Kira) — single shared implementation of
+    the dual-root merge previously copy-pasted verbatim into
+    memo_list_outbox._enumerate_outbox_candidates and
+    memo_reconcile_outbox._reconcile.
+    """
+    new_dir = outbox_dir(caller_worktree)
+    legacy_dir = legacy_outbox_dir(caller_worktree)
+
+    new_paths = sorted(new_dir.glob("*.md"), key=lambda p: p.name) if new_dir.is_dir() else []
+    seen_topics = {p.stem for p in new_paths}
+    legacy_paths = (
+        sorted(
+            (p for p in legacy_dir.glob("*.md") if p.stem not in seen_topics),
+            key=lambda p: p.name,
+        )
+        if legacy_dir.is_dir()
+        else []
+    )
+    return [*new_paths, *legacy_paths]
 
 # Placeholder body written into a fresh draft — guides the human/agent toward
 # memo.compose (fill in body) then memo.send (deliver). Mirrors DoE's
@@ -812,8 +881,9 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
+            # Review: coordinator:code-reviewer — error named the retired write root; corrected to canonical.
             "memo.draft: no repo_root supplied — memo.draft writes into the CALLING "
-            "repo's own state/memo-outbox/ and requires a resolved worktree "
+            "repo's own .coordinator-local/memo-outbox/ and requires a resolved worktree "
             "(common_dir-keyed op).",
         )
     caller_worktree = main_worktree_root(Path(repo_root))
@@ -821,8 +891,7 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
     from_id: str = params.get("from_id") or _ENGINE_ACTOR_ID
     today = datetime.date.today().isoformat()
 
-    outbox_dir = caller_worktree.joinpath(*_OUTBOX_DIRNAME)
-    target_path = outbox_dir / f"{topic}.md"
+    target_path = resolve_outbox_draft_path(caller_worktree, topic)
 
     collision_exists = target_path.exists()
 

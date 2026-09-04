@@ -30,9 +30,13 @@ from __future__ import annotations
 OVERRIDE_KEYS_DOC = "docs/reference/guard-override-keys.md"
 
 #: The DISPLAY form -- DR-290 form 2, the literal, never-expanded
-#: settings-root pointer, the same shape
-#: ``session/guard_unlock_sentinel.py :: _SETTINGS_ROOT_WIKI_POINTER``
-#: already ships. Not interchangeable with ``OVERRIDE_KEYS_DOC`` above: that
+#: settings-root pointer. THIS constant is the canonical carrier of that
+#: shape (2026-09-03): the comment here used to defer to
+#: ``session/guard_unlock_sentinel.py :: _SETTINGS_ROOT_WIKI_POINTER`` as
+#: the shape that "already ships", but that constant went unread when its
+#: module stopped rendering doc pointers and has been removed -- see that
+#: module's note at ``_SENTINEL_PREFIX``. Not interchangeable with
+#: ``OVERRIDE_KEYS_DOC`` above: that
 #: constant is the file-resolution form a caller joins to a repo root, this
 #: is what a reader of a guard MESSAGE sees.
 #:
@@ -55,8 +59,7 @@ OVERRIDE_KEYS_DOC = "docs/reference/guard-override-keys.md"
 #: this repo. NEGATIVE SPEC: do not collapse these two constants back into
 #: one -- the file-resolution caller and the message reader need different
 #: strings. Left as ``~/...`` literally -- never expanded via
-#: ``Path.home()``/``os.path.expanduser`` -- for the same reason
-#: ``_SETTINGS_ROOT_WIKI_POINTER`` is: expansion would reintroduce the
+#: ``Path.home()``/``os.path.expanduser``: expansion would reintroduce the
 #: machine-specific leak this form exists to avoid.
 #:
 #: 2026-08-05 (PM-raised, break-class): this used to be only the FALLBACK,

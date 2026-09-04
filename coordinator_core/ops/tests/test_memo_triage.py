@@ -61,6 +61,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.memo_triage import (
     MemoTriageContradictionError,
     _already_captured,
@@ -807,7 +808,7 @@ def test_dispatch_message_smoke_with_origin_worktree(golden_corpus, monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# (i) LIVE-CORPUS golden — real cross-repo/archive/ corpus (AC6)
+# (i) LIVE-CORPUS golden — real state/cross-repo/archive/ corpus (AC6)
 # ---------------------------------------------------------------------------
 
 # This repo's own working tree, resolved from this test file's location —
@@ -830,13 +831,13 @@ def _load_live_golden() -> dict:
 
 def test_live_corpus_promote_set_matches_golden():
     """Regression-pinning test (AC6): the memo.triage deterministic pre-filter,
-    run READ-ONLY against this repo's real cross-repo/archive/ corpus, must
+    run READ-ONLY against this repo's real state/cross-repo/archive/ corpus, must
     match the checked-in golden fixture exactly — a silent classifier
     regression (or an unnoticed corpus-shape change) must fail LOUD here, with
     a diff-shaped message telling the maintainer exactly how to regenerate.
 
     This is a REGRESSION PIN, not a brittle content-equality snapshot: the
-    live corpus (cross-repo/archive/) is a tracked, growing directory — new
+    live corpus (state/cross-repo/archive/) is a tracked, growing directory — new
     memos land there routinely as cross-repo coordination lands and gets
     archived, including from CONCURRENT sessions between this test's authoring
     and its next run. The promote-set is the load-bearing invariant this test
@@ -870,7 +871,7 @@ def test_live_corpus_promote_set_matches_golden():
         result = asyncio.run(run())
         golden = {
             'note': 'GOLDEN regression-pinning fixture for memo.triage over the '
-                    'LIVE cross-repo/archive corpus (AC6). See '
+                    'LIVE state/cross-repo/archive corpus (AC6). See '
                     'coordinator_core/ops/tests/test_memo_triage.py::'
                     'test_live_corpus_promote_set_matches_golden for the '
                     'regeneration procedure.',
@@ -914,7 +915,11 @@ def test_live_corpus_promote_set_matches_golden():
     # Narrow the comparison to golden entries still present, which preserves the
     # real signal (a LIVE memo silently flipping to promoted/unscored) while
     # tolerating the deletions this corpus is designed to receive.
-    archive_dir = _REPO_ROOT / "cross-repo" / "archive"
+    # Review: coordinator:code-reviewer — resolve through the same dual-root
+    # resolver production code uses (state/cross-repo/ preferred, legacy
+    # cross-repo/ fallback) instead of hardcoding the retired legacy path,
+    # which made this leg's comparison set vacuously empty.
+    archive_dir = Path(memo_corpus_root(str(_REPO_ROOT))) / "archive"
     golden_disqualified = set(golden["disqualified"])
     deleted_since_golden = {
         memo_id

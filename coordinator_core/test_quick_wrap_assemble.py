@@ -1177,6 +1177,34 @@ def test_d3_carries_the_invoker_the_cli_declares_required():
     )
 
 
+def test_terminal_sweep_directives_are_last_handoffs_then_sizings():
+    """Ordering is load-bearing (commit message for the C3 chunk that added
+    `d5`): every stamp this ceremony performs must land before either sweep
+    classifies, which only holds if both sweeps are LAST, and the sizings
+    sweep is emitted immediately AFTER the handoffs sweep (never before it,
+    never interleaved with anything else). Nothing pinned this before —
+    the generic cross-consistency guard
+    (`coordinator_core/authz/tests/test_assembler_dispatchable.py`) only
+    catches a CLI missing from `ASSEMBLER_DISPATCHABLE`/`CONSUMES_MANIFEST`,
+    never emission order. This gap predates the sizings sweep: `d4` (the
+    handoffs sweep) was never order-pinned either, so this test closes both
+    at once.
+    """
+    fold = {"present": False, "paths": [], "count": 0}
+    directives = qwa._directives(fold, fold_degraded=False)
+
+    ids = _d2_ids(directives)
+    assert ids[-2:] == ["d4", "d5"], (
+        f"expected the handoffs sweep (d4) immediately followed by the sizings "
+        f"sweep (d5) as the final two directives; got {ids!r}"
+    )
+
+    d4 = next(d for d in directives if d["id"] == "d4")
+    d5 = next(d for d in directives if d["id"] == "d5")
+    assert d4["cli"] == "sweep-terminal-handoffs"
+    assert d5["cli"] == "sweep-terminal-sizings"
+
+
 def test_a_degraded_fold_scan_still_surfaces_its_own_judgment_point(repo: Path, monkeypatch):
     """`d2`'s absence is not the EM's only signal — the degradation must remain
     visible as a judgment point, since that is what makes the withheld directive a

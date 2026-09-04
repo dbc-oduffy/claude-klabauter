@@ -213,6 +213,64 @@ def git_root(cwd: Optional[str] = None) -> str:
     return show_toplevel(cwd) or ""
 
 
+#: Shape test for the MSYS/MinGW drive-mount spelling (`/x/claude-klabauter`)
+#: Git-for-Windows' bash hands tools as `$PWD`. Deliberately a LOCAL regex and
+#: not a call into the translator itself: importing
+#: `bash_guards._write_bump_sink_shapes` costs a measured 15.6ms of process
+#: time (it pulls `_command_tokenizer` and `_dialect` behind it), and
+#: `sessions_dir()` is on the per-op hot path this module's import diet
+#: protects. The regex is the cheap discriminator; the translator is the
+#: SSOT, imported lazily only once a cwd actually wears that shape.
+_MSYS_CWD_RE = re.compile(r"^/[A-Za-z](/|$)")
+
+
+def _normalize_cwd(cwd: Optional[str]) -> Optional[str]:
+    """A caller-supplied ``cwd`` in MSYS/MinGW drive-mount spelling rendered
+    as a native Windows path, or the input unchanged.
+
+    A session launched from Git Bash has a POSIX cwd (``/x/claude-klabauter``).
+    ``Path("/x/claude-klabauter").resolve()`` on Windows anchors that to the
+    CURRENT process drive and yields ``X:\\x\\claude-klabauter`` — a path that  # abs-path-ok: illustrative example shape, not a machine-specific citation
+    exists nowhere, so the ``.git`` walk behind ``git_common_dir`` finds
+    nothing and ``sessions_dir()`` answers ``""``. Every registry lookup
+    layered on it then reports an empty hub, which reads identically to "this
+    repo has no sessions": a PM grant recorded under the real hub becomes
+    invisible rather than denied, and nothing on any surface says why.
+
+    Delegates the decoding to
+    ``bash_guards._write_bump_sink_shapes.translate_msys_path`` rather than
+    re-deriving it — that function is the repo's single normalization seam for
+    this spelling (DoE-claude ``coordinator/docs/wiki/bash-on-windows-
+    gotchas.md`` §10/§14) and carries the reasoning for every shape it
+    declines. Its POSIX-host rule is what keeps this module cross-platform:
+    on a non-Windows host ``/x/foo`` is a real directory and the translator is
+    the identity, so a genuine POSIX absolute path is never mangled. The
+    ``os.name`` gate below makes that a static fact here too, never a
+    behaviour this function depends on the callee to remember.
+
+    A shape the translator declines (``/tmp/...``, ``//server/share``,
+    ``/cygdrive/...`` — see its docstring) returns ``None``; this function
+    passes the ORIGINAL string through unchanged in that case, leaving those
+    inputs to resolve exactly as they did before. Deciding what an
+    undecodable root should mean is the separate refusal contract
+    ``sessions_dir()`` still lacks (see its docstring's REFUSAL CONTRACT
+    note), not something to invent here.
+
+    Negative-spec:
+        - Does NOT hardcode a drive letter — the shape is the general
+          ``/<letter>/<rest>``, and a bare ``/<letter>`` mount.
+        - Does NOT probe the filesystem to decide whether the translated
+          drive exists. Existence is the ``.git`` walk's question, and a
+          probe here would make the answer depend on mount state at call
+          time rather than on the spelling in hand.
+    """
+    if cwd is None or os.name != "nt" or not _MSYS_CWD_RE.match(cwd):
+        return cwd
+    from coordinator_core.bash_guards._write_bump_sink_shapes import translate_msys_path
+
+    return translate_msys_path(cwd) or cwd
+
+
 def _sessions_dir_resolve(cwd: Optional[str]) -> str:
     """Uncached resolution of the session hub path, shared by
     ``sessions_dir()``'s ``cwd is None`` branch and by
@@ -315,7 +373,25 @@ def sessions_dir(cwd: Optional[str] = None) -> str:
     NOT route through (different failure contract — raises ``RuntimeError``
     rather than returning ``""`` — and different worktree semantics
     downstream; two resolvers stay, this one alone gains a cache).
+
+    ``cwd`` is passed through ``_normalize_cwd`` FIRST, before both the cache
+    key and the resolution, so a Git-Bash POSIX cwd (``/x/repo``) and its
+    native spelling (``X:/repo``) name one hub and share one cache entry  # abs-path-ok: illustrative example shape, not a machine-specific citation
+    rather than resolving to two answers, one of them empty.
+
+    REFUSAL CONTRACT — KNOWN GAP, deliberately still open. An UNRESOLVABLE
+    root returns ``""``, which every caller in this repo reads as "there is
+    nothing there" rather than "I could not tell". That is the directional
+    half of the Git-Bash defect: the failure always lands on "no grant", and
+    no surface says why. The right shape is a loud, marked absence — a raise,
+    or a sentinel every caller is forced to handle. It is NOT landed here
+    because the falsy-return contract has ~43 production and ~80 test call
+    sites across ``claims``/``scope``/``liveness``/``coordinator-safe-commit``
+    and beyond, so converting it is its own scoped piece of work, not a
+    rider on the path-normalization fix. Do not "simplify" this note away
+    without doing that work.
     """
+    cwd = _normalize_cwd(cwd)
     if cwd is None:
         return _sessions_dir_resolve(cwd)
     try:

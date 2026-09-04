@@ -15,6 +15,7 @@ from coordinator_core.group_em.baseline import (
     diff_and_persist,
     _store_path,
 )
+from coordinator_core.session import machinery_paths
 
 
 def test_first_tick_reports_empty_spawned_and_first_tick_true(tmp_path: Path) -> None:
@@ -136,10 +137,7 @@ def test_two_caller_sessions_do_not_share_a_file(tmp_path: Path) -> None:
 def test_store_path_shape(tmp_path: Path) -> None:
     path = _store_path("myrepo", "sess-xyz", repo_root=tmp_path)
     assert path == (
-        tmp_path
-        / "state"
-        / "subagent-share"
-        / "sess-xyz"
+        Path(machinery_paths.share_dir(str(tmp_path), "sess-xyz"))
         / "group-em-baseline-myrepo.json"
     )
 

@@ -3,7 +3,8 @@ Tests for coordinator_core.ops.fleet.memo_draft — memo.draft native UDS op.
 
 C5 test surface (docs/plans/2026-07-21-memo-tool-rebuild-full-ownership.md § C5, AC5):
   - dry_run vs act envelope shape (exit_code, mode, dry_run, candidates/acted/failed keys)
-  - writes into the CALLING repo's own state/memo-outbox/<topic>.md (local-tree write)
+  - writes into the CALLING repo's own .coordinator-local/memo-outbox/<topic>.md
+    (local-tree write; state/memo-outbox/ is retired-but-still-read, 2026-09-03)
   - O_EXCL fail-loud on an existing draft with the same topic (no clobber)
   - setup-error envelope on bad params (missing required fields, bad types, bad kind)
   - store-less-ness architecture test (mirrors AC8/strang-03 C6's test_no_memo_index)
@@ -299,7 +300,7 @@ class TestScopedToEndToEnd:
         ))
         assert result["exit_code"] == 0, f"scoped_to draft should succeed: {result}"
 
-        target = sender / "state" / "memo-outbox" / "scoped-to-test.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "scoped-to-test.md"
         content = target.read_text(encoding="utf-8")
         split = split_frontmatter(content)
         assert split is not None
@@ -327,7 +328,7 @@ class TestScopedToEndToEnd:
             repo_root=common_dir,
         ))
         assert result["exit_code"] != 0
-        assert not (sender / "state" / "memo-outbox" / "partial-scoped-to-test.md").exists()
+        assert not (sender / ".coordinator-local" / "memo-outbox" / "partial-scoped-to-test.md").exists()
 
 
 # ===========================================================================
@@ -344,13 +345,13 @@ class TestDryRunPreview:
         assert result["mode"] == _MODE
         assert result["dry_run"] is True
         assert result["acted"] == []
-        assert not (sender / "state" / "memo-outbox" / "some-topic.md").exists()
+        assert not (sender / ".coordinator-local" / "memo-outbox" / "some-topic.md").exists()
         assert result["candidates"][0]["collision"] is False
 
     def test_dry_run_reports_collision(self, tmp_path):
         sender = _make_sender_git_repo(tmp_path)
         common_dir = sender / ".git"
-        outbox = sender / "state" / "memo-outbox"
+        outbox = sender / ".coordinator-local" / "memo-outbox"
         outbox.mkdir(parents=True)
         (outbox / "some-topic.md").write_text("existing", encoding="utf-8")
 
@@ -369,7 +370,7 @@ class TestActWritesDraft:
         result = _run(_memo_draft(_base_params(dry_run=False, kind="ask"), repo_root=common_dir))
 
         assert result["exit_code"] == 0
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         assert target.exists()
 
         content = target.read_text(encoding="utf-8")
@@ -386,10 +387,29 @@ class TestActWritesDraft:
         result = _run(_memo_draft(_base_params(dry_run=False), repo_root=None))
         assert result["exit_code"] == 1
 
+    def test_legacy_root_draft_still_collides(self, tmp_path):
+        """2026-09-03 outbox relocation: memo.draft writes only the new
+        `.coordinator-local/memo-outbox/` root, but a topic already staged
+        at the retired `state/memo-outbox/` root must still be found and
+        refused — read-compatibility, not just a write repoint."""
+        sender = _make_sender_git_repo(tmp_path)
+        common_dir = sender / ".git"
+        legacy_outbox = sender / "state" / "memo-outbox"
+        legacy_outbox.mkdir(parents=True)
+        existing = legacy_outbox / "some-topic.md"
+        existing.write_text("do-not-touch", encoding="utf-8")
+
+        result = _run(_memo_draft(_base_params(dry_run=False), repo_root=common_dir))
+
+        assert result["exit_code"] == 2
+        assert result["failed"]
+        assert existing.read_text(encoding="utf-8") == "do-not-touch"
+        assert not (sender / ".coordinator-local" / "memo-outbox" / "some-topic.md").exists()
+
     def test_act_collision_refuses_no_clobber(self, tmp_path):
         sender = _make_sender_git_repo(tmp_path)
         common_dir = sender / ".git"
-        outbox = sender / "state" / "memo-outbox"
+        outbox = sender / ".coordinator-local" / "memo-outbox"
         outbox.mkdir(parents=True)
         existing = outbox / "some-topic.md"
         existing.write_text("do-not-touch", encoding="utf-8")
@@ -410,7 +430,7 @@ class TestActWritesDraft:
         result = _run(_memo_draft(_base_params(dry_run=False), repo_root=common_dir))
         assert result["exit_code"] == 0
 
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         content = target.read_text(encoding="utf-8")
         assert str(_SUMMARY_MAX_CHARS) in content
 
@@ -429,7 +449,7 @@ class TestActWritesDraft:
             _base_params(dry_run=False, to="totally-unregistered-em"), repo_root=common_dir,
         ))
         assert result["exit_code"] == 0
-        assert (sender / "state" / "memo-outbox" / "some-topic.md").exists()
+        assert (sender / ".coordinator-local" / "memo-outbox" / "some-topic.md").exists()
 
     def test_over_cap_summary_warns_writes_and_keeps_text_out_of_summary_field(
         self, tmp_path,
@@ -455,7 +475,7 @@ class TestActWritesDraft:
         assert str(len(over_cap_summary)) in advisory
         assert str(_SUMMARY_MAX_CHARS) in advisory
 
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         content = target.read_text(encoding="utf-8")
         split = split_frontmatter(content)
         assert split is not None
@@ -489,7 +509,7 @@ class TestActWritesDraft:
         assert result["exit_code"] == 0
         advisory = result["candidates"][0]["summary_cap_advisory"]
         assert advisory is not None
-        assert not (sender / "state" / "memo-outbox" / "some-topic.md").exists()
+        assert not (sender / ".coordinator-local" / "memo-outbox" / "some-topic.md").exists()
 
 
 # ===========================================================================
@@ -513,7 +533,7 @@ class TestClassifyReceiver:
             repo_root=common_dir,
         ))
         assert result["exit_code"] == 0
-        assert (sender / "state" / "memo-outbox" / "some-topic.md").exists()
+        assert (sender / ".coordinator-local" / "memo-outbox" / "some-topic.md").exists()
 
     def test_false_classify_receiver_still_portable_draft(self, tmp_path, monkeypatch):
         """(a) classify_receiver explicitly False -> same portable-draft default."""
@@ -530,7 +550,7 @@ class TestClassifyReceiver:
             repo_root=common_dir,
         ))
         assert result["exit_code"] == 0
-        assert (sender / "state" / "memo-outbox" / "false-flag.md").exists()
+        assert (sender / ".coordinator-local" / "memo-outbox" / "false-flag.md").exists()
 
     def test_publish_target_rejected_no_file_written(self, tmp_path, monkeypatch, caplog):
         """(b) classify_receiver: True + publish-target `to` -> fail loud, no write."""
@@ -552,7 +572,7 @@ class TestClassifyReceiver:
         assert result["exit_code"] == 1
         assert "PUBLISH-TARGET" in caplog.text
         assert "claude-central-em" in caplog.text
-        assert not (sender / "state" / "memo-outbox" / "mirror-test.md").exists()
+        assert not (sender / ".coordinator-local" / "memo-outbox" / "mirror-test.md").exists()
 
     def test_unknown_receiver_rejected_with_nearest_match(self, tmp_path, monkeypatch, caplog):
         """(c) classify_receiver: True + genuinely unresolvable `to` (no candidate
@@ -581,7 +601,7 @@ class TestClassifyReceiver:
             ))
         assert result["exit_code"] == 1
         assert "UNKNOWN RECEIVER" in caplog.text
-        assert not (sender / "state" / "memo-outbox" / "unknown-test.md").exists()
+        assert not (sender / ".coordinator-local" / "memo-outbox" / "unknown-test.md").exists()
 
     def test_unique_did_you_mean_auto_accepted(self, tmp_path, monkeypatch):
         """(c2) 2026-07-24 papercut fix: classify_receiver: True + `to` that does
@@ -608,7 +628,7 @@ class TestClassifyReceiver:
         ))
         assert result["exit_code"] == 0
         assert result["acted"][0]["to"] == "claude-klabauter-em"
-        draft_path = sender / "state" / "memo-outbox" / "alias-test.md"
+        draft_path = sender / ".coordinator-local" / "memo-outbox" / "alias-test.md"
         assert draft_path.exists()
         split = split_frontmatter(draft_path.read_text(encoding="utf-8"))
         assert read_fm_field_unquoted(split.fm_text, "to") == "claude-klabauter-em"
@@ -657,7 +677,7 @@ class TestClassifyReceiver:
             ))
         assert result["exit_code"] == 1
         assert "UNKNOWN RECEIVER" in caplog.text
-        assert not (sender / "state" / "memo-outbox" / "ambiguous-test.md").exists()
+        assert not (sender / ".coordinator-local" / "memo-outbox" / "ambiguous-test.md").exists()
 
     def test_valid_receiver_drafts_normally(self, tmp_path, monkeypatch):
         """(d) classify_receiver: True + valid receiver -> drafts normally."""
@@ -675,7 +695,7 @@ class TestClassifyReceiver:
             repo_root=common_dir,
         ))
         assert result["exit_code"] == 0
-        assert (sender / "state" / "memo-outbox" / "valid-test.md").exists()
+        assert (sender / ".coordinator-local" / "memo-outbox" / "valid-test.md").exists()
 
     def test_classification_matches_memo_resolver_directly(self, tmp_path, monkeypatch):
         """(e) classification verdict matches _memo_resolver.resolve_receiver_inbox
@@ -1019,7 +1039,7 @@ class TestInReplyToDraft:
         result = _run(_memo_draft(params, repo_root=common_dir))
         assert result["exit_code"] == 0
 
-        target = sender / "state" / "memo-outbox" / "some-topic.md"
+        target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         content = target.read_text(encoding="utf-8")
         split = split_frontmatter(content)
         assert read_fm_field(split.fm_text, "in_reply_to") == '"2026-07-25-foo.md"'

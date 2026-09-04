@@ -112,7 +112,7 @@ def test_resolvable_executor_kind_still_fires_now_advisory(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
     reason = result["hookSpecificOutput"]["additionalContext"]
     assert "coordinator:executor" in reason
-    assert "state/subagent-share/<path>.md" in reason
+    assert ".coordinator-local/subagent-share/<path>.md" in reason
 
 
 def test_resolvable_ambiguous_kind_still_fires_unconditionally(monkeypatch):

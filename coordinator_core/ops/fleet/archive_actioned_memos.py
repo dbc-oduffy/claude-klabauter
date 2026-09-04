@@ -106,6 +106,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import register_op
 from coordinator_core.liveness import cs_claim_holder_live
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.fleet._common import (
     Move,
     _is_identical_duplicate,
@@ -152,13 +153,17 @@ _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
 # default.
 _RECOMMENDED_CAP_CHOICE = 150
 
-# The memo corpus root, repo-relative POSIX. Exported so a caller outside
-# this module (`housekeeping/cycle.py`'s union dirty-check fallback
-# pathspec) reads the corpus location from here rather than carrying its
-# own copy of the literal -- a corpus move stays a one-file edit.
-# (Review: overengineering-reviewer F5 -- cycle.py hardcoded
-# "cross-repo/inbox" as a fallback pathspec; that is memo-corpus knowledge
-# that belongs here, not in the handoff cycle.)
+# Legacy repo-relative POSIX literal, kept ONLY for a caller outside this
+# plan's scope (`housekeeping/cycle.py`'s union dirty-check fallback
+# pathspec) that still imports this attribute by name. This module's own
+# candidate/dest resolution below no longer reads this constant -- it
+# resolves through `memo_corpus_root` (coordinator_core/memo_corpus.py),
+# the one named resolver every corpus-root construction in coordinator_core
+# routes through. Removal trigger: `cycle.py`'s fallback pathspec repoint,
+# queued as `state/bug-backlog/2026-09-03-cycle-py-fallback-pathspec-still-
+# hardcodes-the-legacy-cross-repo-inbox-literal.yaml` -- that row's
+# completion criterion is this constant's deletion (coordinator:
+# overengineering-reviewer, 2026-09-03).
 INBOX_RELDIR = "cross-repo/inbox"
 
 # Fallback receipt sink for the one setup-error shape that has NO common_dir
@@ -212,7 +217,7 @@ def collect_inbox_memo_paths(worktree_root: Path) -> List[Path]:
     documents. Callers MUST catch OSError and degrade to "no candidates
     visible this call".
     """
-    inbox_dir = worktree_root / INBOX_RELDIR
+    inbox_dir = Path(memo_corpus_root(str(worktree_root))) / "inbox"
     if not inbox_dir.is_dir():
         return []
     try:
@@ -226,11 +231,11 @@ def collect_inbox_memo_paths(worktree_root: Path) -> List[Path]:
 
 
 def memo_archive_dest(worktree_root: Path, memo_path: Path) -> Path:
-    """Derive archive destination: cross-repo/archive/<filename> — FLAT, not
-    nested by date. See this module's own negative-spec for why: the live
-    tree carries zero archive subdirectories.
+    """Derive archive destination: <memo_corpus_root>/archive/<filename> —
+    FLAT, not nested by date. See this module's own negative-spec for why:
+    the live tree carries zero archive subdirectories.
     """
-    return worktree_root / "cross-repo" / "archive" / memo_path.name
+    return Path(memo_corpus_root(str(worktree_root))) / "archive" / memo_path.name
 
 
 def _terminal_since(meta: dict, memo_path: Path) -> Optional[str]:
@@ -301,7 +306,7 @@ def _scan_terminal_memos(
         try:
             inbox_paths = collect_inbox_memo_paths(worktree_root)
         except OSError as exc:
-            inbox_dir = worktree_root / INBOX_RELDIR
+            inbox_dir = Path(memo_corpus_root(str(worktree_root))) / "inbox"
             _LOG.warning(
                 "_scan_terminal_memos: cannot scan %s — %s; returning zero "
                 "candidates (degrade safe)", inbox_dir, exc,

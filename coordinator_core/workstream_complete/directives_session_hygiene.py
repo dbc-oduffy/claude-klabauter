@@ -386,6 +386,103 @@ def build_machine_local_regeneratability_directive() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Terminal-handoff drain — the close's archival step (real CLI, real directive)
+# ---------------------------------------------------------------------------
+
+_TERMINAL_HANDOFF_SWEEP_CLI = "sweep-terminal-handoffs"
+
+
+def build_terminal_handoff_sweep_directive() -> dict[str, Any]:
+    """The close ceremony's mandatory drain of terminal batons out of
+    `state/handoffs/`.
+
+    PM ruling (2026-09-03, carried by doe-claude-em memo
+    `cross-repo/inbox/2026-09-03-doe-claude-em-close-verbs-must-emit-a-
+    terminal-handoff-drain-directive.md`): `/workstream-complete` and
+    `/quick-wrap` MUST archive completed batons at resolution. That reverses
+    the prior doctrine (archival lands at the next ceremony), which left the
+    interval between ceremonies unbounded — measured residue: 17 terminal
+    batons drained in one hand-run in example-cockpit-repo (2026-09-03), five in
+    DoE (2026-08-30) with a roadmap reporting seven batons behind its real
+    state. The mandate was prose in two skill bodies and nothing enforced it;
+    this directive is the artifact that discharges it.
+
+    UNCONDITIONAL by construction, and not a defect: the drain files EVERY
+    session's terminal residue, not this session's own, so gating it on
+    whether this close had a baton of its own to retire would skip exactly
+    the case the ruling exists for. It is emitted LAST in the assembly so
+    every stamp the ceremony performs has landed before the sweep classifies.
+
+    `already_satisfied` stays hardcoded `False` permanently, for the same
+    reason as `build_machine_local_regeneratability_directive`: there is no
+    disk artifact whose presence means "already drained" — a clean
+    `state/handoffs/` is indistinguishable from a sweep that has not run, and
+    on a shared tree a peer can make it dirty again a second later. Re-firing
+    is safe: the CLI is a no-op when nothing classifies terminal, and its
+    per-candidate-file `worktree-dirty` refusal
+    (`ops/fleet/archive_terminal_handoffs.py`) already declines to move a
+    record another session holds open.
+
+    Negative-spec: do not add a predicate here, and do not add a
+    `--dry-run` arg. A dry run reports and archives nothing, which satisfies
+    the directive's shape while discharging none of the ruling.
+    """
+    return {
+        "id": "d-sweep-terminal-handoffs",
+        "cli": _TERMINAL_HANDOFF_SWEEP_CLI,
+        "args": [],
+        "depends_on": None,
+        "already_satisfied": False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Terminal-sizings drain — the sizings sibling of the drain above
+# ---------------------------------------------------------------------------
+
+_TERMINAL_SIZING_SWEEP_CLI = "sweep-terminal-sizings"
+
+
+def build_terminal_sizing_sweep_directive() -> dict[str, Any]:
+    """The close ceremony's mandatory drain of terminal sizing-objects out of
+    `state/sizings/`.
+
+    Sibling of `build_terminal_handoff_sweep_directive` above, for the same
+    C3 defect (docs/plans/2026-09-03-close-verb-archival-stops-asking-for-
+    wri.md): `fleet.archive_terminal_sizings`
+    (`coordinator_core/ops/fleet/archive_sizings.py`, landed 2026-08-13) had
+    no caller — the close ceremony's checklist step instructed a hand `git
+    mv` of every terminal sizing, which `safe_commit_offer` then refused
+    because a relocation is not authorship. This directive, plus
+    `sweep-terminal-sizings.py`, is that caller.
+
+    UNCONDITIONAL by construction and emitted AFTER
+    `d-sweep-terminal-handoffs`, for the identical reason that directive is
+    emitted last relative to everything before it: every stamp the ceremony
+    performs must land before the sweep classifies.
+
+    `already_satisfied` stays hardcoded `False` permanently — same reasoning
+    as the handoff sibling: no disk artifact means "already drained", a
+    clean `state/sizings/` is indistinguishable from a sweep that never ran,
+    and a peer can make it dirty again a moment later. Re-firing is safe:
+    the CLI is a no-op when nothing is a movable candidate, and the op's own
+    worktree-dirty retention gate (AC5, `ops/fleet/archive_sizings.py`)
+    already declines to move a record another session holds open.
+
+    Negative-spec: do not add a predicate here, and do not add a
+    `--dry-run` arg — same reasoning as the handoff sibling's own
+    negative-spec above.
+    """
+    return {
+        "id": "d-sweep-terminal-sizings",
+        "cli": _TERMINAL_SIZING_SWEEP_CLI,
+        "args": [],
+        "depends_on": None,
+        "already_satisfied": False,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Step 2.96 — completeness-checklist advisory WARN (read-only computed gate)
 # ---------------------------------------------------------------------------
 

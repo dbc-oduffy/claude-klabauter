@@ -422,3 +422,71 @@ def test_label_whitelist_matches_provision_report():
     )
 
     assert guard._LABEL_WHITELIST_RE.pattern == _SEGMENT_WHITELIST_RE.pattern
+
+
+class TestLiveSidecarRoot:
+    """The root provisioning actually writes to.
+
+    Every other fixture in this module spells `state/subagent-share/`, the
+    PRE-relocation root. Sidecars are provisioned under
+    `.coordinator-local/subagent-share/` now, so those fixtures pinned a
+    path no live write takes: leg 1 stopped matching real sidecar writes and
+    this suite stayed green through it. These cases fail against the old
+    single-root regex -- `check()` returns None where a deny is required.
+    """
+
+    def test_foreign_write_under_live_root_is_denied(self, tmp_path):
+        _write_backpointer(
+            tmp_path,
+            _AGENT_A,
+            _EM_SESSION_ID,
+            dispatched_rows=[(_AGENT_A, "x", "coordinator:executor")],
+        )
+        payload = _payload(
+            tmp_path,
+            f".coordinator-local/subagent-share/{_SESSION_ID}/"
+            f"coordinatorexecutor.{_AGENT_B}.md",
+            agent_id=_AGENT_A,
+            session_id=_EM_SESSION_ID,
+        )
+        result = guard.check(payload)
+        assert result is not None, "the live sidecar root must reach the deny path"
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_denial_message_echoes_the_root_the_caller_used(self, tmp_path):
+        """The caller's own leaf is a path the caller can act on, so it names
+        the root they actually wrote under -- not a hardcoded one pointing at
+        a directory their write never touched."""
+        _write_backpointer(
+            tmp_path,
+            _AGENT_A,
+            _EM_SESSION_ID,
+            dispatched_rows=[(_AGENT_A, "x", "coordinator:executor")],
+        )
+        payload = _payload(
+            tmp_path,
+            f".coordinator-local/subagent-share/{_SESSION_ID}/"
+            f"coordinatorexecutor.{_AGENT_B}.md",
+            agent_id=_AGENT_A,
+            session_id=_EM_SESSION_ID,
+        )
+        reason = guard.check(payload)["hookSpecificOutput"]["permissionDecisionReason"]
+        assert f".coordinator-local/subagent-share/{_SESSION_ID}" in reason
+        assert "state/subagent-share/" not in reason
+
+    def test_own_write_under_live_root_still_allowed(self, tmp_path):
+        """Widening the gate must not turn the carve-outs into denials."""
+        _write_backpointer(
+            tmp_path,
+            _AGENT_A,
+            _EM_SESSION_ID,
+            dispatched_rows=[(_AGENT_A, "x", "coordinator:code-reviewer")],
+        )
+        payload = _payload(
+            tmp_path,
+            f".coordinator-local/subagent-share/{_SESSION_ID}/"
+            f"coordinatorcode-reviewer.{_AGENT_A}.md",
+            agent_id=_AGENT_A,
+            session_id=_EM_SESSION_ID,
+        )
+        assert guard.check(payload) is None

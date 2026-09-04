@@ -1295,6 +1295,16 @@
               }
             ]
           },
+          "roadmap_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "handoff_id": {
             "type": "string"
           },
@@ -8529,7 +8539,8 @@
                 "enum": [
                   "competitor",
                   "peer",
-                  "aspirational_target"
+                  "aspirational_target",
+                  "first_party"
                 ]
               },
               {
@@ -10169,5 +10180,5 @@
     "malformed_records"
   ],
   "additionalProperties": false,
-  "version": "4.0.0"
+  "version": "4.3.0"
 }

@@ -137,6 +137,41 @@ def require_home(caller: str) -> str:
     )
 
 
+def claude_dir(claude_home: str) -> Path:
+    """``<claude_home>/.claude`` — the ONE spelling of Convention A's appended
+    segment, so no call site re-decides it.
+
+    `require_home` returns a $HOME SUBSTITUTE (its own docstring: "CLAUDE_HOME
+    names the PARENT of `.claude` and every caller appends that segment"), and
+    for a long time most call sites did not append it — targeting
+    ``<home>/settings.json``, ``<home>/bin``, ``<home>/.doe-root`` while every
+    writer puts those under ``<home>/.claude/``. Those readers silently found
+    nothing, and a destructive one found nothing and reported success.
+    Verified against a live install 2026-09-02: settings.json, .doe-root,
+    coordinator-identity.yaml, working-repos.yaml, machine-local, plugins/,
+    bin/, shell/ and agents/ are all under ``~/.claude/``.
+
+    NOT every path derived from the home takes this segment — the POSIX
+    profile files (`shell_rc_guard.applicable_rc_files`), the settings home
+    (`uninstall_legs._settings_home_from`) and `plugin_health`'s
+    ``~/.local/bin`` probe are genuine siblings of `.claude`, not children.
+    This helper exists so the two classes are told apart by which function a
+    call site uses rather than by whether whoever wrote it remembered.
+
+    An EMPTY ``claude_home`` yields ``.claude`` RELATIVE TO CWD, not an
+    absolute path -- `resolve_coordinator_root`'s rung 4 passes "" when
+    `require_home` raises, and only survives it because the caller gates on
+    `.is_file()`. Do not introduce a caller that writes or deletes through
+    this helper without an absolute-home check of its own.
+
+    Lives here rather than in `uninstall_legs` because the segment is not an
+    uninstall fact: `resolve_coordinator_root`'s own `.doe-root` rung reads it
+    too, and that reader was missed by the first sweep precisely because the
+    helper was module-local.
+    """
+    return Path(claude_home) / ".claude"
+
+
 def _strip_trailing_sep(path: str) -> str:
     r"""Trailing-separator strip that also sees a native Windows separator.
 
@@ -196,7 +231,7 @@ def resolve_coordinator_root(
             claude_home = require_home("resolve_coordinator_root")
         except RequireHomeError:
             claude_home = ""
-        doe_root_pointer = Path(claude_home) / ".doe-root"
+        doe_root_pointer = claude_dir(claude_home) / ".doe-root"
         if doe_root_pointer.is_file():
             try:
                 doe_claude = doe_root_pointer.read_text(encoding="utf-8", errors="replace")

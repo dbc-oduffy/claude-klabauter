@@ -144,6 +144,15 @@ _SPAWN_SIGNATURES = (
     "Popen",
 )
 
+#: The subset of `_SPAWN_SIGNATURES` an IMPORT can satisfy. A dotted entry
+#: names a CALL (`os.system(...)`); its module half is `os`, whose import is
+#: how any module reaches `path.join` or `environ` and says nothing about
+#: spawning. Matching imports against `sig.split(".")[0]` therefore fired on
+#: every `import os` in the file -- an instrument that reports a spawn where
+#: the module makes no call at all. Dotted entries are left to the `ast.Call`
+#: arm below, which matches their final segment.
+_SPAWN_IMPORT_SIGNATURES = tuple(s for s in _SPAWN_SIGNATURES if "." not in s)
+
 ELIGIBLE_TYPE = "coordinator:code-reviewer"
 
 #: AC6's stated ceiling, in milliseconds.
@@ -181,10 +190,10 @@ def test_module_source_never_spawns_a_process() -> None:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if any(sig.split(".")[0] == alias.name for sig in _SPAWN_SIGNATURES):
+                if alias.name in _SPAWN_IMPORT_SIGNATURES:
                     hits.append(alias.name)
         elif isinstance(node, ast.ImportFrom):
-            if node.module and any(sig.split(".")[0] == node.module for sig in _SPAWN_SIGNATURES):
+            if node.module and node.module in _SPAWN_IMPORT_SIGNATURES:
                 hits.append(node.module)
         elif isinstance(node, ast.Call):
             func = node.func
@@ -456,7 +465,12 @@ def test_every_catered_type_composes_under_the_char_cap(
 
 def _sanitize(agent_type: str) -> str:
     """Filesystem/session-id-safe stand-in for a `coordinator:foo` agent
-    type -- mirrors `_sanitize_segment`'s own colon-hostility (Windows
-    reserves `:` in a path segment) without importing that private helper
-    across a package boundary for a single character swap."""
+    type, used to build a fixture SESSION ID -- an input production then
+    sanitizes itself, never an expectation about the leaf it emits.
+
+    Deliberately NOT `_sanitize_segment`'s spelling: that whitelist DROPS
+    `:` (`coordinator:staff-eng` -> `coordinatorstaff-eng`), this one swaps
+    it for `-`. Both land in the whitelist's accepted set, so the fixture
+    path is stable either way -- but do not read this helper as a mirror of
+    production, because it is not one."""
     return agent_type.replace(":", "-")

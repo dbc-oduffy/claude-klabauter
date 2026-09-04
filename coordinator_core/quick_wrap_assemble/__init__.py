@@ -125,6 +125,11 @@ from coordinator_core.ops.extract_scope_paths import _extract_scope_paths
 from coordinator_core.ops.session.safe_commit_offer import commit_session_offer_async
 from coordinator_core.ops.session_commits import resolve_session_commits
 from coordinator_core.session import session_facts
+from coordinator_core.sibling_fact import _resolve_archive_handoffs_fallback_reasoned
+from coordinator_core.workstream_complete.directives_session_hygiene import (
+    build_terminal_handoff_sweep_directive,
+    build_terminal_sizing_sweep_directive,
+)
 from coordinator_core.session_baton.store import merge_baton
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -512,13 +517,26 @@ def _c3_ancestry(pickup_kind: dict[str, Any], worktree_root: Path) -> tuple[bool
       (inbox vs. a month-subfoldered archive) is the exact fragility the
       fail-closed branch below exists to distrust, and reading the file would
       buy nothing when the schema guarantees the fields are absent.
-    - Something claimed but no `artifact_path` resolved — the file was
-      already absent or archived to a location this session's pickup fact
-      never found (e.g. a month-subfoldered `archive/handoffs/`); treated the
-      same as an unreadable claimed artifact, fails CLOSED. This also covers
-      `_closed_pickup_kind()`'s degraded-fact substitute (`classification:
-      "degraded"`, `artifact_path: None`), which must keep failing condition
-      3 — never fold "no artifact_path" into the pass branch above it.
+    - Something claimed but no `artifact_path` resolved — most commonly the
+      SAME ceremony's own step 2 already `ship-handoff --archive`-d the
+      chain-root baton this session claimed, moving it under a
+      month-subfoldered `archive/handoffs/<YYYY-MM>/` this fact's
+      `artifact_path` never found. `sibling_fact.
+      _resolve_archive_handoffs_fallback_reasoned` (the single, hardened
+      definition of this predicate — see that function's own docstring for
+      why promoting the hardened variant here is safe) probes that subtree
+      for `pickup_kind["basename"]` (already emitted alongside the null
+      `artifact_path`) and, on EXACTLY ONE same-basename match, resolves it
+      and proceeds to read ancestry off the archived file instead. Zero
+      matches, more than one match, an empty/non-bare-filename basename, or a
+      resolved match that escapes the repo all fail CLOSED, unchanged — the
+      probe repairs the one case it targets (a record this session itself
+      just archived) and never becomes a general path search. This also
+      covers `_closed_pickup_kind()`'s degraded-fact substitute
+      (`classification: "degraded"`, `artifact_path: None`, `basename: None`),
+      which keeps failing condition 3 because its `basename` is null and the
+      probe falls through — asserted by test rather than relied on, since a
+      future edit to `_closed_pickup_kind` could silently open the gate.
     - An artifact_path resolved but the file cannot be read at close time
       (archived mid-session) — fails CLOSED, never guessed.
     - Read succeeds — passes iff the artifact is a chain root: `predecessor`
@@ -539,10 +557,30 @@ def _c3_ancestry(pickup_kind: dict[str, Any], worktree_root: Path) -> tuple[bool
         )
 
     if not artifact_path:
-        return False, (
-            f"classification={classification!r} claimed but no artifact_path resolved "
-            "— treating as unreadable/absent, failing closed"
-        )
+        basename = pickup_kind.get("basename")
+        # `contained_path` hands back a `.resolve()`d path, so the root it is
+        # relativised against must be resolved too or `relative_to` raises
+        # ValueError on any symlinked or relative worktree root — an
+        # UNCAUGHT EXCEPTION where every other exit of this function returns
+        # a controlled `(False, reason)`. A crash is not a fail-closed: it
+        # takes the ceremony down instead of refusing it. `resolve()` itself
+        # can raise OSError on an unreachable root, which is why it is inside
+        # the try rather than beside it.
+        def _probe_failed(reason: str) -> tuple[bool, str]:
+            return False, (
+                f"classification={classification!r} claimed but no artifact_path resolved, and "
+                f"the archive/handoffs probe did not resolve one either ({reason}) "
+                "— treating as unreadable/absent, failing closed"
+            )
+
+        try:
+            probe_root = worktree_root.resolve()
+        except OSError:
+            return _probe_failed("worktree root could not be resolved")
+        archived_path, probe_reason = _resolve_archive_handoffs_fallback_reasoned(probe_root, basename or "")
+        if archived_path is None:
+            return _probe_failed(probe_reason)
+        artifact_path = str(archived_path.relative_to(probe_root))
 
     ancestry = _read_ancestry_fields(worktree_root, artifact_path)
     if ancestry is None:
@@ -713,6 +751,37 @@ def _directives(fold: dict[str, Any], *, fold_degraded: bool = False) -> list[di
             "depends_on": None,
         }
     )
+    # d4 — the terminal-handoff drain. PM ruling 2026-09-03 (doe-claude-em
+    # memo `cross-repo/inbox/2026-09-03-doe-claude-em-close-verbs-must-emit-
+    # a-terminal-handoff-drain-directive.md`): both close verbs MUST archive
+    # completed batons out of `state/handoffs/` at resolution, reversing the
+    # prior "the next ceremony sweeps it" doctrine that left the interval
+    # unbounded. Unconditional, like `d3`, and for a stronger reason: the
+    # drain files EVERY session's terminal residue, so gating it on whether
+    # this quick-wrap had a baton of its own would skip the case the ruling
+    # exists for. Last in the list so any stamp this ceremony performed has
+    # landed before the sweep classifies. Builder owns the contract,
+    # including why `already_satisfied` is permanently `False` and why no
+    # `--dry-run` arg belongs here — this call site only overrides `id` to
+    # this envelope's own positional-id scheme (`d4`), never hand-copies the
+    # builder's dict shape (a hand-copy of this exact dict, differing only in
+    # `id`, IS the defect this call site now avoids — see
+    # `build_terminal_handoff_sweep_directive`'s own docstring).
+    d4 = build_terminal_handoff_sweep_directive()
+    d4["id"] = "d4"
+    directives.append(d4)
+    # d5 — the sizings sibling of d4's terminal-handoff drain (C3,
+    # docs/plans/2026-09-03-close-verb-archival-stops-asking-for-wri.md).
+    # `fleet.archive_terminal_sizings` (coordinator_core/ops/fleet/
+    # archive_sizings.py) already existed but had no caller — this
+    # directive, plus `sweep-terminal-sizings.py`, is that caller. After
+    # d4 for the same reason d4 is last before it: every stamp this
+    # ceremony performed must land before the sweep classifies. Same
+    # builder-owns-the-contract discipline as d4 above — see
+    # `build_terminal_sizing_sweep_directive`'s own docstring.
+    d5 = build_terminal_sizing_sweep_directive()
+    d5["id"] = "d5"
+    directives.append(d5)
     return directives
 
 

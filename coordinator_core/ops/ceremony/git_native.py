@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import functools
 import ntpath
+import logging
 import os
 import shutil
 import subprocess
@@ -111,6 +112,9 @@ from coordinator_core.git.run import REMOTE_BUDGET_SECS
 #: `_DEFAULT_TIMEOUT_SECS` (60s, for `push`/`fetch`) -- a `git diff --name-
 #: only` scoped to an explicit pathspec is proportional to the pathspec size,
 #: not repo size, so a healthy process should never need anywhere near this.
+_LOG = logging.getLogger(__name__)
+_LOG.addHandler(logging.NullHandler())
+
 _DIVERGENCE_CHECK_TIMEOUT_SECS = 5.0
 
 #: Default subprocess timeout (seconds) for a single git invocation. Generous enough
@@ -662,6 +666,106 @@ def status_porcelain(
             return result
         combined.append(result.stdout)
     return GitResult(returncode=0, stdout="".join(combined), stderr="")
+
+
+#: Shared reason string for a candidate a `dirty_relpaths_from_porcelain`-
+#: backed gate retains rather than moves — one definition so the fleet
+#: family and the terminal-handoff drain never carry two copies of the same
+#: sentence (they used to; see `dirty_relpaths_from_porcelain`'s docstring).
+REASON_WORKTREE_DIRTY = "worktree-dirty: uncommitted changes, retained pending commit"
+
+
+def dirty_relpaths_from_porcelain(
+    cwd: Union[str, Path],
+    pathspecs: Sequence[str],
+    *,
+    fail_closed_defaults: Optional[Sequence[str]] = None,
+    caller: str = "git_native",
+) -> Set[str]:
+    """One scoped `git status --porcelain -- <pathspecs>` call, parsed and
+    fail-closed — the shared tail of every fleet-family worktree-dirty
+    retention gate.
+
+    Extracted (2026-09-03) from `coordinator_core.ops.fleet.
+    archive_terminal_handoffs._dirty_handoff_relpaths` and `coordinator_core.
+    ops.fleet.archive_sizings._dirty_sizing_relpaths`, whose porcelain-
+    parsing tails were, before this extraction, a character-for-character
+    copy of one another — same fail-closed warning, same 2-char-status-code
+    skip, same ` -> ` rename-record split, same quote-stripping. Both
+    modules already imported `status_porcelain` from this module, so this is
+    the natural shared home for its parsed-output sibling; it is NOT a fork
+    of either fleet module (neither's own budget/in-process/chunking
+    wrapper moved here — see below).
+
+    NEGATIVE SPEC — deliberately NOT the whole of either caller's rail:
+    `archive_terminal_handoffs._dirty_handoff_relpaths` keeps its own argv-
+    budget overflow fallback and its spawn-free in-process index-walk fast
+    path (`_dirty_relpaths_in_process`) — those are genuinely
+    handoffs-specific (that corpus's own scale motivated them) and are NOT
+    duplicated here. Both callers delegate only the shared TAIL — the actual
+    `git status --porcelain` call, its fail-closed handling, and porcelain
+    parsing — to this function.
+
+    Returns the set of repo-relative paths (drawn from `pathspecs`, or
+    discovered via a rename record's `" -> "` new-path half) that carry
+    uncommitted worktree OR index changes — `git status --porcelain` answers
+    both axes (staged-but-uncommitted, and unstaged) in one call, and either
+    side of a rename record being dirty is enough to exclude both paths.
+
+    FAIL-CLOSED on any git failure: a non-zero exit or launch failure
+    returns `set(pathspecs)` — every pathspec treated as dirty — never an
+    empty set. An empty dirty set from a failed call would be fail-OPEN
+    (every candidate sails through unexcluded because the check that was
+    supposed to gate them silently answered "nothing is dirty"), which is
+    exactly the mode every caller of this primitive exists to refuse.
+
+    `fail_closed_defaults` (optional): the set to fail closed to when it
+    differs from `pathspecs` itself — needed only by a caller whose QUERY
+    pathspec is narrower than its CANDIDATE set, i.e. `archive_terminal_
+    handoffs._dirty_handoff_relpaths`' own argv-budget overflow branch,
+    where `pathspecs` becomes a small fixed set of directory roots
+    (`fallback_pathspecs`) but every one of the original survivor relpaths
+    must still read as dirty on a git failure, not just the directory roots
+    queried. `None` (the default) fails closed to `pathspecs` itself, which
+    is correct whenever query set and candidate set are the same list (every
+    caller except that one overflow branch).
+
+    `pathspecs=()` short-circuits to `set()` without spawning anything — an
+    empty candidate set has nothing to ask git about.
+
+    `caller` names the invoking module in the fail-closed warning log line
+    only (e.g. `"archive_terminal_handoffs"`, `"archive_sizings"`) — purely
+    diagnostic, never load-bearing for behavior.
+    """
+    if not pathspecs:
+        return set()
+
+    ordered = sorted(set(pathspecs))
+    result = status_porcelain(cwd, ordered)
+    if not result.ok:
+        fail_closed = set(fail_closed_defaults) if fail_closed_defaults is not None else set(ordered)
+        _LOG.warning(
+            "%s: git status --porcelain -- %s failed (rc=%s) — degrading to "
+            "fail-closed (all %d candidate(s) treated as dirty)",
+            caller, ordered, result.returncode, len(fail_closed),
+        )
+        return fail_closed
+
+    dirty: Set[str] = set()
+    for line in result.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        # Porcelain v1: 2-char status code, one space, then the path (a
+        # rename record's " -> " new-path half matters too — either side
+        # being dirty is enough to exclude).
+        rel = line[3:].strip()
+        if " -> " in rel:
+            old, _, new = rel.partition(" -> ")
+            dirty.add(old.strip().strip('"'))
+            dirty.add(new.strip().strip('"'))
+        else:
+            dirty.add(rel.strip('"'))
+    return dirty
 
 
 def status_porcelain_scoped(cwd: Union[str, Path], paths: Sequence[str]) -> GitResult:

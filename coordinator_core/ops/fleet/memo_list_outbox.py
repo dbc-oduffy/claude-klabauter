@@ -20,7 +20,10 @@ Spec backlink:
     Parity source: DoE coordinator/bin/cross-repo-memo.py `_cmd_list`
     ("Enumerates state/memo-outbox/*.md in the sender repo").
     Outbox write path (must match exactly): coordinator_core/ops/fleet/memo_draft.py
-    `_OUTBOX_DIRNAME = ("state", "memo-outbox")`, `caller_worktree.joinpath(*_OUTBOX_DIRNAME)`.
+    `outbox_dir(caller_worktree)` -- `.coordinator-local/memo-outbox/`, with
+    `legacy_outbox_dir(caller_worktree)` (`state/memo-outbox/`, retired
+    2026-09-03) read as a fallback so a draft staged before the repoint is
+    still enumerated.
     Frontmatter parsing: coordinator_core.frontmatter.primitives
     (split_frontmatter / read_fm_field — same primitives memo_compose.py uses,
     not a hand-rolled parser).
@@ -60,7 +63,7 @@ from coordinator_core.ops.fleet._common import (
     build_setup_error_result,
     main_worktree_root,
 )
-from coordinator_core.ops.fleet.memo_draft import _OUTBOX_DIRNAME
+from coordinator_core.ops.fleet.memo_draft import merged_outbox_drafts
 
 _LOG = logging.getLogger(__name__)
 
@@ -143,21 +146,18 @@ def _candidate_for_draft(draft_path: Path) -> dict:
 
 
 def _enumerate_outbox_candidates(worktree_root: Path) -> list:
-    """Build one candidate dict per `*.md` file in the calling repo's outbox.
-
-    Read-only: `Path.glob` re-reads the directory fresh on every call — no
-    caching, no persisted index (Q-d store-less-ness invariant, same as
-    memo_list.py's enumeration mode). A missing outbox directory (never
-    drafted anything yet) yields an empty list cleanly, not an error.
+    """Build one candidate dict per `*.md` file in the calling repo's outbox,
+    merged across the new `.coordinator-local/memo-outbox/` root and the
+    retired `state/memo-outbox/` root (2026-09-03 relocation:
+    `machinery_paths.legacy_memo_outbox_dir`'s own docstring).
 
     Sorted by filename for deterministic, stable output across calls.
-    """
-    outbox_dir = worktree_root.joinpath(*_OUTBOX_DIRNAME)
-    if not outbox_dir.is_dir():
-        return []
 
-    draft_paths = sorted(outbox_dir.glob("*.md"), key=lambda p: p.name)
-    return [_candidate_for_draft(p) for p in draft_paths]
+    # Review: overengineering-reviewer (Kira) — merge logic moved to the
+    # shared `memo_draft.merged_outbox_drafts` (was duplicated verbatim here
+    # and in memo_reconcile_outbox._reconcile).
+    """
+    return [_candidate_for_draft(p) for p in merged_outbox_drafts(worktree_root)]
 
 
 @register_op("memo.list_outbox")

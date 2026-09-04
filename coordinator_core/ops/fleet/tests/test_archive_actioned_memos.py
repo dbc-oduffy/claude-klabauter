@@ -142,6 +142,35 @@ def test_sweeps_only_terminal_unclaimed_memos(tmp_path):
         assert (repo / "cross-repo" / "archive" / Path(cid).name).is_file()
 
 
+def test_sweeps_the_migrated_state_cross_repo_corpus(tmp_path):
+    """C2 (2026-09-03-the-engine-follows-the-memo-channel-home): the sweep's
+    own candidate collector must find terminal memos under the C10a-migrated
+    `state/cross-repo/inbox/`, not just the legacy `cross-repo/inbox/` this
+    file's other fixtures seed — this is the exact falsifier the plan names
+    (the collector returned zero against a `state/cross-repo/inbox` corpus
+    before this chunk routed it through `memo_corpus_root`)."""
+    repo = tmp_path / "r"
+    _init_repo(repo)
+    path = repo / "state" / "cross-repo" / "inbox" / "2026-01-01-actioned.md"
+    _write(
+        path,
+        '---\ntitle: "2026-01-01-actioned.md"\nfrom: "peer-em"\nto: "this-em"\n'
+        'created: "2026-01-01"\nstatus: actioned\ndecision: accepted\n---\n\nBody.\n',
+    )
+    _git(repo, "add", str(path.relative_to(repo)))
+    _git(repo, "commit", "-q", "-m", "add memo")
+
+    common_dir = _common_dir(repo)
+    moves, _skipped = plan_sweep(repo, common_dir, cap=150)
+
+    moved_ids = {m.candidate_id for m in moves}
+    assert moved_ids == {rel_id(path, repo)}
+
+    acted, failed = apply_sweep(moves)
+    assert failed == []
+    assert (repo / "state" / "cross-repo" / "archive" / path.name).is_file()
+
+
 def test_apply_sweep_spawns_zero_subprocesses(tmp_path):
     repo = tmp_path / "r"
     _init_repo(repo)

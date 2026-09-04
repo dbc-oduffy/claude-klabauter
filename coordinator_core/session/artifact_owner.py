@@ -147,7 +147,7 @@ from coordinator_core.frontmatter.primitives import (
     read_fm_nested_field,
     split_frontmatter,
 )
-from coordinator_core.session import claims, liveness, reachability
+from coordinator_core.session import claims, liveness, machinery_paths, reachability
 
 #: `claimed_by` is handled separately (it leads the ordering, § docstring) --
 #: this constant covers only the two remaining top-level scalar conventions.
@@ -169,7 +169,19 @@ _STEM_KEYED_CLAIM_CLASSES = frozenset({"plan"})
 
 _AGENT_SESSIONS_ENTRY_RE = re.compile(r'^\s*-\s*["\']?([^"\'|]+)')
 
-_SUBAGENT_SHARE_DIR_RE = re.compile(r'(?:^|[/\\])state[/\\]subagent-share[/\\]([^/\\]+)(?:[/\\]|$)')
+#: Either machinery root is accepted. The bucket moved from `state/subagent-share/`
+#: to `.coordinator-local/subagent-share/` (docs/plans/2026-09-02-state-keeps-the-
+#: work-not-the-machinery.md); a pattern pinned to the old root matches no live
+#: sidecar, and convention 6's owner read then returns "no owner" for every one of
+#: them -- silently, because an unmatched path is indistinguishable from an artifact
+#: that is simply not a sidecar. Both spellings stay accepted rather than swapping:
+#: pre-relocation paths persist in committed citations and archived records, and a
+#: reader that refuses them re-breaks the corpus the relocation left readable.
+#:
+#: Owned by `machinery_paths.subagent_share_id_pattern` -- this module calls
+#: the shared accessor rather than hand-spelling the pattern a second time
+#: (the failure this consolidation exists to close).
+_SUBAGENT_SHARE_DIR_RE = machinery_paths.subagent_share_id_pattern()
 
 
 def _basename_cross_platform(artifact_path: str) -> str:
@@ -179,15 +191,16 @@ def _basename_cross_platform(artifact_path: str) -> str:
     single `/` on POSIX), so a Windows-style path (`state\\handoffs\\foo.md`)
     handed to a POSIX-running engine process would silently fail to reduce
     to `foo.md` -- no exception, just a claim-dir lookup that misses. Follows
-    this module's own `_SUBAGENT_SHARE_DIR_RE` precedent of treating both
+    `machinery_paths.subagent_share_id_pattern`'s precedent of treating both
     `/` and `\\` as separators regardless of host OS (Windows is first-class,
     per project doctrine).
 
     Tradeoff (Review: coordinator:code-reviewer): a genuine POSIX filename
     containing a literal backslash byte is split on that byte too, same as
-    `_SUBAGENT_SHARE_DIR_RE`'s existing precedent -- this module's own
-    artifact universe (machine-authored `YYYY-MM-DD-*.md` slugs) never
-    contains one, so the tradeoff is low-risk but unstated until now.
+    `machinery_paths.subagent_share_id_pattern`'s existing precedent -- this
+    module's own artifact universe (machine-authored `YYYY-MM-DD-*.md`
+    slugs) never contains one, so the tradeoff is low-risk but unstated
+    until now.
     """
     return re.split(r'[/\\]', artifact_path)[-1]
 

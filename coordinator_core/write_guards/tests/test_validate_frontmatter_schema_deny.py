@@ -1186,10 +1186,11 @@ class TestEveryFiringResultIsDenyOrAdvisoryShaped:
     the engine's deny-vs-advisory split. Historically this module could
     ONLY ever emit `permissionDecision` (never `additionalContext`) — the
     2026-08-06 warn-not-block ruling (docs/plans/2026-08-06-apply-guard-
-    class-census.md C15) changed that deliberately: the four genuinely
+    class-census.md C15) changed that deliberately: the genuinely
     UNCONDITIONAL findings (own-inbox, lineage-reachability, and — not
-    included in this payload set, see their own dedicated test classes —
-    grouping-approval and D3 kind-enum) still deny in every mode; every
+    included in this payload set, see its own dedicated test class — the D3
+    kind-enum) still deny in every mode; the grouping-approval finding is no
+    longer among them (2026-09-03 ruling: it warns in both modes); every
     other finding now renders `additionalContext` under
     COORDINATOR_SCHEMA_STRICT=1 and stays silent (None) otherwise, never a
     `permissionDecision`. This asserts BOTH halves of that split, not just
@@ -1287,11 +1288,12 @@ class TestMutualExclusivityWithAdvisorySibling:
         hand_rolled_memo = memo_dir / "hand-rolled.md"
         readme = tmp_path / "README.md"
 
-        # Grouping-approval payload (2026-07-29 contract) — the third
-        # unconditional deny needs its own entry in this corpus, or the
-        # differential property it shares with the other two goes untested.
-        # A GOVERNED plan closing a row whose `defer` grouping is still
-        # pending: deny must fire, advisory must stand down.
+        # Grouping-approval payload (2026-07-29 contract, downgraded to an
+        # always-WARN finding by the 2026-09-03 PM ruling) — it needs its own
+        # entry in this corpus, or the mutual-exclusivity property it shares
+        # with the unconditional denies goes untested. A GOVERNED plan closing
+        # a row whose `defer` grouping is still pending: the deny module warns,
+        # the advisory sibling stands down.
         #
         # Uses `backlogged` rather than `spun_off` (2026-08-05): DoE's ruling
         # gave `spun_off` its own ungated grouping
@@ -1389,26 +1391,45 @@ class TestMutualExclusivityWithAdvisorySibling:
             )
 
     @pytest.mark.parametrize("strict", ["0", "1"])
-    def test_grouping_approval_denies_unconditionally(self, tmp_path, monkeypatch, strict):
-        """The mutual-exclusivity test above passes when NEITHER sibling
-        fires, so it cannot on its own prove the new branch works. This
-        asserts the positive: a governed plan closing a row under a pending
-        grouping is DENIED, in both strict and non-strict trees, because
-        this deny is unconditional rather than _is_strict()-gated.
+    def test_grouping_approval_warns_unconditionally_and_never_denies(
+        self, tmp_path, monkeypatch, strict
+    ):
+        """2026-09-03 PM ruling ("the block on write is too harsh, and it
+        should just be a warn"): a governed plan closing a row under a
+        pending grouping WARNS in both strict and non-strict trees and never
+        denies. The mutual-exclusivity test above passes when NEITHER sibling
+        fires, so it cannot on its own prove this branch is still reachable —
+        that is what the positive assertion here is for, and it is the whole
+        reason the downgrade uses shape "warn" rather than "advisory": under
+        "advisory" this module would stay silent in default mode while the
+        sibling was already standing down unconditionally, and the finding
+        would vanish rather than soften.
+
+        The warning must still NAME the grouping and the row: what the ruling
+        removed is the refusal, not the obligation, and a warning that does
+        not say which grouping is unassented is noise a reader learns to skip.
         """
         if strict == "1":
             monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
         payload = self._representative_payloads(tmp_path)["ungoverned_cut"]
 
-        deny_result = guard.check(payload)
-        assert deny_result is not None, "governed plan with a pending grouping must deny"
+        result = guard.check(payload)
+        assert result is not None, (
+            "governed plan with a pending grouping must still warn"
+        )
+        out = result["hookSpecificOutput"]
+        assert "permissionDecision" not in out, (
+            "the grouping-approval finding must never deny the write"
+        )
         assert advisory_guard.check(payload) is None, "advisory must stand down in lockstep"
 
-        rendered = str(deny_result)
+        rendered = out["additionalContext"]
         assert "PM" in rendered
+        assert "defer" in rendered, "the warning must name the unassented grouping"
+        assert "'C1'" in rendered, "the warning must name the row that fired it"
         for forbidden in ("--verb stamp", "--updates"):
             assert forbidden not in rendered, (
-                "guard refusal must not print a command that satisfies the gate"
+                "guard message must not print a command that satisfies the gate"
             )
 
 

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import stat
+import subprocess
 import sys
 from pathlib import Path
 
@@ -532,3 +533,290 @@ def test_run_posix_argv_unchanged_by_the_windows_branch(tmp_path, monkeypatch):
     monkeypatch.setattr(udg.subprocess, "run", _spy)
     udg._run(cli, ["--x"])
     assert captured["argv"] == [str(cli), "--x"]
+
+
+# ---------------------------------------------------------------------------
+# (j) The four bucket-2 doc-index / prune gates
+#
+# One UNAVAILABLE test per gate, each asserting explicitly that the verdict is
+# not CLEAN. The 2026-09-02 boundary audit found "engine unreachable"
+# indistinguishable from "found nothing" at nine of ten fallback sites in the
+# ceremony this file serves; these four are where a tenth would be added, so
+# the distinction is pinned per gate rather than once for the group.
+# ---------------------------------------------------------------------------
+
+_BUCKET2_GATES = (
+    "docs-readme-index-drift",
+    "directory-md-staleness",
+    "plans-prune-candidates",
+    "archive-memo-prune-candidates",
+)
+
+
+@pytest.mark.parametrize("gate_id", _BUCKET2_GATES)
+def test_bucket2_gate_is_unavailable_not_clean_when_target_absent(gate_id, tmp_path):
+    """An absent corpus is UNAVAILABLE, never CLEAN.
+
+    tmp_path is an empty directory: every one of these gates' targets is
+    missing. A gate that reported CLEAN here would be telling the ceremony
+    "nothing to do" about a corpus it never looked at.
+    """
+    result = udg._GATES[gate_id](tmp_path, tmp_path, {})
+    assert result.verdict is udg.GateVerdict.UNAVAILABLE
+    assert result.verdict is not udg.GateVerdict.CLEAN
+    assert result.severity is None
+    assert "missing_path" in result.detail
+
+
+@pytest.mark.parametrize("gate_id", _BUCKET2_GATES)
+def test_bucket2_gate_is_registered(gate_id):
+    assert gate_id in udg._GATES
+
+
+# ---------------------------------------------------------------------------
+# directory-md-staleness takes its index path from the repo, not from claude-klabauter.
+#
+# The gate hardcoded `coordinator_core/DIRECTORY.md`, so it read UNAVAILABLE
+# forever on every consumer of this ceremony except claude-klabauter — including
+# DoE-claude, whose index is `./DIRECTORY.md`. Reported by doe-claude-3f,
+# state/bug-backlog/2026-09-02-directory-md-staleness-hardcodes-claude_klabauters-index-path.yaml.
+# ---------------------------------------------------------------------------
+
+_INDEX_BODY = "# DIRECTORY\n\nLast refreshed: 2026-09-02\n"
+
+
+def _run_directory_md_gate(root, overrides=None):
+    return udg._GATES["directory-md-staleness"](root, root, overrides or {})
+
+
+def test_directory_md_gate_finds_a_root_level_index(tmp_path):
+    """DoE-claude's shape: the index is `./DIRECTORY.md`."""
+    (tmp_path / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+
+    result = _run_directory_md_gate(tmp_path)
+
+    assert result.verdict is not udg.GateVerdict.UNAVAILABLE
+    assert result.detail["directory_md"] == "DIRECTORY.md"
+
+
+def test_directory_md_gate_finds_a_package_level_index(tmp_path):
+    """claude-klabauter's shape: the index is under a top-level package dir."""
+    pkg = tmp_path / "coordinator_core"
+    pkg.mkdir()
+    (pkg / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+
+    result = _run_directory_md_gate(tmp_path)
+
+    assert result.verdict is not udg.GateVerdict.UNAVAILABLE
+    assert result.detail["directory_md"] == "coordinator_core/DIRECTORY.md"
+
+
+def test_directory_md_gate_prefers_the_root_index_over_a_package_one(tmp_path):
+    (tmp_path / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+    pkg = tmp_path / "coordinator_core"
+    pkg.mkdir()
+    (pkg / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+
+    assert _run_directory_md_gate(tmp_path).detail["directory_md"] == "DIRECTORY.md"
+
+
+def test_directory_md_gate_honours_an_explicit_override(tmp_path):
+    (tmp_path / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+    nested = tmp_path / "engine"
+    nested.mkdir()
+    (nested / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+
+    result = _run_directory_md_gate(tmp_path, {"directory_md": "engine/DIRECTORY.md"})
+
+    assert result.detail["directory_md"] == "engine/DIRECTORY.md"
+
+
+def test_directory_md_discovery_does_not_recurse(tmp_path):
+    """Two levels down is not discovery — it is a walk this gate must not do."""
+    deep = tmp_path / "a" / "b"
+    deep.mkdir(parents=True)
+    (deep / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
+
+    assert udg._discover_directory_md(tmp_path) is None
+
+
+def test_bucket2_gates_are_informational_never_blocking(tmp_path):
+    """None of the four may halt /update-docs.
+
+    Doc-index drift is not a reason to stop the ceremony. This is the concrete
+    guard against repeating Phase 11h2's unconditional halt, whose blocking
+    severity was attached to the phase rather than to the finding.
+    """
+    docs = tmp_path / "docs"
+    (docs / "plans").mkdir(parents=True)
+    (docs / "README.md").write_text("# Index\n\n## Plans\n", encoding="utf-8")
+    (tmp_path / "cross-repo" / "archive").mkdir(parents=True)
+    (tmp_path / "coordinator_core").mkdir()
+    (tmp_path / "coordinator_core" / "DIRECTORY.md").write_text("# map\n", encoding="utf-8")
+    (docs / "plans" / "p.md").write_text("---\nstatus: implemented\n---\n", encoding="utf-8")
+
+    results = [udg._GATES[g](tmp_path, tmp_path, {}) for g in _BUCKET2_GATES]
+    for result in results:
+        assert result.severity is not udg.Severity.BLOCKING
+
+    rolled = udg.rollup(results)
+    assert rolled["halt"] is False
+    assert rolled["blocking"] == []
+
+
+def test_bucket2_gate_ids_do_not_bypass_the_unknown_id_guard():
+    """Adding four gates must not weaken the no-silent-skip contract."""
+    with pytest.raises(ValueError):
+        udg._updatedocs_gates({"gates": ["docs-readme-index-drift", "not-a-real-gate"]})
+
+
+def test_memo_prune_gate_survives_an_actual_prune_candidate(tmp_path):
+    """Regression: the gate raised AttributeError the moment a memo qualified.
+
+    It iterated `c.path` over MemoPruneResult's `list[str]`, copied from the
+    plan gate above it whose lists hold candidate objects. Eighty-seven tests
+    and a correctness review missed it because no test ever drove a PRUNABLE
+    memo through the gate — the live corpus yields zero, so every run took the
+    empty path.
+    """
+    import os
+    import time
+
+    archive = tmp_path / "cross-repo" / "archive"
+    archive.mkdir(parents=True)
+    memo = archive / "old.md"
+    memo.write_text("---\nstatus: actioned\n---\n", encoding="utf-8")
+    old = time.time() - 200 * 86400
+    os.utime(memo, (old, old))
+
+    result = udg._GATES["archive-memo-prune-candidates"](tmp_path, tmp_path, {})
+
+    assert result.verdict is udg.GateVerdict.FINDING
+    assert result.detail["prunable"] == ["cross-repo/archive/old.md"]
+
+
+def test_gates_resolve_corpora_under_the_worktree_not_the_git_dir(tmp_path):
+    """A corpus must never be joined onto the injected common dir.
+
+    Regression for the defect DoE-claude found on 2026-09-02: `updatedocs.gates`
+    is keyed "common_dir", so the injected `repo_root` is `<worktree>/.git`.
+    Every corpus join landed under `.git`, the walks counted zero, and
+    `distill-threshold` reported CLEAN over a populated tree.
+
+    This asserts on a corpus that EXISTS in the worktree. The per-gate
+    UNAVAILABLE tests cannot catch this: they assert on an absent path, and the
+    failure mode here is a path that resolves somewhere real and wrong.
+    """
+    worktree = tmp_path / "repo"
+    (worktree / ".git").mkdir(parents=True)
+    plans = worktree / "docs" / "plans"
+    plans.mkdir(parents=True)
+    for i in range(3):
+        (plans / f"plan-{i}.md").write_text("# plan\n", encoding="utf-8")
+
+    # Dispatch injects the COMMON DIR, exactly as the live engine does.
+    out = udg._updatedocs_gates({"gates": ["distill-threshold"]}, repo_root=worktree / ".git")
+    gate = out["gates"][0]
+
+    assert gate["detail"]["total"] == 3, (
+        f"gate counted {gate['detail']['total']} of 3 files — corpus resolved off the worktree"
+    )
+    assert gate["verdict"] != "clean" or gate["detail"]["total"] > 0
+
+
+# ---------------------------------------------------------------------------
+# (l) CLI resolution is platform-aware
+#
+# The deployed coordinator settings tree publishes each bin/ entrypoint as a
+# native forwarder (`verify-skill-anchor-links.exe`) while this module names
+# them the way the authoring repo writes them (extensionless, or `.py`). An
+# exact-name resolver reported "CLI not found" for four gates whose binaries
+# were present, which reads UNAVAILABLE — the verdict reserved for "could not
+# look" — from a box where the gate could have run. These pin resolution
+# against a platform-blind resolver, in both directions: Windows must find the
+# PATHEXT form, POSIX must never invent one.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_cli_finds_the_pathext_executable_when_the_bare_name_is_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr(udg.sys, "platform", "win32")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    forwarder = tmp_path / "verify-skill-anchor-links.exe"
+    forwarder.write_bytes(b"MZ")
+    assert udg._resolve_cli(tmp_path, "verify-skill-anchor-links") == forwarder
+
+
+def test_resolve_cli_prefers_the_executable_over_a_co_located_extensionless_script(tmp_path, monkeypatch):
+    """On Windows an extensionless file cannot be exec'd at all.
+
+    A settings tree that carries both forms for one entrypoint must resolve to
+    the forwarder — resolving to the script would spawn nothing and report
+    UNAVAILABLE with the executable sitting beside it.
+    """
+    monkeypatch.setattr(udg.sys, "platform", "win32")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    (tmp_path / "sync-plugin-wiki").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    forwarder = tmp_path / "sync-plugin-wiki.exe"
+    forwarder.write_bytes(b"MZ")
+    assert udg._resolve_cli(tmp_path, "sync-plugin-wiki") == forwarder
+
+
+def test_resolve_cli_maps_a_py_name_onto_the_forwarder_that_replaced_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(udg.sys, "platform", "win32")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    forwarder = tmp_path / "check-rag-state.exe"
+    forwarder.write_bytes(b"MZ")
+    assert udg._resolve_cli(tmp_path, "check-rag-state.py") == forwarder
+
+
+def test_resolve_cli_never_invents_a_windows_extension_on_posix(tmp_path, monkeypatch):
+    """`.exe` beside a POSIX CLI is not that CLI."""
+    monkeypatch.setattr(udg.sys, "platform", "linux")
+    (tmp_path / "sync-plugin-wiki.exe").write_bytes(b"MZ")
+    assert udg._resolve_cli(tmp_path, "sync-plugin-wiki") == tmp_path / "sync-plugin-wiki"
+
+
+def test_resolve_cli_keeps_the_name_as_written_when_it_exists_on_posix(tmp_path, monkeypatch):
+    monkeypatch.setattr(udg.sys, "platform", "linux")
+    cli = tmp_path / "sync-plugin-wiki"
+    cli.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    assert udg._resolve_cli(tmp_path, "sync-plugin-wiki") == cli
+
+
+def test_resolve_cli_returns_the_canonical_path_when_nothing_resolves(tmp_path):
+    """UNAVAILABLE must still name the path the gate looked for."""
+    assert udg._resolve_cli(tmp_path, "sync-plugin-wiki") == tmp_path / "sync-plugin-wiki"
+
+
+def test_windows_exec_argv_execs_a_pathext_binary_directly(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    forwarder = tmp_path / "reap-stale-subagent-sidecars.exe"
+    forwarder.write_bytes(b"MZ")
+    assert udg._windows_exec_argv(forwarder, ["--repo-root", "x"]) == [str(forwarder), "--repo-root", "x"]
+
+
+def test_reap_sidecars_gate_runs_against_the_forwarder_instead_of_reporting_cli_not_found(tmp_path, monkeypatch):
+    """End-to-end for the four gates the platform-blind resolver silenced.
+
+    `_run` is stubbed because a fabricated `.exe` cannot be spawned; what this
+    asserts is that the gate reached a spawn at all, with the forwarder's path,
+    rather than short-circuiting to UNAVAILABLE on an exact-name miss.
+    """
+    monkeypatch.setattr(udg.sys, "platform", "win32")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
+    bin_dir = tmp_path / "settings" / "bin"
+    bin_dir.mkdir(parents=True)
+    forwarder = bin_dir / "reap-stale-subagent-sidecars.exe"
+    forwarder.write_bytes(b"MZ")
+
+    spawned: dict[str, Path] = {}
+
+    def _fake_run(cli_path, args, **kwargs):
+        spawned["cli"] = cli_path
+        return subprocess.CompletedProcess([str(cli_path), *args], 0, "reaped 0 sidecars", "")
+
+    monkeypatch.setattr(udg, "_run", _fake_run)
+    result = udg._gate_reap_stale_sidecars(tmp_path, tmp_path / "settings", {})
+
+    assert spawned["cli"] == forwarder
+    assert result.verdict is not udg.GateVerdict.UNAVAILABLE

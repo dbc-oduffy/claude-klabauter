@@ -221,6 +221,7 @@ _RECORDED_PATH_PREFIXES = (
     "state/review-trail/",
     "state/review-findings/",
     "state/subagent-share/",
+    ".coordinator-local/subagent-share/",
 )
 
 _LIVE_DOCTRINE_PREFIXES = (

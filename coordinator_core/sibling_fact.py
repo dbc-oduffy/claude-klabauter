@@ -211,9 +211,17 @@ def _resolve_frontmatter_field(path: Path, field: str) -> Tuple[bool, Optional[s
     return True, value, None
 
 
-def _resolve_archive_handoffs_fallback(repo_root: Path, rel_path: str) -> Optional[Path]:
-    """Probe `<repo_root>/archive/handoffs/**` for a same-basename file when a
-    path-keyed leg's literal target is missing.
+def _resolve_archive_handoffs_fallback_reasoned(
+    repo_root: Path, basename: str
+) -> Tuple[Optional[Path], str]:
+    """The single, hardened definition of "probe `<repo_root>/archive/
+    handoffs/**` for a same-basename record, exactly-one-wins" — every
+    caller of this predicate anywhere in the tree reads from here (promoted
+    2026-09-03 from `coordinator_core.quick_wrap_assemble`'s own
+    `_archive_handoffs_fallback`, which duplicated this module's plain
+    `_resolve_archive_handoffs_fallback` with four hardenings this function
+    now carries for both: a four-way reason string, a bare-filename guard, a
+    post-resolve containment re-check, and an `is_file()` filter on matches).
 
     Mirrors the live-then-archive ordering `gate_eval` and
     `handoff_transition._resolve_blocker_deployment_state` already use for
@@ -223,19 +231,90 @@ def _resolve_archive_handoffs_fallback(repo_root: Path, rel_path: str) -> Option
     nested, hence `rglob`) still resolves rather than manufacturing a
     permanent false negative.
 
-    Returns the single matching path, or `None` when the archive subtree is
-    absent, holds no match, or holds more than one same-basename file — an
-    ambiguous match is not guessed at, it is treated exactly like no match,
-    so `file_exists`/`frontmatter_field` stay genuine observations rather
-    than a silently-wrong pick.
+    HARDENING IS STRICTLY NARROWING (why promoting this variant into every
+    caller's path is safe rather than merely convenient): every guard below
+    can only turn a prior `(path, ...)` resolution into a `(None, reason)`
+    refusal — a bare-filename check, an `is_file()` filter, and a
+    containment re-check each REJECT inputs/matches the un-hardened
+    predecessor would have silently accepted; none of them accepts anything
+    the predecessor would have refused. `resolve_leg`'s two path-keyed kinds
+    (`file_exists`, `frontmatter_field`) therefore get a strictly stricter,
+    never a wrong-positive, answer after this promotion.
+
+    `basename` MUST be a bare filename (no path separators) — the caller
+    (`resolve_leg`'s `file_exists`/`frontmatter_field` branches reduce a
+    caller-supplied `rel_path` to its `.name`; quick_wrap_assemble's
+    `_c3_ancestry` passes `session_pickup_kind`'s own emitted `basename`
+    directly, an already-bare field, but this function does not trust that
+    invariant to hold forever) — an empty basename or one carrying `/`/`\\`
+    is refused before any filesystem access.
+
+    TWO GUARDS, TWO DISTINCT JOBS — do not read the containment re-check as
+    covering the bare-filename guard's own case. The bare-filename check
+    above already refuses every `basename` carrying a traversal segment or
+    an absolute path, so by the time `rglob(basename)` runs, its argument
+    contains no separator and every match is, by construction, a descendant
+    of `archive_root` — the containment re-check below can therefore NOT be
+    reached by a `..`-or-absolute-path escape (that case is refused
+    earlier, by the other guard, with its own reason string). What the
+    containment re-check actually catches is a SYMLINKED DIRECTORY inside
+    `archive/handoffs/` whose target resolves outside the repo — `rglob`
+    walks through a symlinked directory and can return a match whose
+    `.resolve()` lands elsewhere on disk even though the unresolved path it
+    was found under was contained. Both guards stay: they refuse disjoint
+    cases, and the bare-filename guard is independently load-bearing (a
+    security review specifically credited it) even though it also happens
+    to make the traversal shape unreachable at this second checkpoint.
+
+    Returns `(path, reason)` — `path` is `None` on every non-resolving
+    branch, and `reason` names which one fired (basename empty or not bare,
+    archive subtree absent, zero matches, more than one match, or a
+    symlinked match resolving outside the repo) so a caller's evidence
+    string can say which case it was. An ambiguous (more-than-one) match is
+    not guessed at, it is treated exactly like no match, so `file_exists`/
+    `frontmatter_field` stay genuine observations rather than a
+    silently-wrong pick.
     """
+    if not basename or "/" in basename or "\\" in basename:
+        return None, "basename empty or not a bare filename"
     archive_root = repo_root / "archive" / "handoffs"
     if not archive_root.is_dir():
-        return None
-    matches = sorted(archive_root.rglob(Path(rel_path).name))
-    if len(matches) != 1:
-        return None
-    return matches[0]
+        return None, "archive/handoffs subtree absent"
+    matches = sorted(p for p in archive_root.rglob(basename) if p.is_file())
+    if not matches:
+        return None, f"no archived record matched basename {basename!r}"
+    if len(matches) > 1:
+        return None, f"{len(matches)} archived records matched basename {basename!r} — ambiguous"
+
+    # Lazy import (module docstring "Deliberately NOT here" / the module-scope
+    # import-cycle comment above): `coordinator_core.ops._path_guard` sits
+    # under `coordinator_core.ops.`, whose package `__init__` eagerly imports
+    # every op module — importing it at module scope here would reopen the
+    # exact cycle this module's `read_frontmatter_field` lazy-import already
+    # exists to avoid.
+    from coordinator_core.ops._path_guard import contained_path
+
+    resolved = contained_path(matches[0], [repo_root])
+    if resolved is None:
+        return None, (
+            f"archived match for basename {basename!r} resolved outside the repo "
+            "via a symlinked directory under archive/handoffs/"
+        )
+    return resolved, f"resolved archived record for basename {basename!r}"
+
+
+def _resolve_archive_handoffs_fallback(repo_root: Path, rel_path: str) -> Optional[Path]:
+    """Thin wrapper over `_resolve_archive_handoffs_fallback_reasoned`,
+    kept for `resolve_leg`'s own path-keyed call sites (`file_exists`,
+    `frontmatter_field`), which need only the resolved path, never the
+    reason — `resolve_leg`'s `source` field already names whichever path
+    answered (see `_resolve_file_exists`'s and `resolve_leg`'s own
+    `frontmatter_field` branch), so a reason string would have nowhere to
+    go here. Reduces `rel_path` to its bare filename before delegating —
+    the reasoned function requires a bare basename by contract.
+    """
+    path, _reason = _resolve_archive_handoffs_fallback_reasoned(repo_root, Path(rel_path).name)
+    return path
 
 
 def _resolve_file_exists(repo_root: Path, source: str, rel_path: str) -> Tuple[bool, bool, str, Optional[str]]:

@@ -2251,3 +2251,94 @@ class TestUpdateMetaFields:
         (tmp_path / "meta.json").write_text(json.dumps({"session_id": "x", "goal": ""}))
         assert core.update_meta_field(str(tmp_path), "goal", "ship it") is True
         assert core.read_meta_field(str(tmp_path), "goal") == "ship it"
+
+
+# ---------------------------------------------------------------------------
+# sessions_dir() root normalization — the Git-Bash POSIX cwd
+#
+# A session launched from Git Bash hands `sessions_dir()` an MSYS drive-mount
+# cwd (`/x/claude-klabauter`). Before the `_normalize_cwd` fix that resolved to
+# `X:\x\claude-klabauter`, the `.git` walk found nothing, and the hub came back  # abs-path-ok: illustrative example shape
+# as `""` — which every registry lookup layered on it reads as "this repo has
+# no sessions". A PM grant recorded under the real hub was therefore
+# INVISIBLE, not denied, and the failure was directional: always toward "no
+# grant", with nothing on any surface saying why.
+# ---------------------------------------------------------------------------
+
+
+def _msys_spelling(native: Path) -> str:
+    r"""`C:\Users\x` rendered `/c/Users/x` — the spelling Git-for-Windows'
+    bash hands tools as `$PWD`. Test-side inverse of the translator under
+    test, deliberately not imported from it, so a regression in the
+    production translator cannot cancel itself out here."""
+    text = str(native).replace("\\", "/")
+    return f"/{text[0].lower()}{text[2:]}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="MSYS drive-mount spelling is a Windows-host concern")
+def test_sessions_dir_resolves_git_bash_posix_cwd_to_the_same_hub(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _make_repo(repo)
+    core.reset_sessions_dir_cache()
+
+    native = core.sessions_dir(cwd=str(repo))
+    posix = core.sessions_dir(cwd=_msys_spelling(repo))
+
+    assert native == str(repo / ".git" / "coordinator-sessions")
+    assert posix == native
+    assert posix != ""
+    core.reset_sessions_dir_cache()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="MSYS drive-mount spelling is a Windows-host concern")
+def test_sessions_dir_posix_cwd_below_the_root_resolves_to_the_repo_hub(tmp_path):
+    """The shape is general `/<letter>/<rest>`, never a hardcoded drive, and
+    the walk still climbs from a SUBDIRECTORY of the repo."""
+    repo = tmp_path / "repo"
+    (repo / "nested" / "deeper").mkdir(parents=True)
+    _make_repo(repo)
+    core.reset_sessions_dir_cache()
+
+    assert core.sessions_dir(cwd=_msys_spelling(repo / "nested" / "deeper")) == str(
+        repo / ".git" / "coordinator-sessions"
+    )
+    core.reset_sessions_dir_cache()
+
+
+def test_normalize_cwd_never_mangles_a_genuine_posix_path_off_windows(monkeypatch):
+    """The module must not become Windows-only. On a POSIX host `/x/repo` is
+    a real directory, never an MSYS spelling to decode, so normalization is
+    the identity for every input."""
+    monkeypatch.setattr(core.os, "name", "posix")
+    for candidate in ("/x/claude-klabauter", "/x", "/usr/local/src/repo", "/tmp/t", None):
+        assert core._normalize_cwd(candidate) == candidate
+
+
+@pytest.mark.skipif(os.name != "nt", reason="MSYS drive-mount spelling is a Windows-host concern")
+def test_normalize_cwd_passes_through_shapes_the_translator_declines():
+    """`/tmp/...`, `//server/share` and `/cygdrive/...` are shapes
+    `translate_msys_path` deliberately declines. They pass through UNCHANGED
+    rather than becoming `None`, so they resolve exactly as they did before
+    this normalization existed."""
+    for candidate in ("/tmp/x", "//server/share", "/cygdrive/c/x"):
+        assert core._normalize_cwd(candidate) == candidate
+
+
+@pytest.mark.designed_red
+def test_sessions_dir_refuses_an_unresolvable_root_rather_than_answering_empty(tmp_path):
+    """RED BY DESIGN — pins the second half of the Git-Bash defect, which is
+    NOT yet fixed.
+
+    A root that cannot be resolved returns `""`, indistinguishable from "this
+    repo has no session hub". Every caller reads a falsy path as absence, so
+    "I could not tell" and "there is nothing there" collapse into one answer
+    and the failure is silent. The fix is a loud, marked absence — a raise, or
+    a sentinel every caller must handle — and it is deferred because the
+    falsy-return contract has ~43 production and ~80 test call sites (see
+    `sessions_dir`'s REFUSAL CONTRACT note). This test goes green when that
+    work lands; until then its failure IS the worklist entry.
+    """
+    core.reset_sessions_dir_cache()
+    with pytest.raises(Exception):
+        core.sessions_dir(cwd=str(tmp_path))

@@ -818,6 +818,26 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         },
         "measured": {"max_ms": 828.1, "p50_ms": 250.0, "n": 24, "unit": "process_ms"},
         "note": "Closest to the line of the process-measured rows; 250.0 > 200.",
+        # Rehomed by the same C5 rewire that gave `handoff.housekeeping` below
+        # its own fallback, and this row was left without one. Measured cost of
+        # the omission: a example-store-repo EM ran `handoff-archive-transition
+        # supersede`, read "plan a new one under 200ms", and came within one
+        # step of hand-stamping frontmatter around a close-out path that was
+        # live the whole time (cross-repo memo 2026-09-02). Third instance of
+        # the class the two comment blocks below name -- the record was honest,
+        # the message was not.
+        "fallback": (
+            "archive-stamp-cli's ship-handoff / chain-archive-handoff / "
+            "supersede-archive-handoff verbs do the same job, and "
+            "housekeeping.cycle carries the transition leg for /handoff's "
+            "predecessor close. Each reaches this module's surviving compute as "
+            "a LIBRARY (archive_stamp.py :: _call_handoff_archive_transition) "
+            "inside its own under-bar composition and returns the result "
+            "verbatim, so a caller's own predicates are unchanged. The op KEY "
+            "stays dead -- kill means kill forever, PM 2026-08-23 -- what has a "
+            "live door is the JOB."
+        ),
+        "successor_live": True,
         "spinoff": None,
     },
     "handoff.housekeeping": {

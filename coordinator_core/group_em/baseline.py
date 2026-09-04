@@ -76,6 +76,7 @@ from typing import Any, Mapping
 
 from coordinator_core.group_em.watch_heartbeat import ABSENT_NEVER_ARMED, ABSENT_UNREADABLE
 from coordinator_core.group_em.watch_heartbeat import iso_instant as _iso
+from coordinator_core.session.machinery_paths import share_dir as _share_dir
 
 #: Corpus-mutator declaration (generator-provenance sweep): `_write_atomic`
 #: rewrites `state/subagent-share/<caller_session_id>/group-em-baseline-
@@ -85,7 +86,7 @@ from coordinator_core.group_em.watch_heartbeat import iso_instant as _iso
 #: the sibling counters beside this file (`guard_advisory_counter.py`,
 #: `engine_provenance_counter.py`); the extension-scoped glob matches this
 #: repo's own tracked `state/subagent-share/` tree the same way theirs does.
-MUTATES = ["state/subagent-share/**/*.json"]
+MUTATES = [".coordinator-local/subagent-share/**/*.json"]
 
 PeerRecord = Mapping[str, Any]
 PeerSet = Mapping[str, PeerRecord]
@@ -108,7 +109,7 @@ def _repo_root() -> Path:
 
 def _store_path(repo_key: str, session_id: str, *, repo_root: Path | None = None) -> Path:
     root = repo_root if repo_root is not None else _repo_root()
-    return root / "state" / "subagent-share" / session_id / f"group-em-baseline-{repo_key}.json"
+    return Path(_share_dir(str(root), session_id)) / f"group-em-baseline-{repo_key}.json"
 
 
 def _load_previous(

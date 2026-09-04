@@ -45,30 +45,39 @@ next step. To reproduce that exactly across two independently-invoked
 modules, ``_first_result()`` below re-walks the ENTIRE sequence and returns
 the (shape, message) of the FIRST step that fires, or ``None`` if nothing
 does. This module returns a DENY envelope only when that first hit is
-shape=="deny" (always one of the five unconditional findings above); for a
+shape=="deny" (always one of the four unconditional findings above); for a
 shape=="advisory" first hit it returns an ADVISORY envelope of its own only
 under ``COORDINATOR_SCHEMA_STRICT=1`` (exactly when the advisory sibling is
 standing down for that same finding), and ``None`` otherwise. The advisory
 module (mirroring this same walk in its own file) returns non-``None`` for a
-shape=="advisory" first hit only when NOT strict. Neither module may stop
-early at a step whose shape doesn't match its own class — an intermediate
+shape=="advisory" first hit only when NOT strict. The third shape,
+shape=="warn", is rendered by THIS module in BOTH modes: it exists for a
+finding the advisory sibling stands down for unconditionally, where
+"advisory" would mean neither module warns in default mode. Neither module
+may stop early at a step whose shape doesn't match its own class — an intermediate
 non-firing step must fall through to the NEXT step exactly as the source's
 ``main()`` does.
 
 What this leg covers
 ---------------------
-- The five unconditional (never strict-gated, never downgraded by the
+- The four unconditional (never strict-gated, never downgraded by the
   2026-08-06 warn-not-block ruling) denies: the own-inbox misplacement guard
   (an outbound memo, ``from`` == this repo and ``to`` != this repo, landing
   in this repo's OWN ``cross-repo/inbox/``); the C2 lineage-reachability
   hard-reject (predecessor/forked_from/additional_predecessors[]/
   origin_handoff resolving to nothing live, archived, or in git history);
-  the grouping-approval scope-cut contract (closing a task-spine row under a
-  still-pending PM grouping approval); the D3 out-of-enum handoff ``kind``
-  contract (scoped to ``state/handoffs/**`` only); and the queue-deferral
-  grant contract (2026-08-27-a-queue-deferral-is-a-grant-the-pm-issues.md
-  C4 — an ungranted ``status: deferred`` on a
+  the D3 out-of-enum handoff ``kind`` contract (scoped to
+  ``state/handoffs/**`` only); and the queue-deferral grant contract
+  (2026-08-27-a-queue-deferral-is-a-grant-the-pm-issues.md C4 — an ungranted
+  ``status: deferred`` on a
   ``state/{improvement-queue,debt-backlog,bug-backlog}/**`` record).
+- One always-WARN finding, shape=="warn", emitted by this module in both
+  modes: the grouping-approval scope-cut contract (closing a task-spine row
+  under a still-pending PM grouping approval). It was the third
+  unconditional deny until the 2026-09-03 PM ruling downgraded it — the cut
+  is reversible, the refusal was document-wide for a row-scoped condition,
+  and it burned whole dispatches for zero written bytes. The obligation is
+  unchanged; only the write-time refusal is gone. See `_first_result`.
 - Every other branch is now always-"advisory" (2026-08-06 ruling): the
   mislocated-memo / free-form-header offer, the routing-mismatch offer, the
   new-file scaffold offer, and a schema-shape validation failure. This
@@ -1419,35 +1428,58 @@ def _reachability_and_schema_step(
         if violations:
             return ("deny", _reachability_deny_message(violations))
 
-    # Third UNCONDITIONAL deny (2026-07-29 grouping-approval contract),
-    # alongside the own-inbox and lineage-reachability branches above and
-    # independent of the always-"advisory" `schema_message` branch below (see
-    # 2026-08-06 PM ruling, module docstring). Unconditional because an
-    # ungated scope cut is not a
-    # formatting nit that a non-strict tree can tolerate advisorily: the
-    # whole point of the contract is that closing a row without the PM's
-    # recorded assent must not be writable, and an advisory that a
-    # well-meaning agent can write past is exactly the self-certification
-    # the change removes.
+    # Grouping-approval scope-cut finding (2026-07-29 contract) — ALWAYS a
+    # warning, in both modes, never a deny. It was the third unconditional
+    # deny until the 2026-09-03 PM ruling ("the block on write is too harsh,
+    # and it should just be a warn -- blocking on write wastes tokens as you
+    # butt your head up against it"), which claude-klabauter had already agreed with in
+    # state/memo-outbox/sent/plan-deferral-grouping-warn-not-block-agreed.md:
+    # an unapproved scope cut is fully REVERSIBLE — the record lands, it is
+    # attributable, and a reviewer can undo it — so it fails the
+    # irreversible-harm test that is the only carve-out left as a hard block.
     #
-    # Deliberately schema-name-agnostic, unlike the fourth deny below (which
-    # gates on `schema_name == "handoff"`). This branch relies entirely on
-    # `check_plan_tasks_grouping_approval`'s own internal gates
+    # MEASURED COST OF THE OLD SHAPE (example-store-repo, 2026-09-03): two
+    # review-integrator dispatches against a 17-row plan whose ONE `wont_do`
+    # row put the `ruled_out` grouping in `pending` returned BLOCKED having
+    # written zero bytes — ~247k subagent tokens and ~12.5 minutes to produce
+    # two sidecars saying "I could not write". The deny is DOCUMENT-wide for a
+    # ROW-scoped condition: edits to unrelated rows, unrelated fields, and
+    # narrative prose were all refused, confirmed by three probes including a
+    # no-op. Warning removes that blast radius without weakening anything.
+    #
+    # WHAT DOES NOT CHANGE. The obligation is untouched: `grouping_approvals`
+    # still needs an `approver`, a verbatim `pm_utterance`, and a digest
+    # recomputed over current membership, and `plan_tasks_mutate`'s own gate
+    # still refuses to CLOSE a row into a non-approved grouping. An EM still
+    # cannot fabricate assent; it can only write the file while the warning
+    # says loudly, naming the grouping and the row, that the grouping is
+    # unassented.
+    #
+    # Rendered with shape "warn" (not "advisory"), which this module emits in
+    # BOTH modes. "advisory" means "the sibling owns this in non-strict mode";
+    # the advisory sibling stands down for this finding unconditionally
+    # (`_grouping_approval_fires`), so reusing "advisory" here would produce a
+    # payload where NEITHER module warns in default mode — a silent
+    # downgrade-to-nothing, which is not what the ruling asked for.
+    #
+    # Deliberately schema-name-agnostic, unlike the handoff-`kind` deny below
+    # (which gates on `schema_name == "handoff"`). This branch relies entirely
+    # on `check_plan_tasks_grouping_approval`'s own internal gates
     # (`is_governed_plan` plus a locatable plan-tasks fence) to stay silent on
     # non-plan documents.
     #
     # NEGATIVE SPEC — do not add a `schema_name == "plan"` gate here.
     # The original rationale was that claude-klabauter had no vendored
     # `plan.schema.json`, so such a gate would match nothing and silently
-    # disable this whole deny — the exact unreachable-gate defect this change
+    # disable this whole branch — the exact unreachable-gate defect this change
     # was shipped to fix (cf. `is_governed_plan`'s dead `schema_version`
     # conjunct, same session, same failure shape). That premise expired at
     # `cb35ee4b1`, which DID vendor `plan.schema.json`; the prohibition did
     # not. It now rests on a second, independent reason: `schema_name` is
-    # resolved from the vendored corpus, so gating on it couples this deny's
-    # reachability to claude-klabauter's vendoring state — and a corpus repoint would
-    # then silently switch an UNCONDITIONAL deny off, with no envelope to
-    # report it. `b4c6df071` itself was the FIX for a related fail-open — it
+    # resolved from the vendored corpus, so gating on it couples this
+    # finding's reachability to claude-klabauter's vendoring state — and a corpus
+    # repoint would then silently switch it off, with no envelope to report
+    # it. `b4c6df071` itself was the FIX for a related fail-open — it
     # stopped resolving the schema corpus from a sibling repo's live working
     # tree, where an uncommitted edit there changed claude-klabauter's enforcement with
     # no commit or version gate, and a clone without the sibling present got
@@ -1460,7 +1492,7 @@ def _reachability_and_schema_step(
     # content, never on corpus membership.
     grouping_message = _evaluate_grouping_approval(prospective_content, repo_rel)
     if grouping_message is not None:
-        return ("deny", grouping_message)
+        return ("warn", grouping_message)
 
     # Fifth UNCONDITIONAL deny (this plan's own row, C4): an ungranted
     # `status: deferred` on a queue-family record. Computed alongside
@@ -1595,7 +1627,7 @@ def _first_result(
     # write. See `check()` for the companion rule this enables: a write
     # whose repo_root differs from the session's OWN repo is a cross-repo
     # write, and gets ADVISORY-ONLY treatment there — never a deny, whatever
-    # the finding class (DR-277) — even for the five findings that deny
+    # the finding class (DR-277) — even for the four findings that deny
     # unconditionally in-repo. In-repo callers (repo_root == session repo)
     # are unaffected: the resolved root is identical either way.
     target_dir = os.path.dirname(abs_file_path) or cwd
@@ -1862,7 +1894,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     unvalidated on a cross-repo write. Making that write reachable does NOT
     make it denyable: a write whose resolved `repo_root` differs from the
     session's OWN repo (`forensics["is_cross_repo_write"]`) gets ADVISORY-ONLY
-    treatment below, whatever the finding class — including the five findings
+    treatment below, whatever the finding class — including the four findings
     that deny unconditionally in-repo. This is DR-277 (guards are advisory by
     default) applied deliberately, not a hardening: a sibling guard's hardness
     on another tool surface (here, this module's own in-repo behavior) is not
@@ -1926,15 +1958,29 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     shape, message = result
+    if shape == "warn":
+        # Always-warn class (currently only the grouping-approval scope-cut
+        # finding, 2026-09-03 PM ruling — see `_first_result`). Rendered by
+        # THIS module in both modes because the advisory sibling stands down
+        # for it unconditionally; the cross-repo branch below is irrelevant
+        # here, since this was never a deny to soften.
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": (
+                    "[frontmatter-schema guard — WARNING, write proceeds] "
+                    f"{message}"
+                ),
+            }
+        }
     if shape == "deny":
         if forensics.get("is_cross_repo_write"):
             # DR-277 advisory-by-default (docs/decisions/DR-277-guards-are-
             # advisory-by-default-two-named.md): a target outside the
             # session's OWN repo never denies here, whatever the finding
-            # class — including the five findings that deny unconditionally
+            # class — including the four findings that deny unconditionally
             # in-repo (own-inbox misplacement, lineage-reachability,
-            # grouping-approval scope cut, out-of-enum handoff `kind`,
-            # ungranted queue-deferral). This
+            # out-of-enum handoff `kind`, ungranted queue-deferral). This
             # is closing the cwd-vs-target blindness (`_first_result`) into
             # a WARNING, not a new hard-block surface: cross-surface parity
             # with the in-repo deny is explicitly not grounds for hardening

@@ -75,18 +75,34 @@ def _coordinator_state_root(repo_root: str) -> Optional[str]:
         return None
 
 
-def _resolve_outbox_dir(repo_root_arg: str) -> Optional[str]:
-    """Resolve the outbox directory. Priority: env override -> REPO_ROOT arg -> git root.
+def _resolve_draft_paths(repo_root_arg: str) -> Optional[List[str]]:
+    """Resolve the draft paths this surface should report staleness over.
 
-    Returns None when not in a git repo and no override/arg was given (the
-    oracle's "not in a git repo — stay silent" branch).
+    Priority: env override -> REPO_ROOT arg -> git root. Returns None when
+    not in a git repo and no override/arg was given (the oracle's "not in a
+    git repo — stay silent" branch).
+
+    The REPO_ROOT-arg case delegates to `memo_draft.merged_outbox_drafts`,
+    which UNIONS both outbox roots rather than picking one -- a repo mid-
+    drain holds drafts in both `.coordinator-local/memo-outbox/` and the
+    legacy `state/memo-outbox/`, and an either-or policy would silently hide
+    whichever root it didn't pick. This surface previously carried its own
+    either-or implementation (`_prefer_populated_outbox`); it was deleted in
+    favour of this shared union so the dual-root merge has one
+    implementation, not three.
+
+    Review: overengineering-reviewer (Kira), 2026-09-03 — third divergent
+    dual-root merge policy landed in the same session the other two were
+    consolidated into `memo_draft.merged_outbox_drafts`.
     """
     env_override = os.environ.get("COORDINATOR_OUTBOX_DIR", "")
     if env_override:
-        return env_override
+        return _list_md_files(env_override)
 
     if repo_root_arg and os.path.isdir(repo_root_arg):
-        return os.path.join(repo_root_arg, "state", "memo-outbox")
+        from coordinator_core.ops.fleet import memo_draft as _memo_draft
+
+        return [str(p) for p in _memo_draft.merged_outbox_drafts(Path(repo_root_arg))]
 
     if not show_toplevel(os.getcwd()):
         # Not in a git repo — stay silent per spec.
@@ -95,7 +111,7 @@ def _resolve_outbox_dir(repo_root_arg: str) -> Optional[str]:
     state_root = _coordinator_state_root(os.getcwd())
     if not state_root:
         return None
-    return os.path.join(state_root, "memo-outbox")
+    return _list_md_files(os.path.join(state_root, "memo-outbox"))
 
 
 def _get_mtime(path: str) -> int:
@@ -140,8 +156,8 @@ def _list_md_files(outbox_dir: str) -> List[str]:
 def main(argv: List[str]) -> int:
     repo_root_arg = argv[0] if argv else ""
 
-    outbox_dir = _resolve_outbox_dir(repo_root_arg)
-    if not outbox_dir or not os.path.isdir(outbox_dir):
+    draft_paths = _resolve_draft_paths(repo_root_arg)
+    if not draft_paths:
         return 0
 
     stale_hours_raw = os.environ.get("COORDINATOR_OUTBOX_STALE_HOURS", "24")
@@ -154,7 +170,7 @@ def main(argv: List[str]) -> int:
     now_epoch = int(time.time())
 
     lines: List[str] = []
-    for f in _list_md_files(outbox_dir):
+    for f in draft_paths:
         if not os.path.isfile(f):
             continue
 

@@ -16,7 +16,7 @@ Verb contracts (mirrored from the JS spec):
     status:consumed since the DR-084 cutover; consume is accepted for
     backward compatibility and is not itself a status value).
     - status: <non-claimed> → claimed  (DR-084; grandfathered old value: consumed)
-    - deployment_state: <any> → in_flight
+    - deployment_state: <any non-terminal> → in_flight
     - claimed_at: <ISO>  (inserted if absent, anchored after deployment_state;
       grandfathered old field name: consumed_at)
     - claimed_by: <session_id>  (inserted if absent, anchored after claimed_at;
@@ -28,6 +28,9 @@ Verb contracts (mirrored from the JS spec):
       dual-tolerant read, never re-written). Partial prior state (e.g.
       status==claimed but deployment_state!=in_flight) COMPLETES the transition.
     - Fail-loud on empty session_id (the Staff Engineer P2): exit_code=1, no write.
+    - Fail-loud (exit_code=1, no write) when deployment_state is already
+      terminal (lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT) — a finished
+      baton is not re-pickable.
     - DR-084 writer cutover: this verb never writes status:consumed,
       consumed_at:, or consumed_by: again — only status:claimed,
       claimed_at:, claimed_by:. Reads stay dual-tolerant (new name first,
@@ -248,6 +251,7 @@ from typing import Any, Callable, Dict, FrozenSet, List, NamedTuple, Optional, T
 
 import yaml
 
+from coordinator_core import timestamps
 from coordinator_core.dag import _read_meta
 from coordinator_core.frontmatter.primitives import (
     FrontmatterSplit,
@@ -271,6 +275,7 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.frontmatter.baton_class import canonical_kind, kind_values_for_canonical
 from coordinator_core.ipc import register_op
+from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
@@ -610,6 +615,19 @@ def _claim(handoff_path: str, session_id: str, at: str, worktree: Path, repo_roo
     name/value fallback) via _status_is / _read_fm_field_new_or_old.
 
     Fail-loud on empty session_id (the Staff Engineer P2) — never write claimed_by: empty.
+
+    Fail-loud (exit_code=1, no write) when deployment_state is already terminal
+    — the membership test reads `lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT`,
+    the SSOT `fleet/_common._TERMINAL_DEPLOYMENT_STATES` aliases, so claim,
+    archival, and the drift sweep cannot disagree on what "finished" means.
+    Without it, claim was the one verb in this module with no terminality
+    precondition (`_unclaim`, `_repark`, `_close`, `_supersede`, and
+    `_gate_recheck` all have one), so a shipped/continued/closed baton was
+    re-armed to in_flight by any pickup touch and stayed perpetually
+    re-pickable — one baton claimed three times in a day. The refusal is
+    raised BEFORE the D5 idempotency check: no terminal value can also be
+    in_flight, so ordering costs the normal path nothing.
+
     Idempotency (D5): no-op ONLY at full target state (status==claimed AND
     deployment_state==in_flight).  Partial state completes the transition.
 
@@ -645,6 +663,16 @@ def _claim(handoff_path: str, session_id: str, at: str, worktree: Path, repo_roo
         # current_holder feeds BOTH the idempotency guard below AND the
         # claimed_by re-stamp further down — read once, before any mutation.
         current_holder = _read_fm_field_new_or_old(split.fm_text, "claimed_by", "consumed_by")
+
+        if (deployment or "").strip().lower() in HANDOFF_TERMINAL_DEPLOYMENT:
+            # Review: coordinator:code-reviewer — only "continued" has a
+            # successor (continued_into); "shipped"/"closed"/"abandoned"
+            # don't, so the advice no longer assumes one exists.
+            raise MutateAbort(
+                f'claim refused — deployment_state "{deployment}" is terminal '
+                f"({handoff_path}). If it was continued, pick up its "
+                "successor (continued_into); otherwise mint a new handoff."
+            )
 
         # Idempotency (D5): no-op ONLY at the FULL target state AND the
         # recorded holder already matches THIS session. _status_is also
@@ -2252,12 +2280,24 @@ def _leg_identity(leg: Dict[str, Any]) -> str:
     )
 
 
+def _checked_at_clause(checked_at: Any) -> str:
+    """A recheck stamp with the age a reader would otherwise subtract wrong.
+
+    A gate recheck is provenance for a decision being made NOW, so how old
+    it is decides whether it still counts. An absent stamp stays the word
+    `unknown` -- `with_age` on nothing would manufacture a rendering for a
+    field the record never carried."""
+    if not checked_at:
+        return "unknown"
+    return _one_line(timestamps.with_age(checked_at))
+
+
 def _prior_recheck_clause(results: Dict[str, Any]) -> str:
     """`prior gate-recheck <status> at <checked_at>` — the provenance of a
     results block this clear did NOT itself produce."""
     status = _one_line(results.get("status") or "unknown")
-    checked_at = _one_line(results.get("checked_at") or "unknown")
-    return f"prior gate-recheck {status} at {checked_at}"
+    recheck_clause = _checked_at_clause(results.get("checked_at"))
+    return f"prior gate-recheck {status} at {recheck_clause}"
 
 
 def _render_gate_evidence_retirement(
@@ -2316,8 +2356,8 @@ def _render_gate_evidence_retirement(
 
     if rechecked_by_this_clear and results_is_dict:
         status = _one_line(gate_evidence_results.get("status") or "unknown")
-        checked_at = _one_line(gate_evidence_results.get("checked_at") or "unknown")
-        header = f"gate_evidence retired ({status}, checked_at {checked_at})"
+        recheck_clause = _checked_at_clause(gate_evidence_results.get("checked_at"))
+        header = f"gate_evidence retired ({status}, checked_at {recheck_clause})"
         fragments = [
             f"{_leg_identity(leg)} {_one_line(leg.get('status') or 'unknown')}"
             + _leg_authored_detail(leg)

@@ -26,15 +26,23 @@ home-dir guard's scope (``<home>/.claude/cross-repo/**``) never sees this
 path, and no other guard vets an arbitrary sibling-clone path.
 
 Block predicate: DENY when the tool is a file-mutating tool AND its resolved
-target path is equal to, or a descendant of, ``<mirror-root>/cross-repo`` for
-ANY publish-mirror root this machine's registry currently resolves — where
-``<mirror-root>`` comes from ``publish.mirrors.<key>.path`` (the SAME
-registry table the ``cross-repo-memo`` CLI already trusts for publish-target
-detection, read here via ``coordinator_core.ops.fleet._memo_resolver.
-read_publish_mirrors()`` rather than re-parsing TOML a second time).
+target path is equal to, or a descendant of, EITHER
+``<mirror-root>/cross-repo`` (legacy) OR ``<mirror-root>/state/cross-repo``
+(current, part of `_CROSS_REPO_RELDIRS = ("cross-repo", "state/cross-repo")`) for ANY publish-mirror
+root this machine's registry currently resolves — where ``<mirror-root>``
+comes from ``publish.mirrors.<key>.path`` (the SAME registry table the
+``cross-repo-memo`` CLI already trusts for publish-target detection, read
+here via ``coordinator_core.ops.fleet._memo_resolver.
+read_publish_mirrors()`` rather than re-parsing TOML a second time). Both
+literals are guarded unconditionally — this guard has no authority over the
+FOREIGN root it polices, so it does not consult `memo_corpus_root`/
+`receiver_inbox_root` to pick one; a resolver probe would select a single
+root and stop watching the other, reopening exactly the hole this guard
+exists to close.
 
-Scope is deliberately ``<mirror-root>/cross-repo/**`` and nothing else:
-ordinary percolation writes elsewhere under a mirror (e.g.
+Scope is deliberately ``<mirror-root>/cross-repo/**`` and
+``<mirror-root>/state/cross-repo/**`` and nothing else: ordinary percolation
+writes elsewhere under a mirror (e.g.
 ``<mirror>/coordinator/skills/foo/SKILL.md``) MUST pass through silently —
 percolation is the mirror's LEGITIMATE purpose; breaking that would be the
 primary regression this guard could cause.
@@ -106,12 +114,20 @@ _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 #: NotebookEdit uses notebook_path; the rest use file_path.
 _PATH_KEYS = ("file_path", "notebook_path", "path")
 
-_CROSS_REPO_DIRNAME = "cross-repo"
+
+#: Both the legacy bare dirname and the current `state/`-nested one are
+#: guarded unconditionally, per this chunk's negative spec: this guard polices
+#: a FOREIGN root it has no authority to probe/resolve, so BOTH literals are
+#: pinned here rather than consulting `memo_corpus_root`/`receiver_inbox_root`
+#: (neither is authoritative over a foreign root, and a probing resolver would
+#: select one and stop watching the other).
+_CROSS_REPO_RELDIRS = ("cross-repo", "state/cross-repo")
 
 
 def _guarded_roots() -> "list[Path]":
-    """``<mirror-root>/cross-repo`` for every publish-mirror this machine's
-    registry currently resolves to a ``.path``.
+    """``<mirror-root>/cross-repo`` and ``<mirror-root>/state/cross-repo`` for
+    every publish-mirror this machine's registry currently resolves to a
+    ``.path``.
 
     Reads via ``read_publish_mirrors()`` (the shared TOML-merge authority the
     ``cross-repo-memo`` CLI's claude-klabauter-side resolver already uses) rather than
@@ -130,13 +146,14 @@ def _guarded_roots() -> "list[Path]":
         path = entry.get("path") if isinstance(entry, dict) else None
         if not path or not isinstance(path, str):
             continue
-        try:
-            root = Path(_casefold_path(str(Path(path) / _CROSS_REPO_DIRNAME)))
-        except Exception:
-            continue
-        if root not in seen:
-            seen.add(root)
-            roots.append(root)
+        for reldir in _CROSS_REPO_RELDIRS:
+            try:
+                root = Path(_casefold_path(str(Path(path) / reldir)))
+            except Exception:
+                continue
+            if root not in seen:
+                seen.add(root)
+                roots.append(root)
     return roots
 
 

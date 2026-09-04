@@ -62,6 +62,7 @@ from pathlib import Path
 from typing import Any
 
 from coordinator_core import sizing_disposition
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.pickup_assemble import resolve_archived_basename
 from coordinator_core.plan_assemble.predicates import PredicateContext, undetermined
 
@@ -192,7 +193,7 @@ def sizing_wall_via_memo(context: PredicateContext) -> dict[str, Any]:
     if not cited:
         return {"via_memo": False, "source_memo": None}
     basename = Path(str(cited)).name
-    inbox_path = context.repo_root / "cross-repo" / "inbox" / basename
+    inbox_path = Path(memo_corpus_root(str(context.repo_root))) / "inbox" / basename
     if inbox_path.is_file():
         return {
             "via_memo": True,

@@ -229,6 +229,80 @@ def _join_backslash_newlines(cmd: str) -> str:
 #: `_wrapped_shell_c_payloads` (not shared via cross-module import -- this
 #: file's own established no-cross-module-coupling precedent for small
 #: tokenizer-adjacent helpers).
+#: Staged-path count above which the per-file unstage remedy stops being
+#: advice and becomes an instruction to destroy a peer's in-flight work.
+#:
+#: Measured 2026-09-02: a peer's bulk untracking left 11,534 foreign paths
+#: staged on the shared branch. Every commit form in this tree refused for as
+#: long as that stood -- including `git commit -- <pathspec>`, because this
+#: check reads the whole index and a pathspec does not narrow it. The refusal
+#: named one `git restore --staged <file>` per file, which at that size is an
+#: hour of work whose successful completion is the loss of the peer's change.
+_BULK_FOREIGN_INDEX_PATHS = 50
+
+
+#: The one commit route that still succeeds while a peer holds the index, named
+#: in both strict-scope refusals so a blocked operator has an exit that is not
+#: "destroy the peer's staging".
+#:
+#: WHY IT IS SAFE TO NAME, since pointing at a route that escapes a guard is
+#: otherwise exactly this file's anti-scope: `coordinator-safe-commit.py` routes
+#: through `ceremony.commit_v2` WITHOUT `prefer_deliberate_stage`, and on that
+#: default axis `coordinator_core/git/commit.py :: commit_paths` commits worktree
+#: bytes for the paths the caller declared and passes over every staged path it
+#: did not name. A peer's staged blob on an undeclared path is ignored rather
+#: than swept -- the failure mode is prevented by construction, not by a check
+#: that could be skipped. Pinned by `coordinator_core/git/tests/
+#: test_action_guard_default_path.py :: test_default_axis_ignores_a_foreign_
+#: staged_path`, and classified `predicate-consulted-by-construction` in
+#: `docs/research/2026-08-30-the-guard-escape-table.md`.
+#:
+#: NEGATIVE SPEC: "literal paths, never a glob" is load-bearing, not style. The
+#: substitution window is paths the caller NAMED; a glob expands in the shell
+#: before the route sees it, so a peer's file inside the expansion arrives as a
+#: declared path and is committed as instructed. That is the 2026-08-29 incident
+#: shape (29927e684) and the one way this route can still take a peer's work.
+#: Never soften the clause to just "your own paths".
+_SAFE_COMMIT_ROUTE_CLAUSE = (
+    'Your own paths still commit: coordinator-safe-commit.py "<subject>" '
+    "-- <literal paths>; name them literally, never a glob."
+)
+
+
+def _bulk_foreign_index_refusal(
+    staged_count: int,
+    staged_file: str,
+    owner_sentence: str,
+    provenance_note: str,
+) -> str:
+    """The strict-scope refusal for an index that is another session's.
+
+    Separate from the per-file refusal because the two say different true
+    things and only one of them is true at this size. Extracted so the text
+    can be asserted directly: built inline it was unreachable from a test
+    without standing up git state, which is why the original wording shipped
+    unexamined.
+
+    NEGATIVE SPEC: this message must never name `git restore --staged`. That
+    is the remedy the per-file branch offers, and following it here is how an
+    operator destroys 11,534 paths of a peer's work one command at a time.
+    """
+    return (
+        "BLOCKED (strict scope): the index holds %d staged paths and %s is "
+        "not in this session's touch list — owned by %s.%s\n\n"
+        "At this size the index is another session's in-flight change, and no "
+        "`git commit` form succeeds until they land or unstage it — a pathspec "
+        "does not narrow what this check reads. Ask them. %s"
+        % (
+            staged_count,
+            staged_file,
+            owner_sentence,
+            provenance_note,
+            _SAFE_COMMIT_ROUTE_CLAUSE,
+        )
+    )
+
+
 _SHELL_C_WRAPPER_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 _MAX_SHELL_C_UNWRAP_DEPTH = 4
 
@@ -5175,6 +5249,46 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 
 
+def _add_has_narrowing_pathspec(after: str) -> bool:
+    """Whether a `git add` argv restricts itself to named paths.
+
+    True for a `--` with at least one token after it, and for
+    `--pathspec-from-file[=<f>]` / `--pathspec-file-nul` (the path list is in
+    the file; SC-DR-017 already counts these as scope at this file's two
+    other scope readers). A bare `--` with nothing after it narrows nothing.
+
+    Why `-u` is allowed to consult this while `-A` is not, since the
+    asymmetry looks arbitrary: `git add -u -- X` stages tracked
+    modifications under X and is a STRICT SUBSET of `git add -- X`, which
+    this guard already permits — it is the same paths minus the untracked
+    files. Refusing the narrower spelling of a permitted command cannot
+    protect anything; it only pushes the committer toward a coarser form.
+    `-A -- X` has no such subset relation and keeps denying.
+
+    example-store-repo-em reported this twice in one evening (2026-09-03,
+    cross-repo/inbox `scoped-commit-guard-the-permitted-form-has-now-caused-
+    the-harm-twice`): a near-miss, then `176ce18` in example-store-repo, where a
+    literal three-file pathspec — the discipline SC-DR-014 asks for, followed
+    exactly — still swept ~164 lines of a peer's in-progress work, because a
+    file pathspec scopes to the FILE and not to the committer's hunks in it.
+    The refused forms were the most precise ones available.
+
+    Negative-spec: this does NOT make `-u` unconditionally safe. A
+    root-shaped pathspec (`.`, `:/`, the repo root spelled absolutely) is
+    still denied by the path checks in the caller's loop, which a scoped
+    `-u` now falls through to instead of short-circuiting past.
+    """
+    tokens = after.split()
+    for i, tok in enumerate(tokens):
+        if tok == "--":
+            return i + 1 < len(tokens)
+        if tok in ("--pathspec-from-file", "--pathspec-file-nul") or tok.startswith(
+            "--pathspec-from-file="
+        ):
+            return True
+    return False
+
+
 def check_blanket_git_add(
     cmd: str,
     session_id: str = "",
@@ -5310,17 +5424,31 @@ def check_blanket_git_add(
             # flag detection. Every post-`--` token is walked here, not
             # just the first (same finding, observation 1).
             if not past_dd:
-                if tok in ("--all", "--update"):
+                if tok == "--all":
                     should_deny = True
                     deny_reason = tok
                     break
+                if tok == "--update":
+                    if not _add_has_narrowing_pathspec(after):
+                        should_deny = True
+                        deny_reason = tok
+                        break
+                    # Scoped `-u`: fall through so the root-shaped pathspec
+                    # checks below still get to deny `-u -- .` and friends.
+                    continue
                 if tok.startswith("-") and not tok.startswith("--"):
                     if "/" not in tok and not tok.startswith("./"):
                         flag_chars = tok[1:]
-                        if "A" in flag_chars or "u" in flag_chars or "U" in flag_chars:
+                        if "A" in flag_chars or "U" in flag_chars:
                             should_deny = True
                             deny_reason = tok
                             break
+                        if "u" in flag_chars:
+                            if not _add_has_narrowing_pathspec(after):
+                                should_deny = True
+                                deny_reason = tok
+                                break
+                            continue
             if tok in (".", "./"):
                 should_deny = True
                 deny_reason = tok
@@ -5976,11 +6104,27 @@ def _owner_clause_budget_bytes() -> int:
 
 def _truncate_to_budget(text: str, max_bytes: int) -> str:
     """Byte-safe truncation (never split a multi-byte UTF-8 codepoint) with
-    a trailing ellipsis marker when truncated."""
+    a trailing ellipsis marker when truncated.
+
+    The marker is charged AGAINST ``max_bytes``, not added on top of it.
+    Measured 2026-09-03: the pre-fix form truncated to ``max_bytes`` and then
+    appended a 3-byte "…", so every truncating call returned ``max_bytes + 3``
+    -- a budget the function is named for enforcing and silently overshot.
+    Callers that chain it (owner clause -> whole message) compounded the
+    overshoot once per layer.
+
+    NEGATIVE SPEC: do not "fix" a caller by subtracting 3 before calling. The
+    reservation belongs here, once, or the next caller repeats the arithmetic
+    and gets it wrong in a new place.
+    """
     encoded = text.encode("utf-8")
     if len(encoded) <= max_bytes:
         return text
-    return encoded[:max_bytes].decode("utf-8", errors="ignore") + "…"
+    marker = "…"
+    room = max_bytes - len(marker.encode("utf-8"))
+    if room <= 0:
+        return encoded[:max_bytes].decode("utf-8", errors="ignore")
+    return encoded[:room].decode("utf-8", errors="ignore") + marker
 
 
 def _owner_liveness_basis(owner_id: str, live_verdicts: Dict[str, Tuple[bool, str, Optional[int]]]) -> Optional[str]:
@@ -6087,6 +6231,22 @@ def _owner_writer_name_clause(name: Optional[str]) -> str:
     return " -- w:%s" % name
 
 
+def _name_clause_fits(sentence: str, writer_name: Optional[str]) -> bool:
+    """Whether ``sentence`` still has room for its whole name clause inside
+    the owner-clause budget. Shared by ``_with_name_clause`` (which appends
+    it) and by ``_format_owner_sentence``'s live arm (which uses it to
+    decide whether the liveness BASIS can be afforded at all) -- one
+    predicate so the two cannot disagree about what fits.
+
+    Negative-spec: never approximate this with a length constant. The
+    clause, the subject and the budget all move independently, and a
+    hardcoded threshold is how the live arm silently started dropping
+    names for long repo names while every test still passed.
+    """
+    clause = _owner_writer_name_clause(writer_name)
+    return len((sentence + clause).encode("utf-8")) <= _owner_clause_budget_bytes()
+
+
 def _with_name_clause(sentence: str, writer_name: Optional[str]) -> str:
     """Append the name clause whole-or-nothing, then cap to the owner-clause
     budget. THE single exit for every owner class in
@@ -6109,8 +6269,38 @@ def _with_name_clause(sentence: str, writer_name: Optional[str]) -> str:
     """
     clause = _owner_writer_name_clause(writer_name)
     budget = _owner_clause_budget_bytes()
-    if len((sentence + clause).encode("utf-8")) <= budget:
-        sentence += clause
+    if _name_clause_fits(sentence, writer_name):
+        return _truncate_to_budget(sentence + clause, budget)
+
+    # A RESOLVED name that does not fit must still leave a marker. Dropping
+    # the clause outright renders subject + verdict and nothing else -- a
+    # bare sid presented as though it were an address, which is the single
+    # output this whole cluster exists to prevent and which
+    # `_format_owner_sentence`'s own anti-scope forbids by name. Measured
+    # 2026-09-03: the drop began at a 35-byte writer_name, with or without a
+    # basis clause; the longest name in the live registry is 25 bytes, so
+    # this was latent rather than firing -- and
+    # `test_no_live_owner_clause_ever_ends_in_a_bare_sid` asserted the
+    # universal from three names (19/25/22) that all sat under the
+    # threshold, proving less than it claimed.
+    #
+    # Precedence, worst-last: a full name beats a truncated one, a truncated
+    # one beats UNNAMED, and every one of them beats a bare sid. The old
+    # whole-or-nothing rule ranked a fragment BELOW nothing on the grounds
+    # that `_owner_name_provenance_note` fires on the `" -- w:"` substring
+    # and would warn beside an unreadable name. That trade is real but it
+    # was priced against the wrong alternative: the fallback is not "no
+    # name", it is "no address at all". A marked truncation warns beside a
+    # partial name; the drop warns beside nothing and reads as though no
+    # name existed.
+    #
+    # NEGATIVE SPEC: never fall back to `" -- UNNAMED"` here. That marker is
+    # rung 3's -- it states that NO name resolved -- and reusing it for a
+    # name that resolved but did not fit makes the two indistinguishable to
+    # every reader and to the provenance note.
+    if writer_name:
+        if budget - len(sentence.encode("utf-8")) - len(" -- w:") > 4:
+            return _truncate_to_budget(sentence + " -- w:%s" % writer_name, budget)
     return _truncate_to_budget(sentence, budget)
 
 
@@ -6200,6 +6390,25 @@ def _format_owner_sentence(
             subject,
             " via %s" % basis if basis else "",
         )
+        # The BASIS yields to the NAME, same call the CONTESTED arm below
+        # already makes: " via harness-registry" is 21 bytes of diagnostic
+        # provenance, and on a real sid it spent exactly the bytes the name
+        # clause needed. Measured 2026-09-02 against the published engine:
+        # `session b4681734 (confirmed live via harness-registry)` is 54
+        # bytes of a 73-byte budget, so a `-- w:example-cockpit-repo-0f` clause
+        # (24) did not fit and `_with_name_clause` dropped it WHOLE --
+        # rendering a bare sid with no `-- w:` and no `-- UNNAMED`, the one
+        # output this clause's anti-scope forbids, to the exact reader who
+        # is blocked and needs the address. `example-game-repo-em` (11 bytes) fit
+        # and `example-cockpit-repo-0f` (18) did not, so the fleet's longer repo
+        # names lost the name and the shorter ones kept it.
+        #
+        # Basis is a debugging aid for whoever maintains the liveness
+        # ladder; the name is the blocked operator's only route to the
+        # peer holding their tree. Keep the basis when it is free, drop it
+        # the moment it costs the name.
+        if basis and not _name_clause_fits(sentence, writer_name):
+            sentence = "%s (confirmed live)" % subject
     elif fact.liveness == "dead":
         sentence = "%s (no longer live)" % subject
     else:
@@ -7109,6 +7318,24 @@ def check_validate_commit(
 
                     if scope_strict and not compute_scope_raised and _owner_is_provable:
                         _record_scope_event("deny", _warned_paths)
+                        # BULK IS TESTED FIRST, ahead of the CONTESTED and
+                        # unclaimed arms, because the index size decides
+                        # whether ANY per-file remedy is appropriate and the
+                        # per-path facts do not. Ordered after the CONTESTED
+                        # arm, a bulk index whose first offending path happened
+                        # to be contested still emitted `git restore --staged
+                        # <file>` -- the exact per-file destruction this
+                        # threshold exists to stop, reachable by nothing more
+                        # than which path the loop reached first.
+                        if len(commit_scope) > _BULK_FOREIGN_INDEX_PATHS:
+                            return _deny(
+                                _bulk_foreign_index_refusal(
+                                    len(commit_scope),
+                                    staged_file,
+                                    owner_sentence,
+                                    _owner_name_provenance_note(owner_sentence),
+                                )
+                            )
                         if staged_file in _own_claimed_paths:
                             # CONTESTED, not unclaimed. Say so, and do NOT print
                             # the record-it-as-touched remedy: this session
@@ -7139,13 +7366,16 @@ def check_validate_commit(
                         return _deny(
                             "BLOCKED (strict scope): %s is staged but not in "
                             "this session's touch list — owned by %s.%s\n\n"
-                            "Unstage it (git restore --staged %s) or, if it "
-                            "genuinely belongs to this session's work, record it "
-                            "as touched first."
+                            "%s\n\n"
+                            "If it genuinely belongs to this session's work, "
+                            "record it as touched first. Unstaging it (git "
+                            "restore --staged %s) discards content the owner "
+                            "has not committed."
                             % (
                                 staged_file,
                                 owner_sentence,
                                 _owner_name_provenance_note(owner_sentence),
+                                _SAFE_COMMIT_ROUTE_CLAUSE,
                                 staged_file,
                             )
                         )

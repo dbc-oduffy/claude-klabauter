@@ -2,9 +2,12 @@
 (``coordinator_core.bash_guards._override_doc``) and its install-time
 resolution leg.
 
-DR-290 form 2 is the literal, never-expanded settings-root pointer -- the
-same shape ``session/guard_unlock_sentinel.py :: _SETTINGS_ROOT_WIKI_POINTER``
-already ships. This module never runs the DISPLAY string through
+DR-290 form 2 is the literal, never-expanded settings-root pointer.
+``OVERRIDE_KEYS_DOC_DISPLAY`` is now its canonical carrier (2026-09-03):
+this docstring used to cite ``session/guard_unlock_sentinel.py ::
+_SETTINGS_ROOT_WIKI_POINTER`` as the shape that "already ships", but that
+constant went unread and was removed. This module never runs the DISPLAY
+string through
 ``expanduser``/``Path.home()`` (that would reintroduce the machine-specific
 leak DR-290 exists to avoid), and never lets it be reverted to DR-290 form 1
 (the repo-qualified relative string) -- that form named this repo

@@ -134,6 +134,16 @@ def _ctx(out):
     return hso["additionalContext"]
 
 
+#: The outlet path `_sandbox_script_hint` is expected to emit, written with
+#: FORWARD slashes on purpose. The root segment tracks `machinery_paths`
+#: (it has moved once, from `state/`, and a literal here goes stale silently);
+#: the separators do NOT, because emitting native separators on Windows is the
+#: declared `pending_fix` degradation the two tests below exist to hold open.
+#: Building this through `share_dir` would make the Windows case pass by
+#: adopting the very output it is supposed to reject.
+_EXPECTED_SCRIPT_HINT_POSIX = "/fake/root/.coordinator-local/subagent-share/sess1/multiprobe.py"
+
+
 class TestNonBashOrEmpty:
     def test_non_bash_tool_allows(self):
         payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
@@ -397,7 +407,7 @@ class TestSubagentOutlet:
         )
         ctx = _ctx(out)
         assert "multi-probe-banner" in ctx
-        assert "python3 /fake/root/state/subagent-share/sess1/multiprobe.py" in ctx
+        assert "python3 " + _EXPECTED_SCRIPT_HINT_POSIX in ctx
         assert "\"import os" not in ctx
         assert "'import os" not in ctx
 
@@ -410,7 +420,7 @@ class TestSubagentOutlet:
         )
         ctx = _ctx(out)
         assert "multi-probe-banner" in ctx
-        assert "python3 /fake/root/state/subagent-share/sess1/multiprobe.py" in ctx
+        assert "python3 " + _EXPECTED_SCRIPT_HINT_POSIX in ctx
         assert '"import os' not in ctx
         assert "'import os" not in ctx
 

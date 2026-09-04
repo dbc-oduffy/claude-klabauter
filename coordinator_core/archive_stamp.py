@@ -2122,6 +2122,12 @@ def cs_claim_handoff(handoff_path: str, *, return_result: bool = False) -> "int 
     in_flight, +claimed_at/claimed_by. Fails loud on unresolvable session id (an
     empty claimed_by would corrupt the claim gate).
 
+    Terminality is NOT re-checked here: `handoff.transition`'s `_claim` refuses a
+    handoff whose deployment_state is already terminal
+    (`lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT`), and this wrapper surfaces
+    that refusal like any other — exit_code=1, the op's `error` on stderr, no write.
+    A second copy of the predicate here would be a second writer of the same rule.
+
     ``return_result`` (additive kwarg, C2/2026-08-13): when True, returns the
     full ``handoff.transition`` claim op response dict — landed
     (``exit_code: 0, applied: True``), no-op (``exit_code: 0, applied: False``,

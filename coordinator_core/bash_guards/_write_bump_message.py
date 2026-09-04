@@ -88,6 +88,16 @@ foreign/subagent 192 bytes (margin 28 -- the tightest of the four),
 publish/em 149 bytes (margin 71), publish/subagent 149 bytes (margin 71).
 foreign/subagent is the one that breaks first if these regexes ever tighten.
 
+MARGIN UPDATE 2026-09-03 (`DR-298` route added to foreign/em): that clause
+costs foreign/em +36 prose bytes, measured before/after on identical inputs
+-- the backticked `DR-298` itself is exempt, the surrounding prose is not.
+foreign/em keeps a comfortable margin and foreign/subagent remains the
+tightest template; the ordering above is unchanged. The four ABSOLUTE
+figures above do not reproduce under arbitrary inputs (they were taken with
+one specific target/session pair) -- re-measure with `measure_envelope`
+before trusting any single number, and treat the RANKING, not the absolute
+byte counts, as the durable claim.
+
 CALLERS RESOLVE THE INPUTS; THIS MODULE ONLY COMPOSES. `target_repo`,
 `session_repo`, `gitdir`, `session_id`, `sandbox_root`, and (for the publish
 class) `destination_owner` are all taken as arguments, never re-derived
@@ -341,12 +351,28 @@ def render_em_message(
     pasteable bypass recipe is exactly what AC-1/AC-2 forbid for EITHER
     audience, EM included; the EM-vs-subagent split earlier in this
     module's history was about ROUTING (PM vs dispatching-EM), never about
-    which audience may see the recipe. The genuine alternative -- check
-    with your PM, then cross-repo-memo as the sanctioned channel -- is
-    unchanged and is the entire message now. `gitdir`/`session_id`/
-    `surface` are accepted for call-site parity with `render_bump_message`'s
-    single dispatch signature and the sibling subagent-class renderer --
-    none is rendered here.
+    which audience may see the recipe. That ban stands: no `touch`, no
+    marker path, no `session_id`. `gitdir`/`session_id`/`surface` are
+    accepted for call-site parity with `render_bump_message`'s single
+    dispatch signature and the sibling subagent-class renderer -- none is
+    rendered here.
+
+    THE IN-BAND ROUTE IS NAMED, THE KEY IS NOT (2026-09-03). C4d left this
+    copy naming a precondition ("check with your PM") with no way to record
+    that it had been SATISFIED, so a compliant EM whose PM had already said
+    yes was indistinguishable from one who never asked -- the guard fired
+    hardest on the obedient case. `DR-298` (`session.em_guard_grant`) is the
+    EM-exercisable in-band route for exactly this guard pair; the deny now
+    names it. A decision-record id is not a recipe: it is one hop, it hands
+    over no parameterized command, and `message_register._rules` B8 grades
+    it clean (measured -- B8 fires on pointers into the override-key/unlock
+    doc surface, which `DR-298` is not; see `guard_unlock_sentinel.
+    annotate_deny` docstring item 11 for the same measurement).
+
+    SUBAGENT CLASS DOES NOT GET THIS LINE, deliberately -- `em_guard_grant`
+    is structurally barred to subagents by `block_subagent_guard_grant{,_
+    write}`, so naming it there would advertise a door that cannot open.
+    `render_subagent_message` stays a wall.
 
     CLASSIFICATION-DEFECT GUARD (see `_classification_defect_notice`'s own
     docstring): the `(not `{session_repo}`)` contrast leg below is correct
@@ -366,6 +392,7 @@ def render_em_message(
     return (
         "Coordinator guard — instead: check with your PM before writing into "
         f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`). "
+        "Got their yes? `DR-298` records it in-band. "
         "Still unsure? cross-repo-memo is the sanctioned channel."
     )
 

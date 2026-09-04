@@ -191,6 +191,7 @@ from coordinator_core.bash_guards._write_bump_message import (
     AGENT_CLASS_SUBAGENT,
     resolve_agent_class,
 )
+from coordinator_core.session import machinery_paths
 
 _GUARD_NAME = "guard_multiprobe_banner"
 
@@ -350,20 +351,19 @@ def _seam_confirmed_rewrite(result: Optional[Dict[str, Any]]) -> bool:
 
 
 def _sandbox_script_hint(git_root: Optional[str], session_id: str) -> str:
-    """`state/subagent-share/<session_id>/multiprobe.py` under `git_root`
-    -- the same session-scratchpad location `bump_foreign_repo_write.
-    _sandbox_root_hint` / `bump_outside_repo_write._sandbox_root` already
-    treat as an always-allowed subagent write target, restated here rather
-    than imported (both are private to their own sibling modules -- a
-    literal five-component path join carries none of the actual
-    COMPUTATION "consume, don't rebuild" exists to protect against
-    duplicating, unlike the rewrite seam this module calls elsewhere).
-    Returns ``""`` when either input is empty -- callers degrade to a
-    path-free instruction rather than fabricating one.
+    """`<machinery_root>/subagent-share/<session_id>/multiprobe.py` under
+    `git_root` -- the same session-scratchpad location `bump_foreign_repo_
+    write._sandbox_root_hint` / `bump_outside_repo_write._sandbox_root`
+    already treat as an always-allowed subagent write target, resolved
+    through `machinery_paths.share_dir` (the sole owner of this path shape,
+    per `docs/plans/2026-09-02-state-keeps-the-work-not-the-machinery.md`
+    chunk C3) rather than composed here. Returns ``""`` when either input
+    is empty -- callers degrade to a path-free instruction rather than
+    fabricating one.
     """
     if not git_root or not session_id:
         return ""
-    return str(Path(git_root) / "state" / "subagent-share" / session_id / _SCRATCH_SCRIPT_NAME)
+    return str(Path(machinery_paths.share_dir(git_root, session_id)) / _SCRATCH_SCRIPT_NAME)
 
 
 def _subagent_script_outlet(

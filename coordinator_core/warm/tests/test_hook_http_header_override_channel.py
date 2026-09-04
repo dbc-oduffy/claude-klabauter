@@ -70,12 +70,19 @@ def test_a_whitespace_canary_is_treated_as_empty():
     assert disarm is not None
 
 
-def test_only_forwardable_prefixes_survive_the_header_channel():
-    """The header channel is not a wider door than the body one it replaces.
+def test_an_unforwardable_name_is_refused_rather_than_dropped():
+    """The header channel is not a wider door than the body one it replaces -- and says so.
 
-    `forwardable_env`'s prefix allowlist is what stops arbitrary session secrets reaching
-    guard code; routing around it by renaming a header would be a privilege escalation
-    dressed as plumbing.
+    The allowlist is what stops arbitrary session secrets reaching guard code; routing
+    around it by renaming a header would be a privilege escalation dressed as plumbing. The
+    secret still does not reach `env` -- that half is unchanged and is the safety property.
+
+    What changed is the OTHER half. A header under this prefix exists only because someone
+    wrote it plus a matching `allowedEnvVars` entry, so dropping it silently reports a
+    registration as correctly threaded while the op sees nothing -- the permissive
+    direction, the same one the canary veto is loud about. Mutation check: returning
+    `(env, None)` with the good key surviving makes this pass a registration that is
+    misconfigured, which is the exact failure `warm-hook-migration.md` § Step 3 shipped.
     """
     env, disarm = hook_http.env_from_headers(
         _declared(
@@ -86,8 +93,46 @@ def test_only_forwardable_prefixes_survive_the_header_channel():
             }
         )
     )
+    assert env == {}
+    assert disarm is not None
+    assert "AWS_SECRET_ACCESS_KEY" in disarm and "PATH" in disarm
+    assert "leaked" not in disarm
+
+
+def test_the_five_named_env_reads_of_the_live_ops_survive_the_channel():
+    """The regression this list exists for: an http flip that follows the runbook works.
+
+    `hooks.plan_persistence_check` reads the first four and `hooks.nudge_autonomous_askuserquestion`
+    the fifth, all from `payload["env"]`. Before `FORWARDED_ENV_NAMES` every one of them was
+    dropped between the header and the payload, leaving `plan_persistence_check` resolving
+    home against the ENGINE host's own `Path.home()` -- silently, in the permissive
+    direction, on a registration built exactly as the runbook prescribed.
+    """
+    names = {
+        "CLAUDE_HOME": "/home/u/.claude",
+        "HOME": "/home/u",
+        "USERPROFILE": "C:/Users/u",
+        "CLAUDE_PROJECT_DIR": "/repo",
+        "COORDINATOR_AUTONOMOUS_ASK_OK": "1",
+    }
+    env, disarm = hook_http.env_from_headers(
+        _declared(**{"X-Coordinator-Env-%s" % k: v for k, v in names.items()})
+    )
     assert disarm is None
-    assert env == {"COORDINATOR_OVERRIDE_OK": "yes"}
+    assert env == names
+
+
+def test_the_named_list_is_reachable_only_by_header_never_from_an_ambient_environ():
+    """`forwardable_env` must not learn about `FORWARDED_ENV_NAMES`.
+
+    Its callers hand it a WHOLE environment, and every one of those carries a real `HOME`.
+    Admitting the named list there would forward one session's home directory to a guard on
+    any caller that passed its own environ -- the invisible-disarm case, reintroduced by a
+    consistency argument.
+    """
+    assert hook_http.forwardable_env(
+        {"HOME": "/home/u", "CLAUDE_HOME": "/h/.claude", "COORDINATOR_OVERRIDE_BASH": "v"}
+    ) == {"COORDINATOR_OVERRIDE_BASH": "v"}
 
 
 def test_the_channel_and_canary_headers_are_not_themselves_forwarded():

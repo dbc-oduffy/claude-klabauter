@@ -114,6 +114,29 @@ class CrossRepoMemoSummary(BaseModel):
     empty-path computed records). Version-neutral optional — absent on all existing
     records. Spec: producer-contract § 3.3.
     """
+    actioned_at: IsoDate | None = None
+    """
+    The calendar date this memo's status went terminal — WHEN the close happened, not
+    merely that it did. Every other lifecycle field on this entity (`status`, `archived`)
+    is current-state, so a consumer holding a snapshot could answer "how many memos are
+    actioned now" but never "how many were open on date D" — the reconstruction a
+    burn-down chart is made of. Requested by example-cockpit-repo 2026-09-04, whose tactical
+    backlog-depth chart plots the three `backlog_items` queues (which carry `closed_at`)
+    and could not plot memos alongside them.
+
+    Sourced from the memo's own frontmatter closure vocabulary, in precedence order
+    `actioned_at` → `closed_at` → `action_taken_at` (the last two are the grandfathered
+    `closed`/`action_taken` statuses' own stamps), truncated to a calendar date the same
+    way `created` is. NEVER inferred: `picked_up_at` is a pickup, not a completion, and
+    file mtime invents a date nobody recorded — a memo closed before
+    `memo.transition`'s action verb began stamping this field (2026-09-04) carries `None`,
+    which means UNKNOWN and must not be read as "still open" or as a zero.
+
+    No backfill is performed on the historical corpus (D9: nulls on existing rows are
+    correct). Coverage therefore starts sparse and grows as memos close; a consumer
+    plotting this should keep the series absent until coverage is real rather than
+    charting a line that asserts memos were never actioned.
+    """
     archived: bool = False
     """
     True when this row was sourced from the terminal-flipped archive set

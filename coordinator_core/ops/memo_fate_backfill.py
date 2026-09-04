@@ -68,6 +68,7 @@ import yaml
 
 from coordinator_core.distill.delete_guard import resolve_realized_by
 from coordinator_core.ipc import register_op
+from coordinator_core.memo_corpus import memo_corpus_root
 
 __all__ = [
     "derive_fate",
@@ -284,8 +285,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "memo.fate_backfill" handler — COMPUTE_ONLY, no writes.
 
     Params:
-        archive_dir (str, optional): override for cross-repo/archive/ — test
-            isolation, mirrors memo_fate_partition.py's convention.
+        archive_dir (str, optional): override for the memo-corpus archive/ —
+            test isolation, mirrors memo_fate_partition.py's convention.
 
     Returns: the `backfill_fates` outcome dict (see docstring above). Callers
     (an EM or a follow-up apply step) are responsible for actually stamping
@@ -321,7 +322,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     archive_dir = (
         Path(archive_override)
         if isinstance(archive_override, str) and archive_override
-        else worktree_root / "cross-repo" / "archive"
+        else Path(memo_corpus_root(str(worktree_root))) / "archive"
     )
 
     records, degraded, read_errors = collect_memo_records(archive_dir, worktree_root)

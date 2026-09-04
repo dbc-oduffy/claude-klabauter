@@ -144,6 +144,7 @@ full breakdown and the plan-level disposition this needs.
 from __future__ import annotations
 
 import hashlib
+import os
 # NOT `import os`. `test_cater_subagent_start_budget.py :: test_module_source_
 # never_spawns_a_process` flags the bare module import, because `os.system`/
 # `os.popen`/`os.spawn*` are in its `_SPAWN_SIGNATURES` and an import cannot
@@ -169,6 +170,7 @@ from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
 from coordinator_core.session import scope as session_scope
+from coordinator_core.session.machinery_paths import share_dir as _share_dir
 from coordinator_core.subagent_sandbox.engine import (
     _NAMED_TEAMMATE_RE,
     load_policy,
@@ -412,7 +414,7 @@ def _resolve_blocks_companion_path(
     if sanitized_session_id is None:
         return None
 
-    session_dir = Path(git_root) / "state" / "subagent-share" / sanitized_session_id
+    session_dir = Path(_share_dir(git_root, sanitized_session_id))
 
     if sidecar_path:
         sidecar_leaf = Path(sidecar_path).name
@@ -423,7 +425,8 @@ def _resolve_blocks_companion_path(
 
     session_dir.mkdir(parents=True, exist_ok=True)
     companion_path = session_dir / leaf_name
-    return companion_path, f"state/subagent-share/{sanitized_session_id}/{leaf_name}"
+    rel_dir = os.path.relpath(session_dir, git_root).replace(os.sep, "/")
+    return companion_path, f"{rel_dir}/{leaf_name}"
 
 
 def _spill_blocks_to_companion(
@@ -712,11 +715,11 @@ def _write_miss_sentinel(
         if sanitized_session_id is None:
             return ""
 
-        session_dir = Path(git_root) / "state" / "subagent-share" / sanitized_session_id
+        session_dir = Path(_share_dir(git_root, sanitized_session_id))
         session_dir.mkdir(parents=True, exist_ok=True)
 
         doc_path = session_dir / f"{leaf}.md"
-        rel_path = f"state/subagent-share/{sanitized_session_id}/{leaf}.md"
+        rel_path = os.path.relpath(doc_path, git_root).replace(os.sep, "/")
 
         if doc_path.exists():
             # Idempotent hit: a re-fired dispatch against the same derived

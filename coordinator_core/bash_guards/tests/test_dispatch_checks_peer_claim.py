@@ -501,3 +501,189 @@ class TestOwnerNameProvenanceNote:
             % ("foo.py", owner_sentence, note)
         )
         assert "provenance" in warn_msg.lower()
+
+
+class TestLivenessBasisYieldsToName:
+    """The live arm's BASIS clause must never be the reason a name is
+    dropped.
+
+    Every test above passes ``{}`` for ``live_verdicts``, so
+    ``_owner_liveness_basis`` returns ``None`` and the basis clause is
+    never rendered -- which is exactly how the defect survived the whole
+    C3 suite. Reported from example-cockpit-repo 2026-09-02: a blocked EM was
+    handed ``session b4681734 (confirmed live via harness-registry)`` with
+    no ``-- w:`` and no ``-- UNNAMED``, the bare-sid-as-address rendering
+    the ladder's anti-scope forbids, because the 21-byte basis clause
+    consumed the bytes the 24-byte name clause needed.
+    """
+
+    @staticmethod
+    def _verdicts(sid, basis):
+        return {sid: (True, basis, None)}
+
+    @pytest.mark.parametrize(
+        "name",
+        ["example-cockpit-repo-0f", "example-game-workbench-repo-70", "example-market-data-repo-a9"],
+    )
+    def test_long_fleet_names_survive_the_basis_clause(self, name):
+        fact = OwnerFact(
+            owner=REAL_SID, liveness="live", claim_source="session", writer_name=name
+        )
+        sentence = dispatch_checks._format_owner_sentence(
+            fact, self._verdicts(REAL_SID, "harness-registry")
+        )
+        assert " -- w:%s" % name in sentence
+        assert len(sentence.encode("utf-8")) <= dispatch_checks._owner_clause_budget_bytes()
+
+    def test_basis_is_kept_when_it_costs_the_name_nothing(self):
+        fact = OwnerFact(
+            owner=REAL_SID,
+            liveness="live",
+            claim_source="session",
+            writer_name="doe-claude-b8",
+        )
+        sentence = dispatch_checks._format_owner_sentence(
+            fact, self._verdicts(REAL_SID, "harness-registry")
+        )
+        assert "via harness-registry" in sentence
+        assert " -- w:doe-claude-b8" in sentence
+
+    def test_unnamed_marker_still_renders_under_a_basis(self, monkeypatch):
+        """Negative control: dropping the basis must not be confused with
+        having no name. An unresolvable owner still says UNNAMED."""
+        monkeypatch.setattr(
+            "coordinator_core.session.harness_registry.lookup", lambda sid: None
+        )
+        fact = OwnerFact(
+            owner=REAL_SID, liveness="live", claim_source="session", writer_name=None
+        )
+        sentence = dispatch_checks._format_owner_sentence(
+            fact, self._verdicts(REAL_SID, "harness-registry")
+        )
+        assert "UNNAMED" in sentence
+
+    def test_an_unfittable_resolved_name_truncates_rather_than_vanishing(self):
+        """A resolved name too long for the budget renders a MARKED truncation,
+        never nothing and never UNNAMED.
+
+        The three-way precedence this pins, worst-last: full name > truncated
+        name > UNNAMED > bare sid. UNNAMED is rung 3's marker and means no name
+        resolved; reusing it for a name that resolved but did not fit would make
+        the two indistinguishable.
+        """
+        long_name = "an-absurdly-long-session-name-that-no-registry-would-ever-hand-out"
+        fact = OwnerFact(
+            owner=REAL_SID,
+            liveness="live",
+            claim_source="session",
+            writer_name=long_name,
+        )
+        sentence = dispatch_checks._format_owner_sentence(
+            fact, self._verdicts(REAL_SID, "harness-registry")
+        )
+        assert " -- w:" in sentence
+        assert "UNNAMED" not in sentence
+        assert long_name not in sentence  # it truncated
+        assert long_name[:12] in sentence  # but enough survives to read
+        assert len(sentence.encode("utf-8")) <= dispatch_checks._owner_clause_budget_bytes()
+
+    def test_no_live_owner_clause_ever_ends_in_a_bare_sid(self):
+        """The invariant the reported defect broke, stated once: a live
+        owner clause carries an address or an explicit UNNAMED -- never a
+        sid alone."""
+        for basis in ("harness-registry", "harness-registry-elsewhere", "stable-pid"):
+            # Names deliberately span the whole-or-nothing threshold, which
+            # measured at 35 bytes on 2026-09-03. The three fleet names this
+            # test originally carried (19/25/22 bytes) ALL sat under it, so it
+            # asserted a universal it never exercised: a resolved name over the
+            # threshold rendered neither " -- w:" nor UNNAMED, which is the bare
+            # sid this very assertion forbids. The last two entries are over.
+            for name in (
+                None,
+                "x-3",
+                "example-cockpit-repo-0f",
+                "example-game-workbench-repo-70",
+                "a-repo-name-thirty-five-bytes-long!",
+                "an-absurdly-long-session-name-that-no-registry-would-ever-hand-out",
+            ):
+                fact = OwnerFact(
+                    owner=REAL_SID,
+                    liveness="live",
+                    claim_source="session",
+                    writer_name=name,
+                )
+                sentence = dispatch_checks._format_owner_sentence(
+                    fact, self._verdicts(REAL_SID, basis)
+                )
+                assert (" -- w:" in sentence) or ("UNNAMED" in sentence), sentence
+
+
+class TestBulkForeignIndexRefusal:
+    """At 11,534 foreign staged paths (measured 2026-09-02 on this branch) the
+    per-file unstage remedy stops being advice: following it to completion
+    destroys a peer's in-flight change. These pin what the refusal must and
+    must not say at that size."""
+
+    NOTE = " (name via harness-registry)"
+
+    def _msg(self, count=11534):
+        return dispatch_checks._bulk_foreign_index_refusal(
+            count, "state/subagent-share/x/y.md", "abc123 -- w:claude-klabauter-6c", self.NOTE
+        )
+
+    def test_it_never_names_the_per_file_remedy(self):
+        """The negative spec. Following `git restore --staged` per file here is
+        an hour of work whose successful completion is the loss of the peer's
+        change."""
+        assert "restore --staged" not in self._msg()
+        assert "Unstage it" not in self._msg()
+
+    def test_it_states_that_no_git_commit_form_succeeds(self):
+        """Measured: `git commit -- <pathspec>` was refused too, because this
+        check reads the whole index. An operator who is not told that will try
+        the pathspec form and conclude the guard is broken.
+
+        NARROWED from "no commit form succeeds" (the claim this test pinned
+        when it landed at 71c28ef903) to "no `git commit` form": the wider
+        claim is false, and the message now says so. `coordinator-safe-commit.py`
+        routes through `ceremony.commit_v2` on the default axis, where
+        `commit_paths` commits worktree bytes for declared paths and passes
+        over every staged path it did not name -- so an operator's own paths
+        DO commit while a peer holds the index. Pinned by
+        `coordinator_core/git/tests/test_action_guard_default_path.py ::
+        test_default_axis_ignores_a_foreign_staged_path`. The unqualified
+        sentence sent a blocked operator to wait on a peer when a safe route
+        existed, which is the window this message exists to close.
+        """
+        msg = self._msg()
+        assert "no `git commit` form succeeds" in msg
+        assert "pathspec does not narrow" in msg
+        # The narrowing is only honest if the alternative is actually named.
+        assert "coordinator-safe-commit.py" in msg
+
+    def test_it_names_the_safe_route_with_its_glob_warning_attached(self):
+        """The route and the "literal paths" qualifier travel together or not
+        at all. A glob expands in the shell before the route sees it, so a
+        peer's file inside the expansion arrives as a DECLARED path and is
+        committed as instructed -- the 2026-08-29 incident shape (29927e684).
+        Naming the route without the qualifier converts this refusal into
+        instructions for reproducing that incident."""
+        for msg in (self._msg(), self._msg(77)):
+            assert "coordinator-safe-commit.py" in msg
+            assert "never a glob" in msg
+
+    def test_it_reports_the_size_that_makes_this_branch_apply(self):
+        assert "11534 staged paths" in self._msg()
+        assert "77 staged paths" in self._msg(77)
+
+    def test_it_names_the_peer_so_the_operator_can_ask_them(self):
+        """`Ask them` is only actionable if the message says who."""
+        msg = self._msg()
+        assert "claude-klabauter-6c" in msg
+        assert "Ask them" in msg
+
+    def test_the_provenance_note_is_carried_not_dropped(self):
+        assert self.NOTE in self._msg()
+
+    def test_the_threshold_sits_above_a_session_and_below_a_bulk_change(self):
+        assert 10 < dispatch_checks._BULK_FOREIGN_INDEX_PATHS < 500

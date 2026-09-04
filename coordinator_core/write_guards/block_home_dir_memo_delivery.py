@@ -18,16 +18,22 @@ an agent that skips the CLI and Writes straight at
 ``C:\\Users\\<me>\\.claude\\cross-repo\\inbox\\<file>.md``.
 
 Block predicate: DENY when the tool is a file-mutating tool AND its resolved
-absolute target path is equal to, or a descendant of,
-``<home>/.claude/cross-repo`` for ANY plausible home root. Home resolution is
-a UNION of ``USERPROFILE``, ``HOME``, and ``pathlib.Path.home()`` (plus
-``CLAUDE_HOME`` treated as a direct ``.claude`` root when set), rather than a
-first-wins chain — a Git-Bash ``HOME``/``USERPROFILE`` divergence on Windows
-must never open a hole.
+absolute target path is equal to, or a descendant of, EITHER
+``<home>/.claude/cross-repo`` (legacy) OR ``<home>/.claude/state/cross-repo``
+(current, part of `_CROSS_REPO_RELDIRS = ("cross-repo", "state/cross-repo")`) for ANY plausible home
+root. Both literals are guarded unconditionally — this guard has no authority
+over the FOREIGN root it polices, so it does not consult `memo_corpus_root`/
+`receiver_inbox_root` to pick one; a resolver probe would select a single
+root and stop watching the other, reopening exactly the hole this guard
+exists to close. Home resolution is a UNION of ``USERPROFILE``, ``HOME``, and
+``pathlib.Path.home()`` (plus ``CLAUDE_HOME`` treated as a direct ``.claude``
+root when set), rather than a first-wins chain — a Git-Bash
+``HOME``/``USERPROFILE`` divergence on Windows must never open a hole.
 
-Scope is deliberately ``<home>/.claude/cross-repo/**`` and nothing else:
-ordinary config edits under ``~/.claude`` (``settings.json``,
-``docs/decisions/``, CLAUDE.md, machine-local) MUST pass through silently.
+Scope is deliberately ``<home>/.claude/cross-repo/**`` and
+``<home>/.claude/state/cross-repo/**`` and nothing else: ordinary config
+edits under ``~/.claude`` (``settings.json``, ``docs/decisions/``,
+CLAUDE.md, machine-local) MUST pass through silently.
 
 Maintainer override — DELIBERATELY UNADVERTISED: ``COORDINATOR_OVERRIDE_HOME_
 MEMO_GUARD=1`` disables this guard entirely, exactly as in the reference hook.
@@ -98,12 +104,20 @@ _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 _PATH_KEYS = ("file_path", "notebook_path", "path")
 
 _CLAUDE_DIRNAME = ".claude"
-_CROSS_REPO_DIRNAME = "cross-repo"
+
+#: Both the legacy bare dirname and the current `state/`-nested one are
+#: guarded unconditionally, per this chunk's negative spec: this guard polices
+#: a FOREIGN root it has no authority to probe/resolve, so BOTH literals are
+#: pinned here rather than consulting `memo_corpus_root`/`receiver_inbox_root`
+#: (neither is authoritative over a foreign root, and a probing resolver would
+#: select one and stop watching the other).
+_CROSS_REPO_RELDIRS = ("cross-repo", "state/cross-repo")
 
 
 def _guarded_roots() -> "list[Path]":
-    """``<home>/.claude/cross-repo`` roots to guard, union of USERPROFILE /
-    HOME / Path.home(), plus CLAUDE_HOME treated as a direct ``.claude`` root.
+    """``<home>/.claude/cross-repo`` and ``<home>/.claude/state/cross-repo``
+    roots to guard, union of USERPROFILE / HOME / Path.home(), plus
+    CLAUDE_HOME treated as a direct ``.claude`` root.
     """
     homes: "list[str]" = []
     for env_key in ("USERPROFILE", "HOME"):
@@ -117,22 +131,24 @@ def _guarded_roots() -> "list[Path]":
 
     roots: "list[Path]" = []
     for home in homes:
-        try:
-            roots.append(
-                Path(casefold_path(str(Path(home) / _CLAUDE_DIRNAME / _CROSS_REPO_DIRNAME)))
-            )
-        except Exception:
-            continue
+        for reldir in _CROSS_REPO_RELDIRS:
+            try:
+                roots.append(
+                    Path(casefold_path(str(Path(home) / _CLAUDE_DIRNAME / reldir)))
+                )
+            except Exception:
+                continue
 
     # CLAUDE_HOME (when set) points AT the .claude root itself, not at $HOME.
     claude_home = os.environ.get("CLAUDE_HOME", "")
     if claude_home and claude_home.strip():
-        try:
-            roots.append(
-                Path(casefold_path(str(Path(claude_home.strip()) / _CROSS_REPO_DIRNAME)))
-            )
-        except Exception:
-            pass
+        for reldir in _CROSS_REPO_RELDIRS:
+            try:
+                roots.append(
+                    Path(casefold_path(str(Path(claude_home.strip()) / reldir)))
+                )
+            except Exception:
+                pass
 
     # De-dup, preserving order (USERPROFILE/HOME/Path.home() commonly coincide).
     seen: "set[Path]" = set()

@@ -85,6 +85,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from coordinator_core import timestamps
 from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
@@ -129,16 +130,14 @@ import coordinator_core.ops.handoff_author_fork  # noqa: F401
 import coordinator_core.ops.handoff_phase_stamp  # noqa: F401
 import coordinator_core.ops.handoff_archive_transition  # noqa: F401
 
-# d6's door since 2026-08-28, repointed 2026-08-30 (C8,
-# docs/plans/2026-08-29-the-housekeeping-cycle-stops-committing.md) onto the
-# rebuilt cycle's own op boundary. Same REGISTRATION-TRIGGER role as the
-# imports above, and load-bearing for the same reason: `_invoke_op_in_process`
-# resolves out of `coordinator_core.ipc`'s registry, which is empty for a
-# module never imported. `handoff_archive_transition` above stays imported
-# alongside it -- `housekeeping.cycle` reaches that module's `_handler` as a
-# LIBRARY for its targeted-transition leg, so the module must load either way.
-# `handoff.housekeeping`'s own op key stays dead (kill means kill forever, PM
-# 2026-08-23) -- this import no longer resolves it.
+# d6's door; rewire history: coordinator_core/tests/test_housekeeping_is_
+# the_one_job.py :: _PERMITTED_DIRECT_IMPORTERS (canonical site). Same
+# REGISTRATION-TRIGGER role as the imports above, and load-bearing for the
+# same reason: `_invoke_op_in_process` resolves out of
+# `coordinator_core.ipc`'s registry, which is empty for a module never
+# imported. `handoff_archive_transition` above stays imported alongside it
+# -- `housekeeping.cycle` reaches that module's `_handler` as a LIBRARY for
+# its targeted-transition leg, so the module must load either way.
 import coordinator_core.housekeeping.cycle  # noqa: F401
 
 # `handoff.transition` (verb="claim") is the single writer d6's ledger
@@ -731,7 +730,8 @@ def _reconcile_claim_from_ledger(
         f"{predecessor_path!r} from the durable claim ledger -- its frontmatter "
         "carried no claim (a branch that never received the claiming commit, or "
         f"a discarded working-tree edit) while the ledger recorded session "
-        f"{record['session_id']} holding it since {record['claimed_at']}. The "
+        f"{record['session_id']} holding it since "
+        f"{timestamps.with_age(record['claimed_at'])}. The "
         "claim was re-stamped from that record and the succession proceeds.",
         file=sys.stderr,
     )
@@ -832,19 +832,17 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
     successor> and archives it (git mv to archive/handoffs/YYYY-MM/ + commit),
     all in ONE call.
 
-    ROUTED THROUGH `handoff.housekeeping` SINCE 2026-08-28 (and repointed onto
-    `housekeeping.cycle` 2026-08-30, C8,
-    docs/plans/2026-08-29-the-housekeeping-cycle-stops-committing.md), and the
-    rewire is the whole point of the change rather than a refactor.
-    `handoff.archive_transition` is in `SUSPENDED_OPS`, so `get_op_handler`
-    refused it before it was ever composed and this directive degraded on every
-    single `/handoff` in the fleet -- every continuation baton's predecessor
-    left non-terminal, which is the PM-quoted d6 outage. `housekeeping.cycle`
-    is the live door over the same surviving compute: it reaches
-    `handoff_archive_transition._handler` as a LIBRARY (both `handoff.housekeeping`
-    and `handoff.archive_transition`'s own op keys stay dead -- kill means kill
-    forever, PM 2026-08-23) and returns that op's result verbatim under
-    `transition`. Governing plan:
+    ROUTED THROUGH `housekeeping.cycle`; rewire history is canonically stated
+    in `coordinator_core/tests/test_housekeeping_is_the_one_job.py ::
+    _PERMITTED_DIRECT_IMPORTERS`, and the rewire is the whole point of the
+    change rather than a refactor. `handoff.archive_transition` is in
+    `SUSPENDED_OPS`, so `get_op_handler` refused it before it was ever
+    composed and this directive degraded on every single `/handoff` in the
+    fleet -- every continuation baton's predecessor left non-terminal, which
+    is the PM-quoted d6 outage. `housekeeping.cycle` is the live door over the
+    same surviving compute: it reaches `handoff_archive_transition._handler`
+    as a LIBRARY and returns that op's result verbatim under `transition`.
+    Governing plan:
     `docs/plans/2026-08-27-one-corpus-read-or-the-housekeeping-job-dies-a-
     fourth-time.md`, chunk C5.
 
@@ -2343,7 +2341,7 @@ def _collect_directive_commits(report: dict[str, Any]) -> list[dict[str, Any]]:
 
     2026-07-29 legibility fix. `report["commit_sha"]` names ONE commit -- the
     `_scoped_commit` over the successor artifact -- but d6 (`handoff.
-    supersede_predecessor`, composing `handoff.archive_transition`) does its
+    supersede_predecessor`, composing `housekeeping.cycle`) does its
     own `git mv` + commit internally. An operator reading a report with a
     single `commit_sha` after a run that produced two commits has no way to
     tell whether the predecessor's rename is committed or sitting unstaged
@@ -2351,10 +2349,19 @@ def _collect_directive_commits(report: dict[str, Any]) -> list[dict[str, Any]]:
     (observed live, 2026-07-29: a `git log` + two-path history walk that the
     report should simply have answered).
 
-    `handoff.archive_transition` returns `moved: bool` and no sha (see that
-    module's return contract), so this reports the fact and the committing
+    The archival leg returns `moved: bool` and no sha (see
+    `ops/handoff_archive_transition.py`'s return contract, relayed verbatim
+    under `transition`), so this reports the fact and the committing
     directive, never a fabricated sha. An archived-predecessor stamp-in-place
     performs no move and therefore contributes no entry.
+
+    `committed_by` NAMES THE LIVE DOOR, not the leg. It said
+    `handoff.archive_transition` until 2026-09-02 -- a key that has been in
+    `SUSPENDED_OPS` since the d6 rewire (canonical history:
+    `coordinator_core/tests/test_housekeeping_is_the_one_job.py ::
+    _PERMITTED_DIRECT_IMPORTERS`), so an operator reading this report row was
+    handed a name they cannot invoke, cannot look up, and cannot use to find
+    what made the commit.
     """
     commits: list[dict[str, Any]] = []
     for result in report.get("results", []) or []:
@@ -2373,7 +2380,7 @@ def _collect_directive_commits(report: dict[str, Any]) -> list[dict[str, Any]]:
                     # and so agreed with the bug. Any future reader of a
                     # `results[]` row takes its key names from `to_report`.
                     "directive_id": result.get("id"),
-                    "committed_by": "handoff.archive_transition",
+                    "committed_by": "housekeeping.cycle",
                     "what": "predecessor git-mv into archive/handoffs/, committed by the op itself",
                     "sha": None,
                 }

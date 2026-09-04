@@ -190,6 +190,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "plan.append_session":                    "coordinator_core.ops.completion_ops",
     "fleet.backfill_dispositionless_memos":   "coordinator_core.ops.fleet.backfill_memo_disposition",
     "fleet.reap_unintegrated_findings":       "coordinator_core.ops.fleet.reap_unintegrated_findings",
+    "fleet.reap_review_trail_rest":           "coordinator_core.ops.fleet.reap_unintegrated_findings",
     "fleet.reap_integrated_findings":         "coordinator_core.ops.fleet.reap_integrated_findings",
     "session.reap":                           "coordinator_core.ops.session.reap",
     "session.reap_claims_for_repos":          "coordinator_core.ops.session.reap",

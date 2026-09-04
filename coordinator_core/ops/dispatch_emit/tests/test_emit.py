@@ -1485,7 +1485,10 @@ def test_bookkeeping_prefix_render_is_derived_from_the_allowlist():
     Hand-writing the prefix into the prompt string is how the two drift:
     a later prefix addition would silence the halt in nobody's prompt.
     """
-    assert emit._BOOKKEEPING_PREFIXES == ("state/subagent-share/",)
+    assert emit._BOOKKEEPING_PREFIXES == (
+        ".coordinator-local/subagent-share/",
+        "state/subagent-share/",
+    )
     for prefix in emit._BOOKKEEPING_PREFIXES:
         assert f"`{prefix}**`" in emit._BOOKKEEPING_PREFIX_RENDER
     assert emit._BOOKKEEPING_PREFIX_RENDER in emit._PROVENANCE_HEADING

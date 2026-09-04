@@ -87,7 +87,7 @@ in scope for that measurement but are not themselves the AC8 violation class
 the amplification gate polices (per-item-over-a-growing-set spawns are).
 
 Negative-spec:
-    Do NOT glob ``state/subagent-share/<session_id>/<label>-*.md`` to find a
+    Do NOT glob ``.coordinator-local/subagent-share/<session_id>/<label>-*.md`` to find a
     sidecar — the exact directory-scan shape ``review-trail.schema.json``'s
     own ``x-bump-note`` already condemned by name (K-005). Step 2 opens ONE
     file, named by the payload; that is not the scan, and reaching for a glob

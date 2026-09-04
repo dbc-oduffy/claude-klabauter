@@ -31,6 +31,7 @@ import os
 
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
+from coordinator_core.session import machinery_paths
 
 _MODULE = "coordinator_core.hooks.stop_dispatch"
 
@@ -46,7 +47,7 @@ def _make_repo(tmp_path):
 
 
 def _share_dir(repo_root: str, session_id: str) -> str:
-    path = os.path.join(repo_root, "state", "subagent-share", session_id)
+    path = machinery_paths.share_dir(repo_root, session_id)
     os.makedirs(path, exist_ok=True)
     return path
 

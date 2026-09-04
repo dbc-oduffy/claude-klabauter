@@ -632,6 +632,45 @@ static long door_stdin_read_chunk(void *reader_ctx, char *buf, size_t cap) {
     return (long)got;
 }
 
+/* The wide-argv adapter over `door_argv_declares_params_stdin`
+ * (door_core.h) -- the predicate itself is shared with the POSIX door so
+ * the two cannot disagree about which argv shapes name this route. Each
+ * argument is converted with the same `wide_to_utf8` the request builder
+ * uses, rather than a second `wcscmp` spelling of the flag text. A
+ * conversion failure is treated as "not declared": this gate only ever
+ * chooses the cold leg, so failing it open costs nothing the door was not
+ * already going to attempt, and the `-32004` it exists to prevent is
+ * unreachable for an argv this door could not even render.
+ *
+ * Review: overengineering-reviewer -- this converts argv to UTF-8 and
+ * discards the result; the request builder in `main()`'s step 6 converts
+ * the same argv again, per warm request, on the 105ms hot path. Accepted
+ * explicitly rather than threading one shared converted-argv array
+ * through the ~20 fall-through exit points between this gate and that
+ * builder: that span already frees several other resources (SID, stamp
+ * bytes, pipe handles) per exit, and adding a shared array's lifetime
+ * across all of them is a `main()`-wide restructuring, not a local edit,
+ * for a duplicate conversion of an argv list that is typically a handful
+ * of short strings. */
+static int door_argv_declares_params_stdin_w(int argc, wchar_t **wargv) {
+    if (argc <= 1 || wargv == NULL) return 0;
+    const char **argv_u8 = (const char **)calloc((size_t)argc, sizeof(char *));
+    if (!argv_u8) return 0;
+    int declared = 0;
+    int converted = 1;
+    for (int i = 1; i < argc; i++) {
+        int len = 0;
+        argv_u8[i] = wide_to_utf8(wargv[i], &len);
+        if (!argv_u8[i]) { converted = 0; break; }
+    }
+    if (converted) {
+        declared = door_argv_declares_params_stdin(argc, argv_u8);
+    }
+    for (int i = 1; i < argc; i++) free((void *)argv_u8[i]);
+    free(argv_u8);
+    return declared;
+}
+
 /* Forward declaration -- `write_all` is defined below (used by
  * `emit_indeterminate`, further down still), needed here one section
  * earlier by `emit_hook_deny` immediately below. */
@@ -1187,6 +1226,19 @@ int main(void) {
     size_t engine_root_u8_len = 0;
     if (!resolve_engine_root(&engine_root_w, &engine_root_u8, &engine_root_u8_len)) {
         return fall_through_and_free(argc, wargv, NULL);
+    }
+
+    /* ---- 0a. THE STDIN-BOUND PARAMS ROUTE IS DECIDED HERE, PRE-DELIVERY
+     * (door_core.h :: door_argv_declares_params_stdin). Placed after the
+     * engine root resolves so the cold leg it takes is the SAME validated
+     * root every other fall-through in this function uses -- not the
+     * build-time default `fall_through(.., NULL)` would fall back to.
+     * Hook mode is excluded: that caller's stdin is already drained above,
+     * and its disposition on every fall-through is a deny envelope, not a
+     * cold spawn. */
+    if (!g_door_hook_mode && door_argv_declares_params_stdin_w(argc, wargv)) {
+        free(engine_root_u8);
+        return fall_through_and_free(argc, wargv, engine_root_w);
     }
 
     /* ---- 1. SID ---- */

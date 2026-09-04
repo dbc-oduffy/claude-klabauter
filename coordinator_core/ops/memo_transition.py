@@ -143,6 +143,7 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
 from coordinator_core.win_portability import no_console_creationflags
@@ -1245,6 +1246,20 @@ def _handle_already_actioned(fm_text: str, params: dict, verb: str) -> str | Non
     return _apply_realization_correction(fm_text, params)
 
 
+def _closure_stamp(params: dict) -> str:
+    """The instant a memo's ``status → actioned`` write is landing, RFC3339 UTC.
+
+    ``resolve`` already carries a caller-supplied ``at`` (the same instant it stamps
+    ``picked_up_at`` with, so one transition reads as one moment); ``action`` has never
+    required one, so an absent/blank ``at`` falls back to now. Never returns empty — a
+    closure with no recorded time is the exact hole ``actioned_at`` exists to close.
+    """
+    at = params.get("at")
+    if isinstance(at, str) and at.strip():
+        return at.strip()
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _apply_action_fields(fm_text: str, params: dict) -> str:
     """Apply status→actioned plus the disposition field writes, as ``_action`` does.
 
@@ -1291,6 +1306,19 @@ def _apply_action_fields(fm_text: str, params: dict) -> str:
     # (schema.js) has no opt-in flag — it unconditionally quotes all-digit values on
     # every field it serializes. Python must match on every write, not just realized_by.
     fm_text = replace_fm_field(fm_text, "status", "actioned", numeric_quoting=True)
+
+    # actioned_at — WHEN the close happened, not merely that it did. Every other field
+    # this function writes is current-state; without this one the corpus can answer "how
+    # many memos are actioned now" but never "how many were open on date D", which is what
+    # a burn-down needs (example-cockpit-repo, 2026-09-04). Preserved, never overwritten, when
+    # already present: a hand-authored stamp or an earlier close is the closure-of-record,
+    # and --correct-realization must not move a memo's closure date. Anchored on `status`
+    # so the disposition fields written below land between the two, leaving actioned_at
+    # last in the lifecycle block.
+    if read_fm_field(fm_text, "actioned_at") is None:
+        fm_text = insert_fm_field(
+            fm_text, "actioned_at", _closure_stamp(params), "status", numeric_quoting=True
+        )
 
     if decision:
         # decision field: replace if present, insert after status if absent.
@@ -1364,8 +1392,9 @@ def _apply_action_fields(fm_text: str, params: dict) -> str:
 # superseded_by pointer validation — mirrors
 # memo_send._normalize_in_reply_to / _validate_in_reply_to_exists (that
 # module's exact resolution logic, not re-invented here): the pointer must
-# name a memo THIS repo actually holds, in its own cross-repo/inbox/ or
-# cross-repo/archive/ (searched recursively — archive is nested by date).
+# name a memo THIS repo actually holds, in its own memo-corpus inbox/ or
+# archive/ (resolved via memo_corpus_root, searched recursively — archive is
+# nested by date).
 # ---------------------------------------------------------------------------
 
 def _normalize_superseded_by(value: str) -> str:
@@ -1377,11 +1406,14 @@ def _normalize_superseded_by(value: str) -> str:
 
 def _validate_superseded_by_exists(git_root: Path, superseded_by: str) -> dict | None:
     """Fail-loud gate: ``superseded_by`` must name a memo THIS repo actually
-    holds (its own ``cross-repo/inbox/`` or ``cross-repo/archive/``, the
-    latter searched recursively). Runs BEFORE any write — a typo'd pointer is
-    worse than none. Returns None on pass, else an ``_err()`` envelope."""
-    inbox_dir = git_root / "cross-repo" / "inbox"
-    archive_dir = git_root / "cross-repo" / "archive"
+    holds (its own memo-corpus ``inbox/`` or ``archive/``, resolved via
+    ``memo_corpus_root`` so this stays correct across the state/cross-repo
+    migration, the latter searched recursively). Runs BEFORE any write — a
+    typo'd pointer is worse than none. Returns None on pass, else an
+    ``_err()`` envelope."""
+    corpus_root = Path(memo_corpus_root(str(git_root)))
+    inbox_dir = corpus_root / "inbox"
+    archive_dir = corpus_root / "archive"
 
     if (inbox_dir / superseded_by).is_file():
         return None
@@ -1393,8 +1425,8 @@ def _validate_superseded_by_exists(git_root: Path, superseded_by: str) -> dict |
     return _err(
         f"action: superseded_by={superseded_by!r} does not match any memo in "
         f"this repo's own {inbox_dir} or {archive_dir} (searched recursively) — "
-        f"superseded_by must name a memo present in cross-repo/inbox/ or "
-        f"cross-repo/archive/. Check for a typo."
+        f"superseded_by must name a memo present in this repo's memo-corpus "
+        f"inbox/ or archive/. Check for a typo."
     )
 
 
@@ -1992,7 +2024,13 @@ def _resolve(memo: str, session_id: str, at: str, params: dict) -> dict:
             # Step 3: apply _action's disposition field writes. Its "requires in_progress"
             # precondition is satisfied by step 2 above (status is now "in_progress" in
             # fm_text) — checked within this SAME closure, never a second read.
-            fm_text = _apply_action_fields(fm_text, params)
+            # `at` is injected explicitly rather than left to ride in `params`: resolve
+            # takes it as its own positional argument, and its closure stamp must be the
+            # SAME instant as the picked_up_at written in step 2 — one transition reads as
+            # one moment. The op handler happens to pass an `at`-carrying params dict, so
+            # relying on that would work in production and silently drift to a now-stamp
+            # for any other caller (every direct _resolve() call site, tests included).
+            fm_text = _apply_action_fields(fm_text, {**params, "at": _at})
 
         # Truncate-and-warn an over-cap summary: BEFORE the validation gate (Ask 2) —
         # the cap is cosmetic; it must not hard-fail the transition.
@@ -2082,7 +2120,9 @@ async def _handler(
                    actioned_note (str)
                  plus optional distill_fate (str: ephemeral|commitment|ratification) and
                  in_repo_capture (str), stamped atomically in the same write (Finding #11, C3);
-                 plus optional correct_realization (bool) — see below.
+                 plus optional correct_realization (bool) — see below;
+                 plus optional at (str, ISO timestamp) — the closure instant stamped
+                 into actioned_at, defaulting to now when absent (_closure_stamp).
         release: (no additional params)
         resolve: session_id (str, required, non-empty), at (str, ISO timestamp), plus the
                  same disposition params as action — atomic open→actioned, no intermediate

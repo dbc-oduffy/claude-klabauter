@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import subprocess
 from coordinator_core.win_portability import no_console_creationflags
 import sys
@@ -382,6 +383,52 @@ def _trim_trailing_blank(text: str) -> str:
     return "\n".join(lines[:last])
 
 
+# Prose older than this is treated as absent, so the ladder falls through to the
+# always-current git-log rung. Both changelog feeds are written at weekly
+# cadence, so two consecutive silent weeks is not a quiet sprint — it is a
+# stopped feed, and the artifact's job is reporting shipped work rather than
+# preserving the last thing anyone wrote about it.
+_MAX_PROGRESS_INPUT_AGE_DAYS = 14
+
+_ISO_DATE_RE = re.compile(r"(\d{4}-\d{2}-\d{2})")
+
+
+def _date_from_path(path: str) -> Optional[datetime]:
+    """Recover an input's authored date from its path, newest component first.
+
+    Deliberately NOT mtime. Every one of these files arrives by checkout on a
+    fresh clone, which stamps mtime at clone time and would report a feed that
+    stopped in July as hours old — the staleness check would then vouch hardest
+    for exactly the machines it is meant to catch. The date in the filename
+    (`2026-08-17.md`, `2026-07-14-pending-release.md`) or its parent directory
+    (`archive/week-changelogs/2026-07-13/`) is the authored date and survives
+    transport.
+    """
+    for component in (os.path.basename(path), os.path.basename(os.path.dirname(path))):
+        match = _ISO_DATE_RE.search(component)
+        if not match:
+            continue
+        try:
+            return datetime.strptime(match.group(1), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _is_stale_input(path: str, now: Optional[datetime] = None) -> bool:
+    """True when `path`'s authored date is beyond the freshness bound.
+
+    Undated inputs are treated as fresh: absent a date there is no evidence of
+    staleness, and refusing prose on a naming convention it never agreed to
+    would silently empty the section for any repo that names files differently.
+    """
+    authored = _date_from_path(path)
+    if authored is None:
+        return False
+    reference = now or datetime.now(timezone.utc)
+    return (reference - authored).days > _MAX_PROGRESS_INPUT_AGE_DAYS
+
+
 def _derive_progress(state_root: str, repo_root: str) -> str:
     wc_dir = os.path.join(state_root, "week-changelog")
     output = ""
@@ -389,7 +436,12 @@ def _derive_progress(state_root: str, repo_root: str) -> str:
 
     # --- Highlights from week-changelog (if directory present) ---
     if os.path.isdir(wc_dir):
-        for wc_file in sorted(glob.glob(os.path.join(wc_dir, "*.md"))):
+        # Newest-first: filenames are date-prefixed, so descending lexicographic
+        # is descending chronological. The `break` below takes the first match,
+        # which must be the freshest — rung 2 reaches for `candidates[-1]` for
+        # the same reason. Ascending order here silently pins the section to the
+        # oldest file on disk forever.
+        for wc_file in sorted(glob.glob(os.path.join(wc_dir, "*.md")), reverse=True):
             if not os.path.isfile(wc_file):
                 continue
             try:
@@ -400,6 +452,11 @@ def _derive_progress(state_root: str, repo_root: str) -> str:
                 continue
             candidate = _extract_section(wc_text, "## Highlights")
             if candidate:
+                if _is_stale_input(wc_file):
+                    # Newest-first, so the newest is already too old: every
+                    # remaining file is older still. Stop rather than walk down
+                    # into staler prose.
+                    break
                 highlights = candidate
                 break
 
@@ -409,6 +466,8 @@ def _derive_progress(state_root: str, repo_root: str) -> str:
             pattern = os.path.join(repo_dir, "archive", "week-changelogs", "**", "*pending-release*.md")
             candidates = sorted(glob.glob(pattern, recursive=True))
             latest_pr = candidates[-1] if candidates else ""
+            if latest_pr and _is_stale_input(latest_pr):
+                latest_pr = ""
             if latest_pr and os.path.isfile(latest_pr):
                 try:
                     with open(latest_pr, encoding="utf-8", errors="replace") as fh:

@@ -73,6 +73,7 @@ import re
 import subprocess
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.memo_corpus import memo_corpus_root
 import sys
 from datetime import date
 from typing import List, Optional, Tuple
@@ -105,8 +106,8 @@ def _resolve_inbox_dir(cwd: Optional[str] = None) -> str:
     cwd = cwd or os.getcwd()
     git_root = show_toplevel(cwd)
     if not git_root:
-        return os.path.join(cwd, "cross-repo", "inbox")
-    return os.path.join(git_root, "cross-repo", "inbox")
+        return os.path.join(memo_corpus_root(cwd), "inbox")
+    return os.path.join(memo_corpus_root(git_root), "inbox")
 
 
 def _parse_frontmatter(text: str) -> dict:

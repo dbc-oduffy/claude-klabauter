@@ -82,6 +82,7 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.fleet._common import main_worktree_root
 
 import asyncio
@@ -308,7 +309,7 @@ def _apply_one(memo_path: Path, field: str, value: str, repo_root: Path) -> dict
 
 
 def backfill_dispositionless_memos(worktree_root: Path) -> dict:
-    """Apply BACKFILL_TABLE against cross-repo/archive/ under worktree_root.
+    """Apply BACKFILL_TABLE against <memo_corpus_root>/archive/ under worktree_root.
 
     Re-runnable (AC10): a memo already carrying a disposition field is skipped,
     so a second call over the same table is a no-op by construction.
@@ -316,7 +317,7 @@ def backfill_dispositionless_memos(worktree_root: Path) -> dict:
     Returns {"applied": [...], "skipped": [...], "failed": [...]}, each a list
     of {"id": <filename>, ...} dicts.
     """
-    archive_dir = worktree_root / "cross-repo" / "archive"
+    archive_dir = Path(memo_corpus_root(str(worktree_root))) / "archive"
     applied: list[dict] = []
     skipped: list[dict] = []
     failed: list[dict] = []

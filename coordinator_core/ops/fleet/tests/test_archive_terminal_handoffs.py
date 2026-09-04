@@ -997,7 +997,7 @@ def test_c3_fallback_to_unscoped_call_above_pathspec_budget():
     assert sum(len(p) + 1 for p in huge_survivor_set) > _DIVERGENCE_CHECK_ARGV_BUDGET_CHARS
 
     with patch(
-        "coordinator_core.ops.fleet.archive_terminal_handoffs.status_porcelain",
+        "coordinator_core.ops.ceremony.git_native.status_porcelain",
         return_value=GitResult(returncode=0, stdout="", stderr=""),
     ) as spy:
         dirty = _dirty_handoff_relpaths(Path("."), huge_survivor_set)
@@ -1028,7 +1028,7 @@ def test_c3_fail_closed_on_git_status_failure_treats_survivors_as_dirty():
         "coordinator_core.ops.fleet.archive_terminal_handoffs._dirty_relpaths_in_process",
         return_value=None,
     ), patch(
-        "coordinator_core.ops.fleet.archive_terminal_handoffs.status_porcelain",
+        "coordinator_core.ops.ceremony.git_native.status_porcelain",
         return_value=GitResult(returncode=1, stdout="", stderr="fatal: boom"),
     ) as spy:
         dirty = _dirty_handoff_relpaths(Path("."), survivors)
@@ -1052,7 +1052,7 @@ def test_in_process_arm_declining_is_a_fallback_never_a_fail_closed_refusal():
         "coordinator_core.ops.fleet.archive_terminal_handoffs._dirty_relpaths_in_process",
         return_value=None,
     ), patch(
-        "coordinator_core.ops.fleet.archive_terminal_handoffs.status_porcelain",
+        "coordinator_core.ops.ceremony.git_native.status_porcelain",
         return_value=GitResult(returncode=0, stdout="", stderr=""),
     ) as spy:
         dirty = _dirty_handoff_relpaths(Path("."), survivors)

@@ -24,8 +24,12 @@ state:
 
     TWO BINDING READER RULES, from the ruling, neither optional:
       - Scans BOTH `cross-repo/inbox/` AND `cross-repo/archive/` (the
-        latter recursively — archive is nested by date). The boot sweep
-        moves actioned memos; an actioned discharge memo is still the
+        latter via `rglob`, tolerant of nesting). Negative spec, measured
+        against this worktree's live corpus (1852 archive entries, zero in
+        date subdirectories, C16): the archive is flat, not nested by
+        date — `rglob` is kept only because it degrades safely to `glob`
+        behavior on a flat tree, not because nesting is expected. The boot
+        sweep moves actioned memos; an actioned discharge memo is still the
         discharge record. Scanning inbox only loses discharges to a sweep
         that runs on someone else's schedule.
       - Keys on the `discharges` block ALONE — never on `status:`. This
@@ -88,6 +92,7 @@ from typing import Any, Optional
 from coordinator_core.frontmatter.body_blocks import LocateStatus
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.ipc import register_op
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.gate_liveness.emit_discharge import CLOSURE_KEY_KINDS
 from coordinator_core.ops.plan_tasks_render import load_rows
 
@@ -212,13 +217,16 @@ def _scan_discharge_records(repo_root: Path) -> list:
     """Scan `repo_root`'s own `cross-repo/inbox/` and `cross-repo/archive/`
     trees for memos carrying a well-formed `discharges:` block.
 
-    Both directories are scanned unconditionally (archive recursively,
-    nested by date) — the boot sweep moves actioned memos, so an actioned
-    discharge memo is still the discharge record (binding reader rule, see
-    module docstring). Sorted by path for deterministic match order.
+    Both directories are scanned unconditionally (archive via `rglob`,
+    tolerant of nesting — negative spec, measured C16: the live corpus is
+    flat, not nested by date; `rglob` is kept as the safe degrade, not
+    because nesting is expected) — the boot sweep moves actioned memos, so
+    an actioned discharge memo is still the discharge record (binding
+    reader rule, see module docstring). Sorted by path for deterministic
+    match order.
     """
     records: list = []
-    cross_repo_dir = repo_root / "cross-repo"
+    cross_repo_dir = Path(memo_corpus_root(str(repo_root)))
     for sub in ("inbox", "archive"):
         search_dir = cross_repo_dir / sub
         if not search_dir.is_dir():

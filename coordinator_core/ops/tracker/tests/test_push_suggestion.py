@@ -1031,3 +1031,82 @@ def test_delivery_commit_message_carries_deliverable_trailer():
         "a delivery lands a file in a repo whose operators ran nothing; without "
         "an attribution trailer they cannot tell what put it there"
     )
+
+
+# ---------------------------------------------------------------------------
+# Review coordinator:code-reviewer (slice B, 2026-09-03) Finding 1 — the
+# migration-aware delivery path (`receiver_inbox_root`, C10a) had zero
+# coverage: no test exercised delivery against a receiver whose corpus has
+# already migrated to `state/cross-repo/`, and none asserted the confinement
+# refusal against the MIGRATED root specifically. Positive assertions are
+# anchored on the migrated root itself, never a negative `"cross-repo" not
+# in x` check (vacuous the moment the literal moves).
+# ---------------------------------------------------------------------------
+
+
+def test_handler_peer_delivery_lands_under_migrated_state_cross_repo_inbox(
+    monkeypatch, tmp_path
+):
+    """A receiver repo carrying `state/cross-repo/` (no legacy `cross-repo/`)
+    must receive the delivery under the MIGRATED inbox — `receiver_inbox_root`
+    prefers the new root, and `target_path`/`rel_path` both derive from that
+    SAME resolved root (single-resolve property, C5)."""
+    repo = _make_git_repo(tmp_path / "repo")
+    peer = _make_git_repo(tmp_path / "peer")
+    (peer / "state" / "cross-repo" / "inbox").mkdir(parents=True)
+    assert not (peer / "cross-repo").exists(), "fixture must have no legacy root"
+
+    monkeypatch.setattr(
+        tracker_holder,
+        "registry_get",
+        _fake_registry(
+            {
+                "tracker.holder_repo": "peer_key",
+                "repos.peer_key": str(peer),
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        tracker_holder, "_claude_klabauter_source_tree", lambda: tmp_path / "claude-klabauter"
+    )
+
+    result = _run(_handler({"event": _event(item_id="migrated-item")}, repo_root=repo))
+
+    assert result["delivered"] == "peer"
+    delivered_path = Path(result["path"])
+    migrated_inbox = (peer / "state" / "cross-repo" / "inbox").resolve()
+    assert delivered_path.resolve().parent == migrated_inbox, (
+        f"delivery landed at {delivered_path}, expected under the migrated "
+        f"inbox {migrated_inbox}"
+    )
+    assert delivered_path.exists()
+    # rel_path (used for both the git-add pathspec and the commit) must
+    # derive from the SAME resolved migrated root, not a re-spelled literal.
+    assert delivered_path.resolve().relative_to(peer.resolve()).as_posix().startswith(
+        "state/cross-repo/inbox/"
+    )
+    assert not (peer / "cross-repo").exists(), (
+        "delivery must never mint a legacy cross-repo/ directory for a "
+        "receiver that has already migrated"
+    )
+
+
+def test_deliver_envelope_refuses_path_outside_migrated_inbox_directly():
+    """Direct unit test of the confinement assertion against the MIGRATED
+    root specifically (Finding 1(b)) — the legacy-root version of this
+    check already exists
+    (`test_deliver_envelope_refuses_path_outside_inbox_directly`); this
+    pins the same refusal when the receiver has moved to
+    `state/cross-repo/`, so a future edit that special-cases the migrated
+    branch and drops the confinement check there goes RED."""
+    import tempfile as _tempfile
+
+    with _tempfile.TemporaryDirectory() as tmp:
+        target_root = Path(tmp)
+        (target_root / "state" / "cross-repo" / "inbox").mkdir(parents=True)
+        hostile_event = {
+            "id": "../../../../escaped",
+            "observed_at": "x",
+        }
+        with pytest.raises(PushSuggestionRefused):
+            push_suggestion._deliver_envelope(target_root, None, hostile_event)

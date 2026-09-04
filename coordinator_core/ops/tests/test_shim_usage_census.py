@@ -17,7 +17,7 @@ def test_record_invocation_appends_one_line_and_census_reports_it(tmp_path):
     now = time.time()
     shim_usage_census.record_invocation("baton-assemble", repo_root=tmp_path, now=now)
 
-    series_path = tmp_path / "state" / "shim-usage-census.jsonl"
+    series_path = tmp_path / ".coordinator-local" / "shim-usage-census.jsonl"
     lines = series_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     row = json.loads(lines[0])
@@ -36,7 +36,7 @@ def test_record_invocation_never_truncates_across_calls(tmp_path):
     for i in range(5):
         shim_usage_census.record_invocation("baton-assemble", repo_root=tmp_path, now=float(i))
 
-    series_path = tmp_path / "state" / "shim-usage-census.jsonl"
+    series_path = tmp_path / ".coordinator-local" / "shim-usage-census.jsonl"
     lines = series_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 5
 
@@ -64,7 +64,7 @@ def test_census_distinguishes_no_series_from_empty_series(tmp_path):
     # Review: coordinator:code-reviewer -- P2. A series file that exists
     # but has no rows for this name must report series_present=True while
     # invoked stays False -- distinct from the no-file-at-all case above.
-    series_path = tmp_path / "state" / "shim-usage-census.jsonl"
+    series_path = tmp_path / ".coordinator-local" / "shim-usage-census.jsonl"
     series_path.parent.mkdir(parents=True, exist_ok=True)
     series_path.write_text('{"name": "some-other-shim", "ts": 1.0}\n', encoding="utf-8")
 
@@ -74,7 +74,7 @@ def test_census_distinguishes_no_series_from_empty_series(tmp_path):
 
 
 def test_census_ignores_malformed_lines_and_unknown_names(tmp_path):
-    series_path = tmp_path / "state" / "shim-usage-census.jsonl"
+    series_path = tmp_path / ".coordinator-local" / "shim-usage-census.jsonl"
     series_path.parent.mkdir(parents=True, exist_ok=True)
     series_path.write_text(
         "not json at all\n"
@@ -112,7 +112,7 @@ def test_record_invocation_never_raises_on_non_serializable_name(tmp_path):
     # swallow it, same as any other write failure.
     shim_usage_census.record_invocation(object(), repo_root=tmp_path)  # type: ignore[arg-type]
 
-    series_path = tmp_path / "state" / "shim-usage-census.jsonl"
+    series_path = tmp_path / ".coordinator-local" / "shim-usage-census.jsonl"
     assert not series_path.exists()
 
 

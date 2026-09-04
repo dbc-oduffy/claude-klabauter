@@ -94,7 +94,7 @@ def _load_klabauter_rows() -> list[list[str]]:
 # ---------------------------------------------------------------------------
 
 
-def test_eight_klabauter_rows_present():
+def test_all_klabauter_rows_present():
     """Sanity floor for the rest of this file: if the row count drifts, the
     per-row audit below (this file + the dispatch report) is stale and must
     be re-walked, not silently trusted."""
@@ -105,8 +105,15 @@ def test_eight_klabauter_rows_present():
     # `coordinator/lib`, rather than the legacy flat `lib`) — an additional
     # allowlisted row, same fail-closed mechanism, not a state/-carrying
     # change. 8 -> 9.
-    assert len(rows) == 9, (
-        f"expected 9 publish-mirror:claude_klabauter rows, found {len(rows)}: "
+    # Re-audited 2026-09-02: `claude-klabauter-coordinator-tests` was added in
+    # 2f6e8d4825 (2026-08-30), source and destination both `coordinator/tests`,
+    # declaring a 6-entry allowlist. Walked all ten rows rather than bumping the
+    # count: sources are dist/klabauter-toplevel, docs/reference, docs/install,
+    # bin, scripts, coordinator/lib (x2), coordinator/bin, coordinator/tests and
+    # coordinator_core; no inclusion entry in any of the nine allowlists is
+    # `state`. Same fail-closed mechanism, not a state/-carrying change. 9 -> 10.
+    assert len(rows) == 10, (
+        f"expected 10 publish-mirror:claude_klabauter rows, found {len(rows)}: "
         f"{[r[0] for r in rows]} — re-audit this file's row-by-row rationale"
     )
 
@@ -137,9 +144,9 @@ def test_no_klabauter_allowlist_admits_state():
             f"this would carry claude-klabauter's working substrate into the mirror"
         )
 
-    assert checked_allowlisted == 8, (
-        f"expected 8 of the 9 claude_klabauter rows to declare an allowlist "
-        f"(the 9th, claude-klabauter-publish-repo-toplevel, deliberately has "
+    assert checked_allowlisted == 9, (
+        f"expected 9 of the 10 claude_klabauter rows to declare an allowlist "
+        f"(the 10th, claude-klabauter-publish-repo-toplevel, deliberately has "
         f"none), found {checked_allowlisted} — row shape has drifted, re-audit"
     )
 

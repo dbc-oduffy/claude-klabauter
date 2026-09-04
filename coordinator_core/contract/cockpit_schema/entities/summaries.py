@@ -443,6 +443,43 @@ class HandoffSummary(BaseModel):
     D9: nullable, never optional.
     """
 
+    roadmap_id: str | None = Field(
+        default=None,
+        json_schema_extra={"x-zod-nullable-optional": True},
+    )
+    """
+    The roadmap this artifact belongs to. Bare id (emitted-kind — roadmap
+    records ARE emitted in this contract as RoadmapSummary, so a bare id
+    resolves without a stub).
+
+    Added 4.2.0 for kind `roadmap-baton`, whose ancestry is NOT carried on the
+    origin_* family: `_scaffold_roadmap_baton` emits `predecessor: none`
+    unconditionally and never writes origin_session/origin_handoff, so a
+    roadmap-baton's only parent edge from mint is its roadmap. Consumers that
+    build a lineage DAG had no way to place those rows at all.
+
+    Deliberately NOT named `origin_roadmap_id` despite sitting in the ancestry
+    block: `roadmap_id` is the frontmatter field name authored on the record,
+    and the origin_* family denotes a spawned-from edge stamped at fork time,
+    which this is not — it is a durable membership FK true from mint.
+
+    OPTIONAL, not D9-required, unlike the origin_* fields it sits beside —
+    same `x-zod-nullable-optional` shape as `forked_from` /
+    `additional_predecessors` / `disposed_successors`, the other ancestry
+    fields in this entity that arrived after consumers already existed. The
+    fleet emits asynchronously and per-repo by design (8+ producers, own
+    vintages, no coordination point), so a required additive field would bar
+    every consumer from validating at 4.2.0 until the last producer re-emitted
+    — a fleet-wide lockstep bought for one field. Optional lets each producer
+    light it up independently and reaches the same end state. Requested by
+    example-cockpit-repo-em (the consumer that pays the coupling), whose ingest
+    records no schema version and does not validate snapshots on the read
+    path, so `required` would have bought enforcement nowhere.
+
+    Spec backlink: cross-repo/inbox/2026-09-03-example-cockpit-repo-em-handoff-
+    predecessor-defaults-to-none.md
+    """
+
     # ── Wire-level handoff_id derivation (C4) ────────────────────────────
     # Spec backlink: emit/sections/handoffs.py `collect()` — see that module's
     # docstring for the full rationale (basename-not-provenance.path keying,

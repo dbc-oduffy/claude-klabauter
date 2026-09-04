@@ -49,11 +49,24 @@ were editing those files concurrently) — wiring it is a follow-up chunk, not a
 gap in this op's own contract; `updatedocs.gates` runs a NAMED SUBSET of gates
 via `params["gates"]`, so adding 11h2 later is additive, not a reshape.
 
-Repo-root resolution is an EXPLICIT param (`params["repo_root"]`, default cwd),
-not the injected `_origin_worktree` seam — this op is registered with op-scope
-"none" (see coordinator_core/op_scopes.py's documented default-for-unlisted-ops),
-matching the existing `update-docs-probes.py` CLI contract of an explicit
-`--repo-root` rather than requiring a JSON-RPC dispatch envelope.
+Repo-root resolution: this op is keyed "common_dir" in
+coordinator_core/op_scopes.py, so the injected `repo_root` is the git COMMON
+DIR (`<worktree>/.git`), not a worktree. Every gate below reads worktree-rooted
+corpora (`docs/`, `archive/specs/`, `cross-repo/archive/`), so the handler
+derives the worktree via `main_worktree_root()` exactly as its keying-table
+peers `memo.triage` and `distill.scope` do. `params["repo_root"]` still
+overrides, and `main_worktree_root` is ergonomically widened to accept a
+worktree root unchanged, so an explicit worktree-shaped param stays correct.
+
+NEGATIVE SPEC — do not "simplify" this back to using the injected root
+directly. Joining a corpus onto `<worktree>/.git` yields a path that is absent
+for most gates (UNAVAILABLE, merely useless) but REAL for some, and a gate whose
+corpus resolved to a real-but-wrong directory reports CLEAN over an empty walk.
+That happened: `distill-threshold` returned CLEAN with total 0 against a
+DoE-claude tree holding 634 files in `archive/specs/`, because it counted
+`.git/archive/specs`. UNAVAILABLE-on-missing-corpus tests do NOT cover this —
+they assert on a path that is absent, and this failure needs a path that exists.
+`test_gates_resolve_corpora_under_the_worktree_not_the_git_dir` pins the root.
 
 Every external CLI this op shells out to (the DoE-claude-owned `bin/verify-*`,
 `bin/sync-plugin-wiki`, `bin/reap-stale-subagent-sidecars` scripts) is resolved
@@ -93,6 +106,12 @@ from typing import Any, Callable, Optional
 
 from coordinator_core.external_tool_budget import bound_for
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.updatedocs._common import UpdatedocsTargetMissing
+from coordinator_core.updatedocs.directory_md import compute_directory_md_drift
+from coordinator_core.updatedocs.memo_prune import compute_memo_prune_candidates
+from coordinator_core.updatedocs.plan_prune import compute_plan_prune_candidates
+from coordinator_core.updatedocs.readme_index import compute_readme_index_drift
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -182,6 +201,58 @@ _CLI_SITE = "coordinator_core/ops/updatedocs_gates.py :: _run"
 _DEFAULT_CLI_TIMEOUT_SECONDS = bound_for(_CLI_SITE)
 
 
+def _windows_pathext() -> tuple[str, ...]:
+    """The host's own list of directly-executable suffixes, lowercased.
+
+    Read from `PATHEXT` rather than hard-coded so a box that publishes its
+    entrypoints under a non-default extension resolves them; the fallback is
+    the Windows default value of that variable."""
+    raw = os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD"
+    return tuple(e.strip().lower() for e in raw.split(os.pathsep) if e.strip().startswith("."))
+
+
+def _resolve_cli(bin_dir: Path, name: str) -> Path:
+    """Resolves a `bin/` entrypoint name to the file the host actually ships.
+
+    The gate battery names its CLIs the way the authoring repo writes them —
+    extensionless (`verify-skill-anchor-links`) or `.py`
+    (`check-rag-state.py`). A deployed tree may publish the same entrypoint
+    under a platform extension instead: on Windows the coordinator installer
+    emits native forwarders (`verify-skill-anchor-links.exe`), so an
+    exact-name `is_file()` test reports "CLI not found" for a CLI that is
+    present.
+
+    Candidate order follows the host's own executability rule rather than a
+    per-OS name list. On Windows the `PATHEXT` forms come first — an
+    extensionless file is not executable there at all, so a co-located
+    extensionless script must lose to the forwarder that can actually run —
+    then the name as written, the launcher-shim `.ps1`, and the source
+    `.py`/extensionless forms. On POSIX the name as written wins and no
+    extension is invented: `.exe` is never a candidate off Windows.
+
+    Returns the canonical `bin_dir / name` when nothing resolves, so the
+    caller's UNAVAILABLE message names the path it looked for."""
+    base = name[:-3] if name.endswith(".py") else name
+    candidates: list[str] = []
+    if sys.platform == "win32":
+        candidates.extend(base + ext for ext in _windows_pathext())
+        candidates.append(name)
+        candidates.append(base + ".ps1")
+    else:
+        candidates.append(name)
+    candidates.extend((base, base + ".py"))
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        resolved = bin_dir / candidate
+        if resolved.is_file():
+            return resolved
+    return bin_dir / name
+
+
 def _windows_exec_argv(cli_path: Path, args: list[str]) -> Optional[list[str]]:
     """Resolves the Windows-executable argv form of an extensionless CLI.
     `CreateProcess` (what `subprocess.run` uses under the hood on Windows)
@@ -195,6 +266,16 @@ def _windows_exec_argv(cli_path: Path, args: list[str]) -> Optional[list[str]]:
     read stays a last resort rather than competing with an already-generated
     shim. Returns None (never raises) when nothing resolves; the caller
     treats that exactly like today's direct-exec OSError — UNAVAILABLE."""
+    suffix = cli_path.suffix.lower()
+    if suffix and cli_path.is_file():
+        if suffix in _windows_pathext():
+            return [str(cli_path), *args]
+        if suffix == ".ps1":
+            powershell = shutil.which("powershell") or shutil.which("pwsh")
+            if powershell is None:
+                return None
+            return [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(cli_path), *args]
+
     cmd_sibling = Path(str(cli_path) + ".cmd")
     if cmd_sibling.is_file():
         return [str(cmd_sibling), *args]
@@ -346,7 +427,7 @@ def _gate_repomap(repo_root: Path, settings_home: Path, overrides: dict) -> Gate
     bin_dir = settings_home / "bin"
     rag_state = overrides.get("rag_state")
     if not rag_state:
-        check_rag_state_cli = Path(overrides["check_rag_state_cli"]) if overrides.get("check_rag_state_cli") else bin_dir / "check-rag-state.py"
+        check_rag_state_cli = Path(overrides["check_rag_state_cli"]) if overrides.get("check_rag_state_cli") else _resolve_cli(bin_dir, "check-rag-state.py")
         proc = _run(check_rag_state_cli, [])
         rag_state = proc.stdout.strip() if proc and proc.returncode == 0 else "unknown"
         if not rag_state:
@@ -355,7 +436,7 @@ def _gate_repomap(repo_root: Path, settings_home: Path, overrides: dict) -> Gate
     if rag_state == "fresh":
         return GateResult("repomap-gate", GateVerdict.CLEAN, "repomap skipped (RAG present + fresh)")
 
-    generate_repomap_cli = Path(overrides["generate_repomap_cli"]) if overrides.get("generate_repomap_cli") else bin_dir / "generate-repomap.py"
+    generate_repomap_cli = Path(overrides["generate_repomap_cli"]) if overrides.get("generate_repomap_cli") else _resolve_cli(bin_dir, "generate-repomap.py")
     if not generate_repomap_cli.is_file():
         return GateResult(
             "repomap-gate",
@@ -453,7 +534,7 @@ def _gate_distill_threshold(repo_root: Path, _settings: Path, overrides: dict) -
 
 
 def _gate_lens_orthogonality(_repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
-    cli = Path(overrides["cli"]) if overrides.get("cli") else settings_home / "bin" / "verify-parallel-review-lens-orthogonality"
+    cli = Path(overrides["cli"]) if overrides.get("cli") else _resolve_cli(settings_home / "bin", "verify-parallel-review-lens-orthogonality")
     if not cli.exists():
         return GateResult("11f-lens-orthogonality", GateVerdict.UNAVAILABLE, f"CLI not found at {cli}")
     proc = _run(cli, [])
@@ -479,7 +560,7 @@ _VALIDATED_RE = re.compile(r"(\d+)\s+validated", re.IGNORECASE)
 
 
 def _gate_plugin_wiki(_repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
-    cli = Path(overrides["cli"]) if overrides.get("cli") else settings_home / "bin" / "sync-plugin-wiki"
+    cli = Path(overrides["cli"]) if overrides.get("cli") else _resolve_cli(settings_home / "bin", "sync-plugin-wiki")
     if not cli.exists():
         return GateResult("11g-plugin-wiki", GateVerdict.UNAVAILABLE, f"CLI not found at {cli}")
     proc = _run(cli, [])
@@ -556,7 +637,7 @@ def _gate_skill_anchor_links(_repo_root: Path, settings_home: Path, overrides: d
     """Never collapse exit 1 into exit 2 — "found dead anchors" and "could not
     check" are different verdicts (the incident this whole op exists to
     prevent from recurring)."""
-    cli = Path(overrides["cli"]) if overrides.get("cli") else settings_home / "bin" / "verify-skill-anchor-links"
+    cli = Path(overrides["cli"]) if overrides.get("cli") else _resolve_cli(settings_home / "bin", "verify-skill-anchor-links")
     if not cli.exists():
         return GateResult("11h-skill-anchor-links", GateVerdict.UNAVAILABLE, f"CLI not found at {cli}")
     proc = _run(cli, [])
@@ -635,7 +716,7 @@ _YAML_QUEUE_FAMILIES = (
 def _gate_queue_prune_sweep(repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
     bin_dir = settings_home / "bin"
     override_cli = overrides.get("prune_cli")
-    prune_cli = Path(override_cli) if override_cli else bin_dir / "prune-resolved-queue-entries.py"
+    prune_cli = Path(override_cli) if override_cli else _resolve_cli(bin_dir, "prune-resolved-queue-entries.py")
     queues = overrides.get("queues") or list(_DEFAULT_QUEUES)
 
     overall_fail = False
@@ -691,7 +772,7 @@ def _gate_queue_prune_sweep(repo_root: Path, settings_home: Path, overrides: dic
         if not dir_path.is_dir():
             continue
         any_yaml_present = True
-        cli_path = bin_dir / cli_name
+        cli_path = _resolve_cli(bin_dir, cli_name)
         if not cli_path.is_file():
             overall_fail = True
             lines.append(f"YAML prune CLI missing for {family_dir}: {cli_path}")
@@ -742,7 +823,7 @@ _REAPED_RE = re.compile(r"reaped\s+(\d+)", re.IGNORECASE)
 
 
 def _gate_reap_stale_sidecars(repo_root: Path, settings_home: Path, overrides: dict) -> GateResult:
-    cli = Path(overrides["cli"]) if overrides.get("cli") else settings_home / "bin" / "reap-stale-subagent-sidecars"
+    cli = Path(overrides["cli"]) if overrides.get("cli") else _resolve_cli(settings_home / "bin", "reap-stale-subagent-sidecars")
     if not cli.exists():
         return GateResult("11j-reap-stale-sidecars", GateVerdict.UNAVAILABLE, f"CLI not found at {cli}")
     proc = _run(cli, ["--repo-root", str(repo_root)])
@@ -770,6 +851,236 @@ def _gate_reap_stale_sidecars(repo_root: Path, settings_home: Path, overrides: d
 
 
 # ---------------------------------------------------------------------------
+# Gates: doc-index drift and prune candidates (bucket-2 extraction)
+#
+# Four detectors backed by coordinator_core.updatedocs. Each compute function
+# raises a typed missing-path error rather than returning an empty result, and
+# each gate below converts that to UNAVAILABLE — never CLEAN. That mapping is
+# the point of these four: the 2026-09-02 boundary audit found "engine
+# unreachable" indistinguishable from "found nothing" at nine of ten fallback
+# sites in the ceremony this file serves, and a detector that reports an absent
+# corpus as "nothing to do" adds a tenth.
+#
+# All four are INFORMATIONAL. Drift in a doc index is not a reason to halt
+# /update-docs; the audit's evidence against Phase 11h2's unconditional halt
+# applies here too.
+# ---------------------------------------------------------------------------
+
+
+def _gate_docs_readme_index_drift(repo_root: Path, _settings: Path, _overrides: dict) -> GateResult:
+    """Which docs/ artifacts are missing from, or dead in, docs/README.md."""
+    try:
+        drift = compute_readme_index_drift(repo_root)
+    except UpdatedocsTargetMissing as exc:
+        return GateResult(
+            "docs-readme-index-drift",
+            GateVerdict.UNAVAILABLE,
+            f"cannot check: {exc.missing_path} does not exist",
+            detail={"missing_path": str(exc.missing_path)},
+        )
+
+    drifted = [s for s in drift.sections if s.missing or s.dead]
+    if not drifted:
+        return GateResult(
+            "docs-readme-index-drift",
+            GateVerdict.CLEAN,
+            "docs/README.md indexes every artifact and links nothing absent",
+        )
+
+    total_missing = sum(len(s.missing) for s in drifted)
+    total_dead = sum(len(s.dead) for s in drifted)
+    return GateResult(
+        "docs-readme-index-drift",
+        GateVerdict.FINDING,
+        f"{len(drifted)} section(s) drifted — {total_missing} unindexed, {total_dead} dead link(s)",
+        severity=Severity.INFORMATIONAL,
+        detail={
+            "sections": [
+                {
+                    "section": s.section,
+                    "linked": s.linked,
+                    "on_disk": s.on_disk,
+                    "missing": s.missing,
+                    "dead": s.dead,
+                    "missing_titles": s.missing_titles,
+                }
+                for s in drifted
+            ],
+        },
+    )
+
+
+#: Discovery order for a repo's source index, per `source-index-maintenance.md`
+#: ("default location: project root; match project convention if different").
+#: Anything past these two is found by a single one-level listing of the root.
+_DIRECTORY_MD_FIXED_CANDIDATES = ("DIRECTORY.md", "docs/DIRECTORY.md")
+
+
+def _discover_directory_md(repo_root: Path) -> str | None:
+    """Which DIRECTORY.md does THIS repo keep, as a repo-relative path?
+
+    Negative spec: never returns a path hardcoded to one repo's layout. A
+    hardcoded `coordinator_core/DIRECTORY.md` read UNAVAILABLE forever on
+    every consumer of this ceremony except claude-klabauter, which is the
+    silent-failure route this function exists to close.
+
+    Cost: at most two `is_file` probes plus one non-recursive listing of the
+    repo root — no walk, no spawn.
+    """
+    for rel in _DIRECTORY_MD_FIXED_CANDIDATES:
+        if (repo_root / rel).is_file():
+            return rel
+    try:
+        children = sorted(p.name for p in repo_root.iterdir() if p.is_dir())
+    except OSError:
+        return None
+    for name in children:
+        if name.startswith("."):
+            continue
+        if (repo_root / name / "DIRECTORY.md").is_file():
+            return f"{name}/DIRECTORY.md"
+    return None
+
+
+def _gate_directory_md_staleness(repo_root: Path, _settings: Path, overrides: dict) -> GateResult:
+    """Do a DIRECTORY.md's asserted counts and refresh date still match disk?
+
+    `overrides["directory_md"]` pins which DIRECTORY.md to check; absent an
+    override the path is discovered from the repo under inspection
+    (`_discover_directory_md`), never assumed. Repos disagree about where the
+    index lives — root, `docs/`, or a package directory — and a gate that
+    named one layout reports UNAVAILABLE forever on every other.
+    """
+    rel = overrides.get("directory_md") or _discover_directory_md(repo_root)
+    if rel is None:
+        missing = repo_root / _DIRECTORY_MD_FIXED_CANDIDATES[0]
+        return GateResult(
+            "directory-md-staleness",
+            GateVerdict.UNAVAILABLE,
+            f"cannot check: no DIRECTORY.md found at the repo root, under docs/, "
+            f"or in any top-level directory of {repo_root}",
+            detail={"missing_path": str(missing)},
+        )
+    target = repo_root / rel
+    try:
+        drift = compute_directory_md_drift(target)
+    except UpdatedocsTargetMissing as exc:
+        return GateResult(
+            "directory-md-staleness",
+            GateVerdict.UNAVAILABLE,
+            f"cannot check: {exc.missing_path} does not exist",
+            detail={"missing_path": str(exc.missing_path)},
+        )
+
+    mismatched = [c for c in drift.count_claims if not c.matches]
+    detail = {
+        "directory_md": rel,
+        "refreshed_on": drift.refreshed_on.isoformat() if drift.refreshed_on else None,
+        "age_days": drift.age_days,
+        "mismatched_counts": [
+            {"claim_site": c.claim_site, "asserted": c.asserted, "actual": c.actual}
+            for c in mismatched
+        ],
+    }
+
+    reasons = []
+    if drift.refreshed_on is None:
+        # Not the same as "refreshed today" — an unparseable date means the
+        # document's own freshness claim could not be read, which is a finding
+        # about the document, not a clean bill of health.
+        reasons.append("no readable `Last refreshed:` date")
+    if mismatched:
+        reasons.append(f"{len(mismatched)} count claim(s) disagree with disk")
+
+    if not reasons:
+        return GateResult(
+            "directory-md-staleness",
+            GateVerdict.CLEAN,
+            f"{rel} is internally consistent with disk",
+            detail=detail,
+        )
+    return GateResult(
+        "directory-md-staleness",
+        GateVerdict.FINDING,
+        f"{rel}: " + "; ".join(reasons),
+        severity=Severity.INFORMATIONAL,
+        detail=detail,
+    )
+
+
+def _prune_gate(
+    gate_id: str,
+    compute_fn: Callable[..., Any],
+    repo_root: Path,
+    overrides: dict,
+) -> GateResult:
+    """Shared body for the two prune gates below.
+
+    Both predicates now emit the identical `prunable`/`retained`/
+    `indeterminate` list[str] shape (Kira's finding 1/2 unification), so the
+    two `_gate_*` functions differed only in gate id, compute function, and
+    one CLEAN message string. This is the table that difference collapses to;
+    `_gate_plans_prune_candidates` / `_gate_archive_memo_prune_candidates`
+    below close over it with their own name and compute function.
+    """
+    kwargs = {}
+    if "age_days" in overrides:
+        kwargs["age_days"] = overrides["age_days"]
+    try:
+        result = compute_fn(repo_root, **kwargs)
+    except UpdatedocsTargetMissing as exc:
+        return GateResult(
+            gate_id,
+            GateVerdict.UNAVAILABLE,
+            f"cannot check: {exc.missing_path} does not exist",
+            detail={"missing_path": str(exc.missing_path)},
+        )
+
+    detail = {
+        "prunable": list(result.prunable),
+        "indeterminate": list(result.indeterminate),
+        "retained_count": len(result.retained),
+    }
+    if not result.prunable and not result.indeterminate:
+        return GateResult(
+            gate_id,
+            GateVerdict.CLEAN,
+            f"no candidate is prune-eligible ({len(result.retained)} retained)",
+            detail=detail,
+        )
+    return GateResult(
+        gate_id,
+        GateVerdict.FINDING,
+        f"{len(result.prunable)} prune candidate(s), {len(result.indeterminate)} indeterminate",
+        severity=Severity.INFORMATIONAL,
+        detail=detail,
+    )
+
+
+def _gate_plans_prune_candidates(repo_root: Path, _settings: Path, overrides: dict) -> GateResult:
+    """Which docs/plans/ entries satisfy all three ripeness-safety legs.
+
+    Prunes nothing: the disposal decision stays with the ceremony and its
+    existing guards.
+    """
+    return _prune_gate(
+        "plans-prune-candidates", compute_plan_prune_candidates, repo_root, overrides
+    )
+
+
+def _gate_archive_memo_prune_candidates(repo_root: Path, _settings: Path, overrides: dict) -> GateResult:
+    """Which cross-repo/archive memos satisfy the prune predicate.
+
+    Zero prunable is a legitimate, expected answer on a young archive — which
+    is exactly why an absent archive directory must reach the caller as
+    UNAVAILABLE and not as this gate's CLEAN.
+    """
+    return _prune_gate(
+        "archive-memo-prune-candidates", compute_memo_prune_candidates, repo_root, overrides
+    )
+
+
+# ---------------------------------------------------------------------------
 # Battery registry
 # ---------------------------------------------------------------------------
 
@@ -784,6 +1095,10 @@ _GATES: dict[str, _GateFn] = {
     "11h-skill-anchor-links": _gate_skill_anchor_links,
     "11i-queue-prune-sweep": _gate_queue_prune_sweep,
     "11j-reap-stale-sidecars": _gate_reap_stale_sidecars,
+    "docs-readme-index-drift": _gate_docs_readme_index_drift,
+    "directory-md-staleness": _gate_directory_md_staleness,
+    "plans-prune-candidates": _gate_plans_prune_candidates,
+    "archive-memo-prune-candidates": _gate_archive_memo_prune_candidates,
 }
 """Deferred, deliberately absent: 11h2 (cross-reference coverage) — its backing
 `verify_coverage.py` / `coverage_gate.py` was out of scope for this dispatch.
@@ -810,7 +1125,19 @@ def _updatedocs_gates(params: dict, repo_root: Optional[Path] = None) -> dict:
                          keyed by gate_id — mirrors update-docs-probes.py's
                          existing --*-cli override flags.
     """
-    root = Path(params.get("repo_root") or repo_root or Path.cwd())
+    # Injected `repo_root` is the git COMMON DIR (op_scopes: "common_dir"), and every
+    # gate reads worktree-rooted corpora — see the module docstring's negative spec.
+    # Only the injected value is translated: an explicit params["repo_root"] is already
+    # worktree-shaped by contract, and main_worktree_root() REFUSES a non-git path
+    # rather than guessing, so applying it there would turn a diagnostic call against a
+    # plain directory into an uncaught ValueError instead of running the gates.
+    explicit = params.get("repo_root")
+    if explicit:
+        root = Path(explicit)
+    elif repo_root is not None:
+        root = main_worktree_root(Path(repo_root))
+    else:
+        root = Path.cwd()
     settings_home = _settings_home(params.get("settings_home"))
     requested = params.get("gates") or list(_GATES.keys())
     unknown = [g for g in requested if g not in _GATES]

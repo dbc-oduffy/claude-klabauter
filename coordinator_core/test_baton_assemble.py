@@ -2967,7 +2967,13 @@ class TestEveryEmittedDirectiveActuallyDispatches:
         "session-claim-cli": None,
         "handoff.stamp_phase": "handoff.stamp_phase",
         "handoff.author_fork": "handoff.author_fork",
-        "handoff.supersede_predecessor": "handoff.archive_transition",
+        # `housekeeping.cycle`, not `handoff.archive_transition`: the old key
+        # is permanently dead (rewire history: test_housekeeping_is_the_one_
+        # job.py :: _PERMITTED_DIRECT_IMPORTERS, canonical site), so this row
+        # resolved to a `SUSPENDED_OPS` member and made this test RED at HEAD
+        # -- the guard reporting the rewire as a broken directive rather than
+        # pinning it.
+        "handoff.supersede_predecessor": "housekeeping.cycle",
         "baton-stamp-carried-ids": None,
     }
 
@@ -3244,7 +3250,7 @@ class TestApplyReportAccountsForEveryCommit:
         # Names the directive, never None -- the regression this row's
         # `to_report()`-sourced fixture exists to pin.
         assert "d6" in by_directive
-        assert by_directive["d6"]["committed_by"] == "handoff.archive_transition"
+        assert by_directive["d6"]["committed_by"] == "housekeeping.cycle"
         # The op returns `moved: bool` and no sha -- reported as such, never
         # a fabricated one.
         assert by_directive["d6"]["sha"] is None
@@ -3945,7 +3951,11 @@ class TestDispatchHandoffSupersedePredecessor:
         def _fake_invoke(op_name, params, repo_root):
             captured["op_name"] = op_name
             captured["params"] = params
-            return {"exit_code": 0, "superseded": True, "moved": True}
+            # The cycle relays the leg's own dict verbatim under
+            # `transition`; the handler reads `superseded` off THAT, not off
+            # the envelope, so a bare dict here would test a shape the engine
+            # never returns.
+            return {"exit_code": 0, "transition": {"superseded": True, "moved": True}}
 
         monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _fake_invoke)
         _seed_claimed_predecessor(tmp_path)
@@ -3955,16 +3965,28 @@ class TestDispatchHandoffSupersedePredecessor:
             tmp_path,
         )
 
-        assert captured["op_name"] == "handoff.archive_transition"
+        # The live door (rewire history: test_housekeeping_is_the_one_job.py
+        # :: _PERMITTED_DIRECT_IMPORTERS, canonical site). This asserted
+        # `handoff.archive_transition` and the op's bare param shape until
+        # 2026-09-02, pinning a call the engine had stopped making --
+        # including an `exclude` the handler's own docstring records as no
+        # longer reaching the op at all, since the live-children guard it fed
+        # was deleted on 2026-08-28.
+        assert captured["op_name"] == "housekeeping.cycle"
         assert captured["params"] == {
-            "handoff_path": "state/handoffs/predecessor.md",
-            "mode": "supersede",
-            # `continued_into` stays repo-relative (it is frontmatter);
-            # `exclude` is ABSOLUTE because `dag.referenced_by` resolves a
-            # relative exclude against the process CWD, not the worktree root
-            # -- see the handler's own comment at the params dict.
-            "continued_into": "state/handoffs/successor.md",
-            "exclude": [str(tmp_path / "state" / "handoffs" / "successor.md")],
+            # The corpus legs stay OFF: d6 runs inside `apply()`'s
+            # transaction and its remit is ONE succession, not a fleet-wide
+            # close pass landing on the operator's tree mid-`/handoff`.
+            "close": False,
+            "cap": 1,
+            "transition": {
+                "handoff_path": "state/handoffs/predecessor.md",
+                "mode": "supersede",
+                # `continued_into` stays repo-relative: it is frontmatter,
+                # contractually repo-relative, and an absolute value there
+                # would author a machine-specific edge.
+                "continued_into": "state/handoffs/successor.md",
+            },
         }
         assert result["result"]["superseded"] is True
 
@@ -3976,9 +3998,11 @@ class TestDispatchHandoffSupersedePredecessor:
         def _fake_invoke(op_name, params, repo_root):
             return {
                 "exit_code": 0,
-                "superseded": False,
-                "retained": True,
-                "retain_reason": "unrelated live child",
+                "transition": {
+                    "superseded": False,
+                    "retained": True,
+                    "retain_reason": "unrelated live child",
+                },
             }
 
         monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _fake_invoke)
@@ -4000,7 +4024,10 @@ class TestDispatchHandoffSupersedePredecessor:
         successor_abs = _render_real_scaffold(tmp_path / successor_rel)
 
         def _fake_invoke(op_name, params, repo_root):
-            return {"exit_code": 0, "superseded": False, "retained": True}
+            # Review: coordinatorcode-reviewer.a8fe7b538bfc71c00 -- wrap in the
+            # real `transition` envelope so this exercises the superseded:False
+            # scenario the test names, not the missing-key fallthrough.
+            return {"exit_code": 0, "transition": {"superseded": False, "retained": True}}
 
         monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _fake_invoke)
         # REQUIRED, not incidental: without a claimed predecessor this test
@@ -4025,7 +4052,10 @@ class TestDispatchHandoffSupersedePredecessor:
         second failure mode."""
 
         def _fake_invoke(op_name, params, repo_root):
-            return {"exit_code": 0, "superseded": False}
+            # Review: coordinatorcode-reviewer.a8fe7b538bfc71c00 -- wrap in the
+            # real `transition` envelope so this exercises the superseded:False
+            # scenario the test names, not the missing-key fallthrough.
+            return {"exit_code": 0, "transition": {"superseded": False}}
 
         monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _fake_invoke)
         # See the sibling above: a claimed predecessor is what makes this test
@@ -4059,6 +4089,31 @@ class TestDispatchHandoffSupersedePredecessor:
 
         assert successor_abs.exists()
         with pytest.raises(RuntimeError, match="boom"):
+            ba_apply._dispatch_handoff_supersede_predecessor(
+                ["state/handoffs/predecessor.md", successor_rel, successor_rel], tmp_path
+            )
+        assert not successor_abs.exists()
+
+    def test_refused_before_transition_ran_names_the_error_and_deletes_successor(
+        self, tmp_path, monkeypatch
+    ):
+        # Review: coordinatorcode-reviewer.a8fe7b538bfc71c00 Finding 2 -- the
+        # `exit_code != 0 and not result` refusal branch (reachable from
+        # `housekeeping.cycle`'s own `{"exit_code": 1, ..., "transition": None}`
+        # shape when the transition leg raises) had no direct test; every
+        # other fake in this class returns `exit_code: 0` or a non-empty
+        # `transition`.
+        successor_rel = "state/handoffs/2026-07-27-successor-refused-precompose.md"
+        successor_abs = _render_real_scaffold(tmp_path / successor_rel)
+
+        def _fake_invoke(op_name, params, repo_root):
+            return {"exit_code": 1, "error": "boom", "transition": None}
+
+        monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _fake_invoke)
+        _seed_claimed_predecessor(tmp_path)
+
+        assert successor_abs.exists()
+        with pytest.raises(RuntimeError, match="refused before the transition ran"):
             ba_apply._dispatch_handoff_supersede_predecessor(
                 ["state/handoffs/predecessor.md", successor_rel, successor_rel], tmp_path
             )
@@ -4189,9 +4244,12 @@ class TestSupersedeReconcilesClaimFromDurableLedger:
         real_invoke = ba_apply._invoke_op_in_process
 
         def _routed(op_name, params, repo_root):
-            if op_name == "handoff.archive_transition":
-                calls.append(params)
-                return {"exit_code": 0, "superseded": True, "moved": True}
+            if op_name == "housekeeping.cycle" and params.get("transition"):
+                calls.append(params["transition"])
+                return {
+                    "exit_code": 0,
+                    "transition": {"superseded": True, "moved": True},
+                }
             return real_invoke(op_name, params, repo_root)
 
         monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _routed)
@@ -6058,7 +6116,10 @@ class TestD6CleanupNeverDeletesOperatorContent:
         monkeypatch.setattr(
             ba_apply,
             "_invoke_op_in_process",
-            lambda *a, **k: {"exit_code": 0, "superseded": False},
+            # Review: coordinatorcode-reviewer.a8fe7b538bfc71c00 -- wrap in the
+            # real `transition` envelope so this exercises the superseded:False
+            # scenario the test names, not the missing-key fallthrough.
+            lambda *a, **k: {"exit_code": 0, "transition": {"superseded": False}},
         )
         _seed_claimed_predecessor(tmp_path)
 
@@ -6080,7 +6141,10 @@ class TestD6CleanupNeverDeletesOperatorContent:
         monkeypatch.setattr(
             ba_apply,
             "_invoke_op_in_process",
-            lambda *a, **k: {"exit_code": 0, "superseded": False},
+            # Review: coordinatorcode-reviewer.a8fe7b538bfc71c00 -- wrap in the
+            # real `transition` envelope so this exercises the superseded:False
+            # scenario the test names, not the missing-key fallthrough.
+            lambda *a, **k: {"exit_code": 0, "transition": {"superseded": False}},
         )
         _seed_claimed_predecessor(tmp_path)
 
@@ -6446,8 +6510,23 @@ class TestC10RoadmapBatonPredecessorArmsD6Unconditionally:
         assert d6["args"][0] == str(artifact)
 
 
-class TestC4PlanTierSupersessionTargetFromLedger:
-    """C4: `resolve_lineage`'s `kind == "handoff"` branch currently
+class TestPlanTierSupersessionTargetResolution:
+    """Plan-input supersession-target resolution.
+
+    NAMED FOR THE QUESTION, NOT THE ANSWER (renamed from
+    `TestC4PlanTierSupersessionTargetFromLedger`, 2026-09-02): "FromLedger"
+    was C4/AC5's answer, and C6 retired it -- a declared predecessor that
+    resolves wins, and the ledger is a gated FALLBACK. A class named for one
+    era's answer reads as a contradiction the moment the answer changes.
+    The precedence itself is pinned in
+    `baton_assemble/tests/test_plan_input_predecessor.py`; what lives here is
+    the surrounding behaviour (multi-claim extras, archived-path resolution,
+    the zero-claim judgment point).
+
+    Historical C4 statement of intent, preserved because the two later
+    reversals only make sense against it:
+
+    C4: `resolve_lineage`'s `kind == "handoff"` branch currently
     discriminates a plan input only by the ABSENCE of `handoff_id` -- the
     same `else` branch also covers a legacy/hand-authored/corrupted handoff
     record missing `handoff_id`
@@ -6485,9 +6564,43 @@ class TestC4PlanTierSupersessionTargetFromLedger:
         claims_dir.mkdir(parents=True, exist_ok=True)
         (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
 
-    def test_plan_input_resolves_predecessor_from_ledger_not_predecessor_handoff_field(
+    def test_plan_input_declared_predecessor_is_carried_on_lineage_and_arms_d6(
         self, tmp_path, monkeypatch
     ):
+        """Lineage-carry and d6-arming for a plan input whose declared
+        predecessor resolves. NOT the precedence rule -- the name once said
+        "wins", and after the trim recorded below it no longer asserts that;
+        `test_plan_input_predecessor.py`'s AC1/AC4 own which target wins.
+
+        INVERTED 2026-09-02, and the inversion is the record.
+
+        This asserted C4/AC5's rule -- a plan input's supersession target
+        comes from the durable claim ledger, NEVER from
+        `predecessor_handoff`/`predecessor`, on the reasoning that those
+        fields name PROVENANCE rather than a termination target. C6
+        (`baton_assemble/tests/test_plan_input_predecessor.py`) reversed the
+        precedence deliberately: a declared predecessor that RESOLVES ON DISK
+        is author-asserted descent evidence and wins outright, and an
+        unrelated ledger claim is declined rather than guessed at (its AC1
+        and AC4). The old rule discarded a real declaration in favour of
+        whichever baton the session happened to be holding.
+
+        Left red at that landing rather than reconciled -- the executor's own
+        sidecar names these three tests as newly failing -- so this file spent
+        the interval asserting the opposite of the shipped contract.
+
+        The two assertions C6 did NOT retire are kept: `predecessor_handoff`
+        is still carried on `lineage` for lineage-carry, and d6 still arms
+        against whatever `predecessor` resolved to.
+
+        Review: overengineering-reviewer -- this used to also assert the
+        precedence itself (`lineage["predecessor"] == provenance_handoff`,
+        `!= claimed_predecessor`), duplicating
+        `test_plan_input_predecessor.py`'s AC1 and AC4 and contradicting this
+        class's own docstring, which names that file as the sole owner of the
+        precedence. Trimmed to a bare non-None precondition; AC1/AC4 remain
+        the sole assertions of which target wins.
+        """
         _init_repo(tmp_path)
         provenance_handoff = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-07-20-provenance.md",
@@ -6511,15 +6624,14 @@ class TestC4PlanTierSupersessionTargetFromLedger:
         decision = ba.brief("handoff", str(plan), repo_root=tmp_path).decision_object
         lineage = decision["artifact"]["lineage"]
 
-        assert lineage["predecessor"] == claimed_predecessor.relative_to(tmp_path).as_posix(), (
-            "C4/AC5: a plan input's supersession target must come from the "
-            "durable handoff-claims ledger, not predecessor_handoff/predecessor "
-            f"fm fields -- got predecessor={lineage['predecessor']!r}"
-        )
-        assert lineage["predecessor"] != str(provenance_handoff.relative_to(tmp_path))
+        # Precedence itself (declared wins / unrelated claim declined) is
+        # pinned by test_plan_input_predecessor.py's AC1/AC4; only a
+        # non-None precondition for the lineage-carry/d6-arming assertions
+        # below is needed here.
+        assert lineage["predecessor"] is not None
         assert lineage.get("predecessor_handoff") == str(
             provenance_handoff.relative_to(tmp_path)
-        ), "C4/AC5: predecessor_handoff must still be carried on lineage for lineage-carry"
+        ), "predecessor_handoff must still be carried on lineage for lineage-carry"
 
         d6 = next(
             (d for d in decision["directives"] if d["cli"] == "handoff.supersede_predecessor"),
@@ -6540,13 +6652,20 @@ class TestC4PlanTierSupersessionTargetFromLedger:
         the field. This is the corner an earlier reading of R2 ("do not
         re-walk") narrowed by mistake -- this test pins the corrected shape."""
         _init_repo(tmp_path)
+        # Both claims carry the plan's own `deliverable_id`. That is not
+        # fixture decoration: since C6 the ledger fallback is ADMITTED only
+        # for a held baton sharing this plan's `governing_plan` or
+        # `deliverable_id` (`test_plan_input_predecessor.py` AC2/AC3), and an
+        # unrelated claim is declined rather than guessed at (AC4). Without
+        # it these two claims are exactly the unrelated shape C6 declines,
+        # and this test asserted the pre-C6 unconditional read.
         primary_claimed = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-08-01-primary-claimed.md",
-            ["handoff_id: hnd-plan-input-primary-1a2b51"],
+            ["handoff_id: hnd-plan-input-primary-1a2b51", "deliverable_id: DEL-C4-MULTI"],
         )
         extra_claimed = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-08-01-extra-claimed.md",
-            ["handoff_id: hnd-plan-input-extra-1a2b52"],
+            ["handoff_id: hnd-plan-input-extra-1a2b52", "deliverable_id: DEL-C4-MULTI"],
         )
         plan = _write_artifact(
             tmp_path / "docs" / "plans" / "2026-08-02-c4-multi-claim-plan.md",
@@ -6645,6 +6764,14 @@ class TestC4PlanTierSupersessionTargetFromLedger:
                 "handoff_id: hnd-archived-baton-1a2b42",
                 "kind: roadmap-baton",
                 "deployment_state: continued",
+                # Shares the plan's `deliverable_id` so C6's ledger-fallback
+                # admission gate lets this claim through -- see the sibling
+                # multi-claim test for why that is load-bearing rather than
+                # decoration. Finding 1's own property (an ARCHIVED
+                # ledger-claimed predecessor still resolves its handoff_id)
+                # is what this test is here for, and it is unreachable while
+                # the claim is declined at the gate.
+                "deliverable_id: DEL-C4-ARCHIVED",
             ],
         )
         plan = _write_artifact(

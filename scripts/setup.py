@@ -901,6 +901,57 @@ def _engine_installed(interpreter: str, import_names: list[str]) -> bool:
 _EDITABLE_PTH_PREFIX = "__editable__.{package}-"
 
 
+def _direct_url_names_root(site_packages: Path, package_name: str, package_root: Path) -> str | None:
+    """Return None when `site_packages` holds a dist-info for `package_name`
+    whose `direct_url.json` names `package_root` as the editable source, and
+    a `skip: ...` string otherwise.
+
+    NEGATIVE SPEC — this is the interlock between an interpreter's
+    site-packages and the checkout a caller wants written into it. The
+    conversion below resolves site-packages under whatever interpreter it is
+    handed and rewrites a `.pth` there; with nothing between it and the
+    operator's real Python, a caller passing a wrong `package_root` (a pytest
+    `tmp_path`, a copied tree) silently clobbers a legitimate editable install
+    and leaves `import <package_name>` broken. Verifying the dist-info's own
+    record of where the install points makes that a loud, named skip.
+
+    Fails CLOSED: no dist-info, no `direct_url.json`, an unreadable or
+    non-editable one, or a URL naming a different tree all return a skip.
+    A PEP 660 finder `.pth` cannot exist without the dist-info that pip wrote
+    beside it, so a missing one means this is not the install we think it is."""
+    from urllib.parse import urlparse, unquote
+    from urllib.request import url2pathname
+
+    dist_infos = sorted(site_packages.glob(f"{package_name}-*.dist-info"))
+    direct_urls = [d / "direct_url.json" for d in dist_infos]
+    direct_urls = [d for d in direct_urls if d.is_file()]
+    if not direct_urls:
+        return f"skip: no {package_name}-*.dist-info/direct_url.json under {site_packages}"
+
+    want = package_root.resolve()
+    for direct_url in direct_urls:
+        try:
+            record = json.loads(direct_url.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            return f"skip ({direct_url}): unreadable: {exc}"
+        if not record.get("dir_info", {}).get("editable"):
+            continue
+        url = record.get("url", "")
+        if not url.startswith("file://"):
+            continue
+        try:
+            installed_root = Path(url2pathname(unquote(urlparse(url).path))).resolve()
+        except (OSError, ValueError):
+            continue
+        if installed_root == want:
+            return None
+        return (
+            f"skip: {direct_url.parent.name} records the editable install at "
+            f"{installed_root}, not {want} — refusing to rewrite its .pth"
+        )
+    return f"skip: no editable file:// direct_url for {package_name} under {site_packages}"
+
+
 def convert_editable_finder_to_plain_path(
     interpreter: str, package_root: Path, package_name: str = "coordinator_core"
 ) -> str:
@@ -945,6 +996,9 @@ def convert_editable_finder_to_plain_path(
         return "skip: could not resolve site-packages (probe returned no path)"
 
     site_packages = Path(proc.stdout.strip())
+    mismatch = _direct_url_names_root(site_packages, package_name, package_root)
+    if mismatch is not None:
+        return mismatch
     prefix = _EDITABLE_PTH_PREFIX.format(package=package_name)
     try:
         pth_files = sorted(p for p in site_packages.glob(f"{prefix}*.pth") if p.is_file())

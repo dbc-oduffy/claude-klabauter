@@ -136,6 +136,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
+from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+
 #: The frontmatter key `provision_report._splice_review_receipt` stamps. The
 #: integrator's counterpart (`integrator_receipt`) is deliberately not read —
 #: see the module docstring's negative-spec.
@@ -256,7 +258,7 @@ def receipt_credited_shas(
     Receipt lookups are memoised per DISTINCT session id, so cost scales with
     the number of sessions in the range, not the number of commits.
     """
-    share_dir = Path(repo_root) / "state" / "subagent-share"
+    share_dir = Path(_machinery_root(str(repo_root))) / "subagent-share"
     if not share_dir.is_dir():
         return set()
 

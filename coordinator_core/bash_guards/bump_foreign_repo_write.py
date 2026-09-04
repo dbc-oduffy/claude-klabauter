@@ -208,6 +208,7 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
 from coordinator_core.bash_guards.commit_tripwires import _same_tree
 from coordinator_core.git.git_dir import common_dir_from_gitdir, resolve_git_common_dir
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
+from coordinator_core.session import machinery_paths
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
 
@@ -403,6 +404,26 @@ _GIT_WRITE_SUBCOMMANDS = frozenset(
 )
 
 
+#: Shell redirection tokens survive segment resolution -- the dispatcher
+#: splits on `|`, which is a segment separator, but `2>&1` is not one and
+#: stays inside the git segment it trails. They start with a digit or an
+#: operator rather than `-`, so the positional helpers below counted them as
+#: the subcommand's first positional: `_remote_is_read(['-v'])` is True and
+#: `_remote_is_read(['-v', '2>&1'])` is False, flipping a read to a write and
+#: denying `git -C <repo> remote -v 2>&1` while the same command without the
+#: redirect is allowed. Filtered here, at the one choke point every
+#: positional-shaped predicate routes through, rather than in the predicates
+#: -- each of those is correct given clean args, and fixing them one at a
+#: time leaves the next one to be found the same way.
+#: Matches `>`, `>>`, `<`, `2>`, `2>&1`, `1>&2`, `&>`, `>out.txt`.
+_REDIRECT_TOKEN_RE = re.compile(r"^(?:\d*[<>]|&>)")
+
+
+def _is_redirect_token(tok: str) -> bool:
+    """Whether `tok` is shell redirection rather than an argument."""
+    return bool(_REDIRECT_TOKEN_RE.match(tok))
+
+
 def _first_positional(args: List[str], value_taking: Tuple[str, ...] = ()) -> Optional[str]:
     """The first non-flag token in `args`, skipping the mandatory value of
     any flag named in `value_taking` (separate-token spelling; the
@@ -415,7 +436,7 @@ def _first_positional(args: List[str], value_taking: Tuple[str, ...] = ()) -> Op
         if tok in value_taking:
             i += 2
             continue
-        if tok.startswith("-"):
+        if tok.startswith("-") or _is_redirect_token(tok):
             i += 1
             continue
         return tok
@@ -434,7 +455,7 @@ def _positionals(args: List[str], value_taking: Tuple[str, ...] = ()) -> List[st
         if tok in value_taking:
             i += 2
             continue
-        if tok.startswith("-"):
+        if tok.startswith("-") or _is_redirect_token(tok):
             i += 1
             continue
         out.append(tok)
@@ -1433,11 +1454,12 @@ def _iter_write_sink_candidates(
 
 
 def _sandbox_root_hint(git_root: Optional[str], session_id: str) -> str:
-    """`state/subagent-share/<session_id>/` under `git_root` -- this
-    fleet's own current subagent-share convention (`coordinator_core.
-    subagent_sandbox.provision_report`, e.g. the exact path shape at that
-    module's line ~622), reused here as the message's "sandbox" pointer
-    rather than a literal. Not a claim of enforcement -- see `write_guards.
+    """`<machinery_root>/subagent-share/<session_id>/` under `git_root` --
+    this fleet's own current subagent-share convention, resolved through
+    `machinery_paths.share_dir` (the sole owner of this path shape, per
+    `docs/plans/2026-09-02-state-keeps-the-work-not-the-machinery.md` chunk
+    C3) rather than composed here. Reused as the message's "sandbox"
+    pointer, not a literal. Not a claim of enforcement -- see `write_guards.
     engine.py:32-37` (cited in this wave's sibling modules): the prior
     hard-deny write-outside-sandbox confinement was removed 2026-07-15, so
     this is an OFFERED route, not a guaranteed one; the message text itself
@@ -1447,7 +1469,7 @@ def _sandbox_root_hint(git_root: Optional[str], session_id: str) -> str:
     """
     if not git_root or not session_id:
         return ""
-    return str(Path(git_root) / "state" / "subagent-share" / session_id)
+    return machinery_paths.share_dir(git_root, session_id)
 
 
 # ---------------------------------------------------------------------------

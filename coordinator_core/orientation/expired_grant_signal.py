@@ -58,8 +58,9 @@ Negative-spec:
     record `yaml.safe_load` refuses outright, and a classifier that parses
     everything crashes on a defect unrelated to deferral.
   - Does NOT treat the index as a source of truth. It is derived state under
-    gitignored `state/cache/`, rebuildable from the corpus at any time; a
-    corrupt or absent index costs one bootstrap, never a wrong answer.
+    the gitignored per-machine machinery root's `.coordinator-local/cache/`
+    bucket, rebuildable from the corpus at any time; a corrupt or absent
+    index costs one bootstrap, never a wrong answer.
   - Does NOT compare an event-trigger `deferred_until` (a record whose expiry
     names a condition rather than a date, per C3's unresolved case) against
     today — an unparseable date is skipped, never treated as overdue and
@@ -75,11 +76,14 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import List
 
+from coordinator_core.session.machinery_paths import cache_dir
+
 
 #: Generator-provenance declaration: `_write_index_atomically`'s only write is
-#: `state/cache/queue-grants-index.json` (via `_grant_index_path`) — derived
-#: state under gitignored `state/cache/` (module docstring's "Does NOT treat
-#: the index as a source of truth"), never a tracked repo artifact.
+#: `.coordinator-local/cache/queue-grants-index.json` (via `_grant_index_path`)
+#: — derived state under the gitignored per-machine machinery root's cache
+#: bucket (module docstring's "Does NOT treat the index as a source of
+#: truth"), never a tracked repo artifact.
 GENERATES = []
 
 _QUEUE_DIRS = ("improvement-queue", "debt-backlog", "bug-backlog")
@@ -127,10 +131,12 @@ def _is_deferred(text: str) -> bool:
 
 
 def _grant_index_path(repo_root: Path) -> Path:
-    """Where the grant set is cached. `state/cache/` is gitignored — this is
-    derived state, rebuildable from the corpus at any time, never a source of
-    truth and never something a reader must have."""
-    return repo_root / "state" / "cache" / "queue-grants-index.json"
+    """Where the grant set is cached. `.coordinator-local/cache/` is the
+    gitignored per-machine machinery root's cache bucket
+    (`machinery_paths.cache_dir`) — this is derived state, rebuildable from
+    the corpus at any time, never a source of truth and never something a
+    reader must have."""
+    return Path(cache_dir(str(repo_root))) / "queue-grants-index.json"
 
 
 def _read_index(index_path: Path) -> tuple[float, dict]:

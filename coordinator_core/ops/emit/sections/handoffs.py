@@ -543,6 +543,11 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
             "origin_handoff": _jq_or(fm.get("origin_handoff"), None),
             "origin_plan_id": _jq_or(fm.get("origin_plan_id"), None),
             "origin_goal_id": _origin_goal_id_triples(fm),
+            # roadmap_id (4.2.0): roadmap-baton's only mint-time parent edge —
+            # that kind carries `predecessor: none` from the scaffolder and
+            # acquires a predecessor only at succession, so without this a
+            # consumer cannot place the row. Straight frontmatter passthrough.
+            "roadmap_id": _jq_or(fm.get("roadmap_id"), None),
             # Wire-level handoff_id derivation (C4) — see _resolve_handoff_id/_derive_handoff_id.
             "handoff_id": handoff_id,
             "handoff_id_derivation": handoff_id_derivation,

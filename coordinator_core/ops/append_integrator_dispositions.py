@@ -106,7 +106,7 @@ from coordinator_core.session.declared_writes import declare_write
 # appends a disposition block to whichever open reviewer findings sidecar the
 # caller names (state/subagent-share/<session>/*.md, see the CLI --sidecar
 # help text) -- the sidecar set is data-dependent, not a fixed artifact.
-MUTATES = ["state/subagent-share/**/*.md"]
+MUTATES = [".coordinator-local/subagent-share/**/*.md"]
 
 #: The disposition buckets, in the canonical emission order. The FIRST FIVE
 #: match `agents/review-integrator.md` § Sidecar Disposition Annotation's
@@ -736,9 +736,17 @@ def append_dispositions(
     else:
         rel_normalized = normalized
 
-    if "state/subagent-share/" not in rel_normalized:
+    # Segment-anchored, not a bare substring. The check must span the
+    # relocation (`state/` and `.coordinator-local/` both host real sidecars
+    # today), but `"subagent-share/" in path` also admits `my-subagent-share/`
+    # and any other directory merely ENDING in the bucket name. Requiring the
+    # bucket to be a whole path segment keeps the widening to exactly the two
+    # legitimate roots. (Review: code-reviewer, P3 on 196fbbc71e.)
+    if not any(
+        segment == "subagent-share" for segment in rel_normalized.split("/")
+    ):
         raise DispositionsError(
-            "target must live under state/subagent-share/<session_id>/ "
+            "target must live under <machinery_root>/subagent-share/<session_id>/ "
             f"(the reviewer's own provisioned sidecar) — got: {sidecar_path}\n"
             "This is almost always a sign the wrong path was passed — e.g. "
             "your OWN run-report sidecar rather than the reviewer's findings "
@@ -960,6 +968,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     sidecar_path = Path(args.sidecar)
+    # A drive letter with no root is drive-RELATIVE, so `is_absolute()` is
+    # False and the join below silently produces `<git_root>/X:foo...`. That
+    # is what a Windows absolute path becomes when a POSIX shell consumes its
+    # backslashes as escapes -- measured 2026-09-02, an integrator passing an
+    # unquoted Windows path from Bash reached this CLI with the separators
+    # gone and got a baffling not-found on a path it never typed. Refusing
+    # here names the cause once; joining it produces a path nobody can trace
+    # back to their own argv.
+    if sidecar_path.drive and not sidecar_path.root:
+        print(
+            f"append-integrator-dispositions: --sidecar {args.sidecar!r} is "
+            "drive-relative (a drive letter with no leading separator), not "
+            "absolute. This is what a Windows path becomes when a POSIX shell "
+            "consumes its backslashes: quote the path, or pass a repo-relative "
+            "forward-slash path with --root.",
+            file=sys.stderr,
+        )
+        return 2
     if not sidecar_path.is_absolute():
         sidecar_path = git_root / sidecar_path
 

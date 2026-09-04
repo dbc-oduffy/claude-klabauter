@@ -37,6 +37,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from coordinator_core.session import machinery_paths
 
 # SPAWN-RATCHET Rule 2/4: _git_init below spawns a real `git init` for every
 # test in this file. See coordinator_core/tests/test_no_new_spawning_tests.py.
@@ -93,7 +94,7 @@ _COMPLETE_UNFILLED = _OPEN_UNFILLED.replace("status: open", "status: complete")
 def _sidecar_dir(worktree_root: Path, session_id: str) -> Path:
     """Sidecars live under the WORKTREE, matching `provision_report._provision`
     — never under the gitdir."""
-    d = worktree_root / "state" / "subagent-share" / session_id
+    d = Path(machinery_paths.share_dir(str(worktree_root), session_id))
     d.mkdir(parents=True, exist_ok=True)
     return d
 

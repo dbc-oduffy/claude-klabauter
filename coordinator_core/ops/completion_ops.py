@@ -75,6 +75,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.reconcile.commit_reality import _git as _reality_git
+from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
 
 logger = logging.getLogger(__name__)
 
@@ -1100,7 +1101,10 @@ _REGISTRY_REPO_KEY_PREFIX = "repos."
 #: Session-scoped artifact directory a coordinator session leaves in the repo it
 #: is HOMED in: one subdirectory per session, named with the session's FULL id
 #: (``state/subagent-share/<session-id>/``, the DR-091 reviewer-sidecar home).
-_SESSION_SHARE_REL = ("state", "subagent-share")
+#: `machinery_paths.machinery_root` owns the parent; the bucket leaf is
+#: joined here since this reads across every registry-declared repo root,
+#: not one session's own `share_dir`.
+_MACHINERY_SHARE_LEAF = "subagent-share"
 
 #: Ceremony records, whose filenames are ``<session-id-prefix>-<UTC-stamp>.json``
 #: under a per-ceremony subdirectory (``state/ceremony/wsc/<prefix>-<stamp>.json``).
@@ -1225,7 +1229,7 @@ def _sibling_homed_session_ids(
         except OSError:
             continue
 
-        share_dir = repo_root.joinpath(*_SESSION_SHARE_REL)
+        share_dir = Path(_machinery_root(str(repo_root))) / _MACHINERY_SHARE_LEAF
         try:
             for child in share_dir.iterdir():
                 if child.name in session_ids and child.is_dir():

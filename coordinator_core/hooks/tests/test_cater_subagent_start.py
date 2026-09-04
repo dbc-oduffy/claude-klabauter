@@ -53,6 +53,7 @@ from coordinator_core.subagent_sandbox.provision_report import (
 )
 from coordinator_core.testing.doe_root import doe_root_and_present
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from coordinator_core.session import machinery_paths
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -419,7 +420,7 @@ def test_under_cap_type_keeps_blocks_inline_no_companion_file(git_repo: Path) ->
     assert SNIPPET_A_BODY in result
     assert SNIPPET_B_BODY in result
 
-    session_dir = git_repo / "state" / "subagent-share" / "session-under-cap-1"
+    session_dir = Path(machinery_paths.share_dir(str(git_repo), "session-under-cap-1"))
     companion_files = list(session_dir.glob("*.blocks.md")) if session_dir.is_dir() else []
     assert companion_files == []
 
@@ -560,7 +561,11 @@ def test_race_payload_writes_sentinel_before_child_and_names_it_in_marker(
     assert (git_repo / rel_path).is_file()
 
     expected_leaf = _compute_sentinel_leaf(agent_id_raw)
-    assert rel_path == f"state/subagent-share/session-race-1/{expected_leaf}.md"
+    expected_rel = (
+        Path(machinery_paths.share_dir(str(git_repo), "session-race-1"))
+        / f"{expected_leaf}.md"
+    ).relative_to(git_repo).as_posix()
+    assert rel_path == expected_rel
 
 
 def test_em_side_leaf_derivation_matches_write_side_derivation(git_repo: Path) -> None:
@@ -680,7 +685,7 @@ def test_raw_fallback_shape_gets_no_sentinel(git_repo: Path) -> None:
 
     assert SIDECAR_MISS_MARKER in result
     assert SIDECAR_PATH_MARKER_PREFIX not in result
-    session_dir = git_repo / "state" / "subagent-share" / "abc"
+    session_dir = Path(machinery_paths.share_dir(str(git_repo), "abc"))
     assert not session_dir.exists() or list(session_dir.glob("*.md")) == []
 
 
@@ -709,7 +714,7 @@ def test_canonical_shape_without_a_session_id_does_not_litter_subagent_share(git
 
     assert SIDECAR_MISS_MARKER in result
     assert SIDECAR_PATH_MARKER_PREFIX not in result
-    share_root = git_repo / "state" / "subagent-share"
+    share_root = Path(machinery_paths.share_root(str(git_repo)))
     assert not share_root.exists() or list(share_root.iterdir()) == [], (
         "a payload with no session_id created a subagent-share directory — "
         f"found {[p.name for p in share_root.iterdir()]}; _write_miss_"
@@ -919,7 +924,7 @@ def test_real_code_reviewer_payload_carries_every_resolved_block(
     # there, not ignored. Anything this test leaves behind is reconciliation
     # work for whoever runs `git status` in that repo next, so the session
     # directory comes back out however this test exits.
-    session_dir = Path(DOE_ROOT) / "state" / "subagent-share" / session_id
+    session_dir = Path(machinery_paths.share_dir(str(DOE_ROOT), session_id))
     try:
         result = compose_catering(payload, cwd=DOE_ROOT)
 
@@ -987,7 +992,7 @@ def test_real_staff_eng_payload_spills_blocks_to_companion_file(
     # cannot otherwise see the real corpus.
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(Path(DOE_ROOT) / "coordinator"))
 
-    session_dir = Path(DOE_ROOT) / "state" / "subagent-share" / "ac9-real-staff-eng"
+    session_dir = Path(machinery_paths.share_dir(str(DOE_ROOT), "ac9-real-staff-eng"))
     os.environ["SUBAGENT_SANDBOX_POLICY"] = str(policy_file)
     try:
         payload = {
@@ -1142,7 +1147,7 @@ def _miss_payload(tmp_path, agent_id, agent_type="coordinator:review-integrator"
 
 
 def _sentinels(tmp_path):
-    share = tmp_path / "state" / "subagent-share"
+    share = Path(machinery_paths.share_root(str(tmp_path)))
     if not share.is_dir():
         return []
     return sorted(share.rglob("*.md"))

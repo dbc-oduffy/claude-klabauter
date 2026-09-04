@@ -25,12 +25,10 @@ sessions, and its own environment belongs to none of them (see `hook_http`'s own
 module docstring, obligation 2, and `ops/warm_guard_evaluate.py`'s docstring for the
 established precedent this op follows). In particular the source script's
 `COORDINATOR_AUTONOMOUS_ASK_OK=1` bypass is read here from `payload["env"]`, not
-`os.environ.get(...)` — `hook_http.FORWARDED_ENV_PREFIXES` does not yet carry this
-var (only `COORDINATOR_ALLOW_/OVERRIDE_/PROBE_/SCOPE_`), so an http-flipped
-registration will not thread it end-to-end until that list is widened — a
-same-shaped gap to the one C1's table already named for `plan-persistence-check.py`
-and `stop-dispatch.py`'s env reads. Not fixed here (outside this chunk's `writes:`);
-named so C4's env-threading step inherits it rather than re-discovering it.
+`os.environ.get(...)`. CLOSED 2026-09-02: the var is named in
+`hook_http.FORWARDED_ENV_NAMES` and threads end-to-end. `COORDINATOR_*`-shaped but
+outside all four `FORWARDED_ENV_PREFIXES`, it was dropped after the header arrived —
+naming convention is not membership, in either direction.
 
 Posture resolution is a deliberately narrower port than the source script's
 `_posture.py`: that module walks upward from a resolved consuming-repo root for

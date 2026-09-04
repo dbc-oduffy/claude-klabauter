@@ -1142,6 +1142,21 @@ int main(int argc, char **argv) {
         return fall_through(argc, argv, NULL);
     }
 
+    /* ---- 0a. THE STDIN-BOUND PARAMS ROUTE IS DECIDED HERE, PRE-DELIVERY
+     * (door_core.h :: door_argv_declares_params_stdin -- the shared
+     * predicate, so this door and `door.c` cannot disagree about which
+     * argv shapes name the route). Placed after the engine root resolves
+     * so the cold leg it takes uses the SAME validated root every other
+     * fall-through in this function does. Hook mode is excluded: that
+     * caller's stdin is already drained above, and its disposition on
+     * every fall-through is a deny envelope, not a cold spawn. */
+    if (!g_door_hook_mode &&
+        door_argv_declares_params_stdin(argc, (const char *const *)argv)) {
+        int rc = fall_through(argc, argv, engine_root);
+        free(engine_root);
+        return rc;
+    }
+
     /* ---- 1. identity. Windows puts the SID in the pipe NAME; POSIX
      * enforces the uid as OWNERSHIP of the socket directory (see
      * `dir_is_private`), which is why nothing uid-shaped goes into the path

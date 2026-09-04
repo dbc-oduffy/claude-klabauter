@@ -149,7 +149,9 @@ def test_plan_derivable_path_sidecar_reaches_safe_paths(
         ),
         policy_path, git_repo, monkeypatch, capsys,
     )
-    assert rel_path == "state/plan-sidecars/2026-08-05-some-plan.docs-check.md"
+    assert rel_path == (
+        ".coordinator-local/plan-sidecars/2026-08-05-some-plan.docs-check.md"
+    )
     assert (git_repo / rel_path).is_file()
 
     offer = safe_commit_offer.compute_offer(session_id, cwd=str(git_repo))
