@@ -36,7 +36,9 @@ present only when the source memo carries one; absent/None on plain asks with no
 disposition yet), and ``body`` (str | None — the memo's full markdown body, capped at
 ``_BODY_MAX_CHARS`` and truncated with a trailing ellipsis when oversized; absent/None only
 when the source file could not be re-read, e.g. deleted between the records.query scan and
-this section's body-read pass).
+this section's body-read pass), and ``actioned_at`` (IsoDate | None — the calendar date the
+memo went terminal, derived from the frontmatter closure vocabulary; absent when the memo
+records no closure time, which means UNKNOWN and never "still open" — see ``_actioned_at``).
 A record is VALID only when title/from/to/status/created are strings, ``status`` is within
 {open, in_progress, actioned}, and ``kind`` (default "ask") is within {ask, consult, fyi}.
 Records that fail land in the malformed quarantine ({path, reason}) — the exact
@@ -61,6 +63,7 @@ from __future__ import annotations
 
 import asyncio
 import warnings
+from datetime import date as _date
 from pathlib import Path
 from typing import Optional
 
@@ -73,6 +76,12 @@ from ._shared import normalize_frontmatter
 _STATUS_ENUM = ("open", "in_progress", "actioned")
 _KIND_ENUM = ("ask", "consult", "fyi")
 _MALFORMED_REASON = "missing required field or invalid status/kind enum"
+
+# Frontmatter fields consulted, in order, for the emitted ``actioned_at`` closure date —
+# see ``_actioned_at``. Deliberately excludes ``picked_up_at``: a pickup is not a
+# completion, and dating a closure from it understates every historical date by an
+# unknown margin.
+_CLOSURE_DATE_FIELDS = ("actioned_at", "closed_at", "action_taken_at")
 
 # The two records.query record types this section merges into one emitted array.
 # 'cross-repo-memo' is the actionable inbox set (cross-repo/inbox/*.md); 'archived-memo'
@@ -260,6 +269,45 @@ def _cap_body(value: Optional[str]) -> Optional[str]:
     return _cap(value, _BODY_MAX_CHARS)
 
 
+def _actioned_at(fm: dict) -> Optional[str]:
+    """Derive the emitted ``actioned_at`` calendar date from a memo's frontmatter.
+
+    Precedence ``actioned_at`` -> ``closed_at`` -> ``action_taken_at``: the first is the
+    live terminal status' own stamp (written by ``memo_transition._apply_action_fields``
+    since 2026-09-04), the latter two belong to the grandfathered ``closed`` /
+    ``action_taken`` statuses and are the only closure time a memo that went terminal
+    through the ``close`` verb carries.
+
+    NEVER falls back to ``picked_up_at`` or file mtime. A pickup is not a completion and
+    would date every closure early by an unknown margin; mtime invents a date nobody
+    recorded. A memo with no recorded closure time emits no key at all — the consumer
+    reads that as UNKNOWN, which is honest, where either inference would be a fabricated
+    data point on a burn-down chart (example-cockpit-repo, 2026-09-04).
+
+    Truncates to a calendar date the same way ``created`` does, since the corpus mixes
+    RFC3339 date-time (the op's stamp) with bare dates (hand-authored) and the entity
+    types this field as ``IsoDate``. A value that is not a well-formed date after
+    truncation returns ``None`` rather than emitting a row the entity would reject —
+    one hand-mangled timestamp must not fail the whole snapshot's validation.
+    """
+    for field in _CLOSURE_DATE_FIELDS:
+        value = fm.get(field)
+        if isinstance(value, _date):
+            # A YAML `actioned_at: 2026-09-04` parses to a date object, not a string —
+            # the same leniency `frontmatter.schema_validate._coerce_dates_to_strings`
+            # exists to absorb. isoformat() is already the YYYY-MM-DD shape.
+            return value.isoformat()
+        if not isinstance(value, str) or not value.strip():
+            continue
+        candidate = value.strip()[0:10]
+        try:
+            _date.fromisoformat(candidate)
+        except ValueError:
+            continue
+        return candidate
+    return None
+
+
 def _read_memo_body(ctx: EmitContext, rel_path: object) -> Optional[str]:
     """Re-read a memo's body (frontmatter block stripped) directly off disk.
 
@@ -380,6 +428,12 @@ def _collect_bucket(
             decision_note = _decision_note(fm)
             if decision_note is not None:
                 record["decision_note"] = decision_note
+            # Key-absent-when-None, same convention as decision_note above. Absent means
+            # the memo records no closure time — UNKNOWN, never "still open" and never
+            # zero; see _actioned_at for why no fallback invents one.
+            actioned_at = _actioned_at(fm)
+            if actioned_at is not None:
+                record["actioned_at"] = actioned_at
             # Key-absent-when-None, same convention as decision_note above — see
             # _read_memo_body's docstring for why a fresh file read is needed at all
             # (records.query never returns body text).

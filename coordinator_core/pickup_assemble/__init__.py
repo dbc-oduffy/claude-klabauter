@@ -8543,17 +8543,30 @@ def brief(
         # after: a claim taken here would be a reclaim on a baton already
         # continued into a successor, closing that leg in the same move
         # rather than needing a second fix.
-        if fm.get("deployment_state") == "continued" and fm.get("continued_into"):
-            # `_continued_into_target` reads THIS artifact's own
-            # `continued_into` field, archive-aware — the same value `fm`
-            # already carries here (this artifact is live, not archived),
-            # reused per the module's existing resolver rather than a
-            # second bare `fm.get`. Whether the pointer actually RESOLVES
-            # on disk is then checked separately, archive-aware, via
+        if fm.get("deployment_state") == "continued":
+            # Read straight off `fm`, which the guard above has already
+            # proven carries `deployment_state: continued`.
+            # `_continued_into_target` was called here originally; it
+            # re-opens and re-parses this same artifact to return the
+            # identical value, and its one added capability —
+            # archive-awareness — cannot apply, because reaching this branch
+            # means the artifact is live, not archived. That made it a file
+            # read and a YAML parse on the 500ms brightline pickup path
+            # buying nothing (coordinator:overengineering-reviewer,
+            # 2026-09-03). Whether the pointer actually RESOLVES on disk is
+            # still checked separately and archive-aware, via
             # `_resolve_lineage_artifact_path` — mirroring
             # `_resume_pending_unification`'s own "resolved on disk first,
             # a dangling edge is named, not acted on" precedent.
-            continued_into = _continued_into_target(root, artifact["path"])
+            #
+            # `continued_into` itself is NOT guaranteed truthy here —
+            # `deployment_state == "continued"` with a missing/blank
+            # `continued_into` is a malformed/partially-migrated record,
+            # not "not superseded" (coordinator:code-reviewer, 2026-09-03,
+            # Finding 1). Both an absent pointer and a dangling one route to
+            # this same gate and are named as distinct anomalies below —
+            # different repairs for whoever reads it.
+            continued_into = fm.get("continued_into") or None
             successor_resolved = _resolve_lineage_artifact_path(root, continued_into) if continued_into else None
             dangling = successor_resolved is None
             successor_path = (
@@ -8562,24 +8575,50 @@ def brief(
                 else None
             )
             if dangling:
-                question = (
-                    f"{artifact['path']} is stamped continued_into: {continued_into!r}, "
-                    "but that successor does not resolve on disk (or in any archive dir) — "
-                    "the pointer is dangling. Pick up this predecessor anyway, or treat the "
-                    "pointer as broken and investigate?"
-                )
-                evidence = f"continued_into: {continued_into!r} — dangling, does not resolve"
-                narration = (
-                    f"{artifact['path']} is marked deployment_state: continued with a "
-                    f"dangling continued_into pointer ({continued_into!r} does not resolve "
-                    "on disk or in any archive dir) — this predecessor was superseded but "
-                    "its successor cannot be found."
-                )
-                next_move = (
-                    "Resolve the dangling continued_into pointer by hand before picking up "
-                    "this predecessor — do not treat residency in state/handoffs/ as license "
-                    "to act on it."
-                )
+                if continued_into is None:
+                    # `deployment_state: continued` with `continued_into`
+                    # missing/blank entirely — a malformed or
+                    # partially-migrated record, distinct from a pointer
+                    # that names a successor and simply cannot find it: the
+                    # repair here is "populate continued_into", not
+                    # "chase down where it points" (coordinator:code-reviewer,
+                    # 2026-09-03, Finding 1).
+                    question = (
+                        f"{artifact['path']} is marked deployment_state: continued but has no "
+                        "continued_into pointer at all — the field is missing or blank. Pick "
+                        "up this predecessor anyway, or treat the missing pointer as broken "
+                        "and investigate?"
+                    )
+                    evidence = "continued_into: absent/blank — deployment_state: continued with no successor recorded"
+                    narration = (
+                        f"{artifact['path']} is marked deployment_state: continued but "
+                        "continued_into is missing or blank — this predecessor was superseded "
+                        "but no successor pointer was ever recorded."
+                    )
+                    next_move = (
+                        "Populate the missing continued_into pointer by hand before picking up "
+                        "this predecessor — do not treat residency in state/handoffs/ as license "
+                        "to act on it."
+                    )
+                else:
+                    question = (
+                        f"{artifact['path']} is stamped continued_into: {continued_into!r}, "
+                        "but that successor does not resolve on disk (or in any archive dir) — "
+                        "the pointer is dangling. Pick up this predecessor anyway, or treat the "
+                        "pointer as broken and investigate?"
+                    )
+                    evidence = f"continued_into: {continued_into!r} — dangling, does not resolve"
+                    narration = (
+                        f"{artifact['path']} is marked deployment_state: continued with a "
+                        f"dangling continued_into pointer ({continued_into!r} does not resolve "
+                        "on disk or in any archive dir) — this predecessor was superseded but "
+                        "its successor cannot be found."
+                    )
+                    next_move = (
+                        "Resolve the dangling continued_into pointer by hand before picking up "
+                        "this predecessor — do not treat residency in state/handoffs/ as license "
+                        "to act on it."
+                    )
             else:
                 question = (
                     f"{artifact['path']} is stamped continued_into: {successor_path} — this "

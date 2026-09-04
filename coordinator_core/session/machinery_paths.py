@@ -57,6 +57,12 @@ LEDGER_FILENAME = "next-move-ledger.jsonl"
 INTAKE_FILENAME = "obligations-inbound.jsonl"
 SEND_LOG_FILENAME = "group-em-send-log.jsonl"
 
+#: The one spelling of the machinery root's leaf name. `machinery_root()`
+#: joins this onto `repo_root`; every other repo-relative constant that
+#: needs to spell the root (e.g. `MEMO_OUTBOX_RELDIR` below) builds off this
+#: same literal rather than respelling it.
+_MACHINERY_ROOT_LEAF = ".coordinator-local"
+
 #: A session id arrives from the harness registry (peers) and the environment
 #: (the caller), and is joined straight into a path a writer will `makedirs`.
 #: The sibling reader (`receiver_state_reader.receiver_state_path`) rejects an
@@ -84,7 +90,7 @@ def machinery_root(repo_root: str) -> str:
     `hooks.watchdog_undischarged_next_move`'s module docstring § LEDGER
     LOCATION for the reasoning behind repo-root-relative machinery paths.
     """
-    return os.path.join(repo_root, ".coordinator-local")
+    return os.path.join(repo_root, _MACHINERY_ROOT_LEAF)
 
 
 def share_root(repo_root: str) -> str:
@@ -168,6 +174,50 @@ def kill_ledger_path(repo_root: str) -> str:
     return os.path.join(machinery_root(repo_root), "kill-ledger.md")
 
 
+#: The memo-outbox leaf under `machinery_root()`. Not a second spelling of
+#: the machinery root itself -- `MEMO_OUTBOX_RELDIR` below is built from this
+#: leaf plus `_MACHINERY_ROOT_LEAF`, the SAME literal `machinery_root()`
+#: joins onto `repo_root`, so there is exactly one spelling of
+#: `.coordinator-local` in this module, not two.
+MEMO_OUTBOX_LEAF = "memo-outbox"
+
+#: Repo-relative, POSIX-separated spellings of the two outbox roots, for the
+#: declaration sites an absolute-path accessor structurally cannot serve: op
+#: `MUTATES` lists, `_SUPERSEDES_ANCHORS`, and the `_LEGACY_*_REL` tuples.
+#: Those sites need a bare relative string, not a path built from a
+#: caller-supplied `repo_root`, so before these constants existed the literal
+#: was respelled by hand at five declaration sites and the eventual removal of
+#: dual-root support would have been five separate edits to find
+#: (coordinator:overengineering-reviewer, 2026-09-03). Built from
+#: `_MACHINERY_ROOT_LEAF`, the same literal `machinery_root()` uses, so this
+#: constant and `memo_outbox_dir` cannot drift onto two spellings of the
+#: machinery root.
+MEMO_OUTBOX_RELDIR = "/".join([_MACHINERY_ROOT_LEAF, MEMO_OUTBOX_LEAF])
+LEGACY_MEMO_OUTBOX_RELDIR = "state/memo-outbox"
+
+#: REMOVAL TRIGGER for every dual-root outbox read, named because the
+#: dual-root branch shipped without one and "temporary" fallbacks that name no
+#: end condition are how a migration window becomes permanent.
+#:
+#: Drop the legacy leg -- `legacy_memo_outbox_dir`, `legacy_memo_outbox_sent_dir`,
+#: `LEGACY_MEMO_OUTBOX_RELDIR`, `memo_draft.merged_outbox_drafts`' second glob,
+#: and `_SUPERSEDES_ANCHORS`' legacy entry -- when BOTH hold:
+#:
+#:   1. `state/memo-outbox/` in this repo contains no `status: draft` memo.
+#:      Drafts staged before the 2026-09-03 repoint are the only live content
+#:      the fallback exists to drain; `sent/` history is not a reason to keep
+#:      a READ path, since nothing resolves a sent memo by outbox lookup.
+#:   2. The 984 already-tracked files are untracked and `.gitignore` lists
+#:      this bucket alongside its siblings. That is PM-gated (a `git rm
+#:      --cached` deletes peers' live queued drafts on their next pull), so
+#:      this condition is not the engine's to clear unilaterally.
+#:
+#: Condition 1 is checkable in one command:
+#:   `grep -l "^status: draft" state/memo-outbox/*.md`
+#: An empty result with condition 2 satisfied means delete the leg, not keep
+#: it "just in case" -- a fallback nothing can reach is dead code.
+
+
 def memo_outbox_dir(repo_root: str) -> str:
     """`<machinery_root>/memo-outbox` -- moved, not killed (PM Adjudication
     4): the canonical WRITE root for `memo.draft`/`memo.compose`/`memo.send`/
@@ -175,7 +225,7 @@ def memo_outbox_dir(repo_root: str) -> str:
     stayed off `.gitignore`'s bucket list -- see `legacy_memo_outbox_dir`'s
     own docstring for why callers must still READ it.
     """
-    return os.path.join(machinery_root(repo_root), "memo-outbox")
+    return os.path.join(machinery_root(repo_root), MEMO_OUTBOX_LEAF)
 
 
 def memo_outbox_sent_dir(repo_root: str) -> str:
@@ -201,7 +251,7 @@ def legacy_memo_outbox_dir(repo_root: str) -> str:
     migrated by this accessor's introduction -- a reader must still resolve
     against this root as a fallback after `memo_outbox_dir` comes up empty.
     """
-    return os.path.join(repo_root, "state", "memo-outbox")
+    return os.path.join(repo_root, *LEGACY_MEMO_OUTBOX_RELDIR.split("/"))
 
 
 def legacy_memo_outbox_sent_dir(repo_root: str) -> str:

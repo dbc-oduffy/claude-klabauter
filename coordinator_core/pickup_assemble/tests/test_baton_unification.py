@@ -76,38 +76,10 @@ pytestmark = [
 # ---------------------------------------------------------------------------
 
 
-def _isolated_git_env(anchor: Path) -> dict[str, str]:
-    empty_config = anchor / "empty.gitconfig"
-    if not empty_config.exists():
-        empty_config.write_text("", encoding="utf-8")
-    env = dict(os.environ)
-    env["GIT_CONFIG_GLOBAL"] = str(empty_config)
-    env["GIT_CONFIG_SYSTEM"] = str(empty_config)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    return env
-
-
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        stdin=subprocess.DEVNULL,
-        env=_isolated_git_env(repo.parent),
-        **no_console_creationflags(),
-    )
-
-
-def _init_repo(repo: Path) -> None:
-    repo.mkdir(parents=True, exist_ok=True)
-    _git(repo, "init", "-b", "work/test/2026-01-01")
-    _git(repo, "config", "commit.gpgsign", "false")
-    _git(repo, "config", "user.email", "test@example.com")
-    _git(repo, "config", "user.name", "Test")
-    (repo / "README.md").write_text("init\n", encoding="utf-8")
-    _git(repo, "add", "README.md")
-    _git(repo, "commit", "-m", "init")
+from coordinator_core.pickup_assemble.tests._git_harness import (
+    git as _git,
+    init_repo as _init_repo,
+)
 
 
 def _seed_handoff(

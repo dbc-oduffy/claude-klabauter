@@ -159,10 +159,11 @@ _RECOMMENDED_CAP_CHOICE = 150
 # candidate/dest resolution below no longer reads this constant -- it
 # resolves through `memo_corpus_root` (coordinator_core/memo_corpus.py),
 # the one named resolver every corpus-root construction in coordinator_core
-# routes through. `cycle.py` is not in this chunk's `writes:` scope, so its
-# own still-hardcoded fallback pathspec is a known, out-of-scope gap this
-# edit does not close -- it will keep matching only the legacy
-# `cross-repo/inbox` location until a chunk that owns cycle.py repoints it.
+# routes through. Removal trigger: `cycle.py`'s fallback pathspec repoint,
+# queued as `state/bug-backlog/2026-09-03-cycle-py-fallback-pathspec-still-
+# hardcodes-the-legacy-cross-repo-inbox-literal.yaml` -- that row's
+# completion criterion is this constant's deletion (coordinator:
+# overengineering-reviewer, 2026-09-03).
 INBOX_RELDIR = "cross-repo/inbox"
 
 # Fallback receipt sink for the one setup-error shape that has NO common_dir

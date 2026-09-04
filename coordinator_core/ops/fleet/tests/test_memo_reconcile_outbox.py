@@ -35,6 +35,7 @@ from coordinator_core.ops.fleet.memo_reconcile_outbox import (
 #: proof: a draft staged at the old root before the move must still be
 #: found and reconciled, landing in the NEW `sent/` dir (`_NEW_SENT`).
 _OUTBOX = ("state", "memo-outbox")
+_NEW_OUTBOX = (".coordinator-local", "memo-outbox")
 _NEW_SENT = (".coordinator-local", "memo-outbox", "sent")
 
 
@@ -52,9 +53,32 @@ def _outbox_dir(root: Path) -> Path:
     return d
 
 
+# Review: coordinator:code-reviewer (Finding 3) — every fixture above stages
+# only at the retired root, so `_reconcile`'s own new-root behavior was
+# unproven at exactly the root the engine now writes to. This stages at the
+# canonical `.coordinator-local/memo-outbox/` root instead.
+def _new_outbox_dir(root: Path) -> Path:
+    d = root.joinpath(*_NEW_OUTBOX)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _write_memo(root: Path, name: str, status: str | None) -> Path:
     """Write an outbox entry. `status=None` writes a frontmatter-less fragment."""
     path = _outbox_dir(root) / name
+    if status is None:
+        path.write_text("just a body fragment, no frontmatter\n", encoding="utf-8")
+    else:
+        path.write_text(
+            f'---\ntitle: "t"\nto: "example-retrieval-repo-em"\nstatus: {status}\n---\n\nbody\n',
+            encoding="utf-8",
+        )
+    return path
+
+
+def _write_new_root_memo(root: Path, name: str, status: str | None) -> Path:
+    """Same as `_write_memo`, staged at the NEW canonical root."""
+    path = _new_outbox_dir(root) / name
     if status is None:
         path.write_text("just a body fragment, no frontmatter\n", encoding="utf-8")
     else:
@@ -113,6 +137,24 @@ class TestSweep:
             "a legacy-root draft must still be reconciled, landing in the NEW sent/"
         )
         assert (outbox / "live.md").is_file(), "a draft's home IS the outbox"
+
+    # Review: coordinator:code-reviewer (Finding 3) — the core "non-draft
+    # moves to sent/" case, proven at the NEW canonical root with no legacy
+    # dir present, so a regression isolating new-root behavior in
+    # `_reconcile` itself has a test here to catch it.
+    def test_delivered_entry_at_new_root_moves_and_draft_stays(self, worktree):
+        _write_new_root_memo(worktree, "delivered.md", "sent")
+        _write_new_root_memo(worktree, "live.md", "draft")
+        assert not worktree.joinpath(*_OUTBOX).exists()
+
+        result = _memo_reconcile_outbox({"dry_run": False}, repo_root=worktree)
+
+        assert result["exit_code"] == 0
+        assert [a["filename"] for a in result["acted"]] == ["delivered.md"]
+        new_outbox = worktree.joinpath(*_NEW_OUTBOX)
+        assert not (new_outbox / "delivered.md").exists()
+        assert (worktree.joinpath(*_NEW_SENT) / "delivered.md").is_file()
+        assert (new_outbox / "live.md").is_file(), "a draft's home IS the outbox"
 
     def test_every_non_draft_status_is_delivered_history(self, worktree):
         """`sent` is not the only terminal spelling — the population that

@@ -20,7 +20,7 @@ an agent that skips the CLI and Writes straight at
 Block predicate: DENY when the tool is a file-mutating tool AND its resolved
 absolute target path is equal to, or a descendant of, EITHER
 ``<home>/.claude/cross-repo`` (legacy) OR ``<home>/.claude/state/cross-repo``
-(current, `MEMO_CORPUS_RELDIR = "state/cross-repo"`) for ANY plausible home
+(current, part of `_CROSS_REPO_RELDIRS = ("cross-repo", "state/cross-repo")`) for ANY plausible home
 root. Both literals are guarded unconditionally — this guard has no authority
 over the FOREIGN root it polices, so it does not consult `memo_corpus_root`/
 `receiver_inbox_root` to pick one; a resolver probe would select a single

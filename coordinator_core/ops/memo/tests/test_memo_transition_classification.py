@@ -21,8 +21,15 @@ from __future__ import annotations
 # "method not found" false-negatives from an empty registry).
 # ---------------------------------------------------------------------------
 
-import coordinator_core.ops  # noqa: F401 — side-effect: populates _REGISTRY
+# `import coordinator_core.ops` stopped populating _REGISTRY on its own when that
+# package's eager-import block was retired (2026-08-22, import-path-costs-nothing sprint —
+# see its __init__ docstring): dispatch now targets one op module, and the ~50 test modules
+# asserting the registry at import time were left asserting an empty dict. _eager_import_all
+# is the sanctioned full-registration entry point that block became.
+from coordinator_core.ops import _eager_import_all
 import coordinator_core.ipc as _ipc
+
+_eager_import_all()
 
 assert len(_ipc._REGISTRY) >= 2, (
     f"_REGISTRY must have >=2 ops after importing coordinator_core.ops; "

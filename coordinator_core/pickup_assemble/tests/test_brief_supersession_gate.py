@@ -44,42 +44,15 @@ pytestmark = [
 ]
 
 
-def _isolated_git_env(anchor: Path) -> dict[str, str]:
-    empty_config = anchor / "empty.gitconfig"
-    if not empty_config.exists():
-        empty_config.write_text("", encoding="utf-8")
-    env = dict(os.environ)
-    env["GIT_CONFIG_GLOBAL"] = str(empty_config)
-    env["GIT_CONFIG_SYSTEM"] = str(empty_config)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    return env
-
-
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        stdin=subprocess.DEVNULL,
-        env=_isolated_git_env(repo.parent),
-        **no_console_creationflags(),
-    )
-
-
-def _init_repo(repo: Path) -> None:
-    repo.mkdir(parents=True, exist_ok=True)
-    _git(repo, "init", "-b", "work/test/2026-01-01")
-    _git(repo, "config", "commit.gpgsign", "false")
-    _git(repo, "config", "user.email", "test@example.com")
-    _git(repo, "config", "user.name", "Test")
-    (repo / "README.md").write_text("init\n", encoding="utf-8")
-    _git(repo, "add", "README.md")
-    _git(repo, "commit", "-m", "init")
+from coordinator_core.session.record_homes import record_path
+from coordinator_core.pickup_assemble.tests._git_harness import (
+    git as _git,
+    init_repo as _init_repo,
+)
 
 
 def _write_handoff(repo: Path, name: str, fm_extra: str) -> Path:
-    path = repo / "state" / "handoffs" / name
+    path = Path(record_path(str(repo), "handoffs", name))
     path.parent.mkdir(parents=True, exist_ok=True)
     fm = (
         f'title: "Test Handoff {name}"\n'
@@ -142,6 +115,31 @@ def test_continued_with_dangling_continued_into_still_blocks_and_states_it(tmp_p
     assert d["gates"]["supersession"]["successor_resolves"] is False
     assert d["gates"]["supersession"]["successor_path"] is None
     assert "dangling" in d["narration"].lower()
+
+
+def test_continued_with_missing_continued_into_still_blocks_and_states_it(tmp_path: Path):
+    # Review: coordinator:code-reviewer, 2026-09-03, Finding 1 — a
+    # `deployment_state: continued` record with continued_into missing
+    # entirely must still route to the gate (positive assertion the gate
+    # fires), not fall through to the ordinary live-pickup path.
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _write_handoff(
+        repo,
+        "predecessor.md",
+        "deployment_state: continued\n",
+    )
+
+    result = pa.brief("state/handoffs/predecessor.md", repo_root=repo)
+    d = result.decision_object
+
+    assert d["gates"]["coast"]["verdict"] == "blocked"
+    jp_ids = [jp["id"] for jp in d["judgment_points"]]
+    assert "j-supersession" in jp_ids
+    assert d["directives"] == []
+    assert d["gates"]["supersession"]["successor_resolves"] is False
+    assert d["gates"]["supersession"]["successor_path"] is None
+    assert "missing" in d["narration"].lower() or "blank" in d["narration"].lower()
 
 
 def test_no_claim_acquired_when_gate_fires_with_claim_at_brief(tmp_path: Path):

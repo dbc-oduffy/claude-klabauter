@@ -1458,6 +1458,16 @@ def _normalize_repo_name(name: str) -> str:
     return re.sub(r"[-_]+", "", name.strip().lower())
 
 
+#: Memoized binding for `coordinator_core.memo_corpus.receiver_inbox_root`,
+#: set on first call. `None` until then -- NOT a module-scope non-stdlib
+#: import (see the module note above `_receiver_inbox_root`'s neighbours: no
+#: non-stdlib import binds at import time in this file). Bootstrap
+#: (sys.path setup + the engine import) is per-process work that only needs
+#: doing once; a `--list-receivers` over N receivers used to repeat it N
+#: times to reach an already-imported module.
+_receiver_inbox_root_impl = None
+
+
 def _receiver_inbox_root(repo_path: str) -> "tuple[str, bool]":
     """Resolve the cross-repo inbox root for ONE specific receiver repo.
 
@@ -1465,18 +1475,30 @@ def _receiver_inbox_root(repo_path: str) -> "tuple[str, bool]":
     receiver_inbox_root` (C7, once C1/C5 land that module) — this CLI no
     longer carries a second implementation of the C10a migration-window
     probe. See that function's docstring for the resolution rule and the
-    CACHE ASYMMETRY constraint (never process-lifetime-memoized).
+    CACHE ASYMMETRY constraint (never process-lifetime-memoized) — that
+    constraint governs the RESOLVER's own per-receiver probe, not this
+    forwarder's one-time bootstrap, which is pure sys.path/import setup.
+
+    Bootstrap runs once per process (Review: overengineering-reviewer,
+    2026-09-03 — the bootstrap was re-run on every call). A resolution
+    failure on the first call (bootstrap or import error) still propagates
+    exactly as before — this hoist does not turn it into an import-time
+    crash of the CLI; the bootstrap only ever runs lazily, on first use.
 
     Spec backlink: docs/plans/2026-09-02-state-keeps-the-work-not-the-machinery.md § C8
     Spec backlink: docs/plans/2026-09-03-the-engine-follows-the-memo-channel-home.md § C7
     """
-    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
-    import cc_invoke
+    global _receiver_inbox_root_impl
+    if _receiver_inbox_root_impl is None:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        import cc_invoke
 
-    cc_invoke.ensure_engine_on_path(__file__)
-    from coordinator_core.memo_corpus import receiver_inbox_root
+        cc_invoke.ensure_engine_on_path(__file__)
+        from coordinator_core.memo_corpus import receiver_inbox_root as _impl
 
-    return receiver_inbox_root(repo_path)
+        _receiver_inbox_root_impl = _impl
+
+    return _receiver_inbox_root_impl(repo_path)
 
 
 def _looks_like_coordinator_receiver(path: str) -> bool:

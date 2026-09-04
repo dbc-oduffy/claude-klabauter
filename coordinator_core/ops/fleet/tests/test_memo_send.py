@@ -142,6 +142,38 @@ def _write_draft(
     return draft_path
 
 
+# Review: coordinator:code-reviewer — new-root staging helper. `_write_draft`
+# only ever stages at the retired `state/memo-outbox/` root, so no test in
+# this file exercised `_draft_path`'s new-root branch of the dual-root
+# resolution memo.send depends on (Finding 2).
+def _write_new_root_draft(
+    sender_repo: Path, topic: str, *,
+    to: str = "example-retrieval-repo-em", title: str = "A test memo",
+    summary: str = "a one-line summary", kind: str = "fyi",
+    sent_by: str = "d218a65c-2c5b-472e-879c-ae9ed1747030",
+    body: str = "Body prose.\n",
+) -> Path:
+    outbox = sender_repo / ".coordinator-local" / "memo-outbox"
+    outbox.mkdir(parents=True, exist_ok=True)
+    draft_path = outbox / f"{topic}.md"
+    content = (
+        "---\n"
+        f'title: "{title}"\n'
+        'from: "claude-klabauter-engine"\n'
+        f'to: "{to}"\n'
+        "created: 2026-08-25\n"
+        "status: draft\n"
+        "delivery_mode: receiver-repo\n"
+        f'summary: "{summary}"\n'
+        f'kind: "{kind}"\n'
+        f'sent_by: "{sent_by}"\n'
+        "---\n\n"
+        f"{body}"
+    )
+    draft_path.write_text(content, encoding="utf-8", newline="\n")
+    return draft_path
+
+
 def _base_params(**overrides) -> dict:
     params = {"dry_run": True, "topic": "some-topic"}
     params.update(overrides)
@@ -357,6 +389,44 @@ class TestEndToEndDelivery:
         assert gone.returncode != 0, (
             "the outbox original must be DELETED in HEAD, not merely moved on disk"
         )
+
+    # Review: coordinator:code-reviewer (Finding 2) — a draft staged ONLY at
+    # the new canonical root, no legacy dir present at all, so a broken
+    # new-root branch of `_draft_path`'s dual-root resolution (ordering
+    # flip, inverted existence check) cannot hide behind the legacy leg.
+    def test_happy_path_finds_sends_and_moves_a_new_root_draft(self, tmp_path, monkeypatch):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_new_root_draft(sender_repo, "new-root-topic")
+
+        # Precondition: no legacy dir exists at all -- resolution must find
+        # this draft purely off the new root.
+        assert not (sender_repo / "state" / "memo-outbox").exists()
+
+        result = _memo_send({"dry_run": False, "topic": "new-root-topic"}, repo_root=sender_repo)
+
+        assert result["exit_code"] == 0, result
+        acted = result["acted"][0]
+        assert acted["written"] is True
+        assert acted["committed"] is True
+        assert acted["sender_committed"] is True
+
+        inbox_files = [
+            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
+            if p.name != ".gitkeep"
+        ]
+        assert len(inbox_files) == 1
+        assert "new-root-topic" in inbox_files[0].name
+
+        # The original new-root draft is gone, moved to the new-root sent/.
+        assert not (sender_repo / ".coordinator-local" / "memo-outbox" / "new-root-topic.md").exists()
+        sent_path = sender_repo / ".coordinator-local" / "memo-outbox" / "sent" / "new-root-topic.md"
+        assert sent_path.exists()
+        ledger_path = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        rows = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
+        assert any(r["topic"] == "new-root-topic" for r in rows), rows
 
     def _send_draft_without_sent_by(self, tmp_path, monkeypatch):
         """Drive a full send of a draft carrying no `sent_by` — the ordinary

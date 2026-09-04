@@ -43,39 +43,10 @@ pytestmark = [
 _AC4_OPEN_BUDGET = 250
 
 
-def _isolated_git_env(anchor: Path) -> dict[str, str]:
-    import os
-
-    env = dict(os.environ)
-    config_file = anchor / ".gitconfig-empty"
-    if not config_file.exists():
-        config_file.write_text("", encoding="utf-8")
-    env["GIT_CONFIG_GLOBAL"] = str(config_file)
-    env["GIT_CONFIG_SYSTEM"] = str(config_file)
-    return env
-
-
-def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(repo), *args],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        stdin=subprocess.DEVNULL,
-        env=_isolated_git_env(repo.parent),
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-
-
-def _init_repo(repo: Path) -> None:
-    repo.mkdir(parents=True, exist_ok=True)
-    _git(repo, "init", "-b", "work/test/2026-01-01")
-    _git(repo, "config", "commit.gpgsign", "false")
-    _git(repo, "config", "user.email", "test@example.com")
-    _git(repo, "config", "user.name", "Test")
-    (repo / "README.md").write_text("init\n", encoding="utf-8")
-    _git(repo, "add", "README.md")
-    _git(repo, "commit", "-m", "init")
+from coordinator_core.pickup_assemble.tests._git_harness import (
+    git as _git,
+    init_repo as _init_repo,
+)
 
 
 def _seed_handoff(repo: Path, name: str) -> Path:

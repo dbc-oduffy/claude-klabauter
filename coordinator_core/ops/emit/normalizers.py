@@ -149,8 +149,25 @@ _SECTION_DERIVED_NULL_KEYS = frozenset({"deliverable_status", "shipped_sha"})
 # `producer` is not a derivative of any already-dropped field. It costs no coverage here because
 # its assertions live in a dedicated home: `coordinator_core/contract/cockpit_schema/tests/test_producer_axis_
 # entity.py`. Drop it from the frozen-golden diff, never from that.
+#
+# `actioned_at` (CrossRepoMemoSummary, cockpit contract 4.4.0) joins the same set for the
+# same reason as `archived`/`decision_note` above: the retired bash oracle's § 8.7 never
+# emitted a closure date, so the frozen golden carries no key at all. Dropped from the
+# byte-parity COMPARISON only — sections/cross_repo_memos.py::collect() still stamps it on
+# every record whose memo records a closure time. Its real coverage lives in that section's
+# own unit tests over the precedence chain and the never-infer-from-picked_up_at rule,
+# which a frozen pre-port golden could not assert in the first place.
 _SECTION_DROP_KEYS = frozenset(
-    {"content_hash", "kind", "baton_class", "producer", "_goal_ids", "archived", "decision_note"}
+    {
+        "content_hash",
+        "kind",
+        "baton_class",
+        "producer",
+        "_goal_ids",
+        "archived",
+        "decision_note",
+        "actioned_at",
+    }
 )
 
 # Attribution slug — normalized per contract (REPO_NAME) to tolerate remote/machine variance.

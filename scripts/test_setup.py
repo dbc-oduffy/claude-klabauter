@@ -191,6 +191,30 @@ def _stub_settings_home(setup_mod, monkeypatch, tmp_path):
     return settings_home_dir, venv_dir, venv_py
 
 
+def _stub_editable_finder_conversion(setup_mod, monkeypatch):
+    """Neutralize `convert_editable_finder_to_plain_path` for the duration of
+    a `provision_deps` test.
+
+    NEGATIVE SPEC -- without this, a test that hands `provision_deps` a real
+    interpreter and a `tmp_path` root reaches the converter for real: it
+    resolves that interpreter's site-packages and rewrites the operator's
+    `__editable__.coordinator_core-*.pth` to point at the pytest temp
+    directory, breaking `import coordinator_core` machine-wide. The function
+    now refuses a root the dist-info does not name, so this is belt and
+    braces -- and it keeps these tests off the ambient interpreter entirely.
+    Returned calls list lets a caller assert the call happened."""
+    calls = []
+    monkeypatch.setattr(
+        setup_mod,
+        "convert_editable_finder_to_plain_path",
+        lambda interpreter, package_root, package_name="coordinator_core": calls.append(
+            (interpreter, package_root)
+        )
+        or "stubbed",
+    )
+    return calls
+
+
 def _stub_candidates(setup_mod, monkeypatch, py, *extra):
     candidates = [
         setup_mod.InterpreterCandidate(
@@ -224,6 +248,7 @@ def test_provision_deps_machine_first_installs_editable_package(setup_mod, monke
         return setup_mod.subprocess.CompletedProcess(argv, 0, stdout="Successfully installed")
 
     monkeypatch.setattr(setup_mod, "_run_pip", _fake_run_pip)
+    _stub_editable_finder_conversion(setup_mod, monkeypatch)
 
     engine_py, import_names = setup_mod.provision_deps(pyproject_dir, sys.executable, False)
 
@@ -246,6 +271,7 @@ def test_provision_deps_idempotent_noop_when_already_installed(setup_mod, monkey
 
     calls = []
     monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
+    _stub_editable_finder_conversion(setup_mod, monkeypatch)
 
     engine_py, import_names = setup_mod.provision_deps(pyproject_dir, sys.executable, False)
 
@@ -3024,3 +3050,121 @@ def test_check_governed_authoring_surfaces_manifest_unresolvable_plugin_root_war
     assert "absent at" not in out
     assert "unreadable at" not in out
     assert "valid JSON but not a" not in out
+
+
+# ---------------------------------------------------------------------------
+# convert_editable_finder_to_plain_path — the dist-info interlock
+# ---------------------------------------------------------------------------
+
+
+def _stub_purelib(setup_mod, monkeypatch, site_packages: Path):
+    """Make the converter's `sysconfig.get_path('purelib')` probe report
+    `site_packages` without spawning an interpreter."""
+    real_run = setup_mod.subprocess.run
+
+    def _fake_run(argv, *args, **kwargs):
+        if len(argv) >= 2 and argv[1] == "-c" and "purelib" in argv[2]:
+            return setup_mod.subprocess.CompletedProcess(
+                argv, 0, stdout=f"{site_packages}\n", stderr=""
+            )
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
+
+
+def _make_editable_install(site_packages: Path, package_root: Path, *, version="0.1.0"):
+    """Lay down the artifact pair a PEP 660 strict-mode editable install of
+    `coordinator_core` leaves in site-packages: the finder-import `.pth` and
+    the dist-info `direct_url.json` that records where it points."""
+    site_packages.mkdir(parents=True, exist_ok=True)
+    pth = site_packages / f"__editable__.coordinator_core-{version}.pth"
+    pth.write_text(
+        f"import __editable___coordinator_core_{version.replace('.', '_')}_finder\n",
+        encoding="utf-8",
+    )
+    dist_info = site_packages / f"coordinator_core-{version}.dist-info"
+    dist_info.mkdir(exist_ok=True)
+    (dist_info / "direct_url.json").write_text(
+        json.dumps(
+            {"dir_info": {"editable": True}, "url": package_root.resolve().as_uri()}
+        ),
+        encoding="utf-8",
+    )
+    return pth
+
+
+def test_convert_editable_finder_converts_when_direct_url_names_the_root(
+    setup_mod, monkeypatch, tmp_path
+):
+    """The sanctioned case: the dist-info records this very checkout, so the
+    finder-import line is rewritten to the plain absolute path."""
+    site_packages = tmp_path / "site-packages"
+    package_root = tmp_path / "claude-klabauter"
+    package_root.mkdir()
+    pth = _make_editable_install(site_packages, package_root)
+    _stub_purelib(setup_mod, monkeypatch, site_packages)
+
+    result = setup_mod.convert_editable_finder_to_plain_path("py", package_root)
+
+    assert "converted" in result
+    assert pth.read_text(encoding="utf-8").strip() == str(package_root.resolve())
+
+
+def test_convert_editable_finder_refuses_a_root_the_dist_info_does_not_name(
+    setup_mod, monkeypatch, tmp_path
+):
+    """The memo case (2026-09-03, doe-claude-em): handed a root that is not
+    the installed one -- a pytest tmp dir -- the converter must leave the
+    operator's `.pth` byte-identical and say why."""
+    site_packages = tmp_path / "site-packages"
+    installed_root = tmp_path / "claude-klabauter"
+    installed_root.mkdir()
+    pth = _make_editable_install(site_packages, installed_root)
+    before = pth.read_bytes()
+    _stub_purelib(setup_mod, monkeypatch, site_packages)
+
+    stranger = tmp_path / "root"
+    stranger.mkdir()
+    result = setup_mod.convert_editable_finder_to_plain_path("py", stranger)
+
+    assert result.startswith("skip:")
+    assert "refusing to rewrite" in result
+    assert pth.read_bytes() == before
+
+
+def test_convert_editable_finder_refuses_when_no_dist_info_is_present(
+    setup_mod, monkeypatch, tmp_path
+):
+    """Fails closed: a finder `.pth` with no dist-info beside it is not an
+    install this function can vouch for, so it is left alone."""
+    site_packages = tmp_path / "site-packages"
+    package_root = tmp_path / "claude-klabauter"
+    package_root.mkdir()
+    pth = _make_editable_install(site_packages, package_root)
+    import shutil as _shutil
+
+    _shutil.rmtree(site_packages / "coordinator_core-0.1.0.dist-info")
+    before = pth.read_bytes()
+    _stub_purelib(setup_mod, monkeypatch, site_packages)
+
+    result = setup_mod.convert_editable_finder_to_plain_path("py", package_root)
+
+    assert result.startswith("skip: no coordinator_core-*.dist-info")
+    assert pth.read_bytes() == before
+
+
+def test_convert_editable_finder_is_idempotent_on_an_already_plain_pth(
+    setup_mod, monkeypatch, tmp_path
+):
+    """A second install run reports `already plain-path` rather than
+    rewriting the same bytes every time."""
+    site_packages = tmp_path / "site-packages"
+    package_root = tmp_path / "claude-klabauter"
+    package_root.mkdir()
+    pth = _make_editable_install(site_packages, package_root)
+    pth.write_text(str(package_root.resolve()) + "\n", encoding="utf-8")
+    _stub_purelib(setup_mod, monkeypatch, site_packages)
+
+    result = setup_mod.convert_editable_finder_to_plain_path("py", package_root)
+
+    assert "already plain-path" in result

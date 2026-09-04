@@ -67,7 +67,7 @@ from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
 # place, mirroring cockpit_schema.emit_schema.CONTRACT_VERSION's
 # single-literal-source discipline.
 # ---------------------------------------------------------------------------
-MEMO_SCHEMA_VERSION = "1.7.0"
+MEMO_SCHEMA_VERSION = "1.8.0"
 
 #: Generator-provenance declaration: emit_schemas() writes both of these
 #: fixed tracked artifacts to this module's own directory by default.
@@ -103,6 +103,25 @@ GENERATES = [
 # ---------------------------------------------------------------------------
 MEMO_SCHEMA_BUMP_CLASS = "nested-field-additive"
 MEMO_SCHEMA_BUMP_NOTE = (
+    "1.7.0 -> 1.8.0 declares the optional `actioned_at` closure timestamp on "
+    "cross-repo-memo — WHEN a memo went terminal, not merely that it did. The "
+    "vocabulary previously carried a closure stamp only for the grandfathered "
+    "`action_taken`/`closed` statuses (`action_taken_at`/`closed_at`), while the "
+    "live terminal status `actioned` had none, so the mainline "
+    "`memo.transition action`/`resolve` write recorded no time at all — every "
+    "downstream burn-down reconstruction was left inferring one from "
+    "`picked_up_at` (a pickup is not a completion) or file mtime (invents a date "
+    "nobody recorded), and `distill.delete_guard._candidate_actioned_date` still "
+    "resorts to a per-file `git log --follow` proxy. Requested by example-cockpit-repo "
+    "2026-09-04 (example-cockpit-repo/state/memo-outbox/memo-closure-timestamp-missing-"
+    "from-cross-repo-memo-summary.md, their commit 8754b2171); "
+    "`_apply_action_fields` now stamps it, and cockpit-contract "
+    "4.4.0 carries it to CrossRepoMemoSummary. Declared only on cross-repo-memo, "
+    "not archived-memo, which declares no lifecycle timestamps at all. "
+    "Classified nested-field-additive: one new OPTIONAL property, never required, "
+    "no change to any existing required set — every memo valid under 1.7.0 stays "
+    "valid, and no backfill is performed (absent means UNKNOWN, never 'still "
+    "open'). "
     "1.6.0 -> 1.7.0 (gate-closure-signal-contract, cross-repo/inbox/"
     "2026-08-21-claude-klabauter-em-gate-closure-signal-contract.md, ruled by "
     "eng-director state/subagent-share/f6ed9dc2-6fc9-4804-9952-27e684f5f573/"
@@ -595,6 +614,21 @@ def _build_cross_repo_memo_schema() -> dict[str, Any]:
             "reviewed_at": {
                 "type": "string",
                 "description": "Lifecycle timestamp for review phase.",
+            },
+            "actioned_at": {
+                "type": "string",
+                "description": (
+                    "Closure timestamp for the LIVE terminal status: when "
+                    "status went to actioned. Stamped by "
+                    "coordinator_core.ops.memo_transition._apply_action_fields on "
+                    "the action/resolve write, preserved never overwritten once "
+                    "present. Distinct from action_taken_at/closed_at below, which "
+                    "belong to the grandfathered action_taken/closed statuses. "
+                    "Optional and never required — absent on every memo closed "
+                    "before 2026-09-04, where it means UNKNOWN, never 'still "
+                    "open'. Permissive on shape: the corpus mixes RFC3339 "
+                    "date-time (the op's own stamp) and bare date (hand-authored)."
+                ),
             },
             "action_taken_at": {
                 "type": "string",

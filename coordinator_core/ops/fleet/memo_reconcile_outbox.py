@@ -3,7 +3,8 @@ coordinator_core.ops.fleet.memo_reconcile_outbox — memo.reconcile_outbox MUTAT
 
 Purpose: the outbox depth IS the interface — the workday-start surface, the
 pickup skill, and a handoff's "N undelivered drafts" line all read
-`state/memo-outbox/*.md` as a work queue. `memo.send` moves its own draft to
+`.coordinator-local/memo-outbox/*.md` (plus, dual-root, the retired
+`state/memo-outbox/*.md`) as a work queue. `memo.send` moves its own draft to
 `sent/` when it succeeds, so the depth is honest for everything that went out
 that way. Nothing moves an entry that reached the receiver by ANY OTHER route
 — an out-of-band hand-delivery, a hand-written inbox file, a send whose
@@ -52,6 +53,10 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.session.machinery_paths import (
+    LEGACY_MEMO_OUTBOX_RELDIR,
+    MEMO_OUTBOX_RELDIR,
+)
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import (
@@ -78,9 +83,9 @@ _KNOWN_PARAM_KEYS = frozenset({"dry_run"})
 #: Sourced from BOTH the new and retired outbox roots (2026-09-03
 #: relocation), always moved to the new `sent/` -- see `_reconcile`.
 MUTATES = [
-    ".coordinator-local/memo-outbox/*.md",
-    "state/memo-outbox/*.md",
-    ".coordinator-local/memo-outbox/sent/*.md",
+    f"{MEMO_OUTBOX_RELDIR}/*.md",
+    f"{LEGACY_MEMO_OUTBOX_RELDIR}/*.md",
+    f"{MEMO_OUTBOX_RELDIR}/sent/*.md",
 ]
 
 
@@ -219,10 +224,14 @@ def _reconcile(worktree_root: Path, dry_run: bool) -> tuple[list, list, list]:
 def _memo_reconcile_outbox(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC 'memo.reconcile_outbox' MUTATING UDS op handler.
 
-    Move every already-delivered entry out of the calling repo's
-    `state/memo-outbox/` into its `sent/` subdirectory, so the outbox depth
-    is a count of work rather than a count of files. See the module docstring
-    for what is deliberately NOT swept.
+    Move every already-delivered entry out of the calling repo's outbox
+    into its `sent/` subdirectory, so the outbox depth is a count of work
+    rather than a count of files. Sources candidates from BOTH the canonical
+    `.coordinator-local/memo-outbox/` root and the retired `state/memo-outbox/`
+    root; moves are always written to the root the entry was found under. The
+    retired-root read leg is temporary — see `machinery_paths.py`'s
+    REMOVAL TRIGGER comment above `memo_outbox_dir` for the exact drop
+    condition. See the module docstring for what is deliberately NOT swept.
 
     Params:
         dry_run (bool, required): true previews (every entry comes back with
@@ -241,8 +250,9 @@ def _memo_reconcile_outbox(params: dict, repo_root: Optional[Path] = None) -> di
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
+            # Review: coordinator:code-reviewer — error named the retired write root; corrected to canonical.
             "memo.reconcile_outbox: no repo_root supplied — this op reconciles "
-            "the CALLING repo's own state/memo-outbox/ and requires a resolved "
+            "the CALLING repo's own .coordinator-local/memo-outbox/ and requires a resolved "
             "worktree (common_dir-keyed op).",
         )
     worktree = main_worktree_root(Path(repo_root))

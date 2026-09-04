@@ -28,7 +28,7 @@ path, and no other guard vets an arbitrary sibling-clone path.
 Block predicate: DENY when the tool is a file-mutating tool AND its resolved
 target path is equal to, or a descendant of, EITHER
 ``<mirror-root>/cross-repo`` (legacy) OR ``<mirror-root>/state/cross-repo``
-(current, `MEMO_CORPUS_RELDIR = "state/cross-repo"`) for ANY publish-mirror
+(current, part of `_CROSS_REPO_RELDIRS = ("cross-repo", "state/cross-repo")`) for ANY publish-mirror
 root this machine's registry currently resolves — where ``<mirror-root>``
 comes from ``publish.mirrors.<key>.path`` (the SAME registry table the
 ``cross-repo-memo`` CLI already trusts for publish-target detection, read

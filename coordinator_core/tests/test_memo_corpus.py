@@ -22,7 +22,6 @@ def test_memo_corpus_root_prefers_new_root_when_present(tmp_path):
     legacy_root = os.path.join(repo_root, "cross-repo")
     os.makedirs(legacy_root)
 
-    memo_corpus.memo_corpus_root.cache_clear()
     result = memo_corpus.memo_corpus_root(repo_root)
 
     assert result == new_root
@@ -33,7 +32,6 @@ def test_memo_corpus_root_falls_back_to_legacy_when_only_legacy_present(tmp_path
     legacy_root = os.path.join(repo_root, "cross-repo")
     os.makedirs(legacy_root)
 
-    memo_corpus.memo_corpus_root.cache_clear()
     result = memo_corpus.memo_corpus_root(repo_root)
 
     assert result == legacy_root
@@ -43,31 +41,52 @@ def test_memo_corpus_root_creates_new_root_when_neither_exists(tmp_path):
     repo_root = str(tmp_path)
     new_root = os.path.join(repo_root, "state", "cross-repo")
 
-    memo_corpus.memo_corpus_root.cache_clear()
     result = memo_corpus.memo_corpus_root(repo_root)
 
     assert result == new_root
 
 
-def test_memo_corpus_root_memoizes_per_process(tmp_path):
+def test_memo_corpus_root_re_resolves_when_this_repo_migrates_mid_process(tmp_path):
+    """The inverse of the test this replaces.
+
+    `memo_corpus_root` was process-lifetime `lru_cache`d when it landed, and
+    this test pinned that staleness AS CONTRACT -- it asserted the resolver
+    must KEEP returning the legacy root after the new one appeared on disk.
+    The cache was removed (coordinator:overengineering-reviewer, 2026-09-03):
+    it defended against a call pattern the module's own BRIGHTLINE paragraph
+    already bans, and it froze the root for `group_em/watch.py`, a long-lived
+    process that re-resolves per tick by design.
+
+    So the property flips: a migration landing underneath a running process
+    must be PICKED UP, not held at the value resolved first.
+    """
     repo_root = str(tmp_path)
     legacy_root = os.path.join(repo_root, "cross-repo")
     os.makedirs(legacy_root)
 
-    memo_corpus.memo_corpus_root.cache_clear()
     first = memo_corpus.memo_corpus_root(repo_root)
+    assert first == legacy_root
 
     new_root = os.path.join(repo_root, "state", "cross-repo")
     os.makedirs(new_root)
     second = memo_corpus.memo_corpus_root(repo_root)
 
-    assert first == legacy_root
-    assert second == legacy_root, (
-        "memo_corpus_root must stay memoized for the life of the process "
-        "even after the on-disk state changes underneath it"
+    assert second == new_root, (
+        "memo_corpus_root must re-probe per invocation: a repo that migrates "
+        "underneath a long-lived process must resolve to the new root on the "
+        "next call, not stay frozen at the first resolution"
     )
 
-    memo_corpus.memo_corpus_root.cache_clear()
+
+def test_memo_corpus_root_carries_no_cache_attribute(tmp_path):
+    """Grep-proof against the cache coming back by accident.
+
+    `functools.lru_cache` attaches `cache_clear`/`cache_info` to the wrapped
+    function, so their ABSENCE is the cheapest positive assertion that this
+    resolver is still a plain function.
+    """
+    assert not hasattr(memo_corpus.memo_corpus_root, "cache_clear")
+    assert not hasattr(memo_corpus.memo_corpus_root, "cache_info")
 
 
 def test_receiver_inbox_root_prefers_new_root_when_present(tmp_path):

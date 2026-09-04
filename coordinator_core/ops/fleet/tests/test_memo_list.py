@@ -1054,3 +1054,60 @@ class TestNoMemoIndex:
             f"across handler calls (Q-d store-less-ness invariant). "
             f"Names that appeared after handler calls: {sorted(names_after - names_before)}"
         )
+
+
+# ===========================================================================
+# 7. Cross-agreement — memo_list's advertised inbox vs _memo_resolver's
+# delivery target (review coordinator:code-reviewer, slice B, 2026-09-03,
+# Finding 2). Both call `receiver_inbox_root` from `memo_corpus.py`, which
+# makes disagreement structurally impossible today — this pins that
+# agreement so a future edit to either call site cannot silently reintroduce
+# the drift with nothing going red.
+# ===========================================================================
+
+class TestListAndResolverAgreeOnInboxTarget:
+    def _both_targets(self, tmp_path, monkeypatch, repo_path, receiver_em_id):
+        """Return (enumeration-mode target_inbox, resolve_receiver_inbox's
+        inbox_dir) for the SAME receiver, from the two independent call
+        surfaces the finding calls out."""
+        from coordinator_core.ops.fleet._memo_resolver import resolve_receiver_inbox
+
+        enum_result = _run(_memo_list({"dry_run": True}))
+        receivers = {c["repo_key"]: c for c in _receivers(enum_result["candidates"])}
+        list_target = receivers["repos.example_retrieval_repo"]["target_inbox"]
+
+        inbox_dir, _receiver_repo_path, _all_repos = resolve_receiver_inbox(receiver_em_id)
+        resolver_target = str(inbox_dir)
+
+        return list_target, resolver_target
+
+    def test_unmigrated_receiver_list_and_resolver_agree(self, tmp_path, monkeypatch):
+        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo.mkdir()
+        # No state/cross-repo/ and no legacy cross-repo/ on disk — the
+        # unmigrated case; receiver_inbox_root falls back to the legacy root.
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        list_target, resolver_target = self._both_targets(
+            tmp_path, monkeypatch, rag_repo, "example-retrieval-repo-em"
+        )
+
+        assert list_target == resolver_target
+        # Positive assertion anchored on the resolved (legacy) root itself —
+        # never a vacuous "cross-repo not in x" negative check.
+        assert list_target == str(rag_repo / "cross-repo" / "inbox")
+
+    def test_migrated_receiver_list_and_resolver_agree(self, tmp_path, monkeypatch):
+        rag_repo = tmp_path / "example-retrieval-repo"
+        (rag_repo / "state" / "cross-repo").mkdir(parents=True)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        list_target, resolver_target = self._both_targets(
+            tmp_path, monkeypatch, rag_repo, "example-retrieval-repo-em"
+        )
+
+        assert list_target == resolver_target
+        # Positive assertion anchored on the MIGRATED root specifically.
+        assert list_target == str(rag_repo / "state" / "cross-repo" / "inbox")

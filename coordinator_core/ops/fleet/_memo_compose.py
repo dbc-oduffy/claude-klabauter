@@ -44,6 +44,10 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.session.machinery_paths import (
+    LEGACY_MEMO_OUTBOX_RELDIR,
+    MEMO_OUTBOX_RELDIR,
+)
 from coordinator_core.ops.fleet._common import build_setup_error_result
 from coordinator_core.ops.fleet.memo_kinds import VALID_KINDS as _CANONICAL_VALID_KINDS
 from coordinator_core.ops.fleet._memo_resolver import (
@@ -186,8 +190,8 @@ def _validate_space_param(op_mode: str, value: Any, dry_run: bool):
 _SUPERSEDES_ANCHORS = (
     "cross-repo/inbox/",
     "cross-repo/archive/",
-    ".coordinator-local/memo-outbox/",
-    "state/memo-outbox/",
+    f"{MEMO_OUTBOX_RELDIR}/",
+    f"{LEGACY_MEMO_OUTBOX_RELDIR}/",
 )
 
 #: A value that begins like a filesystem-absolute path on EITHER platform --

@@ -881,8 +881,9 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
+            # Review: coordinator:code-reviewer — error named the retired write root; corrected to canonical.
             "memo.draft: no repo_root supplied — memo.draft writes into the CALLING "
-            "repo's own state/memo-outbox/ and requires a resolved worktree "
+            "repo's own .coordinator-local/memo-outbox/ and requires a resolved worktree "
             "(common_dir-keyed op).",
         )
     caller_worktree = main_worktree_root(Path(repo_root))

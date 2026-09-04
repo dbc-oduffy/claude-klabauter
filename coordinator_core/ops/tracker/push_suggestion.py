@@ -531,7 +531,10 @@ def _delivery_commit_message(rel_path: str) -> str:
     rather than naming a var here closes both.
     """
     lines = [
-        f"cross-repo: deliver {tracker_store.EVENT_KIND_FRONTMATTER_LABEL} {rel_path}",
+        # Prose, not `EVENT_KIND_FRONTMATTER_LABEL`: that constant is the
+        # hyphenated `kind:` value (line 435's use), and substituting it here
+        # renders the subject "deliver sovereign-tracker-event <path>".
+        f"cross-repo: deliver sovereign-tracker event {rel_path}",
         "",
         f"Deliverable-Id: {_DELIVERABLE_ID}",
     ]

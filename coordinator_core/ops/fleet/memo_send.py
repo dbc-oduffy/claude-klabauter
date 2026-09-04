@@ -93,6 +93,10 @@ from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
+from coordinator_core.session.machinery_paths import (
+    LEGACY_MEMO_OUTBOX_RELDIR,
+    MEMO_OUTBOX_RELDIR,
+)
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
     rebuild as _rebuild_frontmatter,
@@ -270,8 +274,8 @@ _SENT_LEDGER_MAX_AGE_DAYS = 30
 # patterns are named here rather than the stale single legacy literal, since
 # either can be the actual write target depending on the receiver probed.
 MUTATES = [
-    ".coordinator-local/memo-outbox/sent-ledger.jsonl",
-    "state/memo-outbox/*.md",
+    f"{MEMO_OUTBOX_RELDIR}/sent-ledger.jsonl",
+    f"{LEGACY_MEMO_OUTBOX_RELDIR}/*.md",
     "cross-repo/inbox/*.md",
     "state/cross-repo/inbox/*.md",
 ]
@@ -646,9 +650,11 @@ def _memo_send(params: dict, repo_root=None) -> dict:
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
+            # Review: coordinator:code-reviewer — error named the retired root only; now names the canonical root, dual-root read noted.
             "memo.send: no repo_root supplied — memo.send reads the CALLING "
-            "repo's own state/memo-outbox/ and requires a resolved worktree "
-            "(common_dir-keyed op).",
+            "repo's own .coordinator-local/memo-outbox/ (falling back to the "
+            "retired state/memo-outbox/ for pre-relocation drafts) and requires "
+            "a resolved worktree (common_dir-keyed op).",
         )
     sender_worktree = main_worktree_root(Path(repo_root))
 

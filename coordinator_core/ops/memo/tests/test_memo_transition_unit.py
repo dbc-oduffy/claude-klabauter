@@ -19,6 +19,7 @@ Spec backlink: pln-memo-transition-native-python--7e1dd0 § C4, AC8
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -42,6 +43,7 @@ from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.memo_transition import (
     _action,
     _claim,
+    _closure_stamp,
     _containment_check,
     _normalize_oversize_summary,
     _release,
@@ -1753,3 +1755,140 @@ created: 2026-06-01
         second = _close(memo, "2026-08-12T00:00:00Z")
         assert second["exit_code"] == 0
         assert second["applied"] is False
+
+
+# ---------------------------------------------------------------------------
+# actioned_at closure-timestamp — memo_transition._closure_stamp /
+# _apply_action_fields's actioned_at insertion (2026-09-04 addition).
+# ---------------------------------------------------------------------------
+
+_RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
+class TestActionedAtClosureStamp(TestActionDispositionValidation):
+    """_action stamps actioned_at on the status->actioned write.
+
+    Inherits _setup_memo/_IN_PROGRESS_FIXTURE from TestActionDispositionValidation
+    (a real git repo + in_progress memo under cross-repo/inbox/, tracked in HEAD).
+    """
+
+    def test_action_with_at_param_stamps_supplied_value(self, tmp_path):
+        """AC: action on an in_progress memo with a decision stamps actioned_at,
+        equal to params['at'] when supplied."""
+        memo = self._setup_memo(tmp_path)
+        result = _action(memo, {
+            "decision": "accepted",
+            "realized_by": "abc1234",
+            "at": "2026-09-04T12:00:00Z",
+        })
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        fm = _fm_dict(memo)
+        assert fm["actioned_at"] == "2026-09-04T12:00:00Z"
+
+    def test_action_without_at_param_stamps_now_rfc3339(self, tmp_path):
+        """AC: action with NO --at stamps a syntactically valid RFC3339
+        YYYY-MM-DDTHH:MM:SSZ value — asserted via regex, never wall-clock equality."""
+        memo = self._setup_memo(tmp_path)
+        result = _action(memo, {"decision": "declined"})
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        fm = _fm_dict(memo)
+        assert _RFC3339_RE.match(fm["actioned_at"])
+
+    def test_preexisting_actioned_at_preserved_byte_identical(self, tmp_path):
+        """AC (--correct-realization-must-not-move-the-closure-date invariant):
+        an actioned_at already present in the frontmatter is preserved, not
+        overwritten, even when the memo is re-actioned via --correct-realization."""
+        memo = self._setup_memo(tmp_path)
+        first = _action(memo, {
+            "decision": "accepted",
+            "realized_by": "aaaaaaa",
+            "at": "2026-01-01T00:00:00Z",
+        })
+        assert first["exit_code"] == 0
+        assert _fm_dict(memo)["actioned_at"] == "2026-01-01T00:00:00Z"
+
+        second = _action(memo, {
+            "decision": "accepted",
+            "realized_by": "bbbbbbb",
+            "correct_realization": True,
+            "at": "2026-09-04T00:00:00Z",
+        })
+        assert second["exit_code"] == 0
+        fm = _fm_dict(memo)
+        assert fm["actioned_at"] == "2026-01-01T00:00:00Z"
+
+    def test_superseded_by_path_stamps_no_actioned_at(self, tmp_path):
+        """AC: the superseded_by early-return branch (status -> superseded) is
+        NOT reached by the status->actioned flip, so no actioned_at is stamped."""
+        repo = Path(tmp_path) / "repo"
+        _git_init(repo)
+        inbox = repo / "cross-repo" / "inbox"
+        inbox.mkdir(parents=True)
+        memo = inbox / "memo.md"
+        memo.write_text(self._IN_PROGRESS_FIXTURE, encoding="utf-8")
+        _git_track(repo, memo)
+
+        target_dir = repo / "cross-repo" / "inbox"
+        target = target_dir / "successor.md"
+        target.write_text(
+            "---\nkind: fyi\nstatus: open\nfrom: peer\nsummary: pointer target.\ncreated: 2026-06-01\n---\n",
+            encoding="utf-8",
+        )
+        _git_track(repo, target)
+
+        result = _action(str(memo), {"superseded_by": "successor.md"})
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        fm = _fm_dict(memo)
+        assert fm["status"] == "superseded"
+        assert "actioned_at" not in fm
+
+
+class TestResolveStampsActionedAt(TestResolve):
+    """resolve's closure stamp is its OWN `at`, not a now-stamp.
+
+    Inherits TestResolve's fixtures. Guards the explicit `at` injection at
+    _resolve's _apply_action_fields call site: resolve takes `at` positionally, and
+    a caller that does not also duplicate it into `params` (every direct call site,
+    including this suite) would otherwise get a now-stamp for actioned_at while
+    picked_up_at carried the supplied instant — one transition reading as two moments.
+    """
+
+    def test_resolve_stamps_actioned_at_equal_to_its_own_at(self, tmp_path):
+        memo = self._setup_memo(tmp_path, self._OPEN_FIXTURE)
+        result = _resolve(
+            memo, "sess-1", "2026-07-26T00:00:00Z",
+            {"decision": "accepted", "realized_by": "abc1234"},
+        )
+        assert result["exit_code"] == 0
+        assert result["applied"] is True
+
+        fm_dict = self._fm_dict(memo)
+        assert fm_dict["actioned_at"] == "2026-07-26T00:00:00Z"
+        # Same instant as the claim stamp written in the same closure.
+        assert fm_dict["actioned_at"] == fm_dict["picked_up_at"]
+        assert validate_memo_cross_fields(fm_dict) == []
+
+
+class TestClosureStampUnit:
+    """_closure_stamp — direct unit coverage."""
+
+    def test_whitespace_padded_at_is_stripped(self):
+        assert _closure_stamp({"at": "  2026-09-04T12:00:00Z  "}) == "2026-09-04T12:00:00Z"
+
+    def test_empty_at_falls_back_to_now_stamp(self):
+        assert _RFC3339_RE.match(_closure_stamp({"at": ""}))
+
+    def test_blank_at_falls_back_to_now_stamp(self):
+        assert _RFC3339_RE.match(_closure_stamp({"at": "   "}))
+
+    def test_missing_at_falls_back_to_now_stamp(self):
+        assert _RFC3339_RE.match(_closure_stamp({}))
+
+    def test_non_str_at_falls_back_to_now_stamp(self):
+        assert _RFC3339_RE.match(_closure_stamp({"at": 12345}))

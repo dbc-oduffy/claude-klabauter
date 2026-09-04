@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import textwrap
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -226,6 +227,13 @@ def test_t10_resolved_engine_class_refuses_write_loudly(repo, tmp_path, monkeypa
         return (mirror_root, "resolved-engine")
 
     monkeypatch.setattr(state_root_mod, "coordinator_engine_root_with_class", _fake_with_class)
+    # `resolved-engine` alone does not refuse: _claude_klabauter_state first offers the
+    # write to a registered live authoring tree and raises only when there is
+    # none. Without this stub the redirect rung fires from the developer's own
+    # machine-local config, the write succeeds legitimately, and this test goes
+    # red precisely where the system is healthy — asserting an unconditional
+    # refusal that stopped being the contract when the redirect rung landed.
+    monkeypatch.setattr(state_root_mod, "_live_engine_source_root", lambda _root: None)
 
     rc = mod.main([])
     err = capsys.readouterr().err
@@ -234,6 +242,36 @@ def test_t10_resolved_engine_class_refuses_write_loudly(repo, tmp_path, monkeypa
     assert "PUBLISHED engine mirror" in err
     assert not os.path.exists(os.path.join(mirror_root, "state"))
     assert not os.path.isfile(repo / "docs" / "exec-summary.md")
+
+
+def test_t10b_resolved_engine_redirects_to_a_registered_live_tree(repo, tmp_path, monkeypatch):
+    """The other rung of the published-mirror guard, and the one every
+    developer box actually takes.
+
+    Executing from the published mirror is not itself the fault the guard
+    exists to prevent — writing state INTO the mirror is. When a live authoring
+    tree is registered, redirecting the write there satisfies the guard, so
+    rc is 0 legitimately. Pinning only the refusal branch (t10) left this one
+    unpinned while making the suite red on healthy machines: exactly inverted.
+    The load-bearing assertion is not the return code but that the mirror
+    remains unwritten either way.
+    """
+    monkeypatch.setattr(meta_repo_identity, "is_meta_repo", lambda _root: True)
+
+    mirror_root = str(tmp_path / "published-mirror-checkout")
+    live_root = str(tmp_path / "live-claude-klabauter-checkout")
+    os.makedirs(os.path.join(live_root, "state"), exist_ok=True)
+
+    def _fake_with_class():
+        return (mirror_root, "resolved-engine")
+
+    monkeypatch.setattr(state_root_mod, "coordinator_engine_root_with_class", _fake_with_class)
+    monkeypatch.setattr(state_root_mod, "_live_engine_source_root", lambda _root: live_root)
+
+    rc = mod.main([])
+
+    assert rc == 0
+    assert not os.path.exists(os.path.join(mirror_root, "state"))
 
 
 def test_t11_live_working_tree_class_unchanged_behavior(repo, tmp_path, monkeypatch):
@@ -330,12 +368,15 @@ def test_derive_progress_reads_week_of_grammar_when_no_highlights_heading(tmp_pa
     """
     repo_dir = tmp_path / "repo"
     state_root = repo_dir / "state"
-    wc_archive = repo_dir / "archive" / "week-changelogs" / "2026-07-20"
+    # Dated relative to now: the freshness bound would reject a hardcoded past
+    # date and send this through the git-log rung, testing nothing about grammar.
+    fresh = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    wc_archive = repo_dir / "archive" / "week-changelogs" / fresh
     wc_archive.mkdir(parents=True)
     (state_root / "week-changelog").mkdir(parents=True)
 
-    (wc_archive / "2026-07-20-pending-release.md").write_text(
-        "# Pending Release — 2026-07-20\n\n"
+    (wc_archive / f"{fresh}-pending-release.md").write_text(
+        f"# Pending Release — {fresh}\n\n"
         "## Week of 2026-07-20\n- Did the thing.\n\n"
         "## Week of 2026-07-27\n- Did the newer thing.\n\n"
         "## Daily summaries backing this digest\n- 2026-07-27.md\n",
@@ -345,6 +386,106 @@ def test_derive_progress_reads_week_of_grammar_when_no_highlights_heading(tmp_pa
     result = mod._derive_progress(str(state_root), str(repo_dir))
     assert "Did the newer thing." in result
     assert "Recent commits:" not in result
+
+
+def test_derive_progress_rung1_selects_the_newest_week_changelog(tmp_path):
+    """Rung 1 loops the week-changelog dir and `break`s on the first file
+    carrying the highlights heading, so iteration order decides the answer.
+    Ascending order takes the OLDEST file and, because the loop breaks, never
+    reconsiders — pinning the Progress section to that file for as long as it
+    exists. Live repos hold months of dated changelogs, so an ascending selector
+    is a permanent freeze, not a one-week lag.
+
+    Currently rung 1 cannot fire (no writer emits `## Highlights`), which is
+    exactly why this guard matters: the defect is armed by whoever repairs the
+    rung-1 grammar, in a commit that would otherwise look like a pure fix.
+    """
+    repo_dir = tmp_path / "repo"
+    wc_dir = repo_dir / "state" / "week-changelog"
+    wc_dir.mkdir(parents=True)
+
+    (wc_dir / "2026-07-06.md").write_text(
+        "## Highlights\n- The stale one.\n", encoding="utf-8"
+    )
+    (wc_dir / "2026-08-24.md").write_text(
+        "## Highlights\n- The current one.\n", encoding="utf-8"
+    )
+
+    result = mod._derive_progress(str(repo_dir / "state"), str(repo_dir))
+    assert "The current one." in result
+    assert "The stale one." not in result
+
+
+def test_date_from_path_prefers_filename_then_parent_directory():
+    from_filename = mod._date_from_path("a/2026-07-13/2026-07-14-pending-release.md")
+    assert from_filename is not None and from_filename.day == 14
+
+    from_parent = mod._date_from_path("a/2026-07-13/pending-release.md")
+    assert from_parent is not None and from_parent.day == 13
+
+    assert mod._date_from_path("a/archive/pending-release.md") is None
+
+
+def test_is_stale_input_reads_the_authored_date_not_mtime(tmp_path):
+    """The freshness bound must survive transport.
+
+    Every input to _derive_progress arrives by git checkout, which stamps mtime
+    at clone time. An mtime-based bound would therefore report a feed that
+    stopped in July as minutes old on a fresh clone — vouching most confidently
+    for precisely the frozen artifacts it exists to catch. The file written here
+    has a brand-new mtime and a stale name; the stale name must win.
+    """
+    stale = tmp_path / "2026-01-05-pending-release.md"
+    stale.write_text("## Highlights\n- old\n", encoding="utf-8")
+
+    now = datetime(2026, 9, 4, tzinfo=timezone.utc)
+    assert mod._is_stale_input(str(stale), now=now) is True
+
+    undated = tmp_path / "pending-release.md"
+    undated.write_text("## Highlights\n- undated\n", encoding="utf-8")
+    assert mod._is_stale_input(str(undated), now=now) is False
+
+
+def test_derive_progress_falls_through_to_git_log_when_prose_is_stale(tmp_path):
+    """A stopped feed must lose to the git-log rung.
+
+    Rungs 1 and 2 read files that can stop being written; rung 3 reads live
+    history and is always current. Ordered purely by prose quality, a repo that
+    wrote changelogs in July and stopped reports staler progress than one that
+    never wrote any — and nothing in the output says so. The bound is what makes
+    the last-resort rung reachable when the richer rungs have gone dead.
+    """
+    repo_dir = tmp_path / "repo"
+    state_root = repo_dir / "state"
+    (state_root / "week-changelog").mkdir(parents=True)
+    stale_day = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
+    wc_archive = repo_dir / "archive" / "week-changelogs" / stale_day
+    wc_archive.mkdir(parents=True)
+    (wc_archive / f"{stale_day}-pending-release.md").write_text(
+        f"## Week of {stale_day}\n- Frozen prose nobody has touched since.\n",
+        encoding="utf-8",
+    )
+
+    result = mod._derive_progress(str(state_root), str(repo_dir))
+    assert "Frozen prose nobody has touched since." not in result
+    assert "Recent highlights:" not in result
+
+
+def test_derive_progress_keeps_prose_inside_the_freshness_bound(tmp_path):
+    """The bound must not empty a living feed — the paired half of the test above."""
+    repo_dir = tmp_path / "repo"
+    state_root = repo_dir / "state"
+    (state_root / "week-changelog").mkdir(parents=True)
+    recent_day = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
+    wc_archive = repo_dir / "archive" / "week-changelogs" / recent_day
+    wc_archive.mkdir(parents=True)
+    (wc_archive / f"{recent_day}-pending-release.md").write_text(
+        f"## Week of {recent_day}\n- Shipped this week.\n",
+        encoding="utf-8",
+    )
+
+    result = mod._derive_progress(str(state_root), str(repo_dir))
+    assert "Shipped this week." in result
 
 
 def test_trim_trailing_blank():

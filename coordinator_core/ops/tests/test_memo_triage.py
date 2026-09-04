@@ -61,6 +61,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.memo_triage import (
     MemoTriageContradictionError,
     _already_captured,
@@ -914,7 +915,11 @@ def test_live_corpus_promote_set_matches_golden():
     # Narrow the comparison to golden entries still present, which preserves the
     # real signal (a LIVE memo silently flipping to promoted/unscored) while
     # tolerating the deletions this corpus is designed to receive.
-    archive_dir = _REPO_ROOT / "cross-repo" / "archive"
+    # Review: coordinator:code-reviewer — resolve through the same dual-root
+    # resolver production code uses (state/cross-repo/ preferred, legacy
+    # cross-repo/ fallback) instead of hardcoding the retired legacy path,
+    # which made this leg's comparison set vacuously empty.
+    archive_dir = Path(memo_corpus_root(str(_REPO_ROOT))) / "archive"
     golden_disqualified = set(golden["disqualified"])
     deleted_since_golden = {
         memo_id

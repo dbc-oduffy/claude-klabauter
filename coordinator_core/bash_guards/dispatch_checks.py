@@ -5249,6 +5249,46 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 
 
+def _add_has_narrowing_pathspec(after: str) -> bool:
+    """Whether a `git add` argv restricts itself to named paths.
+
+    True for a `--` with at least one token after it, and for
+    `--pathspec-from-file[=<f>]` / `--pathspec-file-nul` (the path list is in
+    the file; SC-DR-017 already counts these as scope at this file's two
+    other scope readers). A bare `--` with nothing after it narrows nothing.
+
+    Why `-u` is allowed to consult this while `-A` is not, since the
+    asymmetry looks arbitrary: `git add -u -- X` stages tracked
+    modifications under X and is a STRICT SUBSET of `git add -- X`, which
+    this guard already permits — it is the same paths minus the untracked
+    files. Refusing the narrower spelling of a permitted command cannot
+    protect anything; it only pushes the committer toward a coarser form.
+    `-A -- X` has no such subset relation and keeps denying.
+
+    example-store-repo-em reported this twice in one evening (2026-09-03,
+    cross-repo/inbox `scoped-commit-guard-the-permitted-form-has-now-caused-
+    the-harm-twice`): a near-miss, then `176ce18` in example-store-repo, where a
+    literal three-file pathspec — the discipline SC-DR-014 asks for, followed
+    exactly — still swept ~164 lines of a peer's in-progress work, because a
+    file pathspec scopes to the FILE and not to the committer's hunks in it.
+    The refused forms were the most precise ones available.
+
+    Negative-spec: this does NOT make `-u` unconditionally safe. A
+    root-shaped pathspec (`.`, `:/`, the repo root spelled absolutely) is
+    still denied by the path checks in the caller's loop, which a scoped
+    `-u` now falls through to instead of short-circuiting past.
+    """
+    tokens = after.split()
+    for i, tok in enumerate(tokens):
+        if tok == "--":
+            return i + 1 < len(tokens)
+        if tok in ("--pathspec-from-file", "--pathspec-file-nul") or tok.startswith(
+            "--pathspec-from-file="
+        ):
+            return True
+    return False
+
+
 def check_blanket_git_add(
     cmd: str,
     session_id: str = "",
@@ -5384,17 +5424,31 @@ def check_blanket_git_add(
             # flag detection. Every post-`--` token is walked here, not
             # just the first (same finding, observation 1).
             if not past_dd:
-                if tok in ("--all", "--update"):
+                if tok == "--all":
                     should_deny = True
                     deny_reason = tok
                     break
+                if tok == "--update":
+                    if not _add_has_narrowing_pathspec(after):
+                        should_deny = True
+                        deny_reason = tok
+                        break
+                    # Scoped `-u`: fall through so the root-shaped pathspec
+                    # checks below still get to deny `-u -- .` and friends.
+                    continue
                 if tok.startswith("-") and not tok.startswith("--"):
                     if "/" not in tok and not tok.startswith("./"):
                         flag_chars = tok[1:]
-                        if "A" in flag_chars or "u" in flag_chars or "U" in flag_chars:
+                        if "A" in flag_chars or "U" in flag_chars:
                             should_deny = True
                             deny_reason = tok
                             break
+                        if "u" in flag_chars:
+                            if not _add_has_narrowing_pathspec(after):
+                                should_deny = True
+                                deny_reason = tok
+                                break
+                            continue
             if tok in (".", "./"):
                 should_deny = True
                 deny_reason = tok

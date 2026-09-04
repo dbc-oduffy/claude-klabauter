@@ -87,6 +87,10 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.session.machinery_paths import (
+    LEGACY_MEMO_OUTBOX_RELDIR,
+    MEMO_OUTBOX_RELDIR,
+)
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.fleet._common import (
     build_act_result,
@@ -123,7 +127,7 @@ _CARRIED_DRAFT_FIELDS = ("in_reply_to", "scoped_to", "space", "supersedes")
 # the retired `state/memo-outbox/` root second (`resolve_outbox_draft_path`)
 # -- an existing draft is rewritten wherever it actually lives, never
 # relocated by this op.
-MUTATES = [".coordinator-local/memo-outbox/*.md", "state/memo-outbox/*.md"]
+MUTATES = [f"{MEMO_OUTBOX_RELDIR}/*.md", f"{LEGACY_MEMO_OUTBOX_RELDIR}/*.md"]
 
 
 def _read_carried_fields(fm_text: str) -> dict:
@@ -299,8 +303,9 @@ def _memo_compose(params: dict, repo_root=None) -> dict:
     if repo_root is None:
         return build_setup_error_result(
             _MODE, dry_run,
+            # Review: coordinator:code-reviewer — error named the retired write root; corrected to canonical.
             "memo.compose: no repo_root supplied — memo.compose reads/writes the "
-            "CALLING repo's own state/memo-outbox/ and requires a resolved "
+            "CALLING repo's own .coordinator-local/memo-outbox/ and requires a resolved "
             "worktree (common_dir-keyed op).",
         )
     caller_worktree = main_worktree_root(Path(repo_root))
