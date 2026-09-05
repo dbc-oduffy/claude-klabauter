@@ -363,7 +363,34 @@ path under the system temp dir as a test-sandbox signature. So the honest readin
 regressions and zero incidental fixes from that comparison; the door fix's 2 recovered
 tests are separate and were verified directly.
 
-The ~100 remaining failures are **pre-existing Linux breakage**, present identically at
+**The repo's own documented command is worse than that subset suggests.** `python
+.github/scripts/run-tests.py` — the fast tier, the thing the PR template gates on — over
+the whole `coordinator_core` testpath:
+
+```
+417 failed, 21948 passed, 345 skipped, 1620 warnings, 15 errors in 1258.46s
+```
+
+and it does not finish cleanly. The run terminates in an xdist `INTERNALERROR` after a
+worker dies:
+
+```
+INTERNALERROR> AssertionError: ('coordinator_core/tests/test_settings_home.py::
+INTERNALERROR>   test_normalize_native_path_converts_msys_mount_form', <WorkerController gw0>)
+```
+
+— a crash on an MSYS/Windows path-form test, which also means pytest never prints a short
+summary, so the 417 cannot be attributed by module from that run at all. Anyone trying to
+triage Linux failures has to work around a crashing test runner first.
+
+**Scope note on the baseline comparison.** The zero-regressions result above is measured
+over `coordinator_core/install/` + `bin/tests/` (~2100 tests) at both commits. The
+full-suite figure here was measured **only on the patched tree** — no full-suite baseline
+was run, so this log does not claim the 417 is unchanged from the parent commit, only
+that the suite is far from green on Linux and that the subset which *was* compared shows
+no regressions.
+
+The ~100 subset failures are **pre-existing Linux breakage**, present identically at
 the parent commit. Sampled attribution:
 
 - 26 `test_claude_klabauter_revendor_schema.py` — needs a sibling clone this box has none of
