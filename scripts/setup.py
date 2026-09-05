@@ -2521,6 +2521,36 @@ def register_claude_klabauter_root(
         print(f"  Checked: {repo_root}", file=sys.stderr)
         sys.exit(EXIT_REPO_IDENTITY_UNRESOLVED)
 
+    # Persist the coordinator-claude root this run already resolved.
+    #
+    # `_resolve_coordinator_claude_root` resolves the clone and the dep check
+    # prints it ("coordinator-claude root source: sibling-dir default"), but
+    # nothing ever wrote it down. The registry key is only populated by
+    # coordinator-claude's own installer or by its SessionStart registrar
+    # hook, so on any box where neither has run — an engine-first install, or
+    # any environment that cannot restart Claude Code and therefore never
+    # fires a plugin hook — the key stays empty and every baton/handoff op
+    # dies in `coordinator_core.resolution.facade.resolve_operator_config`
+    # with "'doe_root' resolved to a corrupt value '' (empty or
+    # whitespace-only)". That message names operator-authored config as the
+    # culprit for a value this installer was holding all along.
+    #
+    # Written LAST, and only when currently unset: the insertion-order
+    # contract documented above governs the claude_klabauter keys, so an
+    # append leaves a mid-loop partial failure exactly where it is today, and
+    # deferring to any existing value keeps an operator who pointed doe_root
+    # somewhere deliberate from being overwritten by a sibling-dir guess.
+    if coord_path is not None and Path(coord_path).is_dir():
+        from coordinator_core.machine_resolver import registry_get as _registry_get
+
+        for _doe_key in ("engine.working_repos.doe_claude", "repos.doe_claude"):
+            try:
+                _existing = _registry_get(_doe_key)
+            except Exception:  # registry unreadable — leave the key to the guard below
+                _existing = None
+            if not (_existing or "").strip():
+                key_values[_doe_key] = str(coord_path)
+
     keys = tuple(key_values)
     keys_desc = " + ".join(keys)
     print()

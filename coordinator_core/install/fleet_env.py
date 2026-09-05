@@ -471,7 +471,7 @@ def _env_python_path(env_dir: Path) -> Path:
     return env_dir / "bin" / "python"
 
 
-def _fleet_env_healthy(python_bin: Path) -> bool:
+def _fleet_env_healthy(python_bin: Path, *, diagnostic: dict | None = None) -> bool:
     """Healthy iff `python_bin` is executable AND its interpreter's own
     `sys.version_info` minor matches `LOCK_PYTHON_MINOR` AND every module
     named in `_FLEET_ENV_IMPORT_PROBES` imports successfully under it.
@@ -507,11 +507,22 @@ def _fleet_env_healthy(python_bin: Path) -> bool:
             timeout=_HEALTH_PROBE_TIMEOUT_SECS,
             **no_console_creationflags(),
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
         # Routine on a fresh/rebuilding environment (exec missing yet, or a
         # cold-cache probe genuinely taking longer than the ceiling) — False
         # here just means "not healthy yet", which the caller rebuilds.
+        if diagnostic is not None:
+            diagnostic["error"] = f"{type(exc).__name__}: {exc}"
         return False
+    # `diagnostic` is opt-in and additive: the fast-path callers that only
+    # want a yes/no pass nothing and are unaffected. The pre-swap caller
+    # passes a dict, because THAT call site deletes the build tree the moment
+    # it returns False — the subprocess's traceback is the only evidence that
+    # ever existed of why, and it was being dropped on the floor.
+    if diagnostic is not None:
+        diagnostic["returncode"] = proc.returncode
+        diagnostic["stdout"] = proc.stdout.decode("utf-8", "replace") if proc.stdout else ""
+        diagnostic["stderr"] = proc.stderr.decode("utf-8", "replace") if proc.stderr else ""
     return proc.returncode == 0
 
 
@@ -1203,10 +1214,22 @@ def ensure_fleet_env(
 
         try:
             _provision_uv_environment(build_dir, uv_executable=uv_executable)
-            if not _fleet_env_healthy(build_python_bin):
+            probe_diagnostic: dict = {}
+            if not _fleet_env_healthy(build_python_bin, diagnostic=probe_diagnostic):
+                _probe_stderr = (probe_diagnostic.get("stderr") or "").strip()
+                _probe_stdout = (probe_diagnostic.get("stdout") or "").strip()
+                _probe_error = probe_diagnostic.get("error")
                 raise FleetEnvError(
                     "[fleet-env] ERROR: freshly-built environment failed the "
                     "health probe (import check) before swap-in; discarding it."
+                    + (f"\n  probe error: {_probe_error}" if _probe_error else "")
+                    + (
+                        f"\n  probe exit: {probe_diagnostic['returncode']}"
+                        if "returncode" in probe_diagnostic
+                        else ""
+                    )
+                    + (f"\n--- probe stderr ---\n{_probe_stderr}" if _probe_stderr else "")
+                    + (f"\n--- probe stdout ---\n{_probe_stdout}" if _probe_stdout else "")
                 )
         except FleetEnvError:
             shutil.rmtree(build_dir, ignore_errors=True)
