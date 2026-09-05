@@ -183,9 +183,24 @@ def build(
     resolved_root = str(Path(engine_root).resolve())
 
     output.parent.mkdir(parents=True, exist_ok=True)
+    # `-std=c11` is STRICT ISO C on glibc: it hides every POSIX declaration
+    # behind the feature-test macros, so `readlink`, `sigemptyset`/`sigaddset`,
+    # `CLOCK_MONOTONIC` and `O_CLOEXEC` are all undeclared on Linux even though
+    # `<unistd.h>`, `<signal.h>`, `<time.h>` and `<fcntl.h>` are included --
+    # and under C99-and-later rules an undeclared function is an error, not a
+    # warning, so the door simply does not compile there. Darwin's libc exposes
+    # them regardless of dialect, which is why this never surfaced on macOS.
+    #
+    # Applied only off Darwin, deliberately: on macOS, defining
+    # `_POSIX_C_SOURCE` switches the headers INTO strict-POSIX mode and would
+    # hide the Darwin extensions this file uses under `__APPLE__`
+    # (`<mach-o/dyld.h>`'s `_NSGetExecutablePath`). Restricting the define to
+    # the platform that needs it leaves the macOS compile byte-identical.
+    posix_source_flags = [] if sys.platform == "darwin" else ["-D_POSIX_C_SOURCE=200809L"]
     cmd = [
         compiler_path,
         "-O2", "-Wall", "-Wextra", "-std=c11",
+        *posix_source_flags,
         f'-DPYTHON_BIN="{_shell_safe_define(resolved_python)}"',
         f'-DBUILD_ENGINE_ROOT="{_shell_safe_define(resolved_root)}"',
         "-o", str(output),

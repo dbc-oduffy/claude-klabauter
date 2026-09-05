@@ -11,14 +11,21 @@ because they need a design call, a doc change, or work larger than this pass.
 `jq` present, `scc`/`pwsh` absent. Running as **root**. No GUI, no keychain, no
 Homebrew, no GPU. Claude Code CLI 2.1.261.
 
-**Headline.** The install works on Linux, and the source is genuinely well-hardened for
-portability — three independent audit sweeps over `hooks/` (128 files), `bin/`+`skills/`
-(1289 files) and `coordinator_core/` (~4300 files) found essentially no hardcoded macOS
-paths, no BSD-vs-GNU flag hazards, and no macOS-only binaries in shipped code paths.
-The friction is not in the source's portability. It is concentrated in **the install
-chain's platform assumptions** and in **probes and diagnostics that were only ever
-exercised on macOS**, where Linux either takes a path nobody has walked or is reported
-about incorrectly.
+**Headline.** The install completes on Linux, and the *Python* source is genuinely
+well-hardened for portability — three independent audit sweeps over `hooks/` (128 files),
+`bin/`+`skills/` (1289 files) and `coordinator_core/` (~4300 files) found essentially no
+hardcoded macOS paths, no BSD-vs-GNU flag hazards, and no macOS-only binaries in shipped
+code paths.
+
+The friction sits in three other places. Most of it is **the install chain's platform
+assumptions** and **probes and diagnostics only ever exercised on macOS**, where Linux
+takes a path nobody has walked or gets reported on incorrectly. But two findings are
+sharper than that framing allows, and both were missed by the static audits because
+neither is visible in the Python at all: the warm-engine door's C build **cannot compile
+on Linux** at the dialect the build script pins (§1.3), and the engine's own test suite
+**has never been green on Linux** — ~100 failures present identically at this branch's
+parent commit (§4b). The second is the one to act on first: it means none of the rest had
+a green baseline to be measured against.
 
 ---
 
@@ -73,6 +80,40 @@ processes collapse to 1, and residency moved from `inconclusive` to
 `PASS — 1 resident warm server process(es), all reachable.` Regression test added
 covering the fork case, genuinely independent servers, indirect parentage, and a
 missing `ppid`.
+
+### 1.3 The warm-engine door does not compile on Linux **[patched]**
+
+`build_posix.py` compiles `door_posix.c` + `door_core.c` with `-O2 -Wall -Wextra
+-std=c11`. On glibc that dialect is **strict ISO C**, which hides every POSIX
+declaration behind the feature-test macros — so `readlink`, `sigemptyset`, `sigaddset`,
+`CLOCK_MONOTONIC` and `O_CLOEXEC` are all undeclared on Linux despite `<unistd.h>`,
+`<signal.h>`, `<time.h>` and `<fcntl.h>` all being correctly included. Under C99-and-later
+rules an implicitly-declared function is an **error**, not a warning, so the build fails
+outright:
+
+```
+door_posix.c:390:17: error: call to undeclared function 'readlink'
+door_posix.c:1045:9: error: call to undeclared function 'sigemptyset'
+door_posix.c:257:19: error: 'CLOCK_MONOTONIC' undeclared
+door_posix.c:294:36: error: 'O_CLOEXEC' undeclared
+7 errors generated.
+```
+
+Darwin's libc exposes these regardless of dialect, which is exactly why it never
+surfaced. Note this is *not* the case the portability audits were looking for — the C
+file has a correct `__APPLE__`/`#else` split and a real Linux branch using
+`/proc/self/exe`. The Linux branch is right; it just cannot be compiled.
+
+**Patched:** `-D_POSIX_C_SOURCE=200809L`, applied **only off Darwin**. Defining it on
+macOS would switch those headers into strict-POSIX mode and hide the Darwin extensions
+the file uses under `__APPLE__` (`<mach-o/dyld.h>`'s `_NSGetExecutablePath`), so
+restricting it to the platform that needs it leaves the macOS compile byte-identical.
+Verified: both translation units compile and link clean, and
+`test_door_install_posix_build.py` goes from 5 passed / 2 failed to **7/7**.
+
+This one is worth a second look by someone who owns the door: a build that cannot
+succeed on Linux suggests the door leg has never actually run there, so whatever it
+would have surfaced downstream is still unknown.
 
 ---
 
@@ -264,6 +305,22 @@ across two full runs. Not root-caused in this pass.
   sentinel block landed in `~/.zshrc` on a machine with no zsh. Now defaults per-platform
   (zsh on Darwin, bash elsewhere). The sibling resolver in
   `ops/install_shell_init_guard_seam.py` already defaulted to bash — the two disagreed.
+- **The documented test command does not work on a documented install** — the PR
+  template gates on `python .github/scripts/run-tests.py`, which invokes pytest with
+  `-n` and therefore needs `pytest-xdist`. But the installer classifies the test tier as
+  **advisory** and does not provision it, so a by-the-book install leaves the required
+  command failing with an argparse error (`unrecognized arguments: -n`), not a missing-
+  dependency message. `scripts/setup.py --with-test-deps` fixes it. Two traps around
+  that flag: combining it with `--register-only` silently skips the install (register-only
+  short-circuits first), and without `--skip-fleet-env` it drags the multi-GB fleet-env
+  step along behind it.
+- **A documented install leaves the working tree dirty** **[patched]** — `.coordinator-local/`
+  (per-machine session machinery, written by `coordinator_core.session.machinery_paths`)
+  and `*.egg-info/` (regenerated by the `pip install -e .` the installer performs) were
+  ignored nowhere. `fleet_machinery_sweep` lands a `.coordinator-local/` ignore stanza in
+  every sibling repo it sweeps, but this repo — the sweep's own origin — was the tree
+  still missing it. The egg-info also fed `check-persona-names` the packaged author name
+  out of `PKG-INFO`, failing the repo's own gate on an artifact no commit created.
 - **`bin/tests/test_commit_path_budget_citations.py` breaks suite collection** —
   `FileNotFoundError: bin/commit-path-budget-citations.py`. The test outlived the script
   it tests, so `pytest bin/tests/` cannot collect at all without `--ignore`. Not
@@ -284,6 +341,41 @@ across two full runs. Not root-caused in this pass.
   `winget` as the consent-gated prerequisite installers and never names apt/dnf, so a
   Debian box hitting a missing prerequisite gets no remediation path at all.
   `bin/doctor-probes.toml:410` offers only `brew install bash` for a bash-too-old finding.
+
+---
+
+## 4b. The test suite does not pass on Linux, and that is the real headline
+
+Measured, not estimated. `pytest coordinator_core/install/ bin/tests/` (excluding the
+one module that breaks collection outright), run twice — once at this branch's parent
+commit, once with the patches:
+
+| | failed | passed |
+|---|---|---|
+| baseline (`HEAD~1`) | 102 | 2017 |
+| with these patches | **101** | **2030** |
+
+Diffing the two failure sets: **zero regressions** — no test fails with the patches that
+passed without them. The single delta is `test_fnm_step_consent.py::test_fnm_step_sets_
+homebrew_env_vars_on_consented_install`, and that is an artifact of *where the baseline
+worktree lived* (`/tmp`), not of any code change: `_fnm_step` refuses to install from a
+path under the system temp dir as a test-sandbox signature. So the honest reading is zero
+regressions and zero incidental fixes from that comparison; the door fix's 2 recovered
+tests are separate and were verified directly.
+
+The ~100 remaining failures are **pre-existing Linux breakage**, present identically at
+the parent commit. Sampled attribution:
+
+- 26 `test_claude_klabauter_revendor_schema.py` — needs a sibling clone this box has none of
+- 19 `test_shell_init_guard.py` — confirmed identical at baseline, 19 failed / 8 passed both ways
+- 11 `test_fleet_env_publish_reachability.py` — the fleet env that never provisioned (§2.3)
+- 8 door tests keyed on `PATHEXT`/bare-name resolution — Windows-host tests (26 `PATHEXT`/`win32` references in one module alone)
+
+None of this is caused by the changes here, and none of it was introduced by them. But it
+does mean **the engine's own test suite has never been green on Linux**, which is a
+stronger statement than any individual item in this log and probably the thing most worth
+acting on: every patch above was verified against modules I could reason about
+individually, because there is no green baseline to regress against.
 
 ---
 
