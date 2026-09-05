@@ -313,8 +313,25 @@ gate that could exist rather than a bug — the design call is the maintainers'.
 A run of the installer plus the test suite leaves `coordinator_core.egg-info/` and
 `.coordinator-local/subagent-share/…` untracked, and `git check-ignore` returns non-zero for both —
 neither is in `.gitignore`, which is otherwise meticulous about `.fleet-env*`. It matters more than
-it looks: the system's own dirty-tree gate refuses to terminate a baton with unattributable dirty
+it looks, in two ways.
+
+First, the system's own dirty-tree gate refuses to terminate a baton with unattributable dirty
 paths, and these are exactly that — unattributable to any session's work.
+
+Second, and demonstrated during this pass: `.github/scripts/run-all-checks.py` **fails** on that
+residue. `check-persona-names` scans the working tree, finds the operator's real name in the
+`Author:` field of `coordinator_core.egg-info/PKG-INFO` — written by the editable install this
+repo's own installer performs — and reports an identity leak into the published mirror:
+
+```
+[FAIL] check-persona-names
+  coordinator_core.egg-info/PKG-INFO:5: operator identity '<name>' — Author: <name>
+```
+
+So the documented pre-PR check does not pass on a box that has followed the documented install,
+until the contributor knows to delete a directory nothing told them about. A `.gitignore` entry
+would close both. (The gate itself works, and worked on this log: it also caught a fleet codename
+quoted verbatim from a runtime warning in F14, which is now redacted.)
 
 ### F14 — Linux gaps announced by the engine itself — COSMETIC
 
@@ -330,9 +347,11 @@ Not defects so much as an inventory of where "first-class Linux" is currently as
   install here (`[ADVISORY] door not installed at …`).
 - The **PowerShell dialect guard** is reported `DISARMED` at WARN on a box with no PowerShell, with
   remediation advising `pip install tree_sitter tree_sitter_pwsh`. Correct, and pure noise here.
-- `machine-local` prints a `concern 'project_rag' is registered in concerns=[…] but neither
-  'project_rag.toml' nor 'project_rag.local.toml' could be loaded` warning on **every single
-  invocation** on a fresh install.
+- `machine-local` prints a `concern '<retrieval-layer concern>' is registered in concerns=[…] but
+  neither its `.toml` nor its `.local.toml` could be loaded … Refresh the install or remove it from
+  concerns` warning on **every single invocation** on a fresh install. The concern is registered by
+  default but its file is never provisioned, so the remediation is unreachable and the warning is
+  permanent noise. (Codename redacted here per this repo's own identity gate — see F13.)
 - CI (`.github/workflows/ci.yml`) runs `[ubuntu-latest, windows-latest]` — **not macOS**, which is
   the opposite of the "tested matrix is macOS and Linux" claim in the README.
 
