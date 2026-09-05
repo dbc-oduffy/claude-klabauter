@@ -392,18 +392,27 @@ def test_normalize_native_path_converts_msys_mount_form(monkeypatch):
 
 `coordinator_core._settings_home.os` **is** the stdlib `os` module — module objects are process
 singletons, confirmed on this box (`sh.os is os → True`). So this does not patch a local alias; it
-sets `os.name = "nt"` for the whole interpreter. On POSIX, `pathlib.Path(...)` then resolves to
-`WindowsPath` and raises. The blast lands in pytest's own session teardown, where
-`tmp_path_factory._exit_stack.close() → cleanup_numbered_dir → Path(entry)` raises:
+sets `os.name = "nt"` for the whole interpreter, and `pathlib.Path.__new__` reads exactly that to
+choose `WindowsPath` over `PosixPath`.
+
+The mechanism is worth stating precisely, because it explains why a mere failing test escalates to
+an `INTERNALERROR`. The test body's own `Path("X:/DoE-claude")` raises
+`NotImplementedError: cannot instantiate 'WindowsPath' on your system` — so far, an ordinary
+failure. But pytest then builds the failure report **during the call phase**, before the
+`monkeypatch` fixture's teardown restores `os.name`, and its report builder does
+`Path(os.getcwd())` at `_pytest/nodes.py:444` — which raises the same exception a second time,
+this time *inside pytest's own harness*, where nothing catches it:
 
 ```
-NotImplementedError: cannot instantiate 'WindowsPath' on your system
-INTERNALERROR> ... _pytest/pathlib.py:350 in cleanup_candidates
+INTERNALERROR> ... _pytest/nodes.py:444, in _repr_failure_py
+INTERNALERROR>     abspath = Path(os.getcwd()) != self.config.invocation_params.dir
+INTERNALERROR> NotImplementedError: cannot instantiate 'WindowsPath' on your system
 ```
 
 **This reproduces with that one test run alone, serially** — it is not an interaction effect. Under
-`-n 2` it kills the worker, `xdist`'s `dsession.worker_workerfinished` asserts, and the whole run
-aborts:
+`-n 2` the worker dies mid-item instead of returning a report, the controller finds the item still
+in flight on a worker that reported itself finished, and its crash-detection assert fires
+(`xdist/dsession.py:217`), aborting the whole run:
 
 ```
 INTERNALERROR> AssertionError:
@@ -417,12 +426,15 @@ an INTERNALERROR rather than a normal exit, pytest prints no short test summary,
 failures it did record are unnamed.
 
 Five sibling tests in the same file (`:148`, `:153`, `:158`, `:163`, and following) use the
-identical `setattr` target. Worth noting that the repo already ships a `conftest.py` `os.environ`
-leak detector and an `allow_environ_leak` opt-out marker — the guard exists, and this leaks
-`os.name` rather than `os.environ`, so it slips underneath. Not patched here: the right fix is
-either an indirection in `_settings_home` that the test can patch without touching the shared
-module, or an autouse guard that restores `os.name`, and both are the maintainers' call about how
-the platform-branch tests should be written fleet-wide.
+identical `setattr` target, so **this is a suite-wide hazard, not one bad nodeid** — any test that
+monkeypatches `os.name` globally will do the same thing on POSIX under xdist; collection order
+merely decided which one fired first. Worth noting that the repo already ships a `conftest.py`
+`os.environ` leak detector and an `allow_environ_leak` opt-out marker — the guard exists, and this
+leaks `os.name` rather than `os.environ`, so it slips underneath.
+
+Not patched here: the right fix is either an indirection in `_settings_home` the test can patch
+without touching the shared module, or an autouse guard restoring `os.name`, and both are the
+maintainers' call about how platform-branch tests should be written fleet-wide.
 
 ### F18 — The headline commit-anchor injection does not land from the engine install — FRICTION
 
@@ -450,11 +462,78 @@ pytest -m 'not cadence and not pending_fix and not designed_red' -n 2 -q
   → then INTERNALERROR (F17); ~3,400 selected tests never ran
 ```
 
-Per test-tiers.md's own rule a raw count is not a verdict, and no attribution pass was run against
-the 413 — the doc is explicit that a full-tier run carries pre-existing failures. The four patches
-on this branch were separately reviewed against their own targeted tests, and every failure in
-those files reproduces identically on the pre-patch tree. What the number does establish is that
-**this box cannot currently produce a clean verdict at all**, because of F17.
+Per test-tiers.md's own rule a raw count is not a verdict. The four patches on this branch were
+separately reviewed against their own targeted tests, and every failure in those files reproduces
+identically on the pre-patch tree. What the number does establish is that **this box cannot
+currently produce a clean verdict at all**, because of F17.
+
+A partial attribution pass was run — three subdirectories re-run to completion, 138 of the 413
+failures classified. It is in F19, and its headline is that **the failures are mostly not Linux**.
+
+### F19 — What the 413 failures actually are — INFORMATIONAL (partial attribution)
+
+Three directories re-run serially to completion: `bash_guards/tests` (80 failed / 4592 passed),
+`write_guards/tests` (28 / 1005), `install/tests` (30 / 579). That is 138 of 413 classified; the
+remaining ~275 are **not** attributed, and the proportions below should not be extrapolated as if
+they were.
+
+- **~60 of the 80 `bash_guards` failures are a missing optional dependency, not a platform limit.**
+  The PowerShell shape classifier tokenizes via `tree-sitter-pwsh`, which is a cross-platform
+  native grammar — not a Windows-only thing. Neither `tree_sitter` nor `tree_sitter_pwsh` is
+  installed, and **neither is declared in any `[project.optional-dependencies]` group**, so
+  `tokenize_command` returns `None`, `classify_command` degrades to `matched_shapes=()`, and every
+  assertion expecting a real match fails. This would fail on macOS and Windows too, from a
+  documented install. It is the same absence that has the installer emitting its "dialect guard
+  DISARMED" warning (F14) — and the suite plainly knows how to skip properly when it means to:
+  `write_guards/tests/test_block_cutover_phase_hand_edit.py:191` is an explicit hardware-gated
+  `pytest.skip` with a reason.
+- **Plugin console-scripts this engine-only install does not have.** e.g.
+  `test_alternative_liveness_gate.py` fails because `coordinator-safe-name` and
+  `session-liveness-cli` "do not resolve on PATH or settings-home bin".
+- **Published-mirror artefacts** — files the source tree has and this mirror does not:
+  `test_wiki_citation_resolution.py` imports a script by path from a sibling checkout that does not
+  exist here (2 failures); `test_fleet_env_publish_reachability.py` reads
+  `setup/publish-targets.portable`, absent from the mirror (8 parametrized failures).
+- **Genuine, platform-independent drift** — real, and would fail anywhere: a reachable guard with
+  no corpus row; `coordinator_core/git/run.py:464` spawning a subprocess with no explicit
+  `timeout=` against a test that requires one; two fire-counter suites whose expected JSONL
+  side-effects are never written; and ~18 failures in one file where the advisory text changed
+  upstream (`[frontmatter-schema warning] …`) and the test file was never updated. Dozens of tests
+  in the sample, not hundreds.
+
+**Honest verdict:** of what was classified, the large majority are environment and mirror artefacts
+rather than Linux breakage — an undeclared dependency, plugin binaries an engine-only install
+doesn't have, and files the mirror doesn't ship. A real residue of genuine cross-platform drift
+remains. The extrapolation to the unclassified ~275 is a guess and is marked as one.
+
+### F20 — This source checkout self-identifies as an installed engine root — FRICTION
+
+`coordinator_core/_engine_stamp` is present and non-empty in this checkout
+(`sha:2c9fe5d51050…`). `is_engine_root()` (`coordinator_core/warm/engine_root.py:60-74`) is true
+iff exactly that, so a live source checkout now answers yes to "are you a stamped installed engine
+root". The repo's own test says that must never happen —
+`test_door_image_currency.py::test_door_leg_never_installs_from_the_live_claude_klabauter_checkout`
+asserts `not is_engine_root(<this checkout>)`, and its docstring records the consequence: *"passing
+the checkout through is what silently disabled the whole native leg."*
+
+That test fails here. It is a second instance of the identity-collapse pattern the patch review
+independently hit in `resolve_repo_identity` (where two distinct identities resolve to one string in
+this tree, making six `scripts/test_setup.py` tests self-contradictory — they fail identically on
+the pre-patch commit, so they are not a regression from this branch). Both look like publish-time
+artefacts rather than source defects, but a stamped source tree is the kind of thing that fails
+quietly and in the wrong direction.
+
+### F21 — The known-red ratchet cannot adjudicate anything here — FRICTION
+
+`state/bash-guards/known-red.json` **does not exist in this checkout** — there is no
+`state/bash-guards/` directory at all, which follows from `.gitignore:22` excluding `state/` from
+this mirror (F16, again). So the mechanism that would let anyone say "413 is expected, here is the
+baseline" is itself non-functional, and it contributes to the number it would have adjudicated:
+two of `test_known_red_ratchet.py`'s three gates run in the fast tier and both fail with
+`FileNotFoundError` on the missing registry. Only the third carries `@pytest.mark.cadence`.
+
+A published mirror that ships the ratchet but not its registry has a gate that can only fail. Which
+side gives — ship the registry, or mark the gates cadence-only — is the same `state/` call as F16.
 
 Test tooling is also **not** installed by the default install — `pytest>=9.1` / `pytest-xdist>=3.8`
 are advisory-only and need `--with-test-deps`, which INSTALL.md's Verify section does not mention
@@ -505,3 +584,10 @@ Recorded here for one report; the doctrine-side companion is
    verification command cannot complete on Linux at all. Of everything here this is the one that
    most undercuts the "tested matrix is macOS and Linux" claim — and it reproduces from a single
    test, run alone, in under a second.
+7. **But the 413 failures are mostly not Linux** (F19). An undeclared `tree-sitter-pwsh`, plugin
+   binaries an engine-only install does not have, and files this mirror does not ship account for
+   most of what was classified. The more uncomfortable pair sits underneath: this source checkout
+   carries an engine stamp that makes it self-identify as an installed engine root (F20), and the
+   known-red registry that would adjudicate any of this is not in the mirror (F21). **The suite
+   cannot currently return a verdict on any platform from a documented install** — which is a
+   larger finding than anything platform-specific in this log.
