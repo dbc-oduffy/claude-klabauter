@@ -63,6 +63,7 @@ Usage:
   python3 scripts/setup.py [--i-am-agent] [--skip-dep-check --accept-missing-deps-risk]
                             [--claude-klabauter-live-root <path>] [--coordinator-root <path>]
                             [--allow-venv-fallback] [--with-test-deps]
+                            [--skip-fleet-env]
                             [--register-only] [--check] [--help]
 
 Negative-spec:
@@ -265,8 +266,16 @@ Options:
                                       fall back from.
   --with-test-deps                   Also install the declared test extra (pytest + plugins). Off by
                                       default: the installer provisions the engine, not the dev loop
+  --skip-fleet-env                   Skip provisioning the fleet shared Python environment. That
+                                      environment is the union of every sibling repo's dependencies
+                                      (multi-GB, including a CUDA build of torch) and is downloaded
+                                      unconditionally otherwise; skip it on a GPU-less, bandwidth-
+                                      or disk-constrained box. Nothing in the engine install itself
+                                      depends on it — the step is already advisory-on-failure.
   --register-only                    Skip Step Zero + dep check; run registration + verification only
   --check                            Smoke-test that the script is present and executable; exits 0
+                                      — this is NOT an install verification: it returns green on a
+                                      box whose engine install crashed
   --preflight                        Read-only OSS Step Zero probe: python, git, uv, gh, node, pwsh,
                                       clone_auth (coordinator_core.install.prereq_probe). Prints one
                                       pass/warn/fail line per probe; mutates nothing. Exit 0 if no
@@ -343,6 +352,7 @@ class Args:
         self.accept_risk = False
         self.allow_venv_fallback = False
         self.with_test_deps = False
+        self.skip_fleet_env = False
         self.register_only = False
         self.check = False
         self.preflight = False
@@ -370,6 +380,8 @@ def parse_args(argv: list[str]) -> Args:
             args.allow_venv_fallback = True
         elif tok == "--with-test-deps":
             args.with_test_deps = True
+        elif tok == "--skip-fleet-env":
+            args.skip_fleet_env = True
         elif tok == "--register-only":
             args.register_only = True
         elif tok == "--check":
@@ -4198,6 +4210,13 @@ def install_fleet_shared_environment(repo_root: Path, claude_klabauter_root_reso
     """
     print()
     print("--- Install: fleet shared Python environment ---")
+
+    if getattr(args, "skip_fleet_env", False):
+        print("[ADVISORY] fleet environment provisioning skipped (--skip-fleet-env).")
+        print(
+            f"  Provision it later with: {sys.executable} -m coordinator_core.install.fleet_env"
+        )
+        return
 
     if str(claude_klabauter_root_resolved) not in sys.path:
         sys.path.insert(0, str(claude_klabauter_root_resolved))

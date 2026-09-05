@@ -168,8 +168,8 @@ SENTINEL_BEGIN, SENTINEL_END = _sentinel_markers("CLAUDE_KLABAUTER_CLONE")
 def _resolve_rc_path() -> Path:
     """Pick the rc file to guard for the LEGACY single-file calling shape:
     `MSYSTEM` (Git-Bash/MSYS) forces `.bashrc`, otherwise `$SHELL` selects
-    `.zshrc` / `.bashrc`, defaulting to `.zshrc` when `$SHELL` is unset or
-    names neither. Retained for the `install.write_shell_rc_guard_block` op
+    `.zshrc` / `.bashrc`, defaulting per-platform when `$SHELL` is unset or
+    names neither (`.zshrc` on macOS, `.bashrc` elsewhere). Retained for the `install.write_shell_rc_guard_block` op
     contract — the multi-file shape (`applicable_rc_files`) is the fix for
     this resolver's single-pick limitation, not a replacement of it.
 
@@ -185,7 +185,14 @@ def _resolve_rc_path() -> Path:
     home = Path(os.environ.get("HOME") or str(Path.home()))
     if os.environ.get("MSYSTEM"):
         return home / ".bashrc"
-    shell = os.environ.get("SHELL", "zsh")
+    # The unset-`$SHELL` default is per-platform, not a constant. zsh is the
+    # right guess only where zsh is the login shell by default (macOS since
+    # Catalina); on Linux — and especially in containers and other non-login
+    # contexts, which are exactly where `$SHELL` goes unset — the login shell
+    # is overwhelmingly bash, and defaulting to `.zshrc` there wrote the
+    # sentinel block into a file no shell on the box ever sources.
+    default_shell = "zsh" if sys.platform == "darwin" else "bash"
+    shell = os.environ.get("SHELL") or default_shell
     if shell.endswith(("bash", "bash.exe")):
         return home / ".bashrc"
     return home / ".zshrc"

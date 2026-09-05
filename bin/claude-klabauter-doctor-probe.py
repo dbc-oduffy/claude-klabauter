@@ -4055,10 +4055,22 @@ def _enumerate_resident_warm_servers(psutil_module: Any) -> list[dict[str, Any]]
     "create_time": float | None, "engine_root": Path}`. Pure enumeration
     only — no breadcrumb read, no pipe reachability, no classification;
     callers layer their own per-probe semantics on top.
+
+    A matched process whose PARENT is also a match is excluded: it is one of
+    the elected server's own `ProcessPoolExecutor` workers, not a second
+    resident server. This is a Linux-shaped correction. `ProcessPoolExecutor`
+    defaults to the `fork` start method there, and a forked worker inherits
+    the parent's `cmdline` verbatim, so all `WORKER_POOL_SIZE` of them match
+    `_WARM_SERVER_CMDLINE_SIGNATURE`; macOS and Windows default to `spawn`,
+    which re-execs with a different cmdline and so never showed the problem.
+    Unfiltered, one healthy server reported as `1 + WORKER_POOL_SIZE`
+    residents, which blew past `_WARM_REACHABILITY_PROBE_CAP` (making
+    residency permanently `inconclusive`) and multiplied a single stale
+    generation token into one warning per worker.
     """
     servers: list[dict[str, Any]] = []
 
-    proc_iter = psutil_module.process_iter(["pid", "create_time", "cmdline"])
+    proc_iter = psutil_module.process_iter(["pid", "ppid", "create_time", "cmdline"])
     while True:
         try:
             proc = next(proc_iter)
@@ -4085,11 +4097,30 @@ def _enumerate_resident_warm_servers(psutil_module: Any) -> list[dict[str, Any]]
             create_time = proc.info.get("create_time")
         except Exception:
             create_time = None
+        try:
+            ppid = proc.info.get("ppid")
+        except Exception:
+            ppid = None
 
         engine_root = Path(script_arg).resolve().parent.parent.parent
-        servers.append({"pid": pid, "create_time": create_time, "engine_root": engine_root})
+        servers.append(
+            {"pid": pid, "ppid": ppid, "create_time": create_time, "engine_root": engine_root}
+        )
 
-    return servers
+    return _drop_forked_pool_workers(servers)
+
+
+def _drop_forked_pool_workers(servers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Filter matched processes parented by another match — see
+    `_enumerate_resident_warm_servers`'s docstring for why they exist.
+
+    Only direct parentage is tested. A pool worker's parent is always the
+    server itself, so one hop is sufficient, and testing only one hop keeps
+    a genuine server that happens to have been spawned by another server
+    (a generation handover) visible rather than silently swallowed.
+    """
+    matched_pids = {s["pid"] for s in servers if s.get("pid") is not None}
+    return [s for s in servers if s.get("ppid") not in matched_pids]
 
 
 def _run_probe_warm_residency(claude_klabauter_root: Path | None) -> _ProbeResult:

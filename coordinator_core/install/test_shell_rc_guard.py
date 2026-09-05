@@ -63,7 +63,14 @@ class _OSNameProxy:
 @pytest.fixture(autouse=True)
 def _fake_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("SHELL", raising=False)
+    # Pinned rather than deleted. The mutation-path tests below all assert
+    # against `.zshrc`, which an unset `$SHELL` only resolves to on macOS —
+    # `_resolve_rc_path`'s unset-default is per-platform (`.bashrc` off
+    # Darwin), so deleting `$SHELL` here made every one of those tests
+    # host-dependent in exactly the way this fixture's `MSYSTEM` deletion
+    # below already guards against. The unset-default behaviour itself is
+    # covered by its own platform-pinned tests.
+    monkeypatch.setenv("SHELL", "/bin/zsh")
     # A real Git-Bash/MSYS pytest invocation exports MSYSTEM; left in place it
     # forces every rc-path resolution in this module to `.bashrc` and the
     # zsh/default expectations below become host-dependent.
@@ -96,8 +103,34 @@ def test_resolve_rc_path_bash(monkeypatch, tmp_path):
     assert _resolve_rc_path() == tmp_path / ".bashrc"
 
 
-def test_resolve_rc_path_default_unset(tmp_path):
+def test_resolve_rc_path_default_unset_on_darwin(monkeypatch, tmp_path):
+    """macOS has defaulted to zsh as the login shell since Catalina, so an
+    unset `$SHELL` resolves there."""
+    monkeypatch.delenv("SHELL", raising=False)
+    monkeypatch.setattr(mod.sys, "platform", "darwin")
     assert _resolve_rc_path() == tmp_path / ".zshrc"
+
+
+def test_resolve_rc_path_default_unset_off_darwin(monkeypatch, tmp_path):
+    """Off macOS the unset-`$SHELL` default must be bash. `$SHELL` is most
+    likely to be unset in containers and other non-login contexts — which is
+    precisely where the box is bash and has no zsh at all, so defaulting to
+    `.zshrc` there wrote the sentinel block into a file nothing sources."""
+    monkeypatch.delenv("SHELL", raising=False)
+    monkeypatch.setattr(mod.sys, "platform", "linux")
+    assert _resolve_rc_path() == tmp_path / ".bashrc"
+
+
+def test_resolve_rc_path_explicit_shell_beats_the_platform_default(monkeypatch, tmp_path):
+    """The per-platform default is only a fallback: an explicitly exported
+    `$SHELL` still decides, in both directions."""
+    monkeypatch.setattr(mod.sys, "platform", "linux")
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    assert _resolve_rc_path() == tmp_path / ".zshrc"
+
+    monkeypatch.setattr(mod.sys, "platform", "darwin")
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    assert _resolve_rc_path() == tmp_path / ".bashrc"
 
 
 def test_resolve_rc_path_git_bash_exe_suffix(monkeypatch, tmp_path):

@@ -142,7 +142,13 @@ def _all_present_env() -> fr._Env:
     return env
 
 
-def test_build_plan_all_missing_lists_every_install_step():
+def test_build_plan_all_missing_lists_every_install_step(monkeypatch):
+    # The plan text forks on host platform (Homebrew on macOS, the detected
+    # distro manager on Linux), so the platform is pinned rather than
+    # inherited from whichever box runs the suite -- this assertion set is
+    # the macOS one, and it silently described the wrong plan when the
+    # suite ran on Linux.
+    monkeypatch.setattr(fr.sys, "platform", "darwin")
     steps = fr.build_plan(_all_missing_env(), no_git_lfs=False)
     assert steps[0] == "install Homebrew (absent on this machine)"
     assert "brew install bash  (>=4.3 required; stock macOS is 3.2)" in steps
@@ -159,6 +165,62 @@ def test_build_plan_all_missing_lists_every_install_step():
         "run install-substrate -> platform-localize  (post-toolchain, C1b, Step 4)"
         in steps
     )
+
+
+def test_build_plan_on_linux_names_the_distro_manager_not_homebrew(monkeypatch):
+    """Linux plans must name the command that will actually run on the box.
+    Homebrew is never a step there -- its installer refuses to run as root
+    and is not the platform's package manager in the first place."""
+    monkeypatch.setattr(fr.sys, "platform", "linux")
+    monkeypatch.setattr(fr, "_detect_linux_pkg_manager", lambda: ("apt-get", ["apt-get", "install", "-y"]))
+    steps = fr.build_plan(_all_missing_env(), no_git_lfs=False)
+
+    assert not any("Homebrew" in s or "brew install" in s for s in steps)
+    assert "apt-get install bash  (>=4.3 required)" in steps
+    # Homebrew formula names are translated to distro package names.
+    assert "apt-get install python3  (Python 3.11+ required)" in steps
+    assert "apt-get install nodejs" in steps
+    assert "apt-get install git-lfs  then  git lfs install  (global, idempotent)" in steps
+    # uv has no distro package on any mainstream Linux, so it is called out
+    # as its own route rather than mistranslated into a package that fails.
+    assert "install uv via the official installer (no distro package)" in steps
+    assert steps[-1] == "tell you to /reload-plugins"
+
+
+def test_build_plan_on_linux_without_a_package_manager_says_so(monkeypatch):
+    monkeypatch.setattr(fr.sys, "platform", "linux")
+    monkeypatch.setattr(fr, "_detect_linux_pkg_manager", lambda: None)
+    steps = fr.build_plan(_all_missing_env(), no_git_lfs=False)
+    assert any("no supported package manager found" in s for s in steps)
+
+
+def test_install_homebrew_refuses_off_darwin(monkeypatch, capsys):
+    """Guard the regression directly: before this, a Linux box fell into
+    Homebrew's installer and failed the whole first-run flow on its
+    run-as-root refusal, reported only as a non-zero exit."""
+    monkeypatch.setattr(fr.sys, "platform", "linux")
+    called = []
+    monkeypatch.setattr(fr, "_run", lambda *a, **k: called.append(a) or None)
+    assert fr._install_homebrew() == fr.EXIT_FAIL
+    assert called == []  # never reached the installer subprocess
+    assert "not applicable on linux" in capsys.readouterr().err
+
+
+def test_install_homebrew_refuses_as_root_on_darwin(monkeypatch, capsys):
+    monkeypatch.setattr(fr.sys, "platform", "darwin")
+    monkeypatch.setattr(fr, "_running_as_root", lambda: True)
+    called = []
+    monkeypatch.setattr(fr, "_run", lambda *a, **k: called.append(a) or None)
+    assert fr._install_homebrew() == fr.EXIT_FAIL
+    assert called == []
+    assert "as root" in capsys.readouterr().err
+
+
+def test_linux_package_translation_falls_back_to_the_formula_name():
+    assert fr._linux_package_for("node", "apt-get") == "nodejs"
+    assert fr._linux_package_for("python@3.12", "dnf") == "python3"
+    # An untranslated formula passes through rather than resolving to None.
+    assert fr._linux_package_for("ripgrep", "apt-get") == "ripgrep"
 
 
 def test_build_plan_all_present_only_lists_orchestration_tail():

@@ -42,14 +42,18 @@ Negative-spec:
     - Does NOT clone the DoE repo, does NOT edit any registry key, does NOT write any
       file other than the live pointer (and a temp file discarded in --check-only mode).
     - Does NOT reimplement the machine-local registry.toml/registry.local.toml parser —
-      shells out to the `machine-local` CLI (PATH-resolved) exactly like the bash oracle's
-      Tier 2, so the registry-merge logic has exactly one implementation. The bash oracle
-      ALSO tried a script-directory-relative sibling before falling back to PATH (an
-      install-bootstrap optimization for when PATH isn't wired up yet); this module has no
-      equivalent "co-located bin dir" concept once ported into the claude-klabauter engine tree, so
-      it checks PATH only. Observable behavior (the resolved value, or the fail-loud path)
-      is identical either way -- the sibling check was a resolution-speed optimization,
-      never a distinct semantic branch.
+      shells out to the `machine-local` CLI exactly like the bash oracle's Tier 2, so the
+      registry-merge logic has exactly one implementation. The bash oracle ALSO tried a
+      script-directory-relative sibling before falling back to PATH (an install-bootstrap
+      optimization for when PATH isn't wired up yet). This module checked PATH ONLY until
+      2026-09-05, on the reasoning that the ported engine tree has no "co-located bin dir"
+      -- but the installer does have a fixed deposit location, `<settings-home>/bin/`, and
+      that directory is not on PATH for the process running `scripts/setup.py`. The result
+      was a diagnostic that reported "machine-local not found — cannot read registry" on a
+      box where the CLI was installed and working, pointing the reader at a missing install
+      rather than the real cause (an unset `repos.doe_claude`). `_resolve_machine_local`
+      now checks `<settings-home>/bin/` first, then PATH -- the oracle's two-rung shape,
+      with the engine tree's actual deposit location standing in for its sibling dir.
     - The bash >= 4 version guard from the oracle (DR-148 defense-in-depth) has no meaning
       here -- this is a pure-Python module, not a bash script. Omitted intentionally.
 """
@@ -63,7 +67,7 @@ import sys
 import tempfile
 from typing import List, Optional
 
-from coordinator_core._settings_home import machine_local_dir, native_path_form
+from coordinator_core._settings_home import machine_local_dir, native_path_form, settings_home
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import no_console_creationflags
@@ -86,7 +90,19 @@ _LIVE_WRITE_ALLOW_ENV = "COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE"
 
 
 def _resolve_machine_local() -> Optional[str]:
-    """Locate the `machine-local` CLI on PATH. Returns None if absent."""
+    """Locate the `machine-local` CLI. Returns None if absent.
+
+    Checks `<settings-home>/bin/` before falling back to PATH. That directory
+    is where the installer actually deposits the forwarder, and it is NOT on
+    PATH for the process running `scripts/setup.py` — so a PATH-only probe
+    reported "machine-local not found — cannot read registry" on a box where
+    the CLI was present and working, sending the reader after a missing
+    install instead of the real cause (an unset `repos.doe_claude` key).
+    """
+    candidate = settings_home() / "bin" / "machine-local"
+    for path in (candidate, candidate.with_suffix(".cmd")):
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return str(path)
     return shutil.which("machine-local")
 
 
