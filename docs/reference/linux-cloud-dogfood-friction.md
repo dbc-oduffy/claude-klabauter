@@ -354,6 +354,60 @@ Not a Linux issue, and the `state/` exclusion is right for a mirror; the tension
 a citation contract the same repo enforces. Naming it rather than resolving it: which side gives is
 a doctrine call.
 
+### F17 — A single test crashes the pytest session on POSIX, aborting the documented fast tier — BLOCKER
+
+`coordinator_core/tests/test_settings_home.py:143`
+
+```python
+def test_normalize_native_path_converts_msys_mount_form(monkeypatch):
+    monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")
+```
+
+`coordinator_core._settings_home.os` **is** the stdlib `os` module — module objects are process
+singletons, confirmed on this box (`sh.os is os → True`). So this does not patch a local alias; it
+sets `os.name = "nt"` for the whole interpreter. On POSIX, `pathlib.Path(...)` then resolves to
+`WindowsPath` and raises. The blast lands in pytest's own session teardown, where
+`tmp_path_factory._exit_stack.close() → cleanup_numbered_dir → Path(entry)` raises:
+
+```
+NotImplementedError: cannot instantiate 'WindowsPath' on your system
+INTERNALERROR> ... _pytest/pathlib.py:350 in cleanup_candidates
+```
+
+**This reproduces with that one test run alone, serially** — it is not an interaction effect. Under
+`-n 2` it kills the worker, `xdist`'s `dsession.worker_workerfinished` asserts, and the whole run
+aborts:
+
+```
+INTERNALERROR> AssertionError:
+  ('coordinator_core/tests/test_settings_home.py::test_normalize_native_path_converts_msys_mount_form',
+   <WorkerController gw1>)
+```
+
+So **the repo's own documented verification command cannot complete on Linux.** The run died at
+~85%, leaving roughly 3,400 of the 26,156 selected tests never executed — and because the crash is
+an INTERNALERROR rather than a normal exit, pytest prints no short test summary, so the 413
+failures it did record are unnamed.
+
+Five sibling tests in the same file (`:148`, `:153`, `:158`, `:163`, and following) use the
+identical `setattr` target. Worth noting that the repo already ships a `conftest.py` `os.environ`
+leak detector and an `allow_environ_leak` opt-out marker — the guard exists, and this leaks
+`os.name` rather than `os.environ`, so it slips underneath. Not patched here: the right fix is
+either an indirection in `_settings_home` that the test can patch without touching the shared
+module, or an autouse guard that restores `os.name`, and both are the maintainers' call about how
+the platform-branch tests should be written fleet-wide.
+
+### F18 — The headline commit-anchor injection does not land from the engine install — FRICTION
+
+The README's third named problem-it-solves is that "every plain `git commit` gets a ~20ms injection
+of human-legible, machine-parseable context — which session, which plan, and *why*". After a
+complete engine install on this box, `.git/hooks/` contains exactly one non-sample hook —
+`pre-push` (the LFS gate). There is no `prepare-commit-msg`, and the commits made during this pass
+carry no anchor. `install_precommit_hook` is a documented permanent no-op ("gate deleted
+2026-08-25"). The anchor evidently arrives via `/coordinator:repo-setup`, which is restart-gated
+and therefore unreachable here. Not a defect so much as a scope boundary the README does not draw:
+the engine install alone does not get you the record-keeping the README leads with.
+
 ### F15 — Test tier, as a platform observation — INFORMATIONAL
 
 Per `docs/reference/test-tiers.md`, derived on this box rather than taken from a doc: workers =
@@ -363,11 +417,21 @@ Per `docs/reference/test-tiers.md`, derived on this box rather than taken from a
 pytest --collect-only -q                                  → 43001 tests collected
 pytest --collect-only -q -m 'not cadence and not
         pending_fix and not designed_red'                 → 26156 collected, 16845 deselected
+
+pytest -m 'not cadence and not pending_fix and not designed_red' -n 2 -q
+  → 413 failed, 21943 passed, 352 skipped, 17 errors, 4 subtests passed in 1625s
+  → then INTERNALERROR (F17); ~3,400 selected tests never ran
 ```
 
-Test tooling is **not** installed by the default install — `pytest>=9.1` / `pytest-xdist>=3.8` are
-advisory-only and need `--with-test-deps`, which INSTALL.md's Verify section does not mention while
-telling you to run `pytest`. Collection also emits
+Per test-tiers.md's own rule a raw count is not a verdict, and no attribution pass was run against
+the 413 — the doc is explicit that a full-tier run carries pre-existing failures. The four patches
+on this branch were separately reviewed against their own targeted tests, and every failure in
+those files reproduces identically on the pre-patch tree. What the number does establish is that
+**this box cannot currently produce a clean verdict at all**, because of F17.
+
+Test tooling is also **not** installed by the default install — `pytest>=9.1` / `pytest-xdist>=3.8`
+are advisory-only and need `--with-test-deps`, which INSTALL.md's Verify section does not mention
+while telling you to run `pytest`. Collection emits
 `PytestUnknownMarkWarning: Unknown pytest.mark.spawns_process`, an unregistered marker, from a repo
 that ships a marker-registry-completeness ratchet.
 
@@ -410,3 +474,7 @@ Recorded here for one report; the doctrine-side companion is
 4. **The 3.14 fleet lock does not build** (F5), and nothing said so out loud until F4's patch.
 5. **The sizing lobby is the one place a hand-transcription survives** (F11) — by this system's own
    standard, that is the highest-value thing on this list to discharge.
+6. **One test crashes the pytest session on POSIX** (F17), so the repo's own documented
+   verification command cannot complete on Linux at all. Of everything here this is the one that
+   most undercuts the "tested matrix is macOS and Linux" claim — and it reproduces from a single
+   test, run alone, in under a second.
