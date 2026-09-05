@@ -22,20 +22,18 @@ DEPLOYMENT`, reused rather than re-derived so this module can never drift
 from the single source of truth for that axis. `continued` IS terminal: a
 record with a successor is finished, not retained.
 
-Retention grounds, PM-ruled 2026-08-28:
+Retention grounds, PM-ruled 2026-08-28 and 2026-09-04:
 
   - Live children are NOT a retention ground. A terminal record with
     children is still archivable — this module does not look at a
     record's children at all, and never will; there is nothing to opt out
     of because the check does not exist here.
-  - A live claim HOLDER IS a still-valid, DIFFERENT retention ground. A
-    terminal record currently held by a live claim is excluded from the
-    terminal set. Checking claim-holder liveness is itself I/O
-    (`session.liveness.claim_holder_live` reads a claim directory), so it
-    is never performed inside this module — the caller supplies a
-    `claim_holder_live` predicate (mirrors C6's `resolve` injection
-    pattern for gate evaluation) and this module's own read count from
-    calling it is zero, whatever the predicate itself costs the caller.
+  - A live claim HOLDER is NOT a retention ground either, as of 2026-09-04:
+    "a claim on a baton shouldn't prevent it from getting archived. What
+    matters is that the baton is complete, not the liveness of the holder."
+    The caller's `retained` hook stopped consulting claim-holder liveness on
+    that ruling; this module never consulted it directly, so nothing here
+    changed but this paragraph.
 
 `cap` is REQUIRED and must be a positive integer. An absent or
 non-positive `cap` is a caller setup error — this module raises
@@ -46,9 +44,9 @@ Negative-spec: this module does not decide what `deployment_state` value
 means beyond checking terminal-set membership, does not resolve gate
 blockers (`gate_clear.py`/`resolve.py`), does not move or commit files
 (C6c's job), and performs no file I/O of any kind — a variant that reaches
-for disk to check claim-holder liveness itself, instead of calling the
-caller-supplied predicate, is the regression this module's own test suite
-exists to catch.
+for disk to answer a retention question itself, instead of calling the
+caller-supplied `retained` predicate, is the regression this module's own
+test suite exists to catch.
 """
 
 from __future__ import annotations
@@ -99,10 +97,9 @@ def compute_terminal_set(
     consulted; there is no such ground here (PM ruling 2026-08-28).
 
     ONE retention hook, not two. This carried a separate `claim_holder_live`
-    predicate of identical signature and semantics until 2026-08-30; a live
-    claim holder is one retention ground among several, not a category of
-    its own, and the caller was building both four lines apart. `retained`
-    is its strict superset.
+    predicate of identical signature and semantics until 2026-08-30, folded
+    into `retained` as one ground among several; the ground itself was then
+    retired on the 2026-09-04 ruling, so no caller passes it any more.
 
     `retained` is the general exclusion hook the predecessor sweep spent in
     `archive_terminal_handoffs :: plan_sweep`'s own rails. The rail that

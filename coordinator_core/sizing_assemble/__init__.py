@@ -596,6 +596,107 @@ def _apply_symmetric_resize(
     return resized, resized != tshirt, False
 
 
+#: The stage chain each route commits a session to, and who owns it.
+#: A route the LOBBY owns runs its chain here and closes at a terminal; a route
+#: that names a ROOM records an entry task and stops, because that room's own
+#: skill owns everything after it. Keyed on every member of `ROUTE_ENUM` — the
+#: table is exhaustive by construction (`_assert_stage_table_total` below), so a
+#: route added to the enum without a chain fails at import rather than emitting
+#: a recorder that silently stops one stage early.
+_LOBBY_CHAINS = {
+    "dispatch": ["the work"],
+    "spec-dispatch": [
+        "light plan (scope_mode: spec-dispatch)",
+        "executor dispatch",
+        "scoped code-reviewer + review-integrator",
+    ],
+    "plan": ["plan", "plan review", "execute-plan"],
+}
+
+#: Routes whose chain belongs to the room they name, not to the lobby. The
+#: entry row is all the lobby can honestly record: what the room does next is
+#: that skill's to decide, and a chain guessed here would be a recorder full of
+#: stages nobody agreed to.
+_ROOM_ENTRY = {
+    "shape": "enter coordinator:shape",
+    "roadmap": "enter coordinator:roadmap-planning",
+    "goal-setting": "enter coordinator:goal-setting (PM-gated)",
+    # Not a room: the engine sets `pm_decision_pending` and never picks among
+    # the XL exits, so the entry row is the surfacing itself.
+    "pm-decision": "surface the XL exits to the PM; record the pick in xl_exit",
+}
+
+#: Terminal by SIZE, never by route: XS/S close at `quick-wrap`, M and above at
+#: `/workstream-complete`. Read against the RESIZED t-shirt — a probe that moved
+#: the notch moved the terminal with it.
+_LIGHT_TERMINAL_TSHIRTS = ("XS", "S")
+
+
+def _assert_stage_table_total() -> None:
+    """Every route in `ROUTE_ENUM` is either lobby-owned or room-owned.
+
+    Import-time rather than call-time: a route present in the enum and absent
+    from both tables is a defect the moment it is added, and the caller that
+    would discover it at call time is a session whose recorder is already
+    short a stage.
+    """
+    covered = set(_LOBBY_CHAINS) | set(_ROOM_ENTRY)
+    missing = [r for r in ROUTE_ENUM if r not in covered]
+    if missing:
+        raise AssertionError(
+            f"sizing_assemble: routes with no stage chain: {missing}"
+        )
+
+
+_assert_stage_table_total()
+
+
+def stages(resolved_route: str, resized_tshirt: str) -> dict:
+    """The stage chain `resolved_route` commits the session to, at that size.
+
+    The flight recorder the sizing lobby opens is a pure function of the two
+    fields `route()` already resolves, which is the whole reason this lives
+    beside it and adds no op: the EM was transcribing a table the engine had
+    already computed, and a transcribed table is one an EM can mistype, skip a
+    row of, or stop short of the terminal on.
+
+    Returns ``{"rows": [...], "terminal": <str|None>, "owned_by": <str>}``.
+    ``rows`` is the chain in order, ending WITH the terminal row when the lobby
+    owns the chain; ``terminal`` is ``None`` for a room-owned route, whose room
+    owns its own close.
+
+    NEGATIVE SPEC — the session-goal row is NOT emitted here. It has to cite the
+    sizing-object's path, and `route()` never sees one: it is called before the
+    object is scaffolded, and on the express lane no object is ever written. The
+    caller composes that row; this function answers only what follows it.
+
+    NEGATIVE SPEC — this cannot tell an EXTENSION from a RESTART. `execute-plan`
+    Phase 2 and the spec-dispatch light terminal open per-chunk tasks that must
+    land beneath these rows rather than reopening the list, and the harness task
+    list is not readable from the engine, so nothing here can see whether a
+    recorder is already open. That discriminator stays doctrine-side
+    (doe-claude-em memo, 2026-09-05).
+    """
+    terminal = (
+        "quick-wrap"
+        if resized_tshirt in _LIGHT_TERMINAL_TSHIRTS
+        else "/workstream-complete"
+    )
+
+    if resolved_route in _ROOM_ENTRY:
+        return {
+            "rows": [_ROOM_ENTRY[resolved_route]],
+            "terminal": None,
+            "owned_by": resolved_route,
+        }
+
+    return {
+        "rows": [*_LOBBY_CHAINS[resolved_route], terminal],
+        "terminal": terminal,
+        "owned_by": "lobby",
+    }
+
+
 def route(
     *,
     appetite: Optional[str] = None,
@@ -652,7 +753,7 @@ def route(
             itself is still never parsed. Never alters `route` or `xl_exit`.
 
     Returns:
-        A dict: {route, detents, fork, xl_exit, resolved_estimate,
+        A dict: {route, detents, fork, xl_exit, resolved_estimate, stages,
         scout_evidence, narration, next_move} — READ-ONLY, mutates nothing.
     """
     _validate_appetite(appetite)
@@ -676,6 +777,11 @@ def route(
             "intent": intent,
             "resolved_estimate": {"tshirt": tshirt, "provisional": True},
             "scout_evidence": scout_evidence,
+            # Emitted on this arm too, even though D3 persists no object: the
+            # express lane still runs work and still closes, and a field that
+            # is absent here would make absence mean two different things to
+            # the caller reading it.
+            "stages": stages("dispatch", tshirt),
             "narration": "Express lane: trivial ask, no sizing ceremony.",
             "next_move": "Dispatch directly. No sizing-object persisted (D3).",
         }
@@ -1066,6 +1172,11 @@ def route(
         # there was no frame in which those two facts met.
         "intent": intent,
         "resolved_estimate": {"tshirt": resized_tshirt, "provisional": True},
+        # The lobby's flight recorder, computed rather than transcribed. Rides
+        # the return `route()` already produces, so the caller reads the chain
+        # in the same frame as the route that implies it and pays no second
+        # process to get it.
+        "stages": stages(resolved_route, resized_tshirt),
         "scout_evidence": scout_evidence,
         "narration": narration,
         "next_move": next_move,

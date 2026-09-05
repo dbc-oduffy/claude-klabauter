@@ -110,3 +110,73 @@ def test_an_ambiguous_archive_match_resolves_to_nothing(tmp_path):
 def test_a_genuinely_missing_plan_fk_is_still_a_refusal(tmp_path):
     reason = _forward_plan_refusal_reason(tmp_path, "docs/plans/nope.md")
     assert reason is not None and "could not be resolved" in reason
+
+
+# ---------------------------------------------------------------------------
+# Read 3: the unfenced fallback's head window
+#
+# The same chain's third silent-None. `parse_frontmatter_field` scanned only
+# `text[:4096]` of an unfenced record. A sizing-object spells `status:` as an
+# ordinary top-level key wherever the scaffolder left it, and on this corpus
+# three carried it at byte 5693, 6385 and 9051 -- read as None, refused as
+# non-terminal, stranded while the sweep reported itself clean. Same shape as
+# reads 1 and 2 above: a reader disagreeing with the corpus and failing toward
+# "nothing to do". The window bought no I/O -- the whole file is already in
+# memory one line earlier -- and it mis-taught its own investigation, which
+# read the three sweepable records as correlating with a missing trailing
+# `# draft | sized | ...` comment when the real discriminator was byte offset.
+# ---------------------------------------------------------------------------
+
+_PAST_WINDOW_PAD = "notes: " + ("x" * 6000) + "\n"
+
+
+def test_status_past_the_4096_byte_head_window_is_still_read(tmp_path: Path) -> None:
+    """A top-level `status:` beyond byte 4096 of an unfenced record reads back."""
+    p = tmp_path / "sizing.yaml"
+    p.write_text(
+        "schema: sizing-object\n" + _PAST_WINDOW_PAD + "status: shipped\n",
+        encoding="utf-8",
+    )
+    assert p.stat().st_size > 4096
+    assert parse_frontmatter_status(p) == "shipped"
+
+
+def test_trailing_comment_is_not_the_discriminator(tmp_path: Path) -> None:
+    """The scaffolder's trailing enum comment never blocked the read.
+
+    Pins the hypothesis that the byte-offset investigation ruled out, so it is
+    not re-run: a trailing `# draft | sized | ...` comment is stripped by
+    `read_fm_field_unquoted` at any offset, inside the old window or past it.
+    """
+    comment = "  # draft | sized | routed | shipped | declined | superseded"
+    near = tmp_path / "near.yaml"
+    near.write_text("status: shipped" + comment + "\n", encoding="utf-8")
+    far = tmp_path / "far.yaml"
+    far.write_text(_PAST_WINDOW_PAD + "status: shipped" + comment + "\n", encoding="utf-8")
+    assert parse_frontmatter_status(near) == "shipped"
+    assert parse_frontmatter_status(far) == "shipped"
+
+
+def test_indented_status_past_the_window_is_not_read_as_top_level(tmp_path: Path) -> None:
+    """Widening the scan must not let a nested `status:` answer for the record.
+
+    `read_fm_field`'s pattern is column-anchored under re.MULTILINE; this is
+    the assertion that keeps that property load-bearing rather than incidental,
+    since the head window used to hide any such match by truncation.
+    """
+    p = tmp_path / "nested.yaml"
+    p.write_text(
+        "schema: sizing-object\n" + _PAST_WINDOW_PAD + "system:\n  status: shipped\n",
+        encoding="utf-8",
+    )
+    assert parse_frontmatter_status(p) is None
+
+
+def test_fenced_record_is_untouched_by_the_widened_scan(tmp_path: Path) -> None:
+    """The fallback still fires only when there is no fence -- negative-spec."""
+    p = tmp_path / "plan.md"
+    p.write_text(
+        "---\nstatus: implemented\n---\n\n" + _PAST_WINDOW_PAD + "status: shipped\n",
+        encoding="utf-8",
+    )
+    assert parse_frontmatter_status(p) == "implemented"

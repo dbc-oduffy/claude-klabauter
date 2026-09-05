@@ -51,7 +51,6 @@ import subprocess
 from pathlib import Path
 from typing import Any, Optional
 
-from coordinator_core.ceremony_common.cli_dispatch import resolve_cli_script_root
 
 # Negative-spec — these three are imported LAZILY, inside the functions that use
 # them, and must not be restored to module scope. Importing this package is an
@@ -88,14 +87,6 @@ BRANCH_STATE_DIVERGED = "diverged"
 #: module's `d0` directive preserves as the first hard-gate (chunk C6 AC).
 NODE_CEREMONY_TEST_RELPATH = ("coordinator", "tests", "plugin-ecosystem", "run.js")
 
-#: `coordinator/bin/` resolved from the engine clone through the one seam
-#: that computes it (matches `merge_assemble.apply._BIN_DIR`, which resolves
-#: through the same call) — `portability-sweep.py` is a producer this claude-klabauter
-#: install ships (or doesn't), never a path inside the target repo
-#: `repo_root` names (unlike `NODE_CEREMONY_TEST_RELPATH`).
-_BIN_DIR = resolve_cli_script_root()
-
-
 def node_ceremony_gate_entrypoint(repo_root: Path) -> Path:
     """Resolves `NODE_CEREMONY_TEST_RELPATH` against `repo_root`. The suite it
     names is coordinator-claude's plugin-ecosystem contract suite, which only
@@ -112,8 +103,26 @@ def portability_sweep_entrypoint() -> Path:
     explicit `unavailable` gate verdict rather than surfacing as a
     `RuntimeError` from `_run_py_script` that reads identically to any other
     dispatch failure (D5's defect: a missing producer currently reads as a
-    clean sweep once a caller stops treating "exited 2" as fatal)."""
-    return _BIN_DIR / "portability-sweep.py"
+    clean sweep once a caller stops treating "exited 2" as fatal).
+
+    `coordinator/bin/` is resolved from the engine clone through the one seam
+    that computes it (`merge_assemble.apply` resolves through the same call) —
+    `portability-sweep.py` is a producer this claude-klabauter install ships (or doesn't),
+    never a path inside the target repo `repo_root` names (unlike
+    `NODE_CEREMONY_TEST_RELPATH`).
+
+    Resolved HERE rather than at module scope. This is the package's only
+    consumer of the seam, and binding it at import pulled
+    `ceremony_common.cli_dispatch` into the import closure of
+    `merge_assemble.cli` — the leaf the warm route imports per invocation, and
+    the closure `test_runtime_import_closure_excludes_heavy_modules` exists to
+    keep thin. One call per invocation of a function nothing calls on the hot
+    path is not a cost worth a module-scope constant."""
+    from coordinator_core.ceremony_common.cli_dispatch import (  # noqa: PLC0415
+        resolve_cli_script_root,
+    )
+
+    return resolve_cli_script_root() / "portability-sweep.py"
 
 
 class _TransportFailure(Exception):

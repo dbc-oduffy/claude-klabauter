@@ -596,28 +596,40 @@ class TestInvokeByNameFromTheLauncher:
     parses at all post-C1 (the CLI verb itself was removed)."""
 
     @pytest.mark.real_home
-    def test_apply_help_runs_from_the_launcher(self, _throwaway_repo: Path) -> None:
-        """`apply --help` is NOT recognized by `main_apply`'s own hand-rolled
-        argv loop (pre-existing, unrelated to this plan's routing work —
-        only bare top-level `--help`/`-h` short-circuits before subcommand
-        dispatch); it falls through to `unrecognized argument '--help'` and
-        the CLI's own usage text at exit 3 — verified by hand against this
-        exact launcher before landing this test. AC7's claim is narrower
-        than "succeeds": invoke-by-name through the launcher reaches the
-        real CLI and prints its own documented usage diagnostic, rather
-        than an import/transport failure or a corrupted-argv failure."""
+    def test_apply_reaches_the_real_cli_from_the_launcher(
+        self, _throwaway_repo: Path
+    ) -> None:
+        """AC7's claim is narrower than "succeeds": invoke-by-name through the
+        launcher reaches the real CLI and prints ITS OWN documented usage
+        diagnostic, rather than an import/transport failure or a corrupted-argv
+        failure. `--bogus` is the probe because it is a token nothing upstream
+        claims: it falls through `main_apply`'s hand-rolled argv loop to
+        `unrecognized argument '--bogus'` at exit 3.
+
+        THE PROBE MOVED (2026-09-05). It was `apply --help`, asserting the same
+        exit 3, and that stopped being a test of this claim on 2026-09-02:
+        `entry_point_shim.run_target` now intercepts `--help`/`-h` ANYWHERE in
+        argv before either resolution branch, prints the shim's own rendered
+        help and returns 0 (`_help_requested`, whose NEGATIVE SPEC names the
+        after-a-subcommand position deliberately). So `--help` became the one
+        gesture that provably does NOT reach the CLI — the opposite of what
+        this test asserts. The exit-3 assertion is unchanged; only the token
+        that still travels to `main_apply` moved."""
         _require_windows_or_darwin()
         if not IS_WINDOWS:
             pytest.skip(".cmd launcher invocation is Windows-only")
 
         completed = subprocess.run(
-            [str(_LAUNCHER_CMD), "apply", "--help"],
+            [str(_LAUNCHER_CMD), "apply", "--bogus"],
             cwd=str(_throwaway_repo),
             capture_output=True,
             text=True,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         assert completed.returncode == 3, completed
+        # The diagnostic itself, not just the code: an exit 3 from the shim
+        # rather than from main_apply would satisfy the code alone.
+        assert "unrecognized argument" in completed.stderr, completed
 
 
 _ROUTING_LIKE_FOR_LIKE_PROBE_SOURCE = textwrap.dedent(

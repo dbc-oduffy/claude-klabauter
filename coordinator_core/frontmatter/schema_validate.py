@@ -3199,10 +3199,15 @@ _PLAN_TASKS_GROUPING_ORDER = ('do', 'spun_off', 'defer', 'ruled_out')
 # with `backlogged` under one digest would flood the one grouping digest
 # the PM actually needs to read with cheap, ungated moves, camouflaging the
 # backlogged rows that still need a PM word. Placed between 'do' and
-# 'defer' in `_PLAN_TASKS_GROUPING_ORDER` above — spun_off is ungated, like
-# `do`, but it IS a closed disposition (row is no longer open work), so it
-# sorts after all live/shipped work and before the two PM-gated groupings,
-# matching D5's cheapest-exit-first ordering intent.
+# 'defer' in `_PLAN_TASKS_GROUPING_ORDER` above. The ordering rationale was
+# written when spun_off was ungated like `do`; that half is stale as of
+# 2026-08-30 (it is gated on GOVERNED plans — see
+# `_PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS`), and the POSITION is
+# unchanged and still correct on its own terms: spun_off is a closed
+# disposition (the row is no longer open work), so it sorts after all
+# live/shipped work, and it remains the cheapest exit of the three closed
+# ones, so it sorts before `defer`/`ruled_out` — D5's cheapest-exit-first
+# ordering intent, which never depended on the gating axis.
 _PLAN_TASKS_GROUPING_BY_DISPOSITION = {
     'open': 'do',
     'coded': 'do',

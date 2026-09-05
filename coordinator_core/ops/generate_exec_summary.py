@@ -429,6 +429,55 @@ def _is_stale_input(path: str, now: Optional[datetime] = None) -> bool:
     return (reference - authored).days > _MAX_PROGRESS_INPUT_AGE_DAYS
 
 
+def _newest_pending_release(repo_dir: str) -> str:
+    """The freshest archived pending-release accumulator, across BOTH archive
+    directories that doctrinally hold one.
+
+    They are the same accumulator at two points in one lifecycle, not a drift:
+    week-rollover archives the live `state/week-changelog/` fragments into
+    `archive/week-changelogs/<week-start>/`, and `/merging-to-main` Step 10
+    `git mv`s the accumulator into `archive/release-notes/` once a release tag
+    is cut. Reading only the former meant **cutting a release was the act that
+    moved a repo's freshest Highlights out of the only directory this reader
+    looked in** — so the repos shipping most regularly were exactly the ones
+    whose Progress section froze, and the tile made the repos that ship least
+    look the most current. Ruling: widen the reader, move no writer
+    (doe-claude-em, 2026-09-04, cross-repo/inbox
+    `exec-summary-progress-rung2-archive-contract-ruling`).
+
+    Selection is by AUTHORED DATE, never list position. `sorted(...)[-1]` over
+    a merged list is wrong twice: it orders lexically across two different
+    directory prefixes, and only `release-notes/` names carry the date in the
+    filename — `week-changelogs/` entries may carry it only on the parent
+    directory. `_date_from_path` already reads both shapes.
+
+    On an exact date tie, `archive/release-notes/` wins: it is the post-merge
+    copy, so it is the one whose contents were actually released.
+    """
+    roots = (
+        os.path.join(repo_dir, "archive", "release-notes"),
+        os.path.join(repo_dir, "archive", "week-changelogs"),
+    )
+    best = ""
+    best_key: Optional[Tuple[datetime, int]] = None
+    for rank, root in enumerate(roots):
+        # rank 0 is release-notes, so a HIGHER tie-break value must mean
+        # release-notes: invert rather than reusing the loop index directly.
+        tie_break = 1 - rank
+        for path in glob.glob(os.path.join(root, "**", "*pending-release*.md"), recursive=True):
+            if not os.path.isfile(path):
+                continue
+            authored = _date_from_path(path)
+            # An undated candidate sorts oldest rather than being discarded —
+            # it is still the only prose on disk if nothing else matches, and
+            # `_is_stale_input` already treats undated inputs as fresh.
+            key = (authored or datetime.min.replace(tzinfo=timezone.utc), tie_break)
+            if best_key is None or key > best_key:
+                best_key = key
+                best = path
+    return best
+
+
 def _derive_progress(state_root: str, repo_root: str) -> str:
     wc_dir = os.path.join(state_root, "week-changelog")
     output = ""
@@ -438,9 +487,8 @@ def _derive_progress(state_root: str, repo_root: str) -> str:
     if os.path.isdir(wc_dir):
         # Newest-first: filenames are date-prefixed, so descending lexicographic
         # is descending chronological. The `break` below takes the first match,
-        # which must be the freshest — rung 2 reaches for `candidates[-1]` for
-        # the same reason. Ascending order here silently pins the section to the
-        # oldest file on disk forever.
+        # which must be the freshest. Ascending order here silently pins the
+        # section to the oldest file on disk forever.
         for wc_file in sorted(glob.glob(os.path.join(wc_dir, "*.md")), reverse=True):
             if not os.path.isfile(wc_file):
                 continue
@@ -463,9 +511,7 @@ def _derive_progress(state_root: str, repo_root: str) -> str:
         # Fallback: most recent archived pending-release.md.
         if not highlights:
             repo_dir = os.path.dirname(state_root)
-            pattern = os.path.join(repo_dir, "archive", "week-changelogs", "**", "*pending-release*.md")
-            candidates = sorted(glob.glob(pattern, recursive=True))
-            latest_pr = candidates[-1] if candidates else ""
+            latest_pr = _newest_pending_release(repo_dir)
             if latest_pr and _is_stale_input(latest_pr):
                 latest_pr = ""
             if latest_pr and os.path.isfile(latest_pr):

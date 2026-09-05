@@ -351,3 +351,45 @@ class TestDryRunCensus:
             "an empty census must say it is empty — silence is the failure "
             f"mode this flag exists to fix; got {out!r}"
         )
+
+
+class TestTheRepoRootSeamIsReachable:
+    """The seam a test patches must be the one `main()` actually calls.
+
+    This class exists because the alternative failed silently for real. The
+    CLI resolved its repo root through an import inside `main()`'s own body,
+    so every test that set `mod.resolve_checked_repo_root` patched an
+    attribute nothing read. Those tests ran against THIS repo's live corpus
+    while reporting on a fixture, and `_run_main_with_verdict` drives the ACT
+    path -- one terminal record in the live tree and a test run would have
+    archived and committed real handoffs. It never fired only because the
+    live corpus held no candidates on the day it was found.
+
+    A patch that does not take is invisible in both directions: the test can
+    pass on the real repo's behaviour and fail on it, and neither outcome
+    says the fixture went unused.
+    """
+
+    def test_the_repo_root_seam_is_the_one_the_cli_actually_calls(self, tmp_path):
+        mod = _load_module()
+        calls = []
+
+        def _sentinel(explicit_root=None):
+            calls.append(explicit_root)
+            return None, {"verdict": "MATCH", "message": ""}
+
+        mod.resolve_checked_repo_root = _sentinel
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = mod.main(["--dry-run"])
+
+        assert calls, (
+            "main() must resolve its repo root through the module-global "
+            "`resolve_checked_repo_root` name; a patch that does not take means every "
+            "test in this file is silently running against the real repo"
+        )
+        assert code == 2, (
+            "a None repo root is the not-a-git-repo path and exits 2; got "
+            f"{code} with stderr={err.getvalue()!r} -- if this is 0, the CLI "
+            "resolved a real root and ignored the sentinel"
+        )

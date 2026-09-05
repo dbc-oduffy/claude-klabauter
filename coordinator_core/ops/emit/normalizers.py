@@ -48,10 +48,10 @@ _VOLATILE_TIME_KEYS = frozenset({
     "last_commit_at",       # branch tip commit time
     "last_commit_message",  # branch tip commit subject
     "last_activity_at",     # GitHub API — repo last-push timestamp, moves with each push
-    # Rollup period (completion_rollups.{day,week}): contains the CURRENT date/week-number
-    # ("2026-07-05", "2026-W27") — changes with every run day; must be normalized so frozen-
-    # fixture parity tests are not defeated by wall-clock drift.
-    "period",
+    # Review: overengineering-reviewer (Kira) — "period" removed. Both `_local_day` and
+    # `_iso_week` now derive from `ctx.observed_at` (frozen in the parity fixture), not the
+    # wall clock, so the field is deterministic and the golden should pin it, not normalize
+    # it away.
 })
 # Git SHA fields — volatile as commits land.  Normalized to zero-SHA (_SHA_SENTINEL) per
 # AC5-PROVENANCE oracle (provenance.ref.sha → "0000000000000000000000000000000000000000").
@@ -150,6 +150,23 @@ _SECTION_DERIVED_NULL_KEYS = frozenset({"deliverable_status", "shipped_sha"})
 # its assertions live in a dedicated home: `coordinator_core/contract/cockpit_schema/tests/test_producer_axis_
 # entity.py`. Drop it from the frozen-golden diff, never from that.
 #
+# `roadmap_id` (HandoffSummary, cockpit contract 4.2.0, added at 9e91bb19d4) joins the set on
+# `producer`'s reasoning, not `baton_class`'s: it is not a derivative of an already-dropped
+# field. It postdates the 2.20.0 golden capture, so the frozen slice carries no key at all and
+# the diff can assert nothing about it in either direction. Its real coverage is the contract
+# schema tests (`cockpit_schema/tests/test_new_entity_schemas.py`,
+# `contract/tests/test_human_axis_contract_fields.py`) plus the mint-time carry test
+# (`baton_assemble/tests/test_roadmap_identity_carry.py`); the porter leg is a bare frontmatter
+# passthrough (`sections/handoffs.py::collect`). Dropped from the frozen-golden diff only.
+#
+# `fact_window` (RollupSummary, added at 9fb69f530f so rollup rows name the window their facts
+# were computed over) joins for the same reason and with the same limit: the retired bash
+# oracle emitted no window, so the golden carries no key. Unlike the passthroughs above this is
+# a COMPUTED field, so the drop is only defensible because it has a dedicated oracle of its own
+# — `ops/emit/tests/test_rollups_fact_window.py`. Drop it from the frozen-golden diff, never
+# from that test. Per the `body` contrast above, do not extend this entry to a computed field
+# that has no such home.
+#
 # `actioned_at` (CrossRepoMemoSummary, cockpit contract 4.4.0) joins the same set for the
 # same reason as `archived`/`decision_note` above: the retired bash oracle's § 8.7 never
 # emitted a closure date, so the frozen golden carries no key at all. Dropped from the
@@ -167,6 +184,8 @@ _SECTION_DROP_KEYS = frozenset(
         "archived",
         "decision_note",
         "actioned_at",
+        "roadmap_id",
+        "fact_window",
     }
 )
 

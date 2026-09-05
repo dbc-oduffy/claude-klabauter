@@ -528,20 +528,37 @@ class TestCommitsSinceLastBatch:
 
 
 class TestLocalDayAndIsoWeek:
-    """Locks rollups' ``_local_day``/``_iso_week`` format contracts (bash:1058-1065):
-    ``date -I`` (YYYY-MM-DD) and the ISO-week ``YYYY-Www`` string."""
+    """Locks rollups' ``_local_day``/``_iso_week`` FORMAT contracts — ``YYYY-MM-DD`` and the
+    ISO-week ``YYYY-Www`` string — derived from ``ctx.observed_at``, never the machine's wall
+    clock (per docs/plans/2026-09-04-the-weekly-completion-count-means-the-week.md C1: a
+    re-emitted historical snapshot must stamp the day/week of the instant it is ABOUT, not the
+    day it happens to run on). ``observed_at`` below is deliberately NOT today's date, so these
+    assertions fail against a ``date.today()``-based implementation on every day but one."""
 
-    def test_local_day_matches_date_today_iso(self) -> None:
-        assert _local_day(ctx=MagicMock()) == datetime.date.today().isoformat()
+    def test_local_day_matches_observed_at_iso(self) -> None:
+        ctx = MagicMock()
+        ctx.observed_at = "2026-03-17T08:00:00Z"
+        assert _local_day(ctx) == "2026-03-17"
 
-    def test_iso_week_matches_isocalendar(self) -> None:
-        y, w, _ = datetime.date.today().isocalendar()
-        assert _iso_week() == f"{y}-W{w:02d}"
+    def test_iso_week_matches_observed_at_isocalendar(self) -> None:
+        ctx = MagicMock()
+        ctx.observed_at = "2026-03-17T08:00:00Z"
+        y, w, _ = datetime.date(2026, 3, 17).isocalendar()
+        assert _iso_week(ctx) == f"{y}-W{w:02d}"
 
 
 class TestReviewTrailFacts:
     """Locks ``rollups._review_trail_facts``' valid-set count + verdict group_by (bash:1073-
-    1077), sharing the same quarantine filter as ``review_trail.collect`` (Section 3)."""
+    1077), sharing the same quarantine filter as ``review_trail.collect`` (Section 3).
+
+    Every call passes an explicit inclusive ``YYYY-MM-DD`` window: the function is
+    period-scoped, so there is no unwindowed reading of it to assert. ``_WIDE`` is used
+    where the case under test is about quarantine or emptiness rather than the window,
+    and is deliberately a real bounded window rather than a "match everything" sentinel —
+    a sentinel would let a regression that ignores the bounds pass every test here.
+    ``TestReviewTrailFactsPeriodScope`` below owns the bounds themselves."""
+
+    _WIDE = ("2026-01-01", "2026-12-31")
 
     def _write_record(self, root: Path, name: str, body: dict) -> None:
         path = root / "review-trail" / name
@@ -564,7 +581,7 @@ class TestReviewTrailFacts:
         ctx.subprocess_root = state_root
         ctx.central_state_root = state_root
 
-        count, verdicts = _review_trail_facts(ctx)
+        count, verdicts = _review_trail_facts(ctx, *self._WIDE)
 
         assert count == 2
         assert verdicts == {"ok": 1, "warn": 1}
@@ -586,7 +603,7 @@ class TestReviewTrailFacts:
         ctx.subprocess_root = state_root
         ctx.central_state_root = state_root
 
-        count, verdicts = _review_trail_facts(ctx)
+        count, verdicts = _review_trail_facts(ctx, *self._WIDE)
 
         assert count == 1
         assert verdicts == {"ok": 1}
@@ -598,7 +615,118 @@ class TestReviewTrailFacts:
         ctx.subprocess_root = state_root
         ctx.central_state_root = state_root
 
-        count, verdicts = _review_trail_facts(ctx)
+        count, verdicts = _review_trail_facts(ctx, *self._WIDE)
 
         assert count == 0
         assert verdicts == {}
+
+
+class TestReviewTrailFactsPeriodScope:
+    """The week row's review legs count the week, not the lifetime.
+
+    ``_review_trail_facts`` took no window and counted the ENTIRE live+archive trail, so
+    a week row published ``chains_completed`` for its ISO week beside
+    ``reviews_conducted``/``verdicts`` for all time under one ``period`` label — measured
+    on this repo at 35 beside 3167. Same defect class as the completion legs fixed at
+    130435f60c, one field over, and a flat contradiction of the ``fact_window`` the row
+    now carries.
+    """
+
+    def _write_record(self, root: Path, name: str, verdict: str = "OK") -> None:
+        path = root / "review-trail" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {"sha_range": "aaa..bbb", "reviewer": "code-reviewer", "verdict": verdict}
+            ),
+            encoding="utf-8",
+        )
+
+    def _ctx(self, state_root: Path):
+        ctx = MagicMock()
+        ctx.subprocess_root = state_root
+        ctx.central_state_root = state_root
+        return ctx
+
+    def test_records_outside_the_window_are_not_counted(self, tmp_path: Path) -> None:
+        state_root = tmp_path / "state"
+        self._write_record(state_root, "2026-07-06-101500-in-a.json", "OK")
+        self._write_record(state_root, "2026-07-12-101500-in-b.json", "warn")
+        # One day before the window opens and one day after it closes — the off-by-one
+        # pair, since both bounds are INCLUSIVE.
+        self._write_record(state_root, "2026-07-05-101500-out-before.json", "OK")
+        self._write_record(state_root, "2026-07-13-101500-out-after.json", "OK")
+
+        count, verdicts = _review_trail_facts(self._ctx(state_root), "2026-07-06", "2026-07-12")
+
+        assert count == 2
+        assert verdicts == {"ok": 1, "warn": 1}
+
+    def test_both_bounds_are_inclusive(self, tmp_path: Path) -> None:
+        state_root = tmp_path / "state"
+        self._write_record(state_root, "2026-07-06-000000-first-day.json", "OK")
+        self._write_record(state_root, "2026-07-12-235900-last-day.json", "OK")
+
+        count, verdicts = _review_trail_facts(self._ctx(state_root), "2026-07-06", "2026-07-12")
+
+        assert count == 2
+        assert verdicts == {"ok": 2}
+
+    def test_undatable_filename_is_excluded_not_attributed_to_the_window(
+        self, tmp_path: Path
+    ) -> None:
+        """A stem too short to carry a date reads 1970-01-01 — outside every real window.
+
+        Pins the direction of the failure: an unreadable date drops the record from a
+        period-scoped count rather than silently crediting it to the current period.
+        """
+        state_root = tmp_path / "state"
+        self._write_record(state_root, "short.json", "OK")
+
+        count, verdicts = _review_trail_facts(self._ctx(state_root), "2026-07-06", "2026-07-12")
+
+        assert count == 0
+        assert verdicts == {}
+
+    def test_week_row_facts_and_fact_window_agree(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The emitted row's window and its review legs come from the same two values.
+
+        The regression this forecloses is the two drifting apart again — a row whose
+        ``fact_window`` says one thing while its counts were taken over another.
+        """
+        from coordinator_core.ops.emit.sections import rollups
+
+        state_root = tmp_path / "state"
+        self._write_record(state_root, "2026-07-06-101500-in.json", "OK")
+        self._write_record(state_root, "2026-06-01-101500-out.json", "blocked")
+
+        ctx = self._ctx(state_root)
+        ctx.observed_at = "2026-07-08T00:00:00Z"
+        ctx.repo_name = "fixture-repo"
+        ctx.provenance = lambda *a, **k: {}
+
+        captured: dict = {}
+        real = rollups._review_trail_facts
+
+        def spy(c, start, end):
+            captured["window"] = (start, end)
+            return real(c, start, end)
+
+        monkeypatch.setattr(rollups, "_review_trail_facts", spy)
+        monkeypatch.setattr(rollups, "_query_completions", lambda _c: [])
+
+        recs, _ = rollups.collect(ctx)
+
+        week = next(r for r in recs if r["grain"] == "week")
+        assert captured["window"] == (week["fact_window"]["start"], week["fact_window"]["end"])
+        # 2026-07-08 is ISO 2026-W28 (Mon 07-06 .. Sun 07-12): the in-window record is
+        # counted and the June one is not — the lifetime leg would have returned 2.
+        assert week["fact_window"] == {
+            "kind": "iso-week",
+            "start": "2026-07-06",
+            "end": "2026-07-12",
+        }
+        assert week["deterministic_facts"]["reviews_conducted"] == 1
+        assert week["deterministic_facts"]["verdicts"] == {"ok": 1}

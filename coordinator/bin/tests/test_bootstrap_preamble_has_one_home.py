@@ -45,7 +45,16 @@ import pytest
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
-_EXCLUDE_PREFIXES = ("state/", "archive/", "cross-repo/", "tasks/", "docs/")
+# `.git/` and `.coordinator-local/` are machinery, not source. `.git/` earns its
+# place here twice over: the artifact-claim convention names each claim DIRECTORY
+# after the artifact it claims, so `.git/coordinator-sessions/artifact-claims/`
+# holds real directories called `commit_v2.py` and `safe_commit_offer.py`. rglob
+# matches those, and opening a directory raises PermissionError on Windows — this
+# scan died on a peer's live claim rather than on anything in the repo.
+_EXCLUDE_PREFIXES = (
+    "state/", "archive/", "cross-repo/", "tasks/", "docs/",
+    ".git/", ".coordinator-local/",
+)
 
 # The canonical body, tolerant of the local name and indentation.
 _INLINE_PREAMBLE = re.compile(
@@ -84,6 +93,12 @@ def _live_python_files():
     for p in sorted(_REPO_ROOT.rglob("*.py")):
         rel = p.relative_to(_REPO_ROOT).as_posix()
         if rel.startswith(_EXCLUDE_PREFIXES):
+            continue
+        # A `*.py` match is not necessarily a file — see _EXCLUDE_PREFIXES.
+        # Belt-and-braces behind the prefix skip: a directory named `<x>.py`
+        # anywhere else would fail the same way, and this scan's job is to
+        # read source, so a non-file is simply not its subject.
+        if not p.is_file():
             continue
         yield rel, p
 

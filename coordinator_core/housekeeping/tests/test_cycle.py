@@ -30,7 +30,6 @@ from typing import Any, Dict, List
 
 import pytest
 
-from coordinator_core.claim_state import handoff_claim_dir
 from coordinator_core.housekeeping import cycle
 from coordinator_core.housekeeping.gate_clear import CONFLICT
 from coordinator_core.win_portability import no_console_creationflags
@@ -197,7 +196,8 @@ def repo(tmp_path) -> Path:
         live_dir / "2026-06-01_00003_terminal.md",
         {"handoff_id": "hnd-t1", "deployment_state": "closed"},
     )
-    # T2: terminal but held by a live claim -- must be retained.
+    # T2: terminal, and its claim is held by a live session -- since the
+    # 2026-09-04 ruling that is not a retention ground, so it archives too.
     _write_frontmatter(
         live_dir / "2026-06-02_00004_held.md",
         {"handoff_id": "hnd-t2", "deployment_state": "shipped"},
@@ -218,24 +218,10 @@ def repo(tmp_path) -> Path:
     return root
 
 
-def _held_claim_dir(repo: Path) -> Path:
-    from coordinator_core.lifecycle import git_common_dir
-
-    common_dir = git_common_dir(repo)
-    held_path = repo / "state" / "handoffs" / "2026-06-02_00004_held.md"
-    return handoff_claim_dir(common_dir, held_path)
-
-
-def test_run_clears_a_gate_archives_terminal_records_and_retains_held_claims(
-    repo, monkeypatch
-):
-    held_claim_dir = _held_claim_dir(repo)
-
-    def _fake_claim_holder_live(claim_path: str) -> bool:
-        return Path(claim_path) == held_claim_dir
-
-    monkeypatch.setattr(cycle, "cs_claim_holder_live", _fake_claim_holder_live)
-
+def test_run_clears_a_gate_and_archives_every_terminal_record(repo):
+    """Was `..._and_retains_held_claims`, renamed 2026-09-04 when the claim
+    it retained on stopped being a retention ground. T2's claim is held; T2
+    archives anyway, alongside T1."""
     result = cycle.run(str(repo), cap=10)
 
     # Hardcoded forward-slash literal, not a `relative_to()` round-trip of
@@ -244,11 +230,12 @@ def test_run_clears_a_gate_archives_terminal_records_and_retains_held_claims(
     # actually carries, so it can never catch a regression to the native-
     # separator `str(relative_to())` form on Windows.
     t1_id = "state/handoffs/2026-06-01_00003_terminal.md"
+    t2_id = "state/handoffs/2026-06-02_00004_held.md"
 
     assert result["closed"] == 1
     assert result["conflicts"] == []
     assert result["failed"] == []
-    assert set(result["archived"]) == {t1_id}
+    assert set(result["archived"]) == {t1_id, t2_id}
     assert result["live_read_count"] == 5
 
     # R1 cleared in place: ready_to_fire, gate_blocker_id gone.
@@ -268,8 +255,9 @@ def test_run_clears_a_gate_archives_terminal_records_and_retains_held_claims(
     assert not (repo / "state" / "handoffs" / "2026-06-01_00003_terminal.md").exists()
     assert (repo / "archive" / "handoffs" / "2026-06" / "2026-06-01_00003_terminal.md").exists()
 
-    # T2 retained (live claim holder) -- still live, never moved.
-    assert (repo / "state" / "handoffs" / "2026-06-02_00004_held.md").exists()
+    # T2 archived too: a held claim no longer retains a complete baton.
+    assert not (repo / "state" / "handoffs" / "2026-06-02_00004_held.md").exists()
+    assert (repo / "archive" / "handoffs" / "2026-06" / "2026-06-02_00004_held.md").exists()
 
     # Landed as exactly ONE new commit on top of the fixture baseline.
     log = subprocess.run(
@@ -294,7 +282,6 @@ def test_run_reports_gate_clear_conflict_without_losing_the_cycle(repo, monkeypa
         return ApplyResult(status=CONFLICT)
 
     monkeypatch.setattr(cycle, "apply_gate_clear", _fake_apply_gate_clear)
-    monkeypatch.setattr(cycle, "cs_claim_holder_live", lambda claim_path: False)
 
     # Hardcoded forward-slash literals (coordinator:code-reviewer F2) -- see
     # the sibling fix above; a `relative_to()` round-trip here would mirror
@@ -356,8 +343,6 @@ def test_a_worktree_dirty_terminal_record_is_retained_not_archived(repo, monkeyp
     content nobody staged, or dies on `archive_and_commit`'s own drift refusal
     at act time. On a tree ~50 sessions write to, that is a peer-safety
     property, not a tidiness one."""
-    monkeypatch.setattr(cycle, "_claim_holder_live_predicate", lambda common_dir: (lambda p, r: False))
-
     terminal = repo / "state" / "handoffs" / "2026-06-01_00003_terminal.md"
     terminal.write_text(
         terminal.read_text(encoding="utf-8") + "\nAn uncommitted edit.\n", encoding="utf-8"
@@ -371,61 +356,38 @@ def test_a_worktree_dirty_terminal_record_is_retained_not_archived(repo, monkeyp
     ]
 
 
-def test_a_record_claimed_by_a_live_session_is_retained(repo, monkeypatch):
-    """The claim dir is the primary key and the record's own `claimed_by` is
-    the fallback — mirroring `_scan_terminal`'s own Check 4. A record another
-    live session is working through is not this sweep's to file.
+def test_a_live_claimant_no_longer_retains_a_terminal_record(repo, monkeypatch):
+    """Replaces four tests that pinned the claimant rail: the `claimed_by`
+    live case, the dead-claimant case, the retired `consumed_by` spelling, and
+    the precedence between the two spellings. All four measured a rail deleted
+    on the 2026-09-04 PM ruling -- "a claim on a baton shouldn't prevent it
+    from getting archived. What matters is that the baton is complete, not the
+    liveness of the holder."
 
-    `claimed_by`, not `consumed_by`: the first cut of this rail read the
-    retired name, which NO live record carries, and this test passed anyway
-    because its fixture was authored from the same wrong field. The rail
-    could not have fired in production."""
-    monkeypatch.setattr(cycle, "_claim_holder_live_predicate", lambda common_dir: (lambda p, r: False))
-
-    consumed = repo / "state" / "handoffs" / "2026-06-01_00003_terminal.md"
+    Both spellings are seeded, both naming a session that IS live, which is
+    the strongest form of the old retain. It must archive.
+    """
+    claimed = repo / "state" / "handoffs" / "2026-06-01_00003_terminal.md"
     _write_frontmatter(
-        consumed,
+        claimed,
         {
             "handoff_id": "hnd-t1",
             "deployment_state": "closed",
             "claimed_by": "sess-alive-0001",
+            "consumed_by": "sess-alive-0001",
         },
     )
     _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "record names a claiming session")
-    monkeypatch.setattr(cycle, "resolve_live_session_ids", lambda: frozenset({"sess-alive-0001"}))
+    _git(repo, "commit", "-q", "-m", "record names a live claiming session")
 
     result = cycle.run(repo, cap=10)
 
-    assert consumed.exists(), "a record consumed by a live session must be retained"
-    assert "state/handoffs/2026-06-01_00003_terminal.md" not in [
+    assert not claimed.exists(), (
+        "a complete baton must archive whether or not its claimant is alive"
+    )
+    assert "state/handoffs/2026-06-01_00003_terminal.md" in [
         m.replace("\\", "/") for m in result["archived"]
     ]
-
-
-def test_a_dead_claiming_session_does_not_retain(repo, monkeypatch):
-    """The rail keys on LIVENESS, not on the field being present. A stale
-    `consumed_by` naming a session that exited must not wedge the record in
-    state/handoffs/ forever."""
-    monkeypatch.setattr(cycle, "_claim_holder_live_predicate", lambda common_dir: (lambda p, r: False))
-
-    consumed = repo / "state" / "handoffs" / "2026-06-01_00003_terminal.md"
-    _write_frontmatter(
-        consumed,
-        {
-            "handoff_id": "hnd-t1",
-            "deployment_state": "closed",
-            "claimed_by": "sess-long-gone",
-        },
-    )
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "record names a dead session")
-    monkeypatch.setattr(cycle, "resolve_live_session_ids", lambda: frozenset({"sess-someone-else"}))
-
-    result = cycle.run(repo, cap=10)
-
-    assert not consumed.exists(), "a dead consumer must not retain the record"
-    assert result["archived"]
 
 
 def test_an_excluded_path_is_left_for_its_own_caller(repo, monkeypatch):
@@ -434,8 +396,6 @@ def test_an_excluded_path_is_left_for_its_own_caller(repo, monkeypatch):
     transition's own handoff through its own seam, and
     `cs_chain_archive_handoff`'s source-gone-AND-destination-present check —
     which cannot tell whose move it was — reads the failure as a success."""
-    monkeypatch.setattr(cycle, "_claim_holder_live_predicate", lambda common_dir: (lambda p, r: False))
-
     owned = repo / "state" / "handoffs" / "2026-06-01_00003_terminal.md"
 
     result = cycle.run(
@@ -446,60 +406,6 @@ def test_an_excluded_path_is_left_for_its_own_caller(repo, monkeypatch):
     assert "state/handoffs/2026-06-01_00003_terminal.md" not in [
         m.replace("\\", "/") for m in result["archived"]
     ]
-
-
-def test_the_retired_consumed_by_spelling_is_still_tolerated(repo, monkeypatch):
-    """`coverage.py :: _parse_handoff_consumed_by` is dual-tolerant with
-    `claimed_by` winning, and this rail mirrors that rather than inventing a
-    second rule. Asserted separately from the `claimed_by` case so a refactor
-    that drops the retired name fails here rather than silently narrowing
-    which records the rail can see."""
-    monkeypatch.setattr(cycle, "_claim_holder_live_predicate", lambda common_dir: (lambda p, r: False))
-
-    legacy = repo / "state" / "handoffs" / "2026-06-01_00003_terminal.md"
-    _write_frontmatter(
-        legacy,
-        {
-            "handoff_id": "hnd-t1",
-            "deployment_state": "closed",
-            "consumed_by": "sess-alive-0001",
-        },
-    )
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "record uses the retired spelling")
-    monkeypatch.setattr(cycle, "resolve_live_session_ids", lambda: frozenset({"sess-alive-0001"}))
-
-    result = cycle.run(repo, cap=10)
-
-    assert legacy.exists(), "the retired spelling must still retain"
-    assert "state/handoffs/2026-06-01_00003_terminal.md" not in [
-        m.replace("\\", "/") for m in result["archived"]
-    ]
-
-
-def test_claimed_by_wins_over_the_retired_spelling(repo, monkeypatch):
-    """Precedence, not merely tolerance. A record carrying BOTH must be judged
-    on `claimed_by` — reading `consumed_by` first would retain a record whose
-    live claimant has gone."""
-    monkeypatch.setattr(cycle, "_claim_holder_live_predicate", lambda common_dir: (lambda p, r: False))
-
-    both = repo / "state" / "handoffs" / "2026-06-01_00003_terminal.md"
-    _write_frontmatter(
-        both,
-        {
-            "handoff_id": "hnd-t1",
-            "deployment_state": "closed",
-            "claimed_by": "sess-long-gone",
-            "consumed_by": "sess-alive-0001",
-        },
-    )
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "record carries both spellings")
-    monkeypatch.setattr(cycle, "resolve_live_session_ids", lambda: frozenset({"sess-alive-0001"}))
-
-    result = cycle.run(repo, cap=10)
-
-    assert not both.exists(), "claimed_by names a dead session -- consumed_by must not rescue it"
 
 
 def test_an_excluded_repo_relative_path_is_resolved_against_the_worktree(repo, monkeypatch, tmp_path):
@@ -524,8 +430,6 @@ def test_a_raising_close_pass_still_lets_the_sweep_run_and_says_so(repo, monkeyp
     them: a close pass that raises must not eat the sweep, and it must not
     vanish either. Without `close_error` a caller cannot tell "nothing needed
     closing" from "the close pass died" — both render as closed=0."""
-    monkeypatch.setattr(cycle, "_claim_holder_live_predicate", lambda common_dir: (lambda p, r: False))
-
     def _boom(record, resolver):
         raise RuntimeError("gate evaluation exploded")
 
@@ -541,8 +445,6 @@ def test_a_raising_close_pass_still_lets_the_sweep_run_and_says_so(repo, monkeyp
 def test_a_clean_close_pass_reports_no_close_error(repo, monkeypatch):
     """`close_error` is None on a clean pass, never the empty-string/absent
     shape that would read as falsy-but-present to a caller branching on it."""
-    monkeypatch.setattr(cycle, "_claim_holder_live_predicate", lambda common_dir: (lambda p, r: False))
-
     result = cycle.run(repo, cap=10)
 
     assert result["close_error"] is None

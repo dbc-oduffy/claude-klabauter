@@ -109,3 +109,99 @@ class TestJSpinoffPlanSizingDispositions:
             j for j in decision["judgment_points"] if j["id"] == "j-spinoff-plan-sizing"
         )
         assert jp["recommendation"] is None
+
+
+class TestJSpinoffPlanSizingAnswerReachesTheMint:
+    """The half that did not exist until 2026-09-04.
+
+    `associate` collected the plan id and sizing slug as `decision_note` prose
+    and nothing read it, so the minted spinoff carried the association
+    nowhere. Reported from example-cockpit-repo via DoE-claude. The answer now
+    travels as STRUCTURED keys into `governing_plan` / `sizing_object` -- not
+    into `origin_plan_id`, which is the backward-looking progenitor rung this
+    judgment point's own comment already declares itself distinct from.
+    """
+
+    def _d1c_args(self, decision):
+        d1c = [d for d in decision["directives"] if d["id"] == "d1c"]
+        return d1c[0]["args"] if d1c else None
+
+    def test_associate_stamps_governing_plan_onto_the_mint(self, tmp_path):
+        decision = ba.brief(
+            "spinoff",
+            "a-fresh-mint-slug-c7",
+            repo_root=tmp_path,
+            decisions={
+                "j-spinoff-plan-sizing": {
+                    "disposition": "associate",
+                    "governing_plan": "docs/plans/2026-09-04-some-plan.md",
+                    "decision_note": "the PM spun this chunk out of that plan",
+                }
+            },
+        ).decision_object
+        args = self._d1c_args(decision)
+        assert args is not None, decision["directives"]
+        assert "--governing-plan=docs/plans/2026-09-04-some-plan.md" in args
+
+    def test_associate_stamps_sizing_object_onto_the_mint(self, tmp_path):
+        decision = ba.brief(
+            "spinoff",
+            "a-fresh-mint-slug-c7",
+            repo_root=tmp_path,
+            decisions={
+                "j-spinoff-plan-sizing": {
+                    "disposition": "associate",
+                    "sizing_object": "state/sizings/2026-09-04-some-ask.yaml",
+                }
+            },
+        ).decision_object
+        args = self._d1c_args(decision)
+        assert args is not None, decision["directives"]
+        assert "--sizing-object=state/sizings/2026-09-04-some-ask.yaml" in args
+
+    def test_none_disposition_stamps_nothing(self, tmp_path):
+        """The cheap true-absence answer must not mint a stamp directive."""
+        decision = ba.brief(
+            "spinoff",
+            "a-fresh-mint-slug-c7",
+            repo_root=tmp_path,
+            decisions={"j-spinoff-plan-sizing": {"disposition": "none"}},
+        ).decision_object
+        assert self._d1c_args(decision) is None
+
+    def test_associate_naming_nothing_fails_loud(self, tmp_path):
+        """`associate` with neither key is the `none` answer wearing the wrong
+        label -- refused rather than recorded as an association nobody made."""
+        with pytest.raises(ValueError, match="at least one of governing_plan"):
+            ba.brief(
+                "spinoff",
+                "a-fresh-mint-slug-c7",
+                repo_root=tmp_path,
+                decisions={
+                    "j-spinoff-plan-sizing": {
+                        "disposition": "associate",
+                        "decision_note": "belongs to the thing we discussed",
+                    }
+                },
+            )
+
+    def test_associate_on_a_handoff_kind_fails_loud(self, tmp_path):
+        """A continuation carries governing_plan/sizing forward from its
+        predecessor; an association answered here would contradict that
+        silently, so it is refused rather than ignored."""
+        artifact = _write_artifact(
+            tmp_path / "state" / "handoffs" / "h1.md",
+            ["deliverable_id: DEL-C7-HANDOFF", "initiative: init-c7"],
+        )
+        with pytest.raises(ValueError, match="spinoff-mint"):
+            ba.brief(
+                "handoff",
+                str(artifact),
+                repo_root=tmp_path,
+                decisions={
+                    "j-spinoff-plan-sizing": {
+                        "disposition": "associate",
+                        "governing_plan": "docs/plans/2026-09-04-some-plan.md",
+                    }
+                },
+            )

@@ -62,8 +62,6 @@ from coordinator_core.ops.ceremony.git_native import (
 )
 from coordinator_core.ops.fleet.archive_terminal_handoffs import (
     _REASON_DEST_CONFLICT,
-    _SCAN_REASON_CONSUMED_BY_LIVE,
-    _SCAN_REASON_LIVE_CLAIM,
     _SCAN_REASON_NOT_TERMINAL,
     _SCAN_REASON_WORKTREE_DIRTY,
     _dirty_handoff_relpaths,
@@ -75,19 +73,15 @@ from coordinator_core.ops.fleet.archive_terminal_handoffs import (
     apply_sweep,
     collect_live_handoff_paths,
     handoff_archive_dest,
-    handoff_claim_dir,
     plan_sweep,
     rel_id,
 )
+from coordinator_core.claim_state import handoff_claim_dir
 from coordinator_core.win_portability import no_console_creationflags
 
 # Real-git spawn is load-bearing (see module docstring) — same convention as
 # every other real-git-fixture module in this directory.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
-
-_CS_CLAIM_HOLDER_LIVE_PATCH = (
-    "coordinator_core.ops.fleet.archive_terminal_handoffs.cs_claim_holder_live"
-)
 
 _GIT_ENV = {
     **os.environ,
@@ -200,23 +194,29 @@ def test_ac2_continued_predecessor_with_no_live_child_archives(repo: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_ac3_live_claim_refusal_is_named_in_skipped(repo: Path):
+def test_a_held_claim_no_longer_retains_a_terminal_baton(repo: Path):
+    """Was `test_ac3_live_claim_refusal_is_named_in_skipped`, inverted
+    2026-09-04.
+
+    Check 4 was deleted on the PM ruling that "a claim on a baton shouldn't
+    prevent it from getting archived. What matters is that the baton is
+    complete, not the liveness of the holder." The claim dir seeded here is
+    real, which is exactly the shape the old rail refused: a session that
+    finished its work and has not yet exited. It must now archive.
+    """
     name = "2026-01-02-live-claim.md"
     handoff_path = _seed(repo, name, "status: claimed")
     cid = _cid(name)
     common_dir = _common_dir(repo)
 
-    claim_dir = handoff_claim_dir(common_dir, handoff_path)
-    claim_dir.mkdir(parents=True, exist_ok=True)
+    handoff_claim_dir(common_dir, handoff_path).mkdir(parents=True, exist_ok=True)
 
-    with patch(_CS_CLAIM_HOLDER_LIVE_PATCH, return_value=True):
-        act = _run(_handle_act("already-terminal", repo, common_dir, [cid], cap=10))
+    act = _run(_handle_act("already-terminal", repo, common_dir, [cid], cap=10))
 
     acted_ids = [item["id"] for item in act.get("acted", [])]
-    assert cid not in acted_ids, f"a live claim must retain, not archive; got {act!r}"
-    skipped = [s for s in act.get("skipped", []) if s.get("id") == cid]
-    assert skipped, f"live-claim refusal must appear in skipped[], not be silently dropped; got {act!r}"
-    assert skipped[0].get("reason"), f"skipped entry must carry a named reason; got {skipped!r}"
+    assert cid in acted_ids, (
+        f"a terminal baton whose claim is still held must archive; got {act!r}"
+    )
 
 
 def test_ac3_unresolvable_shipped_in_refusal_is_named_in_skipped(repo: Path):
@@ -809,32 +809,37 @@ def test_a_live_forked_from_child_no_longer_retains_the_parent(repo: Path):
     )
 
 
-def test_ac2_live_claim_rail_names_itself(repo: Path):
+def test_a_held_claim_dir_no_longer_retains_at_scan(repo: Path):
+    """Check 4's claim-dir arm, inverted 2026-09-04 with the rail it pinned.
+
+    A refusal reason of None means the record was NOT refused: it survives the
+    scan and is archivable, which is the point.
+    """
     name = "2026-02-05-claimed.md"
     handoff_path = _seed(repo, name, "status: claimed")
     handoff_claim_dir(_common_dir(repo), handoff_path).mkdir(parents=True, exist_ok=True)
 
-    with patch(_CS_CLAIM_HOLDER_LIVE_PATCH, return_value=True):
-        reason = _scan_reasons(repo).get(_cid(name))
+    reason = _scan_reasons(repo).get(_cid(name))
 
-    assert reason is not None, "a live claim holder must be named, not dropped"
-    assert reason == _SCAN_REASON_LIVE_CLAIM, reason
+    assert reason is None, (
+        f"a held claim dir must no longer retain a terminal baton; got {reason!r}"
+    )
 
 
-def test_ac2_consumed_by_live_rail_names_itself(repo: Path):
+def test_a_consumed_by_naming_a_live_session_no_longer_retains(repo: Path):
+    """Check 4's consumed_by fallback arm, inverted 2026-09-04.
+
+    No liveness patch is needed to prove the point any more: the arm that read
+    `consumed_by` against the live-session set is gone, so the frontmatter key
+    is inert here whatever the registry says.
+    """
     name = "2026-02-06-consumed.md"
     _seed(repo, name, 'status: claimed\nconsumed_by: "sid-alive-0001"')
 
-    with patch(
-        "coordinator_core.ops.fleet.archive_terminal_handoffs.resolve_live_session_ids",
-        return_value={"sid-alive-0001"},
-    ):
-        reason = _scan_reasons(repo).get(_cid(name))
+    reason = _scan_reasons(repo).get(_cid(name))
 
-    assert reason is not None, "a consumed_by naming a live session must be named, not dropped"
-    assert reason.startswith(_SCAN_REASON_CONSUMED_BY_LIVE), reason
-    assert "sid-alive-0001" in reason, (
-        f"the reason must name the live session that retained it; got {reason!r}"
+    assert reason is None, (
+        f"consumed_by naming a live session must no longer retain; got {reason!r}"
     )
 
 
@@ -892,8 +897,6 @@ def test_ac4_scan_reasons_never_reach_the_cockpit_wire(repo: Path):
     for scan_reason in (
         _SCAN_REASON_NOT_TERMINAL,
         _SCAN_REASON_WORKTREE_DIRTY,
-            _SCAN_REASON_LIVE_CLAIM,
-        _SCAN_REASON_CONSUMED_BY_LIVE,
     ):
         assert not any(r.startswith(scan_reason) for r in wire_reasons), (
             f"scan reason {scan_reason!r} reached the wire; got {act!r}"
@@ -1179,17 +1182,20 @@ def test_c4_closed_fall_through_enumeration_never_refuses(tmp_path: Path, block:
     assert _prefilter_scan_disqualifies(p) is None
 
 
-def test_ac11_unconditional_legs_are_not_paid_when_nothing_survives(repo: Path):
-    """AC-11: `build_reverse_edge_index` and `resolve_live_session_ids` are
-    DEFERRED until a candidate survives classification -- 29.9ms of the
-    measured 243.8ms that an all-refused pass must not pay.
+def test_ac11_the_dirty_rail_is_not_paid_when_nothing_survives(repo: Path):
+    """AC-11: the costly leg after classification is DEFERRED until a
+    candidate survives -- an all-refused pass must not pay it.
 
-    The implementation shipped with C3's `if not survivors: return` and no
-    assertion, so the laziness was real and unguarded: any future reorder
-    that hoists either leg back above the short-circuit reintroduces the
-    cost silently, with every existing test still green. Mutation-tested
-    against itself below -- a fixture that DOES produce a survivor must
-    reach both legs, or this test would pass over a scan that never ran.
+    The two legs this originally guarded are both gone: the reverse-edge
+    index build went with Check 3 on 2026-08-28, and `resolve_live_session_ids`
+    went with Check 4 on 2026-09-04. What is left after classification is the
+    worktree-dirty rail, which is now the only thing the `if not survivors:
+    return` short-circuit saves -- and the only one that costs a git spawn.
+    A reorder that hoists it back above the short-circuit reintroduces that
+    cost silently, with every other test still green.
+
+    Mutation-tested against itself below: a fixture that DOES produce a
+    survivor must reach the rail, or the negative arm is vacuous.
     """
     non_terminal = "2026-06-01-not-terminal.md"
     _seed(repo, non_terminal, "status: open\ndeployment_state: ready_to_fire")
@@ -1200,56 +1206,36 @@ def test_ac11_unconditional_legs_are_not_paid_when_nothing_survives(repo: Path):
     # to do with whether the leg was reached.
     import coordinator_core.ops.fleet.archive_terminal_handoffs as _mod
 
-    real_index = _mod.build_reverse_edge_index
-    real_sids = _mod.resolve_live_session_ids
+    real_dirty = _mod._dirty_handoff_relpaths
     reached: list = []
 
-    def _spy_index(*a, **k):
-        reached.append("index")
-        return real_index(*a, **k)
+    def _spy_dirty(*a, **k):
+        reached.append("dirty")
+        return real_dirty(*a, **k)
 
-    def _spy_sids(*a, **k):
-        reached.append("sids")
-        return real_sids(*a, **k)
-
-    with patch.object(_mod, "build_reverse_edge_index", _spy_index), patch.object(
-        _mod, "resolve_live_session_ids", _spy_sids
-    ):
+    with patch.object(_mod, "_dirty_handoff_relpaths", _spy_dirty):
         _run(plan_sweep(repo, common_dir, cap=50))
 
     assert reached == [], (
-        f"an all-refused pass must pay neither unconditional leg; reached {reached!r}"
+        f"an all-refused pass must not reach the dirty rail; reached {reached!r}"
     )
 
     # The negative arm is only meaningful if the positive one fires: seed a
-    # genuinely archivable record and confirm both legs ARE reached.
-    # Same shape test_ac2_continued_predecessor_with_no_live_child_archives
-    # already proves reaches the act path -- a bare `shipped` does NOT (its
-    # shipped_in resolvability gate refuses it), which this arm caught.
+    # genuinely archivable record and confirm the rail IS reached. A bare
+    # `shipped` does NOT survive (its shipped_in resolvability gate refuses
+    # it), which is why this uses a `continued` record.
     _seed(
         repo,
         "2026-06-02-terminal.md",
         "status: claimed\ndeployment_state: continued\ncontinued_into: hnd-child-1",
     )
     reached.clear()
-    with patch.object(_mod, "build_reverse_edge_index", _spy_index), patch.object(
-        _mod, "resolve_live_session_ids", _spy_sids
-    ):
+    with patch.object(_mod, "_dirty_handoff_relpaths", _spy_dirty):
         _run(plan_sweep(repo, common_dir, cap=50))
 
-    # One leg, not two, since 2026-08-28: the reverse-edge index build was
-    # deleted with Check 3 — it existed only to answer "does anything still
-    # point at this node?", which nothing asks any more. The `index` spy is
-    # kept above so this test still fails loudly if a future change
-    # reintroduces that build; `resolve_live_session_ids` is now the only
-    # unconditional leg whose laziness this test guards.
-    assert "sids" in reached, (
-        f"a surviving candidate must reach the live-session leg, else the "
-        f"negative arm above is vacuous; reached {reached!r}"
-    )
-    assert "index" not in reached, (
-        f"the reverse-edge index build was deleted with Check 3; something "
-        f"has reintroduced a corpus-wide edge index; reached {reached!r}"
+    assert reached == ["dirty"], (
+        f"a surviving candidate must reach the dirty rail exactly once, else "
+        f"the negative arm above is vacuous; reached {reached!r}"
     )
 
 
@@ -1399,6 +1385,15 @@ def test_ac6_the_cockpit_wire_envelope_key_set_is_unchanged(repo: Path):
         },
         repo_root=common_dir,
     ))
+    # `_scope_touch_paths` is an ipc-internal declaration, not a wire key:
+    # `ipc.py :: _record_declared_writes` POPS it off the result before the
+    # envelope is serialised. This test calls `_handler` directly, so it sees
+    # the pre-strip dict and must strip the same key the dispatcher does --
+    # otherwise it reds whenever the act path actually moves something, which
+    # is every run that does its job. Asserting it into `_ENVELOPE_KEYS`
+    # instead would be the wrong repair: it would write an internal key into
+    # the frozen producer contract.
+    act.pop("_scope_touch_paths", None)
     assert set(act) == _ENVELOPE_KEYS, (
         f"dry_run:false envelope drifted from the producer contract; "
         f"missing={_ENVELOPE_KEYS - set(act)!r} "
@@ -1435,99 +1430,31 @@ def test_ac6_cap_is_still_a_required_param_on_both_arms(repo: Path):
 
 
 # ---------------------------------------------------------------------------
-# AC-5 -- every refusal is preserved across C3's reorder, asserted as the
-# three byte-identical comparisons the criterion actually names.
+# AC-5 -- reason precedence between the classification and worktree-dirty
+# rails.
 #
-# The "before" side is not on disk, which is not the same fact as there being
-# no oracle: `21f2e4539^` is C3's own parent and git holds that module
-# permanently. It loads and runs against the same fixture with an identical
-# `_scan_terminal` signature, so the comparison the criterion names is
-# runnable after the fact -- it just has to be reconstructed rather than read.
+# Three tests here compared this module's scan, record for record, against the
+# module as it stood at `21f2e4539^` (C3's parent), to prove C3's reorder
+# changed nothing but the reason on a both-rails record. They were DELETED on
+# 2026-09-04. That baseline stopped being an oracle the moment the sweep's
+# criterion started changing on purpose: the PM retired Check 3 on 2026-08-28
+# and Check 4 on 2026-09-04, so the pre-reorder module now refuses records this
+# one deliberately archives, and all three comparisons had been red since the
+# first of those rulings -- unnoticed, because the module is `cadence`-marked
+# and the fast tier never runs it. A test that fails whenever a ruling lands is
+# measuring the ruling, not a regression.
+#
+# What survives is the property C3 actually introduced, and it needs no
+# historical side to assert: classification runs FIRST, so a record refused by
+# both rails reports `not-terminal`, never `worktree-dirty`.
 # ---------------------------------------------------------------------------
 
 
-#: C3 ("Classify handoffs in-memory before dirt-check; scope git query to
-#: survivors"). Its parent is the last commit whose `_scan_terminal` still
-#: dirty-checked before classifying -- the "before" side of AC-5's comparison.
-_C3_REORDER_COMMIT = "21f2e4539"
-
-
-def _load_pre_reorder_module(tmp_path: Path):
-    """Materialise `archive_terminal_handoffs.py` as it stood immediately
-    before C3's reorder, and import it under its own module name.
-
-    Loaded from git rather than vendored as a fixture copy on purpose: a
-    checked-in copy is a snapshot someone has to remember to keep honest,
-    while `21f2e4539^` cannot drift.
-
-    REGISTRY RESTORATION IS LOAD-BEARING, not tidiness. Executing this module
-    re-runs its `@register_op("fleet.archive_completed_handoffs")` side
-    effect, which REBINDS the live op key in `ipc._REGISTRY` to the
-    pre-reorder handler process-wide. Left in place, every later real
-    dispatch in the session resolves to a stale handler that no other test's
-    monkeypatch can reach — which is exactly how this first landed, turning
-    `test_ac4_sync_handler_still_dispatches_and_honors_per_op_timeout` red
-    under a shuffled test order and nowhere else.
-    """
-    import importlib.util
-    import sys
-
-    import coordinator_core.ipc as _ipc
-
-    shown = subprocess.run(
-        ["git", "show", f"{_C3_REORDER_COMMIT}^:coordinator_core/ops/fleet/archive_terminal_handoffs.py"],
-        cwd=str(Path(__file__).resolve().parents[4]),
-        capture_output=True, text=True, timeout=30,
-        stdin=subprocess.DEVNULL, **no_console_creationflags(),
-    )
-    assert shown.returncode == 0, (
-        f"the pre-reorder module must be retrievable from git; "
-        f"`git show {_C3_REORDER_COMMIT}^:...` failed: {shown.stderr!r}"
-    )
-    path = tmp_path / "pre_reorder_atho.py"
-    path.write_text(shown.stdout, encoding="utf-8")
-    spec = importlib.util.spec_from_file_location("pre_reorder_atho", str(path))
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["pre_reorder_atho"] = module
-    registry_before = dict(_ipc._REGISTRY)
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.modules.pop("pre_reorder_atho", None)
-        _ipc._REGISTRY.clear()
-        _ipc._REGISTRY.update(registry_before)
-    return module
-
-
-def test_loading_the_pre_reorder_module_leaves_the_live_op_registry_intact(tmp_path):
-    """Guards the loader above, not the sweep: the restoration is what keeps
-    these AC-5 comparisons from silently breaking an unrelated test that
-    dispatches the real op."""
-    import coordinator_core.ipc as _ipc
-
-    key = "fleet.archive_completed_handoffs"
-    before = _ipc._REGISTRY.get(key)
-    _load_pre_reorder_module(tmp_path)
-    assert _ipc._REGISTRY.get(key) is before, (
-        "loading the pre-reorder module must not leave its own handler bound "
-        "to the live op key"
-    )
-
-
 def _seed_every_rail(repo: Path) -> None:
-    """One fixture reaching every rail AC-5 cares about, including the record
-    that is refused by BOTH the worktree-dirty rail and classification --
-    the single class whose reason the reorder is designed to change."""
+    """One fixture reaching every rail, including the record refused by BOTH
+    the worktree-dirty rail and classification."""
     _seed(repo, "2026-07-01-archivable.md", "status: claimed")
     _seed(repo, "2026-07-02-open.md", "status: open\ndeployment_state: ready_to_fire")
-    parent = "2026-07-03-retained-parent.md"
-    _seed(repo, parent, "status: claimed\ndeployment_state: continued")
-    _seed(
-        repo, "2026-07-04-live-child.md",
-        f'status: open\npredecessor: "none"\nforked_from: "{parent}"\n'
-        'deployment_state: in_flight',
-    )
     dirty = _seed(repo, "2026-07-05-dirty.md", "status: claimed")
     dirty.write_text(dirty.read_text(encoding="utf-8") + "edit\n", encoding="utf-8")
     both = _seed(
@@ -1537,106 +1464,69 @@ def _seed_every_rail(repo: Path) -> None:
     both.write_text(both.read_text(encoding="utf-8") + "edit\n", encoding="utf-8")
 
 
-def _scan_both_sides(repo: Path, tmp_path: Path):
-    """Run pre-reorder and post-reorder `_scan_terminal` over the SAME
-    fixture; return `(pre, post)` as `{refused: {id: reason}, survivors: [id]}`."""
-    import inspect
+def test_ac5_classification_outranks_the_dirty_rail_on_a_both_rails_record(repo: Path):
+    """The designed precedence: a record that is BOTH worktree-dirty and
+    non-terminal is refused as `not-terminal`, because classification runs
+    over the whole corpus before the dirty rail sees any survivor.
 
-    from coordinator_core.ops.fleet import archive_terminal_handoffs as post_mod
-
-    pre_mod = _load_pre_reorder_module(tmp_path)
-    common_dir = _common_dir(repo)
-
-    sides = []
-    for module in (pre_mod, post_mod):
-        refused: "list[dict]" = []
-        survivors = module._scan_terminal(repo, common_dir, skipped=refused)
-        if inspect.iscoroutine(survivors):
-            survivors = asyncio.run(survivors)
-        sides.append({
-            "refused": {item["id"]: item["reason"] for item in refused},
-            "survivors": sorted(rel_id(entry[0], repo) for entry in survivors),
-        })
-    return sides[0], sides[1]
-
-
-def test_ac5_refused_id_set_is_byte_identical_across_the_reorder(repo, tmp_path):
-    """AC-5 (1): the SET OF REFUSED IDS is byte-identical before and after
-    the reorder over the same fixture -- genuinely invariant. Classifying
-    first changes WHICH rail names a record, never WHETHER it is refused.
+    Asserted with its complement -- a record that is dirty and otherwise
+    TERMINAL still reports `worktree-dirty` -- so the test cannot pass against
+    an implementation that simply stopped running the dirty rail at all.
     """
     _seed_every_rail(repo)
-    pre, post = _scan_both_sides(repo, tmp_path)
+    refused = _scan_reasons(repo)
 
-    assert set(pre["refused"]) == set(post["refused"]), (
-        "C3's reorder must refuse exactly the same records; "
-        f"only-before={sorted(set(pre['refused']) - set(post['refused']))!r} "
-        f"only-after={sorted(set(post['refused']) - set(pre['refused']))!r}"
+    both_rails = refused.get(_cid("2026-07-06-dirty-and-non-terminal.md"))
+    assert (both_rails or "").startswith(_SCAN_REASON_NOT_TERMINAL), (
+        f"classification runs first, so the both-rails record must be filed "
+        f"as not-terminal; got {both_rails!r}"
     )
-    assert pre["refused"], "fixture sanity: the fixture must refuse something"
 
-
-def test_ac5_survivor_set_is_byte_identical_across_the_reorder(repo, tmp_path):
-    """AC-5 (3): the SURVIVOR SET is byte-identical -- the property that
-    actually matters, because it is what the sweep goes on to archive."""
-    _seed_every_rail(repo)
-    pre, post = _scan_both_sides(repo, tmp_path)
-
-    assert pre["survivors"] == post["survivors"], (
-        f"the reorder must not change what survives classification; "
-        f"before={pre['survivors']!r} after={post['survivors']!r}"
+    dirty_only = refused.get(_cid("2026-07-05-dirty.md"))
+    assert (dirty_only or "").startswith(_SCAN_REASON_WORKTREE_DIRTY), (
+        f"a terminal-but-dirty record must still reach and be refused by the "
+        f"dirty rail; got {dirty_only!r}"
     )
-    assert post["survivors"], (
-        "fixture sanity: something must survive, else this comparison is "
-        "vacuously true against two empty sets"
+
+    assert _cid("2026-07-01-archivable.md") not in refused, (
+        "fixture sanity: a clean terminal record must survive, else both "
+        "assertions above hold vacuously over a scan that refused everything"
     )
 
 
-def test_ac5_reasons_are_byte_identical_except_the_documented_both_rails_class(
-    repo, tmp_path
-):
-    """AC-5 (2): the REASON is byte-identical for every record refused by
-    exactly one rail. The single documented exception is a record refused by
-    BOTH the worktree-dirty rail and classification, which now reports
-    `not-terminal: ...` instead of `worktree-dirty` -- categorical for that
-    class, not merely relabeled for some instances.
+def test_terminal_but_retained_gets_its_own_refusal_family_not_the_bulk_one(repo: Path):
+    """A terminal record retained fail-closed must NOT be filed as `not-terminal`.
 
-    Asserted as an exact partition rather than a diff budget: a second
-    changed-reason shape would pass a "at most one diff" check and is
-    precisely the drift this criterion exists to catch.
+    Both verdicts pinned in one test, because the whole value of the split is
+    that the two look different from outside. `sweep-terminal-handoffs.py`'s
+    census groups by the reason's family prefix and enumerates every family
+    except the bulk one; filed under `not-terminal` this record was one tick
+    on a count of the entire live corpus, which is how two example-cockpit-repo
+    sessions concluded nothing was archivable and re-ran the sweep to check.
     """
-    _seed_every_rail(repo)
-    pre, post = _scan_both_sides(repo, tmp_path)
-
-    diffs = {
-        rid: (pre["refused"].get(rid), post["refused"].get(rid))
-        for rid in set(pre["refused"]) | set(post["refused"])
-        if pre["refused"].get(rid) != post["refused"].get(rid)
-    }
-
-    unexplained = {
-        rid: pair for rid, pair in diffs.items()
-        if not (
-            (pair[0] or "").startswith(_SCAN_REASON_WORKTREE_DIRTY)
-            and (pair[1] or "").startswith(_SCAN_REASON_NOT_TERMINAL)
-        )
-    }
-    assert not unexplained, (
-        "the ONLY reason change the reorder is designed to produce is "
-        "worktree-dirty -> not-terminal for a record refused by both rails; "
-        f"got {unexplained!r}"
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import (
+        _SCAN_REASON_NOT_TERMINAL,
+        _SCAN_REASON_SHIPPED_IN_UNRESOLVABLE,
+        _classify_branch,
     )
 
-    both_rails_id = _cid("2026-07-06-dirty-and-non-terminal.md")
-    assert both_rails_id in diffs, (
-        "fixture sanity: the both-rails record must actually change reason, "
-        "else the exception clause above is vacuous and would pass against a "
-        f"reorder that changed nothing at all; diffs={diffs!r}"
+    def _family(reason: str) -> str:
+        return reason.split(":", 1)[0]
+
+    unresolvable = {
+        "status": "claimed",
+        "deployment_state": "shipped",
+        "shipped_in": "0" * 40,
+    }
+    qualifies, reason, _label, _b = _classify_branch(unresolvable, {})
+    assert qualifies is False
+    assert _family(reason) == _SCAN_REASON_SHIPPED_IN_UNRESOLVABLE, (
+        f"a terminal-but-retained record must carry its own family; got {reason!r}"
     )
 
-    # Categorical for the class, not merely relabeled for some instances:
-    # `worktree-dirty` must disappear from the both-rails record's census
-    # entirely rather than surviving alongside the new reason.
-    assert not (post["refused"][both_rails_id] or "").startswith(
-        _SCAN_REASON_WORKTREE_DIRTY
-    ), post["refused"][both_rails_id]
+    genuinely_open = {"status": "open", "deployment_state": "in_flight"}
+    qualifies, reason, _label, _b = _classify_branch(genuinely_open, {})
+    assert qualifies is False
+    assert _family(reason) == _SCAN_REASON_NOT_TERMINAL, (
+        f"a genuinely non-terminal record must stay in the bulk family; got {reason!r}"
+    )

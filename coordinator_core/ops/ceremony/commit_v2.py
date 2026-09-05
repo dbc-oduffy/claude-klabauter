@@ -713,6 +713,36 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         worktree_root, list(raw_paths) + list(raw_deleted)
     )
 
+    # Same post-commit region, same negative spec. This op is one of the only
+    # two commit shapes `block_subagent_commit` admits (the other is a plain
+    # scoped `git commit`), so a dispatched committer reaches history through
+    # here or not at all -- and until this call existed, neither shape wrote a
+    # ledger row. `apply_base.record_ledger_entry`'s own docstring still names
+    # `ceremony.scoped_git_commit` as the route that carried this; that op went
+    # over the brightline and its module is gone, which is what left every
+    # `dispatch_emit` commit phase unbilled.
+    #
+    # Budget: ~15-31ms process time warm, measured against this handler's
+    # 500ms end-to-end bar -- `_ledger_kind_and_weight` caches to zero after
+    # the first call and `resolve_owner_handoff_id` is the residual. Zero
+    # spawns. Local import for the module-cycle reason the two sibling call
+    # sites (`git_native.commit_authored_content`, `apply._commit_one`) each
+    # document at their own.
+    from coordinator_core.contract.apply_base import record_ledger_entry
+    from coordinator_core.git.commit_trailers import extract_closure_facts_from_text
+
+    # `message` post-`apply_missing_trailers`: the raw text that became this
+    # commit object, read line-anchored rather than through git's parsed
+    # trailer block, so a demoted `Closes:` still records (C1's contract).
+    closes, reverts_sha = extract_closure_facts_from_text(message)
+    record_ledger_entry(
+        worktree_root,
+        list(raw_paths) + list(raw_deleted),
+        outcome.sha,
+        closes=closes,
+        reverts_sha=reverts_sha,
+    )
+
     return {
         "committed": True,
         "sha": outcome.sha,

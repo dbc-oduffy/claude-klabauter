@@ -20,6 +20,8 @@ from typing import List, Optional
 
 import pytest
 
+from coordinator_core.locked_write import CONTENDED_LOCK_WAIT_ENV
+
 # Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
 # cadence suite is the separate threshold ruling, not this declaration.
 pytestmark = [
@@ -28,6 +30,16 @@ pytestmark = [
 ]
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
+
+# `percolate` is not on sys.path by default — same rung `percolate-push.py` itself
+# adds at `_bootstrap_engine` time (`_BIN_DIR.parent / "lib"`). Needed here at
+# import time, before `_load_module()` runs, so the withhold assertions below can
+# reference the owning constant rather than a retyped literal.
+_LIB_DIR = _BIN_DIR.parent / "lib"
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+
+from percolate.wire_contract import COORDINATOR_ALLOW_PERCOLATE_QUEUE_ENV  # noqa: E402
 
 
 def _load_module():
@@ -436,8 +448,8 @@ def test_held_dest_denies_at_once_naming_holder_not_dirty_tree_usage(tmp_path, m
     assert "held by another round" in err
     assert "percolate-push:alpha" in err or "another round" in err
     assert "docs/reference/percolate-lock-contention.md" in err
-    assert "COORDINATOR_ALLOW_PERCOLATE_QUEUE" not in err
-    assert "COORDINATOR_LOCK_WAIT_SECS" not in err
+    assert COORDINATOR_ALLOW_PERCOLATE_QUEUE_ENV not in err
+    assert CONTENDED_LOCK_WAIT_ENV not in err
     assert "Re-run" not in err
     assert "retry" not in err
     assert "try again" not in err

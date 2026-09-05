@@ -4,7 +4,8 @@ surface over `compute_grouping_digest` (plan.tasks.grouping_digest).
 
 Purpose: close the gap the 2026-07-29 grouping-approval contract otherwise
 leaves open. `plan_tasks_mutate.py`'s `resolve` verb refuses to close a
-task-spine row into a `defer`/`ruled_out` grouping unless that grouping's
+task-spine row into a PM-gated grouping (`spun_off`/`defer`/`ruled_out`
+on a governed plan) unless that grouping's
 `grouping_approvals` block reads `status: approved` AND carries a `digest`
 matching a fresh `compute_grouping_digest` recomputation over the membership
 the write is about to produce (see that module's docstring, and
@@ -97,6 +98,7 @@ from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.frontmatter.schema_validate import (
     _PLAN_TASKS_GROUPING_BY_DISPOSITION,
+    _PLAN_TASKS_GROUPING_ORDER,
     compute_grouping_digest,
 )
 from coordinator_core.ipc import register_op
@@ -186,7 +188,7 @@ def compute_prospective_grouping_digest(
     applied to the plan's current spine.
 
     `source` is the plan file's full text (frontmatter + body). `grouping` is
-    one of `do` / `defer` / `ruled_out`. `cut` is the prospective-close set —
+    one member of `_PLAN_TASKS_GROUPING_ORDER`. `cut` is the prospective-close set —
     see `_apply_cut`'s docstring for its shape and fail-loud conditions.
     Raises `GroupingDigestError` on an absent/malformed spine or an
     unrecognized `cut` entry, and `ValueError` (from `compute_grouping_digest`
@@ -235,7 +237,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     Required params:
         plan_path (str)  — absolute or repo-relative path to the plan file
                             (must resolve under <worktree>/docs/plans/).
-        grouping  (str)  — one of: do | defer | ruled_out.
+        grouping  (str)  — one member of `_PLAN_TASKS_GROUPING_ORDER`.
         cut       (list) — `[{"id": ..., "disposition": ...}, ...]`, the
                             prospective-close set. Pass `[]` explicitly to
                             compute over the spine's CURRENT membership.
@@ -252,7 +254,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not plan_path:
         return _err("plan.tasks.grouping_digest: 'plan_path' is required")
     if not grouping:
-        return _err("plan.tasks.grouping_digest: 'grouping' is required (do|defer|ruled_out)")
+        return _err(
+            "plan.tasks.grouping_digest: 'grouping' is required (one of "
+            + "|".join(_PLAN_TASKS_GROUPING_ORDER)
+            + ")"
+        )
     if cut is None or not isinstance(cut, list):
         return _err(
             "plan.tasks.grouping_digest: 'cut' is required (a list; pass [] to "
@@ -343,7 +349,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         prog="plan-tasks-grouping-digest",
         description=(
             "Print the sha256 membership digest for a plan task-spine grouping "
-            "(do|defer|ruled_out), computed over the membership a prospective "
+            "(" + "|".join(_PLAN_TASKS_GROUPING_ORDER) + "), computed over the membership a prospective "
             "close (--cut) would produce. Read-only: never writes the plan. "
             "This is the value of a hash over a named set — it is not an "
             "approval, and having it does not mean a cut is approved."
@@ -351,7 +357,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--plan", required=True, help="path to the plan file")
     parser.add_argument(
-        "--grouping", required=True, choices=["do", "defer", "ruled_out"], help="grouping name"
+        # DERIVED from `_PLAN_TASKS_GROUPING_ORDER`, never a literal list. A
+        # hand-written copy is what desynced this surface from the write gate
+        # for two months: `spun_off` joined the gate on 2026-08-30 (plan.schema.json
+        # 2.13.0 vendored `grouping_approvals.spun_off`) and this list did not
+        # follow, so the one value an author needed to record a PM-assented
+        # spun_off cut could not be computed at all — argparse exited 2 before
+        # the handler, which already accepted the grouping, ever ran.
+        "--grouping",
+        required=True,
+        choices=list(_PLAN_TASKS_GROUPING_ORDER),
+        help="grouping name",
     )
     parser.add_argument(
         "--cut",

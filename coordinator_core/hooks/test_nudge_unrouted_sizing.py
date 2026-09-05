@@ -25,7 +25,8 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.hooks import nudge_unrouted_sizing as m
-from coordinator_core.session.scope import format_touch_event
+from coordinator_core.session.scope import _TOUCH_RECORD_FILENAME
+from coordinator_core.session.touch_record import append_event
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Real git spawn is load-bearing: the nudge reads real touched-file/dirty
@@ -69,9 +70,24 @@ def _git_init(repo):
 
 
 def _write_touched(repo, session_id, *rel_paths):
-    d = repo / ".git" / "coordinator-sessions" / session_id
-    os.makedirs(d, exist_ok=True)
-    (d / "touched.txt").write_text("\n".join(rel_paths) + "\n", encoding="utf-8")
+    """Record a touch the way the reader under test actually reads one.
+
+    Writes `touch-record.jsonl` through `touch_record.append_event`, NOT a
+    bare `touched.txt`. The compat union that read the sibling `touched.txt`
+    was deleted 2026-08-26 (`scope._read_touch_record_as_legacy_lines`, its
+    THE COMPAT UNION IS GONE section), and these fixtures were not moved with
+    it -- so every fire-asserting test in this file went silent against a
+    reader that saw no touches at all, while the never-fires tests kept
+    passing for the wrong reason. This module is `pytest.mark.cadence`,
+    outside the fast tier, which is how that sat unnoticed.
+
+    Going through the writer rather than hand-rolling a JSON line is the
+    point: a fixture that spells the on-disk dialect itself is a second
+    implementation of it, and drifts exactly the way the one above did.
+    """
+    sink = repo / ".git" / "coordinator-sessions" / session_id / _TOUCH_RECORD_FILENAME
+    for rel in rel_paths:
+        append_event(sink, session_id=session_id, agent_id=None, verb="T", path=rel)
 
 
 def _write_dispatched_agents(repo, session_id, content):
@@ -1215,25 +1231,28 @@ def test_plan_absent_file_does_not_raise_and_does_not_fire(repo):
 
 
 # ---------------------------------------------------------------------------
-# Event-line touched.txt — Review: code-reviewer (Finding 2). Every fixture
-# above is a bare legacy path; `_session_touched_lines` strips the
-# verb/timestamp off a REAL `T <ts> <path>` event line (via
-# `parse_touch_event`) so the anchored `_SIZING_PATH_RE`/`_PLAN_PATH_RE`
-# still match against just the path field.
+# Verb-prefixed line — Review: code-reviewer (Finding 2), repointed 2026-09-05
+# onto the live dialect. The concern is unchanged and still live: the reader
+# re-renders each jsonl event as `T <ts> <path>` and `_session_touched_lines`
+# strips the verb/timestamp back off (via `parse_touch_event`) so the anchored
+# `_SIZING_PATH_RE`/`_PLAN_PATH_RE` match the path field alone. What changed is
+# only where the event comes from — `touched.txt` is no longer read at all, so
+# a fixture writing one asserted nothing.
 # ---------------------------------------------------------------------------
 
 
-def _write_touched_event_lines(repo, session_id, *event_lines):
-    d = repo / ".git" / "coordinator-sessions" / session_id
-    os.makedirs(d, exist_ok=True)
-    (d / "touched.txt").write_text("\n".join(event_lines) + "\n", encoding="utf-8")
+def _write_touched_event_lines(repo, session_id, *rel_paths):
+    """Same writer as `_write_touched` -- kept under its own name because the
+    two tests below are about the verb-stripping leg specifically, not about
+    the touch record generally."""
+    _write_touched(repo, session_id, *rel_paths)
 
 
 def test_event_line_touched_txt_still_fires_for_unrouted_sizing(repo):
     session_id = "sess-event-sizing"
     rel = "state/sizings/x.yaml"
     _write_sizing(repo, rel, _sizing_yaml(route="plan"))
-    _write_touched_event_lines(repo, session_id, format_touch_event("T", rel))
+    _write_touched_event_lines(repo, session_id, rel)
     result = m.op(_payload(repo, session_id=session_id))
     assert result is not None
     assert rel in result["message"]
@@ -1242,7 +1261,7 @@ def test_event_line_touched_txt_still_fires_for_unrouted_sizing(repo):
 def test_event_line_touched_txt_still_fires_for_execute_plan(repo):
     session_id = "sess-event-plan"
     _write_plan(repo, _PLAN_REL, _plan_frontmatter(status="executing"))
-    _write_touched_event_lines(repo, session_id, format_touch_event("T", _PLAN_REL))
+    _write_touched_event_lines(repo, session_id, _PLAN_REL)
     msg = "Taking this into coordinator:execute-plan now."
     result = m.op(_payload(repo, session_id=session_id, last_assistant_message=msg))
     assert result is not None

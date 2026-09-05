@@ -174,10 +174,10 @@ def _run_one_cycle(
     (`test_archival_commit_process_budget.py`'s "fixture setup, not the
     measured region").
 
-    No live claim holders in this fixture (`corpus_fixture.build_corpus`
-    writes none), so `cs_claim_holder_live` is stubbed to always-False
-    rather than reaching for a claim-registry file that was never written —
-    mirrors `test_cycle.py`'s own conflict-arm stub.
+    Nothing here stubs claim-holder liveness any more: the cycle stopped
+    consulting it on the 2026-09-04 PM ruling that a claim on a baton does
+    not prevent its archival, so there is no longer a liveness call for this
+    measurement to hold still.
 
     Git spawn counting reuses this repo's own established convention
     (`coordinator_core/tests/oracles/test_archive_and_commit_spawn_floor.py
@@ -196,8 +196,6 @@ def _run_one_cycle(
     observably spawns exactly ONE real git process ... git restore
     --staged").
     """
-    monkeypatch.setattr(cycle, "cs_claim_holder_live", lambda claim_path: False)
-
     spawn_total = [0]
     real_spawn = asyncio.create_subprocess_exec
 

@@ -171,3 +171,89 @@ def test_a_pathspec_named_dash_h_is_not_help(monkeypatch):
 def test_help_segment_does_not_excuse_a_later_bare_commit(monkeypatch):
     _install_git_stub(monkeypatch, (0, "peer.txt\n"))
     assert _verdict('git -C /repo commit -h && git -C /repo commit -m "x"') == "deny"
+
+
+# --- The fail-open record must OUTLIVE the dispatch -------------------------
+#
+# Naming the cause in the advisory makes the degradation legible in flight and
+# undecidable five minutes later: the reasons live in a ContextVar drained into
+# one message. `state/bug-backlog/2026-08-21-bare-commit-guard-likely-fails-
+# open-unde-0d2276775068.yaml` is exactly that question asked after the fact —
+# a peer's staged blob committed past this guard, with nothing in the record
+# able to say whether the probe had degraded. An advisory nobody kept cannot
+# answer it.
+
+
+def _fail_open_log(tmp_path):
+    return tmp_path / "audit" / "guard-fail-open.log"
+
+
+def _point_audit_dir_at(monkeypatch, tmp_path):
+    audit = tmp_path / "audit"
+    audit.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        dispatch_checks,
+        "_override_log_path",
+        lambda _root, _sid: str(audit / "overrides.log"),
+    )
+    return audit
+
+
+def test_fail_open_is_persisted_with_cause_session_and_command(monkeypatch, tmp_path):
+    _point_audit_dir_at(monkeypatch, tmp_path)
+    _install_git_stub(monkeypatch, (-1, ""))
+
+    dispatch_checks.check_git_commit_safe_commit_advise(
+        'git -C /repo commit -m "sweeping subject"',
+        "sess-persisted",
+        git_root=str(tmp_path),
+    )
+
+    line = _fail_open_log(tmp_path).read_text(encoding="utf-8").strip()
+    assert "GIT-COMMIT-SCOPE-PROBE-FAIL-OPEN" in line
+    assert "sess-persisted" in line, "the record must attribute a session"
+    assert "sweeping subject" in line, "the record must identify the command"
+    assert "timed out" in line, "the record must name WHY it failed open"
+
+
+def test_a_clean_index_writes_no_record(monkeypatch, tmp_path):
+    """The paired negative. A log that also fires when the probe SUCCEEDED
+    cannot distinguish a degraded guard from a working one, which is the
+    distinction the whole record exists to preserve."""
+    _point_audit_dir_at(monkeypatch, tmp_path)
+    _install_git_stub(monkeypatch, (0, ""))
+
+    dispatch_checks.check_git_commit_safe_commit_advise(
+        'git -C /repo commit -m "x"', "sess-clean", git_root=str(tmp_path)
+    )
+
+    assert not _fail_open_log(tmp_path).exists()
+
+
+def test_persistence_failure_never_breaks_the_guard(monkeypatch, tmp_path):
+    """A guard that crashes because it could not write its own audit line is
+    worse than one that loses the line."""
+    _install_git_stub(monkeypatch, (-1, ""))
+
+    def _boom(_root, _sid):
+        raise OSError("audit dir is unwritable")
+
+    monkeypatch.setattr(dispatch_checks, "_override_log_path", _boom)
+
+    out = dispatch_checks.check_git_commit_safe_commit_advise(
+        'git -C /repo commit -m "x"', "sess-boom", git_root=str(tmp_path)
+    )
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "was NOT read" in out["hookSpecificOutput"]["additionalContext"]
+
+
+def test_no_git_root_is_a_silent_skip_not_a_crash(monkeypatch, tmp_path):
+    """`git_root` is optional on this entry point; absent it there is no
+    session audit directory to write into, and that must not raise."""
+    _install_git_stub(monkeypatch, (-1, ""))
+    out = dispatch_checks.check_git_commit_safe_commit_advise(
+        'git -C /repo commit -m "x"', "sess-no-root"
+    )
+    assert out is not None
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"

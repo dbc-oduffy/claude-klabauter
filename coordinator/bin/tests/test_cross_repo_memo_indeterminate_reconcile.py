@@ -9,8 +9,8 @@ ONE had written its draft and two had written nothing
 yaml`). The engine cannot narrow it — `warm/client.py` marks `delivered`
 after `flush()`, which only proves the bytes left the client process into the
 pipe buffer — so the discrimination has to happen at the one layer that knows
-the target path: this CLI, which computes
-`<sender_root>/state/memo-outbox/<topic>.md` from argv before dispatching.
+the target path: this CLI, which computes `memo_draft.outbox_dir(<sender_root>)
+/ <topic>.md` from argv before dispatching.
 
 WHY `existed_before` IS THE LOAD-BEARING ARGUMENT. A bare post-hoc
 `exists()` cannot separate "my write landed" from "a draft for this topic was

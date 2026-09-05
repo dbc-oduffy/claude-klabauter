@@ -1078,31 +1078,38 @@ def test_resolve_coded_no_pm_approved_needed(tmp_path):
     assert "disposition_detail: shipped in abc1234" in text
 
 
-def test_resolve_governed_admits_on_approved_grouping(tmp_path):
+def test_resolve_governed_admits_on_approved_grouping(tmp_path, monkeypatch):
     """On a governed plan the per-row pm_approved boolean is absent by
     design, and an approved grouping whose digest covers this write is what
     authorizes it.
 
-    C12: spun_off's disposition_ref is a computed/verified producer, so the
-    referenced spinoff artifact must exist on disk before this call."""
+    Retargeted 2026-09-04 from `spun_off` to `backlogged`. `_governed_plan()`
+    approves the `defer` grouping over a digest covering C1-AS-BACKLOGGED, so
+    `backlogged` is the disposition this fixture was built to admit; the test
+    passed on `spun_off` only because `spun_off` bypassed the governed gate
+    entirely, which stopped being true when that gate widened to match the
+    lint. `spun_off`'s own admit path is covered by
+    `test_resolve_governed_spun_off_succeeds_with_approved_grouping`."""
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "resolve-governed-ok.md", _governed_plan())
-    _seed_plan(repo, "2026-07-27-spinoff.md", "# Spinoff\n")
+
+    fake_harvest = _make_fake_harvest_module(repo)
+    monkeypatch.setattr(plan_tasks_mutate, "_load_harvest_module", lambda: fake_harvest)
 
     result = _run(_handler(
         {
             "verb": "resolve",
             "plan_path": str(plan),
             "id": "C1",
-            "disposition": "spun_off",
-            "disposition_ref": "docs/plans/2026-07-27-spinoff.md",
-            "disposition_detail": "moved to spinoff plan",
+            "disposition": "backlogged",
+            "disposition_detail": "deferred to backlog",
+            "case_against": "waiting costs little; nothing depends on this landing now",
         },
         repo_root=repo / ".git",
     ))
 
     assert result["exit_code"] == 0, result
-    assert "disposition: spun_off" in plan.read_text(encoding="utf-8")
+    assert "disposition: backlogged" in plan.read_text(encoding="utf-8")
 
 
 def test_add_task_governed_admits_row_without_pm_approved(tmp_path):
@@ -1293,34 +1300,97 @@ def test_resolve_closed_disposition_refuses_without_pm_approved(tmp_path):
     )
 
 
-def test_resolve_governed_spun_off_needs_no_grouping_approval(tmp_path):
-    """A GOVERNED plan can resolve a spun_off row with NO grouping approval
-    present for it AT ALL -- not pending, not absent-but-checked, simply
-    never consulted (2026-08-05 EM/PM ruling on the C1/C3 interaction,
-    ratifying the predecessor executor's flagged deviation).
+def test_resolve_governed_spun_off_refused_without_grouping_approval(tmp_path):
+    """A GOVERNED plan REFUSES a spun_off row whose `spun_off` grouping is not
+    approved.
 
-    `grouping_approvals` here carries only a 'ruled_out' block (itself
-    pending, i.e. would refuse if it were ever checked for this row) and NO
-    'spun_off' key -- which the schema could never carry anyway
-    (`grouping_approvals.properties` is do/defer/ruled_out only,
-    additionalProperties: false, so a 'spun_off' key can never exist). The
-    resolve must succeed regardless: `_PLAN_TASKS_PM_APPROVAL_GATED_
-    DISPOSITIONS` excludes spun_off in BOTH legacy and governed mode, so it
-    never enters `closed_by_grouping` bookkeeping and no grouping lookup is
-    attempted for it."""
+    Inverted 2026-09-04. This test previously asserted the opposite, on two
+    grounds that were both true when it was written and are both false now:
+    DoE's 2026-08-05 ruling took spun_off out of the gate, and
+    `grouping_approvals.properties` could not carry a `spun_off` key under
+    `additionalProperties: false`. DR-183 (2026-08-29) reversed the ruling and
+    plan.schema.json 2.13.0 (vendored 2026-08-30) added the key.
+    `check_plan_tasks_grouping_approval` widened that day; this write gate did
+    not, so a governed spun_off close succeeded here and produced a record the
+    lint refused — the desync this inversion closes.
+
+    `grouping_approvals` carries a pending `spun_off` block, so the refusal is
+    about the recorded status and not about an absent key."""
     repo = _make_git_repo(tmp_path)
-    plan = _seed_plan(repo, "resolve-governed-spun-off-no-approval.md", f"""\
----
+    plan = _seed_plan(repo, "resolve-governed-spun-off-pending.md", f"""---
 title: "Test Plan"
 status: draft
 schema_version: '1.2.0'
 grouping_approvals:
-  ruled_out:
+  spun_off:
     status: pending
     approver: pm
-    approved_at: 2026-07-29
+    approved_at: 2026-08-30
     pm_utterance: 'not yet -- still deciding'
     digest: 'sha256:{"0" * 64}'
+---
+
+# Test Plan
+
+## Tasks
+
+```yaml plan-tasks
+- id: C1
+  title: First chunk
+  change_kind: script-edit
+  surface: some/path.py
+  queue_scope: project
+  deferred: false
+  body: |
+    Do the first thing.
+```
+""")
+    _seed_plan(repo, "2026-07-27-spinoff.md", "# Spinoff\n")
+    original = plan.read_text(encoding="utf-8")
+
+    result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            "id": "C1",
+            "disposition": "spun_off",
+            "disposition_ref": "docs/plans/2026-07-27-spinoff.md",
+            "disposition_detail": "moved to spinoff plan",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] != 0, result
+    assert "spun_off" in result.get("error", "")
+    assert plan.read_text(encoding="utf-8") == original, (
+        "file must be byte-unchanged after an ungated spun_off refusal"
+    )
+
+
+def test_resolve_governed_spun_off_succeeds_with_approved_grouping(tmp_path):
+    """The other half of the inversion: an APPROVED `spun_off` block carrying a
+    digest over the membership this write produces lets the same close land.
+
+    The digest is computed by the same producer an author reaches for
+    (`compute_grouping_digest`, the function `plan.tasks.grouping_digest`
+    wraps), which is why that op had to accept `spun_off` before this gate
+    could refuse without it — a gate whose only remedy cannot be produced is
+    a permanent block, not an approval requirement."""
+    from coordinator_core.frontmatter.schema_validate import compute_grouping_digest
+
+    repo = _make_git_repo(tmp_path)
+    digest = compute_grouping_digest([{"id": "C1", "disposition": "spun_off"}], "spun_off")
+    plan = _seed_plan(repo, "resolve-governed-spun-off-approved.md", f"""---
+title: "Test Plan"
+status: draft
+schema_version: '1.2.0'
+grouping_approvals:
+  spun_off:
+    status: approved
+    approver: pm
+    approved_at: 2026-08-30
+    pm_utterance: 'yes -- C1 moves to the spinoff plan'
+    digest: '{digest}'
 ---
 
 # Test Plan
@@ -1355,6 +1425,34 @@ grouping_approvals:
     assert result["exit_code"] == 0, result
     assert result["applied"] is True
     assert "disposition: spun_off" in plan.read_text(encoding="utf-8")
+
+
+def test_resolve_legacy_spun_off_still_needs_no_pm_approved(tmp_path):
+    """The LEGACY leg is deliberately NOT widened alongside the governed one.
+
+    A plan carrying no `grouping_approvals` key keeps DoE's 2026-08-05
+    relaxation: `spun_off` needs no `pm_approved`. Widening the legacy set in
+    place would retroactively invalidate the 16 spun_off rows across 10 legacy
+    plans written correctly under that ruling, repairable only by forging
+    assent no PM gave."""
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "resolve-legacy-spun-off.md", _PLAN_WITH_TASKS)
+    _seed_plan(repo, "2026-07-27-spinoff.md", "# Spinoff\n")
+
+    result = _run(_handler(
+        {
+            "verb": "resolve",
+            "plan_path": str(plan),
+            "id": "C1",
+            "disposition": "spun_off",
+            "disposition_ref": "docs/plans/2026-07-27-spinoff.md",
+            "disposition_detail": "moved to spinoff plan",
+        },
+        repo_root=repo / ".git",
+    ))
+
+    assert result["exit_code"] == 0, result
+    assert result["applied"] is True
 
 
 def test_resolve_closed_disposition_succeeds_with_pm_approved(tmp_path):

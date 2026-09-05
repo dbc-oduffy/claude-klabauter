@@ -124,6 +124,25 @@ _VERDICT_MAP = {
 _TIME_SEG_RE = re.compile(r"^(\d{6,})(?:-(.+))?$")
 
 
+def review_trail_date_prefix(filepath: str) -> str:
+    """Return a review-trail file's ``YYYY-MM-DD`` date, read from its FILENAME.
+
+    The one implementation of the date half of ``reviewed_at``. Exposed because a
+    period-scoped caller needs the date BEFORE deciding to open the file:
+    ``rollups._review_trail_facts`` narrows a week row to its own ISO week, and
+    doing that after validation would mean reading and JSON-parsing the entire
+    live+archive trail (~3.1k files on this corpus) to keep a week's worth.
+
+    Same fallback as the ISO-8601 assembly below: a stem too short to carry a date
+    reads ``1970-01-01``, which no real period contains — so an undatable file is
+    excluded from a period-scoped count rather than silently attributed to the
+    current one.
+    """
+    bn = os.path.basename(filepath)
+    bn_stem = bn[:-5] if bn.endswith(".json") else bn
+    return bn_stem[:10] if len(bn_stem) >= 10 else "1970-01-01"
+
+
 def _validate_review_trail_file(
     filepath: str,
 ) -> tuple[Optional[dict], Optional[str]]:
@@ -142,7 +161,7 @@ def _validate_review_trail_file(
     # Parse reviewed_at from filename (bash:707-745).
     bn = os.path.basename(filepath)
     bn_stem = bn[:-5] if bn.endswith(".json") else bn
-    rt_date = bn_stem[:10] if len(bn_stem) >= 10 else "1970-01-01"
+    rt_date = review_trail_date_prefix(filepath)
     rest = bn_stem[11:] if len(bn_stem) > 11 else ""
 
     m = _TIME_SEG_RE.match(rest)

@@ -4081,17 +4081,31 @@ def _build_directives(
     # d1b is a replay-ONLY fallback for a union d1's own flags would
     # otherwise have carried, but `governing_plan` is NEVER in d1's flags, so this
     # is the sole write path for it on every mint, clean or replayed.
+    #
+    # `sizing_object` rides the SAME directive on the same terms (2026-09-04).
+    # `coordinator-doc-new`'s own `--sizing-object` flag is `--type=plan` /
+    # `--type=roadmap-baton` only, so a spinoff had no writer for the field at
+    # all -- which is why `j-spinoff-plan-sizing`'s sizing half went nowhere.
+    # Stamping it here rather than widening the scaffolder's type contract
+    # keeps the change inside the assembler plane and inherits d1c's existing
+    # conflict posture (an existing differing value raises) for free.
     d1c_directive: Optional[dict[str, Any]] = None
     _governing_plan_stamp = lineage.get("governing_plan")
-    if _governing_plan_stamp:
+    _sizing_object_stamp = lineage.get("sizing_object")
+    if _governing_plan_stamp or _sizing_object_stamp:
+        _d1c_args = ["--file", d1_out]
+        if _governing_plan_stamp:
+            _d1c_args.append(
+                f"--governing-plan={_repo_relative_posix(_governing_plan_stamp, root)}"
+            )
+        if _sizing_object_stamp:
+            _d1c_args.append(
+                f"--sizing-object={_repo_relative_posix(_sizing_object_stamp, root)}"
+            )
         d1c_directive = {
             "id": "d1c",
             "cli": "baton-stamp-carried-ids",
-            "args": [
-                "--file",
-                d1_out,
-                f"--governing-plan={_repo_relative_posix(_governing_plan_stamp, root)}",
-            ],
+            "args": _d1c_args,
             "depends_on": ["d1"],
             # Never `already_satisfied`: same idempotent-writer contract as
             # d1b -- a read-back-equal value short-circuits with no write.
@@ -4488,7 +4502,12 @@ def _build_judgment_points(
         # above: that field is the ALREADY-resolved parent-provenance
         # rung read off `artifact_path`'s own frontmatter; this judgment
         # point is a forward-looking association the EM supplies for the
-        # freshly-minted spinoff itself. Narrow by ruling (F10 rejected):
+        # freshly-minted spinoff itself, and it lands in `governing_plan` /
+        # `sizing_object`, NOT in `origin_plan_id` (see `brief()`'s own reader
+        # for this point). It resolved nothing at all until 2026-09-04: the
+        # answer was collected as prose and read by no one, so an EM who
+        # answered `associate` honestly got a spinoff carrying the association
+        # nowhere. Narrow by ruling (F10 rejected):
         # scoped to spinoff mint only, never widened onto the
         # continuation/execution-handoff path, which carries its
         # governing_plan/sizing forward deterministically instead (C5's
@@ -4510,10 +4529,18 @@ def _build_judgment_points(
                         "associate",
                         [],
                         guidance=(
-                            "Name the plan_id and/or sizing slug this spinoff "
-                            "belongs to via decision_note -- this is genuine "
-                            "EM/PM knowledge, never inferred from disk state "
-                            "and never offered as a scanned candidate list."
+                            "Carry the association as STRUCTURED keys on this "
+                            "decision: governing_plan (repo-relative path to "
+                            "the plan) and/or sizing_object "
+                            "(state/sizings/<id>.yaml). At least one is "
+                            "required; naming neither is the 'none' "
+                            "disposition. brief() stamps both onto the minted "
+                            "spinoff -- decision_note is for the reasoning and "
+                            "is not read for values, since parsing an id out "
+                            "of prose is the guess this point exists to avoid. "
+                            "This is genuine EM/PM knowledge, never inferred "
+                            "from disk state and never offered as a scanned "
+                            "candidate list."
                         ),
                     ),
                     build_disposition(
@@ -5488,6 +5515,73 @@ def brief(
         lineage["predecessor"] = None
         lineage["predecessor_id"] = None
         lineage["standalone_no_predecessor_reason"] = _excise_decision_note
+    # j-spinoff-plan-sizing's "associate" answer, threaded into lineage HERE
+    # -- before `_build_directives` reads either field -- the same mechanism
+    # the excise disposition above uses, and for the same reason: a judgment
+    # point that only records residue has not resolved anything.
+    #
+    # WHICH FIELDS. `governing_plan` and `sizing_object`, never
+    # `origin_plan_id`. That distinction is the judgment point's own (see its
+    # entry in `_build_judgment_points`): `origin_plan_id` is BACKWARD-looking
+    # parent provenance, read off `artifact_path`'s frontmatter by
+    # `resolve_lineage`, and it is empty for the bare-slug `/spinoff <slug>`
+    # mint precisely because there is no progenitor artifact to read it from.
+    # This point asks a FORWARD-looking question -- which plan and sizing the
+    # freshly-minted spinoff belongs to -- and `governing_plan` is exactly
+    # "the single, current plan path a baton is executing against". Routing
+    # this answer into `origin_plan_id` would make one field mean both, and
+    # would claim a progenitor that does not exist.
+    #
+    # WHY STRUCTURED KEYS, NOT `decision_note` PROSE. The guidance used to ask
+    # for the ids in `decision_note` and nothing read them, which is how this
+    # surfaced (example-cockpit-repo via DoE-claude, 2026-09-04). Parsing an id out
+    # of free prose is the guess this module refuses everywhere else -- an
+    # `associate` naming no id fails loud instead, exactly as `excise` with no
+    # `decision_note` does. `decision_note` stays available and is still the
+    # place for the reasoning; it is simply not a field the engine reads for
+    # values. Sibling keys on a decision are tolerated by
+    # `validate_decisions_shape` by design, so this needs no shape change
+    # there.
+    _spinoff_association = decisions.get("j-spinoff-plan-sizing")
+    if (
+        isinstance(_spinoff_association, dict)
+        and _spinoff_association.get("disposition") == "associate"
+    ):
+        if kind != "spinoff":
+            raise ValueError(
+                "baton_assemble.brief: j-spinoff-plan-sizing is a spinoff-mint "
+                f"point and does not apply to kind={kind!r} -- a continuation "
+                "carries its governing_plan/sizing_object forward from its "
+                "predecessor instead (C5's carry leg), which an association "
+                "answered here would silently contradict"
+            )
+        _assoc_plan = _spinoff_association.get("governing_plan")
+        _assoc_sizing = _spinoff_association.get("sizing_object")
+        if not (_assoc_plan or _assoc_sizing):
+            raise ValueError(
+                "baton_assemble.brief: j-spinoff-plan-sizing disposition "
+                "'associate' requires at least one of governing_plan "
+                "(repo-relative path to the plan) or sizing_object "
+                "(state/sizings/<id>.yaml) on the decision -- naming neither "
+                "is the 'none' disposition, which records a true absence; "
+                "'associate' with nothing named would record an association "
+                "the mint cannot make"
+            )
+        if _assoc_plan:
+            _assoc_plan_rel = _repo_relative_posix(_assoc_plan, root)
+            _already = lineage.get("governing_plan")
+            if _already and _already != _assoc_plan_rel:
+                raise ValueError(
+                    "baton_assemble.brief: j-spinoff-plan-sizing names "
+                    f"governing_plan={_assoc_plan_rel!r} but lineage already "
+                    f"resolved {_already!r} from the progenitor -- refusing to "
+                    "overwrite a resolved link with an asserted one; drop the "
+                    "key to keep the resolved value, or correct the input this "
+                    "spinoff forks from"
+                )
+            lineage["governing_plan"] = _assoc_plan_rel
+        if _assoc_sizing:
+            lineage["sizing_object"] = _repo_relative_posix(_assoc_sizing, root)
     # `lineage["artifact_path"]` is the single already-normalized value (see
     # `_normalize_artifact_path`) -- reused here for the envelope's own
     # top-level `artifact.path` so it never desyncs from what d1/d2/d3/d5

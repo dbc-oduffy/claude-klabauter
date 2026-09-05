@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.fleet.archive_terminal_handoffs — fleet.archive_completed_handoffs op.
 
-Purpose: archive terminal, childless, unclaimed handoffs from state/handoffs/ into
+Purpose: archive terminal handoffs from state/handoffs/ into
 archive/handoffs/YYYY-MM/, bounded by a required per-invocation MOVE CAP so the
 op stays inside the 500ms brightline regardless of how large the retained
 population grows (docs/decisions/DR-344-the-brightline-process-budget-for-claude-klabauter.md).
@@ -56,9 +56,12 @@ Negative-spec:
   - Does NOT transcribe archive_handoffs.py's pipeline shape (its heir branch,
     H1-H4 promoter-owned-roadmap-baton carve-out, and per-candidate
     reverse_membership re-walk) — this plan's OWN design, authored from the
-    terminality requirements cited above, is narrower by intent: Branch A,
-    Branch B, Check 3 (DR-324-narrowed childlessness), Check 4 (live claim).
-    A future chunk MAY widen this if the plan calls for it; this chunk does not.
+    terminality requirements cited above, is narrower by intent, and two PM
+    rulings have narrowed it further since: Branch A and Branch B terminality
+    are all that decide archival here. Check 3 (childlessness) and Check 4
+    (live claim holder) both stood in `_scan_terminal` and were deleted on the
+    ruling that neither a baton's children nor its holder's liveness says
+    anything about whether it is used up — see their deletion notes there.
   - Does NOT take an OP_TIMEOUT_OVERRIDES row in coordinator_core/ipc.py — see
     that module's own comment on why a widened cap for a git-spawning op is
     how the cost stays unexamined (ceremony.scoped_git_commit's 150s row,
@@ -68,10 +71,11 @@ Negative-spec:
     setup-error (exit_code:1), never an unbounded default. The cap's VALUE is
     the CALLER's choice; this module recommends one (see
     `_RECOMMENDED_CAP_CHOICE` below) but does not silently substitute it.
-  - Does NOT re-walk state/handoffs/ a second time to build the reverse-edge
-    index — the same per-node frontmatter reads (`_read_meta`, one pass over
-    `collect_live_handoff_paths`) feed BOTH the Branch A/B classification and
-    `dag.build_reverse_edge_index`'s `metas=` hand-in.
+  - Does NOT walk state/handoffs/ more than once, and since Check 3's
+    deletion does not build a reverse-edge index at all — nothing here asks
+    what points at a candidate. ONE `_read_meta` pass over
+    `collect_live_handoff_paths` feeds the Branch A/B classification and
+    nothing else.
   - Does NOT spawn one git process per candidate, and (C10 of this plan,
     AC-11) does not spawn ANY git process for the `shipped_in` rail at all —
     `_resolve_shipped_in_no_spawn` below answers object-existence by reading
@@ -104,10 +108,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from coordinator_core.coverage import _get_handoff_consumed_by
-from coordinator_core.dag import _read_meta, build_reverse_edge_index
+from coordinator_core.dag import _read_meta
 from coordinator_core.ipc import register_op
-from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session_ids
 from coordinator_core.git.content_hash import content_matches_index_sha
 from coordinator_core.git.git_index import (
     IndexParseError as _IndexParseError,
@@ -135,7 +137,6 @@ from coordinator_core.ops.fleet._common import (
     check_repo_root,
     collect_live_handoff_paths,
     handoff_archive_dest,
-    handoff_claim_dir,
     main_worktree_root,
     rel_id,
     validate_params,
@@ -163,8 +164,12 @@ _FAMILY = "handoff"
 #: the same string from two module-local constants).
 _SCAN_REASON_WORKTREE_DIRTY = REASON_WORKTREE_DIRTY
 _SCAN_REASON_NOT_TERMINAL = "not-terminal"
-_SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
-_SCAN_REASON_CONSUMED_BY_LIVE = "consumed-by-live-session: consumed_by names a live session"
+#: A record that IS terminal and was retained anyway, fail-closed, because its
+#: `shipped_in` did not resolve. Its own family and NOT a `not-terminal` one:
+#: grouped under that name it was indistinguishable from the whole live corpus,
+#: which is how two example-cockpit-repo sessions read "77 not-terminal" as "nothing
+#: here was archivable", re-ran the sweep, and restored an archive twice.
+_SCAN_REASON_SHIPPED_IN_UNRESOLVABLE = "shipped-in-unresolvable"
 
 # Recommended cap VALUE for a future caller of this op (session.boot_sweep,
 # a cron trigger, etc.) to pass — NOT consulted by this module as a fallback.
@@ -904,16 +909,19 @@ def _prefilter_scan_disqualifies(path: Path) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Terminality predicate — Branch A / Branch B / Check 3 / Check 4
+# Terminality predicate — Branch A / Branch B
 # ---------------------------------------------------------------------------
 
 
 def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[Optional[bool], str, str, bool]:
-    """Branch A/B qualification only (no Check 3/4 — those need the reverse-
-    edge index and the hoisted live-session-id set, applied by the caller
-    over the whole corpus in one pass).
+    """Branch A/B qualification — since Checks 3 and 4 were deleted, the whole
+    of the archival criterion.
 
     Returns (qualifies, reason_if_not, status_label_if_qualifies, branch_b_qualified).
+    `reason_if_not` arrives ALREADY family-prefixed (`_SCAN_REASON_*`), so the
+    caller records it verbatim — a refusal that is terminal-but-retained must
+    not inherit the caller's `not-terminal` family, which is the whole live
+    corpus and drowns it.
     `qualifies` is None (never True/False confusion) only when genuinely
     indeterminate frontmatter retains — modeled here as qualifies=False with
     an explicit reason, per "indeterminate frontmatter retains, fail-closed".
@@ -930,8 +938,8 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
             if not shipped_in or not shipped_in_resolved.get(str(shipped_in).strip(), False):
                 return (
                     False,
-                    "deployment_state=shipped but shipped_in unresolvable — "
-                    "retained (fail-closed)",
+                    f"{_SCAN_REASON_SHIPPED_IN_UNRESOLVABLE}: deployment_state=shipped "
+                    "but shipped_in unresolvable — retained (fail-closed)",
                     "",
                     False,
                 )
@@ -944,7 +952,13 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
             return False, "deployment_state=in_flight — not terminal (archive-safety)", "", False
         return True, "", "consumed", False
 
-    return False, f"status={status!r} (not claimed) and deployment_state={deployment_state!r} (not terminal)", "", False
+    return (
+        False,
+        f"{_SCAN_REASON_NOT_TERMINAL}: status={status!r} (not claimed) and "
+        f"deployment_state={deployment_state!r} (not terminal)",
+        "",
+        False,
+    )
 
 
 def _terminal_since(meta: dict, handoff_path: Path) -> Optional[str]:
@@ -978,7 +992,7 @@ def _sort_key(terminal_since: Optional[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Per-family internal — the ONE frontmatter pass + reverse-edge index build
+# Per-family internal — the ONE frontmatter pass
 # ---------------------------------------------------------------------------
 
 
@@ -990,8 +1004,13 @@ def _scan_terminal(
     known_dirty_relpaths: Optional[set] = None,
     skipped: Optional[List[dict]] = None,
 ) -> List[Tuple[Path, str, str, Optional[str]]]:
-    """Return every terminal, childless, unclaimed candidate — UNCAPPED,
-    oldest-first — as (path, note, status_label, terminal_since) tuples.
+    """Return every terminal candidate — UNCAPPED, oldest-first — as
+    (path, note, status_label, terminal_since) tuples.
+
+    Terminal is the WHOLE criterion. Neither a candidate's children nor the
+    liveness of whoever holds its claim narrows this set any more; both gates
+    stood in the loop below and both were deleted on PM ruling (2026-08-28 and
+    2026-09-04). Their deletion notes are inline at the sites.
 
     Cap enforcement happens in the handler, over this function's already-
     sorted output, so the same ordering rule serves both dry_run:true preview
@@ -1007,11 +1026,11 @@ def _scan_terminal(
     the corpus. A record refused by classification never reaches the dirty
     rail: for a record that is BOTH worktree-dirty AND non-terminal this is
     a DESIGNED reason-precedence change from the predecessor (not-terminal
-    now wins, per AC-5's amended assertion), not a regression. The reverse-
-    edge index build and `resolve_live_session_ids()` call below are
-    similarly deferred (lazy) until at least one candidate survives both the
-    classification and dirty-check passes — a scan with zero survivors never
-    pays either cost.
+    now wins, per AC-5's amended assertion), not a regression. The lazy
+    deferral that used to sit below this — a reverse-edge index build and a
+    `resolve_live_session_ids()` call, both held back until a candidate
+    survived — is gone with the two gates that needed it. There is nothing
+    left after the dirty rail to defer.
 
     `known_dirty_relpaths` (C10, AC-11): the standalone/op path leaves this
     None and this function spawns its own scoped `git status --porcelain`
@@ -1036,17 +1055,12 @@ def _scan_terminal(
     (C4, `_prefilter_scan_disqualifies`): the cheap byte-level pre-check
     answers `_classify_branch`'s own disqualifying question for the ~96% of
     records it can, so `dag._read_meta`'s full read+hash+parse is paid only
-    for a pre-filter survivor here. If (and only if) a candidate survives
-    classification + the dirty check, a backfill loop tops up `metas` for
-    every remaining live node before `dag.build_reverse_edge_index` runs —
-    still no SECOND WALK of collect_live_handoff_paths, just a deferred
-    completion of the same one. The shipped_in shas needing the ONE batch
-    resolvability check, and Branch A/B qualification per candidate, both
-    come from the pre-filter survivor set. resolve_live_session_ids() (Check
-    4's fallback key) is called ONCE, hoisted out of the per-candidate loop,
-    exactly like consumed_by's live-session lookup in the killed module's
-    own Check 4 — the difference here is the hoist (now lazy behind the
-    survivor set), not the key.
+    for a pre-filter survivor here. The full-corpus `metas` backfill that
+    used to follow — a `_read_meta` for every live node not already read,
+    solely to feed a reverse-edge index — went with Check 3, so a
+    pre-filter-refused record is now never read at all. The shipped_in shas
+    needing the ONE batch resolvability check, and Branch A/B qualification
+    per candidate, both come from the pre-filter survivor set.
     """
     results: List[Tuple[Path, str, str, Optional[str]]] = []
     try:
@@ -1063,16 +1077,11 @@ def _scan_terminal(
     if not live_paths:
         return results
 
-    # metas keyed by str(abspath), matching build_reverse_edge_index's own
-    # metas= key convention. Populated LAZILY (C4): a record the cheap
-    # pre-filter can already refuse never pays `dag._read_meta`'s full
-    # read+hash+parse here — only a pre-filter SURVIVOR does. If at least one
-    # candidate survives classification + the dirty check, the reverse-edge
-    # index build below needs full frontmatter for every live node (a
-    # pre-filter-refused record can still be some OTHER candidate's live
-    # child), so the backfill loop just above that call fills in whatever
-    # this pass left unread — paying the same total cost the corpus-wide
-    # eager read always did in that branch, never more.
+    # Populated LAZILY (C4): a record the cheap pre-filter can already refuse
+    # never pays `dag._read_meta`'s full read+hash+parse here — only a
+    # pre-filter SURVIVOR does. The backfill that used to top this up for the
+    # whole live corpus is gone with Check 3: nothing downstream asks about a
+    # non-candidate node any more, so the lazy read is now the only read.
     metas: Dict[str, dict] = {}
     live_set_str: List[str] = [str(p) for p in live_paths]
 
@@ -1082,7 +1091,7 @@ def _scan_terminal(
 
     # Pass 1 — classify-first (C3, staff-eng Finding 1), now pre-filtered
     # (C4). Branch A/B qualification is pure-memory (no git spawn, no
-    # reverse-edge index, no live-session resolution), so it runs over the
+    # no live-session resolution), so it runs over the
     # WHOLE corpus first and collects only the survivors the remaining,
     # costlier rails need to see. A record refused here (the bulk of the
     # live corpus) never reaches the dirty rail below — for a record that is
@@ -1116,7 +1125,7 @@ def _scan_terminal(
     for p, rel, meta in prefilter_survivors:
         qualifies, reason, status_label, branch_b_qualified = _classify_branch(meta, shipped_in_resolved)
         if not qualifies:
-            _refuse(rel, f"{_SCAN_REASON_NOT_TERMINAL}: {reason}")
+            _refuse(rel, reason)
             continue
         survivors.append((p, rel, meta, status_label, branch_b_qualified))
 
@@ -1154,11 +1163,6 @@ def _scan_terminal(
     # `handoff_reconcile`: the expensive thing was never the job, it was a
     # question the job did not need to ask.
 
-    # ONE resolve_live_session_ids() call, hoisted out of the per-candidate
-    # loop (do NOT un-hoist — see this function's own docstring) and, like
-    # the reverse-edge index above, deferred until a candidate survives.
-    live_sids = resolve_live_session_ids()
-
     for p, rel, meta, status_label, _branch_b_qualified in remaining:
         # Check 3 (childlessness) was DELETED here on 2026-08-28, on the same
         # PM ruling that removed the guard from `handoff_archive_transition`:
@@ -1180,33 +1184,37 @@ def _scan_terminal(
         # children do not decide archival, an error computing children is not a
         # reason to retain forever.
         #
-        # Checks 1/2 (terminality, worktree-clean) and Check 4 (live claim
-        # holder) are untouched -- a live HOLDER is a different ground and still
-        # retains.
-
-        # Check 4: no live claim — claim-dir primary key, consumed_by fallback.
-        claim_dir = handoff_claim_dir(common_dir, p)
-        holder_live = False
-        if claim_dir.is_dir():
-            try:
-                holder_live = cs_claim_holder_live(str(claim_dir))
-            except Exception as exc:
-                _LOG.warning(
-                    "archive_terminal_handoffs: cs_claim_holder_live raised for %s — "
-                    "retaining (fail-closed-to-keep): %s", claim_dir, exc,
-                )
-                holder_live = True
-        if holder_live:
-            _refuse(rel, _SCAN_REASON_LIVE_CLAIM)
-            continue
-        if not claim_dir.is_dir() or not holder_live:
-            consumed_by_sid = _get_handoff_consumed_by(str(p))
-            if consumed_by_sid and consumed_by_sid in live_sids:
-                _refuse(rel, f"{_SCAN_REASON_CONSUMED_BY_LIVE}: {consumed_by_sid}")
-                continue
+        # Check 4 (live claim holder) was DELETED here on 2026-09-04, on the PM
+        # ruling that closes the carve-out the block above had kept open:
+        # "a claim on a baton shouldn't prevent it from getting archived. What
+        # matters is that the baton is complete, not the liveness of the
+        # holder." Same principle as Check 3's deletion, one check later --
+        # completeness is the criterion, holder liveness is not a criterion at
+        # all. Both arms went: the claim-dir arm (cs_claim_holder_live) and the
+        # consumed_by-names-a-live-session fallback, since both were holder
+        # liveness under two different keys.
+        #
+        # It had no protective effect to lose. A holder still mid-work carries a
+        # non-terminal deployment_state, so Check 1 retains that baton on its own
+        # without any help from here; the only shape this check actually caught
+        # was terminal-AND-still-held, i.e. a session that had finished its work
+        # and not yet exited. On that shape it deferred archival of correctly
+        # finished work until some later session swept -- and it made the
+        # quick-wrap close condition (no terminal record left in state/handoffs
+        # when you report) unreachable by the very session that earned it.
+        #
+        # The window it did incidentally cover -- a holder stamping a terminal
+        # state and then reverting it, with the file moving out from under it --
+        # is real but is one this module already accepts for every unclaimed
+        # baton. If it ever needs covering, the shape is a re-read at move time,
+        # not a liveness gate. Deleting this also deleted the sweep's ONE
+        # resolve_live_session_ids() call and its per-candidate claim-dir stat.
+        #
+        # Checks 1/2 (terminality, worktree-clean) are untouched, and so is the
+        # fail-closed shipped_in retention in `_classify_branch`.
 
         terminal_since = _terminal_since(meta, p)
-        note = f"{status_label}; no live children; no live claim"
+        note = status_label
         results.append((p, note, status_label, terminal_since))
 
     results.sort(key=lambda t: _sort_key(t[3]))
@@ -1429,10 +1437,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Wire contract: coordinator_core/contract/cockpit-invoke-producer-contract.md.
 
-    dry_run:true  → preview: enumerate terminal candidates (Branch A/B, Check
-                    3 DR-324-narrowed childlessness, Check 4 live claim),
-                    capped oldest-first at `cap`; excess candidates are named
-                    (never silently dropped) in the additive `deferred` key.
+    dry_run:true  → preview: enumerate terminal candidates (Branch A/B
+                    terminality alone), capped oldest-first at `cap`; excess
+                    candidates are named (never silently dropped) in the
+                    additive `deferred` key.
     dry_run:false → act: re-verify + move up to `cap` of the caller-supplied
                     candidate_ids, oldest-first; excess candidate_ids are
                     skipped with reason "deferred-cap", never silently

@@ -132,6 +132,16 @@ class CrossRepoMemoSummary(BaseModel):
     `memo.transition`'s action verb began stamping this field (2026-09-04) carries `None`,
     which means UNKNOWN and must not be read as "still open" or as a zero.
 
+    WIRE SHAPE — key-absent, never present-as-null. This field emits as a bare
+    `{"type": "string", "format": "date", ...}` with no null branch, so an explicit
+    `"actioned_at": null` FAILS the published schema; a producer must OMIT the key when
+    the closure time is unknown, as this entity's porter does. That is the house style
+    on THIS entity (`content_hash`, `decision_note` emit identically from the same
+    `X | None = None` declaration) and deliberately unlike the ancestry fields on
+    HandoffSummary (`roadmap_id`, `forked_from`, `additional_predecessors`,
+    `disposed_successors`), which emit `anyOf: [T, null]`. The annotation below does not
+    predict the wire shape — do not read `| None` as D9 present-as-null here.
+
     No backfill is performed on the historical corpus (D9: nulls on existing rows are
     correct). Coverage therefore starts sparse and grows as memos close; a consumer
     plotting this should keep the series absent until coverage is real rather than

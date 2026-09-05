@@ -394,7 +394,23 @@ GENERATES = [
 # their tree is still at 4.1.0, committed clean at 59bd273b2, so the single 4.4.0
 # regen covers 4.2.0 and 4.3.0 and those two memos resolve as superseded).
 #
-# MINOR bump 4.3.0 -> 4.4.0: adds one OPTIONAL, nullable field —
+# MINOR bump 4.3.0 -> 4.4.0: adds one OPTIONAL field —
+#
+# OPTIONAL, NOT NULLABLE, and the distinction is load-bearing for a producer: it
+# emits as a bare `{"type": "string", "format": "date", "pattern": ...}` with NO
+# null branch, so an explicit `"actioned_at": null` FAILS validation. It is
+# key-absent-when-unknown, unlike `roadmap_id`/`forked_from`/
+# `additional_predecessors`/`disposed_successors`, which emit `anyOf: [T, null]`.
+# That is correct for THIS entity rather than an oversight — `content_hash` and
+# `decision_note` have emitted the same way here for versions from the identical
+# `X | None = None` declaration, and CrossRepoMemoSummary's own porter
+# (ops/emit/sections/cross_repo_memos.py) omits the key rather than writing null.
+# But the Python annotation does not predict the wire shape; the entity's house
+# style does. A producer following D9's present-as-null habit would emit a payload
+# failing this contract's own published schema. Caught by doe-claude-18 reading the
+# emitted bytes rather than this changelog's prose, which said "nullable" until
+# 2026-09-04; recorded DoE-side as D48's third shape, with D9 amended in place.
+#
 # `actioned_at` (IsoDate) on CrossRepoMemoSummary (entities/
 # cross_repo_memo_summary.py). Nothing else moves: no `required[]` change, no
 # nullability change to an existing field, no enum widened. Same additive class
@@ -430,7 +446,26 @@ GENERATES = [
 # Same D39 source-first sequence as every bump above: claude-klabauter regenerates, DoE
 # commits the bundle and advances the release tag, claude-klabauter re-vendors. DoE-claude
 # and example-cockpit-repo warned by memo BEFORE this edit ships, not after.
-CONTRACT_VERSION = "4.4.0"
+#
+# `fact_window` (FactWindow | None) on DayRollup and WeekRollup (entities/
+# rollup.py). Additive-minor: a new optional field, no `required[]` change, no
+# nullability change to an existing field, no enum widened. Same additive class
+# as the 3.9.0 `baton_class`, 3.13.0 `human_*`, and 4.4.0 `actioned_at` bumps
+# above.
+#
+# States the window a row's facts were computed over — a fact discriminator, not
+# a version stamp: `RollupWatermark` carries the emission instant and a source
+# SHA, neither of which identifies which window (rolling-30d vs. iso-week)
+# produced the row, so a consumer could not tell a pre-fix row from a post-fix
+# one during fleet rollout (docs/plans/2026-09-04-rollup-rows-name-their-own-
+# fact-window.md). NO DEFAULT (D9 does not apply here the usual way): absence
+# means "emitted before this field existed, window unknown" and MUST NOT be
+# inferred from `max_observed_at` or any other signal — a default would
+# silently relabel every stale row as week-scoped, reintroducing the discovered
+# defect at higher confidence. `test_emit_schema_pin.py` does not gate this
+# bump; it pins `emit_schemas()` against a fixture entity never registered in
+# `ENTITY_SCHEMAS`. Same D39 sequence as every bump above.
+CONTRACT_VERSION = "4.5.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from

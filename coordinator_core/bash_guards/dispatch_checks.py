@@ -1170,6 +1170,59 @@ _git_probe_fail_open_reasons: contextvars.ContextVar[Tuple[str, ...]] = (
 )
 
 
+def _persist_probe_fail_open(
+    reasons: Tuple[str, ...],
+    cmd: str,
+    session_id: str,
+    git_root: Optional[str],
+) -> None:
+    """Append a fail-open record to disk so "was this commit guarded?" stays
+    answerable after the dispatch ends.
+
+    `_record_probe_fail_open` made the degradation legible IN FLIGHT — the
+    reason reaches the operator through the advisory. That is not enough to
+    close `state/bug-backlog/2026-08-21-bare-commit-guard-likely-fails-open-
+    unde-0d2276775068.yaml`, whose whole subject is a commit that swept a
+    peer's staged blob past this guard with nothing in the record able to
+    establish whether the probe had degraded. The reasons live in a
+    ContextVar drained into one advisory; nothing survives the process. So
+    the question the row exists to answer is undecidable the moment the
+    advisory scrolls past — which is exactly where the 2026-08-21 reporter
+    stood, and where this session stood again for `38383479f1`.
+
+    Recording only. The fail-open POSTURE is unchanged and deliberately so:
+    a degraded probe must not manufacture a deny.
+
+    Never raises. A guard that crashes because it could not write its own
+    audit line is worse than one that loses the line, so every failure here
+    is swallowed after one stderr breadcrumb — the same posture the override
+    audit log takes on an unwritable path.
+    """
+    if not reasons or not git_root:
+        return
+    try:
+        log_path = _override_log_path(git_root, session_id)
+        if log_path is None:
+            return
+        log_path = os.path.join(os.path.dirname(log_path), "guard-fail-open.log")
+        with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(
+                "%s | %s | GIT-COMMIT-SCOPE-PROBE-FAIL-OPEN | %s | %s\n"
+                % (
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    session_id or "no-session",
+                    "; ".join(reasons),
+                    cmd[:200].replace("\n", " "),
+                )
+            )
+    except Exception as exc:  # noqa: BLE001 -- never crash the dispatcher
+        print(
+            "git-commit-safe-commit-advise: failed to persist fail-open "
+            "record: %s" % (exc,),
+            file=sys.stderr,
+        )
+
+
 def _record_probe_fail_open(predicate: str, probe: str, rc: int) -> None:
     """Record WHY an index probe is failing open, and say so on stderr.
 
@@ -9849,6 +9902,99 @@ def _bt_git_dash_c_value(tokens: List[str]) -> Optional[str]:
     return result
 
 
+def _bt_probe_cwd(
+    seg_tokens: List[str], payload: Optional[Dict[str, Any]]
+) -> Optional[str]:
+    """The directory every `git commit` probe in this cascade must run
+    against: the command's own `-C` value when it carries one, resolved
+    against the PAYLOAD cwd, and the payload cwd alone when it does not.
+
+    `_bt_git_dash_c_value` answers only the first half, and returns None for
+    the overwhelmingly common command that carries no `-C` at all. Passing
+    that None straight to `_run_git` does not mean "the command's own repo",
+    it means `cwd=None`, i.e. the GUARD PROCESS's directory -- which is
+    whatever the harness happened to be sitting in, not the repo the operator
+    is committing to. Every probe below therefore read the wrong repository
+    for the ordinary case and the right one only for the rare `-C` case,
+    inverting which commands the guard can reason about (doe-claude-em
+    cross-repo memo, 2026-09-04: adding a no-op `git -C .` to an otherwise
+    identical command flipped allow to deny). `_bt_commit_scope_operand_is_
+    sweeping` already resolves against the payload cwd for exactly this
+    reason; the probes now share that root.
+
+    A RELATIVE `-C` is joined onto the payload cwd rather than handed over
+    raw: real git resolves `-C sub` against the command's own cwd, so
+    resolving it against the guard's would name a third directory belonging
+    to neither. An absolute `-C` stands alone, and a relative one with no
+    payload cwd to anchor it is returned unchanged -- no worse than today,
+    and the probes' own fail-open posture covers a miss.
+    """
+    dash_c = _bt_git_dash_c_value(seg_tokens)
+    payload_cwd = (payload or {}).get("cwd")
+    if dash_c is None:
+        return payload_cwd
+    if os.path.isabs(dash_c) or not payload_cwd:
+        return dash_c
+    try:
+        return os.path.join(payload_cwd, dash_c)
+    except (TypeError, ValueError):
+        return dash_c
+
+
+def _bt_commit_sweeping_scope_operands(
+    seg_tokens: List[str], cwd: Optional[str]
+) -> List[str]:
+    """The scope operands of a `git commit` segment that name a SUBTREE
+    rather than a chosen path -- the ones `_bt_commit_scope_is_sweeping`
+    reduces to a single bool.
+
+    Exists so the deny/advisory text can NAME the operand it is objecting to.
+    A message that says "names no scope" at `git commit -m x -- state/` is
+    false about that command, and the operator who reads it concludes the
+    parser failed rather than that their directory is the problem (two
+    independent field reports: example-retrieval-repo-em 2026-09-02, doe-claude-em
+    2026-09-04). `--only` with no visible operand sweeps too and has no
+    operand to name, so it yields an empty list and the caller falls back to
+    naming the flag.
+    """
+    operands, ambiguous, has_include, _has_only = _bt_commit_operand_scan(seg_tokens)
+    if has_include or ambiguous:
+        return []
+    return [o for o in operands if _bt_commit_scope_operand_is_sweeping(o, cwd)]
+
+
+def _sweeping_scope_sentence(operands: List[str]) -> str:
+    """The one fact a sweeping-scope deny/advisory states: which operand is a
+    directory and what a directory pathspec actually commits.
+
+    `ceremony.commit_v2` already refuses the same input with this sentence
+    ("<path> is a directory -- pass explicit file paths; a directory pathspec
+    matches whatever lands inside it at commit time, including a peer's file
+    added after the caller computed it"). Two components enforcing one rule
+    must not disagree about how they say it -- `docs/wiki/guard-messaging.md`
+    Register, and the sibling-guard lesson that a green suite cannot see a
+    contradiction living in another module's string.
+
+    The empty case is `--only` naming nothing: still a sweep, but with no
+    operand to quote, so the flag itself is the subject."""
+    if not operands:
+        return (
+            "'--only' selects git's self-scoped mode but names no path, so "
+            "this commit's content is whatever is staged, including a peer's."
+        )
+    if len(operands) == 1:
+        return (
+            "%s names a directory, not files — a directory pathspec commits "
+            "whatever is inside it at commit time, including a file a peer "
+            "adds after you read the command back." % operands[0]
+        )
+    return (
+        "%s name directories, not files — a directory pathspec commits "
+        "whatever is inside them at commit time, including a file a peer "
+        "adds after you read the command back." % ", ".join(operands)
+    )
+
+
 def _bt_git_index_file_env(tokens: List[str]) -> Optional[str]:
     """Extract a leading `GIT_INDEX_FILE=<path>` assignment ahead of the git
     binary (BX-13 peel vocabulary, `_bt_peel_wrapper_prefix`'s own token
@@ -9983,6 +10129,7 @@ def _bt_solo_bare_commit_index_nonempty(
     seg_tokens: List[str],
     segments: List[Tuple[List[str], bool]],
     seg_index: int,
+    payload: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """True iff `seg_tokens` is a solo bare `git commit` -- no preceding
     `git add` anywhere earlier in the same command (that shape is
@@ -10030,7 +10177,7 @@ def _bt_solo_bare_commit_index_nonempty(
         # an unscoped add still means the caller staged something here.
         if _bt_git_resolved_subcommand(prior_tokens) == "add":
             return False  # compound shape -- `_bt_compound_add_bare_commit`'s
-    cwd = _bt_git_dash_c_value(seg_tokens)
+    cwd = _bt_probe_cwd(seg_tokens, payload)
     extra_env: Optional[Dict[str, str]] = None
     index_file = _bt_git_index_file_env(seg_tokens)
     if index_file:
@@ -10055,7 +10202,9 @@ _BT_SEQUENCER_CONTINUE_VERBS: Tuple[Tuple[str, str], ...] = (
 )
 
 
-def _bt_git_sequencer_in_progress(seg_tokens: List[str]) -> Optional[Tuple[str, str]]:
+def _bt_git_sequencer_in_progress(
+    seg_tokens: List[str], payload: Optional[Dict[str, Any]] = None
+) -> Optional[Tuple[str, str]]:
     """Return `(state_name, continue_verb)` when a merge/cherry-pick/revert is
     mid-flight for the repo this command targets, else None.
 
@@ -10083,7 +10232,7 @@ def _bt_git_sequencer_in_progress(seg_tokens: List[str]) -> Optional[Tuple[str, 
     confusing deny, while a falsely-detected one would silently retire the
     guard for every ordinary bare commit.
     """
-    cwd = _bt_git_dash_c_value(seg_tokens)
+    cwd = _bt_probe_cwd(seg_tokens, payload)
     for state_name, verb in _BT_SEQUENCER_CONTINUE_VERBS:
         rc, out = _run_git(["rev-parse", "--git-path", state_name], cwd=cwd)
         if rc != 0:
@@ -10101,7 +10250,9 @@ def _bt_git_sequencer_in_progress(seg_tokens: List[str]) -> Optional[Tuple[str, 
     return None
 
 
-def _bt_sweep_all_holds_unverifiable_paths(seg_tokens: List[str]) -> bool:
+def _bt_sweep_all_holds_unverifiable_paths(
+    seg_tokens: List[str], payload: Optional[Dict[str, Any]] = None
+) -> bool:
     """C1's worktree-union escalation predicate: the sweep-all (`-a`/`-am`/
     `--all`) mirror of `_bt_solo_bare_commit_index_nonempty`, not of C7's
     set-difference above -- `-a` supplies no pathspec of its own, so there
@@ -10159,7 +10310,7 @@ def _bt_sweep_all_holds_unverifiable_paths(seg_tokens: List[str]) -> bool:
     `-a` exclusion (and therefore this gap) in place."""
     if not _bt_commit_has_sweep_all_flag(seg_tokens):
         return False
-    cwd = _bt_git_dash_c_value(seg_tokens)
+    cwd = _bt_probe_cwd(seg_tokens, payload)
     if not _is_hazard_repo(cwd or os.getcwd()):
         return False
     extra_env: Optional[Dict[str, str]] = None
@@ -10370,7 +10521,7 @@ def check_git_commit_safe_commit_advise(
             "COORDINATOR_ALLOW_GIT_COMMIT_AMEND", payload=payload
         ):
             provenance = _bt_head_commit_amend_provenance(
-                _bt_git_dash_c_value(seg_tokens), session_id
+                _bt_probe_cwd(seg_tokens, payload), session_id
             )
             owned = provenance is not None and provenance[2]
             if not owned:
@@ -10405,6 +10556,12 @@ def check_git_commit_safe_commit_advise(
                 )
         if _override("COORDINATOR_ALLOW_GIT_COMMIT_BARE", payload=payload):
             return None
+        # Populated only on the fall-through below, where the command DID
+        # name a scope and that scope is a subtree. Every message site past
+        # this point must say so instead of reading from the no-scope-at-all
+        # vocabulary -- see `_sweep_scope_body`.
+        _scope_swept = False
+        _sweeping_operands: List[str] = []
         if _bt_commit_has_explicit_pathspec(seg_tokens):
             # A scope FORM is not a scope BOUND. `-o state/` and
             # `-- state/` both name git's self-scoped mode over a whole
@@ -10420,6 +10577,10 @@ def check_git_commit_safe_commit_advise(
                 seg_tokens, (payload or {}).get("cwd")
             ):
                 return None
+            _scope_swept = True
+            _sweeping_operands = _bt_commit_sweeping_scope_operands(
+                seg_tokens, (payload or {}).get("cwd")
+            )
             # The sweep advisory carries its own key rather than reusing
             # `COORDINATOR_ALLOW_GIT_COMMIT_BARE` below. That key means "I
             # meant to commit the whole index"; this shape is the opposite
@@ -10446,9 +10607,10 @@ def check_git_commit_safe_commit_advise(
         # `subject_operand` is interpolated into the `git add ... && git
         # commit` remediation below.
         subject_operand = shlex.quote(subject) if subject else '"<subject>"'
-        # `--amend` reaching here always carries no `--only` and no explicit
-        # pathspec (both exit earlier via `_bt_commit_has_explicit_pathspec`),
-        # so it is always the risky bare-`--amend`-with-index shape -- the
+        # `--amend` reaching here carries no NARROW pathspec -- that shape
+        # exits earlier via `_bt_commit_has_explicit_pathspec` -- so it is
+        # either the bare-`--amend`-with-index shape or an amend whose scope
+        # is a whole subtree, and both overwrite HEAD wholesale. The
         # remediation below must say the amend-specific thing rather than
         # the scoped-new-commit shape, which does not amend anything (DoE
         # cross-repo memo, example-retrieval-repo-em, 2026-08-15, "amend has no safe
@@ -10480,6 +10642,34 @@ def check_git_commit_safe_commit_advise(
             "To fix a message without rewriting:\n"
             "  git notes add -f -m \"<correction>\" <sha>"
         )
+        # Sweeping-scope remediation. A command carrying `-- state/` NAMED a
+        # scope, so every no-scope-at-all body below is false about it, and
+        # each of those bodies offers `git add -- <paths> && git commit -m x
+        # -- <paths>` -- character-for-character the command it just refused.
+        # An operator reading "names no scope" at a command that names one
+        # concludes the parser failed and starts permuting spellings, which
+        # is what both field reports describe (example-retrieval-repo-em 2026-09-02,
+        # doe-claude-em 2026-09-04; the second reproduced it by calling this
+        # function directly, no dispatcher and no `cd` prefix, so the
+        # offer-git-c short-circuit is not the cause and reordering the chain
+        # is not the fix). TEXT ONLY -- which branch fires, and therefore
+        # deny-vs-advisory, is unchanged: escalating the sweeping form is
+        # direction-class and sits with DoE's strict-mode question (negative
+        # spec, `tests/test_commit_scope_directory_operand_still_advises.py`).
+        # `ceremony.commit_v2` already refuses the same input with this
+        # sentence; the two components now say the same thing.
+        _sweep_scope_body = "%s\n\nUse instead:\n  git commit -m %s -- <file> <file>" % (
+            _sweeping_scope_sentence(_sweeping_operands),
+            subject_operand,
+        )
+        #: The body every branch below uses INSTEAD of its own, when the
+        #: command's real defect is not the one that branch is written about.
+        #: `--amend` outranks a sweeping scope: a scoped amend still
+        #: overwrites a commit that may be a peer's, which no pathspec
+        #: wording addresses. `None` means the branch keeps its own text.
+        _body_override: Optional[str] = (
+            _amend_body if is_amend else (_sweep_scope_body if _scope_swept else None)
+        )
         # A sequencer operation (merge/cherry-pick/revert) is the one state in
         # which every deny below offers a remediation git itself rejects -- see
         # `_bt_git_sequencer_in_progress` for why the "prove it is yours"
@@ -10488,7 +10678,7 @@ def check_git_commit_safe_commit_advise(
         # operation, rather than dropped: a peer can still `git add` into the
         # shared index mid-merge, so the scope warning is not vacuous, it just
         # has no scoped alternative to point at.
-        _sequencer = _bt_git_sequencer_in_progress(seg_tokens)
+        _sequencer = _bt_git_sequencer_in_progress(seg_tokens, payload)
         if _sequencer is not None:
             _state_name, _continue_verb = _sequencer
             return _advisory(
@@ -10506,8 +10696,8 @@ def check_git_commit_safe_commit_advise(
         if _bt_compound_add_bare_commit(seg_tokens, segments, seg_index):
             return _deny(
                 (
-                    "Deny: " + _amend_body
-                    if is_amend
+                    "Deny: " + _body_override
+                    if _body_override
                     else (
                         "Deny: this 'git commit' names no scope — it commits the "
                         "whole shared index, not what its own 'git add' named. A "
@@ -10519,11 +10709,13 @@ def check_git_commit_safe_commit_advise(
                 )
                 + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
             )
-        if _bt_solo_bare_commit_index_nonempty(seg_tokens, segments, seg_index):
+        if _bt_solo_bare_commit_index_nonempty(
+            seg_tokens, segments, seg_index, payload
+        ):
             return _deny(
                 (
-                    "Deny: " + _amend_body
-                    if is_amend
+                    "Deny: " + _body_override
+                    if _body_override
                     else (
                         "Deny: this 'git commit' names no scope and stages "
                         "nothing itself — the shared index already holds staged "
@@ -10536,11 +10728,11 @@ def check_git_commit_safe_commit_advise(
                 )
                 + ("\n\n%s" % _commit_bare_note if _commit_bare_note else "")
             )
-        if _bt_sweep_all_holds_unverifiable_paths(seg_tokens):
+        if _bt_sweep_all_holds_unverifiable_paths(seg_tokens, payload):
             return _deny(
                 (
-                    "Deny: " + _amend_body
-                    if is_amend
+                    "Deny: " + _body_override
+                    if _body_override
                     else (
                         "Deny: this 'git commit' sweeps every modified tracked "
                         "file from the worktree ('-a'/'--all'), not just the "
@@ -10560,6 +10752,7 @@ def check_git_commit_safe_commit_advise(
         # operator is told the staged set was never read, so a silent
         # degradation under load stops being indistinguishable from safety.
         _fail_open_reasons = _take_probe_fail_open_reasons()
+        _persist_probe_fail_open(_fail_open_reasons, cmd, session_id, git_root)
         _fail_open_note = (
             "The index was NOT read (%s), so this stayed an advisory because "
             "the guard could not check the staged set — not because it "
@@ -10569,8 +10762,8 @@ def check_git_commit_safe_commit_advise(
         )
         return _advisory(
             (
-                "Advisory: " + _amend_body
-                if is_amend
+                "Advisory: " + _body_override
+                if _body_override
                 else (
                     "Advisory: this 'git commit' names no scope — commits "
                     "whatever is staged, including a peer's concurrent work.\n\n"

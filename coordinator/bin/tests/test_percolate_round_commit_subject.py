@@ -30,8 +30,33 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
 def _load_module():
+    """Load `percolate-round.py` by path, or skip this module if it is absent.
+
+    NEGATIVE SPEC: the skip is not defensive padding around a file that is
+    always there -- it is load-bearing in the PUBLISHED artifact. This test
+    is carried into the klabauter mirror by the `claude-klabauter-coordinator-
+    tests` row while `coordinator/bin/percolate-round.py` is NOT published at
+    all, so an unguarded module-level `exec_module` raises at COLLECTION in
+    the mirror: not one failing test but a hard collection error taking the
+    whole file down, in an artifact nobody in this repo runs. Reported by
+    example-cockpit-repo-30 / doe-claude-em, 2026-09-04.
+
+    Do not "simplify" this back to a bare load on the grounds that the file
+    is obviously present -- it is present HERE, which is exactly the reason
+    the breakage was invisible for as long as it was. Skipping at module
+    level keeps the published copy collectable and says why it skipped;
+    whether `percolate-round.py` ought to be published is a separate
+    publish-scope question this guard deliberately does not decide.
+    """
+    script = _BIN_DIR / "percolate-round.py"
+    if not script.is_file():
+        pytest.skip(
+            "percolate-round.py is not present beside this test (published "
+            "mirror carries the test without its subject)",
+            allow_module_level=True,
+        )
     spec = importlib.util.spec_from_file_location(
-        "percolate_round_commit_subject", _BIN_DIR / "percolate-round.py"
+        "percolate_round_commit_subject", script
     )
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]

@@ -62,31 +62,29 @@ Verb contracts:
     the prospective membership equal the approved set at all.
 
     Refuses (MutateAbort, no write, whole batch aborts) a PM-GATED
-    disposition (`backlogged`/`wont_do` — `_PLAN_TASKS_PM_APPROVAL_GATED_
-    DISPOSITIONS`) on any row in the batch unless the plan's own
-    authorization signal clears — mirrors
-    `coordinator_core.ops.handoff_carry_gate`'s refuse-on-ungated-state
-    pattern (D4). `spun_off` does NOT enter this gate in EITHER mode, as
-    of DoE's 2026-08-05 ruling ("the EM self-issues it now" — no
-    governed-plan carve-out in the ruling's text): moving a row to another
-    plan drops no work, so there is no scope cut for the PM to ratify
-    (AC2). It also occupied its own grouping as of C3 (split out of
-    `defer` — see `_PLAN_TASKS_GROUPING_BY_DISPOSITION`'s docstring) with no
-    corresponding `grouping_approvals` schema key, so gating it here would
-    have made a governed-plan spun_off resolve permanently unsatisfiable
-    rather than merely PM-gated — a stronger and unintended block than the
-    ruling asked for.
+    disposition on any row in the batch unless the plan's own authorization
+    signal clears — mirrors `coordinator_core.ops.handoff_carry_gate`'s
+    refuse-on-ungated-state pattern (D4). WHICH dispositions are PM-gated
+    depends on the mode: GOVERNED gates `backlogged`/`wont_do`/`spun_off`
+    (`_PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS`), LEGACY gates
+    `backlogged`/`wont_do` only (`_PLAN_TASKS_PM_APPROVAL_GATED_
+    DISPOSITIONS`).
 
-    The first half is now stale: DR-183 (2026-08-29) reverses the ruling and
-    re-gates `spun_off`. The second half still holds and is what blocks the
-    widen — `grouping_approvals` has gained no `spun_off` key, and it cannot
-    gain one here, since plan.schema.json is vendored byte-for-byte from
-    DoE-claude under `check_schema_drift`.
-
-    This gate needs no edit of its own when that resolves: it keys on
-    `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS`, so widening that frozenset
-    is what re-gates `spun_off` here. See `check_plan_tasks_grouping_approval`
-    for the full sequence and the legacy-row migration it carries.
+    `spun_off`'s history is why those are two sets and not one. DoE's
+    2026-08-05 ruling took it out of the gate entirely ("the EM self-issues
+    it now"), reasoning that moving a row to another plan drops no work.
+    DR-183 (2026-08-29) reversed that. The reversal could not be honoured
+    until `grouping_approvals` carried a `spun_off` key, since gating a
+    grouping with no approval block makes every governed-plan `spun_off`
+    resolve permanently unsatisfiable rather than merely PM-gated; the key
+    could not originate here either, plan.schema.json being vendored
+    byte-for-byte from DoE-claude under `check_schema_drift`. It arrived on
+    2026-08-30 with plan.schema.json 2.13.0, and
+    `check_plan_tasks_grouping_approval` widened that day. This gate did NOT
+    — it kept keying on the legacy frozenset for both legs until 2026-09-04,
+    so a governed `spun_off` close succeeded here and produced a record the
+    lint then refused. See `check_plan_tasks_grouping_approval` for the full
+    sequence and for why the legacy leg must stay narrow.
 
     Which signal clears the two PM-gated dispositions depends on the plan
     (2026-07-29 grouping-approval contract; see `is_governed_plan`):
@@ -340,6 +338,7 @@ from coordinator_core.frontmatter.body_blocks import (
 from coordinator_core.frontmatter.schema_validate import (
     _apply_cross_field_rules,
     _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS,
+    _PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS,
     _GROUPING_APPROVAL_HINT,
     _PLAN_TASKS_GROUPING_BY_DISPOSITION,
     _PLAN_TASKS_GROUPING_ORDER,
@@ -1541,30 +1540,44 @@ def _resolve(
         # grouping touched, even when several rows in the batch land in the
         # same grouping (or the batch spans more than one grouping).
         #
-        # Narrowed 2026-08-05 (DoE ruling) to `backlogged`/`wont_do` only,
-        # in BOTH governed and legacy mode — `spun_off` no longer requires
-        # any PM ratification at all: "the EM self-issues it now," with no
-        # governed-plan carve-out in the ruling's own text. `spun_off` also
-        # occupies its own grouping as of C3 (2026-08-05), split out of
-        # `defer` (see `_PLAN_TASKS_GROUPING_BY_DISPOSITION`'s docstring),
-        # so a grouping-approval block for it would need a schema key that
-        # does not exist and was not asked for — gating it here would make
-        # every governed-plan spun_off resolve permanently unsatisfiable
-        # rather than merely PM-gated. The wider three-way {spun_off,
-        # backlogged, wont_do} "closed" set (`_PLAN_TASKS_CLOSED_
-        # DISPOSITIONS`) was deleted from schema_validate.py as dead code
-        # (Review: code-reviewer, slice 1 finding) — it had no call site
-        # left once both its consumers narrowed to
-        # `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS`. D5's ordering lint
-        # and its closed-section concept do not consult a disposition set
-        # at all; they run entirely off `_PLAN_TASKS_GROUPING_BY_
-        # DISPOSITION` (schema_validate.py), which already maps `spun_off`
-        # to its own grouping. This gate here checks the narrower,
-        # PM-approval-only set only.
+        # TWO SETS, picked by mode — never one set for both legs.
+        #
+        # GOVERNED reads `_PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS`
+        # ({backlogged, wont_do, spun_off}); LEGACY reads
+        # `_PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS` ({backlogged,
+        # wont_do}). Both legs keyed on the LEGACY set until 2026-09-04,
+        # which left this write gate one member narrower than the lint that
+        # reads the same records: `check_plan_tasks_grouping_approval`
+        # (schema_validate.py) widened for `spun_off` on 2026-08-30 when
+        # plan.schema.json 2.13.0 was vendored carrying
+        # `grouping_approvals.spun_off`, and this gate did not follow. A
+        # governed `spun_off` close therefore SUCCEEDED here and the record
+        # it produced then failed the lint — a write path minting
+        # lint-invalid plans, with the author left holding a warning and no
+        # sanctioned repair. Reported from example-cockpit-repo via DoE-claude.
+        #
+        # The two-set split is the same one the constants themselves carry
+        # (see their own banners): widening the LEGACY set in place would
+        # retroactively invalidate 16 `spun_off` rows across 10 legacy plans
+        # written correctly under DoE's 2026-08-05 relaxation, repairable
+        # only by forging `pm_approved` assent no PM gave. A governed plan
+        # opted into the block contract by carrying the key and can author a
+        # `spun_off` block; a legacy plan cannot.
+        #
+        # D5's ordering lint and its closed-section concept consult no
+        # disposition set at all — they run entirely off
+        # `_PLAN_TASKS_GROUPING_BY_DISPOSITION` (schema_validate.py), which
+        # already maps `spun_off` to its own grouping. Neither set reaches
+        # them.
+        _gated_dispositions = (
+            _PLAN_TASKS_GOVERNED_PM_APPROVAL_GATED_DISPOSITIONS
+            if governed
+            else _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS
+        )
         closed_by_grouping: dict = {}
         for r in resolutions:
             disposition = r["disposition"]
-            if disposition in _PLAN_TASKS_PM_APPROVAL_GATED_DISPOSITIONS:
+            if disposition in _gated_dispositions:
                 grouping = _PLAN_TASKS_GROUPING_BY_DISPOSITION[disposition]
                 closed_by_grouping.setdefault(grouping, []).append((r["id"], disposition))
 

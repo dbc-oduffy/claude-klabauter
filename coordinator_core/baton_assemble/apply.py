@@ -1230,6 +1230,7 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
     plan_ids: list[str] = []
     carried_items: list[dict[str, Any]] = []
     governing_plan: Optional[str] = None
+    sizing_object: Optional[str] = None
     i = 0
     while i < len(args):
         arg = args[i]
@@ -1253,6 +1254,12 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
             # `resolve_lineage`'s own carry logic (`baton_assemble/
             # __init__.py`), never re-derived here.
             governing_plan = arg.split("=", 1)[1]
+        elif arg.startswith("--sizing-object="):
+            # 2026-09-04: the same SCALAR shape as `--governing-plan`, added
+            # because `coordinator-doc-new`'s own `--sizing-object` flag is
+            # plan/roadmap-baton only and a spinoff therefore had no writer
+            # for the field -- see `_build_directives`'s d1c emission.
+            sizing_object = arg.split("=", 1)[1]
         i += 1
 
     if not file_rel:
@@ -1385,6 +1392,23 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
             else:
                 fm = insert_fm_field(fm, "governing_plan", governing_plan)
                 _state["stamped"].append("governing_plan")
+
+        # sizing_object -- byte-for-byte the same scalar posture as
+        # governing_plan directly above: equal existing value is a no-op, a
+        # differing one raises rather than overwriting a recorded citation.
+        if sizing_object:
+            existing_sizing_object = read_fm_field_unquoted(fm, "sizing_object")
+            if existing_sizing_object is not None:
+                if existing_sizing_object != sizing_object:
+                    raise MutateAbort(
+                        f"baton-stamp-carried-ids: {target_abs} already carries "
+                        f"sizing_object={existing_sizing_object!r}, which does not match "
+                        f"this run's resolved value {sizing_object!r} -- refusing to "
+                        "silently overwrite; resolve by hand"
+                    )
+            else:
+                fm = insert_fm_field(fm, "sizing_object", sizing_object)
+                _state["stamped"].append("sizing_object")
 
         if not _state["stamped"]:
             return old_text

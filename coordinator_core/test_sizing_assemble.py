@@ -1015,7 +1015,18 @@ def test_sizing_object_schema_version_and_bump_class():
     # one quiet — and it reads our COMMITTED HEAD, so their red clears when we
     # commit, not when we write. Do not reintroduce the hold-for-silence
     # reasoning.
-    assert schema["x-schema-version"] == "1.18.0"
+    # Moved 1.18.0 -> 1.20.0 (2026-09-05) after reading what the two bumps
+    # added, per this note's own instruction. Both are `nested-field-additive`
+    # and the schema states them itself in `x-bump-note`: 1.19.0 adds optional
+    # `em_analysis` (topic-keyed EM analysis, closing the bug-backlog row about
+    # analysis degrading to unqueryable prose); 1.20.0 adds optional
+    # `blocked_by` and `awaiting_gate`, the two fields the engine's own sizing
+    # narration already told EMs to write. Nothing joined `required` and no
+    # existing property changed shape.
+    #
+    # The pin had gone red the way the note above predicts: the schema was
+    # re-vendored at 6c19ce193e (2026-08-30) and this number was not read.
+    assert schema["x-schema-version"] == "1.20.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop
@@ -1693,3 +1704,71 @@ def test_breadth_collapse_and_bare_raise_paths_unchanged():
 
 def test_breadth_detent_is_declared_in_the_enum():
     assert "probe_raise_on_breadth" in sa.DETENT_ENUM
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-05 route flight recorder (cross-repo memo
+# 2026-09-05-doe-claude-em-sizing-route-flight-recorder-should-emit-itself):
+# the lobby's stage rows are computed from route + resized tshirt rather than
+# transcribed by the EM. The failure these cover is the one transcription has:
+# a chain that stops one row short, or a terminal picked from the route instead
+# of the size.
+# ---------------------------------------------------------------------------
+
+
+def test_every_route_in_the_enum_has_a_stage_chain():
+    """Totality is the point. A route added to ROUTE_ENUM without a chain would
+    emit a recorder that silently stops early, so the table asserts at import —
+    this test is the statement of that contract, not a second implementation."""
+    for route_name in sa.ROUTE_ENUM:
+        chain = sa.stages(route_name, "M")
+        assert chain["rows"], route_name
+
+
+def test_terminal_is_a_function_of_size_not_route():
+    """XS/S close at quick-wrap, M and above at /workstream-complete — the one
+    rule most likely to be got wrong by hand, because the route is the salient
+    field and the size is not."""
+    assert sa.stages("plan", "S")["terminal"] == "quick-wrap"
+    assert sa.stages("plan", "M")["terminal"] == "/workstream-complete"
+    assert sa.stages("dispatch", "XS")["terminal"] == "quick-wrap"
+    assert sa.stages("dispatch", "M")["terminal"] == "/workstream-complete"
+
+
+def test_a_lobby_owned_chain_ends_on_its_terminal():
+    chain = sa.stages("spec-dispatch", "S")
+    assert chain["owned_by"] == "lobby"
+    assert chain["rows"][-1] == chain["terminal"] == "quick-wrap"
+
+
+def test_a_room_owned_route_records_an_entry_row_and_stops():
+    """shape/roadmap/goal-setting/pm-decision: the room owns everything after
+    the entry, so a chain guessed here would be stages nobody agreed to."""
+    for route_name in ("shape", "roadmap", "goal-setting", "pm-decision"):
+        chain = sa.stages(route_name, "XL")
+        assert chain["terminal"] is None, route_name
+        assert len(chain["rows"]) == 1, route_name
+        assert chain["owned_by"] == route_name
+
+
+def test_route_returns_the_chain_for_the_RESIZED_tshirt():
+    """A probe that moved the notch moves the terminal with it — reading the
+    chain off the caller's original t-shirt is the bug this pins."""
+    collapsed = sa.route(estimate={"tshirt": "M"}, probe_signal="collapse")
+    assert collapsed["resolved_estimate"]["tshirt"] == "S"
+    assert collapsed["route"] == "spec-dispatch"
+    assert collapsed["stages"]["terminal"] == "quick-wrap"
+
+
+def test_express_lane_still_carries_a_chain():
+    """D3 persists no sizing object on this arm, but the ask still runs work and
+    still closes. An absent field here would make absence mean two things."""
+    result = sa.route(estimate={"tshirt": "XS"}, express_lane=True)
+    assert result["stages"]["rows"] == ["the work", "quick-wrap"]
+
+
+def test_stages_mutates_nothing_and_is_stable_across_calls():
+    first = sa.stages("plan", "M")
+    first["rows"].append("tampered")
+    second = sa.stages("plan", "M")
+    assert "tampered" not in second["rows"]

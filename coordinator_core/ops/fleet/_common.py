@@ -1150,7 +1150,26 @@ def parse_frontmatter_field(path: Path, key: str) -> Optional[str]:
         return None
     if text.startswith("---"):
         return None
-    return read_fm_field_unquoted(text[:4096], key)
+    # WHOLE-DOCUMENT SCAN, not a head window. This read used to be
+    # `text[:4096]`, which cost no I/O to widen (`read_text` above already has
+    # the entire file in memory) and bought nothing but a silent false
+    # negative: an unfenced sizing-object spells `status:` as an ordinary
+    # top-level key wherever the scaffolder happened to put it, and on this
+    # corpus three records carried it at byte 5693, 6385 and 9051 — past the
+    # window, so they read as `status: None` and
+    # `fleet.archive_terminal_sizings` reported a clean sweep while they
+    # stranded. That is the SAME failure shape, one layer down, that this
+    # function's own UNFENCED FALLBACK docstring records for 2026-08-26: a
+    # reader disagreeing with the corpus, failing toward "nothing to do".
+    # The window also mis-taught its own investigation — the three records
+    # that DID sweep were read as correlating with a missing trailing
+    # `# draft | sized | ...` comment, when the real discriminator was byte
+    # offset.
+    #
+    # Safe to widen because `read_fm_field`'s pattern is `^<key>:` under
+    # re.MULTILINE — column-anchored, so a nested/indented `status:` inside a
+    # `system:` block cannot match, and only a genuine top-level key can.
+    return read_fm_field_unquoted(text, key)
 
 
 def parse_frontmatter_status(path: Path) -> Optional[str]:

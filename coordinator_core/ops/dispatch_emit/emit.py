@@ -589,12 +589,36 @@ def _first_paragraph(section_body: str) -> Optional[str]:
 
 
 def _plan_title(plan_text: str, fallback: str) -> str:
-    """The plan's H1 title (``# <title>``), or ``fallback`` (the plan's file
-    stem) when no H1 is present in the body."""
-    match = re.search(r"^#\s+(.+?)\s*$", plan_text, re.MULTILINE)
-    if match is None:
-        return fallback
-    return match.group(1)
+    """The plan's H1 title (``# <title>``), read from the BODY; falling back to
+    frontmatter ``title:``, then to ``fallback`` (the plan's file stem).
+
+    The body restriction is the load-bearing part. A YAML comment is
+    ``# <text>`` — character-identical to a Markdown H1 — so an H1 search over
+    the whole file matches the first commented line in the frontmatter block
+    instead. ``coordinator-doc-new --type plan`` scaffolds optional keys
+    commented out, so the plan a caller is most likely to hand this op is
+    exactly the one that mis-renders: every executor brief opened
+    ``Plan: # problem_set: inline   # ratified problem-set slug or`` rather
+    than the plan's name (doe-claude-em, 2026-09-05).
+
+    ``title:`` sits between the H1 and the file stem rather than above the H1
+    because the H1 is what a reader of the rendered brief sees as the plan's
+    name; the frontmatter key is the answer for a plan whose body carries no
+    H1 at all, which the file stem could only approximate.
+    """
+    split = split_frontmatter(plan_text)
+    body = split.body_with_leading_newline if split is not None else plan_text
+
+    match = re.search(r"^#\s+(.+?)\s*$", body, re.MULTILINE)
+    if match is not None:
+        return match.group(1)
+
+    if split is not None:
+        fm_title = read_fm_field_unquoted(split.fm_text, "title")
+        if fm_title and fm_title.strip():
+            return fm_title.strip()
+
+    return fallback
 
 
 def derive_plan_context(plan_text: str, *, fallback_title: str) -> PlanContext:

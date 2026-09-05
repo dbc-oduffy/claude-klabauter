@@ -488,6 +488,90 @@ def test_derive_progress_keeps_prose_inside_the_freshness_bound(tmp_path):
     assert "Shipped this week." in result
 
 
+def test_rung2_reads_release_notes_not_only_week_changelogs(tmp_path):
+    """Cutting a release must not be the act that freezes Progress.
+
+    `/merging-to-main` Step 10 `git mv`s the pending-release accumulator into
+    `archive/release-notes/` once a tag is cut, so a repo that ships regularly
+    keeps its freshest Highlights there and nowhere else. A reader that globs
+    only `archive/week-changelogs/` reports the healthiest repos as the most
+    frozen ones. Ruling: both directories are doctrinal, read their union
+    (doe-claude-em, 2026-09-04).
+    """
+    repo_dir = tmp_path / "repo"
+    state_root = repo_dir / "state"
+    (state_root / "week-changelog").mkdir(parents=True)
+    fresh = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    release_notes = repo_dir / "archive" / "release-notes"
+    release_notes.mkdir(parents=True)
+    (release_notes / f"{fresh}-pending-release.md").write_text(
+        f"## Week of {fresh}\n- Shipped and tagged.\n", encoding="utf-8"
+    )
+
+    result = mod._derive_progress(str(state_root), str(repo_dir))
+    assert "Shipped and tagged." in result
+    assert "Recent commits:" not in result
+
+
+def test_rung2_picks_by_authored_date_not_lexical_order(tmp_path):
+    """Selection is by authored date, never list position.
+
+    `release-notes` sorts before `week-changelogs`, so `sorted(...)[-1]` over a
+    merged list always returns the week-changelogs entry regardless of which is
+    newer — the post-merge copy is exactly the one it discards. The older file
+    below also carries its date only on the parent directory, the shape a
+    filename sort cannot see at all.
+    """
+    repo_dir = tmp_path / "repo"
+    state_root = repo_dir / "state"
+    (state_root / "week-changelog").mkdir(parents=True)
+    now = datetime.now(timezone.utc)
+    newer = now.strftime("%Y-%m-%d")
+    older = (now - timedelta(days=14)).strftime("%Y-%m-%d")
+
+    release_notes = repo_dir / "archive" / "release-notes"
+    release_notes.mkdir(parents=True)
+    (release_notes / f"{newer}-pending-release.md").write_text(
+        f"## Week of {newer}\n- The released one.\n", encoding="utf-8"
+    )
+    wc_archive = repo_dir / "archive" / "week-changelogs" / older
+    wc_archive.mkdir(parents=True)
+    (wc_archive / "pending-release.md").write_text(
+        f"## Week of {older}\n- The superseded one.\n", encoding="utf-8"
+    )
+
+    result = mod._derive_progress(str(state_root), str(repo_dir))
+    assert "The released one." in result
+    assert "The superseded one." not in result
+
+
+def test_rung2_date_tie_goes_to_release_notes(tmp_path):
+    """Same date in both directories is the normal post-merge state — the
+    accumulator was archived and then moved on the same day. The
+    `release-notes/` copy is the one whose contents were actually released, so
+    it wins the tie.
+    """
+    repo_dir = tmp_path / "repo"
+    state_root = repo_dir / "state"
+    (state_root / "week-changelog").mkdir(parents=True)
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    release_notes = repo_dir / "archive" / "release-notes"
+    release_notes.mkdir(parents=True)
+    (release_notes / f"{day}-pending-release.md").write_text(
+        f"## Week of {day}\n- The post-merge copy.\n", encoding="utf-8"
+    )
+    wc_archive = repo_dir / "archive" / "week-changelogs" / day
+    wc_archive.mkdir(parents=True)
+    (wc_archive / f"{day}-pending-release.md").write_text(
+        f"## Week of {day}\n- The pre-merge copy.\n", encoding="utf-8"
+    )
+
+    result = mod._derive_progress(str(state_root), str(repo_dir))
+    assert "The post-merge copy." in result
+    assert "The pre-merge copy." not in result
+
+
 def test_trim_trailing_blank():
     assert mod._trim_trailing_blank("a\nb\n\n\n") == "a\nb"
 
@@ -504,3 +588,88 @@ def test_derive_project_title_cap_200_chars(tmp_path):
     (repo_dir / "README.md").write_text("# " + ("x" * 250) + "\n", encoding="utf-8")
     result = mod._derive_project_title(str(repo_dir))
     assert len(result) == 200
+
+
+def _write_pending_release(root, day, text):
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f"{day}-pending-release.md").write_text(
+        f"## Week of {day}\n- {text}\n", encoding="utf-8"
+    )
+
+
+def test_rung2_reads_release_notes_not_only_week_changelogs(tmp_path):
+    """Cutting a release must not freeze the Progress section.
+
+    `/merging-to-main` Step 10 `git mv`s the accumulator from
+    `archive/week-changelogs/` into `archive/release-notes/`, so a repo that
+    ships regularly keeps its FRESHEST prose in the directory rung 2 used not
+    to read — making the repos with the healthiest release cadence the ones
+    whose tile froze.
+    """
+    repo_dir = tmp_path / "repo"
+    state_root = repo_dir / "state"
+    (state_root / "week-changelog").mkdir(parents=True)
+
+    old = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
+    new = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d")
+    _write_pending_release(repo_dir / "archive" / "week-changelogs" / old, old, "pre-release prose")
+    _write_pending_release(repo_dir / "archive" / "release-notes", new, "post-release prose")
+
+    result = mod._derive_progress(str(state_root), str(repo_dir))
+    assert "post-release prose" in result
+    assert "pre-release prose" not in result
+
+
+def test_rung2_picks_by_authored_date_not_list_position(tmp_path):
+    """`sorted(...)[-1]` over the union is lexical across two directory
+    prefixes, so `week-changelogs/` sorts after `release-notes/` regardless of
+    date. Here the WEEK-CHANGELOGS copy is newer and must win despite its
+    prefix sorting later being irrelevant — and despite its date living on the
+    parent directory rather than the filename."""
+    repo_dir = tmp_path / "repo"
+    state_root = repo_dir / "state"
+    (state_root / "week-changelog").mkdir(parents=True)
+
+    old = (datetime.now(timezone.utc) - timedelta(days=9)).strftime("%Y-%m-%d")
+    new = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    _write_pending_release(repo_dir / "archive" / "release-notes", old, "older released prose")
+    # Date on the PARENT directory only, the shape week-rollover produces.
+    wc = repo_dir / "archive" / "week-changelogs" / new
+    wc.mkdir(parents=True)
+    (wc / "pending-release.md").write_text(
+        f"## Week of {new}\n- newer mid-cycle prose\n", encoding="utf-8"
+    )
+
+    result = mod._derive_progress(str(state_root), str(repo_dir))
+    assert "newer mid-cycle prose" in result
+    assert "older released prose" not in result
+
+
+def test_rung2_date_tie_prefers_release_notes(tmp_path):
+    """Same date in both: the post-merge copy is the one actually released."""
+    repo_dir = tmp_path / "repo"
+    state_root = repo_dir / "state"
+    (state_root / "week-changelog").mkdir(parents=True)
+
+    day = (datetime.now(timezone.utc) - timedelta(days=3)).strftime("%Y-%m-%d")
+    _write_pending_release(repo_dir / "archive" / "week-changelogs" / day, day, "week-changelogs copy")
+    _write_pending_release(repo_dir / "archive" / "release-notes", day, "release-notes copy")
+
+    result = mod._derive_progress(str(state_root), str(repo_dir))
+    assert "release-notes copy" in result
+    assert "week-changelogs copy" not in result
+
+
+def test_rung2_staleness_bound_still_applies_to_the_union_winner(tmp_path):
+    """Widening discovery must not smuggle stale prose back in: a
+    release-notes copy beyond the bound still loses to the git-log rung."""
+    repo_dir = tmp_path / "repo"
+    state_root = repo_dir / "state"
+    (state_root / "week-changelog").mkdir(parents=True)
+
+    stale = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%d")
+    _write_pending_release(repo_dir / "archive" / "release-notes", stale, "very old released prose")
+
+    result = mod._derive_progress(str(state_root), str(repo_dir))
+    assert "very old released prose" not in result
+    assert "Recent highlights:" not in result

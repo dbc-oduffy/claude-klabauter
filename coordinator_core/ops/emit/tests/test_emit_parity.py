@@ -270,6 +270,43 @@ def _neutralize_post_golden_handoff_fields(records: list) -> list:
     return out
 
 
+
+# --------------------------------------------------------------------------- rollups review legs
+# The golden's week row credits a review the corrected emitter does not: the fixture's only
+# review-trail file is `2026-07-01-120000-fixture-review-alpha.json`, dated into ISO 2026-W27,
+# and the golden counts it into the 2026-W28 row as `reviews_conducted: 1, verdicts {ok: 1}`.
+# That is not fixture drift — it is the retired bash oracle's own lifetime-count behaviour,
+# frozen: SECTION 5 counted the ENTIRE live+archive trail with no period filter, so every week
+# row it ever emitted carried a lifetime measure beside weekly ones under one `period` label.
+# `rollups._review_trail_facts` is now period-scoped to the row's own `fact_window`, so the
+# golden and the emitter disagree BY DESIGN on exactly these two keys.
+#
+# Neutralized on BOTH sides rather than dropped from `_SECTION_DROP_KEYS`: a global drop would
+# also blank the leg this fix just changed, in both parity paths, which is the one place the
+# coverage is worth most. The leg's real oracle is
+# `test_routine_signals_native_ports.TestReviewTrailFactsPeriodScope` — window bounds
+# (inclusive, both ends), the undatable-filename exclusion, and a whole-row assertion that the
+# emitted `fact_window` and the window the counts were taken over are the same two values.
+# Assert there, never here; this sentinel only stops a frozen pre-fix capture from re-asserting
+# the defect it recorded.
+_ROLLUP_PRE_FIX_REVIEW_KEYS = frozenset({"reviews_conducted", "verdicts"})
+
+
+def _neutralize_pre_fix_rollup_review_legs(records: list) -> list:
+    """Sentinel `reviews_conducted`/`verdicts` in rollup records, both sides of the diff."""
+    out = []
+    for record in records:
+        if isinstance(record, dict) and isinstance(record.get("deterministic_facts"), dict):
+            record = dict(record)
+            facts = dict(record["deterministic_facts"])
+            for key in _ROLLUP_PRE_FIX_REVIEW_KEYS:
+                if key in facts:
+                    facts[key] = _LIVE_STATE_SENTINEL
+            record["deterministic_facts"] = facts
+        out.append(record)
+    return out
+
+
 def _neutralize_live_coordinator_state_routine_signals(records: list) -> list:
     """Sentinel-normalize the two live-coordinator-state routine_signals record kinds.
 
@@ -401,6 +438,10 @@ def assert_section_parity(name: str, ctx=None) -> None:
         records = _neutralize_live_coordinator_state_routine_signals(records)
         exp_records = _neutralize_live_coordinator_state_routine_signals(exp_records)
 
+    if name == "rollups":
+        records = _neutralize_pre_fix_rollup_review_legs(records)
+        exp_records = _neutralize_pre_fix_rollup_review_legs(exp_records)
+
     got_r = _section_normalize_and_sort(records)
     exp_r = _section_normalize_and_sort(exp_records)
     assert got_r == exp_r, (
@@ -450,6 +491,9 @@ def assert_full_parity(emission: dict) -> None:
         if name == "handoffs":
             exp_records = _neutralize_post_golden_handoff_fields(exp_records)
             got_records = _neutralize_post_golden_handoff_fields(got_records)
+        if name == "rollups":
+            exp_records = _neutralize_pre_fix_rollup_review_legs(exp_records)
+            got_records = _neutralize_pre_fix_rollup_review_legs(got_records)
         assert _normalize_and_sort(got_records) == _normalize_and_sort(exp_records), (
             f"full parity: section {name!r} record mismatch"
         )

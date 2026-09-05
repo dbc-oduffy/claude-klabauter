@@ -109,6 +109,7 @@ __all__ = [
     "head_sha",
     "head_tree_sha",
     "source_sha_suffix",
+    "format_source_sha_suffix",
     "read_tree_spine",
     "head_blobs",
 ]
@@ -573,8 +574,23 @@ def head_sha(repo: Union[str, Path]) -> Optional[str]:
 
 def source_sha_suffix(repo: Union[str, Path]) -> str:
     """The mirror-currency stamp every percolate commit subject carries:
-    `" [source <sha12>]"` for `repo`'s HEAD, or `""` when HEAD does not
-    resolve.
+    `" [source-head <sha12>]"` for `repo`'s HEAD, or `""` when HEAD does
+    not resolve.
+
+    THE STAMP NAMES HEAD; IT DOES NOT NAME THE PUBLISHED BYTES. Percolate
+    copies the source WORKTREE, so the payload equals this sha only when the
+    source tree happens to be clean for the paths carried -- on a box running
+    50-70 concurrent sessions in one tree that is close to never. Measured
+    2026-09-04 (example-cockpit-repo-30): publish `db32afc5` stamped `5392a8009218`
+    and carried 30,263 bytes of `generate_exec_summary.py`, while that sha
+    holds 32,529 -- the published bytes matched NO commit in the source's
+    history, being a pre-fix state plus an in-flight edit.
+
+    THE SPELLING IS THE FIX AND IS LOAD-BEARING. It was `" [source <sha>]"`,
+    which reads as a claim about provenance of the bytes, and consumers acted
+    on it as one. Do NOT restore the shorter spelling for tidiness: `-head`
+    is what makes the stamp true. What it now asserts is exactly what it can
+    know -- the source repo's HEAD at publish time.
 
     WHY THIS EXISTS. A percolate commit subject named the paths it carried
     and the rows that produced them, but never the SOURCE commit those bytes
@@ -584,9 +600,17 @@ def source_sha_suffix(repo: Union[str, Path]) -> str:
     own text (example-retrieval-repo-ue-addon-em, 2026-08-31: a fix committed at
     `40abe011d` stayed live as a crash for a mirror consumer, and the only
     available currency check was a hand-rolled grep for `if parsed.tzinfo is
-    None`). With the source sha in the subject, `git -C <mirror> log -1`
-    answers it, and `git -C <source> merge-base --is-ancestor <fix> <stamp>`
-    answers it exactly.
+    None`). With the source-head sha in the subject, `git -C <mirror> log -1`
+    names the source commit the round ran from.
+
+    IT DOES NOT ESTABLISH THAT A GIVEN FIX IS IN THE PUBLISHED BYTES. This
+    paragraph used to end "`git -C <source> merge-base --is-ancestor <fix>
+    <stamp>` answers it exactly", and that sentence is why this defect cost
+    what it did: a consumer ran exactly that query, got `yes`, and the fix
+    was not in the mirror (2026-09-04, example-cockpit-repo-30). The query answers
+    only whether the fix was in the SOURCE's history at publish time, which
+    is a different question from whether the published bytes contain it --
+    see the block above. Do not restore an "exactly" here.
 
     Lives here, beside `head_sha`, rather than in any one publish CLI: all
     three legs that write mirror history (`publish.py`, `percolate-round.py`,
@@ -602,8 +626,27 @@ def source_sha_suffix(repo: Union[str, Path]) -> str:
     the stamp is strictly what this function's absence produced. Zero-spawn
     by construction -- `head_sha` reads `HEAD`/`packed-refs` directly.
     """
-    sha = head_sha(repo)
-    return f" [source {sha[:12]}]" if sha else ""
+    return format_source_sha_suffix(head_sha(repo))
+
+
+def format_source_sha_suffix(sha: Optional[str]) -> str:
+    """THE one place the stamp's bytes are spelled. `" [source-head <sha12>]"`,
+    or `""` for a falsy sha.
+
+    Split out from `source_sha_suffix` so the three publish legs cannot
+    drift: two of them resolve their sha differently (publish.py may use a
+    round-pinned sha rather than a fresh HEAD read, closing a mid-run race),
+    which is why publish.py could not simply call `source_sha_suffix` and
+    kept its own copy of the format string instead. That copy is exactly the
+    drift `test_publish_commit_subject_names_source_sha.py` exists to
+    prevent, and the test's own docstring asserted all three legs delegate
+    while checking only two -- publish.py, the leg that actually writes the
+    mirror, was the unchecked one (example-cockpit-repo-30, 2026-09-04, who found
+    the same duplication had made a docstring fix half a fix).
+
+    Resolve the sha however the caller must; format it only here.
+    """
+    return f" [source-head {sha[:12]}]" if sha else ""
 
 
 def head_tree_sha(repo: Union[str, Path]) -> Optional[str]:

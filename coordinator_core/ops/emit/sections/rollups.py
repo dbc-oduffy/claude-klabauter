@@ -30,6 +30,19 @@ verbatim, ``created >= cutoff`` with missing-``created`` excluded, applied befor
 Port of: emit-cockpit-snapshot.sh (DoE 07eedcfb, 2026-07-19) § SECTION 5 —
   Completion Rollup. Byte/semantic parity port.
 Spec backlink: pln-tc-3-emission-stack-python-por-c9595b § P05
+
+DIVERGENCE from the bash oracle (deliberate, per
+docs/plans/2026-09-04-the-weekly-completion-count-means-the-week.md):
+  bash computed WEEK facts over the chain-deduped set drawn from the FULL 30-day pull, with
+  no filter narrowing it to the week ``period`` names, and derived both ``period`` labels
+  (``_local_day`` / ``_iso_week``) from the machine's wall clock (``date.today()``) rather
+  than from the emission's own ``ctx.observed_at``. That means every completion in the
+  30-day window was counted in each of the next several weekly readings, and a re-emitted
+  historical snapshot was stamped with today's week instead of its own. This module instead
+  narrows the WEEK grain's fact inputs to completions whose ``created`` falls inside the ISO
+  week of ``ctx.observed_at`` (see ``collect``), and derives ``period`` for both grains from
+  ``ctx.observed_at``, never the wall clock. A reader diffing this module against the bash
+  oracle and "restoring parity" here would reintroduce the defect this plan removes.
 """
 
 from __future__ import annotations
@@ -37,11 +50,13 @@ from __future__ import annotations
 import datetime
 import os
 import re
+from typing import Optional
 
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections._shared import (
     _validate_review_trail_file,
+    review_trail_date_prefix,
     normalize_frontmatter,
 )
 from coordinator_core.ops.emit.sections.review_trail import _list_review_trail_paths
@@ -94,23 +109,82 @@ def _since_cutoff(ctx: EmitContext) -> str:
     return cutoff.strftime("%Y-%m-%d")
 
 
+def _observed_date(ctx: EmitContext) -> datetime.date:
+    """Calendar date of ``ctx.observed_at`` — the one parse of that field in this module.
+
+    ``_since_cutoff``, ``_local_day``, ``_iso_week`` and ``collect``'s week filter all need
+    the emission's own instant as a date; this is where that string is decoded, once.
+    """
+    return (
+        datetime.datetime.strptime(ctx.observed_at, "%Y-%m-%dT%H:%M:%SZ")
+        .replace(tzinfo=datetime.timezone.utc)
+        .date()
+    )
+
+
 def _local_day(ctx: EmitContext) -> str:
-    """Local day (YYYY-MM-DD) — native port of the ``coordinator-daily-day.sh`` seam.
+    """Day (YYYY-MM-DD) of ``ctx.observed_at`` — native port of the ``coordinator-daily-day.sh`` seam.
 
     ``coordinator_local_day()`` in the bash lib is ``date -I 2>/dev/null || date +%Y-%m-%d``
-    — the LOCAL calendar day, no repo/coordinator-root dependency whatsoever. Python's
-    ``date.today()`` (local system clock) is exactly that value; there is nothing left for
-    a subprocess to resolve that this call doesn't already give natively, so the bash
-    bridge is retired outright rather than kept as a fallback path.
+    — the LOCAL calendar day, no repo/coordinator-root dependency whatsoever. That argument
+    is about LOCAL-vs-repo resolution: it establishes that no coordinator-root lookup is
+    needed, not that reading the machine's wall clock is licensed. Every other field in this
+    emission is anchored to ``ctx.observed_at``; a re-emitted historical snapshot must stamp
+    the day of the instant it is ABOUT, not the day it happens to run on.
     """
-    del ctx  # unused: local-day resolution has no coordinator/repo dependency
-    return datetime.date.today().isoformat()
+    return _observed_date(ctx).isoformat()
 
 
-def _iso_week() -> str:
-    """Current ISO week ``YYYY-Www`` (bash:1065 python3 one-liner; perl fallback collapsed)."""
-    y, w, _ = datetime.date.today().isocalendar()
+def _iso_week(ctx: EmitContext) -> str:
+    """ISO week ``YYYY-Www`` of ``ctx.observed_at`` (bash:1065 python3 one-liner; perl fallback collapsed)."""
+    y, w, _ = _observed_date(ctx).isocalendar()
     return f"{y}-W{w:02d}"
+
+
+def _iso_week_start(year: int, week: int) -> datetime.date:
+    """Monday of ISO ``(year, week)`` — the same tuple ``collect``'s WEEK filter compares.
+
+    ``date.fromisocalendar`` is the ISO-calendar inverse of ``date.isocalendar()``; it is what
+    lets the emitted bounds agree with the filter that actually selected the records instead of
+    being independently recomputed from a formatted label (see the ISO-year-boundary note in
+    ``collect``).
+    """
+    return datetime.date.fromisocalendar(year, week, 1)
+
+
+def _iso_week_end(year: int, week: int) -> datetime.date:
+    """Sunday of ISO ``(year, week)`` — inclusive end of the same window ``_iso_week_start`` opens."""
+    return datetime.date.fromisocalendar(year, week, 7)
+
+
+def _created_date(fm: dict) -> Optional[datetime.date]:
+    """``created`` as a date, normalized exactly as the records seam normalizes it.
+
+    The seam's own ``since`` filter is ``str(r['frontmatter']['created']) >= since_cutoff``
+    (``ops/records_query``'s collect, bash-oracle parity with query-records.js:1469-1493) —
+    a lexicographic compare over ``str()``, which is what makes it indifferent to whether
+    the parser handed back a ``str`` or a ``date``, and what lets a full-timestamp
+    ``created`` through its cutoff. This mirrors that normalization so the week filter
+    excludes exactly what the seam excludes and no more: ``str()`` then the leading
+    ``YYYY-MM-DD``.
+
+    Taking ``[:10]`` rather than parsing the whole value is deliberate. ``date.fromisoformat``
+    rejects every timestamp form — ``"...T12:00:00Z"``, the bare ``T`` form, and the
+    space-separated form all raise — so parsing the full string would silently drop a record
+    the seam had already counted, losing it from the week's facts with no signal. The corpus
+    carries only bare ``YYYY-MM-DD`` strings today (486/486 at 2026-09-04); this keeps the
+    divergence from opening if that ever stops being true.
+
+    Returns ``None`` when ``created`` is absent or not date-shaped — excluded, never raised,
+    matching the seam's missing-``created``-excluded rule.
+    """
+    created = fm.get("created")
+    if created is None:
+        return None
+    try:
+        return datetime.date.fromisoformat(str(created)[:10])
+    except ValueError:
+        return None
 
 
 # --------------------------------------------------------------------------- fact helpers
@@ -204,8 +278,13 @@ def _today_chains(today_fms: list[dict]) -> int:
 
 
 # --------------------------------------------------------------------------- review trail (week)
-def _review_trail_facts(ctx: EmitContext) -> tuple[int, dict]:
-    """Return ``(reviews_conducted, verdicts)`` from the review-trail VALID set.
+def _review_trail_facts(
+    ctx: EmitContext, window_start: str, window_end: str
+) -> tuple[int, dict]:
+    """Return ``(reviews_conducted, verdicts)`` for the review trail WITHIN a window.
+
+    ``window_start``/``window_end`` are inclusive ``YYYY-MM-DD`` bounds — the same
+    window the calling row publishes as its own ``fact_window``.
 
     Delegates quarantine filtering to ``_validate_review_trail_file`` from ``_shared`` so
     the counted valid set matches what ``review_trail.collect`` emits: a record is valid iff
@@ -215,13 +294,39 @@ def _review_trail_facts(ctx: EmitContext) -> tuple[int, dict]:
     Delegates file listing to ``review_trail._list_review_trail_paths`` — the same
     in-process native lister SECTION 3 uses — so both sections read the identical
     live+archive union via one implementation (no bash spawn either side).
+
+    PERIOD SCOPE. This function used to take no window and count the ENTIRE
+    live+archive trail, so a week row read ``chains_completed 35`` (its own ISO week)
+    beside ``reviews_conducted 3167`` (all time) under one ``period`` label — a weekly
+    measure and a lifetime one in the same row. Same defect class as the completion
+    legs fixed at 130435f60c, one field over. The row now names a ``fact_window``
+    outright, which makes an unfiltered leg a contradiction on the wire rather than
+    merely an undocumented one.
+
+    The narrow happens on the FILENAME date, before the file is opened — the date half
+    of ``reviewed_at`` is in the basename, so scoping costs nothing and SAVES the read
+    and JSON parse of every out-of-window file (~3.1k on this corpus, for a week's worth
+    kept). An undatable filename reads ``1970-01-01`` and falls outside every real
+    window; it is excluded rather than attributed to the current period, and stays
+    visible in ``review_trail.collect``'s own malformed bucket, which is unscoped and
+    unchanged.
+
+    Negative-spec: this narrows COUNTS in a period-labelled row only. It is not a
+    filter on the review-trail section itself, which still emits the full union.
     """
     paths = _list_review_trail_paths(ctx)
 
     count = 0
     verdicts: dict = {}
     for filepath in paths:
-        if not filepath or not os.path.isfile(filepath):
+        if not filepath:
+            continue
+
+        day = review_trail_date_prefix(filepath)
+        if day < window_start or day > window_end:
+            continue
+
+        if not os.path.isfile(filepath):
             continue
 
         validated, _reason = _validate_review_trail_file(filepath)
@@ -240,11 +345,21 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     """Build [DayRollup, WeekRollup] (records); no malformed bucket (bash SECTION 5)."""
     completions = _query_completions(ctx)
     today = _local_day(ctx)
-    iso_week = _iso_week()
+    iso_week = _iso_week(ctx)
     max_commit_sha = _max_commit_sha(completions)
 
-    # --- WEEK: chain-deduped facts (bash:998-1052) ---
-    deduped = _dedup_by_chain(completions)
+    # --- WEEK: narrowed to the ISO week named by `period`, then chain-deduped ---
+    observed_year, observed_week, _ = _observed_date(ctx).isocalendar()
+    week_completions = [
+        c
+        for c in completions
+        if (created := _created_date(_fm(c))) is not None
+        and created.isocalendar()[:2] == (observed_year, observed_week)
+    ]
+    # ISO year is not the calendar year at the boundary — 2026-12-28..31 are ISO 2027-W01 —
+    # so the (year, week) pair is compared as a tuple and never as a formatted label.
+
+    deduped = _dedup_by_chain(week_completions)
     deduped_fms = [e["fm"] for e in deduped]
     chains_completed = sum(
         1 for e in deduped if not e["chain_key"].startswith("__null_")
@@ -254,7 +369,9 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
     null_chains = sum(1 for e in deduped if e["chain_key"].startswith("__null_"))
     total_chains = chains_completed + null_chains
 
-    week_reviews, week_verdicts = _review_trail_facts(ctx)
+    week_start = _iso_week_start(observed_year, observed_week).isoformat()
+    week_end = _iso_week_end(observed_year, observed_week).isoformat()
+    week_reviews, week_verdicts = _review_trail_facts(ctx, week_start, week_end)
     has_today = any(_fm(c).get("created") == today for c in completions)
     week_freshness = "current" if has_today else "stale"
 
@@ -281,6 +398,11 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         "provenance": ctx.provenance(
             "coordinator_artifact", path="archive/completed", derivation="rolled_up"
         ),
+        "fact_window": {
+            "kind": "iso-week",
+            "start": week_start,
+            "end": week_end,
+        },
     }
 
     # --- DAY: raw today-filtered facts, NOT deduped (bash:1127-1193) ---
@@ -310,6 +432,7 @@ def collect(ctx: EmitContext) -> tuple[list[dict], list[dict]]:
         "provenance": ctx.provenance(
             "coordinator_artifact", path="archive/completed", derivation="rolled_up"
         ),
+        "fact_window": {"kind": "day", "start": today, "end": today},
     }
 
     return [day_rollup, week_rollup], []

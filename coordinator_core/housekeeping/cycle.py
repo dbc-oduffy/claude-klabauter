@@ -87,7 +87,6 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
-from coordinator_core.claim_state import handoff_claim_dir
 from coordinator_core.housekeeping import archive_index as archive_index_mod
 from coordinator_core.housekeeping.archive_index import ArchiveIndex
 from coordinator_core.housekeeping.corpus import read_live_corpus
@@ -105,7 +104,6 @@ from coordinator_core.housekeeping.terminal import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
-from coordinator_core.liveness import cs_claim_holder_live, resolve_live_session_ids
 from coordinator_core.ops.fleet import archive_actioned_memos
 from coordinator_core.ops.fleet._common import Move, archive_and_commit, handoff_archive_dest
 from coordinator_core.ops.fleet.archive_terminal_handoffs import _dirty_handoff_relpaths
@@ -120,24 +118,6 @@ PathLike = Union[str, Path]
 #: there, and this module's own scope is which records to OFFER to
 #: `evaluate_gate_clear`, not gate-clear's own internal vocabulary).
 _AWAITING_GATE = "awaiting_gate"
-
-
-def _record_claimant(record: Dict[str, Any]) -> str:
-    """The session id a record names as holding it, or `""`.
-
-    `claimed_by` wins over the retired `consumed_by`, mirroring
-    `coordinator_core.coverage :: _parse_handoff_consumed_by`'s own
-    dual-tolerant precedence rather than inventing a second rule. Reading
-    only `consumed_by` reads a name no live record carries -- 0 of 298 at
-    the time this was written, against 30 carrying `claimed_by` -- which is
-    a rail that cannot fire and a unit test that passes because its fixture
-    was authored from the same wrong field.
-    """
-    for key in ("claimed_by", "consumed_by"):
-        value = record.get(key)
-        if value:
-            return str(value).strip()
-    return ""
 
 
 def _transition_target_rel(worktree_root: Path, transition_params: Any) -> Set[str]:
@@ -165,34 +145,6 @@ def _transition_target_rel(worktree_root: Path, transition_params: Any) -> Set[s
         return {candidate.resolve().relative_to(root).as_posix()}
     except (ValueError, OSError):
         return set()
-
-
-def _claim_holder_live_predicate(common_dir: Path):
-    """Build the `claim_holder_live(path, record) -> bool` predicate
-    `compute_terminal_set` (C6b) expects, closing over `common_dir` so each
-    call only needs the per-record `path`.
-
-    Delegates entirely to `coordinator_core.liveness.cs_claim_holder_live`
-    (session-registry-backed, DR5 single-liveness-key) via the shared
-    `handoff_claim_dir` convention (`coordinator_core.claim_state`) —
-    mirrors `archive_terminal_handoffs.py`'s own Check 4. Fails CLOSED to
-    "not live" (never retains) on an unexpected liveness-check error: a
-    stuck claim dir the liveness check cannot resolve should not silently
-    wedge every terminal record behind it forever, and this module's own
-    caller (C7's brightline test) never exercises a genuinely broken
-    liveness backend — the alternative (fail OPEN to "live", i.e. retain)
-    would convert an unrelated liveness-check bug into a routine archival
-    stall, on a check that is already best-effort by its own contract.
-    """
-
-    def predicate(path: Path, record: Dict[str, Any]) -> bool:
-        claim_dir = handoff_claim_dir(common_dir, path)
-        try:
-            return cs_claim_holder_live(str(claim_dir))
-        except OSError:
-            return False
-
-    return predicate
 
 
 def run(
@@ -317,7 +269,6 @@ def run(
     # status --porcelain` only when that arm declines, so the normal path adds
     # no spawn to the cycle's budget. It fails CLOSED: a git failure retains
     # every candidate rather than sweeping them.
-    claim_holder_live = _claim_holder_live_predicate(common_dir)
     excluded = exclude or frozenset()
     candidate_rels = sorted({
         path.relative_to(worktree_root).as_posix()
@@ -357,34 +308,22 @@ def run(
         sorted(set(candidate_rels) | set(memo_candidate_rels)),
         fallback_pathspecs=("state/handoffs", archive_actioned_memos.INBOX_RELDIR),
     )
-    # Read off the record step A already parsed -- the rail costs no I/O
-    # here, where the predecessor sweep paid a per-candidate file read.
-    # `claimed_by` is the live field; `consumed_by` is its retired spelling,
-    # tolerated at lower precedence exactly as `coverage.py ::
-    # _parse_handoff_consumed_by` does. `resolve_live_session_ids` is asked
-    # once, and only when some terminal candidate actually names a session.
-    live_sids = (
-        resolve_live_session_ids()
-        if any(
-            _record_claimant(record)
-            for record in records.values()
-            if record.get("deployment_state") in TERMINAL_DEPLOYMENT_STATES
-        )
-        else frozenset()
-    )
-
     def _retained(path: Path, record: Dict[str, Any]) -> bool:
         """Every ground on which a terminal record is NOT this sweep's to
-        file, in one predicate. A live claim holder is one such ground, not
-        a category of its own -- it had a second parameter of identical
-        shape on `compute_terminal_set` until 2026-08-30."""
+        file, in one predicate.
+
+        Holder liveness is NOT one of them, as of the PM ruling of
+        2026-09-04: "a claim on a baton shouldn't prevent it from getting
+        archived. What matters is that the baton is complete, not the
+        liveness of the holder." Both arms that read it went -- the claim-dir
+        probe (`cs_claim_holder_live`) and the `claimed_by`/`consumed_by`
+        against `resolve_live_session_ids()` fallback -- taking this cycle's
+        only session-registry resolution with them. The sibling deletion, and
+        why the check protected nothing it was credited with, is at
+        `ops/fleet/archive_terminal_handoffs :: _scan_terminal`.
+        """
         rel = path.relative_to(worktree_root).as_posix()
-        if rel in excluded or rel in dirty_rels:
-            return True
-        if claim_holder_live(path, record):
-            return True
-        claimant = _record_claimant(record)
-        return bool(claimant) and claimant in live_sids
+        return rel in excluded or rel in dirty_rels
 
     terminal_entries = compute_terminal_set(records, cap, retained=_retained)
 

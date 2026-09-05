@@ -141,6 +141,46 @@ def _read(path: str) -> str:
         return fh.read()
 
 
+def _isolated_harvest_env(tmpdir: str) -> dict[str, str]:
+    """The environment a harvest subprocess must run under to actually write
+    into `tmpdir` instead of the fleet's live corpora.
+
+    THE OVERRIDES ARE NOT ENOUGH ON THEIR OWN. Both are honoured only by the
+    process the caller ran -- an invariant, not an implementation detail:
+    `queue_promote._outbox_root_override` drops the value unless
+    `op_latency.execution_route()` is IN_PROCESS, and
+    `cli_shared.isolation_root_if_under_test` drops it unless
+    PYTEST_CURRENT_TEST is set. Both gates landed 2026-08-31 (c3b670d620)
+    after a live session's real queue writes were found in a swept
+    `harvest-test-*` tmpdir -- the redirect leaking INTO a test dir was the
+    defect they closed.
+
+    Dispatched warm, a harvest reaches a long-lived server that is neither of
+    those things, so the redirect is dropped there and the write lands in the
+    real corpus. Measured 2026-09-05: fixture-derived rows
+    (`retro-migrate-old-widgets`, `central-scope-deferred-doctrine-note`,
+    traceable by their `from_repo: harvest-*-test-*-em`) sitting in
+    claude-klabauter's own `state/improvement-queue/` and in DoE-claude's
+    `state/lessons-outbox/`, dated 09-02, 09-04 and 09-05, seven of them
+    already staged in DoE's index. `COORDINATOR_WARM=0` forces the cold route,
+    which is what makes the isolation these tests promise actually hold.
+
+    ONE builder for both call sites deliberately. The second copy of this
+    block (in `test_harvest_call_site_second_run_is_idempotent`) is what kept
+    leaking after the first was fixed -- a duplicated fixture env is a second
+    implementation of the isolation contract.
+    """
+    env = dict(os.environ)
+    env["QUEUE_APPEND_OUTPUT_ROOT"] = tmpdir
+    env["LESSON_PROMOTE_OUTBOX_ROOT"] = os.path.join(tmpdir, "state", "lessons-outbox")
+    env["COORDINATOR_WARM"] = "0"
+    # Avoid any ambient DOE_ROOT/CLAUDE_KLABAUTER_ROOT bleeding central-scope writes
+    # out of the isolated tmpdir.
+    env.pop("DOE_ROOT", None)
+    env.pop("CLAUDE_KLABAUTER_ROOT", None)
+    return env
+
+
 def _run_harvest_in_isolated_repo(
     plan_source_path: str,
     extra_env: dict[str, str] | None = None,
@@ -165,13 +205,7 @@ def _run_harvest_in_isolated_repo(
     with open(plan_path, "w", encoding="utf-8") as fh:
         fh.write(_read(plan_source_path))
 
-    env = dict(os.environ)
-    env["QUEUE_APPEND_OUTPUT_ROOT"] = tmpdir
-    env["LESSON_PROMOTE_OUTBOX_ROOT"] = os.path.join(tmpdir, "state", "lessons-outbox")
-    # Avoid any ambient DOE_ROOT/CLAUDE_KLABAUTER_ROOT bleeding central-scope writes
-    # out of the isolated tmpdir.
-    env.pop("DOE_ROOT", None)
-    env.pop("CLAUDE_KLABAUTER_ROOT", None)
+    env = _isolated_harvest_env(tmpdir)
     if extra_env:
         env.update(extra_env)
 
@@ -257,6 +291,11 @@ def test_multiple_fenced_blocks_is_warn_and_skip() -> None:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+@pytest.mark.skip(
+    reason=(
+        "state/bug-backlog/2026-09-05-harvest-tests-write-fixture-lessons-into-dde97ba7de36.yaml -- this test's child CLIs resolve to the PATH launcher (published engine), which ignores LESSON_PROMOTE_OUTBOX_ROOT and writes fixture rows into DoE-claude's live state/lessons-outbox/ on every run. Skipped to stop the write, not to hide a red: it was already failing. Un-skip with the fix."
+    )
+)
 def test_template_comment_is_located_and_deferred_row_harvested(stamped_engine_env: str) -> None:
     """Regression for the silent-data-loss bug: a plan that still carries
     the writing-plans.md template's unedited authoring HTML comment
@@ -619,6 +658,11 @@ def test_coverage_checker_prompt_documents_the_exact_flag_text() -> None:
 # ===========================================================================
 
 
+@pytest.mark.skip(
+    reason=(
+        "state/bug-backlog/2026-09-05-harvest-tests-write-fixture-lessons-into-dde97ba7de36.yaml -- this test's child CLIs resolve to the PATH launcher (published engine), which ignores LESSON_PROMOTE_OUTBOX_ROOT and writes fixture rows into DoE-claude's live state/lessons-outbox/ on every run. This one PASSED: it asserts only the queue leg, while its fixture's doctrine-edit row still reaches the leaking lesson leg. Skipped for the write, not for a red. Un-skip with the fix."
+    )
+)
 def test_harvest_call_site_project_scope_queue_append(stamped_engine_env: str) -> None:
     name = "test_harvest_call_site_project_scope_queue_append"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_VALID)
@@ -638,6 +682,11 @@ def test_harvest_call_site_project_scope_queue_append(stamped_engine_env: str) -
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+@pytest.mark.skip(
+    reason=(
+        "state/bug-backlog/2026-09-05-harvest-tests-write-fixture-lessons-into-dde97ba7de36.yaml -- this test's child CLIs resolve to the PATH launcher (published engine), which ignores LESSON_PROMOTE_OUTBOX_ROOT and writes fixture rows into DoE-claude's live state/lessons-outbox/ on every run. Skipped to stop the write, not to hide a red: it was already failing. Un-skip with the fix."
+    )
+)
 def test_harvest_call_site_doctrine_edit_routes_to_lesson_promote(stamped_engine_env: str) -> None:
     name = "test_harvest_call_site_doctrine_edit_routes_to_lesson_promote"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_VALID)
@@ -672,6 +721,11 @@ def test_harvest_call_site_doctrine_edit_routes_to_lesson_promote(stamped_engine
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+@pytest.mark.skip(
+    reason=(
+        "state/bug-backlog/2026-09-05-harvest-tests-write-fixture-lessons-into-dde97ba7de36.yaml -- this test's child CLIs resolve to the PATH launcher (published engine), which ignores LESSON_PROMOTE_OUTBOX_ROOT and writes fixture rows into DoE-claude's live state/lessons-outbox/ on every run. Skipped to stop the write, not to hide a red: it was already failing. Un-skip with the fix."
+    )
+)
 def test_harvest_call_site_second_run_is_idempotent(stamped_engine_env: str) -> None:
     name = "test_harvest_call_site_second_run_is_idempotent"
     tmpdir = tempfile.mkdtemp(prefix="harvest-idem-test-")
@@ -681,11 +735,7 @@ def test_harvest_call_site_second_run_is_idempotent(stamped_engine_env: str) -> 
         with open(plan_path, "w", encoding="utf-8") as fh:
             fh.write(_read(_FIXTURE_VALID))
 
-        env = dict(os.environ)
-        env["QUEUE_APPEND_OUTPUT_ROOT"] = tmpdir
-        env["LESSON_PROMOTE_OUTBOX_ROOT"] = os.path.join(tmpdir, "state", "lessons-outbox")
-        env.pop("DOE_ROOT", None)
-        env.pop("CLAUDE_KLABAUTER_ROOT", None)
+        env = _isolated_harvest_env(tmpdir)
 
         cmd = ["python3", os.path.abspath(_HARVEST_CLI), "--plan", plan_path]
 
@@ -736,6 +786,11 @@ _FIXTURE_CASE_AGAINST = os.path.join(_FIXTURES_DIR, "valid-spine-with-case-again
 _IMPROVEMENT_QUEUE_SCHEMA = os.path.join(str(data_root("schemas")), "improvement-queue.schema.json")
 
 
+@pytest.mark.skip(
+    reason=(
+        "state/bug-backlog/2026-09-05-harvest-tests-write-fixture-lessons-into-dde97ba7de36.yaml -- this test's child CLIs resolve to the PATH launcher (published engine), which ignores LESSON_PROMOTE_OUTBOX_ROOT and writes fixture rows into DoE-claude's live state/lessons-outbox/ on every run. Skipped to stop the write, not to hide a red: it was already failing. Un-skip with the fix."
+    )
+)
 def test_harvest_carries_case_against_through_to_queue_entry(stamped_engine_env: str) -> None:
     name = "test_harvest_carries_case_against_through_to_queue_entry"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_CASE_AGAINST)
@@ -778,6 +833,11 @@ def test_harvest_carries_case_against_through_to_queue_entry(stamped_engine_env:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+@pytest.mark.skip(
+    reason=(
+        "state/bug-backlog/2026-09-05-harvest-tests-write-fixture-lessons-into-dde97ba7de36.yaml -- this test's child CLIs resolve to the PATH launcher (published engine), which ignores LESSON_PROMOTE_OUTBOX_ROOT and writes fixture rows into DoE-claude's live state/lessons-outbox/ on every run. Skipped to stop the write, not to hide a red: it was already failing. Un-skip with the fix."
+    )
+)
 def test_harvest_omits_case_against_when_row_carries_none(stamped_engine_env: str) -> None:
     name = "test_harvest_omits_case_against_when_row_carries_none"
     result, tmpdir = _run_harvest_in_isolated_repo(_FIXTURE_CASE_AGAINST)
