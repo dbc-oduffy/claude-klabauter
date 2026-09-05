@@ -308,7 +308,7 @@ route, and a `PLACEHOLDER` premise, are both present, machine-readable, and one 
 from a refusal by the same tool that already hard-refuses a missing `--sizing-object`. Flagged as a
 gate that could exist rather than a bug — the design call is the maintainers'.
 
-### F13 — The install leaves the checkout dirty with unignored paths — COSMETIC
+### F13 — The install leaves the checkout dirty with unignored paths — FIXED
 
 A run of the installer plus the test suite leaves `coordinator_core.egg-info/` and
 `.coordinator-local/subagent-share/…` untracked, and `git check-ignore` returns non-zero for both —
@@ -329,9 +329,17 @@ repo's own installer performs — and reports an identity leak into the publishe
 ```
 
 So the documented pre-PR check does not pass on a box that has followed the documented install,
-until the contributor knows to delete a directory nothing told them about. A `.gitignore` entry
-would close both. (The gate itself works, and worked on this log: it also caught a fleet codename
-quoted verbatim from a runtime warning in F14, which is now redacted.)
+until the contributor knows to delete a directory nothing told them about. (The gate itself works,
+and worked on this log: it also caught a fleet codename quoted verbatim from a runtime warning in
+F14, which is now redacted.)
+
+**Patched**, because `.gitignore` already carries the ruling that decides it — *"a path that should
+never be tracked is ignored, not repeatedly deleted … Untracked-but-unignored is the state this
+closes: it was one `git add -A` away from being committed"* (claude-central-em, 2026-08-26, stated
+for both mirrors). `*.egg-info/` and `.coordinator-local/` are exactly that state, so applying the
+repo's own standing ruling is not a judgment call this pass had to make. Verified: `git status
+--porcelain` is clean after an install-plus-test run, and `run-all-checks.py` passes 7/7 without
+deleting anything by hand.
 
 ### F14 — Linux gaps announced by the engine itself — COSMETIC
 
