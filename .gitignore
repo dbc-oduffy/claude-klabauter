@@ -14,6 +14,26 @@ __pycache__/
 *.pyo
 .pytest_cache/
 
+# `*.egg-info/` is written by the editable install THIS REPO'S OWN INSTALLER
+# performs (`scripts/setup.py`'s dependency-provisioning phase runs
+# `pip install -e <root>`), so a contributor who followed the documented
+# install has it, untracked, without being told. It is not merely noise: its
+# `PKG-INFO` carries the operator's real name in an `Author:` field, and
+# `.github/scripts/run-all-checks.py`'s `check-persona-names` scans the
+# working tree, so the documented pre-PR check FAILS on a box that followed
+# the documented install (observed 2026-09-05, Linux cloud dogfood ->
+# docs/reference/linux-cloud-dogfood-friction.md § F13). Per the ruling
+# further down this file, that is closed by ignoring the path, not by
+# deleting it each time.
+*.egg-info/
+
+# `.coordinator-local/subagent-share/<slug>/` is written by the test suite
+# and by session tooling into the CWD's git root -- the same
+# root-on-the-git-root shape the `state/` paragraphs below describe, under a
+# different name. Same remedy, same reason: untracked-but-unignored is one
+# blanket `git add` away from being committed.
+.coordinator-local/
+
 # --- Coordinator working state, never OSS payload ---
 # No publish row ships `state/` here. When it appears it is a stray session
 # writing its own orientation cache or session-hierarchy JSON into the mirror
