@@ -615,11 +615,13 @@ _LESSON_BODY_SPOOL_RELDIR = "state/ceremony/wsc-lesson-body"
 LESSONS_TEMPLATE_DEFAULT: list[dict[str, Any]] = [
     {
         "title": None,
+        "title_file": None,
         "body": None,
         "body_file": None,
         "scope": None,
         "trigger": None,
         "why": None,
+        "why_file": None,
         "how_to_apply": None,
         "target_wiki": None,
         "proposed_target": None,

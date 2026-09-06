@@ -383,6 +383,78 @@ class TestVersionBumpOverride:
 
 
 # ---------------------------------------------------------------------------
+# version_bump_final decline — a deliberate "merge, but cut no tag this
+# time" answer, distinct from leaving the point unanswered
+# (docs/plans/2026-09-06-declined-judgment-answer-is-not-silence.md, C2).
+# ---------------------------------------------------------------------------
+
+class TestVersionBumpDecline:
+    def _stub_git(self, monkeypatch, *, rev_list_out="0\t1\n", tag_out="v1.0.0\n"):
+        def _fake_run_git(args, cwd):
+            if args[0] == "rev-list":
+                return SimpleNamespace(returncode=0, stdout=rev_list_out, stderr="")
+            if args[0] == "tag":
+                return SimpleNamespace(returncode=0, stdout=tag_out, stderr="")
+            raise AssertionError(f"unexpected git call: {args}")
+
+        monkeypatch.setattr(merge_assemble, "_run_git", _fake_run_git)
+
+    def test_decline_disposition_leaves_release_tag_cut_null(self, tmp_path, monkeypatch):
+        self._stub_git(monkeypatch)
+        decisions = {"version_bump_final": {"disposition": "decline"}}
+        do = merge_assemble.brief(repo_root=tmp_path, decisions=decisions).decision_object
+        assert do["artifact"]["release_tag_cut"] is None
+
+    def _stub_all_handlers(self, monkeypatch):
+        # Every directive that lands before the judgment halt (d0/d_grant_write)
+        # must dispatch through a handler that does not need a real repo —
+        # same pattern as TestApplyDispatchTable.test_every_directive_cli_
+        # resolves_in_the_closed_table.
+        for name in merge_apply._CLI_DISPATCH:
+            monkeypatch.setitem(
+                merge_apply._CLI_DISPATCH, name, lambda args, repo_root, _n=name: {"cli": _n}
+            )
+
+    def test_declined_run_halts_without_d2_and_reports_declined(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_SESSION_ID", "test-session")
+        self._stub_git(monkeypatch)
+        self._stub_all_handlers(monkeypatch)
+        decisions = {"version_bump_final": {"disposition": "decline"}}
+        exit_code, report = merge_apply.apply(repo_root=tmp_path, decisions=decisions, force=True)
+        assert exit_code == merge_apply.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert "d2" not in report.get("landed", [])
+        assert report.get("release_tag_cut") is None
+        assert "version_bump_final" in report.get("declined_judgment_points", [])
+        assert "version_bump_final" not in report.get("unresolved_judgment_points", [])
+        # ship_verdict was never answered at all — it stays UNANSWERED, not
+        # conflated with the declined point.
+        assert "ship_verdict" in report.get("unresolved_judgment_points", [])
+
+    def test_bare_string_decline_normalizes_to_disposition_not_override(self, tmp_path, monkeypatch):
+        self._stub_git(monkeypatch)
+        decisions = {"version_bump_final": "decline"}
+        result = merge_assemble.brief(repo_root=tmp_path, decisions=decisions)
+        do = result.decision_object
+        assert do["decisions"]["version_bump_final"] == {"disposition": "decline"}
+        assert do["artifact"]["release_tag_cut"] is None
+        assert result.exit_code == merge_assemble.EXIT_OK
+        assert "error" not in do
+
+    def test_bare_decline_tuple_matches_declared_non_version_dispositions(self):
+        # Review: code-reviewer — Finding 1. Pins `_VERSION_BUMP_FINAL_BARE_
+        # DECLINE` against the point's own declared dispositions so a fourth
+        # non-d2-resolving disposition added to `version_bump_final` and
+        # forgotten here fails loud, instead of quietly falling through to
+        # the override path and being misdiagnosed as a bad tag shape.
+        judgment_points = merge_assemble.build_judgment_points()
+        point = next(jp for jp in judgment_points if jp["id"] == "version_bump_final")
+        non_version_values = {
+            d["value"] for d in point["dispositions"] if "d2" not in (d.get("resolves") or [])
+        }
+        assert non_version_values == set(merge_assemble._VERSION_BUMP_FINAL_BARE_DECLINE)
+
+
+# ---------------------------------------------------------------------------
 # apply() — force bypass + dispatch-table composition (no real subprocess)
 # ---------------------------------------------------------------------------
 

@@ -14,6 +14,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.emit import (
+    MalformedAgentOverrideError,
     MixedAgentTypeRowError,
     NoWavesError,
     ReviewRosterFragmentError,
@@ -23,8 +24,8 @@ from coordinator_core.ops.dispatch_emit.emit import (
     emit_script,
 )
 from coordinator_core.ops.dispatch_emit.pathspec import NoWritesDeclaredError
-from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
-from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
+from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, build_waves
 
 _AGENT_CALL_RE = re.compile(r"agent\s*\(")
 _META_PHASE_LINE_RE = re.compile(r"phases\s*:\s*\[([^\]]*)\]")
@@ -54,7 +55,9 @@ def _extract_phase_titles(script: str) -> list[str]:
     ]
 
 
-def _wave_row(id_, writes, reads=None, surface="dispatch_emit"):
+def _wave_row(
+    id_, writes, reads=None, surface="dispatch_emit", agent_type=None, agent_model=None
+):
     return WaveRow(
         id=id_,
         title=f"title-{id_}",
@@ -62,6 +65,8 @@ def _wave_row(id_, writes, reads=None, surface="dispatch_emit"):
         writes=writes,
         reads=reads or [],
         depends_on=[],
+        agent_type=agent_type,
+        agent_model=agent_model,
     )
 
 
@@ -252,6 +257,183 @@ def test_undeclared_writes_row_propagates_no_writes_declared_before_agent_type_m
     waves = [[_wave_row("C1", UNDECLARED)]]
     with pytest.raises(NoWritesDeclaredError):
         compose_script(waves, name="wf", description="undeclared row")
+
+
+# ---------------------------------------------------------------------------
+# agent_type / agent_model spine overrides
+# (state/sizings/2026-09-05-a-plan-row-can-name-the-agent-that-runs.yaml)
+# ---------------------------------------------------------------------------
+
+
+def test_malformed_agent_type_raises_malformed_agent_override_error():
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                ["coordinator_core/ops/dispatch_emit/spine_read.py"],
+                agent_type="bad type!",
+            )
+        ]
+    ]
+    with pytest.raises(MalformedAgentOverrideError):
+        compose_script(waves, name="wf", description="malformed agent_type")
+
+
+def test_malformed_agent_model_raises_malformed_agent_override_error():
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                ["coordinator_core/ops/dispatch_emit/spine_read.py"],
+                agent_model="bad model!",
+            )
+        ]
+    ]
+    with pytest.raises(MalformedAgentOverrideError):
+        compose_script(waves, name="wf", description="malformed agent_model")
+
+
+def test_mixed_writes_row_still_raises_even_with_explicit_agent_type():
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                [
+                    "docs/plans/2026-08-13-example.md",
+                    "coordinator_core/ops/dispatch_emit/spine_read.py",
+                ],
+                agent_type="coordinator:workflow-maker",
+            )
+        ]
+    ]
+    with pytest.raises(MixedAgentTypeRowError):
+        compose_script(waves, name="wf", description="mixed row, explicit agent_type")
+
+
+def test_unmodellable_agent_type_alone_raises_malformed_agent_override_error():
+    """An explicit agent_type absent from _AGENT_MODELS, with no agent_model
+    supplied, refuses rather than silently downgrading to a default model
+    (Ruling 2: the field that closes the silent-Sonnet-downgrade hole is the
+    refusal itself, not agent_model alone)."""
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                ["coordinator_core/ops/dispatch_emit/spine_read.py"],
+                agent_type="coordinator:workflow-maker",
+            )
+        ]
+    ]
+    with pytest.raises(MalformedAgentOverrideError):
+        compose_script(waves, name="wf", description="unmodellable agent_type alone")
+
+
+def test_unmodellable_agent_type_with_agent_model_does_not_raise():
+    """The same agent_type as above does NOT refuse once agent_model
+    accompanies it -- agent_model is the mechanism that satisfies the
+    refusal, not a knob only the informed find."""
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                ["coordinator_core/ops/dispatch_emit/spine_read.py"],
+                agent_type="coordinator:workflow-maker",
+                agent_model="opus",
+            )
+        ]
+    ]
+    script = compose_script(waves, name="wf", description="unmodellable agent_type with model")
+    assert "agentType: 'coordinator:workflow-maker'" in script
+    assert "model: 'opus'" in script
+
+
+def test_agent_model_is_escaped_not_interpolated_raw():
+    """agent_model is spliced into `model: '{...}'` the same way agent_type
+    is spliced into `agentType:` -- through `_js_string_literal`, not a raw
+    f-string -- so a value carrying a quote cannot deform the emitted
+    script. The grammar regex disallows a literal quote outright, so this
+    proves the escaping path is exercised for a value the grammar itself
+    permits, not merely that malformed input is refused elsewhere
+    (Ruling 3)."""
+    waves = [
+        [
+            _wave_row(
+                "C1",
+                ["coordinator_core/ops/dispatch_emit/spine_read.py"],
+                agent_model="opus-model",
+            )
+        ]
+    ]
+    script = compose_script(waves, name="wf", description="agent_model escaping")
+    assert "model: 'opus-model'" in script
+
+
+def test_spine_text_agent_type_reaches_emitted_call(tmp_path):
+    """End-to-end: spine text -> read_spine -> build_waves -> compose_script.
+
+    ``test_explicit_agent_type_overrides_write_target_derivation`` above
+    covers ``WaveRow`` -> emit only; nothing exercised the leg the peer
+    executor left inert -- ``EmitterRow`` carrying neither field, so a
+    plan row's ``agent_type:``/``agent_model:`` never reached ``WaveRow``
+    regardless of what ``compose_script`` did with it once it arrived
+    (state/sizings/2026-09-05-a-plan-row-can-name-the-agent-that-runs.yaml).
+    """
+    plan_path = tmp_path / "plan.md"
+    plan_path.write_text(
+        "# fixture plan\n\n## Tasks\n\n"
+        "```yaml plan-tasks\n"
+        "- id: C1\n"
+        "  title: uses an override\n"
+        "  surface: dispatch_emit\n"
+        "  writes:\n"
+        "    - coordinator_core/ops/dispatch_emit/spine_read.py\n"
+        "  agent_type: coordinator:workflow-maker\n"
+        "  agent_model: opus\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    rows = read_spine(plan_path)
+    waves = build_waves(rows)
+    script = compose_script(waves, name="wf", description="spine-sourced override")
+
+    assert "agentType: 'coordinator:workflow-maker'" in script
+    assert "model: 'opus'" in script
+
+
+def test_spine_text_with_neither_agent_key_emits_byte_identically(tmp_path):
+    """A spine declaring neither key must still emit byte-identically to the
+    pre-existing hand-built ``WaveRow`` path -- the negative-spec twin of
+    the positive case above, and an actual byte-for-byte comparison rather
+    than only substring assertions (the name's original unmet promise;
+    Review: overengineering-reviewer -- the prior ``_plan_text`` helper's
+    ``with_agent_keys=True`` branch was dead code, never exercised)."""
+    plan_path = tmp_path / "plan.md"
+    plan_path.write_text(
+        "# fixture plan\n\n## Tasks\n\n"
+        "```yaml plan-tasks\n"
+        "- id: C1\n"
+        "  title: title-C1\n"
+        "  surface: dispatch_emit\n"
+        "  writes:\n"
+        "    - coordinator_core/ops/dispatch_emit/spine_read.py\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    script_from_spine = compose_script(
+        build_waves(read_spine(plan_path)), name="wf", description="no overrides"
+    )
+    script_from_hand_built = compose_script(
+        [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])]],
+        name="wf",
+        description="no overrides",
+    )
+
+    assert script_from_spine == script_from_hand_built
+    assert "agentType: 'coordinator:workflow-maker'" not in script_from_spine
+    assert "agentType: 'coordinator:executor'" in script_from_spine
+    assert "model: 'opus'" not in script_from_spine
 
 
 def test_single_row_wave_is_a_plain_await_agent():

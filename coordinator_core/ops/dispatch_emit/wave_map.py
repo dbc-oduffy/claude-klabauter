@@ -116,7 +116,7 @@ from __future__ import annotations
 import logging
 import posixpath
 from pathlib import PurePosixPath
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, EmitterRow
 
@@ -126,7 +126,19 @@ _EPISTEMIC_PREMISE = "epistemic-premise"
 
 
 class WaveRow(NamedTuple):
-    """One emitted row within a wave, carrying its predecessor edges for C4."""
+    """One emitted row within a wave, carrying its predecessor edges for C4.
+
+    ``agent_type``/``agent_model`` (state/sizings/2026-09-05-a-plan-row-can-
+    name-the-agent-that-runs.yaml) are the per-row spine overrides
+    ``EmitterRow`` carries through, both defaulting to ``None`` so a spine
+    declaring neither key maps exactly as before either field existed.
+
+    Note the end-to-end coverage lives in ``tests/test_emit.py`` (spine YAML
+    -> ``read_spine`` -> ``build_waves`` -> ``compose_script``), NOT here:
+    this module's own tests construct ``WaveRow`` directly and so cannot see
+    a break in the parsing seam above it, which is exactly how these two
+    fields first shipped inert.
+    """
 
     id: str
     title: str
@@ -134,6 +146,8 @@ class WaveRow(NamedTuple):
     writes: object
     reads: list
     depends_on: list
+    agent_type: Optional[str] = None
+    agent_model: Optional[str] = None
 
 
 class WaveCycleError(ValueError):
@@ -532,6 +546,8 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
                 writes=row.writes,
                 reads=row.reads,
                 depends_on=row.depends_on,
+                agent_type=row.agent_type,
+                agent_model=row.agent_model,
             )
             for row in wave
         ]

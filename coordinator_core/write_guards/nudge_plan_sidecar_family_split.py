@@ -156,7 +156,7 @@ def _extract_lens(filename: str) -> Optional[Tuple[str, str]]:
 _REASON_TEMPLATE = (
     "{lens} is not a plan-derivable lens -- state/plan-sidecars/ is "
     "unreaped-by-design for those only. Did you mean "
-    "`state/subagent-share/<session>/<name>.md`? Offer only, not a block."
+    "`.coordinator-local/subagent-share/<session>/<name>.md`? Offer only, not a block."
 )
 
 

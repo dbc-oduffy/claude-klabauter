@@ -345,16 +345,58 @@ def disposition_resolves_directive(
     disposition on `jp` whose own `resolves` includes `directive_id` —
     never merely "some disposition was picked" (the Director of Engineering v2 finding-1
     value-aware predicate, pickup_assemble's chunk C7 Part B)."""
+    candidate = declared_disposition_for(jp, decisions)
+    return candidate is not None and directive_id in (candidate.get("resolves") or [])
+
+
+def declared_disposition_for(
+    jp: dict[str, Any], decisions: dict[str, Any]
+) -> Optional[dict[str, Any]]:
+    """Resolves `decisions[jp['id']].disposition` against `jp['dispositions']`
+    and returns the matching declared-disposition dict, or `None` when the
+    point was never answered, answered with an entry carrying no
+    `disposition`, or answered with a value that names nothing `jp` itself
+    declares. A typo in `disposition` must read as `None` here — the same
+    "no declared disposition matched" outcome as leaving the point
+    untouched — never as a deliberate decline (C1,
+    docs/plans/2026-09-06-declined-judgment-answer-is-not-silence.md).
+
+    This is the ANSWERED/UNANSWERED split alone; whether the matched
+    disposition also RESOLVES a given directive is a separate question
+    `disposition_resolves_directive` still owns."""
     entry = decisions.get(jp.get("id")) if jp.get("id") else None
     if not isinstance(entry, dict):
-        return False
+        return None
     chosen = entry.get("disposition")
     if not chosen:
-        return False
+        return None
     for candidate in jp.get("dispositions", []) or []:
         if candidate.get("value") == chosen:
-            return directive_id in (candidate.get("resolves") or [])
-    return False
+            return candidate
+    return None
+
+
+def classify_judgment_point_ids(
+    jp_ids: "list[str] | set[str]",
+    jp_by_id: dict[str, dict[str, Any]],
+    decisions: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Splits `jp_ids` into `(unresolved, declined)`, each sorted:
+    ANSWERED-DECLINING ids (`declared_disposition_for` finds a match) land
+    in `declined`; everything else — no entry, no `disposition`, or a
+    `disposition` naming nothing `jp` declares — lands in `unresolved`.
+    Every id in `jp_ids` appears in exactly one list. Shared by both
+    `execute_directives` emission sites (the per-directive halt and the
+    `directives == []` fallback) so the split is computed once."""
+    unresolved: list[str] = []
+    declined: list[str] = []
+    for jp_id in jp_ids:
+        jp = jp_by_id.get(jp_id)
+        if jp is not None and declared_disposition_for(jp, decisions) is not None:
+            declined.append(jp_id)
+        else:
+            unresolved.append(jp_id)
+    return sorted(unresolved), sorted(declined)
 
 
 def directive_gate_open(
@@ -911,6 +953,25 @@ def execute_directives(
     (including grant-handback). `unresolved_judgment_points` still lists
     only originating judgment-point ids, never the intermediate directive:
     resolving those with `--decisions` is what unblocks the whole chain.
+
+    UNRESOLVED VS DECLINED (C1, docs/plans/2026-09-06-declined-judgment-
+    answer-is-not-silence.md): a halted report's judgment-point ids split
+    into two disjoint sorted lists via `classify_judgment_point_ids`.
+    `unresolved_judgment_points` carries only ids nobody answered at all,
+    or answered with an entry naming no disposition `jp` actually declares.
+    `declined_judgment_points` carries ids the operator DID answer, with a
+    disposition `jp` declares whose own `resolves` does not include the
+    blocked directive — the answer legitimately gates nothing here, and
+    that is a different fact from silence.
+
+    HALT IS KEYED ON THE EXIT CODE, NEVER ON `unresolved_judgment_points`
+    BEING NON-EMPTY: a run whose only blocking judgment points were ALL
+    answered-and-declining still returns `APPLY_EXIT_HALTED_AT_JUDGMENT`,
+    with the same `landed`/`results` content it would report if those ids
+    had instead been unresolved — `unresolved_judgment_points` can be
+    EMPTY on a halted run. A caller that gates on that list's emptiness
+    instead of `rc == APPLY_EXIT_HALTED_AT_JUDGMENT` will misread an
+    all-declining halt as success.
     """
     decisions, malformed_decisions = normalize_decisions(decisions or {})
     if malformed_decisions:
@@ -927,8 +988,12 @@ def execute_directives(
 
     if not directives:
         if judgment_points:
+            unresolved, declined = classify_judgment_point_ids(
+                [jp_id for jp in judgment_points if (jp_id := jp.get("id"))], jp_by_id, decisions
+            )
             return APPLY_EXIT_HALTED_AT_JUDGMENT, {
-                "unresolved_judgment_points": [jp.get("id") for jp in judgment_points],
+                "unresolved_judgment_points": unresolved,
+                "declined_judgment_points": declined,
                 "landed": [],
             }
         return APPLY_EXIT_OK, {"landed": []}
@@ -1126,8 +1191,10 @@ def execute_directives(
             print(f"[composition-budget] {post_budget_breach}", file=sys.stderr)
 
     if blocked_jp_ids:
+        unresolved, declined = classify_judgment_point_ids(blocked_jp_ids, jp_by_id, decisions)
         halted_report: dict[str, Any] = {
-            "unresolved_judgment_points": sorted(blocked_jp_ids),
+            "unresolved_judgment_points": unresolved,
+            "declined_judgment_points": declined,
             "landed": landed,
             "results": [r.to_report() for r in results],
         }

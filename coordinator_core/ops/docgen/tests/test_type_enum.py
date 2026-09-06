@@ -193,8 +193,22 @@ class TestManifestReadFailures:
 # AC4 — live conformance against the CLI's actual post-union _KNOWN_TYPES
 # ---------------------------------------------------------------------------
 
+@pytest.mark.real_home
 @pytest.mark.skipif(not _DOE_AVAILABLE, reason="DoE clone not available on this machine (manifest.json has not migrated in-repo)")
 class TestAC4LiveConformance:
+    # `real_home` (2026-09-06): this class is a parity oracle against the LIVE
+    # tree -- it resolves the real DoE clone through the machine-local
+    # registry, which is the case `conftest._quarantine_real_home`'s docstring
+    # names as the marker's reason for existing. It read green only because
+    # that fixture had a gap: it never cleared `COORDINATOR_SETTINGS_HOME`,
+    # which `settings_home()` consults ahead of every home var, so the
+    # quarantine silently did not apply to registry lookups. Closing that gap
+    # made the dependency explicit, and this class must now ask for the real
+    # home by name. Read-only, which is what the marker is scoped to: the
+    # machine-mutation kill switch stays on regardless (see the fixture).
+    #
+    # Its `skipif` is unaffected and stays -- clone ABSENCE is a different
+    # question from home resolution, and evaluates at collection time.
     # 2026-07-28: the class-level `pytestmark = pytest.mark.pending_fix` demotion
     # that used to sit here is RETIRED — all 7 cases pass live against a present
     # DoE clone. The `skipif` above is NOT a demotion and stays: it is the

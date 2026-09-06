@@ -142,7 +142,10 @@ from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Set, Union
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
 from coordinator_core.session import scope as session_scope
-from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+from coordinator_core.session.machinery_paths import (
+    machinery_root as _machinery_root,
+    share_roots as _share_roots,
+)
 from coordinator_core.session.machinery_paths import share_dir as _share_dir
 from coordinator_core.warm import skew as _skew
 from coordinator_core.warm.engine_root import current_engine_clone as _current_engine_clone
@@ -849,14 +852,16 @@ def _scan_subagent_share_session_dirs(repo_root: Path, this_session_id: str) -> 
     intentionally broader, over-inclusive answer this fallback exists to
     give rather than a confident empty set."""
     paths: list[str] = []
-    share_root = Path(_machinery_root(str(repo_root))) / "subagent-share"
-    try:
-        if share_root.is_dir():
-            for entry in share_root.iterdir():
-                if entry.is_dir() and entry.name != this_session_id:
-                    paths.append(entry.name)
-    except OSError:
-        pass
+    # Both share roots -- see machinery_paths.share_roots. Widening a
+    # deliberately over-inclusive fallback is the safe direction here.
+    for share_root in (Path(d) for d in _share_roots(str(repo_root))):
+        try:
+            if share_root.is_dir():
+                for entry in share_root.iterdir():
+                    if entry.is_dir() and entry.name != this_session_id:
+                        paths.append(entry.name)
+        except OSError:
+            continue
     return paths
 
 

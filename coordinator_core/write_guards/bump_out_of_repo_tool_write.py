@@ -510,6 +510,7 @@ from coordinator_core.bash_guards._write_bump_message import (
     render_bump_message,
     resolve_agent_class,
 )
+from coordinator_core.session import machinery_paths
 from coordinator_core.subagent_sandbox.engine import resolve_effective_types
 from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
@@ -611,16 +612,20 @@ def _same_gitdir(a: Optional[Path], b: Optional[Path]) -> bool:
 
 
 def _resolve_sandbox_root(git_root: Optional[str], session_id: str) -> str:
-    """Best-effort `state/subagent-share/<sanitized-session-id>/` display
-    path -- see module docstring, "AGENT-CLASS AND SANDBOX ROOT". Returns
-    `""` (fail open -- the message renders with a blank sandbox line rather
-    than raising) when either input is unusable."""
+    """Best-effort `<machinery_root>/subagent-share/<sanitized-session-id>/`
+    display path -- see module docstring, "AGENT-CLASS AND SANDBOX ROOT".
+
+    The CURRENT root only, not both: this is the path the message tells an
+    agent to write to, and a writer resolves one root (see
+    `machinery_paths.share_roots`' note). Returns `""` (fail open -- the
+    message renders with a blank sandbox line rather than raising) when
+    either input is unusable."""
     if not git_root or not session_id:
         return ""
     sanitized = _sanitize_segment(session_id)
     if not sanitized:
         return ""
-    return str(Path(git_root) / "state" / "subagent-share" / sanitized)
+    return machinery_paths.share_dir(git_root, sanitized)
 
 
 #: Adjacent, case-folded directory-path pair this predicate keys on -- see

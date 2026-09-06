@@ -87,6 +87,12 @@ def test_empty_env_value_is_not_treated_as_a_redirect(monkeypatch):
 def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(monkeypatch):
     from coordinator_core.ops import queue_append as qa
 
+    # Rung 1.5 (`engine.source_root`) is stubbed absent so this exercises the
+    # repo-named registry rung it names. Left live, the machine's own
+    # `engine.source_root` resolves to this checkout and returns before the
+    # rung under test runs at all -- the test would pass or fail on whether
+    # the box happens to have that key, not on the refusal.
+    monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
     monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/publish-mirror")
     monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: True)
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")
@@ -99,6 +105,9 @@ def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(monke
 def test_claude_klabauter_root_returns_a_live_working_tree_unchanged(monkeypatch):
     from coordinator_core.ops import queue_append as qa
 
+    # Same isolation as the refusal case above: Rung 1.5 stubbed absent so the
+    # synthetic root below is what the repo-named rung returns, not this box's.
+    monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
     monkeypatch.setattr(qa, "_machine_local_get", lambda key: "/repos/claude-klabauter")
     monkeypatch.setattr(qa, "_is_published_engine_mirror", lambda root: False)
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")

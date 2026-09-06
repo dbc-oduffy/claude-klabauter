@@ -164,6 +164,7 @@ HARD_DENY_NAMES = [
     "block_disarm_marker_sentinel_write",
     "block_duplicate_decision_record_id",
     "block_fleet_delegation_write",
+    "block_foreign_family_sidecar_write",
     "block_goals_log_hand_write",
     "block_hand_authored_sidecar_creation",
     "block_home_dir_memo_delivery",

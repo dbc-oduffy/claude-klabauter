@@ -58,6 +58,18 @@ Recipe: scratch/subagent-sandbox/bash-to-python-engine-migration/recipe-t3a-g3.m
 Negative-spec (hard-won, preserve exactly):
   - Does NOT overwrite the goal artifact's live `status:` field — writes only a
     "# --- KR Re-assessment (proposed ...) ---" comment block.
+  - Scraped `key_results[]` scalars are inline-comment-stripped
+    (`strip_inline_comment`) — do NOT restore the bash original's
+    scrape-to-end-of-line here to recover parity. docgen's `goal` template
+    emits `status: not-started  # not-started | in-progress | met | at-risk`,
+    and the raw scrape put that hint inside the value, so `process_kr_entry`'s
+    exact compare made the op's ONLY transition (`not-started -> in-progress`)
+    unreachable for every scaffolded goal. The stripper is quote-aware, so a
+    `#` inside a quoted `text:` survives.
+  - An off-enum `status` / non-boolean `weekly_perceptible` is REPORTED, never
+    enforced and never fatal — it reaches `warnings` (which the CLI trampoline
+    prints to stderr) and marks its report line. This op reports; schema
+    enforcement belongs to frontmatter validation, not here.
   - The proposed-block anchor uses `since=` (the query window), NOT today's date —
     an explicit F5 bash-version fix avoiding diff churn on identical re-runs. The
     Python port preserves this anchor choice.
@@ -148,6 +160,17 @@ _KR_FIELD_RE = re.compile(r"^[ \t]+([a-z_]+):[ \t]*(.*)$")
 _INLINE_ID_RE = re.compile(r"^id:[ \t]*(.*)$")
 _INLINE_TEXT_RE = re.compile(r"^text:[ \t]*(.*)$")
 
+#: The `key_results[].status` enum, verbatim from
+#: coordinator_core/frontmatter/schemas/goal.schema.json. Restated rather than
+#: read from the schema at runtime: this op is "none"-scoped and holds no
+#: repo_root-derived path to the schema file, and a status outside this set is
+#: reported, never enforced — see `_kr_field_anomalies`.
+KR_STATUS_ENUM = frozenset({"not-started", "in-progress", "met", "at-risk"})
+
+#: The two YAML boolean literals `weekly_perceptible` may carry. The schema
+#: types the field `boolean`; the line scraper sees its unparsed text.
+_KR_BOOL_LITERALS = frozenset({"true", "false"})
+
 
 # ---------------------------------------------------------------------------
 # Pure parsing helpers — each a direct transliteration of one bash function.
@@ -198,6 +221,47 @@ def extract_key_results(text: str) -> str:
             break
         out.append(line)
     return "\n".join(out)
+
+
+def strip_inline_comment(value: str) -> str:
+    """Drop a YAML inline comment from a scraped scalar value, quote-aware.
+
+    A ``#`` opens a comment only when it is at the start of the value or
+    preceded by whitespace, and only outside a quoted run — matching YAML's own
+    rule, so ``text: "fix #143"`` and ``text: colour#hex`` keep their hashes
+    while ``status: not-started  # not-started | in-progress`` yields
+    ``not-started``. Trailing whitespace is stripped either way.
+
+    Negative-spec: this is NOT one of the deliberately-preserved bash quirks
+    (contrast _extract_keywords' empty-token note). The bash original scraped
+    to end-of-line too, so `state/goals/*.yaml` artifacts scaffolded from
+    docgen's `goal` template — whose `status:`/`kind:` lines carry an inline
+    enum hint — parsed their status as the value PLUS the hint. Since
+    `process_kr_entry` compares status exactly, that defeated the only
+    transition this op owns (`not-started -> in-progress`) for every scaffolded
+    goal, at any amount of movement signal, and defeated the
+    `weekly_perceptible` compare alongside it. Reported by doe-claude-em
+    2026-09-06; parity with the bash original is not worth reproducing here.
+
+    Escape sequences inside double quotes (``\\"``) are not interpreted — a
+    value carrying one is beyond what a line scraper can read correctly, and
+    the enum/boolean anomaly reporting below is what catches the fallout.
+    """
+    out: List[str] = []
+    quote = ""
+    for i, ch in enumerate(value):
+        if quote:
+            out.append(ch)
+            if ch == quote:
+                quote = ""
+        elif ch in ('"', "'"):
+            quote = ch
+            out.append(ch)
+        elif ch == "#" and (i == 0 or value[i - 1] in " \t"):
+            break
+        else:
+            out.append(ch)
+    return "".join(out).rstrip()
 
 
 def match_signal(keyword: str, all_signal_text: str) -> bool:
@@ -254,10 +318,33 @@ def process_kr_entry(
     (the bash version's early ``return`` — no report line, no proposed line).
     Otherwise returns a dict with keys: movement, proposed_status, flag,
     kr_label, report_line, proposed_line, flagged (bool — True when the
-    "maybe-not-a-goal" flag fired, mirroring the bash FLAGS_FOUND side-effect).
+    "maybe-not-a-goal" flag fired, mirroring the bash FLAGS_FOUND side-effect),
+    and anomalies (list[str] — off-enum field values, see below).
+
+    A `current_status` outside `KR_STATUS_ENUM`, or a `weekly_perceptible`
+    that is neither YAML boolean literal, is reported rather than passed
+    through: both compares below are exact, so an off-enum value makes this
+    function a guaranteed no-op, and "proposed no change because the status is
+    already right" was previously indistinguishable from "proposed no change
+    because the compare could not match". The anomaly is surfaced on the report
+    line AND returned for the caller to raise into the op's `warnings` channel;
+    it is never fatal — this op reports, it does not enforce the schema.
     """
     if not kr_id and not kr_text:
         return None
+
+    anomalies: List[str] = []
+    if current_status and current_status not in KR_STATUS_ENUM:
+        anomalies.append(
+            f"KR {kr_id or kr_text[:40]!r}: status {current_status!r} is not one of "
+            f"{sorted(KR_STATUS_ENUM)} — no status transition can be proposed for it"
+        )
+    if weekly_perceptible and weekly_perceptible.lower() not in _KR_BOOL_LITERALS:
+        anomalies.append(
+            f"KR {kr_id or kr_text[:40]!r}: weekly_perceptible {weekly_perceptible!r} is "
+            "neither 'true' nor 'false' — read as false, so the "
+            "'maybe-not-a-goal' flag cannot fire for it"
+        )
 
     movement = "no"
     if kr_text:
@@ -282,13 +369,15 @@ def process_kr_entry(
 
     kr_label = kr_id if kr_id else kr_text[:40]
 
+    anomaly_marker = " *** OFF-ENUM FIELD — see warnings" if anomalies else ""
+
     report_line = (
         f"  KR [{kr_label}]: current={current_status} | movement={movement} "
-        f"| proposed={proposed_status}{flag}"
+        f"| proposed={proposed_status}{flag}{anomaly_marker}"
     )
     proposed_line = (
         f"    # KR {kr_label}: proposed_status: {proposed_status} "
-        f"| perceptible_movement: {movement}{flag}"
+        f"| perceptible_movement: {movement}{flag}{anomaly_marker}"
     )
 
     return {
@@ -299,6 +388,7 @@ def process_kr_entry(
         "kr_label": kr_label,
         "report_line": report_line,
         "proposed_line": proposed_line,
+        "anomalies": anomalies,
     }
 
 
@@ -313,6 +403,10 @@ def parse_kr_block(kr_block: str) -> List[Tuple[str, str, str, str]]:
     lines set/override id/text/status/weekly_perceptible for the current
     entry (last-write-wins, same as the bash case statement); a new "- " line
     or EOF flushes the previous entry.
+
+    Every scraped value passes through `strip_inline_comment` — see that
+    function's negative-spec for why this deliberately breaks parity with the
+    bash original's scrape-to-end-of-line.
     """
     entries: List[Tuple[str, str, str, str]] = []
     kr_id = ""
@@ -337,15 +431,15 @@ def parse_kr_block(kr_block: str) -> List[Tuple[str, str, str, str]]:
             m_id = _INLINE_ID_RE.match(local_rest)
             m_text = _INLINE_TEXT_RE.match(local_rest)
             if m_id:
-                kr_id = m_id.group(1)
+                kr_id = strip_inline_comment(m_id.group(1))
             elif m_text:
-                kr_text = m_text.group(1)
+                kr_text = strip_inline_comment(m_text.group(1))
             continue
 
         if in_entry:
             m = _KR_FIELD_RE.match(line)
             if m:
-                field_name, field_val = m.group(1), m.group(2)
+                field_name, field_val = m.group(1), strip_inline_comment(m.group(2))
                 if field_name == "id":
                     kr_id = field_val
                 elif field_name == "text":
@@ -776,6 +870,8 @@ def reassess(
             proposed_lines.append(result["proposed_line"])
             if result["flagged"]:
                 flags_found = True
+            for anomaly in result["anomalies"]:
+                warnings.append(f"{goal_name}: {anomaly}")
 
             for sug in suggestions_by_kr.get(kr_id, []):
                 sug_report_line, sug_proposed_line = _render_kr_suggestion(kr_id, sug, kr_status)

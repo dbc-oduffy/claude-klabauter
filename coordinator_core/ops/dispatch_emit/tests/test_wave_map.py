@@ -27,6 +27,21 @@ def _row(id_, writes, depends_on=None, reads=None):
     )
 
 
+def test_wave_row_agent_type_and_model_default_none_when_row_omits_both():
+    """WaveRow's agent_type/agent_model (state/sizings/2026-09-05-a-plan-row-
+    can-name-the-agent-that-runs.yaml) default to None on a row that
+    declares neither key -- an EmitterRow relying on its own NamedTuple
+    defaults must still produce a WaveRow whose fields read None, not a
+    fabricated value. (Review: overengineering-reviewer / code-reviewer --
+    this test previously documented a getattr-tolerance fallback that
+    EmitterRow's real fields made unreachable; build_waves now reads both
+    attributes directly.)"""
+    rows = [_row("C1", ["a.py"])]
+    waves = build_waves(rows)
+    assert waves[0][0].agent_type is None
+    assert waves[0][0].agent_model is None
+
+
 def test_disjoint_rows_collapse_into_one_wave():
     rows = [_row("C1", ["a.py"]), _row("C2", ["b.py"]), _row("C3", ["c.py"])]
     waves = build_waves(rows)

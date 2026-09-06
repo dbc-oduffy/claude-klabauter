@@ -372,6 +372,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "fleet.aggregate_capability_index":      "common_dir",
     "fleet.reap_unintegrated_findings":      "common_dir",
     "fleet.reap_integrated_findings":        "common_dir",
+    # Same module and same keying class as the two above -- it resolves the
+    # caller's own review-trail via main_worktree_root(common_dir) before
+    # deleting from it.
+    "fleet.reap_review_trail_rest":          "common_dir",
     # fleet.handoffs_for_plan — COMPUTE_ONLY read op, but still "common_dir": unlike
     # memo.list (registry-only, scope "none"), this op enumerates the CALLING repo's
     # own state/handoffs/ + archive/handoffs/ trees for a given origin_plan_id, so it

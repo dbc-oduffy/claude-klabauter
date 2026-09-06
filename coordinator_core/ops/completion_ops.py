@@ -75,7 +75,10 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.reconcile.commit_reality import _git as _reality_git
-from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+from coordinator_core.session.machinery_paths import (
+    machinery_root as _machinery_root,
+    share_roots as _share_roots,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1229,13 +1232,14 @@ def _sibling_homed_session_ids(
         except OSError:
             continue
 
-        share_dir = Path(_machinery_root(str(repo_root))) / _MACHINERY_SHARE_LEAF
-        try:
-            for child in share_dir.iterdir():
-                if child.name in session_ids and child.is_dir():
-                    sibling_homed.add(child.name)
-        except OSError:
-            pass
+        # Both share roots -- see machinery_paths.share_roots.
+        for share_dir in (Path(d) for d in _share_roots(str(repo_root))):
+            try:
+                for child in share_dir.iterdir():
+                    if child.name in session_ids and child.is_dir():
+                        sibling_homed.add(child.name)
+            except OSError:
+                continue
 
         ceremony_dir = repo_root.joinpath(*_SESSION_CEREMONY_REL)
         try:

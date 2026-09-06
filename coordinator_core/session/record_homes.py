@@ -98,6 +98,7 @@ HOMES = frozenset({
     "bash-guards",
     "bug-backlog",
     "capabilities",
+    "cross-repo",
     "cross-repo-commitments",
     "cross-repo-declarations",
     "cross-repo-outbound",

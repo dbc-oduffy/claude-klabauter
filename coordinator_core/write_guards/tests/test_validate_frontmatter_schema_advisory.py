@@ -38,6 +38,7 @@ import pytest
 
 import yaml
 
+from coordinator_core.bash_guards._override_doc import OVERRIDE_KEYS_DOC_DISPLAY
 from coordinator_core.frontmatter.schema_validate import compute_grouping_digest
 from coordinator_core.testing.doe_root import doe_root_and_present
 from coordinator_core.write_guards import validate_frontmatter_schema_advisory as guard
@@ -343,11 +344,17 @@ class TestSchemaValidationWarn:
         # the override key itself is no longer named in agent-facing text --
         # only that an override route exists, routed to the doc.
         assert "COORDINATOR_SCHEMA_STRICT" not in text
-        assert "docs/reference/guard-override-keys.md" in text
+        # DR-290 form 2: the pointer a MESSAGE reader sees is the
+        # settings-root form (`_override_doc.OVERRIDE_KEYS_DOC_DISPLAY`),
+        # not the repo-root-relative resolution form
+        # (`OVERRIDE_KEYS_DOC`) a caller joins to a repo root. Asserted
+        # against the constant so the two forms cannot drift apart here
+        # again -- a literal copy of either one re-opens that gap.
+        assert OVERRIDE_KEYS_DOC_DISPLAY in text
 
     def test_missing_required_fields_subagent_audience_no_pointer(self, tmp_path):
         # Review: staff-eng (B8 leg (d)+(f)) -- this module used to hand-roll
-        # "see docs/reference/guard-override-keys.md" for EVERY audience,
+        # the override-doc pointer for EVERY audience,
         # a dispatched subagent included. A subagent-shaped payload (an
         # `agent_id`) must now degrade to no pointer at all.
         fp = self._handoff_path(tmp_path)
@@ -361,7 +368,11 @@ class TestSchemaValidationWarn:
         assert result is not None
         text = _advisory_text(result)
         assert "[frontmatter-schema warning]" in text
-        assert "docs/reference/guard-override-keys.md" not in text
+        # Against the constant, not a literal: the literal this test used
+        # to name is the resolution form, which the rendered pointer never
+        # contains -- a negative assertion on it passes whether or not the
+        # pointer was suppressed, which is no assertion at all.
+        assert OVERRIDE_KEYS_DOC_DISPLAY not in text
         assert "COORDINATOR_SCHEMA_STRICT" not in text
 
     def test_strict_mode_yields_none_not_mine(self, tmp_path, monkeypatch):
@@ -822,7 +833,7 @@ class TestReviewedRangeOffer:
     """
 
     def _sidecar_path(self, tmp_path):
-        d = tmp_path / "state" / "subagent-share" / "sess1"
+        d = tmp_path / ".coordinator-local" / "subagent-share" / "sess1"
         d.mkdir(parents=True, exist_ok=True)
         return d / "report.md"
 

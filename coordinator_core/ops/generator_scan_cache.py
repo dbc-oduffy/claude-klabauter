@@ -1,7 +1,8 @@
 """
 coordinator_core.ops.generator_scan_cache -- an (mtime_ns, size)-keyed store
 for `generator_provenance.FileWrites`, persisted at
-`<repo_root>/state/cache/generator-scan-cache.json`.
+`<machinery_root>/cache/generator-scan-cache.json` (resolved through
+`session.machinery_paths.cache_dir`, the declared owner of that bucket).
 
 Purpose: re-parsing and re-walking every swept module's AST on every sweep is
 the cost `discover_generators` pays for having no memory between runs. This
@@ -45,20 +46,40 @@ from pathlib import Path
 
 from coordinator_core.ops.generator_provenance import FileWrites
 
-_CACHE_RELATIVE_PATH = ("state", "cache", "generator-scan-cache.json")
-_SCHEMA_VERSION = 3
+_CACHE_FILENAME = "generator-scan-cache.json"
+
+#: 3 -> 4 (2026-09-06): `generator_provenance._extract_mutates` changed its
+#: SEMANTICS, not its shape -- it now resolves f-strings and names over the
+#: constants `session.machinery_paths` owns, so three `ops/fleet/memo_*`
+#: modules that previously scanned as `__MALFORMED__` -> UNDECLARED now report
+#: their real write targets. Entries are keyed on the SCANNED FILE's
+#: `(mtime_ns, size)`, which cannot see a change to the scanner itself: none of
+#: those modules was touched, so every reader would have kept being served the
+#: old verdict indefinitely. Bumping the schema is the only invalidation this
+#: store has for a scanner-semantics change, and it is what the version field
+#: is for. Bump it again on the next one.
+_SCHEMA_VERSION = 4
 
 
 def _cache_path(repo_root: Path) -> Path:
     """Resolve the cache file path from *repo_root* alone.
 
     No home directory, no environment variable, no hardcoded drive letter --
-    the path is always `<repo_root>/state/cache/generator-scan-cache.json`.
+    the path is always `<machinery_root>/cache/generator-scan-cache.json`.
+
+    Resolved through `session.machinery_paths.cache_dir`, the declared owner
+    of that bucket, rather than the `("state", "cache", ...)` tuple this
+    module spelled by hand until 2026-09-06. That tuple was the pre-relocation
+    root: `machinery_paths` had already declared the cache bucket moved, so
+    this store kept writing to the retired one and the two diverged on disk
+    (a stale `.coordinator-local/cache/` copy beside a live `state/cache/`
+    one). Both are gitignored, so nothing failed loudly -- which is why it
+    survived. The schema bump beside this makes the cutover clean: no reader
+    can be served a pre-move entry regardless of which file it finds.
     """
-    path = repo_root
-    for part in _CACHE_RELATIVE_PATH:
-        path = path / part
-    return path
+    from coordinator_core.session.machinery_paths import cache_dir
+
+    return Path(cache_dir(str(repo_root))) / _CACHE_FILENAME
 
 
 def _write_site_to_json(target_literal: str | None) -> str | None:
@@ -199,7 +220,7 @@ def save(repo_root: Path, entries: dict) -> None:
 
     tmp_path = path.parent / f"{path.name}.tmp.{os.getpid()}"
     try:
-        tmp_path.write_text(json.dumps(payload), encoding="utf-8")
+        tmp_path.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
         os.replace(tmp_path, path)
     except OSError:
         try:

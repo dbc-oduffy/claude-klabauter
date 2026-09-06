@@ -608,6 +608,43 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Spec backlink: docs/decisions/DR-218-review-trail-aged-unintegrated-reap-boundary.md § D1/D2,
     #   docs/plans/2026-07-14-review-findings-aged-unintegrated-reaper.md
     "fleet.reap_unintegrated_findings": OpClass.MUTATING,
+    # fleet.reap_review_trail_rest — MUTATING: git-rm of the rest of the
+    # (CLOSED, post-C7) review-trail corpus by filename-derived date cap
+    # (REVIEW_TRAIL_RETENTION_DATE_CAP_DAYS), gated on a citation-census hard
+    # pre-delete gate. Registered in the same module as its sibling above
+    # (ops/fleet/reap_unintegrated_findings.py, `_handler_review_trail_rest`)
+    # and shipped without a classification entry: `_REGISTRY` fills by
+    # import-time self-registration, so the gap was invisible to every test
+    # run whose worker never happened to import the fleet module.
+    # DR-208 five-question affirmation (citing ops/fleet/reap_unintegrated_findings.py
+    # :: _handler_review_trail_rest):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      The dry_run:false leg reaches `_common.rm_and_commit()`, which
+    #      performs `git rm` + `git commit` on each capped record.
+    #   2. Writes into rag's relational store?                                 No.
+    #      Deletes only under state/review-trail/ and writes a git commit
+    #      object; no rag-owned surface is touched. Dual-write ban satisfied.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #      The classifier opens candidates for READ; the delete path is
+    #      `git rm`, and rm_and_commit's commit object is answered in Q1.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      state/review-trail/ is coordinator substrate shared across EM
+    #      sessions and repos; the git commit is repo-shared state.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The commit and the records' absence are observable by any git
+    #      client and every future review-trail read.
+    # DR-218 D2 delete-specific five-bound affirmed, same shape as the sibling:
+    #   D2-i   per-record idempotent — an already-deleted or under-cap record
+    #          is simply absent from the next scan; no error on re-run.
+    #   D2-ii  commutative — set-difference delete semantics over the
+    #          candidate list; order does not change the resulting tree.
+    #   D2-iii cwd-scope-guarded — main_worktree_root() confines the op to
+    #          this repo's review-trail; a missing tree degrades to [].
+    #   D2-iv  act-time-terminality-re-verifying — the citation-census gate
+    #          runs immediately before the delete, not off the dry-run scan.
+    #   D2-v   fail-closed-to-keep — an unparseable filename date, an
+    #          unreadable record, or a live citation KEEPS, never deletes.
+    "fleet.reap_review_trail_rest": OpClass.MUTATING,
     # fleet.reap_integrated_findings — MUTATING: git-rm of INTEGRATED
     # review-findings sidecars (marker-PRESENT, age-independent) from
     # state/review-trail/findings/. Leg (a) of the DR-218 two-leg split

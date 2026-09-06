@@ -68,6 +68,9 @@ import sys
 
 import pytest
 
+from pathlib import Path
+
+from coordinator_core.session.machinery_paths import share_dir
 from coordinator_core.write_guards import engine
 
 _ENVELOPE = {
@@ -94,7 +97,7 @@ def _fake_guard(name="fake-advisory-guard"):
 
 
 def _counts_path(git_root, session_id):
-    return git_root / "state" / "subagent-share" / session_id / "advisory-fire-counts.jsonl"
+    return Path(share_dir(str(git_root), session_id)) / "advisory-fire-counts.jsonl"
 
 
 class TestFlippedGuardProducesOneRecord:

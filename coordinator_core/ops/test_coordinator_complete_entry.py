@@ -770,6 +770,379 @@ class TestRollupSentence:
 
 
 # ---------------------------------------------------------------------------
+# C2 — the entry title is computed from the artifact that governs it
+# (docs/plans/2026-09-05-the-completion-entry-computes-its-own-ti.md).
+# ---------------------------------------------------------------------------
+
+
+class TestResolveEntryTitle:
+    def test_computed_from_plan_title(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        # Review: overengineering-reviewer finding 6 -- these tests assert
+        # frontmatter-scan/title-ladder behaviour, not git; stub the git
+        # runner so C3's added spawn doesn't cost a real process per test.
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", _RecordingGitRunner(rc=0, out=""))
+        plans_dir = repo / "docs" / "plans"
+        plans_dir.mkdir(parents=True)
+        (plans_dir / "2026-07-06-my-plan.md").write_text(
+            '---\ntitle: "Ported the widget frobnicator to native Python"\n---\n# Plan\n',
+            encoding="utf-8",
+        )
+
+        rc, out, err = _run(
+            [
+                "--sid",
+                "session-abcdef",
+                "--disposition",
+                "single-session",
+                "--governing-plan-slug",
+                "2026-07-06-my-plan",
+            ],
+            cwd=repo,
+        )
+        assert rc == 0
+        text = Path(out.strip()).read_text(encoding="utf-8")
+        assert (
+            'title: "Accomplished: Ported the widget frobnicator to native Python"'
+            in text
+        )
+        assert "Residue: nature" in err
+        # The plan's acceptance oracle, in one assertion: `title` has left the
+        # residue list entirely, leaving only the two surfaces that stay the
+        # EM's. A gate that kept naming `title` here would mean the computed
+        # value never reached the file; one that named neither would mean the
+        # gate had gone blind to a genuinely unauthored entry (the negative
+        # half is `test_placeholder_retained_when_neither_source_exists`).
+        assert m.scaffold_residue_fields(out.strip()) == ["nature", "prose"]
+
+    def test_computed_from_handoff_title_when_no_plan_slug(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        # Review: overengineering-reviewer finding 6 -- these tests assert
+        # frontmatter-scan/title-ladder behaviour, not git; stub the git
+        # runner so C3's added spawn doesn't cost a real process per test.
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", _RecordingGitRunner(rc=0, out=""))
+        handoff = repo / "handoff.md"
+        handoff.write_text(
+            '---\ntitle: "Migrated the legacy queue to native Python"\n---\n',
+            encoding="utf-8",
+        )
+
+        rc, out, _ = _run(
+            [
+                "--sid",
+                "session-abcdef",
+                "--disposition",
+                "chain-terminal",
+                "--consumed-handoff",
+                str(handoff),
+            ],
+            cwd=repo,
+        )
+        assert rc == 0
+        text = Path(out.strip()).read_text(encoding="utf-8")
+        assert (
+            'title: "Accomplished: Migrated the legacy queue to native Python"'
+            in text
+        )
+
+    def test_placeholder_retained_when_neither_source_exists(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        # Review: overengineering-reviewer finding 6 -- these tests assert
+        # frontmatter-scan/title-ladder behaviour, not git; stub the git
+        # runner so C3's added spawn doesn't cost a real process per test.
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", _RecordingGitRunner(rc=0, out=""))
+
+        rc, out, err = _run(
+            ["--sid", "session-abcdef", "--disposition", "single-session"],
+            cwd=repo,
+        )
+        assert rc == 0
+        entry_path = out.strip()
+        text = Path(entry_path).read_text(encoding="utf-8")
+        assert 'title: "PLACEHOLDER' in text
+
+        # The one place the gate could silently start passing entries with
+        # no title at all: verify `scaffold_residue_fields` still names
+        # "title" as residue for an unauthored/uncomputed placeholder.
+        assert "title" in m.scaffold_residue_fields(entry_path)
+
+    def test_authored_title_survives_a_rerun_untouched(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        # Review: overengineering-reviewer finding 6 -- these tests assert
+        # frontmatter-scan/title-ladder behaviour, not git; stub the git
+        # runner so C3's added spawn doesn't cost a real process per test.
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", _RecordingGitRunner(rc=0, out=""))
+        plans_dir = repo / "docs" / "plans"
+        plans_dir.mkdir(parents=True)
+        (plans_dir / "2026-07-06-my-plan.md").write_text(
+            '---\ntitle: "Ported the widget frobnicator to native Python"\n---\n# Plan\n',
+            encoding="utf-8",
+        )
+
+        rc, out, _ = _run(
+            [
+                "--sid",
+                "session-abcdef",
+                "--disposition",
+                "single-session",
+                "--governing-plan-slug",
+                "2026-07-06-my-plan",
+            ],
+            cwd=repo,
+        )
+        assert rc == 0
+        entry_path = Path(out.strip())
+        first_text = entry_path.read_text(encoding="utf-8")
+        assert 'title: "Accomplished: Ported the widget frobnicator to native Python"' in first_text
+
+        # Change the plan title AND the entry itself does not overwrite it
+        # on a second call — the computed title, once written, is preserved
+        # exactly like an EM-hand-authored one (existing.title_authored).
+        (plans_dir / "2026-07-06-my-plan.md").write_text(
+            '---\ntitle: "A completely different plan title"\n---\n# Plan\n',
+            encoding="utf-8",
+        )
+
+        rc, out, _ = _run(
+            [
+                "--sid",
+                "session-abcdef",
+                "--disposition",
+                "single-session",
+                "--governing-plan-slug",
+                "2026-07-06-my-plan",
+            ],
+            cwd=repo,
+        )
+        assert rc == 0
+        second_text = entry_path.read_text(encoding="utf-8")
+        assert 'title: "Accomplished: Ported the widget frobnicator to native Python"' in second_text
+        assert "A completely different plan title" not in second_text
+
+    def test_plan_title_already_accomplished_prefixed_does_not_double_prefix(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        # Review: overengineering-reviewer finding 6 -- these tests assert
+        # frontmatter-scan/title-ladder behaviour, not git; stub the git
+        # runner so C3's added spawn doesn't cost a real process per test.
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", _RecordingGitRunner(rc=0, out=""))
+        plans_dir = repo / "docs" / "plans"
+        plans_dir.mkdir(parents=True)
+        (plans_dir / "2026-07-06-my-plan.md").write_text(
+            '---\ntitle: "Accomplished: Already past-tense from a prior entry"\n---\n# Plan\n',
+            encoding="utf-8",
+        )
+
+        rc, out, _ = _run(
+            [
+                "--sid",
+                "session-abcdef",
+                "--disposition",
+                "single-session",
+                "--governing-plan-slug",
+                "2026-07-06-my-plan",
+            ],
+            cwd=repo,
+        )
+        assert rc == 0
+        text = Path(out.strip()).read_text(encoding="utf-8")
+        assert 'title: "Accomplished: Already past-tense from a prior entry"' in text
+        assert "Accomplished: Accomplished:" not in text
+
+    def test_title_containing_double_quote_is_escaped(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        # Review: overengineering-reviewer finding 6 -- these tests assert
+        # frontmatter-scan/title-ladder behaviour, not git; stub the git
+        # runner so C3's added spawn doesn't cost a real process per test.
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", _RecordingGitRunner(rc=0, out=""))
+        plans_dir = repo / "docs" / "plans"
+        plans_dir.mkdir(parents=True)
+        # Single-quote-wrapped in the SOURCE plan frontmatter so the raw
+        # double-quote inside the title needs no escaping to be read back —
+        # `_plan_frontmatter_field` is a line-scan, not a real YAML parser,
+        # and only strips one matching layer of quoting either way.
+        (plans_dir / "2026-07-06-my-plan.md").write_text(
+            "---\ntitle: 'Ported the \"widget\" frobnicator'\n---\n# Plan\n",
+            encoding="utf-8",
+        )
+
+        rc, out, _ = _run(
+            [
+                "--sid",
+                "session-abcdef",
+                "--disposition",
+                "single-session",
+                "--governing-plan-slug",
+                "2026-07-06-my-plan",
+            ],
+            cwd=repo,
+        )
+        assert rc == 0
+        text = Path(out.strip()).read_text(encoding="utf-8")
+        assert 'title: "Accomplished: Ported the \\"widget\\" frobnicator"' in text
+
+
+# ---------------------------------------------------------------------------
+# C3 — the entry names its own commits, from one git spawn
+# (docs/plans/2026-09-05-the-completion-entry-computes-its-own-ti.md).
+# ---------------------------------------------------------------------------
+
+
+class _RecordingGitRunner:
+    """A monkeypatchable `_git_log_runner_for_commits` stand-in — records
+    every `(argv, cwd)` it is called with so a test can assert call COUNT
+    (the amplification-gate-shaped assertion C3 requires) as well as
+    inspect the exact argv (e.g. the `--since=` bound)."""
+
+    def __init__(self, rc: int = 0, out: str = "", err: str = ""):
+        self.rc = rc
+        self.out = out
+        self.err = err
+        self.calls: list = []
+
+    def __call__(self, argv, cwd):
+        self.calls.append((list(argv), cwd))
+        return self.rc, self.out, self.err
+
+
+# A sid shape valid under BOTH this module's own `_SID_RE`
+# (`[A-Za-z0-9._-]+`) and `chain_attribution._UUID_RE`
+# (hex-and-hyphen-only) — `_resolve_session_commits` degrades to `[]` on a
+# sid failing the latter, so a real end-to-end test needs a sid satisfying
+# both, not just the CLI's own looser gate.
+_HEX_SID = "abcdef12-3456"
+
+
+class TestResolveSessionCommits:
+    def test_fake_runner_two_shas_populate_commits_in_log_order(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        fake = _RecordingGitRunner(rc=0, out="sha-newest\nsha-oldest\n")
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", fake)
+
+        commits = m._resolve_session_commits(str(repo), _HEX_SID, "2026-09-01")
+
+        assert commits == ["sha-newest", "sha-oldest"]
+        assert len(fake.calls) == 1
+
+    def test_end_to_end_git_failure_degrades_entry_to_empty_commits_rc_zero(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        fake = _RecordingGitRunner(rc=1, out="", err="fatal: boom")
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", fake)
+
+        rc, out, err = _run(
+            ["--sid", _HEX_SID, "--disposition", "single-session"], cwd=repo
+        )
+        assert rc == 0
+        text = Path(out.strip()).read_text(encoding="utf-8")
+        assert "commits: []" in text
+
+    def test_explicit_commits_seed_wins_over_computed_and_skips_the_walk(
+        self, tmp_path, monkeypatch
+    ):
+        repo = _make_repo(tmp_path)
+        fake = _RecordingGitRunner(rc=0, out="deadbeef1234\n")
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", fake)
+
+        rc, out, _ = _run(
+            [
+                "--sid",
+                _HEX_SID,
+                "--disposition",
+                "single-session",
+                "--for-date",
+                "2026-07-01",
+                "--commits",
+                "cafef00dcafe",
+            ],
+            cwd=repo,
+        )
+        assert rc == 0
+        text = Path(out.strip()).read_text(encoding="utf-8")
+        assert '  - "cafef00dcafe"' in text
+        assert "deadbeef1234" not in text
+        # The explicit seed short-circuits `main()`'s own `if seeded_commits
+        # else _resolve_session_commits(...)` branch — the computed walk is
+        # never invoked at all, not merely overridden after the fact.
+        assert fake.calls == []
+
+    def test_since_window_equals_created_date_on_live_close(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        fake = _RecordingGitRunner(rc=0, out="")
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", fake)
+
+        from datetime import date
+
+        rc, _, _ = _run(["--sid", _HEX_SID, "--disposition", "single-session"], cwd=repo)
+        assert rc == 0
+        assert len(fake.calls) == 1
+        argv, cwd = fake.calls[0]
+        today = date.today().strftime("%Y-%m-%d")
+        assert f"--since={today}" in argv
+        assert argv[-1] == "HEAD"
+        assert cwd == str(repo)
+
+    def test_since_window_equals_backfilled_date_on_for_date_run(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path)
+        fake = _RecordingGitRunner(rc=0, out="")
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", fake)
+
+        rc, _, _ = _run(
+            [
+                "--sid",
+                _HEX_SID,
+                "--disposition",
+                "single-session",
+                "--for-date",
+                "2026-07-15",
+            ],
+            cwd=repo,
+        )
+        assert rc == 0
+        assert len(fake.calls) == 1
+        argv, _ = fake.calls[0]
+        assert "--since=2026-07-15" in argv
+
+    def test_no_op_rerun_on_fully_authored_entry_spawns_zero_git_calls(
+        self, tmp_path, monkeypatch
+    ):
+        # Review: code-reviewer P2 — a re-run over an already-fully-authored
+        # entry must not pay `_resolve_session_commits`'s git spawn, since
+        # `_write_entry`'s own early return discards the result anyway.
+        repo = _make_repo(tmp_path)
+        first_runner = _RecordingGitRunner(rc=0, out="")
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", first_runner)
+
+        rc, out, _ = _run(
+            ["--sid", _HEX_SID, "--disposition", "single-session"], cwd=repo
+        )
+        assert rc == 0
+        entry_path = Path(out.strip())
+
+        # Hand-author all three EM-owned surfaces so `_write_entry`'s
+        # all-three-authored early return fires on the next call.
+        text = entry_path.read_text(encoding="utf-8")
+        text = text.replace(
+            f'title: "{m._PLACEHOLDER_TITLE}"', 'title: "Accomplished: hand-authored"'
+        )
+        text = text.replace("nature: null", "nature: bugfix")
+        text = text.replace("nature_inferred: true", "nature_inferred: false")
+        text = text.replace(m._PROSE_PLACEHOLDER_MARKER, "Hand-authored prose.")
+        entry_path.write_text(text, encoding="utf-8")
+
+        second_runner = _RecordingGitRunner(rc=0, out="")
+        monkeypatch.setattr(m, "_git_log_runner_for_commits", second_runner)
+
+        rc, out2, err2 = _run(
+            ["--sid", _HEX_SID, "--disposition", "single-session"], cwd=repo
+        )
+        assert rc == 0
+        assert out2.strip() == str(entry_path)
+        assert "already fully authored" in err2
+        assert second_runner.calls == []
+
+
+# ---------------------------------------------------------------------------
 # Idempotency-guard primary signal — native records-query (was: node
 # query-records.js subprocess; repointed 2026-07-22 onto
 # coordinator_core.ops.ceremony.records_query.query_records — see this

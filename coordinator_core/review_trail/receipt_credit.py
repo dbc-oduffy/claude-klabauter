@@ -136,7 +136,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 
-from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+from coordinator_core.session.machinery_paths import (
+    machinery_root as _machinery_root,
+    share_roots as _share_roots,
+)
 
 #: The frontmatter key `provision_report._splice_review_receipt` stamps. The
 #: integrator's counterpart (`integrator_receipt`) is deliberately not read —
@@ -258,8 +261,10 @@ def receipt_credited_shas(
     Receipt lookups are memoised per DISTINCT session id, so cost scales with
     the number of sessions in the range, not the number of commits.
     """
-    share_dir = Path(_machinery_root(str(repo_root))) / "subagent-share"
-    if not share_dir.is_dir():
+    # Both share roots -- see machinery_paths.share_roots. A receipt written
+    # by a pre-relocation session is still a receipt.
+    share_dirs = [Path(d) for d in _share_roots(str(repo_root)) if Path(d).is_dir()]
+    if not share_dirs:
         return set()
 
     stamps_by_session: Dict[str, List[datetime]] = {}
@@ -277,7 +282,10 @@ def receipt_credited_shas(
             continue
 
         if session_id not in stamps_by_session:
-            stamps_by_session[session_id] = _counting_receipt_stamps(share_dir, session_id)
+            stamps = []
+            for share_dir in share_dirs:
+                stamps.extend(_counting_receipt_stamps(share_dir, session_id))
+            stamps_by_session[session_id] = sorted(stamps)
         stamps = stamps_by_session[session_id]
         if not stamps:
             continue

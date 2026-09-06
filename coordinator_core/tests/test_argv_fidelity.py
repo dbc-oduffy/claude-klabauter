@@ -30,6 +30,63 @@ from coordinator_core.argv_fidelity import (
 # ---------------------------------------------------------------------------
 
 
+#: The three cases below load a `coordinator/bin` CLI IN-PROCESS via
+#: `SourceFileLoader`. Those CLIs bootstrap their siblings with a bare
+#: `import lib`, which `coordinator/bin/lib/__init__.py` documents as resolving
+#: "because a script's own directory is `sys.path[0]`" -- true when the CLI is
+#: executed, false when a test loads it by path. Until 2026-09-06 these three
+#: therefore passed only when some EARLIER test in the same worker had already
+#: put those directories on `sys.path`: order-dependent, green or red purely on
+#: how xdist happened to distribute the run. Reproducing the interpreter state a
+#: real invocation provides is the test's job, not a neighbour's side effect.
+#:
+#: A FIXTURE, not a helper that restores on the way out: these CLIs bootstrap
+#: LAZILY (`_bootstrap_imports()` moved off module scope precisely so importing
+#: one would stop mutating the warm server's `sys.path`), so the imports fire
+#: when the test CALLS the CLI, not when it loads it. Restoring at the end of
+#: the load put the path back before the only line that needed it.
+@pytest.fixture
+def bin_cli_loader():
+    import importlib.machinery
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    bin_dir = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
+    # BOTH directories, and `bin/lib` is the load-bearing one. The CLIs
+    # bootstrap via a bare `import lib`, but TWO packages in this repo are
+    # importable under that bare name -- `coordinator/lib` and
+    # `coordinator/bin/lib` -- and whichever a process imports first wins in
+    # `sys.modules` for its whole life. Under pytest `coordinator/lib` can get
+    # there first (it is in `testpaths`), making the CLI's `import lib` a cache
+    # hit on the WRONG package that never runs the line adding
+    # `coordinator/bin/lib`. Adding it directly makes `cc_invoke` and
+    # `coordinator_registry` resolve regardless of who won that race.
+    lib_dir = bin_dir / "lib"
+    added = [str(d) for d in (bin_dir, lib_dir) if str(d) not in sys.path]
+    for entry in added:
+        sys.path.insert(0, entry)
+
+    def _load(filename: str, module_name: str):
+        loader = importlib.machinery.SourceFileLoader(
+            module_name, str(bin_dir / filename)
+        )
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        cli_mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+        loader.exec_module(cli_mod)
+        return cli_mod
+
+    try:
+        yield _load
+    finally:
+        # Leave `sys.path` as found -- this suite runs in a warm interpreter
+        # ~50 sessions share, and the neighbour-pollution above is exactly what
+        # this fixture exists to stop; it must not become a source of it.
+        for entry in added:
+            if entry in sys.path:
+                sys.path.remove(entry)
+
+
 def test_resolve_body_mutually_exclusive():
     with pytest.raises(ArgvFidelityError, match="mutually exclusive"):
         resolve_body("inline body", "some/path.txt")
@@ -218,22 +275,13 @@ def test_refuse_newline_argv_names_the_flag():
 # ---------------------------------------------------------------------------
 
 
-def test_coordinator_lesson_add_refuses_newline_body(capsys):
+def test_coordinator_lesson_add_refuses_newline_body(capsys, bin_cli_loader):
     import importlib.machinery
     import importlib.util
     import unittest.mock
     from pathlib import Path
 
-    cli_path = (
-        Path(__file__).resolve().parents[2]
-        / "coordinator" / "bin" / "coordinator-lesson-add.py"
-    )
-    loader = importlib.machinery.SourceFileLoader(
-        "coordinator_lesson_add_argv_fidelity_test", str(cli_path)
-    )
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    cli_mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    loader.exec_module(cli_mod)
+    cli_mod = bin_cli_loader("coordinator-lesson-add.py", "coordinator_lesson_add_argv_fidelity_test")
 
     argv = [
         "coordinator-lesson-add",
@@ -248,22 +296,28 @@ def test_coordinator_lesson_add_refuses_newline_body(capsys):
     assert "--body-file" in capsys.readouterr().err
 
 
-def test_coordinator_lesson_promote_refuses_newline_body(capsys):
+def test_coordinator_lesson_promote_refuses_newline_body(
+    capsys, bin_cli_loader, monkeypatch
+):
+    # This CLI's lazy bootstrap resolves the claude-klabauter root before argparse ever
+    # runs, and the suite-root home quarantine leaves the machine-local
+    # registry empty by design -- so the refusal under test is unreachable
+    # without naming a root. `COORDINATOR_ENGINE_ROOT` is the documented rung-1
+    # override (`coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`), pointed at
+    # THIS checkout: an explicit, machine-independent answer rather than
+    # `@pytest.mark.real_home`, which is scoped to live-parity oracles and this
+    # is not one -- it asserts a pure argv refusal.
+    from pathlib import Path
+
+    monkeypatch.setenv(
+        "COORDINATOR_ENGINE_ROOT", str(Path(__file__).resolve().parents[2])
+    )
     import importlib.machinery
     import importlib.util
     import unittest.mock
     from pathlib import Path
 
-    cli_path = (
-        Path(__file__).resolve().parents[2]
-        / "coordinator" / "bin" / "coordinator-lesson-promote.py"
-    )
-    loader = importlib.machinery.SourceFileLoader(
-        "coordinator_lesson_promote_argv_fidelity_test", str(cli_path)
-    )
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    cli_mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    loader.exec_module(cli_mod)
+    cli_mod = bin_cli_loader("coordinator-lesson-promote.py", "coordinator_lesson_promote_argv_fidelity_test")
 
     # Refusal fires from post-parse validation, before any schema-derived
     # write path is reached -- stub the schema.describe lookup so this case
@@ -287,21 +341,12 @@ def test_coordinator_lesson_promote_refuses_newline_body(capsys):
     assert "--body-file" in capsys.readouterr().err
 
 
-def test_queue_triage_scaffold_baton_body_flag(monkeypatch, tmp_path, capsys):
+def test_queue_triage_scaffold_baton_body_flag(monkeypatch, tmp_path, capsys, bin_cli_loader):
     import importlib.machinery
     import importlib.util
     from pathlib import Path
 
-    cli_path = (
-        Path(__file__).resolve().parents[2]
-        / "coordinator" / "bin" / "queue-triage.py"
-    )
-    loader = importlib.machinery.SourceFileLoader(
-        "queue_triage_argv_fidelity_test", str(cli_path)
-    )
-    spec = importlib.util.spec_from_loader(loader.name, loader)
-    cli_mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
-    loader.exec_module(cli_mod)
+    cli_mod = bin_cli_loader("queue-triage.py", "queue_triage_argv_fidelity_test")
 
     with pytest.raises(SystemExit) as exc_info:
         cli_mod.main(

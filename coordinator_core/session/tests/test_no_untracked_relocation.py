@@ -329,19 +329,39 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("bin", "repomap/generate-repomap.py", "generate_task_scoped_map", "os.replace", "os.replace(tmp_path, output_path)", 1): "atomic tmp->final; temp source never claimed (generate_task_scoped_repomap)",
     ("bin", "repomap/generate-repomap.py", "generate_repomap", "os.replace", "os.replace(tmp_path, output_path)", 1): "atomic tmp->final; temp source never claimed (main, final write)",
     ("bin", "refresh-plugin-live-install.py", "_replace_restore", "Path.rename", "staging.rename(live_path)", 1): "live_path resolves under the plugin plugins_dir (the CLI's live plugin-install tree), outside this worktree -- not claimable by touch() in this process",
-    ("bin", "publish.py", "_swap_publish_staging_into_dest", "os.rename", "os.rename(dest_dir, prior_backup)", 1): "dest_dir points at an external sibling-repo publish destination, outside this worktree entirely",
-    ("bin", "publish.py", "_swap_publish_staging_into_dest", "os.rename", "os.rename(staging_dir, dest_dir)", 1): "dest_dir points at an external sibling-repo publish destination, outside this worktree entirely",
-    ("bin", "publish.py", "_swap_publish_staging_into_dest", "os.rename", "os.rename(prior_backup, dest_dir)", 1): "recovery rename: prior_backup/dest_dir, same external-destination reasoning",
+    # 2026-09-06: the seven raw `os.rename` calls that used to sit directly in
+    # `_swap_publish_staging_into_dest` (4) and `_swap_publish_staging_entry`
+    # (3) are gone -- every one of them now goes through the shared
+    # `_rename_with_retry(src, dst)` primitive (the PM-ruling-reopened Windows
+    # contention retry), so the module holds exactly ONE raw `os.rename`, in
+    # that primitive. Both former groups' entries are removed rather than
+    # re-keyed: there is no call left in either function to key. The single
+    # surviving entry below covers the primitive on behalf of all seven
+    # callers, whose paths every one of the removed reasons described.
+    ("bin", "publish.py", "_rename_with_retry", "os.rename", "os.rename(src, dst)", 1):
+        "the ONE raw os.rename left in publish.py -- the retry primitive every "
+        "publish-swap rename now funnels through (`_swap_publish_staging_into_"
+        "dest`'s dest_dir->prior_backup, staging_dir->dest_dir, prior_backup->"
+        "dest_dir recovery and prior_backup/.git->dest_dir/.git legs, and "
+        "`_swap_publish_staging_entry`'s per-entry aside/restore/install legs). "
+        "Every caller's src and dst resolve under the external sibling-repo "
+        "publish DESTINATION or its same-parent staging/backup siblings "
+        "(`tempfile.mkdtemp(dir=dest_dir.parent)`), never this worktree, so "
+        "`normalize_touch_path` expresses no claim on either operand and there "
+        "is nothing for `relocate_touched_path` to restate -- the same "
+        "external-destination reasoning the seven removed per-call-site "
+        "entries carried, now stated once at the site that actually renames. "
+        "The function is a private module-level primitive with no callers "
+        "outside those two swap functions (verified 2026-09-06), so this entry "
+        "cannot silently widen to cover a worktree path later without the "
+        "guard's own group-membership check firing on a new caller's site.",
     # The root-dest branch (2026-08-15): a flat-mirror row whose dest_subdir is
     # empty has dest_dir == the mirror ROOT, and renaming that root fails on
     # Windows whenever any handle is open anywhere beneath it -- which, for a
     # mirror that is also a live engine install, is always. That branch swaps
-    # entry-by-entry instead, so its renames operate one level lower than the
-    # four above. Same external-destination reasoning: every path here is under
-    # the sibling-repo publish destination, never this worktree.
-    ("bin", "publish.py", "_swap_publish_staging_entry", "os.rename", "os.rename(dest_entry, prior)", 1): "per-entry swap under an external sibling-repo publish destination; rename-aside so a partial failure stays recoverable",
-    ("bin", "publish.py", "_swap_publish_staging_entry", "os.rename", "os.rename(prior, dest_entry)", 1): "recovery rename of the aside-copy, same external-destination reasoning",
-    ("bin", "publish.py", "_swap_publish_staging_entry", "os.rename", "os.rename(staging_entry, dest_entry)", 1): "directory entry moved into the external publish destination; staging source is this round's own copy, never claimed",
+    # entry-by-entry instead, so its renames operate one level lower. Same
+    # external-destination reasoning: every path here is under the sibling-repo
+    # publish destination, never this worktree.
     ("bin", "publish.py", "_swap_publish_staging_entry", "os.replace", "os.replace(staging_entry, dest_entry)", 1): "file entry replaced in the external publish destination; staging source is this round's own copy, never claimed",
     ("bin", "publish.py", "write_publish_provenance_record", "os.replace", "os.replace(tmp_path, record_path)", 1): "atomic tmp->final rename of the publish provenance record; the temp source is a fresh pid-suffixed sibling written moments earlier by this call and never claimed by any session",
 
@@ -370,7 +390,6 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     # --- (fixed above, see `_scan_root`'s `rel = path.relative_to(root).  ---
     # --- as_posix()`) stopped masking every subdirectory finding. Same    ---
     # --- source-side discriminator as Category 4 above; none are hazards.---
-    ("bin", "publish.py", "_swap_publish_staging_into_dest", "os.rename", "os.rename(prior_backup / '.git', dest_dir / '.git')", 1): "dest_dir/prior_backup point at an external sibling-repo publish destination, outside this worktree entirely -- same reasoning as this function's other three already-allowlisted renames",
     ("bin", "tests/test_publish_swap_preserves_dest_git.py", "_stranded_prior_dir", "Path.rename", "stray.rename(prior)", 1): "test fixture: stray/prior both resolve under pytest tmp_path -- not the process's real worktree",
     ("bin", "tests/test_publish_swap_preserves_dest_git.py", "test_arm_h_stranded_prior_glob_metachar_dest_name_ignores_lookalike_sibling", "Path.rename", "lookalike.rename(lookalike_prior)", 1): "test fixture: lookalike/lookalike_prior both resolve under pytest tmp_path -- not the process's real worktree",
     ("bin", "tests/test_publish_swap_preserves_dest_git.py", "test_arm_j_non_matching_directory_is_untouched", "Path.rename", "prior_shaped.rename(prior)", 1): "test fixture: prior_shaped/prior both resolve under pytest tmp_path -- not the process's real worktree",
@@ -621,6 +640,54 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
         "sibling never claimed, and the destination is rewritten in place "
         "rather than relocated -- including the one call that restores a real "
         "fleet-mode file, which writes back to the path it read from",
+
+    # --- 2026-09-06 sweep: three sites that landed after the last curation. ---
+    # --- Each read at its own call site, not matched to a rationale.        ---
+    ("coordinator_core", "group_em/watch_spool.py", "prune", "os.replace", "os.replace(tmp_path, path)", 1):
+        "atomic tmp->final REWRITE of the group-em watch spool -- src is a "
+        "`tempfile.mkstemp(dir=<spool dir>)` sibling this call created "
+        "microseconds earlier and no session could ever have named, and dst is "
+        "the spool's own path, rewritten in place rather than relocated, so "
+        "there is no claim to carry and no path that stops existing. That the "
+        "spool lives under `state/` (not `.git/`) does not change the "
+        "classification: the C3 no-strand discriminator is a property of the "
+        "rename SOURCE, and this source is a fresh unclaimed temp. Same shape "
+        "as `ops/deliverable_ledger_write.upsert_deliverable_ledger_rows` "
+        "above, which is allow-listed on exactly this ground.",
+    ("coordinator_core", "ops/fleet_residue_merge.py", "run", "shutil.move", "shutil.move(src, dst)", 1):
+        "one-shot 2026-09-02 residue migration: moves machinery-bucket files "
+        "from the OLD `state/<bucket>/` paths to the new "
+        "`.coordinator-local/<bucket>/` root. A REAL forward relocation of a "
+        "real worktree path, allow-listed on the defect this guard names "
+        "rather than on 'temp source': the strand this guard exists to stop is "
+        "a claimed file dropping out of the SAFE-COMMIT OFFER, and both ends "
+        "are gitignored -- `git check-ignore` resolves all five source buckets "
+        "(`state/{subagent-share,review-trail,ceremony,dispatch-briefs,"
+        "plan-sidecars}/`, .gitignore:247,258-261) and the destination "
+        "(`.coordinator-local/`, .gitignore:233). An ignored path is never in a "
+        "commit offer at either location, so a stranded T-claim on one has no "
+        "consequence to prevent. Two supporting facts, neither load-bearing "
+        "alone: the corpus is machine-written machinery sidecars, not "
+        "agent-authored source; and `repo` is a CLI argument naming ARBITRARY "
+        "sibling repos, for which this process holds no session id to restate a "
+        "claim against anyway. If a future edit points this op at a TRACKED "
+        "bucket, the reason above stops holding and the site must migrate onto "
+        "`relocate_touched_path` (with a fail-open, like "
+        "`ops/migrate_cross_repo_layout._move_one`) -- the argument is the "
+        "ignore status, not the op's name.",
+    ("coordinator_core", "ops/tests/test_fleet_machinery_sweep.py", "rename_fn", "os.rename", "os.rename(src, dst)", 1):
+        "test fixture: the local `rename_fn` injected into `_relocate_buckets` "
+        "by `test_relocate_buckets_defers_on_existing_destination`, whose "
+        "`root = str(tmp_path)` -- both operands resolve under pytest's "
+        "synthetic tree, not the process's real worktree. The injection point "
+        "is the production module's OWN seam: `fleet_machinery_sweep` refuses "
+        "to define a second retry primitive and loads publish.py's "
+        "`_rename_with_retry` instead (see `_load_rename_with_retry`), so this "
+        "raw call exists only to let a test drive that seam without the retry "
+        "loop. The sibling `rename_fn` in "
+        "`test_relocate_buckets_records_permanent_oserror_as_deferred` raises "
+        "instead of renaming and so is not a finding -- this is the only call "
+        "in the group.",
 }
 
 _METHODS = {"move", "rename", "replace"}

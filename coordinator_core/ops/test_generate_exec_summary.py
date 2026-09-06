@@ -23,6 +23,8 @@ from coordinator_core import meta_repo_identity
 from coordinator_core import state_root as state_root_mod
 from coordinator_core.ops import generate_exec_summary as mod
 from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.session import record_homes
+from pathlib import Path
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -401,7 +403,7 @@ def test_derive_progress_rung1_selects_the_newest_week_changelog(tmp_path):
     rung-1 grammar, in a commit that would otherwise look like a pure fix.
     """
     repo_dir = tmp_path / "repo"
-    wc_dir = repo_dir / "state" / "week-changelog"
+    wc_dir = Path(record_homes.home_dir(str(repo_dir), "week-changelog"))
     wc_dir.mkdir(parents=True)
 
     (wc_dir / "2026-07-06.md").write_text(

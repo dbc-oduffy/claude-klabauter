@@ -210,10 +210,25 @@ def bulk_grep_attributed_shas(
     session_id: Optional[str],
     cwd: str,
     run: GitRunner,
-) -> FrozenSet[str]:
+    since: Optional[str] = None,
+) -> List[str]:
     """Message-line `--grep=^Session-Id: <sid>$` attribution over the whole
     window — the same grep shape `coverage._derive_dag_chain_set` uses for
     chain membership.
+
+    Returns a `List[str]` in `git log`'s own emission order (newest-first,
+    git's default — NOT reversed here), not a frozenset. Widened from
+    `FrozenSet[str]` for task C3 (docs/plans/2026-09-05-the-completion-
+    entry-computes-its-own-ti.md): a review measured this function's actual
+    consumer count at two — `unattributed_foreign_shas` below (which only
+    does a `sha not in grep_attributed` membership test, satisfied by a
+    list) and `workstream_complete/directives_review.py` (which already
+    rebuilds its own frozenset from an `Any`-typed iterable seam) — and
+    found neither depends on the return being a set. A `_ordered` sibling
+    function was considered and rejected: it would have bought a second
+    permanent public entry point to avoid one `frozenset(...)` at the one
+    internal call site that needs set membership (`unattributed_foreign_
+    shas`, which now wraps this call in `frozenset(...)` itself).
 
     `--no-merges` is LOAD-BEARING here (adjudication § 10.7 item 2, the other
     half): without it, a merge commit whose OWN message happens to carry (or
@@ -225,23 +240,34 @@ def bulk_grep_attributed_shas(
     above deliberately omits it is not a contradiction; each omission closes
     a different bypass (see that function's own docstring).
 
-    Returns the empty frozenset on a malformed `session_id` (`_UUID_RE`
-    shape-validation fails) or any git failure — never fail-open.
+    `since`, added for task C1 (pln-the-completion-entry-computes-a1780d):
+    when supplied, appends exactly one `--since=<since>` argv element to the
+    SAME `git log` call below — still one spawn, no second call. `since` is
+    NOT shape-validated as a date; git accepts approxidate strings and the
+    only caller passes an ISO `YYYY-MM-DD` it derived itself. It is passed as
+    a single argv element, never string-concatenated into `range_str`, so it
+    cannot smuggle a second git argument. `since=None` (every existing
+    caller) produces byte-identical argv to before this parameter existed.
+
+    Returns `[]` on a malformed `session_id` (`_UUID_RE` shape-validation
+    fails) or any git failure — never fail-open. The `_UUID_RE` short-circuit
+    fires before `since` is ever consulted or any git call is made, so a
+    malformed `session_id` cannot be routed around by supplying `since`.
     """
     if not session_id or not _UUID_RE.match(session_id):
-        return frozenset()
-    rc, out, err = run(
-        [
-            "git", "log", "--no-merges",
-            f"--grep=^Session-Id: {session_id}$",
-            "--format=%H",
-            range_str,
-        ],
-        cwd,
-    )
+        return []
+    argv = [
+        "git", "log", "--no-merges",
+        f"--grep=^Session-Id: {session_id}$",
+        "--format=%H",
+    ]
+    if since is not None:
+        argv.append(f"--since={since}")
+    argv.append(range_str)
+    rc, out, err = run(argv, cwd)
     if rc != 0:
-        return frozenset()
-    return frozenset(line.strip() for line in out.splitlines() if line.strip())
+        return []
+    return [line.strip() for line in out.splitlines() if line.strip()]
 
 
 def unattributed_foreign_shas(
@@ -272,7 +298,10 @@ def unattributed_foreign_shas(
     if key in cache:
         return cache[key]
     window = bulk_commit_attribution_map(sha_range, cwd, run)
-    grep_attributed = bulk_grep_attributed_shas(sha_range, own_session_id, cwd, run)
+    # Review: overengineering-reviewer finding 1 — bulk_grep_attributed_shas
+    # now returns List[str] in git log order; frozenset ONCE here at the one
+    # call site that needs O(1) membership, not a permanent second function.
+    grep_attributed = frozenset(bulk_grep_attributed_shas(sha_range, own_session_id, cwd, run))
     result = foreign_shas_from_window(window.keys(), own_session_id, window, grep_attributed)
     cache[key] = result
     return result

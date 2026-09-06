@@ -10,10 +10,10 @@ scaffold taught authors the retired vocabulary before they could read the
 doctrine that would tell them otherwise. This suite asserts the scaffold now
 emits `disposition` rows, mentions `case_against` (the strongest-honest-case
 field required on `backlogged`/`wont_do`), and that the emitted sample rows
-still validate against the vendored plan-tasks schema (1.10.0).
+still validate against the vendored plan-tasks schema (1.13.1).
 
 Spec backlink: cross-repo/inbox/2026-08-06-doe-claude-em-deferral-both-sides-adopted-three-legs-for-you.md
-Spec backlink: coordinator_core/frontmatter/schemas/plan-tasks.schema.json (x-schema-version 1.10.0)
+Spec backlink: coordinator_core/frontmatter/schemas/plan-tasks.schema.json (x-schema-version 1.13.1)
 
 Loaded by file path (`importlib.machinery.SourceFileLoader`) since
 `coordinator-doc-new` is an extensionless polyglot entrypoint, not a `.py`
@@ -114,7 +114,16 @@ class TestPlanTemplateEmitsLiveDispositionVocabulary(unittest.TestCase):
     def test_sample_rows_validate_against_vendored_schema(self):
         rows = _extract_task_spine_rows(_scaffolded_plan_text())
         schema = json.loads(_SCHEMA_PATH.read_text())
-        self.assertEqual(schema.get("x-schema-version"), "1.10.0")
+        # Pin bumped 1.10.0 -> 1.13.1, the version re-vendored through
+        # bin/claude-klabauter-revendor-schema.py (last hop 7bd0e6c267). The re-look
+        # the module docstring's tripwire demands was performed, not waved
+        # through -- diffed against the last 1.10.x revision (b62e1d8e31)
+        # across the whole span: NO required set changed in either
+        # direction, and the only additions are two optional properties
+        # (`agent_type`, `agent_model`). Nothing these sample rows carry
+        # became invalid, which the validate() below re-proves on the
+        # emitted rows. Equality, never a range -- see the docstring note.
+        self.assertEqual(schema.get("x-schema-version"), "1.13.1")
         for row in rows:
             jsonschema.validate(instance=row, schema=schema)
 

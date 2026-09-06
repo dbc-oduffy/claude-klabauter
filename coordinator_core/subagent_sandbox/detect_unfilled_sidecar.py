@@ -58,7 +58,10 @@ import sys
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
-from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+from coordinator_core.session.machinery_paths import (
+    machinery_root as _machinery_root,
+    share_roots as _share_roots,
+)
 from coordinator_core.session.machinery_paths import share_dir as _share_dir
 from coordinator_core.subagent_sandbox.provision_report import (
     _build_run_report_doc_text,
@@ -190,11 +193,16 @@ def scan_session_dir(repo_root: str, session_id: str) -> List[SidecarVerdict]:
     to walk the scan outside the intended tree. A value that resolves
     outside is treated as "no sidecars found" rather than raising, matching
     this module's best-effort-diagnostic contract."""
-    share_root = os.path.abspath(os.path.join(_machinery_root(repo_root), "subagent-share"))
-    session_dir = os.path.abspath(_share_dir(repo_root, session_id))
-    if os.path.commonpath([session_dir, share_root]) != share_root:
-        return []
-    paths = sorted(glob.glob(os.path.join(session_dir, "*.md")))
+    # Both share roots -- see machinery_paths.share_roots. The containment
+    # check runs per root, so a `..`-shaped session id still cannot walk the
+    # scan outside either tree.
+    paths = []
+    for root in _share_roots(repo_root):
+        share_root = os.path.abspath(root)
+        session_dir = os.path.abspath(os.path.join(share_root, session_id))
+        if os.path.commonpath([session_dir, share_root]) != share_root:
+            continue
+        paths.extend(sorted(glob.glob(os.path.join(session_dir, "*.md"))))
     return scan_paths(paths)
 
 
@@ -208,12 +216,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument(
         "--cwd", dest="cwd", default=".",
-        help="Repo root state/subagent-share/ lives under (default: '.').",
+        help="Repo root the subagent-share bucket lives under (default: '.').",
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--session", dest="session", default=None,
-        help="Scan every sidecar under state/subagent-share/<session>/.",
+        help="Scan every sidecar under <machinery_root>/subagent-share/<session>/.",
     )
     group.add_argument(
         "--path", dest="paths", action="append", default=None,

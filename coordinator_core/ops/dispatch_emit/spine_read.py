@@ -348,7 +348,20 @@ class InvalidRowIdError(SpineReadError):
 
 
 class EmitterRow(NamedTuple):
-    """One normalized task-spine row for the dispatch-emit pipeline."""
+    """One normalized task-spine row for the dispatch-emit pipeline.
+
+    ``agent_type``/``agent_model`` (state/sizings/2026-09-05-a-plan-row-can-
+    name-the-agent-that-runs.yaml; plan-tasks.schema.json 1.13.0) are the
+    optional per-row overrides ``wave_map.build_waves`` reads off this row
+    via ``getattr`` into ``WaveRow`` and ``emit.py``'s ``_row_agent_type``/
+    ``_model_opt`` resolve at emit time. Read tolerantly here, matching
+    every field on this row but the four fail-loud ones (module docstring):
+    a malformed value is `emit.py`'s ``MalformedAgentOverrideError`` to
+    raise, not this module's — re-checking the grammar here would be a
+    second place the pattern could drift from the vendored schema's own
+    ``pattern``. Both default to ``None``, and a spine declaring neither key
+    carries both as ``None`` here exactly as before this field existed.
+    """
 
     id: str
     title: str
@@ -356,6 +369,8 @@ class EmitterRow(NamedTuple):
     writes: object  # list[str], or the UNDECLARED sentinel
     reads: list
     depends_on: list
+    agent_type: Optional[str] = None
+    agent_model: Optional[str] = None
 
 
 def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]:
@@ -518,6 +533,8 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                 writes=writes,
                 reads=reads,
                 depends_on=depends_on,
+                agent_type=raw.get("agent_type"),
+                agent_model=raw.get("agent_model"),
             )
         )
 

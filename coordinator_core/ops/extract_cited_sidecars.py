@@ -69,7 +69,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.session.machinery_paths import machinery_root
+from coordinator_core.session.machinery_paths import machinery_root, share_roots
 from coordinator_core.win_portability import leaf_spawn_creationflags
 
 _LOG_PREFIX = "extract-cited-sidecars"
@@ -81,6 +81,32 @@ _SHA_RE = re.compile(r"\b[0-9a-fA-F]{40}\b")
 
 _UUID_AUDIT_PATH = "state/audits/2026-09-02-cited-subagent-share-sidecars.md"
 _SHA_AUDIT_PATH = "state/audits/2026-09-02-cited-commit-shas.md"
+
+# Generator-provenance declaration (generator_provenance.py's AST reader).
+# `main` writes both audit records above into claude-klabauter's own tracked tree, so
+# this is a real emitter, not a DECLARED-EMPTY one. `sources` names this
+# module: the scan, both renderers, and the write all live here, so its own
+# movement is what changes either artifact's content -- there is no deeper
+# locus to point at. Artifact paths are spelled as LITERALS, not as the
+# `_*_AUDIT_PATH` names above: the reader parses source with `ast` and never
+# imports, so a Name reference reads as "not a literal list" and the whole
+# declaration collapses to UNDECLARED. Neither artifact carries frontmatter,
+# so the staleness leg reads them UNSTAMPED
+# (`check_generator_output_staleness`) -- a declared,
+# reported state, and the correct one for a one-shot pre-rewrite extraction
+# whose inputs are the whole tracked corpus rather than a fixed source set.
+GENERATES = [
+    {
+        "artifact": "state/audits/2026-09-02-cited-subagent-share-sidecars.md",
+        "stamp_key": "generated_at",
+        "sources": ["coordinator_core/ops/extract_cited_sidecars.py"],
+    },
+    {
+        "artifact": "state/audits/2026-09-02-cited-commit-shas.md",
+        "stamp_key": "generated_at",
+        "sources": ["coordinator_core/ops/extract_cited_sidecars.py"],
+    },
+]
 
 
 def _resolve_root(root: Optional[str]) -> str:
@@ -158,10 +184,7 @@ def _list_candidates(root: str) -> List[str]:
 #: whose whole job is to notice a citation that used to work and stopped.
 #: Drop the legacy entry only when the old directories are actually gone.
 def _share_roots(root: str) -> List[str]:
-    return [
-        os.path.join(machinery_root(root), "subagent-share"),
-        os.path.join(root, "state", "subagent-share"),
-    ]
+    return list(share_roots(root))
 
 
 def _on_disk_session_ids(root: str) -> set:

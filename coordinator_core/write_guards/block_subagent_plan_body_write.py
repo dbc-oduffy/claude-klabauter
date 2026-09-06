@@ -198,6 +198,7 @@ from coordinator_core.bash_guards._helpers import (
 )
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.git.git_dir import resolve_git_dir
+from coordinator_core.session import machinery_paths
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.bash_guards._override_log_path import (
     NO_SESSION_BUCKET,
@@ -476,7 +477,8 @@ def _resolve_executing_plan_keys(git_root: Optional[str], session_id: str) -> se
     """Plan/problem-set keys this session's run-report sidecars declare as
     ``plan:`` — i.e. the plan bodies actually being executed right now by
     dispatches under this session, per the fleet's own
-    ``state/subagent-share/<session_id>/`` sidecar convention.
+    ``<machinery_root>/subagent-share/<session_id>/`` sidecar convention
+    (both roots, via ``machinery_paths.share_dirs`` — see that accessor).
 
     Best-effort: an unresolvable git_root/session_id, missing sidecar
     directory, or any per-file read/parse failure simply omits that
@@ -488,11 +490,12 @@ def _resolve_executing_plan_keys(git_root: Optional[str], session_id: str) -> se
     keys: set = set()
     if not git_root or not session_id:
         return keys
-    sidecar_dir = Path(git_root) / "state" / "subagent-share" / session_id
-    try:
-        entries = sorted(sidecar_dir.glob("*.md"))
-    except OSError:
-        return keys
+    entries = []
+    for sidecar_dir in machinery_paths.share_dirs(git_root, session_id):
+        try:
+            entries.extend(sorted(Path(sidecar_dir).glob("*.md")))
+        except OSError:
+            continue
     for entry in entries:
         try:
             text = entry.read_text(encoding="utf-8")
@@ -596,7 +599,7 @@ def _deny_reason_executor(
         "Use instead:\n"
         f"  {file_path_safe}: coordinator:executor may not write this plan/problem-set "
         "body directly. Stamping status? Use the run-report sidecar "
-        "state/subagent-share/<provisioned-path>.md instead. Editing the body was your "
+        "<machinery_root>/subagent-share/<provisioned-path>.md instead. Editing the body was your "
         "deliverable? Ask the EM to route to coordinator:enricher/review-integrator"
         + ("\n\n" + _note if _note else "")
     )

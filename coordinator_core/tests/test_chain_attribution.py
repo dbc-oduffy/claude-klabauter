@@ -239,7 +239,7 @@ def test_grep_rejects_malformed_session_id(repo_root):
     attributed = chain_attribution.bulk_grep_attributed_shas(
         f"{init_sha}..HEAD", ".*", str(repo_root), _run,
     )
-    assert attributed == frozenset(), (
+    assert attributed == [], (
         "an unvalidated session_id like '.*' must not be interpolated into --grep"
     )
 
@@ -254,7 +254,7 @@ def test_grep_git_failure_returns_empty(repo_root):
     attributed = chain_attribution.bulk_grep_attributed_shas(
         "HEAD..HEAD", sid, str(repo_root), _failing_run,
     )
-    assert attributed == frozenset()
+    assert attributed == []
 
 
 # ---------------------------------------------------------------------------

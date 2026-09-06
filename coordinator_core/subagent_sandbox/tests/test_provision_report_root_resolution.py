@@ -76,7 +76,21 @@ def test_resolve_plugin_root_prefers_env_var(tmp_path: Path, monkeypatch: pytest
     assert provision_report.resolve_plugin_root() == str(plugin_root)
 
 
-def test_resolve_plugin_root_returns_none_on_full_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_plugin_root_returns_none_on_full_miss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FULL miss means EVERY rung misses -- all three, not the two this test
+    originally knew about.
+
+    ``resolve_plugin_root`` grew a third rung (``machine_local_dir()/.doe-root``
+    + ``coordinator``, the fleet's dev-clone pointer file) after this test was
+    written; the test kept isolating only ``CLAUDE_PLUGIN_ROOT`` and
+    ``claude_config_dir()``, so on any box carrying a real ``.doe-root`` the
+    unisolated rung resolved a LIVE plugin root (the machine's own DoE-claude
+    checkout) and the "full miss" this asserts was never actually constructed.
+    Isolate
+    each rung the resolver reads, so the scenario under test is the one named.
+    """
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setattr(
         provision_report,
@@ -84,10 +98,22 @@ def test_resolve_plugin_root_returns_none_on_full_miss(monkeypatch: pytest.Monke
         lambda: Path("does-not-exist-anywhere"),
         raising=False,
     )
+    # An EMPTY real directory, not a bogus path: the rung reads
+    # ``<machine_local_dir()>/.doe-root``, so the miss under test is "the
+    # pointer file is absent", exercising the resolver's own OSError leg
+    # rather than an unreadable-parent accident.
+    machine_local = tmp_path / "machine-local"
+    machine_local.mkdir()
+    monkeypatch.setattr(
+        provision_report,
+        "machine_local_dir",
+        lambda: machine_local,
+        raising=False,
+    )
 
-    # No CLAUDE_PLUGIN_ROOT and an unresolvable claude_config_dir()-relative
-    # probe -- both legs miss, so the resolver must fail open to None rather
-    # than raise or fabricate a path.
+    # No CLAUDE_PLUGIN_ROOT, an unresolvable claude_config_dir()-relative
+    # probe, and no .doe-root pointer -- every leg misses, so the resolver
+    # must fail open to None rather than raise or fabricate a path.
     assert provision_report.resolve_plugin_root() is None
 
 

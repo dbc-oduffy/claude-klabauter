@@ -2,11 +2,12 @@
 """bin/tests/test_workweek_complete_advisories.py
 
 Purpose: unit tests for coordinator/bin/workweek-complete-advisories.py — the
-M3 chunk WWC-1 port of four genuine bash-logic fences out of DoE-claude's
+M3 chunk WWC-1 port of genuine bash-logic fences out of DoE-claude's
 `coordinator/commands/workweek-complete.md` (tripwire fire-log summarization,
-improvement-queue depth counting, cruft-sweep last-run parsing, and the
-ubt-unresolved CLI dispatch over the already-ported
-`coordinator_core.ops.scan_unresolved_ubt_records`).
+improvement-queue depth counting, and cruft-sweep last-run parsing). A fourth,
+`ubt-unresolved`, was drained 2026-09-06 with the Step 4c gate it served --
+DR-372/DR-374 deleted its scanner and the requirement is discharged by the
+owning UE repo's own ceremonies.
 
 Coverage:
   test_tripwire_absent_file_returns_none
@@ -15,7 +16,6 @@ Coverage:
   test_improvement_queue_depth_counts_and_oldest
   test_cruft_sweep_last_run_absent
   test_cruft_sweep_last_run_parses_pipe_delimited_log
-  test_ubt_unresolved_cli_lists_only_unpaired_markers
 """
 from __future__ import annotations
 
@@ -147,40 +147,3 @@ def test_cruft_sweep_cmd_reports_never_when_absent(tmp_path: Path, capsys: pytes
     assert "Cruft-sweep last run: never" in out
 
 
-# ---------------------------------------------------------------------------
-# ubt-unresolved — Step 4c oracle fence (workweek-complete.md:1331-1333)
-# ---------------------------------------------------------------------------
-
-
-def test_ubt_unresolved_cli_lists_only_unpaired_markers(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    review_trail = tmp_path / "state" / "review-trail"
-    review_trail.mkdir(parents=True)
-
-    # Paired: pending + resolved sibling -> must NOT appear in output.
-    paired_pending = review_trail / "abc123.ubt-compile.pending.json"
-    paired_pending.write_text(json.dumps({"sha_range": "abc..def"}), encoding="utf-8")
-    (review_trail / "abc123.resolved.json").write_text("{}", encoding="utf-8")
-
-    # Unpaired: pending only -> must appear.
-    unpaired_pending = review_trail / "ghi789.ubt-compile.pending.json"
-    unpaired_pending.write_text(json.dumps({"sha_range": "ghi..jkl"}), encoding="utf-8")
-
-    rc = _mod.main(["ubt-unresolved", str(tmp_path)])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert str(unpaired_pending) in out
-    assert str(paired_pending) not in out
-
-
-def test_ubt_unresolved_cli_absent_dir_is_clean_noop(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    rc = _mod.main(["ubt-unresolved", str(tmp_path)])
-    assert rc == 0
-    assert capsys.readouterr().out == ""
-
-
-if __name__ == "__main__":
-    sys.exit(pytest.main([__file__, "-v"]))

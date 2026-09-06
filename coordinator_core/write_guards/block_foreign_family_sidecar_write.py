@@ -131,7 +131,19 @@ from coordinator_core.write_guards._subagent_identity import (
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
-PRIORITY = 30
+#: PRIORITY 31 -- unique within the HARD-DENY phase. Slot 30 is
+#: ``block_subagent_archive_write``'s, held since before the 2026-08-06
+#: band snapshot in ``docs/wiki/write-guard-priority-bands.md``; this guard
+#: (2026-08-31 incident) is the newcomer and moves rather than tie-breaking
+#: against an unconditional fail-closed backstop by import order. 31 is
+#: the adjacent free slot, so every pre-existing precedence relation is
+#: preserved: still after ``block_illegal_filename`` (20) and still ahead
+#: of ``block_subagent_plan_body_write`` (40), the subagent-identity
+#: cluster (45-49) and ``block_hand_authored_sidecar_creation`` (60) --
+#: the last of which is the only hard-deny that can co-match this guard's
+#: surface (a Write CREATING a sidecar leaf), and the foreign-owner fact
+#: is the one a writer needs first.
+PRIORITY = 31
 
 #: No filesystem writes of its own -- detection only.
 GENERATES = []

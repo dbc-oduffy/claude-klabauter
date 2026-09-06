@@ -86,6 +86,25 @@ _JOIN_PATTERN = re.compile(
 )
 
 _KNOWN_LITERAL_SITES = frozenset({
+    # 2026-09-06 -- seeded when `cross-repo` was DECLARED in
+    # `record_homes.HOMES`. The kind set growing brings pre-existing
+    # `state/cross-repo` literals into this guard's scope for the first
+    # time; each site predates the declaration and is unchanged by it.
+    # The ratchet still only shrinks -- a NEW literal in any of them, or
+    # in any file not listed, still fails.
+    'memo_corpus.py',
+    'ops/ceremony/tests/test_update_docs_scan.py',
+    'ops/fleet/memo_send.py',
+    'ops/fleet/tests/test_archive_actioned_memos.py',
+    'ops/fleet/tests/test_memo_list.py',
+    'ops/fleet/tests/test_memo_send.py',
+    'ops/tracker/tests/test_push_suggestion.py',
+    'tests/test_memo_corpus.py',
+    'write_guards/block_home_dir_memo_delivery.py',
+    'write_guards/block_oss_mirror_memo_delivery.py',
+    'write_guards/tests/test_block_home_dir_memo_delivery.py',
+    'write_guards/tests/test_block_oss_mirror_memo_delivery.py',
+    'write_guards/tests/test_no_retired_memo_invocation_offered.py',
     "backlog_grind_assemble/readers_blitz.py",
     "backlog_grind_assemble/readers_mise.py",
     "backlog_grind_assemble/readers_sweep.py",

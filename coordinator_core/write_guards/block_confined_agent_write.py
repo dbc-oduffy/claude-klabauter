@@ -120,7 +120,7 @@ from coordinator_core.bash_guards._helpers import (
     operator_override_note,
 )
 from coordinator_core.ops._path_guard import contained_path
-from coordinator_core.session.machinery_paths import share_dir
+from coordinator_core.session.machinery_paths import legacy_share_dir, share_dir
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._subagent_identity import (
@@ -143,14 +143,6 @@ GENERATES = []
 #: Escape-hatch env var named (indirectly, via operator_override_note) as
 #: this guard's override key.
 _OVERRIDE_ENV_VAR = "COORDINATOR_OVERRIDE_CONFINED_AGENT_WRITE"
-
-#: The LEGACY sandbox root, relative to git_root. Retained beside the
-#: machinery-root resolver rather than replaced by it: hooks are read at
-#: boot, so a session provisioned before the engine republished is still
-#: writing here while a session started after it writes under the
-#: machinery root. Both are live simultaneously and the guard cannot tell
-#: which one provisioned the agent it is judging.
-_LEGACY_SANDBOX_PARENT = ("state", "subagent-share")
 
 #: tool_input keys that can carry the target path, in probe order.
 #: NotebookEdit uses notebook_path; the rest use file_path. Mirrors
@@ -261,7 +253,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # as before.
     sandbox_roots = [
         Path(casefold_path(share_dir(git_root, session_id))),
-        Path(casefold_path(str(Path(git_root, *_LEGACY_SANDBOX_PARENT, session_id)))),
+        Path(casefold_path(legacy_share_dir(git_root, session_id))),
     ]
     # A tool-supplied file_path is contractually absolute (every MATCHERS
     # tool requires it), but a relative string is joined against git_root

@@ -182,6 +182,17 @@ from coordinator_core.group_em.watch_heartbeat import _STAMP_FORMAT
 
 _SPOOL_RELATIVE_PATH = os.path.join("state", "group-em-watch-spool.jsonl")
 
+#: Generator-provenance declaration (generator_provenance.py's AST reader).
+#: `prune`'s mkstemp/os.replace rewrite targets `<repo_root>/state/
+#: group-em-watch-spool.jsonl` and nothing else -- per-box, per-repo runtime
+#: state the .gitignore names outright ("Group-EM standing-watch runtime
+#: state"), never a repo artifact with a staleness contract. Same posture,
+#: same subsystem, as `watch_heartbeat.GENERATES` one file over: `repo_root`
+#: is a required parameter with no in-module default, so this module never
+#: anchors the write to its own tree, and the spool's freshness is an age
+#: window (`RETAIN_SECONDS`) rather than staleness relative to a source set.
+GENERATES = []
+
 #: THE GUARANTEE. What `prune` keeps, at minimum, once it rewrites -- a
 #: floor, never a target (module docstring, "IS A FLOOR, NEVER A TARGET").
 #: Must comfortably exceed the slowest consumer cadence: the sibling plane's

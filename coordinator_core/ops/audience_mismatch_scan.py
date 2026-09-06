@@ -86,7 +86,10 @@ from pathlib import Path
 import yaml
 
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+from coordinator_core.session.machinery_paths import (
+    machinery_root as _machinery_root,
+    share_roots as _share_roots,
+)
 
 _EXIT_INTERVIEW_QUESTION_RE = re.compile(
     r"-\s*What did you have to work out that the brief could have told you\?"
@@ -271,12 +274,16 @@ def main(argv: list[str]) -> int:
         return 0
 
     root_path = Path(root)
-    subagent_share_dir = Path(_machinery_root(str(root_path))) / "subagent-share"
-    if not subagent_share_dir.is_dir():
+    # Both share roots -- see machinery_paths.share_roots.
+    share_dirs = [Path(d) for d in _share_roots(str(root_path))]
+    share_dirs = [d for d in share_dirs if d.is_dir()]
+    if not share_dirs:
         return 0
 
     since = datetime.now(tz=timezone.utc) - timedelta(days=since_days)
-    entries = _collect_recent_answers(subagent_share_dir, since)
+    entries = []
+    for subagent_share_dir in share_dirs:
+        entries.extend(_collect_recent_answers(subagent_share_dir, since))
     if not entries:
         return 0
 

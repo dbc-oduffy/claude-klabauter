@@ -852,7 +852,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sidecar",
         required=True,
-        help="Path to the reviewer's review-findings sidecar (state/subagent-share/<session>/*.md).",
+        help="Path to the reviewer's review-findings sidecar (<machinery_root>/subagent-share/<session>/*.md).",
     )
     parser.add_argument(
         "--run-report",
@@ -911,7 +911,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--root",
         default=None,
-        help="Repo root to resolve the state/subagent-share/ scope check against (default: git rev-parse from cwd).",
+        help="Repo root to resolve the subagent-share scope check against (default: git rev-parse from cwd).",
     )
     return parser
 

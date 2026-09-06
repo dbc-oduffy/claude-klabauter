@@ -397,6 +397,44 @@ class TestExecuteDirectives:
         assert exit_code == apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
         assert report["landed"] == ["d1"]
         assert report["unresolved_judgment_points"] == ["j1"]
+        assert report["declined_judgment_points"] == []
+
+    def test_declining_disposition_lands_in_declined_not_unresolved(self, tmp_path):
+        directives = [
+            {"id": "d1", "cli": "noop-cli"},
+            {"id": "d2", "cli": "noop-cli", "depends_on": "j1"},
+        ]
+        decisions = {"j1": {"disposition": "reject"}}
+        exit_code, report = apply_base.execute_directives(
+            directives, [_JP_TWO_WAY], tmp_path, _DISPATCH_TABLE, decisions=decisions
+        )
+        assert exit_code == apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert report["landed"] == ["d1"]
+        assert report["declined_judgment_points"] == ["j1"]
+        assert report["unresolved_judgment_points"] == []
+
+    def test_disposition_naming_nothing_declared_is_unanswered_not_declined(self, tmp_path):
+        directives = [
+            {"id": "d1", "cli": "noop-cli"},
+            {"id": "d2", "cli": "noop-cli", "depends_on": "j1"},
+        ]
+        decisions = {"j1": {"disposition": "typo-value"}}
+        exit_code, report = apply_base.execute_directives(
+            directives, [_JP_TWO_WAY], tmp_path, _DISPATCH_TABLE, decisions=decisions
+        )
+        assert exit_code == apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert report["unresolved_judgment_points"] == ["j1"]
+        assert report["declined_judgment_points"] == []
+
+    def test_all_declining_halt_is_keyed_on_exit_code_not_unresolved_list(self, tmp_path):
+        directives = [{"id": "d2", "cli": "noop-cli", "depends_on": "j1"}]
+        decisions = {"j1": {"disposition": "reject"}}
+        exit_code, report = apply_base.execute_directives(
+            directives, [_JP_TWO_WAY], tmp_path, _DISPATCH_TABLE, decisions=decisions
+        )
+        assert exit_code == apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert report["landed"] == []
+        assert report["unresolved_judgment_points"] == []
 
     def test_recommendation_key_is_never_a_control_flow_input(self, tmp_path):
         directives = [{"id": "d1", "cli": "noop-cli", "depends_on": "j1"}]
@@ -951,7 +989,8 @@ class TestDecisionsShorthandNormalization:
             directives, [_JP_TWO_WAY], tmp_path, _DISPATCH_TABLE, decisions={"j1": "reject"}
         )
         assert exit_code == apply_base.APPLY_EXIT_HALTED_AT_JUDGMENT
-        assert report["unresolved_judgment_points"] == ["j1"]
+        assert report["declined_judgment_points"] == ["j1"]
+        assert report["unresolved_judgment_points"] == []
 
     def test_object_form_is_never_rewritten(self):
         entry = {"disposition": "accept", "note": "kept"}

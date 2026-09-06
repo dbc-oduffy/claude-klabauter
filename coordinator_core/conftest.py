@@ -357,6 +357,19 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     # would let the real profile back in whenever USERPROFILE is deleted.
     monkeypatch.delenv("HOMEDRIVE", raising=False)
     monkeypatch.delenv("HOMEPATH", raising=False)
+    # COORDINATOR_SETTINGS_HOME is checked by `_settings_home.settings_home()`
+    # AHEAD of every home var, so leaving it set defeats this whole fixture on
+    # any box that exports it: the durable `.doe-root` rung, the machine-local
+    # registry rung, and the engine-build path all keep reading the operator's
+    # LIVE settings tree no matter what home a test then sets. Measured
+    # 2026-09-06 across eleven test files: 58 failures with it set, 1 with it
+    # unset -- and every one of those 57 was a test silently measuring a
+    # different branch than its own name claimed, which is worse than a red.
+    # This is not a new policy, it is the gap the fixture already assumes shut:
+    # it seeds a stub pointer at
+    # `<quarantine>/.coordinator-claude-settings/machine-local/.doe-root`,
+    # which only anything reads if settings-home resolves INTO the quarantine.
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
 
     # Preserve subprocess access to real user-site packages (2026-07-21 cluster-A fix).
     # Quarantining HOME/USERPROFILE also, as an unintended side effect, hides whatever

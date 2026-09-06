@@ -112,8 +112,18 @@ def test_save_into_unwritable_location_does_not_raise(tmp_path: Path) -> None:
 
 
 def test_cache_path_resolves_under_tmp_path_root(tmp_path: Path) -> None:
+    """Repo-root-relative, and under the MACHINERY root, not `state/`.
+
+    Asserted through `machinery_paths.cache_dir` rather than a respelled
+    literal: that module is the declared owner of the bucket, and this store
+    spelling its own `("state", "cache")` tuple by hand is precisely how it
+    kept writing to the retired root after the relocation had moved it.
+    """
+    from coordinator_core.session.machinery_paths import cache_dir
+
     path = cache._cache_path(tmp_path)
-    assert path == tmp_path / "state" / "cache" / "generator-scan-cache.json"
+    assert path == Path(cache_dir(str(tmp_path))) / "generator-scan-cache.json"
+    assert path.parent.parent == tmp_path / ".coordinator-local"
 
 
 def test_file_writes_round_trip_with_list_of_dicts_generates(tmp_path: Path) -> None:

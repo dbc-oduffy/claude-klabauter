@@ -88,6 +88,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from coordinator_core.session import machinery_paths
 from coordinator_core.write_guards.block_em_hand_edit_pending_review_integration import (
     _DISPOSITIONS_HEADING,
     _FINDINGS_SENTINEL,
@@ -209,14 +210,25 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         cwd = payload.get("cwd") or None
         base_dir = Path(cwd) if cwd else Path.cwd()
-        sidecar_dir = base_dir / "state" / "subagent-share" / session_id
-        if not sidecar_dir.is_dir():
-            return None
+        # Both share roots — see the sibling guard's note; one root alone is
+        # a guard that cannot fire.
+        candidate_dirs = [
+            Path(d)
+            for d in machinery_paths.share_dirs(str(base_dir), session_id)
+        ]
 
         normalized_target = _normalize(file_path)
         basename = normalized_target.rsplit("/", 1)[-1]
 
-        found = _find_sentinel_retained_sidecar(sidecar_dir, normalized_target, basename)
+        found = None
+        for sidecar_dir in candidate_dirs:
+            if not sidecar_dir.is_dir():
+                continue
+            found = _find_sentinel_retained_sidecar(
+                sidecar_dir, normalized_target, basename
+            )
+            if found is not None:
+                break
         if found is None:
             return None
 

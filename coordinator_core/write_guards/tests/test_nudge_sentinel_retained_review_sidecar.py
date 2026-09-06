@@ -70,6 +70,10 @@ def _sentinel_absent_filled_body() -> str:
     )
 
 
+#: See the sibling suite's note -- both share roots, never one.
+SHARE_ROOTS = (".coordinator-local", "state")
+
+
 def _write_sidecar(
     tmp_path,
     session_id: str,
@@ -77,8 +81,9 @@ def _write_sidecar(
     *,
     agent_type: str = "coordinator:code-reviewer",
     body: str,
+    share_root: str = ".coordinator-local",
 ) -> None:
-    sidecar_dir = tmp_path / "state" / "subagent-share" / session_id
+    sidecar_dir = tmp_path / share_root / "subagent-share" / session_id
     sidecar_dir.mkdir(parents=True, exist_ok=True)
     frontmatter = _FINDINGS_FRONTMATTER.replace(
         "agent_type: coordinator:code-reviewer", f"agent_type: {agent_type}"

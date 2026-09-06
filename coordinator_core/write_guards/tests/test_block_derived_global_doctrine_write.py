@@ -152,7 +152,7 @@ class TestDenyTextNamesAlternativeAndConsequence:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "/Users/alice/.claude/CLAUDE.md" in reason
 
-    def test_deny_text_names_no_override_route_at_all(self):
+    def test_deny_text_names_no_override_route_at_all(self, monkeypatch):
         """Inverted (was: `..._routes_to_the_override_doc_not_the_key`,
         which asserted the override-doc pointer WAS present). The deny text
         for this default (unregistered-root) payload shape is now a wholly
@@ -161,7 +161,14 @@ class TestDenyTextNamesAlternativeAndConsequence:
         <path>`" — with no override-doc pointer and no key at all.
         Positively asserts both the absence of any override-note fragment
         AND the presence of the real, current unregistered-root remediation
-        text, so this cannot pass vacuously on a reason carrying neither."""
+        text, so this cannot pass vacuously on a reason carrying neither.
+
+        `registry_get` is patched because the branch under test is the
+        UNREGISTERED one, and this box has `repos.doe_claude` registered --
+        without the patch the guard renders the registered narrative and the
+        test measures the wrong branch. It read green only while nobody who
+        ran it had the key set."""
+        monkeypatch.setattr(guard, "registry_get", lambda key: None)
         result = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "guard-override-keys.md" not in reason

@@ -83,9 +83,15 @@ Spec backlink: docs/plans/2026-07-06-cockpit-contract-v27 (§ coordinator-comple
 Port backlink: docs/plans/2026-07-15-bash-to-naked-python-engine-migration.md (BIG_PORT Wave B)
 
 Negative-spec (faithfully reproduced from the bash oracle — do NOT "fix" mid-port):
-    - Never seeds the ``commits:`` field — always ``commits: []``. Step 2.6.8
-      owns that field exclusively via reconcile-completion-commits (Session-Id
-      trailer reconcile), a separate port not in scope here.
+    - (Pre-C3 history, no longer current) Step 2.6.8's ``reconcile-completion-
+      commits`` (Session-Id trailer reconcile) was this field's sole intended
+      writer, but was killed 2026-08-23 with nothing replacing it — every
+      entry since shipped ``commits: []`` regardless of what landed. C3
+      (docs/plans/2026-09-05-the-completion-entry-computes-its-own-ti.md)
+      closes that gap: ``_resolve_session_commits`` computes it from this
+      session's own attributed git history (`` --for-date`` backfill's
+      explicit ``--commits`` still wins over the computed result — see
+      `main()`).
     - The idempotency guard's grep-scan is a LITERAL match on the quoted YAML
       value as written (``chain: "<slug>"``), not a regex — mirrors the bash
       oracle's ``grep -qF`` (avoids metacharacter mismatches when the slug
@@ -130,6 +136,7 @@ from datetime import date
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 
+from coordinator_core.chain_attribution import bulk_grep_attributed_shas
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.launchable import resolve_launchable, which_path_ordered
 from coordinator_core.ops._git_root_util import git_root
@@ -999,6 +1006,44 @@ def _which_render_rollup_shim() -> str:
     return which_path_ordered("coordinator-render-rollup.sh", extensions=[]) or ""
 
 
+def _plan_frontmatter_field(plan_file: str, key: str) -> str:
+    """Reads ONE `<key>:` frontmatter line out of `plan_file` — the shared
+    single-open reader behind both `_resolve_governing_deliverable_id`
+    (`deliverable_id:`) and `_resolve_entry_title` (`title:`). Before this
+    factor, each caller line-scanned its own key off a separately-opened
+    read of the same plan file; this collapses that to one open per
+    caller-site, not one open per run — `main()` still calls
+    `_resolve_governing_deliverable_id` and `_resolve_entry_title`
+    separately, and each still opens `plan_file` once for its own key.
+
+    Fail-open at every stage, exactly as the pre-factor scan: a missing
+    `plan_file` argument (empty string), a non-existent file, an unreadable
+    file (`OSError`), or an absent `<key>:` line all return `""`, never
+    raise. Strips one layer of matching `"` or `'` quoting around the
+    value, same as the pre-factor scan did for `deliverable_id:` — a bare
+    (unquoted) scalar is returned as-is.
+    """
+    if not plan_file or not os.path.isfile(plan_file):
+        return ""
+    try:
+        with open(plan_file, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        print(f"skip: _plan_frontmatter_field: with open(plan_file, \"r\", encoding=\"utf-8\", errors=\"replace\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
+        return ""
+
+    prefix = f"{key}:"
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            raw = line[len(prefix):].strip()
+            if raw.startswith('"') and raw.endswith('"') and len(raw) >= 2:
+                raw = raw[1:-1]
+            elif raw.startswith("'") and raw.endswith("'") and len(raw) >= 2:
+                raw = raw[1:-1]
+            return raw
+    return ""
+
+
 def _resolve_governing_deliverable_id(repo_root: str, governing_plan_slug: str) -> str:
     """Reads the governing plan file's own `deliverable_id:` frontmatter line.
 
@@ -1021,26 +1066,128 @@ def _resolve_governing_deliverable_id(repo_root: str, governing_plan_slug: str) 
     if not governing_plan_slug:
         return ""
     plan_file = os.path.join(repo_root, "docs", "plans", f"{governing_plan_slug}.md")
-    if not os.path.isfile(plan_file):
-        return ""
-    try:
-        with open(plan_file, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
-    except OSError:
-        print(f"skip: _resolve_governing_deliverable_id: with open(plan_file, \"r\", encoding=\"utf-8\", errors=\"replace\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return ""
+    return _plan_frontmatter_field(plan_file, "deliverable_id")
 
-    dlv_id = ""
-    for line in text.splitlines():
-        if line.startswith("deliverable_id:"):
-            raw = line[len("deliverable_id:") :].strip()
-            if raw.startswith('"') and raw.endswith('"') and len(raw) >= 2:
-                raw = raw[1:-1]
-            elif raw.startswith("'") and raw.endswith("'") and len(raw) >= 2:
-                raw = raw[1:-1]
-            dlv_id = raw
-            break
-    return dlv_id
+
+_ACCOMPLISHED_PREFIX = "Accomplished: "
+
+
+def _resolve_entry_title(repo_root: str, governing_plan_slug: str, consumed_handoff: str) -> str:
+    """C2 — the completion entry's `title:` is COMPUTED from the artifact
+    that governs the workstream, not hand-authored by the EM at scaffold
+    time (the pre-C2 contract this replaces). Ladder, first hit wins:
+
+      1. `docs/plans/<governing_plan_slug>.md` frontmatter `title:` — read
+         via the shared `_plan_frontmatter_field` reader
+         (`_resolve_governing_deliverable_id` reads `deliverable_id:` off
+         the SAME file through the SAME helper, so both keys come off one
+         open apiece rather than each hand-rolling its own scan).
+      2. `consumed_handoff`'s own frontmatter `title:`, read through the
+         same helper — covers a `/pickup`-opened chain that has a handoff
+         but no governing plan.
+      3. `""` — no source exists; `_write_entry` leaves the placeholder in
+         place unchanged.
+
+    The returned value is prefixed `Accomplished: ` — historical by
+    PREPENDING, not by rewriting the source string's tense, so the source
+    title stays quotable verbatim inside the prefixed one. A leading
+    `Accomplished: ` already on the source (e.g. a plan title itself copied
+    from a prior completion entry) is stripped BEFORE prefixing, so the
+    prefix can never compound into `Accomplished: Accomplished: ...`.
+
+    Fail-open at every stage, same posture as `_resolve_rollup_sentence`
+    and `_resolve_governing_deliverable_id`: a missing slug, missing plan
+    file, missing `title:` line, missing/unreadable `consumed_handoff`, or
+    an empty result from both rungs returns `""`, never raises. Never
+    invoked when `existing.title_authored` is already true — see
+    `_write_entry`'s own docstring on that posture, unchanged by this
+    function's addition.
+    """
+    source = ""
+    if governing_plan_slug:
+        plan_file = os.path.join(repo_root, "docs", "plans", f"{governing_plan_slug}.md")
+        source = _plan_frontmatter_field(plan_file, "title")
+    if not source and consumed_handoff:
+        source = _plan_frontmatter_field(consumed_handoff, "title")
+    if not source:
+        return ""
+    if source.startswith(_ACCOMPLISHED_PREFIX):
+        source = source[len(_ACCOMPLISHED_PREFIX):]
+    return f"{_ACCOMPLISHED_PREFIX}{source}"
+
+
+def _git_log_runner_for_commits(argv: List[str], cwd: Optional[str]) -> tuple[int, str, str]:
+    """`chain_attribution.GitRunner` contract for `_resolve_session_commits`'s
+    one log walk — "never raises, returns (rc, stdout, stderr)", matching
+    the DI contract `session_attribution.GitRunner` and this module's own
+    `_resolve_rollup_sentence` subprocess convention (Windows
+    ``CREATE_NO_WINDOW`` via `no_console_creationflags`, bounded timeout,
+    ``stdin=DEVNULL``). An `OSError`/`TimeoutExpired` degrades to
+    ``(1, "", str(exc))`` rather than propagating — the caller's own
+    fail-open posture depends on this seam never raising, exactly like
+    every other `run` callable this module hands to a sibling."""
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=_SUBPROCESS_TIMEOUT_SECS,
+            stdin=subprocess.DEVNULL,
+            **_CREATIONFLAGS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, "", str(exc)
+    return result.returncode, result.stdout, result.stderr
+
+
+def _resolve_session_commits(repo_root: str, sid: str, since: str) -> List[str]:
+    """C3 — `commits:` is COMPUTED from this session's own attributed git
+    history, not left permanently `[]`: `completion.reconcile_commits` (the
+    only writer this field ever had) was killed 2026-08-23, and nothing
+    replaced it — every entry since has shipped `commits: []` regardless of
+    what actually landed.
+
+    Wraps `chain_attribution.bulk_grep_attributed_shas`, which returns a
+    `List[str]` in `git log`'s own emission order (oldest-landed-last per
+    git's newest-first default; see that function's own docstring) — widened
+    from `FrozenSet[str]` for this task after a review found neither of its
+    two consumers depended on set-ness.
+
+    `range_str="HEAD"` — branch-agnostic by design. `origin/main..HEAD` was
+    considered and rejected (this plan's own Problem statement): empty on a
+    close run from `main` itself, and wrong the moment a repo's `origin/main`
+    ref is stale relative to what actually landed.
+
+    `since` is the caller's ONE resolved date for this run (`main()`'s
+    `yyyymmdd`, ISO ``YYYY-MM-DD`` — a valid `git --since` value) — the
+    entry's own `created` date, so a `--for-date` backfill bounds the walk
+    to the day being backfilled, not today.
+
+    ONE git spawn total: `bulk_grep_attributed_shas` issues exactly one
+    `git log` call via the injected runner below; this wrapper adds no
+    second call. The amplification gate
+    (`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`)
+    refuses a per-item spawn shape — there is no per-item loop here to
+    refuse.
+
+    Fail-open at every stage, matching every other computed field in this
+    CLI: a malformed `sid` (rejected inside `bulk_grep_attributed_shas`
+    itself), a non-zero `git log` rc, or any unexpected exception from the
+    walk all degrade to `[]` with a `skip:` stderr line — a commit list is a
+    record of what happened, never a gate on whether the close proceeds, so
+    nothing here may abort `main()`.
+    """
+    try:
+        return bulk_grep_attributed_shas(
+            "HEAD", sid, repo_root, _git_log_runner_for_commits, since=since
+        )
+    except Exception:
+        print(
+            f"skip: _resolve_session_commits: bulk_grep_attributed_shas(...) failed: {sys.exc_info()[1]}",
+            file=sys.stderr,
+        )
+        return []
 
 
 def _resolve_rollup_sentence(repo_root: str, governing_plan_slug: str) -> str:
@@ -1110,6 +1257,7 @@ def _write_entry(
     deliverable_id: str,
     commits: Optional[List[str]] = None,
     authored_by_unknown: bool = False,
+    computed_title: str = "",
 ) -> bool:
     """Writes (or idempotent-preserving re-writes) the completion-entry
     scaffold at `entry_path`. Returns `True` when the file was written,
@@ -1124,14 +1272,23 @@ def _write_entry(
     existing text verbatim and only (re)writes the surfaces still carrying
     a placeholder — robust to an EM who filled in, say, the title and
     prose but hasn't yet resolved `nature`. Purely mechanical/computed
-    fields this CLI itself owns (`created` once set, `commits` — always
-    `[]`, `status`, `chain_terminal`, `authored_by`, `chain`, `deliverable_id`,
+    fields this CLI itself owns (`created` once set, `commits` — computed by
+    `_resolve_session_commits` (or seeded via `--commits`), `status`,
+    `chain_terminal`, `authored_by`, `chain`, `deliverable_id`,
     the `loe:` block, the rollup sentence) are recomputed fresh on every call
     regardless of authoring state, exactly as before this fix — only the
     three EM-owned surfaces are sacred. `created` is the one exception:
     once an entry exists, its original `created` date is preserved rather
     than bumped to today, since re-running this scaffolder across
     midnight must not misdate an already-in-progress entry.
+
+    `computed_title` (C2) seeds `title:` in place of `_PLACEHOLDER_TITLE`
+    when non-empty (`_resolve_entry_title`'s ladder output) — same
+    write-once posture as every other field here: `existing.title_authored`
+    still wins unconditionally, so a computed title is written ONCE, at
+    first scaffold, and never overwrites an EM-hand-authored title on a
+    later call. Empty `computed_title` leaves the placeholder exactly as
+    before this parameter existed.
 
     `deliverable_id` (sedge-18) — the spine's exit join key, stamped
     ceremony-internal (ninth parameter) rather than by a later cascade
@@ -1151,6 +1308,9 @@ def _write_entry(
     lines.append("---")
     if existing.title_authored:
         _title_esc = str(existing.title).replace('"', '\\"')
+        lines.append(f'title: "{_title_esc}"')
+    elif computed_title:
+        _title_esc = computed_title.replace('"', '\\"')
         lines.append(f'title: "{_title_esc}"')
     else:
         lines.append(f'title: "{_PLACEHOLDER_TITLE}"')
@@ -1312,8 +1472,37 @@ def main(argv: List[str]) -> int:
 
     chain_terminal = canonicalize(disposition) == PREDECESSOR_CONSUMED
 
-    rollup_sentence = _resolve_rollup_sentence(repo_root, governing_plan_slug)
-    deliverable_id = _resolve_governing_deliverable_id(repo_root, governing_plan_slug)
+    # Review: code-reviewer P2 — a fully-authored re-run used to pay
+    # `_resolve_session_commits`'s git spawn and the plan/handoff reads for
+    # `_resolve_rollup_sentence`/`_resolve_governing_deliverable_id`/
+    # `_resolve_entry_title` before `_write_entry`'s own all-three-authored
+    # early return discarded every one of those results. Read the same
+    # existing-scaffold state `_write_entry` reads (a cheap file read, not a
+    # git call) BEFORE doing any of that work, so a no-op re-run spawns
+    # nothing. `_write_entry` re-reads this state itself and is unchanged —
+    # this is a skip-ahead-of-the-write, not a bypass of its own guard.
+    existing = _read_existing_scaffold_state(entry_path)
+    already_fully_authored = (
+        existing.exists
+        and existing.title_authored
+        and existing.nature_authored
+        and existing.prose_authored
+    )
+    if already_fully_authored:
+        rollup_sentence = ""
+        deliverable_id = ""
+        computed_title = ""
+        commits: List[str] = []
+    else:
+        rollup_sentence = _resolve_rollup_sentence(repo_root, governing_plan_slug)
+        deliverable_id = _resolve_governing_deliverable_id(repo_root, governing_plan_slug)
+        computed_title = _resolve_entry_title(repo_root, governing_plan_slug, consumed_handoff)
+        # Precedence, unchanged for existing callers: an explicit `--commits`
+        # seed (the `--for-date` backfill path — see module Negative-spec/
+        # _parse_args' own gate) always wins over a computed result; a live
+        # close has no seed and falls through to the computed walk, which
+        # itself degrades to `[]`.
+        commits = seeded_commits if seeded_commits else _resolve_session_commits(repo_root, sid, yyyymmdd)
 
     wrote = _write_entry(
         entry_path,
@@ -1325,8 +1514,9 @@ def main(argv: List[str]) -> int:
         rollup_sentence,
         yyyymmdd,
         deliverable_id,
-        seeded_commits,
+        commits,
         authored_by_unknown,
+        computed_title,
     )
 
     print(entry_path)

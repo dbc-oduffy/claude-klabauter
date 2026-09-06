@@ -85,7 +85,14 @@ def test_gen_doe_root_pointer_coordinator_subdir_absent_names_no_repo(monkeypatc
 
 
 def test_gen_doe_root_pointer_graceful_skip_names_no_repo(monkeypatch, capsys):
+    # All THREE resolution rungs are stubbed unresolvable, not just the CLI
+    # one: `_resolve_doe_root` reads the env override, then the in-process
+    # `registry_get`, and only then shells out. On a machine that has
+    # `repos.doe_claude` registered -- every developer box -- the registry rung
+    # answers and the op reports `ready (no-op)`, so the graceful-skip branch
+    # this test names never runs and the assertions below measure nothing.
     monkeypatch.setenv("REPO_DOE_CLAUDE", "")
+    monkeypatch.setattr(gen_mod, "_registry_get", lambda key: None)
     monkeypatch.setattr(gen_mod, "_resolve_machine_local", lambda: None)
 
     rc = gen_mod.main(["--graceful-skip-unresolved"])

@@ -234,6 +234,27 @@ def _extract_frontmatter(text: str) -> Optional[dict]:
     return data if isinstance(data, dict) else None
 
 
+def _content_candidates(doe_root: str, leaf: str) -> "list[Path]":
+    """`leaf` under each on-disk shape the plugin content root takes, in
+    probe order: a dev clone nests it under `coordinator/`, a
+    marketplace/OSS-mirror clone holds it directly at the root.
+
+    Same two candidates and the same order as
+    `subagent_sandbox.provision_report.resolve_plugin_root` rung 2 and
+    `http_hook_forwarder._compute_plugin_root`, and for the same reason
+    those exist. Callers probe for THEIR OWN artifact across the pair
+    rather than for a bare `coordinator/` directory: on a dev-clone box
+    that directory can exist holding only `bin`, which is exactly the
+    stand-in trap `resolve_plugin_root`'s docstring records. Hard-coding
+    the first candidate alone made both roster sources raise
+    `_RosterError` on every mirror install -- fail-closed, so the guard
+    correctly identified an install defect and then refused every
+    `coordinator:*` dispatch because of it.
+    """
+    base = Path(doe_root)
+    return [base / "coordinator" / leaf, base / leaf]
+
+
 def _load_policy_roster(doe_root: str) -> FrozenSet[str]:
     """Roster source (a) -- the union of all `subagent_type` keys/members
     across `subagent-sandbox-policy.yaml`'s four catering maps.
@@ -246,11 +267,13 @@ def _load_policy_roster(doe_root: str) -> FrozenSet[str]:
     independently shaped and a malformed one should not blank the other
     three.
     """
-    policy_path = Path(doe_root) / "coordinator" / "subagent-sandbox-policy.yaml"
-    if not policy_path.is_file():
+    candidates = _content_candidates(doe_root, "subagent-sandbox-policy.yaml")
+    policy_path = next((c for c in candidates if c.is_file()), None)
+    if policy_path is None:
         raise _RosterError(
             "roster source MISSING ENTIRELY (path/install defect): "
-            f"{policy_path} does not exist."
+            + " and ".join(str(c) for c in candidates)
+            + " do not exist."
         )
     try:
         raw = policy_path.read_text(encoding="utf-8")
@@ -293,11 +316,13 @@ def _scan_agents_frontmatter(doe_root: str) -> Dict[str, Tuple[dict, Path]]:
     unreadable or frontmatter-less file is skipped, not fatal -- one
     corrupt agent file must not blank the roster for the other 32.
     """
-    agents_dir = Path(doe_root) / "coordinator" / "agents"
-    if not agents_dir.is_dir():
+    candidates = _content_candidates(doe_root, "agents")
+    agents_dir = next((c for c in candidates if c.is_dir()), None)
+    if agents_dir is None:
         raise _RosterError(
             "roster source MISSING ENTIRELY (path/install defect): "
-            f"{agents_dir} is not a directory."
+            + " and ".join(str(c) for c in candidates)
+            + " are not directories."
         )
     try:
         files = sorted(agents_dir.glob("*.md"))

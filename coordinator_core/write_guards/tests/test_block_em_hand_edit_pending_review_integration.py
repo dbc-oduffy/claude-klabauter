@@ -52,6 +52,14 @@ def _unfilled_findings_body() -> str:
     )
 
 
+#: The share root each test writes its sidecar under. Parametrized because
+#: this suite wrote ONLY under `state/` while the guard read ONLY under
+#: `state/` -- green on both sides of a defect that made the guard unable to
+#: fire in production, where provisioning writes under `.coordinator-local/`.
+#: A single-root fixture cannot see that class; keep both legs.
+SHARE_ROOTS = (".coordinator-local", "state")
+
+
 def _write_sidecar(
     tmp_path,
     session_id: str,
@@ -59,8 +67,9 @@ def _write_sidecar(
     *,
     agent_type: str = "coordinator:code-reviewer",
     body: str,
+    share_root: str = ".coordinator-local",
 ) -> None:
-    sidecar_dir = tmp_path / "state" / "subagent-share" / session_id
+    sidecar_dir = tmp_path / share_root / "subagent-share" / session_id
     sidecar_dir.mkdir(parents=True, exist_ok=True)
     frontmatter = _FINDINGS_FRONTMATTER.replace(
         "agent_type: coordinator:code-reviewer", f"agent_type: {agent_type}"
@@ -262,3 +271,38 @@ class TestOverrideAndToolGating:
             tmp_path, "sess-abc", "codereview-sliceA.md", body=_findings_body()
         )
         _allow(_payload(tmp_path, tool_name="Read"))
+
+
+# ---------------------------------------------------------------------------
+# Share-root coverage — the guard reads BOTH roots
+# ---------------------------------------------------------------------------
+
+
+class TestFiresUnderEitherShareRoot:
+    """Provisioning writes under `.coordinator-local/subagent-share/`; a
+    session provisioned before the relocation republished still writes under
+    `state/subagent-share/`. A guard that reads one root is silently dead for
+    every session homed under the other.
+    """
+
+    @pytest.mark.parametrize("share_root", SHARE_ROOTS)
+    def test_pending_finding_advises_from_either_root(self, tmp_path, share_root):
+        _write_sidecar(
+            tmp_path,
+            "sess-abc",
+            "codereview-sliceA.md",
+            body=_findings_body(),
+            share_root=share_root,
+        )
+        _advise(_payload(tmp_path))
+
+    @pytest.mark.parametrize("share_root", SHARE_ROOTS)
+    def test_no_sidecar_still_allows_from_either_root(self, tmp_path, share_root):
+        _write_sidecar(
+            tmp_path,
+            "sess-abc",
+            "codereview-sliceA.md",
+            body=_findings_body(mentions_target=False),
+            share_root=share_root,
+        )
+        _allow(_payload(tmp_path))

@@ -93,6 +93,17 @@ def machinery_root(repo_root: str) -> str:
     return os.path.join(repo_root, _MACHINERY_ROOT_LEAF)
 
 
+#: The one spelling of the share bucket's leaf name. `share_root()` joins it
+#: onto `machinery_root()`; `SHARE_RELDIR` builds the repo-relative spelling
+#: off the same two literals, so this module holds one spelling of each.
+SHARE_LEAF = "subagent-share"
+
+#: Repo-relative, POSIX-separated spelling of the CURRENT share root, for the
+#: declaration sites an absolute-path accessor structurally cannot serve --
+#: same role as `MEMO_OUTBOX_RELDIR`.
+SHARE_RELDIR = "/".join([_MACHINERY_ROOT_LEAF, SHARE_LEAF])
+
+
 def share_root(repo_root: str) -> str:
     """`<machinery_root>/subagent-share` -- the parent every per-session share
     directory hangs off.
@@ -102,12 +113,70 @@ def share_root(repo_root: str) -> str:
     otherwise rebuilding the join by hand against a stale `state/` literal --
     the exact drift this module owns.
     """
-    return os.path.join(machinery_root(repo_root), "subagent-share")
+    return os.path.join(machinery_root(repo_root), SHARE_LEAF)
 
 
 def share_dir(repo_root: str, session_id: str) -> str:
     """`<machinery_root>/subagent-share/<session_id>`."""
     return os.path.join(share_root(repo_root), session_id)
+
+
+#: Repo-relative, POSIX-separated spelling of the RETIRED share root. Same
+#: role as `LEGACY_MEMO_OUTBOX_RELDIR`: the declaration sites that need a
+#: bare relative string (op `MUTATES` lists, guard prefix tuples) cannot use
+#: an accessor that takes a `repo_root`.
+LEGACY_SHARE_RELDIR = "state/subagent-share"
+
+#: REMOVAL TRIGGER for every dual-root share read below, named because the
+#: relocation shipped without one and a reader repointed at only the new
+#: root reports the entire pre-move corpus as absent.
+#:
+#: Drop the legacy leg -- `legacy_share_root`, `legacy_share_dir`,
+#: `LEGACY_SHARE_RELDIR`, and the second element of `share_roots`/`share_dirs`
+#: -- when `state/subagent-share/` in this repo is gone (reaped by
+#: `coordinator/bin/reap-stale-subagent-sidecars.py`, which walks both roots
+#: for exactly this reason) and no session provisioned before the relocation
+#: republish is still live. Checkable in one command:
+#:   `test -d state/subagent-share || echo drop-the-leg`
+
+
+def legacy_share_root(repo_root: str) -> str:
+    """`<repo_root>/state/subagent-share` -- the RETIRED share root. READ ONLY.
+
+    Hooks are read per-invocation but a session's sidecars are provisioned
+    once, at dispatch: a session provisioned before the engine republished
+    the relocation is still writing here while a session started after it
+    writes under the machinery root. Both roots are live simultaneously and
+    a reader cannot tell which one provisioned the agent it is judging, so
+    a reader resolves against both -- see `share_roots`.
+    """
+    return os.path.join(repo_root, *LEGACY_SHARE_RELDIR.split("/"))
+
+
+def legacy_share_dir(repo_root: str, session_id: str) -> str:
+    """`<repo_root>/state/subagent-share/<session_id>` -- READ ONLY."""
+    return os.path.join(legacy_share_root(repo_root), session_id)
+
+
+def share_roots(repo_root: str) -> list:
+    """Every share root a READER must consult, current root first.
+
+    Existence is not filtered here -- a caller that needs only extant
+    directories filters, and a caller building a display/citation list does
+    not. Never use for a WRITE: a writer resolves `share_root` alone.
+    """
+    return [share_root(repo_root), legacy_share_root(repo_root)]
+
+
+def share_dirs(repo_root: str, session_id: str) -> list:
+    """Every per-session share directory a READER must consult, current first.
+
+    The reader-side counterpart to `share_dir`. A guard that scans only
+    `share_dir` cannot fire for a session provisioned under the legacy root,
+    and a guard that scans only the legacy root cannot fire at all -- the
+    defect this accessor exists to make unspellable.
+    """
+    return [os.path.join(root, session_id) for root in share_roots(repo_root)]
 
 
 def ledger_path(repo_root: str, session_id: str) -> str:

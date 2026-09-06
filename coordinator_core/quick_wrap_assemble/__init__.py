@@ -904,6 +904,149 @@ def _judgment_points(
     return points
 
 
+#: `close_ledger` entry status values. `"discharged"` means a landing artifact
+#: was named; `"could-not-establish"` means the underlying close-gate leg was
+#: degraded or untrustworthy and this function refuses to guess either "closed"
+#: or "open" for it. There is deliberately no third value for "nothing to
+#: report" — a leg with nothing to discharge (no memo actioned, no governing
+#: plan) emits no entry at all rather than a manufactured null entry.
+_LEDGER_DISCHARGED = "discharged"
+_LEDGER_COULD_NOT_ESTABLISH = "could-not-establish"
+
+#: Pushed verbatim into `brief()`'s narration, same pattern `sizing_assemble`'s
+#: `next_move` and `plan_assemble`'s route segments already use in this repo:
+#: one fact, once, no self-legitimacy, no override key
+#: (docs/wiki/guard-messaging.md § Register). Module-level so tests can assert
+#: on it directly rather than substring-matching the composed narration.
+_CLOSE_LEDGER_NARRATION = (
+    "close_ledger names what this session discharged — report it verbatim, "
+    "not a composed residual/open-items list."
+)
+
+
+def _close_ledger(close_gate: dict[str, Any]) -> list[dict[str, Any]]:
+    """What this session DISCHARGED, named against its landing artifact —
+    never a composed "still open" list (see module docstring's Negative-spec
+    additions and the sizing object this module was built against,
+    `state/sizings/2026-09-06-close-out-emits-what-is-discharged-so-th.yaml`).
+
+    The failure this closes: an EM's close-out report re-opened two items this
+    session had already discharged — one fixed by the very diff being
+    reported, one already landed as a bug-backlog row. Doctrine already
+    forbids composing a residual "still open" section (CLAUDE.md §
+    Communication Style), but a rule the EM must remember is the wrong
+    discharge point; this emits the facts mechanically instead.
+
+    Three legs, each read off the SAME `close_gate` dict `brief()` already
+    assembles (the raw DR-319 records, `governing_plan`'s `value` already
+    carrying `terminal_write_owed` merged in by the time this is called):
+
+      - `pickup_kind.value.actioned_memos` — one entry per actioned memo,
+        named by its own recorded decision.
+      - `governing_plan.value` — one entry naming the plan and its current
+        status, when a plan is present. A plan's mere presence is not itself
+        a discharge; the entry exists so the EM can cite the plan's own
+        status as the landing artifact rather than re-describing plan state
+        in prose.
+      - `diff.value` — one entry naming the session's own commit range as the
+        landing artifact for its code changes, when the diff read is both
+        computed AND trustworthy (an ambiguous Session-Id trailer already
+        raises `j-scoping-ambiguous`; this ledger does not repeat that
+        judgment call as a false "discharged").
+
+    DEGRADED/UNTRUSTWORTHY POSTURE (the honesty requirement this function
+    exists to satisfy, same DR-319 § (c) discipline as the closed-fallback
+    functions above): a degraded record or an untrustworthy diff produces an
+    explicit `_LEDGER_COULD_NOT_ESTABLISH` entry naming which leg and why —
+    never silent omission, which would read as "nothing was discharged here"
+    and is the same class of false signal in the opposite direction.
+
+    NEVER emits an "open"/"remaining" entry for anything — this function only
+    knows what was discharged, not what remains, and inventing the latter
+    from partial knowledge is the sizing object's other named failure mode.
+    """
+    entries: list[dict[str, Any]] = []
+
+    pickup_record = close_gate["pickup_kind"]
+    if pickup_record["degraded"]:
+        entries.append(
+            {
+                "item": "memos actioned this session",
+                "status": _LEDGER_COULD_NOT_ESTABLISH,
+                "evidence": pickup_record["evidence"],
+            }
+        )
+    else:
+        for memo in pickup_record["value"].get("actioned_memos") or []:
+            entries.append(
+                {
+                    "item": f"memo {memo.get('basename')}",
+                    "status": _LEDGER_DISCHARGED,
+                    "discharged_by": f"actioned this session, decision={memo.get('decision')!r}",
+                }
+            )
+
+    plan_record = close_gate["governing_plan"]
+    if plan_record["degraded"]:
+        entries.append(
+            {
+                "item": "governing plan",
+                "status": _LEDGER_COULD_NOT_ESTABLISH,
+                "evidence": plan_record["evidence"],
+            }
+        )
+    else:
+        plan = plan_record["value"]
+        if plan.get("present"):
+            entries.append(
+                {
+                    "item": f"governing plan {plan.get('path') or plan.get('slug')}",
+                    "status": _LEDGER_DISCHARGED,
+                    "discharged_by": (
+                        f"plan status={plan.get('status')!r}, "
+                        f"terminal_write_owed={plan.get('terminal_write_owed')}"
+                    ),
+                }
+            )
+
+    diff_record = close_gate["diff"]
+    if diff_record["degraded"]:
+        entries.append(
+            {
+                "item": "session code changes",
+                "status": _LEDGER_COULD_NOT_ESTABLISH,
+                "evidence": diff_record["evidence"],
+            }
+        )
+    else:
+        diff = diff_record["value"]
+        if not diff.get("trustworthy"):
+            entries.append(
+                {
+                    "item": "session code changes",
+                    "status": _LEDGER_COULD_NOT_ESTABLISH,
+                    "evidence": (
+                        f"scoping_method={diff.get('scoping_method')} is ambiguous — "
+                        "commit attribution to this session is not trustworthy"
+                    ),
+                }
+            )
+        elif diff.get("commit_count"):
+            entries.append(
+                {
+                    "item": "session code changes",
+                    "status": _LEDGER_DISCHARGED,
+                    "discharged_by": (
+                        f"{diff.get('commit_count')} commit(s), "
+                        f"sha_range={diff.get('sha_range')!r}, "
+                        f"surface_count={diff.get('surface_count')}"
+                    ),
+                }
+            )
+
+    return entries
+
+
 def _run_close_commit(root: Path, sid: str) -> dict[str, Any]:
     """C5 (docs/plans/2026-08-20-the-close-ceremony-commits-what-the-session-
     wrote.md § C5): call C4's hardened `commit_session_offer_async` in-process
@@ -1035,6 +1178,8 @@ def brief(worktree_root: Path | None = None) -> dict[str, Any]:
             )
         )
 
+    close_ledger = _close_ledger(close_gate)
+
     failures = entry_test["computed_failures"]
     if not failures:
         narration = (
@@ -1049,6 +1194,7 @@ def brief(worktree_root: Path | None = None) -> dict[str, Any]:
             f"Entry test fails on {', '.join(failures)} — {entry_test['route']}. "
             "This is a routing verdict, not an error."
         )
+    narration += " " + _CLOSE_LEDGER_NARRATION
 
     commit_report = _run_close_commit(root, sid)
     commit_outcome = dict(commit_report.get("outcome") or {})
@@ -1064,7 +1210,7 @@ def brief(worktree_root: Path | None = None) -> dict[str, Any]:
         },
         directives=_directives(fold, fold_degraded=fold_record["degraded"]),
         judgment_points=judgment_points,
-        decisions={},
+        decisions={"close_ledger": close_ledger},
         narration=narration,
         next_move=entry_test["route"],
     )

@@ -269,6 +269,66 @@ def test_resolve_roster_agents_dir_missing_fails_closed(tmp_path: Path) -> None:
     assert "MISSING ENTIRELY" in reason
 
 
+# ---------------------------------------------------------------------------
+# Mirror-clone layout — content at the root, not nested under `coordinator/`.
+#
+# A dev clone nests plugin content under `coordinator/`; a marketplace/OSS-
+# mirror clone holds it directly at the root. Both roster sources probed only
+# the first shape and fail CLOSED, so on a mirror install the guard reported
+# "roster source MISSING ENTIRELY (path/install defect)" and refused every
+# `coordinator:*` dispatch — including `coordinator:executor`. Reproduced on
+# the 2026-09-05 Linux cloud dogfood.
+# ---------------------------------------------------------------------------
+
+
+def _write_mirror_tree(root: Path, extra_type: str = "coordinator:executor") -> None:
+    """The same two artifacts a dev clone carries, at the mirror's own depth."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "subagent-sandbox-policy.yaml").write_text(
+        "report_sidecar:\n"
+        f"  - {extra_type}\n"
+        "report_type_map:\n"
+        f"  {extra_type}: run-report\n"
+        "contract_blocks:\n"
+        f"  {extra_type}: []\n"
+        "dispatch_tier:\n"
+        f"  {extra_type}: review-execution\n",
+        encoding="utf-8",
+    )
+    agents_dir = root / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    (agents_dir / "executor.md").write_text(
+        '---\nname: executor\ndescription: "test agent"\n---\nbody\n', encoding="utf-8"
+    )
+
+
+def test_resolve_roster_reads_a_mirror_clone_holding_content_at_the_root(tmp_path: Path) -> None:
+    root = tmp_path / "coordinator-claude"
+    _write_mirror_tree(root)
+    roster, reason = mod.resolve_roster(doe_root=str(root), home=None)
+    assert reason is None, f"mirror layout must resolve, not fail closed: {reason}"
+    assert roster is not None
+    assert "coordinator:executor" in roster
+
+
+def test_resolve_roster_still_prefers_the_dev_clone_nesting(doe_root: Path) -> None:
+    """The added candidate must not displace the nested shape it probes first."""
+    roster, reason = mod.resolve_roster(doe_root=str(doe_root), home=None)
+    assert reason is None
+    assert roster is not None
+    assert "coordinator:executor" in roster
+
+
+def test_resolve_roster_missing_in_both_shapes_still_fails_closed(tmp_path: Path) -> None:
+    """Widening the probe must not soften the genuine install defect."""
+    root = tmp_path / "empty"
+    root.mkdir()
+    roster, reason = mod.resolve_roster(doe_root=str(root), home=None)
+    assert roster is None
+    assert "MISSING ENTIRELY" in reason
+    assert "subagent-sandbox-policy.yaml" in reason
+
+
 def test_resolve_roster_plugin_dir_absent_degrades_not_fatal(doe_root: Path) -> None:
     # No plugin_home fixture at all — real DoE sources present, home unresolved.
     roster, reason = mod.resolve_roster(doe_root=str(doe_root), home=None)

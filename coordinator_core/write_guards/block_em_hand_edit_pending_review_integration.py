@@ -122,6 +122,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
+from coordinator_core.session import machinery_paths
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -308,17 +309,29 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         cwd = payload.get("cwd") or None
         base_dir = Path(cwd) if cwd else Path.cwd()
-        sidecar_dir = base_dir / "state" / "subagent-share" / session_id
-        if not sidecar_dir.is_dir():
+        # Both share roots (machinery_paths.share_dirs) — a session
+        # provisioned before the relocation republished still writes under
+        # the legacy root, and scanning one root alone is a guard that
+        # cannot fire.
+        candidate_dirs = [
+            Path(d)
+            for d in machinery_paths.share_dirs(str(base_dir), session_id)
+        ]
+        candidate_dirs = [d for d in candidate_dirs if d.is_dir()]
+        if not candidate_dirs:
             return None
 
         normalized_target = _normalize(file_path)
         basename = normalized_target.rsplit("/", 1)[-1]
 
-        # Never let the guard's own module file (or the state directory it
+        # Never let the guard's own module file (or the share directory it
         # walks) trip itself — not a real risk given the agent_type gate,
         # but keeps the walk narrowly scoped to what it claims.
-        pending = _find_pending_sidecar(sidecar_dir, normalized_target, basename)
+        pending = None
+        for sidecar_dir in candidate_dirs:
+            pending = _find_pending_sidecar(sidecar_dir, normalized_target, basename)
+            if pending is not None:
+                break
         if pending is None:
             return None
 

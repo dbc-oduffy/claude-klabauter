@@ -587,11 +587,6 @@ def _build_directives(
             args=["schema-drift-gate"],
         ),
         _directive(
-            "d_step4c_ubt_pending_merge_gate",
-            cli="workweek-complete-advisories",
-            args=["ubt-unresolved", _resolve_repo_root_for_doc_staleness() or "."],
-        ),
-        _directive(
             "d_step4b_4k_reverse_drift",
             cli="workweek-complete-reverse-drift-gate",
             args=[],

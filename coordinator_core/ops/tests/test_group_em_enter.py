@@ -13,6 +13,7 @@ from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
 from coordinator_core.ops import _registry_map
 from coordinator_core.ops import group_em_enter as gee
 from coordinator_core.op_scopes import OP_KEY_SCOPE
+from coordinator_core.session import machinery_paths
 
 
 def test_payload_has_exactly_eight_keys(tmp_path, monkeypatch):
@@ -501,7 +502,7 @@ def test_baseline_leg_writes_under_the_acted_on_repo_root_not_claude_klabauter(t
 
     claude_klabauter_root = Path(__file__).resolve().parents[3]
     claude_klabauter_store_glob = list(
-        (claude_klabauter_root / "state" / "subagent-share" / "caller-sid-6").glob(
+        (Path(machinery_paths.share_dir(str(claude_klabauter_root), "caller-sid-6"))).glob(
             "group-em-baseline-*.json"
         )
     )
@@ -513,12 +514,12 @@ def test_baseline_leg_writes_under_the_acted_on_repo_root_not_claude_klabauter(t
     assert result.get("baseline_error") is None
     assert result["baseline"]["first_tick"] is True
 
-    target_dir = tmp_path / "state" / "subagent-share" / "caller-sid-6"
+    target_dir = Path(machinery_paths.share_dir(str(tmp_path), "caller-sid-6"))
     written = list(target_dir.glob("group-em-baseline-*.json"))
     assert len(written) == 1, "baseline snapshot must land under the acted-on repo_root"
 
     claude_klabauter_store_after = list(
-        (claude_klabauter_root / "state" / "subagent-share" / "caller-sid-6").glob(
+        (Path(machinery_paths.share_dir(str(claude_klabauter_root), "caller-sid-6"))).glob(
             "group-em-baseline-*.json"
         )
     )

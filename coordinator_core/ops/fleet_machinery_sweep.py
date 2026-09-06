@@ -140,6 +140,27 @@ _ALL_BUCKETS: Tuple[str, ...] = _STANZA2_BUCKETS + _STANZA1_BUCKETS
 
 _AUDIT_PATH = "state/audits/2026-09-02-fleet-machinery-sweep.md"
 
+# Generator-provenance declaration (generator_provenance.py's AST reader).
+# The ONE write this module makes into claude-klabauter's own tracked tree is
+# `append_audit`'s (leg 5) -- every other write lands in a SIBLING repo
+# (`_write_ignore_block`'s .gitignore, C4's two audit records written there)
+# or at an operator-named `--dry-run --out` path, and none of those is a
+# claude-klabauter artifact. `sources` names this module: the selector, the sweep, and
+# the audit renderer all live here. The artifact path is spelled as a
+# LITERAL, not as `_AUDIT_PATH` above: the reader parses source with `ast`
+# and never imports, so a Name reference reads as "not a literal list" and
+# the whole declaration collapses to UNDECLARED. The audit carries no
+# frontmatter, so the staleness leg reads it UNSTAMPED
+# (`check_generator_output_staleness`) --
+# correct for an append-only run log rather than a regenerated artifact.
+GENERATES = [
+    {
+        "artifact": "state/audits/2026-09-02-fleet-machinery-sweep.md",
+        "stamp_key": "generated_at",
+        "sources": ["coordinator_core/ops/fleet_machinery_sweep.py"],
+    },
+]
+
 _IGNORE_BLOCK = """
 # 2026-09-02 fleet-machinery-sweep (C14) -- fanned out from claude-klabauter's own C6.
 # Sibling sessions keep writing the OLD state/ machinery paths until the new

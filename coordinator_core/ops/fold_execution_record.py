@@ -86,7 +86,10 @@ import sys
 from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
-from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+from coordinator_core.session.machinery_paths import (
+    machinery_root as _machinery_root,
+    share_roots as _share_roots,
+)
 
 _PROG = "coordinator-fold-execution-record"
 
@@ -330,15 +333,20 @@ def main(argv: List[str]) -> int:
         print("<!-- coordinator-fold-execution-record: SKIP repo-root-unresolvable -->")
         return 0
 
-    subagent_share_dir = os.path.join(_machinery_root(git_root), "subagent-share")
-    if not os.path.isdir(subagent_share_dir):
+    # Both share roots -- see machinery_paths.share_roots. The first extant
+    # root names the SKIP/report path; sidecars are collected from all of them.
+    _share_dirs = [d for d in _share_roots(git_root) if os.path.isdir(d)]
+    subagent_share_dir = _share_dirs[0] if _share_dirs else _share_roots(git_root)[0]
+    if not _share_dirs:
         print(
             "<!-- coordinator-fold-execution-record: SKIP no-subagent-share-dir "
             f"{os.path.relpath(subagent_share_dir, git_root).replace(os.sep, '/')}/ -->"
         )
         return 0
 
-    sidecar_files = _collect_sidecar_files(subagent_share_dir, plan_slug)
+    sidecar_files = []
+    for _d in _share_dirs:
+        sidecar_files.extend(_collect_sidecar_files(_d, plan_slug))
     rel_share = os.path.relpath(subagent_share_dir, git_root).replace(os.sep, "/")
     if not sidecar_files:
         print(

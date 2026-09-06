@@ -70,6 +70,12 @@ SCHEMA_VERSION = 1
 #: Exists so the pin test can emit into a tmp_path without a DoE checkout present.
 OUT_DIR_ENV = "WITHHELD_KNOBS_OUT_DIR"
 
+# Generator-provenance: emits coordinator/withheld-knobs.json under the
+# DoE-claude tree (or OUT_DIR_ENV's override), explicitly NOT claude-klabauter -- see
+# module docstring CROSS-REPO WRITE. Same declaration as the sibling op that
+# runs the same way, `emit_artifact_shape_contract`.
+GENERATES = []
+
 _BASENAME = "withheld-knobs.json"
 
 

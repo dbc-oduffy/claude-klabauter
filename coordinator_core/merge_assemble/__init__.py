@@ -237,22 +237,44 @@ def _parse_version_tag(value: str, tag_prefix: str) -> Optional[tuple[int, int, 
     return tuple(int(seg) for seg in segments)  # type: ignore[return-value]
 
 
+#: Declared disposition VALUES on `version_bump_final` that a bare string
+#: normalizes to a plain `{"disposition": <value>}` rather than an
+#: `override` — kept as a literal tuple, not read back off
+#: `build_judgment_points`, so `normalize_decisions` never has to build a
+#: judgment point (with its lazy `decision_object.judgment` import) just to
+#: normalize a decisions map. `override` itself is excluded on purpose — a
+#: bare string naming "override" literally has no `value` to carry, so it
+#: stays on the existing any-other-string-is-an-override path below and
+#: fails loud through `_resolve_version_override` as a malformed override,
+#: same as before this chunk.
+_VERSION_BUMP_FINAL_BARE_DECLINE = ("decline",)
+
+
 def normalize_decisions(decisions: Optional[dict[str, Any]]) -> dict[str, Any]:
-    """Normalizes a bare-string `version_bump_final` decisions entry (the
-    sender's shape 2, e.g. `{"version_bump_final": "v0.16.0"}`) into the
-    mapping shape `disposition_resolves_directive` requires
-    (`{"disposition": "override", "value": "v0.16.0"}`) — done in exactly
-    ONE place so `brief()` and `apply()` can never disagree about what a
-    decisions map means: `apply()` recomputes `brief()` in-process and
-    then hands the SAME normalized map to `execute_directives`, so both
+    """Normalizes a bare-string `version_bump_final` decisions entry into
+    the mapping shape `disposition_resolves_directive` requires — done in
+    exactly ONE place so `brief()` and `apply()` can never disagree about
+    what a decisions map means: `apply()` recomputes `brief()` in-process
+    and then hands the SAME normalized map to `execute_directives`, so both
     halves must read this function's output, never re-derive their own.
     Idempotent — an already-mapping entry (or any other entry shape) is
     returned unchanged. `None`/empty input normalizes to `{}`.
 
-    NOT a uniform copy contract: the string-entry branch returns a shallow
-    copy (`dict(decisions)`), but the already-normalized-dict branch
-    returns the SAME object reference as `decisions` — callers must not
-    rely on the return value being a distinct object from the input.
+    Two bare-string shapes are distinguished (C2,
+    docs/plans/2026-09-06-declined-judgment-answer-is-not-silence.md): a
+    string matching a declared non-version disposition value on the point
+    (`_VERSION_BUMP_FINAL_BARE_DECLINE`, e.g. `"decline"`) normalizes
+    to `{"disposition": "decline"}` — a plain disposition, not an override.
+    Any OTHER bare string (the sender's shape 2, e.g.
+    `{"version_bump_final": "v0.16.0"}`) still normalizes to
+    `{"disposition": "override", "value": "v0.16.0"}`, exactly as before —
+    that path, and `_resolve_version_override`'s fail-loud on a malformed
+    override, are unchanged.
+
+    NOT a uniform copy contract: either string-entry branch returns a
+    shallow copy (`dict(decisions)`), but the already-normalized-dict
+    branch returns the SAME object reference as `decisions` — callers must
+    not rely on the return value being a distinct object from the input.
     (Review: code-reviewer — Finding: aliasing asymmetry between branches.)
     """
     if not decisions:
@@ -260,7 +282,10 @@ def normalize_decisions(decisions: Optional[dict[str, Any]]) -> dict[str, Any]:
     entry = decisions.get("version_bump_final")
     if isinstance(entry, str):
         normalized = dict(decisions)
-        normalized["version_bump_final"] = {"disposition": "override", "value": entry}
+        if entry in _VERSION_BUMP_FINAL_BARE_DECLINE:
+            normalized["version_bump_final"] = {"disposition": entry}
+        else:
+            normalized["version_bump_final"] = {"disposition": "override", "value": entry}
         return normalized
     return decisions
 
@@ -390,23 +415,27 @@ def build_judgment_points(
             id="version_bump_final",
             question=(
                 "Confirm the proposed version bump is the number to cut, "
-                "or override it by supplying "
+                "override it by supplying "
                 "decisions[\"version_bump_final\"] = "
                 "{\"disposition\": \"override\", \"value\": \"<tag_prefix>MAJOR.MINOR.PATCH\"} "
                 "(a bare string of that shape is also accepted and normalized "
-                "the same way)"
+                "the same way), or decline to cut any tag this merge via "
+                "decisions[\"version_bump_final\"] = {\"disposition\": \"decline\"} "
+                "(or the bare string \"decline\") — merges, but does not resolve d2"
             ),
             dispositions=[
                 build_disposition("confirmed", resolves=["d2"]),
                 build_disposition("override", resolves=["d2"]),
+                build_disposition("decline"),
             ],
             evidence=(
                 "version_bump is a PROPOSAL only (patch-bump default, "
                 "compute_version_bump_proposal) — the PM/EM confirms the "
-                "final released number, or overrides it outright via this "
-                "judgment point's own decisions entry; d2's cut-tag args "
-                "are frozen from whichever number wins here at brief-"
-                "compute time"
+                "final released number, overrides it outright, or declines to "
+                "cut a tag this merge via this judgment point's own decisions "
+                "entry; a decline leaves d2 (and transitively d7) blocked, "
+                "exactly as an unanswered point does, but reports itself under "
+                "declined_judgment_points rather than unresolved_judgment_points"
             ),
             reason="insufficient-evidence",
         ),
@@ -793,7 +822,26 @@ def brief(
             exit_code=EXIT_BUSINESS_FAIL,
         )
 
-    cut_tag_input = override_tag if override_tag is not None else version_bump.get("proposed")
+    version_bump_final_entry = effective_decisions.get("version_bump_final")
+    declined_version_bump = (
+        isinstance(version_bump_final_entry, dict)
+        and version_bump_final_entry.get("disposition") == "decline"
+    )
+    if declined_version_bump:
+        # `decline` resolves nothing (no `resolves` on the disposition,
+        # `build_judgment_points`) — d2 stays blocked exactly as it does
+        # when the point is left unanswered, so there is no tag to freeze
+        # into its args yet.
+        #
+        # This leaves `cut_tag_input = None`, so `build_directives` falls
+        # back to its `f"{tag_prefix}0.0.0"` sentinel in d2's args — but that
+        # sentinel is unreachable: d2 stays gated on `version_bump_final` and
+        # `_apply_force_bypass` remaps only d0, so it can never fire while
+        # declined. A footgun for a reader of the raw directive list, not a
+        # live bug (Review: code-reviewer — Finding 3).
+        cut_tag_input = None
+    else:
+        cut_tag_input = override_tag if override_tag is not None else version_bump.get("proposed")
     if override_tag is not None:
         version_bump = {**version_bump, "override": override_tag}
 

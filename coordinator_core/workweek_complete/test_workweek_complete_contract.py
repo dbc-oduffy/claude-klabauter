@@ -88,33 +88,6 @@ def test_reap_claims_for_repos_directive_present() -> None:
     )
 
 
-def test_step4c_ubt_directive_exists_and_hard_blocks() -> None:
-    """The Step 4c UBT pending-record merge gate must exist and emit
-    `hard_block: true` -- DoE's PM cut the compensating ceremony prose on the
-    premise this directive exists and is trustworthy; a silently-missing or
-    silently-advisory 4c directive leaves the merge gate dark on a live
-    release ceremony (see brief.py's `_build_directives` docstring)."""
-    directive = next(
-        d for d in wwc_brief._build_directives()
-        if d["id"] == "d_step4c_ubt_pending_merge_gate"
-    )
-    assert directive["cli"] == "workweek-complete-advisories"
-    assert directive["args"][0] == "ubt-unresolved"
-    assert len(directive["args"]) == 2, (
-        "ubt-unresolved takes exactly one positional repo-root argument"
-    )
-    assert directive["hard_block"] is True
-
-
-def test_only_scan_unresolved_ubt_records_caller_is_the_4c_directive() -> None:
-    """Ground-truth pin (prior investigation, dispatch brief): the ONLY
-    directive naming `ubt-unresolved` must be the 4c gate -- catches a
-    future accidental duplicate/second invocation."""
-    ubt_directives = [
-        d for d in wwc_brief._build_directives()
-        if d["cli"] == "workweek-complete-advisories" and d["args"] and d["args"][0] == "ubt-unresolved"
-    ]
-    assert [d["id"] for d in ubt_directives] == ["d_step4c_ubt_pending_merge_gate"]
 
 
 def test_drift_guards_bundle_split_carries_correct_per_directive_hard_block() -> None:

@@ -283,7 +283,10 @@ from coordinator_core.ops.fleet._common import handoff_archive_dest
 from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # AC8: NOT zero-spawn — runs `git rev-parse --show-toplevel` via `_run_git`, one subprocess spawn per resolution
 from coordinator_core.resolution.facade import resolve_operator_config
-from coordinator_core.session.machinery_paths import machinery_root as _machinery_root
+from coordinator_core.session.machinery_paths import (
+    machinery_root as _machinery_root,
+    share_roots as _share_roots,
+)
 
 from coordinator_core.workstream_complete import completion_verdict as _completion_verdict
 from coordinator_core.workstream_complete import directives_commit_tail
@@ -2332,7 +2335,11 @@ def _compute_review_receipt_gate(
 
     from coordinator_core.reviewer_vocabulary import CLOSE_RECEIPT_REVIEWERS
 
-    sidecar_dir = Path(_machinery_root(str(root))) / "subagent-share" / sid
+    # Both share roots -- see machinery_paths.share_roots. A receipt written
+    # by a pre-relocation session must not read as "no receipt" and block a
+    # close.
+    sidecar_dirs = [Path(d) / sid for d in _share_roots(str(root))]
+    sidecar_dir = sidecar_dirs[0]
     no_receipt_detail = (
         f"no counting review receipt for session {sid!r} under "
         f"{sidecar_dir.as_posix()} (missing, blank, wrong agent type, or "
@@ -2340,7 +2347,8 @@ def _compute_review_receipt_gate(
         "(coordinator_core.reviewer_vocabulary.CLOSE_RECEIPT_REVIEWERS) and let it "
         f"finish before reaching status: {target_status!r}"
     )
-    if not sidecar_dir.is_dir():
+    extant_sidecar_dirs = [d for d in sidecar_dirs if d.is_dir()]
+    if not extant_sidecar_dirs:
         return ReviewReceiptGate(applies=True, blocks=True, detail=no_receipt_detail)
 
     window_start = _parse_review_receipt_timestamp(claimed_at)

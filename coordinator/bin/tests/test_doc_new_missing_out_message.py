@@ -3,7 +3,8 @@
 
 Incident: a workflow-dispatched executor asked to write a subagent-sidecar read
 the old refusal ("Pass --out explicitly") as a usage error and had no way to act
-on it — the sidecar lives under ``state/subagent-share/<session-id>/`` and the
+on it — the sidecar lives under ``.coordinator-local/subagent-share/<session-id>/``
+and the
 message named neither the session id it carried nor the identity it would need,
 so the executor reported the scaffold as unavailable
 (state/improvement-queue/2026-08-21-a-dispatched-executor-cannot-scaffold-it-
@@ -39,6 +40,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from coordinator_core.session.machinery_paths import SHARE_RELDIR
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
@@ -72,7 +74,7 @@ def test_dispatched_reader_gets_the_session_scoped_root(doc_new, monkeypatch, no
 
     msg = doc_new._missing_out_message("subagent-sidecar")
 
-    assert "state/subagent-share/2f364457-4c88-a41f/" in msg
+    assert f"{SHARE_RELDIR}/2f364457-4c88-a41f/" in msg
     assert "<session-id>" not in msg
     assert "--type subagent-sidecar" in msg
 
@@ -85,7 +87,7 @@ def test_session_id_segment_is_sanitized(doc_new, monkeypatch, no_session_env):
     # The whitelist keeps '.' (it rejects only the degenerate ''/'.'/'..' whole-
     # segment results); what must not survive is a separator that turns the named
     # path into a traversal.
-    leaf = msg.split("state/subagent-share/", 1)[1].split("/", 1)[0]
+    leaf = msg.split(f"{SHARE_RELDIR}/", 1)[1].split("/", 1)[0]
     assert "/" not in leaf and "\\" not in leaf
     assert leaf == "....etcpasswd"
 
@@ -96,7 +98,7 @@ def test_identityless_reader_gets_the_missing_identity_named(doc_new, no_session
     for var in _SESSION_ENV_VARS:
         assert var in msg
     assert "dispatch brief" in msg
-    assert "state/subagent-share/em-unknown" not in msg
+    assert f"{SHARE_RELDIR}/em-unknown" not in msg
 
 
 def test_no_arm_tells_the_reader_to_just_pass_out(doc_new, monkeypatch, no_session_env):

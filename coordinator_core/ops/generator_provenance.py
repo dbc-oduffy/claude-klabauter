@@ -1247,22 +1247,160 @@ def _extract_generates(tree: ast.Module) -> object | None:
     return None
 
 
+#: The ONE module whose string constants this scanner resolves across an
+#: import boundary. Not general import-following: `session.machinery_paths`
+#: is the declared single owner of the machinery root's layout (see its own
+#: docstring), so a declaration built from its constants is the CORRECT way
+#: to spell a machinery path -- respelling the literal instead is the exact
+#: duplication that module exists to remove. A scanner that cannot read those
+#: constants therefore punishes the right answer, which is what it did until
+#: 2026-09-06: `ops/fleet/{memo_compose,memo_send,memo_reconcile_outbox}` each
+#: declared a correct f-string MUTATES over `MEMO_OUTBOX_RELDIR`,
+#: `ast.literal_eval` could not evaluate an f-string, and all three landed as
+#: `__MALFORMED__` -> UNDECLARED, making their write-target contract invisible
+#: to every consumer of discovery (including the scope attribution
+#: `memo_reconcile_outbox`'s own MUTATES comment cites).
+_OWNED_CONSTANTS_MODULE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "session",
+    "machinery_paths.py",
+)
+
+_owned_constants_cache: dict | None = None
+
+
+def _owned_string_constants() -> dict:
+    """Module-level string constants of `session.machinery_paths`, parsed
+    statically. Never imports the module -- this scanner reads source text for
+    everything else too, and importing what it scans is the discipline every
+    sibling guard in this corpus keeps."""
+    global _owned_constants_cache
+    if _owned_constants_cache is None:
+        try:
+            with open(_OWNED_CONSTANTS_MODULE, "r", encoding="utf-8") as fh:
+                owned_tree = ast.parse(fh.read())
+            _owned_constants_cache = _module_string_constants(owned_tree, {})
+        except (OSError, SyntaxError):
+            # Fail OPEN to an empty table: an unreadable owner module means
+            # "cannot resolve", never "this declaration is malformed".
+            _owned_constants_cache = {}
+    return _owned_constants_cache
+
+
+def _static_str(node, table: dict):
+    """Statically evaluate *node* to a `str`, or `None` when it cannot be.
+
+    Deliberately narrow -- the shapes a path constant is actually written in,
+    never a general expression evaluator: a literal, a name bound to one,
+    `"sep".join([...])`, `a + b`, and an f-string whose every interpolation
+    resolves to one of those.
+    """
+    if isinstance(node, ast.Constant):
+        return node.value if isinstance(node.value, str) else None
+    if isinstance(node, ast.Name):
+        value = table.get(node.id)
+        return value if isinstance(value, str) else None
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for piece in node.values:
+            if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
+                parts.append(piece.value)
+            elif isinstance(piece, ast.FormattedValue):
+                # A conversion or format spec means the rendered text is not
+                # simply the operand -- refuse rather than guess.
+                if piece.conversion not in (-1, None) or piece.format_spec is not None:
+                    return None
+                resolved = _static_str(piece.value, table)
+                if resolved is None:
+                    return None
+                parts.append(resolved)
+            else:
+                return None
+        return "".join(parts)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _static_str(node.left, table)
+        right = _static_str(node.right, table)
+        return None if left is None or right is None else left + right
+    if isinstance(node, ast.Call):
+        func = node.func
+        if (
+            isinstance(func, ast.Attribute)
+            and func.attr == "join"
+            and len(node.args) == 1
+            and not node.keywords
+        ):
+            sep = _static_str(func.value, table)
+            if sep is None or not isinstance(node.args[0], (ast.List, ast.Tuple)):
+                return None
+            pieces = []
+            for element in node.args[0].elts:
+                resolved = _static_str(element, table)
+                if resolved is None:
+                    return None
+                pieces.append(resolved)
+            return sep.join(pieces)
+    return None
+
+
+def _module_string_constants(tree: ast.Module, seed: dict) -> dict:
+    """Module-level `NAME = <statically-resolvable str>` bindings, walked in
+    source order so a later constant may build on an earlier one -- which is
+    exactly how `MEMO_OUTBOX_RELDIR` is written."""
+    table = dict(seed)
+    for node in tree.body:
+        targets = []
+        value = None
+        if isinstance(node, ast.Assign):
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            targets = [node.target.id]
+            value = node.value
+        if not targets or value is None:
+            continue
+        resolved = _static_str(value, table)
+        if resolved is not None:
+            for name in targets:
+                table[name] = resolved
+    return table
+
+
+def _eval_declaration(node, table: dict) -> object:
+    """A `GENERATES`/`MUTATES` value, resolving the names and f-strings
+    `ast.literal_eval` alone cannot. Returns `"__MALFORMED__"` only when the
+    value is genuinely unevaluable -- an f-string over a resolvable constant is
+    a WELL-FORMED declaration this reader simply has to work harder to read."""
+    try:
+        return ast.literal_eval(node)
+    except (ValueError, SyntaxError):
+        pass
+    if isinstance(node, (ast.List, ast.Tuple)):
+        out = []
+        for element in node.elts:
+            resolved = _static_str(element, table)
+            if resolved is None:
+                try:
+                    out.append(ast.literal_eval(element))
+                except (ValueError, SyntaxError):
+                    return "__MALFORMED__"
+            else:
+                out.append(resolved)
+        return out
+    resolved = _static_str(node, table)
+    return resolved if resolved is not None else "__MALFORMED__"
+
+
 def _extract_mutates(tree: ast.Module) -> object | None:
+    table = _module_string_constants(tree, _owned_string_constants())
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             names = [t.id for t in node.targets if isinstance(t, ast.Name)]
             if "MUTATES" in names:
-                try:
-                    return ast.literal_eval(node.value)
-                except (ValueError, SyntaxError):
-                    return "__MALFORMED__"
+                return _eval_declaration(node.value, table)
         if isinstance(node, ast.AnnAssign):
             target = node.target
             if isinstance(target, ast.Name) and target.id == "MUTATES" and node.value is not None:
-                try:
-                    return ast.literal_eval(node.value)
-                except (ValueError, SyntaxError):
-                    return "__MALFORMED__"
+                return _eval_declaration(node.value, table)
     return None
 
 

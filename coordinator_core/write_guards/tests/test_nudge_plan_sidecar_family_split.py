@@ -87,7 +87,7 @@ class TestRealResiduePositiveCases:
     def test_non_row_39_lens_advises(self, file_path):
         result = guard.check(_payload("Write", file_path))
         text = _advisory_text(result)
-        assert "state/subagent-share/<session>/<name>.md" in text
+        assert ".coordinator-local/subagent-share/<session>/<name>.md" in text
         assert "not a plan-derivable lens" in text
 
     def test_edit_tool_also_advises(self):

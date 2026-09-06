@@ -331,7 +331,6 @@ _ENRICHER_AGENT_TYPE = "coordinator:enricher"
 _COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 _TEST_AGENT_TYPE = "coordinator:test-runner"
 
-_DEFAULT_MODEL = "sonnet"
 _AGENT_MODELS = {
     _EXECUTOR_AGENT_TYPE: "sonnet",
     _ENRICHER_AGENT_TYPE: "sonnet",
@@ -340,14 +339,45 @@ _AGENT_MODELS = {
 }
 
 
-def _model_opt(agent_type: str) -> str:
+def _model_opt(agent_type: str, agent_model: Optional[str] = None) -> str:
     """Compose the ACTIVE ``model:`` opts entry for one ``agentType`` (AC11).
 
-    See module docstring § An ACTIVE model: on every call. An agentType with
-    no row falls back to ``_DEFAULT_MODEL`` rather than emitting nothing --
-    the invariant is that no call site is ever left model-less.
+    See module docstring § An ACTIVE model: on every call. Every row derived
+    (not overridden) ``agent_type`` has an ``_AGENT_MODELS`` row, so the only
+    way to reach a name absent from it is an explicit spine ``agent_type``
+    override this module does not own the roster for (``coordinator:
+    workflow-maker`` and any future plugin-qualified persona).
+
+    ``agent_model`` (state/sizings/2026-09-05-a-plan-row-can-name-the-agent-
+    that-runs.yaml), when supplied, OVERRIDES the ``_AGENT_MODELS`` lookup
+    entirely. Validated against ``_AGENT_MODEL_GRAMMAR_RE`` before use, and
+    escaped through ``_js_string_literal`` like every other spliced value --
+    unlike ``agent_type``, this value is interpolated with nothing else
+    protecting the emitted ``model: '...'`` literal, so escaping cannot be
+    left to the grammar check alone.
+
+    Absent ``agent_model``, an ``agent_type`` with no ``_AGENT_MODELS`` row
+    REFUSES (``MalformedAgentOverrideError``) rather than silently falling
+    back to a default model: a row naming an unregistered persona and
+    omitting ``agent_model`` used to downgrade to a silent Sonnet dispatch,
+    closing the hole only for an author who already knew the second key
+    existed. Refusing here closes it for everyone -- the fix the refusal
+    names is supplying ``agent_model``.
     """
-    return f"model: '{_AGENT_MODELS.get(agent_type, _DEFAULT_MODEL)}'"
+    if agent_model:
+        if not _AGENT_MODEL_GRAMMAR_RE.match(agent_model):
+            raise MalformedAgentOverrideError(
+                f"agent_model {agent_model!r} does not match the required "
+                f"grammar {_AGENT_MODEL_GRAMMAR}"
+            )
+        return f"model: {_js_string_literal(agent_model)}"
+    if agent_type not in _AGENT_MODELS:
+        raise MalformedAgentOverrideError(
+            f"agent_type {agent_type!r} has no entry in _AGENT_MODELS and no "
+            "agent_model override was supplied -- supply agent_model to name "
+            "this agent's model explicitly"
+        )
+    return f"model: '{_AGENT_MODELS[agent_type]}'"
 
 
 # dispatch_emit/emit.py -> dispatch_emit -> ops -> coordinator_core -> repo
@@ -383,6 +413,34 @@ _REVIEW_PHASE_TITLE = "Review"
 # commit-phase MECHANISM as always (``_commit_agent_call``), a new
 # placement rule only.
 _WAVE_COMMIT_BATCH_THRESHOLD = 10
+
+
+# Defined ONCE and referenced everywhere a message needs to spell it out
+# (Review: overengineering-reviewer, finding 2) -- previously typed a second
+# time in each of two error messages below, on top of the two `re.compile`
+# copies, for four on-disk copies in this module alone (plus the vendored
+# schema's own two `pattern` keys, untouched per Ruling 1).
+_AGENT_TYPE_GRAMMAR = r"^[A-Za-z0-9][A-Za-z0-9_-]*(:[A-Za-z0-9][A-Za-z0-9_-]*)?$"
+_AGENT_MODEL_GRAMMAR = r"^[A-Za-z0-9][A-Za-z0-9_-]*$"
+_AGENT_TYPE_GRAMMAR_RE = re.compile(_AGENT_TYPE_GRAMMAR)
+_AGENT_MODEL_GRAMMAR_RE = re.compile(_AGENT_MODEL_GRAMMAR)
+
+
+class MalformedAgentOverrideError(ValueError):
+    """Raised for either of two spine-row agent-override refusals
+    (state/sizings/2026-09-05-a-plan-row-can-name-the-agent-that-runs.yaml):
+    an explicit ``agent_type``/``agent_model`` value that does not match the
+    settled value grammar, or an explicit ``agent_type`` with no
+    ``_AGENT_MODELS`` row and no ``agent_model`` supplied to name its model.
+    One class covers both: both are the same refusal-over-guessing posture
+    on the same override mechanism, and no caller discriminates between them.
+
+    Same posture as ``MixedAgentTypeRowError``/``NoWritesDeclaredError``:
+    this module refuses a fabricated dispatch rather than guessing at a
+    malformed override — silently dropping it and falling back to the
+    write-target derivation would let a typo'd row silently dispatch under
+    an agent the author never asked for.
+    """
 
 
 class MixedAgentTypeRowError(ValueError):
@@ -442,34 +500,50 @@ def _is_immutable_body_path(path: str) -> bool:
 
 
 def _row_agent_type(row: WaveRow) -> str:
-    """Derive a wave row's ``agentType`` from its declared write targets.
+    """Derive a wave row's ``agentType``, honouring an explicit override.
 
-    A row writing ANY ``docs/plans/*.md`` or ``docs/problems/*.md`` path
-    routes to ``coordinator:enricher`` — ``coordinator:executor`` is
-    hard-denied from editing either surface by
-    ``write_guards.block_subagent_plan_body_write`` (Defect A, widened
-    2026-07-24 to also cover ``docs/problems/**``). Every other row stays
-    ``coordinator:executor``. A row whose writes span both kinds raises
-    ``MixedAgentTypeRowError`` — see its docstring.
+    ``row.agent_type`` (state/sizings/2026-09-05-a-plan-row-can-name-the-
+    agent-that-runs.yaml), when present, OVERRIDES the write-target
+    derivation below entirely — the first concrete consumer is
+    ``coordinator:workflow-maker``, a row whose work IS dispatching
+    sub-agents and so cannot be inferred from ``writes:`` at all.
 
-    ``UNDECLARED`` writes derive to ``coordinator:executor``: an UNDECLARED
-    row is refused downstream by ``pathspec.commit_pathspec`` (raising
-    ``NoWritesDeclaredError``) before this module ever composes a call for
-    it, so no dispatch is ever emitted with this fallback live — the choice
-    only has to be a safe placeholder, not a real routing decision.
+    The mixed-writes check runs BEFORE the override is honoured, not after:
+    a row writing both an immutable ``docs/plans/*.md``/``docs/problems/*.md``
+    body and ordinary code is incoherent regardless of who runs it, so an
+    explicit ``agent_type`` does not reconcile the two halves and
+    ``MixedAgentTypeRowError`` still fires.
+
+    Absent an override: a row writing ANY ``docs/plans/*.md`` or
+    ``docs/problems/*.md`` path routes to ``coordinator:enricher`` —
+    ``coordinator:executor`` is hard-denied from editing either surface by
+    ``write_guards.block_subagent_plan_body_write``. Every other row stays
+    ``coordinator:executor``. ``UNDECLARED`` writes also derive to
+    ``coordinator:executor``, a safe placeholder never actually dispatched
+    (``pathspec.commit_pathspec`` refuses an UNDECLARED row first).
     """
+    immutable_body = False
+    if row.writes is not UNDECLARED:
+        immutable_body = any(_is_immutable_body_path(p) for p in row.writes)
+        other = any(not _is_immutable_body_path(p) for p in row.writes)
+
+        if immutable_body and other:
+            raise MixedAgentTypeRowError(
+                f"row {row.id!r} declares writes spanning both an immutable "
+                "docs/plans/*.md or docs/problems/*.md body and an ordinary "
+                "path — split the row instead of guessing an agentType"
+            )
+
+    if row.agent_type:
+        if not _AGENT_TYPE_GRAMMAR_RE.match(row.agent_type):
+            raise MalformedAgentOverrideError(
+                f"row {row.id!r} declares agent_type {row.agent_type!r}, "
+                f"which does not match the required grammar {_AGENT_TYPE_GRAMMAR}"
+            )
+        return row.agent_type
+
     if row.writes is UNDECLARED:
         return _EXECUTOR_AGENT_TYPE
-
-    immutable_body = any(_is_immutable_body_path(p) for p in row.writes)
-    other = any(not _is_immutable_body_path(p) for p in row.writes)
-
-    if immutable_body and other:
-        raise MixedAgentTypeRowError(
-            f"row {row.id!r} declares writes spanning both an immutable "
-            "docs/plans/*.md or docs/problems/*.md body and an ordinary "
-            "path — split the row instead of guessing an agentType"
-        )
     if immutable_body:
         return _ENRICHER_AGENT_TYPE
     return _EXECUTOR_AGENT_TYPE
@@ -897,29 +971,33 @@ def _wave_agent_calls(
 
     if len(wave) == 1:
         row = wave[0]
+        row_agent_type = _row_agent_type(row)
         call = (
             f"  {binder}await agent("
             f"{_js_string_literal(_row_prompt(row, plan_path, plan_context))}, "
             "{ "
             f"label: {_js_string_literal(f'work:{row.id}')}, "
             f"phase: {_js_string_literal(phase_title)}, "
-            f"agentType: {_js_string_literal(_row_agent_type(row))}, "
-            f"{_model_opt(_row_agent_type(row))} "
+            f"agentType: {_js_string_literal(row_agent_type)}, "
+            f"{_model_opt(row_agent_type, row.agent_model)} "
             "});"
         )
         return f"{phase_call}\n{call}"
 
-    item_calls = ",\n".join(
-        "    () => agent("
-        f"{_js_string_literal(_row_prompt(row, plan_path, plan_context))}, "
-        "{ "
-        f"label: {_js_string_literal(f'work:{row.id}')}, "
-        f"phase: {_js_string_literal(phase_title)}, "
-        f"agentType: {_js_string_literal(_row_agent_type(row))}, "
-        f"{_model_opt(_row_agent_type(row))} "
-        "})"
-        for row in wave
-    )
+    def _item_call(row: WaveRow) -> str:
+        row_agent_type = _row_agent_type(row)
+        return (
+            "    () => agent("
+            f"{_js_string_literal(_row_prompt(row, plan_path, plan_context))}, "
+            "{ "
+            f"label: {_js_string_literal(f'work:{row.id}')}, "
+            f"phase: {_js_string_literal(phase_title)}, "
+            f"agentType: {_js_string_literal(row_agent_type)}, "
+            f"{_model_opt(row_agent_type, row.agent_model)} "
+            "})"
+        )
+
+    item_calls = ",\n".join(_item_call(row) for row in wave)
     call = (
         f"  {binder}await parallel([\n"
         f"{item_calls}\n"
