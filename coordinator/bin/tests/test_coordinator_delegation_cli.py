@@ -200,6 +200,15 @@ def test_grant_against_real_writer_reader_lands_live_grant(monkeypatch, tmp_path
 
     import os
 
+    # A REAL class, taken from the writer's own ratified allow-list rather
+    # than invented here. `write_fleet_delegation` gained a positive
+    # `DELEGABLE` check (`fleet_delegation.DELEGABLE`), so the invented
+    # `"review-schedule"` this used to pass is now rejected at write time and
+    # the test measured the rejection, not the grant. Reading the list back
+    # off the module keeps this test tracking the list instead of restating
+    # it -- the same convention every other consumer of `DELEGABLE` follows.
+    delegable_class = sorted(fd.DELEGABLE)[0]
+
     orig_import = _cli._import_module
     _cli._import_module = lambda: fd
     try:
@@ -209,7 +218,7 @@ def test_grant_against_real_writer_reader_lands_live_grant(monkeypatch, tmp_path
                 "--pid",
                 str(os.getpid()),
                 "--classes",
-                "review-schedule",
+                delegable_class,
                 "--lease-hours",
                 "1",
                 "--note",
@@ -221,7 +230,7 @@ def test_grant_against_real_writer_reader_lands_live_grant(monkeypatch, tmp_path
     assert rc == 0, out
     assert _cli.CEILING_SENTENCE in out
 
-    granted, record = fd.check_fleet_delegation("review-schedule")
+    granted, record = fd.check_fleet_delegation(delegable_class)
     assert granted is True
     assert record is not None
     assert record["designated"]["pid"] == os.getpid()
@@ -308,10 +317,19 @@ def test_show_multi_class_record_probes_first_class_but_matches_any_class(monkey
 
     this_proc = psutil.Process(os.getpid())
     now = datetime.now(timezone.utc)
+    # Two REAL classes off the writer's own `DELEGABLE` allow-list (invented
+    # names are rejected at write time now), ordered so the probed
+    # `classes[0]` is NOT the one checked second -- which is the whole point
+    # of this test.
+    first_class, second_class = sorted(fd.DELEGABLE)[:2]
+    assert first_class != second_class, (
+        "this test needs two distinct delegable classes to prove the "
+        f"classes[0] probe does not decide the outcome; DELEGABLE={sorted(fd.DELEGABLE)}"
+    )
     ok, reason = fd.write_fleet_delegation(
         designated_pid=os.getpid(),
         designated_create_time=this_proc.create_time(),
-        classes=["z-class", "a-class"],
+        classes=[first_class, second_class],
         granted_at=now.isoformat().replace("+00:00", "Z"),
         expires_at=(now + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
         granted_by="human",
@@ -319,8 +337,8 @@ def test_show_multi_class_record_probes_first_class_but_matches_any_class(monkey
     )
     assert ok, reason
 
-    granted_first, _ = fd.check_fleet_delegation("z-class")
-    granted_second, _ = fd.check_fleet_delegation("a-class")
+    granted_first, _ = fd.check_fleet_delegation(first_class)
+    granted_second, _ = fd.check_fleet_delegation(second_class)
     assert granted_first is True
     assert granted_second is True
 
@@ -394,10 +412,14 @@ def test_revoke_against_real_writer_reader_clears_live_grant(monkeypatch, tmp_pa
     )
 
     now = datetime.now(timezone.utc)
+    # A real class off the writer's own allow-list — an invented one is
+    # rejected at write time by `fleet_delegation.DELEGABLE`, which would
+    # leave this test revoking a grant that was never written.
+    delegable_class = sorted(fd.DELEGABLE)[0]
     ok, reason = fd.write_fleet_delegation(
         designated_pid=1234,
         designated_create_time=1000.5,
-        classes=["some-class"],
+        classes=[delegable_class],
         granted_at=now.isoformat().replace("+00:00", "Z"),
         expires_at=(now + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
         granted_by="human",
@@ -414,7 +436,7 @@ def test_revoke_against_real_writer_reader_clears_live_grant(monkeypatch, tmp_pa
         _cli._import_module = orig_import
     assert rc == 0
 
-    granted, record = fd.check_fleet_delegation("some-class")
+    granted, record = fd.check_fleet_delegation(delegable_class)
     assert granted is False
     assert record is None
 

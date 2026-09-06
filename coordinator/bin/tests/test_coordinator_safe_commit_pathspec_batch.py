@@ -20,6 +20,20 @@ import types
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
+# WHY THESE TESTS FAKE THE HEAD PROBE.
+# `main()`'s dry-run preview routes through `_split_paths_for_commit_v2`,
+# whose deletion probe (`_paths_tracked_at_head`, one `git ls-tree HEAD`)
+# FAILS CLOSED — it refuses rather than infer a deletion it cannot confirm.
+# A bare `tmp_path` is not a repo, so that probe errored and the two tests
+# below measured the refusal instead of the preview they name. The probe
+# itself is covered against a REAL repo by
+# `test_a_missing_path_is_a_deletion_only_if_head_has_it.py`; what is under
+# test here is `main()`'s dry-run gate, so the probe is faked rather than
+# spawning git a second time for a fact a sibling already pins (the spawn
+# ratchet, `coordinator_core/tests/test_no_new_spawning_tests.py`, would
+# tier this whole file to `cadence` for it, hiding the three fast
+# `_first_invalid_pathspec` tests above with it).
+
 
 def _load_cli_module():
     loader = importlib.machinery.SourceFileLoader(
@@ -97,6 +111,8 @@ def test_pathspec_dry_run_never_dispatches_do_pathspec(monkeypatch, tmp_path):
     preview text would not have caught this regression shape."""
     mod = _load_cli_module()
     monkeypatch.chdir(tmp_path)
+    # Present in the worktree, so the split needs no HEAD probe at all.
+    (tmp_path / "somefile.py").write_text("x = 1\n", encoding="utf-8")
     dispatched = []
     monkeypatch.setattr(mod, "do_pathspec", lambda args: dispatched.append(args))
 
@@ -110,12 +126,18 @@ def test_pathspec_dry_run_preview_matches_split_paths_including_deletion(
 ):
     """Second half of Finding 1: the previewed present/deleted split must
     match `_split_paths_for_commit_v2`'s own classification, including the
-    deletion case (a pathspec absent from the worktree)."""
+    deletion case (a pathspec absent from the worktree but carried by HEAD).
+
+    A path absent from BOTH the worktree and HEAD is REFUSED, not previewed,
+    so the deletion leg needs a HEAD that carries `deleted.py` — faked here
+    at `_paths_tracked_at_head` (see the module-level note above)."""
     mod = _load_cli_module()
     monkeypatch.chdir(tmp_path)
-    present_file = tmp_path / "present.py"
-    present_file.write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "present.py").write_text("x = 1\n", encoding="utf-8")
     missing_path = "deleted.py"
+    monkeypatch.setattr(
+        mod, "_paths_tracked_at_head", lambda root, paths: {missing_path}
+    )
 
     expected_present, expected_deleted = mod._split_paths_for_commit_v2(
         str(tmp_path), ["present.py", missing_path]

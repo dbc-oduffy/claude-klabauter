@@ -605,6 +605,7 @@ def _load_bin_module(claude_klabauter_bin: str, filename: str, module_name: str)
     cached = _BIN_MODULE_CACHE.get(cache_key)
     if cached is not None:
         return cached
+    _ensure_bin_lib_importable(claude_klabauter_bin)
     script_path = Path(claude_klabauter_bin) / filename
     spec = importlib.util.spec_from_file_location(module_name, script_path)
     if spec is None or spec.loader is None:
@@ -616,6 +617,53 @@ def _load_bin_module(claude_klabauter_bin: str, filename: str, module_name: str)
         raise TransportFailure(f"{script_path} not found: {exc}") from exc
     _BIN_MODULE_CACHE[cache_key] = module
     return module
+
+
+
+def _ensure_bin_lib_importable(claude_klabauter_bin: str) -> None:
+    """Make a bare `import lib` inside a loaded bin script resolve to
+    `coordinator/bin/lib` -- the package whose `__init__` is the single
+    declared `sys.path` bootstrap for the bin CLIs.
+
+    Why this is not the loaded script's own problem: those scripts resolve
+    their siblings with a bare `import lib`, which the lib package's own
+    docstring documents as working "because a script's own directory is
+    `sys.path[0]`". That holds when a CLI is EXECUTED. It does not hold when
+    the engine loads one by file path, which is precisely what
+    `_load_bin_module` does -- and the failure is not a clean
+    ModuleNotFoundError for `lib`. On any box with pywin32 installed,
+    `site-packages/win32/lib` is an importable PEP 420 namespace package, so
+    the bare import SUCCEEDS, binds a third-party directory, runs no
+    bootstrap, and the error surfaces one line later on an unrelated-looking
+    `import cc_invoke`. A successful import that does nothing is the same
+    fail-open shape as a reader pointed at a retired root.
+
+    Two things are needed, and the second is the one that is easy to miss:
+    the bin directory has to be on `sys.path` AHEAD of site-packages, and any
+    foreign `lib` already bound in `sys.modules` has to be evicted -- once
+    win32's is cached, no amount of path repair changes what `import lib`
+    returns. Eviction is scoped to a `lib` that is NOT ours; a correctly
+    bound one is left alone, so this stays idempotent and cannot thrash a
+    warm server that ~50 sessions share.
+
+    Warm-path twin: `ops/invoke_from_argv._ensure_bin_dir_importable`, which
+    does the path half for the entrypoint route. It is not shared code
+    because the two resolve the bin directory differently -- that one from
+    `_ENGINE_ROOT`, this one from the operator config's `claude_klabauter_bin` -- and
+    folding them together would force one caller onto the other's root.
+    """
+    bin_dir = str(Path(claude_klabauter_bin))
+    if bin_dir not in sys.path:
+        sys.path.insert(0, bin_dir)
+
+    bound = sys.modules.get("lib")
+    if bound is None:
+        return
+    bound_paths = [os.path.normcase(os.path.abspath(p)) for p in getattr(bound, "__path__", [])]
+    ours = os.path.normcase(os.path.abspath(os.path.join(bin_dir, "lib")))
+    if ours in bound_paths:
+        return
+    del sys.modules["lib"]
 
 
 def _resolve_claude_klabauter_bin() -> str:

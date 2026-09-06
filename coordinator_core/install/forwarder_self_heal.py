@@ -258,6 +258,7 @@ def _self_heal_forwarders_inner() -> None:
     from coordinator_core.locked_write import LockTimeout, held_lock
     from coordinator_core.install.substrate import (
         _derive_agent_helper_target_map,
+        _NO_LAUNCHER_FOR_THIS_NAME,
         _cut_over_to_native_door,
         _write_agent_forwarder,
         _union_native_forwarder_manifest,
@@ -307,9 +308,16 @@ def _self_heal_forwarders_inner() -> None:
                 if _installed_forwarder_present(bin_dst, name):
                     continue
                 if door_root is not None:
-                    if _cut_over_to_native_door(
+                    cutover = _cut_over_to_native_door(
                         name, bin_dst, False, engine_root=door_root
-                    ) is not None:
+                    )
+                    if cutover is _NO_LAUNCHER_FOR_THIS_NAME:
+                        # No launcher of any kind for this name, so nothing
+                        # was written and nothing goes in the native
+                        # manifest -- `is not None` alone would have
+                        # recorded a write that did not happen.
+                        continue
+                    if cutover is not None:
                         native_written.add(name)
                         continue
                 # Doorless root: the bare Python forwarder is all that can be

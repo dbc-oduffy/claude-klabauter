@@ -67,6 +67,47 @@ def _invoke(*extra_args: str) -> int:
             return int(exc.code) if exc.code is not None else 0
 
 
+def _run_double(returncode: int = 0, stderr=None):
+    """A `subprocess.run` double that answers the locator's probes and the
+    delegation separately.
+
+    `main()` resolves its child through `_queue_append_locator.find_cli_cmd`
+    (since 6afa6df8d5, which retired this CLI's own `_QUEUE_APPEND` constant
+    and hand-rolled interpreter resolution). That locator spawns a `--help`
+    liveness probe per candidate before committing to one, so a blanket
+    `return_value` both mis-answers those probes and buries the one spawn
+    under test among them. A two-element probe argv is a bare-PATH candidate,
+    refused here as it is on a box where the sibling is not on Windows PATH;
+    a three-element argv is the interpreter+sibling candidate the locator
+    falls through to, which is accepted. Anything else is the delegation and
+    carries the caller's `returncode`.
+    """
+    delegation = unittest.mock.MagicMock()
+    delegation.returncode = returncode
+    delegation.stderr = stderr
+
+    def _dispatch(cmd, *args, **kwargs):
+        if len(cmd) > 1 and cmd[-1] == "--help":
+            probe = unittest.mock.MagicMock()
+            probe.returncode = 0 if len(cmd) == 3 else 1
+            return probe
+        return delegation
+
+    return unittest.mock.MagicMock(side_effect=_dispatch)
+
+
+def _delegation_call(mock_run):
+    """The one non-probe call — the spawn of coordinator-queue-append.
+
+    Asserts there is exactly one: the wrapper delegates once or not at all.
+    """
+    calls = [c for c in mock_run.call_args_list if c[0][0][-1] != "--help"]
+    assert len(calls) == 1, (
+        f"expected exactly one delegation spawn, got {len(calls)}: {calls}"
+    )
+    return calls[0]
+
+
 # ---------------------------------------------------------------------------
 # AC3 — delegation: subprocess is invoked with coordinator-queue-append
 #
@@ -79,37 +120,41 @@ def _invoke(*extra_args: str) -> int:
 
 def test_subprocess_called_with_queue_append():
     """AC3: subprocess.run is called with coordinator-queue-append as the target."""
-    mock_result = unittest.mock.MagicMock()
-    mock_result.returncode = 0
+    mock_run = _run_double(returncode=0)
 
     with (
         unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
-        unittest.mock.patch("subprocess.run", return_value=mock_result) as mock_run,
+        unittest.mock.patch("subprocess.run", mock_run),
     ):
         rc = _invoke()
 
     assert rc == 0
-    mock_run.assert_called_once()
-    cmd = mock_run.call_args[0][0]
-    # cmd = [interpreter, _QUEUE_APPEND, "--schema", "lessons", ...]
-    assert str(_cli_mod._QUEUE_APPEND) in cmd, (
-        "coordinator-queue-append must be the subprocess delegation target"
-    )
+    cmd = _delegation_call(mock_run)[0][0]
+    # cmd = [*find_cli_cmd(...), "--schema", "lessons", ...]
+    assert any(
+        os.path.basename(part).startswith("coordinator-queue-append") for part in cmd
+    ), "coordinator-queue-append must be the subprocess delegation target"
 
 
 def test_subprocess_cmd_starts_with_interpreter():
-    """AC3: delegation uses the current Python interpreter as cmd[0]."""
-    mock_result = unittest.mock.MagicMock()
-    mock_result.returncode = 0
+    """AC3: delegation runs queue-append as Python, never as a bare exec.
+
+    The interpreter prefix is `_queue_append_locator.find_cli_cmd`'s output,
+    not something this CLI derives: the locator falls through to
+    interpreter+sibling exactly when no bare-PATH candidate answers `--help`,
+    which is the Windows case (CreateProcess cannot launch an extensionless
+    script — WinError 193). `_run_double` reproduces that fall-through, so
+    what is asserted here is that the resolved prefix reaches argv verbatim.
+    """
+    mock_run = _run_double(returncode=0)
 
     with (
         unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
-        unittest.mock.patch("subprocess.run", return_value=mock_result) as mock_run,
+        unittest.mock.patch("subprocess.run", mock_run),
     ):
         _invoke()
 
-    cmd = mock_run.call_args[0][0]
-    # Verify cmd[0] is a python interpreter path (same interpreter as the test runner).
+    cmd = _delegation_call(mock_run)[0][0]
     interpreter_path = cmd[0]
     assert "python" in interpreter_path.lower(), (
         "cmd[0] must be a Python interpreter — ensures subprocess runs queue-append as Python"
@@ -118,16 +163,15 @@ def test_subprocess_cmd_starts_with_interpreter():
 
 def test_subprocess_cmd_includes_schema_lessons():
     """AC3: delegation passes --schema lessons to coordinator-queue-append."""
-    mock_result = unittest.mock.MagicMock()
-    mock_result.returncode = 0
+    mock_run = _run_double(returncode=0)
 
     with (
         unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
-        unittest.mock.patch("subprocess.run", return_value=mock_result) as mock_run,
+        unittest.mock.patch("subprocess.run", mock_run),
     ):
         _invoke()
 
-    cmd = mock_run.call_args[0][0]
+    cmd = _delegation_call(mock_run)[0][0]
     assert "--schema" in cmd, "--schema flag must be in the delegation command"
     schema_idx = cmd.index("--schema")
     assert cmd[schema_idx + 1] == "lessons", "--schema value must be 'lessons'"
@@ -135,16 +179,15 @@ def test_subprocess_cmd_includes_schema_lessons():
 
 def test_subprocess_cmd_passes_through_title_and_body():
     """AC3: --title and --body are forwarded to coordinator-queue-append."""
-    mock_result = unittest.mock.MagicMock()
-    mock_result.returncode = 0
+    mock_run = _run_double(returncode=0)
 
     with (
         unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
-        unittest.mock.patch("subprocess.run", return_value=mock_result) as mock_run,
+        unittest.mock.patch("subprocess.run", mock_run),
     ):
         _invoke()
 
-    cmd = mock_run.call_args[0][0]
+    cmd = _delegation_call(mock_run)[0][0]
     assert "--title" in cmd, "--title must be forwarded to queue-append"
     assert "--body" in cmd, "--body must be forwarded to queue-append"
     title_idx = cmd.index("--title")
@@ -155,12 +198,12 @@ def test_subprocess_cmd_passes_through_title_and_body():
 
 def test_exit_code_propagated_from_queue_append():
     """AC3: subprocess returncode from coordinator-queue-append is propagated."""
-    mock_result = unittest.mock.MagicMock()
-    mock_result.returncode = 2
+    mock_run = _run_double(returncode=2, stderr=b"")
 
     with (
         unittest.mock.patch.object(_cli_mod, "_dedup_check", return_value=[]),
-        unittest.mock.patch("subprocess.run", return_value=mock_result),
+        unittest.mock.patch("subprocess.run", mock_run),
+        unittest.mock.patch("sys.stderr", io.StringIO()),
     ):
         rc = _invoke()
 
@@ -222,26 +265,24 @@ def test_duplicate_emits_possible_duplicate_to_stderr(tmp_path):
 
 def test_force_flag_bypasses_dedup_and_delegates(tmp_path):
     """AC3: --force bypasses the dedup pre-check and proceeds to delegation."""
-    mock_result = unittest.mock.MagicMock()
-    mock_result.returncode = 0
+    mock_run = _run_double(returncode=0)
 
     tmpdir = str(tmp_path)
     _write_lesson_yaml(tmpdir, "Test lesson about foobar pattern usage")
 
     with (
         unittest.mock.patch.object(_cli_mod, "_lessons_dir", return_value=tmpdir),
-        unittest.mock.patch("subprocess.run", return_value=mock_result) as mock_run,
+        unittest.mock.patch("subprocess.run", mock_run),
     ):
         rc = _invoke("--force")
 
     assert rc == 0, "--force must bypass dedup and succeed"
-    mock_run.assert_called_once()
+    _delegation_call(mock_run)
 
 
 def test_no_duplicate_delegates_normally(tmp_path):
     """AC3: when no duplicate exists, delegation proceeds without obstruction."""
-    mock_result = unittest.mock.MagicMock()
-    mock_result.returncode = 0
+    mock_run = _run_double(returncode=0)
 
     tmpdir = str(tmp_path)
     # Existing lesson with a completely different title — 0% overlap
@@ -249,12 +290,12 @@ def test_no_duplicate_delegates_normally(tmp_path):
 
     with (
         unittest.mock.patch.object(_cli_mod, "_lessons_dir", return_value=tmpdir),
-        unittest.mock.patch("subprocess.run", return_value=mock_result) as mock_run,
+        unittest.mock.patch("subprocess.run", mock_run),
     ):
         rc = _invoke()
 
     assert rc == 0
-    mock_run.assert_called_once()
+    _delegation_call(mock_run)
 
 
 def test_below_threshold_no_match(tmp_path):
@@ -265,20 +306,19 @@ def test_below_threshold_no_match(tmp_path):
     Intersection = {test, lesson, about} = 3; overlap = 3/6 = 0.50 < 0.60 → no match.
     Review: code-reviewer strang-08-slice3 — (F9/dispatch-F8) threshold boundary coverage.
     """
-    mock_result = unittest.mock.MagicMock()
-    mock_result.returncode = 0
+    mock_run = _run_double(returncode=0)
 
     tmpdir = str(tmp_path)
     _write_lesson_yaml(tmpdir, "Test lesson about routing unique words")
 
     with (
         unittest.mock.patch.object(_cli_mod, "_lessons_dir", return_value=tmpdir),
-        unittest.mock.patch("subprocess.run", return_value=mock_result) as mock_run,
+        unittest.mock.patch("subprocess.run", mock_run),
     ):
         rc = _invoke()
 
     assert rc == 0, "below-threshold overlap must not block delegation"
-    mock_run.assert_called_once()
+    _delegation_call(mock_run)
 
 
 def test_at_threshold_blocks_delegation(tmp_path):
@@ -305,18 +345,17 @@ def test_at_threshold_blocks_delegation(tmp_path):
 
 def test_empty_lessons_dir_delegates_normally(tmp_path):
     """AC3: empty lessons directory → no dedup match → delegation proceeds."""
-    mock_result = unittest.mock.MagicMock()
-    mock_result.returncode = 0
+    mock_run = _run_double(returncode=0)
 
     tmpdir = str(tmp_path)
     with (
         unittest.mock.patch.object(_cli_mod, "_lessons_dir", return_value=tmpdir),
-        unittest.mock.patch("subprocess.run", return_value=mock_result) as mock_run,
+        unittest.mock.patch("subprocess.run", mock_run),
     ):
         rc = _invoke()
 
     assert rc == 0
-    mock_run.assert_called_once()
+    _delegation_call(mock_run)
 
 
 # ---------------------------------------------------------------------------

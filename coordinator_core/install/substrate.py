@@ -1311,6 +1311,34 @@ class _StaticFamilyAlreadyServed:
 _STATIC_FAMILY_ALREADY_SERVED = _StaticFamilyAlreadyServed()
 
 
+class _NoLauncherForThisName:
+    """Return marker from `_write_native_door_forwarder` /
+    `_cut_over_to_native_door`: `launcher_is_installable` is false for this
+    name, so NO launcher of any kind is to be written -- not the native
+    image, and not the Python forwarder either.
+
+    THE THIRD MEANING `None` WAS CARRYING. `_write_native_door_forwarder`'s
+    `launcher_is_installable`-false branch states its own intent in the
+    comment above it: "skipping the write leaves the name off PATH entirely
+    -- which is the intended end state here." It then returned `None`, which
+    is the caller's signal for the DOORLESS fallback ("no door, write the
+    Python pair"). So the installer printed "no launcher installed", removed
+    the stale image, and immediately wrote an EXTENSIONLESS Python forwarder
+    for the same name -- a file Windows cannot execute at all (no PATHEXT
+    match), for 14 repo-side names (`publish`, `percolate-push`,
+    `percolate-round`, `coordinator-publish`, `engine-gap-lint`, ...).
+
+    This is the same conflation `_STATIC_FAMILY_ALREADY_SERVED` was minted
+    for, one case later: that sentinel exists because "`None` alone can no
+    longer stand for 'write nothing here'", and this branch never got its
+    own. DISCRIMINATE WITH `is`, exactly as for the static-family marker --
+    every non-`Path` return here is distinguished by identity, never by
+    truthiness."""
+
+
+_NO_LAUNCHER_FOR_THIS_NAME = _NoLauncherForThisName()
+
+
 def _door_engine_root() -> Optional[Path]:
     """The engine root the native door leg installs FROM -- resolved through
     `engine_root_for_install.resolve_engine_root_for_install()`, never from
@@ -1369,7 +1397,7 @@ def _cut_over_to_native_door(
     *,
     engine_root: Optional[Path],
     static_family_names: "frozenset[str]" = frozenset(),
-) -> "Union[Path, None, _StaticFamilyAlreadyServed]":
+) -> "Union[Path, None, _StaticFamilyAlreadyServed, _NoLauncherForThisName]":
     """Attempts the C5 cutover for one door-eligible `name`, returning:
 
       - the native image `Path` on a successful cutover;
@@ -1432,6 +1460,8 @@ def _cut_over_to_native_door(
     if engine_root is None:
         return None
     native_dst = _write_native_door_forwarder(name, bin_dst, check_only, engine_root=engine_root)
+    if native_dst is _NO_LAUNCHER_FOR_THIS_NAME:
+        return native_dst
     if native_dst is None or check_only:
         return native_dst
     from coordinator_core.install import door_install
@@ -1442,7 +1472,7 @@ def _cut_over_to_native_door(
 
 def _write_native_door_forwarder(
     name: str, bin_dst: Path, check_only: bool, *, engine_root: Path
-) -> Optional[Path]:
+) -> "Union[Path, None, _NoLauncherForThisName]":
     """Writes the native `.exe`-direct door forwarder for one door-eligible
     `name` (C5) via `door_install.install_named_forwarder` (hardlink-to-
     the-installed-door-or-copy; see that function's own docstring for the
@@ -1538,7 +1568,10 @@ def _write_native_door_forwarder(
         )
         if not check_only:
             door_install.remove_stale_named_forwarder(bin_dst, name)
-        return None
+        # NOT `None`: that is the doorless-fallback signal, and taking it
+        # here made the caller write the very forwarder the removal above
+        # just took back. See `_NoLauncherForThisName`.
+        return _NO_LAUNCHER_FOR_THIS_NAME
 
     # A FAILED BUILD DEGRADES, IT DOES NOT ABORT (C2, dispatch brief F-013,
     # part b). `install_named_forwarder` -> `install_door` -> (POSIX)
@@ -3776,6 +3809,11 @@ def _write_agent_helper_forwarders(
                 )
                 if native_dst is _STATIC_FAMILY_ALREADY_SERVED:
                     continue
+                if native_dst is _NO_LAUNCHER_FOR_THIS_NAME:
+                    # Off PATH entirely is the intended end state -- writing
+                    # the Python pair here is what put an unexecutable
+                    # extensionless file on Windows for 14 names.
+                    continue
                 if native_dst is not None:
                     agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))
                     continue
@@ -3802,6 +3840,11 @@ def _write_agent_helper_forwarders(
                     static_family_names=static_family_names,
                 )
                 if native_dst is _STATIC_FAMILY_ALREADY_SERVED:
+                    continue
+                if native_dst is _NO_LAUNCHER_FOR_THIS_NAME:
+                    # Off PATH entirely is the intended end state -- writing
+                    # the Python pair here is what put an unexecutable
+                    # extensionless file on Windows for 14 names.
                     continue
                 if native_dst is not None:
                     agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(native_dst)))

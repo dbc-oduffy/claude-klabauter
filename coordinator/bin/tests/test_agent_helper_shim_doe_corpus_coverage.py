@@ -4,8 +4,10 @@ Makes it durable that (a) every `<settings-home>/bin/<cli>`-shaped reference
 found anywhere in the DoE-claude doctrine corpus (skills/commands/agents/
 pipelines/snippets) resolves to a CLI that the real installer (`substrate.py`'s
 `_install_bin_resolvers`) actually produces a forwarder for (AC8 — fail loud
-on a corpus/install drift), and (b) every derived agent-helper forwarder has
-a macOS/Windows-parity `.cmd` sibling in `<settings-home>/bin/` (AC7).
+on a corpus/install drift), and (b) every derived agent-helper the installer
+writes a forwarder for is reachable by BARE NAME on the platform running this
+test (AC7) — the `.cmd` sibling this once asserted is retired by C5's native
+image; see AC7's own section comment for the substitution.
 
 The former `~/.claude/bin/` compat mirror this test used to ALSO assert
 parity against (Step 3c-compat) is retired as of the owns-zero-claude-bin
@@ -106,10 +108,42 @@ for _p in (str(_CLAUDE_KLABAUTER_ROOT), str(_BIN_DIR / "lib")):
 
 from coordinator_core.install.substrate import (  # noqa: E402
     _derive_agent_helper_target_map,
-    _agent_cmd_dest_name,
     _install_bin_resolvers,
     _resolve_baked_python_bin,
 )
+from coordinator_core.install.door_install import named_forwarder_path  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# Installed-filename -> bare CLI name.
+#
+# C5 (docs/plans/2026-08-26-every-forwarder-that-can-reach-the-door-does.md)
+# made the per-name forwarder a NATIVE IMAGE, so on Windows the file on disk
+# is `<cli>.exe` and PATHEXT is what resolves the bare `<cli>` a corpus
+# invocation writes; on POSIX the file IS the bare name. Comparing corpus
+# references against raw `iterdir()` names therefore reported every one of
+# ~350 forwarders as missing on Windows and none of them on macOS — a
+# platform-shaped false negative, not a corpus/install drift.
+#
+# The suffix is read back out of `named_forwarder_path`, the writer's own
+# naming rule, rather than hardcoded here: reader and writer cannot then
+# drift apart on the suffix, which is the same defence
+# `_sweep_orphaned_agent_helpers` already applies to this rule.
+# ---------------------------------------------------------------------------
+
+_NATIVE_FORWARDER_SUFFIX = named_forwarder_path(Path("."), "cli").name[len("cli"):]
+
+
+def _installed_cli_names(bin_dir: Path) -> "set[str]":
+    """Every bare CLI name `bin_dir` answers to, plus the raw filenames."""
+    names: "set[str]" = set()
+    for p in bin_dir.iterdir():
+        if not p.is_file():
+            continue
+        names.add(p.name)
+        if _NATIVE_FORWARDER_SUFFIX and p.name.endswith(_NATIVE_FORWARDER_SUFFIX):
+            names.add(p.name[: -len(_NATIVE_FORWARDER_SUFFIX)])
+    return names
 
 # `coordinator_registry` raises at IMPORT time (not just when `doe_root()` is
 # called) when its manifest is unresolvable via any rung of its own
@@ -271,7 +305,7 @@ def test_every_referenced_cli_is_in_generator_installed_forwarder_set(_doe_root,
     )
 
     bin_dst = _installed_dirs
-    expected_names = {p.name for p in bin_dst.iterdir() if p.is_file()}
+    expected_names = _installed_cli_names(bin_dst)
     assert expected_names, (
         f"fresh scratch install into {bin_dst} produced zero files — either "
         "coordinator/bin/ is unexpectedly empty on this checkout, or the "
@@ -327,7 +361,7 @@ def test_real_installed_settings_home_matches_generated_set_when_present() -> No
     bin_dir = _resolve_settings_home_bin()
     if not bin_dir.is_dir():
         pytest.skip(f"no installed settings-home bin dir at {bin_dir} — nothing to cross-check")
-    installed_names = {p.name for p in bin_dir.iterdir() if p.is_file()}
+    installed_names = _installed_cli_names(bin_dir)
     if not installed_names:
         pytest.skip(f"{bin_dir} exists but is empty — nothing to cross-check")
 
@@ -341,14 +375,26 @@ def test_real_installed_settings_home_matches_generated_set_when_present() -> No
 
 
 # ---------------------------------------------------------------------------
-# AC7 — macOS/Windows .cmd parity for every derived agent-helper forwarder,
-# in the single `<settings-home>/bin/` write location (the former
-# `~/.claude/bin/` compat-mirror second location is retired — see module
-# docstring). This validates the INSTALLER itself, so it must actually run
-# an install — but always into pytest's own cross-platform `tmp_path`
-# scratch directory, never the real machine's settings home. That makes the
-# test itself run and pass identically on macOS and Windows, rather than
-# merely asserting about Windows artifacts from a Mac.
+# AC7 — bare-name reachability on THIS platform for every derived
+# agent-helper forwarder the installer actually writes, in the single
+# `<settings-home>/bin/` write location (the former `~/.claude/bin/`
+# compat-mirror second location is retired — see module docstring). This
+# validates the INSTALLER itself, so it must actually run an install — but
+# always into pytest's own cross-platform `tmp_path` scratch directory,
+# never the real machine's settings home. That makes the test itself run and
+# pass identically on macOS and Windows, rather than merely asserting about
+# Windows artifacts from a Mac.
+#
+# Originally phrased as `.cmd` parity: a forwarder installed with no `.cmd`
+# twin was a live Windows regression, because the `.cmd` was the only file
+# PATHEXT could resolve for a bare name. C5 replaced that shim with a native
+# `.exe` image — `substrate.py`'s own note is "THE `.cmd` NEVER SOLVED A
+# PROBLEM THE `.exe` DOES NOT. PATHEXT ranks .EXE" — so a fresh install now
+# writes zero agent-helper `.cmd` files by design, and the old phrasing
+# failed for every derived name on Windows. The GUARANTEE is unchanged and
+# is what is asserted below: no agent-helper is installed in a shape only
+# one platform can reach by bare name. `named_forwarder_path` is the
+# writer's own rule for what that shape is per platform.
 # ---------------------------------------------------------------------------
 
 def _install_shims_to_scratch(doe_root: Path, tmp_path: Path) -> Path:
@@ -393,9 +439,15 @@ def _installed_dirs(_doe_root, tmp_path_factory) -> Path:
 
 
 def test_derived_agent_helper_forwarders_have_cmd_parity(_installed_dirs) -> None:
-    """AC7: for every name in `_derive_agent_helper_target_map()`'s live
-    output, a `.cmd` sibling must exist in `<settings-home>/bin/`. A
-    forwarder installed with no `.cmd` twin is a live Windows regression.
+    """AC7: every derived agent-helper the installer writes a forwarder for
+    must be reachable by BARE NAME on the platform running this test.
+
+    `named_forwarder_path` is the writer's own per-platform rule for that
+    file (`<name>.exe` on Windows, bare `<name>` on POSIX). A name present
+    in `<settings-home>/bin/` under some OTHER shape only — a `.cmd`, a
+    `.ps1`, a suffixed script — is the live regression this pins: the
+    corpus invokes `"$CC_BIN/<name>"` with no extension, so a forwarder one
+    platform cannot resolve from that is a 127 there and nowhere else.
     """
     bin_dst = _installed_dirs
     derived_names = set(_derive_agent_helper_target_map(_AGENT_BIN))
@@ -407,21 +459,30 @@ def test_derived_agent_helper_forwarders_have_cmd_parity(_installed_dirs) -> Non
         "validate AC7 parity with an empty derived set."
     )
 
+    # A name the installer declined to write anything for at all is out of
+    # scope here — it is AC8's business, and `_install_bin_resolvers` says so
+    # out loud per name ("no launcher installed -- <clone> carries no ...")
+    # for the repo-side tools that are deliberately not published.
+    installed_stems = {
+        p.name[: -len(p.suffix)] if p.suffix else p.name
+        for p in bin_dst.iterdir()
+        if p.is_file()
+    }
+
     missing_parity: "list[str]" = []
     for name in sorted(derived_names):
-        cmd_source = _AGENT_BIN / (Path(name).stem + ".cmd")
-        if not cmd_source.is_file():
-            # No .cmd twin ships for this CLI at all — nothing to check
-            # parity against (matches _install_bin_resolvers' own
-            # cmd_src.is_file() gate before installing a .cmd sibling).
+        if name not in installed_stems:
             continue
-        dest_name = _agent_cmd_dest_name(name)
-        settings_home_cmd = bin_dst / dest_name
-        if not settings_home_cmd.is_file():
-            missing_parity.append(f"{name!r} ({dest_name}): missing at {settings_home_cmd}")
+        reachable = named_forwarder_path(bin_dst, name)
+        if not reachable.is_file():
+            present = sorted(p.name for p in bin_dst.glob(name + ".*"))
+            missing_parity.append(
+                f"{name!r}: no bare-name-reachable {reachable.name} "
+                f"(present instead: {present})"
+            )
 
     assert not missing_parity, (
-        "AC7 macOS/Windows .cmd parity violation — "
+        "AC7 macOS/Windows bare-name reachability violation — "
         + "; ".join(missing_parity)
     )
 

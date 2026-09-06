@@ -122,7 +122,7 @@ from coordinator_core.hooks.receiver_state_sensor import _handler as _receiver_s
 from coordinator_core.hooks.runtime_tripwire_em_check import _handler as _runtime_tripwire_em_check_handler
 from coordinator_core.hooks.watchdog_undischarged_next_move import _handler as _watchdog_undischarged_next_move_handler
 from coordinator_core.ipc import register_op
-from coordinator_core.session.machinery_paths import share_dir as _share_dir
+from coordinator_core.session.machinery_paths import share_dirs as _share_dirs
 
 # ---------------------------------------------------------------------------
 # guard-kira-verdict-routed.py — verbatim port of its frontmatter-only
@@ -348,23 +348,41 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
             "could not resolve repo root from cwd"
         )
 
-    share_dir = _share_dir(repo_root, session_id)
-    try:
-        filenames = [
-            f
-            for f in os.listdir(share_dir)
-            if f.endswith(".md") and not f.endswith(".blocks.md")
-        ]
-    except OSError:
-        return post_advisory(
-            f"[guard] guard-kira-verdict-routed could not evaluate: "
-            f"could not list share dir {share_dir}"
-        )
-
+    # A READER consults every share root, not just the live one. This guard
+    # was the reported instance of the fail-open class: pointed at a root
+    # sidecars no longer land in, `os.listdir` reports ABSENCE, not error, so
+    # the guard returns "nothing to see" forever instead of failing. Reading
+    # only the current root has the same shape one relocation later, and for
+    # any session whose sidecars predate the move.
+    share_dirs = _share_dirs(repo_root, session_id)
     entries = []
-    for fname in filenames:
-        meta = _kira_read_frontmatter(os.path.join(share_dir, fname))
-        entries.append((fname, meta))
+    listed_any = False
+    unreadable: list = []
+    for share_dir in share_dirs:
+        try:
+            filenames = [
+                f
+                for f in os.listdir(share_dir)
+                if f.endswith(".md") and not f.endswith(".blocks.md")
+            ]
+        except FileNotFoundError:
+            # A root that does not exist is the NORMAL state for the legacy
+            # leg, and for the live leg in a session that dispatched nobody.
+            # Absence is not an evaluation failure.
+            continue
+        except OSError:
+            unreadable.append(share_dir)
+            continue
+        listed_any = True
+        for fname in filenames:
+            meta = _kira_read_frontmatter(os.path.join(share_dir, fname))
+            entries.append((fname, meta))
+
+    if unreadable and not listed_any:
+        return post_advisory(
+            "[guard] guard-kira-verdict-routed could not evaluate: "
+            "could not list share dir " + ", ".join(unreadable)
+        )
 
     if not entries:
         return no_advisory()

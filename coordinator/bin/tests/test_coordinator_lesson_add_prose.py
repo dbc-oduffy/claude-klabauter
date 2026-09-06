@@ -183,6 +183,18 @@ class MultilineInlineWhyIsRefusedTest(unittest.TestCase):
 
 
 class WhyFileRoundTripsByteForByteTest(unittest.TestCase):
+    """The FILE is forwarded, not the prose read out of it.
+
+    Resolving `--why-file` back to an inline `--why` is the seam that
+    swallowed multi-line lessons: `coordinator-queue-append` refuses a
+    newline-bearing `--why` by name and answers "pass --why-file instead" --
+    advice the caller had already taken one hop up. The wrapper therefore
+    hands the child the same `--why-file` it was given (queue-append parses
+    it: see its own `--why-file` argument and `resolve_optional_prose` call),
+    and byte-for-byte is asserted on what the child will read, not on an
+    argv value that could never survive this leg.
+    """
+
     def test_why_file_sibling_carries_multiline_text_verbatim(self):
         path = _write(_MULTILINE_WHY)
         self.addCleanup(lambda: Path(path).unlink(missing_ok=True))
@@ -196,8 +208,14 @@ class WhyFileRoundTripsByteForByteTest(unittest.TestCase):
         )
         self.assertEqual(rc, 0)
         cmd = _delegated_cmd(mock_run)
-        idx = cmd.index("--why")
-        self.assertEqual(cmd[idx + 1], _MULTILINE_WHY)
+        self.assertNotIn(
+            "--why", cmd, "the resolved prose must not be forwarded inline"
+        )
+        idx = cmd.index("--why-file")
+        self.assertEqual(cmd[idx + 1], path)
+        self.assertEqual(
+            Path(path).read_text(encoding="utf-8"), _MULTILINE_WHY
+        )
 
 
 class AbsentWhyBehavesAsTodayTest(unittest.TestCase):

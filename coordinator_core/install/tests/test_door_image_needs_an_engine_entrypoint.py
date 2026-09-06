@@ -110,11 +110,62 @@ def test_a_name_the_engine_cannot_serve_gets_no_launcher(tmp_path, capsys):
         "publish", bin_dst, check_only=False, engine_root=root
     )
 
-    assert result is None
+    # `is _NO_LAUNCHER_FOR_THIS_NAME`, not `is None`. This assertion read
+    # `is None` until 2026-09-06 and was a FALSE GREEN over the defect the
+    # docstring above already forbade: `None` is the caller's DOORLESS-
+    # FALLBACK signal ("no door, write the Python pair"), so
+    # `_write_agent_helper_forwarders` answered this branch by writing an
+    # extensionless Python forwarder -- unexecutable on Windows, no PATHEXT
+    # match -- for the same 14 names it had just printed "no launcher
+    # installed" for. The test could not see it because it only checked the
+    # NATIVE image path, which this function indeed never wrote; the bad
+    # file came from the caller, one layer up. Both halves are now pinned:
+    # the identity here, and the end state in the caller-level test below.
+    assert result is substrate._NO_LAUNCHER_FOR_THIS_NAME
     assert not door_install.named_forwarder_path(bin_dst, "publish").exists()
+    assert not (bin_dst / "publish").exists()
     err = capsys.readouterr().err
     assert "no launcher installed" in err
     assert "python coordinator/bin/publish.py" in err
+
+
+def test_the_forwarder_loop_writes_nothing_at_all_for_an_unservable_name(tmp_path):
+    """The regression this file's unit tests could not see.
+
+    `_write_native_door_forwarder` declining to write the native image is
+    only half the end state; the other half is the CALLER not writing a
+    Python forwarder in its place. Until 2026-09-06 it did: the decline
+    returned `None`, which is the doorless-fallback signal, so
+    `_write_agent_helper_forwarders` printed "no launcher installed",
+    removed the stale image, and then wrote `<bin_dst>/publish` -- an
+    extensionless Python file Windows cannot execute at all, for 14 names.
+
+    Every unit test in this file passed throughout, because each one asks
+    the function that correctly wrote nothing. This one asks the loop, and
+    asserts over the DIRECTORY rather than a return value: an unservable
+    name must leave no file behind under any extension, while a servable
+    one in the same pass still gets its launcher (so the assertion cannot
+    be satisfied by the loop simply doing nothing).
+    """
+    root = _engine_root(tmp_path, names=["coordinator-invoke"])
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+
+    substrate._write_agent_helper_forwarders(
+        {"publish": "coordinator/bin/publish.py"},
+        bin_dst,
+        False,
+        engine_root=root,
+    )
+
+    left_behind = sorted(
+        p.name for p in bin_dst.iterdir() if p.name == "publish" or p.name.startswith("publish.")
+    )
+    assert left_behind == [], (
+        "an unservable name must leave NO launcher of any kind -- found "
+        f"{left_behind}. An extensionless entry here is the Windows-"
+        "unexecutable Python forwarder this test exists to keep out."
+    )
 
 
 def test_a_stale_launcher_from_an_earlier_install_is_taken_back(tmp_path):

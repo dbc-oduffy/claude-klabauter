@@ -25,6 +25,7 @@ silently stop tracking a token added/removed there.
 from __future__ import annotations
 
 import ast
+import re
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
@@ -420,12 +421,90 @@ def _embedded_in_larger_identifier(text: str, start: int, end: int) -> bool:
     return before in _IDENT_CHARS or after in _IDENT_CHARS
 
 
+#: Functional-identifier exemptions for shapes that occur only in this tree,
+#: so they have no `_codename_classes._EXEMPTION_PATTERNS` row to draw on.
+#: Each is one named, dated SHAPE, never a file or a token -- a blanket
+#: exemption for `claude-klabauter` would retire the ratchet for the whole
+#: family the same week it was pinned.
+#:
+#: Added 2026-09-06, when `claude-klabauter`/`claude-klabauter` joined
+#: `PINNED_UNREACHABLE_TOKENS` (`_codename_classes._PINNED_FAMILY_ROOTS`
+#: 2026-08-30 addition + `_CLAUDE_KLABAUTER_TOKENS`) and this sweep went red
+#: across `coordinator/bin` on prose AND on identifiers. The prose was fixed
+#: at the emission sites; these four are not prose. The same reasoning
+#: `_EXEMPTION_PATTERNS` records for `repos.<key>` applies verbatim: the
+#: reader TYPES THIS BACK.
+_BIN_EXEMPTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(r"\bpublish\.mirrors\.[a-z][a-z0-9_]*\.[a-z0-9_]+\b"),
+        "publish-target config key of the publish.mirrors.<mirror>.<field> form "
+        "(klabauter-channel.py's _TRACK_REF_KEY) -- the same dotted-registry-path "
+        "class _EXEMPTION_PATTERNS already exempts as repos.<key>, and the lever "
+        "the message tells the reader to set",
+    ),
+    (
+        re.compile(
+            r"(?:repos\.[a-z][a-z0-9_]*|COORDINATOR_ENGINE_ROOT=)\s*/path/to/claude-klabauter"
+        ),
+        "the placeholder argument of a remediation command the reader retypes with a real "
+        "path substituted (`machine-local set repos.claude_klabauter /path/to/claude-klabauter`, "
+        "`COORDINATOR_ENGINE_ROOT=/path/to/claude-klabauter`). Not this module's own reading: "
+        "coordinator_core ratified this exact text as a SUBJECT-class site in "
+        "`tests/test_foreign_identity_subject_exemptions.py` (`tracker_holder.py`, "
+        "`/path/to/claude-klabauter`), and `test_cc_invoke_timeout_remedy.py` pins the string "
+        "byte-for-byte. Anchored on the key or env-var that precedes it, so a bare prose "
+        "mention of the repo still fires",
+    ),
+    (
+        re.compile(r"\bengine\.working_repos\.[a-z][a-z0-9_]*\b"),
+        "working-repo registry key of the engine.working_repos.<key> form "
+        "(workday-start-health-probes.py's WORKING-REPO PROBE) -- same dotted-key "
+        "class again; the probe's whole remedy is that the reader writes this key",
+    ),
+    (
+        re.compile(r"\bclaude-klabauter(?:-[a-z0-9]+)+\b"),
+        "a registered publish-target ROW NAME of the hyphen-compound form "
+        "(claude-klabauter-coordinator-bin, -publish-repo-toplevel, -bin) -- the "
+        "name the reader matches against setup/publish-targets.portable, and the "
+        "hyphen-joined-identifier case this module's own extraction note flags as "
+        "not caught by _embedded_in_larger_identifier. Anchored on requiring at "
+        "least one hyphen segment, so BARE `claude-klabauter` in prose still fires",
+    ),
+    (
+        re.compile(r"\(claude-klabauter\)"),
+        "the token standing alone in parentheses is help text quoting an accepted "
+        "ARGUMENT VALUE (percolate-mirror.py's `mirror` positional accepts the bare "
+        "mirror name) -- the reader types it as an argv word. Deliberately anchored "
+        "on the parentheses so ordinary prose naming the repo still fires",
+    ),
+)
+
+
+def _bin_exemption_spans(text: str) -> list[tuple[int, int]]:
+    spans: list[tuple[int, int]] = []
+    for pattern, _reason in _BIN_EXEMPTION_PATTERNS:
+        spans.extend(m.span() for m in pattern.finditer(text))
+    return spans
+
+
 def find_token_violations(text: str) -> list[str]:
     """Every `PINNED_UNREACHABLE_TOKENS` member present in `text` outside a
     span `exemption_spans(text)` covers, and not embedded in a longer
     identifier. Consumes the token set and `exemption_spans` live from
     `_codename_classes` -- see module docstring."""
-    covered = exemption_spans(text)
+    # A fragment that IS a pinned token, with nothing else in it, is a NAME
+    # being interpolated into a message, not a message pointing anywhere: the
+    # emitted sentence around it lives in the f-string that consumed the
+    # constant, and that sentence is checked as its own fragment. Two live
+    # cases, both publish-target row names read out of a module constant --
+    # publish.py's `_KLABAUTER_PARITY_EMITTER_ROW` and
+    # publish-allowlist-generate.py's row literal. There is no surrounding
+    # text for a shape pattern to anchor on, and the alternative (allowlisting
+    # an 11k-line file wholesale) is the blanket exemption this ratchet exists
+    # to refuse. Added 2026-09-06 with `_BIN_EXEMPTION_PATTERNS`.
+    if text.strip() in PINNED_UNREACHABLE_TOKENS:
+        return []
+    covered = exemption_spans(text) + _bin_exemption_spans(text)
     found: list[str] = []
     for token in PINNED_UNREACHABLE_TOKENS:
         start = text.find(token)
@@ -439,8 +518,26 @@ def find_token_violations(text: str) -> list[str]:
     return found
 
 
+#: `coordinator/bin/tests/` is out of the sweep (2026-09-06). This lint's
+#: charter, in its own opening sentence, is "a `coordinator/bin` SCRIPT that
+#: still PRINTS a prose pointer TO AN OSS OPERATOR". A pytest module prints
+#: to no operator and ships to no mirror; what it holds is fixture text —
+#: e.g. `test_percolate_mirror.py` reproduces another CLI's lock-timeout
+#: message, absolute foreign root and all, as the string under assertion.
+#: Linting that is linting the ORACLE, and the fix it demands is editing the
+#: expected value away from what the real CLI emits. The shipped scripts are
+#: still swept; `test_sweep_actually_covers_scripts_beyond_the_allowlist`
+#: keeps that population honest.
+_EXCLUDED_SUBTREES = ("tests",)
+
+
 def _iter_bin_python_files(root: Path) -> list[Path]:
-    return sorted(p for p in root.rglob("*.py") if p.name not in ALLOWLIST)
+    return sorted(
+        p
+        for p in root.rglob("*.py")
+        if p.name not in ALLOWLIST
+        and not any(part in _EXCLUDED_SUBTREES for part in p.relative_to(root).parts[:-1])
+    )
 
 
 def collect_violations(root: Path) -> list[Violation]:

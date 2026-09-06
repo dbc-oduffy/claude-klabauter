@@ -326,13 +326,21 @@ def compute_run_report_sidecar_gate(
     # every run. Resolve through the owner rather than rebuilding the join.
     from coordinator_core.session import machinery_paths
 
-    sidecar_dir = Path(machinery_paths.share_dir(str(repo_root), sid))
-    if not sidecar_dir.is_dir():
+    # `share_dirs`, not `share_dir`: this is a reader, and the failure the
+    # comment above describes does not need another relocation to bite -- a
+    # session whose sidecars landed before the move folds nothing, silently,
+    # for exactly the reason stated. The writer side still resolves one root.
+    sidecar_dirs = [Path(d) for d in machinery_paths.share_dirs(str(repo_root), sid)]
+    present = [d for d in sidecar_dirs if d.is_dir()]
+    if not present:
         return RunReportSidecarGate(detected=(), foldable=(), preserved=())
 
+    matched = sorted(
+        {p for d in present for p in d.glob(f"{plan_slug}.*.md")},
+        key=lambda p: (p.name, str(p)),
+    )
     detected = tuple(
-        RunReportSidecar(path=p, status=_read_sidecar_status(p))
-        for p in sorted(sidecar_dir.glob(f"{plan_slug}.*.md"))
+        RunReportSidecar(path=p, status=_read_sidecar_status(p)) for p in matched
     )
     foldable = tuple(s.path for s in detected if s.status not in _PRESERVED_SIDECAR_STATUSES)
     preserved = tuple(s.path for s in detected if s.status in _PRESERVED_SIDECAR_STATUSES)
