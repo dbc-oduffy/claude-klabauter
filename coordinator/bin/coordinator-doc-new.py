@@ -4015,11 +4015,89 @@ def _mutate_sizing_reverse_edge(old_text: str, plan_repo_rel_path: str) -> str:
     )
     _errors = _validate_frontmatter(_parsed, _schema_path)
     if _errors:
-        raise _MutateAbort(
-            "sizing reverse edge: post-mutation schema validation failed: "
-            f"{_format_validation_errors(_errors)}"
-        )
+        raise _MutateAbort(_sizing_validation_abort(old_text, _schema_path, _errors))
     return new_text
+
+
+def _sizing_validation_abort(old_text: str, schema_path, errors: list) -> str:
+    """Build the reverse edge's validation-failure message, saying WHICH of
+    the two very different things went wrong.
+
+    WHY THIS SPLIT EXISTS. The check above validates the document AFTER the
+    edge's text surgery, and was added to catch surgery that produces an
+    invalid document (a `plan:` value the schema's path pattern rejects).
+    But it fires just as readily on a sizing object that was ALREADY invalid
+    when it arrived -- the surgery only writes `status` and `plan`, so it
+    cannot be the cause of an error on any other field. Reported 2026-09-06:
+    a planner was told "post-mutation schema validation failed:
+    em_review: additional property not allowed", read it as the reverse edge
+    misbehaving, and refused to route around it -- correctly, and against the
+    wrong suspect. The message named a real defect and pointed at the one
+    component that had not caused it.
+
+    So the pre-mutation document is validated too, and the errors are
+    partitioned: an error already present before the edge is the DOCUMENT's,
+    an error only present after is the EDGE's. Both are still refusals --
+    this changes what the operator is told, never what is written.
+
+    UNKNOWN TOP-LEVEL KEY GETS A NAMED ALTERNATIVE. `additionalProperties`
+    is `false` on this schema, and the way that fires in practice is an EM
+    writing prose under a key they invented on the spot (`em_review`,
+    2026-09-06). The schema already has a home for exactly that --
+    `em_analysis`, a free-form topic-keyed object of strings, whose own
+    description names `em_resolution` as an example key -- so the refusal
+    names it rather than leaving the writer to re-derive it or, worse, to
+    argue for a synonym field. One fact, one alternative
+    (`docs/wiki/guard-messaging.md` § Register).
+    """
+    import yaml as _yaml  # noqa: PLC0415
+
+    from coordinator_core.frontmatter.schema_validate import (  # noqa: PLC0415
+        format_validation_errors as _format_validation_errors,
+        validate_frontmatter as _validate_frontmatter,
+    )
+
+    try:
+        _before = _validate_frontmatter(_yaml.safe_load(old_text) or {}, schema_path)
+    except Exception:  # noqa: BLE001
+        # The pre-mutation document does not even parse or validate cleanly
+        # enough to partition against. That is itself the answer -- fall back
+        # to the undifferentiated message rather than inventing a verdict.
+        _before = None
+
+    if _before is None:
+        _head = "sizing reverse edge: post-mutation schema validation failed: "
+        return _head + _format_validation_errors(errors)
+
+    _prior = {_format_validation_errors([e]) for e in _before}
+    _preexisting = [e for e in errors if _format_validation_errors([e]) in _prior]
+    _introduced = [e for e in errors if _format_validation_errors([e]) not in _prior]
+
+    _parts = []
+    if _introduced:
+        _parts.append(
+            "sizing reverse edge: the edge's own write is invalid: "
+            + _format_validation_errors(_introduced)
+        )
+    if _preexisting:
+        _parts.append(
+            "sizing object was already invalid before the reverse edge touched "
+            "it (the edge writes only `status` and `plan`): "
+            + _format_validation_errors(_preexisting)
+        )
+        _unknown = sorted(
+            {
+                str(e.get("field"))
+                for e in _preexisting
+                if "additional propert" in str(e.get("error", "")).lower()
+            }
+        )
+        if _unknown:
+            _parts.append(
+                "Free-form EM prose belongs under `em_analysis` as a keyed "
+                f"entry, not a new top-level key: {', '.join(_unknown)}."
+            )
+    return " | ".join(_parts)
 
 
 def _write_sizing_reverse_edge(

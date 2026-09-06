@@ -169,6 +169,47 @@ class SocketPathTooLongError(ElectionError):
     """
 
 
+#: BYTE read mode for both named-pipe creation sites -- THIS one (the first
+#: instance) and `server._create_pipe_instance` (every follow-on one), which
+#: imports this name rather than repeating the value. They must agree: if they
+#: did not, whether a request is served would depend on which instance
+#: happened to accept it. Defined here rather than in `server` because
+#: `server` already imports this module and the reverse edge would be a cycle.
+#:
+#: `_winapi` publishes no `PIPE_READMODE_BYTE` because the flag IS zero; the
+#: constant exists so both sites NAME the choice instead of silently omitting
+#: a flag.
+#:
+#: WHY BYTE AND NOT MESSAGE. The wire protocol is one newline-terminated JSON
+#: line in each direction -- `server._handle_connection` reads it with
+#: `io.readline()`, `door.c` scans for a newline byte. That is a byte-stream
+#: protocol; the pipe's message framing was read by nothing, and one leg of
+#: it was actively fatal.
+#:
+#: THE DEFECT THIS CLOSES (2026-09-06, reported from a live plan-blitz wave).
+#: Under `PIPE_READMODE_MESSAGE` a `ReadFile` whose buffer is smaller than the
+#: pending message fails with `ERROR_MORE_DATA` instead of returning a partial
+#: read. `server._wrap_handle` hands the pipe to a `BufferedReader` whose
+#: underlying reads are `io.DEFAULT_BUFFER_SIZE` (8192) -- so EVERY request
+#: frame over 8192 bytes made `io.readline()` raise `OSError`, which
+#: `_handle_connection` catches with a bare `return`, closing the connection
+#: without a reply. The caller's door had already delivered the bytes, so it
+#: could only emit `-32004 warm dispatch indeterminate`: the worst failure
+#: shape this transport has, on a request the server never even parsed.
+#: Measured threshold: 8192 bytes served, 8193 refused, exactly.
+#:
+#: THE ASYMMETRY THAT HID IT. A CLIENT handle opened with `CreateFile`
+#: (`client._open_pipe`'s `open(endpoint, "r+b")`, and `door.c`'s
+#: `CreateFileW`) defaults to BYTE read mode regardless of the pipe's type,
+#: and neither ever calls `SetNamedPipeHandleState`. Large RESPONSES therefore
+#: always worked and only large REQUESTS died -- which reads as "that one op
+#: is broken" rather than "every op with a big payload is".
+#:
+#: `PIPE_TYPE_MESSAGE` is deliberately LEFT at both sites: it governs how a
+#: handle's WRITES are framed, which no reader on either end depends on, so
+#: changing it would widen this fix's blast radius for nothing.
+_PIPE_READMODE_BYTE = 0x00000000
+
 def _is_windows() -> bool:
     return sys.platform == "win32"
 
@@ -309,7 +350,7 @@ def elect(name: str, *, user_sid: Optional[str] = None) -> int:
         return _winapi.CreateNamedPipe(
             name,
             _winapi.PIPE_ACCESS_DUPLEX | _winapi.FILE_FLAG_FIRST_PIPE_INSTANCE,
-            _winapi.PIPE_TYPE_MESSAGE | _winapi.PIPE_READMODE_MESSAGE | _winapi.PIPE_WAIT,
+            _winapi.PIPE_TYPE_MESSAGE | _PIPE_READMODE_BYTE | _winapi.PIPE_WAIT,
             _winapi.PIPE_UNLIMITED_INSTANCES,
             65536,
             65536,

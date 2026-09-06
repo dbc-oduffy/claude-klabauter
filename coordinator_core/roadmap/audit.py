@@ -334,6 +334,40 @@ _VERDICT_PROSE_RE: Dict[str, "re.Pattern[str]"] = {
 }
 
 
+_KEEP_ROW_RE = re.compile(r'^\|(?P<cid>[^|]*)\|[^|]*\*\*KEEP\*\*')
+
+
+def parse_keep_cluster_ids(text: str) -> List[str]:
+    """Cluster ids carrying a **KEEP** verdict, in table order.
+
+    Why this exists rather than a count: the stub:cluster relation is
+    MANY-TO-ONE by construction. Step 2.1.6 of the roadmap-planning skill
+    MANDATES folding several clusters into one baton, so `stub_count ==
+    keep_count` is not a weaker form of the coverage bar -- it is a different
+    and incompatible one, and a roadmap that obeys the skill fails it BY
+    CONSTRUCTION, harder the larger it is. The skill states this directly:
+    "Any gate asserting the two counts match is measuring the wrong thing and
+    must read `covers:`."
+
+    The real bar is coverage plus non-duplication: every KEEP cluster is named
+    in exactly one stub's `covers:`. That needs the cluster IDS, which a count
+    discards.
+
+    Negative spec: a row whose verdict cell is not bolded is not a verdict
+    (same convention `_count_verdict` enforces), and an id is only taken from
+    the FIRST column -- prose mentioning a cluster id elsewhere in the row must
+    not register as a second verdict for it.
+    """
+    seen: List[str] = []
+    for line in text.splitlines():
+        m = _KEEP_ROW_RE.match(line)
+        if m:
+            cid = m.group("cid").strip().strip("`").strip()
+            if cid and cid not in seen:
+                seen.append(cid)
+    return seen
+
+
 def _count_verdict(text: str, kind: str) -> int:
     """Count matching LINES (grep -cE semantics — one count per matching line,
     not per regex hit) for the KEEP/MERGE table-cell shape, falling back to the
@@ -807,21 +841,89 @@ def _audit1_stub_coverage(
             f"to reach both-sides-zero. The prose fallback shape is "
             f"`Verdict: KEEP` / `Verdict: MERGE` (case-insensitive)."
         )
-    elif stub_count != expected:
-        r.fail(
-            f"Stub-coverage{label} mismatch: {stub_count} stubs on disk across "
-            f"{record_count} record(s) ({live_count} live + {arch_count} "
-            f"archived), {expected} expected (KEEP={keep_count}; MERGE={merge_count} "
-            f"folds into a KEEP cluster and mints no stub). "
-            f"If the excess stubs postdate the reconciliation pass, declare them in "
-            f"{post_recon_path}. See {recon_path}."
-        )
     else:
-        r.passed(
-            f"Stub-coverage{label}: {stub_count} stubs across "
-            f"{record_count} record(s) ({live_count} live + {arch_count} "
-            f"archived) match {expected} verdicts (KEEP={keep_count}, MERGE={merge_count})."
-        )
+        # COVERAGE, NOT A COUNT. The stub:cluster relation is many-to-one --
+        # Step 2.1.6 mandates the fold -- so `stub_count == keep_count` fails a
+        # conforming roadmap by construction. Read `covers:`: every KEEP cluster
+        # named exactly once across all stubs.
+        keep_ids = parse_keep_cluster_ids(text)
+        covered: Dict[str, List[str]] = {}
+        declares_covers = False
+        for rec in all_records:
+            fm = rec.get("frontmatter") if isinstance(rec, dict) else None
+            fm = fm if isinstance(fm, dict) else (rec if isinstance(rec, dict) else {})
+            sid = str(fm.get("stub_id") or fm.get("id") or "?")
+            raw = fm.get("covers") or []
+            if isinstance(raw, str):
+                raw = [raw]
+            if raw:
+                declares_covers = True
+            for cid in raw:
+                covered.setdefault(str(cid).strip(), []).append(sid)
+
+        missing = [c for c in keep_ids if c not in covered]
+        duplicated = {c: s for c, s in covered.items() if c in keep_ids and len(s) > 1}
+        unknown = sorted(c for c in covered if c not in keep_ids)
+
+        if not declares_covers:
+            # LEGACY ARM, deliberately kept. Roadmaps authored before `covers:`
+            # existed declare no coverage at all, and their reconciliation
+            # tables use free-form first columns ("1 - a"). For those the count
+            # is the only signal available, so the historical bar stands
+            # unchanged rather than failing every roadmap in the corpus.
+            if stub_count != expected:
+                r.fail(
+                    f"Stub-coverage{label} mismatch: {stub_count} stubs on disk across "
+                    f"{record_count} record(s) ({live_count} live + {arch_count} "
+                    f"archived), {expected} expected (KEEP={keep_count}; MERGE={merge_count} "
+                    f"folds into a KEEP cluster and mints no stub). No stub declares "
+                    f"`covers:`, so this roadmap is measured by count; declaring `covers:` "
+                    f"switches it to per-cluster coverage, which is the bar Step 2.1.6's "
+                    f"fold actually requires. If the excess stubs postdate the "
+                    f"reconciliation pass, declare them in {post_recon_path}. "
+                    f"See {recon_path}."
+                )
+            else:
+                r.passed(
+                    f"Stub-coverage{label}: {stub_count} stubs across "
+                    f"{record_count} record(s) ({live_count} live + {arch_count} "
+                    f"archived) match {expected} verdicts (KEEP={keep_count}, "
+                    f"MERGE={merge_count}). Counted, not covered — no stub declares "
+                    f"`covers:`."
+                )
+        elif not keep_ids and stub_count:
+            r.fail(
+                f"Stub-coverage{label}: {stub_count} stub(s) on disk but no KEEP "
+                f"cluster ids parsed from {recon_path}. The verdict cell must be "
+                f"BOLDED (`**KEEP**`) and the cluster id must be the FIRST column."
+            )
+        elif missing or duplicated or unknown:
+            parts = []
+            if missing:
+                parts.append(f"NOT covered by any stub's covers:: {', '.join(missing)}")
+            if duplicated:
+                parts.append(
+                    "covered more than once: "
+                    + "; ".join(f"{c} by {', '.join(s)}" for c, s in sorted(duplicated.items()))
+                )
+            if unknown:
+                parts.append(
+                    f"named in covers: but carrying no KEEP verdict: {', '.join(unknown)}"
+                )
+            r.fail(
+                f"Stub-coverage{label} mismatch: {' | '.join(parts)}. "
+                f"{stub_count} stub(s) across {record_count} record(s) "
+                f"({live_count} live + {arch_count} archived); {len(keep_ids)} KEEP "
+                f"cluster(s) in {recon_path}. Coverage is per-cluster, not a stub "
+                f"count -- one stub may cover several clusters."
+            )
+        else:
+            r.passed(
+                f"Stub-coverage{label}: all {len(keep_ids)} KEEP cluster(s) named "
+                f"exactly once across {stub_count} stub(s) / {record_count} record(s) "
+                f"({live_count} live + {arch_count} archived). "
+                f"MERGE={merge_count} folds into a KEEP cluster and mints no stub."
+            )
 
 
 def _audit2_ready_to_fire_uniqueness(r: _Reporter, run_id: str, data_root: Path) -> None:

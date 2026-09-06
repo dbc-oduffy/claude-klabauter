@@ -21,6 +21,7 @@ from coordinator_core.roadmap.audit import (
     _claude_klabauter_root,
     _machine_local_get,
     _parse_pending_stubs,
+    parse_keep_cluster_ids,
     parse_post_reconciliation_stubs,
     _same_path,
     _state_root,
@@ -59,6 +60,7 @@ def _write_stub(
     gate_dependency: Optional[str] = None,
     number: Optional[int] = None,
     kind: str = "spinoff-roadmap",
+    covers: Optional[List[str]] = None,
 ) -> None:
     # Review: code-reviewer (P1, Finding 1) — `kind` defaults to the retired
     # spelling for byte-parity with every pre-existing caller, but callers
@@ -83,6 +85,8 @@ def _write_stub(
         lines.append(f"wave: {wave}")
     if gate_dependency is not None:
         lines.append(f'gate_dependency: "{gate_dependency}"')
+    if covers is not None:
+        lines.append("covers: [" + ", ".join(covers) + "]")
     if blocked_by:
         lines.append("blocked_by:")
         for dep in blocked_by:
@@ -850,3 +854,104 @@ def test_declaration_naming_a_stub_not_on_disk_fails(tmp_path: Path) -> None:
 
     assert exit_code == 1
     assert any("ghost-99" in line and "not on disk" in line for line in stderr_lines)
+
+# ---------------------------------------------------------------------------
+# Stub-coverage is per-CLUSTER, not a stub count. Step 2.1.6 of the
+# roadmap-planning skill MANDATES folding several clusters into one baton, so
+# `stub_count == keep_count` fails a conforming roadmap BY CONSTRUCTION and
+# fails it harder the larger the roadmap is. The skill says so directly: "Any
+# gate asserting the two counts match is measuring the wrong thing and must
+# read `covers:`." These tests pin the corrected bar and the legacy fallback.
+# ---------------------------------------------------------------------------
+
+_NL = chr(10)
+
+
+def test_parse_keep_cluster_ids_reads_first_column_of_bolded_keep_rows() -> None:
+    text = _NL.join([
+        "| id | Verdict | Rationale |",
+        "|---|---|---|",
+        "| `cl-01` | **KEEP** | engine work |",
+        "| `cl-02` | **KEEP** | mentions cl-01 in prose, must not double-count |",
+        "| `cl-03` | **MOVE** | peer plane |",
+        "| `cl-04` | KEEP | unbolded is not a verdict |",
+    ]) + _NL
+    assert parse_keep_cluster_ids(text) == ["cl-01", "cl-02"]
+
+
+def test_one_stub_covering_several_clusters_passes_coverage(tmp_path: Path) -> None:
+    """The fold is mandated, so 2 stubs over 3 KEEP clusters is CORRECT."""
+    root = _init_tree(tmp_path)
+    run_id = "zzz-fold"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(handoffs / (run_id + "-1.md"), run_id, run_id + "-1", 1, 1,
+                covers=["cl-01", "cl-02"])
+    _write_stub(handoffs / (run_id + "-2.md"), run_id, run_id + "-2", 1, 2,
+                covers=["cl-03"])
+    recon = root / "state" / "roadmap" / run_id / "reconciliation.md"
+    recon.parent.mkdir(parents=True, exist_ok=True)
+    recon.write_text(_NL.join([
+        "| `cl-01` | **KEEP** | a |",
+        "| `cl-02` | **KEEP** | b |",
+        "| `cl-03` | **KEEP** | c |",
+    ]) + _NL, encoding="utf-8")
+
+    exit_code, stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 0, stderr_lines
+    assert any("all 3 KEEP cluster(s) named exactly once" in ln for ln in stdout_lines)
+
+
+def test_uncovered_keep_cluster_fails_and_is_named(tmp_path: Path) -> None:
+    root = _init_tree(tmp_path)
+    run_id = "zzz-gap"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(handoffs / (run_id + "-1.md"), run_id, run_id + "-1", 1, 1,
+                covers=["cl-01"])
+    recon = root / "state" / "roadmap" / run_id / "reconciliation.md"
+    recon.parent.mkdir(parents=True, exist_ok=True)
+    recon.write_text(_NL.join([
+        "| `cl-01` | **KEEP** | a |",
+        "| `cl-02` | **KEEP** | orphaned |",
+    ]) + _NL, encoding="utf-8")
+
+    exit_code, stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 1
+    joined = _NL.join(stdout_lines + stderr_lines)
+    assert "cl-02" in joined and "NOT covered" in joined
+
+
+def test_cluster_covered_twice_fails(tmp_path: Path) -> None:
+    """Coverage AND non-duplication — a cluster claimed by two batons is two
+    sessions doing the same work."""
+    root = _init_tree(tmp_path)
+    run_id = "zzz-dupe"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(handoffs / (run_id + "-1.md"), run_id, run_id + "-1", 1, 1, covers=["cl-01"])
+    _write_stub(handoffs / (run_id + "-2.md"), run_id, run_id + "-2", 1, 2, covers=["cl-01"])
+    recon = root / "state" / "roadmap" / run_id / "reconciliation.md"
+    recon.parent.mkdir(parents=True, exist_ok=True)
+    recon.write_text("| `cl-01` | **KEEP** | a |" + _NL, encoding="utf-8")
+
+    exit_code, stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 1
+    assert "covered more than once" in _NL.join(stdout_lines + stderr_lines)
+
+
+def test_roadmap_declaring_no_covers_keeps_the_legacy_count_bar(tmp_path: Path) -> None:
+    """Pre-`covers:` roadmaps must not start failing — the legacy arm is why
+    this change is additive rather than a corpus-wide break."""
+    root = _init_tree(tmp_path)
+    run_id = "zzz-legacy"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(handoffs / (run_id + "-1.md"), run_id, run_id + "-1", 1, 1)
+    recon = root / "state" / "roadmap" / run_id / "reconciliation.md"
+    recon.parent.mkdir(parents=True, exist_ok=True)
+    recon.write_text("| 1 - a | **KEEP** | free-form first column |" + _NL, encoding="utf-8")
+
+    exit_code, stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 0, stderr_lines
+    assert any("Counted, not covered" in ln for ln in stdout_lines)

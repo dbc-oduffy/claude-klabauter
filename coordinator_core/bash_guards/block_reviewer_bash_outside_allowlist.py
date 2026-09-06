@@ -244,6 +244,36 @@ two new carve-outs precisely rather than continuing to claim ``|``/``>``
 always deny.
 
 Divergence 9 (2026-08-01, Amendment 1 -- confine coordinator:executor too):
+
+**REVERSED 2026-08-02 BY PM RULING, AND THIS WHOLE DIVERGENCE IS NOW DEAD CODE.
+READ THIS BEFORE BELIEVING A WORD OF THE PARAGRAPHS BELOW.** The PM narrowed the
+confined perimeter to two harm classes, and
+``docs/plans/2026-08-03-narrow-subagent-commit-confinement-two-classes.md``
+reverses C1's addition of ``coordinator:executor`` to
+``_helpers._CONFINED_FINDINGS_AGENTS`` -- see the amendment banner at the top of
+``docs/plans/2026-08-01-confine-subagent-bash-by-allowlist.md``. That frozenset has
+exactly one member today (``coordinator:code-reviewer``), the ``bash_policy:`` table
+has exactly one key (the same one), and executor is rostered, so ALL THREE legs of
+``_is_confined_type`` return False for it. Measured, not inferred::
+
+    coordinator:executor           confined=False  known=True
+    coordinator:code-reviewer      confined=True   known=True
+
+``_default_ruleset`` is consulted only for a type that is confined, so
+``_DEFAULT_RULESET_TYPE_OVERRIDES[_EXECUTOR_TYPE]`` -- the pytest module allowance,
+``interpreter_allow_scripts``, and the ``scaffolder_required_arg: ""`` relaxation --
+CANNOT BE REACHED, and neither can ``_DENY_MESSAGE_STANZA_OVERRIDES``'s executor
+stanzas or ``_EXECUTOR_HEADER_LINE``. Their tests pass vacuously, exactly as the
+``:860`` note warns for ``_CONFINED_FINDINGS_AGENTS`` itself. The executor is not
+confined-with-a-relaxation; it is unconfined outright.
+
+Reported by doe-claude-em (cross-repo/inbox/2026-09-06-doe-claude-em-executor-is-
+not-confined-so-its-ruleset-override-is-dead.md) after this prose misled claude-klabauter's
+own EM into asserting the opposite to two sibling repos. Kept rather than deleted
+only so a reader arriving at the paragraphs below is not misled a third time; the
+deletion is tracked in state/bug-backlog/. DO NOT cite anything below this banner
+as live behaviour.
+
 ``coordinator:executor`` joined ``_helpers._CONFINED_FINDINGS_AGENTS``
 (``docs/plans/2026-08-01-confine-subagent-bash-by-allowlist.md``, a prior C1
 attempt returned BLOCKED on the substrate drift this divergence fixes). The
