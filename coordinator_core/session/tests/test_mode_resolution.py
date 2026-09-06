@@ -11,11 +11,15 @@ fleet-record content degrades silently).
 from __future__ import annotations
 
 import dataclasses
+import sys
+from pathlib import Path
 
 import pytest
 
 from coordinator_core.session import mode_resolution
 from coordinator_core.session.mode_resolution import (
+    COORDINATOR_JOB_MODE,
+    JOB_MODE_VALUES,
     MODE_KEYS,
     ModeKey,
     _validate_registry,
@@ -160,11 +164,13 @@ def test_unrecognised_key_inside_fleet_record_is_silently_absorbed(_isolate_sent
 
 class TestRegistryInvariant:
     def test_mode_keys_itself_satisfies_the_invariant(self):
-        """Every shipped entry with session_pair=None declares fleet-wins."""
+        """Every shipped entry with session_pair=None declares fleet-wins or
+        environment-wins -- the two precedences valid for a key with no
+        session-scoped value (see `_validate_registry`)."""
         _validate_registry(MODE_KEYS)
         for key, entry in MODE_KEYS.items():
             if entry.session_pair is None:
-                assert entry.precedence == "fleet-wins", key
+                assert entry.precedence in ("fleet-wins", "environment-wins"), key
 
     def test_session_wins_with_no_session_pair_is_refused_at_definition_time(self):
         bad_registry = {
@@ -254,7 +260,7 @@ class TestCompactionWarningsEnvironmentDefault:
         from coordinator_core.session import mode_resolution as MR
 
         monkeypatch.setattr(MR, "_compaction_default_for_environment",
-                            lambda: "informational")
+                            lambda env=None: "informational")
         _write_fleet(_isolate_sentinel_and_fleet[1],
                      {"compaction_warnings": "standard"})
         assert resolve_mode("compaction_warnings", "s1") == "standard"
@@ -265,7 +271,7 @@ class TestCompactionWarningsEnvironmentDefault:
         from coordinator_core.session import mode_resolution as MR
 
         monkeypatch.setattr(MR, "_compaction_default_for_environment",
-                            lambda: "informational")
+                            lambda env=None: "informational")
         assert resolve_mode("compaction_warnings", "s1") == "informational"
 
     def test_a_resolution_failure_falls_back_to_the_static_default(
@@ -288,3 +294,198 @@ class TestCompactionWarningsEnvironmentDefault:
 
         monkeypatch.setattr("coordinator_core.env_locality.locality", _boom)
         assert _REAL_ENV_DEFAULT() is None
+
+
+# --- job_mode: environment-wins ----------------------------------------------
+
+
+class TestJobModeEnvironmentWins:
+    """One test per failing-input case (never one test for all three), plus
+    one happy-path test per enum value -- per this chunk's own spec."""
+
+    # -- failing inputs: each asserts the conservative anchor -----------------
+
+    def test_absent_variable_resolves_to_conservative_anchor(self, _isolate_sentinel_and_fleet):
+        assert resolve_mode("job_mode", "s1", env={}) == "interactive"
+
+    def test_absent_env_argument_resolves_to_conservative_anchor(self, _isolate_sentinel_and_fleet):
+        """`env` itself omitted entirely (the pool-broken isolated=False
+        fallback shape) -- must abstain rather than reach for os.environ."""
+        assert resolve_mode("job_mode", "s1") == "interactive"
+
+    def test_empty_string_variable_resolves_to_conservative_anchor(self, _isolate_sentinel_and_fleet):
+        assert resolve_mode("job_mode", "s1", env={COORDINATOR_JOB_MODE: ""}) == "interactive"
+
+    def test_unrecognised_value_resolves_to_conservative_anchor(self, _isolate_sentinel_and_fleet):
+        assert (
+            resolve_mode("job_mode", "s1", env={COORDINATOR_JOB_MODE: "not-a-real-mode"})
+            == "interactive"
+        )
+
+    # -- happy path: one test per enum value -----------------------------------
+
+    def test_blitz_resolves(self, _isolate_sentinel_and_fleet):
+        assert resolve_mode("job_mode", "s1", env={COORDINATOR_JOB_MODE: "blitz"}) == "blitz"
+
+    def test_cron_resolves(self, _isolate_sentinel_and_fleet):
+        assert resolve_mode("job_mode", "s1", env={COORDINATOR_JOB_MODE: "cron"}) == "cron"
+
+    def test_interactive_resolves(self, _isolate_sentinel_and_fleet):
+        assert (
+            resolve_mode("job_mode", "s1", env={COORDINATOR_JOB_MODE: "interactive"})
+            == "interactive"
+        )
+
+    # -- environment-wins proof: beats a stale fleet record --------------------
+
+    def test_environment_value_beats_a_stale_fleet_record(self, _isolate_sentinel_and_fleet):
+        """The precedence this chunk adds `job_mode` for: a fleet-wide
+        record must not silently override the caller's own explicit
+        assertion."""
+        _home = _isolate_sentinel_and_fleet[1]
+        _write_fleet(_home, {"job_mode": "cron"})
+        assert resolve_mode("job_mode", "s1", env={COORDINATOR_JOB_MODE: "blitz"}) == "blitz"
+
+    def test_fleet_value_used_when_environment_is_silent(self, _isolate_sentinel_and_fleet):
+        _home = _isolate_sentinel_and_fleet[1]
+        _write_fleet(_home, {"job_mode": "cron"})
+        assert resolve_mode("job_mode", "s1", env={}) == "cron"
+
+    def test_fleet_wrong_type_degrades_to_conservative_anchor(self, _isolate_sentinel_and_fleet):
+        _home = _isolate_sentinel_and_fleet[1]
+        _write_fleet(_home, {"job_mode": "not-a-real-mode"})
+        assert resolve_mode("job_mode", "s1", env={}) == "interactive"
+
+    def test_none_value_from_environment_default_abstains(self, monkeypatch, _isolate_sentinel_and_fleet):
+        """A candidate value outside `JOB_MODE_VALUES` degrades via
+        `_validate_value` at the registry boundary, exercised directly here
+        (module docstring: verify that path rather than reimplementing it)."""
+        from coordinator_core.session import mode_resolution as MR
+
+        assert MR._job_mode_from_environment(None) is None
+        assert MR._job_mode_from_environment({}) is None
+        assert MR._job_mode_from_environment({COORDINATOR_JOB_MODE: ""}) is None
+        assert MR._job_mode_from_environment({COORDINATOR_JOB_MODE: "blitz"}) == "blitz"
+
+
+class TestJobModeRegistryInvariant:
+    def test_job_mode_satisfies_the_widened_invariant(self):
+        entry = MODE_KEYS["job_mode"]
+        assert entry.session_pair is None
+        assert entry.precedence == "environment-wins"
+        assert entry.environment_default is not None
+
+    def test_environment_wins_without_environment_default_is_refused_at_definition_time(self):
+        bad_registry = {
+            "bogus": ModeKey(
+                session_pair=None,
+                precedence="environment-wins",
+                value_type=JOB_MODE_VALUES,
+                default="interactive",
+            )
+        }
+        with pytest.raises(ValueError):
+            _validate_registry(bad_registry)
+
+    def test_environment_wins_with_no_session_pair_is_accepted(self):
+        ok_registry = {
+            "bogus": ModeKey(
+                session_pair=None,
+                precedence="environment-wins",
+                value_type=JOB_MODE_VALUES,
+                default="interactive",
+                environment_default=lambda env: None,
+            )
+        }
+        _validate_registry(ok_registry)  # must not raise
+
+
+# --- job_mode resolution cost: AC-9, process time and spawn count only ------
+#
+# See baton AC-9 ("resolution costs no interpreter start on a hot path and
+# stays under the brightline") and this plan's C2 row: the pre-existing
+# "0.038 ms, zero spawns" figure describes `env_locality.py`'s OWN ladder,
+# not this FORWARDING_SET + MODE_KEYS read, so it does not discharge AC-9 for
+# the path this chunk adds -- measured here, directly, against the same
+# `benchmarks.process_time.batched_process_time_ms` primitive
+# `test_touch_record_perf.py` uses, per DR-344 vocabulary (process time and
+# spawn count, never wall clock).
+
+
+#: The one bar (DR-344). `SUSPENSION_BAR_MS` (2000ms) is which-to-switch-off
+#: -first, never a target, and never cited here in its place.
+_BRIGHTLINE_MS = 500.0
+
+
+#: Iterations of `resolve_mode("job_mode", ...)` inside one spawned driver --
+#: amortises the interpreter-start floor across enough real work that the
+#: import-only baseline's own noise does not dominate the delta (same
+#: reasoning `test_touch_record_perf.py::_APPENDS_PER_DRIVER` states).
+_JOB_MODE_CALLS_PER_DRIVER = 2000
+
+
+def _write_job_mode_driver(driver_path, repo_root, do_resolve: bool) -> None:
+    """`do_resolve=False` writes the IMPORT-ONLY baseline: same interpreter
+    start, same import, no resolution loop. Module docstring's own "sixth
+    trap" section names this as the correct way to isolate an in-process
+    op's own cost from the interpreter-start floor neither this file nor
+    `batched_process_time_ms` can amortise away on a single spawned process
+    -- the delta between the two driver shapes is `job_mode` resolution's
+    own cost, and `procs_per_call` compared between them is this path's own
+    spawn count (never zero on this box -- see this test's own baseline
+    assertion below -- but held CONSTANT if `resolve_mode` itself spawns
+    nothing)."""
+    loop = (
+        f'for _ in range({_JOB_MODE_CALLS_PER_DRIVER}):\n'
+        f'    resolve_mode("job_mode", "bench-session", env={{"COORDINATOR_JOB_MODE": "blitz"}})\n'
+        if do_resolve
+        else ""
+    )
+    script = f'''\
+import sys
+
+sys.path.insert(0, r"{repo_root}")
+
+from coordinator_core.session.mode_resolution import resolve_mode
+
+{loop}
+sys.exit(0)
+'''
+    driver_path.write_text(script, encoding="utf-8")
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_job_mode_resolution_costs_no_spawn_and_stays_under_the_brightline(tmp_path):
+    """AC-9: measured as a DELTA against an import-only baseline of the same
+    driver shape (module docstring's "sixth trap" -- a bare figure off this
+    box's own interpreter-start floor is not this op's cost). Never wall
+    clock (DR-344)."""
+    from coordinator_core.benchmarks.process_time import batched_process_time_ms
+
+    repo_root = Path(__file__).resolve().parents[3]
+    baseline_path = tmp_path / "job_mode_baseline.py"
+    driver_path = tmp_path / "job_mode_driver.py"
+    _write_job_mode_driver(baseline_path, repo_root, do_resolve=False)
+    _write_job_mode_driver(driver_path, repo_root, do_resolve=True)
+
+    baseline = batched_process_time_ms([sys.executable, str(baseline_path)], k=5)
+    result = batched_process_time_ms([sys.executable, str(driver_path)], k=5)
+
+    assert baseline["rc"] == 0
+    assert result["rc"] == 0
+    # No subprocess of its own: the resolution loop must not raise this
+    # path's own spawn count above the import-only baseline's.
+    assert result["procs_per_call"] <= baseline["procs_per_call"], (
+        f"job_mode resolution spawned a process of its own: baseline "
+        f"procs_per_call={baseline['procs_per_call']!r}, driver "
+        f"procs_per_call={result['procs_per_call']!r}"
+    )
+    delta_ms = result["process_time_ms"] - baseline["process_time_ms"]
+    assert delta_ms < _BRIGHTLINE_MS, (
+        f"job_mode resolution cost {delta_ms!r}ms process time over "
+        f"{_JOB_MODE_CALLS_PER_DRIVER} calls (driver "
+        f"{result['process_time_ms']!r}ms - baseline "
+        f"{baseline['process_time_ms']!r}ms), at or over DR-344's "
+        f"{_BRIGHTLINE_MS}ms brightline"
+    )

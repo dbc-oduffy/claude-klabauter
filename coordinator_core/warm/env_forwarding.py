@@ -61,6 +61,7 @@ from __future__ import annotations
 from typing import NamedTuple, Tuple
 
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+from coordinator_core.session.mode_resolution import COORDINATOR_JOB_MODE
 
 __all__ = ["Mode", "EnvEntry", "FORWARDING_SET", "generate_header"]
 
@@ -118,7 +119,7 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
     # above, this server's own `os.environ` belongs to whoever spawned it,
     # not the session that dispatched the op. Without this entry an
     # engine-side read returns the daemon's environment, not the session's.
-    _entry("COORDINATOR_JOB_MODE", BORROW),
+    _entry(COORDINATOR_JOB_MODE, BORROW),
 )
 
 

@@ -128,9 +128,10 @@ def run_step(name: str, fn, report: Report) -> None:
     (BaseException), so the day a step calls `sys.exit` in-process, the escape
     lands as a non-zero exit from this script, which is the one failure this
     module exists to prevent — the cloud session would not start at all. Two
-    lines against that is not the same trade as an ordinary dead branch. This is how fact 3 (exit zero, or the
-    cloud session fails to start) is satisfied without pretending a failed step
-    succeeded.
+    lines against that is not the same trade as an ordinary dead branch.
+
+    This is how fact 3 (exit zero, or the cloud session fails to start) is
+    satisfied without pretending a failed step succeeded.
 
     # Review: overengineering-reviewer — previously returned a bool no call
     # site read. The reviewer's preferred fix (short-circuit later steps on
@@ -183,6 +184,10 @@ def _git_clone(url: str, dest: str) -> None:
         capture_output=True,
         text=True,
         timeout=60,
+        # Review: code-reviewer (2026-09-06) -- stdin explicitly closed rather
+        # than inherited: an ambient closed fd 0 would otherwise let git (or a
+        # credential helper it spawns) be handed an unrelated fd as "stdin".
+        stdin=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if result.returncode != 0:
@@ -248,6 +253,9 @@ def run_coordinator_install_trampoline() -> None:
         text=True,
         timeout=180,
         env=env,
+        # Review: code-reviewer (2026-09-06) -- stdin explicitly closed, not
+        # inherited; see the matching comment on _git_clone's subprocess.run.
+        stdin=subprocess.DEVNULL,
     )
     print(result.stdout, end="")
     if result.returncode != 0:
@@ -325,6 +333,13 @@ def run_claude_klabauter_setup(report: Report) -> None:
         stdin=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
+    # Review: code-reviewer (2026-09-06) -- printed on both success and
+    # failure, consistent with run_coordinator_install_trampoline: this is a
+    # one-shot snapshotted VM with the JSON report as the only other durable
+    # artifact, so a successful run's setup.py progress output (interpreter
+    # chosen, dep path taken, DR-411 opt-in honoured or not) would otherwise
+    # be visible only when the run fails.
+    print(result.stdout, end="")
     report.setup_exit_code = result.returncode
     if result.returncode != 0:
         raise RuntimeError(f"scripts/setup.py exited {result.returncode}: {result.stderr.strip()}")
@@ -335,11 +350,42 @@ def write_report(report: Report) -> None:
     INSTALL_REPORT_PATH.write_text(json.dumps(report.to_dict(), indent=2))
 
 
+def _safe_print(text: str) -> None:
+    """Print text that may contain content this process did not choose, without
+    ever raising past this call.
+
+    # Review: code-reviewer (2026-09-06) -- called from `_print_summary`, which
+    # runs in `main` outside any `run_step` net. `step.detail` is built from raw
+    # subprocess stderr / exception text (git, pip, the install orchestrator),
+    # so a minimal-locale host (LANG=C, no UTF-8) can hand this a non-ASCII byte
+    # `print()` cannot encode. An encoding-safe write makes that failure
+    # impossible rather than caught: a try/except around the call would still
+    # lose the whole summary (and the install report, written after it) the
+    # moment one byte is odd, where sanitizing keeps the summary visible.
+    """
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+    print(safe_text)
+
+
 def _print_summary(report: Report) -> None:
-    print("[cloud_setup] summary:")
+    _safe_print("[cloud_setup] summary:")
     for step in report.steps:
         verdict = "OK" if step.ok else "FAILED"
-        print(f"  - {step.name}: {verdict} ({step.detail})")
+        _safe_print(f"  - {step.name}: {verdict} ({step.detail})")
+
+
+def _write_report_best_effort(report: Report) -> None:
+    """Write the install report, swallowing any failure.
+
+    Both exits from `main` -- precondition refusal and normal completion --
+    route through here. Neither may let a report-write failure break the
+    exit-zero contract the cloud setup script is held to.
+    """
+    try:
+        write_report(report)
+    except Exception as e:  # noqa: BLE001 - even the report write must not raise
+        print(f"[cloud_setup] could not write install report: {e}")
 
 
 def main() -> int:
@@ -348,10 +394,7 @@ def main() -> int:
         print(f"[cloud_setup] refusing: {reason}")
         report = Report()
         report.steps.append(StepResult("host precondition", False, reason))
-        try:
-            write_report(report)
-        except Exception as e:  # noqa: BLE001 - even the report write must not raise
-            print(f"[cloud_setup] could not write install report: {e}")
+        _write_report_best_effort(report)
         return 0
     print(f"[cloud_setup] {reason}")
 
@@ -369,10 +412,7 @@ def main() -> int:
 
     _print_summary(report)
 
-    try:
-        write_report(report)
-    except Exception as e:  # noqa: BLE001 - the report write itself must not raise
-        print(f"[cloud_setup] could not write install report: {e}")
+    _write_report_best_effort(report)
 
     return 0
 

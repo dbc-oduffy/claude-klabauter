@@ -705,6 +705,63 @@ def test_offer_homebrew_removal_returns_false_for_non_homebrew_interpreter(setup
     assert setup_mod._offer_homebrew_removal(candidate, tmp_path) is False
 
 
+def test_offer_homebrew_removal_declines_on_closed_stdin_runtime_error(setup_mod, monkeypatch, tmp_path):
+    """Review: code-reviewer (2026-09-06) — the twin of
+    test_offer_homebrew_removal_declines_on_eof for the OTHER exception
+    91aa0da5's guard catches. A closed stdin (0<&-) raises `RuntimeError:
+    input(): lost sys.stdin`, not EOFError; a mutation that keeps the AST
+    test's `(EOFError, RuntimeError)` tuple but re-raises instead of
+    defaulting to a decline would pass the structural test while still
+    exiting the installer non-zero here."""
+    monkeypatch.setattr(setup_mod, "_is_homebrew_python", lambda interpreter: True)
+    monkeypatch.setattr(setup_mod, "_homebrew_python_formula", lambda interpreter: "python@3.14")
+    monkeypatch.setattr("builtins.input", lambda prompt: (_ for _ in ()).throw(RuntimeError("input(): lost sys.stdin")))
+    calls = []
+    monkeypatch.setattr(
+        setup_mod.subprocess, "run",
+        lambda *a, **k: calls.append(a) or setup_mod.subprocess.CompletedProcess(a, 0),
+    )
+
+    candidate = setup_mod.InterpreterCandidate(
+        label="bare python3 on PATH", path="/opt/homebrew/bin/python3", consumers=("hooks.json",)
+    )
+    assert setup_mod._offer_homebrew_removal(candidate, tmp_path) is False
+    assert calls == []
+
+
+def test_offer_warm_opt_in_defaults_on_after_closed_stdin_runtime_error(
+    setup_mod, monkeypatch, tmp_path
+):
+    """Review: code-reviewer (2026-09-06) — behavioral twin of the
+    homebrew-offer RuntimeError test, for `offer_warm_opt_in`'s own
+    `try: input() except (EOFError, RuntimeError): answer = ""` guard.
+    Reachable directly (agent_mode=False) without a subprocess by stubbing
+    the two resolver calls ahead of the prompt and the registry-write import
+    the function makes locally."""
+    from coordinator_core.install import _shared as shared_mod
+
+    monkeypatch.setattr(
+        setup_mod,
+        "_resolve_coordinator_claude_root",
+        lambda repo_root, args: (tmp_path, None),
+    )
+    monkeypatch.setattr(
+        setup_mod, "_resolve_plugin_root_for_machine_local", lambda coord_path: None
+    )
+    monkeypatch.setattr(shared_mod, "resolve_machine_local_cli", lambda plugin_root_str: None)
+    monkeypatch.setattr(
+        "builtins.input", lambda prompt: (_ for _ in ()).throw(RuntimeError("input(): lost sys.stdin"))
+    )
+
+    args = setup_mod.Args()
+    args.agent_mode = False
+
+    # Must not raise -- a mutation reintroducing the un-caught RuntimeError
+    # (or re-raising it instead of defaulting to a decline) would exit the
+    # installer non-zero here.
+    setup_mod.offer_warm_opt_in(tmp_path, args)
+
+
 # ---------------------------------------------------------------------------
 # --skip-dep-check / --accept-missing-deps-risk exit-93 flag-pair gate
 # ---------------------------------------------------------------------------
