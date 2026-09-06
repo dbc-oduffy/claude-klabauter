@@ -3905,7 +3905,14 @@ _QUEUE_SCHEMA_PINS = {
     #   Kira/review-integrator terminal-stamp contract (integrated_from,
     #   rebuild_recommended, rebuild_rationale, rebuild_scope,
     #   findings_count). nested-field-additive, no required change.
-    'review-findings': "8c36240dad2b6dc4f1c88b7c54103d3c64f0018c",
+    # Pin moved 2026-09-06 to 469897344d1927702184d9cb1b7eff26c9e16ea8 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
+    #   workweek close W34-W36: reconcile the nine non-major drifts the
+    #   corrected drift gate now reports. The gate was previously reading the
+    #   published mirror's transformed copies (31 phantom drifts); fixed at
+    #   72e3baac33, so these ten are the first honest reading. handoff is held
+    #   back -- major advance, separate act.
+    'review-findings': "469897344d1927702184d9cb1b7eff26c9e16ea8",
     # Moved off _C1_LANDING_SHA 2026-07-27: DoE landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;
@@ -3929,7 +3936,14 @@ _QUEUE_SCHEMA_PINS = {
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
     #   DoE ruled reviewer_attestation verbatim at 2.1.0 (56cc5fba2); C0 leg
     #   of pln-a-chain-review-records-and-cre-0c3d9e
-    'review-trail': "9e9854fc9af259112bdb2da6412b39eeb86b8633",
+    # Pin moved 2026-09-06 to 469897344d1927702184d9cb1b7eff26c9e16ea8 (DoE
+    # HEAD) by bin/claude-klabauter-revendor-schema.py review-trail.
+    #   workweek close W34-W36: reconcile the nine non-major drifts the
+    #   corrected drift gate now reports. The gate was previously reading the
+    #   published mirror's transformed copies (31 phantom drifts); fixed at
+    #   72e3baac33, so these ten are the first honest reading. handoff is held
+    #   back -- major advance, separate act.
+    'review-trail': "469897344d1927702184d9cb1b7eff26c9e16ea8",
     # Vendored 2026-08-06 (initial vendoring, by hand — see
     # bin/claude-klabauter-revendor-schema.py's own docstring for why the FIRST
     # vendoring of a not-yet-tracked name is done by hand, not by the

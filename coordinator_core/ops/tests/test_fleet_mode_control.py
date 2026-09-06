@@ -200,3 +200,67 @@ def _entry(rendered: dict, key: str) -> dict:
         if entry["key"] == key:
             return entry
     raise AssertionError(f"key {key!r} not found in show_fleet_mode() output")
+
+
+class TestShowReportsTheVariantThatActuallyFires:
+    """`show` misreporting is worse than no `show`: a session reads this
+    (indirectly) to explain its own behaviour, so a stated variant that is not
+    the one that fires defeats the op's purpose."""
+
+    def test_environment_variant_is_reported_when_fleet_is_silent(self, monkeypatch):
+        from coordinator_core.ops.fleet import mode_control as MC
+
+        monkeypatch.setattr(MC, "read_fleet_mode", lambda: {})
+        # `ModeKey` is a frozen dataclass, so the entry's callable cannot be
+        # patched. It does not need to be: the registry stores a LATE-BOUND
+        # lambda that resolves this name through module globals at call time,
+        # which is what keeps the seam testable at all.
+        monkeypatch.setattr(
+            "coordinator_core.session.mode_resolution."
+            "_compaction_default_for_environment",
+            lambda: "informational",
+        )
+        entry = next(e for e in MC.show_fleet_mode()["keys"]
+                     if e["key"] == "compaction_warnings")
+        assert entry["variant_that_fires"] == "informational"
+        assert "environment" in entry["variant_source"]
+
+    def test_a_stated_fleet_value_is_reported_as_stated(self, monkeypatch):
+        from coordinator_core.ops.fleet import mode_control as MC
+
+        monkeypatch.setattr(MC, "read_fleet_mode",
+                            lambda: {"compaction_warnings": "standard"})
+        entry = next(e for e in MC.show_fleet_mode()["keys"]
+                     if e["key"] == "compaction_warnings")
+        assert entry["variant_that_fires"] == "standard"
+        assert entry["variant_source"] == "fleet record"
+
+    def test_falls_back_to_the_declared_default_when_resolution_is_unavailable(
+        self, monkeypatch
+    ):
+        """Lazy and fail-open: `show` must still render if the resolver cannot
+        be reached."""
+        from coordinator_core.ops.fleet import mode_control as MC
+
+        monkeypatch.setattr(MC, "read_fleet_mode", lambda: {})
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _blocked(name, *a, **k):
+            if "mode_resolution" in name:
+                raise ImportError("blocked for test")
+            return real_import(name, *a, **k)
+
+        monkeypatch.setattr(builtins, "__import__", _blocked)
+        variant, source = MC._unset_variant("compaction_warnings",
+                                            ("standard", "informational"))
+        assert variant == "standard"
+        assert "declared default" in source
+
+    def test_no_variant_selector_is_ever_reported_suppressible(self):
+        from coordinator_core.ops.fleet import mode_control as MC
+
+        for entry in MC.show_fleet_mode()["keys"]:
+            if entry["is_variant_selector"]:
+                assert entry["suppressible"] is False

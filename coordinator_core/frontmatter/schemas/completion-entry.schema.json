@@ -16,7 +16,7 @@
   "properties": {
     "title": {
       "type": "string",
-      "description": "One-line past-tense description of work shipped. Computed by coordinator_core/ops/coordinator_complete_entry.py::_resolve_entry_title: the governing plan's own frontmatter title:, else the consumed handoff's title:, prefixed 'Accomplished: ' (historical by prepending -- the source title is never rewritten). Falls back to an EM-authored placeholder only when the close has neither a governing plan nor a consumed handoff."
+      "description": "One-line past-tense description of work shipped. Authored by the EM at /workstream-complete time."
     },
     "created": {
       "type": "string",
@@ -48,7 +48,7 @@
       "items": {
         "type": "string"
       },
-      "description": "Commit SHAs landing this work. Computed at scaffold time by _resolve_session_commits: one `git log --grep=^Session-Id: <sid>$` over a window bounded to the entry's created date, in git log order. Explicitly-seeded --commits (the --for-date backfill path) still wins. Empty remains permitted, meaning no trailered commit was found in the window."
+      "description": "Commit SHAs landing this work. May be empty if /workstream-complete runs before commit (uncommon but permitted)."
     },
     "status": {
       "enum": [

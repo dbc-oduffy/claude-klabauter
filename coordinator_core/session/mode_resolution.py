@@ -123,12 +123,28 @@ class ModeKey:
     this is what makes an empty fleet mapping (``fleet_mode.
     read_fleet_mode()``'s own degradation) reproduce today's pre-plan
     behaviour exactly.
+
+    ``environment_default``: an optional callable returning a value in
+    ``value_type``, or ``None`` to abstain. Consulted AFTER both explicit
+    sides and BEFORE ``default`` — so an operator who states a value always
+    beats it, and it only ever speaks where nobody else has. A callable for
+    the same reason ``session_pair`` is one: the fact it reads is resolved at
+    call time, not frozen at import.
+
+    It exists because some defaults are wrong in a way that is knowable from
+    the environment rather than from the operator. The motivating case: the
+    context-pressure advisory's `standard` variant recommends `/handoff`, and
+    on a cloud box that remedy does not exist — no `/clear`, and passing a
+    baton means a PR merge, a new session and a re-point. Making the operator
+    remember to set that per box is exactly the failure the discharge test
+    names; the environment already knows.
     """
 
     session_pair: Optional[Callable[[str], object]]
     precedence: str
     value_type: ValueType
     default: object
+    environment_default: Optional[Callable[[], object]] = None
 
 
 def _validate_value(raw: object, value_type: ValueType) -> Optional[object]:
@@ -158,6 +174,30 @@ def _autonomous_session_value(session_id: str) -> bool:
     return autonomous_sentinel.sentinel_path(session_id).exists()
 
 
+def _compaction_default_for_environment() -> Optional[str]:
+    """`informational` on a box that is not the developer's own; abstain
+    otherwise.
+
+    The `standard` variant tells the reader to run `/handoff`. That is the
+    right call on an attended box and an unavailable one on a cloud box, where
+    a session rides compaction by design. Abstaining (returning ``None``)
+    rather than answering `standard` matters: it leaves the static default in
+    charge wherever locality is uncertain, so a `suspect` reading never silently
+    changes behaviour.
+    """
+    try:
+        from coordinator_core.env_locality import locality
+
+        got = locality()
+        # Only a confident cloud reading moves the default. `suspect` abstains
+        # by construction, and so does a low-confidence cloud call.
+        if got.call == "cloud" and got.confidence in ("certain", "high"):
+            return "informational"
+    except Exception:  # pragma: no cover - resolution must never block a mode read
+        pass
+    return None
+
+
 MODE_KEYS: Dict[str, ModeKey] = {
     "autonomous": ModeKey(
         session_pair=_autonomous_session_value,
@@ -170,6 +210,11 @@ MODE_KEYS: Dict[str, ModeKey] = {
         precedence="fleet-wins",
         value_type=COMPACTION_WARNING_VARIANTS,
         default="standard",
+        # Late-bound by name, NOT a direct reference: the entry is a frozen
+        # dataclass built at import time, so a direct reference would freeze
+        # this seam shut and make it unpatchable in tests. The lambda resolves
+        # the name through module globals at call time instead.
+        environment_default=lambda: _compaction_default_for_environment(),
     ),
 }
 
@@ -211,7 +256,8 @@ def resolve_mode(key: str, session_id: str) -> object:
         cannot consent to on third parties' behalf).
       - ``fleet-wins``: a validated fleet value governs if present; else the
         session's own value (where the key declares one) governs; else the
-        key's ``default``.
+        key's ``environment_default`` (where it declares one and that callable
+        does not abstain); else the key's ``default``.
 
     Never enumerates sessions — only ever reads the one ``session_id`` it
     was given.
@@ -234,4 +280,15 @@ def resolve_mode(key: str, session_id: str) -> object:
         return fleet_value
     if entry.session_pair is not None:
         return entry.session_pair(session_id)
+    if entry.environment_default is not None:
+        # Defensive: resolving the environment must never block a mode read.
+        # The shipped callable swallows its own failures, but the registry is
+        # an extension point and a future entry's callable is not this
+        # module's to trust.
+        try:
+            env_value = _validate_value(entry.environment_default(), entry.value_type)
+        except Exception:
+            env_value = None
+        if env_value is not None:
+            return env_value
     return entry.default

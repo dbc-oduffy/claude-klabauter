@@ -2968,6 +2968,45 @@ _TYPE_UNENUMERATED_HEADER_LINE = (
     "BLOCKED: this dispatch identity is on no roster, so Bash is confined."
 )
 
+#: (2026-09-06) The same defect the block above fixed, one layer in: naming
+#: the CAUSE ("on no roster") without naming the IDENTITY still leaves the
+#: reader unable to act, because the roster is checkable and the string is
+#: not. Measured today, on a Workflow-dispatched planner: three sessions
+#: across two repos reasoned for hours about which leg was non-empty, and
+#: could not tell an absent `agent_type` from a present-but-unrostered one
+#: -- the deny they were reading was compatible with both, and the correct
+#: answer (non-empty, since an empty type escapes all three legs) was
+#: deducible only by reading this module's source. A probe matrix finally
+#: established it by elimination. The identity is the one fact the guard
+#: holds and the reader does not.
+#:
+#: Same discipline as the block above: this REPLACES the header line rather
+#: than adding one, so `_message_size`'s prose byte count is unaffected.
+#: The value is caller-controlled free text, so it is passed through
+#: `_sanitize_cmd_for_reason` (control-char strip + length cap) exactly like
+#: the command string, and truncated harder -- an identity is a short token,
+#: and a long one is itself the finding.
+_UNENUMERATED_IDENTITY_MAX_LEN = 60
+
+
+def _unenumerated_header_line(effective_type: str) -> str:
+    """Header for a leg-3 unenumerated confinement, naming the identity that
+    was confined.
+
+    Falls back to the bare `_TYPE_UNENUMERATED_HEADER_LINE` when
+    `effective_type` is empty. That fallback is currently unreachable by
+    construction -- `is_confined_by_roster_absence` returns False for an
+    empty string, so leg 3 cannot fire without a non-empty type -- and is
+    kept as a defensive branch rather than an assertion because a deny
+    message is the wrong place to raise.
+    """
+    if not effective_type:
+        return _TYPE_UNENUMERATED_HEADER_LINE
+    shown = _sanitize_cmd_for_reason(effective_type)
+    if len(shown) > _UNENUMERATED_IDENTITY_MAX_LEN:
+        shown = shown[:_UNENUMERATED_IDENTITY_MAX_LEN] + "..."
+    return f"BLOCKED: dispatch identity {shown!r} is on no roster, so Bash is confined."
+
 #: (Message-size discipline, 2026-08-03) Trimmed to prose-cap width. Moved
 #: onto ONE indented line so it lands inside the "Use instead:" cue window
 #: (see ``_deny_reason``) and is exempted from the prose byte count --
@@ -3149,7 +3188,7 @@ def _deny_reason(
         if confinement_cause == "roster-unreadable":
             header_line = _ROSTER_UNREADABLE_HEADER_LINE
         elif confinement_cause == "unenumerated":
-            header_line = _TYPE_UNENUMERATED_HEADER_LINE
+            header_line = _unenumerated_header_line(effective_type)
     scaffolder_stanza = overrides.get("scaffolder", _DEFAULT_SCAFFOLDER_STANZA)
     accepted_forms_stanza = overrides.get("accepted_forms", _DEFAULT_ACCEPTED_FORMS_STANZA)
     closing_stanza = (

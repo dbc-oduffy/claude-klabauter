@@ -24,13 +24,31 @@ from coordinator_core.session.mode_resolution import (
 )
 
 
+#: Captured at import, BEFORE the autouse fixture below shadows the module
+#: attribute — the tests that exercise the real environment logic need the
+#: real function, not the fixture's abstaining stand-in.
+_REAL_ENV_DEFAULT = mode_resolution._compaction_default_for_environment
+
+
 @pytest.fixture(autouse=True)
 def _isolate_sentinel_and_fleet(tmp_path, monkeypatch):
-    """Isolate both the autonomous sentinel's temp dir and the fleet record
-    location so tests never touch the real machine-wide files."""
+    """Isolate the autonomous sentinel's temp dir, the fleet record location,
+    AND the environment-derived default, so tests never touch the real
+    machine-wide files and never depend on the host they run on.
+
+    The environment leg matters as much as the other two: `compaction_warnings`
+    carries an `environment_default` that answers `informational` on a cloud
+    box, so without pinning it here every "absent fleet falls back to the
+    static default" assertion below would pass on an attended box and fail in
+    a cloud session. Tests that mean to exercise the environment leg pin it
+    themselves (see `TestCompactionWarningsEnvironmentDefault`)."""
     monkeypatch.setattr(
         "coordinator_core.session.autonomous_sentinel.tempfile.gettempdir",
         lambda: str(tmp_path),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.session.mode_resolution._compaction_default_for_environment",
+        lambda: None,
     )
     settings_home = tmp_path / "settings-home"
     settings_home.mkdir()
@@ -188,3 +206,85 @@ def test_validate_value_raises_on_unsupported_value_type():
     finding 2)."""
     with pytest.raises(TypeError):
         _validate_value("whatever", str)
+
+
+class TestCompactionWarningsEnvironmentDefault:
+    """The environment leg: `informational` where `/handoff` is not an
+    available remedy, and silence everywhere else."""
+
+    def _pin(self, monkeypatch, call, confidence):
+        from coordinator_core.env_locality import Locality
+
+        monkeypatch.setattr(
+            "coordinator_core.env_locality.locality",
+            lambda *a, **k: Locality(call, confidence, "test", "pinned"),
+        )
+
+    def test_confident_cloud_moves_the_default(self, monkeypatch):
+        from coordinator_core.session import mode_resolution as MR
+
+        self._pin(monkeypatch, "cloud", "certain")
+        assert _REAL_ENV_DEFAULT() == "informational"
+
+    def test_attended_abstains(self, monkeypatch):
+        from coordinator_core.session import mode_resolution as MR
+
+        self._pin(monkeypatch, "attended", "certain")
+        assert _REAL_ENV_DEFAULT() is None
+
+    def test_suspect_abstains_rather_than_guessing(self, monkeypatch):
+        """A `suspect` reading must never silently change behaviour — that is
+        the whole reason the third state exists."""
+        from coordinator_core.session import mode_resolution as MR
+
+        self._pin(monkeypatch, "suspect", "low")
+        assert _REAL_ENV_DEFAULT() is None
+
+    def test_low_confidence_cloud_abstains(self, monkeypatch):
+        from coordinator_core.session import mode_resolution as MR
+
+        self._pin(monkeypatch, "cloud", "low")
+        assert _REAL_ENV_DEFAULT() is None
+
+    def test_a_stated_fleet_value_beats_the_environment(
+        self, _isolate_sentinel_and_fleet, monkeypatch
+    ):
+        """An operator who states a value always wins: the environment only
+        ever speaks where nobody else has."""
+        from coordinator_core.session import mode_resolution as MR
+
+        monkeypatch.setattr(MR, "_compaction_default_for_environment",
+                            lambda: "informational")
+        _write_fleet(_isolate_sentinel_and_fleet[1],
+                     {"compaction_warnings": "standard"})
+        assert resolve_mode("compaction_warnings", "s1") == "standard"
+
+    def test_environment_beats_the_static_default_when_fleet_is_silent(
+        self, _isolate_sentinel_and_fleet, monkeypatch
+    ):
+        from coordinator_core.session import mode_resolution as MR
+
+        monkeypatch.setattr(MR, "_compaction_default_for_environment",
+                            lambda: "informational")
+        assert resolve_mode("compaction_warnings", "s1") == "informational"
+
+    def test_a_resolution_failure_falls_back_to_the_static_default(
+        self, _isolate_sentinel_and_fleet, monkeypatch
+    ):
+        """Locality resolution must never block a mode read."""
+        from coordinator_core.session import mode_resolution as MR
+
+        def _boom():
+            raise RuntimeError("locality unavailable")
+
+        monkeypatch.setattr(MR, "_compaction_default_for_environment", _boom)
+        assert resolve_mode("compaction_warnings", "s1") == "standard"
+
+    def test_the_callable_itself_swallows_a_locality_failure(self, monkeypatch):
+        from coordinator_core.session import mode_resolution as MR
+
+        def _boom(*a, **k):
+            raise RuntimeError("no")
+
+        monkeypatch.setattr("coordinator_core.env_locality.locality", _boom)
+        assert _REAL_ENV_DEFAULT() is None

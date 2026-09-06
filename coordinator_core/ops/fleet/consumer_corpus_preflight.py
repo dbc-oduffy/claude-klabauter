@@ -227,6 +227,16 @@ NON_FLEET_EXCLUDED_KEYS: Dict[str, str] = {
     "repos.example-sim-repo": "standalone product repo (example-sim-repo), not part of the coordinator EM fleet",
     "repos.example-voice-system": "standalone product repo (example-voice-system), not part of the coordinator EM fleet",
     "repos.example_store_repo": "standalone product repo (Example Store), not part of the coordinator EM fleet",
+    # 2026-09-06: five keys that had been sitting unclassified, blocking the
+    # handoff 8.10.0 -> 10.0.0 major re-vendor. Each verified by RESOLVED PATH,
+    # not by name — the two aliases below resolve to a tree FLEET_REPO_KEYS
+    # already scans under a different key, so promoting either would double-count
+    # that repo's corpus and silently inflate every count this oracle reports.
+    "repos.claude_klabauter": "published engine mirror (percolate publish target), not an authoring EM working tree — its handoff corpus, if any, is a transformed copy of claude-klabauter's",
+    "repos.example_doctrine_repo": "ALIAS: resolves to the same tree as repos.doe_claude, already scanned as DoE-claude — classifying it fleet would double-count that corpus",
+    "repos.example-game-repo": "ALIAS: resolves to the same tree as repos.example_game_workbench_repo, already scanned as example-game-workbench-repo — classifying it fleet would double-count that corpus",
+    "repos.fleet_root": "the PARENT DIRECTORY holding the fleet's repos, not a repo itself — a scan rooted here would walk every tree at once",
+    "repos.example_memo_probe_repo": "memo-delivery smoke-test fixture under the settings home's machine-local dir, not a repo",
 }
 
 

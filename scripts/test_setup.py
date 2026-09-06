@@ -306,6 +306,145 @@ def test_provision_deps_guarded_interpreter_exits_96_no_fallback_no_override(set
     assert "does not honour it" in stderr
 
 
+# ---------------------------------------------------------------------------
+# DR-411 container opt-in — --i-assert-no-other-consumer
+# (docs/decisions/DR-411-the-pep-668-refusal-does-not-reach-an-ephemeral-container.md)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_args_container_optin_flag(setup_mod):
+    args = setup_mod.parse_args(["--i-assert-no-other-consumer"])
+    assert args.container_optin is True
+    # The flag must not alter the ordinary venv-fallback flag it sits beside.
+    assert args.allow_venv_fallback is False
+
+
+def test_provision_deps_guarded_without_optin_flag_unchanged_no_override_token(
+    setup_mod, monkeypatch, tmp_path, capsys
+):
+    """The floor: the workstation path (no --i-assert-no-other-consumer passed)
+    is behaviourally unchanged by this carve-out existing at all -- same
+    exit 96, same no-pip-call, and (new) no override token anywhere near the
+    argv the installer would have built."""
+    pyproject_dir = tmp_path / "root"
+    pyproject_dir.mkdir()
+    _fixture_pyproject(pyproject_dir)
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    _stub_candidates(setup_mod, monkeypatch, sys.executable)
+    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
+    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path: False)
+
+    calls = []
+    monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
+
+    with pytest.raises(SystemExit) as exc_info:
+        setup_mod.provision_deps(pyproject_dir, sys.executable, False)
+
+    assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
+    assert calls == []
+    stderr = capsys.readouterr().err
+    assert "--break-system-packages" not in stderr
+    assert "--i-assert-no-other-consumer" not in stderr
+
+
+def test_provision_deps_container_optin_honoured_appends_break_system_packages_only(
+    setup_mod, monkeypatch, tmp_path
+):
+    """WITH the flag on a Linux/euid-0 host: the guarded candidate is
+    provisioned rather than refused, and the recorded pip argv is the
+    ORDINARY argv plus exactly one token, `--break-system-packages` --
+    asserted token-by-token, not merely "provisioned", per the chunk body's
+    warning that a looser assertion is satisfied by exactly the mechanism
+    DR-411 forbids (an env-var override). The child env carries no
+    PIP_BREAK_SYSTEM_PACKAGES."""
+    pyproject_dir = tmp_path / "root"
+    pyproject_dir.mkdir()
+    _fixture_pyproject(pyproject_dir)
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    _stub_candidates(setup_mod, monkeypatch, sys.executable)
+    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
+    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path: False)
+    monkeypatch.setattr(setup_mod.sys, "platform", "linux")
+    monkeypatch.setattr(setup_mod.os, "geteuid", lambda: 0, raising=False)
+    _stub_editable_finder_conversion(setup_mod, monkeypatch)
+
+    state = {"installed": False}
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names: state["installed"])
+
+    captured = {}
+
+    def _fake_subprocess_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["env"] = kwargs.get("env")
+        state["installed"] = True
+        return setup_mod.subprocess.CompletedProcess(argv, 0, stdout="Successfully installed")
+
+    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_subprocess_run)
+
+    engine_py, import_names = setup_mod.provision_deps(
+        pyproject_dir, sys.executable, False, container_optin=True
+    )
+
+    ordinary_argv = [sys.executable, "-m", "pip", "install", "PyYAML", "-e", str(pyproject_dir)]
+    assert captured["argv"] == ordinary_argv + ["--break-system-packages"]
+    assert captured["env"] is not None
+    assert "PIP_BREAK_SYSTEM_PACKAGES" not in captured["env"]
+    assert engine_py == sys.executable
+
+
+def test_provision_deps_container_optin_wrong_host_refuses_exit_96(setup_mod, monkeypatch, tmp_path, capsys):
+    """WITH the flag on a non-Linux or non-root host: the opt-in is itself a
+    refusal (DR-411's one real enforcement) -- exit 96, naming the host and
+    the asserted property. Never a positive container-detection branch."""
+    pyproject_dir = tmp_path / "root"
+    pyproject_dir.mkdir()
+    _fixture_pyproject(pyproject_dir)
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    _stub_candidates(setup_mod, monkeypatch, sys.executable)
+    monkeypatch.setattr(setup_mod.sys, "platform", "win32")
+    monkeypatch.setattr(setup_mod.os, "geteuid", lambda: 0, raising=False)
+
+    calls = []
+    monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
+
+    with pytest.raises(SystemExit) as exc_info:
+        setup_mod.provision_deps(pyproject_dir, sys.executable, False, container_optin=True)
+
+    assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
+    assert calls == []
+    stderr = capsys.readouterr().err
+    assert "win32" in stderr
+    assert "--i-assert-no-other-consumer" in stderr
+
+
+def test_provision_deps_container_optin_no_root_refuses_exit_96(setup_mod, monkeypatch, tmp_path, capsys):
+    pyproject_dir = tmp_path / "root"
+    pyproject_dir.mkdir()
+    _fixture_pyproject(pyproject_dir)
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    _stub_candidates(setup_mod, monkeypatch, sys.executable)
+    monkeypatch.setattr(setup_mod.sys, "platform", "linux")
+    monkeypatch.setattr(setup_mod.os, "geteuid", lambda: 1000, raising=False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        setup_mod.provision_deps(pyproject_dir, sys.executable, False, container_optin=True)
+
+    assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
+    stderr = capsys.readouterr().err
+    assert "euid" in stderr
+
+
+def test_help_text_omits_container_optin_flag(setup_mod):
+    assert "--i-assert-no-other-consumer" not in setup_mod.HELP_TEXT
+
+
+def test_manifest_override_flags_omits_container_optin_flag():
+    manifest_path = _SETUP_PY_PATH.parent.parent / "docs" / "install" / "agent-install-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    override_values = set(manifest.get("override_flags", {}).values())
+    assert "--i-assert-no-other-consumer" not in override_values
+
+
 def test_provision_deps_nonpep668_failure_no_flag_exits_1(setup_mod, monkeypatch, tmp_path, capsys):
     pyproject_dir = tmp_path / "root"
     pyproject_dir.mkdir()
@@ -3182,3 +3321,68 @@ def test_convert_editable_finder_is_idempotent_on_an_already_plain_pth(
     result = setup_mod.convert_editable_finder_to_plain_path("py", package_root)
 
     assert "already plain-path" in result
+
+
+# ---------------------------------------------------------------------------
+# Interactive-prompt stdin guards
+# ---------------------------------------------------------------------------
+
+
+def test_input_call_sites_catch_runtime_error_not_only_eof(setup_mod):
+    """Every `input()` in setup.py is guarded against BOTH exceptions a
+    non-interactive stdin can raise, not just `EOFError`.
+
+    Measured 2026-09-06: a stdin redirected from /dev/null makes `input()`
+    raise `EOFError`, but a genuinely CLOSED stdin (`0<&-`) raises
+    `RuntimeError: input(): lost sys.stdin` instead. A handler catching only
+    `EOFError` therefore lets the second case escape and exit the installer
+    non-zero on exactly the machines that have no operator -- and a non-zero
+    exit from a cloud environment's setup script fails the whole session
+    (https://code.claude.com/docs/en/cloud-environments, "Exit zero").
+
+    AST-based rather than behavioural because both call sites sit behind
+    platform/flag branches that a unit test cannot reach without a subprocess:
+    the Homebrew offer is macOS-only, and the warm-engine prompt is skipped
+    outright under `--i-am-agent`. The structural property is the thing worth
+    pinning, and it is the thing a future edit would break.
+    """
+    tree = ast.parse(_SETUP_PY_PATH.read_text(encoding="utf-8"))
+
+    def _handled_names(handler: ast.ExceptHandler) -> set[str]:
+        node = handler.type
+        if isinstance(node, ast.Name):
+            return {node.id}
+        if isinstance(node, ast.Tuple):
+            return {e.id for e in node.elts if isinstance(e, ast.Name)}
+        return set()
+
+    def _contains_input_call(node: ast.AST) -> bool:
+        return any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "input"
+            for n in ast.walk(node)
+        )
+
+    guarded: list[int] = []
+    for try_node in (n for n in ast.walk(tree) if isinstance(n, ast.Try)):
+        if not any(_contains_input_call(stmt) for stmt in try_node.body):
+            continue
+        handled: set[str] = set()
+        for handler in try_node.handlers:
+            handled |= _handled_names(handler)
+        assert {"EOFError", "RuntimeError"} <= handled, (
+            f"input() at line {try_node.lineno} is guarded by {sorted(handled) or 'nothing'}; "
+            "a closed stdin raises RuntimeError('input(): lost sys.stdin'), not EOFError"
+        )
+        guarded.append(try_node.lineno)
+
+    # Denominator check: a refactor that moves an input() out of a try block
+    # would otherwise make this test pass by finding nothing to assert on.
+    input_calls = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "input"
+    ]
+    assert len(input_calls) == len(guarded), (
+        f"{len(input_calls)} input() call(s) in setup.py but only {len(guarded)} inside a "
+        "guarded try block — an unguarded prompt exits non-zero on a closed stdin"
+    )
+    assert guarded, "expected at least one guarded input() call site; found none"

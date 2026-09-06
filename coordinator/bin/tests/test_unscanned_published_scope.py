@@ -159,3 +159,103 @@ class TestPublishedScopeFalsePositiveFix:
             published_dest_dirs_by_repo_root={target.dest_dir: {target.dest_dir}},
         )
         assert ok is True
+
+
+class TestDestAuthoredFilesAreNotPublished:
+    """The `published_files_by_repo_root` fix. `published_dest_dirs_by_repo_root`
+    scopes `published` to files under a dest_dir this run swapped, which is
+    strictly weaker than "files this run wrote" and collapses to nothing at all
+    for a MIRROR-MODE TOPLEVEL ROW whose `dest_dir` IS the destination repo
+    root: `dest_dir.rglob("*")` is then the whole repo, so content the
+    DESTINATION authored itself reads as published-by-this-run.
+
+    Witnessed live, not hypothesised: `percolate-round claude-klabauter` failed
+    its engine rows on klabauter's own `docs/plans/2026-09-05-linux-cloud-
+    dogfood-install-and-exercise.md` -- authored in that repo by its own
+    session (cfc55599), brought into the publish branch by their reconcile
+    (5721ce1b). Because `plans` is one of the sweep's `exclude_prefixes`, the
+    sweep is contractually guaranteed never to visit it, so the finding could
+    never clear and every subsequent round fail-closed.
+    """
+
+    def test_dest_authored_file_under_root_dest_dir_does_not_fail(self, tmp_path, capsys):
+        repo_root = tmp_path / "dest-repo"
+        repo_root.mkdir()
+        (repo_root / "docs" / "plans").mkdir(parents=True)
+        dest_authored = repo_root / "docs" / "plans" / "their-own-plan.md"
+        dest_authored.write_text("# authored in the destination repo\n", encoding="utf-8")
+        ours = repo_root / "shipped.py"
+        ours.write_text("print('ours')\n", encoding="utf-8")
+
+        target = publish.ResolvedTarget(
+            name="toplevel", mode="mirror", source_dir=tmp_path / "src", dest_dir=repo_root
+        )
+        (tmp_path / "src").mkdir(exist_ok=True)
+        section = {"file_surface": {}}
+
+        ok = publish.dispatch_end_of_run_unscanned_published_check(
+            [(target, section)],
+            target_filtered=False,
+            visited_files_by_repo_root={repo_root: {ours}},
+            published_dest_dirs_by_repo_root={repo_root: {repo_root}},
+            published_files_by_repo_root={repo_root: {ours}},
+        )
+        assert ok is True
+        captured = capsys.readouterr()
+        assert "their-own-plan.md" not in captured.err
+
+    def test_the_same_file_still_fails_when_a_row_did_publish_it(self, tmp_path, capsys):
+        """Fail-closed is preserved, and this is the direction that matters:
+        the discriminator is whether a ROW WROTE the file, never where it sits
+        or what its extension is. The identical path under the identical
+        exclude_prefixes segment is a hard failure once it appears in the
+        published-files set, because then it really did ship untransformed."""
+        repo_root = tmp_path / "dest-repo"
+        repo_root.mkdir()
+        (repo_root / "docs" / "plans").mkdir(parents=True)
+        shipped_unswept = repo_root / "docs" / "plans" / "we-shipped-this.md"
+        shipped_unswept.write_text("# ours, and never swept\n", encoding="utf-8")
+
+        target = publish.ResolvedTarget(
+            name="toplevel", mode="mirror", source_dir=tmp_path / "src", dest_dir=repo_root
+        )
+        (tmp_path / "src").mkdir(exist_ok=True)
+        section = {"file_surface": {}}
+
+        ok = publish.dispatch_end_of_run_unscanned_published_check(
+            [(target, section)],
+            target_filtered=False,
+            visited_files_by_repo_root={repo_root: set()},
+            published_dest_dirs_by_repo_root={repo_root: {repo_root}},
+            published_files_by_repo_root={repo_root: {shipped_unswept}},
+        )
+        assert ok is False
+        captured = capsys.readouterr()
+        assert "we-shipped-this.md" in captured.err
+        assert "unscanned-published check FAILED" in captured.err
+
+    def test_published_files_takes_precedence_over_dest_dirs(self, tmp_path, capsys):
+        """The two params are not merged. When both are supplied the
+        files-level set governs -- merging them would silently reinstate the
+        whole-root walk this fix exists to remove."""
+        repo_root = tmp_path / "dest-repo"
+        repo_root.mkdir()
+        stray = repo_root / "not-ours.py"
+        stray.write_text("print('theirs')\n", encoding="utf-8")
+
+        target = publish.ResolvedTarget(
+            name="toplevel", mode="mirror", source_dir=tmp_path / "src", dest_dir=repo_root
+        )
+        (tmp_path / "src").mkdir(exist_ok=True)
+        section = {"file_surface": {}}
+
+        ok = publish.dispatch_end_of_run_unscanned_published_check(
+            [(target, section)],
+            target_filtered=False,
+            visited_files_by_repo_root={repo_root: set()},
+            published_dest_dirs_by_repo_root={repo_root: {repo_root}},
+            published_files_by_repo_root={repo_root: set()},
+        )
+        assert ok is True
+        captured = capsys.readouterr()
+        assert "not-ours.py" not in captured.err

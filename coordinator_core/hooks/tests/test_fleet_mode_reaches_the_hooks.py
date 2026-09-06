@@ -193,6 +193,44 @@ class TestContextPressureCompactionWarningsFleetWins:
         assert "INFORMATIONAL" in text
         assert "Commit and checkpoint now" in text
 
+    def test_cloud_box_gets_the_informational_variant_with_no_config_at_all(
+        self, _isolate_sentinel_and_fleet, monkeypatch
+    ):
+        """The whole point of the environment leg: on a box where `/handoff`
+        is not an available remedy, the advisory stops recommending it WITHOUT
+        anyone having set anything. Nothing to install, nothing to remember."""
+        monkeypatch.setattr(
+            "coordinator_core.session.mode_resolution."
+            "_compaction_default_for_environment",
+            lambda: "informational",
+        )
+        _write_usage("cp-cloud", 50.0, 1_000_000.0)
+        text = postuse_advisory_dispatch._check_context_pressure_sync(
+            "cp-cloud", "/does/not/matter/transcript.jsonl"
+        )
+        assert "INFORMATIONAL" in text
+        assert "HANDOFF NOW" not in text, (
+            "a cloud box must not be told to run a ceremony it cannot run"
+        )
+
+    def test_an_explicit_fleet_value_still_beats_the_environment(
+        self, _isolate_sentinel_and_fleet, monkeypatch
+    ):
+        """An operator who states a value wins over the environment's inference
+        -- including stating `standard` on a box the environment reads as
+        cloud."""
+        monkeypatch.setattr(
+            "coordinator_core.session.mode_resolution."
+            "_compaction_default_for_environment",
+            lambda: "informational",
+        )
+        _write_fleet({"compaction_warnings": "standard"})
+        _write_usage("cp-override", 50.0, 1_000_000.0)
+        text = postuse_advisory_dispatch._check_context_pressure_sync(
+            "cp-override", "/does/not/matter/transcript.jsonl"
+        )
+        assert "HANDOFF NOW" in text
+
     def test_fleet_informational_selects_variant_at_40(self, _isolate_sentinel_and_fleet):
         _write_fleet({"compaction_warnings": "informational"})
         now = 1_000_000.0
@@ -257,3 +295,78 @@ class TestModeKeysRegistryStillValid:
     def test_autonomous_key_registered(self):
         assert "autonomous" in MODE_KEYS
         assert MODE_KEYS["autonomous"].precedence == "session-wins"
+
+
+class TestBatonAffordanceIsNamedInBothBands:
+    """The session usually does not know it has a baton. Both informational
+    bands must name it — 40 especially, where there is still runway to write a
+    considered note rather than a hurried one."""
+
+    def _with_baton(self, monkeypatch, tmp_path, sid):
+        baton = tmp_path / f"{sid}-baton.json"
+        baton.write_text("{}")
+        monkeypatch.setattr(
+            "coordinator_core.session_baton.store.baton_path",
+            lambda s, cwd=None: baton,
+        )
+        return baton
+
+    def test_orange_band_names_the_baton(self, _isolate_sentinel_and_fleet, monkeypatch):
+        tmp_path = _isolate_sentinel_and_fleet[0]
+        baton = self._with_baton(monkeypatch, tmp_path, "cp-40")
+        _write_usage("cp-40", 41.0, 1_000_000.0)
+        text = postuse_advisory_dispatch._check_context_pressure_sync(
+            "cp-40", "/does/not/matter/transcript.jsonl"
+        )
+        assert "INFORMATIONAL" in text
+        assert str(baton) in text
+        assert "baton.carry_forward" in text
+
+    def test_red_band_informational_names_the_baton(
+        self, _isolate_sentinel_and_fleet, monkeypatch
+    ):
+        tmp_path = _isolate_sentinel_and_fleet[0]
+        baton = self._with_baton(monkeypatch, tmp_path, "cp-43")
+        monkeypatch.setattr(
+            "coordinator_core.session.mode_resolution."
+            "_compaction_default_for_environment",
+            lambda: "informational",
+        )
+        _write_usage("cp-43", 50.0, 1_000_000.0)
+        text = postuse_advisory_dispatch._check_context_pressure_sync(
+            "cp-43", "/does/not/matter/transcript.jsonl"
+        )
+        assert str(baton) in text
+
+    def test_no_baton_on_disk_means_no_clause_not_a_broken_promise(
+        self, _isolate_sentinel_and_fleet, monkeypatch
+    ):
+        """An advisory that names a file the reader cannot find teaches them to
+        distrust the next one."""
+        monkeypatch.setattr(
+            "coordinator_core.session_baton.store.baton_path",
+            lambda s, cwd=None: None,
+        )
+        _write_usage("cp-nobaton", 41.0, 1_000_000.0)
+        text = postuse_advisory_dispatch._check_context_pressure_sync(
+            "cp-nobaton", "/does/not/matter/transcript.jsonl"
+        )
+        assert "INFORMATIONAL" in text
+        assert "baton" not in text.lower()
+
+    def test_the_40_band_still_reads_no_mode_keys(
+        self, _isolate_sentinel_and_fleet, monkeypatch
+    ):
+        """PM ruling: 40 is informational for everyone. The baton clause is
+        mode-independent and must not reintroduce a variant selection here."""
+        def _explode(*a, **k):
+            raise AssertionError("the 40 band must not resolve a mode key")
+
+        monkeypatch.setattr(
+            "coordinator_core.session.mode_resolution.resolve_mode", _explode
+        )
+        _write_usage("cp-nomode", 41.0, 1_000_000.0)
+        text = postuse_advisory_dispatch._check_context_pressure_sync(
+            "cp-nomode", "/does/not/matter/transcript.jsonl"
+        )
+        assert "INFORMATIONAL" in text

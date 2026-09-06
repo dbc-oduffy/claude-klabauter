@@ -22,9 +22,18 @@ fail-open (`read_fleet_mode()` treats an unrecognized key as ordinary
 degradation input, by design -- see that module's own docstring). It
 intentionally mirrors C2's planned two keys (`autonomous`, session-wins;
 `compaction_warnings`, fleet-wins, `session_pair: None`) by NAME and
-PRECEDENCE, because both describe the same fleet record; it does not, and
-must not, import from `mode_resolution` (out of this chunk's scope, and
-not guaranteed to exist yet).
+PRECEDENCE, because both describe the same fleet record.
+
+`_KNOWN_KEYS` is still not sourced from `mode_resolution`, and VALIDATION
+here never consults it: a human's typo is caught against this local
+registry, at the door. The original prohibition on importing that module at
+all gave two reasons — chunk scope, and "not guaranteed to exist yet" — and
+both have expired; it ships. `show` therefore reads it, LAZILY and
+fail-open, for one purpose only: to REPORT the variant that actually fires
+when a key carries an `environment_default` (see `_unset_variant`). Reading
+the resolver to report is not the same as validating against it, and a
+`show` that renders a variant other than the one that fires defeats this
+op's own load-bearing self-explanation requirement below.
 
 VALIDATION IS THE FLOOR HERE, NOT A SUBSTITUTE FOR C1's DEGRADATION PATH.
 `set` rejects an unknown key by name (listing the known ones) and rejects
@@ -217,6 +226,42 @@ def set_fleet_mode_key(key: str, value: str) -> dict:
     return record
 
 
+def _unset_variant(key: str, enum_values: tuple) -> tuple:
+    """The variant that fires when the fleet record is silent, plus where it
+    came from.
+
+    WHY THIS CONSULTS THE RESOLVER. A key may carry an ``environment_default``
+    -- ``compaction_warnings`` does, answering ``informational`` on a box where
+    the ``standard`` variant's ``/handoff`` recommendation is not an available
+    remedy. Reporting the STATIC default here would make ``show`` state a
+    variant other than the one that actually fires, which defeats this op's own
+    load-bearing requirement (see module docstring: a session has to be able to
+    explain its own behaviour). A ``show`` that misreports is worse than no
+    ``show``.
+
+    The module docstring's prohibition on importing ``mode_resolution`` gave
+    two reasons, and BOTH have since expired: the chunk-scope boundary that
+    excluded that file, and "not guaranteed to exist yet". It ships. The import
+    stays LAZY and fail-open regardless, so this op keeps its import-time
+    independence and degrades to the static default rather than failing to
+    render if resolution is ever unavailable. `_KNOWN_KEYS` remains the
+    CLI-validation registry; this reads the resolver only to REPORT, never to
+    validate.
+    """
+    static_default = enum_values[0]
+    try:
+        from coordinator_core.session.mode_resolution import MODE_KEYS
+
+        env_default = MODE_KEYS[key].environment_default
+        if env_default is not None:
+            value = env_default()
+            if value in enum_values:
+                return value, "environment (no fleet value set)"
+    except Exception:
+        pass
+    return static_default, "declared default (no fleet value set)"
+
+
 def show_fleet_mode() -> dict:
     """Render every known key, self-explaining: precedence rule, which
     scope currently wins, and (for a variant-selector key) the variant
@@ -235,9 +280,13 @@ def show_fleet_mode() -> dict:
               "is_variant_selector": bool,
               "description": str,
               # present only when is_variant_selector is True:
-              "variant_that_fires": str,     # the fleet_value, or the
-                                              # declared default variant
-                                              # when absent
+              "variant_that_fires": str,     # the fleet_value; else the
+                                              # key's environment-derived
+                                              # variant; else its declared
+                                              # default
+              "variant_source": str,          # which of those three it was --
+                                              # so a reader can tell a stated
+                                              # value from an inferred one
               "suppressible": False,         # ALWAYS False for a variant
                                               # selector -- no value of it
                                               # suppresses the advisory
@@ -275,8 +324,13 @@ def show_fleet_mode() -> dict:
 
         if key_def["is_variant_selector"]:
             enum_values = key_def["enum_values"]
-            default_variant = enum_values[0]
-            entry["variant_that_fires"] = fleet_value if fleet_value in enum_values else default_variant
+            if fleet_value in enum_values:
+                entry["variant_that_fires"] = fleet_value
+                entry["variant_source"] = "fleet record"
+            else:
+                variant, source = _unset_variant(key, enum_values)
+                entry["variant_that_fires"] = variant
+                entry["variant_source"] = source
             entry["suppressible"] = False
 
         entries.append(entry)

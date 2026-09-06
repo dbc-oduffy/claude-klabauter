@@ -106,6 +106,13 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
     _entry("COORDINATOR_ROOT", BORROW),
     _entry("DOE_ROOT", BORROW),
     _entry("CLAUDE_PROJECT_DIR", BORROW),
+    # Execution locality. `coordinator_core.env_locality`'s rung 0 is a
+    # per-CALLER fact, and this server's own `os.environ` belongs to whoever
+    # spawned it -- without this entry an engine-side locality read returns the
+    # daemon's environment, not the session's. Rung 1 is machine-constant and
+    # needs no forwarding, so a missing entry here degrades to a labelled
+    # confidence rather than a confident lie.
+    _entry("CLAUDE_CODE_REMOTE", BORROW),
 )
 
 

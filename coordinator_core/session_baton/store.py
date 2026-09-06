@@ -144,6 +144,20 @@ def default_record(session_id: str) -> Dict[str, Any]:
         # it.
         "closed_at": None,
         "closed_into": None,
+        # What this session wants its own POST-COMPACTION self to have, written
+        # while it still knows it. Compaction is lossy in a way a forward-
+        # thinking artifact is not, so this is the cheap alternative to the
+        # handoff ceremony -- which on a cloud box is not merely expensive but
+        # unavailable: there is no `/clear`, and passing a baton means a PR
+        # merge, a new session and a re-point. A session there rides compaction
+        # by design, and this field is what makes riding it survivable.
+        #
+        # Dedup-extended like the other list fields, so appending is idempotent
+        # and an earlier note is never displaced by a later one. Entries are
+        # free text: the value is in what a session chooses to say to itself,
+        # and a schema over that would only constrain it. Additive and
+        # `.get()`-safe -- a reader predating this key is unaffected.
+        "carry_forward": [],
     }
 
 
@@ -298,6 +312,7 @@ def merge_baton(
     adopted_artifacts: Optional[List[str]] = None,
     minted_artifacts: Optional[List[str]] = None,
     commits: Optional[List[str]] = None,
+    carry_forward: Optional[List[str]] = None,
     promoted_to: Any = _UNSET,
     closed_at: Any = _UNSET,
     closed_into: Any = _UNSET,
@@ -328,8 +343,8 @@ def merge_baton(
     together, and any caller stamping a closure is expected to do the same;
     callers wanting an atomicity guarantee must enforce it themselves.
 
-    List fields (``adopted_artifacts``, ``minted_artifacts``, ``commits``) are
-    DEDUP-EXTENDED, not
+    List fields (``adopted_artifacts``, ``minted_artifacts``, ``commits``,
+    ``carry_forward``) are DEDUP-EXTENDED, not
     replaced: passing a list appends any entries not already present
     (order-preserving), so two callers merging overlapping lists never lose
     or duplicate an entry. Passing ``None`` (the default) leaves the
@@ -391,6 +406,12 @@ def merge_baton(
                 if entry not in existing:
                     existing.append(entry)
             record["adopted_artifacts"] = existing
+        if carry_forward:
+            existing_cf = list(record.get("carry_forward") or [])
+            for entry in carry_forward:
+                if entry not in existing_cf:
+                    existing_cf.append(entry)
+            record["carry_forward"] = existing_cf
         if minted_artifacts:
             existing_m = list(record.get("minted_artifacts") or [])
             for entry in minted_artifacts:

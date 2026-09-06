@@ -81,12 +81,23 @@ Negative-spec:
   externally-managed is a DESIGNED REFUSAL (exit 96,
   EXIT_INTERPRETER_UNSUPPORTED), naming that interpreter and the consumer
   that resolves to it — never an automatic fallback and never
-  --break-system-packages, which no longer exists. The settings-home
+  --break-system-packages, EXCEPT the single narrow exception below. The
+  settings-home
   coordinator venv (coordinator_core.install.ensure_venv) remains reachable
   ONLY via the explicit --allow-venv-fallback opt-in, and only for a
   genuine machine-level install failure that is NOT a PEP-668 refusal — a
   guarded interpreter is swapped, never fallen back from. See §
   Dependency provisioning below.
+  The single narrow exception (docs/decisions/DR-411-the-pep-668-refusal-does-not-reach-an-ephemeral-container.md):
+  a caller passing the internal-only `--i-assert-no-other-consumer` opt-in,
+  honoured ONLY on Linux with effective uid 0 (fail-closed everywhere else —
+  the flag is itself a refusal off that host), reaches
+  `--break-system-packages` in the pip argv for a guarded interpreter. This
+  is not a general override: it is not documented in --help, not in the
+  agent-install manifest's override_flags, and is asserted against a
+  resident property (no other consumer of that interpreter), not a bare
+  "proceed anyway" — see DR-411 for why this narrows rather than reopens
+  the 2026-08-17 ruling.
   Does NOT install the [project.optional-dependencies].test extra by default —
   the installer's job is the ENGINE, not the dev loop, and pytest plugins
   auto-load into every OTHER repo's pytest run on the same interpreter, so
@@ -342,6 +353,7 @@ class Args:
         self.skip_dep_check = False
         self.accept_risk = False
         self.allow_venv_fallback = False
+        self.container_optin = False
         self.with_test_deps = False
         self.register_only = False
         self.check = False
@@ -368,6 +380,12 @@ def parse_args(argv: list[str]) -> Args:
             args.accept_risk = True
         elif tok == "--allow-venv-fallback":
             args.allow_venv_fallback = True
+        elif tok == "--i-assert-no-other-consumer":
+            # DR-411's container opt-in. Deliberately absent from HELP_TEXT and
+            # from docs/install/agent-install-manifest.json's override_flags —
+            # cloud_setup.py's caller (the only one that may pass it) discovers
+            # it from the plan/decision record, not from --help.
+            args.container_optin = True
         elif tok == "--with-test-deps":
             args.with_test_deps = True
         elif tok == "--register-only":
@@ -829,7 +847,12 @@ def _offer_homebrew_removal(
     print(f"  and irreversible ('brew uninstall {formula}').")
     try:
         answer = input(f"  Uninstall Homebrew's {formula} now? [y/N]: ")
-    except EOFError:
+    except (EOFError, RuntimeError):
+        # RuntimeError, not just EOFError: a CLOSED stdin (0<&-, as opposed to
+        # one redirected from /dev/null) raises `RuntimeError: input(): lost
+        # sys.stdin`. Measured 2026-09-06. Both mean "nobody is there to
+        # answer", and an uncaught RuntimeError here exits the installer
+        # non-zero — which in a cloud setup script fails the whole session.
         answer = ""
     if answer.strip().lower() not in ("y", "yes"):
         print("  Declined — leaving Homebrew Python in place.")
@@ -1087,11 +1110,28 @@ def _fallback_to_venv(
     return str(venv_py)
 
 
-def provision_deps(claude_klabauter_root: Path, py: str, allow_venv_fallback: bool) -> tuple[str, list[str]]:
+def provision_deps(
+    claude_klabauter_root: Path, py: str, allow_venv_fallback: bool, *, container_optin: bool = False
+) -> tuple[str, list[str]]:
     """Machine-first dependency provisioning (PM ruling 2026-08-17,
     superseding DR-307's healthy-venv prior-consent branch and retiring
-    `--break-system-packages` entirely — see this file's module docstring
-    Negative-spec and docs/decisions/DR-3xx-machine-first-install-surface.md).
+    `--break-system-packages` for every ordinary caller — see this file's
+    module docstring Negative-spec and
+    docs/decisions/DR-3xx-machine-first-install-surface.md).
+
+    The single exception is `container_optin` (DR-411, docs/decisions/
+    DR-411-the-pep-668-refusal-does-not-reach-an-ephemeral-container.md):
+    an internal-only, keyword-only param — never a fourth positional, several
+    callers in scripts/test_setup.py invoke this positionally — asserting
+    "no other resident consumer" of the interpreter being provisioned.
+    Honoured only when `sys.platform` is Linux AND `os.geteuid() == 0`
+    (fail-closed: passed anywhere else, it is itself a refusal, not silently
+    ignored). When honoured, a guarded (PEP-668) candidate is provisioned
+    instead of refused, by appending `--break-system-packages` — and ONLY
+    that, never a `PIP_BREAK_SYSTEM_PACKAGES` env var, which `_run_pip`'s
+    `env = dict(os.environ)` would otherwise inherit invisibly — to that
+    candidate's pip argv. This is an assertion of a checkable resident
+    property, not the container-detection DR-411 explicitly rejects.
 
     Order: enumerate the predictable, consumer-resolved interpreter set
     (`enumerate_provisioning_candidates`) -> verify NONE is PEP-668
@@ -1186,8 +1226,31 @@ def provision_deps(claude_klabauter_root: Path, py: str, allow_venv_fallback: bo
         for consumer in candidate.consumers:
             print(f"        - {consumer}")
 
+    container_optin_honoured = False
+    if container_optin:
+        geteuid = getattr(os, "geteuid", None)
+        euid = geteuid() if geteuid is not None else None
+        container_optin_honoured = sys.platform.startswith("linux") and euid == 0
+        if not container_optin_honoured:
+            print(
+                "FAIL [deps] --i-assert-no-other-consumer refused: this opt-in (DR-411, "
+                '"no other resident consumer") is honoured only on Linux with effective uid 0 '
+                f"— host is {sys.platform}, euid is {euid if euid is not None else 'unavailable'}.",
+                file=sys.stderr,
+            )
+            sys.exit(EXIT_INTERPRETER_UNSUPPORTED)
+
     guarded = [c for c in candidates if _is_externally_managed(c.path)]
-    if guarded:
+    if guarded and container_optin_honoured:
+        print()
+        print(
+            "CONTAINER-OPTIN-HONOURED [deps] --i-assert-no-other-consumer accepted on Linux/euid-0 "
+            "— provisioning the guarded interpreter(s) below via --break-system-packages "
+            "(DR-411, asserted: no other resident consumer):",
+        )
+        for c in guarded:
+            print(f"  - {c.label} ({c.path})")
+    elif guarded:
         print()
         for c in guarded:
             print(f"  GUARDED (PEP 668 externally-managed): {c.label} ({c.path})", file=sys.stderr)
@@ -1245,16 +1308,29 @@ def provision_deps(claude_klabauter_root: Path, py: str, allow_venv_fallback: bo
             )
             resolved = candidate.path
         else:
-            print(f"Provisioning {candidate.label} ({candidate.path}) — machine-level, no --user, no override flag.")
+            pip_argv = [candidate.path, "-m", "pip", "install", *dep_specs, "-e", str(claude_klabauter_root)]
+            if container_optin_honoured:
+                # DR-411's sole mechanism. Appended to the pip ARGV only — never
+                # via env (`_run_pip`'s `env = dict(os.environ)` would inherit a
+                # `PIP_BREAK_SYSTEM_PACKAGES` invisibly, defeating this).
+                pip_argv.append("--break-system-packages")
+                # The CONTAINER-OPTIN-HONOURED block above already names the
+                # opt-in and lists every candidate it covers; repeating it per
+                # candidate states one fact twice. This line stays because it is
+                # the per-candidate progress marker, and it drops the ordinary
+                # branch's "no override flag" clause, which is false here.
+                print(f"Provisioning {candidate.label} ({candidate.path}).")
+            else:
+                print(f"Provisioning {candidate.label} ({candidate.path}) — machine-level, no --user, no override flag.")
             try:
-                pip_proc = _run_pip([candidate.path, "-m", "pip", "install", *dep_specs, "-e", str(claude_klabauter_root)])
+                pip_proc = _run_pip(pip_argv)
             except subprocess.TimeoutExpired:
                 print(f"FAIL [deps] pip install timed out after 600s under {candidate.path}.", file=sys.stderr)
                 sys.exit(1)
             print(pip_proc.stdout, end="")
 
             pip_output = pip_proc.stdout.lower()
-            if "externally-managed-environment" in pip_output:
+            if not container_optin_honoured and "externally-managed-environment" in pip_output:
                 # The marker-file probe above said unguarded, but pip itself
                 # refused mid-install — still a designed refusal, never an
                 # override, never a fallback (see docstring).
@@ -1406,11 +1482,15 @@ def _install_test_deps(engine_py: str, specs: list[str]) -> None:
     home/settings-path resolution of its own — no `expanduser`, no
     `Path.home()`, no hand-built `~/...`.
 
-    No PEP-668 retry: `--break-system-packages` no longer exists anywhere in
-    this installer (machine-first-install-surface plan, C2) — a guarded
-    interpreter is swapped, never bypassed with an override flag, and that
-    applies to this extra the same as the required set `provision_deps`
-    already refuses on.
+    No PEP-668 retry, and no container carve-out either: this path never
+    passes `--break-system-packages` (machine-first-install-surface plan, C2)
+    — a guarded interpreter is swapped, never bypassed with an override flag,
+    and that applies to this extra the same as the required set
+    `provision_deps` already refuses on. DR-411's `--i-assert-no-other-consumer`
+    reaches `provision_deps` ONLY; the test extra is developer tooling with no
+    cloud-provisioning caller, so the exception deliberately stops short of it.
+    The blanket claim that the flag "no longer exists anywhere in this
+    installer" was true when written and is not any more — see DR-411.
 
     Fails loud: this path only runs when the operator explicitly passed
     --with-test-deps, and silently half-installing the tooling is how F2
@@ -2281,50 +2361,6 @@ def _discover_klabauter_root(repo_root: Path, plugin_root: str | None) -> str | 
     return None
 
 
-def _write_doe_root_keys(doe_root_keys: dict, machine_local_argv: list) -> None:
-    """Persist the coordinator-claude root this run already resolved.
-
-    `_resolve_coordinator_claude_root` resolves the sibling clone and the dep
-    check prints it, but nothing ever wrote it down: `repos.doe_claude` /
-    `engine.working_repos.doe_claude` are only populated by coordinator-claude's
-    own installer or by its SessionStart registrar hook. On a box where neither
-    has run — an engine-first install, or any environment that cannot restart
-    Claude Code, so no plugin hook ever fires — the key stays empty and every
-    baton/handoff op dies in `coordinator_core.resolution.facade` with
-    "'doe_root' resolved to a corrupt value '' (empty or whitespace-only)",
-    a message that blames operator-authored config for a value this installer
-    was holding in a local ten phases earlier.
-
-    BEST-EFFORT BY DESIGN, and deliberately outside `register_claude_klabauter_root`'s
-    all-or-nothing `key_values` loop. That loop's contract covers the keys the
-    caller asked to register; this is bookkeeping the installer volunteers, so a
-    failure here is an advisory and the install proceeds. Same posture as
-    `offer_warm_opt_in`'s registry write.
-    """
-    for key, value in doe_root_keys.items():
-        try:
-            proc = subprocess.run(
-                machine_local_argv + ["set", key, value],
-                timeout=15,
-                capture_output=True,
-                text=True,
-                **_NO_CONSOLE,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            print()
-            print(f"[ADVISORY] 'machine-local set {key}' failed to launch: {exc}")
-            print(f"  Re-run manually: machine-local set {key} {value}")
-            continue
-        if proc.returncode != 0:
-            print()
-            print(f"[ADVISORY] 'machine-local set {key}' failed — doe_root stays unresolved,")
-            print("  which fails every baton/handoff op with a 'corrupt value' error.")
-            _print_child_detail(proc)
-            print(f"  Re-run manually: machine-local set {key} {value}")
-            continue
-        print(f"PASS [registration] {key} = {value}")
-
-
 def register_claude_klabauter_root(
     claude_klabauter_root_resolved: Path, claude_klabauter_root_source: str, repo_root: Path, args: Args
 ) -> Path:
@@ -2565,44 +2601,6 @@ def register_claude_klabauter_root(
         print(f"  Checked: {repo_root}", file=sys.stderr)
         sys.exit(EXIT_REPO_IDENTITY_UNRESOLVED)
 
-    # Persist the coordinator-claude root this run already resolved.
-    #
-    # `_resolve_coordinator_claude_root` resolves the clone and the dep check
-    # prints it ("coordinator-claude root source: sibling-dir default"), but
-    # nothing ever wrote it down. The registry key is only populated by
-    # coordinator-claude's own installer or by its SessionStart registrar
-    # hook, so on any box where neither has run — an engine-first install, or
-    # any environment that cannot restart Claude Code and therefore never
-    # fires a plugin hook — the key stays empty and every baton/handoff op
-    # dies in `coordinator_core.resolution.facade.resolve_operator_config`
-    # with "'doe_root' resolved to a corrupt value '' (empty or
-    # whitespace-only)". That message names operator-authored config as the
-    # culprit for a value this installer was holding all along.
-    #
-    # Collected here but deliberately NOT folded into `key_values`, and
-    # written AFTER the fail-loud loop below (see `_write_doe_root_keys`).
-    # `key_values` is all-or-nothing by contract — "a failure to write any one
-    # of them is a registration failure" — and that contract is about the keys
-    # the caller actually asked this installer to register. This is
-    # bookkeeping the installer volunteers on top; a transient
-    # `machine-local set` hiccup on it must not abort the claude_klabauter
-    # registration that was the point of the run. Best-effort, same posture as
-    # `offer_warm_opt_in`'s registry write.
-    #
-    # Only when currently unset: an operator who pointed doe_root somewhere
-    # deliberate is never overwritten by a sibling-dir guess.
-    doe_root_keys: dict[str, str] = {}
-    if coord_path is not None and Path(coord_path).is_dir():
-        from coordinator_core.machine_resolver import registry_get as _registry_get
-
-        for _doe_key in ("engine.working_repos.doe_claude", "repos.doe_claude"):
-            try:
-                _existing = _registry_get(_doe_key)
-            except Exception:  # registry unreadable — treat as unset, the write is advisory
-                _existing = None
-            if not (_existing or "").strip():
-                doe_root_keys[_doe_key] = str(coord_path)
-
     keys = tuple(key_values)
     keys_desc = " + ".join(keys)
     print()
@@ -2662,9 +2660,6 @@ def register_claude_klabauter_root(
             print(f"  Remediation: run manually: machine-local set {key} {value}", file=sys.stderr)
             sys.exit(1)
         print(f"PASS [registration] {key} = {value}")
-
-    _write_doe_root_keys(doe_root_keys, machine_local_argv)
-
     for advisory in pending_advisories:
         advisory()
 
@@ -2736,7 +2731,9 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
         print("minutes with no invocation.")
         try:
             answer = input("  Run a warm engine on this machine? [Y/n]: ")
-        except EOFError:
+        except (EOFError, RuntimeError):
+            # See _maybe_uninstall_homebrew_python's twin handler: a closed
+            # stdin raises RuntimeError, not EOFError.
             answer = ""
         want_warm = answer.strip().lower() not in ("n", "no")
 
@@ -4477,7 +4474,7 @@ def main(argv: list[str]) -> int:
         apply_git_perf_config(claude_klabauter_root_resolved)
 
     engine_py, import_names = provision_deps(
-        claude_klabauter_root_resolved, py, args.allow_venv_fallback
+        claude_klabauter_root_resolved, py, args.allow_venv_fallback, container_optin=args.container_optin
     )
 
     if not args.register_only:
