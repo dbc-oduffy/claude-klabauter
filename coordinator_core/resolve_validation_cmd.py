@@ -50,7 +50,10 @@ instead of also printing the resolved command to stdout — printing it too woul
 a doubling, not parity. The stderr DIAGNOSTIC contract (step=env-var / step=local-md
 / step=skipped / step=fast-fallback prose, the metachar WARN tripwire, and the
 no-interpreter fail-loud line) is preserved byte-for-byte, including message text,
-for parity testing against the bash oracle.
+for parity testing against the bash oracle — this covers the oracle-matched lines
+only; the worker-cap diagnostic lines emitted on both tiers' env-var/local-md steps
+are new-behaviour additions with no bash-oracle counterpart, not part of that
+parity claim.
 
 Trust model: COORDINATOR_FAST_TEST_CMD is an escape hatch for trusted contexts
 (local shell, CI-managed env). It is not safe to accept from untrusted sources
@@ -109,6 +112,34 @@ class ResolvedCommand:
 
     cmd: Optional[str]
     exit_code: int
+
+
+def _capped(cmd: str, step: str, caller: str, eprint) -> str:
+    """Hold an auto-detected worker request to this box's derived cap.
+
+    Shared by both `cs_resolve_fast_test_cmd` and `cs_resolve_full_test_cmd`'s
+    own direct steps (env-var / local-md) — Review: code-reviewer P1 — the
+    full tier's own steps never applied the cap at all, only its Step-3
+    fast-tier fallback did (transitively, by delegating to
+    `cs_resolve_fast_test_cmd`). `caller` preserves each resolver's own
+    stderr diagnostic prefix rather than hardcoding one, per the module's
+    per-caller diagnostic contract. See `derive_worker_cap` /
+    `docs/reference/test-tiers.md` for why this resolves at read time rather
+    than a committed constant. Imported lazily: this is the only path that
+    needs the derivation, and the resolver's other exits should not pay for
+    it.
+    """
+    from coordinator_core.install.derive_worker_cap import cap_command_for_this_box
+
+    resolved, cap = cap_command_for_this_box(cmd)
+    if cap is None:
+        eprint(
+            f"[{caller}] step={step} worker cap not derivable on this "
+            "host; using the command's committed ceiling unchanged."
+        )
+    elif resolved != cmd:
+        eprint(f"[{caller}] step={step} worker cap derived for this box: {cap}")
+    return resolved
 
 
 # --- Unit 1: helpers (_cs_redact_for_diag, _cs_metachar_warn,
@@ -352,7 +383,9 @@ def cs_resolve_fast_test_cmd(
         except NoPythonInterpreterError as exc:
             _eprint(f"[cs_resolve_fast_test_cmd] step=env-var hard-fail: {exc}")
             return ResolvedCommand(None, 127)
-        return ResolvedCommand(norm, 0)
+        return ResolvedCommand(
+            _capped(norm, "env-var", "cs_resolve_fast_test_cmd", _eprint), 0
+        )
 
     # Step 2 — coordinator.local.md flat top-level fast_test_cmd: key
     local_md = Path(repo_root) / "coordinator.local.md"
@@ -373,7 +406,9 @@ def cs_resolve_fast_test_cmd(
             except NoPythonInterpreterError as exc:
                 _eprint(f"[cs_resolve_fast_test_cmd] step=local-md hard-fail: {exc}")
                 return ResolvedCommand(None, 127)
-            return ResolvedCommand(norm, 0)
+            return ResolvedCommand(
+                _capped(norm, "local-md", "cs_resolve_fast_test_cmd", _eprint), 0
+            )
 
     # Step 3 — skip-with-notice (no conventional fallback — the Staff Engineer F1)
     _eprint("[cs_resolve_fast_test_cmd] step=skipped — no fast-test command configured.")
@@ -588,7 +623,15 @@ def cs_resolve_full_test_cmd(repo_root: Optional[str] = None) -> ResolvedCommand
                 file=sys.stderr,
             )
             return ResolvedCommand(None, 127)
-        return ResolvedCommand(norm, 0)
+        return ResolvedCommand(
+            _capped(
+                norm,
+                "env-var",
+                "cs_resolve_full_test_cmd",
+                lambda msg: print(msg, file=sys.stderr),
+            ),
+            0,
+        )
 
     # Step 2 — coordinator.local.md flat top-level full_test_cmd: key
     full_test_cmd = cs_read_local_md_key(repo_root, "full_test_cmd")
@@ -609,7 +652,15 @@ def cs_resolve_full_test_cmd(repo_root: Optional[str] = None) -> ResolvedCommand
                 file=sys.stderr,
             )
             return ResolvedCommand(None, 127)
-        return ResolvedCommand(norm, 0)
+        return ResolvedCommand(
+            _capped(
+                norm,
+                "local-md",
+                "cs_resolve_full_test_cmd",
+                lambda msg: print(msg, file=sys.stderr),
+            ),
+            0,
+        )
 
     # Step 3 — FALL BACK to the fast tier (not skip). Surface the caveat so
     # the caller reports fast-tier-only coverage rather than claiming

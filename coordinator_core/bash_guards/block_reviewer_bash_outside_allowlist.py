@@ -2174,12 +2174,126 @@ def _tokenize_segment(cmd: str) -> list:
     return tokens if tokens is not None else []
 
 
+#: (2026-09-06) An environment assignment whose NAME can redirect which
+#: binary or which code the shell actually runs. Peeling such a prefix would
+#: make the allowlist's identity anchor a lie: `PATH=/tmp/evil python3 -m
+#: pytest` resolves to the effective token `python3` while the shell executes
+#: `/tmp/evil/python3`, and `PYTHONPATH=`/`PYTHONSTARTUP=`/`BASH_ENV=` reach
+#: arbitrary code through a binary the allowlist genuinely sanctions. Matched
+#: as exact names or as a `<prefix>_`/`<prefix>` family so a new loader
+#: variable in an existing family (LD_*, DYLD_*, PYTHON*) is covered without
+#: an edit here. A command carrying one of these is NOT peeled -- it keeps
+#: the assignment as its effective token and denies exactly as before.
+_EXEC_INFLUENCING_ENV_NAME_RE = re.compile(
+    r"^(?:PATH|SHELL|IFS|ENV|BASH_ENV|LD_[A-Z0-9_]*|DYLD_[A-Z0-9_]*|PYTHON[A-Z0-9_]*)$"
+)
+
+_ENV_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
+
+_ENV_IGNORE_ENVIRONMENT_FLAGS = ("-i", "--ignore-environment")
+
+
+def peel_env_assignment_prefix(tokens: list) -> list:
+    """Return ``tokens`` with a leading run of ``VAR=value`` assignments --
+    and a leading bare ``env`` carrying its own assignments/``-i`` -- removed,
+    so the effective token is resolved from the command actually being run.
+
+    Why (memo, doe-claude-em, 2026-09-06): a ``coordinator:code-reviewer`` may
+    run ``python3 -m pytest <file>`` (Amendment 2's ruling), but could not set
+    an environment variable on that same sanctioned run, because tokens[0] was
+    then the assignment (or ``env``) and matched no allowlisted binary. Any
+    test whose fixture is selected by the environment was therefore unreachable
+    to the agent that found the finding -- the guard did not prevent the run,
+    it moved it to a human. Allowlisting ``env`` as a BINARY was rejected: it
+    takes an arbitrary command and would admit everything the allowlist exists
+    to exclude. This peel keeps the decision anchored on the invoked binary.
+
+    Negative-spec -- what this deliberately does NOT peel:
+      - An assignment whose name matches ``_EXEC_INFLUENCING_ENV_NAME_RE``.
+        Peeling it would resolve the effective token from a name the
+        assignment itself redirects (see that constant's own note). Returns
+        ``tokens`` unchanged, so the caller denies as it did before.
+      - ``env`` carrying any OTHER flag (``-S``/``--split-string``, ``-u``,
+        ``-C``, ``--``): ``env -S`` re-parses its argument as a whole command
+        line, so the token following it is not the invoked binary. Only the
+        bare ``env`` + assignments/``-i`` form is a pure passthrough.
+      - A ``python3`` unwrap. That stays in ``_first_effective_token`` where
+        it already lives; this runs BEFORE it, so ``FOO=1 python3 -m pytest``
+        reaches the same interpreter tier ``python3 -m pytest`` does.
+
+    Assignment COUNT is uncapped: the name predicate above is the whole
+    discriminator, and a second harmless assignment carries no risk a first
+    one does not.
+    """
+    if not tokens:
+        return []
+    peeled = list(tokens)
+    while True:
+        before = len(peeled)
+        while peeled:
+            match = _ENV_ASSIGNMENT_RE.match(peeled[0])
+            if match is None:
+                break
+            if _EXEC_INFLUENCING_ENV_NAME_RE.match(match.group(1)):
+                return list(tokens)
+            peeled = peeled[1:]
+        if peeled and _normalize_executable_basename(peeled[0]) == "env":
+            rest = peeled[1:]
+            while rest:
+                if rest[0] in _ENV_IGNORE_ENVIRONMENT_FLAGS:
+                    rest = rest[1:]
+                    continue
+                match = _ENV_ASSIGNMENT_RE.match(rest[0])
+                if match is None:
+                    break
+                if _EXEC_INFLUENCING_ENV_NAME_RE.match(match.group(1)):
+                    return list(tokens)
+                rest = rest[1:]
+            if rest and rest[0].startswith("-"):
+                # `env` with a flag this peel does not model -- not a pure
+                # passthrough; leave the whole command unpeeled.
+                return list(tokens)
+            if not rest:
+                return list(tokens)
+            peeled = rest
+        if len(peeled) == before:
+            break
+    return peeled
+
+
+def _unpeeled_exec_influencing_env_name(cmd: str) -> Optional[str]:
+    """Name of the leading environment assignment that stopped ``cmd`` from
+    being peeled, or ``None`` when no leading assignment/``env`` prefix was
+    the reason it went unpeeled.
+
+    Message-accuracy only (2026-09-06): the allow/deny outcome is already
+    settled by ``peel_env_assignment_prefix`` before this is consulted. It
+    exists so a denial caused by ``PATH=``/``PYTHONPATH=``/``LD_PRELOAD=``
+    names that cause instead of reporting the assignment token as an
+    unrecognised binary -- see ``_EXEC_INFLUENCING_ENV_NAME_RE``.
+    """
+    for token in _tokenize_segment(cmd):
+        match = _ENV_ASSIGNMENT_RE.match(token)
+        if match is None:
+            if _normalize_executable_basename(token) == "env" or token in _ENV_IGNORE_ENVIRONMENT_FLAGS:
+                continue
+            return None
+        if _EXEC_INFLUENCING_ENV_NAME_RE.match(match.group(1)):
+            return match.group(1)
+    return None
+
+
 def _first_effective_token(tokens: list) -> str:
     """Return the token identifying the invoked binary at the head of
     ``tokens`` -- the first token, or the SECOND token when the first is
     exactly ``python3`` (the ``python3 <path>`` invocation form). Returns
     ``""`` for an empty list.
+
+    (2026-09-06) A leading environment-assignment / bare-``env`` prefix is
+    peeled first by ``peel_env_assignment_prefix`` -- see that function for
+    which prefixes are peeled and which are deliberately not.
     """
+    tokens = peel_env_assignment_prefix(tokens)
     if not tokens:
         return ""
     if tokens[0] == "python3" and len(tokens) >= 2:
@@ -2397,7 +2511,7 @@ def _git_command_tokens(cmd: str) -> list:
     ``_extract_first_token``'s docstring for the full incident writeup;
     both functions share the same root cause and the same fix.
     """
-    tokens = _tokenize_segment(cmd)
+    tokens = peel_env_assignment_prefix(_tokenize_segment(cmd))
     if not tokens:
         return []
     start = 1
@@ -3541,7 +3655,7 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
         # original generic deny. See _evaluate_python3_interpreter's
         # docstring: it returns None (not applicable/not granted) for every
         # case that must preserve the ORIGINAL deny message text (AC3).
-        tokens_for_interpreter = _tokenize_segment(cmd_for_check)
+        tokens_for_interpreter = peel_env_assignment_prefix(_tokenize_segment(cmd_for_check))
         interpreter_result = _evaluate_python3_interpreter(tokens_for_interpreter, ruleset)
         if interpreter_result is not None:
             interpreter_allowed, interpreter_deny_reason = interpreter_result
@@ -3568,6 +3682,17 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
             # `curl`/`rm` -- unaffected by this branch).
             first_token = _extract_first_token(cmd_for_check)
             raw_first_token = tokens_for_interpreter[0] if tokens_for_interpreter else ""
+            unsafe_env_name = _unpeeled_exec_influencing_env_name(cmd_for_check)
+            if unsafe_env_name is not None:
+                # (2026-09-06) The assignment prefix WAS the reason -- say so
+                # rather than reporting the assignment as an unrecognised
+                # binary name, which reads as a tokenizer failure and costs a
+                # round trip to diagnose.
+                deny_reason = (
+                    f"{unsafe_env_name}= redirects which binary or code runs, so it is not "
+                    f"peeled to find the command; run without it"
+                )
+                suppress_retry_advice = True
             if raw_first_token and raw_first_token != first_token:
                 deny_reason = (
                     f"command token is not coordinator-doc-new (got: {first_token or 'empty'}, "

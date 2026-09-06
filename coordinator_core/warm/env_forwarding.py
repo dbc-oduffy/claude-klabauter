@@ -113,6 +113,12 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
     # needs no forwarding, so a missing entry here degrades to a labelled
     # confidence rather than a confident lie.
     _entry("CLAUDE_CODE_REMOTE", BORROW),
+    # Job mode. `session.mode_resolution`'s resolver reads this to learn
+    # what the CALLER was invoked as -- and, same as `CLAUDE_CODE_REMOTE`
+    # above, this server's own `os.environ` belongs to whoever spawned it,
+    # not the session that dispatched the op. Without this entry an
+    # engine-side read returns the daemon's environment, not the session's.
+    _entry("COORDINATOR_JOB_MODE", BORROW),
 )
 
 

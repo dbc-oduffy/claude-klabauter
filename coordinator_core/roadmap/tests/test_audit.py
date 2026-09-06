@@ -879,6 +879,26 @@ def test_parse_keep_cluster_ids_reads_first_column_of_bolded_keep_rows() -> None
     assert parse_keep_cluster_ids(text) == ["cl-01", "cl-02"]
 
 
+def test_parse_keep_cluster_ids_honours_column_3_verdict_shape() -> None:
+    """Regression for overengineering-reviewer (major): `_KEEP_ROW_RE` used to
+    match column 2 ONLY while `_VERDICT_TABLE_RE["KEEP"]` (the count this
+    result feeds in `_audit1_stub_coverage`) accepted column 2 OR column 3 --
+    a reconciliation table putting its verdict in column 3 produced a
+    non-empty `keep_count` alongside an EMPTY `keep_ids`, which read as
+    vacuously satisfied coverage. Both counters must now agree on the same
+    table."""
+    text = _NL.join([
+        "| id | Cluster name | Verdict |",
+        "|---|---|---|",
+        "| `cl-05` | foo | **KEEP** |",
+        "| `cl-06` | bar | **KEEP** |",
+        "| `cl-07` | baz | **MOVE** |",
+    ]) + _NL
+    keep_ids = parse_keep_cluster_ids(text)
+    assert keep_ids == ["cl-05", "cl-06"]
+    assert len(keep_ids) == _count_verdict(text, "KEEP")
+
+
 def test_one_stub_covering_several_clusters_passes_coverage(tmp_path: Path) -> None:
     """The fold is mandated, so 2 stubs over 3 KEEP clusters is CORRECT."""
     root = _init_tree(tmp_path)
@@ -938,6 +958,65 @@ def test_cluster_covered_twice_fails(tmp_path: Path) -> None:
 
     assert exit_code == 1
     assert "covered more than once" in _NL.join(stdout_lines + stderr_lines)
+
+
+def test_repeated_id_within_one_stubs_own_covers_passes(tmp_path: Path) -> None:
+    """A stub repeating an id in its own `covers:` (sloppy frontmatter, no
+    second stub involved) must not read as cross-stub duplication."""
+    root = _init_tree(tmp_path)
+    run_id = "zzz-self-dupe"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(
+        handoffs / (run_id + "-1.md"), run_id, run_id + "-1", 1, 1,
+        covers=["cl-01", "cl-01"],
+    )
+    recon = root / "state" / "roadmap" / run_id / "reconciliation.md"
+    recon.parent.mkdir(parents=True, exist_ok=True)
+    recon.write_text("| `cl-01` | **KEEP** | a |" + _NL, encoding="utf-8")
+
+    exit_code, stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 0, stderr_lines
+    assert any("all 1 KEEP cluster(s) named exactly once" in ln for ln in stdout_lines)
+
+
+def test_covers_entry_naming_no_keep_cluster_fails_as_unknown(tmp_path: Path) -> None:
+    root = _init_tree(tmp_path)
+    run_id = "zzz-unknown"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(
+        handoffs / (run_id + "-1.md"), run_id, run_id + "-1", 1, 1,
+        covers=["cl-01", "cl-99"],
+    )
+    recon = root / "state" / "roadmap" / run_id / "reconciliation.md"
+    recon.parent.mkdir(parents=True, exist_ok=True)
+    recon.write_text("| `cl-01` | **KEEP** | a |" + _NL, encoding="utf-8")
+
+    exit_code, stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 1
+    joined = _NL.join(stdout_lines + stderr_lines)
+    assert "cl-99" in joined and "carrying no KEEP verdict" in joined
+
+
+def test_backtick_wrapped_covers_entry_matches_plain_table_id(tmp_path: Path) -> None:
+    """`covers:` ids may be backtick-wrapped just like the table's own
+    convention — both sides of the comparison must normalize identically."""
+    root = _init_tree(tmp_path)
+    run_id = "zzz-backtick-covers"
+    handoffs = root / "state" / "handoffs"
+    _write_stub(
+        handoffs / (run_id + "-1.md"), run_id, run_id + "-1", 1, 1,
+        covers=["`cl-01`"],
+    )
+    recon = root / "state" / "roadmap" / run_id / "reconciliation.md"
+    recon.parent.mkdir(parents=True, exist_ok=True)
+    recon.write_text("| `cl-01` | **KEEP** | a |" + _NL, encoding="utf-8")
+
+    exit_code, stdout_lines, stderr_lines = run_audit(run_id, root, root / "state")
+
+    assert exit_code == 0, stderr_lines
+    assert any("all 1 KEEP cluster(s) named exactly once" in ln for ln in stdout_lines)
 
 
 def test_roadmap_declaring_no_covers_keeps_the_legacy_count_bar(tmp_path: Path) -> None:

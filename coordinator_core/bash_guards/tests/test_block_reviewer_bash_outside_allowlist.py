@@ -2004,3 +2004,84 @@ def test_py_suffix_lookalike_double_extension_denies(monkeypatch):
     # exact ".py"-suffixed identity -- its basename does not equal either
     # allowlisted spelling, so it must deny.
     _deny("coordinator-doc-new.py.evil --type review-findings", monkeypatch)
+
+
+# ---------------------------------------------------------------------------
+# Environment-assignment prefix peel (2026-09-06, doe-claude-em memo:
+# "A confined reviewer cannot set an env var for a scoped pytest run it is
+# already allowed to run"). The allowlist sanctioned `python3 -m pytest
+# <file>` but denied the same run with a `VAR=val`/`env VAR=val` prefix,
+# because tokens[0] was then the assignment and matched no allowlisted
+# binary -- so any test whose fixture is selected by the environment was
+# unreachable to the reviewer that found the finding. `env` is NOT
+# allowlisted as a binary (it takes an arbitrary command); the peel resolves
+# the effective token from the command actually being run instead.
+# ---------------------------------------------------------------------------
+
+
+def test_env_assignment_prefix_allows_sanctioned_pytest(monkeypatch):
+    _allow("REPO_CLAUDE_KLABAUTER=/tmp/empty python3 -m pytest coordinator/tests/t.py", monkeypatch)
+
+
+def test_bare_env_prefix_allows_sanctioned_pytest(monkeypatch):
+    _allow("env REPO_CLAUDE_KLABAUTER=/tmp/empty python3 -m pytest coordinator/tests/t.py", monkeypatch)
+
+
+def test_multiple_assignments_and_env_stack_allow(monkeypatch):
+    _allow("A=1 env -i B=2 python3 -m pytest -q", monkeypatch)
+
+
+def test_env_assignment_prefix_allows_tier_a_git(monkeypatch):
+    # The peel is in the shared first-token derivation, so Tier A's git leg
+    # sees `git` too -- and `_git_command_tokens` peels identically, so the
+    # subcommand walk still finds `log`, not `git`.
+    _allow("REPO_CLAUDE_KLABAUTER=/tmp/empty git log --oneline -5", monkeypatch)
+
+
+def test_env_prefix_does_not_admit_a_denied_binary(monkeypatch):
+    # The peel resolves the binary; it does not widen the allowlist.
+    _deny("REPO_CLAUDE_KLABAUTER=/tmp/empty rm -rf /", monkeypatch)
+
+
+def test_env_prefix_does_not_admit_inline_code(monkeypatch):
+    _deny("FOO=1 python3 -c 'import os'", monkeypatch)
+
+
+def test_env_prefix_does_not_admit_unlisted_module(monkeypatch):
+    _deny("FOO=1 python3 -m http.server", monkeypatch)
+
+
+@pytest.mark.parametrize(
+    "name", ["PATH", "PYTHONPATH", "PYTHONSTARTUP", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "BASH_ENV"]
+)
+def test_exec_influencing_assignment_is_not_peeled(name, monkeypatch):
+    # Peeling these would make the effective token a lie: the assignment
+    # redirects which binary (or which code) the shell actually runs, so the
+    # allowlist would sanction `python3` while something else executes.
+    result = _deny(f"{name}=/tmp/evil python3 -m pytest -q", monkeypatch)
+    assert name in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_exec_influencing_assignment_behind_env_is_not_peeled(monkeypatch):
+    _deny("env PATH=/tmp/evil python3 -m pytest -q", monkeypatch)
+
+
+def test_exec_influencing_assignment_after_a_safe_one_is_not_peeled(monkeypatch):
+    _deny("FOO=1 PATH=/tmp/evil python3 -m pytest -q", monkeypatch)
+
+
+def test_env_split_string_flag_is_not_peeled(monkeypatch):
+    # `env -S` re-parses its argument as a whole command line, so the token
+    # after it is not the invoked binary -- not a pure passthrough.
+    _deny("env -S 'python3 -m pytest -q' extra", monkeypatch)
+
+
+def test_bare_env_with_no_command_still_denies(monkeypatch):
+    _deny("env", monkeypatch)
+    _deny("env FOO=1", monkeypatch)
+
+
+def test_peel_helper_is_identity_for_unprefixed_tokens():
+    tokens = ["python3", "-m", "pytest", "-q"]
+    assert guard.peel_env_assignment_prefix(tokens) == tokens
+    assert guard.peel_env_assignment_prefix([]) == []
