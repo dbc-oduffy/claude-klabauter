@@ -146,6 +146,7 @@ from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet._memo_summary import _SUMMARY_MAX_CHARS
+from coordinator_core.session import scope as session_scope
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.wire_paths import rel_id
 
@@ -338,6 +339,33 @@ def _commit_terminal_write(
             f"memo.transition {verb}: frontmatter write applied but the follow-up "
             f"commit failed: {commit_result.stderr}"
         )
+
+    # Release this session's claim over the path the commit just landed
+    # (`session/scope.py :: release_committed_claims`). `commit_authored_
+    # content` releases nothing itself -- the release is hand-wired per
+    # commit route, and this route had no wiring, so a transitioned memo
+    # left an `R`-less claim behind on every call.
+    #
+    # GATED ON `attributed_session_id`, NOT ON THE ENV FALLBACK, and that is
+    # the point. `commit_authored_content` falls back to a blind env-var read
+    # when this is None, which is exactly the foreign-session-id exposure
+    # state/bug-backlog/2026-08-18-scoped-git-commit-stamps-a-foreign-
+    # session-id-8d21f0c4e7b9.yaml names. Stamping a trailer with a wrong id
+    # is a mis-attribution; RELEASING A CLAIM under a wrong id would drop a
+    # claim that is not ours to drop, which is worse. So only the two verbs
+    # that carry a caller-supplied session id (`claim`/`resolve`) release
+    # here; the rest keep the pre-existing behaviour of releasing nothing.
+    #
+    # NEGATIVE SPEC (mirrors `ceremony/commit_v2.py ::
+    # _release_committed_claims_step`): runs AFTER the commit has landed and
+    # cannot fail it -- the commit is already history by this line.
+    if attributed_session_id:
+        try:
+            session_scope.release_committed_claims(
+                attributed_session_id, [pathspec], cwd=str(git_root)
+            )
+        except Exception:  # noqa: BLE001 -- see NEGATIVE SPEC above
+            pass
 
     return commit_result.stdout.strip(), None
 

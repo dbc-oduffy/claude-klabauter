@@ -425,32 +425,50 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "supersede flip on a predecessor it did not itself claim",
         "confirmed": True,
     },
-    # These four DO have a session id in scope and do NOT release. That is a
-    # finding, not a classification: each lands a commit while whatever claim
-    # covered its paths stays open. Entered as "release" because that is what
-    # they should do, `confirmed: False` because the wiring is not there yet.
-    # Do not flip these to confirmed without adding the call.
+    # WIRED 2026-09-06, and each verified by reading the function body, not
+    # by grepping the module: these three landed a commit while the claim
+    # over its paths stayed open, because `commit_paths`/`commit_authored_
+    # content` release nothing themselves -- the release is hand-wired per
+    # route and these three routes had no wiring.
     "execute_plan_assemble/close_out_and_stamp.py::close_out_and_stamp": {
         "reason": "release",
-        "confirmed": False,
+        "confirmed": True,
     },
+    # Releases only for the two verbs carrying a caller-supplied session id.
+    # The others fall back to a blind env read for their trailer, and
+    # releasing a claim under a possibly-foreign id would drop a claim that
+    # is not ours -- see the call site's own comment.
     "ops/memo_transition.py::_commit_terminal_write": {
         "reason": "release",
-        "confirmed": False,
-    },
-    "ops/plan_status_transition.py::_commit_plan_flip": {
-        "reason": "release",
-        "confirmed": False,
+        "confirmed": True,
     },
     "ops/session/safe_commit_offer.py::_commit_group": {
         "reason": "release",
-        "confirmed": False,
+        "confirmed": True,
     },
-    # Verified: both call `release_committed_claims` in their own bodies.
+    # VERIFIED INELIGIBLE, and a correction to this row's first draft, which
+    # read "release" on a measurement that counted the word "session_id" in
+    # the DOCSTRING (`ast.unparse` emits docstrings; the sweep did not strip
+    # them). The body has no session identity of any kind, and the docstring
+    # explains why that is deliberate: `--by` is rejected by `main()` before
+    # this path runs, precisely so an unauthenticated override cannot disarm
+    # `_refuse_if_live_foreign_holder`. There is no id here to release under.
+    "ops/plan_status_transition.py::_commit_plan_flip": {
+        "reason": "ineligible: has no caller-supplied session identity by "
+        "design (an unauthenticated --by override is refused upstream), so "
+        "there is no trusted id to release a claim under",
+        "confirmed": True,
+    },
+    # Verified by reading the body: calls `release_committed_claims` itself.
     "ops/ceremony/commit_v2.py::_handler": {
         "reason": "release",
         "confirmed": True,
     },
+    # Covered by its WRAPPER, not by its own body: this function deliberately
+    # releases neither claim mechanism, and `run_close_commit_and_release_
+    # claims` releases both at its success AND failure exits. The enumerator
+    # keys on the function that builds the commit, so the row lives here
+    # while the call lives one frame up.
     "workstream_complete/directives_commit_tail.py::run_close_commit": {
         "reason": "release",
         "confirmed": True,

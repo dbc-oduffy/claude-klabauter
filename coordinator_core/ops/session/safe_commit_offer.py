@@ -1744,6 +1744,33 @@ async def _commit_group(
             "reason": None,
             "declared_absent_from_head": [],
         }
+    # Release this session's claims over the paths the commit just landed
+    # (`session/scope.py :: release_committed_claims`). This route needs it
+    # more plainly than any other: the group being committed IS this
+    # session's own claimed dirty set (see this function's docstring), so
+    # every auto-commit here left an `R`-less claim over paths it had just
+    # written to history -- the claim outliving the very commit that
+    # discharged it.
+    #
+    # Release set is `group["paths"]`, not `present_paths`: a deleted path
+    # was claimed too, and its deletion is in the commit.
+    #
+    # Only on a landed commit (`outcome.sha is not None`). `commit_paths`
+    # can return a no-delta outcome with no sha, and nothing was written to
+    # history then, so there is nothing to discharge.
+    #
+    # NEGATIVE SPEC (mirrors `ceremony/commit_v2.py ::
+    # _release_committed_claims_step`): runs AFTER the commit has landed and
+    # cannot refuse, delay, or fail it -- a bookkeeping append that fails
+    # must not turn a successful auto-commit into a reported failure.
+    if session_id and outcome.sha is not None:
+        try:
+            scope_module.release_committed_claims(
+                session_id, list(group["paths"]), cwd=str(worktree_root)
+            )
+        except Exception:  # noqa: BLE001 -- see NEGATIVE SPEC above
+            pass
+
     return {
         "paths": group["paths"],
         "message": group["message"],

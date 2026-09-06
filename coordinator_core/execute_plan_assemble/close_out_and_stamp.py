@@ -181,6 +181,7 @@ from coordinator_core.ops.plan_status_transition import (
     _strip_unquoted_trailing_comment,
 )
 from coordinator_core.session import core as session_core
+from coordinator_core.session import scope as session_scope
 from coordinator_core.wire_paths import rel_id
 
 EXIT_OK = 0
@@ -2283,6 +2284,36 @@ def _ac_table_desync_finding(
         return None
 
 
+def _release_committed_path_claims(
+    root: Path, sid: "Optional[str]", stage_paths: "Sequence[str]"
+) -> None:
+    """Release this session's per-path claims over the paths the close-out
+    commit just landed (`session/scope.py :: release_committed_claims`).
+
+    `commit_paths` never releases anything itself -- the release is
+    hand-wired per commit route, and this route was missing its wiring, so
+    every close-out left an `R`-less claim over the plan and its stamped
+    siblings until something else happened to clear it.
+
+    NEGATIVE SPEC, mirroring `ceremony/commit_v2.py ::
+    _release_committed_claims_step`: this runs AFTER the commit has landed
+    and cannot refuse, delay, or fail it. A claim that outlives its commit
+    is a nuisance; a close-out that fails because a bookkeeping append
+    failed is a regression, so every exception is swallowed here.
+
+    `sid` is the one already resolved for `compute_repo_identity_gate`
+    earlier in this call -- not a second resolution, and not an env read at
+    commit time. `None` means no session identity was resolvable, and there
+    is then no claim of ours to release.
+    """
+    if not sid or not stage_paths:
+        return
+    try:
+        session_scope.release_committed_claims(sid, list(stage_paths), cwd=str(root))
+    except Exception:  # noqa: BLE001 -- see NEGATIVE SPEC above
+        pass
+
+
 def close_out_and_stamp(
     plan_path: str, *, repo_root: Optional[Path] = None, dry_run: bool = False
 ) -> tuple[int, dict[str, Any]]:
@@ -2907,6 +2938,7 @@ def close_out_and_stamp(
             "sha_unverified": False,
             "diagnostics": [],
         }
+        _release_committed_path_claims(root, sid, stage_paths)
         # Reach `post_commit_tail`'s stub-close leg (AC4) -- see
         # `_reach_post_commit_tail_stub_close`'s own docstring.
         # `delivery_proof` (PM ruling) lets a complete, stub-specific
