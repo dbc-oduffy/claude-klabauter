@@ -1640,3 +1640,41 @@ def test_ac5_reasons_are_byte_identical_except_the_documented_both_rails_class(
     assert not (post["refused"][both_rails_id] or "").startswith(
         _SCAN_REASON_WORKTREE_DIRTY
     ), post["refused"][both_rails_id]
+
+
+def test_terminal_but_retained_gets_its_own_refusal_family_not_the_bulk_one(repo: Path):
+    """A terminal record retained fail-closed must NOT be filed as `not-terminal`.
+
+    Both verdicts pinned in one test, because the whole value of the split is
+    that the two look different from outside. `sweep-terminal-handoffs.py`'s
+    census groups by the reason's family prefix and enumerates every family
+    except the bulk one; filed under `not-terminal` this record was one tick
+    on a count of the entire live corpus, which is how two example-cockpit-repo
+    sessions concluded nothing was archivable and re-ran the sweep to check.
+    """
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import (
+        _SCAN_REASON_NOT_TERMINAL,
+        _SCAN_REASON_SHIPPED_IN_UNRESOLVABLE,
+        _classify_branch,
+    )
+
+    def _family(reason: str) -> str:
+        return reason.split(":", 1)[0]
+
+    unresolvable = {
+        "status": "claimed",
+        "deployment_state": "shipped",
+        "shipped_in": "0" * 40,
+    }
+    qualifies, reason, _label, _b = _classify_branch(unresolvable, {})
+    assert qualifies is False
+    assert _family(reason) == _SCAN_REASON_SHIPPED_IN_UNRESOLVABLE, (
+        f"a terminal-but-retained record must carry its own family; got {reason!r}"
+    )
+
+    genuinely_open = {"status": "open", "deployment_state": "in_flight"}
+    qualifies, reason, _label, _b = _classify_branch(genuinely_open, {})
+    assert qualifies is False
+    assert _family(reason) == _SCAN_REASON_NOT_TERMINAL, (
+        f"a genuinely non-terminal record must stay in the bulk family; got {reason!r}"
+    )

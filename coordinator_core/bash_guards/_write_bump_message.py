@@ -269,19 +269,43 @@ def _classification_defect_notice(target_repo: str, session_repo: str, report_to
 
 
 def resolve_agent_class(payload: Dict[str, Any], git_root: Optional[str]) -> str:
-    """Classify a session as EM-class or subagent-class for message
-    selection (see module docstring, "TWO AGENT CLASSES").
+    """Classify a session as EM-class or subagent-class (see module
+    docstring, "TWO AGENT CLASSES").
+
+    NOT MESSAGE SELECTION ALONE, despite living in this module:
+    `write_guards.bump_out_of_repo_tool_write` reads this verdict to decide
+    whether to compute a `sandbox_root` at all, so a wrong answer here
+    redirects the write, not just the wording.
 
     Uses `coordinator_core.subagent_sandbox.engine.resolve_effective_types`
     -- the fleet's existing OR-resolver -- rather than re-deriving agent
     identity here. Subagent-class the moment either resolved leg
     (`agent_id`, `subagent_type`) is non-empty; subagent-class ALSO on any
     resolution failure. Review: staff-eng (AC-3) -- an empty/missing
-    `payload` or `git_root`, or any exception out of
-    `resolve_effective_types`, now reads as subagent-class, matching the
-    fail-open inversion AC-3 names for this predicate alongside
-    `annotate_deny` and the dispatch seam; EM-class is the strictly
-    narrower, positively-resolved case. Never raises: any exception
+    `payload`, or any exception out of `resolve_effective_types`, reads as
+    subagent-class, matching the fail-open inversion AC-3 names for this
+    predicate alongside `annotate_deny` and the dispatch seam; EM-class is
+    the strictly narrower, positively-resolved case.
+
+    `git_root` IS NOT AN IDENTITY SIGNAL, and requiring it here produced a
+    positive subagent claim out of a lookup that never ran. It exists only
+    so `resolve_effective_types` can read the back-pointer leg, which that
+    function consults under `if agent_id and git_root:` -- so on the branch
+    below, where `agent_id` and `subagent_type` are both empty, `git_root`
+    provably contributed nothing to the resolution. Conjoining it into the
+    EM leg therefore did not narrow the positively-resolved case; it turned
+    "the session is not anchored in a repo" into "this caller was dispatched
+    by an EM", and the confinement that follows was applied to a session
+    nobody identified. Measured, not theorised: a session whose cwd is not
+    itself a git repo (a container with the clones one level down, the
+    2026-09-05 Linux cloud dogfood) resolved `own_git_root` to `None` in
+    `write_guards.bump_out_of_repo_tool_write`, which reads this verdict to
+    decide `sandbox_root` -- so every write in that session was bumped into
+    a subagent sandbox and told to report to a dispatcher that did not
+    exist. An empty `payload` still degrades to subagent-class: that is the
+    stripped-envelope case AC-3 was written for, and it is unchanged.
+
+    Never raises: any exception
     (malformed `payload`, resolver failure inside `resolve_effective_types`,
     or a filesystem error inside its `_canonical_agent_id` /
     `_read_backpointer_subagent_type` legs) is caught and degrades to
@@ -294,7 +318,7 @@ def resolve_agent_class(payload: Dict[str, Any], git_root: Optional[str]) -> str
         return AGENT_CLASS_SUBAGENT
     if agent_id or subagent_type:
         return AGENT_CLASS_SUBAGENT
-    if payload and git_root:
+    if payload:
         return AGENT_CLASS_EM
     return AGENT_CLASS_SUBAGENT
 

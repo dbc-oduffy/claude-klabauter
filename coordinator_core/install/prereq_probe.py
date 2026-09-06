@@ -254,7 +254,10 @@ def probe_python() -> str:
 # ---------------------------------------------------------------------------
 def probe_uv() -> str:
     result = _run(["uv", "--version"])
-    remediation = "install uv: `py -m pip install uv` (Windows) / `brew install uv` (macOS) / `pipx install uv` (pipx)"
+    remediation = (
+        "install uv: `py -m pip install uv` (Windows) / `brew install uv` (macOS) / "
+        "`pipx install uv` or `pip install --user uv` (Linux; no distro packages it)"
+    )
     if result is None:
         return emit_line("uv", "warn", "advisory", "uv not found on PATH", remediation)
     if result.returncode != 0 or not (result.stdout or "").strip():
@@ -270,7 +273,11 @@ def probe_uv() -> str:
 # _co_probe_gh
 # ---------------------------------------------------------------------------
 def probe_gh() -> str:
-    remediation = "install GitHub CLI: `winget install GitHub.cli` (Windows) / `brew install gh` (macOS)"
+    remediation = (
+        "install GitHub CLI: `winget install GitHub.cli` (Windows) / `brew install gh` (macOS) / "
+        "your distro's package (`apt-get install gh`, `dnf install gh`) or "
+        "https://github.com/cli/cli/blob/trunk/docs/install_linux.md (Linux)"
+    )
 
     ver = _run(["gh", "--version"])
     if ver is None:
@@ -330,7 +337,10 @@ def probe_node() -> str:
     prerequisite's severity is the probe's own fact, not the caller's.
     """
     result = _run(["node", "--version"])
-    remediation = "install Node.js LTS: `winget install OpenJS.NodeJS.LTS` (Windows) / `brew install node` (macOS)"
+    remediation = (
+        "install Node.js LTS: `winget install OpenJS.NodeJS.LTS` (Windows) / `brew install node` (macOS) / "
+        "`apt-get install nodejs` / `dnf install nodejs` or https://nodejs.org/en/download (Linux)"
+    )
     if result is None:
         return emit_line("node", "fail", "advisory", "node (Node.js) not found on PATH", remediation)
     if result.returncode != 0 or not (result.stdout or "").strip():

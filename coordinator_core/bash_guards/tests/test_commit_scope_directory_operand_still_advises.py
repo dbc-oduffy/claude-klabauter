@@ -231,3 +231,90 @@ def test_the_sweep_override_is_registered_in_the_operator_reference():
 
     doc = _p.Path(__file__).resolve().parents[3] / "docs" / "reference" / "guard-override-keys.md"
     assert "COORDINATOR_ALLOW_GIT_COMMIT_SCOPE_SWEEP" in doc.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# C -- a sweeping scope must not inherit the no-scope-at-all vocabulary
+#
+# Two independent field reports of the same defect: example-retrieval-repo-em 2026-09-02
+# ("the commit guard says 'names no scope' at a command that named one"), and
+# doe-claude-em 2026-09-04, which reproduced it by calling the check function
+# directly -- no dispatcher, no `cd` prefix -- and so retired the theory that
+# `offer-git-c`'s rewrite short-circuit was the cause.
+#
+# Section A above pins that the sweeping form is not SILENT. That left the
+# text unpinned, and control fell through into branches written for a command
+# with no pathspec at all: the operator was told their command "names no
+# scope" and handed back, verbatim, the command they had just typed. Both
+# halves of that are asserted here.
+#
+# NEGATIVE SPEC: these rows assert TEXT, never severity. The deny/advisory
+# split is untouched by them and stays where section A's own negative spec
+# leaves it -- escalating the sweeping form is direction-class and sits with
+# DoE's strict-mode question.
+# ---------------------------------------------------------------------------
+
+
+def _reason(cmd: str) -> str:
+    out = dc.check_git_commit_safe_commit_advise(cmd, "", _payload())
+    assert out is not None, cmd
+    return out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+#: The compound form the earlier suite never exercised. Every row above is a
+#: solo commit, so the interaction between a sweeping scope and the
+#: 2026-08-30 compound-add deny was invisible to a green run.
+COMPOUND_SWEEP_CMD = 'git add -- state/ && git commit -m "x" -- state/'
+
+
+def test_a_sweeping_scope_is_not_told_it_named_no_scope():
+    assert "names no scope" not in _reason("git commit -m x -- state/")
+
+
+def test_the_compound_sweeping_form_is_not_told_it_named_no_scope():
+    assert "names no scope" not in _reason(COMPOUND_SWEEP_CMD)
+
+
+def test_a_sweeping_scope_is_told_which_operand_is_the_directory():
+    assert "state/ names a directory" in _reason("git commit -m x -- state/")
+
+
+def test_several_sweeping_operands_are_all_named():
+    reason = _reason("git commit -m x -- state/lessons/ state/audits/")
+    assert "state/lessons/, state/audits/ name directories" in reason
+
+
+def test_the_remediation_is_not_the_command_it_just_refused():
+    """The circularity is the operator-facing cost, not a wording nit: a
+    remedy character-for-character identical to the refused command reads as
+    a parser failure and sends the operator permuting spellings. Asserted on
+    the compound form, where the old text offered back both halves."""
+    assert "git add -- <paths> && git commit" not in _reason(COMPOUND_SWEEP_CMD)
+
+
+def test_the_remediation_asks_for_files():
+    assert "-- <file> <file>" in _reason(COMPOUND_SWEEP_CMD)
+
+
+def test_a_bare_commit_keeps_the_no_scope_vocabulary():
+    """The false-positive floor for section C. A command that really names
+    nothing must still be told so -- the fix narrows which commands get that
+    sentence, it does not retire the sentence."""
+    assert "names no scope" in _reason("git commit -m x")
+
+
+def test_only_naming_nothing_is_told_the_flag_is_the_problem():
+    """`--only` with no operand this walk can see sweeps too, and has no
+    operand to quote, so the flag itself becomes the subject rather than the
+    message falling back to a sentence about directories that names none."""
+    reason = _reason("git commit --only -m x")
+    assert "'--only' selects git's self-scoped mode but names no path" in reason
+
+
+def test_an_amend_outranks_a_sweeping_scope_in_the_message(monkeypatch):
+    """A scoped `--amend` still overwrites a commit that may be a peer's, and
+    no amount of pathspec wording addresses that. The amend body must win."""
+    monkeypatch.setenv("COORDINATOR_ALLOW_GIT_COMMIT_AMEND", "1")
+    reason = _reason("git commit --amend -m x -- state/")
+    assert "rewrites whatever commit is at HEAD" in reason
+    assert "names a directory" not in reason

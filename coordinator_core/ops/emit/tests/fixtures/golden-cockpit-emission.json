@@ -370,12 +370,10 @@
         "repo": "fixture-owner/fixture-repo",
         "coordinator_root_path": ".",
         "deterministic_facts": {
-          "chains_completed": 1,
-          "tshirt_counts": {
-            "S": 1
-          },
+          "chains_completed": 0,
+          "tshirt_counts": {},
           "opus_dispatches": 0,
-          "commits": 1,
+          "commits": 0,
           "reviews_conducted": 1,
           "verdicts": {
             "ok": 1
@@ -385,7 +383,7 @@
         "input_watermark": {
           "max_observed_at": "2026-07-06T15:54:47Z",
           "max_commit_sha": "aaaaaaaabbbbbbbbccccccccddddddddeeeeeeee",
-          "source_count": 1
+          "source_count": 0
         },
         "freshness": "stale",
         "provenance": {

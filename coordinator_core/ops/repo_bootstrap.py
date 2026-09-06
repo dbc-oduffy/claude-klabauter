@@ -83,7 +83,12 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from coordinator_core._settings_home import home_dir, normalize_native_path, settings_home
+from coordinator_core._settings_home import (
+    home_dir,
+    normalize_native_path,
+    resolve_machine_local_cli,
+    settings_home,
+)
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.install.clone_sibling_repo import (
@@ -111,18 +116,7 @@ def _resolve_machine_local_bin() -> Optional[str]:
     `${CLAUDE_HOME:-$HOME}/.claude/bin/machine-local`.
     Returns None (never raises) if unresolvable — the caller decides whether
     that is fatal."""
-    found = shutil.which("machine-local")
-    if found:
-        return found
-
-    settings_home_candidate = settings_home() / "bin" / "machine-local"
-    if settings_home_candidate.is_file() and is_executable(settings_home_candidate):
-        return str(settings_home_candidate)
-
-    fallback = home_dir() / ".claude" / "bin" / "machine-local"
-    if fallback.is_file() and is_executable(fallback):
-        return str(fallback)
-    return None
+    return resolve_machine_local_cli()
 
 
 def _machine_local_get(machine_local_bin: str, key: str) -> Optional[str]:

@@ -33,7 +33,7 @@ from pathlib import Path
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
-_STAMP = re.compile(r" \[source ([0-9a-f]{12})\]$")
+_STAMP = re.compile(r" \[source-head ([0-9a-f]{12})\]$")
 
 
 def _load(name: str, filename: str):
@@ -220,12 +220,25 @@ def test_the_stamp_has_exactly_one_definition():
     assert "from coordinator_core.git.git_state import source_sha_suffix" in body, (
         "percolate-round.py must delegate to the engine's single definition"
     )
-    assert 'f" [source {' not in body, (
+    assert 'f" [source-head {' not in body, (
         "percolate-round.py re-implements the stamp format instead of delegating"
     )
 
+    # publish.py WAS the gap this assertion left open: it resolves its sha
+    # differently (round-pinned vs fresh HEAD), so it could not call
+    # `source_sha_suffix`, and kept its own copy of the format string --
+    # unchecked here while this file's docstring claimed all three legs
+    # delegate. It now formats through `format_source_sha_suffix`.
+    pub = (_BIN_DIR / "publish.py").read_text(encoding="utf-8")
+    assert "format_source_sha_suffix" in pub, (
+        "publish.py must format the stamp through the engine's single definition"
+    )
+    assert 'f" [source-head {' not in pub, (
+        "publish.py re-implements the stamp format instead of delegating"
+    )
+
     mirror = (_BIN_DIR / "percolate-mirror.py").read_text(encoding="utf-8")
-    assert 'f" [source {' not in mirror, (
+    assert 'f" [source-head {' not in mirror, (
         "percolate-mirror.py re-implements the stamp format instead of "
         "reaching it through `_round`"
     )

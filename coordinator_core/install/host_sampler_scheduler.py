@@ -202,10 +202,19 @@ def register_host_sampler_task(
     print("--- Install: host-resource sampler scheduled task (Windows Task Scheduler) ---")
 
     if not _IS_WINDOWS:
+        # Says what is lost and how to get it, not only that a step was
+        # skipped: an advisory naming neither leaves the operator to work out
+        # both. Register doctrine -- one fact, once, plus a terse alternative.
+        script = _host_sampler_script_path(repo_root)
         print(
             "[ADVISORY] not running on Windows — skipping host-sampler task "
             "registration (Task Scheduler is Windows-only; cron wiring is "
-            "not yet in scope)."
+            "not yet in scope). Host-resource sampling will not run on this "
+            "box; nothing else in the install depends on it."
+        )
+        print(
+            f"  To sample anyway, every {_INTERVAL_MINUTES}m via cron:\n"
+            f"    */{_INTERVAL_MINUTES} * * * * {sys.executable} {script}"
         )
         return False
 

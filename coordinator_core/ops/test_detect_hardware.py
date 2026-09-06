@@ -167,9 +167,37 @@ def test_detect_cores_windows_undetectable_returns_none(monkeypatch):
 
 
 def test_detect_cores_undetectable_returns_none(monkeypatch):
+    """Emptying PATH is enough to make macOS undetectable (it shells to
+    `sysctl`), but NOT Linux: the Linux leg falls back to reading
+    /proc/cpuinfo directly, no subprocess. This test asserted otherwise and so
+    only passed on a box without /proc -- i.e. it described the wrong
+    behaviour on the platform it names, and passed by accident of where it
+    ran."""
     monkeypatch.setenv("PATH", "")
     assert dh._detect_cores("macos") is None
+
+    real_isfile = os.path.isfile
+    monkeypatch.setattr(
+        os.path, "isfile", lambda p: False if p == "/proc/cpuinfo" else real_isfile(p)
+    )
     assert dh._detect_cores("linux") is None
+
+
+def test_detect_cores_linux_falls_back_to_proc_cpuinfo(monkeypatch, tmp_path):
+    """With no `nproc` on PATH, the Linux leg still resolves from /proc."""
+    cpuinfo = tmp_path / "cpuinfo"
+    cpuinfo.write_text("processor\t: 0\nprocessor\t: 1\nprocessor\t: 2\n")
+    monkeypatch.setenv("PATH", "")
+    real_isfile = os.path.isfile
+    monkeypatch.setattr(
+        os.path, "isfile", lambda p: True if p == "/proc/cpuinfo" else real_isfile(p)
+    )
+    real_open = open
+    monkeypatch.setattr(
+        "builtins.open",
+        lambda p, *a, **kw: real_open(cpuinfo, *a, **kw) if p == "/proc/cpuinfo" else real_open(p, *a, **kw),
+    )
+    assert dh._detect_cores("linux") == 3
 
 
 # ---------------------------------------------------------------------------
@@ -195,8 +223,15 @@ def test_detect_ram_gb_linux_meminfo_kb_to_gb(tmp_path, monkeypatch):
 
 
 def test_detect_ram_gb_undetectable_returns_none(monkeypatch):
+    """Same shape as the cores test above: the Linux leg reads /proc/meminfo
+    directly and never consults PATH, so PATH="" leaves it fully detectable."""
     monkeypatch.setenv("PATH", "")
     assert dh._detect_ram_gb("macos") is None
+
+    real_isfile = os.path.isfile
+    monkeypatch.setattr(
+        os.path, "isfile", lambda p: False if p == "/proc/meminfo" else real_isfile(p)
+    )
     assert dh._detect_ram_gb("linux") is None
 
 

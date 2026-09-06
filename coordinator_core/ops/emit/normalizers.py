@@ -48,10 +48,10 @@ _VOLATILE_TIME_KEYS = frozenset({
     "last_commit_at",       # branch tip commit time
     "last_commit_message",  # branch tip commit subject
     "last_activity_at",     # GitHub API — repo last-push timestamp, moves with each push
-    # Rollup period (completion_rollups.{day,week}): contains the CURRENT date/week-number
-    # ("2026-07-05", "2026-W27") — changes with every run day; must be normalized so frozen-
-    # fixture parity tests are not defeated by wall-clock drift.
-    "period",
+    # Review: overengineering-reviewer (Kira) — "period" removed. Both `_local_day` and
+    # `_iso_week` now derive from `ctx.observed_at` (frozen in the parity fixture), not the
+    # wall clock, so the field is deterministic and the golden should pin it, not normalize
+    # it away.
 })
 # Git SHA fields — volatile as commits land.  Normalized to zero-SHA (_SHA_SENTINEL) per
 # AC5-PROVENANCE oracle (provenance.ref.sha → "0000000000000000000000000000000000000000").

@@ -142,7 +142,11 @@ def _all_present_env() -> fr._Env:
     return env
 
 
-def test_build_plan_all_missing_lists_every_install_step():
+def test_build_plan_all_missing_lists_every_install_step(monkeypatch):
+    """PLATFORM-PINNED. This assertion previously ran unpinned and encoded the
+    macOS answer, so on any Linux runner it described the wrong behaviour and
+    passed only by accident of where it ran."""
+    monkeypatch.setattr(fr.sys, "platform", "darwin")
     steps = fr.build_plan(_all_missing_env(), no_git_lfs=False)
     assert steps[0] == "install Homebrew (absent on this machine)"
     assert "brew install bash  (>=4.3 required; stock macOS is 3.2)" in steps
@@ -182,6 +186,99 @@ def test_build_plan_no_git_lfs_and_missing_prefers_skip_line():
     steps = fr.build_plan(env, no_git_lfs=True)
     assert "git-lfs SKIPPED (--no-git-lfs passed; LFS-backed clones will be pointer-only)" in steps
     assert not any("brew install git-lfs" in s for s in steps)
+
+
+# ---------------------------------------------------------------------------
+# Linux toolchain leg. Homebrew's installer aborts by design as EUID 0, so the
+# brew-only flow returned EXIT_FAIL and killed the whole first run on any root
+# container -- reported as a bare non-zero exit, never as "this platform is
+# unsupported".
+# ---------------------------------------------------------------------------
+
+
+def _linux(monkeypatch, manager="apt-get", root=True):
+    monkeypatch.setattr(fr.sys, "platform", "linux")
+    monkeypatch.setattr(fr, "_running_as_root", lambda: root)
+    monkeypatch.setattr(fr, "_detect_linux_pkg_manager", lambda: manager)
+    env = _all_missing_env()
+    env.pkg_manager = manager
+    return env
+
+
+def test_build_plan_on_linux_never_offers_homebrew(monkeypatch):
+    env = _linux(monkeypatch)
+    steps = fr.build_plan(env, no_git_lfs=False)
+    assert not any("Homebrew" in s for s in steps)
+    assert not any("brew install" in s for s in steps)
+
+
+def test_build_plan_on_linux_names_the_command_this_box_will_run(monkeypatch):
+    """`build_plan` is the consent surface: it must print the real command.
+    Printing `brew install ...` on a Debian box asked for consent to something
+    that would never run."""
+    env = _linux(monkeypatch)
+    steps = fr.build_plan(env, no_git_lfs=False)
+    assert "apt-get install -y bash  (>=4.3 required)" in steps
+    assert "apt-get install -y python3  (Python 3.11+ required)" in steps
+    assert "apt-get install -y nodejs" in steps
+    assert "apt-get install -y git-lfs  then  git lfs install  (global, idempotent)" in steps
+
+
+def test_build_plan_on_linux_special_cases_uv(monkeypatch):
+    """No mainstream distro packages `uv`, so it must not be handed to the
+    package manager as a name that resolves to nothing."""
+    env = _linux(monkeypatch)
+    steps = fr.build_plan(env, no_git_lfs=False)
+    assert any(s.startswith("install uv (pip --user") for s in steps)
+    assert not any("install -y uv" in s for s in steps)
+
+
+def test_pkg_install_argv_prefixes_sudo_only_when_not_root(monkeypatch):
+    monkeypatch.setattr(fr.sys, "platform", "linux")
+    monkeypatch.setattr(fr, "_running_as_root", lambda: True)
+    assert fr._pkg_install_argv("apt-get", "node") == ["apt-get", "install", "-y", "nodejs"]
+    monkeypatch.setattr(fr, "_running_as_root", lambda: False)
+    assert fr._pkg_install_argv("apt-get", "node")[0] == "sudo"
+
+
+@pytest.mark.parametrize(
+    "manager,expected",
+    [
+        ("apt-get", ["apt-get", "install", "-y", "python3"]),
+        ("dnf", ["dnf", "install", "-y", "python3"]),
+        ("yum", ["yum", "install", "-y", "python3"]),
+        ("zypper", ["zypper", "--non-interactive", "install", "python3"]),
+        ("pacman", ["pacman", "-S", "--noconfirm", "python"]),
+        ("apk", ["apk", "add", "--no-cache", "python3"]),
+    ],
+)
+def test_pkg_install_argv_maps_formula_to_distro_package(monkeypatch, manager, expected):
+    monkeypatch.setattr(fr, "_running_as_root", lambda: True)
+    assert fr._pkg_install_argv(manager, "python@3.12") == expected
+
+
+def test_build_plan_on_linux_with_no_package_manager_says_so(monkeypatch):
+    """A box with none of the supported managers must be told that, not handed
+    a macOS command."""
+    env = _linux(monkeypatch, manager=None)
+    steps = fr.build_plan(env, no_git_lfs=False)
+    assert any("NO SUPPORTED PACKAGE MANAGER ON PATH" in s for s in steps)
+
+
+def test_pkg_install_routes_darwin_to_brew_unchanged(monkeypatch):
+    """The macOS path through the dispatcher must be exactly what it was."""
+    monkeypatch.setattr(fr.sys, "platform", "darwin")
+    seen = []
+    monkeypatch.setattr(fr, "_brew_install", lambda f, l=None: seen.append((f, l)) or fr.EXIT_OK)
+    assert fr._pkg_install("node", "node") == fr.EXIT_OK
+    assert seen == [("node", "node")]
+
+
+def test_pkg_install_on_unsupported_platform_fails_loud(monkeypatch, capsys):
+    monkeypatch.setattr(fr.sys, "platform", "sunos5")
+    monkeypatch.setattr(fr.os, "name", "posix")
+    assert fr._pkg_install("node", "node") == fr.EXIT_FAIL
+    assert "not supported on" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

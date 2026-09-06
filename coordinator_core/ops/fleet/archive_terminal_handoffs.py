@@ -163,6 +163,12 @@ _FAMILY = "handoff"
 #: the same string from two module-local constants).
 _SCAN_REASON_WORKTREE_DIRTY = REASON_WORKTREE_DIRTY
 _SCAN_REASON_NOT_TERMINAL = "not-terminal"
+#: A record that IS terminal and was retained anyway, fail-closed, because its
+#: `shipped_in` did not resolve. Its own family and NOT a `not-terminal` one:
+#: grouped under that name it was indistinguishable from the whole live corpus,
+#: which is how two example-cockpit-repo sessions read "77 not-terminal" as "nothing
+#: here was archivable", re-ran the sweep, and restored an archive twice.
+_SCAN_REASON_SHIPPED_IN_UNRESOLVABLE = "shipped-in-unresolvable"
 _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
 _SCAN_REASON_CONSUMED_BY_LIVE = "consumed-by-live-session: consumed_by names a live session"
 
@@ -914,6 +920,10 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
     over the whole corpus in one pass).
 
     Returns (qualifies, reason_if_not, status_label_if_qualifies, branch_b_qualified).
+    `reason_if_not` arrives ALREADY family-prefixed (`_SCAN_REASON_*`), so the
+    caller records it verbatim — a refusal that is terminal-but-retained must
+    not inherit the caller's `not-terminal` family, which is the whole live
+    corpus and drowns it.
     `qualifies` is None (never True/False confusion) only when genuinely
     indeterminate frontmatter retains — modeled here as qualifies=False with
     an explicit reason, per "indeterminate frontmatter retains, fail-closed".
@@ -930,8 +940,8 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
             if not shipped_in or not shipped_in_resolved.get(str(shipped_in).strip(), False):
                 return (
                     False,
-                    "deployment_state=shipped but shipped_in unresolvable — "
-                    "retained (fail-closed)",
+                    f"{_SCAN_REASON_SHIPPED_IN_UNRESOLVABLE}: deployment_state=shipped "
+                    "but shipped_in unresolvable — retained (fail-closed)",
                     "",
                     False,
                 )
@@ -944,7 +954,13 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
             return False, "deployment_state=in_flight — not terminal (archive-safety)", "", False
         return True, "", "consumed", False
 
-    return False, f"status={status!r} (not claimed) and deployment_state={deployment_state!r} (not terminal)", "", False
+    return (
+        False,
+        f"{_SCAN_REASON_NOT_TERMINAL}: status={status!r} (not claimed) and "
+        f"deployment_state={deployment_state!r} (not terminal)",
+        "",
+        False,
+    )
 
 
 def _terminal_since(meta: dict, handoff_path: Path) -> Optional[str]:
@@ -1116,7 +1132,7 @@ def _scan_terminal(
     for p, rel, meta in prefilter_survivors:
         qualifies, reason, status_label, branch_b_qualified = _classify_branch(meta, shipped_in_resolved)
         if not qualifies:
-            _refuse(rel, f"{_SCAN_REASON_NOT_TERMINAL}: {reason}")
+            _refuse(rel, reason)
             continue
         survivors.append((p, rel, meta, status_label, branch_b_qualified))
 

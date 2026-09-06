@@ -2281,50 +2281,6 @@ def _discover_klabauter_root(repo_root: Path, plugin_root: str | None) -> str | 
     return None
 
 
-def _write_doe_root_keys(doe_root_keys: dict, machine_local_argv: list) -> None:
-    """Persist the coordinator-claude root this run already resolved.
-
-    `_resolve_coordinator_claude_root` resolves the sibling clone and the dep
-    check prints it, but nothing ever wrote it down: `repos.doe_claude` /
-    `engine.working_repos.doe_claude` are only populated by coordinator-claude's
-    own installer or by its SessionStart registrar hook. On a box where neither
-    has run — an engine-first install, or any environment that cannot restart
-    Claude Code, so no plugin hook ever fires — the key stays empty and every
-    baton/handoff op dies in `coordinator_core.resolution.facade` with
-    "'doe_root' resolved to a corrupt value '' (empty or whitespace-only)",
-    a message that blames operator-authored config for a value this installer
-    was holding in a local ten phases earlier.
-
-    BEST-EFFORT BY DESIGN, and deliberately outside `register_claude_klabauter_root`'s
-    all-or-nothing `key_values` loop. That loop's contract covers the keys the
-    caller asked to register; this is bookkeeping the installer volunteers, so a
-    failure here is an advisory and the install proceeds. Same posture as
-    `offer_warm_opt_in`'s registry write.
-    """
-    for key, value in doe_root_keys.items():
-        try:
-            proc = subprocess.run(
-                machine_local_argv + ["set", key, value],
-                timeout=15,
-                capture_output=True,
-                text=True,
-                **_NO_CONSOLE,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            print()
-            print(f"[ADVISORY] 'machine-local set {key}' failed to launch: {exc}")
-            print(f"  Re-run manually: machine-local set {key} {value}")
-            continue
-        if proc.returncode != 0:
-            print()
-            print(f"[ADVISORY] 'machine-local set {key}' failed — doe_root stays unresolved,")
-            print("  which fails every baton/handoff op with a 'corrupt value' error.")
-            _print_child_detail(proc)
-            print(f"  Re-run manually: machine-local set {key} {value}")
-            continue
-        print(f"PASS [registration] {key} = {value}")
-
-
 def register_claude_klabauter_root(
     claude_klabauter_root_resolved: Path, claude_klabauter_root_source: str, repo_root: Path, args: Args
 ) -> Path:
@@ -2565,44 +2521,6 @@ def register_claude_klabauter_root(
         print(f"  Checked: {repo_root}", file=sys.stderr)
         sys.exit(EXIT_REPO_IDENTITY_UNRESOLVED)
 
-    # Persist the coordinator-claude root this run already resolved.
-    #
-    # `_resolve_coordinator_claude_root` resolves the clone and the dep check
-    # prints it ("coordinator-claude root source: sibling-dir default"), but
-    # nothing ever wrote it down. The registry key is only populated by
-    # coordinator-claude's own installer or by its SessionStart registrar
-    # hook, so on any box where neither has run — an engine-first install, or
-    # any environment that cannot restart Claude Code and therefore never
-    # fires a plugin hook — the key stays empty and every baton/handoff op
-    # dies in `coordinator_core.resolution.facade.resolve_operator_config`
-    # with "'doe_root' resolved to a corrupt value '' (empty or
-    # whitespace-only)". That message names operator-authored config as the
-    # culprit for a value this installer was holding all along.
-    #
-    # Collected here but deliberately NOT folded into `key_values`, and
-    # written AFTER the fail-loud loop below (see `_write_doe_root_keys`).
-    # `key_values` is all-or-nothing by contract — "a failure to write any one
-    # of them is a registration failure" — and that contract is about the keys
-    # the caller actually asked this installer to register. This is
-    # bookkeeping the installer volunteers on top; a transient
-    # `machine-local set` hiccup on it must not abort the claude_klabauter
-    # registration that was the point of the run. Best-effort, same posture as
-    # `offer_warm_opt_in`'s registry write.
-    #
-    # Only when currently unset: an operator who pointed doe_root somewhere
-    # deliberate is never overwritten by a sibling-dir guess.
-    doe_root_keys: dict[str, str] = {}
-    if coord_path is not None and Path(coord_path).is_dir():
-        from coordinator_core.machine_resolver import registry_get as _registry_get
-
-        for _doe_key in ("engine.working_repos.doe_claude", "repos.doe_claude"):
-            try:
-                _existing = _registry_get(_doe_key)
-            except Exception:  # registry unreadable — treat as unset, the write is advisory
-                _existing = None
-            if not (_existing or "").strip():
-                doe_root_keys[_doe_key] = str(coord_path)
-
     keys = tuple(key_values)
     keys_desc = " + ".join(keys)
     print()
@@ -2662,9 +2580,6 @@ def register_claude_klabauter_root(
             print(f"  Remediation: run manually: machine-local set {key} {value}", file=sys.stderr)
             sys.exit(1)
         print(f"PASS [registration] {key} = {value}")
-
-    _write_doe_root_keys(doe_root_keys, machine_local_argv)
-
     for advisory in pending_advisories:
         advisory()
 
@@ -3924,16 +3839,29 @@ def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_kl
         if not args.agent_mode and output and not skipped:
             print(output)
         if skipped:
+            # NOT APPLICABLE, not incomplete. This whole chain wires the
+            # dev-clone install mode: every step of it exists to point a
+            # `claude()` shell function at a DoE-claude working clone via
+            # `.doe-root`. `docs/safety.md` rows 4 and 5 already say so --
+            # "only present in the maximalist/dev install mode", "not the
+            # marketplace path" -- and `skills/setup/SKILL.md` states that OSS
+            # coordinator-claude and claude-klabauter installs never take the
+            # `--doe-root` seam at all.
+            #
+            # An unresolved `repos.doe_claude` IS that discriminant: there is
+            # no DoE clone to point at, so the remaining three generators have
+            # nothing to render and the marketplace plugin loads without them.
+            # Reporting it as an incomplete chain told a correctly-installed
+            # OSS box that coordinator would not load -- shouting a dev-mode
+            # requirement at an install that does not have one, which a Linux
+            # cloud dogfood read as a hard break and worked around by hand.
+            print(f"SKIP [claude-doe-chain] {label} — dev-clone mode not configured on this box")
             print(
-                f"[ADVISORY] {label} install skipped (see reason below) — "
-                "not an error, but coordinator will NOT load in any interactive session "
-                "on this box until this step completes.",
-                file=sys.stderr,
+                "SKIP [claude-doe-chain] remaining launcher-chain steps — the claude() shim "
+                "wires the dev-clone install mode only; the marketplace plugin install needs "
+                "none of it. To opt in: machine-local set repos.doe_claude <path>  then re-run.",
             )
-            if output:
-                print(output, file=sys.stderr)
-            print(f"  Re-run manually once resolved: {' '.join(argv)}", file=sys.stderr)
-            continue
+            return
         if proc.returncode != 0:
             any_failed = True
             print(

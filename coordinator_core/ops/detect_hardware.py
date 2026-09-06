@@ -78,7 +78,7 @@ import subprocess
 import sys
 from typing import List, Optional, Tuple
 
-from coordinator_core._settings_home import settings_home
+from coordinator_core._settings_home import resolve_machine_local_cli, settings_home
 from coordinator_core.win_portability import is_executable, no_console_creationflags, no_console_passthrough_kwargs
 
 try:
@@ -117,27 +117,7 @@ def _resolve_machine_local() -> Optional[str]:
     is checked ahead of the legacy ~/.claude/bin fallbacks, mirroring
     coordinator_core.pyresolve._machine_local_impl's settings-home-first ordering.
     """
-    on_path = shutil.which("machine-local")
-    if on_path:
-        return on_path
-
-    settings_home_candidate = os.path.join(str(settings_home()), "bin", "machine-local")
-    if os.path.isfile(settings_home_candidate) and is_executable(settings_home_candidate):
-        return settings_home_candidate
-
-    claude_home = os.environ.get("CLAUDE_HOME", "")
-    if claude_home:
-        candidate = os.path.join(claude_home, ".claude", "bin", "machine-local")
-        if os.path.isfile(candidate) and is_executable(candidate):
-            return candidate
-
-    home = os.environ.get("HOME", "")
-    if home:
-        candidate = os.path.join(home, ".claude", "bin", "machine-local")
-        if os.path.isfile(candidate) and is_executable(candidate):
-            return candidate
-
-    return None
+    return resolve_machine_local_cli()
 
 
 def _platform() -> str:

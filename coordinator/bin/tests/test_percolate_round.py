@@ -33,6 +33,7 @@ from typing import List, Tuple
 import pytest
 
 import coordinator_core.git.commit as _commit_mod
+from coordinator_core.locked_write import CONTENDED_LOCK_WAIT_ENV
 
 # Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
 # cadence suite is the separate threshold ruling, not this declaration.
@@ -46,6 +47,15 @@ pytestmark = [
 # belongs in the per-commit tier, not deferred to cadence gates.
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
+
+# `percolate` is not on sys.path by default — same rung `percolate-round.py` itself
+# adds (`_BIN_DIR.parent / "lib"`). Needed here at import time so the withhold
+# assertions below can reference the owning constant rather than a retyped literal.
+_LIB_DIR = _BIN_DIR.parent / "lib"
+if str(_LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(_LIB_DIR))
+
+from percolate.wire_contract import COORDINATOR_ALLOW_PERCOLATE_QUEUE_ENV  # noqa: E402
 
 
 def _load_module():
@@ -1651,7 +1661,10 @@ def test_lock_timeout_fails_loud_before_real_run(tmp_path, monkeypatch):
     # B6 pointer-only rewrite (C2/C3): names the mechanism page, never the
     # override env var — the old shape invited exactly the respawn-pressure
     # loop this refusal exists to stop.
-    assert "COORDINATOR_LOCK_WAIT_SECS" not in err
+    assert CONTENDED_LOCK_WAIT_ENV not in err
+    # Parity with test_percolate_push.py: the registry declares both knobs
+    # withheld on both paths (docs/reference/withheld-knobs.md).
+    assert COORDINATOR_ALLOW_PERCOLATE_QUEUE_ENV not in err
     assert "docs/reference/percolate-lock-contention.md" in err
 
     real_run_calls = [

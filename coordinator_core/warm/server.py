@@ -343,21 +343,20 @@ WORKER_POOL_SIZE = 30
 # `WORKER_POOL_SIZE` already names (C5's accept-and-queue chunk), it does not
 # add a second one on top of it.
 #
-# CORE-COUNT CAP (added 2026-09-05, Linux cloud dogfood). `WORKER_POOL_SIZE`
-# bounds an I/O-bound resource — pending listeners / accept slots — where 30
-# costs a kernel handle apiece. This pool bounds OS PROCESSES, each of which
-# preloads the op registry (`_worker_process_init`) and was measured at ~78 MB
-# RSS. `ProcessPoolExecutor` spawns lazily per `submit()` up to `max_workers`,
-# so on a small box a burst of concurrent dispatches materialises all 30: a
+# CORE-COUNT CAP. `WORKER_POOL_SIZE` bounds an I/O-bound resource -- pending
+# listeners / accept slots -- where 30 costs a kernel handle apiece. This pool
+# bounds OS PROCESSES, each of which preloads the op registry
+# (`_worker_process_init`) and was measured at ~78 MB RSS.
+# `ProcessPoolExecutor` spawns lazily per `submit()` up to `max_workers`, so on
+# a small box a burst of concurrent dispatches materialises all 30: a
 # 4-core/16 GB container was observed holding 1 parent + 30 children, ~2.4 GB
 # of RSS, for a pool that C1's own measurement says plateaus at roughly
 # core-count concurrency ("~1000-1100/s from 4 threads up", module docstring).
 # Oversubscribing 4 cores 7.5x buys no throughput and is not the damage bound
-# the constant above is reasoning about. Capping at the core count leaves
-# every box with >=30 cores exactly where it was, and leaves
-# WORKER_POOL_SIZE / PENDING_LISTENER_POOL_SIZE / ACCEPTOR_POOL_SIZE — the
-# cheap I/O-bound bounds that genuinely answer "how many queued callers" —
-# untouched.
+# the constant above is reasoning about. Capping at the core count leaves every
+# box with >=30 cores exactly where it was, and leaves WORKER_POOL_SIZE /
+# PENDING_LISTENER_POOL_SIZE / ACCEPTOR_POOL_SIZE -- the cheap I/O-bound bounds
+# that genuinely answer "how many queued callers" -- untouched.
 DISPATCH_PROCESS_POOL_SIZE = min(WORKER_POOL_SIZE, max(1, os.cpu_count() or 1))
 
 # ACCEPTOR POOL SIZE -- the POSIX accept layer's own bound

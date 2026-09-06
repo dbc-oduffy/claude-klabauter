@@ -52,6 +52,38 @@ class RollupWatermark(BaseModel):
     source_count: int
 
 
+#: `rolling-30d` is deliberately NOT a member. The pre-fix rolling window predates this field
+#: entirely, so no emitter can ever produce a row carrying it — a row from that era has no
+#: `fact_window` at all, and ABSENCE is the discriminator. A member nothing can emit reads to a
+#: consumer as a case worth branching on, and that branch would be dead on arrival. Add it back
+#: only alongside an emitter that actually produces it.
+FactWindowKind = Literal["iso-week", "day"]
+
+
+class FactWindow(BaseModel):
+    """The window a rollup row's facts were computed over — states what the row DID, never what
+    produced it (no emitter-version stamp; see the plan's rejection of that alternative).
+
+    ABSENT means the row was emitted before this field existed: window unknown, and MUST be
+    read as "do not label" — never defaulted to any kind, in particular never inferred from
+    `max_observed_at` or any other wall-clock/deployment signal. During fleet rollout most rows
+    come from engines without this field; giving it a default would silently relabel every
+    stale row as week-scoped and reintroduce, at higher confidence, the exact defect this field
+    fixes. Spec: docs/plans/2026-09-04-rollup-rows-name-their-own-fact-window.md.
+
+    Carries both a semantic (`kind`) so a consumer can branch without parsing dates, and the
+    actual inclusive bounds used, so a future window change is self-describing without minting
+    a new `kind` value.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: FactWindowKind
+    # Inclusive bounds, ISO date YYYY-MM-DD, of the window actually used to select this row's facts.
+    start: str
+    end: str
+
+
 class RollupNarrative(BaseModel):
     """Regenerable narrative over the deterministic rollup; cites its input watermark."""
 
@@ -94,6 +126,10 @@ class DayRollup(BaseModel):
     # aggregates, empty-path computed records). Version-neutral optional —
     # absent on all existing records. Spec: producer-contract § 3.3.
     content_hash: ContentHash | None = None
+    # The window this row's facts were computed over. Version-neutral optional —
+    # absent on all rows emitted before this field existed; absence MUST be read
+    # as "window unknown", never defaulted. See FactWindow's own docstring.
+    fact_window: FactWindow | None = None
 
 
 class _WeekDeterministicFacts(BaseModel):
@@ -127,3 +163,7 @@ class WeekRollup(BaseModel):
     # aggregates, empty-path computed records). Version-neutral optional —
     # absent on all existing records. Spec: producer-contract § 3.3.
     content_hash: ContentHash | None = None
+    # The window this row's facts were computed over. Version-neutral optional —
+    # absent on all rows emitted before this field existed; absence MUST be read
+    # as "window unknown", never defaulted. See FactWindow's own docstring.
+    fact_window: FactWindow | None = None

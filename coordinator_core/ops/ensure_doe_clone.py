@@ -1,6 +1,7 @@
 """
 coordinator_core.ops.ensure_doe_clone — DoE-clone resolution + idempotent
-clone-if-absent, ported from coordinator/commands/install.md Step 3.5a
+clone-if-absent, ported from the DoE-claude install playbook
+(coordinator/commands/install.md)
 (the two literal bash fences at lines 731 and 747 of the DoE-claude source).
 
 Purpose: resolve the local DoE-claude clone path (``REPO_DOE_CLAUDE`` env

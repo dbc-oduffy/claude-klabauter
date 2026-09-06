@@ -77,6 +77,7 @@ import sys
 import tempfile
 from typing import List, Optional
 
+from coordinator_core._settings_home import resolve_machine_local_cli
 from coordinator_core.session.declared_writes import declare_write
 
 _PROG = "gen-claude-doe-shim.sh"  # literal program-name prefix, matches the DoE filename
@@ -406,7 +407,7 @@ def main(argv: List[str]) -> int:
                 import shutil
                 import subprocess
 
-                ml_bin = shutil.which("machine-local")
+                ml_bin = resolve_machine_local_cli()
                 if ml_bin is not None:
                     try:
                         from coordinator_core.win_portability import no_console_creationflags
@@ -422,7 +423,10 @@ def main(argv: List[str]) -> int:
                     except OSError:
                         doe_resolved = False
         if not doe_resolved:
-            print("claude_shim: skipped (DoE clone not resolved — complete step 3.5a first)")
+            print(
+                "claude_shim: skipped (DoE clone unresolved — "
+                "machine-local set repos.doe_claude <path>  then /coordinator:install)"
+            )
             return 0
 
     if not template_override:

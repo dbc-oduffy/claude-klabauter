@@ -63,7 +63,11 @@ import sys
 import tempfile
 from typing import List, Optional
 
-from coordinator_core._settings_home import machine_local_dir, native_path_form
+from coordinator_core._settings_home import (
+    machine_local_dir,
+    native_path_form,
+    resolve_machine_local_cli,
+)
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import no_console_creationflags
@@ -86,8 +90,10 @@ _LIVE_WRITE_ALLOW_ENV = "COORDINATOR_ALLOW_LIVE_DOE_ROOT_WRITE"
 
 
 def _resolve_machine_local() -> Optional[str]:
-    """Locate the `machine-local` CLI on PATH. Returns None if absent."""
-    return shutil.which("machine-local")
+    """Locate the `machine-local` CLI -- PATH, then `<settings-home>/bin`.
+    See `_settings_home.resolve_machine_local_cli` for why PATH alone is not
+    enough on the box that just ran the install."""
+    return resolve_machine_local_cli()
 
 
 def _resolve_doe_root() -> "tuple[Optional[str], int]":
@@ -358,7 +364,10 @@ def main(argv: List[str]) -> int:
     doe_root, rc = _resolve_doe_root()
     if doe_root is None:
         if graceful_skip_unresolved and not check_only:
-            print("doe_root_pointer: skipped (repos.doe_claude not resolved — complete step 3.5a first)")
+            print(
+                "doe_root_pointer: skipped (repos.doe_claude unset — "
+                "machine-local set repos.doe_claude <path>  then /coordinator:install)"
+            )
             return 0
         return rc
 

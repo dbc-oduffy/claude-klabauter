@@ -528,15 +528,23 @@ class TestCommitsSinceLastBatch:
 
 
 class TestLocalDayAndIsoWeek:
-    """Locks rollups' ``_local_day``/``_iso_week`` format contracts (bash:1058-1065):
-    ``date -I`` (YYYY-MM-DD) and the ISO-week ``YYYY-Www`` string."""
+    """Locks rollups' ``_local_day``/``_iso_week`` FORMAT contracts — ``YYYY-MM-DD`` and the
+    ISO-week ``YYYY-Www`` string — derived from ``ctx.observed_at``, never the machine's wall
+    clock (per docs/plans/2026-09-04-the-weekly-completion-count-means-the-week.md C1: a
+    re-emitted historical snapshot must stamp the day/week of the instant it is ABOUT, not the
+    day it happens to run on). ``observed_at`` below is deliberately NOT today's date, so these
+    assertions fail against a ``date.today()``-based implementation on every day but one."""
 
-    def test_local_day_matches_date_today_iso(self) -> None:
-        assert _local_day(ctx=MagicMock()) == datetime.date.today().isoformat()
+    def test_local_day_matches_observed_at_iso(self) -> None:
+        ctx = MagicMock()
+        ctx.observed_at = "2026-03-17T08:00:00Z"
+        assert _local_day(ctx) == "2026-03-17"
 
-    def test_iso_week_matches_isocalendar(self) -> None:
-        y, w, _ = datetime.date.today().isocalendar()
-        assert _iso_week() == f"{y}-W{w:02d}"
+    def test_iso_week_matches_observed_at_isocalendar(self) -> None:
+        ctx = MagicMock()
+        ctx.observed_at = "2026-03-17T08:00:00Z"
+        y, w, _ = datetime.date(2026, 3, 17).isocalendar()
+        assert _iso_week(ctx) == f"{y}-W{w:02d}"
 
 
 class TestReviewTrailFacts:

@@ -63,7 +63,14 @@ class _OSNameProxy:
 @pytest.fixture(autouse=True)
 def _fake_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("SHELL", raising=False)
+    # PINNED, not deleted. Most tests in this module exercise the rc
+    # write/append/idempotency/escaping logic and merely need *some* stable rc
+    # file to write into; they name `.zshrc` throughout. Deleting `$SHELL` left
+    # them riding `_resolve_rc_path`'s unset-default, so which file they wrote
+    # became a property of the host -- they passed on macOS and failed on Linux
+    # for a reason that has nothing to do with what they assert. The tests that
+    # are genuinely about resolution set or delete `$SHELL` themselves.
+    monkeypatch.setenv("SHELL", "/bin/zsh")
     # A real Git-Bash/MSYS pytest invocation exports MSYSTEM; left in place it
     # forces every rc-path resolution in this module to `.bashrc` and the
     # zsh/default expectations below become host-dependent.
@@ -96,8 +103,24 @@ def test_resolve_rc_path_bash(monkeypatch, tmp_path):
     assert _resolve_rc_path() == tmp_path / ".bashrc"
 
 
-def test_resolve_rc_path_default_unset(tmp_path):
+def test_resolve_rc_path_default_unset_darwin(monkeypatch, tmp_path):
+    """zsh is the macOS interactive default, so it is the right guess there."""
+    monkeypatch.delenv("SHELL", raising=False)
+    monkeypatch.setattr(mod.sys, "platform", "darwin")
     assert _resolve_rc_path() == tmp_path / ".zshrc"
+
+
+def test_resolve_rc_path_default_unset_linux(monkeypatch, tmp_path):
+    """...and the wrong guess anywhere else. `$SHELL` is most often unset in
+    exactly the containers where the box is bash-only, so the pre-fix default
+    wrote the sentinel block into a `~/.zshrc` nothing would ever source.
+
+    This test and its Darwin sibling replace one unpinned assertion that
+    encoded the macOS answer unconditionally, and so described the wrong
+    behaviour on any Linux runner while still passing."""
+    monkeypatch.delenv("SHELL", raising=False)
+    monkeypatch.setattr(mod.sys, "platform", "linux")
+    assert _resolve_rc_path() == tmp_path / ".bashrc"
 
 
 def test_resolve_rc_path_git_bash_exe_suffix(monkeypatch, tmp_path):

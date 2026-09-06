@@ -30,8 +30,33 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
 def _load_module():
+    """Load `percolate-round.py` by path, or skip this module if it is absent.
+
+    NEGATIVE SPEC: the skip is not defensive padding around a file that is
+    always there -- it is load-bearing in the PUBLISHED artifact. This test
+    is carried into the klabauter mirror by the `claude-klabauter-coordinator-
+    tests` row while `coordinator/bin/percolate-round.py` is NOT published at
+    all, so an unguarded module-level `exec_module` raises at COLLECTION in
+    the mirror: not one failing test but a hard collection error taking the
+    whole file down, in an artifact nobody in this repo runs. Reported by
+    example-cockpit-repo-30 / doe-claude-em, 2026-09-04.
+
+    Do not "simplify" this back to a bare load on the grounds that the file
+    is obviously present -- it is present HERE, which is exactly the reason
+    the breakage was invisible for as long as it was. Skipping at module
+    level keeps the published copy collectable and says why it skipped;
+    whether `percolate-round.py` ought to be published is a separate
+    publish-scope question this guard deliberately does not decide.
+    """
+    script = _BIN_DIR / "percolate-round.py"
+    if not script.is_file():
+        pytest.skip(
+            "percolate-round.py is not present beside this test (published "
+            "mirror carries the test without its subject)",
+            allow_module_level=True,
+        )
     spec = importlib.util.spec_from_file_location(
-        "percolate_round_commit_subject", _BIN_DIR / "percolate-round.py"
+        "percolate_round_commit_subject", script
     )
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
@@ -48,7 +73,7 @@ def test_subject_reports_pathspec_size_not_raw_change_line_count():
     to be committed), never present the raw scrape count as if it were
     that.
     """
-    real_changes = [("UPDATE", f"file{i}.py") for i in range(1875)] + [
+    real_changes = [("NEW", f"file{i}.py") for i in range(1875)] + [
         ("NEW", f"new{i}.py") for i in range(45)
     ] + [("REMOVE", f"gone{i}.py") for i in range(39)]
     pathspec = ["file1.py", "file2.py", "new1.py"]
@@ -56,11 +81,13 @@ def test_subject_reports_pathspec_size_not_raw_change_line_count():
     subject = _mod._build_commit_subject("claude-klabauter", real_changes, pathspec)
 
     assert "3 file(s) to commit" in subject
-    # The triple sizes off what the pathspec CARRIES, never off the full
-    # scrape: two of the three carried paths are UPDATEs, one is a NEW, and
-    # not one of the 39 REMOVEs is in the pathspec.
-    assert "1 added" in subject
-    assert "2 modified" in subject
+    # The counts size off what the pathspec CARRIES, never off the full
+    # scrape: all three carried paths are added-or-updated, and not one of
+    # the 39 REMOVEs is in the pathspec. No `modified` term exists -- the
+    # producer emits only NEW/REMOVE, so a test that manufactured "UPDATE"
+    # tuples validated a vocabulary production cannot build (that is exactly
+    # how a permanently-zero `0 modified` shipped in sixty subjects).
+    assert "3 added-or-updated" in subject
     assert "0 removed" in subject
     assert "1956 reported change(s) not carried" in subject
     # The raw scrape total (1959) must never appear standing in for the
@@ -83,27 +110,26 @@ def test_subject_never_claims_removals_the_commit_does_not_carry():
 
     subject = _mod._build_commit_subject("coordinator-claude", real_changes, pathspec)
 
-    assert "3 added" in subject
+    assert "3 added-or-updated" in subject
     assert "0 removed" in subject
     assert "67 removed" not in subject
     assert "67 reported change(s) not carried" in subject
 
 
 def test_subject_matches_when_pathspec_equals_real_changes():
-    real_changes = [("NEW", "a.py"), ("UPDATE", "b.py")]
+    real_changes = [("NEW", "a.py"), ("NEW", "b.py")]
     pathspec = ["a.py", "b.py"]
 
     subject = _mod._build_commit_subject("t", real_changes, pathspec)
 
     assert "2 file(s) to commit" in subject
-    assert "1 added" in subject
-    assert "1 modified" in subject
+    assert "2 added-or-updated" in subject
     assert "0 removed" in subject
     assert "not carried" not in subject
 
 
 def test_residual_report_silent_when_counts_agree(capsys):
-    real_changes = [("NEW", "a.py"), ("UPDATE", "b.py")]
+    real_changes = [("NEW", "a.py"), ("NEW", "b.py")]
     pathspec = ["a.py", "b.py"]
 
     assert _mod._report_commit_residual("t", real_changes, pathspec) is None
@@ -113,7 +139,7 @@ def test_residual_report_silent_when_counts_agree(capsys):
 
 
 def test_residual_report_names_both_numbers_when_they_diverge(capsys):
-    real_changes = [("UPDATE", f"file{i}.py") for i in range(1875)]
+    real_changes = [("NEW", f"file{i}.py") for i in range(1875)]
     pathspec = ["file1.py", "file2.py", "file3.py"]
 
     warning = _mod._report_commit_residual("claude-klabauter", real_changes, pathspec)

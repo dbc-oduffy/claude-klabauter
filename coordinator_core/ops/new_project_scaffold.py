@@ -82,6 +82,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from coordinator_core._settings_home import resolve_machine_local_cli
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
@@ -115,8 +116,11 @@ _PNPM_TEST_TIMEOUT = 300
 
 
 def _resolve_machine_local() -> Optional[str]:
-    """Locate the `machine-local` CLI on PATH. Returns None if absent."""
-    return shutil.which("machine-local")
+    """Locate the `machine-local` CLI -- PATH, then the settings-home and
+    legacy install locations. See
+    `_settings_home.resolve_machine_local_cli` for why PATH alone reported
+    "not found" on boxes where the CLI was installed and working."""
+    return resolve_machine_local_cli()
 
 
 def _resolve_doe_root() -> Tuple[Optional[str], int]:
