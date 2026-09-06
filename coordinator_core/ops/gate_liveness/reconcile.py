@@ -414,7 +414,7 @@ def reconcile_gate_liveness(
 
 
 @register_op(_OP_NAME)
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "gate_liveness.reconcile" handler.
 
     Params:

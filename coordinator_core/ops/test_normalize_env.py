@@ -367,25 +367,33 @@ def test_run_probe_fn_unknown_fn_expr_returns_empty():
 def test_step1_longpaths_git_config_call_is_hardened(monkeypatch):
     captured = {}
 
-    def _fake_run(cmd, **kwargs):
+    class _FakeProc:
+        returncode = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def communicate(self, input=None, timeout=None):
+            captured["timeout"] = timeout
+            return "", ""
+
+    def _fake_popen(cmd, **kwargs):
         captured["cmd"] = cmd
         captured.update(kwargs)
+        return _FakeProc()
 
-        class _R:
-            returncode = 0
-            # `_ne_step1_longpaths` now delegates to
-            # `coordinator_core.git.run.git_ok` -> `run_git`, which builds a
-            # `GitResult` from the real `subprocess.CompletedProcess` shape
-            # (reads `.stdout`/`.stderr`, not just `.returncode` -- the prior
-            # direct `ne.subprocess.run(...).returncode == 0` shape this stub
-            # was written against no longer exists at this call site).
-            stdout = b""
-            stderr = b""
-
-        return _R()
-
-    monkeypatch.setattr(ne.shutil, "which", lambda name: "/usr/bin/git" if name == "git" else None)
-    monkeypatch.setattr(ne.subprocess, "run", _fake_run)
+    # `subprocess.Popen`, NOT `subprocess.run`, and NOT an attribute on `ne`:
+    # `_ne_step1_longpaths` delegates to `coordinator_core.git.run.git_ok` ->
+    # `run_git`, which hand-rolls `Popen` (its own comment names the
+    # `subprocess.run(timeout=)`-does-not-bound-a-wedged-child defect it exists
+    # to avoid) and function-locally imports `subprocess` on each call. Patching
+    # `ne.subprocess.run` therefore stubs a seam this call site no longer has:
+    # the stub was silently never invoked, and the step spawned a REAL `git
+    # config --global` against whatever HOME the run happened to have.
+    monkeypatch.setattr(subprocess, "Popen", _fake_popen)
 
     runner = ne.NeRunner(yes=True)
     out = io.StringIO()

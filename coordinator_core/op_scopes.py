@@ -490,6 +490,17 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # exactly as those verbs do. DR-264, spec:
     # docs/plans/2026-08-05-roadmap-graph-enforcement-gap.md § C4
     "roadmap.link_stubs":                    "common_dir",
+    # roadmap.plan_gate — keyed on git_common_dir: reads state/handoffs/*.md,
+    # archive/handoffs/**/*.md and docs/plans/**/*.md under
+    # main_worktree_root(common_dir), the same corpus roadmap.serve reads and
+    # the same worktree roadmap.link_stubs writes. Read-only; keyed here so a
+    # linked worktree's call resolves the main worktree's records rather than
+    # its own (empty) state/ tree.
+    "roadmap.plan_gate":                     "common_dir",
+    # roadmap.blitz_land — keyed on git_common_dir: writes main-worktree-rooted
+    # docs/plans/*.md and state/handoffs/*.md, same worktree roadmap.plan_gate
+    # reads and roadmap.link_stubs writes.
+    "roadmap.blitz_land":                    "common_dir",
     # goal.match_candidates — keyed on git_common_dir: reads state/goals/ under
     # main_worktree_root(common_dir), same key-scope as initiative.serve_set/roadmap.serve.
     # Spec: docs/plans/2026-07-06-goal-setting-okr-legibility-system.md § C3

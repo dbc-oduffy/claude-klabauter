@@ -323,7 +323,7 @@ def _write_records(repo_root: str, session_id: str, records: list) -> bool:
         )
         try:
             try:
-                handle = os.fdopen(tmp_fd, "w", encoding="utf-8")
+                handle = os.fdopen(tmp_fd, "w", encoding="utf-8", newline="\n")
             except Exception:
                 try:
                     os.close(tmp_fd)

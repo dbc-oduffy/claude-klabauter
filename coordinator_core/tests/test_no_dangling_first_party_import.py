@@ -172,6 +172,54 @@ def _imported_names(source: str) -> list[tuple[str, str]]:
     return pairs
 
 
+def _without_string_literals(source: str) -> str:
+    """`source` with every string literal's body blanked, newlines preserved.
+
+    `_FROM_IMPORT` is anchored `^from` under `re.MULTILINE`, so a first-party
+    import spelled INSIDE a triple-quoted string matched as if it were an
+    import statement. That is not a hypothetical: this repo pins historical
+    defect specimens as module-level string constants -- see
+    `test_async_handler_discipline.py`'s `_HISTORICAL_SPECIMEN_BROKEN`, whose
+    whole point is to reproduce, verbatim, a handler that imported the
+    since-killed `ops.ceremony.commit_pipeline`. The guard read that specimen
+    as a live dangling import and demanded the specimen be edited, which would
+    have destroyed the fixture it was pinning.
+
+    Tokenizing rather than regexing the strings out: a nested quote, an
+    f-string, and a raw prefix all defeat a quote-matching pattern, and this
+    guard's own contract is that an unresolvable parse degrades to SILENCE
+    rather than to a false accusation -- hence the `except` returning a source
+    with no imports at all rather than the raw text.
+    """
+    import tokenize
+
+    try:
+        tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
+    except (tokenize.TokenError, SyntaxError, IndentationError):
+        return ""
+
+    lines = source.splitlines(keepends=True)
+    out = list(lines)
+    string_types = {tokenize.STRING} | {
+        getattr(tokenize, name)
+        for name in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END")
+        if hasattr(tokenize, name)
+    }
+    for token in tokens:
+        if token.type not in string_types:
+            continue
+        (srow, scol), (erow, ecol) = token.start, token.end
+        for row in range(srow, erow + 1):
+            line = out[row - 1]
+            body = line[:-1] if line.endswith("\n") else line
+            tail = line[len(body):]
+            start = scol if row == srow else 0
+            stop = ecol if row == erow else len(body)
+            body = body[:start] + " " * max(0, min(stop, len(body)) - start) + body[stop:]
+            out[row - 1] = body + tail
+    return "".join(out)
+
+
 def _scan_tree() -> dict[str, set[str]]:
     """Map every first-party module to the set of names the tree imports from
     it, plus the files doing the importing."""
@@ -186,7 +234,7 @@ def _scan_tree() -> dict[str, set[str]]:
                 continue
             if FIRST_PARTY_PREFIX not in source:
                 continue
-            for module, name in _imported_names(source):
+            for module, name in _imported_names(_without_string_literals(source)):
                 wanted.setdefault(module, set()).add(name)
     return wanted
 
@@ -584,6 +632,22 @@ class TestNoDanglingFirstPartyImport:
         )
         assert not resolved
         assert not used_fallback
+
+    def test_import_inside_a_string_literal_is_not_an_import(self) -> None:
+        """A pinned defect specimen is text, not a live import.
+
+        Both directions, because blanking string bodies is exactly the change
+        that could blind this guard: the specimen must vanish from the scan,
+        and a real import on the very next line must still be seen.
+        """
+        source = (
+            'SPECIMEN = """\n'
+            "from coordinator_core.ops.ceremony.commit_pipeline import run_commit_pipeline\n"
+            '"""\n'
+            "from coordinator_core.session.work_state import read_work_state\n"
+        )
+        pairs = _imported_names(_without_string_literals(source))
+        assert pairs == [("coordinator_core.session.work_state", "read_work_state")]
 
     def test_submodule_import_resolves_without_fallback(self) -> None:
         """`from coordinator_core import session` names a subpackage, not an

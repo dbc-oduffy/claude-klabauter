@@ -100,11 +100,29 @@ def _pins_newline(call: ast.Call) -> bool:
     return False
 
 
+class TextWriteParseError(AssertionError):
+    """A scanned file did not parse, so this guard has no idea what it
+    contains. Named rather than bare so the failure reads as "the guard
+    could not look", never as "the guard looked and found nothing"."""
+
+
 def _offenders_in(src: str, rel: str) -> list[str]:
     try:
         tree = ast.parse(src)
-    except SyntaxError:
-        return []
+    except SyntaxError as exc:
+        # RAISE, DO NOT RETURN []. This swallowed the error until 2026-09-06,
+        # which meant an unparseable file was reported as COMPLIANT -- the
+        # one verdict the guard is least entitled to give about a file it
+        # could not read. Observed, not theorised: a genuinely broken
+        # `coordinator/bin/retire-dead-post-commit-hooks.py` passed this
+        # guard in the same run that `spawn_policy.detect` failed on it,
+        # because that scanner raises `SpawnParseError` here instead. A
+        # corpus guard's silence has to mean "I checked", or it means
+        # nothing at all.
+        raise TextWriteParseError(
+            f"{rel}: failed to parse -- {exc}. This guard cannot certify a "
+            f"file it cannot read; fix the syntax error rather than the guard."
+        ) from exc
     out = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -156,6 +174,19 @@ def test_no_production_text_write_omits_newline() -> None:
         'Fix: add newline="\\n" (or newline="" for csv). Sites:\n  '
         + "\n  ".join(sorted(offenders))
     )
+
+
+def test_an_unparseable_file_is_a_failure_not_a_pass() -> None:
+    """The guard must not certify what it could not read. Proving the
+    instrument: without this, `except SyntaxError: return []` reads exactly
+    like a clean file to every caller, and the corpus scan below silently
+    shrinks by one."""
+    import pytest
+
+    with pytest.raises(TextWriteParseError) as caught:
+        _offenders_in("def f(:" + chr(10), "broken.py")
+    assert "broken.py" in str(caught.value)
+    assert "cannot certify" in str(caught.value)
 
 
 def test_guard_detects_a_planted_violation() -> None:

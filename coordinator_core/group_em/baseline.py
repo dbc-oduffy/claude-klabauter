@@ -156,7 +156,7 @@ def _write_atomic(path: Path, payload: dict[str, Any]) -> None:
         prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(payload, fh)
         os.replace(tmp_name, path)
     finally:

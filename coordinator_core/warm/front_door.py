@@ -1118,7 +1118,7 @@ class DialCounter:
             path.parent.mkdir(parents=True, exist_ok=True)
             payload = json.dumps(self.snapshot(), ensure_ascii=False, indent=2)
             tmp_path = str(path) + f".{os.getpid()}.tmp"
-            with open(tmp_path, "w", encoding="utf-8") as handle:
+            with open(tmp_path, "w", encoding="utf-8", newline="\n") as handle:
                 handle.write(payload)
             if not _replace_with_retry(tmp_path, str(path)):
                 return False

@@ -486,7 +486,10 @@ def test_graceful_skip_unresolved_exits_zero_with_skip_row(capsys, _isolated_env
 
     assert rc == 0
     out = capsys.readouterr().out
-    assert "doe_root_pointer: skipped (repos.doe_claude not resolved" in out
+    assert "doe_root_pointer: skipped (repos.doe_claude unset" in out
+    # The remediation names a runnable command. It previously said "complete
+    # step 3.5a first", and there is no 3.5a in the shipped install.md.
+    assert "machine-local set repos.doe_claude" in out
 
 
 def test_graceful_skip_unresolved_does_not_mask_check_only_failure(tmp_path, monkeypatch, capsys, _isolated_env):

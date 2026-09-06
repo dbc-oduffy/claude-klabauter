@@ -2138,25 +2138,36 @@ def test_install_claude_doe_launcher_chain_continues_past_a_mid_chain_failure(
     assert "claude-doe launcher chain incomplete" in out_err.err
 
 
-def test_install_claude_doe_launcher_chain_doe_root_skip_is_not_pass(
+def test_install_claude_doe_launcher_chain_unresolved_doe_root_is_not_applicable(
     setup_mod, tmp_path, monkeypatch, capsys
 ):
-    # Review: coordinatorcode-reviewer-7ca32c22 — `gen-doe-root-pointer.py
-    # --graceful-skip-unresolved` exits 0 without writing the pointer when
-    # repos.doe_claude isn't resolved yet (fresh-clean-install shape). This
-    # must never read as PASS, and the skip explanation must survive
-    # agent_mode (the mode a scripted/CI install runs under).
+    """An unresolved `repos.doe_claude` means the dev-clone install mode is not
+    configured -- the marketplace plugin install needs none of this chain
+    (`docs/safety.md` rows 4/5, `skills/setup/SKILL.md` on the `--doe-root`
+    seam). So the chain reports SKIP and stops, never PASS and never the
+    "coordinator will NOT load" ADVISORY, which is a dev-mode statement that
+    is false on a correctly-installed OSS box.
+
+    The three remaining generators are dev-mode renderers; running them there
+    also wrote an rc sentinel block that `safety.md` row 4 says is "only
+    present in the maximalist/dev install mode"."""
     repo_root = tmp_path / "repo"
     bin_dir = repo_root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
     for _, name, _ in setup_mod._CLAUDE_DOE_CHAIN_STEPS:
         (bin_dir / name).write_text("# stub\n")
 
+    calls = []
+
     def _fake_run(argv, **kwargs):
+        calls.append(argv[1])
         if "gen-doe-root-pointer.py" in argv[1]:
             return setup_mod.subprocess.CompletedProcess(
                 argv, 0,
-                stdout="doe_root_pointer: skipped (repos.doe_claude not resolved — complete step 3.5a first)",
+                stdout=(
+                    "doe_root_pointer: skipped (repos.doe_claude unset — "
+                    "machine-local set repos.doe_claude <path>  then /coordinator:install)"
+                ),
                 stderr="",
             )
         return setup_mod.subprocess.CompletedProcess(argv, 0, stdout="ok", stderr="")
@@ -2168,12 +2179,15 @@ def test_install_claude_doe_launcher_chain_doe_root_skip_is_not_pass(
     setup_mod.install_claude_doe_launcher_chain(repo_root, sys.executable, tmp_path, args)
 
     out_err = capsys.readouterr()
-    assert "PASS [claude-doe-chain] doe-root pointer" not in out_err.out
-    assert "doe_root_pointer: skipped" in out_err.err  # survives agent_mode
-    assert "[ADVISORY]" in out_err.err
-    # The other three steps still ran and still PASS -- only the skipped
-    # step's own outcome downgrades.
-    assert out_err.out.count("PASS [claude-doe-chain]") == len(setup_mod._CLAUDE_DOE_CHAIN_STEPS) - 1
+    assert "PASS [claude-doe-chain]" not in out_err.out
+    assert "SKIP [claude-doe-chain]" in out_err.out
+    assert "dev-clone mode not configured" in out_err.out
+    # Never the dev-mode alarm, and never the incomplete-chain summary.
+    assert "[ADVISORY]" not in out_err.err
+    assert "will NOT load" not in out_err.err + out_err.out
+    assert "launcher chain incomplete" not in out_err.err
+    # The remaining dev-mode generators are not run at all.
+    assert len(calls) == 1
 
 
 def test_install_claude_doe_launcher_chain_all_pass_prints_no_incomplete_summary(

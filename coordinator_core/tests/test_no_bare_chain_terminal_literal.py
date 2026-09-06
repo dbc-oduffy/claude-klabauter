@@ -136,19 +136,41 @@ _TEST_FILE_ALLOWLIST: frozenset[str] = frozenset({
     "coordinator_core/ops/ceremony/tests/test_pipeline_context.py",
     "coordinator_core/ops/ceremony/tests/test_receipt_emit.py",
     "coordinator_core/ops/ceremony/tests/test_receipt_schema.py",
-    "coordinator_core/ops/ceremony/tests/test_resolver_git_provenance.py",
-    "coordinator_core/ops/ceremony/tests/test_session_instructions.py",
     "coordinator_core/ops/ceremony/tests/test_wsc_disposition.py",
-    "coordinator_core/ops/ceremony/tests/test_wsc_tail_parity.py",
-    "coordinator_core/ops/session/tests/test_resolve_chain_terminal_disposition.py",
     "coordinator_core/ops/test_coordinator_complete_entry.py",
     "coordinator_core/tests/test_ceremony_brief_budget.py",
-    "coordinator_core/workstream_complete/test_apply.py",
     "coordinator_core/workstream_complete/test_directives_review_oracle.py",
     "coordinator_core/workstream_complete/test_directives_review_scale.py",
     "coordinator_core/workstream_complete/test_lesson_capture_reachable.py",
     "coordinator_core/workstream_complete/test_workstream_complete.py",
     "coordinator_core/workstream_complete/test_workstream_complete_contract.py",
+    # Added 2026-09-06. Five suites landed by peer work since this allowlist
+    # was last measured, each naming `"single-session"` as a literal FIXTURE
+    # value -- the same class every entry above covers (a test states the
+    # disposition it is exercising; it is not a production comparison the C2
+    # sweep was meant to migrate). Verified per site, not by rationale:
+    #   - ops/tests/test_coordinator_complete_entry_backfill.py::_parse --
+    #     the `--disposition` CLI argv value under test.
+    #   - workstream_complete/test_gate_path_spawn_budget.py::
+    #     _patch_gate_with_sid -- a stubbed `SessionShapeGate` field.
+    #   - workstream_complete/tests/test_review_receipt_gates_delivered_close
+    #     .py::_gate -- the local `SessionShapeGate` fixture's default.
+    #   - workstream_complete/tests/test_review_scale_mandatory_invariants.py
+    #     -- the module-level `_BASE` review-scale input dict.
+    #   - workstream_complete/tests/test_review_scale_unresolved_is_not_a_
+    #     measured_negative.py -- two `chain_disposition=` fixture kwargs.
+    # Removed the same day, having stopped matching anything (a stale entry
+    # silently re-exempts whatever lands at that path next):
+    # ops/ceremony/tests/test_session_instructions.py and
+    # ops/ceremony/tests/test_wsc_tail_parity.py no longer exist;
+    # ops/ceremony/tests/test_resolver_git_provenance.py,
+    # ops/session/tests/test_resolve_chain_terminal_disposition.py and
+    # workstream_complete/test_apply.py no longer carry either spelling.
+    "coordinator_core/ops/tests/test_coordinator_complete_entry_backfill.py",
+    "coordinator_core/workstream_complete/test_gate_path_spawn_budget.py",
+    "coordinator_core/workstream_complete/tests/test_review_receipt_gates_delivered_close.py",
+    "coordinator_core/workstream_complete/tests/test_review_scale_mandatory_invariants.py",
+    "coordinator_core/workstream_complete/tests/test_review_scale_unresolved_is_not_a_measured_negative.py",
     # This gate itself: `_LEGACY_VALUES` and every planted-fixture literal
     # below are the detector's OWN target values, not a violation of the
     # invariant they detect.

@@ -52,7 +52,10 @@ from coordinator_core.subagent_sandbox.provision_report import (
     assemble_contract_blocks_for_payload,
 )
 from coordinator_core.testing.doe_root import doe_root_and_present
-from coordinator_core.win_portability import no_console_passthrough_kwargs
+from coordinator_core.win_portability import (
+    no_console_creationflags,
+    no_console_passthrough_kwargs,
+)
 from coordinator_core.session import machinery_paths
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -1173,7 +1176,7 @@ def test_unnamed_integrator_miss_writes_a_sentinel_carrying_the_receipt(tmp_path
 
     from coordinator_core.hooks import cater_subagent_start as mod
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
     _force_sidecar_eligible(monkeypatch, mod, "coordinator:review-integrator")
 
@@ -1204,7 +1207,7 @@ def test_the_sentinel_puts_the_stop_guard_on_the_do_not_redispatch_branch(tmp_pa
     from coordinator_core.hooks import cater_subagent_start as mod
     from coordinator_core.hooks import stop_dispatch as sd
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
     _force_sidecar_eligible(monkeypatch, mod, "coordinator:review-integrator")
 
@@ -1237,7 +1240,7 @@ def test_named_raw_fallback_shape_still_gets_no_sentinel(tmp_path, monkeypatch):
 
     from coordinator_core.hooks import cater_subagent_start as mod
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
     _force_sidecar_eligible(monkeypatch, mod, "coordinator:review-integrator")
 
@@ -1257,7 +1260,7 @@ def test_sentinel_write_is_idempotent_for_a_refired_dispatch(tmp_path, monkeypat
 
     from coordinator_core.hooks import cater_subagent_start as mod
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
     _force_sidecar_eligible(monkeypatch, mod, "coordinator:review-integrator")
 
@@ -1289,7 +1292,7 @@ def test_a_non_receipt_type_gets_a_sentinel_without_a_receipt_block(tmp_path, mo
 
     from coordinator_core.hooks import cater_subagent_start as mod
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
     _force_sidecar_eligible(monkeypatch, mod, "coordinator:executor")
 

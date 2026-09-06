@@ -626,14 +626,14 @@ def _stamp_integrated_from(run_report, reviewer_stem):
             merged = trimmed + " [" + reviewer_stem + "]"
         head = head[:existing.start()] + merged + head[line_end:]
         try:
-            run_report.write_text(head + rest, encoding="utf-8")
+            run_report.write_text(head + rest, encoding="utf-8", newline="\n")
         except OSError as exc:
             return StampOutcome("unwritable", str(run_report), "cannot write: %s" % exc)
         return StampOutcome("appended", str(run_report))
 
     stamped = head + "integrated_from: [" + reviewer_stem + "]\n"
     try:
-        run_report.write_text(stamped + rest, encoding="utf-8")
+        run_report.write_text(stamped + rest, encoding="utf-8", newline="\n")
     except OSError as exc:
         return StampOutcome("unwritable", str(run_report), "cannot write: %s" % exc)
     return StampOutcome("stamped", str(run_report))

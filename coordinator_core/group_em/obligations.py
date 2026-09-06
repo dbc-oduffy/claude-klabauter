@@ -196,7 +196,7 @@ def record(
     line = json.dumps(row, sort_keys=True)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as handle:
+        with open(path, "a", encoding="utf-8", newline="\n") as handle:
             handle.write(line + "\n")
     except OSError:
         return False

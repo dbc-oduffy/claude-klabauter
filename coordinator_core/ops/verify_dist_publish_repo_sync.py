@@ -75,7 +75,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from coordinator_core._settings_home import home_dir, settings_home
+from coordinator_core._settings_home import home_dir, resolve_machine_local_cli, settings_home
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
 
@@ -142,7 +142,7 @@ def _resolve_publish_repo_root() -> Optional[str]:
     if env_val:
         return env_val
 
-    path_binary = shutil.which("machine-local")
+    path_binary = resolve_machine_local_cli()
     if path_binary:
         value = _run_machine_local(path_binary, _MACHINE_LOCAL_KEY)
         if value:

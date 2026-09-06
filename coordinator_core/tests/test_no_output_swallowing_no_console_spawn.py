@@ -182,6 +182,90 @@ def _is_passthrough_shaped(identifier: str) -> bool:
     return "passthrough" in tail and ("kw" in tail or "spawn" in tail)
 
 
+def _collect_compliant_kwargs_names(stmts: list[ast.stmt]) -> set[str]:
+    """Names bound to a kwargs mapping that ALREADY carries a std stream.
+
+    The counterpart to the sibling gate's `_collect_no_console_names`, and the
+    reason this gate needs one of its own. That collector answers "does this
+    name contribute console suppression?" and answers YES for
+    `no_console_passthrough_kwargs()` -- correctly, since the passthrough
+    primitive returns the creationflags too. This gate then read the resulting
+    alias as a bare no-console splat, because `_is_passthrough_shaped` is a
+    name-SHAPE test applied to the SPLAT's identifier, and a local called
+    `_passthrough` or `spawn_kwargs` is not shaped like the primitive it was
+    assigned from. Every compose-then-splat site therefore read as a violation
+    while being compliant by construction:
+
+        spawn_kwargs = dict(stdout=PIPE, stderr=PIPE, **no_console_creationflags())
+        subprocess.Popen(argv, **spawn_kwargs)
+
+    Resolution is deliberately the same three shapes, and the same traversal
+    contract, `_collect_no_console_names` uses -- assignment from a
+    passthrough-shaped call, a `dict(...)`/`{...}` display carrying a stream
+    kwarg or splatting a compliant source, and `NAME["stdout"] = ...`
+    subscript assignment (which is how a caller adds a stream inside one
+    branch of a conditional). Descends into `if`/`try`/`with`/`for`/`while`
+    bodies, never into a nested function, so a same-named local elsewhere
+    cannot leak in.
+    """
+
+    names: set[str] = set()
+
+    def _value_is_compliant(value: ast.expr) -> bool:
+        if isinstance(value, ast.Name):
+            return value.id in names
+        if isinstance(value, ast.Call):
+            func_name = _splat_identifier(value.func) or ""
+            if _is_passthrough_shaped(func_name):
+                return True
+            for kw in value.keywords:
+                if kw.arg in _STREAM_KWARGS:
+                    return True
+                if kw.arg is None and _value_is_compliant(kw.value):
+                    return True
+            return False
+        if isinstance(value, ast.Dict):
+            for key, item in zip(value.keys, value.values):
+                if key is None:
+                    if _value_is_compliant(item):
+                        return True
+                elif isinstance(key, ast.Constant) and key.value in _STREAM_KWARGS:
+                    return True
+            return False
+        return False
+
+    def _walk(body: list[ast.stmt]) -> None:
+        for stmt in body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue  # new scope -- do not resolve names into or out of it
+
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign)):
+                targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+                value = stmt.value
+                if value is not None and _value_is_compliant(value):
+                    for target in targets:
+                        if isinstance(target, ast.Name):
+                            names.add(target.id)
+                for target in targets:
+                    if (
+                        isinstance(target, ast.Subscript)
+                        and isinstance(target.value, ast.Name)
+                        and isinstance(target.slice, ast.Constant)
+                        and target.slice.value in _STREAM_KWARGS
+                    ):
+                        names.add(target.value.id)
+
+            for field in ("body", "orelse", "finalbody"):
+                nested = getattr(stmt, field, None)
+                if isinstance(nested, list):
+                    _walk([s for s in nested if isinstance(s, ast.stmt)])
+            for handler in getattr(stmt, "handlers", []) or []:
+                _walk(handler.body)
+
+    _walk(stmts)
+    return names
+
+
 def _has_untraceable_splat(
     node: ast.Call, resolved: frozenset[str] = frozenset()
 ) -> bool:
@@ -210,11 +294,13 @@ class _Visitor(ast.NodeVisitor):
         source_lines: list[str],
         resolver: _SubprocessImportResolver,
         module_aliases: frozenset[str] = frozenset(),
+        module_compliant: frozenset[str] = frozenset(),
     ) -> None:
         self._lines = source_lines
         self._resolver = resolver
         self._enclosing: list[str] = []
         self.sites: list[tuple[int, str]] = []
+        self._scope_compliant: list[frozenset[str]] = [module_compliant]
         # Two-pass alias resolution, matching the sibling gate's own contract:
         # module scope once, then each function scope unioned on top for the
         # duration of that scope. A same-named local inside another function must
@@ -225,7 +311,10 @@ class _Visitor(ast.NodeVisitor):
         self._enclosing.append(node.name)
         local = _collect_no_console_names(getattr(node, "body", []))
         self._scope_aliases.append(self._scope_aliases[-1] | frozenset(local))
+        local_compliant = _collect_compliant_kwargs_names(getattr(node, "body", []))
+        self._scope_compliant.append(self._scope_compliant[-1] | frozenset(local_compliant))
         self.generic_visit(node)
+        self._scope_compliant.pop()
         self._scope_aliases.pop()
         self._enclosing.pop()
 
@@ -245,6 +334,7 @@ class _Visitor(ast.NodeVisitor):
                 and _carries_no_console_signal(node, self._lines, self._scope_aliases[-1])
                 and not (kwnames & _STREAM_KWARGS)
                 and not any(_is_passthrough_shaped(name) for name in splats)
+                and not any(name in self._scope_compliant[-1] for name in splats)
                 and not _has_untraceable_splat(node, self._scope_aliases[-1])
             ):
                 self.sites.append((node.lineno, self._enclosing[-1] if self._enclosing else "<module>"))
@@ -294,6 +384,7 @@ def find_output_swallowing_spawns(roots: list[pathlib.Path]) -> list[OutputSwall
                 source.splitlines(),
                 resolver,
                 frozenset(_collect_no_console_names(tree.body)),
+                frozenset(_collect_compliant_kwargs_names(tree.body)),
             )
             visitor.visit(tree)
             if not visitor.sites:
@@ -429,6 +520,62 @@ def test_gate_ignores_a_passthrough_helper_spawn(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     assert find_output_swallowing_spawns([pkg]) == []
+
+
+def test_gate_ignores_a_composed_kwargs_dict_carrying_a_stream(tmp_path, monkeypatch):
+    """The compose-then-splat shape reads by what the mapping CONTAINS.
+
+    `_collect_compliant_kwargs_names`'s reason for existing: the splat's own
+    identifier (`spawn_kwargs`) is shaped like neither primitive, so before it
+    this correct site read as a violation.
+    """
+    monkeypatch.setattr(
+        "coordinator_core.tests.test_no_output_swallowing_no_console_spawn.REPO_ROOT", tmp_path
+    )
+    sites = _plant_and_scan(
+        tmp_path,
+        "    spawn_kwargs = dict(\n"
+        "        stdout=subprocess.PIPE,\n"
+        "        stderr=subprocess.PIPE,\n"
+        "        **no_console_creationflags(),\n"
+        "    )\n"
+        "    subprocess.Popen(['x'], **spawn_kwargs)\n",
+    )
+    assert sites == []
+
+
+def test_gate_still_flags_a_composed_kwargs_dict_with_no_stream(tmp_path, monkeypatch):
+    """The teeth on the arm above: composing the mapping is not itself a fix.
+
+    Same shape, minus the stream kwargs -- this must stay red, or
+    `_collect_compliant_kwargs_names` would have blinded the gate to every
+    site that builds its kwargs a statement early.
+    """
+    monkeypatch.setattr(
+        "coordinator_core.tests.test_no_output_swallowing_no_console_spawn.REPO_ROOT", tmp_path
+    )
+    sites = _plant_and_scan(
+        tmp_path,
+        "    spawn_kwargs = dict(env=None, **no_console_creationflags())\n"
+        "    subprocess.Popen(['x'], **spawn_kwargs)\n",
+    )
+    assert [s.enclosing for s in sites] == ["go"]
+
+
+def test_gate_ignores_a_stream_added_by_subscript_assignment(tmp_path, monkeypatch):
+    """`NAME["stderr"] = PIPE` inside one branch is how a caller adds a stream
+    conditionally -- the shape `coordinator-lesson-add.py :: main` uses."""
+    monkeypatch.setattr(
+        "coordinator_core.tests.test_no_output_swallowing_no_console_spawn.REPO_ROOT", tmp_path
+    )
+    sites = _plant_and_scan(
+        tmp_path,
+        "    kw = dict(**no_console_creationflags())\n"
+        "    if True:\n"
+        "        kw['stderr'] = subprocess.PIPE\n"
+        "    subprocess.run(['x'], **kw)\n",
+    )
+    assert sites == []
 
 
 def test_gate_honours_the_last_resort_exemption_tag(tmp_path, monkeypatch):

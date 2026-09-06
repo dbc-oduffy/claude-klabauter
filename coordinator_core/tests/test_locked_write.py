@@ -707,7 +707,7 @@ class TestLockHolderCarriesAnAge:
         payload = json.dumps(
             {"pid": 4242, "holder": "publisher", "acquired_at": acquired_at}
         ).encode("utf-8")
-        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT)
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
         try:
             os.lseek(fd, locked_write._METADATA_OFFSET, os.SEEK_SET)
             os.write(fd, payload)

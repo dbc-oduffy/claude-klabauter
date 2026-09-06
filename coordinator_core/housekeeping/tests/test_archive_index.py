@@ -193,7 +193,8 @@ def test_revalidate_detects_in_place_modify_with_unchanged_size(tmp_path):
     before_size = p.stat().st_size
 
     # "hnd-aaaa" -> "hnd-bbbb": same length, different content.
-    text = p.read_text(encoding="utf-8", newline="").replace("hnd-aaaa", "hnd-bbbb")
+    with open(p, encoding="utf-8", newline="") as _f:
+        text = _f.read().replace("hnd-aaaa", "hnd-bbbb")
     assert len(text.encode("utf-8")) == len(p.read_bytes()), (
         "test setup drifted -- replacement must not change byte length"
     )

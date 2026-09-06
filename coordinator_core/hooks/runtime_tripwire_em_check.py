@@ -380,7 +380,7 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
         if not _ensure_cursor_dir(cursor_dir):
             return None
         try:
-            with open(cursor_path, "w", encoding="utf-8") as fh:
+            with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(str(log_size))
         except Exception:
             pass
@@ -398,7 +398,7 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
         pass
 
     try:
-        with open(cursor_path, "w", encoding="utf-8") as fh:
+        with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(str(log_size))
     except Exception:
         pass
@@ -492,7 +492,7 @@ def _check_hooks_json_staleness(git_root: str, session_id: str, common_dir: str)
         if not _ensure_cursor_dir(cursor_dir):
             return None
         try:
-            with open(cursor_path, "w", encoding="utf-8") as fh:
+            with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(current_hash)
         except Exception:
             pass
@@ -502,7 +502,7 @@ def _check_hooks_json_staleness(git_root: str, session_id: str, common_dir: str)
         return None
 
     try:
-        with open(cursor_path, "w", encoding="utf-8") as fh:
+        with open(cursor_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(current_hash)
     except Exception:
         pass

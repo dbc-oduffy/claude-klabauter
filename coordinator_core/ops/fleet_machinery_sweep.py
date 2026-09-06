@@ -98,7 +98,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -106,7 +105,7 @@ from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops import extract_cited_sidecars
-from coordinator_core.win_portability import leaf_spawn_creationflags
+from coordinator_core.git.run import run_git
 
 _LOG_PREFIX = "fleet-machinery-sweep"
 
@@ -269,34 +268,24 @@ def _git_ls_files(root: str) -> Optional[List[str]]:
     but-not-ignored, so the same call sees paths C6 will `git rm --cached`
     and paths a fresh `.gitignore` stanza would otherwise miss. `None` if
     `root` is not a git worktree / git is unavailable."""
-    try:
-        proc = subprocess.run(
-            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-            cwd=root, capture_output=True, timeout=60,
-            **leaf_spawn_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
+    result = run_git(
+        ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=root,
+        binary=True,
+    )
+    if result.returncode != 0:
         return None
-    if proc.returncode != 0:
-        return None
-    raw = proc.stdout.decode("utf-8", errors="replace")
+    raw = result.stdout_bytes.decode("utf-8", errors="replace")
     return sorted(p.replace(os.sep, "/") for p in raw.split("\0") if p)
 
 
 def _git_ls_files_cached_only(root: str) -> Optional[List[str]]:
     """ONE `git ls-files --cached` spawn -- the tracked-only view `git rm
     --cached` needs (untracked paths were never in the index to remove)."""
-    try:
-        proc = subprocess.run(
-            ["git", "ls-files", "-z", "--cached"],
-            cwd=root, capture_output=True, timeout=60,
-            **leaf_spawn_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
+    result = run_git(["ls-files", "-z", "--cached"], cwd=root, binary=True)
+    if result.returncode != 0:
         return None
-    if proc.returncode != 0:
-        return None
-    raw = proc.stdout.decode("utf-8", errors="replace")
+    raw = result.stdout_bytes.decode("utf-8", errors="replace")
     return sorted(p.replace(os.sep, "/") for p in raw.split("\0") if p)
 
 
@@ -359,26 +348,22 @@ def _git_rm_cached(root: str, paths: List[str]) -> Tuple[bool, str]:
     also cap path length and mangle anything with a quote in it."""
     if not paths:
         return True, ""
-    try:
-        proc = subprocess.run(
-            [
-                "git", "rm", "--cached", "-r", "-q",
-                "--pathspec-from-file=-", "--pathspec-file-nul",
-            ],
-            input="\0".join(paths).encode("utf-8"),
-            cwd=root, capture_output=True, timeout=120,
-            **leaf_spawn_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, str(exc)
-    if proc.returncode != 0:
+    result = run_git(
+        [
+            "rm", "--cached", "-r", "-q",
+            "--pathspec-from-file=-", "--pathspec-file-nul",
+        ],
+        input="\0".join(paths).encode("utf-8"),
+        cwd=root,
+    )
+    if result.returncode != 0:
         # `input=` is bytes, so this call cannot pass `text=True` and both
         # streams come back as bytes. Decode here rather than returning them
         # raw: this string IS the abort reason a human reads to decide whether
         # a repo was skipped for a transient reason or a real one, and
         # `b'...'` in that line is how a legible failure becomes a mystery.
-        err = (proc.stderr or b"").decode("utf-8", errors="replace").strip()
-        out = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
+        err = result.stderr.strip()
+        out = result.stdout.strip()
         return False, err or out
     return True, ""
 

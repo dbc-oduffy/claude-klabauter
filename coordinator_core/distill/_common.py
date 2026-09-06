@@ -421,7 +421,7 @@ def active_reference_guard_many(
 
         pattern_fd, pattern_path = tempfile.mkstemp(suffix=".txt", text=True)
         try:
-            with os.fdopen(pattern_fd, "w", encoding="utf-8") as pattern_file:
+            with os.fdopen(pattern_fd, "w", encoding="utf-8", newline="\n") as pattern_file:
                 pattern_file.write("\n".join(distinct_needles) + "\n")
             result = subprocess.run(
                 [

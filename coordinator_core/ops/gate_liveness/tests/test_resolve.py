@@ -7,7 +7,6 @@ Spec backlink: docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md 
 
 from __future__ import annotations
 
-import asyncio
 import textwrap
 from pathlib import Path
 
@@ -329,19 +328,17 @@ class TestResolveGateLiveness:
 
 class TestHandler:
     def test_missing_plan_path_errors(self, tmp_path):
-        result = asyncio.run(_handler({}, repo_root=tmp_path))
+        result = _handler({}, repo_root=tmp_path)
         assert result["exit_code"] == 1
         assert "plan_path" in result["error"]
 
     def test_missing_repo_root_errors(self):
-        result = asyncio.run(_handler({"plan_path": "plan.md"}, repo_root=None))
+        result = _handler({"plan_path": "plan.md"}, repo_root=None)
         assert result["exit_code"] == 1
         assert "repo_root" in result["error"]
 
     def test_nonexistent_plan_path_errors(self, tmp_path):
-        result = asyncio.run(
-            _handler({"plan_path": "does-not-exist.md"}, repo_root=tmp_path)
-        )
+        result = _handler({"plan_path": "does-not-exist.md"}, repo_root=tmp_path)
         assert result["exit_code"] == 1
         assert "does not exist" in result["error"]
 
@@ -358,9 +355,7 @@ class TestHandler:
             """
         )
         plan = _write_plan(tmp_path, "plan.md", rows)
-        result = asyncio.run(
-            _handler({"plan_path": "plan.md"}, repo_root=tmp_path)
-        )
+        result = _handler({"plan_path": "plan.md"}, repo_root=tmp_path)
         assert result["exit_code"] == 0
         assert len(result["verdicts"]) == 1
         assert result["verdicts"][0]["plan"] == str(plan)

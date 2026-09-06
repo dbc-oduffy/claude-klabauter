@@ -1610,7 +1610,7 @@ def revert_ship_stamps(
         if original is None:
             continue
         try:
-            (root / relpath).write_text(original, encoding="utf-8")
+            (root / relpath).write_text(original, encoding="utf-8", newline="\n")
         except OSError:
             pass
 
@@ -1887,7 +1887,7 @@ def revert_close_stamps(
         if original is None:
             continue
         try:
-            (root / relpath).write_text(original, encoding="utf-8")
+            (root / relpath).write_text(original, encoding="utf-8", newline="\n")
         except OSError:
             pass
 

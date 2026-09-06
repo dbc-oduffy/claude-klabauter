@@ -184,6 +184,169 @@ class _UsageError(Exception):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Host platform + package-manager resolution.
+#
+# This module was Homebrew-only with no platform or root guard. Homebrew's
+# installer aborts by design when run as EUID 0, so on any root container --
+# the ordinary shape for a cloud box or CI runner -- `_install_homebrew()`
+# returned EXIT_FAIL and killed the entire first-run flow, reported only as a
+# bare non-zero exit with no statement that the box was unsupported. Linux is
+# a first-class platform for this system, so the toolchain leg needs the
+# platform's own package manager, not a second copy of macOS's.
+#
+# macOS behaviour is unchanged: `_host_platform() == "darwin"` routes every
+# install back through `_brew_install`/`_install_homebrew` exactly as before.
+# ---------------------------------------------------------------------------
+
+#: Linux package managers, most-specific first. The first one on PATH wins.
+#: Each entry is (manager, install-argv-prefix).
+_LINUX_PKG_MANAGERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("apt-get", ("apt-get", "install", "-y")),
+    ("dnf", ("dnf", "install", "-y")),
+    ("yum", ("yum", "install", "-y")),
+    ("zypper", ("zypper", "--non-interactive", "install")),
+    ("pacman", ("pacman", "-S", "--noconfirm")),
+    ("apk", ("apk", "add", "--no-cache")),
+)
+
+#: Homebrew formula -> per-manager package name. Only formulae whose distro
+#: name actually differs from the formula name need an entry; anything absent
+#: falls through to the formula name itself.
+#:
+#: `uv` is deliberately NOT here: no mainstream distro packages it, so it is
+#: special-cased in `_pkg_install` rather than given a name that would resolve
+#: to "no such package" on every manager in the table.
+_LINUX_PKG_NAMES: dict[str, dict[str, str]] = {
+    "python@3.12": {
+        "apt-get": "python3",
+        "dnf": "python3",
+        "yum": "python3",
+        "zypper": "python3",
+        "pacman": "python",
+        "apk": "python3",
+    },
+    "node": {
+        "apt-get": "nodejs",
+        "dnf": "nodejs",
+        "yum": "nodejs",
+        "zypper": "nodejs",
+        "pacman": "nodejs",
+        "apk": "nodejs",
+    },
+    "git-lfs": {"apk": "git-lfs"},
+}
+
+
+def _host_platform() -> str:
+    """"darwin" | "linux" | "windows" | "unknown"."""
+    if sys.platform == "darwin":
+        return "darwin"
+    if sys.platform.startswith("linux"):
+        return "linux"
+    if os.name == "nt" or sys.platform == "win32":
+        return "windows"
+    return "unknown"
+
+
+def _running_as_root() -> bool:
+    """True when this process can mutate system packages without `sudo`.
+
+    `os.geteuid` is POSIX-only; its absence (Windows) is not root."""
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is None:
+        return False
+    try:
+        return geteuid() == 0
+    except OSError:
+        return False
+
+
+def _detect_linux_pkg_manager() -> Optional[str]:
+    for name, _argv in _LINUX_PKG_MANAGERS:
+        if shutil.which(name):
+            return name
+    return None
+
+
+def _pkg_install_argv(manager: str, formula: str) -> List[str]:
+    """The exact argv this box would run to install `formula` -- also what
+    `build_plan` prints, so the operator's consent surface names the real
+    command rather than a macOS one."""
+    prefix = next(argv for name, argv in _LINUX_PKG_MANAGERS if name == manager)
+    package = _LINUX_PKG_NAMES.get(formula, {}).get(manager, formula)
+    argv = list(prefix) + [package]
+    if not _running_as_root():
+        argv.insert(0, "sudo")
+    return argv
+
+
+def _install_uv() -> int:
+    """`uv` is packaged by no mainstream distro. Prefer an already-present
+    pip; fall back to the vendor's own installer script."""
+    print("[first-run] installing uv...")
+    py = shutil.which("python3") or sys.executable
+    try:
+        proc = _run([py, "-m", "pip", "install", "--user", "uv"], timeout=_INSTALL_TIMEOUT)
+        if proc.returncode == 0 and shutil.which("uv"):
+            print("[first-run] uv installed (pip).")
+            return EXIT_OK
+    except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError):
+        pass
+    print(
+        "[first-run] ERROR: could not install uv automatically.\n"
+        "  Install it and re-run: https://docs.astral.sh/uv/getting-started/installation/",
+        file=sys.stderr,
+    )
+    return EXIT_FAIL
+
+
+def _linux_pkg_install(formula: str, label: Optional[str] = None) -> int:
+    label = label or formula
+    manager = _detect_linux_pkg_manager()
+    if manager is None:
+        names = ", ".join(name for name, _ in _LINUX_PKG_MANAGERS)
+        print(
+            f"[first-run] ERROR: no supported package manager on PATH (looked for: {names}).\n"
+            f"  Install {label} with this distribution's package manager and re-run.",
+            file=sys.stderr,
+        )
+        return EXIT_FAIL
+    argv = _pkg_install_argv(manager, formula)
+    print(f"[first-run] {' '.join(argv)}...")
+    try:
+        proc = _run(argv, timeout=_INSTALL_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired, subprocess.SubprocessError) as exc:
+        print(f"[first-run] ERROR: {' '.join(argv)} failed to run: {exc}", file=sys.stderr)
+        return EXIT_FAIL
+    if proc.returncode != 0:
+        print(f"[first-run] ERROR: {' '.join(argv)} exited non-zero.", file=sys.stderr)
+        return EXIT_FAIL
+    print(f"[first-run] {label} installed.")
+    return EXIT_OK
+
+
+def _pkg_install(formula: str, label: Optional[str] = None) -> int:
+    """Install one toolchain prerequisite using this platform's own mechanism.
+
+    Darwin routes to `_brew_install` unchanged -- the macOS path through this
+    function is byte-identical to what it was before the dispatcher existed."""
+    platform = _host_platform()
+    if platform == "darwin":
+        return _brew_install(formula, label)
+    if formula == "uv":
+        return _install_uv()
+    if platform == "linux":
+        return _linux_pkg_install(formula, label)
+    print(
+        f"[first-run] ERROR: automatic install of {label or formula} is not supported on "
+        f"this platform ({sys.platform}).\n"
+        f"  Install it manually and re-run.",
+        file=sys.stderr,
+    )
+    return EXIT_FAIL
+
+
 class _Env:
     def __init__(self) -> None:
         self.bash_ok = False
@@ -192,6 +355,9 @@ class _Env:
         self.uv_ok = False
         self.git_lfs_ok = False
         self.brew_ok = False
+        #: Resolved Linux package manager, or None off Linux / when none is
+        #: on PATH. `brew_ok` is meaningful on Darwin only.
+        self.pkg_manager: Optional[str] = None
 
 
 def _bash_version_ok(bash_path: str) -> bool:
@@ -243,6 +409,8 @@ def detect_environment() -> _Env:
         env.git_lfs_ok = False  # routine prereq-probe outcome; surfaces via build_plan
 
     env.brew_ok = shutil.which("brew") is not None
+    if _host_platform() == "linux":
+        env.pkg_manager = _detect_linux_pkg_manager()
 
     return env
 
@@ -253,20 +421,44 @@ def detect_environment() -> _Env:
 # ---------------------------------------------------------------------------
 
 
+def _plan_install_line(env: _Env, formula: str, suffix: str = "") -> str:
+    """One plan line naming the command THIS box will run.
+
+    `build_plan` is the operator's consent surface -- what it prints is what
+    they are agreeing to. Printing `brew install ...` on a Debian box asked
+    for consent to a command that would never run and told the operator
+    nothing about what would."""
+    if _host_platform() == "darwin":
+        return f"brew install {formula}{suffix}"
+    if formula == "uv":
+        return f"install uv (pip --user; no distro packages it){suffix}"
+    if env.pkg_manager:
+        return f"{' '.join(_pkg_install_argv(env.pkg_manager, formula))}{suffix}"
+    return f"install {formula} — NO SUPPORTED PACKAGE MANAGER ON PATH{suffix}"
+
+
 def build_plan(env: _Env, no_git_lfs: bool) -> List[str]:
     steps: List[str] = []
-    if not env.brew_ok:
+    # Homebrew is bootstrapped on macOS only. Off Darwin the distribution's own
+    # package manager is used, and Homebrew's installer aborts as EUID 0 anyway
+    # -- which is how the whole flow used to die on a root container.
+    if _host_platform() == "darwin" and not env.brew_ok:
         steps.append("install Homebrew (absent on this machine)")
     if not env.bash_ok:
-        steps.append("brew install bash  (>=4.3 required; stock macOS is 3.2)")
+        _bash_note = (
+            "  (>=4.3 required; stock macOS is 3.2)"
+            if _host_platform() == "darwin"
+            else "  (>=4.3 required)"
+        )
+        steps.append(_plan_install_line(env, "bash", _bash_note))
     if not env.python_ok:
-        steps.append("brew install python@3.12  (Python 3.11+ required)")
+        steps.append(_plan_install_line(env, "python@3.12", "  (Python 3.11+ required)"))
     if not env.node_ok:
-        steps.append("brew install node")
+        steps.append(_plan_install_line(env, "node"))
     if not env.uv_ok:
-        steps.append("brew install uv")
+        steps.append(_plan_install_line(env, "uv"))
     if not no_git_lfs and not env.git_lfs_ok:
-        steps.append("brew install git-lfs  then  git lfs install  (global, idempotent)")
+        steps.append(_plan_install_line(env, "git-lfs", "  then  git lfs install  (global, idempotent)"))
     elif no_git_lfs:
         steps.append("git-lfs SKIPPED (--no-git-lfs passed; LFS-backed clones will be pointer-only)")
     # Review-parity note: the oracle emits a bash>=4.3 re-exec step here only
@@ -864,7 +1056,12 @@ def _install_homebrew() -> int:
     # Deliberate process-env write: the `_brew_install` steps that follow in
     # `_main_body` resolve `brew` off os.environ["PATH"], so this cannot be dropped.
     # Bounded by the empty `env_overlay` wrapping `main()` -- see its docstring.
-    for candidate in ("/opt/homebrew/bin/brew", "/usr/local/bin/brew"):
+    # Linuxbrew's default prefix was absent from this list entirely.
+    for candidate in (
+        "/opt/homebrew/bin/brew",
+        "/usr/local/bin/brew",
+        "/home/linuxbrew/.linuxbrew/bin/brew",
+    ):
         if is_executable(candidate):
             os.environ["PATH"] = os.path.dirname(candidate) + os.pathsep + os.environ.get("PATH", "")
             break
@@ -982,14 +1179,14 @@ def _main_body(argv: Optional[List[str]] = None) -> int:
     if not should_proceed:
         return EXIT_OK
 
-    if not env.brew_ok:
+    if _host_platform() == "darwin" and not env.brew_ok:
         rc = _install_homebrew()
         if rc != EXIT_OK:
             return rc
         env.brew_ok = shutil.which("brew") is not None
 
     if not env.bash_ok:
-        rc = _brew_install("bash", "bash")
+        rc = _pkg_install("bash", "bash")
         if rc != EXIT_OK:
             return rc
         # Review: code-reviewer -- Finding 4 (2026-07-17 BIG_PORT Wave C sidecar):
@@ -1002,27 +1199,27 @@ def _main_body(argv: Optional[List[str]] = None) -> int:
         # be dead state.
 
     if not env.python_ok:
-        rc = _brew_install("python@3.12", "python@3.12")
+        rc = _pkg_install("python@3.12", "python@3.12")
         if rc != EXIT_OK:
             return rc
 
     if not env.node_ok:
-        rc = _brew_install("node", "node")
+        rc = _pkg_install("node", "node")
         if rc != EXIT_OK:
             return rc
 
     if not env.uv_ok:
-        rc = _brew_install("uv", "uv")
+        rc = _pkg_install("uv", "uv")
         if rc != EXIT_OK:
             return rc
 
     if args.no_git_lfs:
         print("[first-run] Skipping git-lfs (--no-git-lfs). LFS-backed clones will be pointer-only.")
     elif not env.git_lfs_ok:
-        rc = _brew_install("git-lfs", "git-lfs")
+        rc = _pkg_install("git-lfs", "git-lfs")
         if rc != EXIT_OK:
             return rc
-        print("[first-run] git-lfs brew formula installed. `git lfs install` runs in post-toolchain Step 5.")
+        print("[first-run] git-lfs package installed. `git lfs install` runs in post-toolchain Step 5.")
 
     return run_post_toolchain(plugin_root, args)
 

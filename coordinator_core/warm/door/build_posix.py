@@ -3,8 +3,12 @@ native fast-path client.
 
 VERIFIED ON macOS 2026-08-22: this module built `door_posix.c` on macOS
 (arm64, Apple clang 21) with no source edits, and the resulting binary served
-a live warm engine. It has NOT been run on Linux. See `README-posix.md` for
-the build command, what was measured, and what remains unexercised there.
+a live warm engine. COMPILES ON LINUX (glibc, gcc/clang) -- but only since the
+`_POSIX_C_SOURCE` define in `build()` below; before it, `-std=c11` on glibc
+failed with undeclared `readlink`/`sigemptyset`/`CLOCK_MONOTONIC`/`O_CLOEXEC`
+and the door could not be built there at all. Compiled is not exercised: it
+has still not been INVOKED on Linux. See `README-posix.md` for the build
+command, what was measured, and what remains unexercised there.
 
 WHY THIS IS A SEPARATE MODULE FROM `build.py` RATHER THAN A BRANCH IN IT.
 `build.py` is Windows-shaped end to end -- wide-string placeholders
@@ -183,9 +187,24 @@ def build(
     resolved_root = str(Path(engine_root).resolve())
 
     output.parent.mkdir(parents=True, exist_ok=True)
+    # `-std=c11` selects STRICT ISO C on glibc, which hides every POSIX
+    # declaration behind the feature-test macros: `readlink`, `sigemptyset`,
+    # `sigaddset`, `CLOCK_MONOTONIC` and `O_CLOEXEC` are all undeclared on
+    # Linux even though `<unistd.h>`, `<signal.h>`, `<time.h>` and `<fcntl.h>`
+    # are included -- and under C99-and-later rules that is an error, not a
+    # warning, so the door did not compile there at all. Darwin's libc exposes
+    # them regardless of dialect, which is why macOS never saw it.
+    #
+    # Restricted to non-Darwin deliberately: on macOS, defining
+    # `_POSIX_C_SOURCE` switches the headers INTO strict-POSIX mode and hides
+    # the Darwin extensions this file uses under `__APPLE__`
+    # (`<mach-o/dyld.h>`'s `_NSGetExecutablePath`). Leaving it undefined there
+    # keeps the macOS compile byte-identical.
+    posix_source_flags = [] if sys.platform == "darwin" else ["-D_POSIX_C_SOURCE=200809L"]
     cmd = [
         compiler_path,
         "-O2", "-Wall", "-Wextra", "-std=c11",
+        *posix_source_flags,
         f'-DPYTHON_BIN="{_shell_safe_define(resolved_python)}"',
         f'-DBUILD_ENGINE_ROOT="{_shell_safe_define(resolved_root)}"',
         "-o", str(output),
@@ -224,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Build the POSIX warm-engine door and its engine-root sidecar. "
-            "Verified on macOS 2026-08-22; not yet run on Linux."
+            "Verified on macOS 2026-08-22; compiles on Linux, not yet invoked there."
         )
     )
     parser.add_argument(

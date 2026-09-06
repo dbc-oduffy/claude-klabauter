@@ -264,7 +264,7 @@ def _write_index_atomically(index_path: Path, watermark: float, grants: dict) ->
             {"watermark_mtime": watermark, "grants": grants}, indent=2, sort_keys=True
         )
         tmp = index_path.with_suffix(f".{os.getpid()}.tmp")
-        tmp.write_text(payload, encoding="utf-8")
+        tmp.write_text(payload, encoding="utf-8", newline="\n")
         os.replace(tmp, index_path)
     except Exception:  # noqa: BLE001 — a cache that cannot be saved is still a cache
         try:

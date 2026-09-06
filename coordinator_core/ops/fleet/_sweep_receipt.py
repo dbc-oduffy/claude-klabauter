@@ -109,7 +109,7 @@ def record_sweep_outcome(
             row["detail"] = detail[:512]
 
         line = json.dumps(row, sort_keys=True) + "\n"
-        with open(path, "a", encoding="utf-8") as handle:
+        with open(path, "a", encoding="utf-8", newline="\n") as handle:
             handle.write(line)
 
         _truncate_if_oversized(path)

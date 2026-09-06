@@ -94,16 +94,26 @@ def test_one_git_subprocess_regardless_of_uuid_count(tmp_path, monkeypatch):
         _write(root, "state/subagent-share/" + uid + "/a.md", "x\n")
         _write(root, f"archive/bug-backlog/f{i}.yaml", f"cited: state/subagent-share/{uid}\n")
 
+    # Counts BOTH spawn entrypoints, not just `subprocess.run`. The scan
+    # reaches git through `coordinator_core.git.run.run_git`, which uses
+    # `Popen` on the `input=`/binary path -- a spy on `run` alone counted
+    # zero and would have read green over any number of spawns.
     calls = []
     real_run = subprocess.run
+    real_popen = subprocess.Popen
 
-    def _spy(*args, **kwargs):
+    def _spy_run(*args, **kwargs):
         calls.append(args)
         return real_run(*args, **kwargs)
 
-    monkeypatch.setattr(subprocess, "run", _spy)
+    def _spy_popen(*args, **kwargs):
+        calls.append(args)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", _spy_run)
+    monkeypatch.setattr(subprocess, "Popen", _spy_popen)
     scan(root)
-    assert len(calls) == 1
+    assert len(calls) == 1, calls
 
 
 def test_main_writes_both_audit_files(tmp_path):

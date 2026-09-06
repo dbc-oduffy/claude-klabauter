@@ -16,7 +16,6 @@ Run:
 """
 from __future__ import annotations
 
-import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,9 +51,7 @@ def _lint(text: str, *, name: str = "2026-08-21-x.md") -> dict:
         root = _worktree(Path(tmp))
         (root / "state" / "handoffs").mkdir(parents=True)
         (root / "state" / "handoffs" / name).write_text(text, encoding="utf-8")
-        return asyncio.run(
-            _handler({"handoff_path": f"state/handoffs/{name}"}, root)
-        )
+        return _handler({"handoff_path": f"state/handoffs/{name}"}, root)
 
 
 def _worktree(root: Path) -> Path:
@@ -163,21 +160,19 @@ class RefusalTest(unittest.TestCase):
 
     def test_missing_path_param_is_exit_2(self):
         with tempfile.TemporaryDirectory(prefix="author-lint-") as tmp:
-            result = asyncio.run(_handler({}, _worktree(Path(tmp))))
+            result = _handler({}, _worktree(Path(tmp)))
         self.assertEqual(result["exit_code"], 2)
         self.assertFalse(result["clean"])
 
     def test_absent_repo_root_is_exit_2(self):
-        result = asyncio.run(_handler({"handoff_path": "state/handoffs/x.md"}, None))
+        result = _handler({"handoff_path": "state/handoffs/x.md"}, None)
         self.assertEqual(result["exit_code"], 2)
 
     def test_nonexistent_file_is_exit_2_not_clean(self):
         with tempfile.TemporaryDirectory(prefix="author-lint-") as tmp:
-            result = asyncio.run(
-                _handler(
+            result = _handler(
                     {"handoff_path": "state/handoffs/nope.md"}, _worktree(Path(tmp))
                 )
-            )
         self.assertEqual(result["exit_code"], 2)
         self.assertFalse(result["clean"])
 

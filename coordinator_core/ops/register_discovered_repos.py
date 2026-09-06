@@ -69,7 +69,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core import launchable
-from coordinator_core._settings_home import home_dir
+from coordinator_core._settings_home import home_dir, resolve_machine_local_cli
 from coordinator_core.install.resolution_journal import record_resolution
 from coordinator_core.install.write_surface import (
     ShapedClause,
@@ -229,13 +229,9 @@ def _resolve_machine_local(self_dir: Path) -> Optional[str]:
     `_machine_local_launch_argv`); a PATH hit via `shutil.which` is already
     exec-bit-verified by the OS's own PATH search.
     """
-    found = shutil.which("machine-local")
-    if found:
-        return found
-    fallback = home_dir() / ".claude" / "bin" / "machine-local"
-    if fallback.is_file():
-        return str(fallback)
-    return None
+    # Was PATH -> legacy ~/.claude/bin, skipping the settings-home rung that
+    # is the actual install location today. The shared ladder carries all three.
+    return resolve_machine_local_cli()
 
 
 def _registry_snapshot(ml_argv: List[str]) -> Optional[Dict[str, str]]:

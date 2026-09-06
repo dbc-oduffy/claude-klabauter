@@ -10,7 +10,23 @@ deliberate: a restructure that returns the same record COUNT with a different
 BASIS or verdict for some module is exactly the silent regression this guards
 against, and a count-only or length-only check would not catch it.
 
-Observed record count at capture time: 255.
+Observed record count at capture time: 265 (recaptured 2026-09-06; 255 at the
+original capture).
+
+RESOLVED 2026-09-06 -- the three records this fixture briefly pinned as degraded
+are no longer degraded. `ops/fleet/{memo_compose,memo_reconcile_outbox,memo_send}`
+each declare a well-formed `MUTATES` built from f-strings over
+`session.machinery_paths.MEMO_OUTBOX_RELDIR`; `_extract_mutates` read them with
+`ast.literal_eval`, which cannot evaluate an f-string, so all three landed on
+`"__MALFORMED__"` -> `UNDECLARED` and their write-target contract was invisible
+to every consumer of discovery. The fix landed in `_extract_mutates` (it now
+resolves names and f-strings over the constants `machinery_paths` owns), NOT in
+the three modules -- respelling their patterns as literals would reintroduce
+exactly the duplication `MEMO_OUTBOX_RELDIR` exists to remove. This fixture was
+recaptured with their real verdicts. Note that the recapture also required
+bumping `generator_scan_cache._SCHEMA_VERSION`: entries are keyed on the SCANNED
+file's `(mtime_ns, size)`, which cannot see a change to the scanner itself, so
+without it every reader would have kept being served the stale verdict.
 
 Negative-spec:
   - This module does not test discovery's correctness (that is

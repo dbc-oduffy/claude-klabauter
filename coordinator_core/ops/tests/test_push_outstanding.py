@@ -33,6 +33,7 @@ from coordinator_core.ops.push_outstanding import (
     _range_touches_lfs_paths,
     push_outstanding,
 )
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -614,24 +615,24 @@ def test_cockpit_publish_uses_outcome_pushed_range_not_precall_shas(monkeypatch,
 def _repo_with_remote(tmp_path, *, outstanding: bool):
     """A real repo with its own bare remote, ahead by one commit or level."""
     bare = tmp_path / "bare.git"
-    subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True)
+    subprocess.run(["git", "init", "--bare", "-q", str(bare)], check=True, **no_console_creationflags())
     work = tmp_path / "work"
     # A `work/*` branch, not the init default: the branch gate declines
     # anything else, which would make a "did not publish" assertion pass for
     # the wrong reason.
     subprocess.run(
-        ["git", "init", "-q", "--initial-branch", "work/probe", str(work)], check=True)
+        ["git", "init", "-q", "--initial-branch", "work/probe", str(work)], check=True, **no_console_creationflags())
     for k, v in (("user.email", "t@t"), ("user.name", "t")):
-        subprocess.run(["git", "-C", str(work), "config", k, v], check=True)
+        subprocess.run(["git", "-C", str(work), "config", k, v], check=True, **no_console_creationflags())
     (work / "a.txt").write_text("one\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(work), "add", "--", "a.txt"], check=True)
-    subprocess.run(["git", "-C", str(work), "commit", "-qm", "one", "--", "a.txt"], check=True)
-    subprocess.run(["git", "-C", str(work), "remote", "add", "origin", str(bare)], check=True)
-    subprocess.run(["git", "-C", str(work), "push", "-q", "-u", "origin", "HEAD"], check=True)
+    subprocess.run(["git", "-C", str(work), "add", "--", "a.txt"], check=True, **no_console_creationflags())
+    subprocess.run(["git", "-C", str(work), "commit", "-qm", "one", "--", "a.txt"], check=True, **no_console_creationflags())
+    subprocess.run(["git", "-C", str(work), "remote", "add", "origin", str(bare)], check=True, **no_console_creationflags())
+    subprocess.run(["git", "-C", str(work), "push", "-q", "-u", "origin", "HEAD"], check=True, **no_console_creationflags())
     if outstanding:
         (work / "a.txt").write_text("two\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(work), "add", "--", "a.txt"], check=True)
-        subprocess.run(["git", "-C", str(work), "commit", "-qm", "two", "--", "a.txt"], check=True)
+        subprocess.run(["git", "-C", str(work), "add", "--", "a.txt"], check=True, **no_console_creationflags())
+        subprocess.run(["git", "-C", str(work), "commit", "-qm", "two", "--", "a.txt"], check=True, **no_console_creationflags())
     return work, bare
 
 
@@ -642,7 +643,7 @@ def _remote_tip(bare):
     equal to itself forever."""
     out = subprocess.run(
         ["git", "-C", str(bare), "rev-parse", "refs/heads/work/probe"],
-        capture_output=True, text=True, check=True)
+        capture_output=True, text=True, check=True, **no_console_creationflags())
     return out.stdout.strip()
 
 

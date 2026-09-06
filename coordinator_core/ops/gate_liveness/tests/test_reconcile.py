@@ -7,7 +7,6 @@ Spec backlink: docs/plans/2026-08-21-a-discharged-gate-tells-the-row-waiting.md 
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 import textwrap
 from pathlib import Path
@@ -142,9 +141,7 @@ class TestDryRunDefault:
         _write_discharge_memo(tmp_path, "deliverable", "dlv-foo-abc123")
         before = plan.read_text(encoding="utf-8")
 
-        result = asyncio.run(
-            _handler({"plan_path": "docs/plans/plan.md"}, repo_root=tmp_path)
-        )
+        result = _handler({"plan_path": "docs/plans/plan.md"}, repo_root=tmp_path)
 
         assert result["exit_code"] == 0
         assert result["applied"] is False
@@ -350,40 +347,34 @@ class TestConcurrentDriftAborts:
 
 class TestHandlerErrors:
     def test_missing_plan_path_errors(self, tmp_path):
-        result = asyncio.run(_handler({}, repo_root=tmp_path))
+        result = _handler({}, repo_root=tmp_path)
         assert result["exit_code"] == 1
         assert "plan_path" in result["error"]
 
     def test_missing_repo_root_errors(self):
-        result = asyncio.run(_handler({"plan_path": "docs/plans/plan.md"}, repo_root=None))
+        result = _handler({"plan_path": "docs/plans/plan.md"}, repo_root=None)
         assert result["exit_code"] == 1
         assert "repo_root" in result["error"]
 
     def test_nonexistent_plan_path_errors(self, tmp_path):
-        result = asyncio.run(
-            _handler(
+        result = _handler(
                 {"plan_path": "docs/plans/does-not-exist.md"}, repo_root=tmp_path
             )
-        )
         assert result["exit_code"] == 1
         assert "plan not found" in result["error"]
 
     def test_non_bool_apply_errors(self, tmp_path):
         plan = _write_plan(tmp_path, _ROWS_ONE_GATE)
-        result = asyncio.run(
-            _handler(
+        result = _handler(
                 {"plan_path": "docs/plans/plan.md", "apply": "true"}, repo_root=tmp_path
             )
-        )
         assert result["exit_code"] == 1
         assert "apply" in result["error"]
 
     def test_path_escapes_docs_plans_errors(self, tmp_path):
         outside = tmp_path / "elsewhere.md"
         outside.write_text("# not a plan\n", encoding="utf-8")
-        result = asyncio.run(
-            _handler({"plan_path": "../elsewhere.md"}, repo_root=tmp_path / "docs" / "plans")
-        )
+        result = _handler({"plan_path": "../elsewhere.md"}, repo_root=tmp_path / "docs" / "plans")
         assert result["exit_code"] == 1
 
 

@@ -128,7 +128,7 @@ def _write_json_atomic(target: Path, record: dict) -> None:
     handle, tmp = tempfile.mkstemp(dir=str(target.parent), suffix=".tmp")
     tmp_path = Path(tmp)
     try:
-        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(record, fh, indent=2)
             fh.write("\n")
         os.replace(tmp, target)

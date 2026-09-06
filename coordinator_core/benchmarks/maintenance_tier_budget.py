@@ -67,11 +67,11 @@ def _churn(repo: Path, commits: int) -> None:
     reproduces the optimistic condition the original spike measured under and
     reads green whatever the code does."""
     for i in range(commits):
-        (repo / "churn.txt").write_text("line %d\n" % i, encoding="utf-8")
+        (repo / "churn.txt").write_text("line %d\n" % i, encoding="utf-8", newline="\n")
         run_git(["add", "churn.txt"], cwd=str(repo))
         run_git(
             ["-c", "user.email=f@example.com", "-c", "user.name=f",
-             "commit", "-q", "-m", "churn %d" % i],
+             "commit", "-q", "-m", "churn %d" % i, "--", "churn.txt"],
             cwd=str(repo),
         )
 
@@ -83,11 +83,11 @@ def _make_throwaway_clone() -> Path:
     """
     work = Path(tempfile.mkdtemp(prefix="falsifier-worktree-", dir=str(SCRATCH_ROOT)))
     run_git(["init", "-q"], cwd=str(work))
-    (work / "seed.txt").write_text("seed\n", encoding="utf-8")
+    (work / "seed.txt").write_text("seed\n", encoding="utf-8", newline="\n")
     run_git(["add", "seed.txt"], cwd=str(work))
     run_git(
         ["-c", "user.email=falsifier@example.com", "-c", "user.name=falsifier",
-         "commit", "-q", "-m", "seed"],
+         "commit", "-q", "-m", "seed", "--", "seed.txt"],
         cwd=str(work),
     )
     return work

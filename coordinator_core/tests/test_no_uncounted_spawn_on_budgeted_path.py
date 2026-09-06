@@ -6086,7 +6086,13 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # starts, then this pin lowered to that. Lowering is the expected outcome,
     # not a revert. Tracked at
     # state/debt-backlog/2026-09-03-fleet-reap-review-trail-rest-settle-spaw-248862aa6b0a.yaml.
-    "fleet.reap_review_trail_rest": 10,
+    # Tightened 10 -> 9 on 2026-09-06 by `test_static_spawn_count_pins_that_
+    # have_gone_loose`: the op reaches one fewer spawn site than the pin
+    # allowed, so the ceiling had gone slack. Banked at the live number per
+    # that test's own instruction ("lower each pin to the live number"); the
+    # instrumented-invocation settle above is still outstanding and this is
+    # not it.
+    "fleet.reap_review_trail_rest": 9,
     # Added 2026-09-03: one dynamic site, `invoke_coordinator_doc_new`. Pre-dates
     # this pass; it surfaced only because the file's other failures were cleared.
     "hooks.plan_persistence_check": 1,
@@ -6125,7 +6131,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "push.outstanding": 4,
     "plan.suggest_completion_steps": 3,
     "release.cut_tag_and_publish": 3,
-    "repo.clone_and_register": 3,
+    # 3 -> 4, 2026-09-06: same `_existing_origin_url` site as
+    # `install.clone_idempotent` above, reached through the shared helper.
+    "repo.clone_and_register": 4,
     "repo.create_and_push_remote": 3,
     "tracker.push_suggestion": 3,
     "backlog.record": 2,
@@ -6185,7 +6193,18 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "distill.curation_status": 1,
     "distill.scope": 1,
     "engine.drift": 1,
-    "git.push_failure_verdict": 1,
+    # 1 -> 2, 2026-09-06. The new site is `git/run.py :: run_git`, reached
+    # through `git_state.head_blobs`, which gained an `ls-tree` arm in
+    # 3590c3dda7 (C2b, "the spine serves head_blobs"). IT IS NOT A PER-CALL
+    # SPAWN: `read_tree_spine` answers the ordinary case at ZERO spawns and
+    # this arm runs only when it returns None -- an unreadable or unsupported
+    # packfile, a corrupt object. The site's own comment states why it cannot
+    # be dropped instead: an empty result there is byte-identical to the
+    # honest "none of these paths exist in HEAD" and would make
+    # `deletion_block_gate` refuse a legitimate commit. So the REACHABLE-site
+    # count rises by one while the ordinary path's spawn count does not.
+    # Raised on that evidence, not to clear the red.
+    "git.push_failure_verdict": 2,
     "goals.reassess_krs": 1,
     "handoff.author_fork": 1,
     "handoff.backfill_claim_stamp": 1,
@@ -6218,7 +6237,13 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # and `hooks.track_touched_files` is in the live registry. Its reachable set is the
     # single `_git_run` site, measured live.
     "hooks.track_touched_files": 1,
-    "install.clone_idempotent": 1,
+    # 1 -> 2, 2026-09-06: `clone_sibling_repo._existing_origin_url` (C10
+    # clone-origin verification, 1f799341c2) -- a local-config
+    # `git remote get-url origin` read, no network, guarding the
+    # adopted-clone identity check. One extra local spawn on a path whose
+    # whole job is a network clone is proportionate; declining it would mean
+    # adopting a clone without verifying it points where the caller thinks.
+    "install.clone_idempotent": 2,
     "install.detect_python3_appx_stub": 1,
     "install.probe_skill_frontmatter_valid": 1,
     "invoke.from_argv": 1,

@@ -286,7 +286,7 @@ def _atomic_write_json(path: Path, data: Any) -> None:
     it.
     """
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
     tmp.replace(path)
 
 

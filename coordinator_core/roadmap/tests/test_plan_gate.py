@@ -1,0 +1,526 @@
+"""
+coordinator_core/roadmap/tests/test_plan_gate.py — the two-gate resolver.
+
+Subject: `coordinator_core.roadmap.plan_gate`, which answers "may planning
+start?" and "may execution start?" as two separate questions over one
+`blocked_by` edge set.
+
+The claim under test, stated once so every case below reads against it: a
+blocker holds EXECUTION until its work lands, but holds PLANNING only until its
+plan clears review. Every test here either pins that divergence, pins one of the
+fail-closed directions around it (an unresolved edge, a cycle, a sidecar
+mistaken for a plan), or pins the cost of computing it.
+
+Zero spawns; every case builds its corpus in `tmp_path`. The one exception is
+`test_narrow_scan_agrees_with_the_general_parser`, which reads this repo's own
+records — a parity oracle needs a corpus it did not author, and a hand-built
+fixture would only prove the scanner agrees with the shapes its author thought
+of.
+"""
+
+from __future__ import annotations
+
+import time
+from pathlib import Path
+
+import pytest
+
+from coordinator_core.roadmap import plan_gate as pg
+
+
+# ---------------------------------------------------------------------------
+# Fixture helpers
+# ---------------------------------------------------------------------------
+
+
+def _write(path: Path, frontmatter: str, body: str = "body\n") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"---\n{frontmatter.strip()}\n---\n\n{body}", encoding="utf-8")
+    return path
+
+
+def _baton(root: Path, stub_id: str, **fields) -> Path:
+    lines = [
+        "kind: roadmap-baton",
+        f"title: {fields.pop('title', stub_id)}",
+        f"stub_id: {stub_id}",
+        f"status: {fields.pop('status', 'open')}",
+        f"deployment_state: {fields.pop('deployment_state', 'ready_to_fire')}",
+        "baton_role: work",
+    ]
+    for key, value in fields.items():
+        if isinstance(value, (list, tuple)):
+            lines.append(f"{key}: [{', '.join(value)}]")
+        else:
+            lines.append(f"{key}: {value}")
+    return _write(root / "state" / "handoffs" / f"{stub_id}.md", "\n".join(lines))
+
+
+def _plan(root: Path, slug: str, status: str, **fields) -> str:
+    lines = [f"title: {slug}", f"status: {status}"]
+    for key, value in fields.items():
+        lines.append(f"{key}: {value}")
+    _write(root / "docs" / "plans" / f"{slug}.md", "\n".join(lines))
+    return f"docs/plans/{slug}.md"
+
+
+def _by_id(report, ident):
+    for baton in report["batons"]:
+        if baton["id"] == ident:
+            return baton
+    raise AssertionError(f"{ident} absent from report: {[b['id'] for b in report['batons']]}")
+
+
+# ---------------------------------------------------------------------------
+# The central claim: one edge, two gates
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "plan_status, planning_open, execution_open, disposition",
+    [
+        # Pre-ratification: the blocker's decisions are not published yet, so
+        # neither gate opens. This is the row that keeps the new planning gate
+        # from collapsing into "any plan will do".
+        ("draft", False, False, pg.BLOCKER_PLAN_DRAFTED),
+        ("reviewed", False, False, pg.BLOCKER_PLAN_DRAFTED),
+        # The seam. `approved` publishes the blocker's decisions; a dependent
+        # can plan against them, and cannot yet call the code.
+        ("approved", True, False, pg.BLOCKER_PLAN_APPROVED),
+        ("executing", True, False, pg.BLOCKER_PLAN_APPROVED),
+        # Landed: the code exists, so both gates open.
+        ("landed", True, True, pg.BLOCKER_CODED),
+        ("implemented", True, True, pg.BLOCKER_CODED),
+        # Shelved: a deferred plan publishes nothing a dependent can build on,
+        # so it must NOT read as approved just because it passed through review.
+        ("deferred", False, False, pg.BLOCKER_PLAN_DRAFTED),
+        ("abandoned", False, False, pg.BLOCKER_PLAN_DRAFTED),
+        ("superseded", False, False, pg.BLOCKER_PLAN_DRAFTED),
+    ],
+)
+def test_plan_status_drives_the_two_gates_apart(
+    tmp_path, plan_status, planning_open, execution_open, disposition
+):
+    plan_path = _plan(tmp_path, "blocker-plan", plan_status, plan_id="pln-blocker")
+    _baton(tmp_path, "blocker-1", governing_plan=plan_path, origin_plan_id="pln-blocker")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+    dependent = _by_id(report, "dependent-1")
+
+    assert dependent["planning_gate"]["open"] is planning_open
+    assert dependent["execution_gate"]["open"] is execution_open
+    assert dependent["blockers"][0]["disposition"] == disposition
+
+
+@pytest.mark.parametrize("state", sorted(pg.BATON_CODED_STATES))
+def test_terminal_deployment_states_open_both_gates(tmp_path, state):
+    """`deployment_state` is read directly, with NO plan on disk — a baton that
+    reached a terminal state has satisfied its dependents whether or not anyone
+    ever wrote it a plan. Batons predating the plan convention are the common
+    case here, and requiring a plan link would report every one of them as
+    holding its dependents shut forever."""
+    _baton(tmp_path, "blocker-1", deployment_state=state)
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+
+    assert dependent["planning_gate"]["open"] is True
+    assert dependent["execution_gate"]["open"] is True
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_CODED
+
+
+def test_an_unplanned_blocker_holds_both_gates(tmp_path):
+    _baton(tmp_path, "blocker-1")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+
+    assert dependent["planning_gate"]["open"] is False
+    assert dependent["execution_gate"]["open"] is False
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_UNPLANNED
+
+
+# ---------------------------------------------------------------------------
+# Fail-closed directions
+# ---------------------------------------------------------------------------
+
+
+def test_an_unresolvable_blocker_closes_both_gates_and_is_named(tmp_path):
+    """A gate that fails OPEN on a typo authorises exactly the work the edge
+    existed to hold. The id must also be REPORTED — a closed gate with no named
+    cause is indistinguishable from a real dependency, and the author would go
+    looking for a baton that does not exist."""
+    _baton(tmp_path, "dependent-1", blocked_by=["nothing-on-disk"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+    dependent = _by_id(report, "dependent-1")
+
+    assert dependent["planning_gate"]["open"] is False
+    assert dependent["execution_gate"]["open"] is False
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_UNRESOLVED
+    assert {"baton": "dependent-1", "blocker": "nothing-on-disk"} in report["unresolved_blockers"]
+    assert dependent["planning_wave"] is None
+
+
+def test_a_cycle_is_named_rather_than_silently_dropped(tmp_path):
+    _baton(tmp_path, "a-1", blocked_by=["b-1"])
+    _baton(tmp_path, "b-1", blocked_by=["a-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["cycles"], "a two-node cycle must be reported"
+    assert set(report["cycles"][0]) == {"a-1", "b-1"}
+    assert _by_id(report, "a-1")["planning_wave"] is None
+    assert _by_id(report, "b-1")["planning_wave"] is None
+
+
+def test_a_review_sidecar_is_not_mistaken_for_the_plan_it_reviews(tmp_path):
+    """`docs/plans/` holds review sidecars beside the plans they review. A
+    sidecar admitted as a plan would answer "is this baton's plan approved?"
+    with a status that is not the plan's."""
+    _write(
+        tmp_path / "docs" / "plans" / "thing.staff-eng-review.md",
+        "kind: staff-eng-review\nplan: docs/plans/thing.md\n"
+        "status: approved\nplan_id: pln-thing\nverdict: REQUIRES_CHANGES",
+    )
+    _baton(tmp_path, "blocker-1", origin_plan_id="pln-thing")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_UNPLANNED
+    assert dependent["planning_gate"]["open"] is False
+
+
+def test_a_blocker_that_is_in_flight_is_unschedulable_not_wave_zero(tmp_path):
+    """An `in_flight` blocker is not a candidate, so no planning wave will
+    clear it. Its dependent must get wave `None` — assigning it a wave would
+    invite a caller to fire against a gate that this pass cannot open."""
+    _baton(tmp_path, "blocker-1", deployment_state="in_flight")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+
+    assert dependent["planning_wave"] is None
+    assert dependent["planning_gate"]["open"] is False
+
+
+# ---------------------------------------------------------------------------
+# Wave assignment
+# ---------------------------------------------------------------------------
+
+
+def test_waves_follow_the_planning_gate_not_the_execution_gate(tmp_path):
+    """The scheduling claim: a chain of depth 3 plans in 3 rounds, because each
+    round's approvals open the next round's planning gates. Under the old
+    single-gate reading this chain took 3 LANDINGS, not 3 reviews."""
+    _baton(tmp_path, "a-1")
+    _baton(tmp_path, "b-1", blocked_by=["a-1"])
+    _baton(tmp_path, "c-1", blocked_by=["b-1"])
+    _baton(tmp_path, "d-1", blocked_by=["a-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["waves"] == [["a-1"], ["b-1", "d-1"], ["c-1"]]
+    assert _by_id(report, "c-1")["planning_wave"] == 2
+    # Nothing has landed, so every execution gate below the root stays shut.
+    assert _by_id(report, "b-1")["execution_gate"]["open"] is False
+
+
+def test_an_already_approved_blocker_collapses_its_dependent_to_wave_zero(tmp_path):
+    """A blocker whose plan already cleared review is not work this blitz has to
+    do, so its dependent starts at wave 0 rather than queueing behind it — and
+    the blocker itself is NOT in the wave, because it needs no plan.
+
+    Both halves matter. On DoE-claude's first live run the second half was
+    missing and 18 batons carrying approved plans sat in wave 0, where a blitz
+    would have re-planned every one of them."""
+    plan_path = _plan(tmp_path, "done-plan", "approved")
+    _baton(tmp_path, "blocker-1", governing_plan=plan_path)
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert _by_id(report, "dependent-1")["planning_wave"] == 0
+    assert report["waves"][0] == ["dependent-1"]
+    assert _by_id(report, "blocker-1")["needs_plan"] is False
+    assert _by_id(report, "blocker-1")["planning_wave"] is None
+
+
+def test_a_baton_with_a_draft_plan_still_needs_one(tmp_path):
+    """`needs_plan` keys on APPROVAL, not on a file existing. A draft plan is
+    exactly the case a blitz should pick up and drive through review."""
+    plan_path = _plan(tmp_path, "draft-plan", "draft")
+    _baton(tmp_path, "subject-1", governing_plan=plan_path)
+
+    baton = _by_id(pg.assemble_plan_gate(tmp_path), "subject-1")
+    assert baton["needs_plan"] is True
+    assert baton["planning_wave"] == 0
+
+
+def test_targets_narrow_the_candidate_set_but_not_the_gates(tmp_path):
+    """Targeted mode: an EM or the PM picks the batons. A non-target stays a
+    fully-resolved BLOCKER — narrowing the question must never narrow what the
+    answer is computed from, or a gate reports open because the thing holding it
+    shut was filtered out."""
+    _baton(tmp_path, "blocker-1")
+    _baton(tmp_path, "wanted-1", blocked_by=["blocker-1"])
+    _baton(tmp_path, "ignored-1")
+
+    report = pg.assemble_plan_gate(tmp_path, targets=["wanted-1"])
+
+    assert [b["id"] for b in report["batons"]] == ["wanted-1"]
+    wanted = _by_id(report, "wanted-1")
+    assert wanted["planning_gate"]["open"] is False
+    assert wanted["blockers"][0]["disposition"] == pg.BLOCKER_UNPLANNED
+    assert report["scanned"]["batons"] == 3
+
+
+def test_a_multi_blocker_baton_waits_for_its_latest_blocker(tmp_path):
+    _baton(tmp_path, "a-1")
+    _baton(tmp_path, "b-1", blocked_by=["a-1"])
+    _baton(tmp_path, "c-1", blocked_by=["a-1", "b-1"])
+
+    assert _by_id(pg.assemble_plan_gate(tmp_path), "c-1")["planning_wave"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Candidate selection and plan linking
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "fields, expected",
+    [
+        ({}, True),
+        ({"status": "claimed"}, False),
+        ({"deployment_state": "in_flight"}, False),
+        ({"deployment_state": "shipped"}, False),
+        ({"deployment_state": "awaiting_gate", "gate_dependency": "something"}, True),
+    ],
+)
+def test_candidate_selection(tmp_path, fields, expected):
+    _baton(tmp_path, "subject-1", **fields)
+    report = pg.assemble_plan_gate(tmp_path, subject="subject-1")
+    assert _by_id(report, "subject-1")["candidate"] is expected
+
+
+@pytest.mark.parametrize(
+    "link_field, plan_field, value",
+    [
+        ("origin_plan_id", "plan_id", "pln-x"),
+        ("deliverable_id", "deliverable_id", "dlv-x"),
+        ("sizing_object", "sizing_object", "state/sizings/szo-x.yaml"),
+    ],
+)
+def test_each_plan_link_basis_resolves(tmp_path, link_field, plan_field, value):
+    _plan(tmp_path, "linked", "approved", **{plan_field: value})
+    _baton(tmp_path, "blocker-1", **{link_field: value})
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_PLAN_APPROVED
+
+
+def test_a_sizing_object_links_across_the_path_vs_bare_id_spelling(tmp_path):
+    """A baton citing `state/sizings/szo-x.yaml` and a plan citing `szo-x` are
+    citing the same object. Joining on the raw strings misses the pair, and the
+    miss reads as 'this baton has no plan' — which would send an already-planned
+    baton back through a planning wave."""
+    _plan(tmp_path, "linked", "approved", sizing_object="szo-x")
+    _baton(tmp_path, "blocker-1", sizing_object="state/sizings/szo-x.yaml")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_PLAN_APPROVED
+
+
+def test_the_most_advanced_of_several_linked_plans_wins(tmp_path):
+    _plan(tmp_path, "early", "draft", deliverable_id="dlv-x")
+    _plan(tmp_path, "later", "approved", deliverable_id="dlv-x")
+    _baton(tmp_path, "blocker-1", deliverable_id="dlv-x")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_PLAN_APPROVED
+
+
+def test_a_blocker_may_be_named_by_handoff_id_as_well_as_stub_id(tmp_path):
+    """handoff.schema.json admits both spellings in `blocked_by`. Indexing only
+    `stub_id` reports every handoff_id edge as `unresolved`."""
+    _baton(tmp_path, "blocker-1", handoff_id="hnd-blocker-aaaaaa", deployment_state="shipped")
+    _baton(tmp_path, "dependent-1", blocked_by=["hnd-blocker-aaaaaa"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_CODED
+
+
+def test_an_archived_blocker_still_resolves(tmp_path):
+    """The archive is scanned lazily, so this is the case that proves the
+    laziness is a skipped-empty-scan and not a dropped edge."""
+    _write(
+        tmp_path / "archive" / "handoffs" / "2026-01" / "old.md",
+        "kind: roadmap-baton\ntitle: old\nstub_id: blocker-1\n"
+        "status: open\ndeployment_state: shipped\nbaton_role: work",
+    )
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+    dependent = _by_id(report, "dependent-1")
+
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_CODED
+    assert dependent["planning_gate"]["open"] is True
+
+
+def test_a_live_baton_wins_an_id_collision_with_an_archived_namesake(tmp_path):
+    _write(
+        tmp_path / "archive" / "handoffs" / "2026-01" / "old.md",
+        "kind: roadmap-baton\ntitle: old\nstub_id: blocker-1\n"
+        "status: open\ndeployment_state: shipped\nbaton_role: work",
+    )
+    _baton(tmp_path, "blocker-1")  # live, unplanned
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_UNPLANNED
+
+
+# ---------------------------------------------------------------------------
+# Narrow-scanner parity
+# ---------------------------------------------------------------------------
+
+
+def _normalise(value):
+    """Collapse the two readers' type conventions so only real disagreements show."""
+    if value is None or value == "" or value == []:
+        return None
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return value
+
+
+@pytest.mark.parametrize("subtree", [("state", "handoffs"), ("archive", "handoffs")])
+def test_narrow_scan_agrees_with_the_general_parser(subtree):
+    """The narrow scanner is a performance decision (~7x) with a correctness
+    surface, so it is held to the general parser's reading of the SAME bytes,
+    field by field, over this repo's whole live corpus.
+
+    Read against a corpus rather than a fixture on purpose: a hand-built fixture
+    only proves the scanner handles the shapes its author thought of, and every
+    divergence found while writing it (a trailing `#` comment on an inline
+    `blocked_by` list; a `null` scalar read as the four-letter string) came from
+    a real record nobody would have invented.
+    """
+    root = Path(__file__).resolve().parents[3]
+    paths = pg._iter_record_paths(root, subtree, recursive=(subtree[0] == "archive"))
+    if not paths:
+        pytest.skip(f"{'/'.join(subtree)} is empty in this checkout")
+
+    # `shipped_in` is excluded, and the exclusion is the finding rather than a
+    # concession: YAML reads a leading-zero SHA like `0983062` as a NUMBER, so the
+    # general parser returns 983062.0 — a corrupted hash with its leading zero gone
+    # and a decimal point added. The narrow scanner returns the string, which is
+    # correct. Comparing them here would assert the wrong reading. The general
+    # parser's coercion is a real defect in `coordinator_core.dag._parse_frontmatter`,
+    # reported rather than fixed from here: it is a shared primitive with callers
+    # this workstream has not surveyed.
+    corrupted_by_the_general_parser = {"shipped_in"}
+
+    disagreements = []
+    for path in paths:
+        narrow = pg._read_baton_fields(path)
+        general = pg._read_frontmatter_head(path)
+        for field in pg._BATON_FIELDS - corrupted_by_the_general_parser:
+            got, want = _normalise(narrow.get(field)), _normalise(general.get(field))
+            if got != want:
+                disagreements.append((path.name, field, got, want))
+
+    assert not disagreements, (
+        f"{len(disagreements)} field(s) read differently by the narrow scanner "
+        f"and the general parser; first 5: {disagreements[:5]}"
+    )
+
+
+def test_a_trailing_comment_on_an_inline_list_does_not_swallow_the_edges(tmp_path):
+    """Regression: `blocked_by: [a-1, b-1]  # why` parsed as a single scalar id,
+    so both real edges vanished and the gate reported `unresolved`."""
+    _baton(tmp_path, "a-1", deployment_state="shipped")
+    _baton(tmp_path, "b-1", deployment_state="shipped")
+    _write(
+        tmp_path / "state" / "handoffs" / "dependent-1.md",
+        "kind: roadmap-baton\ntitle: d\nstub_id: dependent-1\nstatus: open\n"
+        "deployment_state: ready_to_fire\nbaton_role: work\n"
+        "blocked_by: [a-1, b-1]  # b-1 added later: consumes a-1's primitive",
+    )
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+    assert dependent["blocked_by"] == ["a-1", "b-1"]
+    assert dependent["planning_gate"]["open"] is True
+
+
+def test_a_null_scalar_is_absence_not_the_string_null(tmp_path):
+    _plan(tmp_path, "decoy", "approved", plan_id="null")
+    _baton(tmp_path, "blocker-1", origin_plan_id="null")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_UNPLANNED
+
+
+def test_a_leading_html_comment_does_not_hide_the_frontmatter(tmp_path):
+    path = tmp_path / "state" / "handoffs" / "commented.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "<!-- generated; do not hand-edit -->\n---\nkind: roadmap-baton\n"
+        "title: c\nstub_id: commented-1\nstatus: open\n"
+        "deployment_state: ready_to_fire\nbaton_role: work\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    report = pg.assemble_plan_gate(tmp_path)
+    assert _by_id(report, "commented-1")["candidate"] is True
+
+
+# ---------------------------------------------------------------------------
+# Budget
+# ---------------------------------------------------------------------------
+
+
+def test_whole_tree_scan_holds_the_brightline():
+    """500ms end-to-end, process time, over this repo's real corpus — the
+    brightline (DR-344), not a suspension bar.
+
+    Process time rather than wall clock: wall clock measures peer load on a box
+    running ~50 sessions, and calibrating to it would let a busy box excuse a
+    slow op or a quiet one hide a fast-growing one.
+    """
+    root = Path(__file__).resolve().parents[3]
+    start = time.process_time()
+    report = pg.assemble_plan_gate(root)
+    elapsed_ms = (time.process_time() - start) * 1000
+
+    assert report["scanned"]["batons"] > 0, "empty scan proves nothing about cost"
+    assert elapsed_ms < 500, (
+        f"assemble_plan_gate took {elapsed_ms:.0f}ms process time over "
+        f"{report['scanned']} — over the 500ms brightline. Cut the real cost; "
+        f"do not raise this number."
+    )
+
+
+def test_the_archive_is_not_scanned_when_nothing_needs_it(tmp_path):
+    """The laziness is load-bearing: claude-klabauter's archive holds ~3x its live tree,
+    and parsing it cost more than the rest of this module put together."""
+    for index in range(3):
+        _write(
+            tmp_path / "archive" / "handoffs" / "2026-01" / f"old-{index}.md",
+            f"kind: roadmap-baton\ntitle: o\nstub_id: archived-{index}\n"
+            "status: open\ndeployment_state: shipped\nbaton_role: work",
+        )
+    _baton(tmp_path, "solo-1")
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert report["scanned"]["batons"] == 1, "archive was walked with no edge asking for it"

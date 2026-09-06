@@ -162,10 +162,61 @@ EXPECTED_READERS = (
     "coordinator_core.benchmarks.tests.test_hook_entry_cost",
     "coordinator_core.hooks.nudge_em_code_dispatch",
     "coordinator_core.hooks.postuse_advisory_dispatch",
+    # --- 2026-09-06 cluster: the `_resolve_subagent_identity` re-use chain ---
+    #
+    # Nine modules arrived at once, and every one of them reaches the record
+    # through a SINGLE edge measured, not assumed:
+    #
+    #   hooks.runtime_tripwire_em_check
+    #       -> hooks.postuse_advisory_dispatch   (already allowlisted, C3)
+    #       -> session.mode_resolution
+    #
+    # and `hooks.stop_dispatch` reaches it only by importing
+    # `runtime_tripwire_em_check._handler`; the seven test modules below reach
+    # it only by importing one of those two. So this is ONE edge, counted nine
+    # times by module granularity.
+    #
+    # ALLOWLIST-VS-RESTRUCTURE, done rather than re-run. The edge is
+    # `from coordinator_core.hooks.postuse_advisory_dispatch import
+    # _resolve_subagent_identity` -- a deliberate re-use, recorded in
+    # `runtime_tripwire_em_check`'s own docstring as "imported rather than
+    # carrying its own copy". `_resolve_subagent_identity` does NOT call
+    # `resolve_mode`: the only `resolve_mode` call in
+    # `postuse_advisory_dispatch` is in its compaction-warnings band, a
+    # different function entirely. NO MODE VALUE REACHES EITHER HOOK'S
+    # DECISION -- the reachability is module-granularity, not data flow.
+    #
+    # That distinction matters here more than for the clusters above, because
+    # `stop_dispatch` IS denial-capable: it aggregates eight legs and returns
+    # `deny("Stop", ...)` when any leg blocks. It is not in
+    # `test_no_denial_shaped_guard_reaches_the_record`'s scope (that test
+    # enumerates top-level `write_guards/`/`bash_guards/` modules), so the
+    # analysis is recorded here instead of being left to a check that would
+    # not have asked. The plan's exit criterion -- no value in the fleet
+    # record can change how a denial-shaped guard behaves -- still holds, on
+    # the symbol-level fact above and not on the directory `stop_dispatch`
+    # lives in.
+    #
+    # THE RESTRUCTURE THAT WOULD RETIRE THE WHOLE CLUSTER, named so it is a
+    # choice and not an omission: move `_resolve_subagent_identity` into a
+    # leaf module that imports neither target, and both hooks plus all seven
+    # tests drop out of the closure. Not done here -- it edits two per-turn
+    # hot-path hooks, which is a change that needs its own owner, and this
+    # file's writes are this test only. If that lands, delete this whole
+    # cluster rather than repointing it.
+    "coordinator_core.hooks.runtime_tripwire_em_check",
+    "coordinator_core.hooks.stop_dispatch",
+    "coordinator_core.hooks.test_auto_push",
     "coordinator_core.hooks.test_postuse_advisory_dispatch",
+    "coordinator_core.hooks.tests.test_cater_subagent_start",
     "coordinator_core.hooks.tests.test_fleet_mode_reaches_the_hooks",
     "coordinator_core.hooks.tests.test_nudge_em_code_dispatch",
+    "coordinator_core.hooks.tests.test_postuse_advisory_dispatch",
     "coordinator_core.hooks.tests.test_postuse_context_pressure",
+    "coordinator_core.hooks.tests.test_postuse_workflow_monitor_arm",
+    "coordinator_core.hooks.tests.test_runtime_tripwire_em_check",
+    "coordinator_core.hooks.tests.test_stop_dispatch",
+    "coordinator_core.ops.tests.test_append_integrator_dispositions",
     "coordinator_core.message_register.tests.test_register",
     "coordinator_core.ops.fleet.mode_control",
     "coordinator_core.ops.tests.test_fleet_mode_control",

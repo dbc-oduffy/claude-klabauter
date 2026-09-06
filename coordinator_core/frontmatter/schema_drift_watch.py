@@ -76,6 +76,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.engine_root import (
+    coordinator_engine_root,
+    engine_source_root,
+    is_published_engine_mirror,
+)
 from coordinator_core.frontmatter.schema_validate import (
     DIRECTION_WE_AHEAD,
     check_schema_drift_advisory_batch,
@@ -85,6 +90,48 @@ from coordinator_core.machine_resolver import registry_get
 
 # Directory holding claude-klabauter's vendored copies of DoE's canonical schemas.
 VENDORED_SCHEMAS_DIR = Path(__file__).resolve().parent / "schemas"
+
+# Review: overengineering-reviewer — corrected: this is a hand-written parallel
+# literal, not a derivation from VENDORED_SCHEMAS_DIR; nothing couples the two,
+# so a package move must update both by hand.
+#
+# Relative path from an engine SOURCE root down to the vendored-schemas dir —
+# the same suffix VENDORED_SCHEMAS_DIR's own module-relative derivation ends in.
+_VENDORED_SCHEMAS_SUBPATH = Path("coordinator_core") / "frontmatter" / "schemas"
+
+
+def _resolve_scan_schemas_dir(schemas_dir: Optional[Path]) -> Path:
+    """The SCAN path's directory resolver — NOT used by any other caller.
+
+    `baton_class.py` and the write-guards derive their own module-relative
+    schema dirs and are right to; only the drift scan wants the source
+    checkout when it is running from a published mirror.
+
+    Resolution order:
+      1. `schemas_dir`, when the caller passed one — wins outright.
+      2. `engine_source_root()/coordinator_core/frontmatter/schemas`, when
+         the executing engine root IS a published mirror AND that directory
+         exists on disk.
+      3. `VENDORED_SCHEMAS_DIR` (today's module-relative behaviour) —
+         the fallback for EVERY failure of rung 2: no source root
+         registered, the resolved directory absent, or the resolver raising.
+
+    Never raises — mirrors `vendored_schema_paths`'/`vendored_source_paths`'
+    own "never raises" contract, since this is the resolver those two (and
+    `_scan`'s directory reference) route through.
+    """
+    if schemas_dir is not None:
+        return Path(schemas_dir)
+    try:
+        if is_published_engine_mirror(coordinator_engine_root()):
+            source_root = engine_source_root()
+            if source_root:
+                candidate = Path(source_root) / _VENDORED_SCHEMAS_SUBPATH
+                if candidate.is_dir():
+                    return candidate
+    except Exception:
+        pass
+    return VENDORED_SCHEMAS_DIR
 
 # Path, relative to a DoE clone root, where the canonical schemas live. Mirrors the
 # `coordinator/schemas/<name>` ref that check_schema_drift_advisory resolves via git.
@@ -129,7 +176,10 @@ def vendored_schema_paths(schemas_dir: Optional[Path] = None) -> list[Path]:
     `emit_memo_schema` exists to prevent) must not silently get treated as
     an ordinary vendored-schema drift-watch entry.
     """
-    directory = Path(schemas_dir) if schemas_dir is not None else VENDORED_SCHEMAS_DIR
+    # Review: overengineering-reviewer — rung 1 of _resolve_scan_schemas_dir
+    # already does the None-check and Path() coercion; pass schemas_dir straight
+    # through instead of redoing both here.
+    directory = _resolve_scan_schemas_dir(schemas_dir)
     try:
         return sorted(
             p for p in directory.glob("*.schema.json")
@@ -161,7 +211,8 @@ def vendored_source_paths(schemas_dir: Optional[Path] = None) -> list[Path]:
 
     Returns [] (never raises) when the directory is absent or unreadable.
     """
-    directory = Path(schemas_dir) if schemas_dir is not None else VENDORED_SCHEMAS_DIR
+    # Review: overengineering-reviewer — see vendored_schema_paths, same vestige.
+    directory = _resolve_scan_schemas_dir(schemas_dir)
     try:
         return sorted(
             p for p in directory.glob(COCKPIT_SOURCE_GLOB) if p.is_file()
@@ -587,8 +638,15 @@ def _scan(
         Path(cockpit_repo_path) if cockpit_repo_path is not None else resolve_cockpit_repo_path()
     )
 
-    schema_paths = vendored_schema_paths(Path(schemas_dir) if schemas_dir is not None else None)
-    source_paths = vendored_source_paths(Path(schemas_dir) if schemas_dir is not None else None)
+    # Review: code-reviewer (P3) — resolve the schemas dir once and thread it
+    # through both coverage-set calls and the indeterminate-summary below,
+    # instead of letting each re-derive it (a second env/registry read on
+    # every indeterminate-empty scan). `_resolve_scan_schemas_dir` treats a
+    # non-None arg as already-resolved (rung 1), so passing `resolved_dir`
+    # back in is a no-op resolution, not a third distinct one.
+    resolved_dir = _resolve_scan_schemas_dir(schemas_dir)
+    schema_paths = vendored_schema_paths(resolved_dir)
+    source_paths = vendored_source_paths(resolved_dir)
 
     if resolved_doe is None and resolved_cockpit is None:
         return {
@@ -607,9 +665,6 @@ def _scan(
         }
 
     if not schema_paths and not source_paths:
-        directory = (
-            Path(schemas_dir) if schemas_dir is not None else VENDORED_SCHEMAS_DIR
-        )
         return {
             "status": STATUS_INDETERMINATE,
             "doe_repo_path": str(resolved_doe) if resolved_doe else None,
@@ -618,7 +673,7 @@ def _scan(
             "drifted": [],
             "indeterminate": [],
             "summary": (
-                f"No vendored schemas or sources found under {directory} — nothing to "
+                f"No vendored schemas or sources found under {resolved_dir} — nothing to "
                 "compare; treating as indeterminate rather than clean (an empty coverage "
                 "set is not evidence of no drift)."
             ),

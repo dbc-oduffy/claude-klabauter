@@ -299,7 +299,7 @@ def resolve_session_commits(
 
 
 @register_op("session.commits")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> List[Dict[str, Any]]:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> List[Dict[str, Any]]:
     """JSON-RPC "session.commits" handler.
 
     Params:

@@ -220,8 +220,8 @@ def test_record_offers_single_write_call(tmp_path, monkeypatch):
         def __exit__(self, *exc):
             self._handle.close()
 
-    def fake_open(path, mode="r", encoding=None, errors=None):
-        handle = real_open(path, mode, encoding=encoding, errors=errors)
+    def fake_open(path, mode="r", encoding=None, errors=None, newline=None):
+        handle = real_open(path, mode, encoding=encoding, errors=errors, newline=newline)
         if mode == "a":
             return _CountingHandle(handle)
         return handle

@@ -62,7 +62,6 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -70,7 +69,7 @@ from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.session.machinery_paths import machinery_root, share_roots
-from coordinator_core.win_portability import leaf_spawn_creationflags
+from coordinator_core.git.run import run_git
 
 _LOG_PREFIX = "extract-cited-sidecars"
 
@@ -124,17 +123,14 @@ def _list_candidate_files(root: str) -> Optional[List[str]]:
 
     ONE subprocess spawn total, regardless of repo size or candidate-UUID
     count (see module docstring's spawn-budget paragraph)."""
-    try:
-        proc = subprocess.run(
-            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-            cwd=root, capture_output=True, timeout=60,
-            **leaf_spawn_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
+    result = run_git(
+        ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=root,
+        binary=True,
+    )
+    if result.returncode != 0:
         return None
-    if proc.returncode != 0:
-        return None
-    raw = proc.stdout.decode("utf-8", errors="replace")
+    raw = result.stdout_bytes.decode("utf-8", errors="replace")
     paths = [p for p in raw.split("\0") if p]
     out = []
     for p in paths:

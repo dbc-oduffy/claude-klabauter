@@ -48,6 +48,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core._settings_home import resolve_machine_local_cli
 from coordinator_core import launchable
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.machine_resolver import registry_get as _registry_get
@@ -91,7 +92,7 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
     # `coordinator_core.machine_resolver.registry_get`).
     value = _registry_get("repos.doe_claude") or ""
     if not value:
-        ml_bin = shutil.which("machine-local")
+        ml_bin = resolve_machine_local_cli()
         if ml_bin is not None:
             try:
                 proc = subprocess.run(

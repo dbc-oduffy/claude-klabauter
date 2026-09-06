@@ -542,7 +542,7 @@ def main(argv: Sequence[str]) -> int:
 
 
 @register_op("git.maintenance")
-async def _git_maintenance(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _git_maintenance(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC `git.maintenance` handler. `params["tier"]` is required.
 
     Review: overengineering-reviewer -- tier validity was checked a third time

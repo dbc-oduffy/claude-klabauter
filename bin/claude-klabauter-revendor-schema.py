@@ -394,7 +394,9 @@ def _read_source(path: Path) -> str:
     test module from CRLF to LF and bury a two-character pin change in it. Paired
     with the `newline=""` on the write side — both halves are required.
     """
-    return path.read_text(encoding="utf-8", newline="")
+    # `newline=` on Path.read_text is 3.13+; open() is version-safe.
+    with open(path, encoding="utf-8", newline="") as f:
+        return f.read()
 
 
 def _detect_eol(src: str) -> str:

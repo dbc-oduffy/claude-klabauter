@@ -119,12 +119,43 @@ _COMMIT_SCOPED_NAMES = {"commit_scoped"}
 #: lands through.
 _CAS_REF_CALL_NAMES = {"cas_ref"}
 
+#: The SEVENTH mechanism (2026-09-06). `cas_ref` above catches a native
+#: committer at the point it MOVES THE REF, which is inside
+#: `git_native._commit_via_head_spine` itself -- so the spine function is
+#: enumerated and every CALLER of it is not. That is a real coverage hole,
+#: not a bookkeeping one: `_common.archive_and_commit`, `_common.
+#: rm_and_commit`, `git_native._commit_scoped_private_index` and
+#: `memo_send._memo_send` all land commits through the spine and were
+#: invisible to this walk, which surfaced as four "stale" allowlist rows
+#: naming functions that plainly still commit. Matched on the callee alone,
+#: for the same reason `cas_ref` is: a native committer builds no argv, so
+#: there is no string constant to require.
+_HEAD_SPINE_CALL_NAMES = {"_commit_via_head_spine"}
+
+#: The EIGHTH mechanism (2026-09-06), and the one that closes the hole the
+#: seventh only narrowed. `_commit_via_head_spine` is git_native's PRIVATE
+#: spine; the surface most callers actually commit through is the public
+#: native-committer API above it. `memo_send._memo_send` is the worked
+#: example -- it commits twice, through `commit_paths` and
+#: `commit_authored_new_file`, and matched no row at all, so a live op that
+#: lands two commits read to this tripwire as a function that commits
+#: nothing. Measured before/after on this tree: adding these names takes the
+#: stale-entry count to 0 and surfaces 9 previously-invisible commit sites.
+#: Callee-alone again -- native committers build no argv.
+_NATIVE_COMMITTER_API_NAMES = {
+    "commit_paths",
+    "commit_authored_new_file",
+    "commit_authored_content",
+}
+
 _ALL_TRACKED_CALLEE_NAMES = (
     _ASYNCIO_EXEC_NAMES
     | _RUN_GIT_HELPER_NAMES
     | _GIT_NATIVE_UNDERSCORE_GIT
     | _COMMIT_SCOPED_NAMES
     | _CAS_REF_CALL_NAMES
+    | _HEAD_SPINE_CALL_NAMES
+    | _NATIVE_COMMITTER_API_NAMES
 )
 
 # One row per mechanism: (callee-names, required-string-constant-or-None,
@@ -151,6 +182,8 @@ _MECHANISM_ROWS = (
     ),
     (_COMMIT_SCOPED_NAMES, None, "commit_scoped"),
     (_CAS_REF_CALL_NAMES, None, "cas_ref_landing"),
+    (_HEAD_SPINE_CALL_NAMES, None, "head_spine_commit"),
+    (_NATIVE_COMMITTER_API_NAMES, None, "native_committer_api"),
 )
 
 
@@ -271,8 +304,16 @@ def _iter_tracked_calls():
             continue
         try:
             tree = ast.parse(source, filename=str(path))
-        except SyntaxError:
-            continue
+        except SyntaxError as exc:
+            # RAISE, DO NOT SKIP. Skipping made an unparseable file read as
+            # "contains no commit site", which is the one answer a
+            # commit-route tripwire must never give about a file it could
+            # not read -- an unlisted commit site would pass unnoticed for
+            # exactly as long as the syntax error survived.
+            raise AssertionError(
+                f"{path}: failed to parse -- {exc}. This tripwire cannot "
+                f"certify a file it cannot read."
+            ) from exc
         tracker = _EnclosingFunctionTracker()
         tracker.visit(tree)
         if not tracker.found:
@@ -325,9 +366,16 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "keyed off \"what this commit covered\" has no bounded answer",
         "confirmed": True,  # settled ineligible per plan, not a C3a open question
     },
-    # DELIBERATELY RETAINED WHILE STALE (2026-08-25). `test_no_stale_allowlist_
-    # entry` fails on these two, and removing them to get green would launder a
-    # coverage regression into a pass. Both functions are alive and still commit --
+    # DELIBERATELY RETAINED WHILE STALE (2026-08-25; re-measured 2026-09-06).
+    # `test_no_stale_allowlist_entry` fails on FOUR rows now, not the two this
+    # note first named -- `git_native.py::_commit_scoped_private_index`,
+    # `fleet/_common.py::archive_and_commit`, `fleet/_common.py::
+    # rm_and_commit` and `fleet/memo_send.py::_memo_send`. Every one names a
+    # function that is alive and still lands a commit; each stopped matching
+    # only because its landing moved onto a primitive this enumerator does not
+    # match at enclosing-function granularity (a deeper `cas_ref`, a
+    # `create_subprocess_exec` carrying no literal `"commit"`). Removing them
+    # to get green would launder a coverage regression into a pass. Both functions are alive and still commit --
     # they stopped being `git commit` argv sites when the DR-211 plumbing rewrite
     # moved them to `git commit-tree` + `git update-ref`, a fifth mechanism this
     # enumerator does not track. So two live commit paths now sit outside the
@@ -349,6 +397,63 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     "ops/ceremony/git_native.py::commit_authored_content": {
         "reason": "release",
         "confirmed": False,
+    },
+    # ---------------------------------------------------------------------
+    # Surfaced 2026-09-06 by the seventh and eighth mechanisms above. None of
+    # these is a NEW commit site; each has been committing all along, unseen.
+    # `confirmed: False` carries its established meaning here -- classified,
+    # not independently verified -- and
+    # `test_unconfirmed_entries_are_visibly_tracked` prints each by name.
+    # ---------------------------------------------------------------------
+    # The creation sibling of `commit_authored_content` directly above, same
+    # contract and opposite HEAD precondition; classified identically.
+    "ops/ceremony/git_native.py::commit_authored_new_file": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    # VERIFIED INELIGIBLE, not asserted: `release_committed_claims(sid, paths)`
+    # cannot be called without a session id, and neither function below has
+    # one anywhere in its body (checked by AST, not by eye).
+    "benchmarks/probe_commit_pipeline.py::one": {
+        "reason": "ineligible: a benchmark fixture commit in a throwaway "
+        "repo -- no session holds a claim over these paths, and the "
+        "function threads no session id to release one with",
+        "confirmed": True,
+    },
+    "ops/handoff_archive_transition.py::_commit_retained_supersede_flip": {
+        "reason": "ineligible: threads no session id -- it commits a "
+        "supersede flip on a predecessor it did not itself claim",
+        "confirmed": True,
+    },
+    # These four DO have a session id in scope and do NOT release. That is a
+    # finding, not a classification: each lands a commit while whatever claim
+    # covered its paths stays open. Entered as "release" because that is what
+    # they should do, `confirmed: False` because the wiring is not there yet.
+    # Do not flip these to confirmed without adding the call.
+    "execute_plan_assemble/close_out_and_stamp.py::close_out_and_stamp": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    "ops/memo_transition.py::_commit_terminal_write": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    "ops/plan_status_transition.py::_commit_plan_flip": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    "ops/session/safe_commit_offer.py::_commit_group": {
+        "reason": "release",
+        "confirmed": False,
+    },
+    # Verified: both call `release_committed_claims` in their own bodies.
+    "ops/ceremony/commit_v2.py::_handler": {
+        "reason": "release",
+        "confirmed": True,
+    },
+    "workstream_complete/directives_commit_tail.py::run_close_commit": {
+        "reason": "release",
+        "confirmed": True,
     },
     "ops/fleet/_common.py::archive_and_commit": {
         "reason": "release",
@@ -389,7 +494,33 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": False,
     },
-    "ops/ceremony/commit_pipeline.py::commit": {
+    # REMOVED 2026-09-06, both rows naming a site that no longer exists in
+    # any form -- distinct from the DELIBERATELY-RETAINED-WHILE-STALE rows
+    # above, which name LIVE functions that merely stopped matching this
+    # enumerator's mechanisms. Deleting one of those would launder a coverage
+    # regression; deleting these two cannot, because there is no code left to
+    # cover:
+    #   - `ops/ceremony/commit_pipeline.py::commit` -- the whole module was
+    #     killed (C4, docs/plans/2026-08-29-the-push-subsystem-leaves-and-
+    #     then-the-pipeline-can-go.md); the file is not on disk.
+    #   - `ops/session/boot_backstop.py::_commit_relocations` -- the module
+    #     was gravestoned (K-059) and the producer went with it; the sibling
+    #     roster in `commit_ledger/tests/test_producer_coverage.py` removed
+    #     its own row for the same reason on 2026-08-27, and this one was
+    #     missed in that pass.
+    # Found by the enumerator 2026-09-06, not in the brief's seed list: the
+    # completion-entry commit-ledger fold (AC5, state/handoffs/2026-08-29-
+    # rebuild-completion-reconcile-commits-under-the-bar.md) lands its
+    # one-file `commits:` rewrite through `commit_scoped` into the CALLING
+    # session's own worktree -- structurally the sibling of
+    # `_commit_and_push_origin_stub_close` two rows above, which lives in
+    # this same module and carries "release". Listed with that disposition
+    # rather than a new one. `confirmed: False`: unlike its sibling, this
+    # leg threads no session id (see the function's own signature --
+    # `worktree_root`, `entry_path`, `committed_sha`, `push_mode`), so
+    # `release_committed_claims` is not wired here and the row states the
+    # gap instead of implying coverage.
+    "ops/ceremony/post_commit_tail.py::_run_completion_entry_fold": {
         "reason": "release",
         "confirmed": False,
     },
@@ -443,15 +574,6 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     # this session's own claims, so "release" pending confirmation like the
     # other unconfirmed commit_scoped sites above.
     "ops/fleet/memo_send.py::_memo_send": {
-        "reason": "release",
-        "confirmed": False,
-    },
-    # Found by the enumerator, not in the brief's seed list. Commits a
-    # boot-time handoff relocation batch (`state/handoffs` -> `archive/
-    # handoffs`) into the calling session's own worktree -- a real
-    # coordinator op route, "release" pending classification like the other
-    # unconfirmed sites above.
-    "ops/session/boot_backstop.py::_commit_relocations": {
         "reason": "release",
         "confirmed": False,
     },

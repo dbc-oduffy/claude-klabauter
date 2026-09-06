@@ -24,9 +24,9 @@ _TESTS_DIR = Path(__file__).resolve().parent
 # mechanism-selection.md) is the first deliberate, reviewed real-git
 # crossing: index/worktree divergence -- the thing the commit-mechanism
 # selector has to tell apart -- cannot be exhibited by a mocked git.
-# test_wsc_tail_trailer_divergence.py (C10, same plan) is the second: it
-# proves wsc_tail._derive_trailers() no longer clobbers a deliberately
-# partial-hunk-staged path's content when pre-staging for `commit.anchors`.
+# (test_wsc_tail_trailer_divergence.py, C10 of the same plan, was the
+# second; the module no longer exists in this package, so its allowlist
+# entry was removed 2026-09-06 rather than left naming a dead file.)
 # test_commit_scoped_trailer_replay.py (C10-remainder / AC18, same plan) is
 # the third: it proves the diverged (commit-tree) branch replays the
 # prepare-commit-msg hook's Session-Id/Deliverable-Id trailers, which
@@ -50,15 +50,34 @@ _TESTS_DIR = Path(__file__).resolve().parent
 # and additionally installs real hooks into a real .git/hooks/ to prove that
 # NONE of them fires: a mocked git cannot fail that assertion, which is the
 # whole reason the assertion is worth making.
+#
+# Added 2026-09-06, three reviewed crossings landed by peer work since this
+# set was last edited. Each is here because its oracle is a REAL git side
+# effect, which is exactly the class a mock cannot exhibit:
+#   - test_no_interpreter_on_commit.py (C6, docs/plans/2026-08-30-who-
+#     pushes-and-when.md) -- patches `subprocess.Popen` around a real commit
+#     through both entrypoints and asserts no Python-interpreter child was
+#     spawned. A mocked git would only prove the mock spawns nothing.
+#   - test_post_commit_tail_completion_fold.py (AC5, state/handoffs/
+#     2026-08-29-rebuild-completion-reconcile-commits-under-the-bar.md) --
+#     folds a LATE-LANDING real commit's sha into a completion entry's
+#     `commits:` list; the sha has to come from a commit that really landed.
+#   - test_commit_cas_freshness.py (C1, docs/plans/2026-08-27-the-commit-op-
+#     resolves-one-pass-context.md) -- pins the index compare-and-swap
+#     REFUSAL against a simulated peer write to a real `.git/index`; the CAS
+#     comparand is git's own on-disk stat identity.
 _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
     "test_commit_authored_content_edges.py",
     "test_commit_authored_new_file.py",
+    "test_commit_cas_freshness.py",
     "test_commit_scoped.py",
     "test_commit_scoped_edges.py",
     "test_commit_scoped_in_process.py",
     "test_commit_scoped_trailer_replay.py",
     "test_consumed_handoff_stamp.py",
+    "test_no_interpreter_on_commit.py",
     "test_post_commit_tail.py",
+    "test_post_commit_tail_completion_fold.py",
 })
 
 _IMPORT_PATTERN = re.compile(

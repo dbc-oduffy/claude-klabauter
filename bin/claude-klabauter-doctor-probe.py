@@ -4055,10 +4055,23 @@ def _enumerate_resident_warm_servers(psutil_module: Any) -> list[dict[str, Any]]
     "create_time": float | None, "engine_root": Path}`. Pure enumeration
     only — no breadcrumb read, no pipe reachability, no classification;
     callers layer their own per-probe semantics on top.
+
+    A server's OWN dispatch-pool workers are NOT resident servers. On POSIX
+    `ProcessPoolExecutor` forks without re-exec, so every worker inherits the
+    parent's cmdline byte-for-byte and matches the signature above. Left
+    unfiltered, one elected server presents as up to
+    `DISPATCH_PROCESS_POOL_SIZE + 1` "resident servers" -- observed as 31 on a
+    Linux box, which then (a) blew past `_WARM_REACHABILITY_PROBE_CAP` and
+    reported the residency probe `inconclusive` at HARD severity, and (b) made
+    the generation probe report one stale breadcrumb as 31 stale processes.
+    Both probes mean "how many top-level warm servers are resident", so a
+    match whose parent is itself a match is dropped below. macOS and Windows
+    default to `spawn`, which re-execs with a different cmdline, so neither
+    platform ever saw it.
     """
     servers: list[dict[str, Any]] = []
 
-    proc_iter = psutil_module.process_iter(["pid", "create_time", "cmdline"])
+    proc_iter = psutil_module.process_iter(["pid", "ppid", "create_time", "cmdline"])
     while True:
         try:
             proc = next(proc_iter)
@@ -4086,8 +4099,28 @@ def _enumerate_resident_warm_servers(psutil_module: Any) -> list[dict[str, Any]]
         except Exception:
             create_time = None
 
+        try:
+            ppid = proc.info.get("ppid")
+        except Exception:
+            ppid = None
+
         engine_root = Path(script_arg).resolve().parent.parent.parent
-        servers.append({"pid": pid, "create_time": create_time, "engine_root": engine_root})
+        servers.append(
+            {"pid": pid, "ppid": ppid, "create_time": create_time, "engine_root": engine_root}
+        )
+
+    # Drop a match whose parent is also a match -- that is a dispatch-pool
+    # worker of an already-enumerated server, not a second resident server.
+    # A worker whose parent has died is re-parented to init and no longer
+    # matches, so it correctly stays in the list as a genuine orphan.
+    matched_pids = {s["pid"] for s in servers if s["pid"] is not None}
+    servers = [s for s in servers if s["ppid"] not in matched_pids]
+
+    # `ppid` is enumeration-internal: the filter needs it, callers do not, and
+    # the documented return shape above does not include it. Leaking it would
+    # silently widen a contract two probes read.
+    for entry in servers:
+        entry.pop("ppid", None)
 
     return servers
 

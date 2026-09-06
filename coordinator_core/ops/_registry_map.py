@@ -150,6 +150,13 @@ OP_MODULE_MAP: Dict[str, str] = {
     # enforcement-gap.md): the first op that AUTHORS a blocked_by/blocks
     # roadmap-dependency edge (reciprocal, two-file compound transaction).
     "roadmap.link_stubs":                     "coordinator_core.ops.roadmap_link_stubs",
+    # roadmap.plan_gate — the READ twin of roadmap.link_stubs: link_stubs authors
+    # the blocked_by edge, plan_gate says what that edge currently permits, split
+    # into a planning gate and an execution gate.
+    "roadmap.plan_gate":                      "coordinator_core.ops.roadmap_plan_gate",
+    # roadmap.blitz_land — the WRITE twin of roadmap.plan_gate: executes a
+    # wave's verdicts and emits the next wave, so the loop needs no operator.
+    "roadmap.blitz_land":                     "coordinator_core.ops.roadmap_blitz_land",
     "queue.append":                           "coordinator_core.ops.queue_append",
     "queue.cluster":                          "coordinator_core.ops.queue_cluster",
     "queue.promote":                          "coordinator_core.ops.queue_promote",

@@ -208,9 +208,36 @@ _EXEMPTION_TAG = "# popup-intentional-last-resort"
 #: gate answers the other's.
 _SUPPRESSION_IDENTIFIER_PREFIXES = ("no_console", "leaf_spawn")
 
+#: A `**`-splatted mapping NAMED for the keyword it carries. A module that
+#: binds its suppression kwargs once as `_CREATIONFLAGS` and splats that
+#: constant is wired, not bare -- and this gate could not see it, because
+#: `_is_no_console_shaped` is a PREFIX test over `no_console`/`leaf_spawn`
+#: and `_CREATIONFLAGS` starts with neither.
+#:
+#: The concrete cost of not having this, 2026-09-06:
+#: `ops/tests/test_gate_dimension_review.py :: _git` splats
+#: `gate_dimension_review._CREATIONFLAGS`, which that module binds FROM
+#: `no_console_creationflags()`. The gate read it as bare, and the advertised
+#: fix -- splat the primitive -- is precisely the second creationflags source
+#: that call site's own inline comment records as having killed every test
+#: using the helper on Windows with `TypeError: got multiple values for
+#: keyword argument 'creationflags'`. A guard whose remedy is a known Windows
+#: red is worse than no guard on that site.
+#:
+#: Narrow by construction, not by rationale: matched only when the splat
+#: identifier's tail IS the keyword (case-insensitively, underscores
+#: stripped), never as a prefix or substring -- `**_CREATIONFLAGS_MAYBE` and
+#: `**flags` both still read as bare. A mapping named exactly this and
+#: splatted into a spawn supplies `creationflags=`; that is the only question
+#: this gate asks.
+_CREATIONFLAGS_MAPPING_NAME = "creationflags"
+
 
 def _is_no_console_shaped(identifier: str) -> bool:
-    return identifier.lstrip("_").startswith(_SUPPRESSION_IDENTIFIER_PREFIXES)
+    stripped = identifier.lstrip("_")
+    if stripped.lower() == _CREATIONFLAGS_MAPPING_NAME:
+        return True
+    return stripped.startswith(_SUPPRESSION_IDENTIFIER_PREFIXES)
 
 
 def _call_func_name(node: ast.expr) -> str | None:
@@ -1018,7 +1045,11 @@ _UNWALKED_ROOT_BASELINE: dict[str, int] = {
     # parent, is the highest-value site in this population and is now fully
     # suppressed at all three of its spawns.
     "coordinator/bin": 93,
-    "coordinator/lib": 10,
+    # 10 -> 8, 2026-09-06: `coordinator/lib/percolate/dest_refresh.py`'s
+    # private `_git` runner was migrated onto `coordinator_core.git.run.
+    # run_git` (shared-runner register is shrink-only), which suppresses the
+    # console at the one place instead of at each call site.
+    "coordinator/lib": 8,
     "coordinator/scripts": 2,
     # `coordinator/tests` is deliberately ABSENT (was present, removed on
     # review 2026-08-21). Every path under a `tests/` directory is filtered by

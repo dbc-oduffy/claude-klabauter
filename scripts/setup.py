@@ -3839,16 +3839,29 @@ def install_claude_doe_launcher_chain(repo_root: Path, engine_py: str, claude_kl
         if not args.agent_mode and output and not skipped:
             print(output)
         if skipped:
+            # NOT APPLICABLE, not incomplete. This whole chain wires the
+            # dev-clone install mode: every step of it exists to point a
+            # `claude()` shell function at a DoE-claude working clone via
+            # `.doe-root`. `docs/safety.md` rows 4 and 5 already say so --
+            # "only present in the maximalist/dev install mode", "not the
+            # marketplace path" -- and `skills/setup/SKILL.md` states that OSS
+            # coordinator-claude and claude-klabauter installs never take the
+            # `--doe-root` seam at all.
+            #
+            # An unresolved `repos.doe_claude` IS that discriminant: there is
+            # no DoE clone to point at, so the remaining three generators have
+            # nothing to render and the marketplace plugin loads without them.
+            # Reporting it as an incomplete chain told a correctly-installed
+            # OSS box that coordinator would not load -- shouting a dev-mode
+            # requirement at an install that does not have one, which a Linux
+            # cloud dogfood read as a hard break and worked around by hand.
+            print(f"SKIP [claude-doe-chain] {label} — dev-clone mode not configured on this box")
             print(
-                f"[ADVISORY] {label} install skipped (see reason below) — "
-                "not an error, but coordinator will NOT load in any interactive session "
-                "on this box until this step completes.",
-                file=sys.stderr,
+                "SKIP [claude-doe-chain] remaining launcher-chain steps — the claude() shim "
+                "wires the dev-clone install mode only; the marketplace plugin install needs "
+                "none of it. To opt in: machine-local set repos.doe_claude <path>  then re-run.",
             )
-            if output:
-                print(output, file=sys.stderr)
-            print(f"  Re-run manually once resolved: {' '.join(argv)}", file=sys.stderr)
-            continue
+            return
         if proc.returncode != 0:
             any_failed = True
             print(

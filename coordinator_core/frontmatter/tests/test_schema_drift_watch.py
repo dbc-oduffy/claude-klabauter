@@ -29,11 +29,14 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.frontmatter import schema_drift_watch
 from coordinator_core.frontmatter.schema_drift_watch import (
     STATUS_DRIFT,
     STATUS_INDETERMINATE,
     STATUS_MATCH,
     STATUS_UNRESOLVED,
+    VENDORED_SCHEMAS_DIR,
+    _resolve_scan_schemas_dir,
     check_source_drift_advisory,
     check_source_drift_advisory_batch,
     resolve_doe_repo_path,
@@ -951,4 +954,103 @@ class TestAggregateIncludesCockpitSource:
 
         assert report["status"] == STATUS_INDETERMINATE
         assert [d["schema"] for d in report["indeterminate"]] == [_VENDOR_SOURCE_NAME]
+        # Review: code-reviewer — restore assertion dropped as accidental collateral
+        # of appending TestResolveScanSchemasDir below; the docstring's coverage claim
+        # (an unresolved cockpit side must not mask real JSON-schema matches) needs it.
         assert sorted(report["matched"]) == sorted([_SCHEMA_A, _SCHEMA_B])
+
+
+class TestResolveScanSchemasDir:
+    """The scan-only directory resolver (C1) — see `schema_drift_watch._resolve_scan_schemas_dir`.
+
+    Fixture directories all live under `tmp_path`; nothing here depends on a real
+    claude-klabauter or claude-klabauter checkout existing on this host.
+    """
+
+    def test_explicit_schemas_dir_wins_outright(self, tmp_path: Path) -> None:
+        # Review: overengineering-reviewer — rung 1 returns before any mirror
+        # lookup is consulted, so an explicit arg needs no mirror/source
+        # fixture or monkeypatches to prove it wins; trimmed to the assertion.
+        explicit = tmp_path / "explicit-schemas"
+        explicit.mkdir()
+
+        assert _resolve_scan_schemas_dir(explicit) == explicit
+
+    def test_mirror_with_existing_source_dir_resolves_to_source_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mirror_root = tmp_path / "mirror"
+        source_root = tmp_path / "source"
+        source_schemas = source_root / "coordinator_core" / "frontmatter" / "schemas"
+        source_schemas.mkdir(parents=True)
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", lambda: str(mirror_root))
+        monkeypatch.setattr(schema_drift_watch, "is_published_engine_mirror", lambda root: True)
+        monkeypatch.setattr(schema_drift_watch, "engine_source_root", lambda: str(source_root))
+
+        result = _resolve_scan_schemas_dir(None)
+
+        assert result == source_schemas
+
+    def test_source_root_none_falls_back_to_module_relative(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mirror_root = tmp_path / "mirror"
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", lambda: str(mirror_root))
+        monkeypatch.setattr(schema_drift_watch, "is_published_engine_mirror", lambda root: True)
+        monkeypatch.setattr(schema_drift_watch, "engine_source_root", lambda: None)
+
+        assert _resolve_scan_schemas_dir(None) == VENDORED_SCHEMAS_DIR
+
+    def test_resolved_source_dir_absent_falls_back_to_module_relative(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mirror_root = tmp_path / "mirror"
+        source_root = tmp_path / "source-without-schemas"
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", lambda: str(mirror_root))
+        monkeypatch.setattr(schema_drift_watch, "is_published_engine_mirror", lambda root: True)
+        monkeypatch.setattr(schema_drift_watch, "engine_source_root", lambda: str(source_root))
+
+        assert _resolve_scan_schemas_dir(None) == VENDORED_SCHEMAS_DIR
+
+    def test_not_a_mirror_falls_back_to_module_relative(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        live_root = tmp_path / "live-working-tree"
+        source_root = tmp_path / "source"
+        source_schemas = source_root / "coordinator_core" / "frontmatter" / "schemas"
+        source_schemas.mkdir(parents=True)
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", lambda: str(live_root))
+        monkeypatch.setattr(schema_drift_watch, "is_published_engine_mirror", lambda root: False)
+        monkeypatch.setattr(schema_drift_watch, "engine_source_root", lambda: str(source_root))
+
+        assert _resolve_scan_schemas_dir(None) == VENDORED_SCHEMAS_DIR
+
+    def test_engine_root_raising_falls_back_to_module_relative(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _raise() -> str:
+            raise RuntimeError("no engine root registered")
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", _raise)
+
+        assert _resolve_scan_schemas_dir(None) == VENDORED_SCHEMAS_DIR
+
+    # Review: overengineering-reviewer — removed
+    # test_is_published_engine_mirror_raising_falls_back_to_module_relative:
+    # same single `except Exception` and same assertion as
+    # test_engine_root_raising_falls_back_to_module_relative above; which call
+    # inside the try raises is a monkeypatch property, not a code branch.
+    #
+    # Also removed test_vendored_schemas_dir_is_still_module_relative: it
+    # re-executed VENDORED_SCHEMAS_DIR's own defining expression and compared
+    # the result to the constant, so it could not fail for the hazard its
+    # docstring named. That hazard (in-repo consumers getting silently
+    # repointed) does not apply to this constant regardless — baton_class.py
+    # and both write-guards each define their own module-relative copy rather
+    # than importing VENDORED_SCHEMAS_DIR (baton_class.py documents the
+    # non-import as deliberate); nothing outside this module imports it. No
+    # replacement pin written on that premise.

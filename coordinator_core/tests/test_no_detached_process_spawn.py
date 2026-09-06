@@ -122,10 +122,84 @@ def _code_references(path: Path) -> list[int]:
     return sorted(set(hits))
 
 
+#: The ONE function in the repo allowed to name `DETACHED_PROCESS`, keyed by
+#: repo-relative module path -> enclosing function name. Scoped to the function
+#: rather than the file so a second, unreviewed reference elsewhere in
+#: `win_portability.py` still reds.
+#:
+#: 2026-09-06 -- `win_portability.py :: leaf_spawn_creationflags` is the shared
+#: PRIMITIVE this rule is expressed through, not an instance of the defect it
+#: forbids. It landed as C3 of
+#: `archive/specs/2026-08/2026-08-25-leaf-spawns-stop-paying-for-a-console.md`
+#: (AC-5) and is now the single place the flag is spelled: 33 leaf spawns moved
+#: onto it, and every one of them is a spawn with no console-subsystem
+#: descendant of its own, which is exactly the case where the subtree-console
+#: storm this guard exists to prevent cannot arise. The primitive's own
+#: docstring carries that hazard and names `spawn-hidden.py :: _NO_WINDOW` and
+#: `auto_push.py :: _windows_detached_flags` as sites that must never migrate
+#: onto it. Behaviour is pinned separately by
+#: `coordinator_core/tests/test_leaf_spawn_creationflags.py`.
+#:
+#: negative-spec -- this is a NAMED-SITE carve-out, never a flag-combination
+#: one. Do not widen an entry to a whole file, and do not add an entry for a
+#: caller: a caller splats `leaf_spawn_creationflags()`, so it never spells the
+#: name and never needs to be here. An entry that stops matching must be
+#: deleted -- `test_allowlist_has_no_stale_entry` enforces that.
+_ALLOWED_SITES: dict[str, frozenset[str]] = {
+    "coordinator_core/win_portability.py": frozenset({"leaf_spawn_creationflags"}),
+}
+
+
+def _enclosing_functions(path: Path) -> dict[int, str]:
+    """Map every line inside a function body to that function's name."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError):
+        return {}
+    owner: dict[int, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for line in range(node.lineno, (node.end_lineno or node.lineno) + 1):
+            owner[line] = node.name
+    return owner
+
+
+def _allowlisted_hits(path: Path) -> list[int]:
+    """Line numbers in `path` that an `_ALLOWED_SITES` entry covers."""
+    rel = path.relative_to(_REPO_ROOT).as_posix()
+    allowed = _ALLOWED_SITES.get(rel)
+    if not allowed:
+        return []
+    owner = _enclosing_functions(path)
+    return [ln for ln in _code_references(path) if owner.get(ln) in allowed]
+
+
+def test_allowlist_has_no_stale_entry() -> None:
+    """A carve-out that no longer covers anything must be deleted.
+
+    Ratchets only shrink. An entry left behind after its site moved or was
+    migrated silently re-opens the hole for whatever lands at that name next.
+    """
+    for rel, functions in _ALLOWED_SITES.items():
+        path = _REPO_ROOT / rel
+        assert path.is_file(), f"_ALLOWED_SITES names {rel}, which does not exist -- delete the entry"
+        owner = _enclosing_functions(path)
+        live = {owner.get(ln) for ln in _code_references(path)}
+        for function in sorted(functions):
+            assert function in live, (
+                f"_ALLOWED_SITES[{rel!r}] still carves out {function!r}, but that "
+                "function no longer references DETACHED_PROCESS. Delete the entry."
+            )
+
+
 def test_no_live_module_references_detached_process() -> None:
     offenders: list[str] = []
     for path in _live_modules():
+        allowed = set(_allowlisted_hits(path))
         for lineno in _code_references(path):
+            if lineno in allowed:
+                continue
             offenders.append(f"{path.relative_to(_REPO_ROOT).as_posix()}:{lineno}")
 
     assert not offenders, (

@@ -339,7 +339,7 @@ def _err(msg: str) -> dict:
 
 
 @register_op("gate_liveness.resolve")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "gate_liveness.resolve" handler.
 
     Params:

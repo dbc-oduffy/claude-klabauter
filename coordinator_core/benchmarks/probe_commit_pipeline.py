@@ -51,7 +51,7 @@ def build_repo(root: Path):
     q("config", "core.autocrlf", "true")
     q("config", "core.fileMode", "false")
     shutil.copyfile(SRC / ".gitattributes", root / ".gitattributes")
-    (root / "seed.md").write_text("seed\n")
+    (root / "seed.md").write_text("seed\n", newline="\n")
     q("add", "-A")
     q("commit", "-q", "-m", "seed")
     return q
@@ -88,7 +88,7 @@ def _one_window(label, tracked, n, rep):
         for nm in names:
             f = repo / nm
             f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text("v0" + chr(10))
+            f.write_text("v0" + chr(10), newline="\n")
         _q(repo, "add", "-A")
         _q(repo, "commit", "-q", "-m", "seed-tracked")
 
@@ -96,7 +96,7 @@ def _one_window(label, tracked, n, rep):
         nm = names[i] if tracked else f"docs/d{i:03d}/note.md"
         f = repo / nm
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(f"v{i}" + chr(10))
+        f.write_text(f"v{i}" + chr(10), newline="\n")
         try:
             commit_paths(
                 repo,

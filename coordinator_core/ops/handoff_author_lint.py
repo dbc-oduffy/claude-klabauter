@@ -226,7 +226,7 @@ def _resolve_read_path(handoff_path: str, repo_root: Path) -> "tuple[Optional[Pa
 
 
 @register_op("handoff.author_lint")
-async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "handoff.author_lint" handler. See the module docstring for the
     param, the envelope, and what each finding code means."""
     if repo_root is None:

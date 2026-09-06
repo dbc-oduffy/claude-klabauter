@@ -796,7 +796,7 @@ def _write_allowlist(verdicts: "list[ForwarderVerdict]", allowlist_path: Path = 
         "entrypoints": list(merged),
     }
     _preserve_unowned_keys(payload, allowlist_path)
-    allowlist_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    allowlist_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n")
     return merged
 
 

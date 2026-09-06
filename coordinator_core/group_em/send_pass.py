@@ -368,7 +368,7 @@ def _record_offer(
     )
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as handle:
+        with open(path, "a", encoding="utf-8", newline="\n") as handle:
             handle.write(line + "\n")
     except OSError:
         return False
@@ -439,7 +439,7 @@ def record_offers(
     path = send_log_path(repo_root, holder_session_id)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as handle:
+        with open(path, "a", encoding="utf-8", newline="\n") as handle:
             handle.write("\n".join(lines) + "\n")
     except OSError:
         return unrecorded + recorded
@@ -488,7 +488,7 @@ def decline(
     )
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as handle:
+        with open(path, "a", encoding="utf-8", newline="\n") as handle:
             handle.write(line + "\n")
     except OSError:
         return False

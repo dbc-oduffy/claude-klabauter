@@ -293,7 +293,7 @@ def save_index(index: ArchiveIndex, cache_path: Path) -> bool:
             dir=str(cache_path.parent), prefix=".archive-index-", suffix=".tmp"
         )
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
                 json.dump(payload, handle, separators=(",", ":"))
             os.replace(tmp_name, str(cache_path))
         except BaseException:

@@ -340,7 +340,7 @@ def prune(repo_root: str, now_epoch: "float | None" = None) -> bool:
         handle, tmp_path = tempfile.mkstemp(
             prefix=".group-em-watch-spool-", suffix=".tmp", dir=directory
         )
-        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as fh:
             for line in kept:
                 fh.write(line)
                 fh.write("\n")

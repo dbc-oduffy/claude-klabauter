@@ -164,7 +164,7 @@ def write_atomic(path: str, payload: dict) -> bool:
         handle, tmp_path = tempfile.mkstemp(
             prefix=".group-em-watch-", suffix=".tmp", dir=directory
         )
-        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(payload, fh, sort_keys=True)
             fh.write("\n")
         os.replace(tmp_path, path)

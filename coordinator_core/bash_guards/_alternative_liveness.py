@@ -362,7 +362,7 @@ def _trigger_host_subagent_policy_guard(
         config = Path(scratch) / "coordinator.local.md"
         config.write_text(
             "---\n%s: deny\n---\n\nAltlive probe fixture.\n" % policy_key,
-            encoding="utf-8",
+            encoding="utf-8",newline="\n"
         )
         return module.check(_payload(cmd, agent_id="deadbeef0123", cwd=scratch))
     finally:

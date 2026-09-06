@@ -45,7 +45,8 @@ entry is (see § Relocation self-heal below): rerun the writer.
 Rc-path resolution (legacy single-file shape) mirrors the pre-generalization
 ``substrate.py`` PATH-block writer, with one platform correction: `MSYSTEM`
 (Git-Bash/MSYS) forces `.bashrc`, else `$SHELL` selects `.zshrc` / `.bashrc`
-by an `.exe`-tolerant suffix match, defaulting to `.zshrc`. The bare
+by an `.exe`-tolerant suffix match, defaulting per platform when `$SHELL` is
+unset (`.zshrc` on macOS, `.bashrc` everywhere else). The bare
 basename-equality form it replaced silently missed Git-Bash's `bash.exe` —
 see ``_resolve_rc_path``'s own negative-spec. The multi-file shape does NOT have this
 single-pick limitation — ``applicable_rc_files`` returns every applicable
@@ -168,7 +169,7 @@ SENTINEL_BEGIN, SENTINEL_END = _sentinel_markers("CLAUDE_KLABAUTER_CLONE")
 def _resolve_rc_path() -> Path:
     """Pick the rc file to guard for the LEGACY single-file calling shape:
     `MSYSTEM` (Git-Bash/MSYS) forces `.bashrc`, otherwise `$SHELL` selects
-    `.zshrc` / `.bashrc`, defaulting to `.zshrc` when `$SHELL` is unset or
+    `.zshrc` / `.bashrc`, defaulting per platform when `$SHELL` is unset or
     names neither. Retained for the `install.write_shell_rc_guard_block` op
     contract — the multi-file shape (`applicable_rc_files`) is the fix for
     this resolver's single-pick limitation, not a replacement of it.
@@ -185,7 +186,16 @@ def _resolve_rc_path() -> Path:
     home = Path(os.environ.get("HOME") or str(Path.home()))
     if os.environ.get("MSYSTEM"):
         return home / ".bashrc"
-    shell = os.environ.get("SHELL", "zsh")
+    # UNSET `$SHELL` DEFAULTS PER PLATFORM, not to zsh everywhere. zsh is the
+    # macOS interactive default and the right guess there. It is the wrong
+    # guess anywhere else, and `$SHELL` is most often unset in exactly the
+    # environments where it is wrong -- containers and other non-login shells,
+    # which are overwhelmingly bash and frequently have no zsh installed at
+    # all, so the sentinel block lands in a `~/.zshrc` nothing will ever
+    # source. `ops/gen_claude_doe_shim.py`'s sibling resolver already
+    # defaulted to bash; the two disagreed, and this is the half that was
+    # wrong off Darwin.
+    shell = os.environ.get("SHELL") or ("zsh" if sys.platform == "darwin" else "bash")
     if shell.endswith(("bash", "bash.exe")):
         return home / ".bashrc"
     return home / ".zshrc"

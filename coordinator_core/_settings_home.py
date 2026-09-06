@@ -92,7 +92,9 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 from pathlib import Path
+from typing import Optional
 
 
 def reject_doubled_claude_home(var: str, raw: str) -> None:
@@ -218,6 +220,50 @@ def settings_home_child_env(base_env: dict) -> dict:
 def machine_local_dir() -> Path:
     """Resolve the `machine-local/` directory under the settings-home root."""
     return settings_home() / "machine-local"
+
+
+def resolve_machine_local_cli() -> Optional[str]:
+    """Locate the `machine-local` CLI. Returns None only when it is genuinely
+    absent from this box.
+
+    PATH FIRST, THEN THE KNOWN INSTALL LOCATION. `/coordinator:install`
+    Phase 3 deposits this CLI at `<settings-home>/bin/machine-local` and adds
+    that directory to PATH via a shell-rc block -- which only takes effect in a
+    shell started afterwards. In the session that just ran the install, and in
+    any non-login shell (the ordinary shape for a container, a CI runner, or a
+    hook), PATH does not carry it yet. A PATH-only probe therefore reported
+    "machine-local not found" on boxes where the CLI was installed and working,
+    and pointed the operator back at the install step that had already
+    succeeded. Absence must mean absent, not not-yet-on-PATH.
+
+    Windows names are probed alongside the POSIX one: the forwarder is
+    installed as `.cmd` there, which `shutil.which` finds via PATHEXT but a
+    bare-name existence check would not.
+
+    ONE LADDER, NOT SEVEN. This consolidates what were seven hand-rolled
+    probes across `ops/` with three different rung sets: four were PATH-only,
+    `register_discovered_repos` skipped the settings-home rung outright, and
+    only `detect_hardware` and `repo_bootstrap` carried the full ladder. Any
+    new caller gets the whole ladder by construction.
+    """
+    found = shutil.which("machine-local")
+    if found:
+        return found
+    names = ("machine-local", "machine-local.cmd", "machine-local.exe")
+    roots = [settings_home() / "bin"]
+    # Legacy rung: the pre-settings-home install location, still live on boxes
+    # installed before the move.
+    claude_home = os.environ.get("CLAUDE_HOME", "").strip()
+    roots.append((Path(claude_home) if claude_home else home_dir()) / ".claude" / "bin")
+    for root in roots:
+        for name in names:
+            candidate = root / name
+            try:
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return str(candidate)
+            except OSError:
+                continue
+    return None
 
 
 def normalize_native_path(raw):
