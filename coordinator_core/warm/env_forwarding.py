@@ -61,6 +61,7 @@ from __future__ import annotations
 from typing import NamedTuple, Tuple
 
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+from coordinator_core.session.mode_resolution import COORDINATOR_JOB_MODE
 
 __all__ = ["Mode", "EnvEntry", "FORWARDING_SET", "generate_header"]
 
@@ -106,6 +107,19 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
     _entry("COORDINATOR_ROOT", BORROW),
     _entry("DOE_ROOT", BORROW),
     _entry("CLAUDE_PROJECT_DIR", BORROW),
+    # Execution locality. `coordinator_core.env_locality`'s rung 0 is a
+    # per-CALLER fact, and this server's own `os.environ` belongs to whoever
+    # spawned it -- without this entry an engine-side locality read returns the
+    # daemon's environment, not the session's. Rung 1 is machine-constant and
+    # needs no forwarding, so a missing entry here degrades to a labelled
+    # confidence rather than a confident lie.
+    _entry("CLAUDE_CODE_REMOTE", BORROW),
+    # Job mode. `session.mode_resolution`'s resolver reads this to learn
+    # what the CALLER was invoked as -- and, same as `CLAUDE_CODE_REMOTE`
+    # above, this server's own `os.environ` belongs to whoever spawned it,
+    # not the session that dispatched the op. Without this entry an
+    # engine-side read returns the daemon's environment, not the session's.
+    _entry(COORDINATOR_JOB_MODE, BORROW),
 )
 
 

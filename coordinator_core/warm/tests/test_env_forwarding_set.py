@@ -91,7 +91,7 @@ def test_override_entries_are_exactly_the_session_env_precedence_triple():
     assert override_entries == list(SESSION_ENV_PRECEDENCE)
 
 
-def test_forwarding_set_is_exactly_the_widened_twelve_named_entries():
+def test_forwarding_set_is_exactly_the_named_entries():
     assert [e.name for e in FORWARDING_SET] == [
         "COORDINATOR_SETTINGS_HOME",
         "COORDINATOR_SESSION_ID",
@@ -105,6 +105,11 @@ def test_forwarding_set_is_exactly_the_widened_twelve_named_entries():
         "COORDINATOR_ROOT",
         "DOE_ROOT",
         "CLAUDE_PROJECT_DIR",
+        # Execution locality: `env_locality`'s rung 0 is a per-caller fact and
+        # the warm server's own environ belongs to its spawner.
+        "CLAUDE_CODE_REMOTE",
+        # Job mode: same per-caller-fact reasoning as CLAUDE_CODE_REMOTE.
+        "COORDINATOR_JOB_MODE",
     ]
 
 

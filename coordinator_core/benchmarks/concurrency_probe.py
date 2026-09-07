@@ -85,6 +85,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
+from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 from coordinator_core.benchmarks import op_fixtures
 from coordinator_core.benchmarks.timer import BenchmarkSampleInvalid, time_invocation
 
@@ -192,6 +193,15 @@ def read_machine_state() -> MachineState:
     )
 
 
+@declares_safe_direction(
+    SafeDirection.FALL_BACK,
+    anchor=lambda result: result[0] is False,
+    because=(
+        "an unreadable machine state cannot be read as headroom; RAISE was rejected because "
+        "this gate runs at the top of a probe run and an exception here would abort the "
+        "measurement instead of declining it"
+    ),
+)
 def evaluate_escape_hatch(
     state: MachineState,
     min_free_ram_gb: float,
@@ -229,6 +239,15 @@ def compute_parallelism_cap(physical_cores: int, usable_ram_gb: float) -> int:
     return max(1, int(min(by_cores, by_ram)))
 
 
+@declares_safe_direction(
+    SafeDirection.FALL_BACK,
+    anchor=lambda cores: cores == (os.cpu_count() or 1),
+    because=(
+        "a logical-for-physical substitution is bounded at ~2x and the cap it feeds stays "
+        "survivable; RAISE was rejected because psutil is genuinely absent on some CI and "
+        "virtualized hosts and refusing there would delete the probe entirely"
+    ),
+)
 def default_physical_cores() -> int:
     """Best-effort physical-core count; falls back to os.cpu_count() (logical)
     if psutil is unavailable or returns None (some virtualized/CI hosts)."""
@@ -243,6 +262,14 @@ def default_physical_cores() -> int:
     return os.cpu_count() or 1
 
 
+@declares_safe_direction(
+    SafeDirection.RAISE,
+    because=(
+        "a wrong RAM figure has unbounded error and a silently wrong worker cap defeats the "
+        "whole escape-hatch contract; FALL_BACK was rejected because no anchor exists that a "
+        "caller could tell apart from a real reading"
+    ),
+)
 def default_usable_ram_gb() -> float:
     """Best-effort total system RAM in GB via psutil; fails loud (raises) if
     psutil is unavailable -- there is no safe fallback for this figure and a

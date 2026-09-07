@@ -3,7 +3,7 @@
   "$id": "https://coordinator.local/schemas/review-sidecar.schema.json",
   "x-schema-name": "review-sidecar",
   "x-schema-version": "1.1.0",
-  "applies_to": "state/plan-sidecars/*.review.md",
+  "applies_to": ".coordinator-local/plan-sidecars/*.review.md",
   "kinds": [
     "staff-eng-review",
     "eng-director-review",

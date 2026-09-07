@@ -244,6 +244,36 @@ two new carve-outs precisely rather than continuing to claim ``|``/``>``
 always deny.
 
 Divergence 9 (2026-08-01, Amendment 1 -- confine coordinator:executor too):
+
+**REVERSED 2026-08-02 BY PM RULING, AND THIS WHOLE DIVERGENCE IS NOW DEAD CODE.
+READ THIS BEFORE BELIEVING A WORD OF THE PARAGRAPHS BELOW.** The PM narrowed the
+confined perimeter to two harm classes, and
+``docs/plans/2026-08-03-narrow-subagent-commit-confinement-two-classes.md``
+reverses C1's addition of ``coordinator:executor`` to
+``_helpers._CONFINED_FINDINGS_AGENTS`` -- see the amendment banner at the top of
+``docs/plans/2026-08-01-confine-subagent-bash-by-allowlist.md``. That frozenset has
+exactly one member today (``coordinator:code-reviewer``), the ``bash_policy:`` table
+has exactly one key (the same one), and executor is rostered, so ALL THREE legs of
+``_is_confined_type`` return False for it. Measured, not inferred::
+
+    coordinator:executor           confined=False  known=True
+    coordinator:code-reviewer      confined=True   known=True
+
+``_default_ruleset`` is consulted only for a type that is confined, so
+``_DEFAULT_RULESET_TYPE_OVERRIDES[_EXECUTOR_TYPE]`` -- the pytest module allowance,
+``interpreter_allow_scripts``, and the ``scaffolder_required_arg: ""`` relaxation --
+CANNOT BE REACHED, and neither can ``_DENY_MESSAGE_STANZA_OVERRIDES``'s executor
+stanzas or ``_EXECUTOR_HEADER_LINE``. Their tests pass vacuously, exactly as the
+``:860`` note warns for ``_CONFINED_FINDINGS_AGENTS`` itself. The executor is not
+confined-with-a-relaxation; it is unconfined outright.
+
+Reported by doe-claude-em (cross-repo/inbox/2026-09-06-doe-claude-em-executor-is-
+not-confined-so-its-ruleset-override-is-dead.md) after this prose misled claude-klabauter's
+own EM into asserting the opposite to two sibling repos. Kept rather than deleted
+only so a reader arriving at the paragraphs below is not misled a third time; the
+deletion is tracked in state/bug-backlog/. DO NOT cite anything below this banner
+as live behaviour.
+
 ``coordinator:executor`` joined ``_helpers._CONFINED_FINDINGS_AGENTS``
 (``docs/plans/2026-08-01-confine-subagent-bash-by-allowlist.md``, a prior C1
 attempt returned BLOCKED on the substrate drift this divergence fixes). The
@@ -2144,12 +2174,126 @@ def _tokenize_segment(cmd: str) -> list:
     return tokens if tokens is not None else []
 
 
+#: (2026-09-06) An environment assignment whose NAME can redirect which
+#: binary or which code the shell actually runs. Peeling such a prefix would
+#: make the allowlist's identity anchor a lie: `PATH=/tmp/evil python3 -m
+#: pytest` resolves to the effective token `python3` while the shell executes
+#: `/tmp/evil/python3`, and `PYTHONPATH=`/`PYTHONSTARTUP=`/`BASH_ENV=` reach
+#: arbitrary code through a binary the allowlist genuinely sanctions. Matched
+#: as exact names or as a `<prefix>_`/`<prefix>` family so a new loader
+#: variable in an existing family (LD_*, DYLD_*, PYTHON*) is covered without
+#: an edit here. A command carrying one of these is NOT peeled -- it keeps
+#: the assignment as its effective token and denies exactly as before.
+_EXEC_INFLUENCING_ENV_NAME_RE = re.compile(
+    r"^(?:PATH|SHELL|IFS|ENV|BASH_ENV|LD_[A-Z0-9_]*|DYLD_[A-Z0-9_]*|PYTHON[A-Z0-9_]*)$"
+)
+
+_ENV_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=")
+
+_ENV_IGNORE_ENVIRONMENT_FLAGS = ("-i", "--ignore-environment")
+
+
+def peel_env_assignment_prefix(tokens: list) -> list:
+    """Return ``tokens`` with a leading run of ``VAR=value`` assignments --
+    and a leading bare ``env`` carrying its own assignments/``-i`` -- removed,
+    so the effective token is resolved from the command actually being run.
+
+    Why (memo, doe-claude-em, 2026-09-06): a ``coordinator:code-reviewer`` may
+    run ``python3 -m pytest <file>`` (Amendment 2's ruling), but could not set
+    an environment variable on that same sanctioned run, because tokens[0] was
+    then the assignment (or ``env``) and matched no allowlisted binary. Any
+    test whose fixture is selected by the environment was therefore unreachable
+    to the agent that found the finding -- the guard did not prevent the run,
+    it moved it to a human. Allowlisting ``env`` as a BINARY was rejected: it
+    takes an arbitrary command and would admit everything the allowlist exists
+    to exclude. This peel keeps the decision anchored on the invoked binary.
+
+    Negative-spec -- what this deliberately does NOT peel:
+      - An assignment whose name matches ``_EXEC_INFLUENCING_ENV_NAME_RE``.
+        Peeling it would resolve the effective token from a name the
+        assignment itself redirects (see that constant's own note). Returns
+        ``tokens`` unchanged, so the caller denies as it did before.
+      - ``env`` carrying any OTHER flag (``-S``/``--split-string``, ``-u``,
+        ``-C``, ``--``): ``env -S`` re-parses its argument as a whole command
+        line, so the token following it is not the invoked binary. Only the
+        bare ``env`` + assignments/``-i`` form is a pure passthrough.
+      - A ``python3`` unwrap. That stays in ``_first_effective_token`` where
+        it already lives; this runs BEFORE it, so ``FOO=1 python3 -m pytest``
+        reaches the same interpreter tier ``python3 -m pytest`` does.
+
+    Assignment COUNT is uncapped: the name predicate above is the whole
+    discriminator, and a second harmless assignment carries no risk a first
+    one does not.
+    """
+    if not tokens:
+        return []
+    peeled = list(tokens)
+    while True:
+        before = len(peeled)
+        while peeled:
+            match = _ENV_ASSIGNMENT_RE.match(peeled[0])
+            if match is None:
+                break
+            if _EXEC_INFLUENCING_ENV_NAME_RE.match(match.group(1)):
+                return list(tokens)
+            peeled = peeled[1:]
+        if peeled and _normalize_executable_basename(peeled[0]) == "env":
+            rest = peeled[1:]
+            while rest:
+                if rest[0] in _ENV_IGNORE_ENVIRONMENT_FLAGS:
+                    rest = rest[1:]
+                    continue
+                match = _ENV_ASSIGNMENT_RE.match(rest[0])
+                if match is None:
+                    break
+                if _EXEC_INFLUENCING_ENV_NAME_RE.match(match.group(1)):
+                    return list(tokens)
+                rest = rest[1:]
+            if rest and rest[0].startswith("-"):
+                # `env` with a flag this peel does not model -- not a pure
+                # passthrough; leave the whole command unpeeled.
+                return list(tokens)
+            if not rest:
+                return list(tokens)
+            peeled = rest
+        if len(peeled) == before:
+            break
+    return peeled
+
+
+def _unpeeled_exec_influencing_env_name(cmd: str) -> Optional[str]:
+    """Name of the leading environment assignment that stopped ``cmd`` from
+    being peeled, or ``None`` when no leading assignment/``env`` prefix was
+    the reason it went unpeeled.
+
+    Message-accuracy only (2026-09-06): the allow/deny outcome is already
+    settled by ``peel_env_assignment_prefix`` before this is consulted. It
+    exists so a denial caused by ``PATH=``/``PYTHONPATH=``/``LD_PRELOAD=``
+    names that cause instead of reporting the assignment token as an
+    unrecognised binary -- see ``_EXEC_INFLUENCING_ENV_NAME_RE``.
+    """
+    for token in _tokenize_segment(cmd):
+        match = _ENV_ASSIGNMENT_RE.match(token)
+        if match is None:
+            if _normalize_executable_basename(token) == "env" or token in _ENV_IGNORE_ENVIRONMENT_FLAGS:
+                continue
+            return None
+        if _EXEC_INFLUENCING_ENV_NAME_RE.match(match.group(1)):
+            return match.group(1)
+    return None
+
+
 def _first_effective_token(tokens: list) -> str:
     """Return the token identifying the invoked binary at the head of
     ``tokens`` -- the first token, or the SECOND token when the first is
     exactly ``python3`` (the ``python3 <path>`` invocation form). Returns
     ``""`` for an empty list.
+
+    (2026-09-06) A leading environment-assignment / bare-``env`` prefix is
+    peeled first by ``peel_env_assignment_prefix`` -- see that function for
+    which prefixes are peeled and which are deliberately not.
     """
+    tokens = peel_env_assignment_prefix(tokens)
     if not tokens:
         return ""
     if tokens[0] == "python3" and len(tokens) >= 2:
@@ -2367,7 +2511,7 @@ def _git_command_tokens(cmd: str) -> list:
     ``_extract_first_token``'s docstring for the full incident writeup;
     both functions share the same root cause and the same fix.
     """
-    tokens = _tokenize_segment(cmd)
+    tokens = peel_env_assignment_prefix(_tokenize_segment(cmd))
     if not tokens:
         return []
     start = 1
@@ -2968,6 +3112,45 @@ _TYPE_UNENUMERATED_HEADER_LINE = (
     "BLOCKED: this dispatch identity is on no roster, so Bash is confined."
 )
 
+#: (2026-09-06) The same defect the block above fixed, one layer in: naming
+#: the CAUSE ("on no roster") without naming the IDENTITY still leaves the
+#: reader unable to act, because the roster is checkable and the string is
+#: not. Measured today, on a Workflow-dispatched planner: three sessions
+#: across two repos reasoned for hours about which leg was non-empty, and
+#: could not tell an absent `agent_type` from a present-but-unrostered one
+#: -- the deny they were reading was compatible with both, and the correct
+#: answer (non-empty, since an empty type escapes all three legs) was
+#: deducible only by reading this module's source. A probe matrix finally
+#: established it by elimination. The identity is the one fact the guard
+#: holds and the reader does not.
+#:
+#: Same discipline as the block above: this REPLACES the header line rather
+#: than adding one, so `_message_size`'s prose byte count is unaffected.
+#: The value is caller-controlled free text, so it is passed through
+#: `_sanitize_cmd_for_reason` (control-char strip + length cap) exactly like
+#: the command string, and truncated harder -- an identity is a short token,
+#: and a long one is itself the finding.
+_UNENUMERATED_IDENTITY_MAX_LEN = 60
+
+
+def _unenumerated_header_line(effective_type: str) -> str:
+    """Header for a leg-3 unenumerated confinement, naming the identity that
+    was confined.
+
+    Falls back to the bare `_TYPE_UNENUMERATED_HEADER_LINE` when
+    `effective_type` is empty. That fallback is currently unreachable by
+    construction -- `is_confined_by_roster_absence` returns False for an
+    empty string, so leg 3 cannot fire without a non-empty type -- and is
+    kept as a defensive branch rather than an assertion because a deny
+    message is the wrong place to raise.
+    """
+    if not effective_type:
+        return _TYPE_UNENUMERATED_HEADER_LINE
+    shown = _sanitize_cmd_for_reason(effective_type)
+    if len(shown) > _UNENUMERATED_IDENTITY_MAX_LEN:
+        shown = shown[:_UNENUMERATED_IDENTITY_MAX_LEN] + "..."
+    return f"BLOCKED: dispatch identity {shown!r} is on no roster, so Bash is confined."
+
 #: (Message-size discipline, 2026-08-03) Trimmed to prose-cap width. Moved
 #: onto ONE indented line so it lands inside the "Use instead:" cue window
 #: (see ``_deny_reason``) and is exempted from the prose byte count --
@@ -3149,7 +3332,7 @@ def _deny_reason(
         if confinement_cause == "roster-unreadable":
             header_line = _ROSTER_UNREADABLE_HEADER_LINE
         elif confinement_cause == "unenumerated":
-            header_line = _TYPE_UNENUMERATED_HEADER_LINE
+            header_line = _unenumerated_header_line(effective_type)
     scaffolder_stanza = overrides.get("scaffolder", _DEFAULT_SCAFFOLDER_STANZA)
     accepted_forms_stanza = overrides.get("accepted_forms", _DEFAULT_ACCEPTED_FORMS_STANZA)
     closing_stanza = (
@@ -3472,7 +3655,7 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
         # original generic deny. See _evaluate_python3_interpreter's
         # docstring: it returns None (not applicable/not granted) for every
         # case that must preserve the ORIGINAL deny message text (AC3).
-        tokens_for_interpreter = _tokenize_segment(cmd_for_check)
+        tokens_for_interpreter = peel_env_assignment_prefix(_tokenize_segment(cmd_for_check))
         interpreter_result = _evaluate_python3_interpreter(tokens_for_interpreter, ruleset)
         if interpreter_result is not None:
             interpreter_allowed, interpreter_deny_reason = interpreter_result
@@ -3499,6 +3682,17 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
             # `curl`/`rm` -- unaffected by this branch).
             first_token = _extract_first_token(cmd_for_check)
             raw_first_token = tokens_for_interpreter[0] if tokens_for_interpreter else ""
+            unsafe_env_name = _unpeeled_exec_influencing_env_name(cmd_for_check)
+            if unsafe_env_name is not None:
+                # (2026-09-06) The assignment prefix WAS the reason -- say so
+                # rather than reporting the assignment as an unrecognised
+                # binary name, which reads as a tokenizer failure and costs a
+                # round trip to diagnose.
+                deny_reason = (
+                    f"{unsafe_env_name}= redirects which binary or code runs, so it is not "
+                    f"peeled to find the command; run without it"
+                )
+                suppress_retry_advice = True
             if raw_first_token and raw_first_token != first_token:
                 deny_reason = (
                     f"command token is not coordinator-doc-new (got: {first_token or 'empty'}, "

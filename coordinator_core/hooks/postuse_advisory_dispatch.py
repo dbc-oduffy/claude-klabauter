@@ -629,12 +629,21 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
             mode_clause = (
                 "Autonomous run:" if autonomous_run else "Informational mode:"
             )
+            # The baton clause is what makes this variant actionable rather
+            # than merely quieter. The mode exists so a session rides through
+            # compaction instead of stopping; riding it is only survivable if
+            # the session can make its current awareness durable, and on a
+            # cloud box the handoff route that would normally do that is
+            # unavailable (no `/clear`, and passing a baton means a PR merge,
+            # a new session and a re-point).
             return (
                 f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
                 f" used{age_note}, measured from the harness's own context_window"
                 f" block. {mode_clause} compaction from here is involuntary and"
                 f" lossy, so state that is not on disk is state that is lost."
-                f" Commit and checkpoint now; continue the run."
+                f" Commit and checkpoint now."
+                f"{_baton_affordance_clause(session_id)}"
+                f" Continue the run."
             )
         return (
             f"CONTEXT PRESSURE — HANDOFF NOW: ~{display_pct}% of window used{age_note},"
@@ -661,11 +670,21 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
         # in this branch: with 40 informational for everyone there is nothing
         # left here for either to select between. The key still governs the
         # red band.
+        # The baton clause belongs here MORE than in the red band, not less:
+        # this band already says "checkpoint state to disk", and the baton is
+        # the cheapest durable place to put it — at 40 there is still runway to
+        # write a considered note rather than a hurried one. It is
+        # mode-independent, so naming it does not read `compaction_warnings` or
+        # `autonomous_run` and leaves the PM ruling above intact: 40 stays
+        # informational for everyone, and this adds no variant to select
+        # between.
         return (
             f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of window"
             f" used{age_note}, measured from the harness's own context_window"
             f" block. Checkpoint state to disk at the next natural boundary so"
-            f" the run is resumable. The hard call comes at 43%."
+            f" the run is resumable."
+            f"{_baton_affordance_clause(session_id)}"
+            f" The hard call comes at 43%."
         )
 
     _save_advisory_state(tmpdir, session_id, cp_state)
@@ -675,6 +694,37 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
 # _check_runtime_tripwire_sync
 # (mirrors runtime-tripwire-advisory.sh check_runtime_tripwire)
 # ---------------------------------------------------------------------------
+
+
+def _baton_affordance_clause(session_id: str) -> str:
+    """Name the baton this session ALREADY has, at the moment it is needed.
+
+    A session very often does not know it has one: it was minted on the
+    session's behalf, possibly hundreds of turns ago, and nothing has mentioned
+    it since. An affordance nobody remembers is not an affordance -- so the
+    informational advisory names the path and the op rather than assuming
+    recall. This is the same rule as claude-klabauter's cold-path remediation convention:
+    an advisory names a remedy that is actually available where it fires.
+
+    Fail-open and silent: an advisory that cannot resolve a path still has a
+    useful message without this clause, and must never raise on the hook path.
+    """
+    try:
+        from coordinator_core.session_baton import store as _baton_store
+
+        path = _baton_store.baton_path(session_id)
+        # One stat. `baton_path` only COMPUTES a location, so without this the
+        # advisory would assert a baton that may not exist -- and an advisory
+        # that names a file the reader cannot find teaches them to distrust the
+        # next one.
+        if path is None or not path.is_file():
+            return ""
+        return (
+            f" This session's baton is at {path} — append what your"
+            f" post-compaction self needs with `baton.carry_forward`."
+        )
+    except Exception:  # pragma: no cover - advisory path is fail-open
+        return ""
 
 
 def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:

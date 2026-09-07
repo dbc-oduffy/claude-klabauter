@@ -1002,3 +1002,43 @@ def _no_new_live_session_hub_entries():
         "repo, or pass the root explicitly. See this file's Live session-hub "
         "litter guard note."
     )
+
+
+# ---------------------------------------------------------------------------
+# Environment-answered mode defaults — suite-wide quarantine, same class as the
+# real-home quarantine above.
+#
+# `MODE_KEYS` entries may declare an `environment_default` (see
+# `coordinator_core.session.mode_resolution`). `compaction_warnings` does: it
+# answers `informational` on a box that is not the developer's own, because the
+# `standard` variant recommends `/handoff` and that ceremony does not exist
+# there. Correct behaviour, and it makes an AMBIENT MACHINE FACT load-bearing
+# for every test asserting anything downstream of that key.
+#
+# Left unpinned, such a test passes on an attended box and fails in a cloud
+# session while naming neither — the same shape as the `HOME` leak this file
+# was written for, and just as invisible. Measured 2026-09-05: eleven
+# `coordinator_core/hooks` tests, none of which mentioned locality.
+#
+# Pinned to ABSTAIN, so the static default governs and tests reproduce
+# attended-box behaviour by default. A test exercising the environment leg
+# re-patches this itself and says so in its own name.
+#
+# SCOPE LIMIT, LOAD-BEARING: a `monkeypatch` does not cross a process
+# boundary. A test that spawns the real hook (see
+# `coordinator_core/tests/test_fleet_mode_process_boundary.py`) is NOT covered
+# here and must state the value it wants in the subprocess's own inputs —
+# never rely on "no fleet file" meaning `standard`.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _pin_environment_answered_mode_defaults(monkeypatch):
+    try:
+        monkeypatch.setattr(
+            "coordinator_core.session.mode_resolution."
+            "_compaction_default_for_environment",
+            lambda: None,
+        )
+    except (ImportError, AttributeError):  # pragma: no cover - import-order safety
+        pass

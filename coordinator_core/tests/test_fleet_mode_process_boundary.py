@@ -417,11 +417,25 @@ def test_leg1_real_door_write_and_leg3_no_session_traffic(tmp_path, real_home, e
 
 def test_leg2_real_hook_subprocess_reflects_fleet_value(tmp_path, real_home, engine_check):
     """Execute the converted turn-boundary hook entry point AS A SUBPROCESS
-    with a harness-shaped JSON payload on stdin, once with no fleet file
-    and once with ``compaction_warnings: informational`` set, and assert
-    its STDOUT differs in the declared way. A same-process call into
+    with a harness-shaped JSON payload on stdin, once with
+    ``compaction_warnings: standard`` and once with ``informational``, and
+    assert its STDOUT differs in the declared way. A same-process call into
     ``postuse_advisory_dispatch`` cannot establish this half of clause 1 --
     see this module's own docstring.
+
+    BOTH ARMS STATE THEIR VALUE EXPLICITLY, and the `standard` arm must not
+    revert to "no fleet file". `compaction_warnings` carries an
+    ``environment_default`` that answers `informational` on a box that is not
+    the developer's own, so an absent fleet file no longer implies `standard`:
+    on a cloud box both arms would resolve identically and this test would fail
+    claiming the fleet file does not cross the process boundary, when in fact
+    it does. The in-process suite pins that leg in a conftest, but a
+    ``monkeypatch`` DOES NOT CROSS A PROCESS BOUNDARY -- this test spawns the
+    real hook, so its only defence is stating both values in the subprocess's
+    own inputs.
+
+    Stating both is also strictly stronger than the original shape: it proves
+    each value reaches a live hook fire, rather than one value plus a default.
     """
     doe_root = _doe_claude_root(real_home)
     if doe_root is None or not doe_root.is_dir():
@@ -479,17 +493,21 @@ def test_leg2_real_hook_subprocess_reflects_fleet_value(tmp_path, real_home, eng
     # A fresh, unique session_id per call: the hook's own durable throttle/
     # bark-once state is keyed by session_id in the platform temp dir, and
     # this test must not depend on -- or trip over -- a prior run's state.
+    (home / "fleet-mode.json").write_text(
+        json.dumps({"compaction_warnings": "standard"}), encoding="utf-8"
+    )
+
     session_a = f"c7leg2a-{uuid.uuid4().hex[:12]}"
     _write_usage(session_a, 48.0)
-    stdout_no_fleet = _run(session_a)
+    stdout_standard = _run(session_a)
 
-    assert stdout_no_fleet.strip(), (
-        "baseline (no fleet file) run produced no advisory at all -- cannot "
-        "prove a difference; expected the standard HANDOFF NOW text at 48% usage "
-        f"against {engine_check['verdict']}"
+    assert stdout_standard.strip(), (
+        "the compaction_warnings=standard run produced no advisory at all -- "
+        "cannot prove a difference; expected the standard HANDOFF NOW text at "
+        f"48% usage against {engine_check['verdict']}"
     )
-    assert "HANDOFF NOW" in stdout_no_fleet
-    assert "INFORMATIONAL" not in stdout_no_fleet
+    assert "HANDOFF NOW" in stdout_standard
+    assert "INFORMATIONAL" not in stdout_standard
 
     (home / "fleet-mode.json").write_text(
         json.dumps({"compaction_warnings": "informational"}), encoding="utf-8"
@@ -499,9 +517,9 @@ def test_leg2_real_hook_subprocess_reflects_fleet_value(tmp_path, real_home, eng
     _write_usage(session_b, 48.0)
     stdout_with_fleet = _run(session_b)
 
-    assert stdout_no_fleet != stdout_with_fleet, (
-        "the real hook subprocess's stdout did not change between the no-fleet-"
-        "file baseline and a fleet compaction_warnings=informational run -- the "
+    assert stdout_standard != stdout_with_fleet, (
+        "the real hook subprocess's stdout did not change between a fleet "
+        "compaction_warnings=standard run and an =informational run -- the "
         "fleet file is not reaching a live session's turn-boundary hook fire"
     )
     assert "INFORMATIONAL" in stdout_with_fleet

@@ -426,8 +426,22 @@ passes (``_ARGV0_HEAD_NORMALIZE_NAMES``,
 ``.cmd``-suffixed spellings of ``scoped-git-commit`` are all detected the
 same way ``coordinator-safe-commit`` already was. This is defense-in-depth
 for any agent type NOT already confined by C1's Bash allowlist (an
-allowlist-confined executor/code-reviewer is already denied this shape by
-C1) -- it does not re-engineer C1's confinement.
+allowlist-confined type is already denied this shape by C1) -- it does not
+re-engineer C1's confinement.
+
+CORRECTED 2026-09-06: this parenthetical used to read "an allowlist-confined
+executor/code-reviewer", and the executor half is false. The PM narrowed the
+confined perimeter on 2026-08-02 and
+``docs/plans/2026-08-03-narrow-subagent-commit-confinement-two-classes.md``
+reversed ``coordinator:executor``'s membership in
+``_helpers._CONFINED_FINDINGS_AGENTS``; ``coordinator:code-reviewer`` is the
+sole member of that set AND the sole ``bash_policy:`` key, so the executor is
+confined by no leg. That inverts what this sentence implied about THIS guard:
+a dispatched ``coordinator:executor`` is NOT covered by C1, so this matcher is
+not defense-in-depth for it -- it is the only thing standing between an
+executor and a wrapped ``git commit``, which is the exact bypass
+(``183176e7``, ``edd72e36``) the 2026-08-01 plan was written for. Do not thin
+it on the belief that C1 catches executors first.
 
 Ported from: coordinator_core/bash_guards/nudge_subagent_scoped_commit.py
   (git-commit detection regexes; scoped-pathspec exemption removed).

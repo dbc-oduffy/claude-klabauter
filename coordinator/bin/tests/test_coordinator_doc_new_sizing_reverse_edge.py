@@ -125,7 +125,12 @@ def _tmp_git_repo():
         repo = Path(td) / "testrepo"
         repo.mkdir()
         _init_git_repo(repo)
-        out_path = repo / "custom-out.md"
+        # Must satisfy the sizing schema's own `plan:` pattern (^docs/plans/.+\.md$):
+        # the reverse edge writes this path INTO the sizing object and then validates
+        # it, so a path outside docs/plans/ fails the post-mutation schema check
+        # rather than exercising the branch under test.
+        out_path = repo / "docs" / "plans" / "2026-08-10-reverse-edge-fixture.md"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         yield repo, out_path
 
 
@@ -180,6 +185,152 @@ class MutateSizingReverseEdgeHelperTest(unittest.TestCase):
         with self.assertRaises(MutateAbort) as ctx:
             _cli._mutate_sizing_reverse_edge(old_text, "docs/plans/2026-08-10-example.md")
         self.assertIn("declined", str(ctx.exception))
+
+    def _write_existing_plan(self, repo: Path, deliverable_id: str | None) -> str:
+        """Write a minimal plan file with (or without) `deliverable_id:` and
+        return its repo-relative POSIX path, matching what
+        `_existing_plan_value` on a sizing record names."""
+        plans_dir = repo / "docs" / "plans"
+        plans_dir.mkdir(parents=True, exist_ok=True)
+        existing_plan = plans_dir / "2026-08-01-other.md"
+        body = "---\ntitle: Other plan\n"
+        if deliverable_id is not None:
+            body += f'deliverable_id: "{deliverable_id}"\n'
+        body += "---\n\n# Other plan\n"
+        existing_plan.write_text(body)
+        return "docs/plans/2026-08-01-other.md"
+
+    def test_fan_out_with_differing_deliverable_id_is_permitted_and_plan_untouched(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            existing_plan_rel = self._write_existing_plan(repo, "dlv-existing-aaaaaa")
+            old_text = _sizing_yaml("routed", f'"{existing_plan_rel}"')
+            new_text = _cli._mutate_sizing_reverse_edge(
+                old_text,
+                "docs/plans/2026-08-10-example.md",
+                "dlv-incoming-bbbbbb",
+                str(repo),
+            )
+            # `plan:` is left naming the FIRST plan, unchanged — the fan-out
+            # relaxes the refusal, never the clobber guard.
+            self.assertIn(f'plan: "{existing_plan_rel}"', new_text)
+            self.assertNotIn("docs/plans/2026-08-10-example.md", new_text)
+            self.assertIn("status: routed", new_text)
+
+    def test_same_deliverable_id_is_still_refused_as_a_reroute(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            existing_plan_rel = self._write_existing_plan(repo, "dlv-shared-cccccc")
+            old_text = _sizing_yaml("routed", f'"{existing_plan_rel}"')
+            from coordinator_core.locked_write import MutateAbort
+
+            with self.assertRaises(MutateAbort) as ctx:
+                _cli._mutate_sizing_reverse_edge(
+                    old_text,
+                    "docs/plans/2026-08-10-example.md",
+                    "dlv-shared-cccccc",
+                    str(repo),
+                )
+            self.assertIn(existing_plan_rel, str(ctx.exception))
+
+    def test_unresolvable_because_existing_plan_file_is_missing_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            existing_plan_rel = "docs/plans/2026-08-01-does-not-exist.md"
+            old_text = _sizing_yaml("routed", f'"{existing_plan_rel}"')
+            from coordinator_core.locked_write import MutateAbort
+
+            with self.assertRaises(MutateAbort) as ctx:
+                _cli._mutate_sizing_reverse_edge(
+                    old_text,
+                    "docs/plans/2026-08-10-example.md",
+                    "dlv-incoming-bbbbbb",
+                    str(repo),
+                )
+            self.assertIn(existing_plan_rel, str(ctx.exception))
+
+    def test_unresolvable_because_existing_plan_has_no_deliverable_id_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            existing_plan_rel = self._write_existing_plan(repo, None)
+            old_text = _sizing_yaml("routed", f'"{existing_plan_rel}"')
+            from coordinator_core.locked_write import MutateAbort
+
+            with self.assertRaises(MutateAbort) as ctx:
+                _cli._mutate_sizing_reverse_edge(
+                    old_text,
+                    "docs/plans/2026-08-10-example.md",
+                    "dlv-incoming-bbbbbb",
+                    str(repo),
+                )
+            self.assertIn(existing_plan_rel, str(ctx.exception))
+
+    def _write_existing_plan_with_raw_deliverable_id(self, repo: Path, raw_value: str) -> str:
+        """Write a minimal plan file with `deliverable_id:` set to a literal,
+        unquoted frontmatter value (e.g. a bare YAML null) rather than the
+        quoted-string form `_write_existing_plan` produces."""
+        plans_dir = repo / "docs" / "plans"
+        plans_dir.mkdir(parents=True, exist_ok=True)
+        existing_plan = plans_dir / "2026-08-01-other.md"
+        body = f"---\ntitle: Other plan\ndeliverable_id: {raw_value}\n---\n\n# Other plan\n"
+        existing_plan.write_text(body)
+        return "docs/plans/2026-08-01-other.md"
+
+    def test_unresolvable_because_existing_plan_deliverable_id_is_explicit_null_is_refused(self):
+        """A cited plan carrying literal `deliverable_id: null` must degrade
+        to unresolvable, not the truthy string "null" — see
+        `_resolve_plan_deliverable_id`'s docstring on explicit-null."""
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            existing_plan_rel = self._write_existing_plan_with_raw_deliverable_id(repo, "null")
+            old_text = _sizing_yaml("routed", f'"{existing_plan_rel}"')
+            from coordinator_core.locked_write import MutateAbort
+
+            with self.assertRaises(MutateAbort) as ctx:
+                _cli._mutate_sizing_reverse_edge(
+                    old_text,
+                    "docs/plans/2026-08-10-example.md",
+                    "dlv-incoming-bbbbbb",
+                    str(repo),
+                )
+            self.assertIn(existing_plan_rel, str(ctx.exception))
+
+    def test_unresolvable_because_existing_plan_deliverable_id_is_blank_is_refused(self):
+        """A cited plan carrying a whitespace/empty `deliverable_id:` value
+        must also degrade to unresolvable, not an empty-but-truthy string."""
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            existing_plan_rel = self._write_existing_plan_with_raw_deliverable_id(repo, "")
+            old_text = _sizing_yaml("routed", f'"{existing_plan_rel}"')
+            from coordinator_core.locked_write import MutateAbort
+
+            with self.assertRaises(MutateAbort) as ctx:
+                _cli._mutate_sizing_reverse_edge(
+                    old_text,
+                    "docs/plans/2026-08-10-example.md",
+                    "dlv-incoming-bbbbbb",
+                    str(repo),
+                )
+            self.assertIn(existing_plan_rel, str(ctx.exception))
+
+    def test_unresolvable_because_incoming_deliverable_id_is_none_is_refused(self):
+        """The existing plan resolves fine; it's the INCOMING id that is
+        unresolvable (mirrors a caller that could not mint one) — still
+        conservative, still refused."""
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            existing_plan_rel = self._write_existing_plan(repo, "dlv-existing-aaaaaa")
+            old_text = _sizing_yaml("routed", f'"{existing_plan_rel}"')
+            from coordinator_core.locked_write import MutateAbort
+
+            with self.assertRaises(MutateAbort) as ctx:
+                _cli._mutate_sizing_reverse_edge(
+                    old_text,
+                    "docs/plans/2026-08-10-example.md",
+                    None,
+                    str(repo),
+                )
+            self.assertIn(existing_plan_rel, str(ctx.exception))
 
 
 class SizingTerminalStatusMirrorSyncTest(unittest.TestCase):
@@ -245,6 +396,47 @@ class FullCliReverseEdgeClobberGuardTest(unittest.TestCase):
             self.assertEqual(sizing_file.read_text(), original_text)
 
 
+class FullCliReverseEdgeFanOutTest(unittest.TestCase):
+    """A second plan citing one sizing object, minting a DIFFERENT
+    `deliverable_id`, is a shape->roadmap fan-out: permitted, and the
+    sizing's `plan:` still names the FIRST plan afterwards -- covers the
+    call-site wiring of `_resolved_deliverable_id` into
+    `_write_sizing_reverse_edge`, not just the helper in isolation."""
+
+    def test_second_plan_with_different_deliverable_id_is_permitted_and_first_plan_kept(self):
+        with _tmp_git_repo() as (repo, _unused_out):
+            sizing_dir = repo / "state" / "sizings"
+            sizing_dir.mkdir(parents=True)
+            sizing_file = sizing_dir / "2026-08-10-example.yaml"
+            sizing_file.write_text(_sizing_yaml("sized", "null"))
+            sizing_rel = "state/sizings/2026-08-10-example.yaml"
+
+            (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+            first_out = repo / "docs" / "plans" / "2026-08-10-first-baton.md"
+            second_out = repo / "docs" / "plans" / "2026-08-10-second-baton.md"
+
+            first_result = _run_cli(repo, first_out, "First baton plan", sizing_rel)
+            self.assertEqual(first_result.returncode, 0, first_result.stderr)
+            self.assertTrue(first_out.exists())
+
+            sizing_after_first = yaml.safe_load(sizing_file.read_text())
+            first_plan_rel = first_out.relative_to(repo).as_posix()
+            self.assertEqual(sizing_after_first.get("plan"), first_plan_rel)
+            self.assertEqual(sizing_after_first.get("status"), "routed")
+
+            # Distinct titles -> distinct minted `deliverable_id`s (mint-
+            # from-slug path), which is what makes this a fan-out rather
+            # than a re-route of the same deliverable.
+            second_result = _run_cli(repo, second_out, "Second baton plan, a distinct deliverable", sizing_rel)
+            self.assertEqual(second_result.returncode, 0, second_result.stderr)
+            self.assertTrue(second_out.exists())
+
+            sizing_after_second = yaml.safe_load(sizing_file.read_text())
+            # `plan:` is untouched by the fan-out -- still the FIRST plan.
+            self.assertEqual(sizing_after_second.get("plan"), first_plan_rel)
+            self.assertEqual(sizing_after_second.get("status"), "routed")
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -308,7 +500,7 @@ class SizingReverseEdgeIsClaimedByTheInvokingSessionTest(unittest.TestCase):
             # `custom-out.md` fails validation before the declaration under
             # test is ever reached.
             out_path = repo / "docs" / "plans" / "2026-08-10-reverse-edge-claim.md"
-            out_path.parent.mkdir(parents=True)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
 
             env = dict(os.environ)
             env["COORDINATOR_SESSION_ID"] = sid

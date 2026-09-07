@@ -44,11 +44,36 @@ changed files and re-run only the failing set. Derive current runtime and suite 
 Parallelism is load-bearing, not an optimization: serial cannot complete the fast-tier gate in
 reasonable time. **But bare `-n auto` is unbounded and has killed a session.**
 
-`-n auto` takes the host's PHYSICAL core count with no ceiling. Cap it at:
+`-n auto` takes the host's core count with no ceiling — **physical only when psutil is importable**.
+pytest-xdist 3.8.0 (`xdist/plugin.py::auto_detect_cpus`) tries `psutil.cpu_count(logical=False)`
+first and falls through to `sched_getaffinity`/`os.cpu_count()` when psutil is absent, and both of
+those are *logical*. An earlier revision of this section stated the physical count unconditionally;
+on a psutil-less host that reads about 2x low. Cap it at:
 
 ```
 min(physical_cores / 2, usable_RAM_GB * 1024 / 150MB)
 ```
+
+**That ceiling now resolves per box, at read time.** `cs_resolve_fast_test_cmd`
+(`coordinator_core/resolve_validation_cmd.py`) hands every `-n auto`/`-n logical` command to
+`derive_worker_cap.cap_command_for_this_box`, which sets `--maxprocesses` from
+`compute_parallelism_cap` against the host that is about to run it. `python -m
+coordinator_core.install.derive_worker_cap` prints what this box derives; do not hand-edit the
+number.
+
+The reason it resolves at read time rather than being written down: **`coordinator.local.md` is
+tracked, not per-box.** `git ls-files` finds it and `.gitignore` does not, so its `fast_test_cmd` is
+one committed constant every clone shares — and no single constant is safe across a fleet whose
+derived caps are 12 (24c/96GB workstation), 6 (12c/24GB floor) and 2 (4c/15GB container). Writing
+one box's answer there hands the smaller boxes a 2x–3.5x over-subscription. The committed
+`--maxprocesses` survives as an inert fallback for anything reading the frontmatter raw, and for a
+host whose hardware cannot be read at all.
+
+The psutil condition applies to the ceiling as well as the request: `default_physical_cores()`
+(`coordinator_core/benchmarks/concurrency_probe.py`) has the same import and the same fallback, so
+both halves move together. With psutil, a 4-core/15GB container asks for 4 and is capped to 2. With
+it absent, the same container asks for 8 and is capped to 4 — over-subscribed 2x, and the residual
+is the fallback's, not the ceiling's.
 
 The halving is not a fudge factor: this tier spawns subprocesses per worker (several live
 processes per xdist worker), so one worker per core oversubscribes the CPU several-fold — the

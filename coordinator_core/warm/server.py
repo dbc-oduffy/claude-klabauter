@@ -1540,13 +1540,21 @@ def _create_pipe_instance(name: str, sid: str) -> int:
     import ctypes
     import _winapi
 
-    from coordinator_core.warm.election import _build_security_attributes
+    # `_PIPE_READMODE_BYTE` is imported, never redefined: `election` carries
+    # the argument and the 8192-byte `-32004` defect it closes, and this site
+    # and `election.elect`'s first-instance creation must not drift. Imported
+    # inside the function for the same reason `_build_security_attributes` is
+    # -- this module is on the resident server's path, not on a caller's.
+    from coordinator_core.warm.election import (
+        _PIPE_READMODE_BYTE,
+        _build_security_attributes,
+    )
 
     security_attributes = _build_security_attributes(sid)
     return _winapi.CreateNamedPipe(
         name,
         _winapi.PIPE_ACCESS_DUPLEX,
-        _winapi.PIPE_TYPE_MESSAGE | _winapi.PIPE_READMODE_MESSAGE | _winapi.PIPE_WAIT,
+        _winapi.PIPE_TYPE_MESSAGE | _PIPE_READMODE_BYTE | _winapi.PIPE_WAIT,
         _winapi.PIPE_UNLIMITED_INSTANCES,
         _PIPE_BUFFER_BYTES,
         _PIPE_BUFFER_BYTES,
