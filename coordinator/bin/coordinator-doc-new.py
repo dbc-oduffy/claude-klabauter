@@ -3684,12 +3684,38 @@ def _scaffold_plan(
         "# scope:",
         "#   - path/or/item/one",
         "#   - path/or/item/two",
-        "# prime_exit_criterion:              # falsifier block — read-side owed only at",
-        "#                                     # estimate.tshirt M/L/XL; scaffold time can't",
-        "#                                     # know that, so this stays commented, not a",
-        "#                                     # live stub (schema 2.8.0, plan.schema.json)",
-        "#   statement:                       # one falsifiable sentence",
-        "#   derived_from:                    # state/sizings/<id>.yaml OR <goal_id>#kr-<kr-id>",
+        # `prime_exit_criterion` — the CRITERION emitted LIVE with placeholder
+        # markers; the FALSIFIER stays commented. The two were previously one
+        # commented block on the reasoning that the falsifier is read-side owed
+        # only at estimate.tshirt M/L/XL and scaffold time cannot know the size.
+        # That is true of the falsifier and false of the criterion: the mise-prep
+        # bar wants `statement` + `derived_from` at EVERY size, so commenting the
+        # whole block left every plan born failing PRIME_EXIT — the same defect
+        # `census` was fixed for directly below, measured at 0 of 273 plans
+        # carrying the key.
+        #
+        # A live placeholder was previously refused here because it would "clear
+        # the gate without meaning anything". It no longer can:
+        # `coordinator_core.roadmap.prep_gate.is_placeholder` refuses
+        # `<REPLACE: ...>` in either field and reports `prime-exit-placeholder`,
+        # distinct from `prime-exit-absent`, because the repairs differ. So the
+        # key is present and visibly unanswered rather than absent and
+        # invisible — the author fills a field they can see instead of
+        # remembering one they cannot. Row text is byte-parity with the other
+        # producer of this block, DoE's `coordinator/templates/plans/plan.md.tmpl`.
+        "prime_exit_criterion:",
+        "  statement: >-",
+        "    <REPLACE: one falsifiable sentence naming what is true of the TREE when this plan",
+        "    has delivered — outcome-shaped, never a paraphrase of the task list.>",
+        # QUOTED, unlike the block-scalar `statement` above. `<REPLACE: ...>` is a
+        # plain scalar containing ": ", which YAML refuses outright — an unquoted
+        # marker here does not merely read oddly, it makes the whole frontmatter
+        # unparseable, and every downstream reader (this gate included) sees a
+        # plan with NO frontmatter rather than one with an unanswered field.
+        '  derived_from: "<REPLACE: state/sizings/<file>.yaml | <goal_id>#kr-<kr-id> — a LINK>"',
+        "# falsifier: {how, baseline_output, baseline_ref, expected_when_true} — REQUIRED only",
+        "#   when this plan's sizing_object resolves to estimate.tshirt M/L/XL. The criterion",
+        "#   above is owed at EVERY size; that size rule governs the falsifier, never it.",
         "#   falsifier:",
         "#     how:",
         "#     baseline_output:",

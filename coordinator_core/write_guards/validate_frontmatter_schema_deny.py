@@ -78,6 +78,22 @@ What this leg covers
   is reversible, the refusal was document-wide for a row-scoped condition,
   and it burned whole dispatches for zero written bytes. The obligation is
   unchanged; only the write-time refusal is gone. See `_first_result`.
+- A second always-WARN finding, shape=="warn", emitted by this module in
+  both modes: an UNPARSEABLE frontmatter block (the document opens a
+  ``---`` block, closes it, and the block is not valid YAML). It is a
+  stand-down seam turned into a finding: with no parseable frontmatter
+  there is no ``type`` to match a schema on, so ``_match_schema`` returns
+  nothing and BOTH this module and the advisory sibling used to fall
+  silent — the write landed, and every downstream reader
+  (``split_frontmatter`` + ``yaml.safe_load``, the fleet's ordinary record
+  read path) then saw the file as having NO frontmatter rather than as a
+  record whose keys failed to parse. Rendered "warn" for the same reason
+  the grouping-approval finding is: the advisory sibling stands down for
+  the whole no-match seam unconditionally, so "advisory" would mean
+  neither module reports it in default mode. See
+  `_malformed_frontmatter_detail` for the two false positives it is
+  explicitly built not to produce (no block at all; a legal multi-document
+  body).
 - Every other branch is now always-"advisory" (2026-08-06 ruling): the
   mislocated-memo / free-form-header offer, the routing-mismatch offer, the
   new-file scaffold offer, and a schema-shape validation failure. This
@@ -133,6 +149,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
 
+import yaml
+
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.dag import check_lineage_reachability as _check_lineage_reachability
 from coordinator_core.frontmatter.baton_class import (
@@ -141,6 +159,7 @@ from coordinator_core.frontmatter.baton_class import (
 )
 from coordinator_core.frontmatter.body_blocks import LocateStatus as _LocateStatus
 from coordinator_core.frontmatter.body_blocks import locate_fenced_block as _locate_fenced_block
+from coordinator_core.frontmatter.primitives import split_frontmatter as _split_frontmatter
 from coordinator_core.git.repo_root import show_toplevel as _git_show_toplevel
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 from coordinator_core.win_portability import no_console_creationflags
@@ -681,6 +700,73 @@ def _violation_message(schema_name: str, errors: "list[dict]") -> str:
         hint = f"; required shape: {e['hint']}" if e.get("hint") else ""
         parts.append(f"{field}: {e.get('error')}{hint}")
     return f"{schema_name}: {'; '.join(parts)}"
+
+
+def _malformed_frontmatter_detail(content: str) -> Optional[str]:
+    """Return a one-line YAML-error summary when ``content`` OPENS a
+    frontmatter block whose YAML does not parse, else ``None``.
+
+    This is the author-error half of the no-schema-match stand-down; every
+    other reason `_match_schema` returns nothing (plain prose, an unvendored
+    doc type, a record whose `type` no schema claims) must keep returning
+    ``None`` here. Three cases are deliberately NOT reported:
+
+    - **No frontmatter block at all.** `split_frontmatter` returns ``None``
+      for content that does not open a ``---`` block after its optional
+      blank/HTML-comment preamble. Plain prose is the majority of what this
+      guard sees; a guard that fires on it is noise, not enforcement.
+    - **An UNCLOSED block.** `split_frontmatter` also returns ``None`` when
+      no closing ``---`` is found, and that stays a non-finding: a markdown
+      file whose first line is a ``---`` horizontal rule is
+      indistinguishable from a truncated block, and the false positive is
+      the more common shape.
+    - **A legal MULTI-DOCUMENT record.** ``safe_load_all`` is used, never
+      ``safe_load``, so a stream of ``---``-separated documents parses
+      cleanly instead of raising ``ComposerError`` ("expected a single
+      document"). That single substitution is the difference between a
+      finding and a mass false positive: run against the fleet corpus, the
+      ``safe_load`` shape over-reported by 595 files. The extraction is
+      block-scoped as well (``split.fm_text`` ends at the block's own
+      closing ``---``), so ``---`` fences in the BODY are never fed to the
+      parser at all.
+
+    Parser choice is not incidental: ``yaml.safe_load`` is what the fleet's
+    ordinary record readers use (`split_frontmatter` + ``safe_load``, see
+    e.g. ``ops/handoff_carry_gate.py``, ``ops/cutover_gate.py``), so its
+    verdict — not this repo's own lenient `parse_yaml` port, which skips
+    lines it cannot read rather than raising — is what decides whether a
+    landed record has keys or is invisible.
+
+    Only ``yaml.YAMLError`` is a finding. Anything else (an unreadable
+    input, an internal error in the splitter) propagates to the caller's
+    fail-open: this guard never blocks or warns because its own machinery
+    broke.
+    """
+    split = _split_frontmatter(content)
+    if split is None:
+        return None
+    try:
+        for _ in yaml.safe_load_all(split.fm_text):
+            pass
+    except yaml.YAMLError as err:
+        kind = type(err).__name__
+        problem = getattr(err, "problem", None) or str(err).split("\n")[0]
+        mark = getattr(err, "problem_mark", None)
+        if mark is not None:
+            # `mark.line` is 0-based and relative to the frontmatter block;
+            # the block's own opening `---` is line 1 of the file, so +2
+            # lands on the file line the author is looking at.
+            return f"{kind}, line {mark.line + 2}: {problem}"
+        return f"{kind}: {problem}"
+    return None
+
+
+def _malformed_frontmatter_message(repo_rel: str, detail: str) -> str:
+    return (
+        f"{repo_rel}: frontmatter block does not parse as YAML — {detail}. "
+        "Readers of this record see no frontmatter at all, not a record with "
+        "keys. Fix the YAML, or drop the --- block if this file is prose."
+    )
 
 
 def _reachability_deny_message(violations: "list[dict]") -> str:
@@ -1725,6 +1811,24 @@ def _first_result(
     except Exception:  # noqa: BLE001 — fail-open
         match = None
     if not match:
+        # Second always-WARN finding (see module docstring): the write opens
+        # a frontmatter block that does not parse. That is precisely WHY no
+        # schema matched — there are no keys to match a doc type on — so
+        # this seam is the only place it can be caught, and returning None
+        # here is how 43 records across two repos landed with frontmatter
+        # every downstream reader sees as absent. Scoped to the no-match
+        # branch on purpose: when a schema DOES match, the existing
+        # `(missing frontmatter)` schema-validation finding already reports
+        # it and the advisory sibling renders it, so firing here too would
+        # break mutual exclusivity. On this branch the sibling stands down
+        # unconditionally (`if not match: return None` in its own walk), so
+        # exactly one module speaks.
+        try:
+            yaml_detail = _malformed_frontmatter_detail(prospective_content)
+        except Exception:  # noqa: BLE001 — fail-open, never block on infra
+            yaml_detail = None
+        if yaml_detail is not None:
+            return ("warn", _malformed_frontmatter_message(repo_rel, yaml_detail))
         if _forensics is not None:
             try:
                 gap_doc_type = _unvendored_offerable_doc_type(ctx, schemas, frontmatter, repo_rel)

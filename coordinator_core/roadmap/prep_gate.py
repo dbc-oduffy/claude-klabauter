@@ -141,6 +141,31 @@ FLEET_REPOS = (
 #: can answer it.
 CENSUS_ENTRY_KEYS = ("question", "command", "result")
 
+#: Scaffold placeholders. A key whose value is still the generator's marker is
+#: PRESENT and NON-BLANK, so every predicate here that tests "non-empty" would
+#: pass it — which is the one way a live-emitted stub could clear this bar
+#: without an author ever having answered it. That is the form-filling failure
+#: the bar exists to prevent, so the markers are named and refused.
+#:
+#: This is what lets the PRODUCER emit `prime_exit_criterion` live (as
+#: `coordinator/templates/plans/plan.md.tmpl` already does) instead of commented
+#: out: a plan is then born with the key present and visibly unanswered, and the
+#: gate still refuses it until it is answered. Key-absent and key-placeholder are
+#: reported as different defects because the repairs differ — one adds a key, the
+#: other replaces a marker.
+PLACEHOLDER_MARKERS = ("<REPLACE:", "<replace:", "REPLACE ME", "TODO:", "TBD")
+
+
+def is_placeholder(value: Any) -> bool:
+    """True when ``value`` is still a scaffold marker rather than an answer.
+
+    Substring, not prefix: a marker survives YAML block-scalar folding with
+    leading whitespace and trailing prose around it.
+    """
+    if not isinstance(value, str):
+        return False
+    return any(marker in value for marker in PLACEHOLDER_MARKERS)
+
 
 # ---------------------------------------------------------------------------
 # Per-corpus inputs
@@ -271,6 +296,10 @@ def _census(fm: Dict[str, Any]) -> Dict[str, Any]:
         missing = [k for k in CENSUS_ENTRY_KEYS if not str(entry.get(k) or "").strip()]
         if missing:
             bad.append(f"[{index}] missing {', '.join(missing)}")
+            continue
+        unanswered = [k for k in CENSUS_ENTRY_KEYS if is_placeholder(entry.get(k))]
+        if unanswered:
+            bad.append(f"[{index}] scaffold placeholder in {', '.join(unanswered)}")
     if bad:
         return _defect("census-incomplete", "; ".join(bad))
     if not entries:
@@ -443,10 +472,22 @@ def _prime_exit(fm: Dict[str, Any]) -> Dict[str, Any]:
         )
     if not str(criterion.get("statement") or "").strip():
         return _defect("prime-exit-empty", "prime_exit_criterion carries no statement")
+    if is_placeholder(criterion.get("statement")):
+        return _defect(
+            "prime-exit-placeholder",
+            "prime_exit_criterion.statement is still a scaffold placeholder "
+            "(replace the <REPLACE: ...> marker with the falsifiable sentence)",
+        )
     if not str(criterion.get("derived_from") or "").strip():
         return _defect(
             "prime-exit-underived",
             "prime_exit_criterion has no derived_from (a link, not a self-declaration)",
+        )
+    if is_placeholder(criterion.get("derived_from")):
+        return _defect(
+            "prime-exit-placeholder",
+            "prime_exit_criterion.derived_from is still a scaffold placeholder "
+            "(replace it with the sizing object or goal KR it derives from)",
         )
     return _pass("declared")
 
@@ -563,6 +604,16 @@ def refusal_message(
         lines.append(f"  {key:<14} {value['detail']}")
     if verdict == REFUSED:
         lines.append("  route: PM, not the plan author.")
+    else:
+        # NOT-PREPPED only. A plan authored before this bar existed is missing
+        # keys its generator never emitted, and the repair is mechanical for the
+        # part that is derivable from the plan's own body. Naming the converter
+        # here is what stops each session rediscovering it — a runnable script,
+        # never a slash command, because what fails here may have no session.
+        lines.append(
+            "  fix: python coordinator/bin/mise-prep-upgrade.py <plan>  "
+            "(derives what the body already declares; never invents a census or a criterion)"
+        )
     return "\n".join(lines)
 
 

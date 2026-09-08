@@ -2000,3 +2000,128 @@ class TestQueueDeferralLayersAgree:
             f"advisory mirror disagrees with the deny for {value!r}: "
             f"fires={mirror_fires} deny={deny!r}"
         )
+
+
+class TestUnparseableFrontmatterWarns:
+    """A document that OPENS a frontmatter block whose YAML does not parse
+    is a FINDING, not a stand-down.
+
+    The seam: with no parseable frontmatter there is no doc `type` to match
+    a schema on, `_match_schema` returns nothing, and both siblings used to
+    fall silent — the write landed and every downstream reader
+    (`split_frontmatter` + `yaml.safe_load`) then saw the file as having no
+    frontmatter at all rather than as a record whose keys failed to parse.
+    43 such records exist across two repos, each one written past this
+    guard.
+
+    The three ways this could become a menace instead of a guard are
+    covered below as first-class cases: prose with no block, a legal
+    multi-document body, and an infrastructure failure in the guard's own
+    machinery.
+    """
+
+    _MALFORMED = (
+        "---\n"
+        "title: t\n"
+        "summary: [unclosed\n"
+        "created: 2026-09-08\n"
+        "---\n"
+        "body\n"
+    )
+
+    def _unmatched_path(self, tmp_path, name):
+        """A path no vendored schema claims — the stand-down seam itself.
+        (On a schema-MATCHING path the existing `(missing frontmatter)`
+        schema-validation finding already fires and the advisory sibling
+        renders it; this branch is scoped to the no-match case so exactly
+        one module ever speaks.)
+        """
+        docs = tmp_path / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        return docs / name
+
+    @pytest.mark.parametrize("strict", ["0", "1"])
+    def test_unparseable_frontmatter_produces_a_finding(self, tmp_path, monkeypatch, strict):
+        if strict == "1":
+            monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        target = self._unmatched_path(tmp_path, "malformed.md")
+        payload = _payload("Write", str(target), str(tmp_path), content=self._MALFORMED)
+
+        result = guard.check(payload)
+        assert result is not None, "unparseable frontmatter must not stand down"
+        rendered = _assert_advisory_shape(result)
+        assert "does not parse as YAML" in rendered
+        # The author cannot fix what the message does not name: kind + line.
+        assert "ParserError" in rendered
+        assert "line 4" in rendered, rendered
+        assert "docs/malformed.md" in rendered
+        # Warn, never block — 2026-08-06 ruling; and the sibling stands down.
+        assert "permissionDecision" not in result["hookSpecificOutput"]
+        assert advisory_guard.check(payload) is None, "advisory must stand down in lockstep"
+
+    def test_file_with_no_frontmatter_block_produces_nothing(self, tmp_path):
+        for content in (
+            "# hello\n\njust prose\n",
+            "# hello\n\nprose with a --- rule\n\n---\n\nmore prose\n",
+            "---\n\nan opening rule that never closes\n",
+        ):
+            target = self._unmatched_path(tmp_path, "prose.md")
+            payload = _payload("Write", str(target), str(tmp_path), content=content)
+            assert guard.check(payload) is None, content
+            assert advisory_guard.check(payload) is None, content
+
+    def test_legal_multi_document_record_produces_nothing(self, tmp_path):
+        """The 595-file overcount shape: `yaml.safe_load` over content
+        carrying more than one `---`-separated document raises
+        ComposerError. Legal YAML is not a finding.
+        """
+        content = (
+            "---\n"
+            "title: t\n"
+            "type: notes\n"
+            "---\n"
+            "\n"
+            "body\n"
+            "\n"
+            "---\n"
+            "foo: 1\n"
+            "---\n"
+            "\n"
+            "more\n"
+        )
+        # Proves the payload really is the trap shape, not a benign file.
+        with pytest.raises(yaml.composer.ComposerError):
+            yaml.safe_load(content)
+
+        target = self._unmatched_path(tmp_path, "multi.md")
+        payload = _payload("Write", str(target), str(tmp_path), content=content)
+        assert guard.check(payload) is None
+        assert advisory_guard.check(payload) is None
+        assert guard._malformed_frontmatter_detail(content) is None
+
+    def test_multi_document_frontmatter_block_is_not_a_finding(self, tmp_path):
+        """Same property asserted directly on the detector, on a block that
+        `safe_load` would reject and `safe_load_all` accepts.
+        """
+        assert guard._malformed_frontmatter_detail("---\na: 1\n") is None
+
+    def test_infrastructure_failure_still_fails_open(self, tmp_path, monkeypatch):
+        """Only the AUTHOR's malformed YAML is a finding. When the guard's
+        own machinery raises, it stays silent — never a warning, never a
+        block, on infra.
+        """
+        target = self._unmatched_path(tmp_path, "malformed.md")
+        payload = _payload("Write", str(target), str(tmp_path), content=self._MALFORMED)
+        assert guard.check(payload) is not None, "precondition: this payload does fire"
+
+        def _boom(_content):
+            raise RuntimeError("splitter exploded")
+
+        monkeypatch.setattr(guard, "_split_frontmatter", _boom)
+        assert guard.check(payload) is None, "an internal error must fail open"
+
+        def _unreadable(_content):
+            raise OSError("cannot read")
+
+        monkeypatch.setattr(guard, "_split_frontmatter", _unreadable)
+        assert guard.check(payload) is None, "an I/O error must fail open"

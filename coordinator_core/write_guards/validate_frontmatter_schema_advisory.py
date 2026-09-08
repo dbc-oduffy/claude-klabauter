@@ -1561,6 +1561,13 @@ def check(payload: dict) -> Optional[dict]:
 
     match = match_schema(repo_rel, frontmatter, schemas)
     if not match:
+        # Unconditional stand-down, and it stays that way. One sub-case of
+        # this seam — a frontmatter block that OPENS and does not parse —
+        # is no longer silent: the deny sibling renders it as an always-WARN
+        # finding in both modes (`_malformed_frontmatter_detail` there), the
+        # same ownership shape as the grouping-approval warning below. Do not
+        # "restore symmetry" by re-deriving that finding here;
+        # `test_at_most_one_sibling_fires_per_payload` would red on it.
         return None
 
     schema_name = match.get("schemaName")
