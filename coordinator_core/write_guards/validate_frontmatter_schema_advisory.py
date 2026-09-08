@@ -109,7 +109,6 @@ from coordinator_core.write_guards.validate_frontmatter_schema_deny import (
 )
 from coordinator_core.dag import check_lineage_reachability as _check_lineage_reachability
 from coordinator_core.frontmatter.baton_class import canonical_kind as _canonical_kind
-from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.frontmatter.schema_validate import (
     _apply_cross_field_rules,
     _is_parseable_iso_date,
@@ -121,6 +120,7 @@ from coordinator_core.frontmatter.schema_validate import (
     match_schema,
     parse_frontmatter,
     parse_yaml,
+    plan_tasks_spine_integrity as _plan_tasks_spine_integrity,
     validate_frontmatter_obj,
 )
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
@@ -862,11 +862,16 @@ def _plan_tasks_spine_errors(
     schema, closing change_kind/disposition/queue_scope (and any future
     field) in one pass.
 
-    Fail-open at every seam (missing plan-tasks schema, unparseable YAML) ->
-    []. Two LocateResult statuses are deliberately silent, not findings:
-      - ABSENT (no spine yet) — legitimate mid-authoring state.
-      - MALFORMED (>1 fence, or a heading with no fence in its section) —
-        plan-coverage-checker's fail-loud, not duplicated here.
+    Fail-open on a missing plan-tasks schema -> []. Locating and parsing the
+    block, and every defect that is not per-row, now belong to
+    `schema_validate.plan_tasks_spine_integrity`, which both siblings call:
+      - ABSENT (no spine yet) is still silent — legitimate mid-authoring state.
+      - MALFORMED (>1 fence, or no fence under `## Tasks`) and an unparseable
+        block are FINDINGS as of 2026-09-08. They were silent, delegated to
+        plan-coverage-checker — an EM-dispatched review-time subagent with no
+        Edit tool, so it never saw a write, and a plan edited after review was
+        covered by nothing. Enforcement was inverted: one row with a bad enum
+        was reported, a spine no consumer could read at all was not.
 
     Reference: DoE-claude coordinator/hooks/scripts/validate-frontmatter-schema.py
     (`_plan_tasks_spine_errors`) — kept as an honest parity copy there, but
@@ -889,28 +894,17 @@ def _plan_tasks_spine_errors(
     if not isinstance(plan_tasks_schema, dict):
         return []
 
-    try:
-        result = locate_fenced_block(prospective_content)
-    except Exception:  # noqa: BLE001 — fail-open, never block on infra
-        return []
-    if result.status != LocateStatus.LOCATED or result.body is None:
-        return []
-
-    try:
-        parsed = parse_yaml(result.body)
-    except Exception as err:  # noqa: BLE001 — mirrors the whole-document-yaml catch below
-        return [{
-            "field": "(plan-tasks parse error)",
-            "error": f"YAML parse error: {err}",
-            "hint": "Ensure the ```yaml plan-tasks block is a valid YAML list of task rows",
-        }]
-
-    if not isinstance(parsed, list):
-        return [{
-            "field": "(plan-tasks)",
-            "error": f"expected a YAML list of task rows, got {type(parsed).__name__}",
-            "hint": "Each row is a `- id: ... title: ... change_kind: ... surface: ...` list item",
-        }]
+    # The three defects a per-ROW loop structurally cannot see (spine not
+    # locatable, block does not parse, depends_on edge onto a row that is not
+    # here). Shared door with the sibling guard, so neither can drift about what
+    # counts as an unreadable spine; ABSENT stays silent there, as it must.
+    # It also hands back the STRICTLY-parsed rows, which is what the row loop
+    # below now validates — this used to run the lenient `parse_yaml` over the same
+    # block, so it both paid a second parse and checked a reconstruction rather
+    # than the document every real spine consumer reads.
+    integrity, parsed = _plan_tasks_spine_integrity(prospective_content)
+    if parsed is None:
+        return integrity
 
     governed = _is_governed_plan(frontmatter) if isinstance(frontmatter, dict) else False
     schema = (
@@ -919,7 +913,7 @@ def _plan_tasks_spine_errors(
         else plan_tasks_schema
     )
 
-    errors: list[dict] = []
+    errors: list[dict] = list(integrity)
     for idx, row in enumerate(parsed):
         row_label = row.get("id") if isinstance(row, dict) and row.get("id") else f"index {idx}"
         if not isinstance(row, dict):
