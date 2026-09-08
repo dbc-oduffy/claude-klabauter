@@ -320,8 +320,148 @@ def check_meta_required_fields(block: str) -> List[Finding]:
 # ---------------------------------------------------------------------------
 
 _PHASE_CALL = re.compile(r"\bphase\s*\(\s*['\"]([^'\"]*)['\"]")
-_META_PHASES_ENTRY = re.compile(r"['\"]([^'\"]*)['\"]")
+# Escape-aware, and aware that `phases:` has TWO shipped shapes. A bare quote-pair
+# scan ("any quote to the next quote") pairs an ESCAPED quote inside a `detail:`
+# string with the wrong partner, and every entry after it shifts by one -- so a phase
+# plainly present is reported as undeclared and fragments of prose are reported as
+# declared titles. A script survives that only by carrying an even number of escaped
+# quotes, which is luck, not a property.
+#
+# Review: code-reviewer (Findings 1-3, major, PR #35 follow-up) -- a per-array-element
+# regex pass (`_META_PHASES_TITLE.finditer(body)` gated by a blanket "if titles: return
+# titles") is the same failure class one layer down: (1) it is all-or-nothing across the
+# WHOLE array, so one object-form entry silently drops every bare-string sibling
+# (Finding 1); (2) it only recognizes `'...'`/`"..."`, so a backtick title is invisible
+# and the bare-string fallback re-admits `detail:` prose as a title (Finding 2); (3) it
+# is a `finditer` over raw text with no comment-stripping and no string-context
+# tracking, so a `title:`-shaped fragment inside a `//` comment, or nested inside a
+# `detail:` string quoted with the OTHER quote character, reads as a genuinely declared
+# title (Finding 3) -- the exact permissive-superset risk this module's own comment
+# above (and the commit this PR follows up on) names. `_scan_meta_phases_body` below
+# replaces both regexes with a single depth- and quote-aware walk: only a string
+# immediately anchored on `title:` is ever read as a title (any of the three quote
+# styles), only a genuinely top-level (object-depth-0) string is ever read as a bare
+# entry, and comment content plus non-title string content is walked over as opaque
+# bytes rather than re-offered to a second regex pass -- so a `title:`-shaped substring
+# that is not real top-level code is structurally unreachable, not merely unmatched.
+_JS_STRING_ESCAPE = re.compile(r"\\(.)")
+_TITLE_KEY_TAIL = re.compile(r"\btitle\s*:\s*\Z")
 _AGENT_OPTIONS_PHASE = re.compile(r"\bphase\s*:\s*['\"]([^'\"]*)['\"]")
+
+
+def _strip_comments_keep_strings(text: str) -> str:
+    """Return `text` with `//` and `/* */` comment content (delimiters
+    included) replaced by spaces, newlines preserved, and every string span
+    (single/double/backtick, escape-aware) left completely verbatim.
+
+    Mirrors `scrub()`'s escape-aware quote handling but inverts what gets
+    masked: `scrub()` masks string CONTENTS for the forbidden-globals/
+    barrier/model-default checks; this masks only comment content, because
+    `_scan_meta_phases_body` (the caller) needs to see actual title/bare
+    string TEXT, just not `title:`-shaped bytes that only exist inside a
+    comment (Finding 3)."""
+    out: List[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+
+        if ch == "/" and nxt == "/":
+            while i < n and text[i] != "\n":
+                out.append(" ")
+                i += 1
+            continue
+
+        if ch == "/" and nxt == "*":
+            out.append(" ")
+            out.append(" ")
+            i += 2
+            while i < n and not (text[i] == "*" and i + 1 < n and text[i + 1] == "/"):
+                out.append(" " if text[i] != "\n" else "\n")
+                i += 1
+            if i < n:
+                out.append(" ")
+                out.append(" ")
+                i += 2
+            continue
+
+        if ch in ("'", '"', "`"):
+            quote = ch
+            out.append(ch)
+            i += 1
+            while i < n and text[i] != quote:
+                if text[i] == "\\" and i + 1 < n:
+                    out.append(text[i])
+                    out.append(text[i + 1])
+                    i += 2
+                    continue
+                out.append(text[i])
+                i += 1
+            if i < n:
+                out.append(quote)
+                i += 1
+            continue
+
+        out.append(ch)
+        i += 1
+
+    return "".join(out)
+
+
+def _scan_meta_phases_body(body: str) -> Set[str]:
+    """Walk a `phases: [...]` array body once, comment- and quote-aware, and
+    return the union of (a) every string immediately anchored on `title:`
+    (any of `'...'`/`"..."`/`` `...` ``, at any brace depth -- an object
+    entry's declared title) and (b) every string that is a genuine top-level
+    (depth-0) array element (a bare-string entry). A non-title string nested
+    inside an object (e.g. `detail:`'s value) is walked over as opaque
+    content and contributes nothing either way -- it is neither a title nor
+    a bare element, so it can no longer leak into the declared set."""
+    clean = _strip_comments_keep_strings(body)
+    titles: Set[str] = set()
+    bare: Set[str] = set()
+    depth = 0
+    i = 0
+    n = len(clean)
+    while i < n:
+        ch = clean[i]
+
+        if ch == "{":
+            depth += 1
+            i += 1
+            continue
+        if ch == "}":
+            depth -= 1
+            i += 1
+            continue
+
+        if ch in ("'", '"', "`"):
+            quote = ch
+            start = i
+            i += 1
+            content_chars: List[str] = []
+            while i < n and clean[i] != quote:
+                if clean[i] == "\\" and i + 1 < n:
+                    content_chars.append(clean[i])
+                    content_chars.append(clean[i + 1])
+                    i += 2
+                    continue
+                content_chars.append(clean[i])
+                i += 1
+            if i < n:
+                i += 1  # consume the closing quote
+            raw = "".join(content_chars)
+            unescaped = _JS_STRING_ESCAPE.sub(r"\1", raw)
+            if _TITLE_KEY_TAIL.search(clean[:start]):
+                titles.add(unescaped)
+            elif depth == 0:
+                bare.add(unescaped)
+            continue
+
+        i += 1
+
+    return titles | bare
 
 
 def phase_titles(source: str) -> Set[str]:
@@ -347,11 +487,19 @@ def agent_options_phase_titles(source: str) -> Set[str]:
 def meta_phase_titles(block: str) -> Set[str]:
     """Return the set of phase titles declared in `meta.phases` within the
     (already-extracted, RAW) meta `block` text. Returns an empty set if no
-    `phases:` array is present."""
+    `phases:` array is present.
+
+    `phases:` has TWO shipped shapes and a single array may freely MIX them
+    (a migration in progress, or one entry hand-expanded to carry a
+    `detail:`) -- so titles are resolved per-element via
+    `_scan_meta_phases_body`, not via an all-or-nothing switch on the whole
+    array: an object-form entry's `title:` value is read regardless of
+    whether a sibling entry is still bare, and a bare-string entry is read
+    regardless of whether a sibling entry has already grown a `detail:`."""
     m = re.search(r"phases\s*:\s*\[([^\]]*)\]", block)
     if not m:
         return set()
-    return {entry.group(1) for entry in _META_PHASES_ENTRY.finditer(m.group(1))}
+    return _scan_meta_phases_body(m.group(1))
 
 
 def check_phase_mismatch(source: str, block: Optional[str]) -> List[Finding]:

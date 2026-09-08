@@ -147,7 +147,14 @@ class TestNegative:
 
     def test_unresolvable_plugin_root_exits_1(self, tmp_path: Path):
         env = dict(os.environ)
-        for key in ("CLAUDE_PLUGIN_ROOT", "COORDINATOR_ROOT"):
+        # COORDINATOR_SETTINGS_HOME is the same defect as the USERPROFILE rung
+        # documented below, one rung further along: `settings_home()` prefers
+        # that override over CLAUDE_HOME/HOME/USERPROFILE entirely, so on a box
+        # where an operator exports it the DURABLE `.doe-root` rung
+        # (`<settings-home>/machine-local/.doe-root`) reads the operator's real
+        # settings home and resolution succeeds -- this test then never reaches
+        # the unresolvable path it names.
+        for key in ("CLAUDE_PLUGIN_ROOT", "COORDINATOR_ROOT", "COORDINATOR_SETTINGS_HOME"):
             env.pop(key, None)
         env["HOME"] = str(tmp_path / "no-doe-root-home")
         # `Path.home()` (the fallback every rung in this resolution chain

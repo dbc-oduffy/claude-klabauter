@@ -439,10 +439,26 @@ def _resolve_via_clone_root_script() -> Optional[str]:
     (`coordinator_core.resolve_coordinator_clone`) -- call it in-process and fold
     any resolution failure to None, preserving the same best-effort/fall-through
     contract the bash rung had.
+
+    STOPS PRINTING ON THE STRUCTURALLY-UNANSWERABLE CASE (2026-09-07, bug row
+    2b3bb4f1938a; measured in an Anthropic-hosted cloud container): this rung
+    only runs after rungs 2/2.5/2.75 above have ALL already failed to find a
+    candidate DoE-claude root via registry/pointer-file/flat-layout. This
+    rung's own resolver (`resolve_clone_root` -> `_resolve_source_mode`)
+    walks that same candidate space one more time -- when IT ALSO finds
+    nothing (`ResolveCoordinatorCloneError.no_source_found`), the failure
+    carries no new information: the exact same line would print on every
+    single guard dispatch on a host with no registered source (a container,
+    a CI runner), training the reader to ignore the channel. A genuinely
+    actionable failure from this same resolver -- an ambiguous source, an
+    invalid `COORDINATOR_SOURCE_MODE` value, an OSS install present but not
+    git-backed -- carries `no_source_found=False` and still prints below.
     """
     try:
         return _resolve_coordinator_clone.resolve_clone_root()
-    except _resolve_coordinator_clone.ResolveCoordinatorCloneError:
+    except _resolve_coordinator_clone.ResolveCoordinatorCloneError as exc:
+        if getattr(exc, "no_source_found", False):
+            return None
         print(f"skip: _resolve_via_clone_root_script: return _resolve_coordinator_clone.resolve_clone_root() failed: {sys.exc_info()[1]}", file=sys.stderr)
         return None
 

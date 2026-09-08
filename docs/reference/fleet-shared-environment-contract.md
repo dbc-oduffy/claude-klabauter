@@ -355,18 +355,53 @@ replaces it wholesale with the full binding contract (a named registration call 
 ## The sibling `.pth` binding contract (C6)
 
 **Settled prior art, cited so it is never re-derived.**
-`example-market-data-repo/scripts/setup.py::provision_venv` → `path_wire_example_retrieval_repo()` already writes a
+`example-market-data-repo/scripts/setup.py::path_wire_example_retrieval_repo()` already writes a
 repo-namespaced `.pth` basename (`example_market_data_repo_example_retrieval_repo_sibling.pth`) carrying an
-ABSOLUTE path, located via `sysconfig.get_path('purelib')`. That module's own docstring warns: *"a
+ABSOLUTE path, located via `sysconfig.get_path('purelib')`. (Cited as `provision_venv → path_wire_example_retrieval_repo` until
+2026-09-05; that repo has since made venv provisioning opt-in, so `path_wire_example_retrieval_repo` is
+reached from its `main()` against whichever interpreter the install targeted, not from the venv
+path. The convention this section borrows is unchanged.) That module's own docstring warns: *"a
 relative literal in a `.pth` resolves relative to site-packages, not this repo root, and silently
 fails to import."* This chunk adopts that convention verbatim as the fleet-wide naming rule:
 **`<repo>_<sibling>_sibling.pth`, absolute path only.** Under it, N repos writing into one shared
 site-packages tree cannot collide on filename — filename collision was never this chunk's open
 problem.
 
-**The one documented call.** `coordinator_core.install.fleet_env.register_sibling_binding(repo,
-sibling, sibling_root)` — `sibling_root` MUST be an absolute path (raises `FleetEnvError` otherwise,
-rather than writing a binding that would silently misbehave, per the failure mode above). This:
+**The one documented call, and how a sibling actually reaches it.** In-process, it is
+`coordinator_core.install.fleet_env.register_sibling_binding(repo, sibling, sibling_root)`.
+**A sibling repo does not call that directly** — it cannot: the engine is claude-klabauter's plane
+(`docs/reference/boundary-and-data-planes.md`), and a consumer that imports `coordinator_core` has
+taken an engine dependency it does not declare and cannot resolve. For a year this section told
+sibling maintainers to make a call none of them had a way to make; example-market-data-repo-em found it
+while wiring the first consumer end to end.
+
+The reachable surface is a CLI, the exact analogue of `fleet-env.py get` for the other half of this
+contract:
+
+```
+python3 coordinator/bin/fleet-env-bind.py register <repo> <sibling> <absolute-path>
+python3 coordinator/bin/fleet-env-bind.py deregister <repo> <sibling>
+python3 coordinator/bin/fleet-env-bind.py check
+```
+
+Exit codes: `0` done; `1` the operation failed (e.g. a relative path); `2` usage; `3` (`check`
+only) nothing to check against — the root does not resolve, or resolves but was never provisioned;
+`4` (`check` only) the environment is provisioned and a binding is flagged.
+
+**`register` is safe to call before the environment exists, and that is the point.** It persists
+the registry entry and returns 0; the next provisioning pass replays it. So a consumer's installer
+calls it unconditionally and does not have to care whether the fleet has reached this machine yet
+— install order is independent of provisioning order. `register` returning 0 therefore does NOT
+assert that a `.pth` exists; `check` is what asserts that.
+
+**Read the 3-vs-4 split before consuming `check`.** On an unprovisioned machine
+`resolve_environment_root` does not raise — C5's ladder always yields a root — so every registered
+binding reads `missing_pth`, which is accurate and useless. The CLI probes for a provisioned tree
+first and returns 3 there, so 4 keeps meaning "really provisioned, really broken". A caller that
+collapses the two cannot tell a machine mid-rollout from a machine with a broken binding.
+
+Whichever route, `sibling_root` MUST be an absolute path (raises `FleetEnvError` otherwise, rather
+than writing a binding that would silently misbehave, per the failure mode above). The call:
 
 1. Persists a `{repo, sibling, path}` entry into a versioned JSON binding registry
    (`fleet_env._binding_registry_path()` — `<settings-home>/machine-local/fleet-env-bindings.json`,
@@ -410,7 +445,7 @@ any time — it flags every binding that is either `stale_path` (registered path
 registered while the environment was absent). Nothing is silently broken; everything flagged is
 reported by name.
 
-## Migration paths for the three other hard interpreter-path pins (AC11)
+## Migration paths for the other hard interpreter-path pins (AC11)
 
 Naming the migration path is in scope here; performing it in any of these repos' own trees is not —
 each repo's own maintainers make the change, driven by a cross-repo memo (dispatched by the EM, not
@@ -432,6 +467,19 @@ authored into their trees).
   via the same `resolve_environment_root()` / `fleet-env.py get` call; the three override tiers above
   it are unaffected (an explicit `--host-venv`/`EXAMPLE_RETRIEVAL_REPO_HOST_VENV_OVERRIDE`/`server.json` value
   still wins, exactly as today) — only what an unset chain derives to changes.
+- **example-market-data-repo's installer provisioning a repo-local `.venv`** (`scripts/setup.py`).
+  Added 2026-09-05, and the omission is worth naming rather than quietly filling: this section
+  enumerated three consumers while the § above cited **example-market-data-repo's own
+  `path_wire_example_retrieval_repo` as the prior art this contract's fleet-wide `.pth` naming rule was
+  adopted from**. The one repo whose convention the fleet borrowed had no migration path of its
+  own. Migration, already substantially done in that repo: `scripts/setup.py` no longer creates a
+  venv by default (its `provision_venv` is now behind an opt-in `--venv` break-glass, and the
+  default installs into the interpreter it was invoked with) — so the pin this section would have
+  had to unwind is already gone. What remains is the positive half: when
+  `fleet-env-bind.py`/`fleet-env.py` report a provisioned environment, its installer targets that
+  interpreter and registers its bindings (`market_intel` itself, and the `example_retrieval_repo` sibling it
+  path-wires today) rather than installing per-repo. Their DR-090 and the fleet ruling that bans
+  per-repo venvs are the same decision seen from two repos; nothing here is owed back to us.
 - **example-game-repo's sidecar launch hard-failing on an absent `.venv-sidecar`.** This is the one binding
   this design does NOT collapse: example-game-repo's own accepted DR (`DR-INSTALL-003`) documents a genuine,
   reproduced `huggingface_hub` version conflict between its main venv and the sidecar's model

@@ -157,6 +157,13 @@ OP_MODULE_MAP: Dict[str, str] = {
     # roadmap.blitz_land — the WRITE twin of roadmap.plan_gate: executes a
     # wave's verdicts and emits the next wave, so the loop needs no operator.
     "roadmap.blitz_land":                     "coordinator_core.ops.roadmap_blitz_land",
+    # plan.prep_gate — the mise-prep authoring bar, REPORTED per class. Read twin
+    # of plan.stamp_prepped; the DoE-side runnable half is
+    # coordinator/bin/mise-prep-gate.py and the two must agree.
+    "plan.prep_gate":                         "coordinator_core.ops.plan_prep_gate",
+    # plan.stamp_prepped — the ONLY writer of the four-field mise-prep attest.
+    # Refuses unless plan.prep_gate passes over the bytes it is about to stamp.
+    "plan.stamp_prepped":                     "coordinator_core.ops.plan_stamp_prepped",
     "queue.append":                           "coordinator_core.ops.queue_append",
     "queue.cluster":                          "coordinator_core.ops.queue_cluster",
     "queue.promote":                          "coordinator_core.ops.queue_promote",

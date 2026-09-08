@@ -524,3 +524,23 @@ def test_the_archive_is_not_scanned_when_nothing_needs_it(tmp_path):
 
     report = pg.assemble_plan_gate(tmp_path)
     assert report["scanned"]["batons"] == 1, "archive was walked with no edge asking for it"
+
+
+def test_kind_plan_is_admitted_because_the_template_emits_it():
+    """`kind: plan` is a PLAN, not a sidecar — the template emits it.
+
+    `is_plan_record`'s discriminator once read a bare `kind:` as sidecar-ness, on the
+    premise that plan.schema.json declares no `kind`. True of the schema, false of the
+    corpus: DoE's `coordinator/templates/plans/plan.md.tmpl` emits `kind: plan`, so 41 of
+    283 records carried it and every one was indexed as a sidecar. That is the second
+    failure `is_plan_record`'s own docstring names — an already-planned baton reported as
+    unplanned, fed back into a planning wave that writes a second plan for work that has
+    one — and it fired silently, because the query answers, and answers empty.
+    """
+    assert pg.is_plan_record({"kind": "plan"}) is True
+    assert pg.is_plan_record({}) is True
+    # A sidecar is still a sidecar, by either discriminator.
+    assert pg.is_plan_record({"kind": "staff-eng-review"}) is False
+    assert pg.is_plan_record({"plan": "docs/plans/x.md"}) is False
+    # A back-pointer still wins: a record that points AT a plan is not that plan.
+    assert pg.is_plan_record({"kind": "plan", "plan": "docs/plans/x.md"}) is False

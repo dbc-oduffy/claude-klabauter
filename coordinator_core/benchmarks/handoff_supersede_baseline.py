@@ -57,6 +57,7 @@ import tempfile
 from pathlib import Path
 
 from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.git.run import run_git
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -183,7 +184,11 @@ def sample(mode: str, out_dir: Path, idx: int) -> dict:
         )
         return res
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        # A leak here is a live orphaned scratch repo on a box whose load norm
+        # is 50-70 concurrent sessions, and `ignore_errors=True` reported it as a
+        # clean teardown. Raising from `finally` chains rather than discards: an
+        # in-flight body exception is still shown as the __context__.
+        rmtree_or_raise(tmp, label=f"handoff-baseline-{mode}-{idx}")
 
 
 def measure(n: int, out_dir: Path) -> dict:
@@ -240,7 +245,9 @@ def main(argv: list[str]) -> int:
         for line in problems:
             print(f"  {line}", file=sys.stderr)
         return 1
-    shutil.rmtree(out_dir, ignore_errors=True)
+    # Success path only -- the refusal branch above returns before here,
+    # deliberately keeping per-sample stdio for the run that needed it.
+    rmtree_or_raise(out_dir, label="handoff-baseline-out")
     print(json.dumps(report, indent=2))
     for mode, row in report.items():
         print(

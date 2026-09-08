@@ -49,6 +49,11 @@ checked on BOTH the insert path (no managed block yet) and the swap path
 module FAILS LOUD on that collision rather than silently appending a second
 `## Posture` heading or silently swap-merging past it.
 
+Multiple marker pairs: a target carrying more than one MARKER_START or
+MARKER_END line is refused outright (exit 1), before insert/swap is
+computed. This module owns exactly one managed pair per target; picking
+"the first one" and dropping the rest is silent data loss, not a merge.
+
 Port of: render-posture-overlay.sh (DoE a1a568d2, 2026-07-22)
 Port backlink: docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
 
@@ -240,6 +245,15 @@ def run(anchor: str, target: str, check_only: bool, coordinator_root: str) -> Tu
         original_lines = original_text.splitlines(keepends=True)
 
         has_start_marker = any(line.rstrip("\n") == MARKER_START for line in original_lines)
+
+        start_count = sum(1 for line in original_lines if line.rstrip("\n") == MARKER_START)
+        end_count = sum(1 for line in original_lines if line.rstrip("\n") == MARKER_END)
+        if start_count > 1 or end_count > 1:
+            _die(
+                f"Target carries {start_count} start and {end_count} end markers "
+                f"({MARKER_START} / {MARKER_END}); this op manages exactly one pair. "
+                "Remove the extra pair(s) and re-run."
+            )
 
         scan_lines = _strip_managed_span(original_lines) if has_start_marker else original_lines
         collision = _find_collision(scan_lines)

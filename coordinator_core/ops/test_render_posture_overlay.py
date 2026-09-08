@@ -134,6 +134,28 @@ def test_anchor_default_treated_uniformly(tmp_path):
     assert MARKER_START in out and "default body" in out
 
 
+def test_swap_refuses_second_marker_pair_instead_of_deleting_it(tmp_path):
+    """Two complete MARKER_START/MARKER_END spans in the target: the op must
+    refuse (not silently delete the second pair and exit 0). Regression for
+    state/bug-backlog/2026-09-07-render-posture-overlay-silently-deletes-
+    31282f4abaac.yaml.
+    """
+    root = _make_coordinator_root(tmp_path)
+    original = (
+        "# My CLAUDE.md\n\n"
+        f"{MARKER_START}\nfirst pair content\n{MARKER_END}\n"
+        "middle\n"
+        f"{MARKER_START}\nsecond pair content\n{MARKER_END}\n"
+    )
+    target = _make_target(tmp_path, original)
+
+    rc = main(["substrate-free", str(target)], coordinator_root=str(root))
+
+    assert rc == 1
+    # No data loss: target is untouched, not partially swapped/deleted.
+    assert target.read_text(encoding="utf-8") == original
+
+
 # ---------------------------------------------------------------------------
 # --check-only
 # ---------------------------------------------------------------------------

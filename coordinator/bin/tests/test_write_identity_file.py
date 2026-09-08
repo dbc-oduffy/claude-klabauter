@@ -40,10 +40,17 @@ _mod = _load_module()
 
 def _install_fake_cc_invoke(monkeypatch, *, resolve_root=lambda: "/fake/claude-klabauter/root", invoke=None):
     """Inject a fake `cc_invoke` module into sys.modules so the CLI's deferred
-    `from cc_invoke import _resolve_claude_klabauter_root, cc_invoke` (inside main())
-    picks up stubs instead of the real transport."""
+    `from cc_invoke import cc_invoke, require_dispatch_engine_on_path` (inside
+    main()) picks up stubs instead of the real transport.
+
+    `require_dispatch_engine_on_path`, not the private `_resolve_claude_klabauter_root`:
+    the CLI moved to the public entry point for the reason its own call-site
+    comment records (resolving the root without binding it on `sys.path` fails
+    one frame deeper inside `cc_invoke`), and this stub names whatever the CLI
+    actually imports -- a stub that names a function the module under test no
+    longer calls tests nothing."""
     fake = types.ModuleType("cc_invoke")
-    fake._resolve_claude_klabauter_root = resolve_root  # type: ignore[attr-defined]
+    fake.require_dispatch_engine_on_path = resolve_root  # type: ignore[attr-defined]
     fake.cc_invoke = invoke or (lambda op, params, root: {"exit_code": 0, "message": "ok"})  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "cc_invoke", fake)
 

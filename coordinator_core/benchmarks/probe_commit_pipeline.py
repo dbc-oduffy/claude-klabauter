@@ -24,6 +24,7 @@ SRC = Path(__file__).resolve().parents[2]
 
 sys.path.insert(0, str(SRC))
 from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.benchmarks.process_time import LiveTreeAccountant
 from coordinator_core.git.commit import CommitRefused, FilterUnsupported, commit_paths
 from coordinator_core.git.commit import hash_worktree_blobs_via_spawn
@@ -130,7 +131,9 @@ def _one_window(label, tracked, n, rep):
             f"{label}: repo not clean after the window -- status={st.stdout[:200]!r} "
             f"fsck rc={fs.returncode}"
         )
-    shutil.rmtree(tmp, ignore_errors=True)
+    # Reached only after the cleanliness check above passes; a surviving tree
+    # is a leak worth seeing, not a teardown to swallow.
+    rmtree_or_raise(tmp, label=f"pipeprobe-{label}")
     return ms, procs, landed
 
 

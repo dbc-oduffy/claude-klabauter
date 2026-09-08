@@ -162,6 +162,15 @@ def test_missing_machine_local_binary_degrades_to_absent(monkeypatch):
     def _raise(*args, **kwargs):
         raise FileNotFoundError("machine-local not found")
 
+    # The key-presence probe is an IN-PROCESS registry read since the
+    # 2026-08-16 zero-spawn cutover, so patching `subprocess.run` alone leaves
+    # it reading the operator's REAL machine-local registry -- on any box that
+    # has `fan_out.large_wave_threshold` captured, `capture()` short-circuits
+    # as already-present and never reaches the write this test exists to
+    # exercise. Stub the same seam every other test here stubs, so the
+    # "absent" precondition this test's own name asserts is actually the one
+    # under test rather than an accident of the operator's registry.
+    _patch_registry(monkeypatch, _FakeRegistry(keys=[]))
     monkeypatch.setattr(mod.subprocess, "run", _raise)
 
     # keys-probe degrades to empty -> treated as absent -> attempts a write,

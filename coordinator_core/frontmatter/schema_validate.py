@@ -2007,6 +2007,91 @@ def _cf_execution_stamp_required(fm: dict) -> ErrorDict | None:
     return None
 
 
+#: The four-field mise-prep attest, in written order. Spelled once; the engine's
+#: own writer reads the same tuple from `roadmap/prep_gate.py :: STAMP_FIELDS`.
+#: Not imported from there — this module is the frontmatter validator DoE consumes
+#: BY FILE PATH, and a validator that reaches into `roadmap/` to answer a shape
+#: question acquires a dependency that import has no way to satisfy.
+_MISE_PREPPED_FIELDS = (
+    'mise_prepped_by',
+    'mise_prepped_at',
+    'mise_prepped_sha',
+    'mise_prepped_findings',
+)
+
+
+def _mise_prepped_field_declared(fm: dict, field: str) -> bool:
+    """True when `field` carries a DECLARED value.
+
+    `mise_prepped_findings` is declared by being a list, empty or not — the
+    declared-empty is the point. The other three are declared by being a
+    non-blank scalar, matching `_cf_execution_stamp_required`'s own emptiness
+    test.
+    """
+    if field not in fm:
+        return False
+    value = fm.get(field)
+    if field == 'mise_prepped_findings':
+        return isinstance(value, list)
+    return value is not None and str(value).strip() != ''
+
+
+def _cf_mise_prepped_stamp_quartet(fm: dict) -> ErrorDict | None:
+    """P-CROSS-MISE-1: the four-field mise-prep attest is written together or not
+    at all — `mise_prepped_by`/`_at`/`_sha`/`_findings`.
+
+    THE TRIGGER IS ANY-OF-FOUR PRESENT, never a sibling flag. `_cf_execution_stamp_required`
+    can gate on `handoff_phase == 'execution'` because the handoff schema declares
+    a field whose value MEANS "the stamp is now owed". A plan has no such field:
+    the attest accompanies no transition, which is the whole reason it is a field
+    beside `status` rather than a value in it. So the only thing that can make the
+    quartet owed is one of its own members appearing — presence-symmetric, and
+    deliberately not presence-required. An unstamped plan is UNSTAMPED, which is a
+    legitimate state (and the only state the entire corpus is in until the write op
+    runs); it is never a validation error.
+
+    `mise_prepped_findings: []` is PRESENT — a declared-empty, structurally
+    different from an absent key, exactly as `writes: []` is against an absent
+    `writes:`. Treating an empty list as missing would report every clean
+    certification as a partial stamp, which is precisely inverted.
+
+    WHY THIS LIVES HERE AND NOWHERE ELSE. JSON Schema cannot express
+    required-together, and `coordinator/bin/lib/schema.js` — the file
+    `_HANDOFF_CROSS_FIELD_RULES` was ported from — is retired, so DoE's tree has no
+    surface that can carry the rule. Its own consumer contract
+    (coordinator/docs/wiki/mise-prepped-attest.md § All-or-nothing) says so and
+    routes the enforcement here.
+
+    Gated on a going-forward created-date cutoff, mirroring
+    `_cf_category_required_post_cutoff`'s idiom: the any-of-four trigger already
+    excludes the historical corpus (no plan on disk carries any of the four), so
+    the cutoff's only live effect is exempting a backdated going-forward plan — an
+    accepted residual, since the write op controls what it stamps.
+
+    Spec backlink: DoE-claude coordinator/docs/wiki/mise-prepped-attest.md
+                   .coordinator-local/memo-outbox/sent/mise-prepped-shape-ruling.md § 1
+    """
+    created = fm.get('created')
+    if created and str(created) < '2026-09-07':
+        return None
+    present = [f for f in _MISE_PREPPED_FIELDS if f in fm]
+    if not present:
+        return None
+    missing = [f for f in _MISE_PREPPED_FIELDS if not _mise_prepped_field_declared(fm, f)]
+    if missing:
+        return {
+            'field': ', '.join(missing),
+            'error': 'required when any mise_prepped_* field is present',
+            'hint': (
+                'The mise-prep attest is four fields written together '
+                '(mise_prepped_by/_at/_sha/_findings). A plan certified with nothing '
+                'withheld declares `mise_prepped_findings: []`. Re-run '
+                'plan.stamp_prepped rather than completing the quartet by hand.'
+            ),
+        }
+    return None
+
+
 #: Kinds on which `handoff_phase` is admitted (H-CROSS-EXEC-2). The roadmap
 #: side MUST resolve through ``kind_values_for_canonical('roadmap-baton')``,
 #: never a bare ``kind == 'roadmap-baton'`` literal: that canonical resolves to
@@ -4234,8 +4319,18 @@ _QUEUE_CROSS_FIELD_RULES = [
     _cf_queue_disposition_shape,
 ]
 
+#: Cross-field rules for plan.schema.json. There was NO 'plan' key in
+#: `_CROSS_FIELD_RULES_BY_SCHEMA` before this set existed — `_apply_cross_field_rules`
+#: resolves `.get(schema_name, [])`, so a rule written but not registered here is
+#: INERT at runtime while every unit test that calls it directly still passes. The
+#: same trap `_CUTOVER_CROSS_FIELD_RULES` records immediately above.
+_PLAN_CROSS_FIELD_RULES = [
+    _cf_mise_prepped_stamp_quartet,
+]
+
 _CROSS_FIELD_RULES_BY_SCHEMA: dict[str, list] = {
     'handoff': _HANDOFF_CROSS_FIELD_RULES,
+    'plan': _PLAN_CROSS_FIELD_RULES,
     'handoff-archived': [],
     'cross-repo-memo': _MEMO_CROSS_FIELD_RULES,
     'cutover': _CUTOVER_CROSS_FIELD_RULES,

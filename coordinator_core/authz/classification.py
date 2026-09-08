@@ -1160,6 +1160,53 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   5. Persistent state changes observable across process boundaries?     No.
     # Spec backlink: state/handoffs/2026-08-13-vanilla-plan-mode-capture-safety-net.md § Part 3
     "plan.suggest_completion_steps": OpClass.COMPUTE_ONLY,
+    # plan.prep_gate — COMPUTE_ONLY: evaluates the mise-prep authoring bar over ONE
+    # caller-named docs/plans/*.md and RETURNS the per-class report. Read twin of
+    # plan.stamp_prepped immediately below, which is the write half; the split is the
+    # whole point of the pair (see .coordinator-local/memo-outbox/sent/
+    # mise-prepped-shape-ruling.md § 2 — "a closed gate is REPORTED here; refusing on it
+    # is the caller's act"). Reintroducing a write here would collapse that separation.
+    # DR-208 five-question affirmation (citing ops/plan_prep_gate.py and the pure
+    # coordinator_core/roadmap/prep_gate.py it wraps):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      Reads the plan's own bytes plus the worktree root's top-level entry names
+    #      (repo_root_names); the spine readers it calls are pure parsers.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #   5. Persistent state changes observable across process boundaries?     No.
+    #      Returns {"plan", "verdict", "withheld_rows", "classes", "message", "stamp"}.
+    # Spec backlink: DoE-claude coordinator/docs/wiki/mise-prepped-authoring-bar.md
+    "plan.prep_gate": OpClass.COMPUTE_ONLY,
+    # plan.stamp_prepped — MUTATING: the ONLY writer of the four-field mise-prep attest
+    # (mise_prepped_by/_at/_sha/_findings) on a caller-named docs/plans/*.md. Locked
+    # read-modify-write (coordinator_core.locked_write.locked_rmw) with the gate
+    # evaluated INSIDE the mutate closure, so the recorded sha and the verdict describe
+    # the same bytes. Same scope class and write-shape as plan.tasks.mutate /
+    # plan.append_session above.
+    # DR-208 five-question affirmation (citing ops/plan_stamp_prepped.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      locked_rmw(plan_path, mutate, ...) writes the four attest lines back into
+    #      docs/plans/*.md in place.
+    #   2. Writes into rag's relational store?                                 No.
+    #      Writes only the single caller-named docs/plans/*.md. Dual-write ban satisfied.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      locked_rmw opens the target for the atomic rewrite, plus its lock sidecar.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      docs/plans/*.md is coordinator substrate shared across EM sessions.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The stamp is read back by every fire-time consumer of the attest.
+    # DR-216 D2 five-bound affirmed (plan in-place-mutation sub-category):
+    #   D2(i) (per-record idempotent): a plan already CERTIFIED against its current body
+    #         returns byte-identical text and locked_rmw skips the write.
+    #   D2(ii) (git-reversible): four additive frontmatter lines; git checkout recovers.
+    #   D2(iii) (content-additive): writes only the four mise_prepped_* lines; never
+    #         status, never the body, never another field.
+    #   D2(iv) (confined noun): handler enforces containment in the main worktree at
+    #         runtime via ops._path_guard.contained_path.
+    #   D2(v) (no git commit): this op does not commit; the EM retains that.
+    # Spec backlink: DoE-claude coordinator/docs/wiki/mise-prepped-attest.md
+    "plan.stamp_prepped": OpClass.MUTATING,
     # commit.anchors — COMPUTE_ONLY: derives git-trailer text (Plan/Plan-Id/Deliverable/
     # Nature/Anchor) from the staged diff + on-disk read-model and RETURNS it; the git-message
     # write is done by the prepare-commit-msg hook, NOT this op (causal-direction test,

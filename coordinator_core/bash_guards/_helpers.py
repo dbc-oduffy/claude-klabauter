@@ -120,6 +120,7 @@ from __future__ import annotations
 
 import re
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # --- (1) Identity resolver: thin re-export, NOT a new module -----------------
@@ -383,6 +384,36 @@ def _resolve_override_keys_doc_display() -> str:
     return OVERRIDE_KEYS_DOC_DISPLAY
 
 
+def _override_keys_doc_reachable() -> bool:
+    """True if ``OVERRIDE_KEYS_DOC_DISPLAY`` resolves to a real file on THIS
+    host -- guard-messaging.md's Key Pattern "only offer remediation the
+    current reader can actually run".
+
+    Measured in an Anthropic-hosted cloud container: the settings-home wiki
+    copy this pointer names is an
+    install-time artifact (``install/substrate.py::_install_seed_wikis``'s
+    claude-klabauter-sourced leg) -- absent on any host where that install leg never
+    ran (container, CI runner, a fresh OSS checkout pre-install). A pointer
+    into nothing costs the reader a lookup and returns nothing, which is
+    worse than no line at all.
+
+    ``Path.expanduser()`` only -- resolves ``~`` via ``HOME``/``USERPROFILE``
+    on every OS, so this check is not itself another single-host-class
+    remediation. The expanded path is used ONLY for this existence check and
+    is never rendered: ``OVERRIDE_KEYS_DOC_DISPLAY`` stays the literal,
+    never-expanded string in the message itself (see that constant's own
+    docstring -- expansion into the MESSAGE would reintroduce the
+    machine-specific leak DR-290 form 2 exists to avoid). Never raises: any
+    resolution error (unresolvable home dir, permissions) reads as
+    unreachable, matching this module's existing fail-closed-to-silence
+    pattern for the audience axis.
+    """
+    try:
+        return Path(OVERRIDE_KEYS_DOC_DISPLAY).expanduser().is_file()
+    except Exception:
+        return False
+
+
 def resolve_override_keys_doc_display() -> str:
     """Public alias for ``_resolve_override_keys_doc_display``.
 
@@ -587,8 +618,23 @@ def operator_override_note(
     positively-resolved EM audience, including "could not tell" -- that is
     the specific regression this whole plan exists to close, and reverting
     to "emit unless we positively know it's a subagent" reopens it.
+
+    REACHABILITY-GATED, 2026-09-07 (bug row acf32cc7bf74): audience alone is
+    not sufficient any more -- a positively-resolved EM on a host where the
+    settings-home wiki copy was never installed (container, CI runner,
+    pre-install OSS checkout) used to get the pointer sentence anyway,
+    naming a file that does not exist there. ``_override_keys_doc_reachable()``
+    adds a second, orthogonal fail-closed leg: unreachable degrades to the
+    same ``""`` the audience axis already returns for a non-EM reader, per
+    guard-messaging.md's "only offer remediation the current reader can
+    actually run" pattern. This is not a re-widening of NEGATIVE SPEC 6
+    (which is about WHO the message renders for) -- it narrows further, on
+    WHETHER the named remediation exists, and every existing caller already
+    handles an empty return per the SPLICE CONTRACT above.
     """
     if not resolves_em_audience(payload, git_root):
+        return ""
+    if not _override_keys_doc_reachable():
         return ""
     return "See %s for this guard's override keys." % _resolve_override_keys_doc_display()
 

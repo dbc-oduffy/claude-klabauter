@@ -449,8 +449,13 @@ def is_plan_record(fm: Dict[str, Any]) -> bool:
     working the day somebody files `2026-09-01-review-the-review-gate.md`, which
     is a plan.
 
-      - `kind:` — plan.schema.json declares no `kind`; every sidecar family sets
-        one (`staff-eng-review`, and its siblings).
+      - `kind:` — every sidecar family sets one (`staff-eng-review`, and its
+        siblings). `kind: plan` is the ONE admitted value: plan.schema.json
+        declares no `kind`, but `coordinator/templates/plans/plan.md.tmpl`
+        emits `kind: plan`, so 41 of 283 records in DoE's corpus carry it and
+        every one of them is a plan. Reading a bare `kind:` as sidecar-ness
+        indexed all 41 as sidecars, which is the second failure this
+        docstring's closing paragraph names, fired silently and at scale.
       - `plan:` — a back-pointer AT the plan it reviews. A plan does not point
         at itself.
 
@@ -460,7 +465,7 @@ def is_plan_record(fm: Dict[str, Any]) -> bool:
     an already-planned baton as unplanned and feeds it back into a planning
     wave that will write a second plan for work that has one.
     """
-    return not fm.get("kind") and not fm.get("plan")
+    return fm.get("kind") in (None, "", "plan") and not fm.get("plan")
 
 
 def build_plan_index(worktree_root: Path) -> PlanIndex:

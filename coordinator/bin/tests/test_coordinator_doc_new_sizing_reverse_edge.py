@@ -134,13 +134,17 @@ def _tmp_git_repo():
         yield repo, out_path
 
 
-def _run_cli(repo: Path, out_path: Path, title: str, sizing_rel_path: str) -> subprocess.CompletedProcess:
+def _run_cli(
+    repo: Path, out_path: Path, title: str, sizing_rel_path: str,
+    *extra_args: str,
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
             sys.executable, str(_CLI_PATH), "--type", "plan",
             "--title", title,
             "--sizing-object", sizing_rel_path,
             "--out", str(out_path),
+            *extra_args,
         ],
         cwd=str(repo),
         capture_output=True,
@@ -200,7 +204,7 @@ class MutateSizingReverseEdgeHelperTest(unittest.TestCase):
         existing_plan.write_text(body)
         return "docs/plans/2026-08-01-other.md"
 
-    def test_fan_out_with_differing_deliverable_id_is_permitted_and_plan_untouched(self):
+    def test_fan_out_asserted_is_permitted_and_plan_untouched(self):
         with tempfile.TemporaryDirectory() as td:
             repo = Path(td)
             existing_plan_rel = self._write_existing_plan(repo, "dlv-existing-aaaaaa")
@@ -208,8 +212,8 @@ class MutateSizingReverseEdgeHelperTest(unittest.TestCase):
             new_text = _cli._mutate_sizing_reverse_edge(
                 old_text,
                 "docs/plans/2026-08-10-example.md",
-                "dlv-incoming-bbbbbb",
                 str(repo),
+                True,
             )
             # `plan:` is left naming the FIRST plan, unchanged — the fan-out
             # relaxes the refusal, never the clobber guard.
@@ -217,10 +221,13 @@ class MutateSizingReverseEdgeHelperTest(unittest.TestCase):
             self.assertNotIn("docs/plans/2026-08-10-example.md", new_text)
             self.assertIn("status: routed", new_text)
 
-    def test_same_deliverable_id_is_still_refused_as_a_reroute(self):
+    def test_same_disk_situation_without_fan_out_flag_is_refused_and_writes_nothing(self):
+        """The identical on-disk situation as the permitted case above --
+        without `fan_out=True` this refuses loudly. Pins that the flag, not
+        any inferred property of the disk state, is the discriminator."""
         with tempfile.TemporaryDirectory() as td:
             repo = Path(td)
-            existing_plan_rel = self._write_existing_plan(repo, "dlv-shared-cccccc")
+            existing_plan_rel = self._write_existing_plan(repo, "dlv-existing-aaaaaa")
             old_text = _sizing_yaml("routed", f'"{existing_plan_rel}"')
             from coordinator_core.locked_write import MutateAbort
 
@@ -228,28 +235,17 @@ class MutateSizingReverseEdgeHelperTest(unittest.TestCase):
                 _cli._mutate_sizing_reverse_edge(
                     old_text,
                     "docs/plans/2026-08-10-example.md",
-                    "dlv-shared-cccccc",
                     str(repo),
+                    False,
                 )
             self.assertIn(existing_plan_rel, str(ctx.exception))
+            self.assertIn("--fan-out", str(ctx.exception))
 
-    def test_unresolvable_because_existing_plan_file_is_missing_is_refused(self):
-        with tempfile.TemporaryDirectory() as td:
-            repo = Path(td)
-            existing_plan_rel = "docs/plans/2026-08-01-does-not-exist.md"
-            old_text = _sizing_yaml("routed", f'"{existing_plan_rel}"')
-            from coordinator_core.locked_write import MutateAbort
-
-            with self.assertRaises(MutateAbort) as ctx:
-                _cli._mutate_sizing_reverse_edge(
-                    old_text,
-                    "docs/plans/2026-08-10-example.md",
-                    "dlv-incoming-bbbbbb",
-                    str(repo),
-                )
-            self.assertIn(existing_plan_rel, str(ctx.exception))
-
-    def test_unresolvable_because_existing_plan_has_no_deliverable_id_is_refused(self):
+    def test_default_fan_out_false_refuses_regardless_of_existing_plans_id(self):
+        """`fan_out` defaults False, and the refusal fires whether or not the
+        existing plan's own `deliverable_id` happens to be
+        present/absent/malformed on disk -- that field is no longer read by
+        this discriminator at all."""
         with tempfile.TemporaryDirectory() as td:
             repo = Path(td)
             existing_plan_rel = self._write_existing_plan(repo, None)
@@ -260,74 +256,6 @@ class MutateSizingReverseEdgeHelperTest(unittest.TestCase):
                 _cli._mutate_sizing_reverse_edge(
                     old_text,
                     "docs/plans/2026-08-10-example.md",
-                    "dlv-incoming-bbbbbb",
-                    str(repo),
-                )
-            self.assertIn(existing_plan_rel, str(ctx.exception))
-
-    def _write_existing_plan_with_raw_deliverable_id(self, repo: Path, raw_value: str) -> str:
-        """Write a minimal plan file with `deliverable_id:` set to a literal,
-        unquoted frontmatter value (e.g. a bare YAML null) rather than the
-        quoted-string form `_write_existing_plan` produces."""
-        plans_dir = repo / "docs" / "plans"
-        plans_dir.mkdir(parents=True, exist_ok=True)
-        existing_plan = plans_dir / "2026-08-01-other.md"
-        body = f"---\ntitle: Other plan\ndeliverable_id: {raw_value}\n---\n\n# Other plan\n"
-        existing_plan.write_text(body)
-        return "docs/plans/2026-08-01-other.md"
-
-    def test_unresolvable_because_existing_plan_deliverable_id_is_explicit_null_is_refused(self):
-        """A cited plan carrying literal `deliverable_id: null` must degrade
-        to unresolvable, not the truthy string "null" — see
-        `_resolve_plan_deliverable_id`'s docstring on explicit-null."""
-        with tempfile.TemporaryDirectory() as td:
-            repo = Path(td)
-            existing_plan_rel = self._write_existing_plan_with_raw_deliverable_id(repo, "null")
-            old_text = _sizing_yaml("routed", f'"{existing_plan_rel}"')
-            from coordinator_core.locked_write import MutateAbort
-
-            with self.assertRaises(MutateAbort) as ctx:
-                _cli._mutate_sizing_reverse_edge(
-                    old_text,
-                    "docs/plans/2026-08-10-example.md",
-                    "dlv-incoming-bbbbbb",
-                    str(repo),
-                )
-            self.assertIn(existing_plan_rel, str(ctx.exception))
-
-    def test_unresolvable_because_existing_plan_deliverable_id_is_blank_is_refused(self):
-        """A cited plan carrying a whitespace/empty `deliverable_id:` value
-        must also degrade to unresolvable, not an empty-but-truthy string."""
-        with tempfile.TemporaryDirectory() as td:
-            repo = Path(td)
-            existing_plan_rel = self._write_existing_plan_with_raw_deliverable_id(repo, "")
-            old_text = _sizing_yaml("routed", f'"{existing_plan_rel}"')
-            from coordinator_core.locked_write import MutateAbort
-
-            with self.assertRaises(MutateAbort) as ctx:
-                _cli._mutate_sizing_reverse_edge(
-                    old_text,
-                    "docs/plans/2026-08-10-example.md",
-                    "dlv-incoming-bbbbbb",
-                    str(repo),
-                )
-            self.assertIn(existing_plan_rel, str(ctx.exception))
-
-    def test_unresolvable_because_incoming_deliverable_id_is_none_is_refused(self):
-        """The existing plan resolves fine; it's the INCOMING id that is
-        unresolvable (mirrors a caller that could not mint one) — still
-        conservative, still refused."""
-        with tempfile.TemporaryDirectory() as td:
-            repo = Path(td)
-            existing_plan_rel = self._write_existing_plan(repo, "dlv-existing-aaaaaa")
-            old_text = _sizing_yaml("routed", f'"{existing_plan_rel}"')
-            from coordinator_core.locked_write import MutateAbort
-
-            with self.assertRaises(MutateAbort) as ctx:
-                _cli._mutate_sizing_reverse_edge(
-                    old_text,
-                    "docs/plans/2026-08-10-example.md",
-                    None,
                     str(repo),
                 )
             self.assertIn(existing_plan_rel, str(ctx.exception))
@@ -397,13 +325,14 @@ class FullCliReverseEdgeClobberGuardTest(unittest.TestCase):
 
 
 class FullCliReverseEdgeFanOutTest(unittest.TestCase):
-    """A second plan citing one sizing object, minting a DIFFERENT
-    `deliverable_id`, is a shape->roadmap fan-out: permitted, and the
-    sizing's `plan:` still names the FIRST plan afterwards -- covers the
-    call-site wiring of `_resolved_deliverable_id` into
-    `_write_sizing_reverse_edge`, not just the helper in isolation."""
+    """A second plan citing one sizing object, run with an asserted
+    `--fan-out`, is permitted -- the sizing's `plan:` still names the FIRST
+    plan afterwards -- covers the call-site wiring of `args.fan_out` into
+    `_write_sizing_reverse_edge`, not just the helper in isolation. The
+    IDENTICAL invocation without `--fan-out` refuses loudly and writes
+    nothing."""
 
-    def test_second_plan_with_different_deliverable_id_is_permitted_and_first_plan_kept(self):
+    def test_second_plan_with_fan_out_asserted_is_permitted_and_first_plan_kept(self):
         with _tmp_git_repo() as (repo, _unused_out):
             sizing_dir = repo / "state" / "sizings"
             sizing_dir.mkdir(parents=True)
@@ -424,10 +353,10 @@ class FullCliReverseEdgeFanOutTest(unittest.TestCase):
             self.assertEqual(sizing_after_first.get("plan"), first_plan_rel)
             self.assertEqual(sizing_after_first.get("status"), "routed")
 
-            # Distinct titles -> distinct minted `deliverable_id`s (mint-
-            # from-slug path), which is what makes this a fan-out rather
-            # than a re-route of the same deliverable.
-            second_result = _run_cli(repo, second_out, "Second baton plan, a distinct deliverable", sizing_rel)
+            second_result = _run_cli(
+                repo, second_out, "Second baton plan, a distinct deliverable", sizing_rel,
+                "--fan-out",
+            )
             self.assertEqual(second_result.returncode, 0, second_result.stderr)
             self.assertTrue(second_out.exists())
 
@@ -435,6 +364,151 @@ class FullCliReverseEdgeFanOutTest(unittest.TestCase):
             # `plan:` is untouched by the fan-out -- still the FIRST plan.
             self.assertEqual(sizing_after_second.get("plan"), first_plan_rel)
             self.assertEqual(sizing_after_second.get("status"), "routed")
+
+    def test_second_plan_without_fan_out_flag_refuses_and_writes_nothing(self):
+        """The identical second citation, WITHOUT `--fan-out`, must refuse
+        loudly rather than silently permitting a re-route."""
+        with _tmp_git_repo() as (repo, _unused_out):
+            sizing_dir = repo / "state" / "sizings"
+            sizing_dir.mkdir(parents=True)
+            sizing_file = sizing_dir / "2026-08-10-example.yaml"
+            sizing_file.write_text(_sizing_yaml("sized", "null"))
+            sizing_rel = "state/sizings/2026-08-10-example.yaml"
+
+            (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+            first_out = repo / "docs" / "plans" / "2026-08-10-first-baton.md"
+            second_out = repo / "docs" / "plans" / "2026-08-10-second-baton.md"
+
+            first_result = _run_cli(repo, first_out, "First baton plan", sizing_rel)
+            self.assertEqual(first_result.returncode, 0, first_result.stderr)
+
+            sizing_after_first = yaml.safe_load(sizing_file.read_text())
+            first_plan_rel = first_out.relative_to(repo).as_posix()
+
+            second_result = _run_cli(
+                repo, second_out, "Second baton plan, no flag asserted", sizing_rel,
+            )
+            self.assertNotEqual(second_result.returncode, 0)
+            self.assertIn("--fan-out", second_result.stderr)
+            self.assertFalse(second_out.exists())
+
+            sizing_after_second = yaml.safe_load(sizing_file.read_text())
+            self.assertEqual(sizing_after_second.get("plan"), first_plan_rel)
+
+
+class FullCliReverseEdgeFanOutWithSizingCarriedDeliverableIdTest(unittest.TestCase):
+    """Finding 1/3 experiment (review-integrator, coordinatorcode-reviewer.ab257aeb77bab9269):
+    the realistic case where the CITED SIZING ITSELF carries a `deliverable_id`
+    (the normal case -- a `--type sizing-object` scaffold mints one by
+    default), and two plans cite it back-to-back with no
+    `--deliverable-id`/`DELIVERABLE_ID` and no session-held roadmap-stub
+    claim. `_MINIMAL_SIZING_KEYS`-based fixtures never exercise this: they
+    have no `deliverable_id:` key, so both plans mint distinct ids from
+    their own titles and never reach the cited-sizing carry tier at all.
+
+    This is the ordinary shape->roadmap fan-out path, absent a roadmap-baton
+    session claim (the session-state-parent tier that would otherwise
+    resolve a DIFFERENT id ahead of the cited-sizing tier and never reach
+    it). Verdict: fan-out vs re-route is asserted via `--fan-out`, never
+    inferred by comparing `deliverable_id`s -- an inferred discrimination is
+    defeated on this exact scenario, since the ordinary cited-sizing carry
+    tier gives every citing plan the SAME verbatim id absent the flag.
+    """
+
+    def test_second_plan_citing_a_sizing_with_its_own_deliverable_id_is_permitted_with_fan_out(self):
+        with _tmp_git_repo() as (repo, _unused_out):
+            sizing_dir = repo / "state" / "sizings"
+            sizing_dir.mkdir(parents=True)
+            sizing_file = sizing_dir / "2026-08-10-example.yaml"
+            # A real sizing carries its own minted `deliverable_id` on disk
+            # (`_scaffold_sizing`'s default path) -- not the bare
+            # `_MINIMAL_SIZING_KEYS` fixture, which omits the key entirely.
+            sizing_file.write_text(
+                _MINIMAL_SIZING_KEYS
+                + 'deliverable_id: "dlv-sizing-carried-aaaaaa"\n'
+                + "status: sized\nplan: null\n"
+            )
+            sizing_rel = "state/sizings/2026-08-10-example.yaml"
+
+            (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+            first_out = repo / "docs" / "plans" / "2026-08-10-first-baton.md"
+            second_out = repo / "docs" / "plans" / "2026-08-10-second-baton.md"
+
+            first_result = _run_cli(repo, first_out, "First baton plan", sizing_rel)
+            self.assertEqual(first_result.returncode, 0, first_result.stderr)
+            self.assertTrue(first_out.exists())
+
+            sizing_after_first = yaml.safe_load(sizing_file.read_text())
+            first_plan_rel = first_out.relative_to(repo).as_posix()
+            self.assertEqual(sizing_after_first.get("plan"), first_plan_rel)
+            self.assertEqual(sizing_after_first.get("status"), "routed")
+            # First plan carried the sizing-minted id verbatim -- no explicit
+            # --deliverable-id, no session-held roadmap-stub claim, and the
+            # sizing is not yet routed, so the cited-sizing carry tier fires.
+            first_plan_text = first_out.read_text()
+            self.assertIn('deliverable_id: "dlv-sizing-carried-aaaaaa"', first_plan_text)
+
+            # Without --fan-out, the second citation refuses -- the sizing
+            # already citing a different plan, exactly the re-route shape.
+            second_refused = _run_cli(
+                repo, second_out, "Second baton plan, no flag asserted", sizing_rel,
+            )
+            self.assertNotEqual(second_refused.returncode, 0)
+            self.assertFalse(second_out.exists())
+
+            # With --fan-out asserted, it proceeds -- and this plan mints
+            # its OWN deliverable_id rather than carrying the cited sizing's
+            # (the `--fan-out` tier skips the cited-sizing carry entirely),
+            # so the two plans' ids do not fork one deliverable into two.
+            second_result = _run_cli(
+                repo, second_out, "Second baton plan, a distinct deliverable", sizing_rel,
+                "--fan-out",
+            )
+            self.assertEqual(second_result.returncode, 0, second_result.stderr)
+            self.assertTrue(second_out.exists())
+
+            second_plan_text = second_out.read_text()
+            self.assertNotIn('deliverable_id: "dlv-sizing-carried-aaaaaa"', second_plan_text)
+
+            sizing_after_second = yaml.safe_load(sizing_file.read_text())
+            # `plan:` and `status:` are untouched by the fan-out -- still
+            # naming the FIRST plan, same as the no-sizing-id fan-out test.
+            self.assertEqual(sizing_after_second.get("plan"), first_plan_rel)
+            self.assertEqual(sizing_after_second.get("status"), "routed")
+
+
+class FullCliReverseEdgeFanOutExplicitDeliverableIdWinsTest(unittest.TestCase):
+    """An explicit `--deliverable-id` still wins over both the cited-sizing
+    carry AND the `--fan-out` mint-own-id behaviour -- it is checked ahead
+    of the cited-sizing carry tier in `main()` regardless of `--fan-out`."""
+
+    def test_explicit_deliverable_id_is_carried_verbatim_under_fan_out(self):
+        with _tmp_git_repo() as (repo, _unused_out):
+            sizing_dir = repo / "state" / "sizings"
+            sizing_dir.mkdir(parents=True)
+            sizing_file = sizing_dir / "2026-08-10-example.yaml"
+            sizing_file.write_text(
+                _MINIMAL_SIZING_KEYS
+                + 'deliverable_id: "dlv-sizing-carried-aaaaaa"\n'
+                + "status: sized\nplan: null\n"
+            )
+            sizing_rel = "state/sizings/2026-08-10-example.yaml"
+
+            (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+            first_out = repo / "docs" / "plans" / "2026-08-10-first-baton.md"
+            second_out = repo / "docs" / "plans" / "2026-08-10-second-baton.md"
+
+            first_result = _run_cli(repo, first_out, "First baton plan", sizing_rel)
+            self.assertEqual(first_result.returncode, 0, first_result.stderr)
+
+            second_result = _run_cli(
+                repo, second_out, "Second baton plan, explicit id", sizing_rel,
+                "--fan-out", "--deliverable-id", "dlv-explicit-cccccc",
+            )
+            self.assertEqual(second_result.returncode, 0, second_result.stderr)
+            self.assertTrue(second_out.exists())
+            second_plan_text = second_out.read_text()
+            self.assertIn('deliverable_id: "dlv-explicit-cccccc"', second_plan_text)
 
 
 if __name__ == "__main__":

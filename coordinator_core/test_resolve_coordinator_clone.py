@@ -79,6 +79,26 @@ def test_mode_no_source_found_fails_loud(isolated_home):
         rcc._resolve_source_mode("git-ops")
 
 
+def test_mode_no_source_found_carries_no_source_found_flag(isolated_home):
+    """Bug row 2b3bb4f1938a: this is the ONE terminal case a caller
+    (`coordinator_core.ops.coordinator_doe_root._resolve_via_clone_root_script`)
+    must be able to tell apart from a genuinely actionable failure -- see
+    `ResolveCoordinatorCloneError.__init__`'s own docstring."""
+    with pytest.raises(rcc.ResolveCoordinatorCloneError) as exc_info:
+        rcc._resolve_source_mode("git-ops")
+    assert exc_info.value.no_source_found is True
+
+
+def test_mode_explicit_invalid_value_does_not_carry_no_source_found_flag(isolated_home, monkeypatch):
+    """A bad `COORDINATOR_SOURCE_MODE` value is an actionable misconfiguration,
+    not "nothing to report" -- must NOT be classified alongside the silent
+    no-source-anywhere case."""
+    monkeypatch.setenv("COORDINATOR_SOURCE_MODE", "bogus")
+    with pytest.raises(rcc.ResolveCoordinatorCloneError) as exc_info:
+        rcc._resolve_source_mode("git-ops")
+    assert exc_info.value.no_source_found is False
+
+
 def test_mode_oss_present_alone_resolves_oss(isolated_home):
     plugin_json = isolated_home / ".claude" / "plugins" / "coordinator-claude" / ".claude-plugin"
     plugin_json.mkdir(parents=True)
@@ -174,6 +194,21 @@ def test_mode_unmarked_candidate_plus_oss_is_ambiguous(isolated_home, monkeypatc
     (plugin_json / "plugin.json").write_text("{}")
     with pytest.raises(rcc.ResolveCoordinatorCloneError, match="ambiguous"):
         rcc._resolve_source_mode("git-ops")
+
+
+def test_mode_ambiguous_does_not_carry_no_source_found_flag(isolated_home, monkeypatch):
+    """The ambiguous-source failure is actionable (the message tells the
+    operator to set `COORDINATOR_SOURCE_MODE`) -- it must not be silenced
+    by a caller that only suppresses the truly-empty case."""
+    candidate = isolated_home.parent / "candidate-clone"
+    candidate.mkdir()
+    monkeypatch.setattr(rcc, "_read_doe_root_pointer", lambda: str(candidate))
+    plugin_json = isolated_home / ".claude" / "plugins" / "coordinator-claude" / ".claude-plugin"
+    plugin_json.mkdir(parents=True)
+    (plugin_json / "plugin.json").write_text("{}")
+    with pytest.raises(rcc.ResolveCoordinatorCloneError) as exc_info:
+        rcc._resolve_source_mode("git-ops")
+    assert exc_info.value.no_source_found is False
 
 
 # --- resolve_clone_root ------------------------------------------------------

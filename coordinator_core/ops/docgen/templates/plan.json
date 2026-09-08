@@ -32,6 +32,8 @@
       {"kind": "literal", "line": "#     baseline_output:"},
       {"kind": "literal", "line": "#     baseline_ref:"},
       {"kind": "literal", "line": "#     expected_when_true:             # NEW in 2.8.0 — do not omit"},
+      {"kind": "literal", "line": "census: []  # counted premises as question/command/result rows; [] declares none —"},
+      {"kind": "literal", "line": "            # a claim a reviewer can falsify. Bar: coordinator/bin/mise-prep-gate.py."},
       {"kind": "literal", "line": "gated_exit_criteria:"},
       {"kind": "literal", "line": "  - brightline: work-proportionate-to-question"},
       {"kind": "literal", "line": "    statement: >-"},

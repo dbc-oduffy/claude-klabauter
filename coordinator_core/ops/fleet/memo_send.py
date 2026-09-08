@@ -624,6 +624,113 @@ def _write_msg_file(text: str) -> Path:
 # Handler
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Environment gate: warn once where a memo would have no reader (C-env).
+# ---------------------------------------------------------------------------
+
+#: Where the once-per-topic acknowledgement lands. Under the sender's own
+#: `.coordinator-local/` (already the outbox's home and already untracked),
+#: never in a receiver's tree and never in git history — this is session-local
+#: bookkeeping about a warning, not a durable fleet artifact.
+_SEND_ACK_RELDIR = (".coordinator-local", "memo-send-ack")
+
+
+def _memo_has_no_reader(receiver_root=None):
+    """The capability, or `None` when this memo would be read.
+
+    Consults `peer_ems_reachable` against THE ADDRESSEE'S OWN INBOX, which is
+    a genuinely different question from the write bump's `fleet_present` and
+    now returns a genuinely different answer: the memo corpus stamps a drained
+    memo `picked_up_at`, so an inbox nobody is working is directly observable.
+    Measured 2026-09-06 on one container: `fleet_present=False` while
+    example-market-data-repo's inbox read `peer_ems_reachable=True` (drained 1d
+    ago). The two are not aliases.
+
+    Fail open: an unimportable capability layer means send exactly as before.
+    """
+    try:
+        from coordinator_core.environment import capability
+
+        reachable = capability("peer_ems_reachable", receiver_root=receiver_root)
+    except Exception:
+        return None
+    return None if reachable.value else reachable
+
+
+def _send_ack_path(sender_worktree: Path, topic: str) -> Path:
+    """One marker per topic, keyed by hash rather than transliteration.
+
+    The first version filtered non-alphanumerics to `-`, which collapsed `a/b`,
+    `a-b` and `a b` onto one marker — so one topic could consume another's
+    single warning — and kept `.`, so a topic of `.` or `..` addressed a
+    directory. A digest has neither problem and needs no length cap.
+    """
+    import hashlib
+
+    digest = hashlib.sha256(topic.encode("utf-8")).hexdigest()[:32]
+    return sender_worktree.joinpath(*_SEND_ACK_RELDIR) / digest
+
+
+def _no_reader_warning(topic: str, evidence: str) -> str:
+    """The one-shot warning. A REGISTER, not an essay: one fact, the test the
+    EM applies, and the way through — no self-legitimacy, no apology, no
+    override key dressed up as a punishment.
+
+    It does not say "do not send". A memo is still the right artifact for
+    plan-weight work with no reader today, because it is a durable record for
+    whoever picks the repo up. It says what sending here does and does not
+    buy, and hands the decision back.
+    """
+    return (
+        "memo.send: no peer EM is reachable on this host, so this memo will "
+        "not be read — it is a record, not a dispatch.\n"
+        "  Why: %s\n"
+        "\n"
+        "  If the work is a clear win you are confident in and within your "
+        "competence, doing it\n"
+        "  directly under PM assent beats filing a request nobody receives.\n"
+        "  If it is plan-weight complexity, the memo IS the right artifact — "
+        "re-run this exact\n"
+        "  command and it will send.\n"
+        "\n"
+        "  Nothing was written. This warning fires once per topic (%s); the "
+        "next attempt sends.\n"
+        "  If this host does carry a fleet, say so with "
+        "COORDINATOR_CAP_PEER_EMS_REACHABLE=1." % (evidence, topic)
+    )
+
+
+def _no_reader_gate(
+    sender_worktree: Path, topic: str, dry_run: bool, receiver_root=None
+) -> Optional[str]:
+    """`None` to proceed; a warning string to refuse this one time.
+
+    Never gates a `dry_run` preview — a preview writes nothing, so warning
+    about delivery there would spend the operator's one warning on a call
+    that was never going to deliver.
+    """
+    if dry_run:
+        return None
+    unreachable = _memo_has_no_reader(receiver_root)
+    if unreachable is None:
+        return None
+
+    ack = _send_ack_path(sender_worktree, topic)
+    try:
+        if ack.is_file():
+            return None
+        ack.parent.mkdir(parents=True, exist_ok=True)
+        ack.write_text(
+            "warned: %s\n" % unreachable.evidence, encoding="utf-8"
+        )
+    except OSError:
+        # Cannot record the acknowledgement, so cannot promise the next
+        # attempt behaves differently. Refusing here would strand the memo
+        # permanently; send.
+        return None
+    return _no_reader_warning(topic, unreachable.evidence)
+
+
 @register_op("memo.send")
 def _memo_send(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'memo.send' MUTATING op handler.
@@ -728,6 +835,16 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         )
     except AmbiguousReceiverError as exc:
         return build_setup_error_result(_MODE, dry_run, f"memo.send: {exc}")
+
+    # Warn-once where THIS RECEIVER's inbox shows no one draining it. Sited
+    # here rather than earlier so the probe reads the addressee's own inbox
+    # instead of guessing from the venue; nothing has been written yet, so a
+    # refusal still costs nothing.
+    no_reader = _no_reader_gate(
+        sender_worktree, topic, dry_run, receiver_root=receiver_repo_path
+    )
+    if no_reader is not None:
+        return build_setup_error_result(_MODE, dry_run, no_reader)
 
     if inbox_dir is None:
         suggestion = _suggest_nearest_receiver(to, all_repos)

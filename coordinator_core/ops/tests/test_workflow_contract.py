@@ -599,3 +599,102 @@ def test_run_checks_genuinely_impure_meta_still_caught_after_scrub_fix():
     findings = run_checks(src)
     errors = [f for f in findings if f.severity == Severity.ERROR]
     assert any(f.code == "meta-impure-call" for f in errors)
+
+
+def test_meta_phase_titles_survives_an_escaped_quote_in_a_neighbouring_detail():
+    """An escaped quote must not shift the pairing and hide later phases.
+
+    The prior scan matched any quote to the next quote, so a `\\'` inside a `detail:`
+    string paired with the wrong partner and every entry after it shifted by one. The
+    failure is silent and inverted: a phase plainly present in `meta.phases` is reported
+    as undeclared, while fragments of `detail:` prose are reported as declared titles. A
+    script survived it only by carrying an even number of escaped quotes.
+    """
+    block = (
+        "phases: [\n"
+        "  { title: 'Alpha', detail: 'it\\'s fine' },\n"
+        "  { title: 'Beta', detail: 'plain' },\n"
+        "  { title: \"Gamma's turn\", detail: 'x' },\n"
+        "]"
+    )
+    assert meta_phase_titles(block) == {"Alpha", "Beta", "Gamma's turn"}
+
+
+def test_meta_phase_titles_reads_titles_only_not_every_quoted_string():
+    """`detail:` prose is not a phase title.
+
+    The declared set is compared against real `phase()` / `phase:` titles; admitting
+    every quoted string made it a superset that could mask a genuine mismatch whenever a
+    phase title happened to appear inside someone's prose.
+    """
+    block = "phases: [{ title: 'Only', detail: 'Review is mentioned here' }]"
+    assert meta_phase_titles(block) == {"Only"}
+
+
+# Review: code-reviewer (Finding 4, minor) -- the two tests above both pin the fix
+# against ONE shape (homogeneous object-form, single-quote-style detail escaping) and
+# exercise none of the shapes that independently broke it one layer down (Findings
+# 1-3). Each test below is one of those reproductions, added as its own regression case
+# rather than folded into the existing two so a future revert of any one fix fails its
+# own test rather than a shared one.
+
+
+def test_meta_phase_titles_reads_bare_titles_alongside_object_form_siblings():
+    """Finding 1 -- mixing bare-string and object-form entries in one array must not
+    drop the bare entries.
+
+    The prior object-form/bare-string switch was all-or-nothing (`if titles: return
+    titles`): the moment ONE object-form entry appeared anywhere in the array, every
+    bare-string sibling was silently discarded from the declared set, not merged. A
+    `phase('Bare1')` call elsewhere in the same script would then wrongly WARN that
+    'Bare1' is undeclared, even though it plainly is.
+    """
+    block = "phases: ['Bare1', { title: 'Obj1', detail: 'x' }, 'Bare2']"
+    assert meta_phase_titles(block) == {"Bare1", "Obj1", "Bare2"}
+
+
+def test_meta_phase_titles_reads_template_literal_titles():
+    """Finding 2 -- a backtick-quoted `title:` value must be read as the title, not
+    silently dropped into the bare-string fallback that then admits `detail:` prose.
+
+    The prior title regex matched only `'...'`/`"..."` after `title:`; a template
+    literal was invisible to it. When every title in the array was backtick-quoted,
+    the object-form scan came back empty and the module fell through to the
+    bare-string branch, which reads every quoted string in the array body -- so the
+    real title was lost AND unrelated `detail:` prose was reported as a declared
+    phase, in one input.
+    """
+    block = "phases: [{ title: `Templated`, detail: 'x' }]"
+    assert meta_phase_titles(block) == {"Templated"}
+
+
+def test_meta_phase_titles_ignores_a_commented_out_title():
+    """Finding 3a -- a `title:`-shaped fragment inside a `//` line comment is not a
+    declared phase.
+
+    The prior scan ran over raw text with no comment-stripping, so a commented-out
+    (or dead) `title: 'Fake'` fragment read as a genuinely declared title -- the
+    permissive SUPERSET risk the fix this test file already pins (see the escaped-
+    quote and titles-only tests above) explicitly warns against, reintroduced via
+    comments rather than via bare `detail:` prose.
+    """
+    block = (
+        "phases: [\n"
+        "  // { title: 'Fake' }\n"
+        "  { title: 'Real', detail: 'x' },\n"
+        "]"
+    )
+    assert meta_phase_titles(block) == {"Real"}
+
+
+def test_meta_phase_titles_ignores_a_title_shaped_fragment_nested_in_detail():
+    """Finding 3b -- a `title:`-shaped substring nested inside a `detail:` string
+    quoted with the OTHER quote character is not a declared phase.
+
+    The prior scan had no string-context tracking, so a `finditer` pass over raw
+    text could not tell that `title: 'Nested'` inside a double-quoted `detail:`
+    value is data, not code -- it read 'Nested' as a second declared title sharing
+    the array with the real one.
+    """
+    block = "phases: [{ title: \"Real\", detail: \"see title: 'Nested' for context\" }]"
+    assert meta_phase_titles(block) == {"Real"}

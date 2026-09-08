@@ -89,11 +89,11 @@ class Report:
     settings_home: str | None = None
     container_optin_requested: bool | None = None
     setup_exit_code: int | None = None
+    plugin_settings: dict | None = None
+    doctrine_candidates_tried: list[str] = field(default_factory=list)
+    global_doctrine: dict | None = None
 
     def to_dict(self) -> dict:
-        # Review: overengineering-reviewer — dataclasses.asdict already produces
-        # this exact structure; the hand-enumerated version was a second edit
-        # site that would silently drift out of date on a new field.
         return dataclasses.asdict(self)
 
 
@@ -133,13 +133,10 @@ def run_step(name: str, fn, report: Report) -> None:
     This is how fact 3 (exit zero, or the cloud session fails to start) is
     satisfied without pretending a failed step succeeded.
 
-    # Review: overengineering-reviewer — previously returned a bool no call
-    # site read. The reviewer's preferred fix (short-circuit later steps on
-    # an earlier failure) was not landed: `main`'s all-steps-failing arm
-    # (scripts/test_cloud_setup.py, this plan's prime exit-criterion
-    # falsifier) requires every step to still run and be named in the
-    # report even when an earlier one fails, so a return value nothing
-    # else needs was dropped instead. See dispatch escalation.
+    Returns nothing: every step must still run and be named in the report
+    even after an earlier one fails (the all-steps-failing case
+    `scripts/tests/test_cloud_setup.py` pins), so short-circuiting later
+    steps on an earlier failure is not this function's job.
     """
     try:
         fn()
@@ -158,11 +155,9 @@ def _network_retry(name: str, attempt_fn) -> None:
     Raises the last exception if every attempt fails, so the caller's
     `run_step` records it — no silent skip.
 
-    # Review: overengineering-reviewer — dropped the separate total-time
-    # budget axis. Whichever axis tripped, the outcome was identical
-    # (recorded failure, exit 0), and git clone's own `timeout=60` already
-    # bounds wall clock; a second, independently-configured bound was
-    # specified but not justified.
+    No separate total-time budget: git clone's own `timeout=60` already
+    bounds wall clock, and a second, independently-configured bound would
+    trip to the same outcome (recorded failure, exit 0) as the attempt count.
     """
     last_exc: Exception | None = None
     for attempt in range(1, NETWORK_MAX_ATTEMPTS + 1):
@@ -184,9 +179,9 @@ def _git_clone(url: str, dest: str) -> None:
         capture_output=True,
         text=True,
         timeout=60,
-        # Review: code-reviewer (2026-09-06) -- stdin explicitly closed rather
-        # than inherited: an ambient closed fd 0 would otherwise let git (or a
-        # credential helper it spawns) be handed an unrelated fd as "stdin".
+        # stdin explicitly closed rather than inherited: an ambient closed fd 0
+        # would otherwise let git (or a credential helper it spawns) be handed
+        # an unrelated fd as "stdin".
         stdin=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
@@ -242,19 +237,18 @@ def run_coordinator_install_trampoline() -> None:
     env["COORDINATOR_ENGINE_ROOT"] = str(engine_root)
 
     result = subprocess.run(
-        # Review: code-reviewer (2026-09-06) — pass --non-interactive explicitly
-        # rather than relying solely on maximalist.py's own isatty() fallback.
-        # The cloud host's non-tty stdin makes that fallback safe today, but it
-        # is a guard this caller does not control; asserting it directly means a
-        # future prompt gated only on the flag (not also on isatty) still fails
-        # fast instead of hanging into run_step's 180s subprocess timeout.
+        # --non-interactive passed explicitly rather than relying solely on
+        # maximalist.py's own isatty() fallback: that guard is not this
+        # caller's to control, and asserting the flag directly means a future
+        # prompt gated only on it (not also on isatty) still fails fast
+        # instead of hanging into run_step's 180s subprocess timeout.
         ["python3", str(orchestrator), "--non-interactive"],
         capture_output=True,
         text=True,
         timeout=180,
         env=env,
-        # Review: code-reviewer (2026-09-06) -- stdin explicitly closed, not
-        # inherited; see the matching comment on _git_clone's subprocess.run.
+        # stdin explicitly closed, not inherited; see the matching comment on
+        # _git_clone's subprocess.run.
         stdin=subprocess.DEVNULL,
     )
     print(result.stdout, end="")
@@ -296,25 +290,17 @@ def run_claude_klabauter_setup(report: Report) -> None:
         coordinator_root,
         "--i-assert-no-other-consumer",
     ]
-    # Review: code-reviewer (2026-09-06) — the prior field name/value
-    # ("flag passed in setup.py argv", called "recorded") implied an outcome
-    # this process cannot know: it knows it PASSED --i-assert-no-other-consumer
-    # (first-hand, true regardless of what setup.py does with it); it does NOT
-    # know whether setup.py's own host-precondition gate actually honoured the
-    # opt-in (Linux + euid 0 + a guarded candidate found). Two first-hand facts
-    # are recorded instead of one conflated one:
-    #   - container_optin_requested: this process asserted the flag in argv.
-    #   - setup_exit_code: setup.py's real exit code, captured on every path
-    #     (not just failure) so a later reader can see exit 96 (PEP-668
-    #     refusal — DR-411's precise "was the carve-out honoured?" case) versus
-    #     exit 0.
-    # This still does not fully discharge DR-411 § "Recorded in the install
-    # report": exit 0 alone cannot distinguish "opt-in honoured, guarded
-    # candidate found" from "ordinary install, opt-in never exercised because
-    # nothing was guarded" — setup.py does not surface that distinction on any
-    # channel this process can observe without re-scanning stdout for a
-    # marker string, which the prior review rejected. Named here rather than
-    # papered over: the report can prove REFUSAL was avoided, not that the
+    # `container_optin_requested` and `setup_exit_code` are two separate
+    # first-hand facts, never conflated into one: this process knows it PASSED
+    # --i-assert-no-other-consumer regardless of what setup.py does with it,
+    # but does NOT know whether setup.py's own host-precondition gate actually
+    # honoured the opt-in. `setup_exit_code` is captured on every path (not
+    # just failure) so a later reader can see exit 96 (PEP-668 refusal —
+    # DR-411's precise "was the carve-out honoured?" case) versus exit 0. Even
+    # so, exit 0 alone cannot distinguish "opt-in honoured, guarded candidate
+    # found" from "ordinary install, opt-in never exercised" -- setup.py
+    # surfaces no distinct channel for that without scanning stdout for a
+    # marker string. The report can prove REFUSAL was avoided, not that the
     # carve-out was exercised.
     report.container_optin_requested = True
     result = subprocess.run(
@@ -333,16 +319,278 @@ def run_claude_klabauter_setup(report: Report) -> None:
         stdin=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-    # Review: code-reviewer (2026-09-06) -- printed on both success and
-    # failure, consistent with run_coordinator_install_trampoline: this is a
-    # one-shot snapshotted VM with the JSON report as the only other durable
-    # artifact, so a successful run's setup.py progress output (interpreter
-    # chosen, dep path taken, DR-411 opt-in honoured or not) would otherwise
-    # be visible only when the run fails.
+    # Printed on both success and failure, consistent with
+    # run_coordinator_install_trampoline: this is a one-shot snapshotted VM
+    # with the JSON report as the only other durable artifact, so a
+    # successful run's setup.py progress output (interpreter chosen, dep path
+    # taken, DR-411 opt-in honoured or not) would otherwise be visible only
+    # when the run fails.
     print(result.stdout, end="")
     report.setup_exit_code = result.returncode
     if result.returncode != 0:
         raise RuntimeError(f"scripts/setup.py exited {result.returncode}: {result.stderr.strip()}")
+
+
+def _claude_home() -> Path:
+    """Resolve the VM's own `.claude` directory: `CLAUDE_HOME` first, then
+    `HOME`, then the platform home directory (`expanduser("~")`).
+
+    This is NOT the same resolution order as
+    `coordinator_core/hooks/platform_localize.py :: resolve_registry_paths`,
+    which never reads `HOME` directly (it goes straight from `CLAUDE_HOME` to
+    `expanduser("~")`, which only consults `HOME` internally on POSIX, not on
+    Windows). The explicit `HOME` step here is a deliberate, real behavioural
+    difference, kept because this module targets a cloud VM where `HOME` is
+    set by the environment before this script runs (fact 2's env-var block
+    is this process' own, not the shell's) -- naming `HOME` explicitly makes
+    that resolution readable without knowing `expanduser`'s
+    platform-conditional internals.
+
+    `CLAUDE_HOME` names the PARENT of `.claude` and this function appends that
+    segment itself, matching `platform_localize`'s contract. A `CLAUDE_HOME`
+    that already ends in `.claude` is therefore a misconfiguration, and is
+    refused rather than resolved: silently writing to `<...>/.claude/.claude/`
+    would put the plugin registration and the doctrine somewhere no session
+    reads, while every step still reported OK.
+
+    This refusal is a second spelling of a rule whose canonical home is
+    `coordinator_core/hooks/platform_localize.py :: reject_doubled_claude_home`
+    (four importers on current HEAD). It is re-implemented here, not imported,
+    because this script is dependency-free by design (see module docstring):
+    it runs on a bare cloud VM BEFORE `coordinator_core` is cloned or
+    installed, so importing from it is not available at the point this
+    function runs. If the shared rule's shape or message changes, check here
+    too.
+
+    # Review: coordinator:code-reviewer Finding 1 -- the refusal only has
+    # standing to judge CLAUDE_HOME. HOME and expanduser("~") are values this
+    # process's operator never set and never chose to misconfigure; a VM whose
+    # real home legitimately ends in .claude must resolve, not be refused with
+    # a message blaming a variable that may never have been set. Only the
+    # CLAUDE_HOME source is checked, and only CLAUDE_HOME's own value is
+    # compared -- so the raised message can only ever be true.
+    """
+    claude_home_env = os.environ.get("CLAUDE_HOME")
+    if claude_home_env:
+        # Compared case-insensitively: a `.Claude` spelling must not slip past
+        # this on a case-insensitive filesystem. An EMPTY CLAUDE_HOME is unset,
+        # not a misconfiguration -- falling through to HOME is what the earlier
+        # `or` chain did, and treating "" as a chosen value would resolve the
+        # whole install to a relative `.claude` directory.
+        if Path(claude_home_env).name.lower() == ".claude":
+            raise ValueError(
+                f"CLAUDE_HOME names the parent of .claude, but is {claude_home_env!r} -- "
+                "point it at the home directory, not at .claude itself"
+            )
+        base = claude_home_env
+    else:
+        base = os.environ.get("HOME") or os.path.expanduser("~")
+    return Path(base) / ".claude"
+
+
+def register_plugin_settings() -> None:
+    """Write `$CLAUDE_HOME/settings.json` (or `$HOME/.claude/settings.json`)
+    so the coordinator plugin is registered before Claude Code launches in
+    this cloud VM.
+
+    Modelled on DoE-claude's `coordinator/templates/cloud-env/setup.sh`
+    phase 3 (lines 125-161): a `directory` marketplace source pointing at the
+    already-cloned `coordinator-claude` checkout, plus `enabledPlugins`, plus
+    `env.COORDINATOR_PROBE_CANARY`.
+
+    THE CANARY IS NOT OPTIONAL AND IS NOT A DoE-SIDE CONCERN. Without it,
+    EVERY Bash call in the cloud session is denied for that session's whole
+    life. `coordinator_core/warm/hook_http.py :: OVERRIDE_CANARY_ENV` sends
+    `${COORDINATOR_PROBE_CANARY}` interpolated into the
+    `X-Coordinator-Env-Canary` header, and its own docstring calls it "a var
+    the launcher always exports non-empty" -- an empty canary beside a
+    declared channel is read as a setting-level VETO and disarms the channel.
+    A cloud session has no launcher, so nothing exports it and the veto fires
+    on a session that never vetoed anything. Seeding it here is the recovery
+    the forwarder's own deny text prescribes, applied at provision time so no
+    session has to.
+
+    Merge, never clobber: an existing `settings.json` is read and patched.
+    Unparseable existing JSON is a recorded step FAILURE (raised so `run_step`
+    catches it), never a reason to overwrite the file.
+    """
+    claude_home = _claude_home()
+    claude_home.mkdir(parents=True, exist_ok=True)
+    settings_path = claude_home / "settings.json"
+
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+        except Exception as e:
+            raise ValueError(f"existing settings.json is not valid JSON: {e}") from e
+    else:
+        settings = {}
+
+    marketplace_path = CLONES["coordinator-claude"]["dest"]
+    settings.setdefault("extraKnownMarketplaces", {})["coordinator-claude"] = {
+        "source": {"source": "directory", "path": marketplace_path}
+    }
+    settings.setdefault("enabledPlugins", {})["coordinator@coordinator-claude"] = True
+    settings.setdefault("env", {})["COORDINATOR_PROBE_CANARY"] = "1"
+
+    tmp_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(settings, indent=2))
+    tmp_path.replace(settings_path)
+
+
+def verify_plugin_settings(report: Report) -> None:
+    """Read `settings.json` back off disk and record onto `report.plugin_settings`
+    what a session launched in this VM will actually see -- never the values
+    `register_plugin_settings` just wrote in memory, which is the failure mode
+    this half exists to prevent (a write that silently no-ops would otherwise
+    still report success).
+    """
+    settings_path = _claude_home() / "settings.json"
+    result = {
+        "settings_path": str(settings_path),
+        "marketplace_registered": False,
+        "marketplace_path": None,
+        "plugin_enabled": False,
+        "probe_canary_seeded": False,
+    }
+    try:
+        settings = json.loads(settings_path.read_text())
+    except Exception:
+        report.plugin_settings = result
+        return
+
+    marketplace = settings.get("extraKnownMarketplaces", {}).get("coordinator-claude", {})
+    marketplace_path = marketplace.get("source", {}).get("path")
+    result["marketplace_registered"] = marketplace_path is not None
+    result["marketplace_path"] = marketplace_path
+    result["plugin_enabled"] = bool(settings.get("enabledPlugins", {}).get("coordinator@coordinator-claude"))
+    result["probe_canary_seeded"] = bool(settings.get("env", {}).get("COORDINATOR_PROBE_CANARY"))
+    report.plugin_settings = result
+
+
+def _find_doctrine_source() -> tuple[Path | None, list[str]]:
+    """Search order for the global-doctrine source, first hit wins.
+
+    A candidate is accepted only if it contains a readable `CLAUDE.md`. Returns
+    the accepted candidate (or None) plus the full list of candidates tried, in
+    order, so a miss can be reported with what was searched.
+
+    Three candidates, each a source that actually ships doctrine: the cwd copy
+    (a self-hosted runner checked out with one alongside it), any
+    `/workspace/*/global-doctrine` (the claude.ai cloud-environment mount), and
+    the coordinator-claude clone's `templates/global-doctrine` (published to
+    `dbc-oduffy/coordinator-claude`, verified end-to-end 2026-09-07). Re-add a
+    candidate when a new source starts shipping there, not in anticipation.
+    """
+    candidates: list[Path] = [Path.cwd() / "global-doctrine"]
+    candidates.extend(sorted(Path("/workspace").glob("*/global-doctrine")))
+    coordinator_dest = Path(CLONES["coordinator-claude"]["dest"])
+    candidates.append(coordinator_dest / "templates" / "global-doctrine")
+
+    tried = [str(c) for c in candidates]
+    for cand in candidates:
+        candidate_doctrine = cand / "CLAUDE.md"
+        # Review: coordinator:code-reviewer Finding 2 -- is_file() does not
+        # test readability (it only needs traversal permission on parent
+        # dirs, not read permission on the leaf), so an unreadable CLAUDE.md
+        # would previously win the search and a later, good candidate would
+        # never be tried. os.access is skipped deliberately -- it lies under
+        # some containers and on Windows -- in favour of actually attempting
+        # the read and treating any failure as "this candidate is not it".
+        try:
+            candidate_doctrine.read_bytes()
+        except OSError:
+            continue
+        return cand, tried
+    return None, tried
+
+
+def install_global_doctrine(report: Report) -> None:
+    """Land the fleet's global doctrine into this VM's own `.claude` directory.
+
+    Modelled on `coordinator/templates/cloud-env/setup.sh` phase 3b. Copies
+    `CLAUDE.md` and every `rules/*.md` from the first accepted source
+    candidate (see `_find_doctrine_source`) into `_claude_home()`.
+
+    Copy, never mirror-and-prune: nothing already present under
+    `<claude_home>` or its `rules/` is ever deleted or cleared — a
+    self-hosted runner's `$HOME/.claude` may carry seeded content this must
+    not eat. `CLAUDE.md` itself IS overwritten unconditionally, and that is
+    correct, not a bug to "fix" into write-if-absent: per
+    `coordinator/bin/check-global-doctrine-mirror.py`, the tracked
+    `global-doctrine/` copy is the AUTHORITATIVE source and the `.claude`
+    copy is the derived, live one.
+
+    No source found is a RECORDED MISS, not an exception and not a silent
+    skip: this function never raises for that case (a doctrine-blind VM is a
+    real posture problem, but not one that should abort the whole cloud
+    session), and the candidates tried are stashed onto `report` so
+    `verify_global_doctrine` — and a human reading the report — can see
+    exactly what was searched.
+    """
+    source, tried = _find_doctrine_source()
+    if source is None:
+        report.doctrine_candidates_tried = tried
+        report.global_doctrine = {"source": None}
+        _safe_print(
+            "[cloud_setup] doctrine: FAIL (no copy found in any of "
+            f"{tried} -- session runs doctrine-blind)"
+        )
+        return
+
+    report.global_doctrine = {"source": str(source)}
+    claude_home = _claude_home()
+    claude_home.mkdir(parents=True, exist_ok=True)
+    (claude_home / "CLAUDE.md").write_bytes((source / "CLAUDE.md").read_bytes())
+
+    rules_src = source / "rules"
+    if rules_src.is_dir():
+        rules_dest = claude_home / "rules"
+        rules_dest.mkdir(parents=True, exist_ok=True)
+        rules_files = sorted(rules_src.glob("*.md"))
+        # Review: coordinator:code-reviewer Finding 3 -- no per-file
+        # isolation (deliberate: no rollback on a partial copy, see the
+        # docstring above), but a mid-loop failure previously left the
+        # step's detail as raw exception text with no way to tell "0 of N
+        # landed" from "N-1 of N landed". copied_count is tracked here and
+        # folded into the re-raised message so a partial rules set is
+        # legible in the report without cross-referencing
+        # verify_global_doctrine's disk read-back.
+        copied_count = 0
+        try:
+            for md_file in rules_files:
+                (rules_dest / md_file.name).write_bytes(md_file.read_bytes())
+                copied_count += 1
+        except Exception as e:
+            raise RuntimeError(
+                f"doctrine rules copy failed after {copied_count} of {len(rules_files)} "
+                f"files (from {rules_src}): {type(e).__name__}: {e}"
+            ) from e
+    _safe_print(f"[cloud_setup] doctrine: OK -> {claude_home / 'CLAUDE.md'} (from {source})")
+
+
+def verify_global_doctrine(report: Report) -> None:
+    """Read back off disk whether global doctrine landed -- never asserts what
+    `install_global_doctrine` just wrote in memory, only what is actually on
+    disk now. Adds its disk-read facts onto the same `report.global_doctrine`
+    dict `install_global_doctrine` started (which already holds `source`);
+    it does not re-derive `source` itself.
+    """
+    claude_home = _claude_home()
+    claude_md = claude_home / "CLAUDE.md"
+    rules_dir = claude_home / "rules"
+    exists = claude_md.is_file()
+    size = claude_md.stat().st_size if exists else 0
+    rules_count = len(list(rules_dir.glob("*.md"))) if rules_dir.is_dir() else 0
+    if report.global_doctrine is None:
+        report.global_doctrine = {"source": None}
+    report.global_doctrine.update(
+        {
+            "claude_md_present": exists,
+            "claude_md_size_bytes": size,
+            "rules_file_count": rules_count,
+        }
+    )
 
 
 def write_report(report: Report) -> None:
@@ -354,14 +602,14 @@ def _safe_print(text: str) -> None:
     """Print text that may contain content this process did not choose, without
     ever raising past this call.
 
-    # Review: code-reviewer (2026-09-06) -- called from `_print_summary`, which
-    # runs in `main` outside any `run_step` net. `step.detail` is built from raw
-    # subprocess stderr / exception text (git, pip, the install orchestrator),
-    # so a minimal-locale host (LANG=C, no UTF-8) can hand this a non-ASCII byte
-    # `print()` cannot encode. An encoding-safe write makes that failure
-    # impossible rather than caught: a try/except around the call would still
-    # lose the whole summary (and the install report, written after it) the
-    # moment one byte is odd, where sanitizing keeps the summary visible.
+    Called from `_print_summary`, which runs in `main` outside any `run_step`
+    net. `step.detail` is built from raw subprocess stderr / exception text
+    (git, pip, the install orchestrator), so a minimal-locale host (LANG=C, no
+    UTF-8) can hand this a non-ASCII byte `print()` cannot encode. An
+    encoding-safe write makes that failure impossible rather than caught: a
+    try/except around the call would still lose the whole summary (and the
+    install report, written after it) the moment one byte is odd, where
+    sanitizing keeps the summary visible.
     """
     encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
     safe_text = text.encode(encoding, errors="replace").decode(encoding, errors="replace")
@@ -409,6 +657,10 @@ def main() -> int:
         report,
     )
     run_step("run scripts/setup.py", lambda: run_claude_klabauter_setup(report), report)
+    run_step("register plugin settings", register_plugin_settings, report)
+    run_step("verify plugin settings", lambda: verify_plugin_settings(report), report)
+    run_step("install global doctrine", lambda: install_global_doctrine(report), report)
+    run_step("verify global doctrine", lambda: verify_global_doctrine(report), report)
 
     _print_summary(report)
 

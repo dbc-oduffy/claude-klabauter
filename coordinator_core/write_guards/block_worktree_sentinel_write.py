@@ -73,6 +73,7 @@ from coordinator_core.write_guards._sentinel_write_guard import (
     extract_target_path,
     sentinel_write_denial,
 )
+from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -95,6 +96,17 @@ _DENY_REASON = (
 )
 
 
+@declares_safe_direction(
+    SafeDirection.RAISE,
+    because=(
+        "swallowing a path-resolution failure into a silent allow would let "
+        "a worktree-ban-override sentinel write through unexamined -- the "
+        "same self-grant this guard exists to close; propagating the "
+        "failure (module docstring: 'Fail-CLOSED on its own resolution "
+        "failures') lets the dispatcher's fail-closed default deny it "
+        "instead"
+    ),
+)
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Evaluate the worktree-override-sentinel-write-ban gate against a
     PreToolUse payload.

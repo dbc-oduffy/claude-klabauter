@@ -16,7 +16,10 @@ Negative spec — what these tests deliberately do NOT assert:
     opposite of the intended behaviour.
   * The schema's own `predecessor=none` cross-field rule. That binds
     spinoff/goal-seed/roadmap-seed and is enforced in the frontmatter layer;
-    these tests cover the SCAFFOLDER's half of the contract only.
+    these tests cover the SCAFFOLDER's half of the contract only. The refusal
+    tests below DO assert a clause from each refusal's own reason, but only to
+    keep the two explanations distinguishable -- they assert nothing about
+    whether the schema layer agrees.
 """
 
 from __future__ import annotations
@@ -102,6 +105,12 @@ def test_predecessor_is_refused_for_the_none_by_design_kinds(
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "--predecessor is not accepted" in proc.stderr
+    # The shared substring alone would not catch an edit that garbles the two
+    # DISTINCT reasons behind it -- these kinds are none-by-design under the
+    # schema's cross-field rule, which is a different fact from `recovery`'s
+    # predecessor meaning a commit SHA. Pin the clause, not just the prefix.
+    assert "predecessor:none-by-design" in proc.stderr
+    assert "A3a-3" in proc.stderr
     assert not out.exists(), "refusal must scaffold nothing"
 
 
@@ -118,4 +127,8 @@ def test_predecessor_is_refused_for_recovery(tmp_path: Path) -> None:
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "--predecessor is not accepted" in proc.stderr
+    # Sibling of the check above: pin recovery's OWN reason, so the two
+    # explanations cannot silently collapse into each other.
+    assert "crashed commit SHA" in proc.stderr
+    assert "--recovers-session" in proc.stderr
     assert not out.exists()

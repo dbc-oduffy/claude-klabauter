@@ -116,7 +116,25 @@ _SUBPROCESS_TIMEOUT_SECS = 15
 class ResolveCoordinatorCloneError(RuntimeError):
     """Rc-1 shape: any resolution failure (ambiguous source mode, no
     git-backed clone / no readable content root found, bad
-    COORDINATOR_SOURCE_MODE value)."""
+    COORDINATOR_SOURCE_MODE value).
+
+    ``no_source_found``: keyword-only,
+    defaults False so every existing positional-message raise site is
+    unaffected. True marks the ONE terminal case where this module's own
+    candidate search (registry canonical, registry fallback, pointer file,
+    flat-layout evidence, dev marker, OSS install) came up completely empty
+    -- as opposed to a genuinely actionable failure (ambiguous source,
+    invalid COORDINATOR_SOURCE_MODE, OSS install present but not
+    git-backed). A caller on the hot dispatch path
+    (`coordinator_core.ops.coordinator_doe_root._resolve_via_clone_root_script`)
+    uses this to distinguish "nothing to report, every rung already tried
+    and failed identically" from "something worth a reader's attention" --
+    see that function's own docstring.
+    """
+
+    def __init__(self, message: str, *, no_source_found: bool = False) -> None:
+        super().__init__(message)
+        self.no_source_found = no_source_found
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +364,8 @@ def _resolve_source_mode(verb: str) -> str:
 
     raise ResolveCoordinatorCloneError(
         "resolve-coordinator-clone: no coordinator source found (no dev marker, no "
-        "OSS install); set COORDINATOR_SOURCE_MODE or run coordinator:install."
+        "OSS install); set COORDINATOR_SOURCE_MODE or run coordinator:install.",
+        no_source_found=True,
     )
 
 

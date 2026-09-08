@@ -99,6 +99,7 @@ from coordinator_core.bash_guards.dispatch_checks import (
     _crlf_strip,
     _normalize_executable_basename,
 )
+from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
 #: Subcommands that take the worktree ``index.lock`` -- git's index-writing
 #: set (decided 2026-08-12 per the P2 backlog entry cited in the module
@@ -299,6 +300,20 @@ def _reap_candidate_locks(git_dir: Path) -> None:
         do_reap(maint_lock, maint_age_sec, "maintenance.lock", reap_log, stability_sec, no_sleep)
 
 
+@declares_safe_direction(
+    SafeDirection.FALL_BACK,
+    because=(
+        "raising (or blocking the tool call) when this guard's cheap, "
+        "no-subprocess git-dir resolution cannot confidently locate the "
+        "lock directory would turn every ordinary git invocation whose cwd "
+        "this heuristic cannot walk into a hard failure; the guard exists "
+        "specifically so a reap failure never blocks the command that "
+        "triggered it (module docstring, FAIL-OPEN section) -- falling "
+        "back to 'no reap attempted, command proceeds unaided' is the only "
+        "direction consistent with that contract"
+    ),
+    anchor=lambda attempted: attempted is False,
+)
 def check_reap_stale_git_lock(cmd: str, cwd: str, session_id: str = "") -> Optional[dict]:
     """PreToolUse guard: self-heals an orphaned ``.git/index.lock`` (and its
     ``next-index-*.lock``/``objects/maintenance.lock`` siblings) ahead of a

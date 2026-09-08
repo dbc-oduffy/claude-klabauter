@@ -101,6 +101,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.peer_notice_check import list_unread_notices
@@ -172,6 +173,17 @@ def _deliver(notice: dict) -> None:
         pass
 
 
+@declares_safe_direction(
+    SafeDirection.FALL_BACK,
+    anchor=lambda result: result is None,
+    because=(
+        "raising instead would abort a peer's Write/Edit over a notice-channel "
+        "read that has nothing to do with their edit -- this guard only ever "
+        "ADDS advisory context, so a failure to determine whether notices are "
+        "waiting costs one unsurfaced notice, while the other direction costs "
+        "the write itself"
+    ),
+)
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         tool_name = payload.get("tool_name") or ""

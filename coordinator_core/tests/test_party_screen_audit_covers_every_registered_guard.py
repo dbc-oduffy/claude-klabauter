@@ -26,7 +26,7 @@ bucket well-formedness, citation resolvability, and the rule_family/bucket parti
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePath
 
 import pytest
 
@@ -132,9 +132,18 @@ def test_bucket1_rows_carry_a_resolvable_in_repo_citation(audit_rows):
         if "DoE-claude" in stated_at:
             bad.append((gid, "stated_at resolves under DoE-claude: %s" % stated_at))
             continue
+        # An ABSOLUTE stated_at silently discards REPO_ROOT under
+        # `Path.__truediv__`, so a citation could resolve anywhere on the box
+        # -- including inside a DoE-claude checkout whose path does not contain
+        # the literal string checked above (Review: code-reviewer, slice 1).
+        if PurePath(stated_at).is_absolute() or (len(stated_at) > 1 and stated_at[1] == ":"):
+            bad.append((gid, "stated_at must be repo-relative, not absolute: %s" % stated_at))
+            continue
         candidate = REPO_ROOT / stated_at
-        if not candidate.exists():
-            bad.append((gid, "stated_at does not exist in this repo: %s" % stated_at))
+        # `.is_file()`, not `.exists()`: a citation naming a DIRECTORY states no
+        # rule and would otherwise pass (Review: code-reviewer, slice 1).
+        if not candidate.is_file():
+            bad.append((gid, "stated_at does not name a file in this repo: %s" % stated_at))
     assert not bad, "bucket-1 citation defects: %r" % bad
 
 
@@ -194,3 +203,42 @@ def test_pm_gates_roadmap_covers_every_bucket3_row():
     assert not missing, "bucket-3 guard id(s) absent from pm-gates.md: %r" % missing
 
     assert re.search(r"DR-344", pm_gates_text), "pm-gates.md missing the DR-344 headline row"
+
+    # The REVERSE implication, which the forward check above cannot see: a row
+    # rebucketed AWAY from bucket-3 leaves a stale PM-ruling entry in the
+    # projection, still telling a PM they have a decision to make about a rule
+    # the audit no longer says is theirs. Not hypothetical -- one row WAS
+    # rebucketed this session (`nudge_windows_subprocess_popup`, 253d973d6e),
+    # in a direction this leg would have caught had it gone the other way
+    # (Review: code-reviewer, slice 1).
+    all_ids = {_bare(r["guard id"]) for r in rows}
+    bucket3 = set(bucket3_ids)
+    stale = [
+        gid
+        for gid in all_ids - bucket3
+        if ("`%s`" % gid) in pm_gates_text
+    ]
+    assert not stale, (
+        "pm-gates.md names guard id(s) the audit no longer records as bucket-3 "
+        "(enforced-here-stated-by-PM-ruling): %r" % sorted(stale)
+    )
+
+def test_both_party_columns_are_populated_on_every_row(audit_rows):
+    """The two party columns are the audit's whole point, and until this test
+    existed nothing pinned them: bucket, citation, verdict and
+    `binds_harder_in_cloud` were all asserted while a row could ship with both
+    party cells empty and keep the suite green (found by the close-out
+    criterion-only read). A row that can name no party is a FINDING, recorded
+    in the audit's party-less section as `NONE-FOUND` -- which is a value, not
+    a blank, so it satisfies this test while staying visible as unclassified."""
+    bad = []
+    for r in audit_rows:
+        gid = _bare(r["guard id"])
+        for col in ("party premise states", "party that bears harm"):
+            cell = _bare(r.get(col, ""))
+            if col not in r:
+                bad.append((gid, col, "COLUMN ABSENT"))
+                continue
+            if not cell or cell in ("-", "n/a", "n-a", "tbd"):
+                bad.append((gid, col, cell))
+    assert not bad, "row(s) with an unpopulated party column: %r" % bad

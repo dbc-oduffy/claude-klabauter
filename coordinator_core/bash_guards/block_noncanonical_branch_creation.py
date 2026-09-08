@@ -185,6 +185,7 @@ from coordinator_core.bash_guards.dispatch_checks import _is_hazard_repo
 from coordinator_core.daily_branch import is_canonical_branch
 from coordinator_core.daily_day import local_day
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
 CLASS = "hard-deny"
 # Widened 2026-08-19 (subagent-boundary MATCHERS parity, see
@@ -367,6 +368,20 @@ def _advisory_reason(cmd: str, name: str) -> str:
     ) % (name, cmd_safe, canonical)
 
 
+@declares_safe_direction(
+    SafeDirection.FALL_BACK,
+    because=(
+        "advising against a branch name this guard cannot confidently read "
+        "-- an empty/unresolved literal, or the neutralization artifact a "
+        "partial command substitution leaves behind (see 'FAIL OPEN ON A "
+        "NAME THIS GUARD NEVER ACTUALLY SAW') -- risks flagging a genuinely "
+        "canonical daily branch whose date segment was computed via "
+        "'$(date +%F)' as noncanonical; staying silent when the name "
+        "can't be evaluated is the direction that can never misfire "
+        "against a legitimate branch"
+    ),
+    anchor=lambda result: result is None,
+)
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Evaluate the noncanonical-branch-creation gate against a PreToolUse
     payload. Returns `None` (allow, no comment) or the nested advisory
