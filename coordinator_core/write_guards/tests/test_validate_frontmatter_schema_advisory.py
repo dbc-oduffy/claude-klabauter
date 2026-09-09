@@ -896,12 +896,28 @@ class TestReviewedRangeOffer:
         text = _advisory_text(result)
         assert f"{left_sha}..{right_sha}" in text
 
-    def test_ac2_bare_sha_offers_tilde_one_form(self, tmp_path):
+    def test_ac2_bare_sha_is_valid_and_offers_nothing(self, tmp_path):
+        """A bare fully-resolved hex SHA is VALID and draws no advisory --
+        the same class as `test_ac5` below, not an offer case.
+
+        This used to assert the branch-(b) offer `<sha>~1..<sha>`, and that
+        premise was retired deliberately: run-report.schema.json 2.2.0 ->
+        2.3.0 (DR-190 § 21, 2026-09-02) widened `reviewed_range.items`'s
+        pattern to admit a bare SHA, on the reasoning that it "is the same
+        inert class as the already-admitted `~N`-suffixed left endpoint (one
+        immutable commit, not a re-resolving ref)". A value that validates
+        produces no error, and `_reviewed_range_offer` rewrites errors IN
+        PLACE -- it can only speak where validation already spoke. So the
+        offer did not regress; the case it answered stopped existing.
+
+        Branch (b) of `_reviewed_range_offer`'s own docstring table is
+        therefore unreachable for a bare SHA on this schema version. Left in
+        place rather than deleted here: this test is a write-guard test and
+        the branch belongs to the guard's author to retire, with the vendored
+        schema version in hand.
+        """
         sha = "c" * 40
-        result = self._write_and_check(tmp_path, sha)
-        assert result is not None
-        text = _advisory_text(result)
-        assert f"{sha}~1..{sha}" in text
+        assert self._write_and_check(tmp_path, sha) is None
 
     def test_ac3_unresolvable_value_states_plainly_and_offers_no_substitute(self, tmp_path):
         # Genuinely no `reviewed_targets` destination derivable (C3):
@@ -920,7 +936,14 @@ class TestReviewedRangeOffer:
             "_resolve_refs_to_sha_batch",
             lambda tokens, cwd: {t: "d" * 40 for t in tokens},
         )
-        for value in ("a65e39850^..HEAD", "e" * 40, "working-tree:some/path"):
+        # A bare 40-hex SHA ("e" * 40) was the second member here and is
+        # removed, not fixed: it VALIDATES since run-report.schema.json 2.3.0
+        # (DR-190 § 21), so it draws no advisory at all and cannot demonstrate
+        # "this branch is an advisory, never a deny" -- see
+        # `test_ac2_bare_sha_is_valid_and_offers_nothing`. The two survivors
+        # are the branches that still produce one: a resolvable separator
+        # range (a) and an unresolvable value (c).
+        for value in ("a65e39850^..HEAD", "working-tree:some/path"):
             fp = self._sidecar_path(tmp_path)
             old = "---\nstatus: complete\n---\n\n## Observations\nold\n"
             fp.write_text(old, encoding="utf-8")

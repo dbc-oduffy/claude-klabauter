@@ -1381,3 +1381,171 @@ def test_subcommand_advertisement_names_the_artifact_path_class():
     # The class token alone is not enough — a reader must be able to tell it
     # takes a PATH, without reading claims.py.
     assert "PATH" in advert or "path" in advert
+
+
+# ---------------------------------------------------------------------------
+# M2b: claim-query imports route through cc_invoke.require_dispatch_module,
+# so a stale published mirror (state/bug-backlog/2026-09-01-a-new-engine-
+# module-breaks-fleet-wide-claim-queries-until-publish.yaml) reports a
+# diagnosis (cause + "publish the mirror" remedy) instead of a bare
+# ImportError. These tests exercise the REAL cc_invoke.require_dispatch_module
+# (via _cli._dispatch_import) with only the two engine-root resolvers
+# monkeypatched — never a stubbed _import_* seam — so they prove the wiring
+# itself, not just that a stub was configured correctly.
+# ---------------------------------------------------------------------------
+
+def test_dispatch_import_chokepoint_is_reused_by_every_claim_query_seam(monkeypatch):
+    """`_import_module` / `_import_liveness_module` / `_import_stale_claims_
+    module` / `_import_claim_index_module` must all route through the single
+    `_dispatch_import` chokepoint, never re-implement their own bare import —
+    the collapse this item exists to perform."""
+    calls = []
+    monkeypatch.setattr(_cli, "_dispatch_import", lambda name: calls.append(name) or name)
+
+    assert _cli._import_module() == "coordinator_core.session.claims"
+    assert _cli._import_liveness_module() == "coordinator_core.session.liveness"
+    assert _cli._import_stale_claims_module() == "coordinator_core.session.stale_claims"
+    assert _cli._import_claim_index_module() == "coordinator_core.session.claim_index"
+    assert calls == [
+        "coordinator_core.session.claims",
+        "coordinator_core.session.liveness",
+        "coordinator_core.session.stale_claims",
+        "coordinator_core.session.claim_index",
+    ]
+
+
+def _rig_stale_mirror(monkeypatch, tmp_path, missing_module):
+    """Simulate the stale-mirror condition (source has `missing_module`
+    under `coordinator_core/session/`, the resolved dispatch root does not)
+    against the REAL `cc_invoke.require_dispatch_module` — never a real
+    published mirror. Patches only the two engine-root resolvers cc_invoke
+    itself calls (`require_dispatch_engine_on_path`, `resolve_engine_root`)
+    and `importlib.import_module`, on the cached `cc_invoke` module object
+    `_cli._cc_invoke()` returns, so `_dispatch_import`'s own code path runs
+    unmodified."""
+    source_root = tmp_path / "source"
+    dispatch_root = tmp_path / "dispatch"
+    (source_root / "coordinator_core" / "session").mkdir(parents=True)
+    (source_root / "coordinator_core" / "session" / "__init__.py").write_text("")
+    (source_root / "coordinator_core" / "session" / f"{missing_module}.py").write_text("X = 1\n")
+    (dispatch_root / "coordinator_core" / "session").mkdir(parents=True)
+    (dispatch_root / "coordinator_core" / "session" / "__init__.py").write_text("")
+
+    cc_mod = _cli._cc_invoke()
+    monkeypatch.setattr(cc_mod, "require_dispatch_engine_on_path", lambda: str(dispatch_root))
+    monkeypatch.setattr(cc_mod, "resolve_engine_root", lambda script_file: str(source_root))
+
+    dotted = f"coordinator_core.session.{missing_module}"
+
+    def _boom(name):
+        raise ImportError(f"No module named '{dotted}'", name=dotted)
+
+    monkeypatch.setattr(cc_mod.importlib, "import_module", _boom)
+    return dotted
+
+
+def test_is_session_live_stale_mirror_reports_diagnosis_not_bare_import_error(
+    monkeypatch, tmp_path, capsys
+):
+    """A claim-QUERY subcommand (is-session-live) against a stale mirror
+    reports the diagnosed cause + remedy, not a bare ImportError, and not
+    the plain-root-resolution-failure message (which would be wrong here —
+    the root resolved fine; the import against it failed)."""
+    _rig_stale_mirror(monkeypatch, tmp_path, "liveness")
+
+    rc = _cli.main(["is-session-live", "some-sid"])
+
+    assert rc == _cli._TRANSPORT_FAIL
+    err = capsys.readouterr().err
+    assert "coordinator_core.session.liveness" in err
+    assert "publish" in err.lower()
+    assert "CLAUDE_KLABAUTER_ROOT resolution failed" not in err
+
+
+def test_list_stale_claim_handoffs_stale_mirror_reports_diagnosis(
+    monkeypatch, tmp_path, capsys
+):
+    _rig_stale_mirror(monkeypatch, tmp_path, "stale_claims")
+
+    rc = _cli.main(["list-stale-claim-handoffs"])
+
+    assert rc == _cli._TRANSPORT_FAIL
+    err = capsys.readouterr().err
+    assert "coordinator_core.session.stale_claims" in err
+    assert "publish" in err.lower()
+    assert "CLAUDE_KLABAUTER_ROOT resolution failed" not in err
+
+
+def test_who_claims_path_claim_index_stale_mirror_reports_diagnosis(
+    monkeypatch, tmp_path, capsys
+):
+    _rig_stale_mirror(monkeypatch, tmp_path, "claim_index")
+
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+
+    assert rc == _cli._TRANSPORT_FAIL
+    err = capsys.readouterr().err
+    assert "coordinator_core.session.claim_index" in err
+    assert "publish" in err.lower()
+    assert "CLAUDE_KLABAUTER_ROOT resolution failed" not in err
+
+
+def test_who_claims_path_name_ladder_stale_mirror_reports_diagnosis_via_backstop(
+    monkeypatch, tmp_path, capsys
+):
+    """The EXACT failure site of the filed incident:
+    `_render_claimant_name`'s `coordinator_core.session.name_ladder` import,
+    reached only once who-claims-path has a live claimant to render a name
+    for. Not locally guarded (see `_render_claimant_name`'s own call site,
+    outside the per-claimant `session_live` try/except) -- it propagates to
+    `main()`'s top-level backstop, same as before this change, but now
+    carrying the diagnosis instead of a bare
+    `ImportError: cannot import name 'name_ladder' from 'coordinator_core.
+    session'` (the row's own quoted traceback)."""
+    dotted = _rig_stale_mirror(monkeypatch, tmp_path, "name_ladder")
+
+    monkeypatch.setattr(
+        _cli,
+        "_import_claim_index_module",
+        lambda: _StubClaimIndex(lookup=lambda paths, cwd=None: {p: ["sess-a"] for p in paths}),
+    )
+    monkeypatch.setattr(
+        _cli, "_import_liveness_module", lambda: _StubLiveness(session_live=lambda *a, **k: True)
+    )
+
+    rc = _cli.main(["who-claims-path", "some/path.txt"])
+
+    assert rc == _cli._TRANSPORT_FAIL
+    assert rc == 3
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == ["indeterminate"]
+    assert dotted in captured.err
+    assert "publish" in captured.err.lower()
+
+
+def test_stale_mirror_not_in_source_either_never_says_publish(monkeypatch, tmp_path, capsys):
+    """The sibling case (typo / genuinely absent, not a mirror gap): the
+    diagnosis must say "not in source either", never tell the reader to
+    publish."""
+    source_root = tmp_path / "source"
+    dispatch_root = tmp_path / "dispatch"
+    (source_root / "coordinator_core" / "session").mkdir(parents=True)
+    (dispatch_root / "coordinator_core" / "session").mkdir(parents=True)
+
+    cc_mod = _cli._cc_invoke()
+    monkeypatch.setattr(cc_mod, "require_dispatch_engine_on_path", lambda: str(dispatch_root))
+    monkeypatch.setattr(cc_mod, "resolve_engine_root", lambda script_file: str(source_root))
+
+    dotted = "coordinator_core.session.totally_made_up_thing"
+
+    def _boom(name):
+        raise ImportError(f"No module named '{dotted}'", name=dotted)
+
+    monkeypatch.setattr(cc_mod.importlib, "import_module", _boom)
+
+    rc = _cli.main(["is-session-live", "some-sid"])
+
+    assert rc == _cli._TRANSPORT_FAIL
+    err = capsys.readouterr().err
+    assert "not in source either" in err
+    assert "publish" not in err.lower()

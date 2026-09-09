@@ -1298,7 +1298,16 @@ def _is_doe_owned_repo(repo_root: str) -> bool:
         doe_root = coordinator_doe_root()
         if not doe_root:
             return False
-        return Path(repo_root).resolve() == Path(str(doe_root)).resolve()
+        # Casefolded on BOTH sides. Unfolded, a DoE root differing from
+        # `repo_root` only in case compares unequal on a case-insensitive-but-
+        # case-preserving filesystem, so this answers "not DoE's tree" for a
+        # tree that IS DoE's — and the caller then applies claude-klabauter's own rules to
+        # a sibling's corpus. That is the reaching-into-a-sibling failure the
+        # docstring above says must never happen, reached by the one route the
+        # fail-safe direction does not cover.
+        return casefold_path(str(Path(repo_root).resolve())) == casefold_path(
+            str(Path(str(doe_root)).resolve())
+        )
     except Exception:  # noqa: BLE001 — fail-safe: keep enforcing locally
         return False
 

@@ -266,6 +266,34 @@ def resolve_machine_local_cli() -> Optional[str]:
     return None
 
 
+def _is_windows() -> bool:
+    """`os.name == "nt"`, behind a seam a test can patch WITHOUT patching
+    `os.name` itself.
+
+    The seam is not stylistic. `native_path_form`'s gate used to read `os.name`
+    directly, and `coordinator_core.os` IS the `os` module, so the only way to
+    exercise the Windows branch was
+    `monkeypatch.setattr("coordinator_core._settings_home.os.name", "nt")` --
+    which sets `os.name` for the WHOLE PROCESS. `pathlib` picks its flavour
+    from `os.name` at call time, so while that patch was live every `Path(...)`
+    anywhere in the interpreter tried to build a `WindowsPath`, and on POSIX
+    that raises `NotImplementedError: cannot instantiate 'WindowsPath' on your
+    system`. Ten test sites did it.
+
+    The damage landed in pytest's own internals rather than in the tests, which
+    is why it hid: `coordinator_core/tests/test_settings_home.py` reported
+    "12 passed" AND an `INTERNALERROR`, and under `-n 2` it killed the xdist
+    worker outright -- `assert not crashitem` in `dsession.worker_workerfinished`.
+    A crashed worker means the run never prints its short test summary, so the
+    documented `-n auto` fast tier could report a pass/fail COUNT and no list of
+    which tests failed. Every full-suite run in this repo was losing its own
+    failure list to a path-normalizing unit test.
+
+    Patch THIS, never `os.name`.
+    """
+    return os.name == "nt"
+
+
 def normalize_native_path(raw):
     """Convert an MSYS/Cygwin mount-form path ('/x/...' or '/cygdrive/x/...') to
     native Windows drive form ('X:/...') so native-Windows node / py.exe /
@@ -299,7 +327,7 @@ def native_path_form(raw: str) -> str:
     the MSYS/Cygwin mount-form repair, gated to `os.name == "nt"`.
     """
     s = str(raw)
-    if os.name != "nt":
+    if not _is_windows():
         return s
     m = re.match(r"^/(?:cygdrive/)?([A-Za-z])(/.*)?$", s)
     if m:

@@ -151,6 +151,13 @@ _BATON_FIELDS = frozenset(
         # here so a sweep does not re-plan work that already has its marching orders.
         "handoff_phase", "execution_authorized_by", "execution_authorized_at",
         "execution_authorized_sha", "execution_authorized_note",
+        # NOT a link basis, and read anyway: `plan` is undeclared in
+        # handoff.schema.json, so records carry it freely while `link_plans`
+        # reads `governing_plan`. Two names for one edge, one written and the
+        # other read. Scanned so `_unlinked_plan_claim` can NAME the record that
+        # points at a real plan nothing resolved, instead of leaving it
+        # indistinguishable from a baton that has no plan at all.
+        "plan",
     }
 )
 
@@ -529,6 +536,51 @@ def link_plans(fm: Dict[str, Any], plans: PlanIndex) -> Tuple[List[Dict[str, Any
         if hits:
             return hits, basis
     return [], None
+
+
+#: Frontmatter keys that carry a plan PATH but are not link bases. `plan:` is the
+#: one that matters: it is undeclared in handoff.schema.json and therefore
+#: undeclared-but-tolerated, so records carry it freely while `link_plans` reads
+#: `governing_plan`. Two names for one edge, one written and the other read.
+_UNDECLARED_PLAN_PATH_KEYS: Tuple[str, ...] = ("plan",)
+
+
+def _unlinked_plan_claim(fm: Dict[str, Any], worktree_root: Path) -> Optional[Dict[str, str]]:
+    """A baton that NAMES a plan on disk which no link basis resolved.
+
+    Reported, never linked. The distinction it restores is the one that costs
+    sessions: `needs_plan: true` means "a blitz has work to do here", and a
+    baton whose plan link merely failed to resolve is indistinguishable from one
+    that genuinely has no plan. So the record is re-planned by every sweep
+    forever, beside an approved plan for the same work, and any execution record
+    attaches to nothing. Measured once in example-retrieval-repo against a PM-authorized
+    plan; the cost is silent and unbounded in time.
+
+    NOT promoted to a link basis, deliberately. `plan:` is undeclared, and a
+    resolver that read it would bless an undeclared field as an edge and remove
+    the pressure to correct the record. The repair is to write `governing_plan`
+    (or the `deliverable_id` the plan already carries) onto the baton — which
+    this report names, so nobody has to discover it from a wave that planned
+    work twice.
+    """
+    for key in _UNDECLARED_PLAN_PATH_KEYS:
+        value = fm.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        rel = value.strip().replace("\\", "/")
+        if not rel.endswith(".md"):
+            continue
+        if not (worktree_root / rel).is_file():
+            continue
+        return {
+            "field": key,
+            "path": rel,
+            "repair": (
+                f"baton names {rel} in `{key}:`, which is not a link basis — "
+                "write `governing_plan:` (or the plan's own `deliverable_id:`) onto the baton"
+            ),
+        }
+    return None
 
 
 def _best_plan(hits: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -978,6 +1030,9 @@ def assemble_plan_gate(
     for record in records:
         own = _best_plan(link_plans(record["_fm"], plans)[0])
         record["own_plan"] = own
+        record["unlinked_plan_claim"] = (
+            None if own else _unlinked_plan_claim(record["_fm"], worktree_root)
+        )
         # Two ways a baton stops needing planning work, and the second is not
         # optional: an S-lane baton stamped `handoff_phase: execution` carries a
         # parked spec and a four-field authorization, so it is waiting on
@@ -1050,6 +1105,9 @@ def assemble_plan_gate(
                     else None
                 ),
                 "needs_plan": record["needs_plan"],
+                # Present-as-null, never absent: an omitted key and "no claim" would
+                # be one value, and this field exists to make a silent case loud.
+                "unlinked_plan_claim": record["unlinked_plan_claim"],
                 "execution_authorized": record["execution_authorized"],
                 "sized": bool(record["sizing_objects"]),
                 "sizing_objects": record["sizing_objects"],

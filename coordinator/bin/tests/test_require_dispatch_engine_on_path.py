@@ -117,6 +117,120 @@ def test_takes_no_script_file_argument(cc):
         )
 
 
+def test_require_dispatch_module_hot_path_never_touches_the_diff(cc, monkeypatch, tmp_path):
+    """LOAD-BEARING: the failure-path diff (`_dotted_module_names_under`, two
+    `rglob` walks -- DR-362's cost shape) must not run when the import
+    succeeds. Asserts the hot path stayed clean, not that it merely returned
+    fast: the diff helper is made to raise if called at all, so any success-
+    path invocation of it fails the test regardless of timing.
+    """
+    sentinel = str(tmp_path / "published-engine")
+    monkeypatch.setattr(cc, "_resolve_claude_klabauter_root", lambda: sentinel)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+
+    def _must_not_be_called(root):
+        raise AssertionError(f"diff helper ran on the success path (root={root!r})")
+
+    monkeypatch.setattr(cc, "_dotted_module_names_under", _must_not_be_called)
+    monkeypatch.setattr(
+        cc.importlib, "import_module", lambda name: __import__("sys")
+    )
+
+    result = cc.require_dispatch_module("sys")
+    assert result is not None
+
+
+def test_require_dispatch_module_success_returns_the_imported_module(cc, monkeypatch, tmp_path):
+    sentinel = str(tmp_path / "published-engine")
+    monkeypatch.setattr(cc, "_resolve_claude_klabauter_root", lambda: sentinel)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+
+    assert cc.require_dispatch_module("os") is __import__("os")
+
+
+def test_require_dispatch_module_reports_stale_mirror_cause_and_remedy(cc, monkeypatch, tmp_path):
+    """The published-engine-is-behind case: the missing module exists under
+    the resolved SOURCE checkout's own `coordinator_core/` but not under the
+    (fake) dispatch root -- the exact shape of the filed incident.
+    """
+    source_root = tmp_path / "source"
+    dispatch_root = tmp_path / "dispatch"
+    (source_root / "coordinator_core" / "session").mkdir(parents=True)
+    (source_root / "coordinator_core" / "session" / "__init__.py").write_text("")
+    (source_root / "coordinator_core" / "session" / "name_ladder.py").write_text("X = 1\n")
+    (dispatch_root / "coordinator_core" / "session").mkdir(parents=True)
+    (dispatch_root / "coordinator_core" / "session" / "__init__.py").write_text("")
+
+    monkeypatch.setattr(cc, "require_dispatch_engine_on_path", lambda: str(dispatch_root))
+    monkeypatch.setattr(cc, "resolve_engine_root", lambda script_file: str(source_root))
+
+    def _boom(name):
+        raise ModuleNotFoundError(
+            "No module named 'coordinator_core.session.name_ladder'",
+            name="coordinator_core.session.name_ladder",
+        )
+
+    monkeypatch.setattr(cc.importlib, "import_module", _boom)
+
+    with pytest.raises(cc.StaleEngineImportError) as excinfo:
+        cc.require_dispatch_module("coordinator_core.session.name_ladder")
+
+    message = str(excinfo.value)
+    assert "coordinator_core.session.name_ladder" in message
+    assert "publish" in message.lower()
+    assert excinfo.value.dotted_name == "coordinator_core.session.name_ladder"
+
+
+def test_require_dispatch_module_reports_not_in_source_either(cc, monkeypatch, tmp_path):
+    """The non-mirror-gap case: the missing name is absent from source too --
+    a typo, not a publish lag. Must not tell the reader to publish.
+    """
+    source_root = tmp_path / "source"
+    dispatch_root = tmp_path / "dispatch"
+    (source_root / "coordinator_core").mkdir(parents=True)
+    (dispatch_root / "coordinator_core").mkdir(parents=True)
+
+    monkeypatch.setattr(cc, "require_dispatch_engine_on_path", lambda: str(dispatch_root))
+    monkeypatch.setattr(cc, "resolve_engine_root", lambda script_file: str(source_root))
+
+    def _boom(name):
+        raise ModuleNotFoundError(
+            "No module named 'coordinator_core.nonexistent_thing'",
+            name="coordinator_core.nonexistent_thing",
+        )
+
+    monkeypatch.setattr(cc.importlib, "import_module", _boom)
+
+    with pytest.raises(cc.StaleEngineImportError) as excinfo:
+        cc.require_dispatch_module("coordinator_core.nonexistent_thing")
+
+    message = str(excinfo.value)
+    assert "not in source either" in message
+    assert "publish" not in message.lower()
+
+
+def test_require_dispatch_module_reuses_the_dispatch_seam_unchanged(cc, monkeypatch, tmp_path):
+    """`require_dispatch_module` must not re-implement root resolution --
+    it calls `require_dispatch_engine_on_path` itself, so that seam's own
+    behaviour (divergence hardening, split announcement) is untouched.
+    """
+    sentinel = str(tmp_path / "published-engine")
+    calls = []
+    real = cc.require_dispatch_engine_on_path
+
+    def _spy():
+        calls.append(1)
+        return real()
+
+    monkeypatch.setattr(cc, "_resolve_claude_klabauter_root", lambda: sentinel)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setattr(cc, "require_dispatch_engine_on_path", _spy)
+    monkeypatch.setattr(cc.importlib, "import_module", lambda name: __import__(name))
+
+    cc.require_dispatch_module("os")
+    assert calls == [1]
+
+
 def test_the_two_axes_are_not_the_same_function(cc):
     """A refactor aliasing one to the other would silently undo the split."""
     assert cc.require_dispatch_engine_on_path is not cc.require_engine_on_path

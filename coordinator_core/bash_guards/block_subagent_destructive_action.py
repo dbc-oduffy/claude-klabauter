@@ -1284,6 +1284,14 @@ def _seg_forcing_form_scan_text(seg: str) -> str:
     """
     if "<<" in seg:
         return seg
+    if _exceeds_tokenizable_ceiling(seg):
+        # DoS bound inherited from `_command_tokenizer`, not a local tuning
+        # knob -- the same bound every other direct shlex site in this
+        # package carries. Returning `seg` whole is this function's own
+        # documented fail-CLOSED answer, identical to the heredoc and
+        # untokenizable branches around it, so an over-ceiling segment is
+        # scanned in full by the caller's regex rather than narrowed.
+        return seg
     try:
         tokens = shlex.split(seg, posix=True)
     except ValueError:

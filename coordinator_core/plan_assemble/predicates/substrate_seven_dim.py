@@ -15,11 +15,12 @@ _PREMISE_DETENT_TSHIRTS` rather than a hardcoded tuple), and `:96`/`:100`
 (the trampoline verdict-citation and DEC-4 signal rows).
 
 `:90(1)`/`:90(4)` CONSUME the deterministic plan-sidecar paths
-`state/plan-sidecars/<plan-stem>.prior-art-check.md` and
-`state/plan-sidecars/<plan-stem>.docs-check.md` — the plan-derivable
-`report_sidecar` home `coordinator_core.subagent_sandbox.provision_report.
-_PLAN_DERIVABLE_LENS` resolves `coordinator:prior-art-checker` and
-`coordinator:docs-checker` dispatches to (spec § 2.7). This module never
+`<machinery_root>/plan-sidecars/<plan-stem>.prior-art-check.md` and
+`<machinery_root>/plan-sidecars/<plan-stem>.docs-check.md` (resolved via
+`coordinator_core.session.machinery_paths.plan_sidecars_dir`) — the
+plan-derivable `report_sidecar` home `coordinator_core.subagent_sandbox.
+provision_report._PLAN_DERIVABLE_LENS` resolves `coordinator:prior-art-checker`
+and `coordinator:docs-checker` dispatches to (spec § 2.7). This module never
 dispatches either checker and never re-derives their verdict — file
 presence at that deterministic path IS the signal.
 
@@ -72,19 +73,21 @@ from typing import Any
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.ops.doc_content_verify import _doc_relative_checker, verify_doc
+from coordinator_core.session.machinery_paths import plan_sidecars_dir as _plan_sidecars_dir
 from coordinator_core import sizing_assemble as _sizing_assemble
 from coordinator_core.plan_assemble.predicates import PredicateContext, undetermined
-
-#: Deterministic plan-sidecar directory (spec § 2.7 / provision_report.py's
-#: `_PLAN_DERIVABLE_LENS`) — `state/plan-sidecars/<plan-stem>.<lens>.md`.
-_PLAN_SIDECAR_DIR = "state/plan-sidecars"
 
 _PROBLEM_SET_DIR = "docs/problems"
 _SPIKE_VERDICT_DIR = "docs/research/spike-verdicts"
 
 
 def _plan_sidecar_path(context: PredicateContext, lens: str) -> Path | None:
-    """Resolve `state/plan-sidecars/<plan-stem>.<lens>.md` for `context.plan_path`.
+    """Resolve `<machinery_root>/plan-sidecars/<plan-stem>.<lens>.md` (spec §
+    2.7 / `provision_report.py`'s `_PLAN_DERIVABLE_LENS`) for `context.plan_path`,
+    via `machinery_paths.plan_sidecars_dir` — the same accessor
+    `provision_report` writes through and `harvest_exit_interviews` reads
+    through, so a future relocation is one accessor edit, not a respelled
+    literal here too.
 
     Mirrors `provision_report._resolve_plan_sidecar_stem` — the plan's own
     filename stem, not a re-derivation of any other identifier. Returns
@@ -92,7 +95,7 @@ def _plan_sidecar_path(context: PredicateContext, lens: str) -> Path | None:
     if context.plan_path is None:
         return None
     stem = context.plan_path.stem
-    return context.repo_root / _PLAN_SIDECAR_DIR / f"{stem}.{lens}.md"
+    return Path(_plan_sidecars_dir(str(context.repo_root))) / f"{stem}.{lens}.md"
 
 
 def problem_set(context: PredicateContext) -> dict[str, Any]:

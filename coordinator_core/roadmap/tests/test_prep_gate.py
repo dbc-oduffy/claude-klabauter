@@ -304,18 +304,61 @@ def test_landed_work_withholds_its_own_row_and_the_plan_still_certifies(tmp_path
     assert "withheld" in report["message"]
 
 
-def test_commit_in_owner_repo_refuses_the_whole_plan_and_routes_to_the_pm(tmp_path):
-    """No authoring fix inside this repo clears it: a hands-off run has no session
-    in which to obtain the per-session assent DR-127 requires."""
+def test_commit_in_owner_repo_withholds_its_row_and_the_plan_still_certifies(tmp_path):
+    """PM ruling: a plan is not rejected because part of it needs code in another repo.
+
+    This used to refuse the whole plan, reasoning that a hands-off run has no session in which
+    to obtain the per-session assent DR-127 requires for a cross-repo commit. That is sound
+    about the ROW and wrong about the PLAN — withholding the row already stops the run writing
+    into a sibling's tree unassented, and refusing on top of it discarded every schedulable row
+    that had nothing to do with the sibling. The same argument the LANDED-WORK case above always
+    made, finally applied to the other value.
+    """
     block = f"""  external_gate:
     - owner_repo: DoE-claude
       condition: someone commits there
       requires: {pg.REQUIRES_COMMIT}
 """
     report = _gate(tmp_path, _external_plan(tmp_path, block))
-    assert report["verdict"] == pg.REFUSED
-    assert report["classes"]["EXTERNAL_DEPS"]["kind"] == "cross-repo-commit-gate"
-    assert "route: PM" in report["message"]
+    assert report["verdict"] == pg.PREPPED
+    assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS"
+    assert report["withheld_rows"] == ["C1"]
+
+
+def test_a_commit_gated_row_says_so_rather_than_only_being_withheld(tmp_path):
+    """Both `requires:` values withhold the same row id, so the detail is the only place the
+    difference can live — and they route differently: one waits for a peer's landing, the other
+    needs a cross-repo commit dispatched under per-session assent."""
+    commit_block = f"""  external_gate:
+    - owner_repo: DoE-claude
+      condition: someone commits there
+      requires: {pg.REQUIRES_COMMIT}
+"""
+    landed_block = f"""  external_gate:
+    - owner_repo: DoE-claude
+      condition: they land the op
+      requires: {pg.REQUIRES_LANDED}
+"""
+    commit = _gate(tmp_path / "c", _external_plan(tmp_path / "c", commit_block))
+    landed = _gate(tmp_path / "l", _external_plan(tmp_path / "l", landed_block))
+    assert "cross-repo commit" in commit["classes"]["EXTERNAL_DEPS"]["detail"]
+    assert "cross-repo commit" not in landed["classes"]["EXTERNAL_DEPS"]["detail"]
+
+
+def test_no_predicate_produces_the_retired_refused_verdict():
+    """REFUSED is retired and its absence is the rule, not an oversight.
+
+    The constant stays so no consumer's string comparison shifts, and `_refuse` stays as the one
+    shape that reaches the verdict — so reintroducing a whole-plan refusal means calling it, and
+    deleting this test to do so.
+    """
+    source = Path(pg.__file__).read_text(encoding="utf-8")
+    calls = [
+        line.strip()
+        for line in source.splitlines()
+        if "_refuse(" in line and not line.lstrip().startswith("def _refuse(")
+    ]
+    assert calls == [], f"a predicate reintroduced the whole-plan refusal: {calls}"
 
 
 def test_a_cleared_gate_is_not_a_finding(tmp_path):
@@ -378,6 +421,130 @@ def test_the_repo_s_own_name_is_never_a_sibling(tmp_path):
     own.mkdir()
     assert "claude-klabauter" not in pg.fleet_siblings(own)
     assert "DoE-claude" in pg.fleet_siblings(own)
+
+
+def _plan_with(root: Path, spine: str, slug: str) -> Path:
+    """A plan clearing CENSUS/PRIME_EXIT whose spine is the case under test.
+
+    `prepped_plan` fixes the spine; these cases perturb exactly that, so they
+    build the plan directly and create the `coordinator_core/` root entry the
+    baseline relies on.
+    """
+    (root / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    (root / "docs").mkdir(parents=True, exist_ok=True)
+    return _write_plan(root, slug, frontmatter=_CLEAN_FM, spine=spine)
+
+
+def test_the_fleet_list_carries_every_name_including_the_doctrine_repo(tmp_path):
+    """Defect 1, the write side's half of it. Neither half hard-omits a name: the
+    scanned repo's own is subtracted at CALL time, so standing in the doctrine
+    repo drops it and standing anywhere else keeps it. The read-side twin now
+    carries the same eight, which is what makes the two halves return the same
+    verdict on a corpus that is neither of them."""
+    assert "DoE-claude" in pg.FLEET_REPOS
+    doctrine = tmp_path / "DoE-claude"
+    doctrine.mkdir()
+    assert "DoE-claude" not in pg.fleet_siblings(doctrine)
+    assert "claude-klabauter" in pg.fleet_siblings(doctrine)
+
+
+def test_the_repo_s_own_name_is_subtracted_case_insensitively(tmp_path):
+    """A clone at `doe-claude/` and one at `DoE-claude/` are the same repo. A
+    case-sensitive subtraction would report every self-naming row in the
+    lower-case clone as a cross-repo dependency."""
+    own = tmp_path / "doe-claude"
+    own.mkdir()
+    assert "DoE-claude" not in pg.fleet_siblings(own)
+
+
+def test_a_sibling_named_in_a_different_case_is_still_caught(tmp_path):
+    """Defect 2. The corpus does not agree with itself on case — example-retrieval-repo's own
+    plans and cross-repo archive spell the doctrine repo `doe-claude` 1207 times
+    against `DoE-claude` 1052 — so a case-sensitive `==`/`startswith` left a row
+    declaring a genuine cross-repo surface in the corpus's own spelling unseen by
+    the SIBLING-NAME leg entirely."""
+    for value in (
+        "doe-claude/coordinator/bin/thing.py",
+        "DOE-CLAUDE@coordinator/bin/thing.py",
+        "Doe-Claude",
+    ):
+        spine = (
+            "- id: C1\n  title: t\n  change_kind: code-edit\n"
+            f"  surface: {value}\n  writes: [coordinator_core/x.py]\n"
+            "  queue_scope: project\n  disposition: open\n"
+        )
+        report = _gate(tmp_path, _plan_with(tmp_path, spine, "case.md"))
+        assert (
+            report["classes"]["EXTERNAL_DEPS"]["kind"] == "external-dep-undeclared"
+        ), value
+
+
+def test_case_folding_does_not_weaken_the_separator_rule(tmp_path):
+    """Defect 2's boundary. Folding case widens which spellings are SEEN; it must
+    not widen what counts as a separator, or `claude_klabauter2/` — a different
+    name — starts reading as a match."""
+    spine = (
+        "- id: C1\n  title: t\n  change_kind: code-edit\n"
+        "  surface: claude_klabauter2/coordinator_core/x.py\n"
+        "  writes: [coordinator_core/x.py]\n"
+        "  queue_scope: project\n  disposition: open\n"
+    )
+    report = _gate(tmp_path, _plan_with(tmp_path, spine, "sep.md"))
+    assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS", report["message"]
+
+
+def test_a_new_root_level_entry_is_not_read_as_a_cross_repo_write(tmp_path):
+    """Defect 3. ROOT-EXISTENCE's named false-positive shape, no longer
+    hypothetical: example-retrieval-repo `docs/plans/2026-09-06-inbox-blitz-xs-s-bundle.md`
+    row T8 declares a new root-level `ADOPTERS` file, and the only way past the
+    bar was to delete that write from `writes:` — the leg forced an
+    UNDER-declaration, inverting the one rule the bar enforces.
+
+    The discriminant is the declared value's own shape, never an author's claim: a
+    path INTO another tree carries a separator by construction, so a
+    single-segment value names an entry at THIS repo's root."""
+    for value in ("ADOPTERS", "ADOPTERS.md", "brand-new-dir/"):
+        spine = (
+            "- id: C1\n  title: t\n  change_kind: doc-edit\n"
+            f"  surface: docs/x.md\n  writes: [{value}]\n"
+            "  queue_scope: project\n  disposition: open\n"
+        )
+        report = _gate(tmp_path, _plan_with(tmp_path, spine, "root.md"))
+        assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS", value
+        assert report["verdict"] == pg.PREPPED, value
+
+
+def test_the_exemption_does_not_weaken_the_nameless_cross_repo_catch(tmp_path):
+    """Defect 3's constraint. What the leg genuinely catches is a nameless path
+    into a sibling's tree, and every one of those is multi-segment, so the
+    single-segment exemption cannot reach them."""
+    spine = (
+        "- id: C1\n  title: t\n  change_kind: code-edit\n"
+        "  surface: somewhere\n  writes: [not_a_directory_here/x.py]\n"
+        "  queue_scope: project\n  disposition: open\n"
+    )
+    report = _gate(tmp_path, _plan_with(tmp_path, spine, "nameless.md"))
+    assert report["classes"]["EXTERNAL_DEPS"]["kind"] == "external-dep-undeclared"
+
+
+def test_an_unreplaced_placeholder_path_is_its_own_defect_no_gate_clears(tmp_path):
+    """Defect 3's other half. The single-segment exemption would otherwise drop
+    the one real catch ROOT-EXISTENCE had at that depth — an unreplaced `<...>`
+    stand-in. It is now reported by name, and an `external_gate` does not silence
+    it: a gate says who owns a path, not what the path is."""
+    spine = (
+        "- id: C1\n  title: t\n  change_kind: code-edit\n"
+        "  surface: docs/x.md\n"
+        "  writes: ['<surface-resolved-in-chunk>']\n"
+        "  external_gate:\n"
+        "    - owner_repo: example-retrieval-repo\n"
+        "      condition: they land the op\n"
+        "      requires: landed-work\n"
+        "  queue_scope: project\n  disposition: open\n"
+    )
+    report = _gate(tmp_path, _plan_with(tmp_path, spine, "ph.md"))
+    assert report["classes"]["EXTERNAL_DEPS"]["kind"] == "path-placeholder", report["message"]
+    assert report["verdict"] == pg.NOT_PREPPED
 
 
 # ---------------------------------------------------------------------------

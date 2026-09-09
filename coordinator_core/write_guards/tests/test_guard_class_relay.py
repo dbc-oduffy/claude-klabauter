@@ -141,6 +141,17 @@ def test_invalid_class_value_is_not_a_transition():
 # two touched files (engine.py, guard_class_relay.py) is itself a guard
 # module read by this scan, and no guard module's own source changed as
 # part of C1, this snapshot is valid as a pre/post comparison baseline.
+#
+# ONE ROW POSTDATES THE CAPTURE and its provenance is therefore different:
+# `block_foreign_family_sidecar_write` was added 2026-09-01 (614ca6cda7), after
+# the extraction, so no pre-extraction value for it exists or could. Its triple
+# was read from TODAY's `_cheap_guard_metadata`, which means it proves nothing
+# about the C1 extraction — it cannot, for a module that did not exist then.
+# It is here because `test_golden_snapshot_covers_every_module_in_pkg_dir`
+# requires the snapshot to cover the live module set, and that coverage rule is
+# the thing keeping this file from silently validating a stale subset; the row
+# still earns its place as a change-detector going forward. A future guard
+# added post-extraction gets the same treatment and the same caveat.
 # ---------------------------------------------------------------------------
 
 _GOLDEN_SNAPSHOT = json.loads(
@@ -157,6 +168,7 @@ _GOLDEN_SNAPSHOT = json.loads(
 "block_duplicate_decision_record_id": ["hard-deny", ["Write", "Edit", "MultiEdit"], 137],
 "block_em_hand_edit_pending_review_integration": ["advisory", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 115],
 "block_fleet_delegation_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 49],
+"block_foreign_family_sidecar_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 31],
 "block_goals_log_hand_write": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 65],
 "block_hand_authored_sidecar_creation": ["hard-deny", ["Write"], 60],
 "block_home_dir_memo_delivery": ["hard-deny", ["Write", "Edit", "MultiEdit", "NotebookEdit"], 125],

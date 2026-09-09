@@ -22,13 +22,17 @@ dependency falls on. The four report classes are a routing aid, not four bars.
                  ``question`` + ``command`` + ``result``. ``census: []`` passes.
   EXTERNAL_DEPS  Every row whose declared paths leave this repo carries an
                  ``external_gate``; every uncleared gate declares ``requires:``.
-                 ``requires: commit-in-owner-repo`` REFUSES the whole plan;
-                 ``requires: landed-work`` withholds only its own ROW.
+                 BOTH ``requires:`` values withhold only their own ROW and the
+                 plan certifies on the rows that remain. They stay
+                 distinguishable in the detail line because they route
+                 differently once withheld: ``landed-work`` waits for a peer's
+                 landing, ``commit-in-owner-repo`` needs a cross-repo commit
+                 dispatched under per-session assent.
   PRIME_EXIT     ``prime_exit_criterion`` with a non-empty ``statement`` and a
                  non-empty ``derived_from``, at EVERY size — not only M/L/XL.
 
-Domain vocabulary: the bar, a report class, a verdict (PREPPED / NOT-PREPPED /
-REFUSED), a withheld row, a declared-empty.
+Domain vocabulary: the bar, a report class, a verdict (PREPPED / NOT-PREPPED),
+a withheld row, a declared-empty.
 
 Consumed by ``coordinator_core.ops.plan_prep_gate`` (the ``plan.prep_gate`` op,
 which reports) and ``coordinator_core.ops.plan_stamp_prepped`` (the
@@ -95,10 +99,18 @@ import yaml
 # Vocabulary
 # ---------------------------------------------------------------------------
 
-#: The three verdicts, spelled exactly as the read-side twin spells them —
+#: The two verdicts, spelled exactly as the read-side twin spells them —
 #: consumers on both sides of the repo boundary compare these strings.
 PREPPED = "PREPPED"
 NOT_PREPPED = "NOT-PREPPED"
+
+#: RETIRED, and named rather than deleted because its ABSENCE is the operative
+#: rule: a reader who does not know this was retired reads a plan touching a
+#: sibling repo as un-fireable and reinstates the whole-plan refusal. PM ruling —
+#: a plan is not rejected because part of it needs code in another repo. That
+#: work is withheld and routed, exactly as ``landed-work`` already was. Nothing
+#: produces this verdict; the constant and ``EXIT_REFUSED`` stay reserved so no
+#: consumer's string comparison or exit-code mapping shifts under them.
 REFUSED = "REFUSED"
 
 #: Report-class order. Fixed, because the refusal message enumerates in it and a
@@ -118,13 +130,13 @@ REQUIRES_VALUES = (REQUIRES_LANDED, REQUIRES_COMMIT)
 #: facts, and resolving them would mean spawning `machine-local` on a box already
 #: carrying many concurrent sessions.
 #:
-#: ONE NAME MORE THAN THE READ-SIDE TWIN CARRIES, and the difference is forced.
-#: DoE's copy omits its own shortname because an intra-repo blocker is a
-#: ``depends_on`` edge, never a gate — so its list cannot name ``DoE-claude``.
-#: This module runs over whichever repo the caller stands in, so it carries every
-#: fleet name and subtracts the running repo's own at call time
-#: (``fleet_siblings``). The two lists are therefore identical for any given
-#: corpus, which is the property that matters.
+#: EVERY FLEET NAME, INCLUDING THE DOCTRINE REPO'S, and the read-side twin's
+#: ``SIBLING_REPOS`` carries the same eight. Neither half hard-omits a name:
+#: both run over whichever repo the caller stands in, so the repo's own name is
+#: subtracted at CALL time (``fleet_siblings``) rather than at authoring time. A
+#: hard omission would be right only for a gate that could run over one corpus
+#: alone; a gate that takes a repo root and finds the doctrine repo a sibling
+#: must be able to name it.
 FLEET_REPOS = (
     "claude-klabauter",
     "claude-klabauter",
@@ -179,10 +191,18 @@ def fleet_siblings(repo_root: Path) -> tuple:
     repo-identity fact available without a registry read. A row naming the repo
     it already lives in is a ``depends_on`` edge mis-spelled as a path, not a
     cross-repo dependency, and reporting it as one would fire the DR-127 leg on
-    every plan that cites its own tree by name.
+    every plan that cites its own tree by name. That reasoning is why the
+    subtraction happens; it is not a reason to omit a name from ``FLEET_REPOS``,
+    because the repo being stood in changes per invocation and the constant does
+    not.
+
+    Case-folded, for the reason ``_path_leaves_repo`` folds case: a clone at
+    ``doe-claude/`` and one at ``DoE-claude/`` are the same repo, and a
+    subtraction that missed on case would report every self-naming row in one of
+    them as a cross-repo dependency.
     """
-    own = repo_root.name
-    return tuple(name for name in FLEET_REPOS if name != own)
+    own = repo_root.name.casefold()
+    return tuple(name for name in FLEET_REPOS if name.casefold() != own)
 
 
 def repo_root_names(repo_root: Path) -> frozenset:
@@ -211,6 +231,10 @@ def _defect(kind: str, detail: str, withheld: Optional[List[str]] = None) -> Dic
     return {"status": "DEFECT", "kind": kind, "detail": detail, "withheld": withheld or []}
 
 
+#: RETIRED with the REFUSED verdict it produced, and kept as the one shape that
+#: reaches it, so a predicate reintroducing a whole-plan refusal has to name this
+#: helper and be seen doing it rather than inventing a second refusal path. No
+#: predicate calls it; see ``REFUSED`` for the ruling.
 def _refuse(kind: str, detail: str, withheld: Optional[List[str]] = None) -> Dict[str, Any]:
     return {"status": "REFUSE", "kind": kind, "detail": detail, "withheld": withheld or []}
 
@@ -327,27 +351,81 @@ def _path_leaves_repo(
     would report the corpus as mostly clean. A repo shortname is a NAME, not a
     path shape, so this leg reads ``surface:`` safely.
 
-    ROOT-EXISTENCE (``writes:``, ``reads:`` only) — the value's first segment is
-    not an entry at this repo's root, so as a repo-relative path it cannot resolve
-    here. It does NOT run against ``surface:``, whose schema description admits "a
-    single path OR SUBSYSTEM"; reading those values as paths reports prose. Its
-    one false-positive shape is a plan legitimately creating a new top-level
-    directory — named here rather than assumed away.
+    The name match is CASE-FOLDED, and the separator rule is unchanged by that.
+    The corpus does not agree with itself on the case of a fleet shortname — the
+    doctrine repo is spelled both ``DoE-claude`` and ``doe-claude`` by its own
+    peers, in plan prose and in cross-repo archives — so a case-sensitive ``==``
+    made a row declaring a genuine cross-repo surface in the corpus's OWN
+    spelling invisible to this leg. Folding case widens which spellings are SEEN;
+    it does not widen what counts as a separator, so ``claude_klabauter2/x`` is
+    still not a match.
+
+    ROOT-EXISTENCE (``writes:``, ``reads:`` only) — the value is a MULTI-SEGMENT
+    path whose first segment is not an entry at this repo's root, so as a
+    repo-relative path it cannot resolve here. It does NOT run against
+    ``surface:``, whose schema description admits "a single path OR SUBSYSTEM";
+    reading those values as paths reports prose.
+
+    A SINGLE-SEGMENT value is exempt, and the exemption is structural rather than
+    asserted. What this leg genuinely catches is a nameless path INTO another
+    repo's tree (``coordinator_core/ops/foo.py``), and a path into a tree has a
+    tree to be into: it carries a separator by construction. A value with no
+    separator names one entry at THIS repo's root — the plan is creating it, and
+    a plan is allowed to create a root-level file or directory. That was the
+    false-positive shape this docstring previously named and dismissed as
+    unobserved; it has since been observed (example-retrieval-repo
+    ``docs/plans/2026-09-06-inbox-blitz-xs-s-bundle.md``, row T8, a new
+    root-level ``ADOPTERS`` file), and the only way its author could pass the bar
+    was to delete the declared write from ``writes:`` — the leg forced an
+    UNDER-declaration, inverting the one rule the whole bar enforces. No author
+    assertion clears this leg: the discriminant is read off the declared value's
+    own shape, so it cannot be claimed, only spelled.
+
+    The residual the exemption accepts, named rather than assumed away: a row
+    declaring a sibling's whole tree as one bare directory name (``writes:
+    [coordinator_core]``) reads as a new local root entry. It is bounded — such a
+    row declares no file it would touch, so SPINE's write set is useless for it
+    either way — and it is zero in both measured corpora.
     """
     stripped = value.strip()
     if not stripped:
         return None
+    folded = stripped.casefold()
     for sibling in siblings:
-        if stripped == sibling or (
-            stripped.startswith(sibling) and not stripped[len(sibling)].isalnum()
+        key = sibling.casefold()
+        if folded == key or (
+            folded.startswith(key) and not folded[len(key)].isalnum()
         ):
             return f"names {sibling}"
     if field == "surface":
         return None
-    first = stripped.replace("\\", "/").split("/")[0]
+    normalized = stripped.replace("\\", "/")
+    if "/" not in normalized.strip("/"):
+        return None
+    first = normalized.split("/")[0]
     if first and first not in root_names:
         return f"first path segment {first!r} does not exist in this repo"
     return None
+
+
+def _path_is_unresolved_placeholder(value: str) -> bool:
+    """True when a declared path is still an angle-bracketed stand-in.
+
+    Carried as its own finding because the single-segment exemption in
+    ``_path_leaves_repo`` would otherwise silently drop the one real catch the
+    ROOT-EXISTENCE leg had at single-segment depth. Measured across both corpora,
+    every single-segment value that leg reported was either a legitimate local
+    entry or this: one ``<...>`` stand-in a generator left behind
+    (``'<isolated-registration-surface-resolved-in-chunk>'``). The module's own
+    prior measurement already called that value "itself a defect this bar should
+    catch", so it is caught by name instead of as a side effect of depth.
+
+    Reported separately from ``PLACEHOLDER_MARKERS`` because the shapes differ: a
+    scaffolded FRONTMATTER key carries the generator's literal marker, while a
+    hand-authored path carries the author's own bracketed stand-in. A gate never
+    clears it — an ``external_gate`` says who owns a path, not what the path is.
+    """
+    return "<" in value or ">" in value
 
 
 def _row_declared_paths(row: Dict[str, Any]) -> List[tuple]:
@@ -386,12 +464,26 @@ def _external_deps(
 
     UNDECLARED (row leaves the repo, no gate) and MISSING-REQUIRES (gate present,
     discriminant absent) are both NOT-PREPPED: an author fixes them here.
-    COMMIT-IN-OWNER-REPO is REFUSED, whole-plan — a hands-off run has no session
-    in which to obtain the per-session assent a cross-repo commit needs, so no
-    amount of authoring inside this repo clears it. LANDED-WORK withholds its own
-    row and nothing else; the plan certifies with that row named as withheld.
+
+    BOTH ``requires:`` values withhold their own row and nothing else; the plan
+    certifies on the rows that remain.
+
+    COMMIT-IN-OWNER-REPO used to refuse the whole plan, reasoning that a
+    hands-off run has no session in which to obtain the per-session assent a
+    cross-repo commit needs. That is sound about the ROW and wrong about the
+    PLAN: withholding the row already keeps the run from writing into a sibling's
+    tree unassented, and refusing on top of that discarded every row which had
+    nothing to do with the sibling. It is the same argument this leg already made
+    for LANDED-WORK — refusing the plan would discard every schedulable row
+    alongside the blocked one — which had never been applied to the other value.
+
+    The two remain distinguishable in the detail line because they route
+    differently once withheld: LANDED-WORK waits for a peer's landing, and
+    COMMIT-IN-OWNER-REPO needs a cross-repo commit dispatched. Both are the
+    successor's work, never a reason to refuse the plan.
     """
     undeclared: List[str] = []
+    placeholders: List[str] = []
     missing_requires: List[str] = []
     bad_requires: List[str] = []
     commit_gated: List[str] = []
@@ -402,6 +494,12 @@ def _external_deps(
         gates = row.get("external_gate")
         gates = [g for g in gates if isinstance(g, dict)] if isinstance(gates, list) else []
         for field, value in _row_declared_paths(row):
+            if field != "surface" and _path_is_unresolved_placeholder(value):
+                placeholders.append(
+                    f"{row_id}: {field} {value.strip()!r} is an unreplaced placeholder, "
+                    "not a path (no external_gate clears it)"
+                )
+                continue
             reason = _path_leaves_repo(field, value, root_names, siblings)
             if reason and not gates:
                 undeclared.append(f"{row_id}: {field} {reason}, no external_gate")
@@ -422,26 +520,32 @@ def _external_deps(
             elif requires == REQUIRES_COMMIT:
                 owner = entry.get("owner_repo") or "a sibling repo"
                 commit_gated.append(f"{row_id}: commit into {owner}")
+                withheld.append(row_id)
             else:
                 withheld.append(row_id)
 
-    if commit_gated:
-        return _refuse(
-            "cross-repo-commit-gate",
-            "; ".join(commit_gated)
-            + " — a cross-repo commit needs per-session assent, and a hands-off run has no "
-            "session to obtain it in",
-            withheld=withheld,
-        )
     defects = undeclared + missing_requires + bad_requires
+    if placeholders:
+        # Its own kind, not folded into external-dep-undeclared: the repair
+        # differs — one replaces a stand-in with the path it stands for, the
+        # other adds a gate — and a tally that names only the second sends the
+        # author to the wrong fix.
+        return _defect(
+            "path-placeholder", "; ".join(placeholders + defects), withheld=withheld
+        )
     if defects:
         return _defect("external-dep-undeclared", "; ".join(defects), withheld=withheld)
     if withheld:
-        return _pass(
-            f"{len(set(withheld))} row(s) withheld on landed-work gates: "
-            f"{', '.join(sorted(set(withheld)))}",
-            withheld=withheld,
-        )
+        # Both populations named, because the withheld set alone says a row is
+        # held and not what would release it — one waits for a peer's landing,
+        # the other needs a commit dispatched into a tree this run may not write.
+        detail = f"{len(set(withheld))} row(s) withheld: {', '.join(sorted(set(withheld)))}"
+        if commit_gated:
+            detail += (
+                f" — of which needing a cross-repo commit ({'; '.join(commit_gated)}), "
+                "to be dispatched under per-session assent rather than refused"
+            )
+        return _pass(detail, withheld=withheld)
     return _pass("no declared path leaves this repo")
 
 

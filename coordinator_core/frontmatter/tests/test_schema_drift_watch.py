@@ -31,12 +31,18 @@ import pytest
 
 from coordinator_core.frontmatter import schema_drift_watch
 from coordinator_core.frontmatter.schema_drift_watch import (
+    DEGRADE_REASON_RESOLVER_RAISED,
+    DEGRADE_REASON_SOURCE_DIR_ABSENT,
+    DEGRADE_REASON_SOURCE_ROOT_UNREGISTERED,
+    SCHEMAS_DIR_RUNG_ENGINE_SOURCE,
+    SCHEMAS_DIR_RUNG_MODULE_RELATIVE,
     STATUS_DRIFT,
     STATUS_INDETERMINATE,
     STATUS_MATCH,
     STATUS_UNRESOLVED,
     VENDORED_SCHEMAS_DIR,
     _resolve_scan_schemas_dir,
+    _resolve_scan_schemas_dir_with_reason,
     check_source_drift_advisory,
     check_source_drift_advisory_batch,
     resolve_doe_repo_path,
@@ -1054,3 +1060,175 @@ class TestResolveScanSchemasDir:
     # than importing VENDORED_SCHEMAS_DIR (baton_class.py documents the
     # non-import as deliberate); nothing outside this module imports it. No
     # replacement pin written on that premise.
+
+
+class TestResolveScanSchemasDirWithReason:
+    """Y4 fix — state/bug-backlog/2026-09-09-the-drift-scan-has-the-right-
+    rung-and-falls-through-it-silently.yaml.
+
+    `_resolve_scan_schemas_dir`'s bare `except Exception: pass` used to make
+    every rung-2 failure — a raising resolver, an unregistered source root,
+    an absent resolved directory — indistinguishable from "rung 2 does not
+    apply here". `_resolve_scan_schemas_dir_with_reason` is the same
+    resolution with the cause attached; these tests are the "is a rung-2
+    failure observable" proof this row asks for, and they FAIL against the
+    pre-fix code (which has no such function to import at all — an
+    ImportError, not an assertion failure, on the pre-fix tree).
+    """
+
+    def test_resolver_raising_is_distinguished_as_a_defect(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _raise() -> str:
+            raise RuntimeError("no engine root registered")
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", _raise)
+
+        path, rung, reason = _resolve_scan_schemas_dir_with_reason(None)
+
+        assert path == VENDORED_SCHEMAS_DIR
+        assert rung == SCHEMAS_DIR_RUNG_MODULE_RELATIVE
+        assert reason is not None
+        assert reason.startswith(DEGRADE_REASON_RESOLVER_RAISED)
+        assert "RuntimeError" in reason
+
+    def test_unregistered_source_root_is_distinguished_as_operator_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mirror_root = tmp_path / "mirror"
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", lambda: str(mirror_root))
+        monkeypatch.setattr(schema_drift_watch, "is_published_engine_mirror", lambda root: True)
+        monkeypatch.setattr(schema_drift_watch, "engine_source_root", lambda: None)
+
+        path, rung, reason = _resolve_scan_schemas_dir_with_reason(None)
+
+        assert path == VENDORED_SCHEMAS_DIR
+        assert rung == SCHEMAS_DIR_RUNG_MODULE_RELATIVE
+        assert reason == DEGRADE_REASON_SOURCE_ROOT_UNREGISTERED
+
+    def test_absent_resolved_directory_is_distinguished_as_a_broken_checkout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mirror_root = tmp_path / "mirror"
+        source_root = tmp_path / "source-without-schemas"
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", lambda: str(mirror_root))
+        monkeypatch.setattr(schema_drift_watch, "is_published_engine_mirror", lambda root: True)
+        monkeypatch.setattr(schema_drift_watch, "engine_source_root", lambda: str(source_root))
+
+        path, rung, reason = _resolve_scan_schemas_dir_with_reason(None)
+
+        assert path == VENDORED_SCHEMAS_DIR
+        assert rung == SCHEMAS_DIR_RUNG_MODULE_RELATIVE
+        assert reason is not None
+        assert reason.startswith(DEGRADE_REASON_SOURCE_DIR_ABSENT)
+
+    def test_not_a_mirror_is_not_a_degrade(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Rung 2 does not apply at all here — module-relative is the correct
+        # answer, not a fallback from anything, so this must NOT be reported
+        # as a degrade (distinguishing "not applicable" from "failed").
+        live_root = tmp_path / "live-working-tree"
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", lambda: str(live_root))
+        monkeypatch.setattr(schema_drift_watch, "is_published_engine_mirror", lambda root: False)
+
+        path, rung, reason = _resolve_scan_schemas_dir_with_reason(None)
+
+        assert path == VENDORED_SCHEMAS_DIR
+        assert rung == SCHEMAS_DIR_RUNG_MODULE_RELATIVE
+        assert reason is None
+
+    def test_mirror_with_existing_source_dir_has_no_degrade_reason(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mirror_root = tmp_path / "mirror"
+        source_root = tmp_path / "source"
+        source_schemas = source_root / "coordinator_core" / "frontmatter" / "schemas"
+        source_schemas.mkdir(parents=True)
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", lambda: str(mirror_root))
+        monkeypatch.setattr(schema_drift_watch, "is_published_engine_mirror", lambda root: True)
+        monkeypatch.setattr(schema_drift_watch, "engine_source_root", lambda: str(source_root))
+
+        path, rung, reason = _resolve_scan_schemas_dir_with_reason(None)
+
+        assert path == source_schemas
+        assert rung == SCHEMAS_DIR_RUNG_ENGINE_SOURCE
+        assert reason is None
+
+    def test_explicit_schemas_dir_carries_no_degrade_reason(self, tmp_path: Path) -> None:
+        explicit = tmp_path / "explicit-schemas"
+        explicit.mkdir()
+
+        path, rung, reason = _resolve_scan_schemas_dir_with_reason(explicit)
+
+        assert path == explicit
+        assert reason is None
+
+    def test_thin_wrapper_still_returns_only_the_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # `_resolve_scan_schemas_dir`'s own signature/behaviour stays exactly
+        # as `TestResolveScanSchemasDir` pins it — this is a redundant
+        # cross-check, not a replacement for that class.
+        def _raise() -> str:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", _raise)
+
+        assert _resolve_scan_schemas_dir(None) == VENDORED_SCHEMAS_DIR
+
+
+class TestScanReportsSchemasDirDegrade:
+    """The rung-2 fallthrough surfaced through `_scan`'s (and therefore
+    `scan_vendored_schema_drift`'s) returned report — the second half of the
+    Y4 fix: a consumer reading only the top-level report must be able to
+    tell "compared against source" from "fell back to the mirror's own
+    copies" apart, per the same bug row.
+    """
+
+    def test_report_carries_rung_and_degrade_reason_on_fallthrough(
+        self, fake_doe: Path, vendored_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        mirror_root = fake_doe.parent / "mirror"
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", lambda: str(mirror_root))
+        monkeypatch.setattr(schema_drift_watch, "is_published_engine_mirror", lambda root: True)
+        monkeypatch.setattr(schema_drift_watch, "engine_source_root", lambda: None)
+
+        # schemas_dir intentionally omitted (None) — forcing the scan through
+        # its own internal resolver instead of rung 1.
+        report = scan_vendored_schema_drift(doe_repo_path=fake_doe, schemas_dir=None)
+
+        assert report["schemas_dir_rung"] == SCHEMAS_DIR_RUNG_MODULE_RELATIVE
+        assert report["schemas_dir_degrade_reason"] == DEGRADE_REASON_SOURCE_ROOT_UNREGISTERED
+        assert "Compared against the mirror's own vendored copies" in report["summary"]
+
+    def test_report_carries_no_degrade_reason_when_not_a_mirror(
+        self, fake_doe: Path, vendored_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        live_root = fake_doe.parent / "live-working-tree"
+
+        monkeypatch.setattr(schema_drift_watch, "coordinator_engine_root", lambda: str(live_root))
+        monkeypatch.setattr(schema_drift_watch, "is_published_engine_mirror", lambda root: False)
+
+        report = scan_vendored_schema_drift(
+            doe_repo_path=fake_doe, schemas_dir=vendored_dir
+        )
+
+        # An explicit schemas_dir is rung 1 (wins outright) — assert the
+        # no-degrade case via the un-degraded field values rather than
+        # depending on which rung answered.
+        assert report["schemas_dir_degrade_reason"] is None
+
+    def test_explicit_schemas_dir_reports_no_degrade(
+        self, fake_doe: Path, vendored_dir: Path
+    ) -> None:
+        report = scan_vendored_schema_drift(doe_repo_path=fake_doe, schemas_dir=vendored_dir)
+
+        assert report["status"] == STATUS_MATCH
+        assert report["schemas_dir_rung"] is not None
+        assert report["schemas_dir_degrade_reason"] is None

@@ -252,6 +252,30 @@ class TestEveryDirectShlexSiteInheritsTheCeiling:
     is not.
     """
 
+    def test_seg_forcing_form_scan_text_inherits_the_ceiling(self):
+        """The push-force narrowing site takes its OWN fail-closed branch
+        past the ceiling, not a 600ms shlex walk.
+
+        Paired, per this class's contract. At-ceiling the site still does its
+        real job: narrowing a wrapper-prefixed segment to the git argv, which
+        is what stops `/usr/bin/time -f "%e" git push` classifying as a forced
+        push. Past-ceiling it returns the segment WHOLE -- the same answer its
+        heredoc and untokenizable branches already give, so the caller's regex
+        scans more text rather than less and the guard cannot be walked past
+        by making the input long.
+        """
+        from coordinator_core.bash_guards import (
+            block_subagent_destructive_action as mod,
+        )
+
+        at_ceiling = '/usr/bin/time -f "%e" git push'
+        assert not _command_tokenizer.exceeds_tokenizable_ceiling(at_ceiling)
+        assert mod._seg_forcing_form_scan_text(at_ceiling) == "git push"
+
+        past_ceiling = _pad_to("git push ", "", CEILING + 1)
+        assert _command_tokenizer.exceeds_tokenizable_ceiling(past_ceiling)
+        assert mod._seg_forcing_form_scan_text(past_ceiling) == past_ceiling
+
     def test_shell_c_unwrap_payloads(self) -> None:
         from coordinator_core.bash_guards import dispatch_checks as dc
 
@@ -733,7 +757,7 @@ class TestDialectAwareTokenizer:
 
         monkeypatch.setattr(_dialect, "_parser", _boom)
         monkeypatch.setattr(_dialect, "_parser_cache", None)
-        monkeypatch.setattr(_dialect, "_LOGGED_PARSER_UNAVAILABLE", False)
+        monkeypatch.setattr(_dialect, "_LOGGED_PARSER_UNAVAILABLE_GUARDS", set())
         monkeypatch.setattr(_dialect, "settings_home", lambda: tmp_path)
 
         # abs-path-ok: synthetic PowerShell fixture text, never resolved.
@@ -760,7 +784,7 @@ class TestDialectAwareTokenizer:
         from coordinator_core.bash_guards import _dialect
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
-        monkeypatch.setattr(_dialect, "_LOGGED_PARSER_UNAVAILABLE", False)
+        monkeypatch.setattr(_dialect, "_LOGGED_PARSER_UNAVAILABLE_GUARDS", set())
         monkeypatch.setattr(_dialect, "settings_home", lambda: tmp_path)
 
         cmd = "Remove-Item -Recurse -Force &> out.txt"
@@ -790,7 +814,7 @@ class TestDialectAwareTokenizer:
 
         monkeypatch.setattr(_dialect, "_parser", _boom)
         monkeypatch.setattr(_dialect, "_parser_cache", None)
-        monkeypatch.setattr(_dialect, "_LOGGED_PARSER_UNAVAILABLE", False)
+        monkeypatch.setattr(_dialect, "_LOGGED_PARSER_UNAVAILABLE_GUARDS", set())
         monkeypatch.setattr(_dialect, "settings_home", lambda: unwritable_parent)
 
         # abs-path-ok: synthetic PowerShell fixture text, never resolved.

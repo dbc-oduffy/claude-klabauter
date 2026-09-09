@@ -100,6 +100,98 @@ VENDORED_SCHEMAS_DIR = Path(__file__).resolve().parent / "schemas"
 _VENDORED_SCHEMAS_SUBPATH = Path("coordinator_core") / "frontmatter" / "schemas"
 
 
+# `_resolve_scan_schemas_dir_with_reason`'s rung labels — what actually
+# answered, for a consumer that needs to tell "compared against source" from
+# "fell back to the mirror's own copies" apart (state/bug-backlog/
+# 2026-09-09-the-drift-scan-has-the-right-rung-and-falls-through-it-silently.yaml).
+SCHEMAS_DIR_RUNG_EXPLICIT = "explicit"
+SCHEMAS_DIR_RUNG_ENGINE_SOURCE = "engine-source"
+SCHEMAS_DIR_RUNG_MODULE_RELATIVE = "module-relative"
+
+# `degrade_reason` prefixes `_resolve_scan_schemas_dir_with_reason` returns
+# when rung 2 was APPLICABLE (running from a published mirror) but did not
+# fire — distinguishing the three causes the bare `except Exception: pass`
+# used to collapse into one silent fallthrough. Not applicable at all (not a
+# mirror) is a fourth, un-prefixed case: `degrade_reason` is None there,
+# because module-relative is simply the correct answer, not a degrade.
+DEGRADE_REASON_RESOLVER_RAISED = "engine-root-resolver-raised"
+DEGRADE_REASON_SOURCE_ROOT_UNREGISTERED = "source-root-unregistered"
+DEGRADE_REASON_SOURCE_DIR_ABSENT = "source-root-directory-absent"
+
+
+def _resolve_scan_schemas_dir_with_reason(
+    schemas_dir: Optional[Path],
+) -> tuple[Path, str, Optional[str]]:
+    """`_resolve_scan_schemas_dir`'s resolution, plus WHY rung 2 didn't fire.
+
+    Returns `(path, rung, degrade_reason)`. `rung` is one of the
+    `SCHEMAS_DIR_RUNG_*` constants above. `degrade_reason` is `None` unless
+    rung 2 was applicable (the engine root IS a published mirror) and did not
+    fire, in which case it is one of three distinguishable causes — the same
+    three the bare `except Exception: pass` below used to render identical:
+
+      - `DEGRADE_REASON_RESOLVER_RAISED: <ExcType>: <msg>` — `coordinator_engine_root()`,
+        `is_published_engine_mirror()`, or `engine_source_root()` raised. A
+        DEFECT in the resolver, not operator config.
+      - `DEGRADE_REASON_SOURCE_ROOT_UNREGISTERED` — `engine_source_root()`
+        returned `None`. Operator config (register `engine.source_root`),
+        not a defect.
+      - `DEGRADE_REASON_SOURCE_DIR_ABSENT: <path>` — a source root resolved,
+        but the vendored-schemas subpath under it is not a directory. A
+        broken checkout, not a registry gap.
+
+    Never raises — same contract as `_resolve_scan_schemas_dir`, which this
+    function backs.
+    """
+    if schemas_dir is not None:
+        return Path(schemas_dir), SCHEMAS_DIR_RUNG_EXPLICIT, None
+
+    try:
+        root = coordinator_engine_root()
+        mirror = is_published_engine_mirror(root)
+    except Exception as exc:  # noqa: BLE001 — resolver must never raise into the scan
+        return (
+            VENDORED_SCHEMAS_DIR,
+            SCHEMAS_DIR_RUNG_MODULE_RELATIVE,
+            f"{DEGRADE_REASON_RESOLVER_RAISED}: {type(exc).__name__}: {exc}",
+        )
+
+    if not mirror:
+        # Rung 2 does not apply here — module-relative IS the right answer,
+        # not a fallback from anything, so no degrade_reason.
+        return VENDORED_SCHEMAS_DIR, SCHEMAS_DIR_RUNG_MODULE_RELATIVE, None
+
+    try:
+        source_root = engine_source_root()
+    except Exception as exc:  # noqa: BLE001 — resolver must never raise into the scan
+        return (
+            VENDORED_SCHEMAS_DIR,
+            SCHEMAS_DIR_RUNG_MODULE_RELATIVE,
+            f"{DEGRADE_REASON_RESOLVER_RAISED}: {type(exc).__name__}: {exc}",
+        )
+
+    if not source_root:
+        return (
+            VENDORED_SCHEMAS_DIR,
+            SCHEMAS_DIR_RUNG_MODULE_RELATIVE,
+            DEGRADE_REASON_SOURCE_ROOT_UNREGISTERED,
+        )
+
+    candidate = Path(source_root) / _VENDORED_SCHEMAS_SUBPATH
+    try:
+        candidate_is_dir = candidate.is_dir()
+    except OSError:
+        candidate_is_dir = False
+    if not candidate_is_dir:
+        return (
+            VENDORED_SCHEMAS_DIR,
+            SCHEMAS_DIR_RUNG_MODULE_RELATIVE,
+            f"{DEGRADE_REASON_SOURCE_DIR_ABSENT}: {candidate}",
+        )
+
+    return candidate, SCHEMAS_DIR_RUNG_ENGINE_SOURCE, None
+
+
 def _resolve_scan_schemas_dir(schemas_dir: Optional[Path]) -> Path:
     """The SCAN path's directory resolver — NOT used by any other caller.
 
@@ -119,19 +211,16 @@ def _resolve_scan_schemas_dir(schemas_dir: Optional[Path]) -> Path:
     Never raises — mirrors `vendored_schema_paths`'/`vendored_source_paths`'
     own "never raises" contract, since this is the resolver those two (and
     `_scan`'s directory reference) route through.
+
+    Thin wrapper over `_resolve_scan_schemas_dir_with_reason` — this
+    function's signature and behaviour are pinned by `TestResolveScanSchemasDir`
+    and stay exactly as they were; the `rung`/`degrade_reason` it discards are
+    `_scan`'s to read (see that function and its `schemas_dir_rung` /
+    `schemas_dir_degrade_reason` report keys) so a rung-2 failure is
+    observable rather than folded back into indistinguishable silence.
     """
-    if schemas_dir is not None:
-        return Path(schemas_dir)
-    try:
-        if is_published_engine_mirror(coordinator_engine_root()):
-            source_root = engine_source_root()
-            if source_root:
-                candidate = Path(source_root) / _VENDORED_SCHEMAS_SUBPATH
-                if candidate.is_dir():
-                    return candidate
-    except Exception:
-        pass
-    return VENDORED_SCHEMAS_DIR
+    path, _rung, _degrade_reason = _resolve_scan_schemas_dir_with_reason(schemas_dir)
+    return path
 
 # Path, relative to a DoE clone root, where the canonical schemas live. Mirrors the
 # `coordinator/schemas/<name>` ref that check_schema_drift_advisory resolves via git.
@@ -608,6 +697,8 @@ def scan_vendored_schema_drift(
             "matched": [],
             "drifted": [],
             "indeterminate": [],
+            "schemas_dir_rung": None,
+            "schemas_dir_degrade_reason": None,
             "summary": (
                 "Vendored-schema drift check could not run: "
                 f"{type(exc).__name__}: {exc}"
@@ -644,7 +735,15 @@ def _scan(
     # every indeterminate-empty scan). `_resolve_scan_schemas_dir` treats a
     # non-None arg as already-resolved (rung 1), so passing `resolved_dir`
     # back in is a no-op resolution, not a third distinct one.
-    resolved_dir = _resolve_scan_schemas_dir(schemas_dir)
+    #
+    # Uses the `_with_reason` form (not `_resolve_scan_schemas_dir` itself) so
+    # a rung-2 fallthrough is observable in the returned report instead of
+    # folding back into the silence its own bare `except Exception: pass`
+    # used to produce (state/bug-backlog/2026-09-09-the-drift-scan-has-the-
+    # right-rung-and-falls-through-it-silently.yaml).
+    resolved_dir, schemas_dir_rung, schemas_dir_degrade_reason = (
+        _resolve_scan_schemas_dir_with_reason(schemas_dir)
+    )
     schema_paths = vendored_schema_paths(resolved_dir)
     source_paths = vendored_source_paths(resolved_dir)
 
@@ -656,6 +755,8 @@ def _scan(
             "matched": [],
             "drifted": [],
             "indeterminate": [],
+            "schemas_dir_rung": schemas_dir_rung,
+            "schemas_dir_degrade_reason": schemas_dir_degrade_reason,
             "summary": (
                 "No sibling schema-source clone resolved on this machine (checked "
                 "REPO_DOE_CLAUDE, the .doe-root pointer, REPO_EXAMPLE_COCKPIT_REPO, and the "
@@ -672,6 +773,8 @@ def _scan(
             "matched": [],
             "drifted": [],
             "indeterminate": [],
+            "schemas_dir_rung": schemas_dir_rung,
+            "schemas_dir_degrade_reason": schemas_dir_degrade_reason,
             "summary": (
                 f"No vendored schemas or sources found under {resolved_dir} — nothing to "
                 "compare; treating as indeterminate rather than clean (an empty coverage "
@@ -813,6 +916,18 @@ def _scan(
             f"All {checked} vendored file(s) match their upstream HEAD."
         )
 
+    # Register (docs/wiki/guard-messaging.md § Register): one fact, once — a
+    # DRIFT/MATCH verdict computed from the mirror's own bytes instead of the
+    # engine SOURCE tree names that here, so a reader cannot mistake a
+    # fallthrough for a genuine comparison. Silent whenever rung 2 either
+    # fired (schemas_dir_degrade_reason is None because SOURCE answered) or
+    # legitimately does not apply (not running from a mirror at all).
+    if schemas_dir_degrade_reason is not None:
+        summary = (
+            f"{summary} Compared against the mirror's own vendored copies, not "
+            f"the engine source tree ({schemas_dir_degrade_reason})."
+        )
+
     return {
         "status": status,
         "doe_repo_path": str(resolved_doe) if resolved_doe else None,
@@ -821,5 +936,7 @@ def _scan(
         "matched": matched,
         "drifted": drifted,
         "indeterminate": indeterminate,
+        "schemas_dir_rung": schemas_dir_rung,
+        "schemas_dir_degrade_reason": schemas_dir_degrade_reason,
         "summary": summary,
     }

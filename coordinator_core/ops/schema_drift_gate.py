@@ -62,25 +62,45 @@ from coordinator_core.ipc import register_op
 
 def evaluate() -> dict:
     """Reduce scan_vendored_schema_drift()'s report to a {ok, status, drifted,
-    message} gating verdict. Pure reduction — no params, no repo_root; the scan
-    resolves the DoE clone / vendored dir itself, same as the advisory probe.
+    schemas_dir_rung, schemas_dir_degrade_reason, message} gating verdict. Pure
+    reduction — no params, no repo_root; the scan resolves the DoE clone /
+    vendored dir itself, same as the advisory probe.
+
+    `schemas_dir_rung`/`schemas_dir_degrade_reason` pass the scan's own
+    rung-2-observability fields (schema_drift_watch._resolve_scan_schemas_dir_with_reason)
+    through verbatim, and a non-None degrade_reason is folded into `message`
+    on a DRIFT verdict — a caller reading only `ok`/`message` must be able to
+    tell "compared against source" from "fell back to the mirror's own
+    copies" apart, since those two produce very different drift counts (see
+    state/bug-backlog/2026-09-09-the-drift-scan-has-the-right-rung-and-falls-
+    through-it-silently.yaml).
     """
     report = scan_vendored_schema_drift()
     status = str(report.get("status") or "")
     drifted = report.get("drifted") or []
+    schemas_dir_rung = report.get("schemas_dir_rung")
+    schemas_dir_degrade_reason = report.get("schemas_dir_degrade_reason")
 
     if status == STATUS_DRIFT:
         named = ", ".join(
             f"{d.get('schema')} [{d.get('direction') or 'direction unknown'}]" for d in drifted
         )
+        message = (
+            f"{len(drifted)} vendored schema(s) diverge from DoE HEAD: {named}. "
+            "Re-vendor before merging (see coordinator_core/frontmatter/schema_drift_watch.py)."
+        )
+        if schemas_dir_degrade_reason is not None:
+            message = (
+                f"{message} Compared against the mirror's own copies, not the engine "
+                f"source tree ({schemas_dir_degrade_reason})."
+            )
         return {
             "ok": False,
             "status": status,
             "drifted": drifted,
-            "message": (
-                f"{len(drifted)} vendored schema(s) diverge from DoE HEAD: {named}. "
-                "Re-vendor before merging (see coordinator_core/frontmatter/schema_drift_watch.py)."
-            ),
+            "schemas_dir_rung": schemas_dir_rung,
+            "schemas_dir_degrade_reason": schemas_dir_degrade_reason,
+            "message": message,
         }
 
     message = None
@@ -89,7 +109,14 @@ def evaluate() -> dict:
     elif status == "UNRESOLVED":
         message = str(report.get("summary") or "no DoE clone resolved; drift not determinable")
 
-    return {"ok": True, "status": status, "drifted": drifted, "message": message}
+    return {
+        "ok": True,
+        "status": status,
+        "drifted": drifted,
+        "schemas_dir_rung": schemas_dir_rung,
+        "schemas_dir_degrade_reason": schemas_dir_degrade_reason,
+        "message": message,
+    }
 
 
 @register_op("schema.drift_gate")

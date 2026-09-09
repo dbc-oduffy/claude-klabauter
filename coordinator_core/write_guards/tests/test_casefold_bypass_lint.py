@@ -501,11 +501,21 @@ def test_gate_is_silent_on_the_post_fix_shape():
     )
 
 
+#: The pre-casefold `block_consumed_handoff_edit.py`, VENDORED. `.py.txt` so
+#: nothing imports or collects it: it is a specimen carrying the defect, not a
+#: module. See `test_gate_catches_the_real_pre_fix_file_verbatim`.
+_PRE_FIX_FIXTURE = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "block_consumed_handoff_edit_pre_casefold.py.txt"
+)
+
+
 def test_gate_catches_the_real_pre_fix_file_verbatim():
     """The load-bearing mutation-test proof, per the dispatch brief: not a
-    hand-trimmed stand-in but the ACTUAL pre-`d9617436521c` content of
-    `block_consumed_handoff_edit.py`, fetched from git history and fed to
-    the scanner unmodified -- no guard file on disk is altered.
+    hand-trimmed stand-in but the ACTUAL pre-fix content of
+    `block_consumed_handoff_edit.py`, fed to the scanner unmodified -- no
+    guard file on disk is altered.
 
     This test is the reason `_ComparisonScan` tracks EVERY reaching
     assignment for a name rather than only the textually-last one (see that
@@ -515,25 +525,30 @@ def test_gate_catches_the_real_pre_fix_file_verbatim():
     `try`/`except` and passed even against the weaker tracker, which is
     exactly how the weaker version shipped a false sense of proof) -- this
     test is what caught that gap during authoring and must keep passing.
+
+    READS A VENDORED FIXTURE, not git history. It used to run
+    `git show d9617436521c^:<path>`, and that commit is GONE -- not
+    abbreviation drift: it resolves in none of the three fleet repos at full
+    history, and this repo's log carries at least two "restore the tree
+    deleted by an empty-tree commit" recoveries that explain how. The test had
+    been failing with `CalledProcessError: exit status 128`, which reads as
+    infrastructure noise and buries the proof it is supposed to carry.
+
+    The fixture is the same bytes: recovered by walking the file's own history
+    for the newest commit where `casefold_path` was still absent
+    (`09eda4e1dd7b`, 2026-08-05, 20,138 chars), and confirmed to carry the
+    `try`/`except OSError` assignment shape this test exists for. Vendoring is
+    what the repo's own rules point at anyway -- it removes a `git` spawn from
+    a test that only ever wanted one fixed blob (CLAUDE.md's brightline: "git
+    justifies itself per use"), and it makes the proof survive the next
+    history rewrite rather than dying with it a third time.
     """
-    pre_fix_source = subprocess.run(
-        [
-            "git",
-            "-C",
-            str(_REPO_ROOT),
-            "show",
-            "d9617436521c^:coordinator_core/write_guards/block_consumed_handoff_edit.py",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-        **no_console_creationflags(),
-    ).stdout
+    pre_fix_source = _PRE_FIX_FIXTURE.read_text(encoding="utf-8")
     findings = _scan_source(
         "coordinator_core/write_guards/block_consumed_handoff_edit.py", pre_fix_source
     )
     assert findings, (
-        "Gate failed to flag the VERBATIM pre-d9617436521c content of "
+        "Gate failed to flag the VERBATIM pre-casefold content of "
         "block_consumed_handoff_edit.py -- the detector does not catch the "
         "real defect it exists for."
     )

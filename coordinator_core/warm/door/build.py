@@ -66,20 +66,6 @@ _ENV_SET_HEADER = Path(__file__).resolve().parent / "door_env_set.h"
 #: hand, and grep both on change.
 SIDECAR_FILENAME = "door.engine-root.txt"
 
-#: THE THIRD AXIS (F-022, C1 of
-#: docs/plans/2026-09-01-the-dogfooded-install-stops-lying-about, ledger
-#: item 8). DR-328 and DR-331 establish the two existing skew axes --
-#: `warm.skew`'s commit-level client token and its source-level
-#: `ServerVersionState` check -- and explicitly REJECTED weakening that
-#: token. This filename names a THIRD, ADDITIVE axis only: the door
-#: IMAGE's own build identity, so a door-only rebuild (which touches
-#: neither axis 1 nor axis 2 -- `_engine_stamp` is untouched by a rebuild
-#: of `door.c`/`door_core.c` alone) is still observable to whichever
-#: server the rebuilt door next talks to. Nothing about the two existing
-#: axes changes; this is a new file read by a new caller, not a
-#: replacement for `SIDECAR_FILENAME` or `_engine_stamp`.
-DOOR_IMAGE_STAMP_FILENAME = "door.image-identity.txt"
-
 #: Provenance sidecar written next to every compiled `door.exe` -- see
 #: `write_provenance()`. Filename convention: `<exe-name>.provenance.json`,
 #: so it survives a `--output` pointing somewhere other than `door.exe`.
@@ -143,39 +129,6 @@ def write_sidecar(output_exe: Path, engine_root: Path) -> Path:
 
 def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def write_image_identity(output_exe: Path, *, image_sha256: str | None = None) -> Path:
-    """Writes the built door's own image identity next to it, so a server
-    it later talks to can tell a rebuilt door apart from the one it
-    booted against -- axis 3 (`skew.SKEW_AXIS_DOOR_IMAGE`), additive to
-    the two axes DR-328/DR-331 established.
-
-    THE CIRCULAR-HASH REASON THIS IS A SIDECAR, NOT A BAKED `-D` DEFINE.
-    `write_provenance`'s `image_sha256` is `sha256(output_exe)` -- taken
-    AFTER the binary is fully written, since a binary cannot embed the
-    hash of its own bytes (no fixed point is computed here). Baking it as
-    a compile-time define the way `__BUILD_ENGINE_ROOT_W__` is baked would
-    require hashing a binary that does not yet exist. This function ships
-    that value the way `write_sidecar` already ships `engine_root` -- a
-    single-line UTF-8 file next to the exe, read at the door's own
-    runtime -- rather than inventing a new transport for it.
-
-    `image_sha256` keyword: pass the digest `write_provenance` already
-    computed for this same build so the finished binary is hashed once,
-    not twice (Review: overengineering-reviewer -- `build()`/`build_posix
-    .build()` now compute it a single time and pass it to both writers).
-    Defaults to `None`/self-computed for a direct or test caller with no
-    digest handy.
-
-    Must be called AFTER the binary is fully written (i.e. after
-    `_compile()`), for the same reason `image_sha256` itself must be:
-    hashing a partially-written file would record the wrong identity.
-    """
-    identity = image_sha256 if image_sha256 is not None else _sha256_file(output_exe)
-    path = output_exe.parent / DOOR_IMAGE_STAMP_FILENAME
-    path.write_text(identity + "\n", encoding="utf-8", newline="")
-    return path
 
 
 def _compiler_version(kind: str, compiler_path: str) -> str:
@@ -256,12 +209,9 @@ def write_provenance(
     mtime that `copy2` routinely preserves from a much older source.
 
     `image_sha256` keyword: `build()` computes the digest ONCE and passes
-    it here AND to `write_image_identity`, so the finished binary is
-    hashed a single time per build rather than once per writer (Review:
-    overengineering-reviewer -- the prior shape hashed `output_exe` a
-    second time in `write_image_identity`, on every build, both
-    platforms). Defaults to `None`/self-computed so a direct or test
-    caller that has no digest handy keeps working unchanged."""
+    it here, so the finished binary is hashed a single time per build.
+    Defaults to `None`/self-computed so a direct or test caller that has
+    no digest handy keeps working unchanged."""
     provenance = {
         "door_c_sha256": _sha256_file(source_path),
         "sources": {
@@ -435,7 +385,6 @@ def build(
     write_sidecar(output, engine_root)
     image_sha256 = _sha256_file(output)
     write_provenance(output, _SOURCE, kind, compiler_path, engine_root, image_sha256=image_sha256)
-    write_image_identity(output, image_sha256=image_sha256)
 
     return output
 

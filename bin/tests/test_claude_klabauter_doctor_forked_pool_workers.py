@@ -151,3 +151,38 @@ def test_no_matching_processes_enumerates_empty(probe_mod):
     servers = probe_mod._enumerate_resident_warm_servers(_FakePsutil([]))
 
     assert servers == []
+
+
+class _PpidUnreadable(dict):
+    """A ``proc.info`` whose ``ppid`` read raises, as psutil's lazy accessor can.
+
+    The enumerator wraps that read in ``try/except`` and settles on ``None``; a
+    plain dict never exercises it, so the branch needs a mapping that actually
+    raises.
+    """
+
+    def get(self, key, default=None):
+        if key == "ppid":
+            raise RuntimeError("psutil could not read ppid")
+        return super().get(key, default)
+
+
+def test_a_process_with_no_readable_ppid_is_kept(probe_mod):
+    """``None`` is never a real matched pid, so a server whose parent cannot be
+    determined must survive the filter rather than be silently dropped.
+
+    This is the failure direction that matters: the filter exists to remove
+    workers, and residency is the probe's whole purpose, so dropping a process
+    the enumerator merely failed to read costs a real resident. Covers both ways
+    the read yields nothing -- psutil reporting ``ppid`` as ``None``, and the
+    accessor raising -- because the enumerator collapses them to the same value.
+    """
+    reported_none = dict(_proc(700, 1))
+    reported_none["ppid"] = None
+    raised = _PpidUnreadable(_proc(800, 1))
+
+    servers = probe_mod._enumerate_resident_warm_servers(
+        _FakePsutil([reported_none, raised])
+    )
+
+    assert _pids(servers) == [700, 800]

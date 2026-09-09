@@ -257,5 +257,54 @@ class DiscriminantIsNotKindPlanTest(unittest.TestCase):
         self.assertIsNone(_cli.not_a_plan_reason(path, "# Plan\n"))
 
 
+class NonStringRowIdTests(unittest.TestCase):
+    """A spine row id is a string by convention only, and YAML believes otherwise.
+
+    An unquoted `id: 0` parses as int. Every later use in `plan_report` assumed str, so the
+    residue's `", ".join(...)` raised TypeError and took the WHOLE invocation down — a corpus
+    holding one such row could not be converted at all, and the traceback named a join rather
+    than the row. This is the tool a NOT-PREPPED verdict points its author at, so it has to
+    survive the corpus it exists to repair. Observed on example-retrieval-repo's 2026-07-19 vector-store
+    plan, whose spine numbers its rows 0-8 unquoted.
+    """
+
+    _PLAN = (
+        "---\n"
+        "title: numbered rows\n"
+        "status: approved\n"
+        "census: []\n"
+        "prime_exit_criterion:\n"
+        "  statement: s\n"
+        "  derived_from: d\n"
+        "---\n"
+        "\n"
+        "## Tasks\n"
+        "\n"
+        "```yaml plan-tasks\n"
+        "- id: 0\n"
+        "  title: Orient\n"
+        "  change_kind: verification\n"
+        "  surface: docs\n"
+        "- id: 1\n"
+        "  title: Build\n"
+        "  change_kind: code-edit\n"
+        "  surface: docs\n"
+        "```\n"
+    )
+
+    def test_an_integer_row_id_does_not_crash_the_report(self):
+        path = Path("docs/plans/2026-07-19-numbered.md")
+        report = _cli.plan_report(path, self._PLAN)
+        self.assertIsNone(report["error"])
+
+    def test_the_integer_ids_are_named_in_the_residue(self):
+        """Named, not dropped. The pre-fix filter was `if i`, so a legitimate row `0` was
+        falsy and vanished from the report even where the join did not raise."""
+        path = Path("docs/plans/2026-07-19-numbered.md")
+        residue = " ".join(_cli.plan_report(path, self._PLAN)["residue"])
+        self.assertIn("0", residue)
+        self.assertIn("1", residue)
+
+
 if __name__ == "__main__":
     unittest.main()

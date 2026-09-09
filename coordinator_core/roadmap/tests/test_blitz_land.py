@@ -165,6 +165,31 @@ def test_a_pulled_plan_is_reported_and_left_alone(tmp_path):
     assert _status(root, plan) == "draft"
 
 
+def test_a_pulled_plan_writes_the_missing_link_and_leaves_status_alone(tmp_path):
+    """The regression this row exists for: an unlinked `pulled` plan must gain the
+    baton->plan edge so a later `plan_gate` read stops reporting `plan: None` and
+    re-authoring over an already-reviewed plan -- but `pulled` is not `ready`, so
+    the plan's own `status` must not move."""
+    root = _repo(tmp_path)
+    baton = _baton(root, "b-1")  # no FK of any kind
+    plan = _plan(root, "the-plan", "draft")  # no FK of any kind
+
+    before = pg.assemble_plan_gate(root)
+    assert pg_by(before, "b-1")["plan"] is None
+
+    out = bl.land_wave(root, {"waveIndex": 0, "pulled": [{"batonId": "b-1", "planPath": plan}]})
+
+    assert out["pulled"] == ["b-1"]
+    assert not out["refused"]
+    assert _status(root, plan) == "draft", "pulled must never touch the plan's status"
+
+    after = pg.assemble_plan_gate(root)
+    assert pg_by(after, "b-1")["plan"] is not None
+    assert pg_by(after, "b-1")["plan"]["path"] == plan
+    fm = pg._read_baton_fields(root / baton)
+    assert fm["governing_plan"] == plan
+
+
 # ---------------------------------------------------------------------------
 # The XS lane — the wave did the work; the landing stamps it terminal
 # ---------------------------------------------------------------------------

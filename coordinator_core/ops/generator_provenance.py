@@ -183,6 +183,11 @@ from coordinator_core.ops.staleness_git import Verdict
 
 _SWEEP_DIRS = ("coordinator/bin", "bin", "coordinator_core")
 
+#: Sentinel for "the shipped content cache has not been consulted yet this
+#: sweep" -- distinct from `None`/`{}`, which are honest "consulted, and it
+#: had nothing" outcomes. See `discover_generators`'s lazy-load comment.
+_UNLOADED = object()
+
 _TMP_MARKERS = ("tmp", "temp", "tempfile", "/tmp/", "\\tmp\\")
 
 _DEFAULT_TEST_MODULE_GLOBS = ("test_*.py",)
@@ -1683,6 +1688,18 @@ def discover_generators(repo_root: Path) -> list[GeneratorRecord]:
     new_entries: dict = {}
     cache_dirty = False
 
+    # The shipped, content-keyed cache (`generator-content-cache.json`) is
+    # loaded LAZILY -- only on the first stat-miss below -- and never on a
+    # fully warm run. A warm run has zero misses, so this stays `None` and
+    # is never read or parsed: the whole point is that a warm sweep's cost
+    # is UNCHANGED by this store's existence
+    # (state/bug-backlog/2026-08-22-generator-discovery-ast-parses-71mb-per-94a6779e1ad8.yaml).
+    # `_UNLOADED` (not `None`) is the "not yet consulted" sentinel so an
+    # honestly-empty content cache (missing file, wrong schema) is not
+    # mistaken for "haven't tried yet" and re-loaded on every subsequent
+    # miss in this same sweep.
+    content_cache: dict | None = _UNLOADED
+
     prefix_len = len(str(repo_root)) + 1
 
     for sweep_dir in _SWEEP_DIRS:
@@ -1735,7 +1752,26 @@ def discover_generators(repo_root: Path) -> list[GeneratorRecord]:
                 ):
                     writes = cached["writes"]
                 else:
-                    writes = _scan_or_reuse_file_writes(path)
+                    # Stat miss. Before paying a full AST parse, try the
+                    # shipped content cache -- a checkout stamps a fresh
+                    # mtime on EVERY file regardless of content (git carries
+                    # no mtime metadata), so a fresh clone stat-misses on
+                    # everything; a file whose BYTES are unchanged from what
+                    # shipped in this repo still has a known answer. Loaded
+                    # once per sweep, on first use, never on a warm run (see
+                    # `content_cache`'s own comment above).
+                    if content_cache is _UNLOADED:
+                        content_cache = generator_scan_cache.load_content_cache()
+                    writes = None
+                    try:
+                        raw_bytes = path.read_bytes()
+                    except OSError:
+                        raw_bytes = None
+                    if raw_bytes is not None:
+                        digest = generator_scan_cache.content_hash(raw_bytes)
+                        writes = content_cache.get(digest)
+                    if writes is None:
+                        writes = _scan_or_reuse_file_writes(path)
                     cache_dirty = True
 
                 new_entries[key] = {

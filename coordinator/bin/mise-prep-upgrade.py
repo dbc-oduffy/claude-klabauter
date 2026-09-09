@@ -267,7 +267,15 @@ def plan_report(
         residue.append("spine: no `yaml plan-tasks` block — inventing rows would invent scope")
     else:
         undeclared = [r.get("id") for r in spine_rows if isinstance(r, dict) and "writes" not in r]
-        undeclared = [i for i in undeclared if i]
+        # STRINGIFIED, because a row id is only a string by convention and YAML believes
+        # otherwise: an unquoted `id: 0` parses as int, and every later use here — the
+        # `targets` lookup, the residue join — assumed str. The join raised TypeError and
+        # took the whole invocation down, so a corpus holding ONE such row could not be
+        # converted at all, and the crash named a `', '.join` rather than the row. This is
+        # the tool a NOT-PREPPED verdict points its author at, so it has to survive the
+        # corpus it exists to repair. Falsy-but-real ids (`0`, `"0"`) survive the filter
+        # for the same reason: `if i` dropped the row silently.
+        undeclared = [str(i) for i in undeclared if i is not None and str(i).strip()]
         recoverable = {i: targets[i] for i in undeclared if i in targets}
         if recoverable:
             derivable["spine.writes"] = recoverable

@@ -64,6 +64,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from coordinator_core.write_guards._case_fold_path import casefold_path
+
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
 PRIORITY = 137  # hard-deny band; next free slot after guard_memory_store_cap (136)
@@ -145,7 +147,13 @@ def _sibling_holding_id(directory: Path, target_id: str, exclude: Path) -> Optio
         try:
             if not entry.is_file() or entry.suffix.lower() != ".md":
                 continue
-            if entry.resolve() == exclude.resolve():
+            # Casefolded on BOTH sides: this is the self-exclusion check, and
+            # on a case-insensitive-but-case-preserving filesystem (macOS APFS,
+            # Windows) `docs/Decisions/DR-1.md` and `docs/decisions/DR-1.md`
+            # resolve to two unequal strings naming ONE file. Unfolded, the file
+            # being edited fails to exclude itself and the guard reports the
+            # record as a duplicate of itself — a false block on a legal edit.
+            if casefold_path(str(entry.resolve())) == casefold_path(str(exclude.resolve())):
                 continue
         except OSError:
             continue

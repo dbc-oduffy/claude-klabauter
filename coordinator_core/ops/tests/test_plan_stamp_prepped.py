@@ -176,7 +176,13 @@ def test_the_refusal_carries_the_per_class_breakdown(tmp_path):
     assert "mise-prep: NOT-PREPPED" in result["message"]
 
 
-def test_a_commit_in_owner_repo_gate_refuses_the_whole_plan(tmp_path):
+def test_a_commit_in_owner_repo_gate_stamps_with_its_row_withheld(tmp_path):
+    """PM ruling: a plan is not rejected because part of it needs code in another repo.
+
+    The stamp lands, and the commit-gated row rides `mise_prepped_findings` as a withheld row —
+    the same treatment `landed-work` always got. That is what puts the cross-repo work in front
+    of an operator as something to dispatch, instead of deleting the plan's other rows with it.
+    """
     common = _repo(tmp_path)
     spine = f"""- id: C1
   title: Reaches out
@@ -192,10 +198,10 @@ def test_a_commit_in_owner_repo_gate_refuses_the_whole_plan(tmp_path):
 """
     _plan(tmp_path, spine=spine)
     result = _stamp({"plan": REL, "by": BY}, common)
-    assert result["verdict"] == pg.REFUSED
-    assert result["stamped"] is False
-    assert "route: PM" in result["message"]
-    assert "mise_prepped_by" not in _fm_of(tmp_path / REL)
+    assert result["verdict"] == pg.PREPPED
+    assert result["stamped"] is True
+    fm = _fm_of(tmp_path / REL)
+    assert fm["mise_prepped_findings"] == ["C1"]
 
 
 def test_there_is_no_override_parameter(tmp_path):
