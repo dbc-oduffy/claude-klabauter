@@ -1143,11 +1143,63 @@ def assemble_plan_gate(
         ),
     }
 
+    # `counts.unschedulable` says HOW MANY this pass cannot schedule and never
+    # WHICH, so a driver reading it can neither act on them nor tell a held
+    # baton from one that quietly vanished. Every other list this report returns
+    # names its subjects; this one did not, and the gap is what let a baton the
+    # PM had taken personally cost a scout slot in wave after wave -- the driver
+    # had no way to see it was being held rather than skipped.
+    #
+    # Named here rather than left to the caller because the blocker mapping is
+    # already computed above (`pending`) and re-deriving it caller-side is a
+    # second answer to a settled question. Scoped identically to the count it
+    # explains, so the two can never disagree.
+    # The wave-assigner's own candidate set, rebuilt here: a blocker counts as
+    # unmappable exactly when it is not a baton this pass could have scheduled,
+    # which is the same test `_assign_waves` applies when it records a `None`
+    # hold. Same predicate, so the explanation cannot drift from the exclusion.
+    schedulable_ids = {r["id"] for r in candidate_records if r["needs_plan"]}
+    unschedulable_rows = [
+        {
+            "id": r["id"],
+            "title": r.get("title"),
+            "path": r.get("path"),
+            # The blockers holding it that this pass could not map onto a
+            # candidate. A blocker naming no baton is exactly how a record says
+            # "something outside this repo holds me" -- a PM decision, a
+            # licensing call, an external dependency -- and it is the reason the
+            # row is here rather than in a wave.
+            # Two ways a blocker holds a row out of every wave, and the row is
+            # useless to a driver unless BOTH are named. Directly: the blocker
+            # maps to no schedulable baton, which is exactly how a record says
+            # something outside this repo holds it -- a PM decision, a licensing
+            # call, an external dependency. Transitively: the blocker IS a
+            # schedulable candidate but is itself unscheduled this pass, so
+            # waiting on it never ends either.
+            #
+            # Reporting only the direct case returned `held_by: []` for a row
+            # that genuinely could not be scheduled, which is the same
+            # count-with-no-subject defect this field exists to fix, one level
+            # down. An empty list here must mean "nothing holds it", never
+            # "something holds it and this report cannot say what".
+            "held_by": [
+                b["blocker"]
+                for b in gate_by_id[r["id"]]["planning_gate"]["blocking"]
+                if batons_by_id.get(b["blocker"]) is None
+                or batons_by_id[b["blocker"]]["id"] not in schedulable_ids
+                or wave_by_id.get(batons_by_id[b["blocker"]]["id"]) is None
+            ],
+        }
+        for r in candidate_records
+        if r["needs_plan"] and wave_by_id.get(r["id"]) is None
+    ]
+
     return {
         "batons": reported,
         "waves": waves,
         "cycles": cycles,
         "unresolved_blockers": unresolved,
+        "unschedulable": unschedulable_rows,
         "counts": counts,
         "scanned": {"batons": len(records), "plans": len(plans.by_path)},
     }

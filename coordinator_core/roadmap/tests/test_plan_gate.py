@@ -206,6 +206,54 @@ def test_a_blocker_that_is_in_flight_is_unschedulable_not_wave_zero(tmp_path):
     assert dependent["planning_gate"]["open"] is False
 
 
+def test_unschedulable_names_its_batons_and_what_holds_each(tmp_path):
+    """`counts.unschedulable` says how many; the report must also say WHICH and
+    WHY. A count with no subjects cannot be acted on and cannot be reconciled
+    against the trail -- a driver reading only the number cannot tell a baton
+    that is being deliberately held from one that quietly vanished."""
+    _baton(tmp_path, "blocker-1", deployment_state="in_flight")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["counts"]["unschedulable"] == len(report["unschedulable"])
+    row = next(r for r in report["unschedulable"] if r["id"] == "dependent-1")
+    assert row["held_by"] == ["blocker-1"]
+
+
+def test_a_blocker_naming_no_baton_is_reported_as_what_holds_the_row(tmp_path):
+    """The encoding for "something outside this repo holds this" -- a PM
+    decision, a licensing call -- is a `blocked_by` entry that resolves to no
+    baton. The row stays a visible candidate and never enters a wave, and the
+    report names the blocker so the hold is legible rather than mysterious."""
+    _baton(tmp_path, "pm-held-1", blocked_by=["pm-decision:seats-vs-reauth"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    row = next(r for r in report["unschedulable"] if r["id"] == "pm-held-1")
+    assert row["held_by"] == ["pm-decision:seats-vs-reauth"]
+    assert _by_id(report, "pm-held-1")["candidate"] is True
+    assert all("pm-held-1" not in wave for wave in report["waves"])
+
+
+def test_a_transitively_held_row_names_the_blocker_that_holds_it(tmp_path):
+    """A blocker can be a perfectly good candidate and still hold its dependent
+    out of every wave, by being unscheduled itself. Reporting only blockers that
+    resolve to no baton returned `held_by: []` for a row that genuinely could
+    not be scheduled -- the same count-with-no-subject defect, one level down.
+    An empty `held_by` must mean nothing holds the row, never that something
+    does and the report cannot say what."""
+    _baton(tmp_path, "outside-1", deployment_state="in_flight")
+    _baton(tmp_path, "middle-1", blocked_by=["outside-1"])
+    _baton(tmp_path, "far-1", blocked_by=["middle-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    far = next(r for r in report["unschedulable"] if r["id"] == "far-1")
+    assert far["held_by"] == ["middle-1"]
+    assert not any(r["held_by"] == [] for r in report["unschedulable"])
+
+
 # ---------------------------------------------------------------------------
 # Wave assignment
 # ---------------------------------------------------------------------------
