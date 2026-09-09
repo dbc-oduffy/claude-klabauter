@@ -3630,6 +3630,146 @@ def check_plan_tasks_grouping_approval(source: str) -> ErrorDict | None:
     return None
 
 
+def plan_tasks_spine_integrity(source: str) -> tuple[list[ErrorDict], list | None]:
+    """The spine defects a per-ROW loop structurally cannot see, and the rows.
+
+    WHY THIS EXISTS. Both write guards validate a plan's task-spine ROW BY ROW,
+    and a row loop can only report on rows it was handed. Three defects never
+    reach it, and each one is WORSE than the per-row defects that do:
+
+      MALFORMED    the fence is not locatable under `## Tasks` (renamed heading,
+                   no heading, or a second matching fence). `locate_fenced_block`
+                   returns body=None, so both guards' `status != LOCATED` early
+                   return dropped the write silently. Measured: a plan authored
+                   the day before this landed carried `## Spine` and passed clean.
+      UNPARSEABLE  the block is located but is not YAML. The guards asked the
+                   repo's LENIENT `parse_yaml`, which skips lines it cannot read
+                   instead of raising — so on a real corpus plan it returned 9
+                   rows out of 15+, the loop validated those 9, and the file
+                   passed. The guard did not merely miss the defect; it reported
+                   a document that does not exist as clean. Every real consumer
+                   (`spine_read.read_spine`, `plan_tasks_render.load_rows`, DoE's
+                   `mise-prep-gate.py`) refuses the whole spine. This is the same
+                   trap the 2026-09-08 frontmatter fix found one block up, and it
+                   has the same answer: ask PyYAML, because PyYAML is what the
+                   fleet's readers ask.
+      DANGLING     a well-formed `depends_on[].chunk` naming a row id that is not
+                   in this spine. Shape-valid per row, unresolvable as a graph, so
+                   the row loop is the wrong altitude by construction.
+
+    ENFORCEMENT WAS INVERTED, which is the actual defect being repaired. A single
+    row with an out-of-enum `disposition` was denied at write time; a spine no
+    consumer can read at all said nothing. The weakest enforcement sat on the
+    worst class.
+
+    ABSENT IS NOT A FINDING and never becomes one — a plan mid-authoring has no
+    spine yet, and that is the legitimate state the guards were right to pass.
+    ABSENT vs MALFORMED is exactly the distinction `LocateStatus` was built to
+    draw, and this door is the first caller to spend it.
+
+    Negative-spec:
+      - Does NOT validate rows. The per-row schema + cross-field legs already own
+        that; duplicating them here would double-report every field defect.
+      - Does NOT parse with `parse_yaml`. Its leniency is the bug this closes; a
+        second lenient reading would restore it.
+      - Does NOT resolve `depends_on` against anything but THIS spine's own row-id
+        set. A cross-plan edge has no home on `depends_on` (plan-tasks.schema.json
+        says so on the field), so an unresolvable chunk is a defect, never a
+        cross-plan reference this door failed to follow.
+      - Does NOT drop non-dispatchable rows before collecting ids. `read_spine`
+        resolves referents against the FULL row set precisely so an edge onto a
+        closed row never dangles; a narrower id set here would invent danglers.
+      - Does NOT raise. Every seam fails open to `[]` — a guard that cannot read
+        the tree must never block a write.
+
+    RETURNS `(errors, rows)`. `rows` is None exactly when there is nothing for a
+    caller's row loop to iterate — ABSENT, unlocatable, or unparseable — so the
+    caller's own `if rows is None: return errors` covers all three without
+    re-asking why. On success `rows` is what `yaml.safe_load` produced, and
+    callers use IT rather than re-parsing: the guards previously ran the lenient
+    `parse_yaml` over the same block, which both cost a second parse and made
+    them validate a reconstruction instead of the document every real consumer
+    reads. One parse, strict, shared.
+
+    Zero spawns; one PyYAML parse of one fenced block. Measured on this repo's
+    corpus (423 plans, warm, process time): 17.3ms on a median plan, of which
+    16.3ms is `yaml.safe_load` and 1.0ms is locating the fence; it REPLACES a
+    3.8ms lenient parse, so the net cost to a guard `check()` is ~13.5ms against
+    the 500ms brightline. `yaml.CSafeLoader` would cut most of it and is
+    deliberately not used: the point of this door is to agree with what the
+    fleet's readers ask, and a second loader is a second answer.
+    """
+    try:
+        result = locate_fenced_block(source)
+    except Exception:  # noqa: BLE001 — fail-open, never block on infra
+        return [], None
+
+    if result.status is LocateStatus.ABSENT:
+        return [], None
+
+    if result.status is not LocateStatus.LOCATED or result.body is None:
+        return [ErrorDict(
+            field="(plan-tasks block)",
+            error=(
+                "the ```yaml plan-tasks fence is not locatable under a `## Tasks` "
+                "heading (renamed/absent heading, or more than one matching fence)"
+            ),
+            hint=(
+                "Put exactly one ```yaml plan-tasks fence inside a `## Tasks` section. "
+                "Until it is located, no consumer can read any row of this spine."
+            ),
+        )], None
+
+    try:
+        rows = yaml.safe_load(result.body)
+    except yaml.YAMLError as err:
+        return [ErrorDict(
+            field="(plan-tasks block)",
+            error=f"the ```yaml plan-tasks block does not parse: {type(err).__name__}: {err}",
+            hint=(
+                "Fix the YAML. The lenient reader silently drops the rows it cannot "
+                "parse; every real spine consumer refuses the block outright."
+            ),
+        )], None
+
+    if rows is None:
+        return [], []
+    if not isinstance(rows, list):
+        return [ErrorDict(
+            field="(plan-tasks block)",
+            error=f"expected a YAML list of task rows, got {type(rows).__name__}",
+            hint="Each row is a `- id: ... title: ... change_kind: ... surface: ...` list item",
+        )], None
+
+    row_ids = {
+        row["id"] for row in rows
+        if isinstance(row, dict) and isinstance(row.get("id"), str) and row["id"]
+    }
+
+    errors: list[ErrorDict] = []
+    for idx, row in enumerate(rows):
+        if not isinstance(row, dict):
+            continue
+        label = row["id"] if isinstance(row.get("id"), str) and row["id"] else f"index {idx}"
+        edges = row.get("depends_on")
+        if not isinstance(edges, list):
+            continue
+        for edge_idx, edge in enumerate(edges):
+            if not isinstance(edge, dict):
+                continue
+            chunk = edge.get("chunk")
+            if isinstance(chunk, str) and chunk and chunk not in row_ids:
+                errors.append(ErrorDict(
+                    field=f"tasks[{label}].depends_on[{edge_idx}].chunk",
+                    error=f"names row '{chunk}', which is not a row id in this spine",
+                    hint=(
+                        "depends_on[].chunk resolves only within THIS plan's spine. "
+                        "Point it at an existing row id, or drop the edge."
+                    ),
+                ))
+    return errors, rows
+
+
 def check_plan_tasks_source(source: str) -> ErrorDict | None:
     """Every plan-tasks check that needs the plan's full SOURCE, in one door.
 

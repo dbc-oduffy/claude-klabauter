@@ -621,9 +621,24 @@ class TestPlanTasksSpineWarn:
         # No spine yet -- legitimate mid-authoring state, not a finding.
         assert self._write_and_check(tmp_path, "\nNo spine yet.\n") is None
 
-    def test_two_fences_is_silent_not_this_guards_job(self, tmp_path):
-        # MALFORMED (>1 fence) is plan-coverage-checker's fail-loud, not
-        # duplicated here.
+    def test_two_fences_is_reported_not_delegated(self, tmp_path):
+        """MALFORMED (>1 fence) is a finding here now.
+
+        This test previously asserted silence, on the stated grounds that
+        MALFORMED "is plan-coverage-checker's fail-loud, not duplicated here."
+        That delegation named no artifact that could discharge it:
+        `coordinator/agents/plan-coverage-checker.md` is an EM-dispatched
+        review-time SUBAGENT with no Edit tool, so it cannot see a write, and a
+        plan edited after its review — or never reviewed — was covered by
+        nothing. The corpus is the evidence: claude-klabauter
+        docs/plans/2026-09-07-dispatch-emit-runtime-pathspec-and-test-locator.md
+        landed a spine under a `## Spine` heading, with both guards live, and
+        neither said a word.
+
+        `test_zero_fences_is_silent_noop` above is unchanged and is the half
+        that matters for false positives: ABSENT stays silent, because a plan
+        mid-authoring legitimately has no spine.
+        """
         tasks_block = (
             "```yaml plan-tasks\n"
             "- id: C1\n  title: a\n  change_kind: script-edit\n  surface: x\n"
@@ -632,7 +647,9 @@ class TestPlanTasksSpineWarn:
             "- id: C2\n  title: b\n  change_kind: script-edit\n  surface: y\n"
             "```\n"
         )
-        assert self._write_and_check(tmp_path, tasks_block) is None
+        result = self._write_and_check(tmp_path, tasks_block)
+        assert result is not None
+        assert "(plan-tasks block)" in _advisory_text(result)
 
     def test_row_missing_id_names_zero_based_index(self, tmp_path):
         tasks_block = (

@@ -118,6 +118,24 @@ Saved/
 # was already tracked at HEAD on claude-klabauter.
 /.percolate/
 
+# The engine's machine-local machinery root, written by the coordinator runtime
+# the mirror SHIPS: guard fire-count sidecars
+# (`.coordinator-local/subagent-share/<session>/{deny,advisory}-fire-counts.jsonl`)
+# and generator caches. The engine's source repo has ignored it since the
+# 2026-09-02 state-keeps-the-work-not-the-machinery ruling; this mirror
+# inherited the code that writes there without inheriting the ignore, so a
+# publish round run from a checkout leaves it untracked-but-unignored -- the
+# exact state the ruling above closes, and observed: a stop hook asked for it to
+# be committed, 1.1MB of per-session guard telemetry, on a PUBLIC repo.
+# (Worded without naming the source repo so this stanza survives the mirror's
+# codename substitution byte-identically -- see the two substituted lines above
+# for what it would otherwise become.)
+#
+# Never payload: no publish row declares it, so the removal side would read it
+# as deletable and churn it. Machine-local by construction -- the durable copy
+# is the one machine's tree, not git.
+/.coordinator-local/
+
 # --- Editor / OS detritus ---
 *.bak
 *.tmp
