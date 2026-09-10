@@ -6598,8 +6598,34 @@ def check_validate_commit(
     if not contains_git_commit:
         return None
 
-    rc, staged_out = _run_git(["diff", "--cached", "--name-only"], _cwd)
-    staged = [l for l in staged_out.splitlines() if l]
+    # ONE status probe, three consumers: `staged` here, Check 5's deletion
+    # re-add below, and Check 14 (undeclared-staged-deletion). This used to be
+    # a `--name-only` call with a SECOND `--name-status` call further down for
+    # the deletion re-add; folding them removes a process from the pathspec'd
+    # commit path and adds none to the bare one. Process creation, not the
+    # query, is what the brightline budget is spent on (DR-344), so a third
+    # probe for Check 14 was not an option.
+    #
+    # `-M` is explicit but NOT a behaviour change: `diff.renames` defaults to
+    # true (verified, git 2.43), so the `--name-status` call this replaces was
+    # already reporting `R` for a `git mv` and the `--name-only` call was
+    # already reporting only the rename's NEW path. Spelling it out keeps that
+    # true if a repo or a future default turns rename detection off -- Check 14
+    # must never fire on the archive path, which is a `git mv`.
+    rc, staged_out = _run_git(["diff", "--cached", "--name-status", "-M"], _cwd)
+    _status_lines: Optional[List[str]] = staged_out.splitlines() if rc == 0 else None
+
+    # Reconstruct exactly what `--name-only` returned: the NEW path for a
+    # rename/copy (fields 1,2,3 -> take 3), the single path otherwise.
+    staged = []
+    for _line in _status_lines or []:
+        if not _line:
+            continue
+        _parts = _line.split("\t")
+        if len(_parts) >= 3 and _parts[0][:1] in ("R", "C"):
+            staged.append(_parts[2])
+        elif len(_parts) >= 2 and _parts[1]:
+            staged.append(_parts[1])
     if not staged:
         return None
 
@@ -6654,18 +6680,25 @@ def check_validate_commit(
     # is re-added here rather than left silently dropped. A failed status
     # probe falls back to the whole index (fail loud), same posture as the
     # pathspec re-derivation above.
+    #
+    # Reuses `_status_lines` resolved at the top of this function -- this
+    # block used to run its own second `--name-status` probe. Only true `D`
+    # records are re-added, exactly as before: a rename's SOURCE side is not a
+    # deletion and was never in this warn set (rename detection was already on
+    # by default, so the probe this replaces was already collapsing `git mv`
+    # into `R`).
     if commit_scope is not staged:
-        _rc_status, _status_out = _run_git(
-            ["diff", "--cached", "--name-status"], _cwd
-        )
-        if _rc_status != 0:
+        if _status_lines is None:
             commit_scope = staged
         else:
             _scope_set = set(commit_scope)
-            for _line in _status_out.splitlines():
+            for _line in _status_lines:
                 if not _line or not _line.startswith("D\t"):
                     continue
-                _deleted_path = _line.split("\t", 1)[1]
+                _parts = _line.split("\t")
+                if len(_parts) < 2 or not _parts[1]:
+                    continue
+                _deleted_path = _parts[1]
                 if _deleted_path not in _scope_set:
                     _scope_set.add(_deleted_path)
                     commit_scope.append(_deleted_path)
@@ -7732,6 +7765,24 @@ def check_validate_commit(
     )
     if pathspec_divergence_violation:
         warnings.append(pathspec_divergence_violation)
+
+    # Check 14 -- undeclared-staged-deletion -- UNDECLARED-STAGED-DELETION.
+    # Advisory only, and deliberately so -- see commit_tripwires.
+    # check_undeclared_staged_deletion's own docstring for the deny-vs-warn
+    # call (it cannot read a `-F`/editor message, so it fails open on a real
+    # fraction of commits, and denying only the readable half would buy
+    # compliance rather than safety).
+    #
+    # Reuses `_commit_seg_tokens` and `_status_lines` already resolved above:
+    # this check adds ZERO processes to the commit hot path.
+    if _status_lines is not None:
+        undeclared_deletion_violation = commit_tripwires.check_undeclared_staged_deletion(
+            _commit_seg_tokens, _status_lines, payload=payload
+        )
+        if undeclared_deletion_violation and not _override(
+            "COORDINATOR_OVERRIDE_UNDECLARED_DELETION", payload=payload
+        ):
+            warnings.append(undeclared_deletion_violation)
 
     # Single warn-only flush (bash: the "Single warn-only flush" comment near
     # the end of validate-commit.sh). Every warn-only check above (5, 7 soft/

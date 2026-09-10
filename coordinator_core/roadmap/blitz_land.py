@@ -35,8 +35,12 @@ Negative-spec:
     already made at the readiness gate; this module executes them. A verdict it
     does not recognise is refused, never guessed at.
   - Does NOT stamp a plan it cannot link. See above — refusal is the whole point.
-  - Does NOT touch a `pulled` plan. `pulled` means the EM left it at its current
-    status deliberately; advancing or reverting it would overwrite that judgment.
+  - Does NOT touch a `pulled` plan's STATUS. `pulled` means the EM left it there
+    deliberately; advancing or reverting it would overwrite that judgment. It DOES
+    repair a missing baton→plan link for a `pulled` verdict, same as `ready` —
+    linking is not approving, so the plan's status is untouched either way, and an
+    unlinked `pulled` plan is refused from adoption identically to an unlinked
+    `ready` one when the baton already names a different plan.
   - Does NOT re-queue `surfacedToPm`. Those need a PM answer first, and a loop
     that silently retried them would be answering on the PM's behalf.
   - Does NOT commit. Landing writes records; committing them is the caller's act,
@@ -164,6 +168,50 @@ def pivoting_reviewers(entry: Dict[str, Any]) -> List[str]:
 # ---------------------------------------------------------------------------
 
 
+def _link_baton_to_plan(
+    worktree_root: Path,
+    baton_path: str,
+    plan_path: str,
+    report: Dict[str, Any],
+) -> bool:
+    """Verify/repair the baton→plan link. Returns True iff a repair was written.
+
+    Shared by every landing path that must guarantee a link without ever touching
+    a plan's `status` — `approve_ready` (link, then stamp `approved`) and the
+    `pulled` handler in `land_wave` (link only, status untouched) both call this
+    rather than each carrying its own linker, so the refusal when a baton already
+    names a different plan is one rule, not two that could drift apart.
+
+    Writes `governing_plan` onto the BATON rather than a `deliverable_id` onto the
+    plan. Both would link, but `governing_plan` is the stronger basis
+    (`plan_gate._PLAN_LINK_ORDER` tries it first): it is stamped against this
+    specific baton and cannot be a coincidence of two records citing a third, and it
+    leaves the plan's own frontmatter untouched, which matters when the plan is one
+    a human authored months earlier and this landing is only adopting it.
+    """
+    baton_abs = worktree_root / baton_path
+    plan_abs = worktree_root / plan_path
+    baton = next((b for b in report["batons"] if b["path"] == baton_path), None)
+    linked = bool(baton and baton.get("plan") and baton["plan"]["path"] == plan_path)
+    if linked:
+        return False
+
+    rel = plan_abs.relative_to(worktree_root).as_posix()
+
+    def _link(old: str) -> str:
+        existing = _read_field(old, "governing_plan")
+        if existing and existing not in ("null", "~", rel):
+            raise MutateAbort(
+                f"baton already names a different governing_plan ({existing}); "
+                f"refusing to repoint it at {rel} — a landing adopts an unlinked "
+                f"plan, it never re-owns a linked one"
+            )
+        return _set_field(old, "governing_plan", rel)
+
+    locked_rmw(baton_abs, _link, repo_root=worktree_root)
+    return True
+
+
 def approve_ready(
     worktree_root: Path,
     baton_path: str,
@@ -176,13 +224,6 @@ def approve_ready(
     verify, then stamp. Stamping first and repairing after leaves a window in which
     an interrupted landing has written an approval that resolves to nothing — the
     exact silent state this module was built to make impossible.
-
-    The repair writes `governing_plan` onto the BATON rather than a `deliverable_id`
-    onto the plan. Both would link, but `governing_plan` is the stronger basis
-    (`plan_gate._PLAN_LINK_ORDER` tries it first): it is stamped against this
-    specific baton and cannot be a coincidence of two records citing a third, and it
-    leaves the plan's own frontmatter untouched, which matters when the plan is one
-    a human authored months earlier and this landing is only adopting it.
     """
     baton_abs = worktree_root / baton_path
     plan_abs = worktree_root / plan_path
@@ -191,25 +232,7 @@ def approve_ready(
     if not baton_abs.is_file():
         raise LandingRefused(f"baton does not exist on disk: {baton_path}")
 
-    baton = next((b for b in report["batons"] if b["path"] == baton_path), None)
-    linked = bool(baton and baton.get("plan") and baton["plan"]["path"] == plan_path)
-
-    repaired = False
-    if not linked:
-        rel = plan_abs.relative_to(worktree_root).as_posix()
-
-        def _link(old: str) -> str:
-            existing = _read_field(old, "governing_plan")
-            if existing and existing not in ("null", "~", rel):
-                raise MutateAbort(
-                    f"baton already names a different governing_plan ({existing}); "
-                    f"refusing to repoint it at {rel} — a landing adopts an unlinked "
-                    f"plan, it never re-owns a linked one"
-                )
-            return _set_field(old, "governing_plan", rel)
-
-        locked_rmw(baton_abs, _link, repo_root=worktree_root)
-        repaired = True
+    repaired = _link_baton_to_plan(worktree_root, baton_path, plan_path, report)
 
     def _stamp(old: str) -> str:
         current = (_read_field(old, "status") or "").lower()
@@ -540,6 +563,33 @@ def land_wave(
         except (LandingRefused, MutateAbort, OSError) as exc:
             refused.append({"baton": entry.get("batonId"), "reason": str(exc)})
 
+    pulled: List[Any] = []
+    for entry in wave_result.get("pulled") or []:
+        baton_id = entry.get("batonId")
+        try:
+            baton_path = _baton_path_for(entry, report)
+            # Same route carve-out as the `ready` lane: an XS `pulled` entry has no
+            # plan to link, and that is a no-op here, never a refusal.
+            plan_path = (
+                None
+                if entry.get("route") == "dispatch"
+                else _rel(entry.get("planPath"), worktree_root)
+            )
+            if plan_path is not None:
+                plan_abs = worktree_root / plan_path
+                baton_abs = worktree_root / baton_path
+                if not plan_abs.is_file():
+                    raise LandingRefused(f"plan does not exist on disk: {plan_path}")
+                if not baton_abs.is_file():
+                    raise LandingRefused(f"baton does not exist on disk: {baton_path}")
+                # Link only — never stamp. `pulled` is the EM leaving the plan's
+                # status exactly where it was; the missing edge is what made the
+                # next gate read it as never-planned, not the status.
+                _link_baton_to_plan(worktree_root, baton_path, plan_path, report)
+            pulled.append(baton_id)
+        except (LandingRefused, MutateAbort, OSError) as exc:
+            refused.append({"baton": baton_id, "reason": str(exc)})
+
     minted: List[Dict[str, Any]] = []
     for entry in wave_result.get("replan") or []:
         try:
@@ -585,7 +635,7 @@ def land_wave(
         "execution_ready": execution_ready,
         "refused": refused,
         "minted": minted,
-        "pulled": [e.get("batonId") for e in wave_result.get("pulled") or []],
+        "pulled": pulled,
         "surfaced_to_pm": [e.get("batonId") for e in wave_result.get("surfacedToPm") or []],
         "next_wave": {
             "waveIndex": (wave_result.get("waveIndex") or 0) + 1,

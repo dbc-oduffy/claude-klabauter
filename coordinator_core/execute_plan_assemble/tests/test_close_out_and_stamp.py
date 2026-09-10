@@ -727,6 +727,66 @@ class TestPostCommitTailStubCloseReach:
         assert calls == []
         assert result["origin_stub_close"] == {"acted": [], "skipped": [], "failed": []}
 
+    def test_partial_close_out_skips_stub_close_leg_even_though_a_commit_lands(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression, DoE-claude bug-backlog 2026-09-06-close-out-promotes-
+        an-origin-stub-to-shipped-on-a-partial-plan.yaml: a halted close-out
+        (`shipped=False`/`stamped=False`, one open row) that still lands a
+        real commit -- here, via AC8 auto-resolving `C1`'s row, the exact
+        shape `test_partially_shipped_skips_stamp_but_auto_resolve_still_
+        commits` above pins -- must NOT reach the origin-stub-close leg at
+        all, even though `wrote_anything`/`commit_result["committed_sha"]`
+        are both truthy. Before the fix, `_reach_post_commit_tail_stub_
+        close` was called unconditionally whenever a commit landed, with no
+        consultation of `status_target`; that let the SAME run that refused
+        to stamp the plan promote the origin stub to `deployment_state:
+        shipped` via `handoff.close_origin_stub`'s guard-only fallback
+        (`delivery_proof` is `None` here, since it is only ever built on the
+        `status_target == "implemented"` branch). The skip must also be
+        LEGIBLE on the returned envelope, not merely absent -- mirrors the
+        real incident's own `skipped: ["follow-up:push:unconfirmed"]` shape,
+        proving the skip mechanism now covers this predicate too.
+        """
+        root = tmp_path
+        _init_repo(root)
+        plan_file = _seed_plan(root, _FIXTURE_VALID_SPINE)
+        _commit_chunk(root, "plan.md", "C1", deliverable_id=_DLV_VALID_SPINE)
+        # C2a and C2b deliberately left uncommitted/open.
+
+        calls: list[dict] = []
+
+        async def _fake_close_origin_stub_handler(params: dict, common_dir: Path) -> dict:
+            calls.append(params)
+            return {"exit_code": 0, "closed": [], "skipped": []}
+
+        monkeypatch.setattr(
+            coas, "_close_origin_stub_handler", _fake_close_origin_stub_handler
+        )
+
+        exit_code, result, pre_head = _run_close_out(monkeypatch, root, "plan.md")
+
+        assert exit_code == coas.EXIT_OK
+        assert result["shipped"] is False
+        assert result["stamped"] is False
+        assert result["status_target"] is None
+        assert sorted(result["open_chunk_ids"]) == ["C2a", "C2b"]
+        assert _read_status(plan_file) == "draft"
+
+        # A real commit DID land (AC8's auto-resolve write) ...
+        assert result["commit"]["commit_failed"] is False
+        assert result["commit"]["committed_sha"] is not None
+        assert _head_sha(root) != pre_head
+
+        # ... but the origin-stub-close leg was never reached, and the skip
+        # is reported on the envelope rather than silently absent.
+        assert calls == []
+        assert result["origin_stub_close"] == {
+            "acted": [],
+            "skipped": [coas._ORIGIN_STUB_SKIP_NOT_FULLY_SHIPPED],
+            "failed": [],
+        }
+
     def test_landed_commit_refused_does_not_raise_stale_pipeline_shape(
         self, tmp_path, monkeypatch
     ):
@@ -3396,14 +3456,29 @@ class TestCommitResultPushStatus:
         production outcome even before C3. What remains true, and is what
         this test now pins: a landed commit through `commit_paths` always
         reports `push_status=PUSH_STATUS_NOT_ATTEMPTED` -- there is no push
-        leg left to decline."""
+        leg left to decline.
+
+        Diagnosed 2026-09-09 (mise R2): this test forced `_stage_paths_
+        committed_already` to `False` to reach `commit_paths` directly, but
+        that forced value is now impossible to realize honestly for a
+        status_target == "implemented" flip on this fixture --
+        `plan_status_transition._stamp_implemented` (DR-272,
+        `_commit_plan_flip`) always lands a REAL commit of the status write
+        itself before control returns here, so `stage_paths` (just the plan
+        path) is always already at HEAD by the time this op's own commit
+        leg would run. Forcing the checker to lie about that made git's own
+        `commit_paths` refuse with a genuine "nothing to commit" -- not a
+        code regression, and confirmed pre-existing back to this file's own
+        introducing commit (f08e7be3), well before this session. The
+        checker is no longer overridden below; the real value (`True`) is
+        exactly what production sees, and the DR-272 shortcut it routes to
+        reports the identical fixed not-attempted shape this test pins."""
         root = tmp_path
         _init_repo(root)
         _seed_plan(root, _FIXTURE_VALID_SPINE)
         for chunk_id in ("C1", "C2a", "C2b"):
             _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
 
-        monkeypatch.setattr(coas, "_stage_paths_committed_already", lambda *a, **k: False)
         monkeypatch.setattr(
             coas,
             "_reach_post_commit_tail_stub_close",
@@ -3431,14 +3506,20 @@ class TestCommitResultPushStatus:
         (DR-329 § 7). `commit_paths` (C3's repointed target) carries no push
         leg or push fields at all. What this test now pins: a landed commit
         still reports the fixed not-attempted shape, never a stale/synthetic
-        pushed-range guess."""
+        pushed-range guess.
+
+        Diagnosed 2026-09-09 (mise R2): see the sibling `test_declined_push_
+        surfaces_push_status_declined`'s own diagnosis note above -- same
+        pre-existing (not a regression), same fix: `_stage_paths_committed_
+        already` is no longer forced to the impossible `False`; DR-272's own
+        stamp commit always lands first here, so the real value (`True`)
+        and its shortcut branch are what this test now honestly exercises."""
         root = tmp_path
         _init_repo(root)
         _seed_plan(root, _FIXTURE_VALID_SPINE)
         for chunk_id in ("C1", "C2a", "C2b"):
             _commit_chunk(root, "plan.md", chunk_id, deliverable_id=_DLV_VALID_SPINE)
 
-        monkeypatch.setattr(coas, "_stage_paths_committed_already", lambda *a, **k: False)
         monkeypatch.setattr(
             coas,
             "_reach_post_commit_tail_stub_close",

@@ -78,6 +78,22 @@ What this leg covers
   is reversible, the refusal was document-wide for a row-scoped condition,
   and it burned whole dispatches for zero written bytes. The obligation is
   unchanged; only the write-time refusal is gone. See `_first_result`.
+- A second always-WARN finding, shape=="warn", emitted by this module in
+  both modes: an UNPARSEABLE frontmatter block (the document opens a
+  ``---`` block, closes it, and the block is not valid YAML). It is a
+  stand-down seam turned into a finding: with no parseable frontmatter
+  there is no ``type`` to match a schema on, so ``_match_schema`` returns
+  nothing and BOTH this module and the advisory sibling used to fall
+  silent — the write landed, and every downstream reader
+  (``split_frontmatter`` + ``yaml.safe_load``, the fleet's ordinary record
+  read path) then saw the file as having NO frontmatter rather than as a
+  record whose keys failed to parse. Rendered "warn" for the same reason
+  the grouping-approval finding is: the advisory sibling stands down for
+  the whole no-match seam unconditionally, so "advisory" would mean
+  neither module reports it in default mode. See
+  `_malformed_frontmatter_detail` for the two false positives it is
+  explicitly built not to produce (no block at all; a legal multi-document
+  body).
 - Every other branch is now always-"advisory" (2026-08-06 ruling): the
   mislocated-memo / free-form-header offer, the routing-mismatch offer, the
   new-file scaffold offer, and a schema-shape validation failure. This
@@ -133,14 +149,15 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
 
+import yaml
+
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.dag import check_lineage_reachability as _check_lineage_reachability
 from coordinator_core.frontmatter.baton_class import (
     _PRE_RENAME_ALIASES as _HANDOFF_KIND_PRE_RENAME_ALIASES,
     canonical_kind as _canonical_kind,
 )
-from coordinator_core.frontmatter.body_blocks import LocateStatus as _LocateStatus
-from coordinator_core.frontmatter.body_blocks import locate_fenced_block as _locate_fenced_block
+from coordinator_core.frontmatter.primitives import split_frontmatter as _split_frontmatter
 from coordinator_core.git.repo_root import show_toplevel as _git_show_toplevel
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 from coordinator_core.win_portability import no_console_creationflags
@@ -155,6 +172,7 @@ from coordinator_core.frontmatter.schema_validate import (
     match_schema as _match_schema,
     parse_frontmatter as _parse_frontmatter,
     parse_yaml as _parse_yaml,
+    plan_tasks_spine_integrity as _plan_tasks_spine_integrity,
     validate_frontmatter_obj as _validate_frontmatter_obj,
     _is_parseable_iso_date as _is_parseable_iso_date,
 )
@@ -683,6 +701,73 @@ def _violation_message(schema_name: str, errors: "list[dict]") -> str:
     return f"{schema_name}: {'; '.join(parts)}"
 
 
+def _malformed_frontmatter_detail(content: str) -> Optional[str]:
+    """Return a one-line YAML-error summary when ``content`` OPENS a
+    frontmatter block whose YAML does not parse, else ``None``.
+
+    This is the author-error half of the no-schema-match stand-down; every
+    other reason `_match_schema` returns nothing (plain prose, an unvendored
+    doc type, a record whose `type` no schema claims) must keep returning
+    ``None`` here. Three cases are deliberately NOT reported:
+
+    - **No frontmatter block at all.** `split_frontmatter` returns ``None``
+      for content that does not open a ``---`` block after its optional
+      blank/HTML-comment preamble. Plain prose is the majority of what this
+      guard sees; a guard that fires on it is noise, not enforcement.
+    - **An UNCLOSED block.** `split_frontmatter` also returns ``None`` when
+      no closing ``---`` is found, and that stays a non-finding: a markdown
+      file whose first line is a ``---`` horizontal rule is
+      indistinguishable from a truncated block, and the false positive is
+      the more common shape.
+    - **A legal MULTI-DOCUMENT record.** ``safe_load_all`` is used, never
+      ``safe_load``, so a stream of ``---``-separated documents parses
+      cleanly instead of raising ``ComposerError`` ("expected a single
+      document"). That single substitution is the difference between a
+      finding and a mass false positive: run against the fleet corpus, the
+      ``safe_load`` shape over-reported by 595 files. The extraction is
+      block-scoped as well (``split.fm_text`` ends at the block's own
+      closing ``---``), so ``---`` fences in the BODY are never fed to the
+      parser at all.
+
+    Parser choice is not incidental: ``yaml.safe_load`` is what the fleet's
+    ordinary record readers use (`split_frontmatter` + ``safe_load``, see
+    e.g. ``ops/handoff_carry_gate.py``, ``ops/cutover_gate.py``), so its
+    verdict — not this repo's own lenient `parse_yaml` port, which skips
+    lines it cannot read rather than raising — is what decides whether a
+    landed record has keys or is invisible.
+
+    Only ``yaml.YAMLError`` is a finding. Anything else (an unreadable
+    input, an internal error in the splitter) propagates to the caller's
+    fail-open: this guard never blocks or warns because its own machinery
+    broke.
+    """
+    split = _split_frontmatter(content)
+    if split is None:
+        return None
+    try:
+        for _ in yaml.safe_load_all(split.fm_text):
+            pass
+    except yaml.YAMLError as err:
+        kind = type(err).__name__
+        problem = getattr(err, "problem", None) or str(err).split("\n")[0]
+        mark = getattr(err, "problem_mark", None)
+        if mark is not None:
+            # `mark.line` is 0-based and relative to the frontmatter block;
+            # the block's own opening `---` is line 1 of the file, so +2
+            # lands on the file line the author is looking at.
+            return f"{kind}, line {mark.line + 2}: {problem}"
+        return f"{kind}: {problem}"
+    return None
+
+
+def _malformed_frontmatter_message(repo_rel: str, detail: str) -> str:
+    return (
+        f"{repo_rel}: frontmatter block does not parse as YAML — {detail}. "
+        "Readers of this record see no frontmatter at all, not a record with "
+        "keys. Fix the YAML, or drop the --- block if this file is prose."
+    )
+
+
 def _reachability_deny_message(violations: "list[dict]") -> str:
     parts = [f'{v.get("field")}: "{v.get("value")}" — {v.get("reason")}' for v in violations]
     return (
@@ -940,11 +1025,16 @@ def _plan_tasks_spine_errors(
     schema, closing change_kind/disposition/queue_scope (and any future
     field) in one pass.
 
-    Fail-open at every seam (missing plan-tasks schema, unparseable YAML) ->
-    []. Two LocateResult statuses are deliberately silent, not findings:
-      - ABSENT (no spine yet) — legitimate mid-authoring state.
-      - MALFORMED (>1 fence, or a heading with no fence in its section) —
-        plan-coverage-checker's fail-loud, not duplicated here.
+    Fail-open on a missing plan-tasks schema -> []. Locating and parsing the
+    block, and every defect that is not per-row, now belong to
+    `schema_validate.plan_tasks_spine_integrity`, which both siblings call:
+      - ABSENT (no spine yet) is still silent — legitimate mid-authoring state.
+      - MALFORMED (>1 fence, or no fence under `## Tasks`) and an unparseable
+        block are FINDINGS as of 2026-09-08. They were silent, delegated to
+        plan-coverage-checker — an EM-dispatched review-time subagent with no
+        Edit tool, so it never saw a write, and a plan edited after review was
+        covered by nothing. Enforcement was inverted: one row with a bad enum
+        was reported, a spine no consumer could read at all was not.
 
     Mirrors the advisory sibling's helper of the same name exactly — both
     must stay in lockstep so the STRICT-mode warn shape (rendered by THIS
@@ -988,28 +1078,17 @@ def _plan_tasks_spine_errors(
     if not isinstance(plan_tasks_schema, dict):
         return []
 
-    try:
-        result = _locate_fenced_block(prospective_content)
-    except Exception:  # noqa: BLE001 — fail-open, never block on infra
-        return []
-    if result.status != _LocateStatus.LOCATED or result.body is None:
-        return []
-
-    try:
-        parsed = _parse_yaml(result.body)
-    except Exception as err:  # noqa: BLE001 — mirrors the whole-document-yaml catch below
-        return [{
-            "field": "(plan-tasks parse error)",
-            "error": f"YAML parse error: {err}",
-            "hint": "Ensure the ```yaml plan-tasks block is a valid YAML list of task rows",
-        }]
-
-    if not isinstance(parsed, list):
-        return [{
-            "field": "(plan-tasks)",
-            "error": f"expected a YAML list of task rows, got {type(parsed).__name__}",
-            "hint": "Each row is a `- id: ... title: ... change_kind: ... surface: ...` list item",
-        }]
+    # The three defects a per-ROW loop structurally cannot see (spine not
+    # locatable, block does not parse, depends_on edge onto a row that is not
+    # here). Shared door with the sibling guard, so neither can drift about what
+    # counts as an unreadable spine; ABSENT stays silent there, as it must.
+    # It also hands back the STRICTLY-parsed rows, which is what the row loop
+    # below now validates — this used to run the lenient `_parse_yaml` over the same
+    # block, so it both paid a second parse and checked a reconstruction rather
+    # than the document every real spine consumer reads.
+    integrity, parsed = _plan_tasks_spine_integrity(prospective_content)
+    if parsed is None:
+        return integrity
 
     governed = _is_governed_plan(frontmatter) if isinstance(frontmatter, dict) else False
     schema = (
@@ -1018,7 +1097,7 @@ def _plan_tasks_spine_errors(
         else plan_tasks_schema
     )
 
-    errors: "list[dict]" = []
+    errors: "list[dict]" = list(integrity)
     for idx, row in enumerate(parsed):
         row_label = row.get("id") if isinstance(row, dict) and row.get("id") else f"index {idx}"
         if not isinstance(row, dict):
@@ -1219,7 +1298,16 @@ def _is_doe_owned_repo(repo_root: str) -> bool:
         doe_root = coordinator_doe_root()
         if not doe_root:
             return False
-        return Path(repo_root).resolve() == Path(str(doe_root)).resolve()
+        # Casefolded on BOTH sides. Unfolded, a DoE root differing from
+        # `repo_root` only in case compares unequal on a case-insensitive-but-
+        # case-preserving filesystem, so this answers "not DoE's tree" for a
+        # tree that IS DoE's — and the caller then applies claude-klabauter's own rules to
+        # a sibling's corpus. That is the reaching-into-a-sibling failure the
+        # docstring above says must never happen, reached by the one route the
+        # fail-safe direction does not cover.
+        return casefold_path(str(Path(repo_root).resolve())) == casefold_path(
+            str(Path(str(doe_root)).resolve())
+        )
     except Exception:  # noqa: BLE001 — fail-safe: keep enforcing locally
         return False
 
@@ -1725,6 +1813,24 @@ def _first_result(
     except Exception:  # noqa: BLE001 — fail-open
         match = None
     if not match:
+        # Second always-WARN finding (see module docstring): the write opens
+        # a frontmatter block that does not parse. That is precisely WHY no
+        # schema matched — there are no keys to match a doc type on — so
+        # this seam is the only place it can be caught, and returning None
+        # here is how 43 records across two repos landed with frontmatter
+        # every downstream reader sees as absent. Scoped to the no-match
+        # branch on purpose: when a schema DOES match, the existing
+        # `(missing frontmatter)` schema-validation finding already reports
+        # it and the advisory sibling renders it, so firing here too would
+        # break mutual exclusivity. On this branch the sibling stands down
+        # unconditionally (`if not match: return None` in its own walk), so
+        # exactly one module speaks.
+        try:
+            yaml_detail = _malformed_frontmatter_detail(prospective_content)
+        except Exception:  # noqa: BLE001 — fail-open, never block on infra
+            yaml_detail = None
+        if yaml_detail is not None:
+            return ("warn", _malformed_frontmatter_message(repo_rel, yaml_detail))
         if _forensics is not None:
             try:
                 gap_doc_type = _unvendored_offerable_doc_type(ctx, schemas, frontmatter, repo_rel)

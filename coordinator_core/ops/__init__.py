@@ -171,6 +171,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.roadmap_link_stubs", 'registers "roadmap.link_stubs"'),
     ("coordinator_core.ops.roadmap_plan_gate", 'registers "roadmap.plan_gate"'),
     ("coordinator_core.ops.roadmap_blitz_land", 'registers "roadmap.blitz_land"'),
+    ("coordinator_core.ops.plan_prep_gate", 'registers "plan.prep_gate"'),
+    ("coordinator_core.ops.plan_stamp_prepped", 'registers "plan.stamp_prepped"'),
     ("coordinator_core.ops.queue_append", 'registers "queue.append"'),
     ("coordinator_core.ops.decision_record_mint",
      'registers "decision_record.mint_id" + "decision_record.release_id"'),

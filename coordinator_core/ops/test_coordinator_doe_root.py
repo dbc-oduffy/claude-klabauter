@@ -62,6 +62,15 @@ def _clean_env(monkeypatch, tmp_path):
     monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    # COORDINATOR_SETTINGS_HOME is the one home rung the suite-root quarantine
+    # (`coordinator_core/conftest.py::_quarantine_real_home`) cannot neutralise:
+    # `_settings_home.settings_home()` prefers that override over
+    # CLAUDE_HOME/HOME/USERPROFILE, so on a box where an operator exports it the
+    # rung-2.75 `.doe-root` pointer probe reads the operator's REAL settings home
+    # and `coordinator_doe_root()` resolves the LIVE DoE checkout regardless of
+    # the CLAUDE_HOME a test sets. Dropping it re-anchors settings-home on the
+    # home this fixture (and the quarantine) already controls.
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     # Scratch-scoped, always-empty-unless-seeded registry dir -- shields every
     # test from the operator's REAL machine-local registry (the defect C7b
     # removes). Individual tests seed a value into this same directory via
@@ -205,6 +214,74 @@ def test_negative_no_machine_local_no_pointer_file(tmp_path, monkeypatch):
 
     rc = mod.main([])
     assert rc == 1
+
+
+def test_rung3_structurally_unanswerable_prints_nothing_to_stderr(tmp_path, monkeypatch, capsys):
+    """Bug row 2b3bb4f1938a (measured in an Anthropic-hosted cloud
+    container): rung 3 re-derives "no coordinator source found" through the
+    SAME candidate space (registry, pointer file, flat layout) rungs
+    2/2.5/2.75 already tried and failed -- that answer carries no new
+    information, so it must not print, on every single guard dispatch, on a
+    host with no registered source at all. This reuses
+    `test_negative_no_machine_local_no_pointer_file`'s exact scenario (the
+    one already known to reach rung 3 and fail there) with `capsys` added."""
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    fake_home = tmp_path / "rung3-empty-home"
+    fake_home.mkdir()
+    monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
+    monkeypatch.setenv("PATH", str(empty_bin))
+
+    result = mod.coordinator_doe_root()
+
+    assert result is None
+    captured = capsys.readouterr()
+    assert captured.err == "", (
+        "rung 3 printed on a structurally-unanswerable failure -- got: %r" % captured.err
+    )
+
+
+def test_resolve_via_clone_root_script_suppresses_the_no_source_found_case(monkeypatch, capsys):
+    """Unit-level pin, independent of the full rung chain: when the
+    underlying resolver raises with `no_source_found=True`, this rung must
+    return None silently -- not merely "quieter", but with NOTHING written
+    to stderr."""
+
+    def _raise_no_source() -> str:
+        raise mod._resolve_coordinator_clone.ResolveCoordinatorCloneError(
+            "resolve-coordinator-clone: no coordinator source found (no dev marker, no "
+            "OSS install); set COORDINATOR_SOURCE_MODE or run coordinator:install.",
+            no_source_found=True,
+        )
+
+    monkeypatch.setattr(mod._resolve_coordinator_clone, "resolve_clone_root", _raise_no_source)
+
+    result = mod._resolve_via_clone_root_script()
+
+    assert result is None
+    assert capsys.readouterr().err == ""
+
+
+def test_resolve_via_clone_root_script_still_prints_an_actionable_failure(monkeypatch, capsys):
+    """Control for the test above: a genuinely actionable failure (ambiguous
+    source, bad `COORDINATOR_SOURCE_MODE`) is NOT swallowed by the new
+    gate -- only the specific `no_source_found=True` case is suppressed."""
+
+    def _raise_ambiguous() -> str:
+        raise mod._resolve_coordinator_clone.ResolveCoordinatorCloneError(
+            "resolve-coordinator-clone: ambiguous coordinator source — set "
+            "COORDINATOR_SOURCE_MODE=dev or COORDINATOR_SOURCE_MODE=oss to disambiguate.",
+            no_source_found=False,
+        )
+
+    monkeypatch.setattr(mod._resolve_coordinator_clone, "resolve_clone_root", _raise_ambiguous)
+
+    result = mod._resolve_via_clone_root_script()
+
+    assert result is None
+    captured = capsys.readouterr().err
+    assert "_resolve_via_clone_root_script" in captured
+    assert "ambiguous coordinator source" in captured
 
 
 def test_c1b_codename_free_rung_resolves_with_registry_unreachable(tmp_path, monkeypatch):

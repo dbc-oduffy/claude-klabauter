@@ -216,6 +216,51 @@ def _writes_overlap(a: EmitterRow, b: EmitterRow) -> bool:
     return any(_paths_overlap(x, y) for x in a.writes for y in b.writes)
 
 
+def _declared_closure(declared: dict[str, set[str]]) -> dict[str, set[str]]:
+    """Transitive closure of the declared predecessor graph.
+
+    ``declared[x]`` is ``x``'s direct declared predecessors (the rows its
+    own ``depends_on`` edges name). This returns, for every row, the full
+    set of rows the declared graph places before it at ANY depth — direct
+    predecessors plus their predecessors, recursively — so a caller can ask
+    "does the author's own depends_on graph already order A before B" for a
+    multi-hop chain, not just an immediate pair.
+
+    Computed ONCE per ``_predecessors`` call (memoized per node below), not
+    per candidate pair — this function is already part of an O(rows^2)
+    caller, and a per-pair graph walk would make the whole thing O(rows^3)
+    (see § Declared-beats-derived, transitive widening, in the module
+    docstring).
+
+    Built over DECLARED edges only — never mixes in derived read-after-write
+    edges, which would let a derived edge justify suppressing another
+    derived edge (circular, and can silently drop a real ordering).
+
+    Cycle-safe: a node currently being expanded is skipped rather than
+    re-entered, so a declared cycle (refused later by ``_detect_cycle``)
+    cannot recurse forever here.
+    """
+    closure: dict[str, set[str]] = {}
+
+    def expand(node: str, in_progress: set[str]) -> set[str]:
+        if node in closure:
+            return closure[node]
+        if node in in_progress:
+            return set()
+        in_progress.add(node)
+        result: set[str] = set()
+        for pred in declared.get(node, ()):
+            result.add(pred)
+            result |= expand(pred, in_progress)
+        in_progress.discard(node)
+        closure[node] = result
+        return result
+
+    for node in declared:
+        expand(node, set())
+    return closure
+
+
 def _predecessors(
     rows: list[EmitterRow],
     provenance: dict[tuple[str, str], str] | None = None,
@@ -228,8 +273,10 @@ def _predecessors(
 
     Declared outranks derived (§ Declared-beats-derived in the module
     docstring): a derived read-after-write edge is DROPPED, with a
-    ``logging.warning``, when the pair already carries a declared
-    ``depends_on`` edge pointing the other way.
+    ``logging.warning``, when the pair is already ordered the other way by
+    the declared graph — directly OR transitively through one or more
+    intermediate rows (``_declared_closure`` above). Direct declaration is
+    the depth-1 case of that and stays covered exactly as before.
 
     ``provenance``, when supplied, is filled in place with
     ``(row_id, predecessor_id) -> label`` for every edge kept, so a caller
@@ -255,6 +302,8 @@ def _predecessors(
                         f"declared: depends_on, gate_kind={gate_kind}"
                     )
 
+    declared_closure = _declared_closure(declared)
+
     for writer in rows:
         if writer.writes is UNDECLARED or not isinstance(writer.writes, list):
             continue
@@ -271,7 +320,7 @@ def _predecessors(
             ]
             if not collisions:
                 continue
-            if reader.id in declared[writer.id]:
+            if reader.id in declared_closure[writer.id]:
                 read_path, write_path = collisions[0]
                 # Reported once per FULL-graph derivation pass, not per call:
                 # build_waves calls _predecessors twice (once for the cycle
@@ -282,16 +331,23 @@ def _predecessors(
                 # full-graph pass, which makes it the right gate — one fact,
                 # stated once (docs/wiki/guard-messaging.md § Register).
                 if provenance is not None:
+                    direct = reader.id in declared[writer.id]
+                    relation = (
+                        "declares depends_on"
+                        if direct
+                        else "transitively orders (via depends_on)"
+                    )
                     _logger.warning(
                         "wave_map: dropped derived edge %s -> %s (%s reads %s, "
-                        "written by %s); %s declares depends_on %s and a declared "
-                        "edge outranks a derived one",
+                        "written by %s); %s %s %s and a declared edge outranks "
+                        "a derived one",
                         reader.id,
                         writer.id,
                         reader.id,
                         read_path,
                         writer.id,
                         writer.id,
+                        relation,
                         reader.id,
                     )
                 continue

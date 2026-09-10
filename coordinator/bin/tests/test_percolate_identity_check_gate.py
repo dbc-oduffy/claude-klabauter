@@ -409,6 +409,43 @@ def _fake_process_target_succeeds(target, setup_dir, totals, **kwargs):
     totals.processed += 1
 
 
+def _stub_dest_refresh(monkeypatch) -> None:
+    """Neutralise the destination-refresh precondition (PM ruling 2026-09-02).
+
+    `publish.main` brings every destination level with its origin before the
+    first row materializes anything, and fail-closes on a dest whose checked-out
+    branch has no upstream tracking ref (§ `percolate.dest_refresh.
+    refresh_dest_from_origin`). This fixture's dest repo is a bare tmp tree, not
+    a clone, so that refusal fires and returns 1 before the identity leg runs.
+
+    Patched on the engine module rather than on `publish`, because `main`
+    imports the callable from `percolate.dest_refresh` at call time."""
+    publish._bootstrap_engine()
+    from percolate import dest_refresh as _dest_refresh
+
+    monkeypatch.setattr(
+        _dest_refresh,
+        "refresh_dest_from_origin",
+        lambda repo_root, *, out, err: _dest_refresh.RefreshResult(
+            Path(repo_root), ok=True, branch="main", upstream="origin/main"
+        ),
+    )
+
+
+def _stub_assembled_mirror_leg(monkeypatch) -> None:
+    """Hold the assembled-mirror end-of-run leg inert.
+
+    `dispatch_end_of_run_assembled_mirror_gate` runs a real `pytest
+    --collect-only` against the destination tree and refuses any root whose
+    collection finds no tests and carries no entry in THIS repo's
+    `setup/publish-allowlist-declarations.yaml`. A synthetic fixture tree is
+    neither, so the leg would fail every `main()` run here on live-repo state
+    unrelated to the identity leg under test."""
+    monkeypatch.setattr(
+        publish, "dispatch_end_of_run_assembled_mirror_gate", lambda *a, **k: True
+    )
+
+
 def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> None:
     """Monkeypatch every `main()` precondition OTHER than the end-of-run
     identity-check leg under test: percolate-root resolution, target-row
@@ -417,6 +454,8 @@ def _wire_main_preconditions(monkeypatch, *, setup_dir: Path, rows: list) -> Non
     since these tests exist to prove the RUN-WIDE accumulation + call +
     return-code wiring around it, not row-level sync/gate behaviour, which
     has its own dedicated test files)."""
+    _stub_dest_refresh(monkeypatch)
+    _stub_assembled_mirror_leg(monkeypatch)
     percolate_root = setup_dir.parent
     monkeypatch.setattr(
         publish, "_resolve_percolate_root_and_rung", lambda **kwargs: (percolate_root, "test-rung")

@@ -6,7 +6,7 @@ substrate_seven_dim` (chunk C3, `gates.substrate.*`).
 Covers: `:72`, `:73`, `:90(1)`, `:90(2)`, `:90(4)`, `:90(5)`, `:94`, `:96`,
 `:100` — one case per row, plus the absent-input `undetermined` path for
 each. Never reads the live repo's `docs/plans/`/`state/sizings/`/
-`state/plan-sidecars/`; every fixture is built under `tmp_path`.
+`.coordinator-local/plan-sidecars/`; every fixture is built under `tmp_path`.
 
 Run: python -m pytest coordinator_core/plan_assemble/predicates/test_substrate_seven_dim.py -q
 
@@ -100,7 +100,7 @@ def test_seven_dim_no_duplicate_true_when_sidecar_present(tmp_path):
     plan_path = tmp_path / "docs" / "plans" / "my-plan.md"
     plan_path.parent.mkdir(parents=True)
     plan_path.write_text("---\ntitle: x\n---\nbody", encoding="utf-8")
-    sidecar_dir = tmp_path / "state" / "plan-sidecars"
+    sidecar_dir = tmp_path / ".coordinator-local" / "plan-sidecars"
     sidecar_dir.mkdir(parents=True)
     (sidecar_dir / "my-plan.prior-art-check.md").write_text("x", encoding="utf-8")
     ctx = _ctx(tmp_path, plan_path=plan_path)
@@ -179,7 +179,7 @@ def test_seven_dim_official_docs_read_true_when_sidecar_present(tmp_path):
     plan_path = tmp_path / "docs" / "plans" / "my-plan.md"
     plan_path.parent.mkdir(parents=True)
     plan_path.write_text("---\ntitle: x\n---\nbody", encoding="utf-8")
-    sidecar_dir = tmp_path / "state" / "plan-sidecars"
+    sidecar_dir = tmp_path / ".coordinator-local" / "plan-sidecars"
     sidecar_dir.mkdir(parents=True)
     (sidecar_dir / "my-plan.docs-check.md").write_text("x", encoding="utf-8")
     ctx = _ctx(tmp_path, plan_path=plan_path)

@@ -151,6 +151,13 @@ _BATON_FIELDS = frozenset(
         # here so a sweep does not re-plan work that already has its marching orders.
         "handoff_phase", "execution_authorized_by", "execution_authorized_at",
         "execution_authorized_sha", "execution_authorized_note",
+        # NOT a link basis, and read anyway: `plan` is undeclared in
+        # handoff.schema.json, so records carry it freely while `link_plans`
+        # reads `governing_plan`. Two names for one edge, one written and the
+        # other read. Scanned so `_unlinked_plan_claim` can NAME the record that
+        # points at a real plan nothing resolved, instead of leaving it
+        # indistinguishable from a baton that has no plan at all.
+        "plan",
     }
 )
 
@@ -449,8 +456,13 @@ def is_plan_record(fm: Dict[str, Any]) -> bool:
     working the day somebody files `2026-09-01-review-the-review-gate.md`, which
     is a plan.
 
-      - `kind:` — plan.schema.json declares no `kind`; every sidecar family sets
-        one (`staff-eng-review`, and its siblings).
+      - `kind:` — every sidecar family sets one (`staff-eng-review`, and its
+        siblings). `kind: plan` is the ONE admitted value: plan.schema.json
+        declares no `kind`, but `coordinator/templates/plans/plan.md.tmpl`
+        emits `kind: plan`, so 41 of 283 records in DoE's corpus carry it and
+        every one of them is a plan. Reading a bare `kind:` as sidecar-ness
+        indexed all 41 as sidecars, which is the second failure this
+        docstring's closing paragraph names, fired silently and at scale.
       - `plan:` — a back-pointer AT the plan it reviews. A plan does not point
         at itself.
 
@@ -460,7 +472,7 @@ def is_plan_record(fm: Dict[str, Any]) -> bool:
     an already-planned baton as unplanned and feeds it back into a planning
     wave that will write a second plan for work that has one.
     """
-    return not fm.get("kind") and not fm.get("plan")
+    return fm.get("kind") in (None, "", "plan") and not fm.get("plan")
 
 
 def build_plan_index(worktree_root: Path) -> PlanIndex:
@@ -524,6 +536,51 @@ def link_plans(fm: Dict[str, Any], plans: PlanIndex) -> Tuple[List[Dict[str, Any
         if hits:
             return hits, basis
     return [], None
+
+
+#: Frontmatter keys that carry a plan PATH but are not link bases. `plan:` is the
+#: one that matters: it is undeclared in handoff.schema.json and therefore
+#: undeclared-but-tolerated, so records carry it freely while `link_plans` reads
+#: `governing_plan`. Two names for one edge, one written and the other read.
+_UNDECLARED_PLAN_PATH_KEYS: Tuple[str, ...] = ("plan",)
+
+
+def _unlinked_plan_claim(fm: Dict[str, Any], worktree_root: Path) -> Optional[Dict[str, str]]:
+    """A baton that NAMES a plan on disk which no link basis resolved.
+
+    Reported, never linked. The distinction it restores is the one that costs
+    sessions: `needs_plan: true` means "a blitz has work to do here", and a
+    baton whose plan link merely failed to resolve is indistinguishable from one
+    that genuinely has no plan. So the record is re-planned by every sweep
+    forever, beside an approved plan for the same work, and any execution record
+    attaches to nothing. Measured once in example-retrieval-repo against a PM-authorized
+    plan; the cost is silent and unbounded in time.
+
+    NOT promoted to a link basis, deliberately. `plan:` is undeclared, and a
+    resolver that read it would bless an undeclared field as an edge and remove
+    the pressure to correct the record. The repair is to write `governing_plan`
+    (or the `deliverable_id` the plan already carries) onto the baton — which
+    this report names, so nobody has to discover it from a wave that planned
+    work twice.
+    """
+    for key in _UNDECLARED_PLAN_PATH_KEYS:
+        value = fm.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        rel = value.strip().replace("\\", "/")
+        if not rel.endswith(".md"):
+            continue
+        if not (worktree_root / rel).is_file():
+            continue
+        return {
+            "field": key,
+            "path": rel,
+            "repair": (
+                f"baton names {rel} in `{key}:`, which is not a link basis — "
+                "write `governing_plan:` (or the plan's own `deliverable_id:`) onto the baton"
+            ),
+        }
+    return None
 
 
 def _best_plan(hits: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -973,6 +1030,9 @@ def assemble_plan_gate(
     for record in records:
         own = _best_plan(link_plans(record["_fm"], plans)[0])
         record["own_plan"] = own
+        record["unlinked_plan_claim"] = (
+            None if own else _unlinked_plan_claim(record["_fm"], worktree_root)
+        )
         # Two ways a baton stops needing planning work, and the second is not
         # optional: an S-lane baton stamped `handoff_phase: execution` carries a
         # parked spec and a four-field authorization, so it is waiting on
@@ -1045,6 +1105,9 @@ def assemble_plan_gate(
                     else None
                 ),
                 "needs_plan": record["needs_plan"],
+                # Present-as-null, never absent: an omitted key and "no claim" would
+                # be one value, and this field exists to make a silent case loud.
+                "unlinked_plan_claim": record["unlinked_plan_claim"],
                 "execution_authorized": record["execution_authorized"],
                 "sized": bool(record["sizing_objects"]),
                 "sizing_objects": record["sizing_objects"],
@@ -1080,11 +1143,63 @@ def assemble_plan_gate(
         ),
     }
 
+    # `counts.unschedulable` says HOW MANY this pass cannot schedule and never
+    # WHICH, so a driver reading it can neither act on them nor tell a held
+    # baton from one that quietly vanished. Every other list this report returns
+    # names its subjects; this one did not, and the gap is what let a baton the
+    # PM had taken personally cost a scout slot in wave after wave -- the driver
+    # had no way to see it was being held rather than skipped.
+    #
+    # Named here rather than left to the caller because the blocker mapping is
+    # already computed above (`pending`) and re-deriving it caller-side is a
+    # second answer to a settled question. Scoped identically to the count it
+    # explains, so the two can never disagree.
+    # The wave-assigner's own candidate set, rebuilt here: a blocker counts as
+    # unmappable exactly when it is not a baton this pass could have scheduled,
+    # which is the same test `_assign_waves` applies when it records a `None`
+    # hold. Same predicate, so the explanation cannot drift from the exclusion.
+    schedulable_ids = {r["id"] for r in candidate_records if r["needs_plan"]}
+    unschedulable_rows = [
+        {
+            "id": r["id"],
+            "title": r.get("title"),
+            "path": r.get("path"),
+            # The blockers holding it that this pass could not map onto a
+            # candidate. A blocker naming no baton is exactly how a record says
+            # "something outside this repo holds me" -- a PM decision, a
+            # licensing call, an external dependency -- and it is the reason the
+            # row is here rather than in a wave.
+            # Two ways a blocker holds a row out of every wave, and the row is
+            # useless to a driver unless BOTH are named. Directly: the blocker
+            # maps to no schedulable baton, which is exactly how a record says
+            # something outside this repo holds it -- a PM decision, a licensing
+            # call, an external dependency. Transitively: the blocker IS a
+            # schedulable candidate but is itself unscheduled this pass, so
+            # waiting on it never ends either.
+            #
+            # Reporting only the direct case returned `held_by: []` for a row
+            # that genuinely could not be scheduled, which is the same
+            # count-with-no-subject defect this field exists to fix, one level
+            # down. An empty list here must mean "nothing holds it", never
+            # "something holds it and this report cannot say what".
+            "held_by": [
+                b["blocker"]
+                for b in gate_by_id[r["id"]]["planning_gate"]["blocking"]
+                if batons_by_id.get(b["blocker"]) is None
+                or batons_by_id[b["blocker"]]["id"] not in schedulable_ids
+                or wave_by_id.get(batons_by_id[b["blocker"]]["id"]) is None
+            ],
+        }
+        for r in candidate_records
+        if r["needs_plan"] and wave_by_id.get(r["id"]) is None
+    ]
+
     return {
         "batons": reported,
         "waves": waves,
         "cycles": cycles,
         "unresolved_blockers": unresolved,
+        "unschedulable": unschedulable_rows,
         "counts": counts,
         "scanned": {"batons": len(records), "plans": len(plans.by_path)},
     }

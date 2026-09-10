@@ -80,9 +80,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core.op_census.cross_repo_consumers import ConsumerHit, scan_cross_repo_consumers
+from coordinator_core.session.machinery_paths import kill_ledger_path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-KILL_LEDGER = REPO_ROOT / "state" / "kill-ledger.md"
+#: Sourced from `machinery_paths.kill_ledger_path`, the single owner of the
+#: machinery root's layout, rather than rebuilt here. C7 moved the ledger out
+#: of `state/` (moved, not killed — PM Adjudication 4) and this constant kept
+#: the retired spelling, so every reader through it raised FileNotFoundError
+#: against a path nothing has written since.
+KILL_LEDGER = Path(kill_ledger_path(str(REPO_ROOT)))
 
 #: Populations where "nothing needs this" is still an open assertion — the
 #: only ones a memo hit is joined against. A terminal population (LANDED,

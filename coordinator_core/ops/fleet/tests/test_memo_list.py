@@ -26,6 +26,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ops.fleet.memo_list import (
     _MODE,
     _memo_list,
@@ -37,6 +39,23 @@ from coordinator_core.ops.fleet._memo_compose import (
     _memo_filename,
     resolve_sender_id,
 )
+
+
+@pytest.fixture(autouse=True)
+def _drop_settings_home_override(monkeypatch):
+    """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
+
+    ``_make_claude_home`` below writes its registry under
+    ``<CLAUDE_HOME>/.coordinator-claude-settings/machine-local`` and points
+    CLAUDE_HOME at it, which only isolates the resolver while
+    ``_settings_home.settings_home()`` derives the settings home from
+    CLAUDE_HOME. That resolver consults ``COORDINATOR_SETTINGS_HOME`` first and
+    the suite-root home quarantine (``coordinator_core/conftest.py::
+    _quarantine_real_home``) does not clear it, so on a box where an operator
+    exports it these tests enumerate the operator's REAL fleet registry rather
+    than the one they seeded. Same isolation ``test_memo_resolver.py`` applies.
+    """
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
 
 
 def _run(result):

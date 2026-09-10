@@ -21,8 +21,14 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.op_census.kill_ledger_inventory import KILL_LEDGER
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_KILL_LEDGER_PATH = _REPO_ROOT / "state" / "kill-ledger.md"
+#: Borrowed from `kill_ledger_inventory`, which sources it from
+#: `machinery_paths.kill_ledger_path` -- the single owner of where the ledger
+#: lives. Respelling the path here is what let C7's move of the ledger out of
+#: `state/` leave this module reading a path nothing writes.
+_KILL_LEDGER_PATH = KILL_LEDGER
 
 #: Every kill-ledger entry from K-017 onward titles itself `## K-NNN — \`<op.key>\``
 #: (an optional parenthetical may trail the backticked key) -- the convention this
@@ -35,7 +41,7 @@ _KILL_LEDGER_STATUS_LANDED_RE = re.compile(r"\*\*Status:\*\*\s+\*\*LANDED\*\*")
 
 
 def _killed_op_keys() -> frozenset[str]:
-    """Op-keys with a LANDED entry in `state/kill-ledger.md` -- evidence-driven, not a
+    """Op-keys with a LANDED entry in the kill ledger -- evidence-driven, not a
     hardcoded skip-list, so the next kill doesn't need a matching edit here.
 
     `ceremony.scoped_git_commit` (K-045, DR-344 kill-bar cut, landed `c07062c99`) is

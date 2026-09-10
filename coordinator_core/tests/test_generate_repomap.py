@@ -22,6 +22,21 @@ from coordinator_core.win_portability import no_console_passthrough_kwargs
 # _trusted_root — trust-core boundary cases (mirrors the bash trust-core)
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _drop_settings_home_override(monkeypatch):
+    """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
+
+    The trust core resolves the DoE root through the `.doe-root` pointer, whose
+    DURABLE rung is ``<settings-home>/machine-local/.doe-root`` and whose
+    settings-home resolver prefers ``COORDINATOR_SETTINGS_HOME`` over the
+    CLAUDE_HOME each case sets. The suite-root home quarantine
+    (``coordinator_core/conftest.py::_quarantine_real_home``) does not clear
+    that override, so on a box where an operator exports it the sentinel a test
+    writes under its own CLAUDE_HOME is never the one read.
+    """
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+
+
 def test_trusted_root_under_claude_home(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     monkeypatch.delenv("COORDINATOR_PLUGIN_ROOT_TRUSTED", raising=False)

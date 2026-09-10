@@ -1014,3 +1014,223 @@ def check_staged_pathspec_divergence(
             "COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE", payload=payload
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# 14. UNDECLARED-STAGED-DELETION -- a commit that removes tracked files while
+# its own message describes something else.
+#
+# The incident this is built against (state/bug-backlog/2026-08-31-four-bug-
+# blitz-commits-deleted-five-file-6216c89502b9.yaml, P0): four commits from a
+# single bug-blitz run each landed `0 insertions, N deletions` under a subject
+# describing a fix that was nowhere in its own diff -- one of them deleted
+# `coordinator_core/authz/classification.py` entire (4043 lines) under the
+# subject "git.maintenance and handoff.repair_deployment_state reach
+# OP_CLASSIFICATION". Root cause was a cwd-dependent existence probe in
+# `coordinator-safe-commit :: do_pathspec` turning a NEGATIVE EXISTENCE PROBE
+# into a POSITIVE DELETION DECLARATION.
+#
+# WHY NOTHING CAUGHT IT, and why this has to be a commit-shape check rather
+# than a test: the working tree keeps functioning perfectly afterwards.
+# Imports resolve, tests pass, guards go green -- all against a copy git does
+# not have. There is no failing signal to notice. The blast radius is a fresh
+# clone, a publish, or one `git clean` in a tree ~50 peer sessions share, and
+# the failure then surfaces far from its cause. A test suite structurally
+# cannot catch it: it imports from disk.
+#
+# PREDICATE, and it is deliberately NOT the one that row's body first
+# proposed. That row proposed `insertions == 0 AND deletions > 0`; its own
+# later REFUTED block measured that predicate wrong over all 31,983 commits
+# and named two counter-examples where the deletion RODE ALONG inside an
+# otherwise normal commit carrying insertions (`d721e7b3e1` deleting a
+# doctor test, `e3f53f3d6c` sweeping six `state/recovery/**.py`). An
+# `insertions == 0` gate misses both. So this keys on the presence of a
+# staged deletion at all, never on the insertion count.
+#
+# The second half of the predicate is the deletion-verb scan, and it reads
+# the WHOLE commit message rather than the subject line alone -- also a
+# correction to the row, which proposed a subject-only scan. Measured here
+# over this branch's 699 reachable commits: 11 carry a staged `D`, and a
+# subject-only scan fires on 8 of them, all 8 legitimate (`Untrack ...`,
+# `untrack ...`, `discard the staged draft`, `quarantine ...` -- each
+# declaring the removal in a word the subject-only verb list did not hold, or
+# declaring it one line further down in the body). Reading the full message
+# with the verb list below takes that to 0 false positives over the same 699.
+#
+# RENAMES ARE NOT DELETIONS. The status probe is run with `-M`, so a
+# `git mv` -- which is how every queue closure in this codebase archives a
+# row -- reports `R`, not `D`, and never reaches this check. That matters
+# directly: the archive path is the single highest-volume producer of staged
+# removals in this repo, and a guard that fired on it would be turned off
+# within a day.
+#
+# NOT VERIFIED, and stated rather than papered over: the four accident
+# commits, and the three rides-along victims the REFUTED block names, are
+# unreachable from this branch (shallow clone, 699 commits) -- so the
+# false-positive rate above is measured and the true-positive rate is
+# REASONED, from those commits' recorded subjects, not re-measured. Anyone
+# with the full history should re-run the measurement in
+# `test_undeclared_staged_deletion.py`'s docstring against it.
+#
+# POSTURE: advisory, not a deny. `check_registration_quad_completeness`
+# (Check 12) denies because an incomplete quad is statically decidable from
+# the staged diff alone. This check is not in that position: it cannot read a
+# message passed by `-F` or composed in an editor, so it fails open on a real
+# fraction of commits, and a guard that blocks the shapes it can read while
+# waving through the ones it cannot would buy compliance rather than safety.
+# The advisory names the paths, which is the thing the operator could not
+# otherwise see -- the deletion is invisible in the command they typed.
+
+_DELETION_VERBS = re.compile(
+    r"\b("
+    r"delet\w*|remov\w*|rm|retir\w*|drop(s|ped|ping)?|gravestone\w*|"
+    r"prun\w*|purg\w*|kill(s|ed|ing)?|untrack\w*|discard\w*|quarantin\w*|"
+    r"obsolet\w*|sunset\w*|revert\w*|supersed\w*|retract\w*|withdraw\w*|"
+    r"mov(e|es|ed|ing)|mv|renam\w*|relocat\w*|archiv\w*|migrat\w*|"
+    r"clean(s|ed|up)?|strip(s|ped|ping)?|excis\w*|unregister\w*"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Options that take a separate value argument, so the token after them is
+# never itself a message.
+_COMMIT_OPTS_WITH_VALUE = {
+    "-C", "--reuse-message", "-c", "--reedit-message",
+    "-F", "--file", "--author", "--date", "--cleanup",
+    "--gpg-sign", "-S", "--pathspec-from-file", "--fixup", "--squash",
+    "-t", "--template",
+}
+
+# Options that mean "the message does not come from this command line".
+_COMMIT_OPTS_MESSAGE_ELSEWHERE = {
+    "-F", "--file", "-C", "--reuse-message", "-c", "--reedit-message",
+    "-t", "--template", "--fixup", "--squash",
+}
+
+
+def _commit_message_from_tokens(seg_tokens: List[str]) -> Optional[str]:
+    """Concatenate the ``-m``/``--message`` values in a tokenized ``git
+    commit`` segment, or ``None`` when the message is NOT statically knowable
+    from the command line.
+
+    ``None`` is returned -- and callers must fail open on it, never treat it
+    as an empty message -- for ``-F``/``--file``, ``-C``/``-c``,
+    ``--template``, ``--fixup``/``--squash``, and for a bare ``git commit``
+    with no ``-m`` at all (the message is composed in an editor this process
+    never sees). Reading those as "no deletion verb present" would fire the
+    advisory on every editor-composed commit in the repo.
+    """
+    parts: List[str] = []
+    i = 0
+    saw_message = False
+    while i < len(seg_tokens):
+        tok = seg_tokens[i]
+        if tok == "--":
+            break
+        if tok in _COMMIT_OPTS_MESSAGE_ELSEWHERE:
+            return None
+        if tok in ("-m", "--message"):
+            if i + 1 < len(seg_tokens):
+                parts.append(seg_tokens[i + 1])
+                saw_message = True
+                i += 2
+                continue
+            return None
+        if tok.startswith("--message="):
+            parts.append(tok.split("=", 1)[1])
+            saw_message = True
+            i += 1
+            continue
+        if tok.startswith("-m") and len(tok) > 2 and not tok.startswith("--"):
+            # Attached short-option form: `-mSubject`.
+            parts.append(tok[2:])
+            saw_message = True
+            i += 1
+            continue
+        if tok in _COMMIT_OPTS_WITH_VALUE:
+            i += 2
+            continue
+        i += 1
+    if not saw_message:
+        return None
+    return "\n\n".join(parts)
+
+
+def _staged_deletions(status_lines: List[str]) -> List[str]:
+    """Paths reported ``D`` by a ``git diff --cached --name-status -M`` run.
+
+    Rename records (``R100\told\tnew``) are three-field and start with ``R``,
+    so they are skipped here without any extra branch -- which is the whole
+    reason the caller must pass ``-M``. A ``D`` line is two fields.
+    """
+    out: List[str] = []
+    for line in status_lines:
+        if not line or not line.startswith("D\t"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[1]:
+            out.append(parts[1])
+    return out
+
+
+def check_undeclared_staged_deletion(
+    commit_seg_tokens: Optional[List[str]],
+    status_lines: List[str],
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[str]:
+    """Advisory detail string when this commit stages one or more file
+    DELETIONS and its own message never says so; ``None`` otherwise.
+
+    Takes ``status_lines`` (the caller's already-fetched
+    ``git diff --cached --name-status -M`` output) rather than running its
+    own probe, so this check costs ZERO additional processes: adding it
+    actually REMOVED one from the pathspec'd commit path, because
+    ``check_validate_commit`` was running a ``--name-only`` probe and a
+    second ``--name-status`` probe that are now one call. That is not
+    incidental tidiness -- this runs on the commit hot path, where the
+    brightline budget is 500ms end-to-end and process creation, not the
+    query, is the cost (DR-344).
+
+    Fails open (``None``) when the message is not on the command line -- see
+    ``_commit_message_from_tokens``.
+    """
+    if commit_seg_tokens is None:
+        return None
+
+    deletions = _staged_deletions(status_lines)
+    if not deletions:
+        return None
+
+    message = _commit_message_from_tokens(commit_seg_tokens)
+    if message is None:
+        return None
+
+    if _DELETION_VERBS.search(message):
+        return None
+
+    shown = deletions[:10]
+    more = len(deletions) - len(shown)
+    listed = "\n".join("  D  %s" % p for p in shown)
+    if more > 0:
+        listed += "\n  ... and %d more" % more
+
+    return (
+        "UNDECLARED STAGED DELETION: this commit removes %d tracked file(s), "
+        "and its message does not mention a removal.\n\n"
+        "%s\n\n"
+        "If that is intended, say so in the message and this stops firing. If "
+        "it is not, the deletion is almost certainly a pathspec that did not "
+        "match your intent -- `git restore --staged <path>` puts it back "
+        "before the commit lands.\n\n"
+        "Why this is worth a look: the working tree keeps working either way. "
+        "A file deleted from git but still present on disk breaks nothing "
+        "here -- it breaks the next fresh clone, publish, or `git clean`, far "
+        "from this commit.\n\n"
+        "%s"
+    ) % (
+        len(deletions),
+        listed,
+        operator_override_note(
+            "COORDINATOR_OVERRIDE_UNDECLARED_DELETION", payload=payload
+        ),
+    )

@@ -22,6 +22,23 @@ from coordinator_core.ops.coordinator_setup_state import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _drop_settings_home_override(monkeypatch):
+    """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
+
+    ``_ml_dir`` below (and the module's own ``_machine_local_dir``) resolve the
+    registry as ``<CLAUDE_HOME>/.coordinator-claude-settings/machine-local``,
+    which is only the resolved location while COORDINATOR_SETTINGS_HOME is
+    unset -- it is the FIRST rung of that precedence. The suite-root home
+    quarantine (``coordinator_core/conftest.py::_quarantine_real_home``) does
+    not clear it, so on a box where an operator exports it the auto-record
+    cases read the operator's REAL registry.local.toml and assert against
+    whatever propagation_mode that machine happens to declare instead of the
+    one the test just wrote.
+    """
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+
+
 def _env(tmp_path, claude_home_exists=True):
     home = tmp_path / "home"
     home.mkdir()

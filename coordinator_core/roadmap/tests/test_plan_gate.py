@@ -206,6 +206,54 @@ def test_a_blocker_that_is_in_flight_is_unschedulable_not_wave_zero(tmp_path):
     assert dependent["planning_gate"]["open"] is False
 
 
+def test_unschedulable_names_its_batons_and_what_holds_each(tmp_path):
+    """`counts.unschedulable` says how many; the report must also say WHICH and
+    WHY. A count with no subjects cannot be acted on and cannot be reconciled
+    against the trail -- a driver reading only the number cannot tell a baton
+    that is being deliberately held from one that quietly vanished."""
+    _baton(tmp_path, "blocker-1", deployment_state="in_flight")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["counts"]["unschedulable"] == len(report["unschedulable"])
+    row = next(r for r in report["unschedulable"] if r["id"] == "dependent-1")
+    assert row["held_by"] == ["blocker-1"]
+
+
+def test_a_blocker_naming_no_baton_is_reported_as_what_holds_the_row(tmp_path):
+    """The encoding for "something outside this repo holds this" -- a PM
+    decision, a licensing call -- is a `blocked_by` entry that resolves to no
+    baton. The row stays a visible candidate and never enters a wave, and the
+    report names the blocker so the hold is legible rather than mysterious."""
+    _baton(tmp_path, "pm-held-1", blocked_by=["pm-decision:seats-vs-reauth"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    row = next(r for r in report["unschedulable"] if r["id"] == "pm-held-1")
+    assert row["held_by"] == ["pm-decision:seats-vs-reauth"]
+    assert _by_id(report, "pm-held-1")["candidate"] is True
+    assert all("pm-held-1" not in wave for wave in report["waves"])
+
+
+def test_a_transitively_held_row_names_the_blocker_that_holds_it(tmp_path):
+    """A blocker can be a perfectly good candidate and still hold its dependent
+    out of every wave, by being unscheduled itself. Reporting only blockers that
+    resolve to no baton returned `held_by: []` for a row that genuinely could
+    not be scheduled -- the same count-with-no-subject defect, one level down.
+    An empty `held_by` must mean nothing holds the row, never that something
+    does and the report cannot say what."""
+    _baton(tmp_path, "outside-1", deployment_state="in_flight")
+    _baton(tmp_path, "middle-1", blocked_by=["outside-1"])
+    _baton(tmp_path, "far-1", blocked_by=["middle-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    far = next(r for r in report["unschedulable"] if r["id"] == "far-1")
+    assert far["held_by"] == ["middle-1"]
+    assert not any(r["held_by"] == [] for r in report["unschedulable"])
+
+
 # ---------------------------------------------------------------------------
 # Wave assignment
 # ---------------------------------------------------------------------------
@@ -524,3 +572,85 @@ def test_the_archive_is_not_scanned_when_nothing_needs_it(tmp_path):
 
     report = pg.assemble_plan_gate(tmp_path)
     assert report["scanned"]["batons"] == 1, "archive was walked with no edge asking for it"
+
+
+def test_kind_plan_is_admitted_because_the_template_emits_it():
+    """`kind: plan` is a PLAN, not a sidecar — the template emits it.
+
+    `is_plan_record`'s discriminator once read a bare `kind:` as sidecar-ness, on the
+    premise that plan.schema.json declares no `kind`. True of the schema, false of the
+    corpus: DoE's `coordinator/templates/plans/plan.md.tmpl` emits `kind: plan`, so 41 of
+    283 records carried it and every one was indexed as a sidecar. That is the second
+    failure `is_plan_record`'s own docstring names — an already-planned baton reported as
+    unplanned, fed back into a planning wave that writes a second plan for work that has
+    one — and it fired silently, because the query answers, and answers empty.
+    """
+    assert pg.is_plan_record({"kind": "plan"}) is True
+    assert pg.is_plan_record({}) is True
+    # A sidecar is still a sidecar, by either discriminator.
+    assert pg.is_plan_record({"kind": "staff-eng-review"}) is False
+    assert pg.is_plan_record({"plan": "docs/plans/x.md"}) is False
+    # A back-pointer still wins: a record that points AT a plan is not that plan.
+    assert pg.is_plan_record({"kind": "plan", "plan": "docs/plans/x.md"}) is False
+
+
+# ---------------------------------------------------------------------------
+# The unlinked plan claim
+# ---------------------------------------------------------------------------
+
+
+def test_a_baton_naming_a_plan_no_basis_links_is_reported_not_silently_unplanned(tmp_path):
+    """`needs_plan: true` means a blitz has work to do; a broken link means it does not.
+
+    `plan:` is undeclared in handoff.schema.json, so records carry it freely while `link_plans`
+    reads `governing_plan`. A baton naming a real plan there resolves to no link, reports
+    `needs_plan: true`, and is re-planned by every later sweep — beside an approved plan for the
+    same work, with any execution record attaching to nothing. Measured once in example-retrieval-repo
+    against a PM-authorized plan, where it had been true for weeks and announced nothing.
+    """
+    plan_rel = _plan(tmp_path, "2026-09-09-governed", "approved")
+    _baton(tmp_path, "unlinked-01", plan=plan_rel)
+
+    row = _by_id(pg.assemble_plan_gate(tmp_path), "unlinked-01")
+
+    assert row["plan"] is None
+    assert row["needs_plan"] is True
+    claim = row["unlinked_plan_claim"]
+    assert claim is not None, "the broken link must be named, not inferred from needs_plan"
+    assert claim["field"] == "plan"
+    assert claim["path"] == plan_rel
+    assert "governing_plan" in claim["repair"]
+
+
+def test_the_claim_is_absent_once_a_declared_basis_links(tmp_path):
+    """The repair the claim names actually clears it — otherwise the field is a permanent
+    complaint rather than a routable finding."""
+    plan_rel = _plan(tmp_path, "2026-09-09-governed", "approved")
+    _baton(tmp_path, "linked-01", plan=plan_rel, governing_plan=plan_rel)
+
+    row = _by_id(pg.assemble_plan_gate(tmp_path), "linked-01")
+
+    assert row["plan"]["link_basis"] == "governing_plan"
+    assert row["unlinked_plan_claim"] is None
+
+
+def test_a_baton_with_no_plan_at_all_carries_a_null_claim(tmp_path):
+    """Present-as-null, never absent. An omitted key and "no claim" would be one value, and this
+    field exists to make a silent case loud."""
+    _baton(tmp_path, "bare-01")
+
+    row = _by_id(pg.assemble_plan_gate(tmp_path), "bare-01")
+
+    assert "unlinked_plan_claim" in row
+    assert row["unlinked_plan_claim"] is None
+
+
+def test_a_plan_path_that_does_not_exist_is_not_a_claim(tmp_path):
+    """The claim is that a REAL plan went unlinked. A dangling path is a different defect with a
+    different repair — fix the path, not the link basis — and reporting it here would send an
+    author to write `governing_plan:` pointing at a file that is not there."""
+    _baton(tmp_path, "dangling-01", plan="docs/plans/2026-09-09-not-on-disk.md")
+
+    row = _by_id(pg.assemble_plan_gate(tmp_path), "dangling-01")
+
+    assert row["unlinked_plan_claim"] is None

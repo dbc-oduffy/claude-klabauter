@@ -42,6 +42,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
     token_matches_binary as _bt_token_matches_binary,
     tokenize_full_command as _bt_tokenize_full_command,
 )
+from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
 
 def _offer_strip_q(t: str) -> str:
@@ -228,6 +229,19 @@ def _offer_anchor_followers(followers: str, qt: str) -> Tuple[str, Optional[List
     return (" ".join(pieces), unanchored)
 
 
+@declares_safe_direction(
+    SafeDirection.FALL_BACK,
+    because=(
+        "offering (or auto-rewriting to) a 'git -C <target>' suggestion "
+        "built from quoting this guard cannot confirm is balanced risks "
+        "reconstructing a broken shell command and handing the operator a "
+        "suggestion that fails differently than the command they typed; "
+        "staying silent leaves the original 'cd && git' stall as the only "
+        "cost, which is the exact prompt-stall this guard exists to relieve, "
+        "not a new failure mode"
+    ),
+    anchor=lambda result: result is None,
+)
 def check_offer_git_c(
     cmd: str,
     session_id: str = "",

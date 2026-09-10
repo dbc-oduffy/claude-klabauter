@@ -26,6 +26,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from coordinator_core.ops import check_rag_state as subject  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _drop_settings_home_override(monkeypatch):
+    """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
+
+    The module docstring's "no test touches the real $HOME" claim rests on the
+    CLAUDE_HOME monkeypatch below, which only holds while the `.doe-root`
+    pointer resolves off CLAUDE_HOME. ``doe_root_pointer`` tries the DURABLE
+    rung first — ``_settings_home.settings_home()/machine-local/.doe-root`` —
+    and that resolver prefers ``COORDINATOR_SETTINGS_HOME`` over CLAUDE_HOME.
+    The suite-root home quarantine (``coordinator_core/conftest.py::
+    _quarantine_real_home``) does not clear that override, so on a box where an
+    operator exports it every case here reads the operator's real `.doe-root`
+    and never exercises the seeded one.
+    """
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+
+
 @pytest.fixture
 def doe_home(tmp_path, monkeypatch):
     """A CLAUDE_HOME whose .doe-root points at a directory with a coordinator/ subdir."""

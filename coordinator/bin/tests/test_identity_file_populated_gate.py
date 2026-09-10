@@ -68,11 +68,36 @@ def _fake_process_target_succeeds(target, setup_dir, totals, **kwargs):
     totals.processed += 1
 
 
+def _stub_dest_refresh(monkeypatch) -> None:
+    """Neutralise the destination-refresh precondition (PM ruling 2026-09-02).
+
+    `publish.main` brings every destination level with its origin before the
+    first row materializes anything, and fail-closes on a dest whose checked-out
+    branch has no upstream tracking ref (§ `percolate.dest_refresh.
+    refresh_dest_from_origin`). This fixture's dest repo is a bare `.git`
+    directory in a tmp tree, not a clone, so that refusal fires and returns 1
+    after the populated-patterns gate under test has already proceeded.
+
+    Patched on the engine module rather than on `publish`, because `main`
+    imports the callable from `percolate.dest_refresh` at call time."""
+    publish._bootstrap_engine()
+    from percolate import dest_refresh as _dest_refresh
+
+    monkeypatch.setattr(
+        _dest_refresh,
+        "refresh_dest_from_origin",
+        lambda repo_root, *, out, err: _dest_refresh.RefreshResult(
+            Path(repo_root), ok=True, branch="main", upstream="origin/main"
+        ),
+    )
+
+
 def _wire_main_preconditions_except_identity(monkeypatch, *, setup_dir: Path, rows: list) -> None:
     """Same shape as `_wire_main_preconditions` in
     `test_percolate_identity_check_gate.py`, deliberately WITHOUT stubbing
     `check_identity_file_present` / `check_identity_file_safe` /
     `parse_percolate_identity` — those three are the gate under test here."""
+    _stub_dest_refresh(monkeypatch)
     percolate_root = setup_dir.parent
     monkeypatch.setattr(
         publish, "_resolve_percolate_root_and_rung", lambda **kwargs: (percolate_root, "test-rung")

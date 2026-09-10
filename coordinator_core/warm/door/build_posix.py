@@ -41,7 +41,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .build import write_image_identity, write_sidecar
+from .build import write_sidecar
 
 _HERE = Path(__file__).resolve().parent
 _SOURCES = (_HERE / "door_posix.c", _HERE / "door_core.c")
@@ -115,9 +115,8 @@ def write_provenance(
     write_provenance`'s own paragraph on why an input-only record cannot be
     checked against the artifact beside it; not restated here. Same
     keyword contract as `build.py`'s writer too: `build()` computes the
-    digest once and passes it here AND to `write_image_identity`
-    (Review: overengineering-reviewer), so pass it rather than leave it
-    `None` unless you have no digest handy."""
+    digest once, so pass it rather than leave it `None` unless you have no
+    digest handy."""
     provenance = {
         "sources": {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest()
@@ -229,13 +228,6 @@ def build(
     write_sidecar(output, engine_root)
     image_sha256 = hashlib.sha256(output.read_bytes()).hexdigest()
     write_provenance(output, compiler_path, engine_root, image_sha256=image_sha256)
-    # Same writer, same bytes, same contract as the Windows build -- see
-    # `build.py :: write_image_identity`'s own docstring for why this is a
-    # sidecar file, not a baked `-D` define (image identity is a hash of
-    # the finished binary, unknowable at compile time). `image_sha256`
-    # passed through from above so the finished binary is hashed once per
-    # build, not once per writer (Review: overengineering-reviewer).
-    write_image_identity(output, image_sha256=image_sha256)
     return output
 
 

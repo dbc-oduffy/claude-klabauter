@@ -147,10 +147,74 @@ class TestEvaluate:
         assert "direction unknown" in result["message"]
 
 
+    def test_drift_message_names_a_mirror_fallthrough_degrade(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Y4 fix — the scan's schemas_dir_degrade_reason must be visible to a
+        caller reading only `message`, since a fallthrough and a genuine
+        source-tree comparison produce very different drift counts and would
+        otherwise look identical (state/bug-backlog/2026-09-09-the-drift-
+        scan-has-the-right-rung-and-falls-through-it-silently.yaml)."""
+        _patch_scan(
+            monkeypatch,
+            _report(
+                "DRIFT",
+                drifted=[
+                    {
+                        "schema": "handoff.schema.json",
+                        "detail": "diverges",
+                        "direction": "we-are-behind",
+                    }
+                ],
+                schemas_dir_rung="module-relative",
+                schemas_dir_degrade_reason="source-root-unregistered",
+            ),
+        )
+
+        result = evaluate()
+
+        assert result["ok"] is False
+        assert result["schemas_dir_rung"] == "module-relative"
+        assert result["schemas_dir_degrade_reason"] == "source-root-unregistered"
+        assert "mirror's own copies" in result["message"]
+        assert "source-root-unregistered" in result["message"]
+
+    def test_drift_message_silent_on_a_genuine_source_comparison(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _patch_scan(
+            monkeypatch,
+            _report(
+                "DRIFT",
+                drifted=[
+                    {
+                        "schema": "handoff.schema.json",
+                        "detail": "diverges",
+                        "direction": "we-are-behind",
+                    }
+                ],
+                schemas_dir_rung="engine-source",
+                schemas_dir_degrade_reason=None,
+            ),
+        )
+
+        result = evaluate()
+
+        assert result["schemas_dir_degrade_reason"] is None
+        assert "mirror's own copies" not in result["message"]
+
+
 class TestHandler:
     def test_handler_delegates_to_evaluate(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_scan(monkeypatch, _report("MATCH"))
 
         result = _handler({})
 
-        assert result == {"ok": True, "status": "MATCH", "drifted": [], "message": None}
+        assert result == {
+            "ok": True,
+            "status": "MATCH",
+            "drifted": [],
+            "schemas_dir_rung": None,
+            "schemas_dir_degrade_reason": None,
+            "message": None,
+        }

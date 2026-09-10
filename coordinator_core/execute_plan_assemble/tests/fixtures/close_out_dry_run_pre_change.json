@@ -1,5 +1,5 @@
 {
-  "docs/plans/2026-07-04-strang-01-tc3-emission-port-facade-respin.md": {
+  "docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md": {
     "exit_code": 0,
     "result": {
       "ac_table_desync": null,
@@ -7,7 +7,7 @@
         "commit_failed": false,
         "committed_sha": null,
         "diagnostics": [
-          "dry_run: commit suppressed (would stage/commit ['docs/plans/2026-07-04-strang-01-tc3-emission-port-facade-respin.md'])"
+          "dry_run: commit suppressed (would stage/commit ['docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md'])"
         ],
         "push_status": "not-attempted",
         "pushed": null,
@@ -18,70 +18,80 @@
       "dry_run": true,
       "gates": {
         "repo_identity": {
-          "message": "repo-identity: sid=7c2792b1-f2b8-40f7-aa95-b48048386647 session_root=X:\\claude-klabauter resolved_root=X:\\claude-klabauter verdict=MATCH \u2014 anchor cwd is contained within repo_root",
-          "resolved_root": "X:\\claude-klabauter",
-          "session_root": "X:\\claude-klabauter",
-          "sid": "7c2792b1-f2b8-40f7-aa95-b48048386647",
-          "verdict": "MATCH"
+          "message": "repo-identity: sid=cda40ff5-343b-5d8c-b7fd-69236100f63e session_root=None resolved_root=/home/user/claude-klabauter verdict=UNRESOLVED \u2014 no registry record for this session (registry holds 1 file(s), 0 parsed)",
+          "resolved_root": "/home/user/claude-klabauter",
+          "session_root": null,
+          "sid": "cda40ff5-343b-5d8c-b7fd-69236100f63e",
+          "verdict": "UNRESOLVED"
         }
       },
-      "message": "docs/plans/2026-07-04-strang-01-tc3-emission-port-facade-respin.md: 7 chunk(s) still uncommitted, committed partial state -- if delivered, resolve the row's own disposition_ref to the covering commit sha (`plan-tasks-resolve --coded <sha>` per row, verified against HEAD ancestry), then re-run close-out-and-stamp [dry-run: no write/commit performed]",
+      "message": "docs/plans/2026-07-12-distill-ceremony-mechanical-substrate-joint-design.md: 8 chunk(s) still uncommitted, committed partial state -- if delivered, resolve the row's own disposition_ref to the covering commit sha (`plan-tasks-resolve --coded <sha>` per row, verified against HEAD ancestry), then re-run close-out-and-stamp [dry-run: no write/commit performed]",
       "missing_chunk_ids": [
-        "C1 [M]",
-        "C4a [M]",
-        "C4b [D]",
-        "C2 [D]",
-        "C3 [D]",
-        "C4c [D]",
-        "C6 [M]"
-      ],
-      "open_chunk_ids": [],
-      "origin_stub_close": {
-        "acted": [],
-        "failed": [],
-        "skipped": []
-      },
-      "partial_evaluation_stamped": true,
-      "shipped": false,
-      "stamped": false,
-      "status_target": null
-    }
-  },
-  "docs/plans/2026-07-05-strang-03-cross-repo-memo-send-strangle.md": {
-    "exit_code": 0,
-    "result": {
-      "ac_table_desync": null,
-      "commit": {
-        "commit_failed": false,
-        "committed_sha": null,
-        "diagnostics": [
-          "dry_run: commit suppressed (would stage/commit ['docs/plans/2026-07-05-strang-03-cross-repo-memo-send-strangle.md'])"
-        ],
-        "push_status": "not-attempted",
-        "pushed": null,
-        "pushed_count": null,
-        "pushed_range": null
-      },
-      "disposition_ref_rejections": {},
-      "dry_run": true,
-      "gates": {
-        "repo_identity": {
-          "message": "repo-identity: sid=7c2792b1-f2b8-40f7-aa95-b48048386647 session_root=X:\\claude-klabauter resolved_root=X:\\claude-klabauter verdict=MATCH \u2014 anchor cwd is contained within repo_root",
-          "resolved_root": "X:\\claude-klabauter",
-          "session_root": "X:\\claude-klabauter",
-          "sid": "7c2792b1-f2b8-40f7-aa95-b48048386647",
-          "verdict": "MATCH"
-        }
-      },
-      "message": "docs/plans/2026-07-05-strang-03-cross-repo-memo-send-strangle.md: 7 chunk(s) still uncommitted, committed partial state -- if delivered, resolve the row's own disposition_ref to the covering commit sha (`plan-tasks-resolve --coded <sha>` per row, verified against HEAD ancestry), then re-run close-out-and-stamp [dry-run: no write/commit performed]",
-      "missing_chunk_ids": [
+        "C0",
         "C1",
         "C2",
         "C3",
         "C4",
-        "C6",
         "C5",
+        "C6",
         "C7"
+      ],
+      "open_chunk_ids": [
+        "C0",
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "C6",
+        "C7"
+      ],
+      "origin_stub_close": {
+        "acted": [],
+        "failed": [],
+        "skipped": []
+      },
+      "partial_evaluation_stamped": true,
+      "shipped": false,
+      "stamped": false,
+      "status_target": null
+    }
+  },
+  "docs/plans/2026-08-19-the-selector-gates-before-the-run.md": {
+    "exit_code": 0,
+    "result": {
+      "ac_table_desync": null,
+      "commit": {
+        "commit_failed": false,
+        "committed_sha": null,
+        "diagnostics": [
+          "dry_run: commit suppressed (would stage/commit ['docs/plans/2026-08-19-the-selector-gates-before-the-run.md'])"
+        ],
+        "push_status": "not-attempted",
+        "pushed": null,
+        "pushed_count": null,
+        "pushed_range": null
+      },
+      "disposition_ref_rejections": {
+        "C1": "unresolvable",
+        "C2": "unresolvable",
+        "C3": "unresolvable"
+      },
+      "dry_run": true,
+      "gates": {
+        "repo_identity": {
+          "message": "repo-identity: sid=cda40ff5-343b-5d8c-b7fd-69236100f63e session_root=None resolved_root=/home/user/claude-klabauter verdict=UNRESOLVED \u2014 no registry record for this session (registry holds 1 file(s), 0 parsed)",
+          "resolved_root": "/home/user/claude-klabauter",
+          "session_root": null,
+          "sid": "cda40ff5-343b-5d8c-b7fd-69236100f63e",
+          "verdict": "UNRESOLVED"
+        }
+      },
+      "message": "docs/plans/2026-08-19-the-selector-gates-before-the-run.md: 3 chunk(s) still uncommitted, committed partial state -- if delivered, resolve the row's own disposition_ref to the covering commit sha (`plan-tasks-resolve --coded <sha>` per row, verified against HEAD ancestry), then re-run close-out-and-stamp -- NOTE: disposition_ref did not count as evidence for: C1 (unresolvable), C2 (unresolvable), C3 (unresolvable). [dry-run: no write/commit performed]",
+      "missing_chunk_ids": [
+        "C1",
+        "C2",
+        "C3"
       ],
       "open_chunk_ids": [],
       "origin_stub_close": {
@@ -95,7 +105,7 @@
       "status_target": null
     }
   },
-  "docs/plans/2026-07-05-strang-05-advisory-hook-degrade-silent-routing.md": {
+  "docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md": {
     "exit_code": 0,
     "result": {
       "ac_table_desync": null,
@@ -103,30 +113,51 @@
         "commit_failed": false,
         "committed_sha": null,
         "diagnostics": [
-          "dry_run: commit suppressed (would stage/commit ['docs/plans/2026-07-05-strang-05-advisory-hook-degrade-silent-routing.md'])"
+          "dry_run: commit suppressed (would stage/commit ['docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md'])"
         ],
         "push_status": "not-attempted",
         "pushed": null,
         "pushed_count": null,
         "pushed_range": null
       },
-      "disposition_ref_rejections": {},
+      "disposition_ref_rejections": {
+        "C1": "unresolvable",
+        "C2": "unresolvable",
+        "C2b": "unresolvable",
+        "C2c": "unresolvable",
+        "C3": "unresolvable",
+        "C3b": "unresolvable",
+        "C3c": "unresolvable",
+        "C3d": "unresolvable",
+        "C3e": "unresolvable",
+        "C4": "unresolvable",
+        "C5": "unresolvable",
+        "C6": "unresolvable"
+      },
       "dry_run": true,
       "gates": {
         "repo_identity": {
-          "message": "repo-identity: sid=7c2792b1-f2b8-40f7-aa95-b48048386647 session_root=X:\\claude-klabauter resolved_root=X:\\claude-klabauter verdict=MATCH \u2014 anchor cwd is contained within repo_root",
-          "resolved_root": "X:\\claude-klabauter",
-          "session_root": "X:\\claude-klabauter",
-          "sid": "7c2792b1-f2b8-40f7-aa95-b48048386647",
-          "verdict": "MATCH"
+          "message": "repo-identity: sid=cda40ff5-343b-5d8c-b7fd-69236100f63e session_root=None resolved_root=/home/user/claude-klabauter verdict=UNRESOLVED \u2014 no registry record for this session (registry holds 1 file(s), 0 parsed)",
+          "resolved_root": "/home/user/claude-klabauter",
+          "session_root": null,
+          "sid": "cda40ff5-343b-5d8c-b7fd-69236100f63e",
+          "verdict": "UNRESOLVED"
         }
       },
-      "message": "docs/plans/2026-07-05-strang-05-advisory-hook-degrade-silent-routing.md: 4 chunk(s) still uncommitted, committed partial state -- if delivered, resolve the row's own disposition_ref to the covering commit sha (`plan-tasks-resolve --coded <sha>` per row, verified against HEAD ancestry), then re-run close-out-and-stamp [dry-run: no write/commit performed]",
+      "message": "docs/plans/2026-08-26-the-commit-op-stops-asking-git-eleven-times.md: 12 chunk(s) still uncommitted, committed partial state -- if delivered, resolve the row's own disposition_ref to the covering commit sha (`plan-tasks-resolve --coded <sha>` per row, verified against HEAD ancestry), then re-run close-out-and-stamp -- NOTE: disposition_ref did not count as evidence for: C1 (unresolvable), C2 (unresolvable), C2b (unresolvable), C2c (unresolvable), C3 (unresolvable), C3b (unresolvable), C3c (unresolvable), C3d (unresolvable), C3e (unresolvable), C4 (unresolvable), C5 (unresolvable), C6 (unresolvable). [dry-run: no write/commit performed]",
       "missing_chunk_ids": [
-        "C1",
+        "C6",
+        "C3e",
+        "C2c",
+        "C3d",
+        "C3c",
+        "C2b",
+        "C4",
         "C2",
         "C3",
-        "C4"
+        "C5",
+        "C3b",
+        "C1"
       ],
       "open_chunk_ids": [],
       "origin_stub_close": {

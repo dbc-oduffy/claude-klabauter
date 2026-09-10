@@ -501,6 +501,16 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # docs/plans/*.md and state/handoffs/*.md, same worktree roadmap.plan_gate
     # reads and roadmap.link_stubs writes.
     "roadmap.blitz_land":                    "common_dir",
+    # plan.prep_gate — keyed on git_common_dir: reads one main-worktree-rooted
+    # docs/plans/*.md plus that worktree's top-level entry names (the
+    # ROOT-EXISTENCE leg), under main_worktree_root(common_dir). Without this
+    # entry dispatch resolves repo_root=None and the handler refuses outright.
+    "plan.prep_gate":                        "common_dir",
+    # plan.stamp_prepped — keyed on git_common_dir: writes the four mise_prepped_*
+    # fields of one main-worktree-rooted docs/plans/*.md, and takes its lock
+    # sidecar under the same common dir. Same key-scope class as
+    # roadmap.blitz_land, which writes the same corpus.
+    "plan.stamp_prepped":                    "common_dir",
     # goal.match_candidates — keyed on git_common_dir: reads state/goals/ under
     # main_worktree_root(common_dir), same key-scope as initiative.serve_set/roadmap.serve.
     # Spec: docs/plans/2026-07-06-goal-setting-okr-legibility-system.md § C3

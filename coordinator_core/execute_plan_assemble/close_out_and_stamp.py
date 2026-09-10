@@ -201,6 +201,32 @@ MUTATES = ["docs/plans/*.md"]
 _LANDED_STATUS = "landed"
 
 
+#: Skip reason recorded on `origin_stub_result["skipped"]` when this run
+#: wrote something (a `close_out_last_partial:` evaluation marker, most
+#: commonly) but did NOT fully ship the plan (`status_target !=
+#: "implemented"`) -- Bug fix, 2026-09-06 (DoE-claude bug-backlog
+#: 2026-09-06-close-out-promotes-an-origin-stub-to-shipped-on-a-partial-plan
+#: .yaml): `wrote_anything` (this function's own commit-gating predicate)
+#: is a STRICTLY WIDER condition than "fully shipped" -- it is also true on
+#: the halted path, whenever `_stamp_close_out_partial_evaluation` wrote the
+#: partial-evaluation marker (`partial_evaluation_stamped=True`) with
+#: `status_target=None`. Both commit-leg branches below used to call
+#: `_reach_post_commit_tail_stub_close` unconditionally whenever a commit
+#: landed, with no consultation of `status_target`/`open_blocking` at all --
+#: exactly the information this run already computed to decide whether to
+#: stamp. That let a partial close-out (one open chunk, `shipped: false`,
+#: `stamped: false`) commit its own halted-path marker and, in the SAME
+#: run, promote the origin stub to `deployment_state: shipped` +
+#: `pickup_ready: false` via the live-children-guard fallback (`delivery_
+#: proof` is only ever built on the `status_target == "implemented"`
+#: branch, so an incomplete plan always falls through to the guard-only
+#: path in `handoff.close_origin_stub`, which has no idea a chunk is still
+#: open). Gating both call sites on the SAME `status_target == "implemented"`
+#: predicate that already gates the stamp closes that hole; this constant
+#: names the skip so the miss is legible in the envelope rather than silent.
+_ORIGIN_STUB_SKIP_NOT_FULLY_SHIPPED = "close-out:plan-not-fully-shipped"
+
+
 
 
 
@@ -2870,15 +2896,33 @@ def close_out_and_stamp(
             ],
         }
         if commit_result["committed_sha"]:
+            # Gated on `status_target == "implemented"` -- the SAME
+            # predicate that already decided whether to stamp (see
+            # `_ORIGIN_STUB_SKIP_NOT_FULLY_SHIPPED`'s own docstring for the
+            # defect this closes): `commit_result["committed_sha"]` being
+            # truthy only tells us a commit landed, which `wrote_anything`
+            # (this branch's own guard) makes true on the halted/partial
+            # path too, whenever the `close_out_last_partial:` marker
+            # write happened. Reaching the origin-stub promoter on that
+            # path is exactly the bug -- it has no open-chunk information
+            # of its own and falls through to the guard-only close.
+            #
             # `delivery_proof` (PM ruling) lets a complete, stub-specific
             # proof close the origin stub WITHOUT consulting the
             # live-children guard: this close is IN PLACE (deployment_state
             # -> shipped, no `git mv`), so it cannot strand a dependent the
             # way an archival move could -- archival remains separately
             # gated on liveness in `archive_handoffs.py`, untouched here.
-            origin_stub_result = _reach_post_commit_tail_stub_close(
-                root, plan_path_rel, commit_result["committed_sha"], delivery_proof
-            )
+            if status_target == "implemented":
+                origin_stub_result = _reach_post_commit_tail_stub_close(
+                    root, plan_path_rel, commit_result["committed_sha"], delivery_proof
+                )
+            else:
+                origin_stub_result = {
+                    "acted": [],
+                    "skipped": [_ORIGIN_STUB_SKIP_NOT_FULLY_SHIPPED],
+                    "failed": [],
+                }
     elif wrote_anything:
         # Explicit, non-empty stage_paths -- see this function's docstring
         # "Commit-leg path set" section: the plan doc is the ONLY path this
@@ -2940,16 +2984,28 @@ def close_out_and_stamp(
         }
         _release_committed_path_claims(root, sid, stage_paths)
         # Reach `post_commit_tail`'s stub-close leg (AC4) -- see
-        # `_reach_post_commit_tail_stub_close`'s own docstring.
+        # `_reach_post_commit_tail_stub_close`'s own docstring. Gated on
+        # `status_target == "implemented"` -- see the sibling call site
+        # above and `_ORIGIN_STUB_SKIP_NOT_FULLY_SHIPPED`'s own docstring
+        # for why `wrote_anything` (this branch's own guard) is not enough
+        # on its own: it is also true on the halted/partial path.
+        #
         # `delivery_proof` (PM ruling) lets a complete, stub-specific
         # proof close the origin stub WITHOUT consulting the
         # live-children guard: this close is IN PLACE (deployment_state
         # -> shipped, no `git mv`), so it cannot strand a dependent the
         # way an archival move could -- archival remains separately
         # gated on liveness in `archive_handoffs.py`, untouched here.
-        origin_stub_result = _reach_post_commit_tail_stub_close(
-            root, plan_path_rel, outcome.sha, delivery_proof
-        )
+        if status_target == "implemented":
+            origin_stub_result = _reach_post_commit_tail_stub_close(
+                root, plan_path_rel, outcome.sha, delivery_proof
+            )
+        else:
+            origin_stub_result = {
+                "acted": [],
+                "skipped": [_ORIGIN_STUB_SKIP_NOT_FULLY_SHIPPED],
+                "failed": [],
+            }
     else:
         # Nothing of this op's own to commit -- skipped entirely rather
         # than attempted-and-caught (see "wrote_anything" above; this is

@@ -322,6 +322,25 @@ class TestJobModeEnvironmentWins:
             == "interactive"
         )
 
+    def test_wrong_case_value_resolves_to_conservative_anchor(self, _isolate_sentinel_and_fleet):
+        """No case folding, deliberately. The value is typed by an operator into
+        the cloud-environment dialog, so a near-miss is a misconfiguration to fail
+        safe on rather than a spelling to guess at -- and a well-meaning `.lower()`
+        added later would silently start honouring `BLITZ` on a session nobody
+        meant to run unattended. This test is what makes that change loud.
+        """
+        assert resolve_mode("job_mode", "s1", env={COORDINATOR_JOB_MODE: "BLITZ"}) == "interactive"
+
+    def test_whitespace_padded_value_resolves_to_conservative_anchor(
+        self, _isolate_sentinel_and_fleet
+    ):
+        """Same reasoning as the wrong-case test: no `.strip()`, so a padded value
+        is a miss, not a match.
+        """
+        assert (
+            resolve_mode("job_mode", "s1", env={COORDINATOR_JOB_MODE: " blitz "}) == "interactive"
+        )
+
     # -- happy path: one test per enum value -----------------------------------
 
     def test_blitz_resolves(self, _isolate_sentinel_and_fleet):

@@ -89,6 +89,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
 )
 from coordinator_core.bash_guards._dialect import dialect_from_tool_name
 from coordinator_core.bash_guards._shape_classifier import Shape, classify_command
+from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
 #: The two subcommands this guard rewrites -- the two lock-acquiring
 #: commands agents reach for constantly (see module docstring). Deliberately
@@ -364,6 +365,20 @@ def _join_dup_redirect_spans(
     return joined
 
 
+@declares_safe_direction(
+    SafeDirection.FALL_BACK,
+    because=(
+        "inserting '--no-optional-locks' from an offset this guard cannot "
+        "confidently compute (an unparseable command, a raw-scanner/"
+        "tokenizer value mismatch) would corrupt an unrelated segment's "
+        "text, exactly the live redirect/expansion corruption this "
+        "module's own docstring recounts for the retired reconstruction "
+        "shape; leaving the command unrewritten costs one avoidable "
+        "worktree-lock acquisition, which is recoverable, not a broken "
+        "command"
+    ),
+    anchor=lambda result: result is None,
+)
 def check_git_no_optional_locks(
     cmd: str,
     session_id: str = "",

@@ -46,63 +46,21 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 BIN_DIR = REPO_ROOT / "coordinator" / "bin"
 
 
-class ScanRoot(NamedTuple):
-    """One directory this guard holds to `.cmd`-twin parity.
-
-    `rel` is the repo-relative POSIX path (used verbatim in failure messages
-    and in the `git ls-files` query). `dir` is the on-disk directory, split
-    out from `rel` so red-case tests can point a root at a tmp_path fixture
-    without monkeypatching module state.
-
-    `require_main_guard` is the entrypoint discriminator, and it differs by
-    root for a real reason rather than convenience:
-      - False: the directory is entrypoints-by-construction -- every tracked,
-        top-level, non-test file in it is spawned, never imported. Any file
-        landing there is presumed an entrypoint.
-      - True: the directory MIXES entrypoints with importable library
-        modules (e.g. `coordinator/lib/release_currency.py`,
-        `coordinator/lib/oss-repo-constants.py`), so membership is decided by
-        the file's own content: an `if __name__ == "__main__":` block, which
-        is the direct-invocation signal. A library module needs no launcher
-        and generating one for it is noise. Encoding the distinction here --
-        rather than hand-listing the library modules as exemptions -- is what
-        keeps `PY_ENTRYPOINT_EXEMPTIONS` empty and keeps the guard correct for
-        files that do not exist yet.
-    """
-
-    rel: str
-    dir: Path
-    require_main_guard: bool
-
-
-def _root(rel: str, *, require_main_guard: bool) -> ScanRoot:
-    return ScanRoot(rel, REPO_ROOT / rel, require_main_guard)
-
-
-# Every directory holding entrypoints a user or the engine invokes directly.
-#
-# `require_main_guard=False` is verified-safe, not assumed: as of 2026-08-03
-# all 344 coordinator/bin entrypoints (67 bare + 277 `.py`) carry an
-# `if __name__ == "__main__":` block anyway, so the two policies agree on that
-# tree today. The flag stays False there so a future coordinator/bin
-# entrypoint that runs at import time cannot silently fall out of coverage --
-# widening this guard must never narrow what it already checked.
-#
-# NEGATIVE SPEC -- `coordinator_core/` is deliberately absent. It is the
-# importable engine package (`python -m coordinator_core`), not a launcher
-# directory: its modules are imported by dotted name, and the handful of
-# `if __name__ == "__main__":` blocks in it (`machine_resolver.py`,
-# `pyresolve.py`, `state_root.py`, `dag.py`) are self-test/debug hooks on
-# imported modules, not console entrypoints. Adding it would generate ~5
-# launchers nothing invokes. `.sh` entrypoints are likewise out of scope --
-# this guard has never scanned them, and the naked-Python conversion of the
-# remaining `coordinator/lib/*.sh` files is its own workstream.
-SCAN_ROOTS: tuple[ScanRoot, ...] = (
-    _root("coordinator/bin", require_main_guard=False),
-    _root("coordinator/scripts", require_main_guard=False),
-    _root("bin", require_main_guard=True),
-    _root("coordinator/lib", require_main_guard=True),
-    _root("scripts", require_main_guard=True),
+# ScanRoot / SCAN_ROOTS / _has_main_guard / _is_entrypoint moved to
+# `coordinator_core.launcher_parity` and are imported back under their existing
+# names — every use below, and every sibling guard that consumes them from this
+# module, is unchanged. They moved because the PUBLISH path consumes them
+# (`percolate.engine.enumerate_gate_entrypoints`), which made publish.py depend
+# on this module's `import pytest` — and pytest is an optional extra, so a
+# correctly-provisioned install crashed a publish round at its end-of-run gate.
+# The parity RULES are still asserted here; only the definitions moved.
+from coordinator_core.launcher_parity import (  # noqa: F401 — re-exported
+    _MAIN_GUARD_RE,
+    _has_main_guard,
+    _is_entrypoint,
+    _root,
+    ScanRoot,
+    SCAN_ROOTS,
 )
 
 # The original (pre-widening) scan root, kept as a name because two sibling
@@ -132,7 +90,6 @@ _DP0_TARGET_RE = re.compile(r'"%~dp0([^"%]+)"')
 
 GEN_LAUNCHER_CMD = "python3 coordinator/bin/gen-launcher-shim.py {name} --dir {rel}"
 
-_MAIN_GUARD_RE = re.compile(r'^if\s+__name__\s*==\s*[\'"]__main__[\'"]\s*:', re.M)
 
 # Named exemptions from the `.py`-entrypoint `.cmd`-twin requirement, keyed
 # by REPO-RELATIVE PATH (`<scan-root>/<name>.py`) since the same basename can
@@ -184,47 +141,6 @@ def _tracked_files(rel: str) -> list[str]:
     time).
     """
     return list(tracked_files(REPO_ROOT, rel))
-
-
-def _has_main_guard(path: Path) -> bool:
-    """True when `path` carries a module-level `if __name__ == "__main__":`.
-
-    The direct-invocation signal that separates an entrypoint from an
-    importable library module in the mixed scan roots (see `ScanRoot`).
-    Parsed via `ast` so a `__main__` string inside a comment or docstring
-    cannot fake membership; falls back to a line-anchored regex only when the
-    file does not parse as Python (a non-Python extensionless file cannot be
-    a Python entrypoint, and the regex will not match it either).
-    """
-    try:
-        source = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return False
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return bool(_MAIN_GUARD_RE.search(source))
-    for node in tree.body:
-        if not isinstance(node, ast.If):
-            continue
-        test = node.test
-        if (
-            isinstance(test, ast.Compare)
-            and isinstance(test.left, ast.Name)
-            and test.left.id == "__name__"
-            and len(test.comparators) == 1
-            and isinstance(test.comparators[0], ast.Constant)
-            and test.comparators[0].value == "__main__"
-        ):
-            return True
-    return False
-
-
-def _is_entrypoint(root: ScanRoot, name: str) -> bool:
-    """Whether `root`'s policy admits `name` as an entrypoint needing a twin."""
-    if not root.require_main_guard:
-        return True
-    return _has_main_guard(root.dir / name)
 
 
 def _tracked_top_level_names(root: ScanRoot) -> list[str]:

@@ -2,44 +2,81 @@
 coordinator_core.ops.generator_scan_cache -- an (mtime_ns, size)-keyed store
 for `generator_provenance.FileWrites`, persisted at
 `<machinery_root>/cache/generator-scan-cache.json` (resolved through
-`session.machinery_paths.cache_dir`, the declared owner of that bucket).
+`session.machinery_paths.cache_dir`, the declared owner of that bucket) --
+plus a SECOND, content-keyed store this module also owns: a git-committed
+artifact (`generator-content-cache.json`, sibling of this source file) that
+gives a cache-free checkout something to hit on its very first run.
 
-Purpose: re-parsing and re-walking every swept module's AST on every sweep is
-the cost `discover_generators` pays for having no memory between runs. This
-module is that memory -- a flat JSON file keyed on each file's own
-(mtime_ns, size) pair, so a caller can skip the parse/scan entirely for any
-file whose stat hasn't moved since it was last recorded. The store itself
-never decides whether an entry is still valid; it hands back whatever it has
-and lets the caller compare stats.
+Purpose (stat cache): re-parsing and re-walking every swept module's AST on
+every sweep is the cost `discover_generators` pays for having no memory
+between runs. This module is that memory -- a flat JSON file keyed on each
+file's own (mtime_ns, size) pair, so a caller can skip the parse/scan
+entirely for any file whose stat hasn't moved since it was last recorded.
+The store itself never decides whether an entry is still valid; it hands
+back whatever it has and lets the caller compare stats.
 
-Fail-open is the whole contract: `load` NEVER raises. A cache is an
-optimisation layered over a sweep that already works without it -- a missing
-file, a corrupt one, a concurrent writer's half-written bytes, or a stale
-schema version must all degrade to "no cache, sweep from scratch", never to
-an exception surfacing out of an op that was only trying to go faster.
-`save` writes atomically (temp sibling + `os.replace`) so a torn read is
-never possible even under this repo's normal 50+-concurrent-session load,
-and swallows its own write failures for the same reason `load` swallows read
-failures.
+Purpose (content cache): a fresh clone or install has NO stat cache -- git
+stores no mtime, so every file's `(mtime_ns, size)` is fresh the moment it
+lands on the installing box, and the stat cache misses on every entry
+regardless of content
+(`docs/research/spike-verdicts/2026-08-31-generator-discovery-cache-rebuild.md`,
+carried forward by
+`state/bug-backlog/2026-08-22-generator-discovery-ast-parses-71mb-per-94a6779e1ad8.yaml`'s
+2026-09-07 and 2026-09-09 notes). A stat miss on a file whose BYTES are
+unchanged from what shipped in this repo is still avoidable: hash the bytes
+(blake2b, ~609ms/79.4MB measured -- refuted as a PER-RUN identity check
+against the 500ms brightline, but paid once on a cold run against a ~48-60s
+alternative it is not a close call) and look the digest up in this second,
+git-tracked store. The content cache is a pure function of a file's bytes --
+never its path, its mtime, or which repo it sits in -- so a hit is exactly as
+trustworthy as a fresh scan regardless of where or when the file landed. It
+carries no resolution against a tracked-path set: only `generates`/`mutates`/
+`write_sites`, the same fields the stat cache holds, resolved against the
+LIVE tracked set on every run exactly as a stat-cache hit or a cold scan
+would be -- caching a resolved verdict would go stale the moment the tracked
+set moved, behind a valid-looking key (spike verdict, Q1).
+
+Both stores are gated by the SAME `_SCHEMA_VERSION`: both hold nothing but
+`FileWrites`, produced by the same scanner, so a scanner-semantics change
+that invalidates one invalidates the other identically -- there is one
+version to bump, not two to keep in lockstep by hand.
+
+Fail-open is the whole contract: `load` and `load_content_cache` NEVER
+raise. A cache is an optimisation layered over a sweep that already works
+without it -- a missing file, a corrupt one, a concurrent writer's
+half-written bytes, or a stale schema version must all degrade to "no
+cache, sweep/hash from scratch", never to an exception surfacing out of an
+op that was only trying to go faster. `save`/`save_content_cache` write
+atomically (temp sibling + `os.replace`) so a torn read is never possible
+even under this repo's normal 50+-concurrent-session load, and swallow their
+own write failures for the same reason the loaders swallow read failures.
 
 Negative-spec:
   - This module does not scan any file's AST -- it stores and retrieves
     whatever `FileWrites` a caller already produced (`generator_provenance.
-    _scan_file_writes`), and imports nothing from that module.
+    _scan_file_writes`), and imports nothing from that module but the
+    `FileWrites` dataclass itself.
   - This module does not resolve a `FileWrites` against a tracked-path set
     or decide staleness/freshness -- it is a dumb keyed store, not a
-    verdict engine.
+    verdict engine. This holds for BOTH stores.
   - This module does not know about the tracked set, `git ls-files`, or
     which files the caller intends to sweep. It has no opinion on staleness
-    beyond handing back a `(mtime_ns, size)`-keyed entry for the caller to
-    compare against its own fresh `stat()`.
-  - This module does not decide when it is called -- `discover_generators`
-    is its only production consumer, wired in via C4, and calls `load`/
-    `save` on every sweep run.
+    beyond handing back a keyed entry for the caller to compare against its
+    own fresh `stat()` (stat cache) or content hash (content cache).
+  - This module does not decide when either store is consulted --
+    `discover_generators` is the only production consumer of both, calls
+    `load`/`save` on every sweep run, and consults `load_content_cache`
+    only on a stat-miss (never on the warm path, so a warm run's cost is
+    unchanged by this store's existence).
+  - This module does not regenerate the content cache -- that is
+    `coordinator/bin/regenerate-generator-content-cache.py`'s job. This
+    module only loads and saves the bytes; it has no opinion on when they
+    are stale beyond the schema-version gate every load already applies.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -47,6 +84,8 @@ from pathlib import Path
 from coordinator_core.ops.generator_provenance import FileWrites
 
 _CACHE_FILENAME = "generator-scan-cache.json"
+_CONTENT_CACHE_FILENAME = "generator-content-cache.json"
+_CONTENT_HASH_DIGEST_SIZE = 16  # 128-bit blake2b -- collision-negligible for a correctness-only key
 
 #: 3 -> 4 (2026-09-06): `generator_provenance._extract_mutates` changed its
 #: SEMANTICS, not its shape -- it now resolves f-strings and names over the
@@ -58,6 +97,20 @@ _CACHE_FILENAME = "generator-scan-cache.json"
 #: old verdict indefinitely. Bumping the schema is the only invalidation this
 #: store has for a scanner-semantics change, and it is what the version field
 #: is for. Bump it again on the next one.
+#:
+#: Shared with the content cache (`generator-content-cache.json`) -- both
+#: files hold nothing but `FileWrites` produced by the same scanner, so one
+#: version field governs both stores. Bumping it means: (a) every stat-cache
+#: entry on every box goes cold on its next sweep (self-healing, no action
+#: needed -- `load` fails the version check and falls through to a fresh
+#: scan), and (b) the shipped content cache in this file's git history is
+#: ALSO now stale and must be regenerated in the SAME commit as whatever
+#: changed the scanner -- run
+#: `coordinator/bin/regenerate-generator-content-cache.py` and commit the
+#: result, or the fresh-clone cold path silently loses its speedup (every
+#: digest in the old-schema file fails `load_content_cache`'s version check
+#: and every stat-miss falls through to a full AST parse -- correct, never
+#: silently wrong, but back to paying the cost this store exists to avoid).
 _SCHEMA_VERSION = 4
 
 
@@ -221,6 +274,109 @@ def save(repo_root: Path, entries: dict) -> None:
     tmp_path = path.parent / f"{path.name}.tmp.{os.getpid()}"
     try:
         tmp_path.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
+        os.replace(tmp_path, path)
+    except OSError:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+
+
+def content_hash(data: bytes) -> str:
+    """The content cache's key: a blake2b digest of *data*, hex-encoded.
+
+    128-bit (`digest_size=16`) rather than the default 512-bit -- this key is
+    a correctness-only dedup/lookup key, never a security boundary, and the
+    collision space that matters is "how many distinct file contents will
+    ever populate this store" (thousands, not billions), so 16 bytes is
+    ample margin at roughly half the stored-key size of a default digest.
+    Bytes in, not text -- callers hash the file's raw bytes, before any
+    encoding decision, so the same on-disk content always hashes identically
+    regardless of which caller (the production sweep, the regeneration
+    script) is doing the hashing.
+    """
+    return hashlib.blake2b(data, digest_size=_CONTENT_HASH_DIGEST_SIZE).hexdigest()
+
+
+def _content_cache_path() -> Path:
+    """The shipped content cache lives beside THIS SOURCE FILE, never under
+    a repo's `machinery_root()` -- it is a git-committed artifact that ships
+    WITH the scanner, not per-repo derived state. `Path(__file__)` rather
+    than any `repo_root` argument: the content cache has no per-repo
+    identity at all, unlike the stat cache above."""
+    return Path(__file__).resolve().parent / _CONTENT_CACHE_FILENAME
+
+
+def load_content_cache() -> dict[str, FileWrites]:
+    """Load the shipped, git-committed content-keyed cache.
+
+    Returns a mapping of `<blake2b hex digest>` -> `FileWrites`. NEVER
+    raises, for the same reason `load` never raises: a missing file, an
+    unreadable file, invalid or truncated JSON, a wrong schema version, or
+    a malformed entry all degrade to "no content cache, hash from scratch"
+    -- either for the whole file or per-entry, matching `load`'s own
+    granularity.
+    """
+    path = _content_cache_path()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+
+    if not isinstance(data, dict):
+        return {}
+    if data.get("schema") != _SCHEMA_VERSION:
+        return {}
+    entries_raw = data.get("entries")
+    if not isinstance(entries_raw, dict):
+        return {}
+
+    entries: dict[str, FileWrites] = {}
+    for digest, writes_data in entries_raw.items():
+        if not isinstance(digest, str):
+            continue
+        try:
+            writes = file_writes_from_json(writes_data)
+        except (ValueError, KeyError, TypeError):
+            continue
+        entries[digest] = writes
+    return entries
+
+
+def save_content_cache(entries: dict[str, FileWrites]) -> None:
+    """Persist *entries* atomically to the shipped content-cache file.
+
+    Production `discover_generators` NEVER calls this -- it only calls
+    `load_content_cache`. The only writer is
+    `coordinator/bin/regenerate-generator-content-cache.py`, run by a human
+    (or a ceremony) and committed deliberately, never on a per-sweep basis --
+    unlike the stat cache, this file is git-tracked, and a per-run writer
+    would mean every sweep dirties the working tree.
+
+    Keys are sorted before serialization so two regenerations over an
+    unchanged corpus produce byte-identical output -- a stable diff (or no
+    diff at all) rather than JSON key-order churn on every run.
+    """
+    path = _content_cache_path()
+    payload = {
+        "schema": _SCHEMA_VERSION,
+        "entries": {
+            digest: file_writes_to_json(writes)
+            for digest, writes in sorted(entries.items())
+        },
+    }
+
+    tmp_path = path.parent / f"{path.name}.tmp.{os.getpid()}"
+    try:
+        tmp_path.write_text(
+            json.dumps(payload, sort_keys=True), encoding="utf-8", newline="\n"
+        )
         os.replace(tmp_path, path)
     except OSError:
         try:

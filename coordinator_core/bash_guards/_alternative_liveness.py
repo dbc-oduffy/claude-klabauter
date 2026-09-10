@@ -366,7 +366,12 @@ def _trigger_host_subagent_policy_guard(
         )
         return module.check(_payload(cmd, agent_id="deadbeef0123", cwd=scratch))
     finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+        # Function-local import on purpose: `bash_guards` must not gain a
+        # module-level dependency on `benchmarks`, and this teardown is the
+        # only thing here that needs it.
+        from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+
+        rmtree_or_raise(Path(scratch), label="altlive-policy")
 
 
 def _run(argv: List[str], cwd: str, timeout: int = _PROBE_TIMEOUT_SEC) -> None:

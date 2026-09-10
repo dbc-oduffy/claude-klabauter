@@ -38,6 +38,25 @@ from coordinator_core.ops.fleet._memo_resolver import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _drop_settings_home_override(monkeypatch):
+    """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
+
+    Every fixture here builds its registry under
+    ``<CLAUDE_HOME>/.coordinator-claude-settings/machine-local`` and then points
+    ``CLAUDE_HOME`` at it — which only works while
+    ``_settings_home.settings_home()`` derives the settings home from
+    CLAUDE_HOME. That resolver checks ``COORDINATOR_SETTINGS_HOME`` FIRST, and
+    the suite-root home quarantine (``coordinator_core/conftest.py::
+    _quarantine_real_home``) does not clear it, so on a box where an operator
+    exports it every test in this module silently reads the operator's REAL
+    machine-local registry instead of its own. A handful of tests below already
+    dropped it by hand at their own call sites; this hoists that isolation to
+    the whole module so a newly-added test cannot forget it.
+    """
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+
+
 def _make_claude_home(tmp_path: Path, receiver_repos: dict[str, Path]) -> Path:
     """Minimal machine-local registry fixture (mirrors test_memo_send.py's factory)."""
     claude_home = tmp_path / "claude-home"

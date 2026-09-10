@@ -76,6 +76,7 @@ from coordinator_core.bash_guards._sentinel_creation_guard import (
 )
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
 CLASS = "hard-deny"
 #: Widened 2026-08-07 (C4e) from `["Bash"]` -- see `block_approval_sentinel_
@@ -148,6 +149,17 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
     )
 
 
+@declares_safe_direction(
+    SafeDirection.RAISE,
+    because=(
+        "swallowing a detection-engine failure into a silent allow would "
+        "let a worktree-ban-override sentinel creation through unexamined "
+        "-- the identical self-grant this guard exists to close, on a "
+        "different surface; propagating the failure lets the dispatcher's "
+        "fail-closed default deny it instead, per module docstring's "
+        "'Deliberately no try/except here' note"
+    ),
+)
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Evaluate the worktree-override-sentinel-creation-ban gate against a
     PreToolUse payload.

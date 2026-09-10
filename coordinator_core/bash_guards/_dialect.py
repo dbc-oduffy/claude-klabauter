@@ -196,6 +196,7 @@ __all__ = [
     "resolve_segments_for_dialect",
     "expand_start_process_invocations",
     "strip_powershell_prose_noise",
+    "dialect_degrade_rows",
 ]
 
 
@@ -289,14 +290,32 @@ _parser_cache = None
 # branch re-raises and re-enters on every single PowerShell-dialect call for
 # the life of the process, not once (verified by reading `_parser()` below --
 # do not assume otherwise). Left unbounded per-call would make a broken
-# install's log grow once per PowerShell command; `_LOGGED_PARSER_UNAVAILABLE`
-# below bounds it to one durable write per process, matching this module's
-# own "record once per process, not once per call" intent while still
-# guaranteeing the FIRST occurrence -- the one that matters for detection --
-# is never lost.
+# install's log grow once per PowerShell command.
+#
+# GATED BY GUARD IDENTITY, NOT BY PROCESS (Y3 fix,
+# state/debt-backlog/2026-09-01-the-dialect-degrade-row-names-one-guard-
+# a2f800037e9e.yaml, defect one). The prior single `bool` gate capped the
+# durable row to whichever guard happened to hit the ImportError branch
+# FIRST in a process -- a second, different guard degrading in the same
+# process was silently dropped, so the record under-reported without
+# saying so (one-guard-degraded and first-of-several-degraded rendered
+# identically). `_LOGGED_PARSER_UNAVAILABLE_GUARDS` tracks which GUARD
+# NAMES have already been recorded this process: a dispatch that runs many
+# guards over one PowerShell command still writes one row per DISTINCT
+# guard (bounded by the guard roster's own size, ~54, not by call volume),
+# while the SAME guard calling in on every subsequent command -- the
+# actual hot-path repetition -- still costs nothing beyond the first call,
+# identical to the old gate's cost on that axis. The FIRST occurrence per
+# guard is still never lost.
 # ---------------------------------------------------------------------------
 _DIALECT_PARSER_UNAVAILABLE_LOG_RELPATH = ("state", "dialect-parser-unavailable.log")
-_LOGGED_PARSER_UNAVAILABLE = False
+_LOGGED_PARSER_UNAVAILABLE_GUARDS: set = set()
+
+#: The exact prefix `_log_dialect_parser_unavailable` puts on every
+#: `record_degrade` cause it writes -- shared with `dialect_degrade_rows`
+#: below so a reader can pick THIS guard's rows out of the shared
+#: `degrade.jsonl` sink without re-deriving the string it filters on.
+_DEGRADE_CAUSE_PREFIX = "PowerShell dialect guard disarmed for "
 
 
 def _dialect_parser_unavailable_log_path() -> Path:
@@ -307,12 +326,12 @@ def _dialect_parser_unavailable_log_path() -> Path:
 
 
 def _log_dialect_parser_unavailable(guard_name: str, reason: str) -> None:
-    """Best-effort, once-per-process durable append recording that the
+    """Best-effort, once-PER-GUARD durable append recording that the
     PowerShell grammar package could not be imported -- i.e. PowerShell
-    command classification is disabled machine-wide, not merely undecided
-    for one command. NEVER raises (mirrors `_log_fail_open`'s own
-    never-raise contract one layer up: a guard hot path must never fail
-    because its observability write failed).
+    command classification is disabled for `guard_name`. NEVER raises
+    (mirrors `_log_fail_open`'s own never-raise contract one layer up: a
+    guard hot path must never fail because its observability write
+    failed).
 
     OBSERVABILITY ONLY -- it never changes an allow/deny verdict.
 
@@ -335,10 +354,19 @@ def _log_dialect_parser_unavailable(guard_name: str, reason: str) -> None:
     settings-home log stays, unchanged, as the guard-messaging-facing
     remedy line's own record; `record_degrade` is the second, durable,
     attributable row DR-402 requires and does not replace it.
+
+    GATE (Y3 fix): keyed by `guard_name`, not a single process-wide flag --
+    see `_LOGGED_PARSER_UNAVAILABLE_GUARDS`'s own comment above for why. A
+    guard already recorded this process returns immediately, before either
+    write is attempted; a guard seen for the first time is added to the set
+    up front (so a write failure on ONE guard's row never causes a retry
+    storm on later calls for that same guard -- matching the old gate's own
+    "attempt once" shape, just scoped per guard instead of per process).
     """
-    global _LOGGED_PARSER_UNAVAILABLE
-    if _LOGGED_PARSER_UNAVAILABLE:
+    global _LOGGED_PARSER_UNAVAILABLE_GUARDS
+    if guard_name in _LOGGED_PARSER_UNAVAILABLE_GUARDS:
         return
+    _LOGGED_PARSER_UNAVAILABLE_GUARDS.add(guard_name)
     try:
         log_path = _dialect_parser_unavailable_log_path()
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -349,7 +377,6 @@ def _log_dialect_parser_unavailable(guard_name: str, reason: str) -> None:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line)
-        _LOGGED_PARSER_UNAVAILABLE = True
     except Exception:  # noqa: BLE001 -- observability must never raise into a guard
         pass
     try:
@@ -357,10 +384,36 @@ def _log_dialect_parser_unavailable(guard_name: str, reason: str) -> None:
 
         record_degrade(
             kind=KIND_COLD_FAILED,
-            cause=f"PowerShell dialect guard disarmed for {guard_name!r}: {reason}",
+            cause=f"{_DEGRADE_CAUSE_PREFIX}{guard_name!r}: {reason}",
         )
     except Exception:  # noqa: BLE001 -- observability must never raise into a guard
         pass
+
+
+def dialect_degrade_rows(engine_root=None) -> list:
+    """The subset of `warm.telemetry.degrade_samples` attributable to THIS
+    module's own disarm event -- not just any row in the shared
+    `degrade.jsonl` sink (Y3 fix, defect two: a probe field that reads
+    `degrade_path(...).exists()` is true for an unrelated `cold_run`/
+    `hook_timeout`/`hook_http.py`-authored `cold_failed` row, conflating
+    "the dialect guard degraded" with "something, anything, degraded").
+    Filters by `kind == KIND_COLD_FAILED` AND the exact cause prefix
+    `_log_dialect_parser_unavailable` writes, so a caller asking "did THIS
+    guard degrade" gets an answer scoped to that guard, not to the whole
+    sink. Never raises: an unreadable/absent sink reads as `[]`, matching
+    `degrade_samples`'s own contract.
+    """
+    try:
+        from coordinator_core.warm.telemetry import KIND_COLD_FAILED, degrade_samples
+    except Exception:  # noqa: BLE001 -- advisory reader, never raises
+        return []
+    rows = degrade_samples(engine_root)
+    return [
+        row
+        for row in rows
+        if row.get("kind") == KIND_COLD_FAILED
+        and str(row.get("cause", "")).startswith(_DEGRADE_CAUSE_PREFIX)
+    ]
 
 
 def dialect_parser_unavailable_log_path() -> Path:

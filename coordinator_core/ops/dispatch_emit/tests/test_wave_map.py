@@ -503,19 +503,24 @@ def test_cycle_message_names_each_legs_provenance():
 
 
 def test_cycle_message_distinguishes_declared_from_derived_legs():
-    # Three rows: C1 -> C2 declared, C2 -> C3 declared, C3 -> C1 derived.
-    # No pair carries opposing declared+derived edges, so nothing is
-    # dropped and the cycle is real — the message must attribute each leg.
+    # C1 -> C2 declared; C2 -> C3 and C3 -> C1 both derived (read-after-
+    # write). Unlike a cycle where a derived edge closes the loop back
+    # across a declared chain (that pair is now transitively ordered by
+    # declared edges and the derived leg is correctly DROPPED — see
+    # test_declared_edge_outranks_opposing_derived_edge_transitively), here
+    # neither derived edge's endpoints share any declared order (C3 has no
+    # depends_on edge at all), so nothing is dropped and the cycle is real —
+    # the message must attribute each leg.
     rows = [
         _row("C1", ["a.py"], depends_on=[{"chunk": "C2", "gate_kind": "epistemic-premise"}]),
-        _row("C2", ["b.py"], depends_on=[{"chunk": "C3", "gate_kind": "output-consumption-runtime"}]),
+        _row("C2", ["b.py"], reads=["c.py"]),
         _row("C3", ["c.py"], reads=["a.py"]),
     ]
     with pytest.raises(WaveCycleError) as excinfo:
         build_waves(rows)
     message = str(excinfo.value)
     assert "declared: depends_on, gate_kind=epistemic-premise" in message
-    assert "declared: depends_on, gate_kind=output-consumption-runtime" in message
+    assert "derived: C2 reads c.py, written by C3" in message
     assert "derived: C3 reads a.py, written by C1" in message
 
 
@@ -528,6 +533,69 @@ def test_self_edge_message_carries_provenance():
     message = str(excinfo.value)
     assert "C1" in message
     assert "declared: depends_on, gate_kind=epistemic-premise" in message
+
+
+def test_declared_edge_outranks_opposing_derived_edge_transitively(caplog):
+    # The live-corpus reproducing case (example-cockpit-repo docs/plans/2026-08-15-
+    # pii-stamp-vintage-and-net-bump-sweep.md, rows C0b/C2/C8): the declared
+    # graph orders C0b before C2 only via an intermediate row (C0b -> C8 ->
+    # C2), never a direct C0b -> C2 edge. A derived read-after-write edge
+    # C2 -> C0b (C2 reads what C0b writes) is opposed by that TRANSITIVE
+    # declared order and must be dropped exactly as a direct one would be —
+    # otherwise it points backwards against an ordering the author already
+    # stated and closes a cycle with the declared chain.
+    rows = [
+        _row("C0b", ["c0b.md"], reads=["c2.py"]),
+        _row(
+            "C8",
+            ["c8.md"],
+            depends_on=[{"chunk": "C0b", "gate_kind": "output-consumption-runtime"}],
+        ),
+        _row(
+            "C2",
+            ["c2.py"],
+            depends_on=[{"chunk": "C8", "gate_kind": "output-consumption-runtime"}],
+        ),
+    ]
+    with caplog.at_level("WARNING", logger=wave_map.__name__):
+        waves = build_waves(rows)
+
+    wave_by_id = {w.id: i for i, wave in enumerate(waves) for w in wave}
+    assert wave_by_id["C0b"] < wave_by_id["C8"] < wave_by_id["C2"], (
+        "declared chain order must survive"
+    )
+    assert "dropped derived edge C0b -> C2" in caplog.text
+
+
+def test_derived_edge_survives_with_no_declared_order_direct_or_transitive():
+    # Negative case: this is the test that stops the transitive widening
+    # from becoming "suppress everything". Two rows share a read-after-write
+    # overlap and carry NO declared ordering between them, direct or via any
+    # chain (C3 is a bystander with no edge to either). The derived edge must
+    # still be kept and still force the writer strictly earlier.
+    rows = [
+        _row("C1", ["a.py"]),
+        _row("C2", ["b.py"], reads=["a.py"]),
+        _row("C3", ["c.py"]),
+    ]
+    waves = build_waves(rows)
+    wave_by_id = {w.id: i for i, wave in enumerate(waves) for w in wave}
+    assert wave_by_id["C1"] < wave_by_id["C2"], "derived edge must survive"
+
+
+def test_declared_only_cycle_still_raises_after_transitive_widening():
+    # The transitive declared-closure widening must not weaken cycle
+    # detection: a cycle made up entirely of declared depends_on edges (no
+    # derived edge involved at all) still raises WaveCycleError.
+    rows = [
+        _row("C1", ["a.py"], depends_on=[{"chunk": "C2", "gate_kind": "epistemic-premise"}]),
+        _row("C2", ["b.py"], depends_on=[{"chunk": "C3", "gate_kind": "epistemic-premise"}]),
+        _row("C3", ["c.py"], depends_on=[{"chunk": "C1", "gate_kind": "epistemic-premise"}]),
+    ]
+    with pytest.raises(WaveCycleError) as excinfo:
+        build_waves(rows)
+    message = str(excinfo.value)
+    assert "C1" in message and "C2" in message and "C3" in message
 
 
 def test_dropped_derived_edge_warns_once_per_build(caplog):

@@ -2000,3 +2000,291 @@ class TestQueueDeferralLayersAgree:
             f"advisory mirror disagrees with the deny for {value!r}: "
             f"fires={mirror_fires} deny={deny!r}"
         )
+
+
+class TestUnparseableFrontmatterWarns:
+    """A document that OPENS a frontmatter block whose YAML does not parse
+    is a FINDING, not a stand-down.
+
+    The seam: with no parseable frontmatter there is no doc `type` to match
+    a schema on, `_match_schema` returns nothing, and both siblings used to
+    fall silent — the write landed and every downstream reader
+    (`split_frontmatter` + `yaml.safe_load`) then saw the file as having no
+    frontmatter at all rather than as a record whose keys failed to parse.
+    43 such records exist across two repos, each one written past this
+    guard.
+
+    The three ways this could become a menace instead of a guard are
+    covered below as first-class cases: prose with no block, a legal
+    multi-document body, and an infrastructure failure in the guard's own
+    machinery.
+    """
+
+    _MALFORMED = (
+        "---\n"
+        "title: t\n"
+        "summary: [unclosed\n"
+        "created: 2026-09-08\n"
+        "---\n"
+        "body\n"
+    )
+
+    def _unmatched_path(self, tmp_path, name):
+        """A path no vendored schema claims — the stand-down seam itself.
+        (On a schema-MATCHING path the existing `(missing frontmatter)`
+        schema-validation finding already fires and the advisory sibling
+        renders it; this branch is scoped to the no-match case so exactly
+        one module ever speaks.)
+        """
+        docs = tmp_path / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        return docs / name
+
+    @pytest.mark.parametrize("strict", ["0", "1"])
+    def test_unparseable_frontmatter_produces_a_finding(self, tmp_path, monkeypatch, strict):
+        if strict == "1":
+            monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        target = self._unmatched_path(tmp_path, "malformed.md")
+        payload = _payload("Write", str(target), str(tmp_path), content=self._MALFORMED)
+
+        result = guard.check(payload)
+        assert result is not None, "unparseable frontmatter must not stand down"
+        rendered = _assert_advisory_shape(result)
+        assert "does not parse as YAML" in rendered
+        # The author cannot fix what the message does not name: kind + line.
+        assert "ParserError" in rendered
+        assert "line 4" in rendered, rendered
+        assert "docs/malformed.md" in rendered
+        # Warn, never block — 2026-08-06 ruling; and the sibling stands down.
+        assert "permissionDecision" not in result["hookSpecificOutput"]
+        assert advisory_guard.check(payload) is None, "advisory must stand down in lockstep"
+
+    def test_file_with_no_frontmatter_block_produces_nothing(self, tmp_path):
+        for content in (
+            "# hello\n\njust prose\n",
+            "# hello\n\nprose with a --- rule\n\n---\n\nmore prose\n",
+            "---\n\nan opening rule that never closes\n",
+        ):
+            target = self._unmatched_path(tmp_path, "prose.md")
+            payload = _payload("Write", str(target), str(tmp_path), content=content)
+            assert guard.check(payload) is None, content
+            assert advisory_guard.check(payload) is None, content
+
+    def test_legal_multi_document_record_produces_nothing(self, tmp_path):
+        """The 595-file overcount shape: `yaml.safe_load` over content
+        carrying more than one `---`-separated document raises
+        ComposerError. Legal YAML is not a finding.
+        """
+        content = (
+            "---\n"
+            "title: t\n"
+            "type: notes\n"
+            "---\n"
+            "\n"
+            "body\n"
+            "\n"
+            "---\n"
+            "foo: 1\n"
+            "---\n"
+            "\n"
+            "more\n"
+        )
+        # Proves the payload really is the trap shape, not a benign file.
+        with pytest.raises(yaml.composer.ComposerError):
+            yaml.safe_load(content)
+
+        target = self._unmatched_path(tmp_path, "multi.md")
+        payload = _payload("Write", str(target), str(tmp_path), content=content)
+        assert guard.check(payload) is None
+        assert advisory_guard.check(payload) is None
+        assert guard._malformed_frontmatter_detail(content) is None
+
+    def test_multi_document_frontmatter_block_is_not_a_finding(self, tmp_path):
+        """Same property asserted directly on the detector, on a block that
+        `safe_load` would reject and `safe_load_all` accepts.
+        """
+        assert guard._malformed_frontmatter_detail("---\na: 1\n") is None
+
+    def test_infrastructure_failure_still_fails_open(self, tmp_path, monkeypatch):
+        """Only the AUTHOR's malformed YAML is a finding. When the guard's
+        own machinery raises, it stays silent — never a warning, never a
+        block, on infra.
+        """
+        target = self._unmatched_path(tmp_path, "malformed.md")
+        payload = _payload("Write", str(target), str(tmp_path), content=self._MALFORMED)
+        assert guard.check(payload) is not None, "precondition: this payload does fire"
+
+        def _boom(_content):
+            raise RuntimeError("splitter exploded")
+
+        monkeypatch.setattr(guard, "_split_frontmatter", _boom)
+        assert guard.check(payload) is None, "an internal error must fail open"
+
+        def _unreadable(_content):
+            raise OSError("cannot read")
+
+        monkeypatch.setattr(guard, "_split_frontmatter", _unreadable)
+        assert guard.check(payload) is None, "an I/O error must fail open"
+
+
+class TestPlanTasksSpineIntegrityDeny:
+    """The three spine defects a per-ROW loop structurally cannot see.
+
+    Before `plan_tasks_spine_integrity_errors`, all three passed the write
+    guards SILENTLY while a single out-of-enum field in one row was reported —
+    enforcement was inverted, weakest on the worst class. Each test below is a
+    real corpus shape, not an invented one:
+
+      * `## Spine` instead of `## Tasks` — claude-klabauter
+        docs/plans/2026-09-07-dispatch-emit-runtime-pathspec-and-test-locator.md,
+        authored the day before this landed, with both guards live.
+      * an unparseable block — DoE-claude
+        docs/plans/2026-08-20-make-the-atlas-mechanical.md, where the lenient
+        `parse_yaml` returned 9 rows of a 15-row spine and the guard validated
+        the 9 it invented.
+      * a dangling `depends_on[].chunk` — claude-klabauter
+        docs/plans/2026-08-28-the-currency-signal-stops-one-hop-short-of-the-door.md.
+
+    Mirrors TestPlanTasksSpineDeny's fixtures and drives `guard.check`, so the
+    warn-vs-deny shape is the existing one and only the finding is new.
+    """
+
+    _HEAD = (
+        "---\ntitle: Test plan\ncreated: 2026-09-08\nauthor: test\nstatus: draft\n---\n\n"
+        "# Plan\n\n"
+    )
+
+    def _plan_path(self, tmp_path):
+        d = tmp_path / "docs" / "plans"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / "2026-09-08-test-plan.md"
+
+    def _check(self, tmp_path, body):
+        fp = self._plan_path(tmp_path)
+        old_content = self._HEAD
+        fp.write_text(old_content, encoding="utf-8")
+        new_content = old_content + body
+        return guard.check(
+            _payload(
+                "Edit", str(fp), str(tmp_path), old_string=old_content, new_string=new_content
+            )
+        )
+
+    _GOOD_ROW = (
+        "- id: C1\n"
+        "  title: Do a thing\n"
+        "  change_kind: script-edit\n"
+        "  surface: coordinator/bin/foo\n"
+        "  writes: []\n"
+    )
+
+    def test_absent_spine_stays_silent_even_under_strict(self, tmp_path, monkeypatch):
+        """A plan mid-authoring has no spine yet. ABSENT is a legitimate state
+        and never becomes a finding — the whole reason the door discriminates
+        it from MALFORMED rather than collapsing both into one falsy status.
+        """
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        assert self._check(tmp_path, "## Tasks\n\nTo be written.\n") is None
+
+    def test_fence_outside_tasks_heading_warns_under_strict(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        body = "## Spine\n\n```yaml plan-tasks\n" + self._GOOD_ROW + "```\n"
+        result = self._check(tmp_path, body)
+        assert result is not None
+        reason = _assert_advisory_shape(result)
+        assert "(plan-tasks block)" in reason
+        assert "`## Tasks`" in reason
+
+    def test_unparseable_spine_warns_under_strict(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        body = (
+            "## Tasks\n\n```yaml plan-tasks\n"
+            + self._GOOD_ROW
+            + "  note: an unquoted scalar that then\n"
+            "    runs on: like a mapping key\n"
+            "```\n"
+        )
+        result = self._check(tmp_path, body)
+        assert result is not None
+        reason = _assert_advisory_shape(result)
+        assert "does not parse" in reason
+
+    def test_unparseable_fixture_is_non_vacuous(self):
+        """Pins the TRAP, not a description of it: the repo's lenient
+        `parse_yaml` must NOT raise on this fixture (that leniency is why the
+        guards' own except-branch never fired), while PyYAML — what every real
+        spine consumer asks — must refuse it outright.
+        """
+        import yaml as _yaml
+
+        from coordinator_core.frontmatter.schema_validate import parse_yaml
+
+        block = (
+            "- id: C1\n"
+            "  title: Do a thing\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/foo\n"
+            "  note: an unquoted scalar that then\n"
+            "    runs on: like a mapping key\n"
+        )
+        parse_yaml(block)  # lenient: returns, does not raise — the trap
+        with pytest.raises(_yaml.YAMLError):
+            _yaml.safe_load(block)
+
+    def test_dangling_depends_on_chunk_warns_under_strict(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        body = (
+            "## Tasks\n\n```yaml plan-tasks\n"
+            + self._GOOD_ROW
+            + "- id: C2\n"
+            "  title: Do another thing\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/bar\n"
+            "  writes: []\n"
+            "  depends_on:\n"
+            "    - chunk: C7\n"
+            "      gate_kind: epistemic-premise\n"
+            "```\n"
+        )
+        result = self._check(tmp_path, body)
+        assert result is not None
+        reason = _assert_advisory_shape(result)
+        assert "tasks[C2].depends_on[0].chunk" in reason
+        assert "C7" in reason
+
+    def test_resolvable_depends_on_stays_silent_under_strict(self, tmp_path, monkeypatch):
+        """The negative half of the dangling test — an edge onto a row that IS
+        in this spine is the ordinary case and must never fire.
+        """
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        body = (
+            "## Tasks\n\n```yaml plan-tasks\n"
+            + self._GOOD_ROW
+            + "- id: C2\n"
+            "  title: Do another thing\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/bar\n"
+            "  writes: []\n"
+            "  depends_on:\n"
+            "    - chunk: C1\n"
+            "      gate_kind: epistemic-premise\n"
+            "```\n"
+        )
+        assert self._check(tmp_path, body) is None
+
+    def test_siblings_report_the_identical_finding(self, tmp_path):
+        """Both guards share the door, so neither can drift about what counts
+        as an unreadable spine — the lockstep the two hand-duplicated
+        `_plan_tasks_spine_errors` bodies are required to keep.
+        """
+        import coordinator_core.frontmatter.schema_validate as sv
+        from coordinator_core.write_guards import (
+            validate_frontmatter_schema_advisory as advisory_mod,
+        )
+
+        schemas = {"plan-tasks": sv._PLAN_TASKS_SCHEMA_DICT}
+        source = self._HEAD + "## Spine\n\n```yaml plan-tasks\n" + self._GOOD_ROW + "```\n"
+        fm = sv.parse_frontmatter(source).get("frontmatter")
+        assert guard._plan_tasks_spine_errors(
+            source, schemas, fm
+        ) == advisory_mod._plan_tasks_spine_errors(source, schemas, fm)

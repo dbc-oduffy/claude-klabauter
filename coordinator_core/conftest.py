@@ -557,6 +557,38 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
             pointer.parent.mkdir(parents=True, exist_ok=True)
             pointer.write_text(stub_doe_root + "\n", encoding="utf-8")
 
+    # Same stub-so-the-READ-succeeds pattern as `.doe-root` above, for the
+    # override-keys wiki page. `bash_guards._helpers.operator_override_note`
+    # renders its pointer only when `_override_keys_doc_reachable()` finds a
+    # real file at `~/.coordinator-claude-settings/coordinator-claude/docs/wiki/
+    # guard-override-keys.md` -- guard-messaging.md's "only offer remediation
+    # the current reader can actually run". That path goes through
+    # `expanduser()`, so it follows the HOME this fixture just quarantined, and
+    # the quarantine is empty: every test asserting the pointer renders failed,
+    # on every host, for a reason having nothing to do with its own subject.
+    #
+    # Two correct changes collided to produce that. The reachability gate is
+    # right (do not point at a page that is not there) and this quarantine is
+    # right (its own comment measured 58 failures with the live settings tree
+    # readable, 57 of them tests "silently measuring a different branch than
+    # its own name claimed"). What was missing is the artifact a real install
+    # carries: `install/substrate.py::_install_seed_wikis`' claude-klabauter-sourced leg
+    # copies this page in, and no test host had ever run it. Seeding it here
+    # puts the quarantine one step closer to a real install rather than
+    # teaching each test to special-case an absent page.
+    override_doc_src = Path(__file__).resolve().parent.parent / "docs" / "reference" / "guard-override-keys.md"
+    if override_doc_src.is_file():
+        override_doc_dst = (
+            quarantine
+            / ".coordinator-claude-settings"
+            / "coordinator-claude"
+            / "docs"
+            / "wiki"
+            / "guard-override-keys.md"
+        )
+        override_doc_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(override_doc_src, override_doc_dst)
+
     # `_capture_real_doe_root`'s collection-time call resolved through
     # `ops.coordinator_doe_root`, whose module-scope memo would otherwise hold
     # the REAL checkout path for the rest of the process — a second resolver

@@ -114,6 +114,14 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
     ("coordinator_core/tests/_fixtures.py", "mkdtemp"): (
         "service fixtures pin a short base to stay inside path-length limits"
     ),
+    ("coordinator_core/benchmarks/maintenance_tier_budget.py", "mkdtemp"): (
+        "NOT an engine clone -- `_make_throwaway_clone` does `git init` on an empty "
+        "repo and its own docstring says it never touches the live .git, so there "
+        "are no hardlinks and `mkdtemp_for_clone`'s same-volume requirement (the "
+        "whole reason that helper exists) does not apply. Placing it under the "
+        "source volume instead would put this benchmark's churn -- 200 commits per "
+        "sample -- on the working tree's disk to buy a constraint it does not have"
+    ),
 }
 
 

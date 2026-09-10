@@ -77,6 +77,23 @@ def _load_scripts_setup_module():
     return module
 
 
+@pytest.fixture(autouse=True)
+def _drop_settings_home_override(monkeypatch):
+    """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
+
+    Both the dep probe and ``register_claude_klabauter_root`` resolve through
+    settings-home: the dep ladder's `.doe-root` rung and the engine-build
+    provisioning path (which this file asserts against as
+    ``$USERPROFILE/.coordinator-claude-settings/engine-build/...``, i.e. the
+    quarantined home). ``_settings_home.settings_home()`` prefers
+    ``COORDINATOR_SETTINGS_HOME`` over USERPROFILE and the suite-root home
+    quarantine (``coordinator_core/conftest.py::_quarantine_real_home``) does
+    not clear it, so on a box where an operator exports it these cases probe
+    and provision against the operator's REAL settings home.
+    """
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+
+
 @pytest.fixture(scope="module")
 def setup_mod():
     return _load_scripts_setup_module()
