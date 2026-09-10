@@ -4473,9 +4473,31 @@ def main(argv: list[str]) -> int:
         check_git_version()
         apply_git_perf_config(claude_klabauter_root_resolved)
 
-    engine_py, import_names = provision_deps(
-        claude_klabauter_root_resolved, py, args.allow_venv_fallback, container_optin=args.container_optin
-    )
+    if args.register_only:
+        # `--register-only` is "registration + verification only", and PROVISIONING is
+        # neither. Running it here defeated the flag's whole case: the box you reach for
+        # it on is the one where an install cannot complete — no network, no write
+        # permission, a guarded interpreter — and a failed install exits before the
+        # root registration is ever called, so the registration the operator asked for
+        # does not happen. Derive the probe list instead (pure, reads pyproject) and let
+        # `verify_coordinator_core_importable` below report an engine that genuinely is
+        # not installed. That verification IS the flag's second half; it is not a weaker
+        # substitute for the install, and it names its own remediation.
+        _pyproject = claude_klabauter_root_resolved / "pyproject.toml"
+        if not _pyproject.is_file():
+            print(
+                f"FAIL [deps] pyproject.toml not found at {_pyproject} — cannot derive "
+                "the import-probe list.",
+                file=sys.stderr,
+            )
+            return 1
+        _dep_specs, import_names = derive_deps(_pyproject)
+        engine_py = py
+        print("[SKIP] dependency provisioning bypassed (--register-only).")
+    else:
+        engine_py, import_names = provision_deps(
+            claude_klabauter_root_resolved, py, args.allow_venv_fallback, container_optin=args.container_optin
+        )
 
     if not args.register_only:
         handle_test_tooling(claude_klabauter_root_resolved, engine_py, args)
