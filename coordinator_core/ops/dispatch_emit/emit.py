@@ -600,7 +600,38 @@ class PlanContext:
     goal: Optional[str]
     problem_excerpt: Optional[str]
     exit_criterion: Optional[str] = None
+    #: Absolute path of the repo every repo-relative citation in this script
+    #: resolves against. `None` when the caller passed no `repo_root`, and the
+    #: preamble then says the anchor is undeclared rather than inventing one.
+    #: See `_plan_context_preamble` for why an emitted script needs it at all.
+    repo_root: Optional[str] = None
 
+
+#: The one absolute path an emitted script carries, and the reason it does.
+#:
+#: Every other path in an emitted prompt is repo-relative on purpose
+#: (`_spec_path_for_prompt`'s negative spec): a drive-lettered citation does
+#: not survive being re-run on another box. That rests on one premise — "the
+#: dispatched executor resolves the spec from the repo root it is already
+#: standing in" — and on a fleet box that premise is false. A workflow inherits
+#: the DRIVER SESSION's cwd, which on a multi-repo box is routinely a sibling
+#: of the repo the script was emitted for. Measured 2026-09-10: a 23-row mise
+#: run emitted for claude-klabauter, fired from a session standing in DoE-claude,
+#: returned BLOCKED from eight of ten executors against a spine that existed —
+#: in the repo they were not in — and its commit agent read the same-named file
+#: in the sibling as a cross-repo divergence and halted the run.
+#:
+#: So: ONE declared anchor, not a per-citation absolutisation. `plan-blitz.mjs`
+#: reached the same answer from the same failure and its args contract requires
+#: `repoRoot` ABSOLUTE for exactly this reason; the mandated emitted vehicle
+#: agreeing with the hand-fired one is the point.
+_REPO_ANCHOR_LINE = (
+    "Repo root: {root} — every repo-relative path in this brief resolves "
+    "against it, and it is NOT necessarily the directory you start in. Confirm "
+    "with `git -C {root} rev-parse --show-toplevel` before your first read, and "
+    "read and write only under it. A path that resolves under some other repo "
+    "with the same relative name is the wrong file, not a divergence to report."
+)
 
 # The section-heading vocabulary this module reads out of a plan BODY.
 # `## Goal` is C3a's own scaffolded heading (out of C4's write scope --
@@ -695,7 +726,9 @@ def _plan_title(plan_text: str, fallback: str) -> str:
     return fallback
 
 
-def derive_plan_context(plan_text: str, *, fallback_title: str) -> PlanContext:
+def derive_plan_context(
+    plan_text: str, *, fallback_title: str, repo_root: Optional[str] = None
+) -> PlanContext:
     """Resolve ``PlanContext`` from ``plan_text`` (the plan file's already-
     read full text -- this function never opens a file itself).
 
@@ -726,6 +759,7 @@ def derive_plan_context(plan_text: str, *, fallback_title: str) -> PlanContext:
         goal=goal,
         problem_excerpt=problem_excerpt,
         exit_criterion=_prime_exit_criterion_statement(plan_text),
+        repo_root=repo_root,
     )
 
 
@@ -876,7 +910,10 @@ def _plan_context_preamble(context: PlanContext) -> str:
     drifts. Negative spec: do not narrow or rename this signature without
     notifying that shim; a widening here is what broke it once already.
     """
-    lines = [f"Plan: {context.title}"]
+    lines = []
+    if context.repo_root:
+        lines.append(_REPO_ANCHOR_LINE.format(root=context.repo_root))
+    lines.append(f"Plan: {context.title}")
     if context.goal:
         lines.append(f"Goal: {context.goal}")
     if context.exit_criterion:
@@ -1184,6 +1221,24 @@ _PROVENANCE_HEADING = (
     "report that commit's sha with the success token. No matching commit: "
     "investigate as a real failure, do not report success on clean-tree "
     "alone."
+    "\n\nLANDED BY SOMEONE ELSE is a THIRD state, and it is a SUCCESS. The "
+    "clause above assumes whoever committed your paths was this phase on an "
+    "earlier pass, so it looks for ONE commit carrying every chunk id. A peer "
+    "session or the dispatching EM committing the same paths first is an "
+    "ordinary event on a shared checkout -- /mise-en-place calls it a "
+    "peer-session commit collision and expects it -- and it lands the work "
+    "across commits that carry none of your ids. `commit_paths` then raises "
+    "`NothingToCommit`, which is the tree telling you the work is SAFE, not "
+    "that it is missing. Treat it as landed when, and only when, you have "
+    "checked BOTH: every declared path is tracked and identical to HEAD "
+    "(`git status --porcelain -- <paths>` empty AND `git diff HEAD -- <paths>` "
+    "empty), and the executor reports for this wave say those same paths "
+    "carry their work. Then emit the success token with the sha of HEAD, and "
+    "name in your report the commits that actually carry the paths "
+    "(`git log --oneline -1 -- <path>` per path) so the attribution is not "
+    "lost. Withholding the token here halts the run over work that is already "
+    "on disk and committed, which is the more expensive error: the next wave "
+    "never fires and nothing is at risk of being overwritten."
     "\n\nTHE CALL RETURNS THE SHA: the route is "
     "`coordinator_core.git.commit.commit_paths`, which returns a "
     "`CommitOutcome` whose `.sha` IS the landed commit, or raises "
@@ -1281,6 +1336,7 @@ def _commit_agent_call(
     results_var: Optional[str] = None,
     commit_var: str = "commitResult",
     deliverable_id: Optional[str] = None,
+    repo_root: Optional[str] = None,
 ) -> str:
     """Emit the wave's commit-agent call, plus the gate that halts the run
     when that commit did not land (see ``_commit_halt_gate``).
@@ -1365,8 +1421,10 @@ def _commit_agent_call(
         if deliverable_id
         else ""
     )
+    anchor = f"{_REPO_ANCHOR_LINE.format(root=repo_root)}\n\n" if repo_root else ""
     static_prompt = (
-        f"Commit wave {index + 1}'s work. Pathspec: [{', '.join(pathspec)}]."
+        anchor
+        + f"Commit wave {index + 1}'s work. Pathspec: [{', '.join(pathspec)}]."
         f"{subject_rule}{deliverable_rule}"
         f" If `CommitOutcome.no_delta` comes back non-empty, list those paths"
         f" first and say they contributed nothing to this commit -- they are"
@@ -1566,7 +1624,9 @@ _PREFLIGHT_SHA_VAR = "preflightHeadSha"
 _PREFLIGHT_SHA_PLACEHOLDER = "<<<PREFLIGHT_HEAD_SHA>>>"
 
 
-def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
+def _preflight_agent_call(
+    pathspec: list[str], phase_title: str, repo_root: Optional[str] = None
+) -> str:
     """Compose the preflight phase's ``phase()`` + ``agent()`` call (AC14).
 
     Dispatches the SAME ``agentType`` every commit phase later uses
@@ -1581,7 +1641,8 @@ def _preflight_agent_call(pathspec: list[str], phase_title: str) -> str:
     """
     phase_call = f"  phase({_js_string_literal(phase_title)});"
     prompt = (
-        "Preflight only -- do not stage or commit anything. Every path below is "
+        (f"{_REPO_ANCHOR_LINE.format(root=repo_root)}\n\n" if repo_root else "")
+        + "Preflight only -- do not stage or commit anything. Every path below is "
         "EXPECTED to be unchanged or nonexistent right now: the chunks that write "
         "them have not run yet, so 'no diff' is the correct state and is NOT a "
         "refusal. Report BLOCKED only if a path would be refused by a claim "
@@ -2005,7 +2066,16 @@ def compose_script(
     phase_titles: list[str] = []
 
     phase_titles.append(_PREFLIGHT_PHASE_TITLE)
-    body_blocks.append(_preflight_agent_call(preflight_pathspec, _PREFLIGHT_PHASE_TITLE))
+    # The anchor rides on `plan_context` rather than `compose_script`'s own
+    # `repo_root`: an outside composer (DoE-claude's emit-dispatch-workflow.py)
+    # builds the context and calls straight through here, so one source keeps
+    # executor, commit and preflight prompts from disagreeing about the repo.
+    repo_anchor = plan_context.repo_root if plan_context is not None else None
+    body_blocks.append(
+        _preflight_agent_call(
+            preflight_pathspec, _PREFLIGHT_PHASE_TITLE, repo_root=repo_anchor
+        )
+    )
 
     for index, wave in enumerate(waves):
         batches = _split_wave_for_commit_placement(wave)
@@ -2045,6 +2115,7 @@ def compose_script(
                     results_var,
                     commit_var=f"commit{results_var[0].upper()}{results_var[1:]}",
                     deliverable_id=deliverable_id,
+                    repo_root=repo_anchor,
                 )
             )
 
@@ -2250,6 +2321,7 @@ def emit_script(
     plan_context = derive_plan_context(
         plan_text if plan_text is not None else "",
         fallback_title=plan_path.stem,
+        repo_root=Path(repo_root).as_posix() if repo_root is not None else None,
     )
 
     deliverable_id = _plan_deliverable_id(plan_text) if plan_text else None

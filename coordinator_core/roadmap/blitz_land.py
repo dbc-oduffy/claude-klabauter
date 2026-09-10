@@ -54,7 +54,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Set
 
 from coordinator_core.locked_write import MutateAbort, locked_rmw
 from coordinator_core.roadmap.plan_gate import (
@@ -477,6 +477,67 @@ def _today() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _archived_records_this_wave_names(
+    worktree_root: Path,
+    wave_result: Dict[str, Any],
+    live_records: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Archived baton records for the ids this wave names and the live scan missed.
+
+    The XS lane's own correct close-out ARCHIVES its baton: an executor that
+    finishes an XS remit `git mv`s the record into ``archive/handoffs/<YYYY-MM>/``,
+    which is exactly where the live scan does not look. So a well-behaved dispatch
+    produced a landing refusal — "no baton on disk carries id ..." — reading as a
+    missing record when the record is right there and terminal. Measured 2026-09-10,
+    wave 0 of run 20260910T000000Z: two of eight dispatched batons archived
+    themselves and both refused at the landing, in a report whose other entries
+    landed fine, so the refusal looked like data loss rather than success.
+
+    Lazy for the reason ``plan_gate.scan_batons`` is: claude-klabauter's archive holds ~3x
+    the live tree and parsing all of it costs more than the rest of the landing,
+    for an answer that is normally "nothing was missing". Nothing is read unless
+    this wave names an id the live scan could not resolve, and then only the
+    archive is walked, once.
+
+    Resolving is all this does. It stamps nothing: ``close_dispatched`` already
+    reads an archived record's terminal ``deployment_state`` and reports
+    ``stamped: False`` with the reason, which is the honest answer for work that
+    closed itself — and is a ``closed`` entry rather than a refusal.
+    """
+    from coordinator_core.roadmap.plan_gate import (
+        _baton_record,
+        _iter_record_paths,
+        _read_baton_fields,
+    )
+
+    known: Set[str] = set()
+    for record in live_records:
+        known.update(record["ids"])
+        known.add(record["path"])
+
+    wanted = {
+        ident
+        for key in _VERDICT_KEYS
+        for entry in (wave_result.get(key) or [])
+        if isinstance(entry, dict)
+        for ident in (entry.get("batonId"),)
+        if ident and ident not in known
+    }
+    if not wanted:
+        return []
+
+    found: List[Dict[str, Any]] = []
+    for path in _iter_record_paths(worktree_root, ("archive", "handoffs"), recursive=True):
+        fm = _read_baton_fields(path)
+        if not fm:
+            continue
+        rel = path.relative_to(worktree_root).as_posix()
+        record = _baton_record(rel, path, fm, live=False)
+        if wanted & (set(record["ids"]) | {rel}):
+            found.append(record)
+    return found
+
+
 def land_wave(
     worktree_root: Path,
     wave_result: Dict[str, Any],
@@ -505,6 +566,9 @@ def land_wave(
     from coordinator_core.roadmap.plan_gate import scan_batons
 
     _, all_records = scan_batons(worktree_root, include_archived=False)
+    all_records = all_records + _archived_records_this_wave_names(
+        worktree_root, wave_result, all_records
+    )
     report = dict(report, _all_records=all_records)
 
     approved: List[Dict[str, Any]] = []

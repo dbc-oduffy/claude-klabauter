@@ -373,6 +373,62 @@ def _as_list(value: Any) -> List[str]:
     return []
 
 
+def _resolve_sizing_citations(
+    worktree_root: Path, citations: "List[str]", archive_index: "Dict[str, str]"
+) -> "Tuple[List[str], List[str]]":
+    """Split `citations` into (resolved, unresolved) against disk.
+
+    `sized` used to be `bool(record["sizing_objects"])` -- frontmatter presence,
+    never a disk read. A baton citing a sizing object that is not there therefore
+    read `sized: true`, and plan-blitz's args contract says in as many words that
+    a sized baton SKIPS the sizing scout. So the wave planned a baton whose size
+    nobody had determined, and the blitz-em -- whose job is to interrogate the
+    scout's reasoning -- had no reasoning to interrogate. Silent in both
+    directions: the gate reported it sized and the wave reported it planned.
+
+    Measured 2026-09-10, wave 0 of run 20260910T000000Z:
+    `dlv-deliverable-id-as-a-machine-derived-chai-606ae0` cited
+    `state/sizings/2026-08-21-deliverable-id-as-a-machine-derived-chain-identity.yaml`,
+    which does not exist; the sizing had been ARCHIVED to
+    `archive/sizings/2026-08/` and the citation was never repointed. Its own
+    executor found it and said so.
+
+    An archived sizing still counts as sized: the work was done and filed, and
+    refusing it would re-scout a baton whose sizing exists. What does not count
+    is a citation nothing on disk answers, in either tree.
+
+    The archive index is built at most once per gate read, by the caller, and only
+    when some citation missed the live tree -- the same laziness
+    `scan_batons`'s archive leg takes, for the same reason.
+    """
+    resolved: "List[str]" = []
+    unresolved: "List[str]" = []
+    for citation in citations:
+        if not isinstance(citation, str) or not citation.strip():
+            continue
+        rel = citation.strip()
+        if (worktree_root / rel).is_file() or Path(rel).name in archive_index:
+            resolved.append(rel)
+        else:
+            unresolved.append(rel)
+    return resolved, unresolved
+
+
+def _archived_sizing_index(worktree_root: Path) -> "Dict[str, str]":
+    """`{basename: relpath}` for every archived sizing. Built lazily, once."""
+    index: "Dict[str, str]" = {}
+    target = worktree_root / "archive" / "sizings"
+    if not target.is_dir():
+        return index
+    try:
+        for path in target.rglob("*.yaml"):
+            if path.is_file():
+                index.setdefault(path.name, path.relative_to(worktree_root).as_posix())
+    except OSError:
+        return index
+    return index
+
+
 def _iter_record_paths(root: Path, subdir: Sequence[str], recursive: bool) -> List[Path]:
     """Sorted `*.md` paths under `root/<subdir>`; `[]` if the directory is absent.
 
@@ -1076,6 +1132,27 @@ def assemble_plan_gate(
 
     reported: List[Dict[str, Any]] = []
     unresolved: List[Dict[str, str]] = []
+
+    # One archive index per gate read, built only if some citation missed the
+    # live tree, and memoised so the two reads per record cost one resolution.
+    _sizing_archive: Dict[str, Dict[str, str]] = {}
+    _sizing_memo: Dict[str, Tuple[List[str], List[str]]] = {}
+
+    def _sizing_resolution(rec: Dict[str, Any]) -> Tuple[List[str], List[str]]:
+        key = rec["path"]
+        if key in _sizing_memo:
+            return _sizing_memo[key]
+        citations = rec["sizing_objects"] or []
+        resolved, unresolved_cites = _resolve_sizing_citations(worktree_root, citations, {})
+        if unresolved_cites:
+            if "index" not in _sizing_archive:
+                _sizing_archive["index"] = _archived_sizing_index(worktree_root)
+            resolved, unresolved_cites = _resolve_sizing_citations(
+                worktree_root, citations, _sizing_archive["index"]
+            )
+        _sizing_memo[key] = (resolved, unresolved_cites)
+        return _sizing_memo[key]
+
     for record in subjects:
         if subject is not None and subject not in record["ids"] and subject != record["path"]:
             continue
@@ -1109,8 +1186,13 @@ def assemble_plan_gate(
                 # be one value, and this field exists to make a silent case loud.
                 "unlinked_plan_claim": record["unlinked_plan_claim"],
                 "execution_authorized": record["execution_authorized"],
-                "sized": bool(record["sizing_objects"]),
+                "sized": bool(_sizing_resolution(record)[0]),
                 "sizing_objects": record["sizing_objects"],
+                # Present-as-empty, never absent, for `unlinked_plan_claim`'s
+                # reason: a citation nothing answers is exactly the case that
+                # used to pass as sized, so it gets a field of its own rather
+                # than being inferable only by subtracting two others.
+                "unresolved_sizings": _sizing_resolution(record)[1],
                 "planning_wave": wave_by_id.get(record["id"]),
                 "candidate": record["candidate"],
             }

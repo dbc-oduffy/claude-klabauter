@@ -16,7 +16,7 @@ coordinator_core.ops.__init__, which imports this module — this op is LIVE on
 the dispatch path.
 
 Consumption status: UNCONSUMED — no call site exists today. DoE-claude's
-frozen contract (`docs/contracts/arch-engine-scripts.md`) names this op
+frozen contract (`coordinator/docs/contracts/arch-engine-scripts.md`) names this op
 under its `arch-census` lane, but the survey's Workflow script does not call
 it; only `cartography.chunk_table` and `cartography.churn` have call sites
 (docs/plans/2026-08-06-claude-klabauter-ize-the-survey-census.md § "The survey calls

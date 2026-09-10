@@ -685,6 +685,43 @@ def evaluate_plan(
     }
 
 
+#: The converter this gate routes a NOT-PREPPED author to. It is a SIBLING of this
+#: engine — `<engine root>/coordinator/bin/mise-prep-upgrade.py` — so it is resolved
+#: off this module's own location, which is the only thing that reliably names the
+#: tree that actually answered.
+_UPGRADE_SCRIPT = Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "mise-prep-upgrade.py"
+
+
+def _upgrade_fix_line() -> str:
+    """The NOT-PREPPED `fix:` line, naming a path its READER can run.
+
+    This message is emitted through `plan.prep_gate` into whatever repo is being
+    gated, and the bare relative literal it used to carry —
+    `coordinator/bin/mise-prep-upgrade.py` — resolves against THAT repo, where it
+    does not exist. Measured on example-retrieval-repo-ue-addon: every NOT-PREPPED verdict the
+    op returned named a file absent from the repo it was talking about.
+
+    It is the same defect coordinator-claude's own `mise-prep-gate.py` was repaired
+    for, and the two doors disagreed for exactly as long as this one went unfixed:
+    the CLI resolved the converter absolutely while the op printed a dead relative
+    path for the same plan and the same verdict. A bar that answers differently
+    depending on which door you came through is not one bar.
+
+    Fail-open on the repair line — an unresolvable converter is not worth failing a
+    verdict over — but never a silent guess: an unnamed path is reported as unnamed
+    rather than printed as a specific, plausible, dead one.
+    """
+    if _UPGRADE_SCRIPT.is_file():
+        return (
+            f"  fix: python {_UPGRADE_SCRIPT} <plan>  "
+            "(derives what the body already declares; never invents a census or a criterion)"
+        )
+    return (
+        "  fix: the mise-prep converter is not present beside this engine — reinstall or "
+        "republish claude-klabauter, then rerun"
+    )
+
+
 def refusal_message(
     plan_path: Path, verdict: str, classes: Dict[str, Any], withheld: Sequence[str]
 ) -> str:
@@ -714,10 +751,7 @@ def refusal_message(
         # part that is derivable from the plan's own body. Naming the converter
         # here is what stops each session rediscovering it — a runnable script,
         # never a slash command, because what fails here may have no session.
-        lines.append(
-            "  fix: python coordinator/bin/mise-prep-upgrade.py <plan>  "
-            "(derives what the body already declares; never invents a census or a criterion)"
-        )
+        lines.append(_upgrade_fix_line())
     return "\n".join(lines)
 
 
