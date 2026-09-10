@@ -244,6 +244,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "memo.fate_partition":                    "coordinator_core.ops.memo_fate_partition",
     "workflow.validate":                      "coordinator_core.ops.workflow_validate",
     "workflow.scaffold":                      "coordinator_core.ops.workflow_scaffold",
+    "workflow.bind_args":                     "coordinator_core.ops.workflow_bind",
     "compute_layer.scaffold":                 "coordinator_core.ops.compute_layer_scaffold.op",
     "dispatch.emit":                          "coordinator_core.ops.dispatch_emit.op",
     "workflow.fire":                          "coordinator_core.ops.workflow_fire.op",
