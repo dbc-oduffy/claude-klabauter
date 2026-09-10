@@ -18,9 +18,13 @@ Spec backlink: DoE-claude coordinator/docs/wiki/mise-prepped-authoring-bar.md
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
+
+#: Any slash-bearing, dotted-extension token in a message — the shape a named path takes.
+_PATH_TOKEN = re.compile(r"/?[\w][\w./-]*\.[A-Za-z0-9]+")
 
 from coordinator_core.roadmap.prep_gate import (
     NOT_PREPPED,
@@ -142,3 +146,53 @@ def test_converter_named_by_the_gate_exists_and_is_runnable() -> None:
     script = repo_root / "coordinator" / "bin" / "mise-prep-upgrade.py"
     assert script.is_file(), f"gate names {script}, which does not exist"
     assert script.read_text(encoding="utf-8").startswith("#!/usr/bin/env python3")
+
+
+def test_every_path_the_refusal_names_resolves_from_where_its_reader_stands() -> None:
+    """The generalisation of the test above, and the one that would have caught this.
+
+    Its sibling asserts the converter exists AT THIS REPO'S ROOT. That is not the
+    claim the message makes. `plan.prep_gate` emits this message into whatever repo
+    is being gated, so the bare relative literal it used to carry —
+    `coordinator/bin/mise-prep-upgrade.py` — resolved against THAT repo, where it
+    does not exist. Measured on example-retrieval-repo-ue-addon: every NOT-PREPPED verdict the
+    op returned named a file absent from the repo it was talking about, while
+    coordinator-claude's own `mise-prep-gate.py` CLI printed a resolved absolute
+    path for the same plan and the same verdict. One bar, two doors, two answers.
+
+    So this scans the message for any slash-bearing, dotted-extension token and
+    requires it to resolve. Absolute tokens resolve as themselves; a relative one is
+    taken against a DIFFERENT repo root, standing in for the consumer the message is
+    actually addressed to — resolving it against this repo is the very assumption
+    that hid the defect.
+    """
+    passing = {"status": "PASS", "detail": "", "kind": None, "withheld": []}
+    message = refusal_message(
+        Path("docs/plans/x.md"),
+        NOT_PREPPED,
+        {
+            "SPINE": passing,
+            "CENSUS": {
+                "status": "DEFECT",
+                "detail": "no census: key",
+                "kind": "census-absent",
+                "withheld": [],
+            },
+            "EXTERNAL_DEPS": passing,
+            "PRIME_EXIT": passing,
+        },
+        [],
+    )
+    fix_lines = [ln for ln in message.splitlines() if ln.strip().startswith("fix:")]
+    assert fix_lines, f"NOT-PREPPED message carries no fix: line:\n{message}"
+
+    consumer_root = Path(__file__).resolve().parents[3] / "__not_this_repo__"
+    for line in fix_lines:
+        for token in _PATH_TOKEN.findall(line):
+            if "/" not in token:
+                continue
+            candidate = Path(token) if Path(token).is_absolute() else consumer_root / token
+            assert candidate.exists(), (
+                f"fix line names {token!r}, which does not resolve for a reader outside this "
+                f"repo: {line!r}"
+            )

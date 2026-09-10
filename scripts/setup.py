@@ -414,7 +414,33 @@ def parse_args(argv: list[str]) -> Args:
                 "  Run 'python3 scripts/setup.py --help' for usage."
             )
         i += 1
+    if not args.agent_mode and not _stdin_can_answer():
+        # A prompt written to a stdin nobody is reading is not a question, it is
+        # a hang. The prompt sites already handle a CLOSED stdin (EOFError /
+        # RuntimeError), but an OPEN pipe that never delivers -- which is what an
+        # agent's shell tool hands a child -- blocks in `input()` forever, with no
+        # output and no exit. Measured 2026-09-10: this installer was the
+        # remediation an engine refusal named by path, and following that line
+        # verbatim from an agent shell hung past a 120s timeout having printed
+        # nothing at all. A remediation line therefore does not have to spell
+        # `--i-am-agent` for a headless caller to survive it; the flag stays the
+        # explicit form and this is the floor under every line that omits it.
+        args.agent_mode = True
     return args
+
+
+def _stdin_can_answer() -> bool:
+    """Whether a prompt printed now could actually be answered.
+
+    A TTY can. Everything else -- a pipe, a redirect, a closed descriptor -- is a
+    caller that will never type, so the interactive branch has nothing to wait for.
+    An error reads as "cannot answer": a stdin whose `isatty` raises is not a
+    terminal, and guessing that it is reinstates the hang.
+    """
+    try:
+        return bool(sys.stdin is not None and sys.stdin.isatty())
+    except (AttributeError, ValueError, OSError):
+        return False
 
 
 def _python_version_ok(executable: str, timeout: float = 10.0) -> bool:
