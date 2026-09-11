@@ -1505,7 +1505,7 @@ _MAX_DECLARED_TOUCH_PATHS = 16
 #: docs/plans/2026-08-14-cli-authored-writes-get-claimed.md) — see that
 #: function's own comment for why one acquire covers the whole
 #: `_MAX_DECLARED_TOUCH_PATHS`-bounded batch rather than one per path.
-#: Matches `session.scope._TOUCH_LOCK_TIMEOUT_SECS`'s per-call default; kept
+#: Matches `session.scope._ATOMIC_APPEND_LOCK_TIMEOUT_SECS`'s per-call default; kept
 #: as a separate constant because the two call sites (batch vs. single-path)
 #: are independent tuning knobs even though they share a starting value
 #: today.

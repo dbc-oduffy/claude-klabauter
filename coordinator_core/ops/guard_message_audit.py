@@ -85,9 +85,11 @@ TEXT_FIELDS = (
 #: explains itself on stderr reaches an agent's context exactly as a deny does,
 #: and reads the same way. Found the hard way: the first version of this module
 #: scanned `TEXT_FIELDS` alone and MISSED
-#: `ops/ceremony/scoped_git_commit._CLAIM_CONFLICT_REMEDY`, which names a guard
-#: key inline, carries an unresolvable cross-repo doc path, and closes with the
-#: "doctrine violation, not a shortcut" register -- a site that appears in no
+#: `ops/ceremony/scoped_git_commit._CLAIM_CONFLICT_REMEDY` (since deleted
+#: `40ff424f5`, 2026-08-13, alongside the gate it named; nothing on the
+#: commit path names a live successor), which named a guard key inline,
+#: carried an unresolvable cross-repo doc path, and closed with the
+#: "doctrine violation, not a shortcut" register -- a site that appeared in no
 #: prior memo, audit, or sizing precisely because every previous survey also
 #: looked only at guard envelopes.
 #:

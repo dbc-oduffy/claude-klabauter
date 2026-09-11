@@ -837,6 +837,79 @@ def test_run_preflight_advisory_failure_still_exits_zero(setup_mod, monkeypatch)
     assert setup_mod.run_preflight() == 0
 
 
+def test_main_register_only_does_not_provision_dependencies(setup_mod, monkeypatch):
+    """`--register-only` is registration + verification; PROVISIONING is neither.
+
+    The box you reach for this flag on is the one where an install cannot complete —
+    no network, no write permission, a guarded interpreter. Running provisioning
+    anyway exits before `register_claude_klabauter_root`, so the registration the operator
+    asked for silently does not happen. Measured live: a `files.pythonhosted.org`
+    read timeout aborted a `--register-only` run on a container whose engine
+    imported fine.
+    """
+    calls = []
+
+    def _boom(*a, **k):  # pragma: no cover - must never run
+        calls.append("provision_deps")
+        raise AssertionError("provision_deps ran under --register-only")
+
+    monkeypatch.setattr(setup_mod, "provision_deps", _boom)
+    monkeypatch.setattr(setup_mod, "resolve_python", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(setup_mod, "derive_deps", lambda _p: (["dep==1"], ["dep"]))
+    monkeypatch.setattr(
+        setup_mod, "register_claude_klabauter_root", lambda root, *a, **k: (calls.append("register"), root)[1]
+    )
+    monkeypatch.setattr(setup_mod, "offer_warm_opt_in", lambda *a, **k: None)
+    monkeypatch.setattr(
+        setup_mod,
+        "verify_coordinator_core_importable",
+        lambda *a, **k: calls.append("verify"),
+    )
+    monkeypatch.setattr(setup_mod, "check_dialect_guard_armed", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "run_health_probe", lambda *a, **k: False)
+
+    assert setup_mod.main(["--register-only", "--i-am-agent"]) == 0
+    assert "provision_deps" not in calls
+    assert calls == ["register", "verify"]
+
+
+def test_main_without_register_only_still_provisions(setup_mod, monkeypatch):
+    """The skip is scoped to the flag — an ordinary run must still provision."""
+    calls = []
+    monkeypatch.setattr(
+        setup_mod,
+        "provision_deps",
+        lambda *a, **k: (calls.append("provision_deps"), (sys.executable, ["dep"]))[1],
+    )
+    # The ordinary path spawns `<py> --version` for real; a POSIX-only literal
+    # here fails on Windows before provisioning is ever reached.
+    monkeypatch.setattr(setup_mod, "resolve_python", lambda: sys.executable)
+    monkeypatch.setattr(setup_mod, "check_git_version", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "apply_git_perf_config", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "handle_test_tooling", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "print_symbols_extra_hint", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "check_coordinator_claude_dep", lambda *a, **k: None)
+    monkeypatch.setattr(
+        setup_mod, "check_governed_authoring_surfaces_manifest", lambda *a, **k: None
+    )
+    monkeypatch.setattr(setup_mod, "register_claude_klabauter_root", lambda root, *a, **k: root)
+    monkeypatch.setattr(setup_mod, "offer_warm_opt_in", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "verify_coordinator_core_importable", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "check_dialect_guard_armed", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "run_health_probe", lambda *a, **k: False)
+    for name in (
+        "install_bin_forwarders", "install_warm_door", "migrate_whoami_pin_off_venv",
+        "install_claude_doe_launcher_chain", "register_live_plugin_root",
+        "install_precommit_hook", "install_lfs_pre_push_gate", "install_percolate_identity",
+        "install_machine_identity", "install_host_sampler_task",
+        "install_fleet_shared_environment", "install_verify_settings_home",
+    ):
+        monkeypatch.setattr(setup_mod, name, lambda *a, **k: None)
+
+    assert setup_mod.main(["--i-am-agent"]) == 0
+    assert calls == ["provision_deps"]
+
+
 def test_main_preflight_flag_short_circuits_before_flag_pair_gate(setup_mod, monkeypatch):
     from coordinator_core.install import prereq_probe
 

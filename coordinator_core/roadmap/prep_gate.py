@@ -408,6 +408,26 @@ def _path_leaves_repo(
     return None
 
 
+#: Dispositions ``dispatch_emit/spine_read.py`` treats as done, alongside
+#: ``deferred: true``. A literal set rather than an import: this gate is read by
+#: callers that have not loaded the emitter, and a gate that needs another
+#: subsystem to answer is a gate that fails for the wrong reason.
+_UNSCHEDULABLE_DISPOSITIONS = frozenset({"coded", "spun_off", "backlogged", "wont_do"})
+
+
+def _row_is_unschedulable(row: Dict[str, Any]) -> bool:
+    """Will the wave-builder decline to schedule this row at all?
+
+    ``spine_read.py`` excludes a row that is explicitly ``deferred: true`` or
+    carries a closed disposition. Such a row is never dispatched, so nothing it
+    declares is ever resolved by a driver -- which is what makes an unresolvable
+    declaration on it moot rather than defective.
+    """
+    if row.get("deferred") is True:
+        return True
+    return str(row.get("disposition") or "").strip() in _UNSCHEDULABLE_DISPOSITIONS
+
+
 def _path_is_unresolved_placeholder(value: str) -> bool:
     """True when a declared path is still an angle-bracketed stand-in.
 
@@ -493,6 +513,25 @@ def _external_deps(
         row_id = str(row.get("id") or "<row with no id>")
         gates = row.get("external_gate")
         gates = [g for g in gates if isinstance(g, dict)] if isinstance(gates, list) else []
+        # A row the wave-builder will not schedule declares nothing a fire-time driver
+        # must resolve, because no driver will fire it: `dispatch_emit/spine_read.py`
+        # excludes `deferred: true` and closed-disposition rows from every wave, so
+        # their declared paths are never opened. Refusing the whole plan over a
+        # placeholder in one of them discards the rows that had nothing to do with it —
+        # the same reasoning this function already applies to a withheld cross-repo row.
+        #
+        # Measured case (DoE-claude
+        # docs/plans/2026-07-30-boot-payload-residue-curation-and-dispatch-guards.md):
+        # C8b declares `writes: ~/.claude/projects/<project>/memory/` and is
+        # `deferred: true` / `pm_approved: false`, withheld behind a FRONTMATTER-level
+        # `external_gate: EG1`. An integrator had removed the ROW-level external_gate on
+        # correct grounds — the schema types it {owner_repo, condition} for a CROSS-REPO
+        # blocker, and EG1 names a machine-local store, not a sibling repo. Both sides
+        # were right and the plan still could not certify, because the row was withheld
+        # by a mechanism this leg does not read. Scoped to the placeholder leg only.
+        if _row_is_unschedulable(row):
+            withheld.append(row_id)
+            continue
         for field, value in _row_declared_paths(row):
             if field != "surface" and _path_is_unresolved_placeholder(value):
                 placeholders.append(

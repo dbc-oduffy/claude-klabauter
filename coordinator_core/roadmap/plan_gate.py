@@ -835,18 +835,90 @@ def blocker_disposition(
     hits, basis = link_plans(record["_fm"], plans)
     plan = _best_plan(hits)
     if plan is None:
+        # `unplanned` normally means "a sweep will plan this". For an EXECUTION-PARKED
+        # blocker it does not, and the difference is invisible in the ordinary wording:
+        # `needs_plan` keys on the park alone (no plan dependency), so it reports False
+        # and NO sweep will ever pick the blocker up, while this lane reports its
+        # dependents as ordinarily blocked. The dependents are jammed permanently and
+        # nothing says so.
+        #
+        # The disposition stays UNPLANNED and both gates stay shut — that is the right
+        # answer, since a blocker with no plan publishes nothing to build on, and opening
+        # a gate here would be the more expensive error. Only the REASON changes, because
+        # the repair is a human relinking or restoring the plan, and an operator reading
+        # "no plan links to this baton" has no way to tell this from work still queued.
+        parked = str(record["_fm"].get("handoff_phase") or "").strip() == "execution"
         return {
             "blocker": blocker_id,
             "disposition": BLOCKER_UNPLANNED,
             "path": record["path"],
             "plan": None,
-            "reason": "no plan links to this baton",
+            "reason": (
+                "baton is stamped `handoff_phase: execution` but no plan links to it — "
+                "its governing_plan is missing or was moved. It is NOT queued work: "
+                "`needs_plan` is False for a parked baton, so no sweep will plan it, and "
+                "this blocker holds its dependents shut until the link is restored"
+                if parked
+                else "no plan links to this baton"
+            ),
         }
+
+    # An S-lane blocker parked `handoff_phase: execution` is PLANNING-SATISFIED, and
+    # its plan status cannot tell you so. `blitz_land` parks an S with a four-field
+    # authorization and deliberately never takes the approval, so its plan stays at
+    # `draft` forever by design — the same fact `needs_plan` is keyed on above, for
+    # the same reason. Reading only plan status here ranks it `plan-drafted`, which is
+    # below `_PLANNING_SATISFIED`, so every DEPENDENT's planning gate stays shut and no
+    # sweep can ever open it: the blocker will never be approved and is not yet coded.
+    # Measured 2026-09-10 on example-cockpit-repo — tmrg-07, tmrg-09 and tmrg-10 were all
+    # permanently unplannable behind a tmrg-06 that had been adjudicated ready to
+    # execute three days earlier.
+    #
+    # PLAN_APPROVED, not CODED, and the distinction is the whole two-gate rule: the EM
+    # has adjudicated this blocker ready to RUN, which is at least as strong as a
+    # review-approved plan, but the work has not shipped. Dependents may be PLANNED
+    # against it; they may not be EXECUTED until it is genuinely coded.
+    # The predicate is the WHOLE four-field park, not the phase stamp alone.
+    # `handoff_phase: execution` by itself is the fleet-wide plan->execute seam and sits
+    # on ordinary session handoffs — 19 records carry it in claude-klabauter's own corpus and none
+    # is an S-park. `scan_batons` reads every record in state/handoffs/ with no `kind`
+    # filter, so any of them can be resolved as a blocker. Keying on the stamp alone
+    # would open a dependent's planning gate on a record that never went through
+    # `blitz_land.authorize_execution`, while the reason line asserted a park nothing
+    # checked.
+    fm = record["_fm"]
+    authorized = str(fm.get("handoff_phase") or "").strip() == "execution" and all(
+        str(fm.get(key) or "").strip()
+        for key in (
+            "execution_authorized_by",
+            "execution_authorized_at",
+            "execution_authorized_sha",
+        )
+    )
+    # And only over a plan the S lane actually leaves behind. `PLAN_APPROVED_STATUSES`
+    # deliberately excludes `deferred`/`abandoned`/`superseded` — "a shelved plan
+    # publishes no decisions a dependent can build on" — and `not approved` includes
+    # exactly those. The park stamp is sticky (`authorize_execution` refuses a re-stamp
+    # and nothing clears it), so a plan shelved AFTER the park would otherwise hold the
+    # gate open permanently on a plan its own author withdrew.
+    pre_ratification = (plan["status"] or "draft") in {"draft", "reviewed"}
 
     if plan["coded"]:
         disposition = BLOCKER_CODED
     elif plan["approved"]:
         disposition = BLOCKER_PLAN_APPROVED
+    elif authorized and pre_ratification:
+        return {
+            "blocker": blocker_id,
+            "disposition": BLOCKER_PLAN_APPROVED,
+            "path": record["path"],
+            "plan": {"path": plan["path"], "status": plan["status"], "link_basis": basis},
+            "reason": (
+                f"handoff_phase: execution — spec parked and execution-authorized; "
+                f"plan {plan['path']} stays status: "
+                f"{plan['status'] or '(unset)'} by design on the S lane"
+            ),
+        }
     else:
         disposition = BLOCKER_PLAN_DRAFTED
 

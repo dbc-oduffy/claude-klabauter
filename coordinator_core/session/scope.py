@@ -2032,12 +2032,13 @@ def _peer_record_read_budget_exceeded(sink_path: "Path | str") -> bool:
 #: name as the shared acquire-timeout class. Deleting it breaks that
 #: writer's lock at import time.
 #:
-#: Its NAME is the stale part: `touch()`'s own dedup-scan-then-append lock
+#: Renamed 2026-08-27 (same problem doc, Item 4's outstanding tail) from
+#: `_TOUCH_LOCK_TIMEOUT_SECS` -- `touch()`'s own dedup-scan-then-append lock
 #: region is gone (C4 -- see that function's docstring), so nothing about
-#: this constant concerns `touch` any more. Renaming it means moving three
-#: citing modules together and is recorded on that problem doc, not done
-#: here. Left at its original value and meaning.
-_TOUCH_LOCK_TIMEOUT_SECS = 0.2
+#: this constant concerns `touch` any more. Moved together with the three
+#: citing modules in the same change. Left at its original value and
+#: meaning; only the name lied.
+_ATOMIC_APPEND_LOCK_TIMEOUT_SECS = 0.2
 
 
 def touch(

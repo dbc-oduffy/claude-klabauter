@@ -150,9 +150,12 @@ carrying it adds zero I/O (same files, same walk, same parse), so the
 claimant's current claim run, not its latest (``scope.touch()`` dedups by
 returning early once a path's last event is already ``T``) — DR-296 (PM
 ruling) is to read it AS-IS: no repair, no re-stamp-in-place, no second
-field. See ``coordinator_core/ops/ceremony/scoped_git_commit.py``'s
-``_warn_recent_edits`` for the sole consumer, which logs a WARN and never
-gates on what it reads here.
+field. ``coordinator_core/ops/ceremony/scoped_git_commit.py``'s
+``_warn_recent_edits`` was the sole consumer, logging a WARN and never
+gating on what it reads here -- that module and consumer are deleted
+(``40ff424f5`` removed the hard-deny gate it warned alongside, 2026-08-13;
+``e96b7601`` removed ``_warn_recent_edits`` itself, 2026-08-19, on latency
+grounds). No consumer reads ``edit_ts`` today.
 
 NO GIT SUBPROCESS SPAWNS. Every read in this module is a plain file read —
 that is the entire performance premise. The only exception is resolving the
@@ -289,11 +292,13 @@ class _LookupResult(dict):
 
     C10 (docs/plans/2026-08-08-claim-index-the-commit-gate-never-had.md, the
     fail-OPEN closed alongside that plan): ``_check_claim_conflicts`` in
-    ``coordinator_core/ops/ceremony/scoped_git_commit.py`` needs to know
+    ``coordinator_core/ops/ceremony/scoped_git_commit.py`` needed to know
     whether the walk behind THIS call's answers was complete, to refuse a
     path whose only resolved claimant is the caller itself when the walk
     that produced that positive answer aborted before it could have reached
-    a live peer's claim. A dict subclass carries that one extra bit without
+    a live peer's claim. That gate and module are deleted (``40ff424f5``,
+    2026-08-13, PM ruling); no live consumer reads ``.complete`` today. A
+    dict subclass carries that one extra bit without
     changing ``lookup()``'s call signature or return shape — deliberately,
     to keep the single pinned call site (``coordinator_core/hooks/tests/
     test_c4_ownership_inherited_at_dispatch_tripwires.py``,

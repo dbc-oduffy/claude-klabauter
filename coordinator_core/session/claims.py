@@ -179,7 +179,7 @@ def handoff_lifecycle() -> ModuleType:
 #: writes-get-claimed.md) — deliberately shared, not independently re-tuned,
 #: since both writers target the same class of file under the same
 #: silent-failure contract (see ``atomic_dedup_append``'s docstring).
-_ATOMIC_DEDUP_APPEND_LOCK_TIMEOUT_SECS = scope._TOUCH_LOCK_TIMEOUT_SECS
+_ATOMIC_DEDUP_APPEND_LOCK_TIMEOUT_SECS = scope._ATOMIC_APPEND_LOCK_TIMEOUT_SECS
 
 
 def _atomic_dedup_append_lock_anchor(touched: str) -> Optional[Path]:
@@ -1773,15 +1773,19 @@ def claim_plan(slug: str, cwd: Optional[str] = None, *, for_execution: bool = Fa
 #: ``T``/``R`` event log) instead of the mkdir-based ARTIFACT-CLAIM RECORD
 #: STORE (``<class>-claims/<basename>/`` dirs) the ``handoff``/``memo``/
 #: ``plan`` classes below manage. This is the plane ``who-claims-path``
-#: answers over and ``ceremony.scoped_git_commit``'s commit gate
-#: (``coordinator_core/ops/ceremony/scoped_git_commit.py::
-#: _check_claim_conflicts``) fails closed on -- widened onto here per
-#: cross-repo/inbox/2026-08-11-doe-claude-em-dead-claim-on-a-non-plan-
+#: answers over. ``ceremony.scoped_git_commit``'s commit gate
+#: (``_check_claim_conflicts``) once failed closed on this same plane, but
+#: that gate and module are deleted (``40ff424f5``, 2026-08-13, PM ruling:
+#: path-touch claims are advisory, not hard-denying); its advisory successor
+#: ``_warn_recent_edits`` was itself deleted (``e96b7601``, 2026-08-19).
+#: Nothing on the commit path consumes this plane today -- widened onto here
+#: per cross-repo/inbox/2026-08-11-doe-claude-em-dead-claim-on-a-non-plan-
 #: artifact-has-no-clear-path.md: a dead session's claim on an arbitrary
 #: repo-relative path (e.g. a doctrine/code file the three classed forms
 #: were never meant to cover) had a query surface (``who-claims-path``) and
-#: a consuming gate (``scoped_git_commit``) but no release path. ``basename``
-#: under this class is a repo-relative PATH, not a claim-store basename.
+#: a consuming gate (``scoped_git_commit``, since deleted) but no release
+#: path. ``basename`` under this class is a repo-relative PATH, not a
+#: claim-store basename.
 ARTIFACT_CLASS_PATH = "artifact"
 
 #: The three mkdir-based claim-record classes. Each stores under a

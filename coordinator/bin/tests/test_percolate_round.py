@@ -3278,3 +3278,103 @@ def test_report_commit_residual_reports_pathspec_larger_than_real_changes(capsys
     assert "2 carried into the pathspec beyond" in err
 
 
+# ---------------------------------------------------------------------------
+# `_classify_dropped_paths` / `_report_commit_residual`'s computed-cause
+# detail (state/bug-backlog/2026-09-06-percolate-silently-drops-reported-
+# changes.yaml, proposed action 2). Replaces the fixed, never-derived string
+# "filtering/containment/dedup" with a per-path classification against dest
+# repo state -- these drive the real `git` binary against a throwaway repo,
+# same rationale as the `_pathspec_from_manifest` suite above: the thing
+# under test IS the dest-state reads, so stubbing `_run` would test the
+# stub.
+# ---------------------------------------------------------------------------
+
+
+def test_classify_dropped_paths_computes_real_causes(tmp_path):
+    """Reconstructs the EM's measured live-round shape: a path rewritten
+    with identical content (nothing to commit), a gitignored path, an
+    absent-on-disk path, and one genuinely unexplained divergence -- each
+    must land in its own bucket, never folded together."""
+    repo = _init_head_repo(
+        tmp_path,
+        {
+            "same.md": "unchanged content\n",
+            "changed.md": "old content\n",
+            ".gitignore": "*.pyc\n",
+        },
+    )
+    # Tracked, worktree byte-identical to HEAD -- the dominant benign case.
+    # (no mutation needed; "same.md" already matches what was committed)
+
+    # Tracked, but its worktree bytes now diverge from HEAD, and it is
+    # neither gitignored nor absent -- the classifier has no benign
+    # explanation for this one; it belongs in "unaccounted".
+    (repo / "changed.md").write_text("new content\n", encoding="utf-8")
+
+    dropped = [
+        ("NEW", "same.md"),
+        ("NEW", "ignored.pyc"),  # matches .gitignore, never written to disk
+        ("REMOVE", "missing.md"),  # never existed
+        ("NEW", "changed.md"),
+    ]
+
+    buckets = _mod._classify_dropped_paths(str(repo), dropped)
+
+    assert buckets["identical_to_head"] == ["same.md"]
+    assert buckets["gitignored"] == ["ignored.pyc"]
+    assert buckets["absent"] == ["missing.md"]
+    assert buckets["unaccounted"] == ["changed.md"]
+
+
+def test_describe_dropped_causes_names_unaccounted_paths():
+    """The unaccounted bucket is the one that might be a real drop, so its
+    paths must be named in the rendered detail, never only counted."""
+    buckets = {
+        "identical_to_head": ["a.md", "b.md"],
+        "gitignored": ["c.pyc"],
+        "absent": [],
+        "unaccounted": ["d.md", "e.md"],
+    }
+    detail = _mod._describe_dropped_causes(buckets)
+    assert "2 identical to HEAD" in detail
+    assert "1 gitignored at dest" in detail
+    assert "absent" not in detail  # empty bucket omitted entirely
+    assert "2 unaccounted for: d.md, e.md" in detail
+
+
+def test_report_commit_residual_reports_computed_causes_not_fixed_string(tmp_path, capsys):
+    """`_report_commit_residual`'s deficit-branch message must state the
+    COMPUTED reason a change was not carried, never the fixed guess
+    "filtering/containment/dedup" this replaces."""
+    repo = _init_head_repo(
+        tmp_path, {"same.md": "unchanged content\n", "mystery.md": "old content\n"}
+    )
+    (repo / "mystery.md").write_text("new content\n", encoding="utf-8")
+
+    real_changes = [("NEW", "same.md"), ("NEW", "mystery.md")]
+    pathspec: "List[str]" = []  # neither path made it into the commit set
+
+    warning = _mod._report_commit_residual(
+        "alpha", real_changes, pathspec, repo_root=str(repo)
+    )
+    err = capsys.readouterr().err
+
+    assert "filtering/containment/dedup" not in err
+    assert "1 identical to HEAD" in err
+    assert "1 unaccounted for: mystery.md" in err
+    assert warning is not None
+    assert "2 change(s)" in warning
+
+
+def test_report_commit_residual_without_repo_root_names_the_gap_honestly(capsys):
+    """A caller with no dest repo root to classify against gets an honest
+    statement that no cause was derived -- never the old fixed guess, and
+    never a fabricated classification."""
+    real_changes = [("NEW", "a.md"), ("NEW", "b.md")]
+    pathspec: "List[str]" = []
+    _mod._report_commit_residual("alpha", real_changes, pathspec)
+    err = capsys.readouterr().err
+    assert "filtering/containment/dedup" not in err
+    assert "no dest repo root given to classify" in err
+
+

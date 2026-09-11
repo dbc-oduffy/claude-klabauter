@@ -586,7 +586,7 @@ class ConfigErrorTests(unittest.TestCase):
             "--corpus",
             self.fixture.corpus,
             "--no-default-trees",
-            f"--tree=claude-klabauter={self.fixture.claude-klabauter}",
+            f"--tree=claude-klabauter={self.fixture.claude_klabauter}",
         ]
         code = _module.main(argv)
         self.assertNotEqual(code, 2)

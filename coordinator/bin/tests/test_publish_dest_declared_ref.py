@@ -306,3 +306,52 @@ def test_check_is_generic_across_row_keys(tmp_path, monkeypatch, capsys):
     assert "staging" in combined
     assert "release" in combined
     assert key in combined
+
+
+# ---------------------------------------------------------------------------
+# 8. An engine-carrying mirror publishes to `candidate` only. A fresh clone
+# sits on its remote default (`main`) and a box without this machine's
+# registry declares no track_ref -- that pair must refuse, not default to
+# the remote default and land on main (klabauter main, 2026-09-08..10).
+# ---------------------------------------------------------------------------
+
+
+def _engine_setup_dir(tmp_path: Path) -> Path:
+    setup_dir = tmp_path / "setup"
+    setup_dir.mkdir(parents=True, exist_ok=True)
+    (setup_dir / "publish-targets.portable").write_text(
+        f"engine-row|mirror|publish-mirror:{_ROW_KEY}|coordinator_core|coordinator_core||\n",
+        encoding="utf-8",
+    )
+    return setup_dir
+
+
+@pytest.mark.parametrize(
+    ("branch", "track_ref", "accepted"),
+    [
+        ("main", None, False),
+        ("candidate", None, True),
+        ("main", "origin/main", False),
+        ("candidate", "origin/candidate", True),
+    ],
+)
+def test_engine_mirror_publishes_to_candidate_only(
+    tmp_path, monkeypatch, capsys, branch, track_ref, accepted
+):
+    monkeypatch.delenv("PORTABLE_TARGETS_FILE", raising=False)
+    dest = tmp_path / "dest"
+    _init_git_repo(dest, branch=branch)
+    registry_dir = tmp_path / "registry"
+    _write_registry(registry_dir, dest=dest, track_ref=track_ref)
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
+
+    target = _make_target("row-engine", tmp_path / "src", dest)
+    result = publish.assert_dest_on_declared_ref(
+        target, publish.RunTotals(), setup_dir=_engine_setup_dir(tmp_path)
+    )
+    combined = "".join(capsys.readouterr())
+
+    assert result is accepted
+    if not accepted:
+        assert "candidate" in combined
+        assert "main" in combined

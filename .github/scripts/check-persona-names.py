@@ -157,7 +157,7 @@ BANNED: list[tuple[str, re.Pattern[str]]] = [
     # `DoE-claude` (all delimiter/case forms, including the hyphenated role-id
     # suffixes `...-em`/`...-lead`) and bare `DoE` -- DELETED 2026-08-13 (PM
     # ruling: "stop scrubbing DoE-claude ... be transparent & forthcoming as
-    # to what it is"; makima-side reconciliation in commits c40c6f8f11e5 and
+    # to what it is"; engine-side reconciliation in commits c40c6f8f11e5 and
     # 571a4d78f535, which removed the equivalent `substitute`/`depersonalize`
     # entries from setup/percolate-hooks/percolate-store.yaml). Verified
     # (state/audits/2026-08-13-doe-claude-vocabulary-remap-investigation.md

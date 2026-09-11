@@ -555,6 +555,12 @@ def land_wave(
     `next_wave` is computed from a FRESH gate read taken after the writes, not from
     the pre-landing report — the approvals just written are precisely what changes
     it, and reusing the stale read would hand the driver the same wave twice.
+
+    It carries ONE subtraction from that read: a baton whose replan this landing just
+    minted is dropped, because the mint leaves the source open and the fresh read
+    hands back both halves of the pair. `_without_replanned_sources` states the rule
+    and its bounds — the subtraction is on the report only, nothing is written to the
+    source, and succession is deliberately left unsettled.
     """
     wave_result = _unwrap_wave_result(wave_result)
     report = assemble_plan_gate(worktree_root)
@@ -589,13 +595,23 @@ def land_wave(
                     f"{APPROVED_STATUS}"
                 )
             baton_path = _baton_path_for(entry, report)
-            # An XS carries no plan, so planPath is resolved only for the lanes
-            # that have one — resolving it first would refuse the dispatch lane on
-            # a field it is correct for that lane not to have.
+            # A `ready` verdict on a PM-only route is the blitz-em resolving a PM
+            # decision — the one thing the skill forbids outright. Refuse it HERE, by
+            # name: tolerating it instead would reach `approve_ready` with `plan_path
+            # None` and raise TypeError out of the whole op, after earlier `ready`
+            # entries had already written to disk, so the caller gets a stack trace and
+            # no landing report rather than one named per-baton refusal.
+            route = entry.get("route")
+            if route in _PM_ONLY_ROUTES:
+                raise LandingRefused(
+                    f"route: {route} is not a landable `ready` verdict — the exit is "
+                    "the PM's, and this lane would be the blitz-em taking it. It "
+                    "belongs in surfacedToPm."
+                )
+            # A route without a plan resolves no planPath — resolving it first would
+            # refuse those lanes on a field it is correct for them not to have.
             plan_path = (
-                None
-                if entry.get("route") == "dispatch"
-                else _rel(entry.get("planPath"), worktree_root)
+                None if _carries_no_plan(route) else _rel(entry.get("planPath"), worktree_root)
             )
             # The S lane parks its spec onto the baton and marks it execution-ready,
             # so `/execute-plan` resolves it as a straight dispatch instead of
@@ -632,11 +648,22 @@ def land_wave(
         baton_id = entry.get("batonId")
         try:
             baton_path = _baton_path_for(entry, report)
-            # Same route carve-out as the `ready` lane: an XS `pulled` entry has no
-            # plan to link, and that is a no-op here, never a refusal.
+            # Same route carve-out as the `ready` lane: a `pulled` entry on a route
+            # that carries no plan has none to link, and that is a no-op here, never
+            # a refusal.
+            #
+            # TWO routes carry no plan, not one. `dispatch` (XS) is the obvious one.
+            # `pm-decision` is the other and is the one that bit: an XL exit is not a
+            # plannable route — the blitz-em scaffolds no sizing object and names no
+            # reviewers for it by construction — so `planPath` is absent BY DESIGN and
+            # refusing on its absence refuses the pipeline for behaving correctly.
+            # Measured 2026-09-10 on example-cockpit-repo: one XL pulled to `pm-decision`
+            # refused its whole landing with "verdict carries no planPath", which is a
+            # STOP condition, so a run whose every other lane was clean halted on the
+            # one baton it had handled exactly right.
             plan_path = (
                 None
-                if entry.get("route") == "dispatch"
+                if _carries_no_plan(entry.get("route"))
                 else _rel(entry.get("planPath"), worktree_root)
             )
             if plan_path is not None:
@@ -655,6 +682,9 @@ def land_wave(
             refused.append({"baton": baton_id, "reason": str(exc)})
 
     minted: List[Dict[str, Any]] = []
+    #: Repo-relative paths of the SOURCE batons whose replan was minted in THIS landing.
+    #: Read by the `next_wave` build below — see `_without_replanned_sources`.
+    replanned_sources: set[str] = set()
     for entry in wave_result.get("replan") or []:
         try:
             from coordinator_core.ops.mint_deliverable_id import mint
@@ -666,24 +696,32 @@ def land_wave(
             # then share a visible provenance, and there is only one random draw to
             # reason about.
             suffix = deliverable_id.rsplit("-", 1)[-1]
-            minted.append(
-                mint_replan_baton(
-                    worktree_root,
-                    source_baton_path=_baton_path_for(entry, report),
-                    brief=entry.get("replanBrief") or entry.get("reason") or "",
-                    handoff_id=f"hnd-{slug[:40]}-{suffix}",
-                    deliverable_id=deliverable_id,
-                    title=f"Replan — {entry['batonId']}",
-                    branch=branch,
-                    summary="Replan minted by a plan-blitz readiness gate; brief carries the reviewers' rationale.",
-                )
+            source_path = _baton_path_for(entry, report)
+            # The subtraction below is earned by a mint that SUCCEEDED, so it is recorded after
+            # one. Adding it here would drop a source out of `next_wave` on a refused mint — a
+            # baton left open, `ready_to_fire`, carrying no approved plan and now no replan
+            # either, omitted from the fire that was its way back. Every other refusal path in
+            # this module leaves the record where it was so the next sweep self-heals; this one
+            # would not.
+            entry_minted = mint_replan_baton(
+                worktree_root,
+                source_baton_path=source_path,
+                brief=entry.get("replanBrief") or entry.get("reason") or "",
+                handoff_id=f"hnd-{slug[:40]}-{suffix}",
+                deliverable_id=deliverable_id,
+                title=f"Replan — {entry['batonId']}",
+                branch=branch,
+                summary="Replan minted by a plan-blitz readiness gate; brief carries the reviewers' rationale.",
             )
+            minted.append(entry_minted)
+            replanned_sources.add(source_path)
         except (LandingRefused, OSError, KeyError) as exc:
             refused.append({"baton": entry.get("batonId"), "reason": str(exc)})
 
     after = assemble_plan_gate(worktree_root)
     wave = after["waves"][0] if after["waves"] else []
     by_id = {b["id"]: b for b in after["batons"]}
+    wave = _without_replanned_sources(wave, by_id, replanned_sources)
 
     return {
         "approved": approved,
@@ -713,6 +751,31 @@ def land_wave(
 #: The verdict keys a real wave result carries. A payload with none of them is not
 #: an empty wave — it is the wrong object.
 _VERDICT_KEYS = ("ready", "pulled", "replan", "surfacedToPm", "dispatched", "routedElsewhere")
+
+#: The ONLY routes that produce a plan document — mirrors `PLANNABLE_ROUTES` in
+#: DoE-claude `coordinator/workflows/plan-blitz.mjs`. Every other route is a different
+#: room and carries no `planPath` by construction: `dispatch` (the wave's Dispatch phase
+#: already did the work), and the `ROUTE_EXITS` set — `pm-decision`, `shape`, `roadmap`,
+#: `goal-setting` — none of which gets a sizing object or a planner.
+#:
+#: An ALLOWLIST, deliberately. The plan-free set is open and grows whenever an exit is
+#: added; the plannable set is closed and stable, so enumerating the other side is the
+#: list that goes stale silently. An UNKNOWN or absent route stays on the refusing side:
+#: a legacy wave result carrying no `route` must still get the baton->plan link repair
+#: the `pulled` lane exists for, rather than being silently skipped.
+_PLANNABLE_ROUTES = frozenset({"plan", "spec-dispatch"})
+
+#: Routes whose exit belongs to the PM. A `ready` verdict on one of these is the
+#: blitz-em resolving a PM decision, which the skill forbids in as many words ("The
+#: blitz-em is an EM proxy, never a PM proxy") — so the `ready` lane REFUSES them
+#: loudly rather than tolerating a missing plan. The `pulled` lane accepts them: leaving
+#: such a baton where it is, is exactly the right disposition.
+_PM_ONLY_ROUTES = frozenset({"pm-decision", "shape", "roadmap", "goal-setting"})
+
+
+def _carries_no_plan(route: Optional[str]) -> bool:
+    """True when this route produces no plan document, so `planPath` is absent by design."""
+    return route is not None and route not in _PLANNABLE_ROUTES
 
 
 def _unwrap_wave_result(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -767,6 +830,42 @@ def _baton_path_for(entry: Dict[str, Any], report: Dict[str, Any]) -> str:
         if ident in record["ids"] or ident == record["path"]:
             return record["path"]
     raise LandingRefused(f"no baton on disk carries id {ident!r}")
+
+
+def _without_replanned_sources(
+    wave: List[str],
+    by_id: Dict[str, Dict[str, Any]],
+    replanned_sources: set,
+) -> List[str]:
+    """Drop, from the wave this landing hands back, any baton whose replan it just minted.
+
+    A `replan` verdict mints a NEW baton carrying the gate's brief and leaves the source
+    exactly as it was — open, `ready_to_fire`, carrying no approved plan. The fresh gate read
+    below therefore returns BOTH, and the driver's next fire spends a sizing scout, a planner,
+    a premise check, reviewers and an integrator on the source as well as on its replan.
+    Measured 2026-09-10 on example-retrieval-repo-ue-addon: the landing of one PIVOT returned `rqsi-02`
+    and `hnd-replan-rqsi-02-d15940` side by side, and the wave being landed had itself planned
+    both halves of two OLDER pairs (`inst-02`, `dlv-20260901-handoff-2a3d9e`) — in each case
+    the replan went ready and the source was pulled, after paying for it in full.
+
+    THE FILTER IS ON THE REPORT, NOT ON DISK, and that is the whole design. This module writes
+    no frontmatter it would then have to un-write: no `blocked_by` edge (which is
+    decision-dependency vocabulary, not workflow state, and which nothing here would ever
+    clear), no terminal stamp on the source (`continued` is a CODED state, so stamping it
+    would open a dependent's EXECUTION gate on work that never landed). The source keeps its
+    disk state, stays visible to the very next `roadmap.plan_gate` read, and is simply not
+    handed to the fire the driver is about to make.
+
+    So this stops the double-spend and does NOT settle succession. A replan is a successor in
+    everything but its frontmatter, and the durable answer is to mint it as one (DR-172's
+    `continued`/`continued_into` shape, with identity inherited so a dependent edge does not
+    resolve `coded` against unlanded work). That is a work-graph semantics change and wants a
+    decision record, not this patch. Until it exists, a pair already on disk from an EARLIER
+    landing is outside this filter's reach by construction — it only knows what it just minted.
+    """
+    if not replanned_sources:
+        return wave
+    return [i for i in wave if (by_id.get(i) or {}).get("path") not in replanned_sources]
 
 
 def _fire_arg(baton: Dict[str, Any], worktree_root: Path) -> Dict[str, Any]:

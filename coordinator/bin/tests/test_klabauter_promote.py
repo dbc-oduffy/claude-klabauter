@@ -18,6 +18,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -58,6 +59,18 @@ _STATUS_CLEAN_NON_CANDIDATE = (
 )
 
 _SYMREF_MAIN = "refs/remotes/origin/main\n"
+
+
+def _recent_committer_date(*, minutes_ago: int = 30) -> str:
+    """An ISO-8601 committer date that is well inside the soak floor
+    (`_CROSS_MACHINE_SOAK_FLOOR_SECONDS`, 6h) as of whenever the suite
+    actually runs. A hardcoded absolute timestamp ages past the floor the
+    moment enough wall-clock time elapses since it was written — it is not
+    a fixed fixture, it is a time bomb. Compute it relative to `now`
+    instead so the test keeps testing what it says it tests."""
+    return (
+        datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+    ).isoformat()
 
 
 class _SubprocessSpy:
@@ -273,7 +286,7 @@ def test_cross_machine_predicate_refuses_when_soak_floor_not_met(tmp_path, monke
     """A candidate ref pushed moments ago has not soaked long enough —
     refuses even when every other predicate passes."""
     rc, spy, dest = _run_promote(
-        tmp_path, monkeypatch, confirm=True, log_stdout="2026-08-15T23:59:59+00:00"
+        tmp_path, monkeypatch, confirm=True, log_stdout=_recent_committer_date()
     )
     assert rc == _mod._EXIT_USAGE
     err = capsys.readouterr().err
@@ -324,7 +337,7 @@ def test_all_four_predicate_failures_reported_together_not_just_first(tmp_path, 
         monkeypatch,
         confirm=True,
         status_stdout=_STATUS_DIRTY_CANDIDATE,
-        log_stdout="2026-08-15T23:59:59+00:00",
+        log_stdout=_recent_committer_date(),
         percolate_root=root,
     )
     assert rc == _mod._EXIT_USAGE

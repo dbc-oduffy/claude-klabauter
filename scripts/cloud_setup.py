@@ -62,6 +62,7 @@ DoE-claude docs/plans/2026-09-09-cloud-environment-install-mode-pre-boot.md § C
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import json
 import os
@@ -81,50 +82,53 @@ CLONES: dict[str, dict[str, str]] = {
         "url": "https://github.com/dbc-oduffy/claude-klabauter.git",
         "dest": "/root/klabauter",
     },
-    # The example-retrieval-repo half. Same shape as the two above, so `clone_repo` and the
-    # report read identically for all four; the rag pair additionally accepts an
-    # already-present checkout (see `locate_or_clone_repo`).
-    "example-retrieval-repo": {
-        "url": "https://github.com/dbc-oduffy/example-retrieval-repo.git",
-        "dest": "/root/example-retrieval-repo",
-    },
-    "example-retrieval-repo-ue-addon": {
-        "url": "https://github.com/dbc-oduffy/example-retrieval-repo-ue-addon.git",
-        "dest": "/root/example-retrieval-repo-ue-addon",
-    },
+    # The retrieval half is NOT hardcoded here, deliberately. This file is
+    # published to a PUBLIC mirror, so a private repository's URL cannot live in
+    # it: the publish pipeline scrubs the name, and a scrubbed URL is worse than
+    # an absent one because it clones something that does not exist and records
+    # a failure nobody reads as "the mirror rewrote my URL". The two entries are
+    # composed at run time from the environment instead, and the setup-script
+    # field in the cloud-environment form is where an operator supplies them —
+    # that field is private to the environment, which the published mirror is
+    # not. Absent, the retrieval steps skip with a recorded verdict.
 }
 
-#: Machine-local registry key for each rag-half clone. The key spellings are the
-#: fleet's, not this file's -- `machine-local keys | grep '^repos\.'` is the
-#: authority and a wrong guess returns a bare not-found that reads as "no such
-#: repo". Registering them is what lets a session (or the hydration verb) find
-#: either checkout without a literal path.
+#: Where a cloud environment puts the repositories an operator selected for it.
+#: DISCOVERED, not assumed: the first cut hardcoded /workspace, which does not
+#: exist on this platform — the selected checkouts live under /home/user — so the
+#: locate step could never have found them and every environment would have
+#: reported the retrieval half absent while it was sitting on disk.
+#: Ordered by specificity; the env override wins for a layout none of these match.
+#: Registry key per retrieval repo, so a session resolves either checkout by
+#: key rather than by a literal path this script happened to choose.
 MACHINE_LOCAL_REPO_KEYS: dict[str, str] = {
     "example-retrieval-repo": "repos.example_retrieval_repo",
     "example-retrieval-repo-ue-addon": "repos.example_retrieval_repo_ue_addon",
 }
 
-#: Where a claude.ai cloud environment mounts the repositories it checks out.
-#: Same mount `_find_doctrine_source` globs; named once here so the rag half's
-#: "locate before clone" rung and the project-root resolution agree.
-WORKSPACE_MOUNT = Path("/workspace")
-
+#: Where this run's own verdicts land. A process exiting 0 is not evidence that
+#: anything installed; this file is.
 INSTALL_REPORT_PATH = Path("/root/cloud-setup-report.json")
 
 NETWORK_MAX_ATTEMPTS = 3
-
-#: Ceiling for example-retrieval-repo's installer subprocess. Sized to sit just ABOVE that
-#: installer's own 900s pip ceiling (`_CLOUD_PIP_TIMEOUT_S`), so a wedged pip is
-#: reported by the installer -- which names the package and the refresh rule --
-#: rather than truncated into a bare "timed out" by this caller.
-#: A CEILING IS NOT THE BUDGET. The pre-boot phase's budget is measured, not
-#: bounded: every step's elapsed time is recorded (see `run_step`) and read back
-#: from the setup log and the install report.
+#: Ceiling for the retrieval installer subprocess, sized to sit just ABOVE that
+#: installer's own internal pip ceiling so a wedged pip is reported by the layer
+#: that can name the package. A ceiling is not a budget.
 RAG_INSTALL_TIMEOUT_S = 960
-
-#: Ceiling for one `machine-local set`. A registry write is a single small file
-#: rewrite; anything near this is a wedged interpreter probe, not slow I/O.
 MACHINE_LOCAL_TIMEOUT_S = 60
+
+RETRIEVAL_ROOT_ENV = "COORDINATOR_RETRIEVAL_ROOT"
+
+
+def retrieval_search_roots() -> "list[Path]":
+    override = (os.environ.get(RETRIEVAL_ROOT_ENV) or "").strip()
+    roots = [Path(override)] if override else []
+    roots += [Path("/home/user"), Path("/workspace"), Path("/root"), Path.cwd()]
+    seen: list[Path] = []
+    for r in roots:
+        if r not in seen:
+            seen.append(r)
+    return seen
 
 
 @dataclass
@@ -161,6 +165,8 @@ class Report:
     #: project root could not be chosen without guessing. Empty is the ordinary
     #: case; a populated list means the fallback root was used deliberately.
     rag_project_root_ambiguity: list = field(default_factory=list)
+    #: The MCP entry this run wrote, independently of the clone steps.
+    mcp_entry_written: dict | None = None
     machine_local_keys: dict = field(default_factory=dict)
     rag_install: dict | None = None
     mcp_registration: dict | None = None
@@ -739,7 +745,10 @@ def locate_existing_checkout(name: str) -> Path | None:
     of the right name is not a checkout, and accepting one would register a
     registry key pointing at nothing.
     """
-    candidates = [Path(CLONES[name]["dest"]), WORKSPACE_MOUNT / name]
+    if name in CLONES:
+        candidates = [Path(CLONES[name]["dest"])]
+    else:
+        candidates = [root / name for root in retrieval_search_roots()]
     for cand in candidates:
         if cand.is_dir() and (cand / ".git").exists():
             return cand
@@ -755,16 +764,41 @@ def locate_or_clone_repo(name: str, report: Report) -> None:
     """
     found = locate_existing_checkout(name)
     if found is None:
+        if name not in CLONES:
+            # No URL supplied and nothing already mounted. This is a coordinator-
+            # only environment, which is a supported shape, not a failure.
+            report.rag_roots[name] = None
+            print(
+                f"[cloud_setup] {name}: skipped — no checkout on disk and "
+                f"searched {', '.join(str(r) for r in retrieval_search_roots())}. "
+                "Select it as a repository for this environment, or set "
+                f"{RETRIEVAL_ROOT_ENV}. The retrieval half will not be installed."
+            )
+            return
         clone_repo(name)
         found = locate_existing_checkout(name)
     if found is None:
         report.rag_roots[name] = None
         raise RuntimeError(
-            f"{name}: no checkout at {CLONES[name]['dest']} or {WORKSPACE_MOUNT / name} "
+            f"{name}: no checkout under any of {[str(r) for r in retrieval_search_roots()]} "
             "after the clone step — nothing later in this half can resolve it"
         )
     report.rag_roots[name] = str(found)
     print(f"[cloud_setup] {name}: {found}")
+
+
+def retrieval_half_skipped(report: Report) -> bool:
+    """True when the retrieval half was deliberately not installed.
+
+    Distinguishes "no URL was supplied, so this environment is coordinator-only"
+    from "a step failed". The dependent steps read this and skip with a recorded
+    verdict rather than raising, because a raise here would fill the report with
+    consequential failures for a shape the operator chose.
+    """
+    return (
+        "example-retrieval-repo" in report.rag_roots
+        and report.rag_roots.get("example-retrieval-repo") is None
+    )
 
 
 def _resolved_root(name: str, report: Report) -> Path:
@@ -824,6 +858,10 @@ def register_machine_local_repo_keys(report: Report) -> None:
     The registry lives under COORDINATOR_SETTINGS_HOME, which `set_engine_env`
     put in this process' environment — the child inherits it.
     """
+    if retrieval_half_skipped(report):
+        print("[cloud_setup] registry keys: skipped — retrieval half not installed.")
+        return
+
     # Seed both verdicts BEFORE the resolver can raise. _machine_local_argv
     # raises when neither rung is available, and the keys were left as {} —
     # indistinguishable in the report from a step that never ran, against a
@@ -872,11 +910,15 @@ def _resolve_rag_project_root(report: Report) -> str:
     and nothing else.
     """
     checkouts = []
-    if WORKSPACE_MOUNT.is_dir():
+    for root in retrieval_search_roots():
+        if not root.is_dir():
+            continue
         checkouts = [
-            cand for cand in sorted(WORKSPACE_MOUNT.iterdir())
+            cand for cand in sorted(root.iterdir())
             if cand.is_dir() and (cand / ".git").exists()
         ]
+        if checkouts:
+            break
     if len(checkouts) == 1:
         return str(checkouts[0])
     if len(checkouts) > 1:
@@ -914,6 +956,10 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
     installed lean box reports about itself. Both must land in the setup log, or
     the first operator to read /health treats a working install as broken.
     """
+    if retrieval_half_skipped(report):
+        print("[cloud_setup] cloud install: skipped — retrieval half not installed.")
+        return
+
     rag_root = _resolved_root("example-retrieval-repo", report)
     installer = rag_root / "example_retrieval_repo_scripts" / "install_example_retrieval_repo_plugin.py"
     if not installer.is_file():
@@ -1008,6 +1054,57 @@ def _expected_daemon_url(rag_root: Path) -> tuple[str | None, str]:
     except Exception as e:  # noqa: BLE001 - an unreadable truth source is a recorded miss
         return None, f"{config_path} did not yield host/port: {type(e).__name__}: {e}"
     return f"http://{host}:{port}/mcp", str(config_path)
+
+
+#: The retrieval daemon's loopback endpoint. Example-retrieval-repo's own
+#: ``example_retrieval_repo_mcp/http_config.py`` is the truth source for the port; this
+#: default is what a registration written BEFORE that checkout exists must
+#: assume, and `verify_mcp_registration` re-derives from the checkout and
+#: records a mismatch once it lands.
+RETRIEVAL_MCP_DEFAULT_URL = "http://127.0.0.1:8767/mcp"
+
+
+def register_retrieval_mcp_entry(report: Report) -> None:
+    """Write ``mcpServers."example-retrieval-repo"`` into ``$HOME/.claude.json``, always.
+
+    THIS STEP HAS NO DEPENDENCIES AND MUST NOT ACQUIRE ANY. The entry is a
+    pointer to a loopback URL, not a reference to code: nothing about writing it
+    requires the repository to be present, cloned, installed, or reachable. That
+    matters because the registration is the one half a session CANNOT repair —
+    `mcpServers` is read once at startup — while the daemon behind it can arrive
+    at any later moment, including a subsequent session, and the pre-registered
+    entry connects to it then.
+
+    So this runs BEFORE the clone steps and independently of whether they
+    succeed. An environment whose private checkout could not be fetched still
+    gets a correct registration, and becomes useful the moment the repository is
+    present, with no second pass over the config and no restart owed for the
+    config's sake.
+
+    Merged, never replaced: Claude Code may have written this file already.
+    """
+    config_path = _claude_json_path()
+    entry = {"type": "http", "url": RETRIEVAL_MCP_DEFAULT_URL}
+    data: dict = {}
+    try:
+        if config_path.exists():
+            data = json.loads(config_path.read_text())
+            if not isinstance(data, dict):
+                data = {}
+    except Exception as e:  # noqa: BLE001 - an unreadable config is replaced, not fatal
+        report.mcp_entry_written = {"read_error": f"{type(e).__name__}: {e}"}
+        data = {}
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict):
+        servers = {}
+    servers["example-retrieval-repo"] = entry
+    data["mcpServers"] = servers
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = config_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(config_path)
+    report.mcp_entry_written = {"config_path": str(config_path), "entry": entry}
+    print(f"[cloud_setup] MCP entry registered: example-retrieval-repo -> {entry['url']}")
 
 
 def verify_mcp_registration(report: Report) -> None:
@@ -1151,6 +1248,9 @@ def main() -> int:
     # installer seeds a concern into the machine-local registry those two steps
     # create, so running it earlier reproduces the documented refusal — and the
     # refusal reads as a example-retrieval-repo defect rather than an ordering one.
+    # The registration goes first and unconditionally: it is the half a session
+    # cannot repair, and it needs nothing from the checkout.
+    run_step("register retrieval MCP entry", lambda: register_retrieval_mcp_entry(report), report)
     run_step("locate or clone example-retrieval-repo", lambda: locate_or_clone_repo("example-retrieval-repo", report), report)
     run_step(
         "locate or clone example-retrieval-repo-ue-addon",

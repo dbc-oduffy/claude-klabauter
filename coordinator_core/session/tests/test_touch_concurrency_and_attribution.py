@@ -32,8 +32,10 @@ three tests it served. `touch()` no longer opens the sink through
 `scope.open` at all, so the harness could not fire; and there is no longer a
 two-step region for it to straddle, so there is nothing left to force. Do NOT
 resurrect it against `touch_record.open` -- that would make a deleted lock
-look guarded. `_TOUCH_LOCK_TIMEOUT_SECS` is likewise not exercised by
-`touch()` and is no longer bumped anywhere in this file.
+look guarded. `scope._ATOMIC_APPEND_LOCK_TIMEOUT_SECS` (renamed 2026-08-27
+from `_TOUCH_LOCK_TIMEOUT_SECS`, since nothing about it concerns `touch()`
+any more) is likewise not exercised by `touch()` and is no longer bumped
+anywhere in this file.
 
 Also retired here, 2026-08-27: `scope.touch`'s `lock=` parameter, and the
 `test_touch_ignores_the_vestigial_lock_parameter` test whose only subject

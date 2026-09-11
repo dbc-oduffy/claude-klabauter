@@ -477,6 +477,91 @@ def test_the_minted_baton_re_enters_the_gate_as_work(tmp_path):
     ), f"minted baton absent from the next wave: {sorted(ids)}"
 
 
+def test_a_replanned_source_is_not_handed_back_in_the_same_landings_next_wave(tmp_path):
+    """A mint leaves the source open, so the fresh gate read returns BOTH halves.
+
+    Handing both to the driver spends a sizing scout, a planner, a premise check,
+    reviewers and an integrator on a baton whose replan is already in the same fire.
+    Measured 2026-09-10 on example-retrieval-repo-ue-addon: one PIVOT landed and `next_wave`
+    came back carrying `rqsi-02` beside its just-minted `hnd-replan-rqsi-02-d15940`.
+    """
+    root = _repo(tmp_path)
+    _baton(root, "b-1")
+    _baton(root, "b-other")
+
+    out = bl.land_wave(root, {"waveIndex": 0, "replan": [{"batonId": "b-1", "replanBrief": "why"}]})
+
+    fired = {b["id"] for b in out["next_wave"]["batons"]}
+    assert "b-1" not in fired, f"the replanned source is back in the fire: {sorted(fired)}"
+    assert "b-other" in fired, "the filter reached a baton that was never replanned"
+    assert any("replan" in i for i in fired), (
+        f"the minted replan must still fire — dropping both is not the fix: {sorted(fired)}"
+    )
+
+
+def test_a_refused_mint_leaves_its_source_in_the_next_wave(tmp_path, monkeypatch):
+    """The subtraction is earned by a mint that happened, never by one that was attempted.
+
+    `mint_replan_baton` refuses when the replan file already exists, and an OSError from its
+    write reaches the same handler — a read-only worktree, or a Windows MAX_PATH overrun on the
+    60-char stem. Subtracting before the call drops a source out of the fire that was its way
+    back: open, `ready_to_fire`, no approved plan and now no replan either. Every other refusal
+    path in this module leaves the record where it was so the next sweep self-heals."""
+    root = _repo(tmp_path)
+    _baton(root, "b-1")
+    _baton(root, "b-other")
+    monkeypatch.setattr(bl, "mint_replan_baton", lambda *a, **k: (_ for _ in ()).throw(
+        bl.LandingRefused("replan baton already exists: fixture")))
+
+    out = bl.land_wave(root, {"waveIndex": 0, "replan": [{"batonId": "b-1", "replanBrief": "why"}]})
+
+    assert out["minted"] == []
+    assert [r["baton"] for r in out["refused"]] == ["b-1"]
+    fired = {b["id"] for b in out["next_wave"]["batons"]}
+    assert "b-1" in fired, (
+        f"a refused mint still subtracted its source from the wave: {sorted(fired)}"
+    )
+
+
+def test_the_replanned_source_stays_on_disk_and_stays_a_candidate(tmp_path):
+    """The subtraction is on the REPORT, never on the record.
+
+    Nothing writes `blocked_by` onto the source (decision-dependency vocabulary, not
+    workflow state, and nothing here would ever clear it) and nothing stamps it
+    terminal (`continued` is a CODED state, so a dependent's EXECUTION gate would open
+    on work that never landed). The source is simply not in the fire this landing hands
+    back; the very next gate read still sees it, which is what keeps succession an open
+    question rather than one this patch answered by accident.
+    """
+    root = _repo(tmp_path)
+    baton_path = root / _baton(root, "b-1")
+    before = baton_path.read_text(encoding="utf-8")
+
+    bl.land_wave(root, {"waveIndex": 0, "replan": [{"batonId": "b-1", "replanBrief": "why"}]})
+
+    assert baton_path.read_text(encoding="utf-8") == before, (
+        "the landing mutated the replanned source"
+    )
+    after = pg.assemble_plan_gate(root)
+    assert "b-1" in {b["id"] for b in after["batons"] if b["candidate"]}, (
+        "the source dropped out of the gate entirely — the filter buried it instead of "
+        "deferring it"
+    )
+
+
+def test_a_landing_with_no_replan_leaves_the_wave_untouched(tmp_path):
+    """The filter is inert when nothing was minted. An empty source set must not be
+    an excuse to walk and rebuild the wave list."""
+    root = _repo(tmp_path)
+    plan = _plan(root, "the-plan", "draft")
+    _baton(root, "b-1")
+    _baton(root, "b-other")
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan}]})
+
+    assert "b-other" in {b["id"] for b in out["next_wave"]["batons"]}
+
+
 # ---------------------------------------------------------------------------
 # Payload shape — the wrong object must not look like an empty wave
 # ---------------------------------------------------------------------------
@@ -753,3 +838,103 @@ def test_a_pivot_does_not_block_the_other_lanes_in_the_same_wave(tmp_path):
     assert [r["baton"] for r in out["refused"]] == ["b-1"]
     assert _status(root, good) == "approved"
     assert _status(root, pivoted) == "draft"
+
+
+def test_a_pulled_pm_decision_carries_no_plan_and_is_not_refused(tmp_path):
+    """An XL exit is not a plannable route, so `planPath` is absent BY DESIGN.
+
+    The blitz-em scaffolds no sizing object and names no reviewers for a `pm-decision`
+    route — there is nothing to plan yet, which is the whole content of the verdict.
+    Refusing the landing on the missing field refuses the pipeline for behaving exactly
+    as designed, and `refused[]` is a STOP condition for the driver: measured 2026-09-10
+    on example-cockpit-repo, one such baton halted a run whose every other lane was clean.
+
+    `dispatch` (XS) already had this carve-out; `pm-decision` is the second route with
+    the same property and was missing from it.
+    """
+    root = _repo(tmp_path)
+    _baton(root, "b-1", deliverable_id="dlv-b-1")
+
+    out = bl.land_wave(
+        root,
+        {
+            "waveIndex": 0,
+            "pulled": [{"batonId": "b-1", "route": "pm-decision", "planPath": None}],
+        },
+    )
+
+    assert out["refused"] == []
+    assert out["pulled"] == ["b-1"]
+
+
+def test_a_pulled_verdict_on_a_PLANNABLE_route_still_refuses_a_missing_plan(tmp_path):
+    # The carve-out is per-route, not a blanket tolerance: a route that DOES carry a
+    # plan must still refuse when the verdict names none, or the landing would silently
+    # skip the baton->plan link the `pulled` lane exists to repair.
+    root = _repo(tmp_path)
+    _baton(root, "b-1", deliverable_id="dlv-b-1")
+
+    out = bl.land_wave(
+        root,
+        {"waveIndex": 0, "pulled": [{"batonId": "b-1", "route": "plan", "planPath": None}]},
+    )
+
+    assert [r["baton"] for r in out["refused"]] == ["b-1"]
+    assert "planPath" in out["refused"][0]["reason"]
+
+
+def test_a_ready_verdict_on_a_pm_only_route_is_refused_not_crashed(tmp_path):
+    """The regression this row exists for, and the doctrine underneath it.
+
+    Routing `pm-decision` through the plan-free carve-out made the `ready` lane fall to
+    `approve_ready(..., plan_path=None)`, which does `worktree_root / None` and raises
+    TypeError — outside the lane's `except` clause, so the whole op raised out of
+    `land_wave` AFTER earlier `ready` entries had already written. The caller got a stack
+    trace and no landing report, which is strictly worse than the refusal it replaced.
+
+    The correct behaviour is not tolerance either: a `ready` verdict on a PM-only route
+    IS the blitz-em resolving a PM decision, which the skill forbids outright. Refuse it
+    by name, per baton, and let the other lanes land.
+    """
+    root = _repo(tmp_path)
+    _baton(root, "b-1", deliverable_id="dlv-b-1")
+
+    out = bl.land_wave(
+        root,
+        {
+            "waveIndex": 0,
+            "ready": [{"batonId": "b-1", "route": "pm-decision", "planPath": None}],
+        },
+    )
+
+    assert [r["baton"] for r in out["refused"]] == ["b-1"]
+    assert "the exit is the PM's" in out["refused"][0]["reason"]
+    assert out["approved"] == []
+
+
+def test_every_pm_only_route_is_accepted_by_the_pulled_lane(tmp_path):
+    # `pulled` on a PM-only route is the right disposition — the EM left it where it
+    # was. All four exits behave the same; `pm-decision` was only the one measured.
+    for i, route in enumerate(sorted(bl._PM_ONLY_ROUTES)):
+        sub = tmp_path / f"r{i}"
+        sub.mkdir(parents=True, exist_ok=True)
+        root = _repo(sub)
+        _baton(root, "b-1", deliverable_id="dlv-b-1")
+        out = bl.land_wave(
+            root,
+            {"waveIndex": 0, "pulled": [{"batonId": "b-1", "route": route, "planPath": None}]},
+        )
+        assert out["refused"] == [], f"{route} refused in the pulled lane"
+        assert out["pulled"] == ["b-1"]
+
+
+def test_a_verdict_carrying_no_route_still_refuses_a_missing_plan(tmp_path):
+    # An unknown or absent route stays on the REFUSING side: a legacy wave result with no
+    # `route` must still get the baton->plan link repair the pulled lane exists for,
+    # rather than being silently skipped as plan-free.
+    root = _repo(tmp_path)
+    _baton(root, "b-1", deliverable_id="dlv-b-1")
+
+    out = bl.land_wave(root, {"waveIndex": 0, "pulled": [{"batonId": "b-1"}]})
+
+    assert [r["baton"] for r in out["refused"]] == ["b-1"]

@@ -654,3 +654,165 @@ def test_a_plan_path_that_does_not_exist_is_not_a_claim(tmp_path):
     row = _by_id(pg.assemble_plan_gate(tmp_path), "dangling-01")
 
     assert row["unlinked_plan_claim"] is None
+
+
+def test_an_execution_parked_s_blocker_opens_its_dependents_planning_gate(tmp_path):
+    """The S lane parks a spec and never takes the approval, so the plan stays `draft`.
+
+    `needs_plan` already keys on `handoff_phase: execution` for exactly this reason —
+    "keying on plan status ALONE would re-plan it on every later sweep, forever". The
+    blocker ladder read only plan status, so a parked S ranked `plan-drafted`, below
+    `_PLANNING_SATISFIED`, and held every DEPENDENT's planning gate shut permanently:
+    the blocker will never be approved (the S lane does not approve) and is not yet
+    coded (nothing has shipped). No sweep could open it.
+
+    Measured 2026-09-10 on example-cockpit-repo: tmrg-07, tmrg-09 and tmrg-10 were all
+    unplannable behind a tmrg-06 adjudicated ready to execute three days earlier.
+    """
+    plan = _plan(tmp_path, "the-parked-spec", "draft")
+    _baton(
+        tmp_path,
+        "blocker-1",
+        governing_plan=plan,
+        handoff_phase="execution",
+        execution_authorized_by="plan-blitz",
+        execution_authorized_at="2026-09-10T00:00:00Z",
+        execution_authorized_sha="deadbeef",
+    )
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+
+    assert dependent["planning_gate"]["open"] is True
+    assert dependent["planning_gate"]["blocking"] == []
+
+
+def test_an_execution_parked_s_blocker_still_holds_the_EXECUTION_gate_shut(tmp_path):
+    """PLAN_APPROVED, never CODED — this is the whole two-gate rule.
+
+    The EM adjudicated the blocker ready to RUN, which is at least as strong as a
+    review-approved plan, but the work has not shipped. Ranking it CODED would open a
+    dependent's EXECUTION gate against work that does not exist yet, which is the more
+    expensive of the two errors.
+    """
+    plan = _plan(tmp_path, "the-parked-spec", "draft")
+    _baton(
+        tmp_path,
+        "blocker-1",
+        governing_plan=plan,
+        handoff_phase="execution",
+        execution_authorized_by="plan-blitz",
+        execution_authorized_at="2026-09-10T00:00:00Z",
+        execution_authorized_sha="deadbeef",
+    )
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+
+    assert dependent["execution_gate"]["open"] is False
+    held = dependent["execution_gate"]["blocking"][0]
+    assert held["disposition"] == pg.BLOCKER_PLAN_APPROVED
+    assert "handoff_phase: execution" in held["reason"]
+
+
+def test_an_unparked_draft_blocker_is_unchanged(tmp_path):
+    # The carve-out is keyed on the execution stamp, not on being a draft: an ordinary
+    # drafted plan with no authorization must still hold the planning gate shut.
+    plan = _plan(tmp_path, "just-a-draft", "draft")
+    _baton(tmp_path, "blocker-1", governing_plan=plan)
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+
+    assert dependent["planning_gate"]["open"] is False
+    assert dependent["planning_gate"]["blocking"][0]["disposition"] == pg.BLOCKER_PLAN_DRAFTED
+
+
+def test_the_phase_stamp_alone_does_not_open_a_dependents_planning_gate(tmp_path):
+    """`handoff_phase: execution` is the fleet-wide plan->execute seam, not an S-park.
+
+    `scan_batons` reads EVERY record under state/handoffs/ with no `kind` filter, and
+    ordinary session handoffs carry that stamp — 19 of them in claude-klabauter's own corpus, none
+    an S-park. Keying the carve-out on the phase alone would open a dependent's planning
+    gate on a record that never went through `blitz_land.authorize_execution`, while the
+    reason line asserted a park nothing had checked.
+    """
+    plan = _plan(tmp_path, "a-draft", "draft")
+    _baton(tmp_path, "blocker-1", governing_plan=plan, handoff_phase="execution")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+
+    assert dependent["planning_gate"]["open"] is False
+    assert dependent["planning_gate"]["blocking"][0]["disposition"] == pg.BLOCKER_PLAN_DRAFTED
+
+
+@pytest.mark.parametrize("shelved", ["deferred", "abandoned", "superseded"])
+def test_a_parked_blocker_whose_plan_was_later_shelved_does_not_open_the_gate(tmp_path, shelved):
+    """`PLAN_APPROVED_STATUSES` excludes these deliberately — a shelved plan publishes no
+    decisions a dependent can build on. The park stamp is sticky (`authorize_execution`
+    refuses a re-stamp and nothing clears it), so a plan shelved AFTER the park would
+    otherwise hold the gate open permanently on a plan its own author withdrew.
+    """
+    plan = _plan(tmp_path, "a-shelved-plan", shelved)
+    _baton(
+        tmp_path,
+        "blocker-1",
+        governing_plan=plan,
+        handoff_phase="execution",
+        execution_authorized_by="plan-blitz",
+        execution_authorized_at="2026-09-10T00:00:00Z",
+        execution_authorized_sha="deadbeef",
+    )
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+
+    assert dependent["planning_gate"]["open"] is False
+
+
+def test_a_parked_blocker_whose_plan_link_is_gone_says_so(tmp_path):
+    """`unplanned` normally means a sweep will plan it. Here it never will.
+
+    `needs_plan` keys on the park alone, with no plan dependency, so an execution-parked
+    baton whose `governing_plan` was moved or deleted reports `needs_plan: False` — no
+    sweep picks it up — while this lane reports its dependents as ordinarily blocked. The
+    dependents are jammed permanently and the wording gives an operator no way to tell
+    that from work still queued.
+
+    The disposition and both gates are unchanged: a blocker with no plan publishes
+    nothing to build on, and opening a gate here would be the more expensive error. Only
+    the diagnosis changes, because the repair is a human restoring the link.
+    """
+    _baton(
+        tmp_path,
+        "blocker-1",
+        governing_plan="docs/plans/moved-or-deleted.md",
+        handoff_phase="execution",
+        execution_authorized_by="plan-blitz",
+        execution_authorized_at="2026-09-10T00:00:00Z",
+        execution_authorized_sha="deadbeef",
+    )
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+    dependent = _by_id(report, "dependent-1")
+    held = dependent["planning_gate"]["blocking"][0]
+
+    assert held["disposition"] == pg.BLOCKER_UNPLANNED
+    assert dependent["planning_gate"]["open"] is False
+    assert "no sweep will plan it" in held["reason"]
+    # And the blocker really is invisible to sweeps, which is what makes it permanent.
+    assert _by_id(report, "blocker-1")["needs_plan"] is False
+
+
+def test_an_unparked_baton_with_no_plan_keeps_the_plain_wording(tmp_path):
+    # Ordinary queued work must not inherit the parked diagnosis — a sweep WILL plan this.
+    _baton(tmp_path, "blocker-1")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+    held = _by_id(report, "dependent-1")["planning_gate"]["blocking"][0]
+
+    assert held["reason"] == "no plan links to this baton"
+    assert _by_id(report, "blocker-1")["needs_plan"] is True
