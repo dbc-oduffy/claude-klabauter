@@ -133,3 +133,35 @@ def test_cli_help_exits_0(capsys):
     out = capsys.readouterr()
     assert rc == 0
     assert "mint-deliverable-id.sh" in out.out
+
+
+def test_a_trailing_separator_never_reaches_the_id():
+    """A caller truncating a title to a fixed width lands on a hyphen sooner or
+    later, and a trailing one mints `dlv-<slug>--<hex>`. Schema-valid under
+    `[a-z0-9-]+` and readable, which is why it survives: a consumer splitting the
+    id back into slug and hex sees an empty field and misses the record.
+
+    Measured 2026-09-11 on example-store-repo, where a baton id carrying the doubled
+    dash made a landing check report a missing integration record that was on
+    disk throughout. This seam is the last line, not the fix -- callers should
+    hand a clean slug, and coordinator-doc-new's own mint sites already re-strip
+    after their truncation. This one trusted them."""
+    minted, label = mint(slug="corpus-knowledge-delivery-raw-")
+    assert "--" not in minted, minted
+    assert minted.startswith("dlv-corpus-knowledge-delivery-raw-")
+    assert label == "mint-from-slug"
+
+    minted, label = mint(stub_id="stub-name-")
+    assert "--" not in minted, minted
+    assert label == "mint-from-stub"
+
+
+def test_a_carried_id_is_returned_verbatim_doubled_dash_and_all():
+    """Carry is not a mint. An id already on disk is a join key, and normalising
+    it here would silently point a carrying artifact at a record nothing else
+    names. A doubled dash in a carried id is somebody else's defect to fix at its
+    source, never this seam's to launder in passing."""
+    assert mint(deliverable_id="dlv-already-minted--abc123") == (
+        "dlv-already-minted--abc123",
+        "carry",
+    )

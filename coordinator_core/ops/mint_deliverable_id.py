@@ -54,6 +54,26 @@ def _sha1_hex(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()
 
 
+def _id_body(raw: str) -> str:
+    """The slug as it appears IN the id: no leading or trailing separator.
+
+    A caller that truncates a title to a fixed width lands on a hyphen sooner or
+    later, and a trailing one here mints `dlv-<slug>--<hex>`. That is schema-valid
+    under `[a-z0-9-]+` and reads fine, which is the problem: a consumer splitting
+    an id back into slug and hex sees an empty field between them and misses the
+    record. Measured 2026-09-11 on example-store-repo, where a baton id carrying the
+    doubled dash made a landing check report a missing integration record that was
+    on disk the whole time.
+
+    This is a LAST-LINE defence, not the fix. Every caller should hand a clean
+    slug, and `coordinator-doc-new.py`'s own two mint sites already re-strip after
+    their truncation. This seam trusted them, which is one caller away from being
+    wrong. The hash input deliberately keeps the RAW slug, matching those sites:
+    stripping it would change what long, similar titles hash to.
+    """
+    return raw.strip("-")
+
+
 def mint(
     deliverable_id: Optional[str] = None,
     stub_id: Optional[str] = None,
@@ -79,11 +99,11 @@ def mint(
     if stub_id:
         hash_input = f"{stub_id}|{int(time.time())}|{os.getpid()}|{random.randint(0, 32767)}"
         six_hex = _sha1_hex(hash_input)[:6]
-        return f"dlv-{stub_id}-{six_hex}", "mint-from-stub"
+        return f"dlv-{_id_body(stub_id)}-{six_hex}", "mint-from-stub"
 
     hash_input = f"{slug}|{int(time.time())}|{os.getpid()}|{random.randint(0, 32767)}"
     six_hex = _sha1_hex(hash_input)[:6]
-    return f"dlv-{slug}-{six_hex}", "mint-from-slug"
+    return f"dlv-{_id_body(slug)}-{six_hex}", "mint-from-slug"
 
 
 _HELP_TEXT = """\

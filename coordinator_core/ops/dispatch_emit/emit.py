@@ -937,8 +937,17 @@ def _plan_context_preamble(context: PlanContext) -> str:
     cross-repo/archive/2026-08-27-doe-claude-em-prime-exit-criterion-settled-shape.md.
 
     Named external seam: DoE-claude's ``coordinator/bin/emit-dispatch-workflow.py``
-    monkeypatches ``_row_prompt`` wholesale and calls THIS function to compose the
-    same preamble ahead of its own row body. That is the sanctioned shape -- it is
+    monkeypatches ``_row_prompt``, and its replacement DELEGATES to the original
+    before appending -- ``_install_brief_pointers :: doe_row_prompt`` calls
+    ``original_row_prompt(row, plan_path, plan_context)`` and concatenates a brief
+    pointer onto the result (read at that repo's ``work/machine-a/2026-09-06to11``
+    @ 96f5a9b24, lines 589-601). It is a WRAP, not a replacement: everything
+    ``_row_prompt`` renders, including the return contract, reaches executors
+    dispatched through that shim. "Wholesale" stood here until 2026-09-11 and read
+    as replacement -- an adversarial reader took it as grounds to doubt the
+    contract reaches the mise-emitted path at all. The shim also calls THIS
+    function to compose the same preamble ahead of its own row body. That is the
+    sanctioned shape -- it is
     the only way an outside composer inherits
     ``_PLAN_CONTEXT_PREAMBLE_CHAR_CAP`` rather than re-deriving a cap that then
     drifts. Negative spec: do not narrow or rename this signature without
