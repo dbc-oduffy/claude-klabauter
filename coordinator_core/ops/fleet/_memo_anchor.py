@@ -15,7 +15,14 @@ never reaps an object a live ref still points at, loose or packed.
 
 Negative-spec:
     - `write_anchor` never raises on a lost CAS race and never retries --
-      the caller decides whether to retry, this module only reports.
+      the caller decides whether to retry, this module only reports. It
+      DOES re-read the ref once after a lost CAS (Review: eng-director F7):
+      a send racing a peer's write of the SAME anchor (identical filename,
+      commit sha, and bytes -- e.g. a send racing another session's adopt
+      of the same delivery) loses the CAS but leaves the ref already
+      correct, and reporting that as a loss would warn `anchored: false`
+      for an anchor that in fact exists. Only a ref that, after the
+      re-read, still does not equal the intended blob is a genuine loss.
     - `anchor_names` never raises on a missing `refs/coordinator/inbox/`
       directory or a missing/absent `packed-refs` file; both mean "no
       anchors", not an error.
@@ -111,6 +118,17 @@ def write_anchor(
     if current is None:
         current = read_packed_ref(common_dir, ref)
     if not cas_ref(common_dir, ref, current, blob_sha):
+        # Lost the race -- but re-read rather than declare loss outright
+        # (Review: eng-director F7). A peer may have just written this same
+        # anchor (same filename, same commit sha, same bytes -> the same
+        # content-addressed blob sha), in which case the ref is already
+        # exactly where this call wanted it and there is nothing to warn
+        # about.
+        after = _read_loose_ref_value(common_dir, ref)
+        if after is None:
+            after = read_packed_ref(common_dir, ref)
+        if after == blob_sha:
+            return blob_sha
         return None
     return blob_sha
 

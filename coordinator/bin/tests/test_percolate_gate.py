@@ -522,6 +522,49 @@ def test_tier_medium_concrete_paths_and_identities_still_gate(tmp_path):
     assert sum(1 for row in panel.splitlines() if row.strip() and row.strip() != "(none)") == len(lines)
 
 
+def test_tier_medium_interior_root_and_forge_service_addresses_do_not_gate(tmp_path):
+    """A `/x/` sitting MID-path names a ref namespace, not the `x` drive, and a
+    public-forge SSH service address names a service, not a person -- both
+    recurred in the gating panel across whole rounds and neither may reach it."""
+    target_file = tmp_path / "shapes.py"
+    target_file.write_text(
+        '`"delete refs/x/old blobsha"` or `"create refs/x/new blobsha"`\n'
+        "hosts = ['git@github.com', 'git@gitlab.com']\n"
+        "    subprocess.run(['ssh', '-T', 'git@bitbucket.org'])\n",
+        encoding="utf-8",
+    )
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    assert rc == 0
+    assert _gating_panel(out).strip() == "(none)"
+
+
+def test_tier_medium_real_identities_and_rooted_paths_still_gate(tmp_path):
+    """The two widenings are structural, not literal: a real person at a forge
+    host, the forge service account at a NON-forge host, a drive-rooted path,
+    and a path-rooted `/x/<repo>` all still gate."""
+    lines = [
+        "contact someone@company.com for access",
+        "author someone@github.com owns it",
+        "remote git@gitlab.internal-corp.io:team/repo.git",
+        "clone into X:/real-internal-path",
+        'registry_set("repos.k", "/x/real-internal-path")',
+    ]
+    target_file = tmp_path / "leaks.py"
+    target_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    assert rc == 0
+    panel = _gating_panel(out)
+    for line in lines:
+        assert line in panel
+    assert sum(1 for row in panel.splitlines() if row.strip() and row.strip() != "(none)") == len(lines)
+
+
 def test_scan_secrets_clean(tmp_path):
     target_file = tmp_path / "clean.md"
     target_file.write_text("nothing sensitive here\n", encoding="utf-8")

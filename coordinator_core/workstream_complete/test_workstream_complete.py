@@ -3757,7 +3757,9 @@ def test_memo_resolution_attribution_judgment_point_recommends_resolved_with_sig
     from coordinator_core.contract.decision_object.judgment import _validate_recommendation
     from coordinator_core.workstream_complete import judgments as _judgments
 
-    signals = [{"path": "/x/cross-repo/archive/a.md", "basename": "a.md", "signals": ["picked_up_by"]}]
+    signals = [
+        {"path": "/x/cross-repo/archive/a.md", "basename": "a.md", "signals": ["picked_up_by"]}  # abs-path-ok: synthetic fixture path, names no directory on any machine
+    ]
     jp = _judgments.build_memo_resolution_attribution_judgment_point(["d-flip-memo-status:a.md"], signals)
     assert jp["question"]
     assert jp["recommendation"]["disposition"] == "resolved"

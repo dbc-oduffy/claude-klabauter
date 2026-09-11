@@ -81,3 +81,77 @@ class TestArchiveSweepsLivenessStamp:
             lambda _payload, _common: {"exit_code": 0, "archived": [], "closed": 0},
         )
         assert mod.main(argv) == 0
+
+
+class TestHealInboxOnTheHousekeepingDoor:
+    """C6: the door runs `memo.heal_inbox` before the handoff cycle.
+
+    Lives here rather than beside the warm-serve test because that module's
+    negative-spec forbids importing `handoff-housekeeping.py` at all — and
+    these two assertions are precisely about what `main()` does when it runs.
+    """
+
+    def test_main_reports_a_restored_memo(self, tmp_path, monkeypatch, capsys):
+        mod = _load_module()
+        self._stub_cycle(mod, monkeypatch, tmp_path)
+        self._stub_heal(
+            monkeypatch,
+            result={
+                "exit_code": 0,
+                "acted": [{"action": "restored", "id": "2026-09-11-a-memo.md"}],
+            },
+        )
+
+        assert mod.main(["--cap", "5"]) == 0
+        assert "restored from anchor: 2026-09-11-a-memo.md" in capsys.readouterr().out, (
+            "a restored memo is the one heal outcome the operator must see on the "
+            "door's own stdout — the anchor restored it, nothing else will say so"
+        )
+
+    def test_a_heal_failure_still_runs_the_cycle(self, tmp_path, monkeypatch):
+        mod = _load_module()
+        ran = self._stub_cycle(mod, monkeypatch, tmp_path)
+
+        def _raise(*_a, **_k):
+            raise RuntimeError("heal exploded")
+
+        self._stub_heal(monkeypatch, raises=_raise)
+
+        exit_code = mod.main(["--cap", "5"])
+        assert ran, (
+            "a heal failure must never stop or skip the handoff cycle — the cycle "
+            "is this door's first job and does not depend on the heal"
+        )
+        assert exit_code == 1, (
+            "a heal failure is reported, not swallowed: it flips the exit code where "
+            "the cycle's own outcome would otherwise have been zero"
+        )
+
+    @staticmethod
+    def _stub_heal(monkeypatch, result=None, raises=None):
+        import coordinator_core.ops.fleet.memo_heal as memo_heal
+
+        monkeypatch.setattr(
+            memo_heal, "_memo_heal_inbox", raises or (lambda *_a, **_k: result)
+        )
+
+    @staticmethod
+    def _stub_cycle(mod, monkeypatch, tmp_path):
+        """Stubs everything the cycle half of `main()` needs, and returns a
+        one-element list that becomes truthy once the cycle actually ran."""
+        ran: list[bool] = []
+        monkeypatch.setattr(mod, "_ensure_claude_klabauter_on_path", lambda: str(tmp_path))
+        monkeypatch.setattr(mod, "_stamp_archive_sweeps_liveness", lambda _root: None)
+        import coordinator_core.housekeeping.cycle as cycle
+        import coordinator_core.lifecycle as lifecycle
+        import coordinator_core.ops.fleet._common as fleet_common
+
+        monkeypatch.setattr(lifecycle, "git_common_dir", lambda _p: tmp_path / ".git")
+        monkeypatch.setattr(fleet_common, "main_worktree_root", lambda _c: tmp_path)
+
+        def _handler(_payload, _common):
+            ran.append(True)
+            return {"exit_code": 0, "archived": [], "closed": 0}
+
+        monkeypatch.setattr(cycle, "_handler", _handler)
+        return ran

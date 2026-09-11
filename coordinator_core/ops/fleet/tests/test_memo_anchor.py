@@ -184,3 +184,52 @@ def test_resolved_anchor_survives_gc_prune_now_with_no_branch_reaching_it(tmp_pa
 
 def test_anchor_ref_prefix_shape():
     assert ANCHOR_REF_PREFIX == "refs/coordinator/inbox/"
+
+
+# ---------------------------------------------------------------------------
+# Review: eng-director F7 -- a lost CAS whose ref already equals the
+# intended blob (a peer wrote the identical anchor first) must not be
+# reported as a loss.
+# ---------------------------------------------------------------------------
+
+
+def test_lost_cas_where_ref_already_matches_returns_the_sha(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    commit_sha = _seed_commit(repo)
+
+    # A peer already anchored these exact bytes under this exact
+    # filename/commit -- so the ref is already correctly pointed.
+    first_sha = write_anchor(repo / ".git", "raced-memo.md", commit_sha, b"same payload")
+    assert first_sha is not None
+
+    # This call's own CAS is forced to report a loss (simulating a peer's
+    # write landing between this call's read of `current` and its own CAS
+    # attempt) -- but the ref it re-reads afterward already equals the blob
+    # this call itself would have written, since the bytes are identical.
+    import coordinator_core.ops.fleet._memo_anchor as anchor_module
+
+    monkeypatch.setattr(anchor_module, "cas_ref", lambda *a, **k: False)
+
+    second_sha = write_anchor(repo / ".git", "raced-memo.md", commit_sha, b"same payload")
+
+    assert second_sha == first_sha, (
+        "a lost CAS whose ref already equals the intended blob is not a "
+        "loss -- it must return the sha, not None"
+    )
+
+
+def test_lost_cas_with_a_genuine_mismatch_still_returns_none(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    commit_sha = _seed_commit(repo)
+
+    import coordinator_core.ops.fleet._memo_anchor as anchor_module
+
+    monkeypatch.setattr(anchor_module, "cas_ref", lambda *a, **k: False)
+
+    # No peer has written anything under this ref -- a forced CAS loss here
+    # is a genuine loss, not a same-anchor race, and must stay None.
+    result = write_anchor(repo / ".git", "never-written-memo.md", commit_sha, b"x")
+
+    assert result is None

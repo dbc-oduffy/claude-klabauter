@@ -79,8 +79,21 @@ from coordinator_core.subagent_sandbox.engine import (
     resolve_git_root,
 )
 
-#: Whitelist for a single path SEGMENT (label or session_id) -- everything
-#: outside this set is dropped, never escaped/encoded.
+#: Whitelist for a single path SEGMENT (label or session_id) -- a run of
+#: anything outside this set collapses to a single ``-``, never escaped/encoded.
+#:
+#: It used to be DELETED, and the deletion was the bug: an agent kind
+#: ``coordinator:premise-checker`` provisioned as
+#: ``coordinatorpremise-checker-<hash>.md``, a name that reads as a defect to
+#: every reader because the word boundary is gone. It cost a wrong defect report
+#: against a sibling repo's workflow (doe-claude-9a, 2026-09-11) before anyone
+#: looked here. Sanitization has to stay lossy -- these characters cannot appear
+#: in a segment -- but it does not have to be illegible.
+#:
+#: Negative spec: substitution does NOT make the mapping injective, and nothing
+#: may assume it does. ``a/b`` and ``a:b`` still collide, so a caller needing
+#: distinct leaves for distinct inputs keeps digesting the RAW value
+#: (``_compute_sentinel_leaf``), exactly as before.
 #:
 #: ``@`` is admitted so the EM-side canonical agent id
 #: ``<name>@session-<short8>`` survives sanitization UNCHANGED. The
@@ -92,7 +105,7 @@ from coordinator_core.subagent_sandbox.engine import (
 #: so admitting it widens no traversal surface.
 MUTATES = [".coordinator-local/subagent-share/**/*.md", ".coordinator-local/plan-sidecars/*.md"]  # session/agent-id-keyed sidecar docs and pointer index (_write_sidecar_pointer, _provision, _provision_plan_derivable_doc), plan-stem-keyed for the four G2 plan-pipeline emitters; data-dependent filenames, not a fixed artifact
 
-_SEGMENT_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._@-]")
+_SEGMENT_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._@-]+")
 
 #: Sanitized segments that must still be rejected even though the
 #: whitelist above preserves dots -- a bare '..' (or '.') survives the
@@ -103,13 +116,18 @@ _REJECTED_SEGMENTS = {"", ".", ".."}
 def _sanitize_segment(seg: str) -> Optional[str]:
     """Reduce ``seg`` to a single safe path segment, or ``None`` if unsafe.
 
-    Whitelists ``[A-Za-z0-9._-]`` (dropping '/', '\\', and everything else
-    that could smuggle a directory separator), then rejects the
-    degenerate '.'/'..'/empty results the whitelist alone would let
-    through. Never calls ``Path.resolve()`` -- mirrors the engine's
-    normalized-but-unresolved-string discipline (engine.normalize_file_path).
+    Whitelists ``[A-Za-z0-9._@-]``, collapsing each run of anything else
+    ('/', '\\', ':', and everything else that could smuggle a directory
+    separator) to a single '-', then rejects the degenerate '.'/'..'/empty
+    results the whitelist alone would let through. Never calls
+    ``Path.resolve()`` -- mirrors the engine's normalized-but-unresolved-string
+    discipline (engine.normalize_file_path).
+
+    Leading and trailing '-' are trimmed so a segment cannot open with the
+    substitution character, and a segment that survives as punctuation alone is
+    rejected rather than becoming a bare '-'.
     """
-    sanitized = _SEGMENT_WHITELIST_RE.sub("", seg)
+    sanitized = _SEGMENT_WHITELIST_RE.sub("-", seg).strip("-")
     if sanitized in _REJECTED_SEGMENTS:
         return None
     return sanitized

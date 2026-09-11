@@ -647,8 +647,13 @@ def test_mangling_collision_pair_gets_distinct_leaves_no_reuse(git_repo: Path) -
     an idempotent-hit reuse across this pair would mean one agent reading
     another's findings."""
     session_id = "11111111"
+    # The pair has to collide under the CURRENT sanitizer, which substitutes
+    # rather than deletes: `feature/auth-review` and `featureauth-review` were
+    # the fixture while the rejected character vanished, and stopped colliding
+    # the moment it became a '-'. Two different rejected characters collide
+    # under substitution, and would have under deletion too.
     raw_a = "afeature/auth-review-0123456789abcdef"
-    raw_b = "afeatureauth-review-0123456789abcdef"
+    raw_b = "afeature:auth-review-0123456789abcdef"
 
     payload_a = _payload("collide-a", session_id, str(git_repo))
     payload_a["agent_id"] = raw_a
@@ -662,7 +667,7 @@ def test_mangling_collision_pair_gets_distinct_leaves_no_reuse(git_repo: Path) -
     rel_path_b = _marker_rel_path(result_b, SIDECAR_PATH_MARKER_PREFIX)
 
     canon_a = f"feature/auth-review@session-{session_id}"
-    canon_b = f"featureauth-review@session-{session_id}"
+    canon_b = f"feature:auth-review@session-{session_id}"
     assert canon_a != canon_b
     assert _sanitize_segment(canon_a) == _sanitize_segment(canon_b), (
         "fixture premise: both canonical ids must mangle to the same sanitized stem"

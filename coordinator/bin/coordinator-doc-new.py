@@ -519,13 +519,14 @@ def _slug_from_scope(scope: str) -> str:
 
 
 # Session-id segment whitelist — mirrors coordinator_core.subagent_sandbox.provision_report
-# ._sanitize_segment's character set exactly ([A-Za-z0-9._-], reject '', '.', '..' after
-# whitelisting) so a self-scaffolded review-findings sidecar's session directory leaf gets
+# ._sanitize_segment's character set exactly ([A-Za-z0-9._-], each run of anything else
+# collapsed to a single '-' and the result trimmed of leading/trailing '-'; reject '', '.',
+# '..' after whitelisting) so a self-scaffolded review-findings sidecar's session directory leaf gets
 # the identical sanitization discipline as the engine's spawn-time provisioning. Duplicated
 # rather than imported: this CLI is invoked from an arbitrary consumer repo's cwd (the
 # reviewer's own confined Bash call), and must keep working even when claude-klabauter's own
 # package tree is not importable from there — see _resolve_session_id's docstring.
-_SESSION_SEGMENT_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._-]")
+_SESSION_SEGMENT_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _REJECTED_SESSION_SEGMENTS = {"", ".", ".."}
 
 
@@ -590,7 +591,7 @@ def _sanitize_session_segment(seg: str) -> str:
     scaffolder has no eligibility gate to fail open through: --type
     review-findings always needs a directory to write into.
     """
-    sanitized = _SESSION_SEGMENT_WHITELIST_RE.sub("", seg)
+    sanitized = _SESSION_SEGMENT_WHITELIST_RE.sub("-", seg).strip("-")
     if sanitized in _REJECTED_SESSION_SEGMENTS:
         return "em-unknown"
     return sanitized

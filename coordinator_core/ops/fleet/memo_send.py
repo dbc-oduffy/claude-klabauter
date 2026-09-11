@@ -29,10 +29,14 @@ three-write requirement:
      committed the STAGED blob and so replayed stale ledger snapshots — see
      the call site's own note for the 2026-08-30 measurement.
 
-Ordering is load-bearing: the receiver-side commit lands BEFORE the sender's
-receipt is written. A receipt for an undelivered memo is a lie; an
-uncredited delivery is merely untidy (recoverable by re-reading the
-receiver's own inbox) — see `_memo_send`'s call order.
+Ordering is load-bearing: the receiver-side commit lands BEFORE the anchor
+write (C4), which lands BEFORE the sender's receipt is written. A receipt
+for an undelivered memo is a lie; an uncredited delivery is merely untidy —
+the durable record is the `refs/coordinator/inbox/*` anchor `write_anchor`
+lands in the receiver's own object store (`_memo_anchor.py`, C3), which
+survives the receiver's own branch gestures and a `git gc`, not a re-read of
+the receiver's own inbox (a branch delete/reset/recreate can take that inbox
+file with it) — see `_memo_send`'s call order.
 
 Spec backlink:
     docs/plans/2026-08-25-memo-send-three-writes-and-one-commit-th.md § C2
@@ -127,6 +131,7 @@ from coordinator_core.ops.fleet._common import (
     build_setup_error_result,
     main_worktree_root,
 )
+from coordinator_core.ops.fleet._memo_anchor import ANCHOR_REF_PREFIX, write_anchor
 from coordinator_core.ops.fleet._memo_compose import (
     _TOPIC_SLUG_RE,
     _compose_memo,
@@ -552,6 +557,7 @@ def _ledger_row(
     delivered_to: str, in_reply_to: Optional[str],
     delivery_commit_sha: Optional[str], sent_by: str,
     delivery_branch: Optional[str] = None,
+    anchor_ref: Optional[str] = None,
 ) -> dict:
     """`delivery_branch` — the repo-relative ref (`git_native.GitResult.
     cas_ref_relpath`, e.g. `refs/heads/main`) the delivery commit was CAS'd
@@ -560,7 +566,14 @@ def _ledger_row(
     wherever the receiver has since moved, not where this delivery landed.
     `None` on rows written before this field existed (and on any row whose
     commit result did not carry one) — C5 must read that as UNKNOWN, never
-    as a mismatch against a receiver's current ref."""
+    as a mismatch against a receiver's current ref.
+
+    `anchor_ref` — the `refs/coordinator/inbox/*` ref name (C4) the delivery
+    was anchored under, or `None` when the anchor write lost its CAS race
+    (`write_anchor` returned `None`) and on every row written before this
+    field existed. `None` here is UNKNOWN/absent, never a mismatch against
+    a live anchor — the same discipline `delivery_branch` already carries.
+    """
     return {
         "sent_at": datetime.datetime.now(datetime.timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
@@ -574,6 +587,7 @@ def _ledger_row(
         "delivery_commit_sha": delivery_commit_sha,
         "delivery_branch": delivery_branch,
         "sent_by": sent_by,
+        "anchor_ref": anchor_ref,
     }
 
 
@@ -1204,6 +1218,39 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             ),
         }])
 
+    # ── anchor: the durable record (C4) ─────────────────────────────────
+    # `target_file`'s bytes on disk are exactly the bytes the commit above
+    # hashed -- read them back rather than reuse in-memory `content`, so the
+    # anchored blob is provably identical to what the receiver's own history
+    # committed. Common dir resolved the same way `_delivery_commit_is_object`
+    # already does, in-process, zero spawns.
+    common_dir = resolve_git_common_dir(receiver_repo_path)
+    anchored_bytes = target_file.read_bytes()
+    anchor_blob_sha = write_anchor(
+        common_dir, filename, delivery_commit_sha, anchored_bytes
+    )
+    anchored = anchor_blob_sha is not None
+    anchor_ref = (
+        ANCHOR_REF_PREFIX + filename + "/" + delivery_commit_sha
+        if anchored else None
+    )
+    anchor_warning = None
+    if not anchored:
+        # A failed anchor does NOT fail the send -- the delivery commit has
+        # already landed, and refusing now would be a false negative. One
+        # fact, one alternative: register style, no apology, no override key.
+        anchor_warning = (
+            f"memo.send: anchor write for {filename} lost its CAS race — "
+            f"re-run memo.send, or the receiver's next workday-start "
+            f"adopts it."
+        )
+        _LOG.warning(
+            "memo_send: delivery to %s landed and committed (%s), but the "
+            "anchor write lost its CAS race for %s — re-run memo.send, or "
+            "the receiver's next workday-start adopts it.",
+            to, delivery_commit_sha, filename,
+        )
+
     delivered_to = _portable_delivered_to_form(receiver_repo_path, target_file)
 
     # ── sender-side receipt: sent/ copy + ledger row + one commit ──────────
@@ -1251,6 +1298,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         delivery_commit_sha=delivery_commit_sha,
         delivery_branch=commit_result.cas_ref_relpath,
         sent_by=sent_by,
+        anchor_ref=anchor_ref,
     )
     appended_line = json.dumps(row, ensure_ascii=False) + "\n"
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
@@ -1415,6 +1463,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         "written": True,
         "committed": True,
         "delivery_commit_sha": delivery_commit_sha,
+        "anchored": anchored,
         "sender_committed": bool(sender_commit.ok),
         # A DELIVERY THAT CANNOT NAME ITS SENDER SAYS SO, AT SEND TIME.
         # The sentinel is otherwise write-only: it lands in the delivered
@@ -1427,6 +1476,8 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         # memo, a sizing, and two sessions' investigation.
         "sender_unattributed": sent_by == _SENT_BY_UNRESOLVED,
     }
+    if anchor_warning is not None:
+        acted_item["anchor_warning"] = anchor_warning
     if not sender_commit.ok:
         # The stderr is the whole diagnosis, and a WARNING alone loses it: the
         # engine's log is not retained, so an operator sees only the CLI's

@@ -33,8 +33,16 @@ from types import SimpleNamespace
 import pytest
 
 from coordinator_core.frontmatter.primitives import split_frontmatter, read_fm_field_unquoted
+from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet import memo_send as memo_send_module
+from coordinator_core.ops.fleet import _memo_anchor as anchor_module
+from coordinator_core.ops.fleet._memo_anchor import (
+    ANCHOR_REF_PREFIX,
+    anchor_names,
+    resolve_anchor,
+    write_anchor,
+)
 from coordinator_core.ops.fleet.memo_send import (
     _CHECK_DELIVERIES_KNOWN_PARAM_KEYS,
     _KNOWN_PARAM_KEYS,
@@ -897,6 +905,257 @@ class TestCollisionRefused:
         assert len(result["failed"]) == 1
         assert "race" in result["failed"][0]["reason"]
         assert target.read_text(encoding="utf-8") == "raced in\n"
+
+
+# ---------------------------------------------------------------------------
+# C4 (docs/plans/2026-09-11-memo-deliveries-survive-the-receiver-s-o.md):
+# memo.send anchors every delivery; the receipt records it.
+# ---------------------------------------------------------------------------
+
+class TestDeliveryIsAnchored:
+    def test_successful_send_creates_the_ref_pointing_at_the_delivered_bytes(
+        self, tmp_path, monkeypatch
+    ):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "anchor-happy-topic")
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "anchor-happy-topic"}, repo_root=sender_repo
+        )
+
+        assert result["exit_code"] == 0, result
+        acted = result["acted"][0]
+        assert acted["anchored"] is True
+        assert "anchor_warning" not in acted
+
+        inbox_files = [
+            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
+            if p.name != ".gitkeep"
+        ]
+        assert len(inbox_files) == 1
+        delivered = inbox_files[0]
+        delivery_commit_sha = acted["delivery_commit_sha"]
+
+        common_dir = resolve_git_common_dir(receiver_repo)
+        triples = [
+            t for t in anchor_names(common_dir)
+            if t[0] == delivered.name and t[1] == delivery_commit_sha
+        ]
+        assert len(triples) == 1, anchor_names(common_dir)
+        blob_sha = triples[0][2]
+        assert resolve_anchor(common_dir, blob_sha) == delivered.read_bytes()
+
+    def test_ledger_row_carries_anchor_ref(self, tmp_path, monkeypatch):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "anchor-ledger-topic")
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "anchor-ledger-topic"}, repo_root=sender_repo
+        )
+        assert result["exit_code"] == 0, result
+        delivery_commit_sha = result["acted"][0]["delivery_commit_sha"]
+
+        inbox_files = [
+            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
+            if p.name != ".gitkeep"
+        ]
+        filename = inbox_files[0].name
+
+        ledger_path = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        rows = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
+        assert rows[0]["anchor_ref"] == ANCHOR_REF_PREFIX + filename + "/" + delivery_commit_sha
+
+    def test_lost_anchor_cas_returns_ok_with_anchored_false_and_a_warning(
+        self, tmp_path, monkeypatch
+    ):
+        """Pre-create the anchor's own lock file so `write_anchor`'s CAS
+        loses for real (`cas_ref`'s `O_CREAT|O_EXCL` on `<ref>.lock` refuses
+        outright against an existing lock) -- simulating a peer holding it.
+        The delivery commit has already landed by this point, so the send
+        must still report ok, `anchored: false`, and a warning naming the
+        alternative -- never fail the send.
+        """
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "anchor-lost-topic")
+
+        real_commit = git_native.commit_authored_new_file
+
+        def _commit_then_lock_the_anchor(rel_path, content, msg_file, repo_path):
+            result = real_commit(rel_path, content, msg_file, repo_path)
+            if result.ok:
+                sha = result.stdout.strip()
+                filename = Path(rel_path).name
+                common_dir = resolve_git_common_dir(repo_path)
+                lock_path = common_dir / (
+                    ANCHOR_REF_PREFIX + filename + "/" + sha + ".lock"
+                )
+                lock_path.parent.mkdir(parents=True, exist_ok=True)
+                lock_path.write_bytes(b"held by a peer\n")
+            return result
+
+        monkeypatch.setattr(
+            memo_send_module.git_native, "commit_authored_new_file",
+            _commit_then_lock_the_anchor,
+        )
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "anchor-lost-topic"}, repo_root=sender_repo
+        )
+
+        assert result["exit_code"] == 0, result
+        acted = result["acted"][0]
+        assert acted["anchored"] is False
+        assert "anchor_warning" in acted
+        assert "re-run memo.send" in acted["anchor_warning"]
+        assert "workday-start adopts it" in acted["anchor_warning"]
+
+        ledger_path = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        rows = [json.loads(line) for line in ledger_path.read_text(encoding="utf-8").splitlines()]
+        assert rows[0]["anchor_ref"] is None
+
+    def test_lost_cas_where_the_ref_already_matches_reports_anchored_true_no_warning(
+        self, tmp_path, monkeypatch
+    ):
+        """Review: eng-director F7. A CAS loss whose ref already equals the
+        intended blob (a peer anchored the SAME delivery -- identical
+        filename, commit sha, and bytes -- immediately before this call's
+        own CAS attempt) must not warn `anchored: false` for an anchor that
+        already exists correctly.
+        """
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "anchor-race-topic")
+
+        real_commit = git_native.commit_authored_new_file
+
+        def _commit_then_preanchor_and_force_a_loss(rel_path, content, msg_file, repo_path):
+            result = real_commit(rel_path, content, msg_file, repo_path)
+            if result.ok:
+                sha = result.stdout.strip()
+                filename = Path(rel_path).name
+                common_dir = resolve_git_common_dir(repo_path)
+                # A peer anchors this exact delivery first -- same filename,
+                # commit sha, and bytes memo.send's own write below will use.
+                peer_sha = write_anchor(common_dir, filename, sha, content.encode("utf-8"))
+                assert peer_sha is not None
+                # Now force THIS call's own CAS to report a loss even though
+                # the ref is already correct.
+                monkeypatch.setattr(anchor_module, "cas_ref", lambda *a, **k: False)
+            return result
+
+        monkeypatch.setattr(
+            memo_send_module.git_native, "commit_authored_new_file",
+            _commit_then_preanchor_and_force_a_loss,
+        )
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "anchor-race-topic"}, repo_root=sender_repo
+        )
+
+        assert result["exit_code"] == 0, result
+        acted = result["acted"][0]
+        assert acted["anchored"] is True
+        assert "anchor_warning" not in acted
+
+    def test_declined_commit_writes_no_anchor(self, tmp_path, monkeypatch):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "anchor-declined-topic")
+
+        def _fake_decline(*args, **kwargs):
+            return git_native.GitResult(returncode=1, stdout="", stderr="synthetic decline")
+
+        monkeypatch.setattr(
+            memo_send_module.git_native, "commit_authored_new_file", _fake_decline,
+        )
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "anchor-declined-topic"}, repo_root=sender_repo
+        )
+        assert result["exit_code"] != 0
+
+        common_dir = resolve_git_common_dir(receiver_repo)
+        assert anchor_names(common_dir) == []
+
+    def test_unverified_commit_sha_writes_no_anchor(self, tmp_path, monkeypatch):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "anchor-unverified-topic")
+
+        monkeypatch.setattr(
+            memo_send_module.git_native, "commit_authored_new_file",
+            _fake_ok_but_unverifiable_commit,
+        )
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "anchor-unverified-topic"}, repo_root=sender_repo
+        )
+        assert result["exit_code"] != 0
+
+        common_dir = resolve_git_common_dir(receiver_repo)
+        assert anchor_names(common_dir) == []
+
+    def test_send_path_from_the_anchor_write_onward_makes_zero_spawns(
+        self, tmp_path, monkeypatch
+    ):
+        """The anchor write (`_memo_anchor`, in-process per its own module
+        docstring) and the sender-side receipt commit (`commit_paths`, zero
+        spawns per this module's own docstring) must add no git spawn to the
+        send path. The receiver-side commit's own hookless `update-index`
+        refresh (AC3) is the one spawn already accounted for elsewhere and
+        runs normally; `subprocess.run` is disabled only from the moment
+        that commit returns, so any spawn from the anchor write or the
+        sender receipt raises loud instead of passing silently.
+        """
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "anchor-no-spawn-topic")
+
+        real_commit = git_native.commit_authored_new_file
+
+        def _commit_then_disable_spawns(rel_path, content, msg_file, repo_path):
+            result = real_commit(rel_path, content, msg_file, repo_path)
+
+            def _forbidden(*a, **k):
+                raise AssertionError(
+                    "no git spawn is expected past the receiver-side commit "
+                    "-- the anchor write and the sender receipt are both "
+                    "documented zero-spawn"
+                )
+
+            monkeypatch.setattr(subprocess, "run", _forbidden)
+            return result
+
+        monkeypatch.setattr(
+            memo_send_module.git_native, "commit_authored_new_file",
+            _commit_then_disable_spawns,
+        )
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "anchor-no-spawn-topic"}, repo_root=sender_repo
+        )
+
+        assert result["exit_code"] == 0, result
+        acted = result["acted"][0]
+        assert acted["anchored"] is True
+        assert acted["sender_committed"] is True
 
 
 # ---------------------------------------------------------------------------

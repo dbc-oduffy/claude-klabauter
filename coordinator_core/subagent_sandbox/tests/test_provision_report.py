@@ -93,8 +93,9 @@ def _derived_path(session_id: str, label: str, agent_id: str = BARE_HEX_AGENT_ID
 
 def _sanitize_expected(seg: str) -> str:
     """Mirror provision_report._sanitize_segment's whitelist for test
-    expectations -- the module strips anything outside [A-Za-z0-9._-]."""
-    return re.sub(r"[^A-Za-z0-9._-]", "", seg)
+    expectations -- the module collapses each run outside [A-Za-z0-9._-] to a
+    single '-' and trims the result."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", seg).strip("-")
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +450,7 @@ def test_malicious_session_id_traversal_confined_single_segment_no_escape(
     git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
     """session_id='../escape' whitelist-sanitizes ('/' is dropped, dots
-    survive) down to the single segment '..escape' -- NOT the degenerate
+    survive) down to the single segment '..-escape' -- NOT the degenerate
     '..' the module explicitly rejects, so a doc IS provisioned, but the
     key safety property holds: the sanitized session_id is one literal path
     segment with no '/' in it, so the doc can only land directly under
@@ -467,13 +468,13 @@ def test_malicious_session_id_traversal_confined_single_segment_no_escape(
 
     assert emitted_path == _derived_path("../escape", REPORT_SIDECAR_TYPE)
     session_segment = emitted_path.split("/")[2]
-    assert session_segment == "..escape"
+    assert session_segment == "..-escape"
     assert "/" not in session_segment
 
     share_root = git_repo / ".coordinator-local" / "subagent-share"
     doc_path = git_repo / emitted_path
     assert doc_path.is_file()
-    assert doc_path.parent == share_root / "..escape"
+    assert doc_path.parent == share_root / "..-escape"
     # Confined to a direct child of subagent-share/ -- nothing escaped
     # upward past it (no writes outside share_root's own subtree).
     assert doc_path.resolve().is_relative_to(share_root.resolve())
@@ -637,7 +638,7 @@ def test_provision_key_traversal_sanitized_confined_single_segment(
     envelope = json.loads(lines[0])
     emitted_path = envelope["report_sidecar"]
 
-    assert emitted_path == f".coordinator-local/subagent-share/{session_id}/..escape.md"
+    assert emitted_path == f".coordinator-local/subagent-share/{session_id}/..-escape.md"
     assert "/" not in Path(emitted_path).name
 
     doc_path = git_repo / emitted_path
