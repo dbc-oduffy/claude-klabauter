@@ -1,6 +1,9 @@
 """
 coordinator_core.ops.session.hook_delivery_manifest — reader for the
-hook-delivery manifest block DoE's carriers embed inside `hooks.json`.
+hook-delivery manifest block DoE's carriers publish to the
+`coordinator/hooks/effective-delivery.json` sidecar (formerly embedded
+inside `hooks.json` itself; DoE-claude 6be6a7ead/da0b96608 relocated it,
+same top-level key, path only).
 
 Purpose: `guard_settings_integrity.detect_hook_delivery_duplication`
 compares hook-delivery surfaces by raw script filename. That comparison
@@ -24,10 +27,10 @@ closest in-repo oracle for how this file family typed-degrades a boot-path
 read):
   - Never raises. Every parse failure is a typed `state`, not an exception.
   - Never calls `resolve_content_root`, never opens a file. The whole
-    input is the ALREADY-PARSED `hooks.json` dict handed in by the caller
-    (`guard_settings_integrity.detect_hook_delivery_duplication` resolves
-    and parses `hooks.json` once per boot; this module must not add a
-    second resolution/read).
+    input is the ALREADY-PARSED `effective-delivery.json` dict handed in by
+    the caller (`guard_settings_integrity.detect_hook_delivery_duplication`
+    resolves and parses that sidecar once per boot; this module must not
+    add a second resolution/read).
   - No import outside `coordinator_core`, no subprocess, no network.
 
 Manifest block shape (see `docs/reference/hook-delivery-manifest.md` for
@@ -198,11 +201,13 @@ def read_hook_delivery_manifest(
     declared_script_keys: Sequence[str],
 ) -> HookDeliveryManifest:
     """Parse the `x-effective-delivery` block out of the already-parsed
-    `hooks.json` dict `hooks_json`, and degrade to a typed `state` for
-    every bad case rather than raising. `declared_script_keys` are the
-    plugin-side script tail keys `hooks.json` itself declares, already
-    `_tail_key`-normalized by the caller — used only to compute `stale`
-    (C1's exhaustiveness requirement)."""
+    `effective-delivery.json` dict `hooks_json` (param name kept for the
+    manifest's own historical shape; the sidecar carries only this one
+    key), and degrade to a typed `state` for every bad case rather than
+    raising. `declared_script_keys` are the plugin-side script tail keys
+    `hooks.json` itself declares, already `_tail_key`-normalized by the
+    caller — used only to compute `stale` (C1's exhaustiveness
+    requirement)."""
     # Review: coordinator:code-reviewer — `declared_script_keys` is caller-
     # supplied like everything else this reader touches; a non-iterable
     # (e.g. `None`) must degrade, not raise, per the never-raise contract.

@@ -570,10 +570,11 @@ def _write_hooks_json_with_manifest(
     manifest_block: dict,
     write_scripts: bool = True,
 ) -> None:
-    """Same as `_write_hooks_json`, but embeds the `x-effective-delivery`
-    block (C1's contract) alongside the `hooks` key -- the SAME file, one
-    parse, matching `read_hook_delivery_manifest`'s "no second read"
-    contract."""
+    """Same as `_write_hooks_json`, but also writes the `x-effective-delivery`
+    block (C1's contract) to the `hooks/effective-delivery.json` sidecar
+    `hooks.json` moved it to (DoE-claude 6be6a7ead/da0b96608) -- matching
+    `read_hook_delivery_manifest`'s "no second resolve, no second read"
+    contract on the SIDECAR, not `hooks.json` itself."""
     hooks_dir = content_root / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     entries = [
@@ -590,12 +591,11 @@ def _write_hooks_json_with_manifest(
         for rel in script_rels
     ]
     (hooks_dir / "hooks.json").write_text(
-        json.dumps(
-            {
-                "hooks": {"SessionStart": entries},
-                "x-effective-delivery": manifest_block,
-            }
-        ),
+        json.dumps({"hooks": {"SessionStart": entries}}),
+        encoding="utf-8",
+    )
+    (hooks_dir / "effective-delivery.json").write_text(
+        json.dumps({"x-effective-delivery": manifest_block}),
         encoding="utf-8",
     )
     if write_scripts:

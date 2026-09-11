@@ -275,8 +275,8 @@ def _job_mode_from_environment(env: Optional[Mapping[str, str]]) -> Optional[str
     environment_default`` docstring) — an absent ``env`` (no caller context
     threaded this far) abstains rather than falling back to ``os.environ``,
     which on the pool-broken ``isolated=False`` leg would be the daemon's
-    environment, not the caller's (BORROW's inherit-on-absent semantics would
-    otherwise leak a daemon-inherited value, worst case a leaked ``blitz``,
+    environment, not the caller's (that leg mirrors nothing, so an ambient
+    read would leak a daemon-inherited value, worst case a leaked ``blitz``,
     to a caller that never asserted one).
 
     An empty string and an unrecognised value are both returned as-is here,

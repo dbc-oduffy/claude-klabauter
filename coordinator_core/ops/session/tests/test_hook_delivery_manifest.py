@@ -2,8 +2,8 @@
 coordinator_core.ops.session.tests.test_hook_delivery_manifest
 
 Tests for `hook_delivery_manifest.read_hook_delivery_manifest` — the reader
-for the `x-effective-delivery` block DoE's carriers embed inside
-`hooks.json`. See the module docstring and
+for the `x-effective-delivery` block DoE's carriers publish to the
+`coordinator/hooks/effective-delivery.json` sidecar. See the module docstring and
 `docs/plans/2026-08-07-detector-effective-guard-sets.md` task C2 / AC2 for
 the full contract.
 

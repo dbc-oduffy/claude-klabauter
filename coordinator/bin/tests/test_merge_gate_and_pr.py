@@ -10,9 +10,10 @@ VERDICT line, and the verdict computation it wrapped is dead (WARN on 40 of
 40 closes, zero effect). See merge-gate-and-pr.py's own docstring.
 
   pr-body:
-    - composes ship verdict + release notes + commit log, omits demo path
-      section when absent.
-    - includes demo path section when present.
+    - renders the fleet PR template's sections in order, commit log after.
+    - an absent optional section renders the template's guidance comment;
+      an absent demo path drops the section.
+    - the composer's heading/guidance constants match the template file.
   active-branch-guard:
     - --force always exits 0 without calling gh.
     - commit younger than 5 minutes halts (exit 1).
@@ -47,33 +48,73 @@ _mod = _load_module()
 # pr-body
 # ---------------------------------------------------------------------------
 
-def test_pr_body_without_demo_path(monkeypatch, capsys):
+_TEMPLATE_HEADINGS = [
+    "Summary", "Release notes", "Verification", "Risk and rollback", "Demo path", "Links",
+]
+
+
+def _h2_headings(text: str) -> list[str]:
+    return [line[3:].strip() for line in text.splitlines() if line.startswith("## ")]
+
+
+def test_pr_body_all_sections_in_template_order(monkeypatch, capsys):
     monkeypatch.setattr(_mod, "_commit_log", lambda commit_range: "abc123 first commit")
     rc = _mod.main([
         "pr-body",
         "--ship-verdict", "**Ship verdict:** ship — all green",
-        "--release-notes", "## v1.2.3 — 2026-07-23\n### Fixed\n- thing",
+        "--summary", "- changed a thing",
+        "--release-notes", "### Fixed\n- thing",
+        "--verification", "pytest: 12 passed",
+        "--risk", "Low — docs only",
+        "--demo-path", "run the CLI",
+        "--links", "Closes #7",
     ])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "Ship verdict" in out
-    assert "### Fixed" in out
-    assert "Demo Path" not in out
-    assert "<summary>Commit log</summary>" in out
+    assert out.startswith("**Ship verdict:** ship — all green\n")
+    assert _h2_headings(out) == _TEMPLATE_HEADINGS
+    for text in ("- changed a thing", "### Fixed", "pytest: 12 passed", "Low — docs only",
+                 "run the CLI", "Closes #7"):
+        assert text in out
+    assert "<!--" not in out
+    assert out.index("## Links") < out.index("<summary>Commit log</summary>")
     assert "abc123 first commit" in out
 
 
-def test_pr_body_with_demo_path(monkeypatch, capsys):
+def test_pr_body_absent_sections_render_guidance_and_drop_demo_path(monkeypatch, capsys):
     monkeypatch.setattr(_mod, "_commit_log", lambda commit_range: "abc123 first commit")
     rc = _mod.main([
         "pr-body",
-        "--ship-verdict", "**Ship verdict:** ship",
-        "--release-notes", "## v1.0.0",
-        "--demo-path", "### Demo Path\n**Setup:** none",
+        "--ship-verdict", "Ship — every hard gate reported.",
+        "--release-notes", "Release v1.0.0.",
     ])
     assert rc == 0
     out = capsys.readouterr().out
-    assert "### Demo Path" in out
+    assert out.startswith("**Ship verdict:** Ship — every hard gate reported.\n")
+    assert _h2_headings(out) == [h for h in _TEMPLATE_HEADINGS if h != "Demo path"]
+    assert "Release v1.0.0." in out
+    assert "<!-- 1–3 bullets: what changed, and why it was needed. -->" in out
+    assert "Closes #N" in out
+
+
+def test_pr_body_sections_match_fleet_template():
+    """The composer's headings and guidance comments are constants; this pins
+    them to the fleet template file they transcribe. Skips only where no
+    DoE-claude checkout resolves (the template's source repo)."""
+    import pytest
+
+    from coordinator_core.testing.doe_root import doe_root_and_present
+
+    root, present = doe_root_and_present()
+    template = Path(root) / "coordinator" / "templates" / "github-pull-request-template.md"
+    if not present or not template.is_file():
+        pytest.skip("fleet PR template not resolvable (no DoE-claude checkout)")
+    text = template.read_text(encoding="utf-8")
+    assert _h2_headings(text) == [h for h, _, _ in _mod._PR_BODY_SECTIONS]
+    assert _mod._SHIP_VERDICT_PREFIX in text
+    for heading, _, guidance in _mod._PR_BODY_SECTIONS:
+        if guidance is not None:
+            assert f"## {heading}\n\n{guidance}\n" in text, heading
 
 
 # ---------------------------------------------------------------------------

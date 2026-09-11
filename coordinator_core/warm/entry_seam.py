@@ -193,7 +193,7 @@ def collecting_diagnostics(into: Optional[List[str]] = None) -> Iterator[List[st
 # treated as "no carried identity" on this axis, never mirrored into
 # `os.environ` where every ambient reader downstream would trust it.
 # ---------------------------------------------------------------------------
-from coordinator_core.warm.env_forwarding import BORROW, FORWARDING_SET, OVERRIDE, REFUSE
+from coordinator_core.warm.env_forwarding import BORROW, CALLER, FORWARDING_SET, OVERRIDE, REFUSE
 
 _ENV_LOWER_TIER_SESSION_NAMES = ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
 _ENV_TOP_TIER_SESSION_NAME = "COORDINATOR_SESSION_ID"
@@ -212,6 +212,7 @@ _ENV_SETTINGS_HOME_NAME = "COORDINATOR_SETTINGS_HOME"
 REFUSE_NAMES = tuple(e.name for e in FORWARDING_SET if e.mode == REFUSE)
 OVERRIDE_NAMES = tuple(e.name for e in FORWARDING_SET if e.mode == OVERRIDE)
 BORROW_NAMES = tuple(e.name for e in FORWARDING_SET if e.mode == BORROW)
+CALLER_NAMES = tuple(e.name for e in FORWARDING_SET if e.mode == CALLER)
 
 # `_ENV_BORROWED_NAMES` -- THE RESTORE SET `_environ_identity_borrow`'s
 # `finally` un-mirrors, NOT a forwarding allowlist (those are the three
@@ -273,8 +274,8 @@ def _environ_identity_borrow(
     `env` is the ONE declared-env-set axis (C4): a name->value mapping of
     whichever `env_forwarding.FORWARDING_SET` entries the caller's wire
     carried, resolved by `caller_context` from either wire shape
-    (`warm.server`'s dual-read) before this function ever sees it. THREE
-    EXPLICIT BRANCHES, one per mode, mirroring `FORWARDING_SET`'s own three
+    (`warm.server`'s dual-read) before this function ever sees it. FOUR
+    EXPLICIT BRANCHES, one per mode, mirroring `FORWARDING_SET`'s own four
     modes -- never collapsed into one handling path (DR-404's negative spec,
     satisfied here by branch shape, not by carrying `mode` as C-facing
     data -- see `env_forwarding.py`'s own module docstring):
@@ -294,11 +295,14 @@ def _environ_identity_borrow(
         carried identity" here too. The first name in `OVERRIDE_NAMES`
         (top-tier) is bound when valid; every name in `OVERRIDE_NAMES` is
         popped otherwise, matching the pre-C4 behaviour byte-for-byte.
-      - `BORROW_NAMES` (every other declared entry, e.g.
+      - `BORROW_NAMES` (machine-constant entries, e.g.
         `MACHINE_LOCAL_REGISTRY_DIR`): shape-gate-or-pop, non-empty only (no
         per-entry gate is declared beyond presence -- `env_forwarding.py`'s
         own negative spec: "A per-entry shape-gate field is likewise not
-        carried").
+        carried"). Absent from `env` is inherit-on-absent.
+      - `CALLER_NAMES` (per-caller entries, e.g. `CLAUDE_PROJECT_DIR`): the
+        same shape-gate-or-pop, but absent from `env` is POPPED -- the
+        server's own value is its spawner's, never this caller's.
 
     `caller_pid` is the calling process's own id as carried on the wire
     (`caller_context.CallerContext.pid`). Bound to `CLAUDE_PID` when it is a
@@ -359,6 +363,15 @@ def _environ_identity_borrow(
         for name in BORROW_NAMES:
             if name not in env:
                 continue
+            value = env.get(name)
+            if isinstance(value, str) and value:
+                os.environ[name] = value
+            else:
+                os.environ.pop(name, None)
+
+        # CALLER branch -- NOT inherit-on-absent: this worker's own value is
+        # whichever session spawned the server, so an omitted name pops.
+        for name in CALLER_NAMES:
             value = env.get(name)
             if isinstance(value, str) and value:
                 os.environ[name] = value
@@ -437,7 +450,7 @@ def per_request_state(
         thread-safe ContextVar bind, not an `os.environ` mutation, so it
         needs no process isolation.
       - The full `env` mapping is threaded to `_environ_identity_borrow`,
-        which performs the three-branch REFUSE/OVERRIDE/BORROW mode dispatch
+        which performs the four-branch REFUSE/OVERRIDE/BORROW/CALLER mode dispatch
         against it, `isolated=True` only. See that function's own docstring
         for the per-mode handling this seam does not re-derive here.
 

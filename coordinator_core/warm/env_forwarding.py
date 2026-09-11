@@ -11,10 +11,20 @@ ONCE, as typed data, and `door_env_set.h` (generated -- see
 that makes drift between the two C legs and this module structurally
 impossible rather than merely documented.
 
-THREE MODES, EXACTLY THE THREE THAT EXIST TODAY.
+FOUR MODES, EXACTLY THE FOUR THAT EXIST TODAY.
   - ``borrow``   -- shape-gate-or-pop, mirrored into `os.environ` for the
                     block's duration under `isolated=True` only, restored
-                    in a `finally`. The ordinary mode.
+                    in a `finally`. Inherit-on-absent: a name the caller's
+                    wire never carried keeps the server's own value. Right
+                    only for a MACHINE-constant fact, where the server's
+                    value and the caller's cannot differ.
+  - ``caller``   -- as ``borrow``, except a name the caller's wire never
+                    carried is POPPED, never inherited. For a PER-CALLER
+                    fact: the server's own `os.environ` belongs to whichever
+                    session spawned it, so inheriting hands every caller
+                    that omits the name (every Bash-tool shell omits
+                    `CLAUDE_PROJECT_DIR`) a stranger's value. Popping is
+                    exactly what the cold path sees for such a caller.
   - ``refuse``   -- a mismatch against the server's own resolved value
                     returns a refusal PRE-DISPATCH. `COORDINATOR_SETTINGS_
                     HOME` only; see `warm.server._settings_home_refusal`
@@ -65,13 +75,14 @@ from coordinator_core.session.mode_resolution import COORDINATOR_JOB_MODE
 
 __all__ = ["Mode", "EnvEntry", "FORWARDING_SET", "generate_header"]
 
-#: The three modes that exist today -- see module docstring. A fourth mode
+#: The four modes that exist today -- see module docstring. A fifth mode
 #: is a new row's judgment call, not a value to add here casually.
 Mode = str
 BORROW = "borrow"
+CALLER = "caller"
 REFUSE = "refuse"
 OVERRIDE = "override"
-_VALID_MODES = (BORROW, REFUSE, OVERRIDE)
+_VALID_MODES = (BORROW, CALLER, REFUSE, OVERRIDE)
 
 
 class EnvEntry(NamedTuple):
@@ -106,20 +117,23 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
     _entry("MACHINE_LOCAL_IMPL", BORROW),
     _entry("COORDINATOR_ROOT", BORROW),
     _entry("DOE_ROOT", BORROW),
-    _entry("CLAUDE_PROJECT_DIR", BORROW),
+    # The caller's project. Inherited, a caller that omits it resolves to the
+    # spawning session's repo -- `workday-start-inbox-blitz-assemble` served
+    # claude-klabauter's inbox to four other repos this way on 2026-09-11.
+    _entry("CLAUDE_PROJECT_DIR", CALLER),
     # Execution locality. `coordinator_core.env_locality`'s rung 0 is a
     # per-CALLER fact, and this server's own `os.environ` belongs to whoever
     # spawned it -- without this entry an engine-side locality read returns the
     # daemon's environment, not the session's. Rung 1 is machine-constant and
     # needs no forwarding, so a missing entry here degrades to a labelled
     # confidence rather than a confident lie.
-    _entry("CLAUDE_CODE_REMOTE", BORROW),
+    _entry("CLAUDE_CODE_REMOTE", CALLER),
     # Job mode. `session.mode_resolution`'s resolver reads this to learn
     # what the CALLER was invoked as -- and, same as `CLAUDE_CODE_REMOTE`
     # above, this server's own `os.environ` belongs to whoever spawned it,
     # not the session that dispatched the op. Without this entry an
     # engine-side read returns the daemon's environment, not the session's.
-    _entry(COORDINATOR_JOB_MODE, BORROW),
+    _entry(COORDINATOR_JOB_MODE, CALLER),
 )
 
 

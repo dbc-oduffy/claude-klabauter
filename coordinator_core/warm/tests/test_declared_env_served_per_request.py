@@ -34,12 +34,14 @@ import pytest
 from coordinator_core.warm import entry_seam
 from coordinator_core.warm.entry_seam import (
     BORROW_NAMES,
+    CALLER_NAMES,
     OVERRIDE_NAMES,
     REFUSE_NAMES,
     _environ_identity_borrow,
 )
 
 _BORROW_NAME = BORROW_NAMES[0]  # "MACHINE_LOCAL_REGISTRY_DIR"
+_CALLER_NAME = CALLER_NAMES[0]  # "CLAUDE_PROJECT_DIR"
 _REFUSE_NAME = REFUSE_NAMES[0]  # "COORDINATOR_SETTINGS_HOME"
 _OVERRIDE_TOP = OVERRIDE_NAMES[0]  # "COORDINATOR_SESSION_ID"
 _VALID_UUID = "8b40d62c-55ef-4702-83ce-0cd8dc6513e3"
@@ -49,7 +51,9 @@ _VALID_UUID = "8b40d62c-55ef-4702-83ce-0cd8dc6513e3"
 #: this file's own safety net, independent of the seam's `finally` under
 #: test, so an assertion failure mid-test cannot leak a borrowed value
 #: into a sibling test on this shared-process test run.
-_ALL_TOUCHED_NAMES = tuple(dict.fromkeys(BORROW_NAMES + REFUSE_NAMES + OVERRIDE_NAMES + ("CLAUDE_PID",)))
+_ALL_TOUCHED_NAMES = tuple(
+    dict.fromkeys(BORROW_NAMES + CALLER_NAMES + REFUSE_NAMES + OVERRIDE_NAMES + ("CLAUDE_PID",))
+)
 
 
 @pytest.fixture(autouse=True)
@@ -120,6 +124,34 @@ def test_refuse_mode_absent_from_env_inherits_the_ambient_value():
         assert os.environ[_REFUSE_NAME] == "the-workers-own-value"
 
     assert os.environ[_REFUSE_NAME] == "the-workers-own-value"
+
+
+def test_caller_mode_mirrors_a_carried_value_for_the_block_only():
+    """CALLER branch, carried: mirrored for the block, the prior value back
+    after -- the same borrow shape as BORROW."""
+    os.environ[_CALLER_NAME] = "the-spawners-project"
+    env = {_CALLER_NAME: "the-callers-project"}
+
+    with _environ_identity_borrow(env, isolated=True, caller_pid=None):
+        assert os.environ[_CALLER_NAME] == "the-callers-project"
+
+    assert os.environ[_CALLER_NAME] == "the-spawners-project"
+
+
+def test_caller_mode_absent_from_env_pops_the_spawners_value():
+    """CALLER branch, omitted: the worker's own value is whichever session
+    spawned the server, so it is popped rather than inherited -- the defect
+    that served one repo's memo inbox to every Bash-tool caller, since
+    Claude Code does not export `CLAUDE_PROJECT_DIR` to tool shells."""
+    for name in CALLER_NAMES:
+        os.environ[name] = "the-spawners-value"
+
+    with _environ_identity_borrow({}, isolated=True, caller_pid=None):
+        for name in CALLER_NAMES:
+            assert name not in os.environ
+
+    for name in CALLER_NAMES:
+        assert os.environ[name] == "the-spawners-value"
 
 
 def test_override_mode_binds_the_top_tier_session_id_and_pops_the_rest():

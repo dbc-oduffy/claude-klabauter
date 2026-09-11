@@ -145,6 +145,7 @@ _KNOWN_GOOD_BACKUP_RE = re.compile(r"^settings\.json\.known-good-(\d{8}T\d{6})$"
 _DOEROOT_NAME = ".doe-root"
 _INSTALLED_PLUGINS_REL = ("plugins", "installed_plugins.json")
 _HOOKS_JSON_REL = ("hooks", "hooks.json")
+_EFFECTIVE_DELIVERY_REL = ("hooks", "effective-delivery.json")
 _SCRIPT_TOKEN_RE = re.compile(r"(\S*\.(?:py|sh|mjs|js))\b")
 _TAIL_KEY_RE = re.compile(r"(?:^|/)([^/]+/[^/]+)$")
 
@@ -1010,9 +1011,10 @@ def detect_hook_delivery_duplication(config_dir: Optional[Path] = None) -> HookD
     )
 
     # Hook-delivery manifest (C1/C2): read the `x-effective-delivery` block
-    # out of the ALREADY-PARSED `plugin_data` -- no second resolve, no
-    # second file read. `declared_script_keys` is the plugin-side's own
-    # script-shaped commands, tail-key normalized, so the manifest's
+    # out of `coordinator/hooks/effective-delivery.json`, a sidecar next to
+    # `hooks.json`, which stays schema-clean by not carrying it.
+    # `declared_script_keys` is the plugin-side's
+    # own script-shaped commands, tail-key normalized, so the manifest's
     # exhaustiveness/`stale` check (C1) sees exactly what `hooks.json`
     # itself declares.
     declared_script_keys: List[str] = []
@@ -1023,8 +1025,17 @@ def detect_hook_delivery_duplication(config_dir: Optional[Path] = None) -> HookD
         key = _tail_key(token)
         if key is not None:
             declared_script_keys.append(key)
+    effective_delivery_data: Optional[dict] = None
+    if content_root is not None:
+        effective_delivery_path = Path(content_root, *_EFFECTIVE_DELIVERY_REL)
+        if effective_delivery_path.is_file():
+            try:
+                with effective_delivery_path.open("r", encoding="utf-8") as fh:
+                    effective_delivery_data = json.load(fh)
+            except (OSError, ValueError):
+                effective_delivery_data = None
     manifest: HookDeliveryManifest = read_hook_delivery_manifest(
-        plugin_data, declared_script_keys
+        effective_delivery_data, declared_script_keys
     )
 
     # Overlap is computed on the root-independent tail key (`_tail_key`),

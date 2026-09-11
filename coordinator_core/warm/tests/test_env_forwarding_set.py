@@ -24,6 +24,7 @@ import pytest
 
 from coordinator_core.warm.env_forwarding import (
     BORROW,
+    CALLER,
     FORWARDING_SET,
     OVERRIDE,
     REFUSE,
@@ -64,7 +65,7 @@ def test_header_names_each_entry_exactly_once_as_a_token():
 
 def test_header_carries_no_mode_or_gate_data():
     text = _HEADER_PATH.read_text(encoding="utf-8")
-    for mode in (BORROW, REFUSE, OVERRIDE):
+    for mode in (BORROW, CALLER, REFUSE, OVERRIDE):
         assert mode not in text.split("*/", 1)[-1].split("/*")[0], (
             f"mode {mode!r} must not appear as C-facing data in the "
             "generated header -- mode dispatch is Python-side only"
@@ -76,7 +77,7 @@ def test_forwarding_set_is_typed_name_mode_pairs():
     for entry in FORWARDING_SET:
         assert isinstance(entry, EnvEntry)
         assert isinstance(entry.name, str) and entry.name
-        assert entry.mode in (BORROW, REFUSE, OVERRIDE)
+        assert entry.mode in (BORROW, CALLER, REFUSE, OVERRIDE)
 
 
 def test_settings_home_is_the_sole_refuse_entry():
@@ -113,7 +114,7 @@ def test_forwarding_set_is_exactly_the_named_entries():
     ]
 
 
-def test_c7_widened_names_are_all_borrow_mode():
+def test_c7_widened_machine_constant_names_are_borrow_mode():
     widened_names = {
         "CLAUDE_HOME",
         "CLAUDE_PLUGIN_ROOT",
@@ -121,12 +122,23 @@ def test_c7_widened_names_are_all_borrow_mode():
         "MACHINE_LOCAL_IMPL",
         "COORDINATOR_ROOT",
         "DOE_ROOT",
-        "CLAUDE_PROJECT_DIR",
     }
     by_name = {e.name: e.mode for e in FORWARDING_SET}
     assert widened_names <= set(by_name)
     for name in widened_names:
         assert by_name[name] == BORROW
+
+
+def test_per_caller_facts_are_exactly_the_caller_mode_entries():
+    """A per-caller fact inherited from the server's spawner answers every
+    caller that omits it with a stranger's value -- pinned so a new
+    per-caller name cannot land as BORROW by habit."""
+    caller_entries = [e.name for e in FORWARDING_SET if e.mode == CALLER]
+    assert caller_entries == [
+        "CLAUDE_PROJECT_DIR",
+        "CLAUDE_CODE_REMOTE",
+        "COORDINATOR_JOB_MODE",
+    ]
 
 
 def test_claude_pid_is_never_an_entry():

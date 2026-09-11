@@ -299,7 +299,7 @@ class VendoredPair:
 
 VENDORED_PAIRS: tuple[VendoredPair, ...] = (
     VendoredPair(
-        artifact="coordinator/hooks/hooks.json",
+        artifact="coordinator/hooks/effective-delivery.json",
         sources=("coordinator/hooks/scripts",),
         stamp_block="x-effective-delivery",
     ),
