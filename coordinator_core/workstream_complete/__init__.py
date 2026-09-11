@@ -3602,13 +3602,20 @@ _REVIEW_SCALE_GIT_TIMEOUT = 15
 _REVIEW_SCALE_NUMSTAT_ROW_RE = re.compile(r"^(-|\d+)\t(-|\d+)\t(.+)$")
 
 
-def _run_git_read_only(args: list[str], cwd: Path) -> Optional[str]:
+def _run_git_read_only(
+    args: list[str], cwd: Path, stdin_text: Optional[str] = None
+) -> Optional[str]:
     """Run a READ-ONLY `git` command under `cwd`, returning stdout, or
     `None` on any failure (non-zero rc, missing binary, timeout) — never a
     substitute default for a range this helper could not measure. Mirrors
     `backlog_grind_assemble.readers_mise._run_git_read_only` verbatim in
     shape; not imported cross-package since that one is private to its own
-    module."""
+    module.
+
+    `stdin_text` feeds a stdin-batched primitive (`cat-file --batch-check`,
+    `check-ignore --stdin`) — the one shape that lets a caller ask about N
+    items in one process without an argv the Windows ~32K `CreateProcess`
+    ceiling refuses."""
     try:
         proc = subprocess.run(
             # `--no-optional-locks`: read-only by this helper's own contract,
@@ -3617,6 +3624,7 @@ def _run_git_read_only(args: list[str], cwd: Path) -> Optional[str]:
             # concurrently. Same shape `archive_stamp.py` already uses.
             ["git", "--no-optional-locks", *args],
             cwd=str(cwd),
+            input=stdin_text,
             capture_output=True,
             text=True,
             timeout=_REVIEW_SCALE_GIT_TIMEOUT,
@@ -3627,6 +3635,96 @@ def _run_git_read_only(args: list[str], cwd: Path) -> Optional[str]:
     if proc.returncode != 0:
         return None
     return proc.stdout or ""
+
+
+#: Max SHAs per batched `git log --no-walk` trailer call — mirrors
+#: `coverage._TRAILER_LOOKUP_CHUNK`'s own reasoning (a 40-hex sha plus a
+#: separator is a few bytes; 300 per chunk leaves ample headroom under the
+#: Windows ~32K command-line ceiling).
+_SPINE_TRAILER_CHUNK = 300
+
+
+def _batch_resolve_commit_refs(root: Path, refs: list[str]) -> dict[str, str]:
+    """`{ref: full_commit_sha}` for every ref that resolves to a commit, in
+    ONE `git cat-file --batch-check` spawn instead of one `git rev-parse
+    --verify <ref>^{commit}` per ref.
+
+    `--batch-check` emits exactly one output line per input line, IN ORDER,
+    including for a ref it cannot resolve (`<input> missing` /
+    `<input> ambiguous`), so positional zip is safe. Peeling is done in the
+    input itself (`<ref>^{commit}`) — the same syntax the per-ref
+    `rev-parse --verify` used — and a row whose `%(objecttype)` is not
+    `commit` is dropped, which is exactly the set `rev-parse --verify
+    <ref>^{commit}` failed on.
+
+    NEGATIVE-SPEC: a ref carrying whitespace is dropped without being sent.
+    Git refnames forbid whitespace, so such a value is a hand-written
+    `disposition_ref` typo that `rev-parse --verify` already failed on —
+    and sending it would desynchronise the line-per-line zip this batching
+    depends on. Returns `{}` (never a partial map) on a spawn failure: the
+    caller's per-ref path treated an unresolvable ref as "skip this row",
+    which is the same disposition every ref gets here."""
+    if not refs:
+        return {}
+    ordered = [ref for ref in dict.fromkeys(refs) if not any(c.isspace() for c in ref)]
+    if not ordered:
+        return {}
+    out = _run_git_read_only(
+        ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        root,
+        stdin_text="".join(f"{ref}^{{commit}}\n" for ref in ordered),
+    )
+    if out is None:
+        return {}
+    resolved: dict[str, str] = {}
+    for ref, line in zip(ordered, out.splitlines()):
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "commit":
+            resolved[ref] = parts[0]
+    return resolved
+
+
+def _batch_session_id_trailers(root: Path, shas: list[str]) -> dict[str, str]:
+    """`{sha: Session-Id}` for every sha carrying its own `Session-Id`
+    trailer, via batched `git log --no-walk` over BARE SHA positionals
+    instead of one `git log -1` per sha.
+
+    Bare shas have no exclusion semantics, so batching them cannot silently
+    drop a commit the way combining `A..B` ranges into one `git log` would
+    (git applies exclusions GLOBALLY across ranges). `--no-walk` keeps the
+    output to the named commits rather than their whole ancestry.
+
+    NEGATIVE-SPEC: NOT `coverage._bulk_trailer_lookup`, whose argv carries
+    `--no-merges`. A merge commit dropped from that map reads here as
+    "untrailered", which would silently reclassify a peer-owned merge from
+    `conflicting` to `recovered` — the opposite of the attribution this
+    caller exists to preserve. A chunk that fails is absent from the map,
+    the same disposition the per-sha call's `None` produced."""
+    if not shas:
+        return {}
+    ordered = list(dict.fromkeys(shas))
+    trailers: dict[str, str] = {}
+    for i in range(0, len(ordered), _SPINE_TRAILER_CHUNK):
+        chunk = ordered[i : i + _SPINE_TRAILER_CHUNK]
+        out = _run_git_read_only(
+            [
+                "log",
+                "--no-walk",
+                "--format=%H%x1f%(trailers:key=Session-Id,valueonly)",
+                *chunk,
+            ],
+            root,
+        )
+        if out is None:
+            continue
+        for line in out.splitlines():
+            if "\x1f" not in line:
+                continue
+            sha, _sep, trailer = line.partition("\x1f")
+            sha, trailer = sha.strip(), trailer.strip()
+            if sha and trailer:
+                trailers[sha] = trailer
+    return trailers
 
 
 def _resolve_base_sha_after_session_start(
@@ -4243,6 +4341,14 @@ def _dispatched_chunk_shas_missing_from_slices(
 
     recoverable: list[dict[str, str]] = []
     conflicting: list[dict[str, str]] = []
+
+    # Three passes, TWO spawns, whatever the spine's length: gather the
+    # coded rows, resolve every `disposition_ref` in ONE `cat-file
+    # --batch-check`, then read every surviving sha's `Session-Id` trailer
+    # in ONE `git log --no-walk`. The per-row `rev-parse` + `git log -1`
+    # pair this replaces cost two processes per coded chunk, and process
+    # creation is the cost here, not the query.
+    coded: list[tuple[str, str]] = []
     for row in result.rows:
         if str(row.get("disposition") or "").strip() != "coded":
             continue
@@ -4250,16 +4356,23 @@ def _dispatched_chunk_shas_missing_from_slices(
         chunk_id = str(row.get("id") or "").strip()
         if not ref or not chunk_id:
             continue
-        resolved = _run_git_read_only(["rev-parse", "--verify", f"{ref}^{{commit}}"], root)
-        if not resolved:
+        coded.append((chunk_id, ref))
+    if not coded:
+        return [], []
+
+    resolved_by_ref = _batch_resolve_commit_refs(root, [ref for _chunk, ref in coded])
+    candidates: list[tuple[str, str]] = []
+    for chunk_id, ref in coded:
+        full = resolved_by_ref.get(ref)
+        if not full or full in slice_shas:
             continue
-        full = resolved.strip().splitlines()[0].strip()
-        if full in slice_shas:
-            continue
-        trailer = _run_git_read_only(
-            ["log", "-1", "--format=%(trailers:key=Session-Id,valueonly)", full], root
-        )
-        owner = (trailer or "").strip()
+        candidates.append((chunk_id, full))
+    if not candidates:
+        return [], []
+
+    owner_by_sha = _batch_session_id_trailers(root, [sha for _chunk, sha in candidates])
+    for chunk_id, full in candidates:
+        owner = owner_by_sha.get(full, "")
         entry = {"chunk": chunk_id, "sha": full}
         if owner:
             entry["committed_by"] = owner
@@ -5158,10 +5271,17 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
             "recovered": _recoverable,
             "conflicting": _conflicting,
         }
+        # ONE `git show --raw --numstat` across every recovered sha, through
+        # the same producer the session-LOC and peer-paths consumers already
+        # share, instead of one `git show` per recovered commit. `--raw` rows
+        # begin with `:` and are skipped by both accumulators' numstat-row
+        # regex, so the composed format is a superset of what the per-sha
+        # `--numstat` call returned, not a different reading of it.
+        _recovered_blocks = directives_commit_tail.chunked_show_numstat_blocks(
+            root, [_e["sha"] for _e in _recoverable]
+        ) or {}
         for _entry in _recoverable:
-            _numstat = _run_git_read_only(
-                ["show", "--numstat", "--format=%H", _entry["sha"]], root
-            )
+            _numstat = _recovered_blocks.get(_entry["sha"])
             if _numstat is None:
                 continue
             _surfaces: set[str] = set()

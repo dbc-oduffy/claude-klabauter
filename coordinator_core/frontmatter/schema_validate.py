@@ -6022,6 +6022,75 @@ def _js_number_str(n: float | int) -> str:
     return repr(n)
 
 
+def _quoted_scalar_opens(text: str) -> str:
+    """The quote character `text` opens an unterminated flow scalar with, or ''.
+
+    Negative-spec: a scalar that closes on its own line returns '' however much
+    text follows the closing quote — a trailing inline comment is the ordinary
+    case and is not a continuation.
+    """
+    if not text or text[0] not in ('"', "'"):
+        return ''
+    quote = text[0]
+    i = 1
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if quote == '"' and c == '\\':
+            i += 2
+            continue
+        if c == quote:
+            if quote == "'" and i + 1 < n and text[i + 1] == "'":
+                i += 2
+                continue
+            return ''
+        i += 1
+    return quote
+
+
+def _fold_quoted_continuation(
+    lines: list[str], start: int, rest: str
+) -> tuple[str, int]:
+    """Join the continuation lines of a multi-line quoted scalar. Returns
+    (folded_text, last_consumed_line).
+
+    YAML flow folding: continuation lines are stripped and joined with a single
+    space, a blank line folds to a newline. Without this the restricted parser
+    ends the value at the first newline and reads every following `word: text`
+    line as a KEY — so a correct record reports phantom additional properties
+    (doe-claude-em memo, example-retrieval-repo-ue-addon F15) and every reader of the
+    value gets it truncated with its opening quote still attached.
+
+    Negative-spec: a scalar left unterminated by the end of the block, or by a
+    `---` delimiter, is NOT folded — the lines are returned untouched so the
+    malformed record parses exactly as it did before rather than swallowing the
+    rest of the document.
+    """
+    quote = _quoted_scalar_opens(rest)
+    if not quote:
+        return rest, start
+
+    parts = [rest]
+    i = start + 1
+    while i < len(lines):
+        line = lines[i].strip()
+        if line == '---':
+            break
+        parts.append(line)
+        if _quoted_scalar_opens(quote + line) == '':
+            folded = parts[0]
+            for part in parts[1:]:
+                if part == '':
+                    folded += '\n'
+                elif folded.endswith('\n'):
+                    folded += part
+                else:
+                    folded += ' ' + part
+            return folded, i
+        i += 1
+    return rest, start
+
+
 def _consume_block_scalar(lines: list[str], start: int, key_indent: int) -> tuple[str, int]:
     """Port of schema.js consumeBlockScalar (lines 59-94). Returns (value, next_line)."""
     body_lines: list[str] = []
@@ -6124,6 +6193,7 @@ def _parse_yaml_lines(lines: list[str], start: int, base_indent: int) -> tuple[A
             i = block_next
             continue
         else:
+            rest, i = _fold_quoted_continuation(lines, i, rest)
             stripped = _strip_inline_comment(rest)
             if stripped.startswith('[') and stripped.endswith(']'):
                 result[key] = _parse_inline_list(stripped)

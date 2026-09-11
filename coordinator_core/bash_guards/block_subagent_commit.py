@@ -3437,6 +3437,12 @@ _COMMITTING_OP_NAMES = frozenset(
         # replaced `handoff.housekeeping`, which was deleted with its module.
         "session.safe_commit_offer",         # ops/session/safe_commit_offer.py -- commit_paths(...)
         "housekeeping.cycle",                # housekeeping/cycle.py -- archive_and_commit(...)
+        # memo.heal_inbox (C5, docs/plans/2026-09-11-memo-deliveries-survive-
+        # the-receiver-s-o.md) -- fleet/memo_heal.py's own restore path calls
+        # `git_native.commit_authored_new_file(...)` directly, landing a real
+        # commit into the CALLING repo's own tree (no substring "commit" in
+        # the op name, same hole-(a) shape as memo.send).
+        "memo.heal_inbox",                   # fleet/memo_heal.py -- commit_authored_new_file(...)
     }
 )
 _CEREMONY_INVOKE_MODULE = "coordinator_core.invoke"

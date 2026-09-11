@@ -463,6 +463,41 @@ def _sha_in_multi_pack_index(midx_path: Path, lo_key: bytes, hi_key: bytes) -> b
         return lo_key <= candidate <= hi_key
 
 
+def _require_out_accumulator(name: str, value: object) -> None:
+    """Refuse a non-list out-accumulator by name.
+
+    `skipped`/`scan_skipped` read like flags and are lists, so `skipped=True`
+    is the natural wrong call. Before this, `is not None` admitted the bool
+    and the first refusal died on `'bool' object has no attribute 'append'`
+    -- deep inside a rail, naming neither the parameter nor the caller
+    (example-store-repo-fb, mise run 20260911T144351).
+    """
+    if value is not None and not isinstance(value, list):
+        raise TypeError(
+            f"{name} is an out-accumulator, not a flag: pass a list to collect "
+            f"{{id, reason}} entries, or omit it; got {type(value).__name__}"
+        )
+
+
+def _require_git_common_dir(common_dir: Path) -> None:
+    """Refuse a `common_dir` that names no object store.
+
+    The object reader is existence-only and fail-closed, so a wrong path
+    answers False for every sha rather than raising -- and the sweep then
+    reports a per-baton `shipped-in-unresolvable`, which reads as a fact
+    about the record. A caller who passed the ARCHIVE DESTINATION here spent
+    40 minutes on a fabricated "shipped_in must be a full 40-char sha" rule
+    and committed a record edit to satisfy it (example-store-repo-fb, 2026-09-11).
+    Fail-closed is right; fail-closed while describing the data is what cost
+    the time.
+    """
+    if not (common_dir / "objects").exists():
+        raise ValueError(
+            f"common_dir must be a git common dir (no objects/ under {common_dir}) — "
+            "pass `git rev-parse --git-common-dir`, not a worktree or archive path"
+        )
+
+
 def _object_exists_no_spawn(common_dir: Path, sha_hex: str) -> bool:
     """Existence-only, dependency-free answer to "does this sha name an
     object that exists" — the Rail-2 bounded reader (C10, AC-11).
@@ -936,10 +971,18 @@ def _classify_branch(meta: dict, shipped_in_resolved: Dict[str, bool]) -> Tuple[
         if deployment_state == "shipped":
             shipped_in = meta.get("shipped_in")
             if not shipped_in or not shipped_in_resolved.get(str(shipped_in).strip(), False):
+                sha = str(shipped_in).strip() if shipped_in else ""
                 return (
                     False,
                     f"{_SCAN_REASON_SHIPPED_IN_UNRESOLVABLE}: deployment_state=shipped "
-                    "but shipped_in unresolvable — retained (fail-closed)",
+                    + (
+                        f"but shipped_in {sha!r} names no object in this repo "
+                        "(abbreviations resolve from 7 hex; shorter, non-hex, or "
+                        "another repo's sha does not)"
+                        if sha
+                        else "but shipped_in is empty"
+                    )
+                    + " — retained (fail-closed)",
                     "",
                     False,
                 )
@@ -1062,6 +1105,8 @@ def _scan_terminal(
     needing the ONE batch resolvability check, and Branch A/B qualification
     per candidate, both come from the pre-filter survivor set.
     """
+    _require_out_accumulator("skipped", skipped)
+    _require_git_common_dir(common_dir)
     results: List[Tuple[Path, str, str, Optional[str]]] = []
     try:
         live_paths = collect_live_handoff_paths(worktree_root)
@@ -1267,10 +1312,17 @@ def plan_sweep(
     `apply_sweep` or `archive_and_commit`; `skipped` is a list of
     `{id, reason}` using the same reason strings that ship today, unchanged.
     """
+    _require_out_accumulator("scan_skipped", scan_skipped)
+    # Collected even when the caller wants none: a candidate_id that is absent
+    # from the terminal set was refused by a NAMED rail in this same scan, and
+    # reporting "terminality-drift" instead of that rail's own reason sent an
+    # operator looking for a race that never happened (example-store-repo-fb).
+    rails: List[dict] = scan_skipped if scan_skipped is not None else []
     terminal = _scan_terminal(
         worktree_root, common_dir, known_dirty_relpaths=known_dirty_relpaths,
-        skipped=scan_skipped,
+        skipped=rails,
     )
+    rail_reason = {entry["id"]: entry["reason"] for entry in rails if "id" in entry}
     terminal_by_id = {rel_id(p, worktree_root): (p, note) for p, note, _label, _ts in terminal}
 
     moves: List[Move] = []
@@ -1324,7 +1376,15 @@ def plan_sweep(
             if not src_guess.exists():
                 skipped.append({"id": cid, "reason": "already-archived"})
             else:
-                skipped.append({"id": cid, "reason": "terminality-drift: no longer classifies as terminal"})
+                skipped.append(
+                    {
+                        "id": cid,
+                        "reason": rail_reason.get(
+                            cid,
+                            "terminality-drift: no longer classifies as terminal",
+                        ),
+                    }
+                )
             continue
         if cid in deferred_ids:
             skipped.append({"id": cid, "reason": f"deferred-cap: invocation cap ({cap}) reached"})
@@ -1341,8 +1401,16 @@ def plan_sweep(
     return moves, skipped
 
 
-def apply_sweep(moves: List[Move]) -> Tuple[List[dict], List[dict]]:
+def apply_sweep(moves: "List[Move] | Tuple[List[Move], List[dict]]") -> Tuple[List[dict], List[dict]]:
     """Apply pre-planned moves via `os.replace` only — no git spawn.
+
+    Takes `plan_sweep`'s `(moves, skipped)` pair as well as a bare moves
+    list, because `apply_sweep(plan_sweep(...))` is the obvious composition
+    and the pair is unmistakable. Handed the pair, it applies the moves and
+    ignores the skips, which are already the caller's to report. Before
+    this, that call reached the loop and died on `'list' object has no
+    attribute 'force'` — a shape error wearing a dataclass field's name
+    (example-store-repo-fb, mise run 20260911T144351).
 
     Ensures `dst.parent` exists before each replace. Refuses a non-`force`
     move onto an existing `dst` (`os.replace` has no fail-if-exists mode, so
@@ -1354,10 +1422,12 @@ def apply_sweep(moves: List[Move]) -> Tuple[List[dict], List[dict]]:
     Returns (acted, failed) — `acted` items are `{id, archived: True}`;
     `failed` items are `{id, reason}`.
     """
+    planned: List[Move] = moves[0] if isinstance(moves, tuple) else moves
+
     acted: List[dict] = []
     failed: List[dict] = []
 
-    for move in moves:
+    for move in planned:
         if not move.force and move.dst.exists():
             failed.append({
                 "id": move.candidate_id,

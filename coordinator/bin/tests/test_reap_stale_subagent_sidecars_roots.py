@@ -123,10 +123,10 @@ class TestTrackedPathsDistinguishesTheTwoRoots:
         assert tracked == set()
 
     def test_a_check_scoped_to_one_root_classifies_nothing_in_the_other(self, reap, repo):
-        """Why the caller unions one scoped spawn PER root rather than making
-        a single call: `under` narrows `git ls-files` to one directory, so a
-        legacy path asked about under the machinery root comes back unclassified
-        even though it is genuinely tracked."""
+        """`under` narrows `git ls-files` to the roots it names, so a legacy
+        path asked about under the machinery root ALONE comes back
+        unclassified even though it is genuinely tracked. This is why the
+        caller passes every root, not one at a time."""
         legacy_rel = os.path.join("state", "subagent-share", "sid-old", "tracked.md")
 
         tracked = reap._tracked_paths(
@@ -134,3 +134,33 @@ class TestTrackedPathsDistinguishesTheTwoRoots:
         )
 
         assert tracked == set()
+
+    def test_every_root_is_classified_in_one_spawn(self, reap, repo, monkeypatch):
+        """The batching invariant, and the reason `under` takes a sequence:
+        N roots cost ONE `git ls-files`, not one per root, and the verdict is
+        the same union the per-root loop produced. Counts PROCESSES, never
+        wall clock."""
+        legacy_rel = os.path.join("state", "subagent-share", "sid-old", "tracked.md")
+        ignored_rel = os.path.join(
+            ".coordinator-local", "subagent-share", "sid-new", "ignored.md"
+        )
+        spawns = []
+        real_run = reap.subprocess.run
+
+        def counting_run(argv, *args, **kwargs):
+            spawns.append(list(argv))
+            return real_run(argv, *args, **kwargs)
+
+        monkeypatch.setattr(reap.subprocess, "run", counting_run)
+
+        tracked = reap._tracked_paths(
+            repo,
+            [legacy_rel, ignored_rel],
+            under=[
+                os.path.join("state", "subagent-share"),
+                os.path.join(".coordinator-local", "subagent-share"),
+            ],
+        )
+
+        assert tracked == {legacy_rel}
+        assert len(spawns) == 1, spawns

@@ -1530,3 +1530,103 @@ def test_terminal_but_retained_gets_its_own_refusal_family_not_the_bulk_one(repo
     assert _family(reason) == _SCAN_REASON_NOT_TERMINAL, (
         f"a genuinely non-terminal record must stay in the bulk family; got {reason!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# example-store-repo-fb, mise run 20260911T144351: four call-shape / message defects
+# that each cost an operator a cycle mid-close-out.
+# ---------------------------------------------------------------------------
+
+
+def test_a_non_list_out_accumulator_is_refused_by_name(repo: Path):
+    """`skipped=False` used to pass the `is not None` check and die inside a
+    rail on `'bool' object has no attribute 'append'`, naming neither the
+    parameter nor the caller."""
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import _scan_terminal, plan_sweep
+
+    common_dir = _common_dir(repo)
+
+    with pytest.raises(TypeError) as excinfo:
+        _scan_terminal(repo, common_dir, skipped=False)
+    assert "skipped" in str(excinfo.value) and "not a flag" in str(excinfo.value)
+
+    with pytest.raises(TypeError) as excinfo:
+        plan_sweep(repo, common_dir, 10, scan_skipped=False)
+    assert "scan_skipped" in str(excinfo.value)
+
+    # None and a list both still work.
+    rails: list = []
+    _scan_terminal(repo, common_dir, skipped=rails)
+    _scan_terminal(repo, common_dir, skipped=None)
+
+
+def test_apply_sweep_takes_what_plan_sweep_returns(repo: Path):
+    """`apply_sweep(plan_sweep(...))` is the obvious composition; it used to
+    die on `'list' object has no attribute 'force'`."""
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import apply_sweep, plan_sweep
+
+    name = "2026-01-02-pair-shape.md"
+    path = _seed(repo, name, "status: claimed\ndeployment_state: continued\ncontinued_into: hnd-x")
+    common_dir = _common_dir(repo)
+
+    acted, failed = apply_sweep(plan_sweep(repo, common_dir, 10))
+
+    assert failed == [], failed
+    assert [item["id"] for item in acted] == [_cid(name)]
+    assert not path.exists()
+
+
+def test_a_refused_candidate_reports_the_rail_that_refused_it(repo: Path):
+    """A candidate_id absent from the terminal set was reported as
+    `terminality-drift` whatever the real reason was. The scan names a rail
+    for every refusal; the act path now reports THAT."""
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import plan_sweep
+
+    name = "2026-01-03-still-open.md"
+    _seed(repo, name, "status: open\ndeployment_state: in_flight")
+    common_dir = _common_dir(repo)
+
+    _moves, skipped = plan_sweep(repo, common_dir, 10, candidate_ids=[_cid(name)])
+
+    assert len(skipped) == 1, skipped
+    reason = skipped[0]["reason"]
+    assert "terminality-drift" not in reason, (
+        f"the scan refused this record by a named rail; got {reason!r}"
+    )
+    assert reason.startswith("not-terminal"), reason
+
+
+def test_the_unresolvable_shipped_in_refusal_names_the_sha_and_the_real_rule():
+    """The old text said only "unresolvable", which read as "a full 40-char
+    sha is required". It is not: abbreviations resolve from 7 hex."""
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import _classify_branch
+
+    _q, reason, _label, _b = _classify_branch(
+        {"status": "claimed", "deployment_state": "shipped", "shipped_in": "abc1234"}, {}
+    )
+    assert "'abc1234'" in reason, reason
+    assert "7 hex" in reason, reason
+
+    _q, empty_reason, _label, _b = _classify_branch(
+        {"status": "claimed", "deployment_state": "shipped", "shipped_in": ""}, {}
+    )
+    assert "empty" in empty_reason, empty_reason
+
+
+def test_a_common_dir_that_is_not_a_git_dir_is_a_caller_error(repo: Path):
+    """A wrong `common_dir` used to answer False for every sha and surface as
+    a per-baton `shipped-in-unresolvable` — a caller's bad argument wearing a
+    fact about the record (example-store-repo-fb, 2026-09-11)."""
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import _scan_terminal, plan_sweep
+
+    archive_dest = repo / "archive" / "handoffs"
+    archive_dest.mkdir(parents=True, exist_ok=True)
+
+    for call in (
+        lambda: _scan_terminal(repo, archive_dest),
+        lambda: plan_sweep(repo, archive_dest, 10),
+    ):
+        with pytest.raises(ValueError) as excinfo:
+            call()
+        assert "common_dir" in str(excinfo.value)
+        assert "--git-common-dir" in str(excinfo.value)

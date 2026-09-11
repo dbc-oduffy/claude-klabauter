@@ -2754,6 +2754,17 @@ def _batched_primary_result_names(
     `_batched_primary_result_names` was never told the plural form is the same relationship, only
     an identical string or a bare-Name reference).
 
+    WIDENED 2026-09-11 to the `_from` SPLIT of that plural form. This repo's shape for sharing
+    one spawn across two consumers is to split a batched producer in half -- `tip_authors(run_git,
+    repo_root)` becomes `tip_authors_from(rows)` over an already-fetched `ref_rows` listing, so
+    the branch list and the tip authors cost ONE `for-each-ref` between them instead of two. The
+    2026-08-27 bridge matched only the undivided name, so `04b6c7c643` splitting the producer
+    re-fired `consolidate_assemble::brief -> tip_author` -- a site that got CHEAPER, reported as
+    regrowth. The suffix is a closed two-name set (`{callee}s`, `{callee}s_from`), not a prefix
+    match: a prefix would bridge any callee whose name merely starts with the per-item one.
+    MEASURED at land: exactly this key retired, zero collateral (13 observed keys -> 12, the
+    other 12 unchanged).
+
     Either way it must CARRY THE COLLECTION WHOLE -- by argv (`_carries_whole`) or, WIDENED
     2026-08-27, by RESULT INDEXING (`_result_indexed_by_loop_var`): the primary's own bound name
     is later subscripted/`.get()`-ed by the loop's own target name."""
@@ -2770,7 +2781,9 @@ def _batched_primary_result_names(
                 n.id for n in ast.walk(call) if isinstance(n, ast.Name)
             }
             is_same_callee = callee is not None and (
-                call_name == callee or callee in names_here or call_name == f"{callee}s"
+                call_name == callee
+                or callee in names_here
+                or call_name in (f"{callee}s", f"{callee}s_from")
             )
             if not (is_spawn or is_same_callee):
                 continue
@@ -7406,6 +7419,65 @@ def test_discriminator_batched_primary_fallback_plural_result_indexed_not_flagge
         encoding="utf-8",
     )
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_batched_primary_fallback_plural_from_split_not_flagged(tmp_path):
+    """Discriminator 13, clause 1's `_from` SPLIT (WIDENED 2026-09-11) -- the same plural bridge
+    when the batched producer has been divided into a spawning half (`_ref_rows`) and a parsing
+    half (`_tip_authors_from`) so ONE `for-each-ref` feeds two consumers. This is the live shape
+    in `consolidate_assemble/__init__.py::brief` since `04b6c7c643`, and the undivided-name
+    bridge did not reach it -- a site that got CHEAPER read as regrowth."""
+    fixture = tmp_path / "disc_fallback_plural_from_split.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _tip_author(ref):\n"
+        "    return subprocess.run(['git', 'log', '-1', '--format=%ae', ref])\n"
+        "\n"
+        "def _ref_rows():\n"
+        "    return subprocess.run(['git', 'for-each-ref'])\n"
+        "\n"
+        "def _tip_authors_from(rows):\n"
+        "    return dict(rows)\n"
+        "\n"
+        "def brief(refs):\n"
+        "    rows = _ref_rows()\n"
+        "    all_authors = _tip_authors_from(rows)\n"
+        "    out = {}\n"
+        "    for ref in refs:\n"
+        "        author = all_authors[ref] if ref in all_authors else _tip_author(ref)\n"
+        "        out[ref] = author\n"
+        "    return out\n",
+        encoding="utf-8",
+    )
+    assert find_unbatched_per_item_spawns((tmp_path,)) == []
+
+
+def test_discriminator_batched_primary_fallback_from_suffix_is_not_a_prefix_match(tmp_path):
+    """AC7b negative for the 2026-09-11 widening -- the bridge is a CLOSED two-name set, never a
+    prefix match. `_tip_author_lookup` starts with the per-item callee's own name and is not its
+    batched plural, so it must not bridge; the per-item call stays reported."""
+    fixture = tmp_path / "disc_fallback_from_prefix.py"
+    fixture.write_text(
+        "import subprocess\n"
+        "\n"
+        "def _tip_author(ref):\n"
+        "    return subprocess.run(['git', 'log', '-1', '--format=%ae', ref])\n"
+        "\n"
+        "def _tip_author_lookup(rows):\n"
+        "    return dict(rows)\n"
+        "\n"
+        "def brief(refs, rows):\n"
+        "    all_authors = _tip_author_lookup(rows)\n"
+        "    out = {}\n"
+        "    for ref in refs:\n"
+        "        author = all_authors[ref] if ref in all_authors else _tip_author(ref)\n"
+        "        out[ref] = author\n"
+        "    return out\n",
+        encoding="utf-8",
+    )
+    violations = find_unbatched_per_item_spawns((tmp_path,))
+    assert [site.enclosing for site in violations] == ["brief"]
 
 
 def test_discriminator_batched_primary_fallback_plural_declines_without_indexing(tmp_path):

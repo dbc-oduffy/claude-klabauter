@@ -638,6 +638,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # missing-repo_root guard.
     # Spec: state/bug-backlog/2026-08-25-the-memo-outbox-does-not-clean-itself-up-after-a-send.yaml
     "memo.reconcile_outbox":                  "common_dir",
+    # memo.heal_inbox — "common_dir": the heal reads and writes only the CALLING
+    # repo's own surfaces — its memo_corpus_root-resolved inbox/archive (a
+    # main-worktree-rooted state/ tree) and its refs/coordinator/inbox/* anchors
+    # under git_common_dir. Anchors live in the common dir and are therefore shared
+    # across linked worktrees, which is what rules out "show_top": two worktrees of
+    # one repo must not each heal against a private view of the same ref namespace.
+    # Unlike memo.send it never crosses into a peer tree.
+    # Spec: docs/plans/2026-09-11-memo-deliveries-survive-the-receiver-s-o.md § C5
+    "memo.heal_inbox":                        "common_dir",
     "memo.draft":                             "common_dir",
     "memo.compose":                           "common_dir",
     # memo.list_outbox — keyed on git_common_dir: enumerates the CALLING

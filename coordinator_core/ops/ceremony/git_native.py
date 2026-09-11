@@ -5757,3 +5757,85 @@ def update_ref(
     update instead.
     """
     return _git(["update-ref", ref, new_sha, old_sha], cwd=cwd)
+
+
+def update_refs_stdin(cwd: Union[str, Path], lines: Sequence[str]) -> GitResult:
+    """`git update-ref --stdin -z` — one ATOMIC transaction over several ref
+    commands at once (`memo.heal_inbox`'s adopt/retire/re-key batch, C5).
+
+    `lines` are `"create <ref> <oid>"` / `"delete <ref> <oid>"` strings, ONE
+    PER REF — e.g. `"delete refs/x/old blobsha"` or `"create refs/x/new
+    blobsha"`. `<oid>` is the CURRENT value being verified for `delete`, the
+    new value being set for `create` (matching this module's own
+    `write_anchor`/`_memo_anchor` shape: the ref path names the memo
+    filename+commit sha, its VALUE is the blob sha).
+
+    Encoded to git's `-z` NUL-terminated wire form internally
+    (`command SP ref NUL oid NUL`, per `git-update-ref(1)`), never the plain
+    LF form — `_git()`'s `input_data` goes through a `text=True` pipe, and on
+    Windows that pipe applies universal-newline translation to `"\\n"` on
+    write (observed: a bare `"\\n"`-joined batch reached git as `<oid>\\r\\n`,
+    which git's line-mode parser reports as `extra input` on the CR). NUL is
+    not `\\n`/`\\r`, so it survives that translation untouched — this is a
+    Windows-portability fix, not a preference between git's two documented
+    stdin forms.
+
+    Per `git-update-ref(1)`: "If all of the changes can be carried out
+    ... all modifications are performed. Otherwise, no modifications are
+    performed" — the whole batch is one all-or-nothing transaction with NO
+    `start`/`prepare`/`commit` commands needed to get that guarantee; this
+    wrapper does not add them.
+
+    Refuses (`GitResult(returncode=-1, ...)`, zero spawns) on an empty
+    `lines`, or on any line that is not exactly `"<create|delete> <ref>
+    <oid>"` (three space-separated tokens, first token one of the two
+    supported commands) — callers must gate on a non-empty, well-formed
+    batch themselves per the plan's own "issued only when non-empty" rule;
+    this is a second layer of that same discipline, not a substitute for it.
+    """
+    if not lines:
+        return GitResult(
+            returncode=-1,
+            stdout="",
+            stderr="update_refs_stdin: refusing to spawn `git update-ref --stdin` for an empty batch",
+        )
+    records: List[str] = []
+    for line in lines:
+        tokens = line.split(" ")
+        if len(tokens) != 3 or tokens[0] not in ("create", "delete"):
+            return GitResult(
+                returncode=-1,
+                stdout="",
+                stderr=(
+                    f"update_refs_stdin: malformed command {line!r} -- expected "
+                    "'create <ref> <oid>' or 'delete <ref> <oid>'"
+                ),
+            )
+        command, ref, oid = tokens
+        records.append(f"{command} {ref}\x00{oid}\x00")
+    stdin_data = "".join(records)
+    return _git(["update-ref", "--stdin", "-z"], cwd=cwd, input_data=stdin_data)
+
+
+def rev_list_not(
+    cwd: Union[str, Path], candidates: Sequence[str], extra_args: Sequence[str]
+) -> GitResult:
+    """`git rev-list <candidates...> <extra_args...>` — batched reachability
+    probe (`memo.heal_inbox`'s two-stage anchor-reachability check, C5).
+
+    Typical calls: `rev_list_not(cwd, shas, ["--not", "HEAD"])` (which of
+    `shas` is NOT reachable from HEAD) and `rev_list_not(cwd, shas, ["--not",
+    "--branches", "--remotes"])` (which is not reachable from ANY local or
+    remote-tracking branch). A candidate sha is "printed" (appears as a line
+    of `stdout`) iff it is reachable from at least one positive root and NOT
+    reachable from anything named after `--not` — callers read membership of
+    each candidate sha in the OUTPUT, never `.ok` alone (a `rev-list` with
+    nothing printed still exits 0).
+
+    `candidates` must be non-empty commit shas the caller has already
+    verified are real objects (`git_objects._read_object`) — this wrapper
+    issues the spawn unconditionally and does not itself check object
+    existence; per the plan's own "never handed a missing object" rule, that
+    check belongs to the caller, before batching.
+    """
+    return _git(["rev-list", *candidates, *extra_args], cwd=cwd)

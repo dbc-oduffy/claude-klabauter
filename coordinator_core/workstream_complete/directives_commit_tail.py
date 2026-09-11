@@ -146,7 +146,7 @@ from coordinator_core.session.machinery_paths import (
     machinery_root as _machinery_root,
     share_roots as _share_roots,
 )
-from coordinator_core.session.machinery_paths import share_dir as _share_dir
+from coordinator_core.session.machinery_paths import share_dirs as _share_dirs
 from coordinator_core.warm import skew as _skew
 from coordinator_core.warm.engine_root import current_engine_clone as _current_engine_clone
 from coordinator_core.win_portability import no_console_creationflags
@@ -226,26 +226,36 @@ def _run_git_ok(repo_root: Path, args: list[str]) -> Optional[str]:
 
 
 def _peer_subagent_share_paths(repo_root: Path, sid: str) -> set[str]:
-    """A peer session's `state/subagent-share/<sid>/` surface, in every
-    shape `git status --porcelain` might report it: the directory itself
-    (git's default collapsed-untracked-directory line, e.g. `?? state/
-    subagent-share/<sid>/`), plus every FILE actually present underneath it
-    (the shape `git status -uall` — or a partially-tracked dir — would
-    report instead). Emitting both costs nothing (an entry that never
-    appears in a given `git status` invocation just never matches anything
-    in `classify_session_authored_files`'s exact-membership check) and
-    avoids silently missing whichever shape the caller's git config
-    produces."""
-    abs_dir = Path(_share_dir(str(repo_root), sid))
-    rel_dir = abs_dir.relative_to(repo_root).as_posix()
-    paths: set[str] = {f"{rel_dir}/"}
-    try:
-        if abs_dir.is_dir():
-            for candidate in abs_dir.rglob("*"):
-                if candidate.is_file():
-                    paths.add(candidate.relative_to(repo_root).as_posix())
-    except OSError:
-        pass
+    """A peer session's per-session share surface, under EVERY share root a
+    reader must consult (`machinery_paths.share_dirs` — the current
+    `<machinery_root>/subagent-share/<sid>/` and the retired
+    `state/subagent-share/<sid>/`, both live simultaneously until that
+    module's named removal trigger fires), in every shape `git status
+    --porcelain` might report it: the directory itself (git's default
+    collapsed-untracked-directory line, e.g. `?? state/subagent-share/
+    <sid>/`), plus every FILE actually present underneath it (the shape
+    `git status -uall` — or a partially-tracked dir — would report
+    instead). Emitting both costs nothing (an entry that never appears in a
+    given `git status` invocation just never matches anything in
+    `classify_session_authored_files`'s exact-membership check) and avoids
+    silently missing whichever shape the caller's git config produces.
+
+    Resolving only the writer-side `share_dir` is the under-exclusion
+    defect this function exists to rule out: a peer provisioned before the
+    relocation republished is still writing under the legacy root, and a
+    reader blind to it reports that peer's live in-progress files as OURS
+    to commit — see `resolve_known_concurrent_paths`'s CORRECTNESS BAR."""
+    paths: set[str] = set()
+    for abs_dir in (Path(d) for d in _share_dirs(str(repo_root), sid)):
+        rel_dir = abs_dir.relative_to(repo_root).as_posix()
+        paths.add(f"{rel_dir}/")
+        try:
+            if abs_dir.is_dir():
+                for candidate in abs_dir.rglob("*"):
+                    if candidate.is_file():
+                        paths.add(candidate.relative_to(repo_root).as_posix())
+        except OSError:
+            continue
     return paths
 
 

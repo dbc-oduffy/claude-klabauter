@@ -499,8 +499,15 @@ def _provision_report_sidecar(tmp_path: Path, session_id: str, agent_id: str) ->
     """Provision a minimal report sidecar + pointer, mirroring
     `subagent_sandbox.provision_report`'s own on-disk shape well enough for
     `_read_sidecar_pointer` to resolve it — without invoking the full
-    provisioner (out of this test's footprint)."""
-    rel = f"state/subagent-share/{session_id}/report.md"
+    provisioner (out of this test's footprint).
+
+    The rel path MUST live under `session.machinery_paths.machinery_root`'s
+    `subagent-share` bucket (`.coordinator-local/subagent-share/`, not the
+    tracked `state/` tree) — `_read_sidecar_pointer` refuses to follow a
+    pointer whose target does not start with that exact prefix
+    (`_sidecar_pointer_prefix`), so a fixture using the wrong prefix produces
+    a pointer the source correctly discards, not a source defect."""
+    rel = f".coordinator-local/subagent-share/{session_id}/report.md"
     sidecar_path = tmp_path / rel
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     sidecar_path.write_text("---\nstatus: open\n---\n\n## Run notes\n\n", encoding="utf-8")

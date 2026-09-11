@@ -7425,3 +7425,59 @@ class TestMemoCorpusRoots:
         resolved = match_schema(path, None, schemas)
         assert resolved is not None
         assert resolved['schemaName'] == expected
+
+
+class TestMultiLineQuotedScalars:
+    """A quoted scalar spanning lines is one value, not a value plus phantom keys.
+
+    doe-claude-em memo (example-retrieval-repo-ue-addon F15): a PreToolUse advisory reported
+    `prime_exit_criterion.Review` and `census[3].Review` as additional properties on
+    a plan whose frontmatter PyYAML accepts. Both lines sit inside a double-quoted
+    scalar. The advisory is only the visible half — the parsed VALUE was truncated
+    at the first newline with its opening quote still attached, which every reader
+    of that field got.
+    """
+
+    @pytest.mark.parametrize('quote', ['"', "'"])
+    def test_a_continuation_line_is_not_read_as_a_key(self, quote):
+        doc = (
+            '---\n'
+            'title: t\n'
+            f'statement: {quote}The falsifier goes red first.\n'
+            f'  Review: the reviewer confirms it.{quote}\n'
+            'tail: 3\n'
+            '---\n\nbody\n'
+        )
+        fm = parse_frontmatter(doc)['frontmatter']
+
+        assert 'Review' not in fm
+        assert fm['statement'] == (
+            'The falsifier goes red first. Review: the reviewer confirms it.'
+        )
+        assert fm['tail'] == 3, 'folding must stop at the closing quote'
+
+    def test_the_fold_agrees_with_pyyaml(self):
+        """DoE's mise-prep-gate reads these records through PyYAML. A parser that
+        disagrees with the one enforcing the schema produces findings nobody can act
+        on — the memo's actual complaint."""
+        block = (
+            'title: t\n'
+            'statement: "one\n'
+            '  two\n'
+            '\n'
+            '  three"\n'
+            'n: 1\n'
+        )
+        parsed = parse_frontmatter(f'---\n{block}---\n\nbody\n')['frontmatter']
+
+        assert parsed == yaml.safe_load(block)
+
+    def test_an_unterminated_scalar_is_left_alone(self):
+        """A record whose quote never closes is malformed, not a licence to swallow
+        the document: the fold declines and the line parses as it always did."""
+        doc = '---\ntitle: t\nstatement: "never closed\nn: 1\n---\n\nbody\n'
+
+        fm = parse_frontmatter(doc)['frontmatter']
+
+        assert fm['statement'] == '"never closed'
+        assert fm['n'] == 1

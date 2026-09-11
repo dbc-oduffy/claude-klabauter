@@ -577,8 +577,8 @@ def test_re_landing_does_not_re_stamp_an_execution_ready_baton(tmp_path):
     bl.land_wave(root, result)
     second = bl.land_wave(root, result)
 
-    assert second["execution_ready"][0]["execution_ready"] is False
-    assert "already stamped" in second["execution_ready"][0]["note"]
+    assert not second["execution_ready"], "a declined stamp is not a landing"
+    assert "already stamped" in second["refused"][0]["reason"]
 
 
 def test_a_non_s_route_still_takes_the_ordinary_approval(tmp_path):
@@ -638,9 +638,14 @@ def test_an_s_lane_spinoff_baton_refuses_the_stamp_instead_of_writing_it(tmp_pat
         {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan, "route": "spec-dispatch"}]},
     )
 
-    result = out["execution_ready"][0]
-    assert result["execution_ready"] is False
-    assert "spinoff" in result["note"] and "handoff_phase" in result["note"]
+    # The lane, not just the flag: a refused stamp counted into `execution_ready`
+    # is reported as landed by `len()`, and the baton comes back as a planning
+    # candidate on the next gate read with nothing naming why (example-game-repo wave 1:
+    # reported 2, stamped 0).
+    assert not out["execution_ready"]
+    result = out["refused"][0]
+    assert result["baton"] == "b-1"
+    assert "spinoff" in result["reason"] and "handoff_phase" in result["reason"]
 
     fm = pg._read_baton_fields(root / baton)
     assert fm.get("handoff_phase") is None, "must not write the shape pickup refuses"

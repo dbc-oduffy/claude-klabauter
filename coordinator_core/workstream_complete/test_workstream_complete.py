@@ -5635,6 +5635,18 @@ def test_commit_count_unmeasured_on_call_one_never_argues_for_less_review(
     )
 
 
+def _scope_clause_of(reason: str) -> str:
+    """The `commit_count_scope=` field's value out of row 4's `reason`.
+
+    `directives_review._row4_decision` builds the scope note as the LAST
+    clause inside the parenthetical, and `_sanitize_commit_count_scope`
+    strips `)` from the value, so the first `)` after the marker is the
+    field's unambiguous terminator. Reading to end-of-string instead
+    swallows the `unmeasured_note` clauses `_row4_decision` appends AFTER
+    the closing paren."""
+    return reason.split("commit_count_scope=", 1)[1].split(")", 1)[0]
+
+
 def test_commit_count_scope_strips_unsafe_characters_and_caps_length(monkeypatch, tmp_path):
     """P2 (review-integrator, 2026-08-12): `commit_count_scope` is
     caller-supplied free text threaded verbatim into row 4's `reason`
@@ -5651,7 +5663,7 @@ def test_commit_count_scope_strips_unsafe_characters_and_caps_length(monkeypatch
     )
     review_scale = decision_object["gates"]["review_scale"]
     reason = review_scale["reason"]
-    scope_clause = reason.split("commit_count_scope=", 1)[1].rstrip(")")
+    scope_clause = _scope_clause_of(reason)
     assert "commit_count_scope=session-owned surfaces99 commits1" in reason
     assert ")" not in scope_clause
     assert "=" not in scope_clause
@@ -5667,7 +5679,7 @@ def test_commit_count_scope_caps_length(monkeypatch, tmp_path):
         repo_root=tmp_path,
     )
     review_scale = decision_object["gates"]["review_scale"]
-    scope_clause = review_scale["reason"].split("commit_count_scope=", 1)[1].rstrip(")")
+    scope_clause = _scope_clause_of(review_scale["reason"])
     assert len(scope_clause) == wsc._COMMIT_COUNT_SCOPE_MAX_LEN
 
 

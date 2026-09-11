@@ -1539,6 +1539,16 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # OP_CLASSIFICATION.get("memo.send") returned None.
     # Spec: docs/plans/2026-08-25-memo-send-three-writes-and-one-commit-th.md § C2/AC8
     "memo.send": OpClass.MUTATING,
+    # ---------------------------------------------------------------------------
+    # memo.heal_inbox (C5, docs/plans/2026-09-11-memo-deliveries-survive-the-
+    # receiver-s-o.md) — classified MUTATING: the act path writes a restored
+    # memo's bytes into this repo's OWN inbox/ (O_EXCL + commit_authored_new_
+    # file) and rewrites this repo's OWN refs/coordinator/inbox/* anchors via
+    # update_refs_stdin (create/delete). Both writes stay inside the CALLING
+    # repo — unlike memo.send, this op never crosses into a peer's tree.
+    # dry_run plans and reports only; mutates nothing.
+    # Spec: docs/plans/2026-09-11-memo-deliveries-survive-the-receiver-s-o.md § C5
+    "memo.heal_inbox": OpClass.MUTATING,
     # deliverable.rollup — COMPUTE_ONLY: scans docs/plans/*.md, state/handoffs/*.md, and
     # archive/handoffs/**/*.md frontmatter for artifacts whose deliverable_id FK equals the
     # queried value, unions their non-null initiative FKs, and resolves each to its

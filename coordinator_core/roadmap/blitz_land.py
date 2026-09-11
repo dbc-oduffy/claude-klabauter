@@ -726,18 +726,26 @@ def land_wave(
                     row["prior_shipped_in_rejected"] = rejected
                 closed.append(row)
             elif entry.get("route") == "spec-dispatch":
-                execution_ready.append(
-                    authorize_execution(
-                        worktree_root,
-                        baton_path,
-                        plan_path,
-                        authorized_by=authorized_by,
-                        note=(
-                            f"plan-blitz wave {wave_result.get('waveIndex')} readiness gate: "
-                            f"S-lane spec parked, execution-ready"
-                        ),
-                    )
+                row = authorize_execution(
+                    worktree_root,
+                    baton_path,
+                    plan_path,
+                    authorized_by=authorized_by,
+                    note=(
+                        f"plan-blitz wave {wave_result.get('waveIndex')} readiness gate: "
+                        f"S-lane spec parked, execution-ready"
+                    ),
                 )
+                if row.get("execution_ready"):
+                    execution_ready.append(row)
+                else:
+                    refused.append(
+                        {
+                            "baton": entry.get("batonId"),
+                            "reason": row.get("note")
+                            or "authorize_execution declined to stamp",
+                        }
+                    )
             else:
                 approved.append(
                     approve_ready(worktree_root, baton_path, plan_path, report)

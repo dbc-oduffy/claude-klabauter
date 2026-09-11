@@ -174,6 +174,11 @@ OP_MODULE_MAP: Dict[str, str] = {
     # writes-and-one-commit-th.md § C2) after the 2026-08-23 kill (K-050).
     # NOT a resurrection of the killed module — three-write shape only.
     "memo.send":                              "coordinator_core.ops.fleet.memo_send",
+    # memo.heal_inbox — C5, docs/plans/2026-09-11-memo-deliveries-survive-the-
+    # receiver-s-o.md: receiver-side self-heal over `refs/coordinator/inbox/*`
+    # anchors (C3). Separate module from memo_send.py by design — see
+    # memo_heal.py's own module docstring.
+    "memo.heal_inbox":                        "coordinator_core.ops.fleet.memo_heal",
     "memo.reconcile_outbox":                  "coordinator_core.ops.fleet.memo_reconcile_outbox",
     "memo.compose":                           "coordinator_core.ops.fleet.memo_compose",
     "memo.list_outbox":                       "coordinator_core.ops.fleet.memo_list_outbox",

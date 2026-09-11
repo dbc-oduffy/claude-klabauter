@@ -121,6 +121,10 @@ _WRAPPER_INVOCATIONS = [
     ),
     (git_native.read_tree_merge_update, ("/tmp/repo", "abc123", "def456"), {}),
     (git_native.update_ref, ("/tmp/repo", "refs/heads/work", "def456", "abc123"), {}),
+    # rev_list_not (C5, memo.heal_inbox's two-stage reachability probe) --
+    # argv-only, no stdin data, so it is a plain thin wrapper like every
+    # other entry in this table.
+    (git_native.rev_list_not, ("/tmp/repo", ["abc123"], ["--not", "HEAD"]), {}),
 ]
 
 
@@ -239,7 +243,11 @@ _NON_SUBPROCESS_HELPERS = {
 #: exists to catch, just a genuinely different, deliberate flag shape the
 #: shared `stdin is subprocess.DEVNULL` assertion cannot express. Covered
 #: directly by its own real-git tests instead (`test_check_ignore_*` below).
-_STDIN_INPUT_WRAPPERS = {"check_ignore"}
+#: `update_refs_stdin()` (C5, memo.heal_inbox) is the same shape of bypass
+#: as `check_ignore` above: it feeds pre-formatted `update-ref --stdin`
+#: command lines through `_git()`'s piped `input_data`, never `subprocess.
+#: DEVNULL` -- covered directly by its own dedicated tests below instead.
+_STDIN_INPUT_WRAPPERS = {"check_ignore", "update_refs_stdin"}
 
 #: `cat_file_batch()` is a public wrapper (promoted from
 #: `ac27_differential_oracle._git_cat_file_batch`, C36) that -- like the
@@ -947,6 +955,136 @@ def test_parse_check_ignore_stdin_z_multiple_matches():
         (".gitignore", "1", "ignored_dir/", "ignored_dir/cache.txt"),
         (".gitignore", "2", "*.log", "debug.log"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# update_refs_stdin / rev_list_not -- memo.heal_inbox's (C5) batch ref
+# transaction and reachability probe.
+# ---------------------------------------------------------------------------
+
+
+def _blob_sha(repo, text: str) -> str:
+    return subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"],
+        cwd=str(repo), input=text, capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+
+
+def test_update_refs_stdin_create_then_delete_one_atomic_transaction_each(tmp_path):
+    """A `create` line lands a brand-new ref; a later `delete` line (old
+    value = the ref's current value) removes it -- each its own one-line
+    transaction, matching `memo.heal_inbox`'s adopt/retire shapes."""
+    repo = _init_real_repo(tmp_path)
+    blob = _blob_sha(repo, "memo body\n")
+    ref = "refs/coordinator/inbox/x.md/" + "a" * 40
+
+    result = git_native.update_refs_stdin(repo, [f"create {ref} {blob}"])
+    assert result.ok, result.stderr
+    assert _real_git_out(repo, "rev-parse", ref) == blob
+
+    result = git_native.update_refs_stdin(repo, [f"delete {ref} {blob}"])
+    assert result.ok, result.stderr
+    verify = subprocess.run(
+        ["git", "rev-parse", ref], cwd=str(repo), capture_output=True, text=True,
+        **no_console_creationflags(),
+    )
+    assert verify.returncode != 0
+
+
+def test_update_refs_stdin_batches_several_ref_writes_in_one_call(tmp_path):
+    """Retire + adopt land together: one `delete` and one `create` for two
+    DIFFERENT refs, issued as a single `lines` batch, both take effect."""
+    repo = _init_real_repo(tmp_path)
+    blob_a = _blob_sha(repo, "a\n")
+    blob_b = _blob_sha(repo, "b\n")
+    ref_old = "refs/coordinator/inbox/old.md/" + "a" * 40
+    ref_new = "refs/coordinator/inbox/new.md/" + "b" * 40
+    git_native.update_refs_stdin(repo, [f"create {ref_old} {blob_a}"])
+
+    result = git_native.update_refs_stdin(
+        repo, [f"delete {ref_old} {blob_a}", f"create {ref_new} {blob_b}"]
+    )
+
+    assert result.ok, result.stderr
+    assert _real_git_out(repo, "rev-parse", ref_new) == blob_b
+    verify = subprocess.run(
+        ["git", "rev-parse", ref_old], cwd=str(repo), capture_output=True, text=True,
+        **no_console_creationflags(),
+    )
+    assert verify.returncode != 0
+
+
+def test_update_refs_stdin_is_all_or_nothing_on_a_stale_old_value(tmp_path):
+    """One bad old-value in a multi-line batch refuses the WHOLE
+    transaction -- the ref this test seeds correctly must NOT land either.
+    This is the property `memo.heal_inbox`'s single-refusal-then-retry-once
+    contract depends on: a lost CAS race never partially applies."""
+    repo = _init_real_repo(tmp_path)
+    blob_a = _blob_sha(repo, "a\n")
+    blob_b = _blob_sha(repo, "b\n")
+    ref_good = "refs/coordinator/inbox/good.md/" + "a" * 40
+    ref_stale = "refs/coordinator/inbox/stale.md/" + "b" * 40
+    # ref_stale does not exist -- deleting it with a fabricated old value
+    # must fail and drag the co-batched create down with it.
+
+    result = git_native.update_refs_stdin(
+        repo, [f"create {ref_good} {blob_a}", f"delete {ref_stale} {blob_b}"]
+    )
+
+    assert not result.ok
+    verify = subprocess.run(
+        ["git", "rev-parse", ref_good], cwd=str(repo), capture_output=True, text=True,
+        **no_console_creationflags(),
+    )
+    assert verify.returncode != 0
+
+
+def test_update_refs_stdin_malformed_line_refuses_without_spawning():
+    with patch("subprocess.run") as mock_run:
+        result = git_native.update_refs_stdin("/tmp/repo", ["verify refs/x oid"])
+    mock_run.assert_not_called()
+    assert not result.ok
+
+
+def test_update_refs_stdin_empty_batch_refuses_without_spawning():
+    with patch("subprocess.run") as mock_run:
+        result = git_native.update_refs_stdin("/tmp/repo", [])
+    mock_run.assert_not_called()
+    assert not result.ok
+
+
+def test_rev_list_not_prints_a_commit_unreachable_from_the_not_target(tmp_path):
+    repo = _init_real_repo(tmp_path)
+    (repo / "a.txt").write_text("a")
+    _real_git(["add", "-A"], repo)
+    _real_git(["commit", "-q", "-m", "base"], repo)
+    base_sha = _real_git_out(repo, "rev-parse", "HEAD")
+    _real_git(["checkout", "-q", "-b", "side"], repo)
+    (repo / "b.txt").write_text("b")
+    _real_git(["add", "-A"], repo)
+    _real_git(["commit", "-q", "-m", "side"], repo)
+    side_sha = _real_git_out(repo, "rev-parse", "HEAD")
+    # Detach back onto the base commit so HEAD no longer carries side_sha.
+    _real_git(["checkout", "-q", base_sha], repo)
+
+    result = git_native.rev_list_not(repo, [side_sha], ["--not", "HEAD"])
+
+    assert result.ok, result.stderr
+    assert side_sha in result.stdout.splitlines()
+
+
+def test_rev_list_not_omits_a_commit_reachable_from_the_not_target(tmp_path):
+    repo = _init_real_repo(tmp_path)
+    (repo / "a.txt").write_text("a")
+    _real_git(["add", "-A"], repo)
+    _real_git(["commit", "-q", "-m", "base"], repo)
+    base_sha = _real_git_out(repo, "rev-parse", "HEAD")
+
+    result = git_native.rev_list_not(repo, [base_sha], ["--not", "HEAD"])
+
+    assert result.ok, result.stderr
+    assert base_sha not in result.stdout.splitlines()
 
 
 # ---------------------------------------------------------------------------
