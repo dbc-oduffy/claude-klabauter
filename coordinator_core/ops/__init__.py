@@ -208,6 +208,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         '`shipped` terminal status when no plan was ever minted for the routed work)',
     ),
     (
+        "coordinator_core.ops.sizing_discharge_surfaced",
+        'registers "sizing.discharge_surfaced" (2026-09-11, records a PM answer to a '
+        '`surfaced_to_pm` item in `pm_resolution` against the artifact that settled it, '
+        'leaving the surfaced entry listed)',
+    ),
+    (
         "coordinator_core.ops.sizing_spike_verdict",
         'registers "sizing.record_spike_verdict" (2026-08-14, single-target applier for '
         'the sizing-object `premise.spike_verdict` pointer — the missing producer for the '

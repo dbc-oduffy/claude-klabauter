@@ -1450,3 +1450,54 @@ def test_stem_spelling_matches_the_guards_own(tmp_path):
 
     for name in ("a.md", "coordinatorstaff-eng.a1b2.md", "noext"):
         assert _kira_stem_for_sidecar(tmp_path / name) == _kira_stem(name)
+
+
+def test_a_routed_reviewer_never_stamps_an_unrelated_report(tmp_path, capsys):
+    """F15 (example-market-data-repo blitz-a, 2026-09-11): the bucket holds the
+    integrator's OWN report, already stamped for this reviewer, plus an older
+    unrelated integrator's report. Excluding the stamped one left exactly one
+    candidate -- the stranger -- and it was stamped, attesting an integration
+    its agent never performed. The call printed OK.
+
+    Routed is asked first now, so nothing is stamped and the older report is
+    left exactly as it was."""
+    from coordinator_core.ops import append_integrator_dispositions as mod
+
+    share = _share(tmp_path)
+    reviewer = _reviewer(share)
+    _run_report(share, "aMINE", stamped="coordinatoroverengineering-reviewer.aRRR")
+    stranger = _run_report(share, "aOLD")
+    before = stranger.read_text(encoding="utf-8")
+
+    assert mod.main(
+        ["--sidecar", str(reviewer), "--applied", "F1", "--root", str(tmp_path)]
+    ) == 0
+
+    assert stranger.read_text(encoding="utf-8") == before
+    captured = capsys.readouterr()
+    assert "routing stamp already in place" in captured.out
+    assert "aOLD" not in captured.out
+
+
+def test_an_explicit_run_report_still_wins_over_the_routed_check(tmp_path):
+    """`--run-report` is ownership evidence auto-discovery does not have, so
+    naming a report must still stamp it even when a sibling already carries the
+    stem. The write is idempotent per stem, so this can only add."""
+    from coordinator_core.ops import append_integrator_dispositions as mod
+
+    share = _share(tmp_path)
+    reviewer = _reviewer(share)
+    _run_report(share, "aMINE", stamped="coordinatoroverengineering-reviewer.aRRR")
+    named = _run_report(share, "aNAMED")
+
+    assert mod.main(
+        [
+            "--sidecar", str(reviewer),
+            "--applied", "F1",
+            "--run-report", str(named),
+            "--root", str(tmp_path),
+        ]
+    ) == 0
+
+    head = named.read_text(encoding="utf-8").split("---")[1]
+    assert "\nintegrated_from: [coordinatoroverengineering-reviewer.aRRR]\n" in head

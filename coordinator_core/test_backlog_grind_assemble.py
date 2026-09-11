@@ -1471,6 +1471,79 @@ class TestTemplateEmissionEndToEndThroughApply:
         for value in fields.values():
             assert isinstance(value, str) and len(value) > 20
 
+class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
+    """C2 pin (plan `2026-09-11-the-executor-return-contract-gets-one-de`):
+    `readers_mise`/`readers_blitz` now render their footprint/self-verify/
+    done-summary constants through `executor_return_contract`'s builders
+    instead of carrying their own duplicated text, but the `fields` dict
+    each passes to `build_executor_dispatch_prompt_template_emission` must
+    not move by one byte. These strings are the pre-refactor bytes,
+    captured directly from the readers before C1/C2 existed -- a literal
+    pin, not a re-derivation through the same builders under test."""
+
+    _MISE_FOOTPRINT = (
+        "You MUST NOT create or modify any file outside this footprint: "
+        "[list]. If you discover you need to, STOP and report back via the "
+        "DONE summary with status BLOCKED."
+    )
+    _MISE_SELF_VERIFY = (
+        "After implementation: (1) re-read the spec's `## Tasks` spine row for "
+        "this item -- plus its `prime_exit_criterion` if the spec carries one -- "
+        "and confirm each is discharged; (2) run `git status --porcelain "
+        "-- <footprint paths> | cut -c4-` and confirm every changed AND created "
+        "path is inside the declared footprint; (3) run verification scoped to "
+        "the files/dirs you touched only — never the repo's fast-test command, "
+        "the full suite, or any unscoped runner invocation; note in the DONE "
+        "summary if the spec calls for broader verification and leave it to "
+        "the EM; (4) leave your changes uncommitted and unstaged — you do not "
+        "invoke git under any circumstance. Only the EM commits, once per "
+        "wave, after every item in the wave passes verification."
+    )
+    _MISE_DONE_SUMMARY = (
+        "Write a one-screen summary to `tasks/mise-done/[item-id].md` with: "
+        "status (DONE | BLOCKED | PARTIAL), changed-path list (from `git "
+        "status --porcelain -- <footprint paths> | cut -c4-`), AC checklist "
+        "(each criterion checked or note), footprint-scoped verification "
+        "commands run + outcomes, any spec-named verification broader than "
+        "your footprint that you deferred to the EM, and any deviations from "
+        "the spec. Do not include a commit SHA — your changes are still "
+        "uncommitted when you write this summary. Reply EXACTLY "
+        "`DONE: tasks/mise-done/[item-id].md` (or `BLOCKED: <path>`)."
+    )
+    _BLITZ_FOOTPRINT = (
+        "You MUST NOT create or modify any file outside this footprint: "
+        "[list]. If you discover you need to, STOP and report back via the "
+        "DONE summary with status BLOCKED."
+    )
+    _BLITZ_DONE_SUMMARY = (
+        "Write a one-screen summary to "
+        "`state/scratch/bug-blitz/[run-id]/[item-id].done.md` with: status "
+        "(DONE | BLOCKED | PARTIAL), the changed-path list (`files`), "
+        "`before`/`after` snippets, the verification result you observed, and "
+        "any deviations from the recommended fix. Do not include a commit "
+        "SHA — your changes are still uncommitted when you write this "
+        "summary. Reply EXACTLY `DONE: state/scratch/bug-blitz/[run-id]/"
+        "[item-id].done.md` (or `BLOCKED: <path>`)."
+    )
+
+    def test_mise_fields_unmoved(self):
+        result = bga.readers_mise_en_place._read_executor_dispatch_template()
+        fields = result.directives[0]["fields"]
+        assert fields["footprint_constraint_template"] == self._MISE_FOOTPRINT
+        assert fields["self_verify_constraint"] == self._MISE_SELF_VERIFY
+        assert fields["done_summary_constraint_template"] == self._MISE_DONE_SUMMARY
+
+    def test_blitz_fields_unmoved(self):
+        result = bga.readers_bug_blitz._read_executor_dispatch_template()
+        fields = result.directives[0]["fields"]
+        assert fields["footprint_constraint_template"] == self._BLITZ_FOOTPRINT
+        assert fields["done_summary_constraint_template"] == self._BLITZ_DONE_SUMMARY
+        assert "self_verify_constraint" not in fields, (
+            "bug-blitz adopting self-verify is out of scope for this plan"
+        )
+
+
+class TestTemplateEmissionEndToEndThroughApplySpinoffOnly:
     def test_bug_blitz_spinoff_handoff_template_renders_substantial_body_end_to_end(
         self, tmp_path
     ):

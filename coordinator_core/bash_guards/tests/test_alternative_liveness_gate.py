@@ -260,7 +260,14 @@ def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch):
 #: passing test.
 EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     "check_sed_range_read_advise": 2,  # "the Read tool" + Read(...) -- both harness capability, no structured oracle
-    "check_cat_heredoc_write_advise": 1,  # "the Write tool" -- same reason
+    # check_cat_heredoc_write_advise's row was REMOVED (2026-09-11), for the
+    # same reason and by the same rule as the sibling row below. Its message no
+    # longer names "the Write tool": the guard was rewritten to state a
+    # consequence (the write is recorded and lands in this session's commit,
+    # DR-258 § Amendment 2026-08-30) instead of advertising a tool to prefer.
+    # With no HARNESS_CAPABILITY marker emitted, the measured count is 0 and
+    # the key belongs absent rather than set to 0 -- UNVERIFIABLE shrinking is
+    # the only honest direction of travel.
     # check_heredoc_repo_write_advise's row was REMOVED (2026-08-30), the same
     # shrink-not-raise move the head_tail row below records: its "the Write
     # tool" capability marker is no longer emitted, so the measured count is

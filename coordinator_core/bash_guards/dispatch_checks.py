@@ -303,6 +303,63 @@ def _bulk_foreign_index_refusal(
     )
 
 
+def _format_batched_scope_denial(entries: List[Dict[str, str]]) -> str:
+    """Combine every Check 5 deny-arm hit from one commit's staged-file walk
+    into a SINGLE denial that names every offending path once, instead of
+    the walk returning on the first hit and dripping one more name per
+    clearing attempt (the reported defect: a 311-path plan-blitz landing
+    surfaced exactly one more name per retry, with no way to tell a
+    two-file problem from a fifty-file one).
+
+    Each ``entries`` item is one arm's OWN already-composed reason/remedy
+    text (foreign-hunk mismatch, vanished-from-disk, contested, or
+    unclaimed) -- this function never re-derives or reformats an arm's
+    finding, it only decides how many to print in full and how to
+    summarize the rest, so the arms stay visibly distinct rather than
+    collapsing into one undifferentiated list.
+
+    Single offender: renders EXACTLY that offender's own ``text``,
+    unprefixed -- the pre-batching shape every existing substring-pinned
+    test (foreign hunk / contested / unclaimed) still expects, so a
+    one-path commit reads exactly as it did before this change.
+
+    Multiple offenders, count <= ``_BULK_FOREIGN_INDEX_PATHS``: a header
+    naming the count, then each offender's own full text under its own
+    path heading -- no information lost.
+
+    Multiple offenders, count > ``_BULK_FOREIGN_INDEX_PATHS``: same cost
+    problem `_bulk_foreign_index_refusal` exists for -- printing a `git
+    restore --staged <file>` per path at that size is an hour of
+    destructive work, not a remedy -- so beyond the cap this names only
+    the offending path and its one-line kind, then an exact count of the
+    remainder, without repeating each arm's own remedy paragraph.
+    """
+    if len(entries) == 1:
+        return entries[0]["text"]
+
+    if len(entries) <= _BULK_FOREIGN_INDEX_PATHS:
+        header = "BLOCKED (scope): %d staged paths failed validation:" % len(entries)
+        body = "\n\n".join("%s\n%s" % (e["path"], e["text"]) for e in entries)
+        return header + "\n\n" + body
+
+    shown = entries[:_BULK_FOREIGN_INDEX_PATHS]
+    remainder = len(entries) - len(shown)
+    header = (
+        "BLOCKED (scope): %d staged paths failed validation. At this size "
+        "a per-path remedy is not printed -- following `git restore "
+        "--staged <file>` per path here risks destroying in-flight work."
+        % len(entries)
+    )
+    listing = "\n".join("- %s (%s)" % (e["path"], e["kind"]) for e in shown)
+    return (
+        header
+        + "\n\n"
+        + listing
+        + "\n... and %d more.\n\n" % remainder
+        + _SAFE_COMMIT_ROUTE_CLAUSE
+    )
+
+
 _SHELL_C_WRAPPER_INTERPRETERS = frozenset({"sh", "bash", "zsh", "dash", "ksh"})
 _MAX_SHELL_C_UNWRAP_DEPTH = 4
 
@@ -3173,6 +3230,29 @@ def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> N
         return
 
 
+#: A PowerShell parameter binds on any unambiguous prefix of its name, so
+#: `-Recurse` also arrives as `-Recurs`, `-rec`, or `-r`. Among `Remove-Item`'s
+#: parameters only `Recurse` begins with `r`, so any `-r...` prefix of it is
+#: unambiguous and nothing else can claim those spellings.
+_PS_RECURSE_NAME = "recurse"
+
+
+def _ps_recurse_flag(tokens):
+    """The token that asked for recursion, or None if none did.
+
+    Returned rather than a bool because the refusal names it: a caller told
+    their delete was treated as recursive can see WHICH word did it, and a
+    misparse then reads as a misparse instead of as policy.
+    """
+    for tok in tokens:
+        if not tok.startswith("-") or tok.startswith("--"):
+            continue
+        name = tok[1:].split(":", 1)[0].lower()
+        if name and _PS_RECURSE_NAME.startswith(name):
+            return tok
+    return None
+
+
 def check_destructive_rm(
     cmd: str,
     session_id: str = "",
@@ -3300,6 +3380,11 @@ def check_destructive_rm(
     _pending_rm_touch_paths: List[str] = []
 
     _rm_segments = list(_split_segments(cmd))
+    #: Segment string -> the flag token that declared recursion, or None when
+    #: the segment was parsed and declared none. Only PowerShell-synthesized
+    #: segments get an entry; a bash segment is absent and falls through to the
+    #: free-text scan below, which is correct for bash and only for bash.
+    _parsed_recursion = {}
     if _has_ps_remove_word:
         # AC3: alias/flag resolution is TABLE-DRIVEN AND SHARED, reusing
         # `block_subagent_destructive_action`'s own `_PS_REMOVE_VERBS`/
@@ -3342,7 +3427,22 @@ def check_destructive_rm(
                 _ps_verb, _ps_rest = _ps_resolve_head_verb(_ps_clean)
                 if _ps_verb not in _PS_REMOVE_VERBS:
                     continue
-                _rm_segments.append("rm -rf " + " ".join(_ps_rest))
+                # `-rf` is NOT stamped on unconditionally any more. It was,
+                # and any PowerShell flag CONTAINING an `r` then re-matched the
+                # bash short-flag scan below -- `-Force` most of all. Measured
+                # 2026-09-11 across three repos: `Remove-Item -Force <file>` on
+                # a single tracked file was refused as a recursive delete of
+                # uncommitted work, and the refusal named neither the flag it
+                # had read nor the dialect it had read it in, so three sessions
+                # in turn read a parse bug as a policy they had to argue with.
+                #
+                # The target-irreversibility posture the old comment defended
+                # is untouched: a `.git`/repo-root target is denied on
+                # `tgt_is_dir` above, which never consulted this flag.
+                _ps_recurse = _ps_recurse_flag(_ps_rest)
+                _ps_seg = ("rm -rf " if _ps_recurse else "rm ") + " ".join(_ps_rest)
+                _rm_segments.append(_ps_seg)
+                _parsed_recursion[_ps_seg] = _ps_recurse
         # `_ps_segments is None` (unparseable PowerShell) -- SILENT already
         # recorded by `resolve_segments_for_dialect`; no synthetic segment
         # is added, preserving today's fail-open posture (AC4) rather than
@@ -3405,7 +3505,12 @@ def check_destructive_rm(
         # this changes no case that previously resolved.
         seg_unquoted = seg.replace("'", "").replace('"', "")
         after = re.sub(r".*(^|\s)rm(\s|$)", " ", seg_unquoted, count=1)
-        recursive = bool(re.search(r"(^|\s)-[a-zA-Z]*[rR][a-zA-Z]*(\s|$)|--recursive", after))
+        if seg in _parsed_recursion:
+            recursion_flag = _parsed_recursion[seg]
+        else:
+            _rec_m = re.search(r"(^|\s)(-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(\s|$)", after)
+            recursion_flag = _rec_m.group(2) if _rec_m else None
+        recursive = recursion_flag is not None
 
         if recursive and re.search(r"\$\(|`", after) and not rm_override:
             return _deny(
@@ -3769,8 +3874,16 @@ def check_destructive_rm(
                         continue
                     disp = "\n".join(status.splitlines()[:8])
                     more = "\n  ... and more (first 8 shown)" if len(status.splitlines()) > 8 else ""
+                    # Name the flag when recursion is the ONLY reason this
+                    # armed. On a directory target the reason is the target
+                    # and needs no flag; on a file target the caller cannot
+                    # otherwise tell a read of their command from a policy
+                    # about it, which is how a misparse survived three repos.
+                    why = ""
+                    if not tgt_is_dir and recursion_flag:
+                        why = " (read as recursive: %s)" % recursion_flag
                     return _deny(
-                        "BLOCKED: 'rm' on '%s' would destroy uncommitted/"
+                        "BLOCKED: 'rm' on '%s'%s would destroy uncommitted/"
                         "untracked work that git CANNOT recover (untracked "
                         "files and unstaged edits live in no commit, no "
                         "stash, no reflog):\n%s%s\n\n"
@@ -3783,7 +3896,7 @@ def check_destructive_rm(
                         '  cp -r -- "%s" "${TMPDIR:-/tmp}/preserved-$(basename "%s")"\n\n'
                         "Reserve irreversible deletion for genuinely "
                         "disposable, self-authored, uncontested paths."
-                        % (tgt, disp, more, root, tgt_abs, tgt_abs, tgt_abs)
+                        % (tgt, why, disp, more, root, tgt_abs, tgt_abs, tgt_abs)
                     )
 
     # BX-13: a `sh -c '...'`/`bash -c "..."` (etc.) wrapper's quoted argument
@@ -7258,6 +7371,27 @@ def check_validate_commit(
                         # write below).
                         pass
 
+                # C12 (report: three independent sessions hit the same drip
+                # 2026-09-11): the loop below used to `return _deny(...)` on
+                # the FIRST offending path across all four arms (foreign
+                # hunk, vanished-from-disk, contested, unclaimed), so a
+                # multi-path staged set surfaced exactly one name per
+                # clearing attempt with no way to see the at-risk set's
+                # size. `_deny_entries` collects every arm's own
+                # already-composed text instead of returning immediately;
+                # the walk still finishes in the same per-file cost as
+                # before (every predicate an arm below consults --
+                # `_own_content_hashes`, `_agent_owned_content_hashes()`,
+                # `_head_tracked_paths_lazy()` -- was already being computed
+                # per staged file or lazily-cached once for the whole call;
+                # deferring the return adds no new git spawn). One combined
+                # deny is emitted after the walk by
+                # `_format_batched_scope_denial`, which also caps how many
+                # paths it prints in full (see that function's docstring)
+                # so the message itself cannot grow unbounded on a
+                # thousand-path index.
+                _deny_entries: List[Dict[str, str]] = []
+
                 for staged_file in commit_scope:
                     if my_scope is not None and staged_file in my_scope:
                         _own_hash = _own_content_hashes.get(staged_file)
@@ -7296,18 +7430,22 @@ def check_validate_commit(
                                     payload=payload,
                                     git_root=git_root,
                                 )
-                                return _deny(
-                                    "BLOCKED (foreign hunk): %s is staged and this "
-                                    "session owns it, but its on-disk content no "
-                                    "longer matches the content this session last "
-                                    "recorded for it.\n\n"
-                                    "Confirm the staged content is genuinely this "
-                                    "session's own work (git diff --cached -- %s) "
-                                    "before committing, or coordinate with "
-                                    "whoever else touched it."
-                                    % (staged_file, staged_file)
-                                    + ("\n\n" + _fh_note if _fh_note else "")
-                                )
+                                _deny_entries.append({
+                                    "path": staged_file,
+                                    "kind": "foreign hunk",
+                                    "text": (
+                                        "BLOCKED (foreign hunk): %s is staged and this "
+                                        "session owns it, but its on-disk content no "
+                                        "longer matches the content this session last "
+                                        "recorded for it.\n\n"
+                                        "Confirm the staged content is genuinely this "
+                                        "session's own work (git diff --cached -- %s) "
+                                        "before committing, or coordinate with "
+                                        "whoever else touched it."
+                                        % (staged_file, staged_file)
+                                        + ("\n\n" + _fh_note if _fh_note else "")
+                                    ),
+                                })
                         continue
 
                     # C6b item 2: own predicate, own reason -- a staged path
@@ -7330,17 +7468,19 @@ def check_validate_commit(
                             _head_tracked_paths is not None
                             and staged_file not in _head_tracked_paths
                         ):
-                            _record_scope_event(
-                                "deny", _warned_paths + [staged_file]
-                            )
-                            return _deny(
-                                "BLOCKED (strict scope): %s is staged but no "
-                                "longer exists on disk and was never "
-                                "committed -- its content cannot be "
-                                "verified.\n\nUnstage it (git restore "
-                                "--staged %s) or restore the file before "
-                                "committing." % (staged_file, staged_file)
-                            )
+                            _deny_entries.append({
+                                "path": staged_file,
+                                "kind": "vanished from disk",
+                                "text": (
+                                    "BLOCKED (strict scope): %s is staged but no "
+                                    "longer exists on disk and was never "
+                                    "committed -- its content cannot be "
+                                    "verified.\n\nUnstage it (git restore "
+                                    "--staged %s) or restore the file before "
+                                    "committing." % (staged_file, staged_file)
+                                ),
+                            })
+                            continue
 
                     owner_fact = (
                         _compute_scope_raised_fact
@@ -7403,17 +7543,18 @@ def check_validate_commit(
                     )
 
                     if scope_strict and not compute_scope_raised and _owner_is_provable:
-                        _record_scope_event("deny", _warned_paths)
                         # BULK IS TESTED FIRST, ahead of the CONTESTED and
                         # unclaimed arms, because the index size decides
                         # whether ANY per-file remedy is appropriate and the
-                        # per-path facts do not. Ordered after the CONTESTED
-                        # arm, a bulk index whose first offending path happened
-                        # to be contested still emitted `git restore --staged
-                        # <file>` -- the exact per-file destruction this
-                        # threshold exists to stop, reachable by nothing more
-                        # than which path the loop reached first.
+                        # per-path facts do not -- still an immediate,
+                        # single-shot return: the whole index is a peer's
+                        # in-flight change at this size, and nothing else
+                        # this loop could discover about the remaining
+                        # paths changes that answer, so paying to enumerate
+                        # the rest would only cost more without adding
+                        # information the operator can act on.
                         if len(commit_scope) > _BULK_FOREIGN_INDEX_PATHS:
+                            _record_scope_event("deny", _warned_paths)
                             return _deny(
                                 _bulk_foreign_index_refusal(
                                     len(commit_scope),
@@ -7430,41 +7571,51 @@ def check_validate_commit(
                             # the remedy does not work (measured live
                             # 2026-08-30 — the author unstaged and abandoned
                             # three of the close's own artifacts).
-                            return _deny(
-                                "BLOCKED (strict scope): %s is claimed by BOTH "
-                                "this session and %s, and a live peer's claim "
-                                "wins — recording it again will not clear this."
+                            _deny_entries.append({
+                                "path": staged_file,
+                                "kind": "contested",
+                                "text": (
+                                    "BLOCKED (strict scope): %s is claimed by BOTH "
+                                    "this session and %s, and a live peer's claim "
+                                    "wins — recording it again will not clear this."
+                                    "%s\n\n"
+                                    "Unstage it (git restore --staged %s). Two "
+                                    "causes: this session's write was recorded "
+                                    "under the wrong id, or a peer commit landed "
+                                    "in this file after this session's last read "
+                                    "and this write discarded it. "
+                                    "git log --oneline -3 -- %s tells you which."
+                                    % (
+                                        staged_file,
+                                        owner_sentence,
+                                        _owner_name_provenance_note(owner_sentence),
+                                        staged_file,
+                                        staged_file,
+                                    )
+                                ),
+                            })
+                            continue
+                        _deny_entries.append({
+                            "path": staged_file,
+                            "kind": "owned by another session",
+                            "text": (
+                                "BLOCKED (strict scope): %s is staged but not in "
+                                "this session's touch list — owned by %s.%s\n\n"
                                 "%s\n\n"
-                                "Unstage it (git restore --staged %s). Two "
-                                "causes: this session's write was recorded "
-                                "under the wrong id, or a peer commit landed "
-                                "in this file after this session's last read "
-                                "and this write discarded it. "
-                                "git log --oneline -3 -- %s tells you which."
+                                "If it genuinely belongs to this session's work, "
+                                "record it as touched first. Unstaging it (git "
+                                "restore --staged %s) discards content the owner "
+                                "has not committed."
                                 % (
                                     staged_file,
                                     owner_sentence,
                                     _owner_name_provenance_note(owner_sentence),
-                                    staged_file,
+                                    _SAFE_COMMIT_ROUTE_CLAUSE,
                                     staged_file,
                                 )
-                            )
-                        return _deny(
-                            "BLOCKED (strict scope): %s is staged but not in "
-                            "this session's touch list — owned by %s.%s\n\n"
-                            "%s\n\n"
-                            "If it genuinely belongs to this session's work, "
-                            "record it as touched first. Unstaging it (git "
-                            "restore --staged %s) discards content the owner "
-                            "has not committed."
-                            % (
-                                staged_file,
-                                owner_sentence,
-                                _owner_name_provenance_note(owner_sentence),
-                                _SAFE_COMMIT_ROUTE_CLAUSE,
-                                staged_file,
-                            )
-                        )
+                            ),
+                        })
+                        continue
 
                     warnings.append(
                         "SCOPE: %s is staged but not in this session's touch "
@@ -7476,6 +7627,12 @@ def check_validate_commit(
                             _owner_name_provenance_note(owner_sentence),
                         )
                     )
+
+                if _deny_entries:
+                    _record_scope_event(
+                        "deny", _warned_paths + [e["path"] for e in _deny_entries]
+                    )
+                    return _deny(_format_batched_scope_denial(_deny_entries))
 
                 # `verdict` here is CHECK 5's own verdict, not the function's
                 # final one -- Check 7/8 below can still deny a call recorded

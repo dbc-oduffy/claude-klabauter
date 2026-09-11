@@ -368,3 +368,77 @@ class TestFileCountCap:
         target = str(memory_dir / "new-one.md")
         result = guard.check(_write_payload(target, "y"))
         assert result is None
+
+
+class TestRowLengthDenyNamesWhatItCounted:
+    """The refusal has to answer the two questions it used to leave open: which
+    rows, and why rows the writer never authored.
+
+    Measured 2026-09-11 on example-store-repo: one write refused for four overlong
+    rows, three of them pre-existing and written under an older, looser
+    guideline. Trimming them is the intent — the cap is a property of the file,
+    not of the diff — but a refusal that names rows the writer did not author,
+    without saying that is deliberate, reads as a corrupted file rather than a
+    bill, and gets worked around by whoever is in a hurry.
+    """
+
+    def test_the_deny_says_the_count_covers_pre_existing_rows(self):
+        reason = guard._deny_reason_row_length("repo", ["- " + "x" * 120])
+
+        assert "pre-existing ones included" in reason
+        assert "before any write lands" in reason
+
+    def test_the_deny_quotes_a_row_to_start_from(self):
+        row = "- [A memory with a very long title indeed](f.md) — " + "y" * 90
+        reason = guard._deny_reason_row_length("repo", [row])
+
+        assert "- [A memory with a very long" in reason
+        assert row not in reason, "the whole row would blow the prose budget"
+
+    def test_the_deny_stays_inside_the_prose_budget(self):
+        """220 bytes is the cap every message in this module is written to."""
+        rows = ["- [" + "z" * 200 + "](f.md)"] * 9
+
+        assert len(guard._deny_reason_row_length("claude-klabauter", rows).encode()) <= 220
+
+    def test_a_short_row_is_quoted_whole(self):
+        """The excerpt is a budget device, not a redaction — a row that fits is
+        shown as it is, so the operator matches it by eye."""
+        row = "- [Short](f.md) — hook"
+
+        assert row in guard._deny_reason_row_length("repo", [row])
+
+
+class TestByteDenyNamesWhereTheBytesAre:
+    """An index that grew in its PREAMBLE must not be told to delete a memory.
+
+    Measured 2026-09-11 on example-store-repo: an operator corrected the index header,
+    pushed the file over the byte cap by doing so, and read "evict a row
+    yourself (stale fact, then doctrine dup, then oldest)". Followed literally
+    that trades a fact for documentation about the cap. They rewrote the header
+    instead — the right move, and not the one the message asked for.
+    """
+
+    def test_a_preamble_heavy_file_is_told_to_trim_prose_first(self):
+        rows = ["- [A](a.md) — hook"] * 9
+
+        reason = guard._deny_reason_bytes("example-store-repo", 2149, rows)
+
+        assert "NOT rows" in reason
+        assert reason.index("Trim the prose") < reason.index("evict a row")
+
+    def test_a_row_heavy_file_still_gets_the_eviction_ladder_alone(self):
+        """Where the bytes really are in the rows, nothing changes."""
+        rows = ["- " + "x" * 90] * 20
+
+        reason = guard._deny_reason_bytes("repo", 2100, rows)
+
+        assert "NOT rows" not in reason
+        assert "evict a row yourself" in reason
+
+    def test_both_shapes_state_the_ladder_and_the_no_auto_trim_rule(self):
+        for rows, size in ((["- [A](a.md) — hook"] * 9, 2149), (["- " + "x" * 90] * 20, 2100)):
+            reason = guard._deny_reason_bytes("repo", size, rows)
+            assert "stale fact, then doctrine dup, then oldest" in reason
+            assert "auto-trim" in reason
+            assert len(reason.encode()) <= 220

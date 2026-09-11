@@ -84,6 +84,13 @@ Negative-spec:
   - Does NOT rewrite or delete the block it supersedes. The append-only
     Sidecar Immutability baseline is unchanged; what a re-run produces is a
     disposition HISTORY, and the last block is the operative one.
+  - Does NOT auto-stamp a routing receipt onto any run-report once SOME sibling
+    already names this reviewer. Auto-discovery answers "which reports are owed
+    a stamp", never "which report is mine", so in a session bucket several
+    integrators share, the one remaining candidate is as likely to be a stranger
+    as the caller. A stamp on a stranger attests an integration its agent never
+    performed, and the call reports OK. Ownership evidence is `--run-report`,
+    which still wins. See F15, example-market-data-repo blitz-a, 2026-09-11.
 
 Spec backlink: cross-repo dispatch defect surfaced 2026-07-29 (EM hand-diagnosed
   a review-integrator run that applied all findings correctly but never appended
@@ -1102,7 +1109,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         candidates = _discover_run_report(sidecar_path, reviewer_stem)
         chosen_by = "auto-discovery"
 
-    if len(candidates) == 1:
+    # ROUTED-FIRST, and the order is the whole fix. This asked "is exactly one
+    # run-report owed a stamp?" before asking "is this reviewer already routed?",
+    # so a bucket holding the caller's own already-stamped report plus one older,
+    # unrelated integrator's report left exactly one CANDIDATE -- the older one --
+    # and stamped it. Measured 2026-09-11 on example-market-data-repo blitz-a (F15):
+    # the eng-director stem was routed onto `...a133c322f4f447f04.md`, whose agent
+    # never read that reviewer, while the report that had actually integrated it
+    # was skipped for already carrying the stamp. The call reported OK.
+    #
+    # A reviewer that some sibling already names IS routed; there is nothing a
+    # second stamp can add, and every run where it fires is a misattribution.
+    # Concurrent integrators sharing one session bucket is this box's normal
+    # state, so the shape is routine rather than exotic.
+    #
+    # An explicit `--run-report` still wins: the caller naming its own report is
+    # ownership evidence auto-discovery does not have, and re-stamping is a no-op
+    # (`_stamp_integrated_from` is idempotent per stem).
+    prior_route = None if args.run_report else _already_routed_by(sidecar_path, reviewer_stem)
+    if prior_route is not None:
+        print(
+            f"append-integrator-dispositions: OK — {prior_route.name} already names "
+            f"{reviewer_stem}; routing stamp already in place."
+        )
+    elif len(candidates) == 1:
         outcome = _stamp_integrated_from(candidates[0], reviewer_stem)
         if outcome.status in ("stamped", "appended"):
             print(
@@ -1122,11 +1152,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"is a top-level frontmatter key at column zero.",
                 file=sys.stderr,
             )
-    elif (prior := _already_routed_by(sidecar_path, reviewer_stem)) is not None:
-        print(
-            f"append-integrator-dispositions: OK — {prior.name} already names "
-            f"{reviewer_stem}; routing stamp already in place."
-        )
     elif not candidates:
         print(
             f"append-integrator-dispositions: WARNING — dispositions landed, but no "

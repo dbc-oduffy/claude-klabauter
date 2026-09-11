@@ -1153,3 +1153,131 @@ def test_an_ordinary_baton_carries_held_false(tmp_path):
     report = pg.assemble_plan_gate(tmp_path)
     assert _by_id(report, "plain-1")["held"] is False
     assert report["held"] == []
+
+
+# ---------------------------------------------------------------------------
+# pm-decision is a question, and xl_exit is where the answer lands
+# ---------------------------------------------------------------------------
+
+
+def _xl_sizing(root: Path, slug: str, *, xl_exit: str) -> str:
+    """An XL sizing at route pm-decision, with the PM's exit as written."""
+    rel = f"state/sizings/{slug}.yaml"
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "schema: sizing-object\n"
+        "route: pm-decision  # dispatch | spec-dispatch | shape | plan | roadmap\n"
+        "detents: []\n"
+        "fork: null\n"
+        f"xl_exit: {xl_exit}\n"
+        "status: routed\n",
+        encoding="utf-8",
+    )
+    return rel
+
+
+def test_an_accepted_xl_exit_resolves_pm_decision_to_plan(tmp_path):
+    """example-market-data-repo, 2026-09-11: a sizing resolved on 2026-08-05 —
+    appetite raised, `xl_exit: accept_multi_session` assented, the EM's split
+    DECLINED — still routed pm-decision in every wave since, so each wave
+    re-asked a question answered in the file it had just read. The PM called
+    that class of escalation hedging."""
+    rel = _xl_sizing(tmp_path, "resolved", xl_exit="accept_multi_session")
+    assert pg._sizing_route(tmp_path, [rel]) == "plan"
+
+
+@pytest.mark.parametrize("exit_value", ["split", "shape", "roadmap"])
+def test_the_other_xl_exits_stay_at_the_gate(tmp_path, exit_value):
+    """Only accepting one coherent multi-session job leaves a plan to write.
+    Split and shape send the baton back for re-scoping; roadmap sends it to an
+    initiative. None of those is this wave planning this plan."""
+    rel = _xl_sizing(tmp_path, f"exit-{exit_value}", xl_exit=exit_value)
+    assert pg._sizing_route(tmp_path, [rel]) == "pm-decision"
+
+
+def test_an_unset_xl_exit_is_not_an_acceptance(tmp_path):
+    """`null` is a legitimate open state and NEVER means the multi-session exit
+    was accepted by default — the schema says so in its own words, and a gate
+    that read it as consent would decide the PM's question for them."""
+    rel = _xl_sizing(tmp_path, "unset", xl_exit="null")
+    assert pg._sizing_route(tmp_path, [rel]) == "pm-decision"
+
+
+def test_a_nested_route_key_does_not_shadow_the_top_level_one(tmp_path):
+    """`route:` under some other block is that block's key, not the sizing's."""
+    rel = "state/sizings/nested.yaml"
+    path = tmp_path / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "schema: sizing-object\n"
+        "em_analysis:\n"
+        "  route: dispatch\n"
+        "route: plan  # dispatch | spec-dispatch | shape | plan | roadmap\n",
+        encoding="utf-8",
+    )
+    assert pg._sizing_route(tmp_path, [rel]) == "plan"
+
+
+# ---------------------------------------------------------------------------
+# An owner's declared gate is not an edge, and used to be invisible
+# ---------------------------------------------------------------------------
+
+
+def test_an_owner_declared_gate_is_reported_without_withholding(tmp_path):
+    """example-cockpit-repo, 2026-09-11. The owner stamped awaiting_gate,
+    pickup_ready false, and a gate_dependency naming the credential. All three
+    were readable and the gate said nothing about any of them, because both
+    computed gates resolve `blocked_by` edges and a declaration is not one.
+
+    Reported, not withheld: a gate on FIRING is not a gate on planning, which
+    `test_candidate_selection` pins independently. A baton that must not be
+    planned at all carries plan_blitz_hold_reason instead."""
+    _baton(
+        tmp_path,
+        "gated-1",
+        deployment_state="awaiting_gate",
+        gate_dependency="reddit api credential, requested 2026-09-04",
+    )
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    row = next(r for r in report["gated"] if r["baton"] == "gated-1")
+    assert "reddit api credential" in row["dependency"]
+    assert row["candidate"] is True
+    assert _by_id(report, "gated-1")["gated"] is True
+    assert report["counts"]["gated"] == 1
+
+
+def test_a_gate_with_no_dependency_is_not_reported(tmp_path):
+    """awaiting_gate alone says a gate exists but not what it is, and a row
+    naming no dependency is a row a reader cannot act on."""
+    _baton(tmp_path, "gated-2", deployment_state="awaiting_gate")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["gated"] == []
+    assert _by_id(report, "gated-2")["gated"] is False
+
+
+def test_an_ungated_baton_carries_gated_false(tmp_path):
+    _baton(tmp_path, "plain-2")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert _by_id(report, "plain-2")["gated"] is False
+    assert report["counts"]["gated"] == 0
+
+
+def test_a_comment_after_a_quoted_scalar_is_still_a_comment():
+    """Two live records carry `gate_dependency: ""  # both gates discharged ...`.
+    The quote-aware branch returned the whole line for those, so the narrow
+    scanner read a discharged gate as a live one and disagreed with the general
+    parser — the one thing it may never do."""
+    assert pg._unquote('""  # both gates discharged 2026-08-29') == ""
+    assert pg._unquote('"a real gate"  # deprecated') == "a real gate"
+    assert pg._unquote("'it''s gated'  # note") == "it's gated"
+    assert pg._unquote('"a # inside the quotes"') == "a # inside the quotes"
+    assert pg._unquote('"unterminated  # not ours to truncate') == (
+        '"unterminated  # not ours to truncate'
+    )

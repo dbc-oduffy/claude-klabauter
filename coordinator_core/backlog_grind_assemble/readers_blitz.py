@@ -126,6 +126,7 @@ from coordinator_core.backlog_grind_assemble.verifier import (
     BUG_BLITZ_VERIFIER_ENUM,
     build_haiku_verifier_dispatch,
 )
+from coordinator_core import executor_return_contract
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.ops.queue_family import load_family_records
 from coordinator_core.orient_assemble.reader_result import ReaderResult
@@ -181,26 +182,21 @@ _ASSERTION_WEAKENING_PROHIBITION = (
     "edited. Required on every `TF-*` test-failure item; fixing the code "
     "under test is the default."
 )
-_FOOTPRINT_CONSTRAINT_TEMPLATE = (
-    "You MUST NOT create or modify any file outside this footprint: "
-    "[list]. If you discover you need to, STOP and report back via the "
-    "DONE summary with status BLOCKED."
-)
+_FOOTPRINT_CONSTRAINT_TEMPLATE = executor_return_contract.FOOTPRINT_CONSTRAINT_TEMPLATE
 _EDIT_AND_REPORT_CONSTRAINT = (
     "Edit and report only — you do not stage or commit under any "
     "circumstance. Leave your changes uncommitted and unstaged; the EM "
     "commits at the wave gate, once per item (per-item granularity), "
     "after this item's own verification passes."
 )
-_DONE_SUMMARY_CONSTRAINT_TEMPLATE = (
-    "Write a one-screen summary to "
-    "`state/scratch/bug-blitz/[run-id]/[item-id].done.md` with: status "
-    "(DONE | BLOCKED | PARTIAL), the changed-path list (`files`), "
-    "`before`/`after` snippets, the verification result you observed, and "
-    "any deviations from the recommended fix. Do not include a commit "
-    "SHA — your changes are still uncommitted when you write this "
-    "summary. Reply EXACTLY `DONE: state/scratch/bug-blitz/[run-id]/"
-    "[item-id].done.md` (or `BLOCKED: <path>`)."
+_DONE_SUMMARY_CONSTRAINT_TEMPLATE = executor_return_contract.done_summary_constraint(
+    output_path_template="state/scratch/bug-blitz/[run-id]/[item-id].done.md",
+    extra_fields=(
+        "the changed-path list (`files`)",
+        "`before`/`after` snippets",
+        "the verification result you observed",
+        "and any deviations from the recommended fix",
+    ),
 )
 
 #: bug-blitz.md Phase 2.1's canonical spinoff frontmatter/body schema,

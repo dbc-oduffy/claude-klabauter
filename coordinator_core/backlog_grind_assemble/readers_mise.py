@@ -279,6 +279,7 @@ from coordinator_core.contract.decision_object.judgment import (
     build_untrusted_gate_judgment_point,
 )
 from coordinator_core.coverage import _resolve_numstat_row_path  # 2026-08-12: numstat rename-row resolution, shared with review_brightline_gate.py
+from coordinator_core import executor_return_contract
 from coordinator_core.frontmatter import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ops.ceremony.wsc_disposition import SINGLE_SESSION
 from coordinator_core.ops.check_weekly_staleness import _resolve_state_root
@@ -318,23 +319,9 @@ _ANTI_HALLUCINATION_PREAMBLE = (
     "completion is calling Write/Edit, verifying, and writing the DONE "
     "summary — never git. Returning code inline = task failure."
 )
-_FOOTPRINT_CONSTRAINT_TEMPLATE = (
-    "You MUST NOT create or modify any file outside this footprint: "
-    "[list]. If you discover you need to, STOP and report back via the "
-    "DONE summary with status BLOCKED."
-)
-_SELF_VERIFY_CONSTRAINT = (
-    "After implementation: (1) re-read the spec's `## Tasks` spine row for "
-    "this item -- plus its `prime_exit_criterion` if the spec carries one -- "
-    "and confirm each is discharged; (2) run `git status --porcelain "
-    "-- <footprint paths> | cut -c4-` and confirm every changed AND created "
-    "path is inside the declared footprint; (3) run verification scoped to "
-    "the files/dirs you touched only — never the repo's fast-test command, "
-    "the full suite, or any unscoped runner invocation; note in the DONE "
-    "summary if the spec calls for broader verification and leave it to "
-    "the EM; (4) leave your changes uncommitted and unstaged — you do not "
-    "invoke git under any circumstance. Only the EM commits, once per "
-    "wave, after every item in the wave passes verification."
+_FOOTPRINT_CONSTRAINT_TEMPLATE = executor_return_contract.FOOTPRINT_CONSTRAINT_TEMPLATE
+_SELF_VERIFY_CONSTRAINT = executor_return_contract.self_verify_constraint(
+    commit_authority="the EM"
 )
 #: mise-en-place's own per-item verify-step evidence order (`verifier.py`'s
 #: module docstring) — DONE summary, the item's spec, the still-uncommitted
@@ -355,16 +342,17 @@ _MISE_VERIFIER_EVIDENCE_SOURCE = (
 #: verifier for a concrete item substitutes its real id before writing.
 _MISE_VERIFIER_OUTPUT_PATH_TEMPLATE = "tasks/mise-verify/<item-id>.md"
 
-_DONE_SUMMARY_CONSTRAINT_TEMPLATE = (
-    "Write a one-screen summary to `tasks/mise-done/[item-id].md` with: "
-    "status (DONE | BLOCKED | PARTIAL), changed-path list (from `git "
-    "status --porcelain -- <footprint paths> | cut -c4-`), AC checklist "
-    "(each criterion checked or note), footprint-scoped verification "
-    "commands run + outcomes, any spec-named verification broader than "
-    "your footprint that you deferred to the EM, and any deviations from "
-    "the spec. Do not include a commit SHA — your changes are still "
-    "uncommitted when you write this summary. Reply EXACTLY "
-    "`DONE: tasks/mise-done/[item-id].md` (or `BLOCKED: <path>`)."
+_DONE_SUMMARY_CONSTRAINT_TEMPLATE = executor_return_contract.done_summary_constraint(
+    output_path_template="tasks/mise-done/[item-id].md",
+    extra_fields=(
+        "changed-path list (from `git status --porcelain -- <footprint "
+        "paths> | cut -c4-`)",
+        "AC checklist (each criterion checked or note)",
+        "footprint-scoped verification commands run + outcomes",
+        "any spec-named verification broader than your footprint that you "
+        "deferred to the EM",
+        "and any deviations from the spec",
+    ),
 )
 
 

@@ -391,7 +391,35 @@ _EVICT_ORDER = "stale fact, then doctrine dup, then oldest"
 _ROUTING = "memory is force-read as TRUE every boot; a lesson is found when reached for"
 
 
+#: Below this share of the file, the non-row bytes are not worth naming and the
+#: eviction ladder is the whole answer. Above it, evicting a memory would be
+#: paying for prose with someone's fact.
+_PREAMBLE_SHARE_WORTH_NAMING = 0.25
+
+
 def _deny_reason_bytes(display: str, new_size: int, rows: "List[str]") -> str:
+    """Say which bytes to remove — the rows, or the prose around them.
+
+    The eviction ladder is about ROWS, and this message named it unconditionally.
+    Measured 2026-09-11 on example-store-repo: an operator corrected their index's
+    header, pushed the file over the byte cap by doing so, and was told to evict
+    a memory. Followed literally, that deletes a fact to make room for
+    documentation ABOUT the cap. They rewrote the header instead and everything
+    fit, which was the right move and not the one the message asked for.
+
+    So when the non-row bytes are a real share of the file, the message names
+    them first and leaves eviction as the second option. The ladder is unchanged
+    and still stated; what changes is that a file that grew in its preamble is
+    told where it actually grew.
+    """
+    row_bytes = sum(len((row + "\n").encode("utf-8")) for row in rows)
+    other = max(new_size - row_bytes, 0)
+    if new_size and other >= new_size * _PREAMBLE_SHARE_WORTH_NAMING:
+        return (
+            f"[memory cap] {display}: {new_size}B > {MAX_MEMORY_MD_BYTES}B cap "
+            f"({len(rows)} rows, {other}B of it NOT rows). Trim the prose first, "
+            f"or evict a row ({_EVICT_ORDER}). No auto-trim."
+        )
     return (
         f"[memory cap] {display}: {new_size}B > {MAX_MEMORY_MD_BYTES}B cap "
         f"({len(rows)} rows). No auto-trim -- evict a row yourself ({_EVICT_ORDER}), "
@@ -407,10 +435,36 @@ def _deny_reason_rows(display: str, rows: "List[str]") -> str:
     )
 
 
+#: How much of a flagged row the deny quotes. Enough to find it in the file by
+#: eye, short enough that naming one row does not spend the 220-byte prose cap.
+_ROW_EXCERPT_CHARS = 44
+
+
 def _deny_reason_row_length(display: str, overlong_rows: "List[str]") -> str:
+    """Name the cap, that it counts EVERY row, and one row to start with.
+
+    The old text said "shorten the flagged row(s)" and flagged nothing, which
+    left two questions unanswered at the moment they were being asked. Which
+    rows: a store can hold fifty and the write names none of them. And whose:
+    the check runs over the whole file, so a session adding one memory is
+    refused for rows it did not author. Measured 2026-09-11 on example-store-repo —
+    one write, four overlong rows, three of them pre-existing and written under
+    an older, looser guideline.
+
+    Trimming those three IS the intent: the cap is a property of the file, not
+    of the diff, and a store that drifted over it does not get to stay there
+    because the drift predates you. But an operator who reads a refusal naming
+    rows they never wrote, with no statement that this is deliberate, reads it
+    as a corrupted file rather than a bill — and the ones in a hurry work around
+    it. So the message says so outright.
+    """
+    first = overlong_rows[0].strip()
+    if len(first) > _ROW_EXCERPT_CHARS:
+        first = first[:_ROW_EXCERPT_CHARS].rstrip() + "..."
     return (
         f"[memory cap] {display}: {len(overlong_rows)} row(s) over "
-        f"{MAX_ROW_CHARS} chars. Shorten the flagged row(s), then retry."
+        f"{MAX_ROW_CHARS} chars, pre-existing ones included -- every row must "
+        f"fit before any write lands. First: {first} Shorten, then retry."
     )
 
 

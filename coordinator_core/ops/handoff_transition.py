@@ -179,6 +179,20 @@ Verb contracts (mirrored from the JS spec):
       transition; parking from awaiting_gate/shipped/abandoned is out of scope.
     - Idempotency: no-op (exit_code=0) when deployment_state is already ready_to_fire.
 
+  gate-add-blocker — the inverse of gate-cascade-clear (params: handoff_path,
+    blocker_ids, optional gate_dependency)
+    - Writes the COUPLED gate set in one pass: blocker_ids join blocked_by,
+      deployment_state becomes awaiting_gate, pickup_ready is forced false. By
+      hand this is three edits, each refused by a cross-field rule the previous
+      edit's remedy created (example-retrieval-repo, 2026-09-11).
+    - ACT-TIME VERIFICATION, same shape as gate-cascade-clear's: every blocker id
+      must resolve to a record on disk before any write. An edge naming nothing
+      can never be cleared, so the gate it writes is one nobody can discharge.
+    - Fails loud (exit_code=1, no write) on a terminal deployment_state — a
+      finished baton does not acquire a new gate.
+    - Idempotency: no-op (exit_code=0, applied False) when every id is already in
+      blocked_by AND the record already reads awaiting_gate + not pickup_ready.
+
   gate-cascade-clear — structured blocked_by cascade-clear (params: handoff_path,
     blocker_ids, blocker_shas)
     - The structured-blocked_by mutation vanilla gate-recheck --cleared does NOT
@@ -3504,6 +3518,156 @@ def _gate_cascade_clear(
     return _ok(_state["applied"], _state["message"])
 
 
+#: The fields a gated baton must carry TOGETHER. Spelled once here because the
+#: co-requirement is what this verb exists to discharge, and a second spelling is
+#: how the set drifts apart again.
+_GATED_FIELD_SET = ("blocked_by", "deployment_state: awaiting_gate", "pickup_ready: false")
+
+
+def _gate_add_blocker(
+    handoff_path: str,
+    blocker_ids: list,
+    gate_dependency: str,
+    worktree: Path,
+    repo_root: Path,
+) -> dict:
+    """Apply gate-add-blocker — the exact inverse of gate-cascade-clear.
+
+    Adding a blocker was the only leg of the gate lifecycle with no op behind it,
+    so it was done by hand — and by hand it takes THREE edits for one semantic
+    change, each refused by a different cross-field rule that the previous edit's
+    remedy created (example-retrieval-repo, 2026-09-11). `blocked_by` on a `ready_to_fire`
+    record is refused; setting `awaiting_gate` then makes a surviving
+    `pickup_ready: true` refused; and an author who stops after either one leaves
+    a record whose fields disagree about whether it may fire.
+
+    So the three write together, under one lock, or not at all: the blocker joins
+    `blocked_by`, `deployment_state` becomes `awaiting_gate`, and `pickup_ready`
+    is forced false. There is no partial-application path — a record that refuses
+    validation afterwards leaves disk untouched.
+
+    Act-time verification, mirroring gate-cascade-clear's own: every blocker id
+    must resolve to a real record on disk before any write. An edge naming
+    nothing never clears, and a gate nobody can discharge is worse than no gate —
+    it is the permanent `unresolved_blockers` row example-cockpit-repo reported the
+    same day, reached by an owner who had no other way to write a hold that held.
+
+    `gate_dependency` prose is OPTIONAL and appended as its own clause when given,
+    matching the comma-joined shape gate-cascade-clear's reducer reads back.
+    """
+    try:
+        path = _resolve_path(handoff_path, worktree)
+    except _PathNotContained as exc:
+        return _err(f"gate-add-blocker: {exc}")
+
+    if not blocker_ids:
+        return _err("gate-add-blocker: blocker_ids must be non-empty")
+
+    _state: dict = {"applied": False, "message": ""}
+
+    def mutate(old_text: str) -> str:
+        split = split_frontmatter(old_text)
+        if split is None:
+            raise MutateAbort(
+                f"gate-add-blocker: no parseable YAML frontmatter in {handoff_path}"
+            )
+
+        fm_dict = yaml.safe_load(split.fm_text) or {}
+        deployment = read_fm_field(split.fm_text, "deployment_state")
+        if (deployment or "").strip().lower() in HANDOFF_TERMINAL_DEPLOYMENT:
+            raise MutateAbort(
+                f"gate-add-blocker: {handoff_path} is terminal "
+                f'(deployment_state "{deployment}") — a finished baton does not '
+                "acquire a new gate; re-open it or write a successor instead"
+            )
+
+        current_blocked_by = fm_dict.get("blocked_by") or []
+        if not isinstance(current_blocked_by, list):
+            raise MutateAbort(
+                f"gate-add-blocker: blocked_by is not a list in {handoff_path}"
+            )
+
+        for blocker_id in blocker_ids:
+            state = _resolve_blocker_deployment_state(blocker_id, worktree)
+            if not state.resolved:
+                raise MutateAbort(
+                    f"gate-add-blocker: blocker {blocker_id!r} resolves to no record "
+                    "on disk — an edge naming nothing can never be cleared, and the "
+                    "gate it writes is one nobody can discharge; no write performed"
+                )
+
+        new_blocked_by = list(current_blocked_by)
+        for blocker_id in blocker_ids:
+            if blocker_id not in new_blocked_by:
+                new_blocked_by.append(blocker_id)
+
+        already_gated = (
+            new_blocked_by == list(current_blocked_by)
+            and deployment == "awaiting_gate"
+            and fm_dict.get("pickup_ready") is not True
+        )
+        if already_gated and not gate_dependency:
+            _state["applied"] = False
+            _state["message"] = (
+                f"{handoff_path} already gated on {blocker_ids} — no-op"
+            )
+            return old_text  # byte-identical → locked_rmw skips the write
+
+        fm = split.fm_text
+        if read_fm_field(fm, "blocked_by") is not None:
+            fm = _replace_fm_array_field(fm, "blocked_by", new_blocked_by)
+        else:
+            fm = _insert_fm_array_field(fm, "blocked_by", new_blocked_by, "deployment_state")
+
+        if deployment != "awaiting_gate":
+            fm = replace_fm_field(fm, "deployment_state", "awaiting_gate")
+
+        # pickup_ready — forced, not merely checked. A gated baton advertising
+        # pickup-readiness is the self-contradiction the schema's own cross-field
+        # rule refuses, and leaving it for the caller's next edit is the drip this
+        # verb exists to end.
+        if read_fm_field(fm, "pickup_ready") is not None:
+            fm = replace_fm_field(fm, "pickup_ready", False)
+        elif fm_dict.get("pickup_ready") is True:
+            fm = insert_fm_field(fm, "pickup_ready", False, after_key="deployment_state")
+
+        if gate_dependency:
+            existing = read_fm_field_unquoted(fm, "gate_dependency")
+            clauses = [c.strip() for c in (existing or "").split(",") if c.strip()]
+            if gate_dependency not in clauses:
+                clauses.append(gate_dependency)
+            joined = ", ".join(clauses)
+            if existing is not None:
+                fm = replace_fm_field(fm, "gate_dependency", joined)
+            else:
+                fm = insert_fm_field(fm, "gate_dependency", joined, after_key="blocked_by")
+
+        errors = _validate_fm(fm)
+        if errors:
+            details = format_validation_errors(errors)
+            raise MutateAbort(f"handoff frontmatter validation failed: {details}")
+
+        _state["applied"] = True
+        _state["message"] = (
+            f"gate-add-blocker {handoff_path} — gated on {blocker_ids} "
+            f"({', '.join(_GATED_FIELD_SET)} written together)"
+        )
+        return rebuild(split, fm)
+
+    try:
+        locked_rmw(path, mutate, repo_root=repo_root)
+    except FileNotFoundError:
+        return _err(f"gate-add-blocker: handoff not found: {handoff_path}")
+    except LockTimeout as exc:
+        return _err(
+            f"gate-add-blocker: timed out waiting for file lock on {handoff_path}: {exc}"
+        )
+    except MutateAbort as exc:
+        return _err(exc.args[0] if exc.args else "gate-add-blocker: mutation aborted")
+
+    return _ok(_state["applied"], _state["message"])
+
+
 def _record_disposition(
     handoff_path: str,
     disposition: str,
@@ -3813,6 +3977,17 @@ async def _handler(
             _gate_cascade_clear, handoff_path, blocker_ids, blocker_shas, worktree, repo_root
         )
 
+    if verb == "gate-add-blocker":
+        blocker_ids = params.get("blocker_ids") or []
+        if not isinstance(blocker_ids, list):
+            return _err("gate-add-blocker: 'blocker_ids' must be a list")
+        gate_dependency = (params.get("gate_dependency") or "").strip()
+        # asyncio.to_thread for DR-212 D3 async-loop mandate.
+        # repo_root is forwarded to locked_rmw for git-common-dir lock sidecar resolution.
+        return await asyncio.to_thread(
+            _gate_add_blocker, handoff_path, blocker_ids, gate_dependency, worktree, repo_root
+        )
+
     if verb == "record-disposition":
         disposition = (params.get("disposition") or "").strip()
         reason = (params.get("reason") or "").strip()
@@ -3829,6 +4004,6 @@ async def _handler(
     return _err(
         f"handoff.transition: unknown verb {verb!r} — "
         "supported: claim, supersede, ship, close, repark, unclaim, "
-        "gate-recheck, gate-cascade-clear, record-disposition "
+        "gate-recheck, gate-add-blocker, gate-cascade-clear, record-disposition "
         "(consume/unconsume also accepted, deprecated aliases of claim/unclaim)"
     )

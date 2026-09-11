@@ -168,6 +168,9 @@ _BATON_FIELDS = frozenset(
         # scanner cannot read one — the constraint the schema's own field
         # descriptions record so nobody tidies them into a map later.
         "plan_blitz_hold_reason", "plan_blitz_hold_cite", "plan_blitz_hold_until",
+        # The OWNER's own declared gate. `deployment_state: awaiting_gate` above is
+        # half the statement; this is the half that says what is being waited on.
+        "gate_dependency",
         # NOT a link basis, and read anyway: `plan` is undeclared in
         # handoff.schema.json, so records carry it freely while `link_plans`
         # reads `governing_plan`. Two names for one edge, one written and the
@@ -234,7 +237,30 @@ def _strip_comment(value: str) -> str:
     """
     value = value.strip()
     if value[:1] in ("'", '"'):
-        return value
+        # A quoted scalar ends at its own closing quote — and a comment AFTER
+        # that quote is still a comment. Returning the whole line was safe only
+        # while no scanned field carried the shape; two live records do
+        # (`gate_dependency: ""  # both gates discharged 2026-08-29`), and for
+        # those the scanner disagreed with the general parser, which is the one
+        # thing this scanner may never do.
+        quote = value[0]
+        index = 1
+        while index < len(value):
+            char = value[index]
+            if char == "\\" and quote == '"':
+                index += 2
+                continue
+            if char == quote:
+                if quote == "'" and value[index + 1:index + 2] == "'":
+                    index += 2
+                    continue
+                break
+            index += 1
+        else:
+            # Unterminated quote — not ours to repair, and not ours to truncate.
+            return value
+        rest = value[index + 1:].lstrip()
+        return value[: index + 1] if rest.startswith("#") else value
     if value.startswith("#"):
         return ""
     return value.split(" #", 1)[0].rstrip()
@@ -443,8 +469,18 @@ _ROUTES_WITHOUT_PLANNING_CONTENT = frozenset({"dispatch", "spec-dispatch"})
 _SIZING_MAX_LINES = 80
 
 
+#: The `route` an XL sizing carries while its exit is still the PM's to pick.
+_PM_DECISION_ROUTE = "pm-decision"
+
+#: The only `xl_exit` that resolves `pm-decision` to plannable work. The other
+#: three name a different job: `split` and `shape` send the baton back for
+#: re-scoping, `roadmap` sends it to an initiative. Accepting one coherent
+#: multi-session job is the exit that leaves a plan to write.
+_XL_EXIT_RESOLVING_TO_PLAN = "accept_multi_session"
+
+
 def _sizing_route(worktree_root: Path, resolved: Sequence[str]) -> Optional[str]:
-    """The `route` of the first resolvable sizing object, or None.
+    """The EFFECTIVE `route` of the first resolvable sizing object, or None.
 
     A bounded head-read, not a YAML parse, for the reason `_scan_fields` is one:
     this runs per candidate and the general parser costs an order of magnitude
@@ -453,6 +489,17 @@ def _sizing_route(worktree_root: Path, resolved: Sequence[str]) -> Optional[str]
     (`route: plan  # dispatch | spec-dispatch | ...`), and reading that comment
     as part of the value makes every sized baton's route unrecognisable.
 
+    Effective, not literal, for `pm-decision` alone: that route means "the PM has
+    not picked an XL exit yet", and `xl_exit` is where they record that they have.
+    Reading the route literally re-asks a question the same file already answers,
+    which is what example-market-data-repo measured on 2026-09-11 — a sizing resolved
+    on 2026-08-05 (`xl_exit: accept_multi_session`, `pm_resolution` filled) still
+    routing to pm-decision in every wave since, at the PM's expense.
+
+    Only `accept_multi_session` resolves. The other exits name work that is not
+    writing this plan, so they stay at the gate, and an unset `xl_exit` stays
+    `pm-decision` because null never means accepted (the schema says so).
+
     None is the answer for an UNSIZED baton, and it is not a finding — the gate
     already reports `unsized` separately, and a scout is what fixes it.
     """
@@ -460,15 +507,29 @@ def _sizing_route(worktree_root: Path, resolved: Sequence[str]) -> Optional[str]
         path = worktree_root / citation
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                route: Optional[str] = None
+                xl_exit: Optional[str] = None
                 for count, raw in enumerate(fh):
                     if count > _SIZING_MAX_LINES:
                         break
-                    key, sep, value = raw.rstrip("\n").rstrip("\r").partition(":")
-                    if sep and key.strip() == "route":
-                        route = _unquote(_strip_comment(value))
-                        if route:
-                            return route
-                        break
+                    line = raw.rstrip("\n").rstrip("\r")
+                    if line[:1].isspace():
+                        # A nested key of some other block, not a top-level scalar.
+                        continue
+                    key, sep, value = line.partition(":")
+                    if not sep:
+                        continue
+                    key = key.strip()
+                    if key == "route" and route is None:
+                        route = _unquote(_strip_comment(value)) or None
+                    elif key == "xl_exit" and xl_exit is None:
+                        xl_exit = _unquote(_strip_comment(value)) or None
+                    if route is not None and route != _PM_DECISION_ROUTE:
+                        return route
+                if route == _PM_DECISION_ROUTE and xl_exit == _XL_EXIT_RESOLVING_TO_PLAN:
+                    return "plan"
+                if route:
+                    return route
         except OSError:
             continue
     return None
@@ -1425,6 +1486,48 @@ def assemble_plan_gate(
             }
         )
 
+    # A baton whose OWNER declared a gate says so in the report —
+    # example-cockpit-repo, 2026-09-11.
+    #
+    # Their owner stamped `deployment_state: awaiting_gate`, `pickup_ready: false`
+    # and a `gate_dependency` naming the credential being waited on. The gate read
+    # all three and said nothing about any of them: both computed gates resolve
+    # `blocked_by` edges, and a declaration is not an edge. So the only way to
+    # write a gate the gate could see was to name a dependency resolving to no
+    # record, which then sits in `unresolved_blockers` forever.
+    #
+    # REPORTED, NOT WITHHELD, which is the opposite of the plan-blitz hold above
+    # and deliberate. A gate on firing is not a gate on planning — a baton waiting
+    # on a credential can have its plan written today, and `test_candidate_selection`
+    # pins exactly that. Measuring made the case stronger: this corpus carries
+    # `gate_dependency` values that are already discharged (`""  # both gates
+    # discharged 2026-08-29`) and one marked deprecated in favour of `blocked_by`,
+    # so keying suppression on the field would silently kill candidates on stale
+    # text. A baton that must not be planned at all has `plan_blitz_hold_reason`,
+    # which says so in a field that means it.
+    gated_rows: List[Dict[str, Any]] = []
+    for record in records:
+        if str(record["_fm"].get("deployment_state") or "").strip() != "awaiting_gate":
+            continue
+        dependency = str(record["_fm"].get("gate_dependency") or "").strip()
+        if not dependency:
+            continue
+        record["gated"] = True
+        gated_rows.append(
+            {
+                "baton": record["id"],
+                "path": record["path"],
+                "candidate": bool(record["candidate"]),
+                "dependency": dependency,
+                "note": (
+                    "its owner declared a gate on FIRING: deployment_state is "
+                    f"awaiting_gate and gate_dependency names {dependency!r}. This "
+                    "does not withhold the baton from planning — use "
+                    "plan_blitz_hold_reason for that"
+                ),
+            }
+        )
+
     # A baton with no planning content, waiting on a blocker's EXECUTION, is not
     # a planning candidate — example-retrieval-repo, 2026-09-11.
     #
@@ -1537,6 +1640,7 @@ def assemble_plan_gate(
                 "tracked": record["tracked"],
                 "waiting_on_execution": bool(record.get("waiting_on_execution")),
                 "held": bool(record.get("held")),
+                "gated": bool(record.get("gated")),
             }
         )
 
@@ -1567,6 +1671,7 @@ def assemble_plan_gate(
         ),
         "waiting_on_execution": len(waiting_on_execution_rows),
         "held": len(held_rows),
+        "gated": len(gated_rows),
     }
 
     # `counts.unschedulable` says HOW MANY this pass cannot schedule and never
@@ -1631,6 +1736,7 @@ def assemble_plan_gate(
         "resurrected": resurrected_rows,
         "waiting_on_execution": waiting_on_execution_rows,
         "held": held_rows,
+        "gated": gated_rows,
         "counts": dict(
             counts, untracked=len(untracked_rows), resurrected=len(resurrected_rows)
         ),

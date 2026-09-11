@@ -828,6 +828,30 @@ class TestDeploymentStateGates:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'gate_evidence' for e in errors)
 
+    def test_the_gating_remedy_names_pickup_ready_when_it_would_violate_next(self):
+        """A remedy that implies further co-required changes states the whole
+        resulting state. Adding a blocker to a ready_to_fire + pickup_ready baton
+        used to cost three edits for one semantic change: the pickup_ready rule was
+        not violated until the author took the blocked_by rule's advice
+        (example-retrieval-repo, 2026-09-11, on a roadmap-cq-17 baton)."""
+        fm = _valid_handoff(
+            deployment_state='ready_to_fire', blocked_by=['stb-abc123'], pickup_ready=True
+        )
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        hint = next(h for h in (e['hint'] for e in errors if e['field'] == 'blocked_by'))
+        assert 'awaiting_gate' in hint
+        assert 'pickup_ready=false' in hint
+
+    def test_the_gating_remedy_stays_quiet_about_a_field_that_is_not_at_issue(self):
+        """The co-required half is named only when it would actually fire next —
+        a record with no pickup_ready gets the plain two-option remedy, not a
+        third field to think about."""
+        fm = _valid_handoff(deployment_state='ready_to_fire', blocked_by=['stb-abc123'])
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        hint = next(h for h in (e['hint'] for e in errors if e['field'] == 'blocked_by'))
+        assert 'awaiting_gate' in hint
+        assert 'pickup_ready' not in hint
+
     def test_shipped_without_shipped_in_fails(self):
         fm = _valid_handoff(deployment_state='shipped')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)

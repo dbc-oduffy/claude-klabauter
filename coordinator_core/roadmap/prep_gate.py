@@ -877,7 +877,9 @@ def refusal_message(
         lines.append(
             "  fix: correct the named field(s) in the plan's frontmatter by hand — "
             "mise-prep-upgrade derives missing declarations and cannot repair a "
-            "value that is present and the wrong shape"
+            "value that is present and the wrong shape. An engine-written field "
+            "(execution_authorized_*) has a producer and is repaired there instead, "
+            "never by hand here"
         )
     else:
         # NOT-PREPPED only. A plan authored before this bar existed is missing

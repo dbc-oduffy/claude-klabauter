@@ -663,6 +663,42 @@ def test_the_per_hunk_clause_reaches_the_emitted_script():
 
 
 # ---------------------------------------------------------------------------
+# C4: structured reports narrow the commit phase, per-report, diff still governs
+# ---------------------------------------------------------------------------
+
+
+def test_provenance_reconciles_structured_reports_per_report_not_per_wave():
+    """A mixed wave -- some structured reports, some prose -- must reconcile
+    each report on its own rules, never treat any structured subset as
+    licence to skip reconciling the rest of the wave."""
+    block = _provenance_block()
+    assert "PER-REPORT, NEVER PER-WAVE" in block
+    assert "must never suppress reconciliation of the other two" in block
+
+
+def test_provenance_structured_claim_never_replaces_the_diff_check():
+    """A structured changed-path list may narrow what the commit agent
+    EXPECTS to see in `git diff --stat`; it must never be read as licensing
+    a reports-only derivation of the pathspec -- the exact posture the
+    'read the diff, not just the reports' paragraph exists to kill."""
+    block = _provenance_block()
+    assert "NARROWS WHAT YOU EXPECT" in block
+    assert "NEVER REPLACES THE" in block
+    assert "NOT a substitute for reading the" in block
+
+
+def test_provenance_partial_wave_clause_unmodified():
+    """The `abf69cd326` partial-wave clause is additive-only: this chunk must
+    not touch it."""
+    block = _provenance_block()
+    assert "A PARTIAL WAVE STILL COMMITS" in block
+    assert (
+        "Refusing the whole wave because one item of N is blocked is the "
+        "failure mode, not the safe choice."
+    ) in block
+
+
+# ---------------------------------------------------------------------------
 # Cached-preflight staleness detection
 # ---------------------------------------------------------------------------
 

@@ -878,6 +878,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/read_sizing_object_fields.py",
         ("_handler",),
     ),
+    "sizing.discharge_surfaced": (
+        "coordinator_core/ops/sizing_discharge_surfaced.py",
+        ("_handler",),
+    ),
     "sizing.record_spike_verdict": (
         "coordinator_core/ops/sizing_spike_verdict.py",
         ("_handler",),

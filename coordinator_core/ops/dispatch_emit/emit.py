@@ -313,6 +313,11 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
 )
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, _normalize_path, build_waves
+from coordinator_core.executor_return_contract import (
+    FOOTPRINT_CONSTRAINT_TEMPLATE,
+    done_summary_constraint,
+    self_verify_constraint,
+)
 from coordinator_core.ops.review_mint.compose import compose as compose_review_stages
 from coordinator_core.ops.review_mint.roster import RosterFragmentError, Stage, parse_stages
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -325,6 +330,28 @@ from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_B
 # alias keeps this module's own public surface name stable for any importer
 # that still names it, without a second exception class to keep in sync.
 ReviewRosterFragmentError = RosterFragmentError
+
+#: Named per `executor_return_contract.self_verify_constraint`'s
+#: `commit_authority` parameter (docs/plans/2026-09-11-the-executor-return-
+#: contract-gets-one-de.md § C3): on the emitted path neither commit nor
+#: broader verification is "the EM" -- a `coordinator:git-commit-agent`
+#: phase commits once per wave, and a terminal `coordinator:test-runner`
+#: phase runs broader verification. One string names both, since the
+#: builder threads a single `commit_authority` value into both clauses.
+_EMITTED_COMMIT_AUTHORITY = (
+    "this wave's `coordinator:git-commit-agent` commit phase (which commits, "
+    "once per wave, after every item in the wave passes scoped verification) "
+    "and the run's terminal `coordinator:test-runner` phase (which runs "
+    "broader verification)"
+)
+
+#: `.coordinator-local/subagent-share/` is already inside
+#: `_BOOKKEEPING_PREFIXES`, never `tasks/mise-done/` -- a report landing
+#: there sits outside both the row's pathspec and that allowlist, and
+#: `_PROVENANCE_HEADING` instructs the commit agent to STOP and emit no
+#: success token on any such path. Every wave whose executor named
+#: `tasks/mise-done/...` would halt deterministically on this surface.
+_DISPATCH_REPORT_DIR = ".coordinator-local/subagent-share/dispatch-reports"
 
 _EXECUTOR_AGENT_TYPE = "coordinator:executor"
 _ENRICHER_AGENT_TYPE = "coordinator:enricher"
@@ -927,6 +954,69 @@ def _plan_context_preamble(context: PlanContext) -> str:
     return preamble
 
 
+def _dispatch_report_path(plan_path: str, row_id: str) -> str:
+    """The executor return contract's own report path for one wave row.
+
+    ``<plan stem>`` is ``Path(plan_path).stem`` -- ``plan_path`` here is
+    already the repo-relative spec path ``_row_prompt`` splices in
+    (``_spec_path_for_prompt``'s output), so no second plan read is needed.
+    Lands under ``_DISPATCH_REPORT_DIR``, inside ``_BOOKKEEPING_PREFIXES`` --
+    see that constant's docstring and module docstring § THE REPORT PATH.
+    """
+    return f"{_DISPATCH_REPORT_DIR}/{Path(plan_path).stem}/{row_id}.md"
+
+
+def _row_return_contract(row: WaveRow, plan_path: str) -> str:
+    """Render the executor return contract (``executor_return_contract``)
+    for one wave row: the footprint constraint (when the row declares
+    ``writes``), the self-verify constraint, and the DONE-summary
+    constraint -- in that order.
+
+    The footprint fed to ``FOOTPRINT_CONSTRAINT_TEMPLATE`` is
+    ``row.writes`` PLUS the row's own dispatch-report path
+    (``_dispatch_report_path``) -- never the report path alone and never an
+    exemption clause splicing it around the list. Putting the report inside
+    the footprint the executor is told not to write outside of is what
+    keeps the rendered prompt self-consistent (module docstring § THE
+    REPORT PATH). Rendered ONLY when ``row.writes is not UNDECLARED`` --
+    an UNDECLARED row is a legal state (an epistemic-premise-gated row) and
+    is never rendered as "you may write nothing" (module docstring's two
+    further constraints).
+
+    The DONE-summary's changed-path-list clause is passed as this
+    function's own leading ``extra_fields`` entry, carrying the actual
+    porcelain invocation over the row's own footprint paths -- never left
+    generic, and never reimplemented inside
+    ``executor_return_contract.done_summary_constraint``, whose fixed spine
+    does not carry a changed-path-list clause at all (see that module's own
+    docstring).
+    """
+    report_path = _dispatch_report_path(plan_path, row.id)
+
+    parts = []
+    if row.writes is not UNDECLARED:
+        footprint = list(row.writes) + [report_path]
+        parts.append(
+            FOOTPRINT_CONSTRAINT_TEMPLATE.replace("[list]", ", ".join(footprint))
+        )
+    else:
+        footprint = [report_path]
+
+    parts.append(self_verify_constraint(commit_authority=_EMITTED_COMMIT_AUTHORITY))
+
+    porcelain_paths = " ".join(footprint)
+    parts.append(
+        done_summary_constraint(
+            output_path_template=report_path,
+            extra_fields=(
+                "the output of `git status --porcelain -- "
+                f"{porcelain_paths} | cut -c4-`",
+            ),
+        )
+    )
+    return "\n\n".join(parts)
+
+
 def _row_prompt(
     row: WaveRow,
     plan_path: Optional[str] = None,
@@ -972,6 +1062,7 @@ def _row_prompt(
         "spec from the title, from a file search, or from surrounding code — if "
         "you cannot read that row, stop and report BLOCKED rather than "
         "improvising."
+        f"\n\n{_row_return_contract(row, plan_path)}"
     )
     if plan_context is None:
         return body
@@ -1156,6 +1247,24 @@ _PROVENANCE_HEADING = (
     "\n\nRead the diff, not just the reports. A report is what an agent says "
     "it wrote; the diff is what is actually there, and only the second one is "
     "what you are about to commit."
+    "\n\nSOME REPORTS BELOW MAY NOW BE STRUCTURED: an executor return contract "
+    "closes with a machine-checkable status line and a changed-path list "
+    "instead of prose alone. Read this PER-REPORT, NEVER PER-WAVE -- a wave "
+    "of five where three reports are structured and two are plain prose is "
+    "the ordinary mixed case, not an exception. For EACH report: if it "
+    "carries a structured changed-path line, take that line as that "
+    "executor's claim; if it does not, reconcile that ONE report by the "
+    "prose rules above instead. Three structured reports in a wave must "
+    "never suppress reconciliation of the other two -- a mixed wave gets a "
+    "mixed, per-report reconciliation."
+    "\n\nA STRUCTURED CLAIM NARROWS WHAT YOU EXPECT, IT NEVER REPLACES THE "
+    "DIFF CHECK. Deriving the pathspec by intersecting the union of declared "
+    "writes with what the reports name is NOT a substitute for reading the "
+    "diff -- it is the same reports-only posture the paragraph above exists "
+    "to kill, only wearing a structured report as its excuse. A structured "
+    "changed-path list tells you which paths to expect changes in when you "
+    "run `git diff --stat`; it does not tell you the diff came out that way, "
+    "and it does not excuse reading it."
     "\n\nPASTE THE `git diff --stat` OUTPUT VERBATIM into your report, above "
     "your token line, under the heading `DIFF OBSERVED:`. Not a summary of it, "
     "not a table you built from it -- the raw lines, with their real path names "

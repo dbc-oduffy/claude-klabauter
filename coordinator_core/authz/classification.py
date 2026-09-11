@@ -3151,6 +3151,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # sizing.ship — MUTATING: writes `status: shipped` under locked_rmw
     # (2026-08-13, PM ruling; see coordinator_core/ops/sizing_ship.py docstring).
     "sizing.ship": OpClass.MUTATING,
+    # sizing.discharge_surfaced — MUTATING: writes `pm_resolution` under locked_rmw
+    # (2026-09-11; see coordinator_core/ops/sizing_discharge_surfaced.py docstring —
+    # it never writes `surfaced_to_pm`, which stays listed).
+    "sizing.discharge_surfaced": OpClass.MUTATING,
     # sizing.record_spike_verdict — MUTATING: writes `premise.spike_verdict` under
     # locked_rmw (2026-08-14; see coordinator_core/ops/sizing_spike_verdict.py docstring).
     "sizing.record_spike_verdict": OpClass.MUTATING,

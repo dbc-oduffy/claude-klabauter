@@ -649,13 +649,24 @@ class TestSedRangeReadAdviseMessageAccuracy:
 
 
 class TestCatHeredocWriteAdviseMessageAccuracy:
-    def test_advisory_names_the_write_tool_and_the_exact_target(self):
+    def test_advisory_names_the_exact_target_and_what_is_recorded(self):
         cmd = "cat > out.txt <<'EOF'\nhello\nEOF"
         advisory = _advisory_text(
             _hso(dispatch_checks.check_cat_heredoc_write_advise(cmd, "sess-bx12"))
         )
-        assert "Write tool" in advisory
         assert "out.txt" in advisory
+        assert "DR-258" in advisory
+
+    def test_advisory_does_not_name_a_tool_to_prefer(self):
+        # The message states a consequence, not a tool preference. This is the
+        # register the sibling `check_heredoc_repo_write_advise` already uses,
+        # and the assertion is inverted from what this class pinned before:
+        # naming the Write tool is now the defect, not the contract.
+        cmd = "cat > out.txt <<'EOF'\nhello\nEOF"
+        advisory = _advisory_text(
+            _hso(dispatch_checks.check_cat_heredoc_write_advise(cmd, "sess-bx12"))
+        )
+        assert "Write tool" not in advisory
 
 
 class TestHeredocRepoWriteAdviseMessageAccuracy:

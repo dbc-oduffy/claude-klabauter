@@ -67,3 +67,35 @@ def test_a_titled_sizing_object_still_scaffolds(repo: Path):
     assert "PLACEHOLDER — replace with the PM's ask" not in minted[0].read_text(
         encoding="utf-8"
     )
+
+
+def test_the_scaffolded_id_comment_names_the_join_route(repo: Path):
+    """The stamp used to read "minted at scaffold time — do not hand-edit", which is
+    wrong advice for the commonest case: a sizing object belonging to an EXISTING
+    baton must carry that baton's id, joined, never re-minted. Measured 2026-09-11 on
+    example-store-repo: the scaffolder produced a wrong value and then told the author not
+    to fix it. That author overrode it; the next one might obey and leave two ids on
+    one deliverable."""
+    result = _run(repo, "--type", "sizing-object", "--title", "A real PM ask")
+
+    assert result.returncode == 0, result.stderr
+    stamped = (repo / "state" / "sizings").glob("*.yaml")
+    text = next(stamped).read_text(encoding="utf-8")
+    assert "--deliverable-id" in text
+    assert "do not hand-edit" not in text
+
+
+def test_an_explicit_id_is_joined_not_re_minted(repo: Path):
+    """The flag the comment now names has to actually carry the id through."""
+    carried = "dlv-an-existing-baton-101c06"
+
+    result = _run(
+        repo,
+        "--type", "sizing-object",
+        "--title", "Sized against an existing baton",
+        "--deliverable-id", carried,
+    )
+
+    assert result.returncode == 0, result.stderr
+    text = next((repo / "state" / "sizings").glob("*.yaml")).read_text(encoding="utf-8")
+    assert carried in text

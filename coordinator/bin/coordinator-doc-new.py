@@ -4696,7 +4696,7 @@ def _scaffold_sizing(title: str, deliverable_id: str | None = None) -> str:
         "premise:",
         "  provenance: unrecorded  # executed | read | not-applicable | unrecorded — how the premise was verified; ADVISORY, never blocks a route",
         "  evidence: PLACEHOLDER — cite the file:line, test, or command output you actually looked at; answered in place, never spun into its own record",
-        f"deliverable_id: {_yaml_quote(deliverable_id) if deliverable_id else 'null'}  # durable spine join key, minted at scaffold time — do not hand-edit",
+        f"deliverable_id: {_yaml_quote(deliverable_id) if deliverable_id else 'null'}  # durable spine join key — re-scaffold with --deliverable-id <id> to join an existing baton's, never hand-edit",
     ]
     return "\n".join(lines) + "\n"
 
@@ -5806,7 +5806,8 @@ Spec backlink (workflow): pln-workflow-skeleton-stamper-maki-adab0d
         default=None,
         metavar="ID",
         help=(
-            "(handoff, spinoff, roadmap-baton, plan) Existing deliverable_id to carry "
+            "(handoff, spinoff, roadmap-baton, roadmap-seed, recovery, plan, sizing-object) "
+            "Existing deliverable_id to carry "
             "(never re-mint). When omitted, auto-inherited from the DELIVERABLE_ID env var "
             "(session context); if neither is set, a new id is minted. "
             "Spec: docs/plans/2026-07-03-fleet-deliverable-spine-identity-and-facets.md § D1"
@@ -6682,6 +6683,29 @@ def main(argv: "list[str] | None" = None) -> int:
     global _NEW_CHAIN_REQUESTED
     _NEW_CHAIN_REQUESTED = bool(getattr(args, "new_chain", False))
 
+    # Two statements about the same field, in opposite directions: one names the
+    # chain to join, the other says there is none to join. Letting either win
+    # silently is how a spine key nobody chose becomes durable, and the spine key
+    # is the one field a later reader cannot audit -- a false merge diverges from
+    # nothing, so nothing detects it. Refuse and make the author say which.
+    if _NEW_CHAIN_REQUESTED:
+        _contradicting = [
+            flag for flag, value in (
+                ("--deliverable-id", getattr(args, "deliverable_id", None)),
+                ("--predecessor", getattr(args, "predecessor", None)),
+            )
+            if value
+        ]
+        if _contradicting:
+            print(
+                "coordinator-doc-new: --new-chain declares this artifact a chain "
+                "ROOT, and %s names a chain to join. Pass one: drop --new-chain to "
+                "carry that id, or drop %s to root a new chain."
+                % (" and ".join(_contradicting), " and ".join(_contradicting)),
+                file=sys.stderr,
+            )
+            return 1
+
     # Resolve deliverable-spine fields (handoff, spinoff, roadmap-baton, plan) — C3b.
     # Session context inheritance: DELIVERABLE_ID env var is the mechanism by which the
     # skill layer (e.g. /handoff, /plan) propagates the parent deliverable_id so downstream
@@ -6708,7 +6732,17 @@ def main(argv: "list[str] | None" = None) -> int:
         _explicit_dlv_raw = getattr(args, "deliverable_id", None)
         _flag_explicitly_empty = _explicit_dlv_raw is not None and not _explicit_dlv_raw
         _explicit_dlv = _explicit_dlv_raw or None
-        _env_dlv = os.environ.get("DELIVERABLE_ID", "").strip() or None
+        # `--new-chain` suppresses the AMBIENT rungs, of which this is one. The
+        # env var is whatever the session last exported -- a directive from an
+        # earlier baton_assemble, or a peer's -- and an author who has just
+        # asserted that this artifact ROOTS a chain has said the ambient answer
+        # is wrong. Explicit `--deliverable-id` is not ambient and is refused
+        # outright alongside `--new-chain` (see main()'s argument checks), so
+        # this cannot silently drop a deliberate id.
+        _env_dlv = (
+            None if _NEW_CHAIN_REQUESTED
+            else (os.environ.get("DELIVERABLE_ID", "").strip() or None)
+        )
         _carry_dlv = (
             _explicit_dlv if _explicit_dlv
             else (None if _flag_explicitly_empty else _env_dlv)
@@ -6842,7 +6876,30 @@ def main(argv: "list[str] | None" = None) -> int:
             )
 
             _hnd_repo_root = _current_repo_root()
-            _claimed_plan_rel = _resolve_claimed_plan_path(_hnd_repo_root)
+            # DISCOVERED rung, and the one `--new-chain` was missing. The
+            # handoff arm read the plan this session holds a claim on and
+            # carried its deliverable_id, which is right for a baton that
+            # descends from that plan and wrong for every other baton the
+            # session scaffolds beside it. `--new-chain` is the author saying
+            # this is a chain ROOT; the `plan` and sizing arms already honour
+            # it via `_resolve_session_chain_deliverable_id`, and this arm
+            # consulted no such switch at all.
+            #
+            # Measured 2026-09-11 on example-store-repo: a baton about mise-prep
+            # authoring-bar backfill, scaffolded with `--new-chain` and no
+            # predecessor, came out carrying `dlv-ingest-example-fleet-jira-f26-into-
+            # the-registry-101c06` from the session's claimed plan. Two
+            # unrelated works then read as one chain and the LoE rollup sums
+            # across both, with nothing in the output to suggest a link had
+            # been invented -- "carry path" reads like carrying, not inventing.
+            #
+            # `--predecessor` is deliberately NOT suppressed here: it is named
+            # by the caller, not discovered, and an author who passes both is
+            # refused in main() rather than having one of the two quietly win.
+            _claimed_plan_rel = (
+                None if _NEW_CHAIN_REQUESTED
+                else _resolve_claimed_plan_path(_hnd_repo_root)
+            )
             _claimed_plan_path = (
                 os.path.join(_hnd_repo_root, _claimed_plan_rel)
                 if _claimed_plan_rel and _hnd_repo_root

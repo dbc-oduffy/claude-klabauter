@@ -1213,14 +1213,24 @@ def _cf_ready_to_fire_no_unresolved_blocked_by(fm: dict) -> ErrorDict | None:
             )
             unresolved = [b for b in blocked_by if b not in cleared]
             if unresolved:
+                # The gating remedy MOVES this record into awaiting_gate, where
+                # `pickup_ready: true` is itself a violation
+                # (_cf_awaiting_gate_not_pickup_ready). Naming only this field's fix
+                # hands the author a record that refuses again on the next write for a
+                # rule that was not violated until they took this advice — reported by
+                # example-retrieval-repo as three edits for one semantic change. A remedy that
+                # implies further co-required changes states the whole resulting state.
+                gate_remedy = 'set deployment_state=awaiting_gate'
+                if fm.get('pickup_ready') is True:
+                    gate_remedy += ' AND pickup_ready=false (a gated baton must not '\
+                                   'advertise pickup-readiness)'
                 return {
                     'field': 'blocked_by',
                     'error': 'must be empty or fully cleared when deployment_state=ready_to_fire',
                     'hint': (
                         'A handoff cannot be ready_to_fire while blocked_by names an '
                         'unresolved blocker. Either clear the blocker (moving it into '
-                        'no_longer_blocked_by / gate_cleared_by) or set '
-                        'deployment_state=awaiting_gate.'
+                        f'no_longer_blocked_by / gate_cleared_by) or {gate_remedy}.'
                     ),
                 }
     return None
