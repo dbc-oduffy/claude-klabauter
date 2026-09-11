@@ -9,6 +9,7 @@ during the port (see the golden-oracle snapshot captured for this port).
 
 from __future__ import annotations
 
+import datetime
 import io
 import json
 import os
@@ -19,7 +20,9 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.ops.fleet import memo_send as memo_send_module
+from coordinator_core.ops.fleet._memo_anchor import ANCHOR_REF_PREFIX, write_anchor
 from coordinator_core.ops.workday_start_cross_repo_memo_outbox_surface import main
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -417,3 +420,80 @@ def test_not_checkable_delivery_emits_no_line(tmp_path, monkeypatch):
     )
     assert rc == 0
     assert out == ""
+
+
+# ---------------------------------------------------------------------------
+# C7 sibling: the restorable-delivery nudge, alongside gone. A fresh
+# restorable row is silent (the anchor's ordinary window); one still
+# restorable a day later is news.
+# ---------------------------------------------------------------------------
+
+def test_fresh_restorable_delivery_is_silent(tmp_path, monkeypatch):
+    """A restorable row sent moments ago is the ordinary in-flight state
+    between 'anchor written' and 'receiver's next workday-start restores
+    it' — surfacing it immediately would nudge on every send."""
+    sender_repo = _make_sender_git_repo(tmp_path)
+    receiver_repo = _make_receiver_git_repo(tmp_path)
+    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    outbox = tmp_path / "empty-outbox"
+    outbox.mkdir()
+
+    filename = "2026-09-11-someone-fresh-restorable.md"
+    sha = "5" * 40
+    common_dir = resolve_git_common_dir(receiver_repo)
+    write_anchor(common_dir, filename, sha, b"memo bytes")
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    _write_ledger_rows(sender_repo, [{
+        "sent_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "to": "example-retrieval-repo-em",
+        "topic": "fresh-restorable",
+        "delivery_commit_sha": sha,
+        "delivered_to": f"cross-repo/inbox/{filename}",
+        "anchor_ref": ANCHOR_REF_PREFIX + filename + "/" + sha,
+    }])
+
+    rc, out = _run(
+        [str(sender_repo)], {"COORDINATOR_OUTBOX_DIR": str(outbox)}, monkeypatch,
+    )
+    assert rc == 0
+    assert out == ""
+
+
+def test_stale_restorable_delivery_emits_nudge(tmp_path, monkeypatch):
+    """A restorable row still outstanding after 1 day is news at workday
+    start, alongside gone — and its nudge names an action the SENDER can
+    take (ping the receiver to run a workday-start), never a re-send
+    suggestion: the memo is anchored, so re-sending fixes nothing."""
+    sender_repo = _make_sender_git_repo(tmp_path)
+    receiver_repo = _make_receiver_git_repo(tmp_path)
+    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    outbox = tmp_path / "empty-outbox"
+    outbox.mkdir()
+
+    filename = "2026-09-11-someone-stale-restorable.md"
+    sha = "6" * 40
+    common_dir = resolve_git_common_dir(receiver_repo)
+    write_anchor(common_dir, filename, sha, b"memo bytes")
+
+    old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=3)
+    _write_ledger_rows(sender_repo, [{
+        "sent_at": old.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "to": "example-retrieval-repo-em",
+        "topic": "stale-restorable",
+        "delivery_commit_sha": sha,
+        "delivered_to": f"cross-repo/inbox/{filename}",
+        "anchor_ref": ANCHOR_REF_PREFIX + filename + "/" + sha,
+    }])
+
+    rc, out = _run(
+        [str(sender_repo)], {"COORDINATOR_OUTBOX_DIR": str(outbox)}, monkeypatch,
+    )
+    assert rc == 0
+    assert "stale-restorable" in out
+    assert "restorable" in out
+    assert "workday-start" in out
+    assert "ping example-retrieval-repo-em" in out
+    assert "re-run memo.send" not in out

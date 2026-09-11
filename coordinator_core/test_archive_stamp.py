@@ -2140,6 +2140,33 @@ class TestShipHandoff:
         text = archived[0].read_text(encoding="utf-8")
         assert "shipped_in:" in text
 
+    def test_a_record_the_flip_would_refuse_is_refused_before_the_stamp(self, tmp_path, capsys):
+        """No half-shipped record. The flip validates the whole frontmatter and the
+        stamp does not, so a record already invalid for a reason neither write
+        touches used to take shipped_in and then refuse deployment_state:shipped —
+        shipped to a reader of shipped_in, unshipped to a reader of
+        deployment_state (example-retrieval-repo-ue-addon, 2026-09-11: `handoff_phase` on a
+        kind the validator does not admit). It must refuse with nothing written."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(
+            repo, "ship-wrong-kind.md", "open", "ready_to_fire",
+            extra=(
+                "kind: goal-seed\n"
+                "handoff_phase: execution\n"
+                "scope:\n  - state/handoffs/ship-wrong-kind.md\n"
+            ),
+        )
+        before = hp.read_text(encoding="utf-8")
+
+        rc = arstamp.cs_ship_handoff(str(hp))
+
+        assert rc != 0
+        assert hp.read_text(encoding="utf-8") == before
+        err = capsys.readouterr().err
+        assert "refusing before any write" in err
+        assert "handoff_phase" in err
+
     def test_idempotent_second_call_on_already_shipped_is_clean_noop(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)

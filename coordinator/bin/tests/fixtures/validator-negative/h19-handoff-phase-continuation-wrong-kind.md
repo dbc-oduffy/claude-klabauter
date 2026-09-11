@@ -1,12 +1,12 @@
 ---
-title: Test handoff_phase continuation present on kind:spinoff
+title: Test handoff_phase continuation present on kind:goal-seed
 created: 2026-07-17
 branch: test-branch
-status: active
+status: open
 predecessor: none
 category: infra
 summary: A one-line summary of the session work
-kind: spinoff
+kind: goal-seed
 handoff_phase: continuation
 ---
 Body text

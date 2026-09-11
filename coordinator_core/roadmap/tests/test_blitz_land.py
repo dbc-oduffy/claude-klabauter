@@ -403,7 +403,15 @@ def test_re_landing_does_not_re_close_a_terminal_baton(tmp_path):
     second = bl.land_wave(root, result, shipped_in="1234567")
 
     assert second["closed"][0]["closed"] is False
-    assert "already terminal" in second["closed"][0]["note"]
+    note = second["closed"][0]["note"]
+    assert "already terminal" in note
+    # The note must say what this close WOULD have written, and name the cause.
+    # Read without it, a refusal on a record that is already terminal looks
+    # like the close it wanted -- which is how fire 0-22's refusal cost an
+    # adjudication (2026-09-11): an XS executor had stamped closed/stale, and
+    # a `closed` baton carries nothing linking it to the commit.
+    assert "1234567" in note
+    assert "XS executor" in note
     assert "shipped_in: 0983062" in (root / "state/handoffs/b-1.md").read_text(encoding="utf-8")
 
 
@@ -597,13 +605,13 @@ def test_a_non_s_route_still_takes_the_ordinary_approval(tmp_path):
     assert pg._read_baton_fields(root / baton).get("handoff_phase") is None
 
 
-def test_an_s_lane_spinoff_baton_refuses_the_stamp_instead_of_writing_it(tmp_path):
-    """example-store-repo landing fc61535f: the S lane parked a spec onto a `kind:
-    spinoff` baton and stamped `handoff_phase: execution` anyway — a shape
-    `pickup-assemble apply` refuses on claim (H-CROSS-EXEC-2 admits only
-    `session-handoff`/`roadmap-baton`). The fix refuses the stamp at landing,
-    by name, rather than writing a baton pickup will bounce. Asserted against
-    the REAL validator pickup uses, not a hand-rolled string check."""
+def test_an_s_lane_spinoff_baton_takes_the_stamp(tmp_path):
+    """A spinoff is the S lane's usual carrier — every replan baton a blitz mints
+    is one — and schema 10.5.0 admits it (DoE ruling, 2026-09-11). This test used
+    to assert the opposite, and it was right to: before the widen the stamp was a
+    shape `pickup-assemble apply` bounced on claim. What it must never become is
+    a stamp nobody validates, so the assertion that survives the inversion is the
+    one against the REAL validator pickup uses."""
     from coordinator_core.frontmatter.schema_validate import (
         parse_frontmatter,
         validate_frontmatter,
@@ -638,23 +646,59 @@ def test_an_s_lane_spinoff_baton_refuses_the_stamp_instead_of_writing_it(tmp_pat
         {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan, "route": "spec-dispatch"}]},
     )
 
-    # The lane, not just the flag: a refused stamp counted into `execution_ready`
-    # is reported as landed by `len()`, and the baton comes back as a planning
-    # candidate on the next gate read with nothing naming why (example-game-repo wave 1:
-    # reported 2, stamped 0).
-    assert not out["execution_ready"]
-    result = out["refused"][0]
-    assert result["baton"] == "b-1"
-    assert "spinoff" in result["reason"] and "handoff_phase" in result["reason"]
+    assert not out["refused"]
+    assert out["execution_ready"][0]["execution_ready"] is True
 
     fm = pg._read_baton_fields(root / baton)
-    assert fm.get("handoff_phase") is None, "must not write the shape pickup refuses"
+    assert fm["handoff_phase"] == "execution"
 
     schema = Path(bl.__file__).parents[1] / "frontmatter" / "schemas" / "handoff.schema.json"
     parsed = parse_frontmatter((root / baton).read_text(encoding="utf-8"))["frontmatter"]
     assert not validate_frontmatter(parsed, str(schema)), (
         "a baton this lane touched must still pass the same validator pickup-assemble uses"
     )
+
+
+def test_a_kind_the_phase_gate_does_not_admit_lands_as_a_named_approval(tmp_path):
+    """The widen admitted one kind, not the axis, so a kind H-CROSS-EXEC-2 still
+    rejects can never take the S-lane stamp. Its plan lands on the ordinary
+    approval instead — what the EM did by hand for each such refusal — and the
+    row says so. Never counted into `execution_ready` (example-game-repo wave 1: reported
+    2, stamped 0), and never a silent downgrade either."""
+    root = _repo(tmp_path)
+    plan = _plan(root, "the-spec", "draft")
+    baton = "state/handoffs/b-1.md"
+    (root / baton).parent.mkdir(parents=True, exist_ok=True)
+    (root / baton).write_text(
+        "---\n"
+        "kind: goal-seed\n"
+        "title: b-1\n"
+        "stub_id: b-1\n"
+        "status: open\n"
+        "deployment_state: ready_to_fire\n"
+        "baton_role: work\n"
+        "predecessor: none\n"
+        "created: 2026-09-11\n"
+        'branch: "work/test"\n'
+        "category: infra\n"
+        'summary: "A kind the phase gate does not admit, for the refusal regression."\n'
+        "---\n\nbody\n",
+        encoding="utf-8",
+    )
+
+    out = bl.land_wave(
+        root,
+        {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan, "route": "spec-dispatch"}]},
+    )
+
+    assert not out["execution_ready"]
+    assert not out["refused"]
+    row = out["approved"][0]
+    assert row["stamped"] is True
+    assert row["fell_back_from"] == "spec-dispatch"
+    assert "goal-seed" in row["fallback_reason"]
+    assert pg._read_baton_fields(root / baton).get("handoff_phase") is None
+    assert "status: approved" in (root / plan).read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

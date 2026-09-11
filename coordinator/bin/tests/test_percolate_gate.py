@@ -565,6 +565,55 @@ def test_tier_medium_real_identities_and_rooted_paths_still_gate(tmp_path):
     assert sum(1 for row in panel.splitlines() if row.strip() and row.strip() != "(none)") == len(lines)
 
 
+def test_tier_medium_placeholder_under_an_extension_does_not_gate(tmp_path):
+    """An extension is a TYPE, not a name: `y.md` is the placeholder `y`.
+
+    `/x/y.md` is a synthetic fixture path in both segments -- it names nothing
+    on any machine -- and recurred in the gating panel across three rounds."""
+    target_file = tmp_path / "fixtures.py"
+    target_file.write_text(
+        'assert _compose("/x/y.md", is_named=True) == _compose("/x/y.md")\n'
+        'bodies = {"sentinel": _compose("/x/y.md")}\n'
+        'assert body.endswith(PREFIX + "/x/y.md")\n'
+        'provenance("/x/y.py", root)\n'
+        'detect("/x/foo.txt")\n'
+        "walk(`/x/<slug>.md`)\n",
+        encoding="utf-8",
+    )
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    assert rc == 0
+    assert _gating_panel(out).strip() == "(none)"
+
+
+def test_tier_medium_real_stem_under_an_extension_still_gates(tmp_path):
+    """Only the stem's own placeholder shape discharges it.
+
+    A real stem under any extension gates, the rooted segment is still what the
+    rule reads -- so `/x/cross-repo/archive/a.md` gates on `cross-repo`, never on
+    its placeholder leaf -- and `/x/claude-klabauter` is untouched."""
+    lines = [
+        'registry_set("repos.k", "/x/claude-klabauter")',
+        'archived to "/x/cross-repo/archive/a.md"',
+        'open("/x/notes.md")',
+        'open("/x/real-internal-path.tar.gz")',
+        'open("/x/session-id.jsonl")',
+    ]
+    target_file = tmp_path / "leaks.py"
+    target_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    assert rc == 0
+    panel = _gating_panel(out)
+    for line in lines:
+        assert line in panel
+    assert sum(1 for row in panel.splitlines() if row.strip() and row.strip() != "(none)") == len(lines)
+
+
 def test_scan_secrets_clean(tmp_path):
     target_file = tmp_path / "clean.md"
     target_file.write_text("nothing sensitive here\n", encoding="utf-8")

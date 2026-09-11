@@ -337,7 +337,11 @@ def _census(fm: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _path_leaves_repo(
-    field: str, value: str, root_names: frozenset, siblings: Sequence[str]
+    field: str,
+    value: str,
+    root_names: frozenset,
+    siblings: Sequence[str],
+    created_roots: frozenset = frozenset(),
 ) -> Optional[str]:
     """Why ``value`` names something outside this repo, or None.
 
@@ -386,6 +390,27 @@ def _path_leaves_repo(
     [coordinator_core]``) reads as a new local root entry. It is bounded — such a
     row declares no file it would touch, so SPINE's write set is useless for it
     either way — and it is zero in both measured corpora.
+
+    ``created_roots`` exempts a first segment this plan's own spine declares
+    CREATING (``writes_under: <segment>/``, or a bare ``writes: <segment>``).
+    Without it the leg fires hardest on exactly the plans whose job is to bring a
+    new top-level directory into existence, and the only way through is an
+    ``external_gate`` that would be a lie — no external party, no closure
+    evidence, nothing to wait for. Measured by example-game-workbench-repo-b8: a
+    workspace-skeleton plan refused 35 times across C1-C5 on ``ide/``, the
+    directory it exists to create, whose author correctly declined to fabricate
+    the gate. Ported from DoE c36c45dd0a, which owns the twin.
+
+    This is the ONE exemption read off a declaration rather than off the value's
+    own shape, and the distinction holds: ``writes_under: ide/`` is SPELLED, not
+    claimed — an author who writes it falsely has under-declared their own
+    writes, which is the defect this bar exists to catch, rather than asserted a
+    private intention no reader can check. Deliberately narrow to the two
+    spellings that name a DIRECTORY: reading the first segment off any ``writes:``
+    path would exempt ``coordinator_core/ops/x.py`` too, since a path's first
+    segment is always its own row's first segment, and writing deeper would buy
+    an exemption. The laundering residual is identical IN KIND to the bare-segment
+    one above.
     """
     stripped = value.strip()
     if not stripped:
@@ -405,6 +430,8 @@ def _path_leaves_repo(
     if _is_settings_home_path(normalized):
         return None
     first = normalized.split("/")[0]
+    if first and first in created_roots:
+        return None
     if first and first not in root_names:
         return f"first path segment {first!r} does not exist in this repo"
     return None
@@ -505,6 +532,32 @@ def _gate_is_cleared(entry: Dict[str, Any]) -> bool:
     return entry.get("cleared") is True
 
 
+def _created_roots(rows: List[Dict[str, Any]]) -> frozenset:
+    """Top-level directory names this spine declares it CREATES.
+
+    Only the two spellings that name a DIRECTORY rather than a file inside one:
+    a `writes_under:` entry, and a bare single-segment `writes:` entry. A
+    multi-segment path is not read — see `_path_leaves_repo`'s `created_roots`
+    paragraph for why depth must buy nothing here.
+    """
+    created: set = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        under = row.get("writes_under")
+        values = list(under) if isinstance(under, list) else []
+        writes = row.get("writes")
+        if isinstance(writes, list):
+            values += writes
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            normalized = value.strip().replace("\\", "/").strip("/")
+            if normalized and "/" not in normalized:
+                created.add(normalized)
+    return frozenset(created)
+
+
 def _external_deps(
     rows: List[Dict[str, Any]], root_names: frozenset, siblings: Sequence[str]
 ) -> Dict[str, Any]:
@@ -530,7 +583,8 @@ def _external_deps(
     COMMIT-IN-OWNER-REPO needs a cross-repo commit dispatched. Both are the
     successor's work, never a reason to refuse the plan.
     """
-    undeclared: List[str] = []
+    created_roots = _created_roots(rows)
+    undeclared: Dict[str, int] = {}
     placeholders: List[str] = []
     missing_requires: List[str] = []
     bad_requires: List[str] = []
@@ -573,9 +627,17 @@ def _external_deps(
                     "not a path (no external_gate clears it)"
                 )
                 continue
-            reason = _path_leaves_repo(field, value, root_names, siblings)
+            reason = _path_leaves_repo(
+                field, value, root_names, siblings, created_roots
+            )
             if reason and not gates:
-                undeclared.append(f"{row_id}: {field} {reason}, no external_gate")
+                # One line per DISTINCT fact, with a count. This leg reports a first
+                # SEGMENT, so a row writing eleven files under one new directory
+                # produced eleven byte-identical lines and one plan produced 35
+                # (example-game-workbench-repo's idex-02). A defect restated once per value
+                # reads as that many defects and buries the repair under them.
+                line = f"{row_id}: {field} {reason}, no external_gate"
+                undeclared[line] = undeclared.get(line, 0) + 1
         for index, entry in enumerate(gates):
             if _gate_is_cleared(entry):
                 continue
@@ -597,7 +659,11 @@ def _external_deps(
             else:
                 withheld.append(row_id)
 
-    defects = undeclared + missing_requires + bad_requires
+    collapsed = [
+        line if count == 1 else f"{line} (x{count})"
+        for line, count in undeclared.items()
+    ]
+    defects = collapsed + missing_requires + bad_requires
     if placeholders:
         # Its own kind, not folded into external-dep-undeclared: the repair
         # differs — one replaces a stand-in with the path it stands for, the
@@ -607,7 +673,18 @@ def _external_deps(
             "path-placeholder", "; ".join(placeholders + defects), withheld=withheld
         )
     if defects:
-        return _defect("external-dep-undeclared", "; ".join(defects), withheld=withheld)
+        detail = "; ".join(defects)
+        if any("first path segment" in line for line in collapsed):
+            # Name the spelling rather than the rule. A plan whose job is to create
+            # the directory the refusal names has one correct repair and one lie
+            # available, and an author told only "declare it" reaches for the lie.
+            detail += (
+                " — if this plan CREATES the top-level directory a refusal names, "
+                "declare it where this check reads: `writes_under: <segment>/` on "
+                "the row that creates it. Writing files deeper inside it does not "
+                "declare that the tree gains a root"
+            )
+        return _defect("external-dep-undeclared", detail, withheld=withheld)
     if withheld:
         # Both populations named, because the withheld set alone says a row is
         # held and not what would release it — one waits for a peer's landing,

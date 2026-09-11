@@ -2043,13 +2043,15 @@ def test_commit_phase_binds_its_result_and_gates_the_next_wave():
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
     assert "const commitWave1Results = await agent(" in script
     assert "const commitWave2Results = await agent(" in script
-    # 2 commit-phase gates + 2 preflight gates. The preflight contributes TWO
-    # because a preflight has two ways to fail: it reported a blocker, or it
-    # reported nothing at all. The second was added 2026-08-31 -- until then
-    # the phase's pass verdict was the ABSENCE of output, so a null result, a
-    # crashed agent and a zero-tool-call agent all passed it. See
-    # test_preflight_silence_is_not_a_pass.
-    assert script.count("return { halted:") == 4
+    # 2 commit-phase gates + 2 preflight gates + 2 stop-rule gates, one per
+    # wave. The preflight contributes TWO because a preflight has two ways to
+    # fail: it reported a blocker, or it reported nothing at all. The second
+    # was added 2026-08-31 -- until then the phase's pass verdict was the
+    # ABSENCE of output, so a null result, a crashed agent and a zero-tool-call
+    # agent all passed it. See test_preflight_silence_is_not_a_pass. The
+    # stop-rule pair was added 2026-09-11 (example-retrieval-repo-ue-addon F21): a fired
+    # STOP RULE returns DONE, so nothing else in this script could see it.
+    assert script.count("return { halted:") == 6
 
 
 def test_commit_gate_halts_on_null_and_on_a_tokenless_report():
@@ -2618,3 +2620,77 @@ def test_row_prompt_return_contract_is_escaped_via_js_string_literal_not_templat
     # Never spliced as a backtick template literal at the wave-agent-call
     # splice point.
     assert f"`{row_prompt}`" not in script
+
+
+# ---------------------------------------------------------------------------
+# A fired STOP RULE halts the run (example-retrieval-repo-ue-addon F21)
+# ---------------------------------------------------------------------------
+
+
+def test_emitted_row_prompt_tells_an_executor_how_to_declare_a_fired_stop_rule():
+    """Without a declared token a stop rule is invisible to the script: the
+    executor did what its row asked, so its status is DONE and no non-DONE
+    check can see it. Asserted against the emitted SCRIPT, not the builder's
+    return value, for the reason
+    `test_emitted_row_prompt_carries_the_footprint_constraint_over_writes_plus_report`
+    gives."""
+    waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
+    script = compose_script(
+        waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
+    )
+
+    assert emit._STOP_RULE_TOKEN in script
+    assert "stopping IS the work the row asked for" in script
+    # The status enum is NOT widened: a stopped chunk still reports DONE, so
+    # its finished work commits through the ordinary path.
+    assert "status (DONE | BLOCKED | PARTIAL)" in script
+
+
+def test_the_stop_rule_gate_is_emitted_after_the_commit_phase_not_before_it():
+    """Placement is the whole design: the stopped chunk's work is real and
+    declared, so it lands, and only the NEXT wave is prevented."""
+    waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
+    script = compose_script(
+        waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
+    )
+
+    gate_at = script.index(f"{emit._STOP_RULE_TOKEN}[*_]")
+    commit_at = script.index("commitWave1Results")
+    assert commit_at < gate_at
+    assert "a STOP RULE in the chunk" in script  # reason text, JS-escaped
+
+
+def test_a_wave_that_commits_nothing_still_carries_the_stop_rule_gate():
+    """The two branches that emit no commit phase (all `writes: []`, and
+    every declared write gitignored) must not become the hole a stop rule
+    falls through."""
+    waves = [[_wave_row("C1", [])]]
+    script = compose_script(
+        waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
+    )
+
+    assert "commit phase omitted" in script
+    assert f"{emit._STOP_RULE_TOKEN}[*_]" in script
+
+
+def test_the_stop_rule_pattern_matches_a_declaration_and_not_a_bare_mention():
+    r"""The emitted matcher is line-anchored for `_preflight_halt_gate`'s
+    reason: the prompt itself carries the token text, so a substring test
+    would fail OPEN on an agent quoting its own instructions mid-sentence.
+
+    Evaluated here with Python's `re` rather than a JS runtime -- this repo
+    runs no Node for its own work (CLAUDE.md § Runtime conventions). The
+    pattern uses only syntax the two engines agree on (alternation, a
+    bounded `[*_]{0,2}` repeat, `\s`, `\S`), and the emitted text itself is
+    pinned by the placement test above.
+    """
+    gate = emit._stop_rule_halt_gate("wave1Results", ["C1"], "Wave 1")
+    pattern = gate.split("/(?:")[1].split("/.test")[0]
+    rx = re.compile("(?:" + pattern)
+
+    assert rx.search(f'{emit._STOP_RULE_TOKEN}: "if the shape needs a new rule" — it does')
+    assert rx.search(f'DONE: report.md\n{emit._STOP_RULE_TOKEN}: the rule fired')
+    assert not rx.search(
+        f"I read the instruction about {emit._STOP_RULE_TOKEN}: and no rule fired"
+    )
+    assert not rx.search(f"{emit._STOP_RULE_TOKEN}:")

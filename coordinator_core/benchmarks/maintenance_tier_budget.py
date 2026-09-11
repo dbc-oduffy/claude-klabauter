@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from coordinator_core.git.run import run_git
@@ -65,15 +66,43 @@ def _apply_coordinator_registration(repo: Path) -> None:
 def _churn(repo: Path, commits: int) -> None:
     """Give a repo real work to maintain. A tier measured against a tidy repo
     reproduces the optimistic condition the original spike measured under and
-    reads green whatever the code does."""
+    reads green whatever the code does.
+
+    One `git fast-import` spawn, not an `add`/`commit` pair per iteration
+    (2N -> 1). The commits are real commit objects reachable from the branch,
+    each with its own tree and message; `git maintenance run` reads object and
+    ref state, never how the objects were produced.
+
+    Negative-spec, both learned the hard way:
+
+    - `from` is emitted on the FIRST commit only, and must name the resolved
+      PRE-IMPORT tip SHA-1. The ref NAME is rejected ("can't create a branch
+      from itself") because the stream has not updated it yet, and omitting
+      `from` starts a parentless ROOT commit that discards the seed.
+    - The `\\n` after each `data <count>` block is fast-import's boundary
+      marker and is not counted in `<count>` -- so a body that already ends in
+      a newline does not gain a second one in the blob.
+    """
+    branch = run_git(["symbolic-ref", "--short", "HEAD"], cwd=str(repo)).stdout.strip()
+    ref = "refs/heads/%s" % branch if branch else "refs/heads/master"
+    tip = run_git(["rev-parse", "HEAD"], cwd=str(repo)).stdout.strip()
+    base_ts = int(time.time())
+    parts: list = []
     for i in range(commits):
-        (repo / "churn.txt").write_text("line %d\n" % i, encoding="utf-8", newline="\n")
-        run_git(["add", "churn.txt"], cwd=str(repo))
-        run_git(
-            ["-c", "user.email=f@example.com", "-c", "user.name=f",
-             "commit", "-q", "-m", "churn %d" % i, "--", "churn.txt"],
-            cwd=str(repo),
+        content = ("line %d\n" % i).encode("utf-8")
+        message = ("churn %d" % i).encode("utf-8")
+        parts.append(("commit %s\n" % ref).encode("utf-8"))
+        parts.append(
+            ("committer f <f@example.com> %d +0000\n" % (base_ts + i)).encode("utf-8")
         )
+        parts.append(b"data %d\n" % len(message))
+        parts.append(message + b"\n")
+        if i == 0 and tip:
+            parts.append(("from %s\n" % tip).encode("utf-8"))
+        parts.append(b"M 100644 inline churn.txt\n")
+        parts.append(b"data %d\n" % len(content))
+        parts.append(content + b"\n")
+    run_git(["fast-import", "--quiet"], cwd=str(repo), input=b"".join(parts))
 
 
 def _make_throwaway_clone() -> Path:

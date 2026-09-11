@@ -377,11 +377,49 @@ class TestIndirectionWrapperShapesDeny:
     def test_unrelated_bash_dash_c_allows(self):
         assert guard.check(_payload('bash -c "echo hello"')) is None
 
-    def test_unrelated_xargs_allows_is_still_denied_outright(self):
-        # xargs is denied OUTRIGHT for any payload (content not present in
-        # the command text) -- same over-block posture as the sibling
-        # destructive-action guard's xargs handling.
-        _reason(guard.check(_payload("echo hello | xargs cat")))
+    def test_xargs_read_only_head_allows(self):
+        assert guard.check(_payload("echo hello | xargs cat")) is None
+
+    def test_grep_into_xargs_grep_allows(self):
+        # example-market-data-repo F19: the plan-blitz scout's read-only filter.
+        cmd = 'grep -rln "def main" coordinator/bin | xargs grep -ln "doc-new\\|doc_new"'
+        assert guard.check(_payload(cmd)) is None
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "find . -name '*.py' | xargs -0 -n 1 wc -l",
+            "ls | xargs -I {} head -1 {}",
+            "ls | xargs -I{} stat {}",
+            "ls | xargs --max-args=2 -- cat",
+            "ls | env xargs grep x",
+        ],
+    )
+    def test_xargs_read_only_head_with_options_allows(self, cmd):
+        assert guard.check(_payload(cmd)) is None
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "echo hello | xargs touch",
+            "echo hello | xargs sh -c 'echo x'",
+            "echo hello | xargs env cat",
+            "echo hello | xargs xargs cat",
+            "echo hello | xargs rm",
+            "echo hello | xargs --unknown-flag cat",
+            "echo hello | xargs -0r cat",
+            "echo hello | xargs",
+            "echo hello | xargs -n",
+        ],
+    )
+    def test_xargs_other_heads_still_denied(self, cmd):
+        _reason(guard.check(_payload(cmd)))
+
+    def test_xargs_read_only_head_redirect_to_sentinel_denies(self):
+        _reason(guard.check(_payload("echo hello | xargs cat > %s" % SENTINEL)))
+
+    def test_xargs_read_only_head_inside_sh_dash_c_allows(self):
+        assert guard.check(_payload("sh -c 'ls | xargs grep x'")) is None
 
     def test_python_dash_m_allows(self):
         assert guard.check(_payload("python3 -m pytest")) is None

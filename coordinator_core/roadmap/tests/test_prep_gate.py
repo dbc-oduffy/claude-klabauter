@@ -513,6 +513,47 @@ def test_a_write_whose_first_segment_is_not_in_this_repo_leaves_it(tmp_path):
     assert "does not exist in this repo" in report["classes"]["EXTERNAL_DEPS"]["detail"]
 
 
+def test_a_root_the_plan_itself_creates_is_not_somebody_elses_tree(tmp_path):
+    """Ported from DoE c36c45dd0a, which owns the twin. Without this the leg fires
+    hardest on the plans whose whole job is to bring a new top-level directory into
+    existence, and the only way through the bar is an `external_gate` that would be
+    a lie — no external party, nothing to wait for. Measured by
+    example-game-workbench-repo-b8: one workspace-skeleton plan refused 35 times on
+    `ide/`, the directory it exists to create."""
+    spine = """- id: C1
+  title: Create the workspace root
+  change_kind: code-edit
+  surface: ide
+  writes: [ide/shell/main.py, ide/shell/boundary.py]
+  writes_under: [ide/]
+  queue_scope: project
+  disposition: open
+"""
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS"
+
+
+def test_writing_deeper_does_not_buy_the_created_root_exemption(tmp_path):
+    """The converse, and the reason the exemption reads only the two spellings that
+    name a DIRECTORY. Taken off any `writes:` path, a first segment is always its
+    own row's first segment — so `coordinator_core/ops/x.py` would exempt itself and
+    the leg would be dead."""
+    spine = """- id: C1
+  title: Writes deep into a tree that is not here
+  change_kind: code-edit
+  surface: somewhere
+  writes: [not_a_directory_here/deep/x.py, not_a_directory_here/deep/y.py]
+  queue_scope: project
+  disposition: open
+"""
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    detail = report["classes"]["EXTERNAL_DEPS"]["detail"]
+
+    assert "does not exist in this repo" in detail
+    assert "(x2)" in detail, "one distinct fact, reported once with a count"
+    assert "writes_under:" in detail, "the repair names the spelling, not just the rule"
+
+
 def test_a_settings_home_write_is_not_an_undeclared_cross_repo_dependency(tmp_path):
     """Ported alongside `_is_settings_home_path` (DoE-claude `ff446da1b`, "the
     settings home is not another team's tree"). A row writing under the

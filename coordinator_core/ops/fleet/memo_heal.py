@@ -45,9 +45,11 @@ Negative-spec:
     a guess.
   - Does NOT write a git object for an adopted memo — the anchor points at
     HEAD's OWN existing blob; nothing new is hashed or stored.
-  - Does NOT retry an `update_refs_stdin` transaction more than once — a
-    second refusal is reported; the NEXT invocation of this op converges,
-    per this op's own idempotence, rather than this call looping.
+  - Does NOT retry a refused `update_refs_stdin` transaction — the refusal
+    is reported; the NEXT invocation of this op converges, per this op's
+    own idempotence, rather than this call re-deriving and looping.
+    (Review: overengineering-reviewer — the retry-once + re-derive layer
+    this replaced was redundant with that same convergence guarantee.)
 """
 
 from __future__ import annotations
@@ -72,7 +74,9 @@ from coordinator_core.ops.fleet._common import (
 )
 from coordinator_core.ops.fleet._memo_anchor import (
     ANCHOR_REF_PREFIX,
+    CORPUS_ROOT_RELDIRS,
     anchor_names,
+    present_filenames,
     resolve_anchor,
 )
 
@@ -89,14 +93,18 @@ _KNOWN_PARAM_KEYS = frozenset({"dry_run"})
 #: adopted per run; the rest are picked up on later runs (a backlog of 289
 #: converges in 3 runs). Re-keys and retires are NOT capped — they are rare
 #: and bounded by losses/dispositions, not by inbox size.
+#: Review: overengineering-reviewer — this cap and its branch exist for the
+#: pre-A2 backlog only, which converges in 3 runs per repo; once the fleet's
+#: repos have converged, mark this constant and the cap branch below for
+#: deletion rather than leaving them resident on a number no live run
+#: still tests.
 ADOPT_CAP_PER_RUN = 100
 
-#: Both corpus roots, legacy first-checked order irrelevant here — this
-#: module always unions BOTH (memo_corpus.py's C10a migration window means
-#: either can hold live entries for this exact repo depending on when it
-#: migrated), never resolves to "the" canonical one the way a WRITE target
-#: does elsewhere in this family.
-_CORPUS_ROOT_RELDIRS = ("state/cross-repo", "cross-repo")
+#: Both corpus roots -- shared with every other present-set reader in this
+#: feature via `_memo_anchor.CORPUS_ROOT_RELDIRS` (Review:
+#: overengineering-reviewer F1). Kept as a local alias so existing
+#: in-module references need no further churn.
+_CORPUS_ROOT_RELDIRS = CORPUS_ROOT_RELDIRS
 
 # Generator-provenance: this op writes only into the CALLING repo's own
 # inbox/ (a restore's O_EXCL create) and its own refs/coordinator/inbox/*
@@ -149,31 +157,19 @@ def _present_map(worktree_root: Path) -> Dict[str, _PresentEntry]:
     """filename -> `_PresentEntry`, recursive union of `inbox/` and
     `archive/` under both corpus roots, keyed by filename, read from the
     WORKING TREE — the tree is the truth a reader sees, and a hard reset
-    empties it along with the branch. `inbox/` entries are recorded first
-    (across both roots) and always shadow an `archive/` hit for the same
-    filename, matching step 3's "In inbox/: leave it alone" priority over
-    "In archive/ and not in inbox/: RETIRE"."""
+    empties it along with the branch. `inbox/` entries always shadow an
+    `archive/` hit for the same filename, matching step 3's "In inbox/:
+    leave it alone" priority over "In archive/ and not in inbox/: RETIRE".
+
+    The traversal itself is `_memo_anchor.present_filenames` (shared with
+    `memo_send`'s own present-set reader, Review: overengineering-reviewer
+    F1); this wraps it into the repo-relative-path shape this module's
+    callers need."""
     found: Dict[str, _PresentEntry] = {}
-    for corpus in _CORPUS_ROOT_RELDIRS:
-        inbox_dir = worktree_root / corpus / "inbox"
-        if not inbox_dir.is_dir():
-            continue
-        for p in sorted(inbox_dir.rglob("*")):
-            if not p.is_file() or p.name in found:
-                continue
-            found[p.name] = _PresentEntry(
-                "inbox", p, p.relative_to(worktree_root).as_posix()
-            )
-    for corpus in _CORPUS_ROOT_RELDIRS:
-        archive_dir = worktree_root / corpus / "archive"
-        if not archive_dir.is_dir():
-            continue
-        for p in sorted(archive_dir.rglob("*")):
-            if not p.is_file() or p.name in found:
-                continue
-            found[p.name] = _PresentEntry(
-                "archive", p, p.relative_to(worktree_root).as_posix()
-            )
+    for fname, (status, p) in present_filenames(worktree_root).items():
+        found[fname] = _PresentEntry(
+            status, p, p.relative_to(worktree_root).as_posix()
+        )
     return found
 
 
@@ -320,34 +316,6 @@ def _restore_one(worktree_root: Path, filename: str, blob_sha: str, common_dir: 
 
 def _anchor_ref(filename: str, commit_sha: str) -> str:
     return ANCHOR_REF_PREFIX + filename + "/" + commit_sha
-
-
-def _delete_line(filename: str, commit_sha: str, blob_sha: str) -> str:
-    return f"delete {_anchor_ref(filename, commit_sha)} {blob_sha}"
-
-
-def _create_line(filename: str, commit_sha: str, blob_sha: str) -> str:
-    return f"create {_anchor_ref(filename, commit_sha)} {blob_sha}"
-
-
-def _prune_stale_lines(common_dir: Path, planned: List[dict]) -> List[str]:
-    """Re-derives which of `planned`'s lines still apply against FRESH
-    anchor state — the retry-once path after a refused transaction. A
-    `delete` whose current ref value no longer matches its expected blob
-    sha (a peer already resolved it) is dropped; a `create` whose ref
-    already exists (a peer already created it) is dropped. Never raises —
-    a dropped line converges on the NEXT run per this op's own idempotence,
-    per this module's own negative-spec."""
-    fresh = {(fname, csha): bsha for fname, csha, bsha in anchor_names(common_dir)}
-    kept: List[str] = []
-    for item in planned:
-        if item["op"] == "delete":
-            if fresh.get((item["filename"], item["commit_sha"])) == item["blob_sha"]:
-                kept.append(_delete_line(item["filename"], item["commit_sha"], item["blob_sha"]))
-        elif item["op"] == "create":
-            if fresh.get((item["filename"], item["commit_sha"])) is None:
-                kept.append(_create_line(item["filename"], item["commit_sha"], item["blob_sha"]))
-    return kept
 
 
 # ---------------------------------------------------------------------------
@@ -504,17 +472,23 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
             except OSError:
                 adopt_skipped += 1
                 continue
-            if _blob_sha1(data) != head_blob_sha:
+            # Under `core.autocrlf=true` (this fleet's Windows default) git checks a
+            # memo out as CRLF while HEAD's blob stays LF, so the raw bytes never
+            # hash to the blob and every memo git itself wrote -- clone, checkout,
+            # reset -- would read as dirty and never be adopted. Adopt points at
+            # HEAD's existing blob and writes no bytes, so the only question here
+            # is whether the CONTENT differs from what is committed; a line-ending
+            # difference is not a content difference.
+            if head_blob_sha not in (_blob_sha1(data), _blob_sha1(data.replace(b"\r\n", b"\n"))):
                 adopt_skipped += 1
                 continue
             adopt_items.append({
                 "filename": fname, "commit_sha": head_sha, "blob_sha": head_blob_sha,
             })
-    else:
-        adopt_skipped = sum(
-            1 for fname, entry in present.items()
-            if entry.status == "inbox" and fname not in anchored_filenames
-        )
+    # else: no HEAD commit -> no delivery could have landed and no inbox
+    # memo could be tracked, so there is no repository state reachable here
+    # to count as skipped (Review: overengineering-reviewer). adopt_skipped
+    # stays 0.
 
     if dry_run:
         candidates = (
@@ -552,17 +526,11 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
 
     acted: List[dict] = []
     if planned:
-        lines = [
-            _delete_line(p["filename"], p["commit_sha"], p["blob_sha"]) if p["op"] == "delete"
-            else _create_line(p["filename"], p["commit_sha"], p["blob_sha"])
+        commands = [
+            (p["op"], _anchor_ref(p["filename"], p["commit_sha"]), p["blob_sha"])
             for p in planned
         ]
-        result = git_native.update_refs_stdin(worktree_root, lines)
-        if not result.ok:
-            # Retry-once: re-derive against FRESH anchor state, dropping
-            # any line a concurrent heal already resolved.
-            lines = _prune_stale_lines(common_dir, planned)
-            result = git_native.update_refs_stdin(worktree_root, lines) if lines else result
+        result = git_native.update_refs_stdin(worktree_root, commands)
 
         if result.ok:
             for it in retire_items:
@@ -572,12 +540,15 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
             for it in adopt_items:
                 acted.append({"id": it["filename"], "action": "adopted"})
         else:
+            # Reported, not retried — the NEXT invocation converges (module
+            # negative-spec), which is what made the prior retry-once +
+            # re-derive layer redundant (Review: overengineering-reviewer).
             for it in retire_items:
-                failed_items.append({"id": it["filename"], "reason": f"retire transaction refused twice: {result.stderr}"})
+                failed_items.append({"id": it["filename"], "reason": f"retire transaction refused: {result.stderr}"})
             for it in rekey_items:
-                failed_items.append({"id": it["filename"], "reason": f"rekey transaction refused twice: {result.stderr}"})
+                failed_items.append({"id": it["filename"], "reason": f"rekey transaction refused: {result.stderr}"})
             for it in adopt_items:
-                failed_items.append({"id": it["filename"], "reason": f"adopt transaction refused twice: {result.stderr}"})
+                failed_items.append({"id": it["filename"], "reason": f"adopt transaction refused: {result.stderr}"})
 
     # A restore's file-write-and-commit is reported independent of whether
     # its follow-up anchor re-key transaction landed — per this module's

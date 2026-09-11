@@ -244,9 +244,10 @@ _NON_SUBPROCESS_HELPERS = {
 #: shared `stdin is subprocess.DEVNULL` assertion cannot express. Covered
 #: directly by its own real-git tests instead (`test_check_ignore_*` below).
 #: `update_refs_stdin()` (C5, memo.heal_inbox) is the same shape of bypass
-#: as `check_ignore` above: it feeds pre-formatted `update-ref --stdin`
-#: command lines through `_git()`'s piped `input_data`, never `subprocess.
-#: DEVNULL` -- covered directly by its own dedicated tests below instead.
+#: as `check_ignore` above: it encodes `(command, ref, oid)` triples onto
+#: `update-ref --stdin`'s NUL wire form through `_git()`'s piped
+#: `input_data`, never `subprocess.DEVNULL` -- covered directly by its own
+#: dedicated tests below instead.
 _STDIN_INPUT_WRAPPERS = {"check_ignore", "update_refs_stdin"}
 
 #: `cat_file_batch()` is a public wrapper (promoted from
@@ -979,11 +980,11 @@ def test_update_refs_stdin_create_then_delete_one_atomic_transaction_each(tmp_pa
     blob = _blob_sha(repo, "memo body\n")
     ref = "refs/coordinator/inbox/x.md/" + "a" * 40
 
-    result = git_native.update_refs_stdin(repo, [f"create {ref} {blob}"])
+    result = git_native.update_refs_stdin(repo, [("create", ref, blob)])
     assert result.ok, result.stderr
     assert _real_git_out(repo, "rev-parse", ref) == blob
 
-    result = git_native.update_refs_stdin(repo, [f"delete {ref} {blob}"])
+    result = git_native.update_refs_stdin(repo, [("delete", ref, blob)])
     assert result.ok, result.stderr
     verify = subprocess.run(
         ["git", "rev-parse", ref], cwd=str(repo), capture_output=True, text=True,
@@ -994,16 +995,16 @@ def test_update_refs_stdin_create_then_delete_one_atomic_transaction_each(tmp_pa
 
 def test_update_refs_stdin_batches_several_ref_writes_in_one_call(tmp_path):
     """Retire + adopt land together: one `delete` and one `create` for two
-    DIFFERENT refs, issued as a single `lines` batch, both take effect."""
+    DIFFERENT refs, issued as a single `commands` batch, both take effect."""
     repo = _init_real_repo(tmp_path)
     blob_a = _blob_sha(repo, "a\n")
     blob_b = _blob_sha(repo, "b\n")
     ref_old = "refs/coordinator/inbox/old.md/" + "a" * 40
     ref_new = "refs/coordinator/inbox/new.md/" + "b" * 40
-    git_native.update_refs_stdin(repo, [f"create {ref_old} {blob_a}"])
+    git_native.update_refs_stdin(repo, [("create", ref_old, blob_a)])
 
     result = git_native.update_refs_stdin(
-        repo, [f"delete {ref_old} {blob_a}", f"create {ref_new} {blob_b}"]
+        repo, [("delete", ref_old, blob_a), ("create", ref_new, blob_b)]
     )
 
     assert result.ok, result.stderr
@@ -1016,10 +1017,10 @@ def test_update_refs_stdin_batches_several_ref_writes_in_one_call(tmp_path):
 
 
 def test_update_refs_stdin_is_all_or_nothing_on_a_stale_old_value(tmp_path):
-    """One bad old-value in a multi-line batch refuses the WHOLE
+    """One bad old-value in a multi-command batch refuses the WHOLE
     transaction -- the ref this test seeds correctly must NOT land either.
-    This is the property `memo.heal_inbox`'s single-refusal-then-retry-once
-    contract depends on: a lost CAS race never partially applies."""
+    This is the property `memo.heal_inbox`'s report-and-converge contract
+    depends on: a lost CAS race never partially applies."""
     repo = _init_real_repo(tmp_path)
     blob_a = _blob_sha(repo, "a\n")
     blob_b = _blob_sha(repo, "b\n")
@@ -1029,7 +1030,7 @@ def test_update_refs_stdin_is_all_or_nothing_on_a_stale_old_value(tmp_path):
     # must fail and drag the co-batched create down with it.
 
     result = git_native.update_refs_stdin(
-        repo, [f"create {ref_good} {blob_a}", f"delete {ref_stale} {blob_b}"]
+        repo, [("create", ref_good, blob_a), ("delete", ref_stale, blob_b)]
     )
 
     assert not result.ok
@@ -1038,13 +1039,6 @@ def test_update_refs_stdin_is_all_or_nothing_on_a_stale_old_value(tmp_path):
         **no_console_creationflags(),
     )
     assert verify.returncode != 0
-
-
-def test_update_refs_stdin_malformed_line_refuses_without_spawning():
-    with patch("subprocess.run") as mock_run:
-        result = git_native.update_refs_stdin("/tmp/repo", ["verify refs/x oid"])
-    mock_run.assert_not_called()
-    assert not result.ok
 
 
 def test_update_refs_stdin_empty_batch_refuses_without_spawning():

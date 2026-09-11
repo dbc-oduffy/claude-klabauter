@@ -131,7 +131,12 @@ from coordinator_core.ops.fleet._common import (
     build_setup_error_result,
     main_worktree_root,
 )
-from coordinator_core.ops.fleet._memo_anchor import ANCHOR_REF_PREFIX, write_anchor
+from coordinator_core.ops.fleet._memo_anchor import (
+    ANCHOR_REF_PREFIX,
+    anchor_names,
+    present_filenames,
+    write_anchor,
+)
 from coordinator_core.ops.fleet._memo_compose import (
     _TOPIC_SLUG_RE,
     _compose_memo,
@@ -643,27 +648,27 @@ class _SenderCommit(NamedTuple):
     stderr: str
 
 
-def _row_is_older_than_cutoff(line: str, cutoff: datetime.datetime) -> bool:
-    """True iff this ledger line carries a `sent_at` older than `cutoff`.
+def _row_is_older_than_cutoff_dict(row: dict, cutoff: datetime.datetime) -> bool:
+    """True iff this ALREADY-PARSED ledger row carries a `sent_at` older than
+    `cutoff`. Shared by both this module's own line-based wrapper below (the
+    row cap's read-modify-write only has raw lines in hand) and
+    `workday_start_cross_repo_memo_outbox_surface._gone_delivery_lines` (which
+    already holds parsed dicts via `_iter_ledger_rows`, so parsing here
+    again would be pure waste) — one comparator, not two (Review:
+    overengineering-reviewer).
 
-    UNDATABLE ROWS ARE NEVER EVICTED BY AGE -- a line that is not JSON, or
-    carries no `sent_at`, or carries one this cannot parse, returns False
-    and lives until the row cap reaches it. Dropping a row for failing to
-    prove its own age would delete the oldest rows in the file (the ones
-    predating the field) on the first append after this shipped, which is
-    the opposite of what an age bound is for.
+    UNDATABLE ROWS ARE NEVER EVICTED BY AGE -- a row with no `sent_at`, or
+    one this cannot parse, returns False and lives until the row cap
+    reaches it (or, for the surfacer, is never surfaced on a guess).
+    Dropping a row for failing to prove its own age would delete the oldest
+    rows in the file (the ones predating the field) on the first append
+    after this shipped, which is the opposite of what an age bound is for.
 
     `sent_at` is written by `_ledger_row` as `%Y-%m-%dT%H:%M:%SZ`. Parsed
     with `fromisoformat` after swapping the `Z`, which Python's parser did
     not accept before 3.11 and this repo's floor is 3.11; a value in any
     other shape is undatable by the rule above, not an error.
     """
-    try:
-        row = json.loads(line)
-    except json.JSONDecodeError:
-        return False
-    if not isinstance(row, dict):
-        return False
     sent_at = row.get("sent_at")
     if not isinstance(sent_at, str) or not sent_at:
         return False
@@ -674,6 +679,19 @@ def _row_is_older_than_cutoff(line: str, cutoff: datetime.datetime) -> bool:
     if stamp.tzinfo is None:
         stamp = stamp.replace(tzinfo=datetime.timezone.utc)
     return stamp < cutoff
+
+
+def _row_is_older_than_cutoff(line: str, cutoff: datetime.datetime) -> bool:
+    """True iff this RAW ledger line carries a `sent_at` older than
+    `cutoff` -- parses, then delegates to `_row_is_older_than_cutoff_dict`.
+    See that function for the undatable-rows discipline this shares."""
+    try:
+        row = json.loads(line)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(row, dict):
+        return False
+    return _row_is_older_than_cutoff_dict(row, cutoff)
 
 
 def _write_msg_file(text: str) -> Path:
@@ -810,9 +828,11 @@ def _no_reader_gate(
 
 
 # ---------------------------------------------------------------------------
-# C5 — sender-side sweep: is a ledgered delivery still a commit object in the
-# receiver? Read-only, both repos; reuses `_delivery_commit_is_object`
-# verbatim (no new primitive). See module docstring's C5 spec backlink.
+# C5/C7 — sender-side sweep: is a ledgered delivery present, anchored, or
+# gone in the receiver? Read-only, both repos; C7 widens the verdict from
+# object-existence alone to tree-presence-or-anchor, reusing
+# `_delivery_commit_is_object` only as the pre-anchor fallback. See module
+# docstring's C5/C7 spec backlinks.
 # ---------------------------------------------------------------------------
 
 _CHECK_DELIVERIES_KNOWN_PARAM_KEYS = frozenset({"dry_run"})
@@ -864,25 +884,88 @@ def _iter_ledger_rows(ledger_path: Path):
             yield row
 
 
-#: Sweep verdicts — three outcomes, never two. A receiver absent from this
+#: Sweep verdicts — four outcomes, never three. A receiver absent from this
 #: machine is UNCHECKABLE, not GONE: it says nothing about whether the
 #: delivery arrived (plan's "The delivery-durability decision", C5).
+#: `restorable` is its own verdict (Review: eng-director F8), not folded
+#: into `verified` — a receiver that never runs a local workday-start
+#: (e.g. an all-cloud posture) must not read as verified while its memo
+#: sits unread in anchor form only; it reads as restorable until the
+#: receiver's own heal adopts it back into its tree.
 _VERDICT_VERIFIED = "verified"
+_VERDICT_RESTORABLE = "restorable"
 _VERDICT_GONE = "gone"
 _VERDICT_NOT_CHECKABLE = "not_checkable"
 
+#: Delivered means present, at any depth, under either corpus root's
+#: `inbox/` or `archive/` in the receiver's OWN working tree -- "delivered
+#: means present or anchored, not the object exists" (C7). The traversal
+#: is shared with `memo_heal._present_map` via
+#: `_memo_anchor.present_filenames` (Review: overengineering-reviewer F1:
+#: this was the OTHER join key of the feature, alongside the anchor-ref
+#: shape `_memo_anchor.py` already protects); only the reported TEXT
+#: differs between memo_send (sender-side, reads a registry-resolved
+#: PEER's tree) and memo_heal (receiver-side, acts on `repo_root` itself).
+
+
+def _delivery_present_in_tree(receiver_repo_path: Path, filename: str) -> bool:
+    """True iff `filename` exists, at any depth, under either corpus root's
+    `inbox/` or `archive/` in the receiver's OWN working tree -- the tree is
+    what a reader of that repo actually sees; a branch delete/reset/
+    recreate changes what this returns, which is exactly why the anchor
+    check below exists for when it says no."""
+    if not filename:
+        return False
+    return filename in present_filenames(receiver_repo_path)
+
+
+def _anchor_is_live(receiver_repo_path: Path, filename: str, sha: str) -> bool:
+    """True iff `refs/coordinator/inbox/<filename>/<sha>` currently resolves
+    to a blob in the receiver's own object store — i.e. the anchor `memo.
+    send` wrote for this exact delivery has not been retired by the
+    receiver's own `memo.heal_inbox`. Zero spawns."""
+    if not filename:
+        return False
+    common_dir = resolve_git_common_dir(receiver_repo_path)
+    return any(
+        fname == filename and csha == sha
+        for fname, csha, _bsha in anchor_names(common_dir)
+    )
+
 
 def _check_ledger_row(row: dict) -> dict:
-    """Classify one sent-ledger row: verified / gone / not_checkable.
+    """Classify one sent-ledger row: verified / restorable / gone /
+    not_checkable — "delivered" means present in the receiver's own tree OR
+    anchored there, never merely "the delivery commit object still exists"
+    (C7; that narrower rule is now only the pre-anchor fallback below).
 
-    Reuses `_delivery_commit_is_object` verbatim — the same object-existence
-    read C2 added to the send path itself, run again here, later, read-only.
+    Order of the checks, each answering a strictly narrower question than
+    the last:
+      1. Is the delivered filename present (inbox or archive, either
+         corpus root, any depth) in the receiver's OWN working tree?
+         -> verified.
+      2. Absent from the tree — is this exact (filename, delivery commit)
+         still anchored under `refs/coordinator/inbox/`? -> restorable
+         (the receiver's next workday-start restores it from the anchor).
+      3. Absent from the tree, anchor also gone — did the row EVER record
+         an `anchor_ref`? A missing anchor on a row that HAD one means the
+         receiver's own heal retired it deliberately (heal only retires
+         after observing an archive or removal) -> verified, with a note
+         distinguishing "disposed of by the receiver" from "lost".
+      4. No `anchor_ref` on the row at all (pre-A2, or the anchor write
+         itself lost its CAS race at send time) — fall back to the
+         pre-C7 rule this replaces: is `delivery_commit_sha` still a
+         commit object in the receiver's store? -> verified if so, else
+         gone.
+
     Never writes, never re-sends.
     """
     topic = row.get("topic")
     to = row.get("to")
     sha = row.get("delivery_commit_sha")
     branch = row.get("delivery_branch")  # absent -> unknown, never a mismatch
+    delivered_to = row.get("delivered_to")
+    anchor_ref_on_row = row.get("anchor_ref")
     candidate = {
         "id": f"{to}:{topic}:{sha}",
         "topic": topic,
@@ -917,6 +1000,35 @@ def _check_ledger_row(row: dict) -> dict:
         )
         return candidate
 
+    filename = os.path.basename(delivered_to) if isinstance(delivered_to, str) else None
+
+    if _delivery_present_in_tree(receiver_repo_path, filename):
+        candidate["status"] = _VERDICT_VERIFIED
+        candidate["note"] = None
+        return candidate
+
+    if _anchor_is_live(receiver_repo_path, filename, sha):
+        candidate["status"] = _VERDICT_RESTORABLE
+        candidate["note"] = (
+            f"{filename!r} is absent from the receiver's tree but anchored "
+            f"under refs/coordinator/inbox/ — anchored; the receiver's next "
+            f"workday-start restores it"
+        )
+        return candidate
+
+    if isinstance(anchor_ref_on_row, str) and anchor_ref_on_row:
+        candidate["status"] = _VERDICT_VERIFIED
+        candidate["note"] = (
+            f"{filename!r} is absent and its anchor is gone — the "
+            f"receiver's own heal only retires an anchor after observing an "
+            f"archive or deliberate removal, so this reads as disposed of "
+            f"by the receiver, not lost"
+        )
+        return candidate
+
+    # Rows predating anchors (no anchor_ref ever recorded — pre-A2, or the
+    # anchor write itself lost its CAS race at send time): fall back to the
+    # pre-C7 object-existence rule this replaces.
     if _delivery_commit_is_object(receiver_repo_path, sha):
         candidate["status"] = _VERDICT_VERIFIED
         candidate["note"] = None
@@ -934,10 +1046,16 @@ def _check_ledger_row(row: dict) -> dict:
 def _memo_check_deliveries(params: dict, repo_root=None) -> dict:
     """JSON-RPC 'memo.check_deliveries' COMPUTE_ONLY op handler.
 
-    A sender-side, read-only sweep over this repo's own sent-ledger: for
-    each row, is `delivery_commit_sha` still a commit object in the
-    receiver's own repository? Converts a silent permanent loss (the
-    incident this plan closes) into a visible one.
+    A sender-side, read-only sweep over this repo's own sent-ledger,
+    classifying each row verified / restorable / gone / not_checkable
+    (`_check_ledger_row`, C7) — "delivered" means the memo is present in
+    the receiver's own inbox/archive tree OR anchored under
+    `refs/coordinator/inbox/`, never merely "the delivery commit object
+    still exists" (that narrower rule is now only the pre-anchor fallback
+    for rows predating C4/A2). Converts a silent permanent loss (the
+    incident this plan closes) into a visible one, and stops reading a
+    receiver that never runs a local workday-start as `verified` while its
+    memo sits unread (Review: eng-director F8).
 
     Params:
         dry_run (bool, required): must be True — no act mode.
@@ -945,9 +1063,10 @@ def _memo_check_deliveries(params: dict, repo_root=None) -> dict:
     repo_root: git common dir (`_OP_KEY_SCOPE = "common_dir"`) — the
     SENDER's own worktree, same derivation memo.send uses.
 
-    Reads only: the sender's own ledger file, and object stores of
-    registered receiver repos present on this machine. Never writes into a
-    receiver, never re-sends — see module docstring's C5 negative-spec.
+    Reads only: the sender's own ledger file, and the working trees +
+    object stores of registered receiver repos present on this machine.
+    Never writes into a receiver, never re-sends — see module docstring's
+    C5 negative-spec.
     """
     validated = _validate_check_deliveries_params(params)
     if isinstance(validated, dict):

@@ -1084,6 +1084,37 @@ def test_an_unsized_baton_is_untouched_by_this_pass(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_an_external_gate_on_a_baton_is_reported_as_inert(tmp_path):
+    """example-game-workbench-repo-b8, 2026-09-11: two independent plan-blitz wave EMs
+    recommended writing `external_gate` onto a BATON to stop a host-gated one
+    recycling. It is a plan spine-row field; candidacy never consults it, so the
+    write is well-formed frontmatter that changes nothing — and the next wave's EM
+    reads the field and concludes the question is settled, which is worse than the
+    open defect. `_scan_fields`' "absent from the set reads as absent" is
+    indistinguishable, from the author's side, from having written the right thing.
+    """
+    _baton(tmp_path, "inert-1", external_gate="[{owner_repo: example-game-repo}]")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["counts"]["inert_fields"] == 1
+    row = report["inert_fields"][0]
+    assert row["baton"] == "inert-1"
+    assert row["fields"] == ["external_gate"]
+
+
+def test_an_inert_field_is_reported_but_never_acted_on(tmp_path):
+    """Suppressing the baton here would give the mistaken write exactly the effect
+    its author wanted, which makes the wrong spelling work and buries the defect
+    for good. The real mechanism is `blocked_by: [host:...]`."""
+    _baton(tmp_path, "inert-1", external_gate="[{owner_repo: example-game-repo}]")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["counts"]["candidates"] == 1
+    assert report["counts"]["held"] == 0
+
+
 def test_a_held_baton_is_reported_with_its_reason_not_offered_as_a_candidate(tmp_path):
     """example-retrieval-repo, 2026-09-11 — the friction that cost them the most.
 

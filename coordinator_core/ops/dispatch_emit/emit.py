@@ -1200,6 +1200,97 @@ def _dispatch_report_path(plan_path: str, row_id: str) -> str:
     return f"{_DISPATCH_REPORT_DIR}/{Path(plan_path).stem}/{row_id}.md"
 
 
+#: The line an executor ends its reply with when a STOP RULE written into
+#: its own spine row fired. A stop rule is not a failure: the row asked the
+#: executor to stop at a named condition, and an executor that stops has
+#: done exactly what it was told -- so its status is DONE and no status the
+#: return contract carries (`_NON_DONE_STATUS_JS_RE`) is true of it. Before
+#: this token there was therefore NO signal at all that the run must not
+#: continue: measured on example-retrieval-repo-ue-addon's tc-25, whose C0 fired its
+#: stop rule, replied DONE, was committed, and whose C1 the script then
+#: started anyway; the operator stopped the run by hand.
+_STOP_RULE_TOKEN = "STOP-RULE-FIRED"
+
+
+def _stop_rule_clause() -> str:
+    """The executor-facing half of the stop-rule halt: how to declare that a
+    stop rule fired, and what the declaration costs.
+
+    Emitted-surface only, and deliberately NOT pushed down into
+    `executor_return_contract`: a hand-dispatch EM reads the whole reply and
+    needs no token to notice a stop, while an emitted run reads nothing but
+    the reply text, which is why this signal has to be machine-shaped here.
+
+    Negative spec: this never becomes a fourth status. The status enum stays
+    DONE/BLOCKED/PARTIAL (`done_summary_constraint`), so a stopped chunk's
+    finished work still commits through the ordinary DONE path -- the halt
+    lands AFTER that commit, never instead of it.
+    """
+    return (
+        "STOP RULES: if your row's `body` carries a STOP RULE and its "
+        "condition holds, stopping IS the work the row asked for -- report "
+        "the status your summary honestly records (a stop rule that fires "
+        "before you changed anything is still DONE, not BLOCKED) and then "
+        f"end your reply with one further line: `{_STOP_RULE_TOKEN}: "
+        "<the rule, quoted, and what made it fire>`. The run commits this "
+        "wave and then halts; nothing after it is yours to start. Never "
+        "write that line for a rule that did not fire."
+    )
+
+
+def _stop_rule_halt_gate(
+    results_var: str, row_ids: list[str], phase_title: str
+) -> str:
+    """The JS that stops the run when any executor in this batch declared
+    ``_STOP_RULE_TOKEN``.
+
+    Emitted AFTER the batch's commit phase, which is the whole point: the
+    stopped chunk's work is real, declared and finished, so it lands, and
+    the halt only prevents the NEXT wave from starting on a premise the stop
+    rule just refuted.
+
+    Matched line-anchored, like `_commit_halt_gate` and
+    `_preflight_halt_gate`, and against both a real newline and the
+    backslash-n a JSON-stringified object reply carries, because an agent
+    result is a string on some paths and an object on others.
+
+    The fail direction is deliberate and matches the commit gate's: an
+    executor that quotes this instruction back at line-start halts a run
+    that did not need halting, which costs one `resumeFromRunId`. The
+    opposite bias costs a wave running against a refuted premise, which is
+    the defect this exists to close.
+    """
+    reason = (
+        f"{phase_title}: a STOP RULE in the chunk's own spec fired. Its "
+        "work is committed; the run halts here because the condition that "
+        "rule names refutes the premise the next wave would run on. The EM "
+        "reads the report, decides, and resumes (or re-plans) -- nothing "
+        "later in this run picks this up by itself."
+    )
+    pattern = (
+        f"/(?:^|\\n|\\\\n)[*_]{{0,2}}{_STOP_RULE_TOKEN}[*_]{{0,2}}:\\s*\\S/"
+    )
+    ids_js = ", ".join(_js_string_literal(rid) for rid in row_ids)
+    if len(row_ids) == 1:
+        subject = f"const _stopped = {pattern}.test(String({results_var} ?? \"\")) " \
+                  f"|| {pattern}.test(JSON.stringify({results_var} ?? \"\")) " \
+                  f"? [{ids_js}] : [];"
+    else:
+        subject = (
+            f"const _stopped = [{ids_js}].filter((id, i) => "
+            f"{pattern}.test(String({results_var}?.[i] ?? \"\")) || "
+            f"{pattern}.test(JSON.stringify({results_var}?.[i] ?? \"\")));"
+        )
+    return (
+        "  {\n"
+        f"    {subject}\n"
+        "    if (_stopped.length) return { halted: "
+        f"{_js_string_literal(reason)} + \" Chunk(s): \" + _stopped.join(\", \") "
+        f"+ \" Agent report: \" + JSON.stringify({results_var} ?? null) }};\n"
+        "  }"
+    )
+
+
 def _row_return_contract(row: WaveRow, plan_path: str) -> str:
     """Render the executor return contract (``executor_return_contract``)
     for one wave row: the footprint constraint (when the row declares
@@ -1258,6 +1349,7 @@ def _row_return_contract(row: WaveRow, plan_path: str) -> str:
             extra_fields=extra_fields,
         )
     )
+    parts.append(_stop_rule_clause())
     return "\n\n".join(parts)
 
 
@@ -2773,6 +2865,12 @@ def compose_script(
             body_blocks.append(
                 _status_check_block(results_var, [row.id for row in batch])
             )
+            # Every path out of this batch below gets the same halt gate,
+            # emitted LAST so a commit phase (when there is one) has already
+            # landed the stopped chunk's work -- see `_stop_rule_halt_gate`.
+            stop_gate = _stop_rule_halt_gate(
+                results_var, [row.id for row in batch], wave_title
+            )
 
             if _all_writes_declared_empty(batch):
                 # Every row in this batch declares `writes: []` -- no commit
@@ -2784,6 +2882,7 @@ def compose_script(
                     "  // commit phase omitted: every row in this wave "
                     "declares `writes: []` (nothing to commit)"
                 )
+                body_blocks.append(stop_gate)
                 continue
 
             batch_pathspec_raw = commit_pathspec(batch)
@@ -2803,6 +2902,7 @@ def compose_script(
                     f"this wave is gitignored ({', '.join(batch_gitignored)}) "
                     "-- nothing committable"
                 )
+                body_blocks.append(stop_gate)
                 continue
 
             commit_title = f"{_commit_phase_title(index)}{suffix}"
@@ -2820,6 +2920,7 @@ def compose_script(
                     prefixes=commit_prefixes(batch),
                 )
             )
+            body_blocks.append(stop_gate)
 
     if review_tier is not None and review_roster_fragment is not None:
         stages = parse_stages(review_roster_fragment, review_tier)

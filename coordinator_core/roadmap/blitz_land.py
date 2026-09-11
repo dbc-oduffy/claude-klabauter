@@ -58,25 +58,24 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from coordinator_core.locked_write import MutateAbort, locked_rmw
 from coordinator_core.artifact_id_slug import id_slug
-from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
+from coordinator_core.frontmatter.schema_validate import _HANDOFF_PHASE_KINDS
 from coordinator_core.roadmap.plan_gate import (
     BATON_CODED_STATES,
     PLAN_APPROVED_STATUSES,
     assemble_plan_gate,
 )
 
-#: Kinds `handoff_phase` is legal on (mirrors `schema_validate.py`'s own
-#: `_HANDOFF_PHASE_KINDS`, H-CROSS-EXEC-2). Sourced the same way that module
-#: sources it — through `kind_values_for_canonical('roadmap-baton')`, never a
-#: bare `kind == 'roadmap-baton'` literal, for the identical reason: that
-#: canonical resolves to `{roadmap-baton, spinoff-roadmap}`, and a literal
-#: gate would silently never admit a real roadmap baton written under the
-#: retired spelling. `kind: spinoff` is deliberately absent — see
-#: `authorize_execution`'s own docstring for why a spinoff baton refuses
-#: this stamp instead of receiving a narrowed one.
-_EXECUTION_PHASE_KINDS = frozenset({"session-handoff"}) | frozenset(
-    kind_values_for_canonical("roadmap-baton")
-)
+#: Kinds `handoff_phase` is legal on (H-CROSS-EXEC-2). Read from the validator
+#: that enforces it rather than re-derived here: this was a hand-maintained twin
+#: of `_HANDOFF_PHASE_KINDS`, and when schema 10.5.0 admitted `kind: spinoff`
+#: the twin was the half that would have stayed wrong. A gate that disagrees
+#: with the rule it guards refuses writes the schema accepts, which is how the
+#: S lane spent two landings refusing its own batons.
+#:
+#: The set is still checked before the write, not left to the schema: a stamp
+#: this module writes onto a kind `pickup-assemble apply` will bounce succeeds
+#: here and kills the baton at claim instead.
+_EXECUTION_PHASE_KINDS = _HANDOFF_PHASE_KINDS
 
 #: The status a `ready` verdict advances a plan to. Deliberately a constant rather
 #: than a parameter: this is the single seam the whole two-gate design keys on
@@ -318,7 +317,16 @@ def close_dispatched(
         state = _read_field(old, "deployment_state")
         cited = _read_field(old, "shipped_in") not in (None, "null", "~")
         if state in BATON_CODED_STATES and (state != "shipped" or cited):
-            raise MutateAbort(f"baton is already terminal (deployment_state: {state})")
+            raise MutateAbort(
+                f"baton is already terminal (deployment_state: {state}) — this "
+                f"close would have stamped `shipped` with shipped_in {shipped_in}, "
+                "so the two are not the same end state however close they read: "
+                "a baton in any other terminal state carries nothing linking it "
+                "to the commit holding its work, and the shipped-handoff sweep "
+                "cannot archive it. Whoever made it terminal first (an XS "
+                "executor stamping lifecycle frontmatter is the usual cause) "
+                "took a decision this landing cannot now record."
+            )
         text = _set_field(old, "deployment_state", "shipped")
         text = _set_field(text, "shipped_in", shipped_in)
         return _set_field(text, "shipped_in_kind", "ship-commit")
@@ -368,6 +376,28 @@ def _verified_prior_sha(
     return prior.lower(), None
 
 
+def _baton_kind(baton_abs: Path) -> Optional[str]:
+    return _read_field(baton_abs.read_text(encoding="utf-8"), "kind")
+
+
+def _admits_execution_phase(baton_abs: Path) -> bool:
+    """True when this baton's kind may carry `handoff_phase` (H-CROSS-EXEC-2).
+
+    Read before choosing the S-lane landing, so a kind that can never take the
+    stamp routes to the plan approval up front instead of being refused and then
+    landed by hand. `authorize_execution` keeps its own check inside the lock —
+    this read decides the ROUTE, that one guards the WRITE.
+
+    Negative spec: the admitted set must be THIS tree's `_HANDOFF_PHASE_KINDS`,
+    never one read from a published mirror or a vendored schema elsewhere. Same-tree
+    is what makes the fallback and any widening of the set ship in one publish; read
+    them from different places and a kind the source admits but the reader does not
+    (e.g. `spinoff` while the mirror sat at 10.4.0) drops from a named refusal to a
+    quiet approval in the window between the two.
+    """
+    return _baton_kind(baton_abs) in _EXECUTION_PHASE_KINDS
+
+
 def authorize_execution(
     worktree_root: Path,
     baton_path: str,
@@ -401,17 +431,21 @@ def authorize_execution(
     exists to be self-attesting about who named execution, and a session writing a
     sentence that reads like the PM's is the one way this stamp could lie.
 
-    **`handoff_phase` is legal only on `kind: session-handoff` or a canonical
-    `roadmap-baton` (H-CROSS-EXEC-2, `schema_validate.py::_cf_handoff_phase_kind_gate`).**
-    A spinoff baton (the S lane's usual carrier — example-store-repo-em, landing
-    fc61535f) does not carry either kind, so stamping `handoff_phase: execution`
-    onto one writes a shape `pickup-assemble apply` refuses on claim: the write
-    here would "succeed" and the baton would die at pickup instead. This function
-    refuses the stamp instead — MutateAbort, same as the already-stamped case
-    below, surfaced through the ordinary `execution_ready: False` / `note` result
-    rather than a silent re-kind. The S lane is not expressible on a spinoff
-    baton today; widening `_EXECUTION_PHASE_KINDS` (and its schema-side twin) to
-    admit `spinoff` is a schema-owning decision, not this landing step's to make.
+    **`handoff_phase` is legal only on the kinds `_HANDOFF_PHASE_KINDS` admits
+    (H-CROSS-EXEC-2, `schema_validate.py::_cf_handoff_phase_kind_gate`).** A
+    stamp written onto any other kind writes a shape `pickup-assemble apply`
+    refuses on claim — the write here would "succeed" and the baton would die at
+    pickup instead — so this function refuses first, as a MutateAbort surfaced
+    through the ordinary `execution_ready: False` / `note` result. `land_wave`
+    never reaches that refusal for a whole kind: it reads the kind first
+    (`_admits_execution_phase`) and lands such a plan on the ordinary approval,
+    named on the row as `fell_back_from: spec-dispatch`. The refusal here stays the
+    guard on the write, for any other caller.
+
+    `kind: spinoff` is admitted as of schema 10.5.0 (DoE ruling, 2026-09-11) and
+    is the S lane's usual carrier. Before that it was not, and this refusal fired
+    on two consecutive landings — correctly, but on every S the blitz could mint,
+    since replan batons are spinoffs by construction.
     """
     baton_abs = worktree_root / baton_path
     plan_abs = worktree_root / plan_path
@@ -432,9 +466,9 @@ def authorize_execution(
         if kind not in _EXECUTION_PHASE_KINDS:
             raise MutateAbort(
                 f"cannot stamp handoff_phase: execution — kind is {kind!r}, "
-                "which handoff_phase requires to be session-handoff or "
-                "roadmap-baton (H-CROSS-EXEC-2); the S lane cannot be "
-                "expressed on this baton's kind"
+                f"which H-CROSS-EXEC-2 does not admit "
+                f"({', '.join(sorted(_EXECUTION_PHASE_KINDS))}); pickup would "
+                "refuse this baton on claim"
             )
         text = _set_field(old, "governing_plan", rel_plan)
         text = _set_field(text, "handoff_phase", "execution")
@@ -725,6 +759,21 @@ def land_wave(
                 if rejected:
                     row["prior_shipped_in_rejected"] = rejected
                 closed.append(row)
+            elif entry.get("route") == "spec-dispatch" and not _admits_execution_phase(
+                worktree_root / baton_path
+            ):
+                # The S lane cannot be expressed on this baton's kind, so the plan
+                # lands on the ordinary approval instead — the landing every EM made
+                # by hand for each such refusal (three in fires 0-18/0-20). Reported
+                # on the row, never silent: the gate said "execute straight off the
+                # spec" and this delivers "approved, go through execute-plan".
+                row = approve_ready(worktree_root, baton_path, plan_path, report)
+                row["fell_back_from"] = "spec-dispatch"
+                row["fallback_reason"] = (
+                    f"kind {_baton_kind(worktree_root / baton_path)!r} is not one "
+                    f"H-CROSS-EXEC-2 admits ({', '.join(sorted(_EXECUTION_PHASE_KINDS))})"
+                )
+                approved.append(row)
             elif entry.get("route") == "spec-dispatch":
                 row = authorize_execution(
                     worktree_root,

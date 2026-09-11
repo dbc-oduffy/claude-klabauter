@@ -52,6 +52,7 @@ from coordinator_core.ops.fleet.memo_send import (
     _SENT_LEDGER_MAX_ROWS,
     _VERDICT_GONE,
     _VERDICT_NOT_CHECKABLE,
+    _VERDICT_RESTORABLE,
     _VERDICT_VERIFIED,
     _memo_check_deliveries,
     _memo_send,
@@ -1692,3 +1693,203 @@ class TestCheckDeliveriesSweep:
         result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
         assert result["exit_code"] == 0
         assert result["candidates"] == []
+
+
+# ---------------------------------------------------------------------------
+# C7 — memo.check_deliveries: delivered means present or anchored, not the
+# object exists. Verdicts widen from verified/gone/not_checkable to also
+# carry `restorable`, and `verified` now covers three distinct reasons
+# (present, disposed-of, pre-A2 fallback) — each test below names which.
+# ---------------------------------------------------------------------------
+
+class TestCheckDeliveriesPresenceAndAnchor:
+    def test_present_in_inbox_is_verified_even_if_commit_object_is_gone(
+        self, tmp_path, monkeypatch
+    ):
+        """Presence in the receiver's own tree is the FIRST question — a row
+        whose commit object is long gone still reads verified when the
+        memo itself is sitting right there in inbox/."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        filename = "2026-09-11-someone-present-in-inbox.md"
+        (receiver_repo / "cross-repo" / "inbox" / filename).write_text(
+            "memo\n", encoding="utf-8",
+        )
+        gone_sha = "e" * 40
+
+        _write_ledger_rows(sender_repo, [{
+            "sent_at": "2026-09-09T13:00:00Z",
+            "to": "example-retrieval-repo-em",
+            "topic": "present-in-inbox",
+            "delivery_commit_sha": gone_sha,
+            "delivered_to": f"cross-repo/inbox/{filename}",
+        }])
+
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+        candidate = result["candidates"][0]
+        assert candidate["status"] == _VERDICT_VERIFIED
+        assert candidate["note"] is None
+
+    def test_present_in_archive_is_verified(self, tmp_path, monkeypatch):
+        """The corpus is inbox OR archive — a memo the receiver has since
+        filed away is still delivered, not lost."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        filename = "2026-09-11-someone-present-in-archive.md"
+        archive_dir = receiver_repo / "cross-repo" / "archive"
+        archive_dir.mkdir(parents=True)
+        (archive_dir / filename).write_text("memo\n", encoding="utf-8")
+        gone_sha = "f" * 40
+
+        _write_ledger_rows(sender_repo, [{
+            "sent_at": "2026-09-09T13:00:00Z",
+            "to": "example-retrieval-repo-em",
+            "topic": "present-in-archive",
+            "delivery_commit_sha": gone_sha,
+            "delivered_to": f"cross-repo/inbox/{filename}",
+        }])
+
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+        candidate = result["candidates"][0]
+        assert candidate["status"] == _VERDICT_VERIFIED
+
+    def test_absent_but_anchored_is_restorable(self, tmp_path, monkeypatch):
+        """Absent from the tree, but the anchor for this exact (filename,
+        commit) still resolves -- the receiver's next workday-start
+        restores it, so this is restorable, not gone."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        filename = "2026-09-11-someone-restorable.md"
+        sha = "1" * 40
+        common_dir = resolve_git_common_dir(receiver_repo)
+        blob_sha = write_anchor(common_dir, filename, sha, b"memo bytes")
+        assert blob_sha is not None
+
+        _write_ledger_rows(sender_repo, [{
+            "sent_at": "2026-09-09T13:00:00Z",
+            "to": "example-retrieval-repo-em",
+            "topic": "restorable-one",
+            "delivery_commit_sha": sha,
+            "delivered_to": f"cross-repo/inbox/{filename}",
+            "anchor_ref": ANCHOR_REF_PREFIX + filename + "/" + sha,
+        }])
+
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+        candidate = result["candidates"][0]
+        assert candidate["status"] == _VERDICT_RESTORABLE
+        assert "workday-start" in candidate["note"]
+
+    def test_absent_no_anchor_but_row_carries_anchor_ref_is_verified_disposed(
+        self, tmp_path, monkeypatch
+    ):
+        """Absent from the tree, the live anchor is gone too, but the row
+        DID record an anchor_ref -- the receiver's own heal only retires an
+        anchor after observing an archive or deliberate removal, so this
+        reads as disposed of on purpose, not lost."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        filename = "2026-09-11-someone-disposed-of.md"
+        sha = "2" * 40
+        # No write_anchor call -- the anchor was retired (or never written
+        # under this exact ref), only the ROW remembers it existed.
+
+        _write_ledger_rows(sender_repo, [{
+            "sent_at": "2026-09-09T13:00:00Z",
+            "to": "example-retrieval-repo-em",
+            "topic": "disposed-one",
+            "delivery_commit_sha": sha,
+            "delivered_to": f"cross-repo/inbox/{filename}",
+            "anchor_ref": ANCHOR_REF_PREFIX + filename + "/" + sha,
+        }])
+
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+        candidate = result["candidates"][0]
+        assert candidate["status"] == _VERDICT_VERIFIED
+        assert "disposed" in candidate["note"]
+
+    def test_absent_no_anchor_no_anchor_ref_falls_back_to_object_existence(
+        self, tmp_path, monkeypatch
+    ):
+        """A row predating anchors (no anchor_ref ever recorded) with a
+        live commit object is the documented pre-A2 trap case -- verified,
+        same outcome the old rule gave, now for the recorded reason."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        real_sha = _receiver_head_sha(receiver_repo)
+        filename = "2026-09-11-someone-pre-a2.md"
+
+        _write_ledger_rows(sender_repo, [{
+            "sent_at": "2026-09-09T13:00:00Z",
+            "to": "example-retrieval-repo-em",
+            "topic": "pre-a2-fallback",
+            "delivery_commit_sha": real_sha,
+            "delivered_to": f"cross-repo/inbox/{filename}",
+            # no anchor_ref key at all -- pre-A2 row
+        }])
+
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+        candidate = result["candidates"][0]
+        assert candidate["status"] == _VERDICT_VERIFIED
+
+    def test_absent_no_anchor_no_anchor_ref_commit_gone_is_gone(
+        self, tmp_path, monkeypatch
+    ):
+        """Same pre-A2 shape as above, but the commit object is also gone
+        -- nothing left to call this delivered."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        gone_sha = "3" * 40
+        filename = "2026-09-11-someone-truly-gone.md"
+
+        _write_ledger_rows(sender_repo, [{
+            "sent_at": "2026-09-09T13:00:00Z",
+            "to": "example-retrieval-repo-em",
+            "topic": "truly-gone",
+            "delivery_commit_sha": gone_sha,
+            "delivered_to": f"cross-repo/inbox/{filename}",
+        }])
+
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+        candidate = result["candidates"][0]
+        assert candidate["status"] == _VERDICT_GONE
+
+    def test_receiver_not_on_this_machine_is_not_checkable_even_with_anchor_ref(
+        self, tmp_path, monkeypatch
+    ):
+        """The not-checked-out-here refusal fires before any presence or
+        anchor read is attempted -- a receiver absent from this machine
+        says nothing about delivery, restorable included."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        _write_ledger_rows(sender_repo, [{
+            "sent_at": "2026-09-09T13:00:00Z",
+            "to": "some-unregistered-em",
+            "topic": "unreachable-with-anchor-ref",
+            "delivery_commit_sha": "4" * 40,
+            "delivered_to": "cross-repo/inbox/whatever.md",
+            "anchor_ref": ANCHOR_REF_PREFIX + "whatever.md/" + "4" * 40,
+        }])
+
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+        candidate = result["candidates"][0]
+        assert candidate["status"] == _VERDICT_NOT_CHECKABLE

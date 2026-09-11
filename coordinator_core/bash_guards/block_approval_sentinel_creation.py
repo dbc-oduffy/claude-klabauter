@@ -178,6 +178,7 @@ from coordinator_core.bash_guards._sentinel_creation_guard import (
 )
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _normalize_executable_basename,
+    _strip_env_prefix,
     _strip_heredoc_bodies,
     _tokenize_full_command,
 )
@@ -371,6 +372,80 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
             if sub in self._SAFE_GIT_SUBCOMMANDS:
                 return True
         return False
+
+    #: Heads `xargs` may run without denying: the pure reads of
+    #: `_SAFE_ARGV0`. None of them can create a file whatever arguments stdin
+    #: assembles, and the segment's own redirects are checked before this
+    #: pass. `rm` is left out -- nothing has needed it behind `xargs`.
+    _XARGS_READ_ONLY_HEADS = _SAFE_ARGV0 - {"rm"}
+
+    #: `xargs` options that consume the NEXT token as their operand. An
+    #: option outside this set and `_XARGS_BARE_OPTIONS` fails closed.
+    _XARGS_OPERAND_OPTIONS = frozenset(
+        {
+            "-a", "--arg-file", "-d", "--delimiter", "-E", "-I", "-L",
+            "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars",
+            "--process-slot-var",
+        }
+    )
+    _XARGS_BARE_OPTIONS = frozenset(
+        {
+            "-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose",
+            "-p", "--interactive", "-x", "--exit", "-o", "--open-tty",
+        }
+    )
+
+    def _xargs_runs_read_only_head(self, seg_tokens: "list[str]") -> bool:
+        """True when this segment is `xargs [options] <head> ...` and
+        `<head>` is in `_XARGS_READ_ONLY_HEADS`.
+
+        Negative-spec: this is NOT a general `xargs` unwrap -- the command
+        stdin assembles is still never seen, so only a head that cannot
+        write under ANY argument list is admitted. An unrecognised option,
+        a missing head, or a head that is itself a wrapper (`sh`, `env`,
+        `xargs`) returns False and the parent's outright deny stands."""
+        argv0_idx = self._env_skip_index(seg_tokens)
+        working = seg_tokens[argv0_idx:]
+        if working and working[0] == "env":
+            working = _strip_env_prefix(working)
+        if not working or _normalize_executable_basename(working[0]) != "xargs":
+            return False
+        i = 1
+        while i < len(working):
+            tok = working[i]
+            if tok == "--":
+                i += 1
+                break
+            if not tok.startswith("-"):
+                break
+            if tok in self._XARGS_OPERAND_OPTIONS:
+                i += 2
+                continue
+            if tok in self._XARGS_BARE_OPTIONS:
+                i += 1
+                continue
+            if tok.startswith("--") and "=" in tok:
+                if tok.split("=", 1)[0] in self._XARGS_OPERAND_OPTIONS:
+                    i += 1
+                    continue
+                return False
+            if tok[:2] in {"-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s", "-e", "-i", "-l"}:
+                i += 1
+                continue
+            return False
+        if i >= len(working):
+            return False
+        return _normalize_executable_basename(working[i]) in self._XARGS_READ_ONLY_HEADS
+
+    def _evaluate_segment_indirection(
+        self, seg_tokens: "list[str]", pipe_before: bool, depth: int
+    ):
+        """OVERRIDE: admit `xargs <read-only head>` (see
+        `_xargs_runs_read_only_head`); every other shape takes the parent's
+        indirection walk unchanged."""
+        if self._xargs_runs_read_only_head(seg_tokens):
+            return None
+        return super()._evaluate_segment_indirection(seg_tokens, pipe_before, depth)
 
     def __init__(self, target_basename: str) -> None:
         super().__init__(target_basename)

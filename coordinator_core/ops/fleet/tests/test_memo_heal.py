@@ -270,6 +270,28 @@ def test_unanchored_tracked_matching_inbox_memo_is_adopted_with_zero_object_writ
     assert _anchor_for(common_dir, "fresh.md") == [("fresh.md", head, blob)]
 
 
+def test_a_memo_git_checked_out_as_crlf_is_still_adopted(tmp_path):
+    # Every other adopt test writes LF by hand, so none of them sees what git
+    # itself leaves on disk under `core.autocrlf=true`: an LF blob checked out
+    # as CRLF. Git calls that file clean; a raw-bytes hash calls it dirty, and
+    # on Windows that silently excluded every clone/checkout/reset memo from
+    # adoption, leaving it non-durable.
+    repo = _make_repo(tmp_path)
+    common_dir = _common_dir(repo)
+    rel = "state/cross-repo/inbox/checked-out.md"
+    head, blob = _commit_file(repo, rel, "line one\nline two\n", "deliver checked-out.md")
+    _git(repo, "config", "core.autocrlf", "true")
+    (repo / rel).unlink()
+    _git(repo, "checkout", "--", rel)
+    assert b"\r\n" in (repo / rel).read_bytes(), "premise: git must have written CRLF"
+    assert _git(repo, "status", "--porcelain", "--", rel).stdout.strip() == "", "premise: git calls it clean"
+
+    result = _run(repo, dry_run=False)
+
+    assert {"id": "checked-out.md", "action": "adopted"} in result["acted"]
+    assert _anchor_for(common_dir, "checked-out.md") == [("checked-out.md", head, blob)]
+
+
 def test_untracked_inbox_memo_is_not_adopted_and_is_counted(tmp_path):
     repo = _make_repo(tmp_path)
     inbox = repo / "state" / "cross-repo" / "inbox"
@@ -383,20 +405,21 @@ def test_eexist_on_restore_write_is_reported_restored_by_peer_not_a_failure(tmp_
 
 
 # ---------------------------------------------------------------------------
-# A refused update_refs_stdin transaction retries once, reports on a second
-# refusal.
+# A refused update_refs_stdin transaction is reported, not retried -- the
+# NEXT invocation of this op converges (module negative-spec). Review:
+# overengineering-reviewer -- the prior retry-once + re-derive layer was
+# redundant with that same convergence guarantee, and was removed.
 # ---------------------------------------------------------------------------
 
 
-def test_refused_transaction_retries_once_and_reports_on_second_refusal(tmp_path, monkeypatch):
+def test_refused_transaction_is_reported_without_retrying(tmp_path, monkeypatch):
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     _commit_file(repo, "state/cross-repo/inbox/refused.md", "body\n", "deliver refused.md")
 
     calls = {"n": 0}
-    real = git_native.update_refs_stdin
 
-    def _always_refuse(cwd, lines):
+    def _always_refuse(cwd, commands):
         calls["n"] += 1
         return git_native.GitResult(returncode=128, stdout="", stderr="lock contention")
 
@@ -404,7 +427,7 @@ def test_refused_transaction_retries_once_and_reports_on_second_refusal(tmp_path
 
     result = _run(repo, dry_run=False)
 
-    assert calls["n"] == 2, "expected exactly one retry after the first refusal"
+    assert calls["n"] == 1, "expected exactly one attempt, no retry"
     assert any(f["id"] == "refused.md" for f in result["failed"])
     assert not any(a.get("action") == "adopted" for a in result["acted"])
 

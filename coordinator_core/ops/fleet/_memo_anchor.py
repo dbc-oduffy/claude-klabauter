@@ -42,7 +42,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from coordinator_core.git.git_objects import (
     _read_object,
@@ -52,6 +52,47 @@ from coordinator_core.git.git_objects import (
 )
 
 ANCHOR_REF_PREFIX = "refs/coordinator/inbox/"
+
+#: Both corpus roots, legacy first-checked order irrelevant here -- a reader
+#: always unions BOTH (memo_corpus.py's C10a migration window means either
+#: can hold live entries depending on when a repo migrated), never resolves
+#: to "the" canonical one the way a WRITE target does elsewhere in this
+#: family. Shared by every reader of the delivered-memo present-set --
+#: `memo.heal_inbox` (receiver-side, against `repo_root` itself) and
+#: `memo.check_deliveries` (sender-side, against a registry-resolved peer's
+#: tree) -- so the two cannot drift on which roots or which filename-scan
+#: shape counts as "present" (Review: overengineering-reviewer F1: this was
+#: the other join key of the feature, duplicated the way the anchor-ref
+#: shape was not).
+CORPUS_ROOT_RELDIRS = ("state/cross-repo", "cross-repo")
+
+
+def present_filenames(worktree_root: Union[str, Path]) -> Dict[str, Tuple[str, Path]]:
+    """filename -> (status, path) for every file found, at any depth, under
+    either corpus root's `inbox/` or `archive/` in `worktree_root` --
+    `inbox/` entries (across both roots) always shadow an `archive/` hit for
+    the same filename. The one traversal shared by every present-set reader
+    in this feature; callers needing a richer entry shape (e.g. `memo_heal`'s
+    repo-relative path) wrap this, they do not re-walk the tree."""
+    worktree_root = Path(worktree_root)
+    found: Dict[str, Tuple[str, Path]] = {}
+    for corpus in CORPUS_ROOT_RELDIRS:
+        inbox_dir = worktree_root / corpus / "inbox"
+        if not inbox_dir.is_dir():
+            continue
+        for p in sorted(inbox_dir.rglob("*")):
+            if not p.is_file() or p.name in found:
+                continue
+            found[p.name] = ("inbox", p)
+    for corpus in CORPUS_ROOT_RELDIRS:
+        archive_dir = worktree_root / corpus / "archive"
+        if not archive_dir.is_dir():
+            continue
+        for p in sorted(archive_dir.rglob("*")):
+            if not p.is_file() or p.name in found:
+                continue
+            found[p.name] = ("archive", p)
+    return found
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 

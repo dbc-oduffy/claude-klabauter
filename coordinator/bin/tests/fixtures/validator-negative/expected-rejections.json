@@ -334,15 +334,15 @@
     {
       "fixture": "h18-handoff-phase-execution-wrong-kind.md",
       "schema": "handoff",
-      "rule_covered": "H-CROSS-EXEC-2: handoff_phase (execution) present requires kind=session-handoff",
+      "rule_covered": "H-CROSS-EXEC-2: handoff_phase (execution) present requires a kind in _HANDOFF_PHASE_KINDS",
       "expect_ok": false,
       "current_validator_result": {
         "ok": false,
         "errors": [
           {
             "field": "handoff_phase",
-            "error": "present but kind is \"spinoff\" — handoff_phase requires kind: session-handoff",
-            "hint": "handoff_phase is an axis declared on kind: session-handoff. Either set kind: session-handoff (if this is a continuation/execution baton), or remove handoff_phase (if not)."
+            "error": "present but kind is \"goal-seed\" — handoff_phase requires one of: roadmap-baton, session-handoff, spinoff, spinoff-roadmap",
+            "hint": "handoff_phase is the preparation axis, declared on: roadmap-baton, session-handoff, spinoff, spinoff-roadmap. Either set one of those kinds (if this is a continuation/execution baton), or remove handoff_phase (if not)."
           }
         ]
       }
@@ -350,15 +350,15 @@
     {
       "fixture": "h19-handoff-phase-continuation-wrong-kind.md",
       "schema": "handoff",
-      "rule_covered": "H-CROSS-EXEC-2: handoff_phase (continuation) present requires kind=session-handoff",
+      "rule_covered": "H-CROSS-EXEC-2: handoff_phase (continuation) present requires a kind in _HANDOFF_PHASE_KINDS",
       "expect_ok": false,
       "current_validator_result": {
         "ok": false,
         "errors": [
           {
             "field": "handoff_phase",
-            "error": "present but kind is \"spinoff\" — handoff_phase requires kind: session-handoff",
-            "hint": "handoff_phase is an axis declared on kind: session-handoff. Either set kind: session-handoff (if this is a continuation/execution baton), or remove handoff_phase (if not)."
+            "error": "present but kind is \"goal-seed\" — handoff_phase requires one of: roadmap-baton, session-handoff, spinoff, spinoff-roadmap",
+            "hint": "handoff_phase is the preparation axis, declared on: roadmap-baton, session-handoff, spinoff, spinoff-roadmap. Either set one of those kinds (if this is a continuation/execution baton), or remove handoff_phase (if not)."
           }
         ]
       }

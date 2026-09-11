@@ -13,16 +13,28 @@ Output format (one line per stale draft):
       -> send | compose | discard
 
 Also surfaces the missing sibling of the stale-draft nudge above: sent
-deliveries whose commit is no longer an object in the receiver (the
-2026-09-11 seven-lost-deliveries incident — memo.check_deliveries existed
-but had no trigger, so it went unrun for two days). Reuses
-`memo_send.check_deliveries`'s own sweep verbatim (`_iter_ledger_rows` +
-`_check_ledger_row`) — no second implementation of the object-existence
-check. One line per `gone` verdict, naming the receiver ref the delivery landed on
+deliveries the receiver's tree no longer carries (the 2026-09-11
+seven-lost-deliveries incident — memo.check_deliveries existed but had no
+trigger, so it went unrun for two days). Reuses `memo_send.check_
+deliveries`'s own sweep verbatim (`_iter_ledger_rows` + `_check_ledger_row`,
+C7) — no second implementation of the presence/anchor/object-existence
+checks. One line per `gone` verdict, naming the receiver ref the delivery landed on
 when the ledger row recorded one (absent on pre-`delivery_branch` rows —
 omitted, never printed as "None"):
     Delivery <topic> to <to> is gone — commit <sha> is not in the receiver (landed on <ref>)
       -> re-run memo.send <topic> to re-deliver
+
+Alongside `gone`, one line per `restorable` verdict — but only once the
+row has been outstanding more than `_RESTORABLE_SURFACE_AFTER_DAYS` (a
+fixed 1-day threshold, distinct from `COORDINATOR_OUTBOX_STALE_HOURS`
+above: that env var governs unsent DRAFT nudges, this constant governs
+delivered-but-currently-unreadable ones, and neither is the other's knob).
+A fresh restorable row is the ordinary in-flight state between "anchor
+written" and "receiver's next workday-start restores it" — surfacing it
+immediately would nudge on every send. Only a row still restorable a day
+later is news:
+    Delivery <topic> to <to> is restorable — anchored, absent from the receiver's tree
+      → no receiver workday-start since <sent_at> restored it — ping <to> to run one
 
 Exit: always 0. Emits nothing when no qualifying drafts AND no gone
 deliveries exist (silent per spec) — this is an orientation surfacer, never
@@ -57,7 +69,10 @@ Negative-spec:
       a receiver repo absent from this machine says nothing about whether a
       memo arrived, and a nudge that cries wolf on that verdict gets
       ignored, recreating the defect this closes in a new place. Only
-      `gone` is news at workday start.
+      `gone` and (once stale) `restorable` are news at workday start.
+    - Does NOT surface a `restorable` row before it has been outstanding
+      for `_RESTORABLE_SURFACE_AFTER_DAYS` — a fresh restorable row is the
+      anchor's ordinary window, not yet a nudge-worthy fact.
     - The gone-deliveries sweep degrades SILENTLY on any resolution failure
       (missing worktree root, unreadable ledger, import failure) — same
       discipline as the stale-draft leg's `StateRootError` degrade above:
@@ -66,6 +81,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import datetime
 import os
 import re
 import subprocess
@@ -176,10 +192,22 @@ def _resolve_worktree_root(repo_root_arg: str) -> Optional[str]:
     return show_toplevel(os.getcwd())
 
 
+#: Fixed 1-day threshold before a `restorable` row becomes a nudge — the
+#: plan's own words ("the sender reads restorable, surfaced after 1 day").
+#: Deliberately not env-configurable and deliberately a SEPARATE constant
+#: from `COORDINATOR_OUTBOX_STALE_HOURS` above: that knob governs unsent
+#: draft nudges, this one governs delivered-but-currently-unreadable ones,
+#: and the two landing at the same 24h by no coincidence should not be read
+#: as one knob controlling both.
+_RESTORABLE_SURFACE_AFTER_DAYS = 1
+
+
 def _gone_delivery_lines(repo_root_arg: str) -> List[str]:
-    """One two-line nudge per `gone` sent-ledger row, reusing
-    `memo_send`'s own C5 sweep verbatim. Degrades silently (empty list) on
-    any resolution failure — see module negative-spec."""
+    """One two-line nudge per `gone` sent-ledger row, plus one two-line
+    nudge per `restorable` row once it has been outstanding more than
+    `_RESTORABLE_SURFACE_AFTER_DAYS` — reusing `memo_send`'s own C5/C7
+    sweep verbatim. Degrades silently (empty list) on any resolution
+    failure — see module negative-spec."""
     try:
         worktree_root = _resolve_worktree_root(repo_root_arg)
         if not worktree_root:
@@ -189,24 +217,40 @@ def _gone_delivery_lines(repo_root_arg: str) -> List[str]:
 
         sender_worktree = Path(worktree_root)
         ledger_path = _memo_send_mod._sent_ledger_path(sender_worktree)
-        rows = _memo_send_mod._iter_ledger_rows(ledger_path)
+        rows = list(_memo_send_mod._iter_ledger_rows(ledger_path))
         candidates = [_memo_send_mod._check_ledger_row(row) for row in rows]
     except Exception:
         return []
 
+    restorable_cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        days=_RESTORABLE_SURFACE_AFTER_DAYS
+    )
+
     lines: List[str] = []
-    for candidate in candidates:
-        if candidate.get("status") != _memo_send_mod._VERDICT_GONE:
-            continue
+    for row, candidate in zip(rows, candidates):
+        status = candidate.get("status")
         topic = candidate.get("topic") or "unknown"
         to = candidate.get("to") or "unknown"
-        sha = candidate.get("delivery_commit_sha") or "unknown"
-        branch = candidate.get("delivery_branch")
-        branch_clause = f" (landed on {branch})" if isinstance(branch, str) and branch else ""
-        lines.append(
-            f"Delivery {topic} to {to} is gone — commit {sha} is not in the receiver{branch_clause}"
-        )
-        lines.append(f"  → re-run memo.send {topic} to re-deliver")
+        if status == _memo_send_mod._VERDICT_GONE:
+            sha = candidate.get("delivery_commit_sha") or "unknown"
+            branch = candidate.get("delivery_branch")
+            branch_clause = f" (landed on {branch})" if isinstance(branch, str) and branch else ""
+            lines.append(
+                f"Delivery {topic} to {to} is gone — commit {sha} is not in the receiver{branch_clause}"
+            )
+            lines.append(f"  → re-run memo.send {topic} to re-deliver")
+        elif status == _memo_send_mod._VERDICT_RESTORABLE:
+            if not _memo_send_mod._row_is_older_than_cutoff_dict(row, restorable_cutoff):
+                continue
+            sent_at = row.get("sent_at") or "unknown"
+            lines.append(
+                f"Delivery {topic} to {to} is restorable — anchored, absent "
+                f"from the receiver's tree"
+            )
+            lines.append(
+                f"  → no receiver workday-start since {sent_at} restored it "
+                f"— ping {to} to run one"
+            )
     return lines
 
 

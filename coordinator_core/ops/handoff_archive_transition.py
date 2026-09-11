@@ -321,7 +321,7 @@ from coordinator_core.ops.fleet._common import (
     handoff_archive_dest,
     main_worktree_root,
 )
-from coordinator_core.ops.handoff_transition import _ship
+from coordinator_core.ops.handoff_transition import _ship, build_ship_mutate
 # Aliased: `rel_id` is also a local variable name in _handler below, and an
 # unaliased import would be shadowed by that binding (UnboundLocalError).
 from coordinator_core.wire_paths import rel_id as _wire_rel_id
@@ -453,6 +453,59 @@ def _current_shipped_in(handoff_abs: Path) -> Optional[str]:
     observable warning instead of a false stamped:True.
     """
     return _current_fm_field(handoff_abs, "shipped_in")
+
+
+# Stands in for the SHA the stamp has not resolved yet. The projection below only
+# asks "would the frontmatter validate once both writes land", and the schema
+# checks shipped_in's SHAPE, never whether the commit exists.
+_PROJECTED_SHA_PLACEHOLDER = "0000000000"
+
+
+def _ship_would_refuse(handoff_abs: Path, rel_id: str, stamp_sha: Optional[str],
+                       stamp_kind: str) -> Optional[str]:
+    """Why the stamp_only flip would be refused, judged BEFORE either write; else None.
+
+    stamp_only is two writes: `stamp_shipped_in` (shipped_in + shipped_in_kind),
+    then `_ship` (deployment_state: shipped + pickup_ready: false). Only the second
+    validates the whole frontmatter. So a record that is already invalid for a
+    reason neither write touches — measured: `handoff_phase` on a kind the
+    validator does not admit — took the stamp, then refused the flip, and was left
+    carrying shipped_in on a baton still reading ready_to_fire: shipped to anything
+    reading shipped_in, unshipped to anything reading deployment_state.
+
+    This projects the stamp's two fields onto the current text and runs the REAL
+    ship mutation (`build_ship_mutate`) over it in memory, so the verdict comes from
+    the same validation gate the flip will hit, not from a copy of its rules.
+    Nothing is written; the caller refuses before the stamp when this returns text.
+
+    Negative spec: not a lock. A peer writing between this read and the two writes
+    can still fail the flip; this closes the deterministic case (the record was
+    already invalid), which is the one every retry hit identically.
+    """
+    try:
+        text = handoff_abs.read_text(encoding="utf-8")
+    except OSError as exc:
+        return f"could not read {rel_id} to pre-check the flip: {exc}"
+    split = split_frontmatter(text)
+    if split is None:
+        return f"no parseable YAML frontmatter in {rel_id}"
+    fm = split.fm_text
+    sha = (stamp_sha or "").strip() or _current_fm_field(handoff_abs, "shipped_in") \
+        or _PROJECTED_SHA_PLACEHOLDER
+    # numeric_quoting=True, as stamp_shipped_in writes it: an all-digit SHA left
+    # bare parses as an int and fails `type: string`, which would refuse every
+    # ship for a reason the real write never produces.
+    for field, value in (("shipped_in", sha), ("shipped_in_kind", stamp_kind)):
+        if read_fm_field(fm, field) is not None:
+            fm = replace_fm_field(fm, field, value, numeric_quoting=True)
+        else:
+            fm = insert_fm_field(fm, field, value, "deployment_state", numeric_quoting=True)
+    mutate, _ = build_ship_mutate(rel_id)
+    try:
+        mutate(rebuild(split, fm))
+    except MutateAbort as exc:
+        return exc.args[0] if exc.args else "ship mutation aborted"
+    return None
 
 
 def _current_deployment_state(handoff_abs: Path) -> Optional[str]:
@@ -1645,6 +1698,18 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # run only after the guard clears). Position A: no branch-tip fallback.
     # ------------------------------------------------------------------
     if do_stamp_only:
+        would_refuse = _ship_would_refuse(contained, rel_id, stamp_sha, stamp_kind)
+        if would_refuse is not None:
+            out = _err(
+                f"stamp_only: refusing before any write for {rel_id} — the "
+                f"deployment_state:shipped flip would be refused, so stamping "
+                f"shipped_in first would leave a half-shipped record. Nothing was "
+                f"written. Flip refusal: {would_refuse}"
+            )
+            out["mode"] = mode
+            out["stamped"] = False
+            out["warnings"] = warnings
+            return out
         before = _current_shipped_in(contained)
         outcome = await asyncio.to_thread(
             stamp_shipped_in,

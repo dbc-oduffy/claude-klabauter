@@ -24,9 +24,10 @@ formula above lands on the real file. A NAMED teammate has a subagent-side id of
 the form `a<name>-<16 hex>` while every EM-side tracking surface (the caller's
 `dispatched-agents.txt` among them) records the canonical form `<name>@session-
 <short8>`. Feeding the canonical form to the formula derives
-`subagents/agent-<name>@session-<short8>.jsonl`, which CANNOT EXIST — so every
-named teammate resolved "unknown" and the caller nudged regardless of whether the
-agent had already returned. The oracle worked; it never got to look.
+`subagents/agent-<name>@session-<short8>.jsonl`, which CANNOT EXIST — before the
+probe below existed, every named teammate used to resolve "unknown" this way, and
+the caller nudged regardless of whether the agent had already returned. The
+oracle worked; it never got to look.
 
 The forward map (subagent-side → canonical) is lossy — the 16-hex suffix is
 dropped — so the reverse is a directory probe, not a string transform:
@@ -181,7 +182,8 @@ def _resolve_subagent_transcript_path(transcript_path: str, agent_id: str) -> st
            probe the subagents directory for `agent-a<name>-<16 hex>.jsonl`.
         3. Otherwise (and on any probe failure) return the direct derivation, so the
            caller's "absent, unreadable, or empty" reason names a concrete path and
-           the state stays "unknown" — the fail-toward-nudge direction.
+           the state stays "unknown" — no-information, never inferred arrival; what
+           the caller does with that is caller policy.
 
     Never raises. Never builds a path out of `agent_id`'s own bytes beyond step 1's
     single filename component: the probe filters `os.listdir` results against a

@@ -54,7 +54,15 @@ subprocess against the same resolved interpreter for the identical reason (the
 probe's whole point is testing the RESOLVED interpreter's tomllib availability, not
 this engine's own). P-7's mcpServers/enabledPlugins JSON validation, formerly an
 inline `python -c` heredoc, collapses to a direct in-process function — pure data
-validation with no interpreter-dependent behavior.
+validation with no interpreter-dependent behavior. P-6 formerly spawned one
+`py_bin -m coordinator_whoami.<module>` PER discovered plugin envelope module — the
+per-plugin loop, not the process boundary, was the amplification
+(`coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py`). It now spawns
+`py_bin` exactly once, running every discovered module inside that single process
+via a small driver (`_P6_BATCH_DRIVER_SOURCE`) that replays each module through
+`runpy.run_module` with its own stdout captured, keeping the resolved-interpreter
+boundary P-5/P-6s still need while collapsing the per-module fan-out; see
+`probe_p6`'s docstring for the one fidelity given up.
 
 Spawn budget (hitlist G8, 2026-08-21). Every subprocess this suite makes derives its
 bound from `_PROBE_SPAWN_BUDGET_SECS` — no probe carries a hand-typed timeout, and
@@ -794,16 +802,88 @@ def _whoami_plugin_modules(sh: Path) -> List[str]:
     ]
 
 
+#: The isolation boundary P-6 protects (state/audits/2026-08-06-self-spawn-
+#: isolation-boundary-classification.md) is between THIS process and
+#: ``py_bin`` — a resolved candidate interpreter, distinct from the one
+#: running this module. It is NOT a boundary between the per-plugin
+#: ``coordinator_whoami`` modules probed under that candidate: those already
+#: ran in the SAME bash-oracle shell generation this ported, one after
+#: another, with no isolation between them. So one ``py_bin`` spawn running
+#: every discovered module in sequence preserves the boundary that matters
+#: and only gives up one that was never promised.
+#:
+#: sys.argv[1] carries the discovered module list as a JSON array — passed
+#: as an argv element, not interpolated into the source text, so a module
+#: name can never inject Python source into its own probe driver.
+#:
+#: Negative-spec — two things this batching changes, and nothing else:
+#:
+#: - The modules share ONE interpreter, so a package one imports as a side
+#:   effect is already in ``sys.modules`` for every module probed after it.
+#:   N separate interpreters never had that coupling.
+#: - One ``_PROBE_SPAWN_BUDGET_SECS`` now covers the whole set rather than
+#:   each module. The batch does strictly less work than the N spawns it
+#:   replaces, so this is the tighter bound on a smaller job, and it expires
+#:   into INCONCLUSIVE, never red.
+#:
+#: Every other observable is unchanged. Each candidate's own stdout is
+#: isolated by a per-module StringIO swap, and SystemExit is swallowed the
+#: way a child's exit code was already discarded — P-6 read stdout and never
+#: a returncode — so a crashing module still reports "produced no output".
+_P6_RESULT_MARKER = "__P6_BATCH_RESULT__"
+
+_P6_BATCH_DRIVER_SOURCE = (
+    "import io, json, runpy, sys\n"
+    "\n"
+    "_modules = json.loads(sys.argv[1])\n"
+    "_results = {}\n"
+    "for _m in _modules:\n"
+    "    _buf = io.StringIO()\n"
+    "    _old_stdout = sys.stdout\n"
+    "    sys.stdout = _buf\n"
+    "    _error = None\n"
+    "    try:\n"
+    '        runpy.run_module("coordinator_whoami." + _m, run_name="__main__")\n'
+    "    except SystemExit:\n"
+    "        pass\n"
+    "    except Exception as _exc:\n"
+    '        _error = "{}: {}".format(type(_exc).__name__, _exc)\n'
+    "    finally:\n"
+    "        sys.stdout = _old_stdout\n"
+    '    _results[_m] = {"stdout": _buf.getvalue(), "error": _error}\n'
+    "sys.stdout.write(" + repr(_P6_RESULT_MARKER) + ' + json.dumps(_results) + "\\n")\n'
+)
+
+
+def _parse_p6_batch_output(out: str) -> Optional[dict]:
+    """The driver's own stdout is not this probe's only inhabitant — a
+    module it ran may itself have written to the real stdout before this
+    driver swapped it out, or after restoring it on the way out. Scan from
+    the end for the marked result line rather than assuming it is the last
+    line unconditionally, and return None (never raise) on anything that
+    does not parse — the caller's job, not this parser's, to decide what an
+    unparseable batch means for the probe's verdict."""
+    for line in reversed(out.splitlines()):
+        if line.startswith(_P6_RESULT_MARKER):
+            try:
+                return json.loads(line[len(_P6_RESULT_MARKER):])
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
 def probe_p6(
     whoami_ok: Optional[bool], py_bin: str, py_args: List[str], py_ident: str, sh: Path
 ) -> List[ProbeNote]:
     """Deliberate isolation boundary, not a candidate for an in-process
-    import — runs each per-plugin ``coordinator_whoami`` envelope module under
-    ``py_bin``, a resolved candidate interpreter distinct from the one running
-    this module, so the probe reflects that interpreter's own environment, not
-    this process's. See
+    import — runs every per-plugin ``coordinator_whoami`` envelope module
+    under ONE spawn of ``py_bin``, a resolved candidate interpreter distinct
+    from the one running this module, so the probe reflects that
+    interpreter's own environment, not this process's. See
     ``state/audits/2026-08-06-self-spawn-isolation-boundary-classification.md``
-    for the recorded verdict.
+    for the recorded verdict on the process boundary, and
+    ``_P6_BATCH_DRIVER_SOURCE`` above for what batching the MODULE loop
+    inside that one spawn gives up (nothing this probe's verdict depends on).
 
     Which modules those are is discovered, not declared — see
     ``_whoami_plugin_modules`` for why a literal name here was break-class on
@@ -827,28 +907,34 @@ def probe_p6(
             "/coordinator-whoami — nothing to probe",
         )
 
+    try:
+        from coordinator_core.win_portability import no_console_creationflags
+
+        proc = subprocess.run(
+            [py_bin, *py_args, "-c", _P6_BATCH_DRIVER_SOURCE, json.dumps(modules)],
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_SPAWN_BUDGET_SECS,
+            **no_console_creationflags(),
+        )
+        out = proc.stdout or ""
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _inconclusive(
+            "P-6", f"could not run {py_bin} batch envelope driver — {_exec_detail(exc)}"
+        )
+
+    results = _parse_p6_batch_output(out)
+    if results is None:
+        return _inconclusive(
+            "P-6", f"batch envelope driver under {py_ident} produced no parseable result"
+        )
+
     notes: List[ProbeNote] = []
     for module in modules:
         target = f"coordinator_whoami.{module}"
-        try:
-            from coordinator_core.win_portability import no_console_creationflags
-
-            proc = subprocess.run(
-                [py_bin, *py_args, "-m", target],
-                capture_output=True,
-                text=True,
-                timeout=_PROBE_SPAWN_BUDGET_SECS,
-                **no_console_creationflags(),
-            )
-            out = proc.stdout or ""
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            notes.extend(
-                _inconclusive(
-                    "P-6", f"could not run {py_bin} -m {target} — {_exec_detail(exc)}"
-                )
-            )
-            continue
-        if not out.strip():
+        entry = results.get(module)
+        module_out = entry.get("stdout", "") if isinstance(entry, dict) else ""
+        if not module_out.strip():
             notes.append(
                 ProbeNote(
                     "P-6",
@@ -858,7 +944,7 @@ def probe_p6(
             )
             continue
         try:
-            d = json.loads(out)
+            d = json.loads(module_out)
             if not isinstance(d, dict) or d.get("contract_version") != 1:
                 raise ValueError
         except (json.JSONDecodeError, ValueError):

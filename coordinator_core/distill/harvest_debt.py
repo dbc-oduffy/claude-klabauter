@@ -41,7 +41,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from coordinator_core.distill._common import is_sidecar_filename, parse_distillation_log
+from coordinator_core.distill._common import (
+    _RUN_HEADER_RE,
+    is_sidecar_filename,
+    parse_distillation_log,
+)
 
 HARVESTED_DISPOSITIONS = frozenset(
     {
@@ -95,6 +99,19 @@ class DistillationLogMissingError(FileNotFoundError):
     Deliberately a distinct exception type (not a bare FileNotFoundError) so
     callers can catch specifically for the fail-loud contract without also
     swallowing unrelated FileNotFoundErrors from elsewhere in a call stack."""
+
+
+class DistillationLogUnparseableError(ValueError):
+    """Raised when the canonical distillation log has non-whitespace content
+    but neither the canonical-row parser nor the legacy action-table scan
+    extracts a single row from it.
+
+    A reader returning zero rows against a non-empty log is indistinguishable
+    from a log with nothing in it (state/handoffs/2026-08-30-the-distill-
+    pipeline-reads-its-own-log-w.md, item 2) — that ambiguity is exactly what
+    let a real log read as "zero debt". An empty log (no non-whitespace
+    content) is still legitimately "nothing harvested yet" and does NOT raise
+    this; only a non-empty log that fails to parse does."""
 
 
 @dataclass(frozen=True)
@@ -231,6 +248,36 @@ def _row_path_relative_to_specs_dir(row_path: str, specs_dir: Path) -> str:
     return Path(row_path).name
 
 
+def _has_any_parseable_row(log_text: str) -> bool:
+    """True if the canonical-row parser or the legacy action-table regex
+    matches at least one row in `log_text`, regardless of disposition —
+    used to distinguish "log is empty" from "log is non-empty but the
+    reader can't parse it" (see DistillationLogUnparseableError)."""
+    for _ in parse_distillation_log(log_text):
+        return True
+    for line in log_text.splitlines():
+        if _ACTION_TABLE_ROW_RE.match(line):
+            return True
+    return False
+
+
+def _has_content_beyond_run_headers(log_text: str) -> bool:
+    """True if `log_text` has non-blank content other than bare `## Run ...`
+    header lines — a log carrying only run headers (a run that opened but
+    logged no rows yet) is a legitimate zero-row state, not evidence of an
+    unparseable log; a log with anything else left over that still parses
+    to zero rows is the ambiguous state DistillationLogUnparseableError
+    exists to catch."""
+    for line in log_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if _RUN_HEADER_RE.match(line):
+            continue
+        return True
+    return False
+
+
 def compute_harvest_debt(specs_dir: Path, log_path: Path) -> HarvestDebtResult:
     """Compute harvest debt: archive/specs paths (keyed specs_dir-relative, not
     bare basename) absent from any log row whose disposition/action is in
@@ -263,6 +310,14 @@ def compute_harvest_debt(specs_dir: Path, log_path: Path) -> HarvestDebtResult:
         )
 
     log_text = log_path.read_text()
+    if _has_content_beyond_run_headers(log_text) and not _has_any_parseable_row(log_text):
+        raise DistillationLogUnparseableError(
+            f"distillation log at {log_path} has content but zero rows "
+            "parsed from it (neither the canonical parser nor the legacy "
+            "action-table scan matched a single row) — refusing to report "
+            "harvest-debt against an unreadable log rather than silently "
+            "treating it as zero-debt"
+        )
     all_specs = _specs_dir_relative_paths(specs_dir) if specs_dir.is_dir() else set()
     harvested = _harvested_relative_paths(log_text, specs_dir, all_specs)
 

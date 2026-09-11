@@ -2110,7 +2110,23 @@ def _cf_mise_prepped_stamp_quartet(fm: dict) -> ErrorDict | None:
 #: read correctly, pass a hand-written canonical-name test, and never fire on a
 #: single real baton. ``session-handoff`` has no alias today; it is written
 #: through the same union shape so the gate stays correct when that changes.
-_HANDOFF_PHASE_KINDS = frozenset({'session-handoff'}) | _ROADMAP_BATON_KINDS
+#:
+#: ``spinoff`` joins them at schema 10.5.0 (DoE ruling, DR-097 notice
+#: 2026-09-11). A plan-blitz mints every replan baton as a spinoff, so the S
+#: lane — which parks a reviewed spec as execution-ready — could not be
+#: expressed on any baton the blitz produces, and two landings in a row refused
+#: the stamp. Re-kinding the minting was the other candidate and does not work:
+#: ``_cf_spinoff_roadmap_requires_graph`` obliges a roadmap-baton to carry
+#: roadmap_id, stub_id, wave, blocks and blocked_by, and a per-plan replan baton
+#: is cluster-less by construction — so that route mints a baton that cannot
+#: validate, or a dangling roadmap_id, which DR-198(b) refuses outright.
+#:
+#: Negative spec: this widens the VALIDATOR's presence gate, not the stamping
+#: surface. ``blitz_land``'s S lane is the one route admitted to write the phase
+#: onto a spinoff; ``handoff_phase_stamp.py``'s pre-write kind guard and
+#: push-side-write-discipline's unconditional ``continuation`` stamp stay
+#: session-handoff-only (DR-126).
+_HANDOFF_PHASE_KINDS = frozenset({'session-handoff', 'spinoff'}) | _ROADMAP_BATON_KINDS
 
 
 def _cf_handoff_phase_kind_gate(fm: dict) -> ErrorDict | None:
@@ -2142,16 +2158,17 @@ def _cf_handoff_phase_kind_gate(fm: dict) -> ErrorDict | None:
     if fm.get('handoff_phase') is None:
         return None
     if fm.get('kind') not in _HANDOFF_PHASE_KINDS:
+        admitted = ', '.join(sorted(_HANDOFF_PHASE_KINDS))
         return {
             'field': 'handoff_phase',
             'error': (
                 f'present but kind is "{fm.get("kind") or "unset"}" — '
-                'handoff_phase requires kind: session-handoff or roadmap-baton'
+                f'handoff_phase requires one of: {admitted}'
             ),
             'hint': (
-                'handoff_phase is the preparation axis declared on kind: session-handoff '
-                'and kind: roadmap-baton. Either set one of those kinds (if this is a '
-                'continuation/execution baton), or remove handoff_phase (if not).'
+                f'handoff_phase is the preparation axis, declared on: {admitted}. Either '
+                'set one of those kinds (if this is a continuation/execution baton), or '
+                'remove handoff_phase (if not).'
             ),
         }
     return None

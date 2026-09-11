@@ -86,7 +86,7 @@ from coordinator_core.git.divergence import (
 )
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.git.git_index import scoped_status as _git_index_scoped_status
-from coordinator_core.git.git_objects import cas_ref, write_object
+from coordinator_core.git.git_objects import cas_ref, read_packed_ref, write_object
 from coordinator_core.git.git_state import (
     IndexEntry,
     IndexParseError,
@@ -4506,12 +4506,21 @@ def _resolve_cas_ref_target(root: Path) -> Optional[Tuple[Path, str]]:
     HEAD: the CAS target IS `HEAD` itself, in the WORKTREE-PRIVATE gitdir
     (`cas_ref`'s own docstring names this case explicitly).
 
-    Returns `None` when the resolved branch ref is not a loose file (e.g.
-    packed only) -- `cas_ref`'s `O_CREAT|O_EXCL` lock protocol assumes a
-    loose ref at the target path, and a packed-only ref is rare enough
-    (freshly-committed branches are always loose) that reproducing git's
-    own pack-then-loose ref resolution here is not worth the risk of
-    silently CAS-ing against the wrong file.
+    A PACKED-ONLY ref resolves here rather than refusing, matching the
+    sibling `coordinator_core.git.commit._cas_target`: `cas_ref` reads its
+    comparand out of `packed-refs` (loose first, packed second -- git's own
+    precedence) and writes a loose ref that SHADOWS the packed entry, which
+    is what git itself does on the first ref update after a pack. There is
+    no wrong-file risk -- comparand and write target are the same ref name,
+    resolved the way `cas_ref` itself resolves it.
+
+    This previously returned `None` for a packed-only ref, on the premise
+    that "freshly-committed branches are always loose". That premise is
+    false after `git gc --prune=now`, which packs `refs/heads/<branch>`
+    unconditionally -- so `memo.heal_inbox`'s restore, whose whole occasion
+    is a repo that has just been gc'd, could never commit the memo it had
+    just recovered. `None` still means a ref that is neither loose nor
+    packed, which is genuinely unresolvable.
     """
     worktree_gitdir = resolve_git_dir(root)
     try:
@@ -4522,7 +4531,7 @@ def _resolve_cas_ref_target(root: Path) -> Optional[Tuple[Path, str]]:
         return worktree_gitdir, "HEAD"
     ref_rel = head_text[len("ref:") :].strip()
     common_dir = resolve_git_common_dir(root)
-    if not (common_dir / ref_rel).is_file():
+    if not (common_dir / ref_rel).is_file() and read_packed_ref(common_dir, ref_rel) is None:
         return None
     return common_dir, ref_rel
 
@@ -5759,13 +5768,15 @@ def update_ref(
     return _git(["update-ref", ref, new_sha, old_sha], cwd=cwd)
 
 
-def update_refs_stdin(cwd: Union[str, Path], lines: Sequence[str]) -> GitResult:
+def update_refs_stdin(
+    cwd: Union[str, Path], commands: Sequence[Tuple[str, str, str]]
+) -> GitResult:
     """`git update-ref --stdin -z` — one ATOMIC transaction over several ref
     commands at once (`memo.heal_inbox`'s adopt/retire/re-key batch, C5).
 
-    `lines` are `"create <ref> <oid>"` / `"delete <ref> <oid>"` strings, ONE
-    PER REF — e.g. `"delete refs/x/old blobsha"` or `"create refs/x/new
-    blobsha"`. `<oid>` is the CURRENT value being verified for `delete`, the
+    `commands` are `(command, ref, oid)` triples, ONE PER REF — e.g.
+    `("delete", "refs/x/old", blob_sha)` or `("create", "refs/x/new",
+    blob_sha)`. `<oid>` is the CURRENT value being verified for `delete`, the
     new value being set for `create` (matching this module's own
     `write_anchor`/`_memo_anchor` shape: the ref path names the memo
     filename+commit sha, its VALUE is the blob sha).
@@ -5787,33 +5798,21 @@ def update_refs_stdin(cwd: Union[str, Path], lines: Sequence[str]) -> GitResult:
     wrapper does not add them.
 
     Refuses (`GitResult(returncode=-1, ...)`, zero spawns) on an empty
-    `lines`, or on any line that is not exactly `"<create|delete> <ref>
-    <oid>"` (three space-separated tokens, first token one of the two
-    supported commands) — callers must gate on a non-empty, well-formed
-    batch themselves per the plan's own "issued only when non-empty" rule;
-    this is a second layer of that same discipline, not a substitute for it.
+    `commands` — callers gate on a non-empty batch themselves per the
+    plan's own "issued only when non-empty" rule. A command git does not
+    recognise is git's own refusal to report, not this wrapper's: the
+    triple form leaves no string for a caller to malform between
+    formatting and the wire (Review: overengineering-reviewer).
     """
-    if not lines:
+    if not commands:
         return GitResult(
             returncode=-1,
             stdout="",
             stderr="update_refs_stdin: refusing to spawn `git update-ref --stdin` for an empty batch",
         )
-    records: List[str] = []
-    for line in lines:
-        tokens = line.split(" ")
-        if len(tokens) != 3 or tokens[0] not in ("create", "delete"):
-            return GitResult(
-                returncode=-1,
-                stdout="",
-                stderr=(
-                    f"update_refs_stdin: malformed command {line!r} -- expected "
-                    "'create <ref> <oid>' or 'delete <ref> <oid>'"
-                ),
-            )
-        command, ref, oid = tokens
-        records.append(f"{command} {ref}\x00{oid}\x00")
-    stdin_data = "".join(records)
+    stdin_data = "".join(
+        f"{command} {ref}\x00{oid}\x00" for command, ref, oid in commands
+    )
     return _git(["update-ref", "--stdin", "-z"], cwd=cwd, input_data=stdin_data)
 
 

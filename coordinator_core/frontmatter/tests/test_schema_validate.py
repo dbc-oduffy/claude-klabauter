@@ -1286,8 +1286,17 @@ class TestHandoffPhaseKindGate:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'handoff_phase' for e in errors)
 
-    def test_unrelated_kind_still_fails(self):
+    def test_a_spinoff_carries_the_phase(self):
+        """Admitted at schema 10.5.0 (DoE ruling, 2026-09-11) — a plan-blitz mints
+        every replan baton as a spinoff, so the S lane could not be expressed on
+        any baton it produces. This test asserted the refusal before the widen."""
         fm = _valid_handoff(kind='spinoff', predecessor=None, handoff_phase='continuation')
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'handoff_phase' for e in errors)
+
+    def test_unrelated_kind_still_fails(self):
+        """The widen admitted one kind, not the axis."""
+        fm = _valid_handoff(kind='goal-seed', predecessor=None, handoff_phase='continuation')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'handoff_phase' for e in errors)
 

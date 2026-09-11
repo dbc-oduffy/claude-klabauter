@@ -54,6 +54,7 @@ import pytest
 from coordinator_core.distill._common import SIDECAR_SUFFIXES
 from coordinator_core.distill.harvest_debt import (
     DistillationLogMissingError,
+    DistillationLogUnparseableError,
     _specs_dir_relative_paths,
     compute_harvest_debt,
 )
@@ -119,6 +120,28 @@ def test_absent_log_never_treated_as_harvest_everything(tmp_path):
     except DistillationLogMissingError:
         # Expected -- this IS the assertion under test (see the docstring above).
         pass
+
+
+def test_nonempty_unparseable_log_fails_loud(tmp_path):
+    # A non-empty log that carries content beyond bare run headers but parses
+    # to zero rows (e.g. a header/row format the reader doesn't recognize)
+    # must refuse rather than silently report zero debt -- the exact ambiguity
+    # named in state/handoffs/2026-08-30-the-distill-pipeline-reads-its-own-
+    # log-w.md item 2.
+    specs_dir = _seed_specs(tmp_path, ["a.md"])
+    log_path = _write_log(tmp_path, "## Run r-1\nthis is not a row in any known dialect\n")
+    with pytest.raises(DistillationLogUnparseableError):
+        compute_harvest_debt(specs_dir, log_path)
+
+
+def test_run_header_only_log_is_legitimately_zero_rows(tmp_path):
+    # A log containing only a bare run header (a run that opened but has not
+    # logged any rows yet) is NOT the same defect -- it must not raise.
+    specs_dir = _seed_specs(tmp_path, ["a.md"])
+    log_path = _write_log(tmp_path, "## Run r-1\n")
+    result = compute_harvest_debt(specs_dir, log_path)
+    assert result.harvested_count == 0
+    assert result.harvest_debt == ["2026-07/a.md"]
 
 
 # ---------------------------------------------------------------------------

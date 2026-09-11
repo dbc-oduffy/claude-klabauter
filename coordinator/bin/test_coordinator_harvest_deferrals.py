@@ -576,6 +576,86 @@ def test_run_queue_append_emits_proposed_action_distinct_from_surface(harvest_mo
     assert proposed_action_val == "Do the actual fix here."
 
 
+@pytest.mark.parametrize("runner", ["_run_queue_append", "_run_lesson_promote"])
+def test_multiline_body_travels_by_body_file_on_both_write_seams(harvest_mod, monkeypatch, runner):
+    """Both write CLIs refuse a newline in `--body`; a prose body must go by `--body-file`."""
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        assert "--body" not in cmd
+        path = cmd[cmd.index("--body-file") + 1]
+        seen["path"] = path
+        with open(path, encoding="utf-8") as fh:
+            seen["text"] = fh.read()
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _Result()
+
+    monkeypatch.setattr(harvest_mod, "_resolve_cli_cmd", lambda name: [sys.executable, "-c", "pass"])
+    monkeypatch.setattr(harvest_mod.subprocess, "run", fake_run)
+
+    body = "First line of the ratified deferral.\n\nSecond paragraph.\n"
+    row = _row(
+        "ML1",
+        title="Multi-line body row",
+        surface="some/surface.py",
+        body=body,
+        change_kind="code-edit" if runner == "_run_queue_append" else "doctrine-edit",
+    )
+    assert getattr(harvest_mod, runner)(row, key="fixture-key", dry_run=False) is True
+    assert seen["text"] == body.rstrip("\n")
+    assert not os.path.exists(seen["path"])
+
+
+def test_single_line_body_stays_inline(harvest_mod, monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+
+        class _Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _Result()
+
+    monkeypatch.setattr(harvest_mod, "_resolve_cli_cmd", lambda name: [sys.executable, "-c", "pass"])
+    monkeypatch.setattr(harvest_mod.subprocess, "run", fake_run)
+
+    row = _row("SL1", title="t", surface="s.py", body="One line.\n", change_kind="code-edit")
+    assert harvest_mod._run_queue_append(row, key="k", dry_run=False) is True
+    cmd = seen["cmd"]
+    assert "--body-file" not in cmd
+    assert cmd[cmd.index("--body") + 1] == "One line."
+
+
+def test_partial_failure_headline_is_not_the_nothing_to_defer_headline(harvest_mod, monkeypatch, tmp_path, capsys):
+    """`Queued 0 deferred items: (none)` must never print when a row failed to write."""
+    plan = tmp_path / "plan.md"
+    plan.write_text("placeholder", encoding="utf-8")
+    monkeypatch.setattr(harvest_mod, "_refuse_if_live_foreign_plan_holder", lambda p: None)
+    monkeypatch.setattr(harvest_mod, "_locate_tasks_block", lambda text: "tasks")
+    monkeypatch.setattr(harvest_mod, "_parse_plan_id", lambda text: "fixture-plan")
+    monkeypatch.setattr(harvest_mod, "_parse_rows", lambda block: ([], 0))
+    monkeypatch.setattr(harvest_mod, "parse_frontmatter", lambda text: {"frontmatter": {}}, raising=False)
+    monkeypatch.setattr(harvest_mod, "_select_harvest_candidates", lambda rows, plan_fm: ([], [], 0))
+    monkeypatch.setattr(
+        harvest_mod, "_harvest", lambda plan_id, candidates, dry_run, legacy=None: ([], 0, 1, [])
+    )
+
+    rc = harvest_mod.main(["--plan", str(plan)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Queued 0 of 1 deferred items (1 FAILED): (none)" in out
+    assert "Queued 0 deferred items: (none)" not in out
+
+
 def test_routing_sets_are_disjoint(harvest_mod):
     """No `change_kind` may route to both seams.
 
@@ -587,3 +667,87 @@ def test_routing_sets_are_disjoint(harvest_mod):
     assert not (
         harvest_mod._QUEUE_ELIGIBLE_CHANGE_KINDS & harvest_mod._LESSON_PROMOTE_CHANGE_KINDS
     )
+
+
+def test_a_plan_without_plan_id_harvests_under_its_path_key(harvest_mod, monkeypatch, tmp_path, capsys):
+    """example-retrieval-repo-ue-addon F20: a blitz-minted S-lane spec carries no
+    `plan_id`, so every such harvest returned 0 after a warning that reads,
+    in the close-out line an EM surfaces, exactly like a plan with nothing to
+    defer. The rows must actually be queued."""
+    plan = tmp_path / "2026-09-11-a-blitz-minted-spec.md"
+    plan.write_text("placeholder", encoding="utf-8")
+    seen = {}
+
+    def _fake_harvest(plan_id, candidates, dry_run, legacy=None):
+        seen["plan_id"] = plan_id
+        seen["legacy"] = legacy
+        return (["D1"], 0, 0, [])
+
+    monkeypatch.setattr(harvest_mod, "_refuse_if_live_foreign_plan_holder", lambda p: None)
+    monkeypatch.setattr(harvest_mod, "_locate_tasks_block", lambda text: "tasks")
+    monkeypatch.setattr(harvest_mod, "_parse_plan_id", lambda text: None)
+    monkeypatch.setattr(harvest_mod, "_parse_rows", lambda block: ([{"id": "D1"}], 0))
+    monkeypatch.setattr(harvest_mod, "parse_frontmatter", lambda text: {"frontmatter": {}}, raising=False)
+    monkeypatch.setattr(
+        harvest_mod, "_select_harvest_candidates", lambda rows, plan_fm: ([{"id": "D1"}], [], 0)
+    )
+    monkeypatch.setattr(harvest_mod, "_harvest", _fake_harvest)
+
+    rc = harvest_mod.main(["--plan", str(plan)])
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert seen["plan_id"] == "plan-path-2026-09-11-a-blitz-minted-spec"
+    # No second key to check: this plan has no minted id to have keyed under.
+    assert seen["legacy"] is None
+    # The warning says the rows WERE queued -- the pre-fix text said the
+    # harvest was skipped, which is what made a loss read like a clean zero.
+    assert "The rows ARE queued" in captured.err
+    assert "D1" in captured.out
+
+
+def test_a_minted_plan_id_still_wins_and_carries_the_path_key_for_dedup(
+    harvest_mod, monkeypatch, tmp_path
+):
+    """A plan harvested once under its path key and later given a `plan_id`
+    must not re-queue those rows -- both keys are checked before any write."""
+    plan = tmp_path / "2026-09-11-a-named-plan.md"
+    plan.write_text("placeholder", encoding="utf-8")
+    seen = {}
+
+    def _fake_harvest(plan_id, candidates, dry_run, legacy=None):
+        seen["plan_id"] = plan_id
+        seen["legacy"] = legacy
+        return ([], 0, 0, [])
+
+    monkeypatch.setattr(harvest_mod, "_refuse_if_live_foreign_plan_holder", lambda p: None)
+    monkeypatch.setattr(harvest_mod, "_locate_tasks_block", lambda text: "tasks")
+    monkeypatch.setattr(harvest_mod, "_parse_plan_id", lambda text: "pln-named-abc123")
+    monkeypatch.setattr(harvest_mod, "_parse_rows", lambda block: ([], 0))
+    monkeypatch.setattr(harvest_mod, "parse_frontmatter", lambda text: {"frontmatter": {}}, raising=False)
+    monkeypatch.setattr(harvest_mod, "_select_harvest_candidates", lambda rows, plan_fm: ([], [], 0))
+    monkeypatch.setattr(harvest_mod, "_harvest", _fake_harvest)
+
+    harvest_mod.main(["--plan", str(plan)])
+    assert seen["plan_id"] == "pln-named-abc123"
+    assert seen["legacy"] == "plan-path-2026-09-11-a-named-plan"
+
+
+def test_the_other_key_dedups_a_row_already_harvested(harvest_mod, monkeypatch):
+    """The dedup check is what makes two keys safe rather than duplicating:
+    a row queued under the path key must not queue again under a later-minted
+    `plan_id`."""
+    monkeypatch.setattr(harvest_mod, "_candidate_search_dirs", lambda row: [])
+    monkeypatch.setattr(
+        harvest_mod,
+        "_collect_evidence_lines",
+        lambda dirs: [harvest_mod._harvest_key("plan-path-some-plan", "D1")],
+    )
+
+    queued, deduped, failed, unroutable = harvest_mod._harvest(
+        "pln-some-plan-abc123",
+        [{"id": "D1", "change_kind": "code-edit"}],
+        dry_run=True,
+        legacy_plan_id="plan-path-some-plan",
+    )
+    assert (queued, deduped, failed) == ([], 1, 0)
+    assert unroutable == []

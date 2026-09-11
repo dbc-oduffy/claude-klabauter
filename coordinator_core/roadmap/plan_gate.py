@@ -137,6 +137,42 @@ _CANDIDATE_ROLES = frozenset({"work"})
 #: is already being worked, and handing it to a planning wave races its holder.
 _CANDIDATE_STATES = frozenset({"ready_to_fire", "awaiting_gate"})
 
+#: Keys the fleet schema defines for a DIFFERENT object, which a reader may write
+#: onto a baton expecting it to hold the baton back. They do nothing: candidacy is
+#: `baton_role` + `status` + `deployment_state` and consults nothing else, so the
+#: record is well-formed frontmatter that changes no verdict — and the NEXT wave's
+#: EM reads the field and concludes the question was settled. That is worse than
+#: the open defect, because it looks answered.
+#:
+#: `external_gate` is the measured member: it is a plan SPINE-ROW field
+#: (`prep_gate.py :: _external_deps`), and two independent plan-blitz wave EMs
+#: recommended the baton-record form to example-game-workbench-repo-b8 as the fix for
+#: host-gated batons recycling every wave. The mechanism that does work is
+#: `blocked_by: [host:darwin|host:win32|host:linux]` (DoE doctrine 01123ed2a9,
+#: tripwire AN-EXTERNAL-GATE-ON-A-BATON-IS-INERT).
+#:
+#: Membership criterion, so this set grows on evidence rather than on suspicion: a
+#: key must be DEFINED by the fleet schema for another object AND plausibly written
+#: here in the belief it suppresses. A key that is merely unknown is not a member —
+#: `_BATON_FIELDS`' silence about it is correct, and reporting every stray key would
+#: bury this one.
+#:
+#: Third signal, and the one that predicts which candidates earn a slot
+#: (example-game-workbench-repo-b8, who found the case): the key was RECOMMENDED — named
+#: by agent-facing guidance, a skill body, or a generated verdict as the thing to
+#: write. `external_gate` reached them through two independent wave EMs' pull
+#: reasons, which is generated guidance converging on one wrong key rather than an
+#: author free-associating a plausible name. That is both how the mistake scales and
+#: why it survived two reviews, and it is checkable by grep rather than by judgement.
+#:
+#: `gate_dependency` is the near-miss and stays OUT, deliberately: it is a key about
+#: gating that does not suppress planning, which is the exact shape that invites
+#: addition. But this module already READS it and reports it under `gated`, with a
+#: note redirecting to `plan_blitz_hold_reason` — so listing it here would report a
+#: key that is already explained, which is the burying this criterion exists to
+#: prevent.
+_INERT_ON_A_BATON = frozenset({"external_gate", "pm_approved"})
+
 #: Lines read from the head of each record before the frontmatter block is
 #: declared unterminated. A cap, not a budget: claude-klabauter's widest live handoff
 #: frontmatter is a small fraction of this, and a record that blows it is
@@ -347,6 +383,12 @@ def _scan_fields(path: Path, wanted: frozenset) -> Dict[str, Any]:
                     continue
                 key = key.strip()
                 if key not in wanted:
+                    if key in _INERT_ON_A_BATON:
+                        # Reserved out-key, never a record field: this scanner's
+                        # contract is that an undeclared key reads as ABSENT, and
+                        # an inert key must stay absent to every reader of `_fm`
+                        # while still being reportable by the gate.
+                        out.setdefault("_inert", []).append(key)
                     current_key = None
                     continue
                 # Comment-strip BEFORE the shape decision: an inline list with a
@@ -1505,6 +1547,23 @@ def assemble_plan_gate(
     # so keying suppression on the field would silently kill candidates on stale
     # text. A baton that must not be planned at all has `plan_blitz_hold_reason`,
     # which says so in a field that means it.
+    # REPORTED, never acted on: an inert key changes no verdict, so suppressing the
+    # baton here would give the mistaken write the effect its author wanted and make
+    # the wrong spelling work. The whole defect is that it is indistinguishable, from
+    # the author's side, from having written the right thing — so it is said out loud.
+    inert_rows: List[Dict[str, Any]] = []
+    for record in records:
+        fields = record["_fm"].get("_inert") or []
+        if not fields:
+            continue
+        inert_rows.append(
+            {
+                "baton": record["id"],
+                "path": record["path"],
+                "fields": sorted(set(fields)),
+            }
+        )
+
     gated_rows: List[Dict[str, Any]] = []
     for record in records:
         if str(record["_fm"].get("deployment_state") or "").strip() != "awaiting_gate":
@@ -1672,6 +1731,7 @@ def assemble_plan_gate(
         "waiting_on_execution": len(waiting_on_execution_rows),
         "held": len(held_rows),
         "gated": len(gated_rows),
+        "inert_fields": len(inert_rows),
     }
 
     # `counts.unschedulable` says HOW MANY this pass cannot schedule and never
@@ -1737,6 +1797,7 @@ def assemble_plan_gate(
         "waiting_on_execution": waiting_on_execution_rows,
         "held": held_rows,
         "gated": gated_rows,
+        "inert_fields": inert_rows,
         "counts": dict(
             counts, untracked=len(untracked_rows), resurrected=len(resurrected_rows)
         ),
