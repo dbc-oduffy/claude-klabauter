@@ -525,6 +525,29 @@ def _parse_yaml_list_block(lines: List[str], base_indent: int) -> List[Any]:
     return items
 
 
+def _closes_quote(value: str, quote: str) -> bool:
+    """Does `value` (opening with `quote`) carry its own closing quote?
+
+    Trailing content after the close — an inline comment, say — still counts as
+    closed. A doubled quote inside a single-quoted YAML scalar (`it''s`) is an
+    escape, not a close, so pairs are consumed together.
+    """
+    body = value[1:]
+    idx = 0
+    while idx < len(body):
+        if body[idx] != quote:
+            idx += 1
+            continue
+        if quote == "'" and body[idx + 1:idx + 2] == "'":
+            idx += 2
+            continue
+        if quote == '"' and idx and body[idx - 1] == '\\':
+            idx += 1
+            continue
+        return True
+    return False
+
+
 def _parse_yaml_mapping_block(lines: List[str], base_indent: int) -> Dict[str, Any]:
     """Parse a YAML mapping block at base_indent.
 
@@ -602,8 +625,40 @@ def _parse_yaml_mapping_block(lines: List[str], base_indent: int) -> Dict[str, A
             comment_stripped = _strip_inline_comment(rest_stripped)
             if comment_stripped.startswith('[') and comment_stripped.endswith(']'):
                 result[key] = _parse_inline_list(comment_stripped)
-            else:
-                result[key] = _parse_scalar(rest_stripped)
+                i += 1
+                continue
+            # A QUOTED scalar whose closing quote is on a later line folds those
+            # lines into the value with single spaces. Without this, each
+            # continuation was re-read as its own `key: value` pair at this
+            # level: a `blocking_notes: "…"` value wrapping a sentence like
+            # `status: actioned, routed …` overwrote the record's real `status`,
+            # so a gate read `actioned` off an open baton. Found by
+            # test_narrow_scan_agrees_with_the_general_parser, whose narrow
+            # scanner already skipped continuations (2026-09-11).
+            #
+            # ONLY the unterminated-quote case, deliberately. A more-indented
+            # `key: value` line is ambiguous — it is a continuation of a plain
+            # scalar in YAML, but this parser has always tolerated it as a
+            # ragged-indent mapping entry instead (test_dag_parse_yaml_list_
+            # block's ragged/sequence-of-mappings cases pin that reading), and
+            # an unbalanced quote is the one shape that cannot be either.
+            quote = rest_stripped[:1]
+            if quote in ('"', "'") and not _closes_quote(rest_stripped, quote):
+                folded = [rest_stripped]
+                j = i + 1
+                while j < len(lines):
+                    nxt_s = lines[j].rstrip().strip()
+                    if not nxt_s:
+                        break
+                    folded.append(nxt_s)
+                    if _closes_quote(quote + nxt_s, quote):
+                        j += 1
+                        break
+                    j += 1
+                result[key] = _parse_scalar(' '.join(folded))
+                i = j
+                continue
+            result[key] = _parse_scalar(rest_stripped)
 
         i += 1
 

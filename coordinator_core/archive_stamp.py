@@ -770,6 +770,26 @@ class StampOutcome:
     message: Optional[str] = None
 
 
+def _read_current_shipped_in_kind(handoff_path: str) -> Optional[str]:
+    """The record's current `shipped_in_kind`, or None when absent/unreadable.
+
+    Same non-write safety as `_read_current_shipped_in`: only consulted after the
+    stamp op has skipped, which is by construction a non-write. Exists because a
+    terminal record carrying `shipped_in` and no `shipped_in_kind` is
+    schema-INVALID (the field is required-when-shipped) and the skip branch that
+    left it that way cannot see the missing half.
+    """
+    try:
+        text = Path(handoff_path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    split = split_frontmatter(text)
+    if split is None:
+        return None
+    val = read_fm_field_unquoted(split.fm_text, "shipped_in_kind")
+    return val if val not in (None, "null", "") else None
+
+
 def _read_current_shipped_in(handoff_path: str) -> Optional[str]:
     """Read the current (unquoted) `shipped_in` value straight off disk, or None.
 
@@ -1144,6 +1164,42 @@ def stamp_shipped_in(
         error=result.get("error"),
         message=result.get("message"),
     )
+    if rc == 0 and not outcome.applied and not outcome.replaced and not force:
+        # The op skipped because `shipped_in` is already present. Two sub-cases,
+        # and the first is a REPAIR this verb's own name promises: a record
+        # carrying `shipped_in` and no `shipped_in_kind` is schema-invalid, and
+        # the skip branch keys on the value alone, so it never sees the missing
+        # discriminant. Filling the kind beside an IDENTICAL value changes no
+        # provenance — a different value still needs force, and says so rather
+        # than exiting 0 in silence (DoE-claude, 2026-09-11: a terminal record
+        # left unarchivable while the matching verb reported success).
+        current_kind = _read_current_shipped_in_kind(handoff_path)
+        if current_kind is None and prior_value and prior_value == _final_stamp_value(resolved):
+            repair = asyncio.run(
+                _stamp_handler({**stamp_params, "force": True}, repo_root=repo_root)
+            )
+            rc = int(repair.get("exit_code", 1))
+            outcome = StampOutcome(
+                exit_code=rc,
+                applied=bool(repair.get("applied", False)),
+                replaced=bool(repair.get("replaced", False)),
+                prior_value=prior_value,
+                error=repair.get("error"),
+                message=repair.get("message"),
+            )
+            print(
+                f"stamp_shipped_in: filled the missing shipped_in_kind={kind!r} for "
+                f"{handoff_path}; shipped_in {prior_value!r} unchanged",
+                file=sys.stderr,
+            )
+            return outcome
+        print(
+            f"stamp_shipped_in: nothing written for {handoff_path} — shipped_in is "
+            f"already {prior_value!r} (shipped_in_kind="
+            f"{current_kind!r}). Re-run with force=True and an explicit sha to replace it.",
+            file=sys.stderr,
+        )
+        return outcome
     if rc != 0:
         print(
             f"stamp_shipped_in: WARNING stamp op failed (exit {rc}) for {handoff_path}: "

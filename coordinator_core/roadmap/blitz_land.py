@@ -54,14 +54,13 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from coordinator_core.locked_write import MutateAbort, locked_rmw
 from coordinator_core.roadmap.plan_gate import (
     BATON_CODED_STATES,
     PLAN_APPROVED_STATUSES,
     assemble_plan_gate,
-    link_plans,
 )
 
 #: The status a `ready` verdict advances a plan to. Deliberately a constant rather
@@ -85,7 +84,6 @@ APPROVED_STATUS = "approved"
 PIVOT_VERDICTS = frozenset({"PIVOT", "REJECTED"})
 
 _FM_BOUNDS = re.compile(r"\A(?:\s*<!--.*?-->\s*)*---\s*\n(?P<fm>.*?)\n---\s*(?:\n|\Z)", re.DOTALL)
-_STATUS_LINE = re.compile(r"^status:.*$", re.MULTILINE)
 
 
 class LandingRefused(Exception):
@@ -277,6 +275,19 @@ def close_dispatched(
     does not commit: the executor's changes have to be in history before a SHA can
     name them, and a stamp citing a commit that does not exist yet is a citation to
     nothing. A caller that has not committed gets a refusal telling it to.
+
+    One terminal state is still closable: `shipped` with no `shipped_in`. An
+    executor that hand-stamps `shipped` during the Dispatch phase leaves exactly
+    that, and the shipped-handoff sweep fails closed on it — the record can never
+    archive, and this landing is the one caller holding the SHA that would repair it.
+    So it stamps the SHA and leaves `deployment_state` alone. Every other terminal
+    state, and a `shipped` baton that already cites a commit, stays refused: a
+    re-landing must never overwrite a citation it did not write.
+
+    `shipped_in_kind: ship-commit` is written in lockstep with every `shipped_in`
+    (DR-096; `handoff.schema.json` requires it once a `shipped` baton carries a
+    `shipped_in`). A confirm-and-close's prior SHA is a ship commit too — it names
+    where the work landed.
     """
     if not shipped_in or not re.fullmatch(r"[0-9a-fA-F]{7,64}", shipped_in):
         raise LandingRefused(
@@ -290,11 +301,12 @@ def close_dispatched(
 
     def _close(old: str) -> str:
         state = _read_field(old, "deployment_state")
-        if state in BATON_CODED_STATES:
+        cited = _read_field(old, "shipped_in") not in (None, "null", "~")
+        if state in BATON_CODED_STATES and (state != "shipped" or cited):
             raise MutateAbort(f"baton is already terminal (deployment_state: {state})")
         text = _set_field(old, "deployment_state", "shipped")
         text = _set_field(text, "shipped_in", shipped_in)
-        return text
+        return _set_field(text, "shipped_in_kind", "ship-commit")
 
     stamped = True
     detail = None
@@ -310,6 +322,35 @@ def close_dispatched(
         "shipped_in": shipped_in,
         "note": detail,
     }
+
+
+def _verified_prior_sha(
+    worktree_root: Path, prior: Any
+) -> Tuple[Optional[str], Optional[str]]:
+    """`(sha, None)` for a usable per-baton prior SHA, `(None, reason)` otherwise.
+
+    A confirm-and-close XS verifies work that shipped long before this wave, in
+    a commit the executor names. Stamping the landing's own `shipped_in` there
+    cites the closure commit and loses the one SHA that says where the work is.
+    The prior SHA comes from an agent, so it is honoured only as a full 40-hex
+    COMMIT present in this repo's object store (read in process, no spawn); an
+    abbreviated or absent one falls back to the landing's SHA and is named.
+    `(None, None)` means none was reported.
+    """
+    if prior in (None, ""):
+        return None, None
+    if not isinstance(prior, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", prior):
+        return None, f"not a full 40-hex SHA: {prior!r}"
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import _read_object
+
+    try:
+        found = _read_object(resolve_git_common_dir(worktree_root), prior)
+    except Exception as exc:  # noqa: BLE001 - any read failure is "cannot verify"
+        return None, f"object store unreadable: {type(exc).__name__}: {exc}"
+    if found is None or found[0] != "commit":
+        return None, f"no commit {prior} in this repo"
+    return prior.lower(), None
 
 
 def authorize_execution(
@@ -611,7 +652,12 @@ def land_wave(
             # A route without a plan resolves no planPath — resolving it first would
             # refuse those lanes on a field it is correct for them not to have.
             plan_path = (
-                None if _carries_no_plan(route) else _rel(entry.get("planPath"), worktree_root)
+                None
+                if _carries_no_plan(route)
+                else _rel(
+                    entry.get("planPath") or _plan_path_from_trail(entry, wave_result),
+                    worktree_root,
+                )
             )
             # The S lane parks its spec onto the baton and marks it execution-ready,
             # so `/execute-plan` resolves it as a straight dispatch instead of
@@ -620,9 +666,16 @@ def land_wave(
             if entry.get("route") == "dispatch":
                 # XS: the Dispatch phase already did the work. What is owed is the
                 # terminal stamp, not an approval — there is no plan to approve.
-                closed.append(
-                    close_dispatched(worktree_root, baton_path, shipped_in or "")
-                )
+                prior, rejected = _verified_prior_sha(worktree_root, entry.get("priorShippedIn"))
+                if rejected and not shipped_in:
+                    raise LandingRefused(
+                        f"priorShippedIn rejected ({rejected}) and the landing carries no "
+                        "shipped_in to fall back to — land again with shipped_in=<sha>"
+                    )
+                row = close_dispatched(worktree_root, baton_path, prior or shipped_in or "")
+                if rejected:
+                    row["prior_shipped_in_rejected"] = rejected
+                closed.append(row)
             elif entry.get("route") == "spec-dispatch":
                 execution_ready.append(
                     authorize_execution(
@@ -664,7 +717,10 @@ def land_wave(
             plan_path = (
                 None
                 if _carries_no_plan(entry.get("route"))
-                else _rel(entry.get("planPath"), worktree_root)
+                else _rel(
+                    entry.get("planPath") or _plan_path_from_trail(entry, wave_result),
+                    worktree_root,
+                )
             )
             if plan_path is not None:
                 plan_abs = worktree_root / plan_path
@@ -809,9 +865,40 @@ def _unwrap_wave_result(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
+def _plan_path_from_trail(entry: Dict[str, Any], wave_result: Dict[str, Any]) -> Optional[str]:
+    """The plan this baton's own planning report names, or None.
+
+    A wave whose readiness gate returns verdict rows WITHOUT `planPath` is
+    unlandable in every lane at once — measured 2026-09-11 on claude-klabauter fire 0-1:
+    four verdicts, 31 agents and 2.6M tokens, all refused on the missing field,
+    with the plans themselves authored and reviewed on disk. The pass that wrote
+    each plan also wrote `<trailSlotDir>/<batonId>.planning-report.md` carrying
+    `plan:` in its frontmatter, and the result carries `trailSlotDir`, so the
+    answer the verdict dropped is recoverable from the wave's own trail rather
+    than guessed at. A trail that names no plan either still refuses.
+    """
+    slot = wave_result.get("trailSlotDir") or wave_result.get("trailDir")
+    baton_id = entry.get("batonId")
+    if not slot or not baton_id:
+        return None
+    report = Path(str(slot).replace("\\", "/")) / f"{baton_id}.planning-report.md"
+    try:
+        text = report.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = re.search(r"^plan:\s*(.+)$", text, re.MULTILINE)
+    if not match:
+        return None
+    named = match.group(1).strip().strip("\"'")
+    return named or None
+
+
 def _rel(path: Optional[str], worktree_root: Path) -> str:
     if not path:
-        raise LandingRefused("verdict carries no planPath")
+        raise LandingRefused(
+            "verdict carries no planPath, and no planning report in the wave's trail "
+            "names one for this baton"
+        )
     candidate = Path(path)
     if candidate.is_absolute():
         try:

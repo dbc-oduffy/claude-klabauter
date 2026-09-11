@@ -112,6 +112,57 @@ def test_a_baton_already_owning_a_different_plan_is_refused(tmp_path):
     assert _status(root, mine) == "draft", "refused landing must not have stamped"
 
 
+def _planning_report(root: Path, slot: Path, baton_id: str, plan_rel: str) -> None:
+    slot.mkdir(parents=True, exist_ok=True)
+    (slot / f"{baton_id}.planning-report.md").write_text(
+        f"---\nbaton: {baton_id}\npass: resolve\nplan: {plan_rel}\nstatus: drafted\n---\n\nreport\n",
+        encoding="utf-8",
+    )
+
+
+def test_a_verdict_with_no_planPath_falls_back_to_the_wave_s_own_trail(tmp_path):
+    """claude-klabauter fire 0-1, 2026-09-11: the readiness gate returned every verdict row
+    without `planPath`, so four verdicts, 31 agents and 2.6M tokens refused at the
+    landing while the plans sat authored and reviewed on disk. The pass that wrote
+    each plan also wrote its planning report, which names it."""
+    root = _repo(tmp_path)
+    plan = _plan(root, "the-plan", "draft")
+    _baton(root, "b-1")
+    slot = root / "state" / "plan-blitz" / "run" / "wave-0-abc"
+    _planning_report(root, slot, "b-1", plan)
+
+    out = bl.land_wave(
+        root,
+        {
+            "waveIndex": 0,
+            "trailSlotDir": str(slot),
+            "ready": [{"batonId": "b-1", "verdict": "ready", "route": "plan"}],
+        },
+    )
+
+    assert not out["refused"]
+    assert out["approved"][0]["stamped"] is True
+    assert _status(root, plan) == "approved"
+
+
+def test_a_verdict_with_no_planPath_and_no_trail_report_still_refuses(tmp_path):
+    root = _repo(tmp_path)
+    _plan(root, "the-plan", "draft")
+    _baton(root, "b-1")
+
+    out = bl.land_wave(
+        root,
+        {
+            "waveIndex": 0,
+            "trailSlotDir": str(root / "state" / "plan-blitz" / "run" / "wave-0-abc"),
+            "ready": [{"batonId": "b-1", "verdict": "ready", "route": "plan"}],
+        },
+    )
+
+    assert not out["approved"]
+    assert "no planning report" in out["refused"][0]["reason"]
+
+
 def test_a_missing_plan_refuses_rather_than_stamping(tmp_path):
     root = _repo(tmp_path)
     _baton(root, "b-1")
@@ -216,6 +267,82 @@ def test_a_dispatch_ready_verdict_closes_the_baton_terminal(tmp_path):
     assert fm["shipped_in"] == "0983062abc"
 
 
+_PRIOR = "a" * 40
+
+
+def _object_store_holds(monkeypatch, sha, kind="commit"):
+    from coordinator_core.git import git_objects
+
+    monkeypatch.setattr(
+        git_objects, "_read_object", lambda common, s: (kind, b"") if s == sha else None
+    )
+
+
+def test_a_confirm_and_close_xs_keeps_the_sha_its_work_shipped_in(tmp_path, monkeypatch):
+    """example-store-repo, 2026-09-11: a confirm-and-close XS verifies work that shipped
+    long before the wave. Stamping the landing's SHA there cites the closure
+    commit and loses the one SHA that says where the work is."""
+    root = _repo(tmp_path)
+    baton = _baton(root, "b-1")
+    _object_store_holds(monkeypatch, _PRIOR)
+
+    out = bl.land_wave(
+        root,
+        {"waveIndex": 0, "ready": [{"batonId": "b-1", "route": "dispatch", "priorShippedIn": _PRIOR}]},
+    )
+
+    assert out["closed"][0]["closed"] is True and not out["refused"]
+    assert pg._read_baton_fields(root / baton)["shipped_in"] == _PRIOR
+    assert "prior_shipped_in_rejected" not in out["closed"][0]
+
+
+@pytest.mark.parametrize(
+    "prior, stored_kind, reason",
+    [
+        ("0983062", "commit", "not a full 40-hex SHA"),
+        (_PRIOR, None, "no commit"),
+        (_PRIOR, "tree", "no commit"),
+    ],
+)
+def test_an_unverifiable_prior_sha_falls_back_to_the_landing_and_is_named(
+    tmp_path, monkeypatch, prior, stored_kind, reason
+):
+    """The prior SHA comes from an agent. One this repo cannot show to be a commit
+    is not stamped; the landing's own SHA is, and the row says why."""
+    root = _repo(tmp_path)
+    baton = _baton(root, "b-1")
+    if stored_kind is None:
+        _object_store_holds(monkeypatch, "b" * 40)
+    else:
+        _object_store_holds(monkeypatch, _PRIOR, stored_kind)
+
+    out = bl.land_wave(
+        root,
+        {"waveIndex": 0, "ready": [{"batonId": "b-1", "route": "dispatch", "priorShippedIn": prior}]},
+        shipped_in="0983062abc",
+    )
+
+    assert pg._read_baton_fields(root / baton)["shipped_in"] == "0983062abc"
+    assert reason in out["closed"][0]["prior_shipped_in_rejected"]
+
+
+def test_a_rejected_prior_with_no_landing_sha_is_refused_naming_the_rejection(
+    tmp_path, monkeypatch
+):
+    root = _repo(tmp_path)
+    _baton(root, "b-1")
+    _object_store_holds(monkeypatch, "b" * 40)
+
+    out = bl.land_wave(
+        root,
+        {"waveIndex": 0, "ready": [{"batonId": "b-1", "route": "dispatch", "priorShippedIn": _PRIOR}]},
+    )
+
+    assert not out["closed"]
+    assert "priorShippedIn rejected" in out["refused"][0]["reason"]
+    assert "no commit" in out["refused"][0]["reason"]
+
+
 def test_closing_a_dispatched_baton_without_a_sha_is_refused(tmp_path):
     """This module does not commit, so a stamp written before the commit cites
     nothing. Refusing is the only honest option — a citation to a SHA that does not
@@ -277,6 +404,70 @@ def test_re_landing_does_not_re_close_a_terminal_baton(tmp_path):
 
     assert second["closed"][0]["closed"] is False
     assert "already terminal" in second["closed"][0]["note"]
+    assert "shipped_in: 0983062" in (root / "state/handoffs/b-1.md").read_text(encoding="utf-8")
+
+
+def test_closing_stamps_shipped_in_kind_in_lockstep(tmp_path):
+    """handoff.schema.json requires `shipped_in_kind` once a `shipped` baton carries
+    a `shipped_in`; a close that writes one without the other fails validation."""
+    root = _repo(tmp_path)
+    _baton(root, "b-1")
+
+    bl.land_wave(
+        root,
+        {"waveIndex": 0, "ready": [{"batonId": "b-1", "route": "dispatch"}]},
+        shipped_in="0983062",
+    )
+
+    text = (root / "state/handoffs/b-1.md").read_text(encoding="utf-8")
+    assert "shipped_in: 0983062" in text
+    assert "shipped_in_kind: ship-commit" in text
+
+
+@pytest.mark.parametrize("empty", ["", "shipped_in: null", "shipped_in: ~"])
+def test_a_hand_stamped_shipped_baton_without_a_sha_gets_its_sha(tmp_path, empty):
+    """An executor that hand-stamps `shipped` leaves a record the shipped-handoff
+    sweep can never archive. The landing holds the SHA, so it writes it rather than
+    reporting the baton terminal and writing nothing."""
+    root = _repo(tmp_path)
+    rel = _baton(root, "b-1")
+    path = root / rel
+    stamped = "deployment_state: shipped" + (f"\n{empty}" if empty else "")
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("deployment_state: ready_to_fire", stamped),
+        encoding="utf-8",
+    )
+
+    out = bl.land_wave(
+        root,
+        {"waveIndex": 0, "ready": [{"batonId": "b-1", "route": "dispatch"}]},
+        shipped_in="0983062",
+    )
+
+    assert out["closed"][0]["closed"] is True
+    text = path.read_text(encoding="utf-8")
+    assert "shipped_in: 0983062" in text
+    assert "shipped_in_kind: ship-commit" in text
+    assert text.count("deployment_state:") == 1
+
+
+@pytest.mark.parametrize("state", ["continued", "closed"])
+def test_other_terminal_states_without_a_sha_stay_refused(tmp_path, state):
+    root = _repo(tmp_path)
+    rel = _baton(root, "b-1")
+    path = root / rel
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("ready_to_fire", state), encoding="utf-8"
+    )
+
+    out = bl.land_wave(
+        root,
+        {"waveIndex": 0, "ready": [{"batonId": "b-1", "route": "dispatch"}]},
+        shipped_in="0983062",
+    )
+
+    assert out["closed"][0]["closed"] is False
+    assert "shipped_in" not in path.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

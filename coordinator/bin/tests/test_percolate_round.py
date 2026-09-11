@@ -2557,6 +2557,39 @@ def _init_git_repo_for_lock(root: Path) -> None:
     (root / ".git").mkdir(parents=True, exist_ok=True)
 
 
+def _init_publishable_dest(root: Path) -> None:
+    """A real clone on `main`, tracking an origin it is level with.
+
+    For a test whose `publish.main` gets PAST the lock loop: the destination
+    refresh then runs (§ `percolate.dest_refresh.refresh_dest_from_origin`)
+    and refuses a dest whose checked-out branch tracks nothing, so the bare
+    `.git` directory `_init_git_repo_for_lock` builds is not a dest this
+    driver will publish to. The repo is its own origin -- the same shape, and
+    rationale, as `coordinator/tests/test_publish_mirror_bare_name_expansion.py
+    :: _init_git_repo`.
+    """
+
+    def _git(*args: str) -> None:
+        subprocess.run(
+            ["git", *args],
+            cwd=str(root),
+            capture_output=True,
+            check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    _git("init", "-b", "main")
+    _git(
+        "-c", "user.email=percolate-round-lock-test@claude-klabauter.test",
+        "-c", "user.name=Percolate Round Lock Test",
+        "-c", "commit.gpgsign=false",
+        "commit", "--allow-empty", "-m", "chore: init",
+    )
+    _git("remote", "add", "origin", str(root))
+    _git("fetch", "--no-tags", "origin")
+    _git("branch", "--set-upstream-to=origin/main", "main")
+
+
 def _load_publish_module_for_lock_test():
     spec = importlib.util.spec_from_file_location(
         "publish_percolate_round_lock_handoff_under_test", _BIN_DIR / "publish.py"
@@ -2654,6 +2687,10 @@ def test_inherited_root_does_not_deadlock(tmp_path, monkeypatch):
           child re-attempt root A's already-held lock would now fail FAST
           (instant refusal, not a 180s stall) and this test's `rc == 0`
           would flip to `75` immediately.
+
+    Both dests are real clones level with an origin, so the destination
+    refresh also runs on root A while the parent still holds its lock --
+    the "refresh runs inside the same held lock" leg `publish.main` names.
     """
     import coordinator_core.locked_write as locked_write
 
@@ -2663,8 +2700,8 @@ def test_inherited_root_does_not_deadlock(tmp_path, monkeypatch):
     root_b = tmp_path / "dest-b"
     root_a.mkdir()
     root_b.mkdir()
-    _init_git_repo_for_lock(root_a)
-    _init_git_repo_for_lock(root_b)
+    _init_publishable_dest(root_a)
+    _init_publishable_dest(root_b)
 
     # Speed up the timeout for this test only -- `timeout` is a keyword-only
     # parameter on the real generator function `@contextmanager` wraps
@@ -3324,6 +3361,38 @@ def test_classify_dropped_paths_computes_real_causes(tmp_path):
     assert buckets["gitignored"] == ["ignored.pyc"]
     assert buckets["absent"] == ["missing.md"]
     assert buckets["unaccounted"] == ["changed.md"]
+
+
+def test_refresh_rewritten_stat_clears_stat_only_dirt_from_an_lf_rewrite(tmp_path):
+    """The claude-klabauter 2026-09-11 shape: dest's CRLF checkout (autocrlf=
+    true) rewritten by the sync with the LF payload -- same blob, new size.
+    `git status` read ` M` with an empty `git diff`, and percolate-push then
+    refused on 151 such paths. The round must leave its own rewrites clean."""
+    repo = _init_head_repo(tmp_path, {"seed.md": "seed\n"})
+    _git_head(repo, "config", "core.autocrlf", "true")
+    (repo / "same.py").write_bytes(b"one\r\ntwo\r\n")
+    _git_head(repo, "add", "same.py")
+    _git_head(repo, "commit", "-q", "-m", "crlf checkout")
+    (repo / "same.py").write_bytes(b"one\ntwo\n")
+    assert _git_head(repo, "status", "--porcelain").stdout == " M same.py\n"
+
+    assert _mod._refresh_rewritten_stat(str(repo), ["same.py"]) == 1
+    assert _git_head(repo, "status", "--porcelain").stdout == ""
+
+
+def test_refresh_rewritten_stat_failure_never_ends_the_round(tmp_path, capsys):
+    """A peer holding `.git/index.lock` makes the refresh fail; the round
+    reports it and carries on, with dest exactly as the sync left it."""
+    repo = _init_head_repo(tmp_path, {"same.md": "x\n"})
+    os.utime(repo / "same.md", (1_000_000_000, 1_000_000_000))
+    index_before = (repo / ".git" / "index").read_bytes()
+    (repo / ".git" / "index.lock").write_bytes(b"")
+    try:
+        assert _mod._refresh_rewritten_stat(str(repo), ["same.md"]) == 0
+    finally:
+        (repo / ".git" / "index.lock").unlink()
+    assert "stat refresh failed" in capsys.readouterr().err
+    assert (repo / ".git" / "index").read_bytes() == index_before
 
 
 def test_describe_dropped_causes_names_unaccounted_paths():

@@ -367,6 +367,28 @@ def test_re_stamping_a_certified_plan_writes_nothing(tmp_path):
     assert path.stat().st_mtime_ns == mtime
 
 
+def test_findings_the_gate_no_longer_produces_are_re_stamped(tmp_path):
+    """A bar fixed after the stamp landed leaves the body unchanged — CERTIFIED by
+    sha — while the recorded findings are wrong. Example-game-repo, 2026-09-11: coded and
+    deferred rows stamped as withheld. Without a re-stamp no driver can correct it."""
+    common = _repo(tmp_path)
+    _plan(tmp_path)
+    path = tmp_path / REL
+    _stamp({"plan": REL, "by": BY}, common)
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "mise_prepped_findings: []", "mise_prepped_findings: [C1, D1]"
+        ),
+        encoding="utf-8",
+    )
+    assert pg.read_stamp(path.read_text(encoding="utf-8"))["state"] == pg.CERTIFIED
+
+    result = _stamp({"plan": REL, "by": "second-session"}, common)
+
+    assert result["outcome"] == "stamped"
+    assert _fm_of(path)["mise_prepped_findings"] == []
+
+
 def test_a_stale_stamp_is_replaced_not_duplicated(tmp_path):
     common = _repo(tmp_path)
     _plan(tmp_path)

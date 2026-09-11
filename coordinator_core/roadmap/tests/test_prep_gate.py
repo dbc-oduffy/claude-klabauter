@@ -290,6 +290,27 @@ def test_a_gate_with_no_requires_is_not_prepped(tmp_path):
     assert "requires" in report["classes"]["EXTERNAL_DEPS"]["detail"]
 
 
+@pytest.mark.parametrize(
+    "closure", ["disposition: coded", "disposition: wont_do", "disposition: open\n  deferred: true"]
+)
+def test_a_row_no_wave_schedules_is_skipped_not_withheld(tmp_path, closure):
+    """`withheld` becomes `mise_prepped_findings`: rows held by an uncleared
+    external_gate, work waiting on somebody else. Example-game-repo, 2026-09-11: a plan with
+    59 of 70 rows coded stamped "62 row(s) withheld", which its aggregate reader
+    reports as a PARTIAL-FIRE excluding work that is finished."""
+    spine = f"""- id: C1
+  title: Already done
+  change_kind: code-edit
+  surface: coordinator_core/example.py
+  writes: [<resolved-in-chunk>]
+  queue_scope: project
+  {closure}
+"""
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["verdict"] == pg.PREPPED
+    assert report["withheld_rows"] == []
+
+
 def test_landed_work_withholds_its_own_row_and_the_plan_still_certifies(tmp_path):
     """Row granularity, deliberately: refusing the plan would discard every
     schedulable row alongside the blocked one."""

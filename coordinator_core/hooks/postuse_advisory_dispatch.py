@@ -1269,13 +1269,16 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
             pass
         return ""
 
+    # Optional by wording, never imperative: the harness already delivers a
+    # completion notification, so a driver told to "arm the watcher" hears a
+    # second instruction beside plan-blitz's "then wait". The watcher is for
+    # following a run live, and its cap can end before a long run does.
     return (
-        "WORKFLOW MONITOR: this Workflow run is watched by a background hook"
-        " check, not by you — arm the watcher instead of hand-writing one."
-        f' Paste: Monitor(command="{monitor_command}", timeout_ms={cap_ms},'
-        " persistent=false). The watcher enforces its own wall-clock cap"
-        " independent of this timeout_ms and exits on its own once the run"
-        " reaches a terminal state."
+        "WORKFLOW MONITOR (optional): completion arrives as a task notification"
+        " without any watcher. To follow this run live instead:"
+        f' Monitor(command="{monitor_command}", timeout_ms={cap_ms},'
+        f" persistent=false). It stops at its own {cap_seconds}s cap or at the"
+        " run's end, whichever comes first."
     )
 
 

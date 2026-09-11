@@ -252,8 +252,9 @@ _TO_REPO_CROSS_REPO_MEMO_DESCRIPTION = (
     "without already knowing the alias mapping. Absent on the entire "
     "pre-2026-07-24 corpus and not yet emitted by claude-klabauter's memo_send — "
     "always optional, never required, a receiver-repo-local extension "
-    "consumed by hooks/scripts/validate-frontmatter-schema.py's "
-    "routing-mismatch check. Adopted per cross-repo/inbox/2026-07-24-"
+    "consumed by coordinator_core/write_guards/"
+    "validate_frontmatter_schema_{advisory,deny}.py's routing-mismatch "
+    "check.Adopted per cross-repo/inbox/2026-07-24-"
     "claude-klabauter-em-central-id-canonical-order.md \"Not asked for, "
     "deliberately\" (PM-ratified)."
 )

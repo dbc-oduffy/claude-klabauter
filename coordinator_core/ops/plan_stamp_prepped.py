@@ -67,10 +67,12 @@ Negative-spec:
     hashes the WHOLE FILE and would report every plan stale the moment its own
     stamp landed.
   - Does NOT re-write an unchanged certification. A plan already CERTIFIED
-    against its current body returns the file's own bytes, which
-    ``locked_rmw`` then skips writing — that is how idempotence is spelled here,
-    and it keeps ``mise_prepped_at`` meaning "when this body was certified"
-    rather than "when someone last ran the op".
+    against its current body, whose recorded findings are the ones the gate
+    recomputes now, returns the file's own bytes, which ``locked_rmw`` then
+    skips writing — that is how idempotence is spelled here, and it keeps
+    ``mise_prepped_at`` meaning "when this certification was made" rather than
+    "when someone last ran the op". Findings that differ are a different
+    certification and are re-stamped.
   - Does NOT repair a hand-written partial stamp in a shape it cannot express.
     A block-scalar or nested-block value under one of the four keys is refused by
     name; the four fields are written together or not at all, and silently
@@ -240,7 +242,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
         stamp = read_stamp(old_text)
         state["stamp"] = stamp
-        if stamp["state"] == CERTIFIED:
+        # CERTIFIED is a body verdict; the findings are the gate's, recomputed just
+        # above. A stamp whose body is unchanged but whose recorded findings the gate
+        # no longer produces — a bar fixed after the stamp landed — is re-stamped, or
+        # no driver could ever correct it: every later run would read it as done.
+        findings_drifted = sorted(stamp["findings"] or []) != sorted(report["withheld_rows"])
+        if stamp["state"] == CERTIFIED and not findings_drifted:
             # Byte-identical return: locked_rmw skips the write entirely, so a
             # re-run neither churns the mtime nor moves `mise_prepped_at` off the
             # moment this body was actually certified.

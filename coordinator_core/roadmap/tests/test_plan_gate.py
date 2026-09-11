@@ -552,11 +552,129 @@ def test_whole_tree_scan_holds_the_brightline():
     elapsed_ms = (time.process_time() - start) * 1000
 
     assert report["scanned"]["batons"] > 0, "empty scan proves nothing about cost"
+    assert report["index_unreadable"] is None, "the index read is inside this budget, not skipped"
     assert elapsed_ms < 500, (
         f"assemble_plan_gate took {elapsed_ms:.0f}ms process time over "
         f"{report['scanned']} — over the 500ms brightline. Cut the real cost; "
         f"do not raise this number."
     )
+
+
+# ---------------------------------------------------------------------------
+# A baton still being minted is not a candidate
+# ---------------------------------------------------------------------------
+
+
+def _index_holds(monkeypatch, *stub_ids):
+    paths = frozenset(f"state/handoffs/{s}.md" for s in stub_ids)
+    monkeypatch.setattr(pg, "_tracked_paths", lambda root: (paths, None))
+
+
+def test_an_untracked_baton_is_named_and_held_out_of_every_wave(tmp_path, monkeypatch):
+    """example-cockpit-repo, 2026-09-11: four handoffs minted `pickup_ready` before
+    their commit reached wave 0 while their author was still writing them."""
+    _baton(tmp_path, "settled")
+    _baton(tmp_path, "minting")
+    _index_holds(monkeypatch, "settled")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["waves"] == [["settled"]]
+    assert [row["id"] for row in report["untracked"]] == ["minting"]
+    assert report["counts"]["untracked"] == 1
+    assert report["counts"]["candidates"] == 1
+    assert _by_id(report, "settled")["tracked"] is True
+
+
+def test_a_dependent_of_an_untracked_baton_waits_rather_than_planning_past_it(
+    tmp_path, monkeypatch
+):
+    _baton(tmp_path, "minting")
+    _baton(tmp_path, "dependent", blocked_by=["minting"])
+    _index_holds(monkeypatch, "dependent")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["waves"] == []
+    assert _by_id(report, "dependent")["planning_wave"] is None
+
+
+def test_an_unknowable_index_withholds_nothing_and_says_why(tmp_path, monkeypatch):
+    _baton(tmp_path, "solo")
+    monkeypatch.setattr(pg, "_tracked_paths", lambda root: (None, "IndexParseError: split index"))
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["waves"] == [["solo"]]
+    assert report["untracked"] == []
+    assert report["index_unreadable"] == "IndexParseError: split index"
+    assert _by_id(report, "solo")["tracked"] is None
+
+
+def test_a_tree_with_no_git_index_withholds_nothing(tmp_path):
+    """An unborn or non-git tree has no membership to read — every other test in
+    this file runs in one, which is what pins the fail-open direction."""
+    _baton(tmp_path, "solo")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["waves"] == [["solo"]]
+    assert report["index_unreadable"] == "no git index at this worktree"
+
+
+# ---------------------------------------------------------------------------
+# A live copy of an archived, closed baton is not a candidate
+# ---------------------------------------------------------------------------
+
+
+def _archived(root: Path, stub_id: str, state: str, month: str = "2026-08") -> Path:
+    return _write(
+        root / "archive" / "handoffs" / month / f"{stub_id}.md",
+        f"kind: roadmap-baton\ntitle: {stub_id}\nstub_id: {stub_id}\n"
+        f"status: open\ndeployment_state: {state}\nbaton_role: work",
+    )
+
+
+def test_a_live_copy_of_a_shipped_archived_baton_is_named_and_withheld(tmp_path):
+    """example-store-repo, 2026-09-11: a merge that took HEAD over a closure put the
+    pre-close copies back in state/handoffs, and three reached wave 0."""
+    _baton(tmp_path, "zombie")
+    _archived(tmp_path, "zombie", "shipped")
+    _baton(tmp_path, "alive")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["waves"] == [["alive"]]
+    assert report["resurrected"] == [
+        {
+            "id": "zombie",
+            "path": "state/handoffs/zombie.md",
+            "archived_path": "archive/handoffs/2026-08/zombie.md",
+            "archived_state": "shipped",
+        }
+    ]
+    assert report["counts"]["resurrected"] == 1
+
+
+def test_a_shared_basename_with_no_shared_id_is_not_a_resurrection(tmp_path):
+    _baton(tmp_path, "live-one")
+    archived = _archived(tmp_path, "someone-else", "shipped")
+    archived.rename(archived.with_name("live-one.md"))
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["waves"] == [["live-one"]]
+    assert report["resurrected"] == []
+
+
+def test_a_non_terminal_archived_copy_says_nothing_about_which_is_stale(tmp_path):
+    _baton(tmp_path, "twin")
+    _archived(tmp_path, "twin", "ready_to_fire")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["waves"] == [["twin"]]
+    assert report["resurrected"] == []
 
 
 def test_the_archive_is_not_scanned_when_nothing_needs_it(tmp_path):

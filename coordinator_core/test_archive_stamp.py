@@ -510,9 +510,59 @@ class TestStampShippedIn:
         assert rc2.exit_code == 0
         _assert_shipped_in(hp, second_sha)
 
+    def test_a_missing_kind_beside_an_identical_sha_is_filled(self, tmp_path, capsys):
+        """The repair this verb's name promises. DoE-claude, 2026-09-11: an XS
+        executor hand-wrote `shipped_in` and no `shipped_in_kind`, leaving a
+        terminal record schema-invalid and unarchivable, while this verb exited 0
+        writing nothing — the skip branch keys on the value and never sees the
+        missing discriminant. Filling it beside an IDENTICAL value moves no
+        provenance."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(repo, "h12a.md", "claimed", "shipped")
+        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        assert arstamp.stamp_shipped_in(str(hp), kind="ship-commit", sha=sha).exit_code == 0
+        hp.write_text(
+            "\n".join(
+                line
+                for line in hp.read_text(encoding="utf-8").splitlines()
+                if not line.startswith("shipped_in_kind:")
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        assert "shipped_in_kind:" not in hp.read_text(encoding="utf-8")
+
+        out = arstamp.stamp_shipped_in(str(hp), kind="ship-commit", sha=sha)
+
+        assert out.exit_code == 0
+        text = hp.read_text(encoding="utf-8")
+        assert "shipped_in_kind: ship-commit" in text
+        _assert_shipped_in(hp, sha)
+        assert "filled the missing shipped_in_kind" in capsys.readouterr().err
+
+    def test_a_skip_over_a_different_sha_says_so_rather_than_exiting_silently(
+        self, tmp_path, capsys
+    ):
+        """A no-op a caller cannot tell from a repair is the worse half of the
+        defect: it must name what is on disk and what would replace it."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(repo, "h12b.md", "claimed", "shipped")
+        first_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+        assert arstamp.stamp_shipped_in(str(hp), kind="ship-commit", sha=first_sha).exit_code == 0
+
+        out = arstamp.stamp_shipped_in(str(hp), kind="ship-commit", sha="deadbeefcafe")
+
+        assert out.exit_code == 0
+        _assert_shipped_in(hp, first_sha)
+        err = capsys.readouterr().err
+        assert "nothing written" in err and "force=True" in err
+
     def test_force_false_default_against_already_stamped_is_noop(self, tmp_path):
         """Default force=False against an already-stamped handoff is unchanged:
-        the silent idempotent no-op, rc 0, value untouched."""
+        the idempotent no-op, rc 0, value untouched — now reported on stderr
+        rather than silent."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         hp = _seed_handoff(repo, "h12.md", "claimed", "shipped")

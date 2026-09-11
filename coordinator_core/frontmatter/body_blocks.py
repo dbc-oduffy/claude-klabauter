@@ -25,10 +25,11 @@ two ways, both deliberate:
 
 PUBLIC CROSS-REPO SEAM (2026-07-29) — `locate_fenced_block` and
 `LocateStatus` are imported BY NAME from outside this repo. DoE-claude's
-write-time guard `coordinator/hooks/scripts/validate-frontmatter-schema.py`
-imports both to validate a plan's task-spine rows at authoring time (the
-gate that closes plan-tasks.schema.json's closed enums —
-change_kind/disposition/queue_scope — which nothing enforced before).
+`coordinator/bin/plan-spine-check.py` imports both to locate a plan's
+task-spine block. (The first external importer, DoE's write-time guard
+`hooks/scripts/validate-frontmatter-schema.py`, was deleted 2026-08-04; its
+spine-row check now lives in this repo's
+`write_guards/validate_frontmatter_schema_{advisory,deny}.py`.)
 
 Treat these two names, and `LocateResult`'s field names, as an external
 contract: additive changes only. Renaming, relocating, or changing the

@@ -26,8 +26,9 @@ Wire params (all optional):
 
 Reply fields:
     {"batons": [...], "waves": [[id, ...], ...], "cycles": [[id, ...], ...],
-     "unresolved_blockers": [...], "counts": {...}, "scanned": {...},
-     "verdict": {...} | None}
+     "unresolved_blockers": [...], "unschedulable": [...],
+     "untracked": [{id, path, title}, ...], "index_unreadable": str | None,
+     "counts": {...}, "scanned": {...}, "verdict": {...} | None}
 
     `verdict` is populated only under `subject`, and is that baton's selected
     gate plus the reason it is shut — the one-baton admission question
@@ -39,8 +40,10 @@ Negative-spec:
     refusing on it is the caller's act. Making this op the refusal would put an
     authorization decision behind a derived read, and a derived read that has
     gone stale would then silently block work rather than mis-report it.
-  - Does NOT spawn, and does NOT consult git. See the library module's Budget
-    note: `deployment_state` and plan `status` are the disk-truth read.
+  - Does NOT spawn. See the library module's Budget note: `deployment_state`
+    and plan `status` are the disk-truth read; the one git fact read is index
+    membership, in process, which withholds an uncommitted baton's candidacy
+    (`untracked`).
   - Does NOT accept a caller-supplied root. The scan is rooted at the
     per-request `repo_root` resolved by the dispatcher, promoted to the main
     worktree via `main_worktree_root` — `state/handoffs/` and `docs/plans/`

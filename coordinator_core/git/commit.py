@@ -68,6 +68,7 @@ argument (review: overengineering-reviewer Finding 2, 2026-08-30).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from pathlib import Path
@@ -980,3 +981,70 @@ def stage_paths_in_process(
     if updates:
         index_write.splice_index(repo, updates)
     return tuple(staged)
+
+
+def refresh_stat_in_process(repo: Union[str, Path], paths: Sequence[str]) -> Tuple[str, ...]:
+    """Re-record the stat data of every tracked path in `paths` whose worktree
+    bytes still hash to the blob its index entry already names. Zero spawns.
+    Returns the paths refreshed.
+
+    WHY NOT `git update-index --refresh`. A file rewritten with bytes that
+    differ from what is on disk but check in to the SAME blob -- an LF copy
+    written over a CRLF checkout under `core.autocrlf=true` -- changes size.
+    git's `ie_modified` treats a size change as modified WITHOUT hashing
+    whenever the recorded size is non-zero, so `--refresh` leaves the entry
+    stale and `git status` reports ` M` forever while `git diff` (which does
+    hash) shows nothing. Measured at `claude-klabauter`, 2026-09-11: 151 such
+    paths, index size = CRLF length, worktree = LF length, same blob.
+
+    A PURE REFRESH, NEVER A STAGE. An entry is rewritten only when the hash
+    equals the sha already in the index, and it keeps that sha and mode; every
+    other entry is left exactly as it was. So a hash this function gets wrong
+    can only cause a skip, never a staged change or a hidden edit. Paths
+    under a `filter=` driver, and CR-bearing content that is not the verified
+    autocrlf=true/no-attribute shape, are skipped rather than hashed. CR-free
+    content needs no normalization in any regime, which is the common case.
+
+    Cost is proportional to the stat-dirty subset: an entry whose recorded
+    size and mtime already match the file is skipped after one `stat`.
+    """
+    root = Path(repo)
+    keys = {_index_key(root, raw_path) for raw_path in paths}
+    if not keys:
+        return ()
+    existing = parse_index_identity(repo, wanted=keys)
+    autocrlf_true: Optional[bool] = None
+    updates: Dict[str, object] = {}
+    for p in sorted(keys):
+        entry = existing.get(p)
+        if entry is None:
+            continue
+        target = root / p
+        try:
+            st = target.stat()
+        except OSError:
+            continue
+        if (
+            st.st_size == entry.size
+            and int(st.st_mtime) == entry.mtime
+            and st.st_mtime_ns % 1_000_000_000 == entry.mtime_nsec
+        ):
+            continue
+        if not target.is_file() or _clean_filter_may_apply(root, p) is not None:
+            continue
+        try:
+            data = target.read_bytes()
+        except OSError:
+            continue
+        if bytes([13]) in data:
+            if autocrlf_true is None:
+                autocrlf_true = _repo_autocrlf_true(root)
+            if not autocrlf_true or _text_attribute_pinned(root, p) is not None:
+                continue
+            data = _autocrlf_checkin_normalize(data)
+        header = b"blob " + str(len(data)).encode("ascii") + b"\x00"
+        if hashlib.sha1(header + data).hexdigest() == entry.sha:
+            updates[p] = (entry.mode, entry.sha)
+    if updates:
+        index_write.splice_index(repo, updates)
+    return tuple(sorted(updates))

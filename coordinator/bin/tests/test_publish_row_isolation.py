@@ -79,6 +79,13 @@ def _init_git_repo(root: Path) -> None:
     keeper.write_text("", encoding="utf-8")
     _git("add", ".gitkeep")
     _git("commit", "-m", "chore: init")
+    # A self-origin the dest is level with: `publish.main` refuses a dest whose
+    # branch tracks nothing (§ `percolate.dest_refresh.refresh_dest_from_origin`).
+    # Same shape, and its rationale, as `coordinator/tests/
+    # test_publish_mirror_bare_name_expansion.py :: _init_git_repo`.
+    _git("remote", "add", "origin", str(root))
+    _git("fetch", "--no-tags", "origin")
+    _git("branch", "--set-upstream-to=origin/main", "main")
 
 
 def _load_publish_module():

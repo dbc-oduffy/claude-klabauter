@@ -55,6 +55,29 @@ def test_the_reported_case_is_refused(cli, capsys):
     assert "usage: archive-stamp-cli repark-handoff" in err
 
 
+@pytest.mark.parametrize("subcmd", ["resolve-memo", "action-memo"])
+def test_a_second_memo_is_refused_rather_than_silently_dropped(cli, capsys, subcmd):
+    """example-retrieval-repo-ue-addon, 2026-09-11: workday-start says to pass every routed
+    memo to one call; the CLI resolved the first, exited 0, and left the second
+    open with nothing said. Half a batch honoured in silence is the worst of the
+    three available behaviours."""
+    rc = cli.main([subcmd, "state/cross-repo/inbox/a.md", "state/cross-repo/inbox/b.md"])
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "b.md" in err and "once per memo" in err
+
+
+def test_a_free_standing_value_after_a_flag_is_still_forwarded(cli):
+    """The refusal is positional-only. A token later in the tail is some engine
+    flag's value — `--decision --decision-note-file <path>` depends on it."""
+    tail, err = cli._resolve_disposition_prose(
+        ["--decision", "--decision-note-file", "notes/note.txt"]
+    )
+    assert err is None
+    assert tail == ["--decision", "--decision-note-file", "notes/note.txt"]
+
+
 @pytest.mark.parametrize(
     ("subcmd", "argv"),
     [

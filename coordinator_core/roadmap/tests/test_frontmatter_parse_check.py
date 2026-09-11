@@ -102,7 +102,7 @@ def test_corpus_walk_reaches_records_outside_any_plausible_allowlist(mod) -> Non
     records were in. A green result from a checker that looked at nothing is
     worse than no checker, so the walk must reach records wherever they live.
     """
-    found = {str(p.relative_to(_REPO_ROOT)).split("/")[0] for p in mod.corpus_paths(_REPO_ROOT)}
+    found = {p.relative_to(_REPO_ROOT).parts[0] for p in mod.corpus_paths(_REPO_ROOT)}
     # Directories the allowlist shape missed, all of which hold real records.
     for root in ("state", "docs", "archive"):
         assert root in found, f"corpus walk never reached {root}/"

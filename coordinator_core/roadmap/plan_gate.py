@@ -32,10 +32,13 @@ op) — this module registers nothing and writes nothing.
 Spec backlink: DoE-claude coordinator/skills/plan-blitz/SKILL.md § The two gates;
                coordinator/docs/wiki/coordinator-tripwires/a-planning-gate-is-not-an-execution-gate.md
 
-Budget: pure reads, ZERO spawns, no git. One bounded head-read per candidate
-record (``_read_frontmatter_head``, capped at ``_FRONTMATTER_READ_BYTES``), so
-cost scales with record COUNT, not with corpus bytes. Measured on claude-klabauter's own
-tree (295 live handoffs + 369 plans + 423 sizings) — see
+Budget: pure reads, ZERO spawns. One bounded head-read per candidate record
+(``_read_frontmatter_head``, capped at ``_FRONTMATTER_READ_BYTES``), so cost
+scales with record COUNT, not with corpus bytes, plus ONE in-process parse of
+the git index (``git_state.read_index`` — no ``git`` process; 24ms over
+Claude-klabauter's 23.7k entries, measured 2026-09-11) to tell a committed baton from one
+still being minted. Measured on claude-klabauter's own tree (295 live handoffs + 369
+plans + 423 sizings) — see
 ``coordinator_core/roadmap/tests/test_plan_gate.py::test_whole_tree_scan_holds_the_brightline``.
 
 Negative-spec:
@@ -44,7 +47,17 @@ Negative-spec:
     `deployment_state` flip remains ``archive_stamp``'s job.
   - Does NOT shell out, and in particular does NOT ask git whether a blocker
     landed. `deployment_state` and the linked plan's `status` are the disk-truth
-    this reads; a caller wanting SHA-level proof reads `shipped_in` itself.
+    this reads; a caller wanting SHA-level proof reads `shipped_in` itself. The
+    one git fact it reads is index MEMBERSHIP, for candidacy only (see
+    `_tracked_paths`).
+  - Does NOT treat a tracked-but-modified baton as uncommitted. Only absence
+    from the index withholds candidacy: a content compare lies under autocrlf,
+    and a stat compare lies after any checkout that left index stat stale —
+    both would pull committed batons out of every wave, silently.
+  - Does NOT withhold anything when the index cannot be read or does not exist.
+    Tracking is then UNKNOWN, candidacy falls back to the frontmatter alone, and
+    the reason is reported in `index_unreadable` — a derived read that cannot
+    answer must mis-report, never silently empty a wave.
   - Does NOT treat an unresolvable blocker id as satisfied. An id naming no
     record on disk yields `unresolved`, closes BOTH gates, and is named in
     `unresolved_blockers`. A gate that fails OPEN on a typo is worse than no
@@ -1120,6 +1133,97 @@ def _cycle_groups(
 # ---------------------------------------------------------------------------
 
 
+def _tracked_paths(worktree_root: Path) -> Tuple[Optional[frozenset], Optional[str]]:
+    """Git index membership as `(paths, None)`, or `(None, reason)` when unknowable.
+
+    A handoff is routinely minted `pickup_ready` seconds before the commit that
+    publishes it, while its author may still be writing it — four such batons
+    reached example-cockpit-repo's wave 0 on 2026-09-11, one more 22s after the read,
+    and a driver that fires without judgment races their author. A live holder
+    already withholds candidacy through `claimed`/`in_flight`; an untracked
+    record is the same fact before any stamp exists, so the gate owns it rather
+    than every minter remembering `pickup_ready: false`.
+
+    `(None, reason)` — no index at this worktree, or one `read_index` refuses —
+    means the caller withholds nothing.
+    """
+    from coordinator_core.git.git_state import IndexParseError, read_index
+
+    try:
+        snapshot = read_index(worktree_root)
+    except (IndexParseError, OSError) as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+    if snapshot.stat_identity is None:
+        return None, "no git index at this worktree"
+    return frozenset(snapshot), None
+
+
+def _archived_basenames(worktree_root: Path) -> Dict[str, List[Path]]:
+    """`{basename: [archived paths]}` over `archive/handoffs/` and its month dirs.
+
+    Names only — one directory listing per month, no file opened — so the whole
+    archive costs a few listings, where parsing it is the cost `scan_batons`
+    goes out of its way to avoid.
+    """
+    root = worktree_root / "archive" / "handoffs"
+    out: Dict[str, List[Path]] = {}
+    try:
+        dirs = [root] + [d for d in root.iterdir() if d.is_dir()]
+    except OSError:
+        return out
+    for directory in dirs:
+        try:
+            for entry in directory.iterdir():
+                if entry.suffix == ".md" and entry.is_file():
+                    out.setdefault(entry.name, []).append(entry)
+        except OSError:
+            continue
+    return out
+
+
+def _declared_ids(fm: Dict[str, Any]) -> Set[str]:
+    return {
+        value
+        for field in ("stub_id", "handoff_id", "deliverable_id")
+        for value in _as_list(fm.get(field))
+        if value
+    }
+
+
+def _resurrected(
+    worktree_root: Path, record: Dict[str, Any], archived_by_name: Dict[str, List[Path]]
+) -> Optional[Dict[str, Any]]:
+    """The archived terminal copy a live candidate duplicates, or None.
+
+    Archiving MOVES a handoff, so a live file and an archived file sharing a
+    basename is never a healthy state — it is what a merge that "takes HEAD"
+    over a closure produces: the pre-close copy comes back open and
+    `ready_to_fire` while its closed copy sits in the archive. Example-store-repo,
+    2026-09-11: three such batons reached wave 0 and each cost a scout, an EM and
+    an executor re-doing shipped work. Matched on basename AND a shared id, so a
+    coincidental filename collision between two different batons is not read as
+    one; and only a TERMINAL archived copy counts, since a non-terminal one says
+    nothing about which copy is stale.
+    """
+    name = record["path"].rsplit("/", 1)[-1]
+    live_ids = _declared_ids(record["_fm"])
+    for archived in archived_by_name.get(name, ()):
+        probe = _scan_fields(archived, _ARCHIVE_PROBE_FIELDS)
+        # Declared ids only: `_baton_ids` also indexes the filename stem, which a
+        # shared basename makes equal by construction.
+        if not probe or not live_ids & _declared_ids(probe):
+            continue
+        state = str(probe.get("deployment_state") or "").strip()
+        if state in BATON_CODED_STATES:
+            return {
+                "id": record["id"],
+                "path": record["path"],
+                "archived_path": _rel(archived, worktree_root),
+                "archived_state": state,
+            }
+    return None
+
+
 def assemble_plan_gate(
     worktree_root: Path,
     subject: Optional[str] = None,
@@ -1151,6 +1255,34 @@ def assemble_plan_gate(
     """
     plans = build_plan_index(worktree_root)
     batons_by_id, records = scan_batons(worktree_root)
+
+    # Withheld from candidacy, never from the scan: an untracked baton still
+    # resolves as a BLOCKER, so its dependents wait on it rather than planning
+    # past it. Named in `untracked`, because a baton that silently left the
+    # candidate set reads as one that never needed planning.
+    tracked, index_unreadable = _tracked_paths(worktree_root)
+    untracked_rows: List[Dict[str, Any]] = []
+    for record in records:
+        record["tracked"] = (
+            record["path"] in tracked if tracked is not None and record["live"] else None
+        )
+        if record["candidate"] and record["tracked"] is False:
+            record["candidate"] = False
+            untracked_rows.append(
+                {"id": record["id"], "path": record["path"], "title": record["title"]}
+            )
+
+    # Same withholding, same naming, for the other shape a baton takes when the
+    # tree is wrong rather than the record: see `_resurrected`.
+    resurrected_rows: List[Dict[str, Any]] = []
+    archived_by_name = _archived_basenames(worktree_root)
+    for record in records:
+        if not record["candidate"]:
+            continue
+        hit = _resurrected(worktree_root, record, archived_by_name)
+        if hit is not None:
+            record["candidate"] = False
+            resurrected_rows.append(hit)
 
     # `needs_plan` — does a blitz have work to do on this baton? Annotated here
     # rather than in `_baton_record` because it needs the plan index, which is
@@ -1267,6 +1399,9 @@ def assemble_plan_gate(
                 "unresolved_sizings": _sizing_resolution(record)[1],
                 "planning_wave": wave_by_id.get(record["id"]),
                 "candidate": record["candidate"],
+                # True/False is index membership; None is "could not tell"
+                # (see `index_unreadable`), never "untracked".
+                "tracked": record["tracked"],
             }
         )
 
@@ -1354,6 +1489,11 @@ def assemble_plan_gate(
         "cycles": cycles,
         "unresolved_blockers": unresolved,
         "unschedulable": unschedulable_rows,
-        "counts": counts,
+        "untracked": untracked_rows,
+        "index_unreadable": index_unreadable,
+        "resurrected": resurrected_rows,
+        "counts": dict(
+            counts, untracked=len(untracked_rows), resurrected=len(resurrected_rows)
+        ),
         "scanned": {"batons": len(records), "plans": len(plans.by_path)},
     }

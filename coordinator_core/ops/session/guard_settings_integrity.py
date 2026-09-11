@@ -804,8 +804,8 @@ class HookDeliveryReport:
     `manifest_state`/`manifest_detail`/`manifest_unaccounted` carry the
     hook-delivery manifest's (C1/C2) read result for this boot --
     `"absent"` when no manifest was consulted at all (e.g. the plugin side
-    is not present, or `hooks.json` carries no `x-effective-delivery`
-    block), mirroring `HookDeliveryManifest.state`'s five-state contract.
+    is not present, or `effective-delivery.json` is absent or carries no
+    `x-effective-delivery` block), mirroring `HookDeliveryManifest.state`'s five-state contract.
     `resurrected_decisions` is the third comparator outcome (AC6),
     distinct from `duplicated_scripts` and `settings_only_scripts`."""
 

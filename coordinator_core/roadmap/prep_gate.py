@@ -529,8 +529,14 @@ def _external_deps(
         # blocker, and EG1 names a machine-local store, not a sibling repo. Both sides
         # were right and the plan still could not certify, because the row was withheld
         # by a mechanism this leg does not read. Scoped to the placeholder leg only.
+        #
+        # Skipped, NOT withheld: `withheld` becomes `mise_prepped_findings`, which the
+        # attest contract (DoE-claude coordinator/docs/wiki/mise-prepped-attest.md)
+        # defines as rows held by an uncleared external_gate — work waiting on
+        # somebody else. A coded or wont_do row is finished, and a deferred one is
+        # out of scope; listing them made a 59-of-70-coded plan on example-game-repo read as a
+        # PARTIAL-FIRE excluding 62 rows.
         if _row_is_unschedulable(row):
-            withheld.append(row_id)
             continue
         for field, value in _row_declared_paths(row):
             if field != "surface" and _path_is_unresolved_placeholder(value):
