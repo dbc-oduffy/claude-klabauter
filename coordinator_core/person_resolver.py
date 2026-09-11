@@ -102,8 +102,8 @@ _GIT_TIMEOUT = 10
 
 # github noreply address shape: optional leading numeric id + "+", then the
 # handle, then the fixed noreply domain. Examples:
-#   240204332+dbc-example-operator@users.noreply.github.com
-#   dbc-example-operator@users.noreply.github.com   (no numeric id present)
+#   12345678+<handle>@users.noreply.github.com
+#   <handle>@users.noreply.github.com   (no numeric id present)
 _NOREPLY_RE = re.compile(
     r"^(?:(?P<id>\d+)\+)?(?P<handle>[^@]+)@users\.noreply\.github\.com$"
 )

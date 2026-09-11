@@ -820,6 +820,40 @@ def test_help_synthesizes_only_for_the_argv_shape_none_entrypoint():
     assert result["stdout"] == f"usage: {name} [--help]\n"
 
 
+def test_a_none_shape_that_reads_its_argv_renders_its_own_verbs():
+    """The other half of the NONE shape. `handoff-archive-transition`'s guard
+    is `sys.exit(main())`, but its `main(argv=None)` resolves `sys.argv`
+    itself and parses before doing anything, so a help gesture must reach its
+    real verbs. Synthesizing there left the live baton-close door
+    undiscoverable from any --help (doe-claude-em, F21)."""
+    name = "handoff-archive-transition"
+    script = Path(invoke_from_argv._ENGINE_ROOT) / "coordinator" / "bin" / f"{name}.py"
+    from coordinator_core.warm import serve_classifier
+
+    assert invoke_from_argv._entrypoint_argv_shape(script) == serve_classifier.ARGV_SHAPE_NONE
+    assert invoke_from_argv._none_shape_main_reads_argv(script) is True
+
+    result = _run_entrypoint(name, ["--help"], _PROJECT_ROOT)
+
+    assert result["exit_code"] == 0
+    assert "{chain,supersede}" in result["stdout"]
+    assert result["stdout"] != f"usage: {name} [--help]\n"
+
+
+def test_an_accepted_then_deleted_argv_is_not_a_readable_one():
+    """`def main(argv=None): del argv  # accepted for the warm-call contract`
+    is the shape that must keep synthesizing: declaring the parameter says
+    nothing about whether the body can be steered by it, and this one fetches
+    a live decision object on every call."""
+    bin_dir = Path(invoke_from_argv._ENGINE_ROOT) / "coordinator" / "bin"
+    assert (
+        invoke_from_argv._none_shape_main_reads_argv(
+            bin_dir / "workday-start-inbox-blitz-assemble.py"
+        )
+        is False
+    )
+
+
 def test_help_wins_after_a_subcommand_token(tmp_path):
     """Position is not special-cased — `--help` reached after a real
     subcommand token still renders the target's real usage."""

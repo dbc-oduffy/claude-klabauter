@@ -111,6 +111,49 @@ def test_live_claim_holder_refuses_archival(tmp_path: Path) -> None:
     assert reasons["docs/plans/2026-08-03-claimed.md"] == m._SCAN_REASON_LIVE_CLAIM
 
 
+def test_own_claim_exempted_archives_anyway(tmp_path: Path) -> None:
+    """example-store-repo-fb defect (2026-09-11): the stamping session's OWN live
+    claim on the plan it just stamped must not block archival — only a
+    DIFFERENT session's claim still refuses."""
+    worktree = tmp_path
+    common_dir = tmp_path
+
+    plan_path = _write_plan(worktree, "2026-08-04-self-claimed.md", "implemented")
+    claim_dir = m.plan_claim_dir(common_dir, plan_path)
+    claim_dir.mkdir(parents=True, exist_ok=True)
+
+    skipped: list = []
+    with patch(_CS_CLAIM_HOLDER_LIVE_PATCH, return_value=True), \
+         patch("coordinator_core.ops.fleet.archive_plans.claim_held_by_me", return_value=True):
+        moves, plan_skipped = m.plan_sweep(
+            worktree, common_dir, cap=10, scan_skipped=skipped, exempt_session_id="my-sid",
+        )
+
+    ids = {mv.candidate_id for mv in moves}
+    assert "docs/plans/2026-08-04-self-claimed.md" in ids
+    assert not skipped
+
+
+def test_foreign_claim_still_refuses_even_with_exemption_set(tmp_path: Path) -> None:
+    worktree = tmp_path
+    common_dir = tmp_path
+
+    plan_path = _write_plan(worktree, "2026-08-05-foreign-claimed.md", "implemented")
+    claim_dir = m.plan_claim_dir(common_dir, plan_path)
+    claim_dir.mkdir(parents=True, exist_ok=True)
+
+    skipped: list = []
+    with patch(_CS_CLAIM_HOLDER_LIVE_PATCH, return_value=True), \
+         patch("coordinator_core.ops.fleet.archive_plans.claim_held_by_me", return_value=False):
+        moves, plan_skipped = m.plan_sweep(
+            worktree, common_dir, cap=10, scan_skipped=skipped, exempt_session_id="my-sid",
+        )
+
+    assert not moves
+    reasons = {row["id"]: row["reason"] for row in skipped}
+    assert reasons["docs/plans/2026-08-05-foreign-claimed.md"] == m._SCAN_REASON_LIVE_CLAIM
+
+
 def test_cannot_derive_date_is_named_not_silently_dropped(tmp_path: Path) -> None:
     worktree = tmp_path
     common_dir = tmp_path

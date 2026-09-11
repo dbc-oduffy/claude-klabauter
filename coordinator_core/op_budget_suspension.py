@@ -1036,6 +1036,19 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
         },
         "measured": {"max_ms": 27947.1, "p50_ms": 3507.5, "n": 8, "unit": "WALL_CLOCK"},
         "note": "Module deleted outright; no non-test importers.",
+        # The disposition below has named the live door since 2026-08-30, but a
+        # caller reading only the -32006 reply never saw it: an operator retiring
+        # a dead baton reached for this op and was told where NOT to go
+        # (example-market-data-repo-fa friction log F21, via doe-claude-em).
+        "fallback": (
+            "The close leg is `archive-stamp-cli close-handoff <path> --reason "
+            "<cancelled|displaced|stale>`; the filing leg is the housekeeping "
+            "cycle's own archive step."
+        ),
+        # Both legs are live surfaces (see the disposition below), so the
+        # closing "plan a new one under 200ms" would send a reader off to
+        # build what already exists.
+        "successor_live": True,
         "disposition": (
             "gravestone -- job was 'close out a handoff whose work already "
             "landed, then file it'. Module deleted outright, no importers "

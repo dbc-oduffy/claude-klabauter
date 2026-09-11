@@ -1532,6 +1532,20 @@ def test_lock_spans_real_run_and_commit(tmp_path, monkeypatch):
     assert order == ["lock-acquired", "real-run", "commit", "lock-released"], order
 
 
+def test_advance_lastsync_marker_anchors_inverse_drift_on_the_rounds_own_commit(tmp_path):
+    """The Step 2b anchor must end where this round's commit landed. Left at
+    publish.py's pre-commit HEAD, every round's own commit fell inside the
+    next round's inverse-drift window."""
+    percolate_root = tmp_path / "percolate-root"
+    marker = percolate_root / "setup" / "percolate-state" / "alpha.lastsync"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("b3c62e8dbc9cd3f27ad01f5445659d54ae343693\n", encoding="utf-8")
+
+    _mod._advance_lastsync_marker("alpha", str(percolate_root), "50febb6ce9b279ed6b4fc7608b59b21c5dcce3c4")
+
+    assert marker.read_text(encoding="utf-8") == "50febb6ce9b279ed6b4fc7608b59b21c5dcce3c4\n"
+
+
 @pytest.mark.pending_fix
 @pytest.mark.skip(reason="commit leg killed 2026-08-23 (DR-344); blocked on docs/plans/2026-08-23-the-scoped-commit-rebuilt-from-first-principles.md")
 def test_clean_dest_proceeds_through_commit(tmp_path, monkeypatch):
@@ -3433,6 +3447,24 @@ def test_report_commit_residual_reports_computed_causes_not_fixed_string(tmp_pat
     assert "1 unaccounted for: mystery.md" in err
     assert warning is not None
     assert "2 change(s)" in warning
+
+
+def test_report_commit_residual_explained_gap_is_not_a_warning(tmp_path, capsys):
+    """Every dropped path identical to HEAD or gitignored: the round lost
+    nothing, so no counted warning -- the causes still print on stderr."""
+    repo = _init_head_repo(tmp_path, {"same.md": "unchanged\n", ".gitignore": "*.pyc\n"})
+
+    warning = _mod._report_commit_residual(
+        "alpha",
+        [("NEW", "same.md"), ("NEW", "cache.pyc")],
+        [],
+        repo_root=str(repo),
+    )
+
+    assert warning is None
+    err = capsys.readouterr().err
+    assert "1 identical to HEAD" in err
+    assert "1 gitignored at dest" in err
 
 
 def test_report_commit_residual_without_repo_root_names_the_gap_honestly(capsys):

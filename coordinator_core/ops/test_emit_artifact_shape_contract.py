@@ -417,10 +417,10 @@ class TestRealTreeParity:
         # fresh from the emitter, so asserting against the constant that produced it
         # is a tautology that catches nothing. The literal is the pin: a version bump
         # must be an explicit two-place edit, never a silent side effect. Bumped to
-        # 8.0.0 alongside CONTRACT_VERSION (emit_artifact_shape_contract.py's history
-        # comment, 2026-08-14 conversion-census-row mechanical_part/judgment_part
-        # string -> object narrow, one MAJOR) — this is the second of the two places.
-        assert bundle["version"] == "8.0.0"
+        # 9.0.0 alongside CONTRACT_VERSION (emit_artifact_shape_contract.py's history
+        # comment, 2026-09-11 research-claim required-set add plus the plan-tasks writes
+        # trailing-separator narrow) — this is the second of the two places.
+        assert bundle["version"] == "9.0.0"
 
     def test_no_external_ref_values_anywhere_in_bundle(self, bundle):
         # Regression for cross-repo/inbox/2026-08-03-doe-claude-em-artifact-contract-

@@ -1782,6 +1782,75 @@ def test_stamp_implemented_no_op_on_already_terminal_plan_archives_nothing(tmp_p
     assert not (tmp_path / "archive" / "specs").exists()
 
 
+def test_stamp_implemented_archives_despite_own_live_claim(tmp_path, capsys):
+    """example-store-repo-fb defect (2026-09-11, verified): the stamping session
+    almost always still holds this plan's own execute-plan claim (claimed
+    one directive earlier), so an unexempted plan_sweep read that as a
+    foreign live holder and silently skipped archival on the common path.
+    `_archive_stamped_plan` now resolves its own caller's session id and
+    exempts exactly that claim — this reproduces that path end to end."""
+    from unittest.mock import patch
+
+    from coordinator_core.ops.fleet.archive_plans import plan_claim_dir
+
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    p = _write(
+        tmp_path, "docs/plans/2026-08-06-own-claim.md",
+        "---\ntitle: T\nstatus: executing\n---\n\nBody.\n",
+    )
+    claim_dir = plan_claim_dir(tmp_path / ".git", p)
+    claim_dir.mkdir(parents=True, exist_ok=True)
+
+    with patch(
+        "coordinator_core.ops.fleet.archive_plans.cs_claim_holder_live", return_value=True,
+    ), patch(
+        "coordinator_core.session.core.attributable_session_id", return_value="closing-sid",
+    ), patch(
+        "coordinator_core.ops.fleet.archive_plans.claim_held_by_me",
+        side_effect=lambda cdir, sid, cwd=None: sid == "closing-sid",
+    ):
+        rc = main(["stamp-implemented", "--plan", str(p)])
+
+    assert rc == 0
+    assert not p.exists()
+    dest = tmp_path / "archive" / "specs" / "2026-08" / "2026-08-06-own-claim.md"
+    assert dest.is_file()
+
+
+def test_stamp_implemented_foreign_claim_skip_is_reported_not_silent(tmp_path, capsys):
+    """A DIFFERENT, live session's claim on the plan still blocks archival —
+    and the skip is now surfaced on stderr (never a silent None), per the
+    same defect report's second half."""
+    from unittest.mock import patch
+
+    from coordinator_core.ops.fleet.archive_plans import plan_claim_dir
+
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    p = _write(
+        tmp_path, "docs/plans/2026-08-07-foreign-claim.md",
+        "---\ntitle: T\nstatus: executing\n---\n\nBody.\n",
+    )
+    claim_dir = plan_claim_dir(tmp_path / ".git", p)
+    claim_dir.mkdir(parents=True, exist_ok=True)
+
+    with patch(
+        "coordinator_core.ops.fleet.archive_plans.cs_claim_holder_live", return_value=True,
+    ), patch(
+        "coordinator_core.session.core.attributable_session_id", return_value="closing-sid",
+    ), patch(
+        "coordinator_core.ops.fleet.archive_plans.claim_held_by_me", return_value=False,
+    ):
+        rc = main(["stamp-implemented", "--plan", str(p)])
+
+    assert rc == 0
+    # The status flip and its commit still land -- only archival is skipped.
+    assert p.is_file()
+    assert "status: implemented" in p.read_text(encoding="utf-8")
+    err = capsys.readouterr().err
+    assert "the archival sweep skipped it" in err
+    assert "claim" in err.lower()
+
+
 def test_stamp_superseded_archives_plan_on_terminal_stamp(tmp_path, capsys):
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     p = _write(

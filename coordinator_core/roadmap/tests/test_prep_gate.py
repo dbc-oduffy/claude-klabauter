@@ -513,6 +513,25 @@ def test_a_write_whose_first_segment_is_not_in_this_repo_leaves_it(tmp_path):
     assert "does not exist in this repo" in report["classes"]["EXTERNAL_DEPS"]["detail"]
 
 
+def test_a_settings_home_write_is_not_an_undeclared_cross_repo_dependency(tmp_path):
+    """Ported alongside `_is_settings_home_path` (DoE-claude `ff446da1b`, "the
+    settings home is not another team's tree"). A row writing under the
+    machine-local settings home is not a nameless path into a sibling repo's
+    tree, so it must pass EXTERNAL_DEPS with no `external_gate` -- matching
+    `mise-prep-gate.py`'s bar exactly, since `plan.stamp_prepped` is meant to
+    enforce it ahead of, not a looser one."""
+    spine = """- id: C1
+  title: Settings-home write
+  change_kind: config-edit
+  surface: settings home
+  writes: [~/.coordinator-claude-settings/machine-local/example_retrieval_repo.toml]
+  queue_scope: project
+  disposition: open
+"""
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS"
+
+
 def test_the_repo_s_own_name_is_never_a_sibling(tmp_path):
     """An intra-repo blocker is a `depends_on` edge, never a gate. A list that
     kept the running repo's own name would fire the DR-127 leg on every plan that

@@ -98,7 +98,7 @@ def test_live_foreign_holder_refuses_no_write_no_commit(tmp_path, monkeypatch, c
 
     monkeypatch.setattr(pst, "session_live", None, raising=False)
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: sid == "peer-sid-live")
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    monkeypatch.setattr("coordinator_core.session.core.attributable_session_id", lambda cwd=None: "closing-sid")
 
     rc = main(["stamp-implemented", "--plan", str(plan)])
     err = capsys.readouterr().err
@@ -124,7 +124,7 @@ def test_self_held_proceeds(tmp_path, monkeypatch, capsys):
     )
 
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: True)
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    monkeypatch.setattr("coordinator_core.session.core.attributable_session_id", lambda cwd=None: "closing-sid")
 
     rc = main(["stamp-implemented", "--plan", str(plan)])
     assert rc in (0, 2)
@@ -140,7 +140,7 @@ def test_dead_holder_proceeds(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: False)
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    monkeypatch.setattr("coordinator_core.session.core.attributable_session_id", lambda cwd=None: "closing-sid")
 
     rc = main(["stamp-implemented", "--plan", str(plan)])
     assert rc in (0, 2)
@@ -156,7 +156,7 @@ def test_terminal_deployment_state_proceeds(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: True)
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    monkeypatch.setattr("coordinator_core.session.core.attributable_session_id", lambda cwd=None: "closing-sid")
 
     rc = main(["stamp-implemented", "--plan", str(plan)])
     assert rc in (0, 2)
@@ -167,7 +167,7 @@ def test_ambiguous_zero_handoffs_proceeds(tmp_path, monkeypatch):
     plan = _write_and_commit(tmp_path, "docs/plans/lonely-plan.md", _PLAN_BODY.replace("dlv-peer-plan-abc123", "dlv-lonely-plan-xyz"))
 
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: True)
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    monkeypatch.setattr("coordinator_core.session.core.attributable_session_id", lambda cwd=None: "closing-sid")
 
     rc = main(["stamp-implemented", "--plan", str(plan)])
     assert rc in (0, 2)
@@ -184,7 +184,7 @@ def test_ambiguous_multiple_handoffs_proceeds(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: True)
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    monkeypatch.setattr("coordinator_core.session.core.attributable_session_id", lambda cwd=None: "closing-sid")
 
     rc = main(["stamp-implemented", "--plan", str(plan)])
     assert rc in (0, 2)

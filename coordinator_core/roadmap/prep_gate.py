@@ -402,10 +402,38 @@ def _path_leaves_repo(
     normalized = stripped.replace("\\", "/")
     if "/" not in normalized.strip("/"):
         return None
+    if _is_settings_home_path(normalized):
+        return None
     first = normalized.split("/")[0]
     if first and first not in root_names:
         return f"first path segment {first!r} does not exist in this repo"
     return None
+
+
+_SETTINGS_HOME_PREFIXES = (
+    "~/.coordinator-claude-settings/",
+    "$COORDINATOR_SETTINGS_HOME/",
+    "${COORDINATOR_SETTINGS_HOME}/",
+    "%COORDINATOR_SETTINGS_HOME%/",
+    "$env:COORDINATOR_SETTINGS_HOME/",
+)
+
+
+def _is_settings_home_path(normalized: str) -> bool:
+    """A path rooted at the machine-local settings home, which belongs to no repo.
+
+    The ROOT-EXISTENCE leg catches a nameless path into another team's tree; the
+    settings home is not one. Same bar as DoE-claude ``mise-prep-gate.py``
+    (``ff446da1b``), so a plan the authoring gate passes is one this stamp passes.
+    The discriminant is read off the value's own spelling, never an author flag.
+
+    Negative-spec: NOT a general "outside the repo is fine" — every other path
+    the leg reports still reports; the trailing separator keeps a sibling
+    directory sharing the stem out.
+    """
+    lowered = normalized.strip().strip('"').strip("'")
+    folded = lowered.casefold()
+    return any(folded.startswith(p.casefold()) for p in _SETTINGS_HOME_PREFIXES)
 
 
 #: Dispositions ``dispatch_emit/spine_read.py`` treats as done, alongside

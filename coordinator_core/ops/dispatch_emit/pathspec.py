@@ -395,6 +395,18 @@ def _declared_paths(row: WaveRow) -> list[str]:
     return []
 
 
+def is_zero_contribution(row: WaveRow) -> bool:
+    """True if ``row`` declares ``writes:`` and commits nothing: no declared
+    path, no concrete-surface fallback, no ``writes_under:`` prefix. The one
+    definition both ``commit_pathspec``'s warning and ``emit``'s
+    all-empty-wave check read."""
+    return (
+        row.writes is not UNDECLARED
+        and not _declared_paths(row)
+        and not row.writes_under
+    )
+
+
 def _dedupe(paths: list[str]) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
@@ -475,13 +487,7 @@ def commit_pathspec(wave: list[WaveRow]) -> list[str]:
             f"phase pathspec (rows: {_named_rows(wave)})"
         )
 
-    zero_contribution = [
-        row
-        for row in wave
-        if row.writes is not UNDECLARED
-        and not _declared_paths(row)
-        and not row.writes_under
-    ]
+    zero_contribution = [row for row in wave if is_zero_contribution(row)]
     if zero_contribution:
         _logger.warning(
             "writes: [] declared, excluded from this wave's commit "
@@ -493,7 +499,7 @@ def commit_pathspec(wave: list[WaveRow]) -> list[str]:
     for row in wave:
         paths.extend(_declared_paths(row))
     paths = _dedupe(paths)
-    if not paths and not commit_prefixes(wave):
+    if not paths and not any(row.writes_under for row in wave):
         raise NoWritesDeclaredError(
             "wave's declared writes contribute no paths: refusing to emit "
             f"an empty commit phase pathspec (rows: {_named_rows(wave)})"
@@ -715,8 +721,7 @@ def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = 
         # file to map, so its empty scope is a fact about the spine, not an
         # omission: no edit could name a test for files not chosen yet.
         omissions = [path for path in unmapped if _is_testable_surface(path)]
-        prefix_only = not unmapped and any(row.writes_under for row in all_rows)
-        if omissions or (not unmapped and not prefix_only):
+        if omissions or (not unmapped and not any(row.writes_under for row in all_rows)):
             raise NoTestTargetError(
                 "every written path mapped to no runnable test target, "
                 f"refusing an empty terminal test scope (paths: {unmapped!r}; "

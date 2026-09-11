@@ -16,9 +16,11 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import List
 
 import pytest
 
@@ -288,7 +290,7 @@ def test_scan_secrets_high_hit_blocks(tmp_path):
 def test_scan_secrets_medium_hit_does_not_block(tmp_path):
     target_file = tmp_path / "wiki.md"
     target_file.write_text(
-        "See ~/.claude/tasks/foo for details.\n", encoding="utf-8"
+        "See ~/.claude/tasks/3f9c2a7e-task-list for details.\n", encoding="utf-8"
     )
     file_list = tmp_path / "files.txt"
     file_list.write_text(str(target_file) + "\n", encoding="utf-8")
@@ -296,7 +298,7 @@ def test_scan_secrets_medium_hit_does_not_block(tmp_path):
     rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
     assert rc == 0
     assert "MEDIUM" in out
-    assert "~/.claude/tasks/foo" in out
+    assert "~/.claude/tasks/3f9c2a7e-task-list" in out
     assert "HIGH" in out and "(none)" in out
 
 
@@ -440,7 +442,7 @@ def test_tier_medium_reserved_domain_exemption_is_suffix_anchored(tmp_path):
     target_file.write_text(
         '_git(repo, "config", "user.email", "user@test-domain.com")\n'
         '_git(repo, "config", "user.email", "user@invalid-corp.io")\n'
-        '_git(repo, "config", "user.email", "user@localhost.internal.example")\n'
+        '_git(repo, "config", "user.email", "user@localhost.internal.io")\n'
         '_git(repo, "config", "user.email", "user@foo.test")\n'
         '_git(repo, "config", "user.email", "user@sub.example.test")\n'
         '_git(repo, "config", "user.email", "user@bar.invalid")\n',
@@ -454,11 +456,70 @@ def test_tier_medium_reserved_domain_exemption_is_suffix_anchored(tmp_path):
     # Prefix-only matches of a reserved word must still be flagged.
     assert "user@test-domain.com" in out
     assert "user@invalid-corp.io" in out
-    assert "user@localhost.internal.example" in out
+    assert "user@localhost.internal.io" in out
     # Genuine reserved-TLD suffixes remain exempt.
     assert "user@foo.test" not in out
     assert "user@sub.example.test" not in out
     assert "user@bar.invalid" not in out
+
+
+_GATING_HEADER = "MEDIUM (identity / internal paths / peer-repo names -- surfaces to gate):"
+
+
+def _gating_panel(out: str) -> str:
+    return out.split(_GATING_HEADER)[1].split("LOW (")[0]
+
+
+def test_tier_medium_placeholders_and_marked_paths_do_not_gate(tmp_path):
+    """Placeholder segments, the RFC 2606 `.example` TLD, and a same-line
+    `abs-path-ok: <reason>` name no machine or person -- every line here is a
+    shape that recurred in the gating panel on every percolate round, and none
+    may reach it."""
+    target_file = tmp_path / "docstrings.py"
+    target_file.write_text(
+        "renders `X:/a` as `X:\\a`\n"
+        "drive letter (`\"C:/foo\"`, `\"C:foo\"`)\n"
+        "POSIX `/x` or Windows `X:\\x` / `X:/x`\n"
+        "``~/.claude/projects/<slug>/`` naming\n"
+        "``~/.claude/projects/<mangled-repo-path>/<session-id>.jsonl``\n"
+        '_real_git(["config", "user.email", "t@t.example"], repo)\n'
+        'detect("C:/home/${USER}/src")  # abs-path-ok: synthetic test fixture\n'
+        "12345678+<handle>@users.noreply.github.com\n",
+        encoding="utf-8",
+    )
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    assert rc == 0
+    assert _gating_panel(out).strip() == "(none)"
+
+
+def test_tier_medium_concrete_paths_and_identities_still_gate(tmp_path):
+    """The discharge rules are keyed on the rooted segment and a reasoned
+    marker, never on the file: a real repo segment, a real projects slug, a
+    real email, a bare reason-less marker, an email beside a path marker, and
+    a concrete path sharing a line with a placeholder all still gate."""
+    lines = [
+        "moved to `X:/claude-klabauter`",
+        'registry_set("repos.k", "/x/claude-klabauter")',
+        "see ~/.claude/projects/X--claude-klabauter/memory",
+        "#   240204332+real-handle@users.noreply.github.com",
+        "at C:/work/repo  # abs-path-ok:",
+        "user real.person@some-real-domain.io  # abs-path-ok: path marker only",
+        "`C:/foo` versus `C:/work`",
+    ]
+    target_file = tmp_path / "leaks.py"
+    target_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    file_list = tmp_path / "files.txt"
+    file_list.write_text(str(target_file) + "\n", encoding="utf-8")
+
+    rc, out = _run_cli(["scan-secrets", "--files", str(file_list)])
+    assert rc == 0
+    panel = _gating_panel(out)
+    for line in lines:
+        assert line in panel
+    assert sum(1 for row in panel.splitlines() if row.strip() and row.strip() != "(none)") == len(lines)
 
 
 def test_scan_secrets_clean(tmp_path):
@@ -798,11 +859,8 @@ def test_git_log_batched_survives_a_pathspec_set_over_the_windows_cmdline_cap(
 
     assert sum(len(n) + 1 for n in names) > 32767, "fixture must exceed the cap"
 
-    base = [
-        "-C", str(drift_repo), "log",
-        "--no-merges", "--format=%h %ad %s", "--date=short",
-    ]
-    lines = _mod._git_log_batched(base, ["--since=30 days ago"], names)
+    base = _mod._drift_log_cmd_base(drift_repo)
+    lines = _mod._git_log_batched(base, ["--since=30 days ago"], names).drift_lines
 
     # One commit touched every path; the union must not report it 600 times.
     assert len(lines) == 1
@@ -812,9 +870,153 @@ def test_git_log_batched_survives_a_pathspec_set_over_the_windows_cmdline_cap(
 def test_git_log_batched_raises_instead_of_swallowing_a_git_failure(
     drift_repo: Path,
 ) -> None:
-    base = ["-C", str(drift_repo), "log", "--format=%h %ad %s", "--date=short"]
+    base = _mod._drift_log_cmd_base(drift_repo)
     with pytest.raises(RuntimeError, match="git log failed"):
         _mod._git_log_batched(base, ["no-such-ref..HEAD"], ["seed.txt"])
+
+
+_STAMP = " [source-head 0123456789ab]"
+
+
+def _head(repo: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def _commit_file(repo: Path, name: str, body: str, subject: str) -> None:
+    (repo / name).write_text(body, encoding="utf-8")
+    _git(repo, "add", name)
+    _git(repo, "commit", "-qm", subject)
+
+
+def _drift_cli(repo: Path, tmp_path: Path, anchor: str, names: List[str], *extra: str):
+    percolate_root = tmp_path / "percolate-root"
+    state = percolate_root / "setup" / "percolate-state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "alpha.lastsync").write_text(anchor, encoding="utf-8")
+    file_list = tmp_path / "files.txt"
+    file_list.write_text("".join(f"{repo / n}\n" for n in names), encoding="utf-8")
+    return _run_cli(
+        [
+            "inverse-drift", "alpha",
+            "--percolate-root", str(percolate_root),
+            "--dest", str(repo),
+            "--files", str(file_list),
+            *extra,
+        ]
+    )
+
+
+def test_inverse_drift_excludes_the_publishers_own_commits_but_reports_a_hand_edit(
+    drift_repo: Path, tmp_path: Path
+) -> None:
+    """Stamped publish commits in the window are the publisher's, not drift.
+
+    Every round's own commit landed after the anchor, so each round listed
+    the one before it. With a stale anchor that grew to 231 commits on
+    claude-klabauter, all of them stamped publishes, and it fired Step 3.
+    """
+    anchor = _head(drift_repo)
+    _commit_file(drift_repo, "seed.txt", "published v2\n", f"percolate publish: alpha (1 file(s)){_STAMP}")
+    _commit_file(drift_repo, "other.txt", "hand fix\n", "dest-side hand fix")
+    _commit_file(drift_repo, "seed.txt", "published v3\n", f"percolate: sync 1 path(s) to dest (alpha){_STAMP}")
+
+    rc, out = _drift_cli(drift_repo, tmp_path, anchor, ["seed.txt", "other.txt"])
+
+    assert rc == 0
+    assert "dest-side hand fix" in out
+    assert "percolate publish:" not in out
+    assert "percolate: sync" not in out
+    assert "not drift: 2 publisher commit(s), 0 hand commit(s)" in out
+
+
+def test_inverse_drift_drops_a_hand_edit_a_later_publish_rewrote(
+    drift_repo: Path, tmp_path: Path
+) -> None:
+    """A hand edit a later publish already rewrote is gone from HEAD, so this
+    sync has nothing of it left to overwrite. A hand edit on a path no later
+    publish touched is still live, and still reported."""
+    anchor = _head(drift_repo)
+    _commit_file(drift_repo, "seed.txt", "hand edit, since overwritten\n", "overwritten hand edit")
+    _commit_file(drift_repo, "live.txt", "hand edit, still live\n", "live hand edit")
+    _commit_file(drift_repo, "seed.txt", "published\n", f"percolate publish: alpha (1 file(s)){_STAMP}")
+
+    rc, out = _drift_cli(drift_repo, tmp_path, anchor, ["seed.txt", "live.txt"])
+
+    assert rc == 0
+    assert "live hand edit" in out
+    assert "overwritten hand edit" not in out
+    assert "not drift: 1 publisher commit(s), 1 hand commit(s)" in out
+
+
+def test_inverse_drift_a_hand_edit_after_the_last_publish_is_still_drift(
+    drift_repo: Path, tmp_path: Path
+) -> None:
+    """Supersession runs one way. A hand edit landing AFTER a publish to the
+    same path is exactly what the next sync overwrites."""
+    anchor = _head(drift_repo)
+    _commit_file(drift_repo, "seed.txt", "published\n", f"percolate publish: alpha (1 file(s)){_STAMP}")
+    _commit_file(drift_repo, "seed.txt", "hand fix on top\n", "hand fix on top of a publish")
+
+    rc, out = _drift_cli(drift_repo, tmp_path, anchor, ["seed.txt"])
+
+    assert rc == 0
+    assert "hand fix on top of a publish" in out
+
+
+def test_inverse_drift_recognises_the_stamps_earlier_spelling(
+    drift_repo: Path, tmp_path: Path
+) -> None:
+    """Mirror history before 2026-09-04 carries `[source <sha12>]`."""
+    anchor = _head(drift_repo)
+    _commit_file(drift_repo, "seed.txt", "published\n", "percolate publish: alpha (1 file(s)) [source 0123456789ab]")
+
+    rc, out = _drift_cli(drift_repo, tmp_path, anchor, ["seed.txt"])
+
+    assert rc == 0
+    assert "Inverse drift" not in out
+    assert "not drift: 1 publisher commit(s)" in out
+
+
+def test_inverse_drift_a_stamp_mid_subject_is_not_a_publisher_commit(
+    drift_repo: Path, tmp_path: Path
+) -> None:
+    """The stamp is anchored at the subject's end. A hand commit that quotes
+    one, e.g. a revert of a publish, stays drift."""
+    anchor = _head(drift_repo)
+    _commit_file(drift_repo, "seed.txt", "hand\n", f"Revert \"percolate publish: alpha{_STAMP}\" by hand")
+
+    rc, out = _drift_cli(drift_repo, tmp_path, anchor, ["seed.txt"])
+
+    assert rc == 0
+    assert "by hand" in out
+
+
+def test_inverse_drift_json_verdict_counts_exclusions_and_lists_only_drift(
+    drift_repo: Path, tmp_path: Path
+) -> None:
+    anchor = _head(drift_repo)
+    _commit_file(drift_repo, "seed.txt", "published\n", f"percolate publish: alpha (1 file(s)){_STAMP}")
+    _commit_file(drift_repo, "other.txt", "hand fix\n", "dest-side hand fix")
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    (source_dir / "seed.txt").write_text("published\n", encoding="utf-8")
+    (source_dir / "other.txt").write_text("source version\n", encoding="utf-8")
+
+    rc, out = _drift_cli(
+        drift_repo, tmp_path, anchor, ["seed.txt", "other.txt"],
+        "--source-dir", str(source_dir), "--json",
+    )
+
+    assert rc == 0
+    verdict = json.loads(out)
+    assert verdict["commits"] == 1
+    assert "dest-side hand fix" in verdict["commit_lines"][0]
+    assert verdict["publisher_commits_excluded"] == 1
+    assert verdict["superseded_commits_excluded"] == 0
+    assert verdict["real_drift"] is True
 
 
 def test_inverse_drift_maps_source_paths_onto_the_dest_tree(

@@ -61,7 +61,8 @@ def setup_mod():
 # ---------------------------------------------------------------------------
 
 
-def test_parse_args_defaults(setup_mod):
+def test_parse_args_defaults(setup_mod, monkeypatch):
+    monkeypatch.setattr(setup_mod, "_stdin_can_answer", lambda: True)
     args = setup_mod.parse_args([])
     assert args.agent_mode is False
     assert args.skip_dep_check is False
@@ -2219,6 +2220,114 @@ def test_register_claude_klabauter_root_preserves_existing_valid_klabauter_value
     out = capsys.readouterr().out
     assert f"repos.claude_klabauter {existing}" in out
     assert str(other_sibling) not in out
+
+
+# ---------------------------------------------------------------------------
+# register_claude_klabauter_root / _unset_doe_claude_registration — persist the
+# coordinator-claude root the run already resolved as `repos.doe_claude`,
+# last and only when unset (docs/reference/linux-cloud-dogfood-friction.md
+# F1). registry_get is patched on coordinator_core.machine_resolver, the
+# function-local import idiom test_seed_fleet_env_root_* documents below.
+# ---------------------------------------------------------------------------
+
+
+def _coordinator_claude_clone(tmp_path: Path) -> Path:
+    clone = tmp_path / "coordinator-claude"
+    (clone / ".claude-plugin").mkdir(parents=True)
+    (clone / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    (clone / "commands").mkdir()
+    return clone
+
+
+def _klabauter_repo(tmp_path: Path) -> Path:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "AGENTS.md").write_text("# claude-klabauter — Agent Entry Point\n")
+    return repo_root
+
+
+def test_register_claude_klabauter_root_appends_unset_doe_claude_anchor_last(
+    setup_mod, tmp_path, monkeypatch, capsys
+):
+    import coordinator_core.machine_resolver as mr
+    from coordinator_core.install import _shared
+
+    monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda plugin_root: None)
+    monkeypatch.setattr(mr, "registry_get", lambda key: None)
+    clone = _coordinator_claude_clone(tmp_path)
+    args = _override_args(setup_mod)
+    args.coordinator_root = str(clone)
+    claude_klabauter_root = tmp_path / "claude-klabauter"
+    claude_klabauter_root.mkdir()
+
+    setup_mod.register_claude_klabauter_root(claude_klabauter_root, "test-source", _klabauter_repo(tmp_path), args)
+
+    out = capsys.readouterr().out
+    assert (
+        "--- Registration (claude-klabauter): "
+        "engine.target + repos.claude_klabauter + repos.doe_claude ---"
+    ) in out
+    assert f"machine-local set repos.doe_claude {clone}" in out
+    assert "engine.working_repos.doe_claude" not in out
+
+
+def test_register_claude_klabauter_root_never_overwrites_a_set_doe_claude_anchor(
+    setup_mod, tmp_path, monkeypatch, capsys
+):
+    import coordinator_core.machine_resolver as mr
+    from coordinator_core.install import _shared
+
+    monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda plugin_root: None)
+    deliberate = str(tmp_path / "operator-chosen")
+    monkeypatch.setattr(
+        mr, "registry_get", lambda key: deliberate if key == "repos.doe_claude" else None
+    )
+    args = _override_args(setup_mod)
+    args.coordinator_root = str(_coordinator_claude_clone(tmp_path))
+    claude_klabauter_root = tmp_path / "claude-klabauter"
+    claude_klabauter_root.mkdir()
+
+    setup_mod.register_claude_klabauter_root(claude_klabauter_root, "test-source", _klabauter_repo(tmp_path), args)
+
+    assert "repos.doe_claude" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "resolution_kwargs",
+    [
+        {"rung": "REGISTRY"},
+        {"rung": "SIBLING_DIR_DEFAULT", "is_unresolved": True},
+        {"rung": "FLAG", "is_publish_mirror_rejected": True},
+    ],
+)
+def test_unset_doe_claude_registration_refuses_untrustworthy_candidates(
+    setup_mod, tmp_path, monkeypatch, resolution_kwargs
+):
+    import coordinator_core.machine_resolver as mr
+
+    monkeypatch.setattr(mr, "registry_get", lambda key: None)
+    clone = _coordinator_claude_clone(tmp_path)
+    kwargs = dict(resolution_kwargs)
+    source = setup_mod.CoordSourceResolution(
+        rung=setup_mod.CoordSourceRung[kwargs.pop("rung")], display="test", **kwargs
+    )
+
+    assert setup_mod._unset_doe_claude_registration(clone, source, clone) == {}
+
+
+def test_unset_doe_claude_registration_skips_when_registry_unreadable(
+    setup_mod, tmp_path, monkeypatch
+):
+    import coordinator_core.machine_resolver as mr
+
+    def _unreadable(key):
+        raise RuntimeError("corrupt registry")
+
+    monkeypatch.setattr(mr, "registry_get", _unreadable)
+    clone = _coordinator_claude_clone(tmp_path)
+    source = setup_mod.CoordSourceResolution(rung=setup_mod.CoordSourceRung.FLAG, display="test")
+
+    assert setup_mod._unset_doe_claude_registration(clone, source, clone) == {}
 
 
 def test_discover_klabauter_root_registry_value_wins_over_sibling(

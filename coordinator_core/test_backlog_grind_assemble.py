@@ -1508,7 +1508,8 @@ class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
         "your footprint that you deferred to the EM, and any deviations from "
         "the spec. Do not include a commit SHA — your changes are still "
         "uncommitted when you write this summary. Reply EXACTLY "
-        "`DONE: tasks/mise-done/[item-id].md` (or `BLOCKED: <path>`)."
+        "`<STATUS>: tasks/mise-done/[item-id].md`, where <STATUS> is the "
+        "status your summary records — `DONE`, `PARTIAL`, or `BLOCKED`."
     )
     _BLITZ_FOOTPRINT = (
         "You MUST NOT create or modify any file outside this footprint: "
@@ -1522,8 +1523,9 @@ class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
         "`before`/`after` snippets, the verification result you observed, and "
         "any deviations from the recommended fix. Do not include a commit "
         "SHA — your changes are still uncommitted when you write this "
-        "summary. Reply EXACTLY `DONE: state/scratch/bug-blitz/[run-id]/"
-        "[item-id].done.md` (or `BLOCKED: <path>`)."
+        "summary. Reply EXACTLY `<STATUS>: state/scratch/bug-blitz/[run-id]/"
+        "[item-id].done.md`, where <STATUS> is the status your summary "
+        "records — `DONE`, `PARTIAL`, or `BLOCKED`."
     )
 
     def test_mise_fields_unmoved(self):

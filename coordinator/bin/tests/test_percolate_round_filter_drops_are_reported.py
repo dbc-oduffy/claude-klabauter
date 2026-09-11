@@ -147,8 +147,48 @@ def test_no_filter_drops_is_the_shape_every_return_path_hands_back():
         "gitignored": 0,
         "absent_deletion": 0,
         "staging": 0,
+        "declared_residue": 0,
     }
     assert set(_mod._no_filter_drops()) == set(_mod._FILTER_DROP_LABELS)
+
+
+def test_gitignored_residue_no_row_wrote_is_named_but_not_a_warning(tmp_path):
+    """The claude-klabauter 2026-09-11 shape: the root flat-mirror row's
+    on-disk declaration walk swept up `.pytest_cache/`, `.claude/` and
+    `*.bak` files sitting untracked and gitignored in the mirror. None is
+    publish payload, so dropping them loses nothing -- they are counted in
+    their own class and kept out of the verdict's warning count. A
+    gitignored path the run DID report writing stays a counted drop."""
+    repo = _init_repo(tmp_path)
+    (repo / ".gitignore").write_text("*.bak\n", encoding="utf-8")
+    (repo / "junk.bak").write_text("x", encoding="utf-8")
+    (repo / "written.bak").write_text("x", encoding="utf-8")
+    seen = {
+        str(repo / "junk.bak"): (_mod._DECLARED_ONLY_TAG, "junk.bak"),
+        str(repo / "written.bak"): ("NEW", "written.bak"),
+    }
+
+    kept, drops = _mod._filter_commit_pathspec(repo, str(repo), seen, repo_root=str(repo))
+
+    assert kept == []
+    assert drops["declared_residue"] == 1
+    assert drops["gitignored"] == 1
+    warning = _mod._filter_drop_warning(drops)
+    assert warning is not None and warning.startswith("1 declared path(s)")
+    assert _mod._filter_drop_warning({**_mod._no_filter_drops(), "declared_residue": 15}) is None
+
+
+def test_declared_only_untracked_path_that_is_not_ignored_is_still_carried(tmp_path):
+    """The residue class must not swallow a refused round's stranded payload:
+    untracked, unreported, NOT gitignored -- it stays in the pathspec."""
+    repo = _init_repo(tmp_path)
+    (repo / "stranded.py").write_text("x = 1\n", encoding="utf-8")
+    seen = {str(repo / "stranded.py"): (_mod._DECLARED_ONLY_TAG, "stranded.py")}
+
+    kept, drops = _mod._filter_commit_pathspec(repo, str(repo), seen, repo_root=str(repo))
+
+    assert kept == ["stranded.py"]
+    assert not any(drops.values())
 
 
 def test_an_ignored_path_is_one_git_add_would_refuse(tmp_path):

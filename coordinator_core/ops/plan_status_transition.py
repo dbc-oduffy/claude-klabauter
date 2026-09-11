@@ -563,7 +563,9 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
     return 2
 
 
-def _archive_stamped_plan(plan_path: Path, worktree_root: Path, common_dir: Path) -> Optional[str]:
+def _archive_stamped_plan(
+    plan_path: Path, worktree_root: Path, common_dir: Path
+) -> "tuple[Optional[str], List[dict]]":
     """Archive `plan_path` and any of its sidecars immediately after this op
     just stamped it terminal and committed the flip -- the archival OCCASION
     `coordinator_core.ops.fleet.archive_plans`'s own module docstring names
@@ -586,12 +588,29 @@ def _archive_stamped_plan(plan_path: Path, worktree_root: Path, common_dir: Path
     one, which this chunk's brief scopes out ("if they can't [land in one
     commit], commit the move immediately after").
 
-    Returns None on success (archived, or genuinely nothing to archive --
-    e.g. a live claim still held the plan, or the corpus scan raced the
-    write and found it already gone). Returns a human-readable failure
-    reason string on a genuine archival failure -- the caller NEVER treats
-    a non-None return as a reason to undo or hide the stamp that already
-    landed; it is reported (stderr) only.
+    Own-claim exemption (2026-09-11, example-store-repo-fb defect, verified): the
+    stamping session is almost always the SAME session that still holds this
+    plan's own execute-plan claim (the ceremony claims the plan one
+    directive before it stamps it terminal), so an unexempted `plan_sweep`
+    call read that as a live foreign holder and skipped archival on the
+    common path, silently -- the plan then sat in `docs/plans/` at a
+    terminal status with no message. This function resolves ITS OWN caller's
+    session id (`session.core.attributable_session_id`, the same accessor
+    `_refuse_if_live_foreign_holder` already uses immediately above in this
+    module) and passes it to `plan_sweep` as `exempt_session_id` -- see
+    `archive_plans._is_claim_live`'s own docstring for the identity check
+    this performs. A DIFFERENT, live session's claim on the same plan still
+    blocks archival unchanged; only this op's own in-flight claim is
+    exempted, never a foreign one.
+
+    Returns `(None, skipped)` on success (archived, or genuinely nothing to
+    archive -- `skipped` names WHY when non-empty: a foreign live claim, a
+    destination conflict, the corpus scan racing the write and finding it
+    already gone, etc. -- each entry `{"id": ..., "reason": ...}` straight
+    off `plan_sweep`'s own `skipped` list, never discarded). Returns
+    `(reason, skipped)` on a genuine archival failure -- the caller NEVER
+    treats a non-None first element as cause to undo or hide the stamp that
+    already landed; both elements are reported (stderr) only.
     """
     import asyncio
 
@@ -602,11 +621,15 @@ def _archive_stamped_plan(plan_path: Path, worktree_root: Path, common_dir: Path
         collect_live_plan_paths,
         plan_sweep,
     )
+    from coordinator_core.session.core import attributable_session_id
 
     try:
         plan_relpath = rel_id(plan_path.resolve(), worktree_root.resolve())
     except ValueError as exc:
-        return f"could not resolve {plan_path} as repo-relative to {worktree_root}: {exc}"
+        return (
+            f"could not resolve {plan_path} as repo-relative to {worktree_root}: {exc}",
+            [],
+        )
 
     candidate_ids = [plan_relpath]
     try:
@@ -614,13 +637,19 @@ def _archive_stamped_plan(plan_path: Path, worktree_root: Path, common_dir: Path
             if _is_sidecar(p) and _primary_for_sidecar(p) == plan_path.resolve():
                 candidate_ids.append(rel_id(p, worktree_root))
     except OSError as exc:
-        return f"could not scan docs/plans/ for sidecars of {plan_path}: {exc}"
+        return f"could not scan docs/plans/ for sidecars of {plan_path}: {exc}", []
+
+    try:
+        exempt_session_id = attributable_session_id()
+    except Exception:
+        exempt_session_id = None
 
     moves, skipped = plan_sweep(
         worktree_root, common_dir, cap=len(candidate_ids), candidate_ids=candidate_ids,
+        exempt_session_id=exempt_session_id,
     )
     if not moves:
-        return None  # nothing archivable right now (e.g. live claim, or already gone) -- not a failure
+        return None, skipped  # nothing archivable right now -- `skipped` names why, if anything
 
     subject = (
         f"{_PROG}: archive {len(moves)} plan document(s) "
@@ -631,11 +660,11 @@ def _archive_stamped_plan(plan_path: Path, worktree_root: Path, common_dir: Path
             archive_and_commit(worktree_root=worktree_root, moves=moves, subject=subject)
         )
     except Exception as exc:  # noqa: BLE001 -- report, never let archival raise past the stamp
-        return f"archive_and_commit raised: {exc}"
+        return f"archive_and_commit raised: {exc}", skipped
 
     if failed:
-        return f"{len(failed)} of {len(moves)} move(s) failed: {failed}"
-    return None
+        return f"{len(failed)} of {len(moves)} move(s) failed: {failed}", skipped
+    return None, skipped
 
 
 def _relpath_for_commit(plan_path: Path, worktree_root: Path) -> "tuple[Optional[str], Optional[str]]":
@@ -1549,11 +1578,18 @@ def _stamp_implemented(opts: _Opts) -> int:
     # on stderr and never changes this function's own exit code, mirroring
     # _ac_open_rows_warning's identical "never blocks, never reverts" posture.
     if worktree_root is not None and relpath is not None and untracked_reason is None:
-        archive_err = _archive_stamped_plan(plan_path, worktree_root, git_common_dir)
+        archive_err, archive_skipped = _archive_stamped_plan(plan_path, worktree_root, git_common_dir)
         if archive_err is not None:
             print(
                 f"{_PROG}: {opts.plan} was stamped implemented and committed, but "
                 f"the archival sweep failed: {archive_err}",
+                file=sys.stderr,
+            )
+        elif archive_skipped:
+            reasons = "; ".join(f"{s.get('id')}: {s.get('reason')}" for s in archive_skipped)
+            print(
+                f"{_PROG}: {opts.plan} was stamped implemented and committed, but "
+                f"the archival sweep skipped it: {reasons}",
                 file=sys.stderr,
             )
 
@@ -1753,11 +1789,18 @@ def _stamp_superseded(opts: _Opts) -> int:
             # itself actually committed. Best-effort/advisory only -- never
             # undoes or hides the stamp, never changes this function's exit
             # code.
-            archive_err = _archive_stamped_plan(plan_path, worktree_root, git_common_dir)
+            archive_err, archive_skipped = _archive_stamped_plan(plan_path, worktree_root, git_common_dir)
             if archive_err is not None:
                 print(
                     f"{_PROG}: {opts.plan} was stamped superseded and committed, but "
                     f"the archival sweep failed: {archive_err}",
+                    file=sys.stderr,
+                )
+            elif archive_skipped:
+                reasons = "; ".join(f"{s.get('id')}: {s.get('reason')}" for s in archive_skipped)
+                print(
+                    f"{_PROG}: {opts.plan} was stamped superseded and committed, but "
+                    f"the archival sweep skipped it: {reasons}",
                     file=sys.stderr,
                 )
 

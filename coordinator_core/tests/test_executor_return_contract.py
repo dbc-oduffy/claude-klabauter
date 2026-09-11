@@ -144,5 +144,5 @@ def test_done_summary_constraint_reply_rule_names_own_path():
         output_path_template="some/path.md",
         extra_fields=("a field",),
     )
-    assert "Reply EXACTLY `DONE: some/path.md`" in rendered
-    assert "(or `BLOCKED: <path>`)." in rendered
+    assert "Reply EXACTLY `<STATUS>: some/path.md`" in rendered
+    assert "`DONE`, `PARTIAL`, or `BLOCKED`" in rendered

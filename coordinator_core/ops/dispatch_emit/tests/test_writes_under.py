@@ -103,7 +103,7 @@ def test_a_backslash_terminated_prefix_is_accepted(tmp_path):
     - "state\\\\audits\\\\"
 """
     (row,) = read_spine(_write_plan(tmp_path, body))
-    assert row.writes_under == ("state\\audits\\",)
+    assert row.writes_under == ("state/audits/",)
 
 
 def test_a_file_shaped_prefix_is_refused_naming_row_and_entry(tmp_path):
@@ -185,6 +185,37 @@ def test_a_reader_under_a_prefix_lands_after_its_writer():
     assert [[row.id for row in wave] for wave in waves] == [["C1"], ["C2"]]
 
 
+def test_a_reader_of_the_prefixs_own_ancestor_lands_after_its_writer():
+    # Reverse containment: the reader's declared path (`state/`) is itself
+    # an ancestor of the writer's prefix (`state/audits/`), not a descendant
+    # of it -- the ordinary direction `_predecessors` already checked.
+    rows = [
+        _row("C2", ["b.py"], reads=["state/"]),
+        _row("C1", [], [_AUDITS]),
+    ]
+    waves = build_waves(rows)
+    assert [[row.id for row in wave] for wave in waves] == [["C1"], ["C2"]]
+
+
+def test_two_rows_sharing_a_backslash_spelled_prefix_from_a_spine_cannot_share_a_wave(
+    tmp_path,
+):
+    body = """\
+- id: C1
+  title: first dated audit
+  surface: state/audits
+  writes_under:
+    - "state\\\\audits\\\\"
+- id: C2
+  title: second dated audit
+  surface: state/audits
+  writes_under:
+    - "state\\\\audits\\\\"
+"""
+    waves = build_waves(read_spine(_write_plan(tmp_path, body)))
+    assert len(waves) == 2
+
+
 # ---------------------------------------------------------------------------
 # pathspec
 # ---------------------------------------------------------------------------
@@ -236,6 +267,14 @@ def test_a_prefix_only_wave_keeps_its_commit_phase_with_the_widening_rule():
     assert "RUN-TIME-NAMED WRITES" in script
     assert "C1: \\`state/audits/\\`" in script
     assert "commit phase omitted" not in script
+
+
+def test_the_prefix_widening_names_itself_as_the_one_exception_to_provenance():
+    script = compose_script(
+        [[_wave_row("C1", [], [_AUDITS])]], name="wf", description="prefix wave"
+    )
+    wave_phase = script.split("phase('Commit wave 1')", 1)[1]
+    assert "THE ONE EXCEPTION" in wave_phase
 
 
 def test_a_wave_without_prefixes_carries_no_widening_rule():

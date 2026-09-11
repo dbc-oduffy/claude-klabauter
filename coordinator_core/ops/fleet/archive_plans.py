@@ -158,7 +158,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.liveness import cs_claim_holder_live
+from coordinator_core.session.liveness import claim_held_by_me
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle_constants import PLAN_ARCHIVABLE_STATUS
 from coordinator_core.ops.fleet._common import (
@@ -192,6 +194,8 @@ _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: a live session holds this plan's e
 _SCAN_REASON_CANNOT_DERIVE_DATE = "cannot-derive-date"
 _SCAN_REASON_SIDECAR_ORPHAN = "sidecar-orphan: primary plan not found"
 _SCAN_REASON_SIDECAR_FOLLOWS_PRIMARY = "sidecar-follows-primary: primary is not terminal"
+
+_REASON_SIDECAR_DEST_EXISTS = "sidecar-dest-exists: refusing to overwrite an existing archived sidecar"
 
 _FIRE_SCRIPT_SUFFIXES = (".workflow.mjs", ".workflow.mjs.emitted.json")
 
@@ -357,25 +361,55 @@ def _terminal_since(meta_updated: Optional[str], meta_created: Optional[str], pl
         return None
 
 
-def _is_claim_live(common_dir: Path, plan_path: Path) -> bool:
+def _is_claim_live(
+    common_dir: Path, plan_path: Path, *, exempt_session_id: Optional[str] = None
+) -> bool:
     """Check 4 analogue: is this plan's execute-plan claim held by a live
     session? Fail-closed (treated as live/retained) on any liveness-check
     exception, mirroring archive_terminal_handoffs's own Check 4 handling —
     an inability to answer "is the holder alive" must never be read as "no",
     since that direction silently archives a plan out from under a working
     session.
+
+    ``exempt_session_id`` — the ARCHIVING caller's own session id (2026-09-11,
+    example-store-repo-fb defect: a session stamping a plan ``implemented`` while
+    it still holds that plan's own execute-plan claim was skipped here as
+    "claim-held", the common case since the stamper is almost always the
+    claimant). When the claim is live AND recorded under this exact id
+    (``session.liveness.claim_held_by_me``, the same IDENTITY predicate
+    claim-release already uses — never a second, bespoke equality check),
+    it is the caller's OWN claim, not a foreign live holder, and does not
+    block archival: this function returns ``False`` (not live-as-blocker)
+    for that one case. A DIFFERENT live session's claim still blocks
+    unchanged — this is an identity exemption for the caller alone, never a
+    liveness bypass. ``None`` (the default) preserves prior behaviour
+    byte-for-byte: every caller that does not know its own session id gets
+    the original "any live claim blocks" answer.
     """
     claim_dir = plan_claim_dir(common_dir, plan_path)
     if not claim_dir.is_dir():
         return False
     try:
-        return bool(cs_claim_holder_live(str(claim_dir)))
+        live = bool(cs_claim_holder_live(str(claim_dir)))
     except Exception as exc:  # noqa: BLE001 — fail-closed-to-retain, see docstring
         _LOG.warning(
             "archive_plans: cs_claim_holder_live raised for %s — retaining "
             "(fail-closed-to-keep): %s", claim_dir, exc,
         )
         return True
+    if not live:
+        return False
+    if exempt_session_id:
+        try:
+            if claim_held_by_me(str(claim_dir), exempt_session_id):
+                return False
+        except Exception as exc:  # noqa: BLE001 — fail-closed-to-retain: an
+            # identity-check failure must not silently widen who is exempt.
+            _LOG.warning(
+                "archive_plans: claim_held_by_me raised for %s — treating as "
+                "foreign (fail-closed-to-keep): %s", claim_dir, exc,
+            )
+    return True
 
 
 def _scan_terminal(
@@ -383,6 +417,7 @@ def _scan_terminal(
     common_dir: Path,
     *,
     skipped: Optional[List[dict]] = None,
+    exempt_session_id: Optional[str] = None,
 ) -> List[Tuple[Path, str, str, Optional[str]]]:
     """Return every terminal, unclaimed plan candidate — UNCAPPED, oldest-first
     (by filename, which carries the YYYY-MM-DD prefix) — as (path, note,
@@ -394,6 +429,10 @@ def _scan_terminal(
     `skipped` — opt-in out-param. Every rail that refuses a candidate appends
     `{id, reason}`, so a refusal is observable instead of vanishing into a
     bare `continue` (mirrors the precedent's own AC-2 discharge).
+
+    `exempt_session_id` — threaded straight through to every `_is_claim_live`
+    call site below (see that function's own docstring); `None` preserves
+    prior behaviour unchanged.
     """
     results: List[Tuple[Path, str, str, Optional[str]]] = []
     try:
@@ -445,7 +484,7 @@ def _scan_terminal(
             if plan_archive_dest(worktree_root, p) is None:
                 _refuse(rel, f"{_SCAN_REASON_CANNOT_DERIVE_DATE}: filename {p.name!r} has no YYYY-MM-DD prefix")
                 continue
-            if _is_claim_live(common_dir, primary):
+            if _is_claim_live(common_dir, primary, exempt_session_id=exempt_session_id):
                 _refuse(rel, _SCAN_REASON_LIVE_CLAIM)
                 continue
             updated = parse_frontmatter_field(primary, "updated")
@@ -465,7 +504,7 @@ def _scan_terminal(
             _refuse(rel, f"{_SCAN_REASON_CANNOT_DERIVE_DATE}: filename {p.name!r} has no YYYY-MM-DD prefix")
             continue
 
-        if _is_claim_live(common_dir, p):
+        if _is_claim_live(common_dir, p, exempt_session_id=exempt_session_id):
             _refuse(rel, _SCAN_REASON_LIVE_CLAIM)
             continue
 
@@ -494,6 +533,7 @@ def plan_sweep(
     *,
     candidate_ids: Optional[List[str]] = None,
     scan_skipped: Optional[List[dict]] = None,
+    exempt_session_id: Optional[str] = None,
 ) -> Tuple[List[Move], List[dict]]:
     """Classification-only planning: scan, cap-slot, and every exclusion
     rail. Mutates nothing, commits nothing, spawns nothing.
@@ -505,10 +545,16 @@ def plan_sweep(
     semantics, identical shape to
     `archive_terminal_handoffs.plan_sweep`'s own act-path branch.
 
+    `exempt_session_id` — passed straight through to `_scan_terminal`
+    (see `_is_claim_live`'s own docstring); `None` preserves prior
+    behaviour byte-for-byte for every existing caller.
+
     Returns (moves, skipped) — `moves` are `Move` objects ready for
     `apply_sweep` or `archive_and_commit`.
     """
-    terminal = _scan_terminal(worktree_root, common_dir, skipped=scan_skipped)
+    terminal = _scan_terminal(
+        worktree_root, common_dir, skipped=scan_skipped, exempt_session_id=exempt_session_id,
+    )
     terminal_by_id = {rel_id(p, worktree_root): (p, note) for p, note, _status, _ts in terminal}
 
     moves: List[Move] = []
@@ -578,6 +624,91 @@ __all__ = ["plan_sweep", "apply_sweep", "collect_live_plan_paths", "plan_archive
 # ---------------------------------------------------------------------------
 
 
+def _partition_untracked_sidecars(
+    worktree_root: Path,
+    moves: List[Move],
+) -> Tuple[List[Move], List[Move]]:
+    """Split `moves` into (commit_moves, fs_sidecar_moves).
+
+    Purpose: `archive_and_commit`'s `untracked-at-head` refusal is a
+    deliberate integrity refusal for a TRACKED primary plan (see this
+    module's own docstring) and must stay exactly that strict — this
+    function never touches a primary's path through that refusal. What it
+    DOES fix (defect 9cd2fc40cf, example-store-repo-fb): a fire-script sidecar
+    (`<stem>.workflow.mjs[.emitted.json]`) is written beside its plan by
+    `emit-dispatch-workflow` but the emitter never commits it, so it is
+    untracked at HEAD by construction and was hitting the SAME refusal —
+    stranding it behind while its primary moved on alone, exactly what
+    9cd2fc40cf was meant to stop. A sidecar that WAS committed (e.g. a
+    `.review.md` evidence file) is untouched by this split and still rides
+    through the ordinary commit path below, unchanged.
+
+    ONE batched, spawn-free `read_tree_spine` read over every sidecar
+    candidate's src decides tracked-vs-untracked — never a per-sidecar git
+    spawn (amplification gate:
+    coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py).
+    `read_tree_spine` returning `None` (unresolvable HEAD) fails CLOSED to
+    the pre-existing behaviour (routed through the commit, so
+    `archive_and_commit`'s own refusal fires) rather than guessing a
+    sidecar is untracked.
+    """
+    sidecar_moves = [m for m in moves if _is_sidecar(m.src)]
+    if not sidecar_moves:
+        return moves, []
+
+    src_rels = [rel_id(m.src, worktree_root) for m in sidecar_moves]
+    spine = read_tree_spine(worktree_root, src_rels)
+
+    def _is_tracked(move: Move) -> bool:
+        if spine is None:
+            return True
+        rel = rel_id(move.src, worktree_root)
+        parent, _, leaf = rel.rpartition("/")
+        return spine.get(parent, {}).get(leaf) is not None
+
+    untracked_sidecar_ids = {
+        m.candidate_id for m in sidecar_moves if not _is_tracked(m)
+    }
+    if not untracked_sidecar_ids:
+        return moves, []
+
+    commit_moves = [m for m in moves if m.candidate_id not in untracked_sidecar_ids]
+    fs_sidecar_moves = [m for m in moves if m.candidate_id in untracked_sidecar_ids]
+    return commit_moves, fs_sidecar_moves
+
+
+def _apply_untracked_sidecar_moves(moves: List[Move]) -> Tuple[List[dict], List[dict]]:
+    """Plain filesystem rename for sidecars with no HEAD tree entry.
+
+    Called ONLY after the tracked batch's `archive_and_commit` call (if any)
+    has returned — never before — so an untracked fire-script sidecar can
+    never land in the archive tree ahead of its primary's own commit. This
+    is a pure `os.replace`: no git spawn, no commit, no index interaction of
+    any kind — the file was never tracked, so there is nothing for git to
+    know about.
+
+    An existing destination is a named refusal (`sidecar-dest-exists`),
+    never an overwrite: an untracked sidecar carries no committed history to
+    diff against, so there is no safe "identical duplicate" check to fall
+    back on the way `_is_identical_duplicate` gives tracked moves — see this
+    module's own negative-spec.
+    """
+    acted: List[dict] = []
+    failed: List[dict] = []
+    for move in moves:
+        if move.dst.exists():
+            failed.append({"id": move.candidate_id, "reason": _REASON_SIDECAR_DEST_EXISTS})
+            continue
+        try:
+            move.dst.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(str(move.src), str(move.dst))
+        except OSError as exc:
+            failed.append({"id": move.candidate_id, "reason": f"sidecar-replace-failed: {exc}"})
+            continue
+        acted.append({"id": move.candidate_id, "archived": True})
+    return acted, failed
+
+
 def _handle_act(
     mode: str,
     worktree_root: Path,
@@ -588,16 +719,23 @@ def _handle_act(
     """Act path: re-verify each candidate_id at act time, cap the moves
     ACTUALLY APPLIED this invocation to `cap`, defer the rest with a named
     reason. Records the sweep outcome to the receipt on every branch.
+
+    Untracked fire-script sidecars are split out of the commit batch by
+    `_partition_untracked_sidecars` and applied via a plain filesystem
+    rename (`_apply_untracked_sidecar_moves`) AFTER the tracked-commit call
+    below returns — see both helpers' own docstrings.
     """
     moves, skipped = plan_sweep(worktree_root, common_dir, cap, candidate_ids=candidate_ids)
 
     acted: List[dict] = []
     failed: List[dict] = []
 
-    if moves:
+    commit_moves, fs_sidecar_moves = _partition_untracked_sidecars(worktree_root, moves)
+
+    if commit_moves:
         import asyncio
 
-        n = len(moves)
+        n = len(commit_moves)
         commit_subject = (
             f"fleet: archive {n} terminal plan(s)\n\n"
             f"Archived via {_OP_KEY} (dry_run:false)."
@@ -606,18 +744,30 @@ def _handle_act(
             new_acted, new_failed = asyncio.run(
                 archive_and_commit(
                     worktree_root=worktree_root,
-                    moves=moves,
+                    moves=commit_moves,
                     subject=commit_subject,
                 )
             )
         except Exception as exc:  # noqa: BLE001 — always report a receipt, never raise past this seam
             _LOG.warning("archive_plans: archive_and_commit raised — %s", exc)
             record_sweep_outcome(common_dir, _OP_KEY, "failed", count=len(moves), detail=str(exc))
+            # The commit call never returned cleanly — the "after the commit
+            # succeeds" ordering for untracked sidecars means none of them
+            # ran either; report them failed alongside the aborted batch
+            # rather than silently proceeding to move them anyway.
             return build_act_result(mode, [], skipped, [
-                {"id": m.candidate_id, "reason": f"commit-failed: {exc}"} for m in moves
+                {"id": m.candidate_id, "reason": f"commit-failed: {exc}"} for m in commit_moves
+            ] + [
+                {"id": m.candidate_id, "reason": f"commit-failed: {exc}; sidecar rename not attempted"}
+                for m in fs_sidecar_moves
             ])
         acted.extend(new_acted)
         failed.extend(new_failed)
+
+    if fs_sidecar_moves:
+        fs_acted, fs_failed = _apply_untracked_sidecar_moves(fs_sidecar_moves)
+        acted.extend(fs_acted)
+        failed.extend(fs_failed)
 
     if failed:
         record_sweep_outcome(common_dir, _OP_KEY, "failed", count=len(failed), detail=str(failed[:5]))

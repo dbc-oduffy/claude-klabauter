@@ -53,6 +53,52 @@ def test_new_and_update_lines_alone_are_not_deletions(parser):
     assert parser._has_deletions(stdout_text) is False
 
 
+def _envelope(parser, capsys, argv):
+    import json
+
+    assert parser.main(argv) == 0
+    out = capsys.readouterr().out
+    return json.loads(out[out.rindex("\n{\n") + 1 :] if "\n{\n" in out else out)
+
+
+def test_changes_file_is_what_the_gate_counts(parser, capsys, tmp_path):
+    """The claude-klabauter 2026-09-11 shape: stdout repeated each file per row
+    and per phase (2464 lines) for a round that changed 105 paths. With the
+    round's manifest handed in, the gate counts the manifest -- including its
+    deletions and sensitive paths -- and a phantom stdout `REMOVE:` from a
+    staged sync phase no longer reads as a deletion."""
+    stdout_file = tmp_path / "stdout.txt"
+    stdout_file.write_text(
+        "".join(f"    UPDATE: f{i}.py\n" for i in range(40))
+        + "  REMOVE: phantom.md (not in source)\n",
+        encoding="utf-8",
+    )
+    changes = tmp_path / "changes.txt"
+    changes.write_text("NEW\ta.py\nNEW\tb.py\n", encoding="utf-8")
+
+    env = _envelope(
+        parser,
+        capsys,
+        ["parse-dryrun", "--stdout-file", str(stdout_file), "--source-dir", str(tmp_path),
+         "--changes-file", str(changes)],
+    )
+    assert env["preflight"]["step2_file_count"] == 2
+    assert env["preflight"]["step2_has_deletions"] is False
+    assert env["gates"]["step3_gate_fires"] is False
+    assert len(env["preflight"]["step2c_scan_file_list"]) == 40
+
+    changes.write_text("NEW\thooks/x.py\nREMOVE\tgone.py\n", encoding="utf-8")
+    env = _envelope(
+        parser,
+        capsys,
+        ["parse-dryrun", "--stdout-file", str(stdout_file), "--source-dir", str(tmp_path),
+         "--changes-file", str(changes)],
+    )
+    assert env["preflight"]["step2_has_deletions"] is True
+    assert env["preflight"]["step2_sensitive_paths"] == ["hooks/"]
+    assert env["gates"]["step3_gate_fires"] is True
+
+
 def test_stale_deleting_vocabulary_no_longer_matches_on_its_own(parser):
     """Guards against reintroducing the old `deleting`/`del.` guess as
     a second, drifting vocabulary alongside the real one."""

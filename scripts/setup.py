@@ -2387,6 +2387,70 @@ def _discover_klabauter_root(repo_root: Path, plugin_root: str | None) -> str | 
     return None
 
 
+#: The registry key `coordinator_core.trusted_root_guard._doe_root` reads first
+#: (DR-071's canonical coordinator-root anchor) — the value behind
+#: `resolve_operator_config`'s `doe_root`.
+_DOE_CLAUDE_ANCHOR_KEY = "repos.doe_claude"
+
+
+def _unset_doe_claude_registration(
+    coord_path: Path, coord_source: CoordSourceResolution, plugin_root: Path | None
+) -> dict[str, str]:
+    """Persist the coordinator-claude root this run already resolved, as
+    `repos.doe_claude`, when that key is currently unset.
+
+    `_resolve_coordinator_claude_root` finds the clone and the dep check
+    prints it, but otherwise the key is only written by coordinator-claude's
+    own installer (`coordinator_core.install.maximalist`) or its SessionStart
+    registrar hook. On a box where neither has run — an engine-first install,
+    or a host that cannot restart Claude Code so no plugin hook ever fires —
+    every baton/handoff op then dies in `resolve_operator_config` with
+    "'doe_root' resolved to a corrupt value ''", blaming operator config for a
+    value this installer was holding (docs/reference/
+    linux-cloud-dogfood-friction.md F1).
+
+    Returns `{key: value}` for `register_claude_klabauter_root` to append LAST to its
+    ordered write loop, so the insertion-order contract for the identity keys
+    is untouched; `{}` when nothing should be written.
+
+    negative-spec:
+      - Never overwrites an existing value: an operator who pointed the key
+        somewhere deliberate outranks a resolution ladder that may have
+        bottomed out at a sibling-dir guess. An unreadable registry counts as
+        set — this never writes on a value it could not see.
+      - Never writes `engine.working_repos.doe_claude`: that namespace is
+        DoE's own identity assertion, which claude-klabauter only reads
+        (`coordinator_core.ops.setup_chain_walker.
+        _COORDINATOR_ROOT_LADDER_REMEDIATION`; DR-132). The cfc55599
+        klabauter-side patch this descends from wrote both keys; only the
+        one the failing reader needs is kept.
+      - Never writes a REGISTRY-rung candidate: that rung returns the DERIVED
+        plugin root (`<clone>/coordinator` on a dev clone), not the clone root
+        the anchor names, and it only fires when DoE's installer already ran.
+      - Never writes a publish mirror, or a path that is not a
+        coordinator-claude root in either shape (`plugin_root is None`)."""
+    if coord_source.rung is CoordSourceRung.REGISTRY:
+        return {}
+    if coord_source.is_publish_mirror_rejected or coord_source.is_unresolved:
+        return {}
+    if plugin_root is None or not coord_path.is_dir():
+        return {}
+    try:
+        from coordinator_core.machine_resolver import registry_get
+
+        existing = registry_get(_DOE_CLAUDE_ANCHOR_KEY)
+    except Exception as exc:
+        print(
+            f"[ADVISORY] could not read {_DOE_CLAUDE_ANCHOR_KEY} ({exc}); "
+            "leaving it unregistered.",
+            file=sys.stderr,
+        )
+        return {}
+    if (existing or "").strip():
+        return {}
+    return {_DOE_CLAUDE_ANCHOR_KEY: str(coord_path)}
+
+
 def register_claude_klabauter_root(
     claude_klabauter_root_resolved: Path, claude_klabauter_root_source: str, repo_root: Path, args: Args
 ) -> Path:
@@ -2486,7 +2550,9 @@ def register_claude_klabauter_root(
     mirror (inert) rather than mirror-without-target (a false positive on
     the DR-132 gate). The probe added alongside this chunk
     (`bin/claude-klabauter-doctor-probe.py`) is the backstop for that residue, not a
-    substitute for the ordering.
+    substitute for the ordering. `repos.doe_claude`, when
+    `_unset_doe_claude_registration` yields it, is appended after every
+    identity key, so it never moves where a partial failure lands.
 
     `engine.working_repos.*` is DoE's key-namespace (schema authored on their
     plane, `machine-local-registry.md` §324); our half is this install-time
@@ -2501,7 +2567,7 @@ def register_claude_klabauter_root(
     # instead of a naive `shutil.which` + bare subprocess.
     from coordinator_core.install._shared import resolve_machine_local_cli
 
-    coord_path, _ = _resolve_coordinator_claude_root(repo_root, args)
+    coord_path, coord_source = _resolve_coordinator_claude_root(repo_root, args)
     plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
     plugin_root_str = str(plugin_root) if plugin_root else None
 
@@ -2626,6 +2692,8 @@ def register_claude_klabauter_root(
         print("  this is not overridable via --skip-dep-check/--accept-missing-deps-risk.", file=sys.stderr)
         print(f"  Checked: {repo_root}", file=sys.stderr)
         sys.exit(EXIT_REPO_IDENTITY_UNRESOLVED)
+
+    key_values.update(_unset_doe_claude_registration(coord_path, coord_source, plugin_root))
 
     keys = tuple(key_values)
     keys_desc = " + ".join(keys)

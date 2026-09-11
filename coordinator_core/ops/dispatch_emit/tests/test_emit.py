@@ -7,6 +7,7 @@ Spec backlink: pln-the-emitter-turns-a-plan-spine-d08dda § C4.
 from __future__ import annotations
 
 import re
+import subprocess as _subprocess
 import textwrap
 
 import pytest
@@ -112,12 +113,20 @@ def test_composed_script_never_wraps_body_in_an_uninvoked_run_function():
 
 
 def test_first_statement_after_meta_block_is_a_phase_call():
+    """The invariant this guards is "never wrapped in a function nothing
+    calls" (module docstring § Top-level body), not literally "the very
+    first token is `phase(`" -- `const _incompleteChunks = [];` is a
+    top-level `const`, declared once, ahead of the first phase purely
+    because every later status-check block needs somewhere to push into.
+    """
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves")
 
     meta_end = script.index("};\n") + len("};\n")
     remainder = script[meta_end:].lstrip()
-    assert remainder.startswith("phase(")
+    assert remainder.startswith("const _incompleteChunks = [];")
+    after_decl = remainder[len("const _incompleteChunks = [];") :].lstrip()
+    assert after_decl.startswith("phase(")
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +794,85 @@ def test_a_mismatch_is_not_framed_as_a_refusal_reason():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Gitignored writes excluded from preflight/commit pathspecs
+# ---------------------------------------------------------------------------
+
+_NOWIN = {"creationflags": getattr(_subprocess, "CREATE_NO_WINDOW", 0)}
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def _git(repo, *args, check=True):
+    return _subprocess.run(
+        ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
+    )
+
+
+def _gitignore_repo(tmp_path):
+    repo = tmp_path / "r"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "work/z")
+    _git(repo, "config", "user.email", "t@local")
+    _git(repo, "config", "user.name", "t")
+    (repo / ".gitignore").write_text("registry/registry.db\n", encoding="utf-8")
+    (repo / "registry").mkdir()
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "seed")
+    return repo
+
+
+@pytest.mark.spawns_process
+def test_a_gitignored_write_is_excluded_from_the_preflight_pathspec(tmp_path):
+    """Defect: a spine row declaring a gitignored `writes:` path (a derived
+    store, e.g. `registry/registry.db`) went PREFLIGHT-BLOCKED before wave 1
+    -- an ignored path can never be committed, so it must never reach the
+    preflight claimability set at all.
+    """
+    repo = _gitignore_repo(tmp_path)
+    waves = [[_wave_row("C1", ["registry/registry.db"])]]
+    script = compose_script(waves, name="wf", description="ignored write", repo_root=repo)
+    preflight_body = _preflight_body(script)
+    assert "registry/registry.db" not in preflight_body
+
+
+@pytest.mark.spawns_process
+def test_a_wave_whose_only_write_is_gitignored_gets_no_commit_phase(tmp_path):
+    """Same treatment as an all-`writes: []` wave: nothing committable, so
+    no commit phase is emitted for it."""
+    repo = _gitignore_repo(tmp_path)
+    waves = [[_wave_row("C1", ["registry/registry.db"])]]
+    script = compose_script(waves, name="wf", description="ignored write", repo_root=repo)
+    assert "commit phase omitted" in script
+    assert "gitignored" in script
+    # Nothing after the wave's own body `phase('Wave 1: C1')` call names the
+    # commit agent -- the preflight phase (before it) legitimately does.
+    wave_body = script[script.index("phase('Wave 1: C1')") :]
+    assert "coordinator:git-commit-agent" not in wave_body
+
+
+@pytest.mark.spawns_process
+def test_a_gitignored_write_alongside_a_real_one_still_commits_the_real_path(tmp_path):
+    repo = _gitignore_repo(tmp_path)
+    waves = [[_wave_row("C1", ["registry/registry.db", "a.py"])]]
+    script = compose_script(waves, name="wf", description="mixed write", repo_root=repo)
+    preflight_body = _preflight_body(script)
+    assert "registry/registry.db" not in preflight_body
+    assert "a.py" in preflight_body
+    assert "commit phase omitted" not in script
+
+
+def _preflight_body(script: str) -> str:
+    """The preflight phase's own `agent()` call text -- the segment between
+    its result binding and the next phase's body `phase(...)` call. The
+    phase TITLE `Preflight: commit claimability` also appears earlier, in
+    `meta.phases`, so slicing from there (rather than from the result
+    binding) would include the unrelated meta-block literal too."""
+    start = script.index("const preflightResult")
+    end = script.index("phase('Wave 1", start)
+    return script[start:end]
+
+
 def test_completed_run_returns_a_positive_record_not_undefined():
     """A finished run and a run that fell off the end must not look alike.
 
@@ -793,13 +881,13 @@ def test_completed_run_returns_a_positive_record_not_undefined():
     last phase. Same shape as the preflight's absent-output pass verdict.
     """
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    assert "completed: true" in script
+    assert "completed: _incompleteChunks.length === 0" in script
     assert script.rstrip().endswith("};")
 
 
 def test_completion_record_names_the_chunks_the_recovery_triple_greps_for():
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    tail = script[script.index("completed: true"):]
+    tail = script[script.index("completed: _incompleteChunks.length === 0"):]
     assert "chunks: [" in tail
     assert "waves: 2" in tail
     # Every chunk in the fixture is named, because chunk ids are the join key
@@ -812,9 +900,62 @@ def test_completion_record_names_the_chunks_the_recovery_triple_greps_for():
 def test_completion_return_is_last_so_no_phase_follows_it():
     """An early completion return would silently skip the phases after it."""
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
-    completion = script.index("completed: true")
+    completion = script.index("completed: _incompleteChunks.length === 0")
     assert "phase(" not in script[completion:]
     assert "await agent(" not in script[completion:]
+
+
+def test_a_non_done_chunk_report_flips_completed_false_and_names_the_chunk():
+    """Defect: a workflow reported `completed: true` while a chunk's own
+    agent report carried `Status: PARTIAL`. Runtime behaviour is not
+    executable from a compose-time test (there is no JS runtime here), so
+    this pins the STRUCTURE the fix composes: a status-check block per
+    batch feeding a shared `_incompleteChunks` array that the terminal
+    return's `completed` reads, never a hard-coded `true`.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert "const _incompleteChunks = [];" in script
+    # Every fixture wave is single-row, so each gets the single-row push
+    # form, keyed to that row's own results binding -- never a single global
+    # check blind to which chunk actually reported.
+    for wave in _two_wave_fixture():
+        for row in wave:
+            assert f"_incompleteChunks.push('{row.id}')" in script, row.id
+    assert "incomplete_chunks: _incompleteChunks" in script
+
+
+@pytest.mark.parametrize(
+    "reply, incomplete",
+    [
+        ("PARTIAL: tasks/emit/C2.md", True),
+        ("BLOCKED: tasks/emit/C2.md", True),
+        ("DONE: tasks/emit/C2.md", False),
+        ("DONE: tasks/emit/C2.md -- the PREFLIGHT-BLOCKED check passed", False),
+        ("DONE: tasks/emit/C2.md, no PARTIAL chunks", False),
+        ("report written\n<exit-status>PARTIAL</exit-status>", True),
+    ],
+)
+def test_the_status_check_reads_the_contracts_status_position(reply, incomplete):
+    """The emitted regex has no JS runtime here, but its body is also a valid
+    Python pattern, so it is exercised against the JSON-stringified reply the
+    emitted script actually tests."""
+    import json
+    import re
+
+    from coordinator_core.ops.dispatch_emit.emit import _NON_DONE_STATUS_JS_RE
+
+    body = _NON_DONE_STATUS_JS_RE[1 : _NON_DONE_STATUS_JS_RE.rindex("/")]
+    assert bool(re.search(body, json.dumps(reply))) is incomplete
+
+
+def test_multi_row_wave_status_check_indexes_by_row_order():
+    """A parallel wave's results binding is an array in row-dispatch order;
+    the status check must index it per row, never blind-push every row id
+    on any match (which would misattribute a sibling's PARTIAL)."""
+    waves = [[_wave_row("C1", ["a.py"]), _wave_row("C2", ["b.py"])]]
+    script = compose_script(waves, name="wf", description="one parallel wave")
+    assert "['C1', 'C2'].forEach((id, i) => {" in script
+    assert "wave1Results[i]" in script
 
 
 # ---------------------------------------------------------------------------
@@ -2113,6 +2254,38 @@ def test_a_declared_but_untouched_path_is_landed_not_partial():
     )
 
 
+def test_declared_and_still_dirty_after_landing_halts_the_wave():
+    """Defect (example-retrieval-repo-4a, commit b550e655): a C3 executor reported
+    `registry/materialize.ts` changed, the wave's declared pathspec named
+    it, and the commit agent's report still read COMMIT-LANDED while the
+    file stayed dirty. HEAD then failed to import, and the residue halted
+    the NEXT plan's commit wave as unaccounted -- this wave should have
+    halted at its own boundary instead.
+
+    The gate itself has no independent git access (pure JS orchestration),
+    so the fix is the mandated post-commit `git status --porcelain` check
+    in the static prompt (`_commit_agent_call`) directing the agent to
+    treat a still-dirty declared path as withheld and fall through to
+    COMMIT-PARTIAL -- this pins both halves: the prompt states the
+    requirement, and the emitted gate still halts when a commit agent
+    that followed it reports the resulting COMMIT-PARTIAL.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+
+    assert "POST-COMMIT VERIFICATION IS MANDATORY, NOT OPTIONAL" in script
+    assert "git status --porcelain --" in script
+    assert "registry/materialize.ts" in script
+    assert "b550e655" in script
+
+    gate = _emitted_gate(script)
+    assert not gate.search(
+        "ran git status --porcelain after commit_paths returned; "
+        "chunks/D4.py was still dirty despite being declared and reported "
+        "landed\n"
+        "COMMIT-PARTIAL a805587fd8d0 withheld: chunks/D4.py\n"
+    )
+
+
 def test_commit_gate_land_nothing_halt_is_unchanged():
     """(d) The pre-existing halt-on-nothing-landed behaviour is unchanged:
     a null result and a tokenless report both still fail the gate.
@@ -2310,7 +2483,7 @@ def test_emitted_row_prompt_carries_the_done_summary_constraint_with_reply_and_p
     script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
 
     expected_report_path = ".coordinator-local/subagent-share/dispatch-reports/example/C1.md"
-    assert f"Reply EXACTLY `DONE: {expected_report_path}`" in script
+    assert f"Reply EXACTLY `<STATUS>: {expected_report_path}`" in script
     assert "git status --porcelain -- " in script
     assert "coordinator_core/ops/dispatch_emit/emit.py" in script
     assert expected_report_path in script

@@ -328,13 +328,24 @@ def _predecessors(
                 if normalized in write_paths:
                     collisions.append((read_path, write_paths[normalized]))
                     continue
-                under = [
-                    prefix
-                    for norm_prefix, prefix in write_prefixes.items()
-                    if norm_prefix == normalized or norm_prefix in normalized.parents
-                ]
-                if under:
-                    collisions.append((read_path, under[0]))
+                # Review: coordinator:code-reviewer (P2) -- both directions
+                # of containment count, matching `_paths_overlap`'s
+                # writes/writes check: the reader's path may sit beneath the
+                # prefix (the ordinary case), or the reader may declare an
+                # ancestor of the prefix (e.g. reading `state/` against a
+                # writer prefix `state/audits/`).
+                under = next(
+                    (
+                        prefix
+                        for norm_prefix, prefix in write_prefixes.items()
+                        if norm_prefix == normalized
+                        or norm_prefix in normalized.parents
+                        or normalized in norm_prefix.parents
+                    ),
+                    None,
+                )
+                if under is not None:
+                    collisions.append((read_path, under))
             if not collisions:
                 continue
             if reader.id in declared_closure[writer.id]:

@@ -536,7 +536,13 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                         "which does not end in a path separator. A single file "
                         "belongs in `writes:`."
                     )
-            writes_under = tuple(writes_under)
+            # Review: coordinator:code-reviewer (P1) -- normalize a
+            # Windows-authored `\`-spelled prefix to `/` here, once, so every
+            # downstream stage (wave_map's PurePosixPath-based containment
+            # checks foremost) sees a directory it can reason about. git
+            # itself accepts `/` on Windows, so nothing downstream loses
+            # anything by never seeing the backslash spelling.
+            writes_under = tuple(prefix.replace("\\", "/") for prefix in writes_under)
             if writes is UNDECLARED:
                 writes = []
         reads = raw.get("reads")

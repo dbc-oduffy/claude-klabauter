@@ -58,10 +58,24 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from coordinator_core.locked_write import MutateAbort, locked_rmw
 from coordinator_core.artifact_id_slug import id_slug
+from coordinator_core.frontmatter.baton_class import kind_values_for_canonical
 from coordinator_core.roadmap.plan_gate import (
     BATON_CODED_STATES,
     PLAN_APPROVED_STATUSES,
     assemble_plan_gate,
+)
+
+#: Kinds `handoff_phase` is legal on (mirrors `schema_validate.py`'s own
+#: `_HANDOFF_PHASE_KINDS`, H-CROSS-EXEC-2). Sourced the same way that module
+#: sources it — through `kind_values_for_canonical('roadmap-baton')`, never a
+#: bare `kind == 'roadmap-baton'` literal, for the identical reason: that
+#: canonical resolves to `{roadmap-baton, spinoff-roadmap}`, and a literal
+#: gate would silently never admit a real roadmap baton written under the
+#: retired spelling. `kind: spinoff` is deliberately absent — see
+#: `authorize_execution`'s own docstring for why a spinoff baton refuses
+#: this stamp instead of receiving a narrowed one.
+_EXECUTION_PHASE_KINDS = frozenset({"session-handoff"}) | frozenset(
+    kind_values_for_canonical("roadmap-baton")
 )
 
 #: The status a `ready` verdict advances a plan to. Deliberately a constant rather
@@ -386,6 +400,18 @@ def authorize_execution(
     `note` is attributed to the WAVE, never phrased as a PM utterance. The field
     exists to be self-attesting about who named execution, and a session writing a
     sentence that reads like the PM's is the one way this stamp could lie.
+
+    **`handoff_phase` is legal only on `kind: session-handoff` or a canonical
+    `roadmap-baton` (H-CROSS-EXEC-2, `schema_validate.py::_cf_handoff_phase_kind_gate`).**
+    A spinoff baton (the S lane's usual carrier — example-store-repo-em, landing
+    fc61535f) does not carry either kind, so stamping `handoff_phase: execution`
+    onto one writes a shape `pickup-assemble apply` refuses on claim: the write
+    here would "succeed" and the baton would die at pickup instead. This function
+    refuses the stamp instead — MutateAbort, same as the already-stamped case
+    below, surfaced through the ordinary `execution_ready: False` / `note` result
+    rather than a silent re-kind. The S lane is not expressible on a spinoff
+    baton today; widening `_EXECUTION_PHASE_KINDS` (and its schema-side twin) to
+    admit `spinoff` is a schema-owning decision, not this landing step's to make.
     """
     baton_abs = worktree_root / baton_path
     plan_abs = worktree_root / plan_path
@@ -402,6 +428,14 @@ def authorize_execution(
         existing = _read_field(old, "handoff_phase")
         if existing == "execution":
             raise MutateAbort("baton is already stamped handoff_phase: execution")
+        kind = _read_field(old, "kind")
+        if kind not in _EXECUTION_PHASE_KINDS:
+            raise MutateAbort(
+                f"cannot stamp handoff_phase: execution — kind is {kind!r}, "
+                "which handoff_phase requires to be session-handoff or "
+                "roadmap-baton (H-CROSS-EXEC-2); the S lane cannot be "
+                "expressed on this baton's kind"
+            )
         text = _set_field(old, "governing_plan", rel_plan)
         text = _set_field(text, "handoff_phase", "execution")
         text = _set_field(text, "execution_authorized_by", authorized_by)

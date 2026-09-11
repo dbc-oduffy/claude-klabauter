@@ -55,7 +55,7 @@ def _write_plan(path: Path, created: str, status: str = "draft", scope_lines: "l
 
 def _init_git_repo(d: Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=d, check=True, timeout=30, **no_console_passthrough_kwargs())
-    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=d, check=True, timeout=30, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "config", "user.email", "t@t.example"], cwd=d, check=True, timeout=30, **no_console_passthrough_kwargs())
     subprocess.run(["git", "config", "user.name", "t"], cwd=d, check=True, timeout=30, **no_console_passthrough_kwargs())
 
 

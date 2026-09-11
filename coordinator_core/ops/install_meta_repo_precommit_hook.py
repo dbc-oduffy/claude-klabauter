@@ -114,8 +114,8 @@ forever: the gates failed CANNOT-RUN on every commit, and the remediation the
 BLOCKED banner itself prints (re-run the installer) reported "already
 installed and current — no-op" and changed nothing.
 
-Observed on the Windows box: `~/.claude`'s hook was generated against
-`E:/dev/claude-klabauter`; that clone later moved to `X:/claude-klabauter`.
+Observed on the Windows box: `~/.claude`'s hook was generated against the
+engine clone's original location; that clone later moved to another drive.
 Every commit to Claude Central blocked, and a reinstall repaired exactly one
 gate — `detect-staged-rollback`, which happened to carry a stale version
 stamp — while silently leaving the other two pointing at the dead path.

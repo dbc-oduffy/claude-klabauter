@@ -158,7 +158,7 @@ def test_all_resolution_rungs_absent_returns_unknown(monkeypatch, tmp_path):
     reg_dir = tmp_path / "machine-local"
     reg_dir.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
-    monkeypatch.setattr(mr.socket, "gethostname", lambda: "")
+    monkeypatch.setattr(mr, "_hostname_short", lambda: None)
     monkeypatch.setenv("HOSTNAME", "")
     assert mr.compute_machine() == "unknown"
     assert mr.compute_machine_live() == "unknown"
@@ -395,34 +395,34 @@ def test_registry_set_creates_file_and_writes_flat_key(monkeypatch, tmp_path):
     reg_dir = tmp_path / "reg"
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
-    mr.registry_set("repos.claude_klabauter", "/x/claude-klabauter")
+    mr.registry_set("repos.claude_klabauter", "/srv/claude-klabauter")
 
     target = reg_dir / "registry.local.toml"
     assert target.is_file()
     content = target.read_text(encoding="utf-8")
-    assert "\"repos.claude_klabauter\" = '/x/claude-klabauter'" in content
-    assert mr.registry_get("repos.claude_klabauter") == "/x/claude-klabauter"
+    assert "\"repos.claude_klabauter\" = '/srv/claude-klabauter'" in content
+    assert mr.registry_get("repos.claude_klabauter") == "/srv/claude-klabauter"
 
 
 def test_registry_set_appends_to_existing_file_preserving_other_keys(monkeypatch, tmp_path):
     reg_dir = tmp_path / "reg"
     reg_dir.mkdir(parents=True)
     (reg_dir / "registry.local.toml").write_text(
-        "schema = 1\n\"repos.doe_claude\" = '/x/DoE-claude'\n", encoding="utf-8"
+        "schema = 1\n\"repos.doe_claude\" = '/srv/DoE-claude'\n", encoding="utf-8"
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
-    mr.registry_set("repos.claude_klabauter", "/x/claude-klabauter")
+    mr.registry_set("repos.claude_klabauter", "/srv/claude-klabauter")
 
-    assert mr.registry_get("repos.doe_claude") == "/x/DoE-claude"
-    assert mr.registry_get("repos.claude_klabauter") == "/x/claude-klabauter"
+    assert mr.registry_get("repos.doe_claude") == "/srv/DoE-claude"
+    assert mr.registry_get("repos.claude_klabauter") == "/srv/claude-klabauter"
 
 
 def test_registry_set_replaces_existing_key_in_place(monkeypatch, tmp_path):
     reg_dir = tmp_path / "reg"
     reg_dir.mkdir(parents=True)
     (reg_dir / "registry.local.toml").write_text(
-        "schema = 1\n\"repos.claude_klabauter\" = '/old/path'\n\"repos.doe_claude\" = '/x/DoE-claude'\n",
+        "schema = 1\n\"repos.claude_klabauter\" = '/old/path'\n\"repos.doe_claude\" = '/srv/DoE-claude'\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
@@ -432,7 +432,7 @@ def test_registry_set_replaces_existing_key_in_place(monkeypatch, tmp_path):
     content = (reg_dir / "registry.local.toml").read_text(encoding="utf-8")
     assert content.count('"repos.claude_klabauter"') == 1
     assert mr.registry_get("repos.claude_klabauter") == "/new/path"
-    assert mr.registry_get("repos.doe_claude") == "/x/DoE-claude"
+    assert mr.registry_get("repos.doe_claude") == "/srv/DoE-claude"
 
 
 def test_registry_set_same_value_is_a_true_noop(monkeypatch, tmp_path):
@@ -442,11 +442,11 @@ def test_registry_set_same_value_is_a_true_noop(monkeypatch, tmp_path):
     reg_dir = tmp_path / "reg"
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
 
-    mr.registry_set("repos.claude_klabauter", "/x/claude-klabauter")
+    mr.registry_set("repos.claude_klabauter", "/srv/claude-klabauter")
     target = reg_dir / "registry.local.toml"
     mtime_before = target.stat().st_mtime_ns
 
-    mr.registry_set("repos.claude_klabauter", "/x/claude-klabauter")
+    mr.registry_set("repos.claude_klabauter", "/srv/claude-klabauter")
     mtime_after = target.stat().st_mtime_ns
 
     assert mtime_before == mtime_after

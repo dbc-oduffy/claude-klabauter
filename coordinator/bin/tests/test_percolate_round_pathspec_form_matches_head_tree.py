@@ -229,7 +229,7 @@ def test_commit_subject_counts_deletions_it_actually_carries():
         deletion_paths=["bin/gone.cmd", "bin/also-gone.py"],
     )
 
-    assert "1 added, 0 modified, 2 removed" in subject
+    assert "1 added-or-updated, 2 removed" in subject
 
 
 def test_a_deletion_with_its_own_change_line_is_not_counted_twice():
@@ -245,7 +245,7 @@ def test_a_deletion_with_its_own_change_line_is_not_counted_twice():
         deletion_paths=["bin/gone.cmd"],
     )
 
-    assert "0 added, 0 modified, 1 removed" in subject
+    assert "0 added-or-updated, 1 removed" in subject
 
 
 def test_subject_is_unchanged_when_no_deletions_are_carried():
@@ -262,7 +262,7 @@ def test_subject_is_unchanged_when_no_deletions_are_carried():
     )
 
     assert without == with_empty
-    assert "1 added, 0 modified, 0 removed" in without
+    assert "1 added-or-updated, 0 removed" in without
 
 
 def test_a_round_that_carries_removals_is_not_a_warning(capsys):

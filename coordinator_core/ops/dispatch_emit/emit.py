@@ -325,6 +325,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -336,10 +337,10 @@ from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, spli
 from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.pathspec import (
-    _declared_paths,
     NoTestTargetError,
     commit_pathspec,
     commit_prefixes,
+    is_zero_contribution,
     terminal_test_scope,
 )
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
@@ -361,6 +362,8 @@ from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_B
 # alias keeps this module's own public surface name stable for any importer
 # that still names it, without a second exception class to keep in sync.
 ReviewRosterFragmentError = RosterFragmentError
+
+_logger = logging.getLogger(__name__)
 
 #: Named per `executor_return_contract.self_verify_constraint`'s two
 #: keyword parameters (docs/plans/2026-09-11-the-executor-return-contract-
@@ -589,6 +592,69 @@ class NoWavesError(ValueError):
     directly hostile to AC4/AC10 here, which require fail-loud refusal
     rather than a fabricated phase.
     """
+
+
+def _gitignored_paths(paths: list[str], *, repo_root: Optional[Path] = None) -> frozenset[str]:
+    """The subset of ``paths`` that ``git check-ignore`` matches, via ONE
+    batched spawn (Defect: a gitignored ``writes:`` path halts the whole run
+    at preflight).
+
+    A gitignored path (a derived store such as ``registry/registry.db``) can
+    never be committed, so it must never reach the preflight claimability
+    check or a commit phase's pathspec — asking a dispatched
+    ``coordinator:git-commit-agent`` to verify claimability of a path that is
+    ignored by construction gets a correct, unavoidable ``PREFLIGHT-BLOCKED``
+    and halts every wave before it starts, even though nothing about the row
+    itself is wrong.
+
+    Batched via ``git check-ignore -z --stdin`` (``coordinator_core.git.run
+    :: run_git``'s own documented ``--stdin`` form), the same discipline
+    ``test_no_unbatched_per_item_git_spawn.py`` enforces: one spawn for the
+    whole run's declared-write union, never one per path or per row. Callers
+    pass the WHOLE-RUN pathspec union once; a batch's own pathspec is always
+    a subset of that union (batches partition a wave's rows), so filtering
+    every batch and the preflight union against the one resulting set never
+    needs a second spawn.
+
+    Fails OPEN (returns an empty set) if ``git`` is absent, times out, or the
+    call otherwise cannot run at all (``GitResult.returncode == 127`` or
+    ``timed_out``) -- reproducing this module's PRE-FIX behaviour (nothing
+    filtered) rather than inventing a new failure mode on a best-effort
+    filter. A real ``git check-ignore`` run that simply matches nothing
+    (``returncode == 1``, empty stdout) is not a failure and returns an empty
+    set correctly via the same code path.
+
+    Negative spec: never a per-path spawn, never a directory-listing/tree
+    walk (this repo's ``pathspec.py`` forbids exactly that for the identical
+    reason), and never applied to a ``writes_under:`` prefix -- a prefix
+    names no concrete file at emit time, so there is nothing here yet to
+    check; the runtime preflight prompt already tells the dispatched agent
+    to check-ignore a prefix's own probe file itself.
+    """
+    if not paths:
+        return frozenset()
+
+    from coordinator_core.git.run import run_git
+
+    root = str(repo_root) if repo_root is not None else str(_REPO_ROOT)
+    stdin = b"\0".join(p.encode("utf-8") for p in paths)
+    result = run_git(["check-ignore", "-z", "--stdin"], cwd=root, input=stdin)
+    if result.timed_out or result.returncode == 127:
+        _logger.warning(
+            "git check-ignore could not run (returncode=%s, timed_out=%s); "
+            "proceeding without gitignore filtering for %d path(s)",
+            result.returncode,
+            result.timed_out,
+            len(paths),
+        )
+        return frozenset()
+    if not result.stdout_bytes:
+        return frozenset()
+    return frozenset(
+        segment.decode("utf-8", "replace")
+        for segment in result.stdout_bytes.split(b"\0")
+        if segment
+    )
 
 
 def _dedupe_preserve_order(paths: list[str]) -> list[str]:
@@ -1227,9 +1293,10 @@ def _prefix_commit_rule(prefixes: list[tuple[str, tuple[str, ...]]]) -> str:
     of the row whose report lists it. A file under the prefix that no report
     lists is left alone, because peers write under shared prefixes. A prefix
     row whose report carries no list halts the phase rather than having its
-    files inferred from prose or from ``git status``. The pathspec handed to
-    the commit route stays concrete files, so ``commit_paths`` never sees a
-    directory.
+    files inferred from prose or from ``git status``. The EMITTED pathspec
+    stays concrete files (legally empty for a prefix-only wave); the agent
+    appends concrete files it reads off the executor report, never a
+    directory, so ``commit_paths`` never sees one either.
     """
     rendered = "; ".join(
         f"{row_id}: " + ", ".join(f"`{prefix}`" for prefix in row_prefixes)
@@ -1251,6 +1318,12 @@ def _prefix_commit_rule(prefixes: list[tuple[str, tuple[str, ...]]]) -> str:
         "has nothing to commit. If nothing at all is left to commit once every "
         f"list is resolved, run `git rev-parse HEAD` and end with "
         f"'{_COMMIT_LANDED_TOKEN} <that sha>'."
+        " THIS CLAUSE IS THE ONE EXCEPTION to the pathspec-provenance "
+        "instructions later in this prompt: 'do not widen the pathspec "
+        "yourself' and 'a reported path absent from the pathspec is a "
+        "divergence' do not apply to a file this clause just told you to "
+        "add -- but only for a file sitting under a listed row's own "
+        "prefix, and for no other file."
     )
 
 
@@ -1836,6 +1909,22 @@ def _commit_agent_call(
         f" gitignored `.coordinator-local/memo-outbox/` and never appears"
         f" in this repo's tree at all) is NOT withheld: there is nothing to"
         f" withhold, and it must never trigger the partial verdict below."
+        f" POST-COMMIT VERIFICATION IS MANDATORY, NOT OPTIONAL: your OWN"
+        f" belief that you committed the full pathspec is not evidence of"
+        f" it -- a chunk reported registry/materialize.ts as changed, the"
+        f" declared pathspec named it, and it still stayed dirty after a"
+        f" commit that reported success, because nothing had checked the"
+        f" tree AFTER `commit_paths` returned (example-retrieval-repo-4a, b550e655)."
+        f" After the call returns, run `git status --porcelain --"
+        f" <full declared pathspec>` against the sha it gave you and read"
+        f" the actual output -- not your memory of what you passed in."
+        f" Every declared path you are about to report as landed MUST show"
+        f" no output there. A path that still shows dirty is withheld,"
+        f" full stop, whether you chose a narrower pathspec yourself, the"
+        f" commit call silently dropped it, or anything else -- name it and"
+        f" fall through to the PARTIAL verdict below exactly as you would"
+        f" for a live peer's claim. Do not emit the landed token on an"
+        f" unverified assumption."
         f" When (and ONLY when) the commit has landed its FULL handed"
         f" pathspec -- minus only the legitimate drops named above (an item"
         f" that did not return DONE, a declared path examined but not"
@@ -1936,6 +2025,26 @@ def _commit_agent_call(
 def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
     """The JS that stops the run when ``commit_var``'s commit did not land
     its FULL handed pathspec.
+
+    This gate itself only ever reads the agent's OWN reported verdict token
+    -- it has no independent git access, being pure JS orchestration (see
+    ``_preflight_halt_gate``'s identical constraint). The independent check
+    that catches a declared path silently left dirty after a reported
+    ``COMMIT-LANDED`` -- whether the commit agent narrowed its own pathspec
+    or ``commit_paths`` dropped the path some other way -- is therefore
+    mandated in the STATIC PROMPT itself (``_commit_agent_call``'s "POST-
+    COMMIT VERIFICATION IS MANDATORY" clause: a required post-commit ``git
+    status --porcelain`` over the full declared pathspec, read for real
+    output rather than trusted from memory), not in this gate. A commit
+    agent that skips that check and reports ``COMMIT-LANDED`` on a stale
+    belief is a prompt-contract violation this gate cannot detect any more
+    than it can detect a lie in any other reported field; see
+    ``coordinator/agents/git-commit-agent.md`` for the agent-side contract
+    this prompt clause binds. Reported by example-retrieval-repo-4a (commit
+    ``b550e655``): ``registry/materialize.ts`` stayed dirty after a wave
+    reported landed, and the next plan's commit wave halted on it as
+    "unaccounted" residue rather than this wave catching it at its own
+    boundary.
 
     Two failure shapes share this one gate, deliberately: a commit that
     landed NOTHING (the pre-existing case -- no ``_COMMIT_LANDED_TOKEN``
@@ -2502,12 +2611,7 @@ def _all_writes_declared_empty(rows: list[WaveRow]) -> bool:
     phase runs, only their names are unknown at emit time, so its wave
     keeps a commit phase.
     """
-    return bool(rows) and all(
-        row.writes is not UNDECLARED
-        and not _declared_paths(row)
-        and not row.writes_under
-        for row in rows
-    )
+    return bool(rows) and all(is_zero_contribution(row) for row in rows)
 
 
 def compose_script(
@@ -2592,6 +2696,20 @@ def compose_script(
         [] if _all_writes_declared_empty(wave) else commit_pathspec(wave)
         for wave in waves
     ]
+    # Defect fix: a gitignored declared-write path (a derived store such as
+    # `registry/registry.db`) can never be committed, so it must never reach
+    # the preflight claimability set or a commit phase's pathspec -- see
+    # `_gitignored_paths`'s own docstring. ONE batched spawn over the
+    # whole-run union, computed here before any per-wave/per-batch pathspec
+    # is filtered against it -- a batch's own pathspec is always a subset of
+    # this union, so no second spawn is needed below.
+    gitignored = _gitignored_paths(
+        _dedupe_preserve_order(path for pathspec in wave_pathspecs for path in pathspec),
+        repo_root=repo_root,
+    )
+    wave_pathspecs = [
+        [path for path in pathspec if path not in gitignored] for pathspec in wave_pathspecs
+    ]
     preflight_pathspec = _dedupe_preserve_order(
         path for pathspec in wave_pathspecs for path in pathspec
     )
@@ -2604,6 +2722,13 @@ def compose_script(
 
     body_blocks: list[str] = []
     phase_titles: list[str] = []
+
+    # Defect fix: a chunk report carrying a non-DONE status (PARTIAL,
+    # BLOCKED) must not let the run's terminal record read `completed: true`
+    # -- see `_completion_return` and `_status_check_block`. Declared once,
+    # up front, so every wave's status check below has somewhere to record
+    # into regardless of how many waves/batches follow.
+    body_blocks.append("  const _incompleteChunks = [];")
 
     phase_titles.append(_PREFLIGHT_PHASE_TITLE)
     # The anchor rides on `plan_context` rather than `compose_script`'s own
@@ -2645,6 +2770,9 @@ def compose_script(
                     batch, wave_title, plan_path, results_var, plan_context
                 )
             )
+            body_blocks.append(
+                _status_check_block(results_var, [row.id for row in batch])
+            )
 
             if _all_writes_declared_empty(batch):
                 # Every row in this batch declares `writes: []` -- no commit
@@ -2658,7 +2786,25 @@ def compose_script(
                 )
                 continue
 
-            batch_pathspec = commit_pathspec(batch)
+            batch_pathspec_raw = commit_pathspec(batch)
+            batch_gitignored = [p for p in batch_pathspec_raw if p in gitignored]
+            batch_pathspec = [p for p in batch_pathspec_raw if p not in gitignored]
+
+            if not batch_pathspec and not any(row.writes_under for row in batch):
+                # Same shape as the all-`writes: []` branch above: every
+                # declared write this batch contributes is gitignored, so
+                # nothing here is committable -- treat it identically rather
+                # than handing `_commit_agent_call` an empty pathspec, which
+                # a dispatched committer can only ever report BLOCKED for
+                # (Defect: a gitignored `writes:` path halts the whole run
+                # at preflight).
+                body_blocks.append(
+                    "  // commit phase omitted: every declared write in "
+                    f"this wave is gitignored ({', '.join(batch_gitignored)}) "
+                    "-- nothing committable"
+                )
+                continue
+
             commit_title = f"{_commit_phase_title(index)}{suffix}"
             phase_titles.append(commit_title)
             body_blocks.append(
@@ -2710,6 +2856,57 @@ def compose_script(
     return f"{meta_block}\n{body}\n"
 
 
+#: A non-DONE status in the position the executor return contract puts it:
+#: the reply's leading `<STATUS>:` (``executor_return_contract.
+#: done_summary_constraint``) or an `<exit-status>` tag. Matched against the
+#: JSON-stringified agent result, so a string reply begins with `"`. Anchored,
+#: never a bare word match: a DONE reply mentioning `PREFLIGHT-BLOCKED` or
+#: "no PARTIAL chunks" is still DONE.
+_NON_DONE_STATUS_JS_RE = (
+    r'/^"?\s*(?:PARTIAL|BLOCKED):|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/'
+)
+
+
+def _status_check_block(results_var: str, row_ids: list[str]) -> str:
+    """Record every row in this batch whose agent result carries a non-DONE
+    status into `_incompleteChunks` (Defect: a workflow reports `completed:
+    true` when a chunk returned PARTIAL).
+
+    `results_var` names the JS binding `_wave_agent_calls` already bound the
+    batch's `agent()`/`parallel()` return value to -- this function never
+    introduces a second read of it. A single-row batch's binding is the
+    return value itself; a multi-row batch's is an array in the SAME row
+    order `_wave_agent_calls` dispatched them in (`parallel([...])` over
+    `wave`, unchanged), so indexing `results_var[i]` against `row_ids[i]`
+    names the right chunk without re-deriving the pairing.
+
+    Matched via `_NON_DONE_STATUS_JS_RE` against `JSON.stringify(result)`,
+    not a literal-reply equality check: the return contract asks an executor
+    to reply exactly `DONE: <path>` and to write PARTIAL/BLOCKED only inside
+    its report FILE, but nothing here re-reads that file (no new fs access,
+    no new spawn) -- this reads whatever text the dispatched agent's own
+    reply actually carried, which is the one signal already flowing through
+    `results_var` today (see `_wave_agent_calls`'s docstring: the commit
+    phase already treats this value as the executor's own report).
+
+    Negative spec: never widens to treat `DONE_WITH_CONCERNS` as incomplete
+    -- this emitted return contract's enum is DONE/BLOCKED/PARTIAL only
+    (`executor_return_contract.done_summary_constraint`), not the broader
+    hand-dispatch enum a different surface uses.
+    """
+    if len(row_ids) == 1:
+        return (
+            f"  if ({_NON_DONE_STATUS_JS_RE}.test(JSON.stringify({results_var}))) "
+            f"_incompleteChunks.push({_js_string_literal(row_ids[0])});"
+        )
+    ids_js = ", ".join(_js_string_literal(rid) for rid in row_ids)
+    return (
+        f"  [{ids_js}].forEach((id, i) => {{ if "
+        f"({_NON_DONE_STATUS_JS_RE}.test(JSON.stringify({results_var}[i]))) "
+        "_incompleteChunks.push(id); });"
+    )
+
+
 def _completion_return(waves, phase_titles: list[str]) -> str:
     """The script's terminal `return` -- a POSITIVE completion record.
 
@@ -2730,15 +2927,29 @@ def _completion_return(waves, phase_titles: list[str]) -> str:
     triple's first leg greps for (``git log --grep '<chunk-id>:'``), so a
     completion report that names them lets an EM check what landed without
     re-reading the script.
+
+    ``completed`` is no longer the literal ``true`` (Defect: a workflow
+    reports ``completed: true`` when a chunk returned PARTIAL). It reads
+    ``_incompleteChunks.length === 0`` at RETURN time -- the array every
+    wave's ``_status_check_block`` may have pushed a row id onto -- so a run
+    where every chunk's own report reached DONE still reads exactly as
+    ``completed: true`` (the pre-fix literal, unchanged for the common
+    case), while a run carrying so much as one PARTIAL/BLOCKED chunk report
+    reads ``completed: false`` and names which chunk(s) in
+    ``incomplete_chunks``, present ONLY when non-empty -- a fully-DONE run's
+    record shape is byte-identical to before this fix, so nothing downstream
+    reading it needs to learn a new always-present field.
     """
     chunk_ids = [row.id for wave in waves for row in wave]
     ids_js = ", ".join(_js_string_literal(cid) for cid in chunk_ids)
     return (
         "  return {\n"
-        "    completed: true,\n"
+        "    completed: _incompleteChunks.length === 0,\n"
         f"    waves: {len(waves)},\n"
         f"    phases: {len(phase_titles)},\n"
         f"    chunks: [{ids_js}],\n"
+        "    ...(_incompleteChunks.length ? "
+        "{ incomplete_chunks: _incompleteChunks } : {}),\n"
         "  };"
     )
 

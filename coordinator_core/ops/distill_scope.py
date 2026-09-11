@@ -82,8 +82,6 @@ import re
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-
-from coordinator_core.memo_corpus import memo_corpus_root
 from typing import Any
 
 from coordinator_core.distill import harvest_debt as _harvest_debt
@@ -92,6 +90,7 @@ from coordinator_core.distill import ripe_filter as _ripe_filter
 from coordinator_core.distill.sidecar_sweep import sweep_sidecars
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ipc import register_op
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.wire_paths import rel_id
 

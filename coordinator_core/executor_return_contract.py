@@ -34,7 +34,7 @@ verification is deferred to that phase together with the run's terminal
 
 `done_summary_constraint` stays a builder because its output path and its
 own DONE-summary field list are per-surface (mise's AC checklist vs.
-blitz's before/after snippets), and the "Reply EXACTLY `DONE: <path>`"
+blitz's before/after snippets), and the "Reply EXACTLY `<STATUS>: <path>`"
 sentence is not surface-invariant either — it carries that same per-surface
 path, so it lives inside this builder's own rendered text rather than as a
 standalone constant.
@@ -137,12 +137,19 @@ def done_summary_constraint(
     verbatim (the trailing Oxford "and" a caller wants before its last
     entry is the caller's own text, not list-formatting this function
     performs).
+
+    The reply leads with the summary's own status, never a fixed `DONE`: the
+    reply is the only text a workflow reads without opening the summary
+    file, so a reply that says DONE over a PARTIAL summary is how a run
+    reported `completed: true` with an unfinished chunk (example-store-repo,
+    2026-09-11).
     """
     fields_text = ", ".join(extra_fields)
     return (
         f"Write a one-screen summary to `{output_path_template}` with: "
         f"status (DONE | BLOCKED | PARTIAL), {fields_text}. Do not include "
         "a commit SHA — your changes are still uncommitted when you write "
-        f"this summary. Reply EXACTLY `DONE: {output_path_template}` "
-        "(or `BLOCKED: <path>`)."
+        f"this summary. Reply EXACTLY `<STATUS>: {output_path_template}`, "
+        "where <STATUS> is the status your summary records — `DONE`, "
+        "`PARTIAL`, or `BLOCKED`."
     )

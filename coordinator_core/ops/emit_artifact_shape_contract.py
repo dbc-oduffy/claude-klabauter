@@ -274,6 +274,25 @@ preserved there as the historical record; this port carries only the CURRENT pin
     superseding their earlier 6.2.0 ask. Cross-repo edits stay declined in both directions
     per DR-127: claude-klabauter owns this constant, DoE owns the re-vendor, the regen, the bundle
     commit, and the DECISIONS.md row.
+  9.0.0  (2026-09-11) DoE's committed bundle had drifted from its own sources at an
+    unchanged 8.0.0 stamp: 24 `$defs` differ from a fresh emit, so the stamp identified two
+    different bodies. MAJOR on two non-additive changes. (1) `research-claim` gains required
+    `id` and `claim_text`; a consumer holding 8.0.0 accepts records that now fail. (2)
+    `plan-tasks.writes` items gain a trailing-separator-refusing `pattern`, refusing a trailing separator, and the
+    same bump adds `writes_under` (DoE plan-tasks 2.0.0, their 1f0001b0c; the emitter half is
+    this repo's f9777bdffc). The additive remainder is large and does not soften the class,
+    per the bump rule below: `plan` gains the mise-prep and exit-criterion fields, `handoff`
+    the aggregate-execution and claim-identity fields, the three backlog schemas their
+    deferral-grant fields, and `group-em-nomination`, `known-red-registry` and
+    `plan-approvability-judgment` emit their full property sets for the first time.
+    SEQUENCING inverts the usual shape, and the reason is recorded rather than assumed: the
+    drift was already committed on DoE's side, so this constant moves to STAMP a body that
+    exists, not ahead of one. DoE regenerates and commits the bundle in the same pass.
+    LANDED BY doe-claude-em, not this repo, under explicit per-session PM assent ("it is
+    yours to fix") after DoE asked for the bump in
+    state/cross-repo/inbox/2026-09-11-doe-claude-em-plan-tasks-2-0-0-and-contract-regen.md.
+    That is the DR-127 exception, not its retirement: the standing decline in the 7.0.0 and
+    8.0.0 rows above still governs every bump without such assent.
 Bump rule (unchanged from JS): additive $defs/enum-widen changes stay minor; any
 non-additive change (enum-narrow, field/required removal) bumps MAJOR regardless of
 whether a vendored consumer version-asserts yet — two different bundle bodies must
@@ -334,7 +353,7 @@ from coordinator_core.session.declared_writes import declare_write
 # Constants
 # ---------------------------------------------------------------------------
 
-CONTRACT_VERSION = "8.0.0"
+CONTRACT_VERSION = "9.0.0"
 
 # Generator-provenance: emits artifact-shape-contract/artifact-shape-contract.
 # schema.json under the DoE-claude coordinator/ tree, explicitly NOT claude-klabauter

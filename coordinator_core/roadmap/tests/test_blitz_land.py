@@ -597,6 +597,61 @@ def test_a_non_s_route_still_takes_the_ordinary_approval(tmp_path):
     assert pg._read_baton_fields(root / baton).get("handoff_phase") is None
 
 
+def test_an_s_lane_spinoff_baton_refuses_the_stamp_instead_of_writing_it(tmp_path):
+    """example-store-repo landing fc61535f: the S lane parked a spec onto a `kind:
+    spinoff` baton and stamped `handoff_phase: execution` anyway — a shape
+    `pickup-assemble apply` refuses on claim (H-CROSS-EXEC-2 admits only
+    `session-handoff`/`roadmap-baton`). The fix refuses the stamp at landing,
+    by name, rather than writing a baton pickup will bounce. Asserted against
+    the REAL validator pickup uses, not a hand-rolled string check."""
+    from coordinator_core.frontmatter.schema_validate import (
+        parse_frontmatter,
+        validate_frontmatter,
+    )
+
+    root = _repo(tmp_path)
+    plan = _plan(root, "the-spec", "draft")
+    # `_baton`'s own `kind: roadmap-baton` default line cannot be overridden by
+    # a kwarg (it would duplicate the field, and `_read_field` matches the
+    # first occurrence) — build the spinoff fixture by hand instead.
+    baton = "state/handoffs/b-1.md"
+    (root / baton).parent.mkdir(parents=True, exist_ok=True)
+    (root / baton).write_text(
+        "---\n"
+        "kind: spinoff\n"
+        "title: b-1\n"
+        "stub_id: b-1\n"
+        "status: open\n"
+        "deployment_state: ready_to_fire\n"
+        "baton_role: work\n"
+        "predecessor: none\n"
+        "created: 2026-09-11\n"
+        'branch: "work/test"\n'
+        "category: infra\n"
+        'summary: "A schema-complete spinoff fixture for the refusal regression."\n'
+        "---\n\nbody\n",
+        encoding="utf-8",
+    )
+
+    out = bl.land_wave(
+        root,
+        {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan, "route": "spec-dispatch"}]},
+    )
+
+    result = out["execution_ready"][0]
+    assert result["execution_ready"] is False
+    assert "spinoff" in result["note"] and "handoff_phase" in result["note"]
+
+    fm = pg._read_baton_fields(root / baton)
+    assert fm.get("handoff_phase") is None, "must not write the shape pickup refuses"
+
+    schema = Path(bl.__file__).parents[1] / "frontmatter" / "schemas" / "handoff.schema.json"
+    parsed = parse_frontmatter((root / baton).read_text(encoding="utf-8"))["frontmatter"]
+    assert not validate_frontmatter(parsed, str(schema)), (
+        "a baton this lane touched must still pass the same validator pickup-assemble uses"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Replan minting
 # ---------------------------------------------------------------------------

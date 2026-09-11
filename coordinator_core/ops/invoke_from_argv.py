@@ -348,6 +348,52 @@ def _entrypoint_argv_shape(script: Path) -> str:
     return shape
 
 
+def _none_shape_main_reads_argv(script: Path) -> bool:
+    """True when a NONE-shaped script's own `main` both accepts an argv
+    parameter and READS it -- `sys.exit(main())` beside `def main(argv=None)`
+    whose body goes on to use `argv`.
+
+    The shape is read off the `__main__` guard, so it answers how the guard
+    hands argv over, never whether the callee could receive it. Those differ
+    for the whole `main(argv=None) -> argv = argv if argv is not None else
+    sys.argv[1:]` idiom, whose first act is to PARSE, which is why a help
+    gesture may call it: `sys.argv` is already set to this call's own
+    `--help` before `main_fn` runs.
+
+    READING the parameter is the discriminator, not declaring it. A
+    zero-arity `def main():` cannot be steered at all, and neither can
+    `def main(argv=None)` whose first statement is `del argv  # accepted for
+    the warm-call contract` (`workday-start-inbox-blitz-assemble`, which
+    fetches a live decision object on every call). Both stay synthesized.
+
+    Negative-spec: not a liveness or purity check. A `main` that reads argv
+    but does work before parsing would still do it, exactly as its own cold
+    route does -- the guarantee here is the file's, not this door's.
+    Reported by doe-claude-em (example-market-data-repo-fa friction log F21):
+    `handoff-archive-transition --help` printed a stub naming no verbs,
+    leaving the live baton-close door undiscoverable.
+    """
+    import ast
+
+    from coordinator_core.warm import serve_classifier
+
+    try:
+        tree = ast.parse(script.read_text(encoding="utf-8"), filename=str(script))
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        return False
+    main_fn = serve_classifier._main_def(tree)
+    if main_fn is None or not serve_classifier._main_arity_ok(main_fn):
+        return False
+    names = [a.arg for a in (main_fn.args.posonlyargs + main_fn.args.args)]
+    if not names:
+        return bool(main_fn.args.vararg)
+    first = names[0]
+    return any(
+        isinstance(node, ast.Name) and node.id == first and isinstance(node.ctx, ast.Load)
+        for node in ast.walk(main_fn)
+    )
+
+
 def entrypoint_call_args(shape: str, script: Path, argv: list) -> tuple:
     """The positional arguments the warm route hands `main`, given the shape
     its own `__main__` guard uses. THE decision, isolated as a pure function
@@ -516,19 +562,24 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
     gesture (each of these targets checks `--help` as an EXPLICIT,
     first-checked branch of its own hand-rolled dispatch, or falls through
     to its own usage/parse-error path — see `_render_usage_text` below,
-    ported in shape from `entry_point_shim._render_help`), but is NEVER
-    called for an ARGV_SHAPE_NONE target (`workday-start-inbox-blitz-
-    assemble` is the sole current member): that shape's `main()` takes no
-    argv and always runs its full body regardless of what it is "called
-    with", so invoking it to fetch help would BE the live-decision-object
-    defect this whole op exists to close, and a synthesized line is the
-    only safe answer there — never used elsewhere, per `_synthesize_usage`.
+    ported in shape from `entry_point_shim._render_help`).
+
+    An ARGV_SHAPE_NONE target splits on whether its own `main` READS an argv
+    parameter (`_none_shape_main_reads_argv`). A `main` that cannot be
+    steered — zero-arity, or one that deletes the parameter it accepts for
+    the warm-call contract (`workday-start-inbox-blitz-assemble`) — runs its
+    full body regardless of what it is "called with", so invoking it to
+    fetch help would BE the live-decision-object defect this whole op exists
+    to close, and a synthesized line is the only safe answer. `sys.exit(main())`
+    beside a `def main(argv=None)` that resolves `sys.argv` itself is a
+    different file: it parses first, and `sys.argv` is already this call's
+    own `--help` by then, so it renders its real usage like any other shape.
     """
     script = _resolve_entrypoint_script(entrypoint)
     shape = _entrypoint_argv_shape(script)
 
     help_requested = any(a in ("--help", "-h") for a in argv)
-    if help_requested and shape == "none":
+    if help_requested and shape == "none" and not _none_shape_main_reads_argv(script):
         return {
             "stdout": _synthesize_usage(entrypoint),
             "stderr": "",
