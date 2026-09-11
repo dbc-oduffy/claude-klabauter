@@ -1026,7 +1026,18 @@ def test_sizing_object_schema_version_and_bump_class():
     #
     # The pin had gone red the way the note above predicts: the schema was
     # re-vendored at 6c19ce193e (2026-08-30) and this number was not read.
-    assert schema["x-schema-version"] == "1.20.0"
+    #
+    # Moved 1.20.0 -> 1.21.0 (2026-09-11), per this note's own instruction to
+    # say what the bump added. `nested-field-additive`, DoE 937455db6:
+    # `surfaced_to_pm[].prior_ruling` widens from a string to anyOf[string,
+    # array-of-strings], the array ordered OLDEST FIRST so the superseding
+    # decision is last. A bare string stays valid and means a chain of one, so
+    # every document valid under 1.20.0 still validates and nothing joined
+    # `required`. WHAT IT CLOSES: a later DR superseding an earlier one had
+    # nowhere to go — `superseded_ruling` is rejected as an additional
+    # property, so the supersession ended up in a trailing comment (reported by
+    # example-retrieval-repo, 2026-09-11, from a live plan-blitz run).
+    assert schema["x-schema-version"] == "1.21.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop

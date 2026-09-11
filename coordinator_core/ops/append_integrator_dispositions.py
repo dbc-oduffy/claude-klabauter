@@ -56,9 +56,11 @@ Concretely, `append_dispositions` refuses (raises `DispositionsError`) unless:
     sentinel or a quoted mention surviving elsewhere in the document must
     never trip either check. Neither check parses or counts individual
     findings beyond emptiness.
-  - at least one finding id was supplied across the five disposition buckets,
-  - the target does not already carry the heading (idempotent no-op instead —
-    see `append_dispositions`'s return value).
+  - at least one finding id was supplied across the five disposition buckets.
+
+A sidecar that already carries the heading is DISPOSITIONED AGAIN, appending a
+second block that names the one it supersedes. It used to no-op. See
+`append_dispositions` for why that was break-class.
 
 Negative-spec:
   - Does NOT verify that the supplied finding ids are a set-complete partition
@@ -76,10 +78,12 @@ Negative-spec:
     sidecar — strictly an append of one new block at the end (Sidecar
     Immutability baseline).
   - Does NOT re-open a sidecar that already carries the heading and treat it
-    as an error — a second call against an already-dispositioned sidecar is a
-    no-op (`already_dispositioned=True` in the returned result), matching the
-    guard's own "no separate step needed" framing: calling this tool twice
-    must never be a way to corrupt a sidecar.
+    as an ERROR. A repair run legitimately re-dispositions, and refusing would
+    make the honest second pass look like a failure. It appends instead — see
+    `append_dispositions`.
+  - Does NOT rewrite or delete the block it supersedes. The append-only
+    Sidecar Immutability baseline is unchanged; what a re-run produces is a
+    disposition HISTORY, and the last block is the operative one.
 
 Spec backlink: cross-repo dispatch defect surfaced 2026-07-29 (EM hand-diagnosed
   a review-integrator run that applied all findings correctly but never appended
@@ -96,6 +100,7 @@ import argparse
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -284,8 +289,13 @@ def _find_heading(text: str, heading: str) -> Optional[int]:
     return match.start() if match is not None else None
 
 
-def _has_heading(text: str, heading: str) -> bool:
-    return _find_heading(text, heading) is not None
+def _count_headings(text: str, heading: str) -> int:
+    """How many REAL ATX heading lines spell ``heading``.
+
+    Same line-anchoring as `_find_heading`, and for the same reason: a body
+    quoting the heading in prose must not be counted as a disposition block.
+    """
+    return len(re.findall(rf"(?m)^{re.escape(heading)}[ \t]*$", text))
 
 
 def _find_findings_heading(text: str) -> Optional[Tuple[int, int]]:
@@ -681,6 +691,7 @@ def _build_block(
     rationale: Optional[str],
     *,
     no_findings: bool = False,
+    prior_blocks: int = 0,
 ) -> str:
     """Render the canonical `## Integrator Dispositions` block, matching
     `agents/review-integrator.md`'s own example byte-for-byte in structure
@@ -692,6 +703,11 @@ def _build_block(
     records that the claim was made, making a zero-finding close greppable
     after the fact rather than silent. Renders only when set, so an ordinary
     call keeps byte-parity with a pre-flag block.
+
+    `prior_blocks` renders `supersedes_block` and `recorded_at`, naming which
+    block this one displaces. Like `verified-no-action`, they render ONLY when
+    they apply — a first block stays byte-identical to a pre-history one, so
+    the byte-parity claim above survives.
     """
     lines: List[str] = []
     lines.append("")
@@ -701,6 +717,9 @@ def _build_block(
     lines.append("")
     lines.append("```yaml")
     lines.append("schema_version: 1")
+    if prior_blocks:
+        lines.append(f"supersedes_block: {prior_blocks}")
+        lines.append(f"recorded_at: {datetime.now(timezone.utc).date().isoformat()}")
     for bucket in BUCKET_ORDER:
         ids = buckets.get(bucket) or []
         # The original five buckets always render (even empty, as `[]`) to
@@ -735,7 +754,28 @@ def append_dispositions(
 ) -> Dict[str, object]:
     """Validate `sidecar_path` and append the disposition block to it.
 
-    Returns ``{"path": str, "already_dispositioned": bool}``. Raises
+    A second call against an already-dispositioned sidecar APPENDS a second
+    block naming the one it supersedes; it used to return without writing.
+
+    example-store-repo-fb, 2026-09-11: that no-op keyed on the PRESENCE of the
+    heading rather than on content, so a repair run's second pass exited clean
+    with nothing written and nothing said. Ten findings stayed recorded as
+    `escalated-ask` that the pass had actually APPLIED. The authoritative
+    record silently became the plan's own log section, which this op knows
+    nothing about — and once DoE's repair path started applying single-option
+    recommendations instead of escalating them (a9d5efd3b), a repair re-run
+    became a second pass BY CONSTRUCTION. The two compose into "the record says
+    escalated, the plan says applied, and nothing disagrees out loud".
+
+    Appending rather than refusing, because a repair legitimately
+    re-dispositions: a refusal would make the honest second pass look like an
+    error. Every reader of this block in the fleet tests the heading's
+    PRESENCE (`_MARKER_RE` in the two reap legs, the two write-guards), none
+    parses its body, so a second block changes no existing verdict.
+
+    Returns ``{"path": str, "already_dispositioned": bool, "prior_blocks":
+    int}`` — `already_dispositioned` keeps its name and now means a block was
+    already there, not that this call declined to write. Raises
     `DispositionsError` on any validation failure — see module docstring for
     the full fail-loud checklist. Never partially writes: the block is only
     ever appended after every check above passes.
@@ -806,8 +846,7 @@ def append_dispositions(
             "reviewer sidecar."
         )
 
-    if _has_heading(text, _DISPOSITIONS_HEADING):
-        return {"path": str(sidecar_path), "already_dispositioned": True}
+    prior_blocks = _count_headings(text, _DISPOSITIONS_HEADING)
 
     if is_empty:
         if shape == _SHAPE_REVIEW_FINDINGS:
@@ -838,7 +877,9 @@ def append_dispositions(
             "declared no findings at all, pass --no-findings."
         )
 
-    block = _build_block(buckets, rationale, no_findings=no_findings)
+    block = _build_block(
+        buckets, rationale, no_findings=no_findings, prior_blocks=prior_blocks
+    )
     with sidecar_path.open("a", encoding="utf-8") as handle:
         handle.write(block)
 
@@ -846,7 +887,11 @@ def append_dispositions(
     # report of what was ACTUALLY written, not of an intended surface.
     declare_write(sidecar_path)
 
-    return {"path": str(sidecar_path), "already_dispositioned": False}
+    return {
+        "path": str(sidecar_path),
+        "already_dispositioned": bool(prior_blocks),
+        "prior_blocks": prior_blocks,
+    }
 
 
 def _split_ids(value: Union[str, List[str], None]) -> List[str]:
@@ -1032,9 +1077,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
 
     if result["already_dispositioned"]:
+        prior = int(result["prior_blocks"])  # type: ignore[call-overload]
         print(
-            f"append-integrator-dispositions: OK — {result['path']} already carries "
-            f"{_DISPOSITIONS_HEADING!r}, no-op."
+            f"append-integrator-dispositions: OK — appended dispositions block "
+            f"{prior + 1} to {result['path']}, superseding block {prior}. "
+            "The last block is the operative one; the earlier ones are kept as "
+            "the disposition history."
         )
     else:
         print(f"append-integrator-dispositions: OK — appended dispositions block to {result['path']}.")

@@ -336,7 +336,16 @@ class TestFindingsCheckIsScopedToTheFindingsSection:
 
 
 class TestIdempotentSecondCall:
-    def test_second_call_is_a_safe_noop(self, tmp_path):
+    def test_second_call_records_a_superseding_block(self, tmp_path):
+        """example-store-repo-fb, 2026-09-11 — the reported defect, inverted.
+
+        This pinned a no-op until that no-op was measured in the field: fb's
+        repair re-run left ten findings recorded as `escalated-ask` that the
+        pass had APPLIED, exiting clean with nothing written and nothing said.
+        A repair legitimately re-dispositions, so the second pass appends and
+        names what it supersedes rather than refusing — a refusal would make
+        the honest second pass look like an error.
+        """
         sidecar = _write_sidecar(
             tmp_path, "sess-abc", "codereview-sliceA.md",
             agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
@@ -344,20 +353,74 @@ class TestIdempotentSecondCall:
         mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
         first_text = sidecar.read_text(encoding="utf-8")
 
-        result = mod.append_dispositions(sidecar, {"applied": ["F1"]}, git_root=tmp_path)
+        result = mod.append_dispositions(
+            sidecar, {"escalated-ask": ["F1"]}, git_root=tmp_path
+        )
         assert result["already_dispositioned"] is True
-        second_text = sidecar.read_text(encoding="utf-8")
-        assert first_text == second_text
-        assert second_text.count("## Integrator Dispositions") == 1
+        assert result["prior_blocks"] == 1
 
-    def test_already_dispositioned_real_reviewer_layout_is_clean_noop(self, tmp_path):
-        """Reorder pin: with the emptiness check running before the
-        idempotency check, an already-dispositioned sidecar in the real
-        `## Summary`/`### Finding N` layout would spuriously refuse instead
-        of no-opping, since the whole document (findings body plus the
-        already-appended block) no longer looks like the pristine scaffold
-        but the boundary logic must still find a non-empty section. This
-        must fail loudly on the old (pre-reorder) ordering."""
+        second_text = sidecar.read_text(encoding="utf-8")
+        assert second_text.count("## Integrator Dispositions") == 2
+        # Append-only: the superseded block is kept verbatim, not rewritten.
+        assert second_text.startswith(first_text)
+        assert "supersedes_block: 1" in second_text
+        # The new disposition is the one a later reader must be able to find.
+        assert second_text.rindex("escalated-ask: [F1]") > second_text.rindex(
+            "supersedes_block: 1"
+        )
+
+    def test_a_first_block_carries_no_supersession_fields(self, tmp_path):
+        """Byte-parity with DoE's documented example survives the history.
+
+        `supersedes_block`/`recorded_at` render only when they apply, exactly
+        as `verified-no-action` does — an ordinary first disposition is
+        byte-identical to one written before this op could supersede.
+        """
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=_FINDINGS_BODY,
+        )
+        result = mod.append_dispositions(
+            sidecar, {"applied": ["F1"]}, git_root=tmp_path
+        )
+        assert result["prior_blocks"] == 0
+        text = sidecar.read_text(encoding="utf-8")
+        assert "supersedes_block" not in text
+        assert "recorded_at" not in text
+
+    def test_a_heading_quoted_in_prose_is_not_counted_as_a_block(self, tmp_path):
+        """The line-anchoring `_find_heading` documents, carried into the count.
+
+        A reviewer explaining the mechanism in its own findings body must not
+        make the first real disposition render as a supersession.
+        """
+        body = (
+            "## Findings\n\n"
+            "### Finding 1: the extractor stops at `## Integrator Dispositions`\n"
+            "- **Severity:** P3\n\n"
+        )
+        sidecar = _write_sidecar(
+            tmp_path, "sess-abc", "codereview-sliceA.md",
+            agent_type="coordinator:code-reviewer", body=body,
+        )
+        result = mod.append_dispositions(
+            sidecar, {"applied": ["F1"]}, git_root=tmp_path
+        )
+        assert result["prior_blocks"] == 0
+        assert result["already_dispositioned"] is False
+
+    def test_already_dispositioned_real_reviewer_layout_supersedes_cleanly(
+        self, tmp_path
+    ):
+        """Reorder pin, still load-bearing after the no-op became a supersession.
+
+        With the emptiness check running before the supersession path, an
+        already-dispositioned sidecar in the real `## Summary`/`### Finding N`
+        layout would spuriously REFUSE: the whole document (findings body plus
+        the already-appended block) no longer looks like the pristine scaffold,
+        but the boundary logic must still find a non-empty section. The failure
+        this pins is unchanged — only the success it guards moved from a no-op
+        to a second block."""
         body = (
             "## Findings\n\n"
             "## Summary\n\n"
@@ -732,7 +795,9 @@ class TestStaffEngReviewJsonShapeRoundTrip:
         assert "review-findings" in message
         assert "staff-eng-review" in message
 
-    def test_second_call_on_json_shape_is_a_safe_noop(self, tmp_path):
+    def test_second_call_on_json_shape_also_supersedes(self, tmp_path):
+        """The json shape takes the same path as review-findings: the emptiness
+        discriminator differs, the supersession does not."""
         sidecar = _write_sidecar(
             tmp_path, "sess-abc", "coordinatorstaff-eng-abc123.md",
             agent_type="coordinator:staff-eng", body=_STAFF_ENG_REVIEW_BODY,
@@ -741,7 +806,10 @@ class TestStaffEngReviewJsonShapeRoundTrip:
         first_text = sidecar.read_text(encoding="utf-8")
         result = mod.append_dispositions(sidecar, {"applied": ["0"]}, git_root=tmp_path)
         assert result["already_dispositioned"] is True
-        assert sidecar.read_text(encoding="utf-8") == first_text
+        assert result["prior_blocks"] == 1
+        text = sidecar.read_text(encoding="utf-8")
+        assert text.startswith(first_text)
+        assert text.count("## Integrator Dispositions") == 2
 
 
 class TestFailsLoudOnMisdirection:

@@ -43,7 +43,15 @@ def _write_plan(
 ) -> Path:
     plans = root / "docs" / "plans"
     plans.mkdir(parents=True, exist_ok=True)
-    fm = ["title: fixture", "status: draft", "created: 2026-09-07"]
+    # `author` is not decoration: the SCHEMA class runs plan.schema.json over
+    # this frontmatter, and a fixture missing a required field would make every
+    # positive case in this module assert against a plan no real corpus holds.
+    fm = [
+        "title: fixture",
+        "status: draft",
+        "created: 2026-09-07",
+        "author: fixture-session",
+    ]
     if frontmatter.strip():
         fm.append(frontmatter.strip())
     body = ["", "# Fixture", "", "Prose that names nothing.", ""]
@@ -253,6 +261,77 @@ def test_prime_exit_does_not_require_a_falsifier(tmp_path):
     own M/L/XL proportionality is not this bar's business."""
     report = _gate(tmp_path, prepped_plan(tmp_path))
     assert report["classes"]["PRIME_EXIT"]["status"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# SCHEMA
+# ---------------------------------------------------------------------------
+
+
+def test_prose_where_the_schema_wants_a_sizings_path_is_a_defect(tmp_path):
+    """example-retrieval-repo, 2026-09-11: the reported case, which reached approved AND
+    certified.
+
+    `derived_from` was a paragraph of prose. PRIME_EXIT passed it — the field is
+    PRESENT and is not a scaffold placeholder, which is all that class asks —
+    and nothing else looked at its SHAPE. Only the frontmatter-schema hook
+    caught it, and only because the author happened to edit the file for an
+    unrelated reason.
+    """
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    report = _gate(
+        tmp_path,
+        _write_plan(
+            tmp_path,
+            frontmatter=(
+                "census: []\n"
+                "prime_exit_criterion:\n"
+                "  statement: the four fields land and validate\n"
+                "  derived_from: >-\n"
+                "    The replan brief names this work, and the sizing it came"
+                " from was archived.\n"
+            ),
+            spine=_CLEAN_SPINE,
+        ),
+    )
+    assert report["verdict"] == pg.NOT_PREPPED
+    schema = report["classes"]["SCHEMA"]
+    assert schema["kind"] == "schema-invalid"
+    assert "derived_from" in schema["detail"]
+    # PRIME_EXIT still PASSES: the two classes ask different questions of the
+    # same field, and collapsing them would lose the one that found this.
+    assert report["classes"]["PRIME_EXIT"]["status"] == "PASS"
+
+
+def test_a_defect_prime_exit_already_names_is_not_reported_twice(tmp_path):
+    """Register: one fact, once.
+
+    A plan with no `prime_exit_criterion` fails PRIME_EXIT by design. The schema
+    walk finds the identical absence, and printing it on both lines makes an
+    author read two findings to learn one thing.
+    """
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    report = _gate(
+        tmp_path, _write_plan(tmp_path, frontmatter="census: []\n", spine=_CLEAN_SPINE)
+    )
+    assert report["classes"]["PRIME_EXIT"]["kind"] == "prime-exit-absent"
+    assert report["classes"]["SCHEMA"]["status"] == "PASS"
+    assert report["message"].count("prime_exit_criterion") == 1
+
+
+def test_an_unreadable_schema_passes_rather_than_refusing_every_plan(
+    tmp_path, monkeypatch
+):
+    """The instrument's failure is advisory about itself, never about the plan.
+
+    Failing closed here would refuse every plan in a tree whose vendored schemas
+    have not been re-published yet — a defect in this gate, not in the corpus.
+    """
+    monkeypatch.setattr(pg, "_PLAN_SCHEMA", tmp_path / "no-such-schema.json")
+    report = _gate(tmp_path, prepped_plan(tmp_path))
+    assert report["verdict"] == pg.PREPPED
+    assert report["classes"]["SCHEMA"]["status"] == "PASS"
+    assert "unreadable" in report["classes"]["SCHEMA"]["detail"]
 
 
 # ---------------------------------------------------------------------------

@@ -934,3 +934,222 @@ def test_an_unparked_baton_with_no_plan_keeps_the_plain_wording(tmp_path):
 
     assert held["reason"] == "no plan links to this baton"
     assert _by_id(report, "blocker-1")["needs_plan"] is True
+
+
+# ---------------------------------------------------------------------------
+# waiting_on_execution — a baton with no planning content
+# ---------------------------------------------------------------------------
+
+
+def _sizing(root: Path, slug: str, route: str) -> str:
+    """A sizing object carrying only the key the gate reads.
+
+    The trailing enum comment is the SCAFFOLD'S OWN shape, not decoration: the
+    generator emits `route: plan  # dispatch | spec-dispatch | ...`, and a
+    reader that takes the comment as part of the value finds no route on any
+    real sizing. Every fixture here carries it for that reason.
+    """
+    rel = f"state/sizings/{slug}.yaml"
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "schema: sizing-object\n"
+        f"route: {route}  # dispatch | spec-dispatch | shape | plan | roadmap\n"
+        "estimate: XS\n",
+        encoding="utf-8",
+    )
+    return rel
+
+
+def test_an_xs_waiting_on_its_blockers_execution_is_not_a_planning_candidate(tmp_path):
+    """example-retrieval-repo's cq-17, 2026-09-11 — dispatched and declined three times.
+
+    Its blocker's plan is APPROVED, so the planning gate is open and it landed
+    in `waves[0]`; its blocker is not CODED, so the execution gate is shut and
+    nothing it could be dispatched to do can start. A dispatch-route baton has
+    no plan to write, so a planning wave had nothing to give it.
+    """
+    plan_path = _plan(tmp_path, "blocker-plan", "approved")
+    _baton(tmp_path, "blocker-1", governing_plan=plan_path)
+    _baton(
+        tmp_path,
+        "cq-17",
+        blocked_by=["blocker-1"],
+        sizing_object=_sizing(tmp_path, "szo-cq-17", "dispatch"),
+    )
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert all("cq-17" not in wave for wave in report["waves"])
+    # Withheld, so it is out of `batons` like every other non-candidate. A
+    # driver asking "why is cq-17 not in the wave?" names it as the `subject`,
+    # which narrows the REPORT without narrowing the gates — and that is the
+    # one read where the per-row flag is reachable.
+    row = _by_id(pg.assemble_plan_gate(tmp_path, subject="cq-17"), "cq-17")
+    assert row["candidate"] is False
+    assert row["waiting_on_execution"] is True
+
+    held = report["waiting_on_execution"]
+    assert [r["baton"] for r in held] == ["cq-17"]
+    assert held[0]["route"] == "dispatch"
+    assert held[0]["blocking"] == ["blocker-1"]
+    assert "waiting on a blocker to be CODED" in held[0]["reason"]
+    assert report["counts"]["waiting_on_execution"] == 1
+
+
+def test_a_spec_dispatch_baton_is_withheld_on_the_same_grounds(tmp_path):
+    """The S lane parks a light spec, not a plan — same absence of planning
+    content as XS, so the same verdict."""
+    plan_path = _plan(tmp_path, "blocker-plan", "approved")
+    _baton(tmp_path, "blocker-1", governing_plan=plan_path)
+    _baton(
+        tmp_path,
+        "s-lane-1",
+        blocked_by=["blocker-1"],
+        sizing_object=_sizing(tmp_path, "szo-s-lane", "spec-dispatch"),
+    )
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert [r["baton"] for r in report["waiting_on_execution"]] == ["s-lane-1"]
+    assert report["waiting_on_execution"][0]["route"] == "spec-dispatch"
+
+
+def test_a_plan_route_baton_in_the_same_gate_state_stays_a_candidate(tmp_path):
+    """The negative verdict, and the reason this keys on ROUTE rather than on
+    the cheaper "no plan and a shut execution gate".
+
+    An M or L waiting on a blocker's execution is exactly the baton a wave
+    SHOULD plan now — the planning is the useful work available while the
+    blocker is coded. Withholding it would trade cq-17's silence for a worse
+    one.
+    """
+    plan_path = _plan(tmp_path, "blocker-plan", "approved")
+    _baton(tmp_path, "blocker-1", governing_plan=plan_path)
+    _baton(
+        tmp_path,
+        "m-lane-1",
+        blocked_by=["blocker-1"],
+        sizing_object=_sizing(tmp_path, "szo-m-lane", "plan"),
+    )
+
+    report = pg.assemble_plan_gate(tmp_path)
+    row = _by_id(report, "m-lane-1")
+
+    assert row["candidate"] is True
+    assert row["waiting_on_execution"] is False
+    assert row["execution_gate"]["open"] is False
+    assert report["counts"]["waiting_on_execution"] == 0
+
+
+def test_an_open_execution_gate_keeps_even_a_dispatch_baton_a_candidate(tmp_path):
+    """Route alone never withholds. A dispatch baton whose blockers are all
+    CODED is dispatchable NOW, and the whole point of the wave is to reach it."""
+    _baton(tmp_path, "blocker-1", deployment_state="shipped")
+    _baton(
+        tmp_path,
+        "cq-17",
+        blocked_by=["blocker-1"],
+        sizing_object=_sizing(tmp_path, "szo-cq-17", "dispatch"),
+    )
+
+    report = pg.assemble_plan_gate(tmp_path)
+    row = _by_id(report, "cq-17")
+
+    assert row["execution_gate"]["open"] is True
+    assert row["waiting_on_execution"] is False
+    assert row["candidate"] is True
+
+
+def test_an_unsized_baton_is_untouched_by_this_pass(tmp_path):
+    """COVERAGE, not cost, is this predicate's limit — measured on claude-klabauter:
+    242 candidates carry 5 sizing citations between them.
+
+    A baton with no sizing object has no route to read, so it cannot be
+    classified here and must not be guessed at. It is already reported
+    `unsized`, and a sizing scout is what fixes that.
+    """
+    plan_path = _plan(tmp_path, "blocker-plan", "approved")
+    _baton(tmp_path, "blocker-1", governing_plan=plan_path)
+    _baton(tmp_path, "unsized-1", blocked_by=["blocker-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+    row = _by_id(report, "unsized-1")
+
+    assert row["sized"] is False
+    assert row["waiting_on_execution"] is False
+    assert row["candidate"] is True
+
+
+# ---------------------------------------------------------------------------
+# held — a baton somebody decided must not fire
+# ---------------------------------------------------------------------------
+
+
+def test_a_held_baton_is_reported_with_its_reason_not_offered_as_a_candidate(tmp_path):
+    """example-retrieval-repo, 2026-09-11 — the friction that cost them the most.
+
+    5 of 8 wave-0 candidates had a recorded reason not to fire, and 4 had been
+    re-fired across five runs since 09-06: the reason lived in a DR or a run
+    report, nothing joined it to the gate, and every session re-derived it.
+    """
+    _baton(
+        tmp_path,
+        "held-1",
+        plan_blitz_hold_reason="PM took this personally; DR-2048 rules it GO but not yet",
+        plan_blitz_hold_cite="DR-2048 §2",
+        plan_blitz_hold_until="the structural-index gift ships",
+    )
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert all("held-1" not in wave for wave in report["waves"])
+    assert report["counts"]["held"] == 1
+
+    row = report["held"][0]
+    assert row["baton"] == "held-1"
+    assert row["cite"] == "DR-2048 §2"
+    assert row["until"] == "the structural-index gift ships"
+    assert "PM took this personally" in row["reason"]
+
+    subject = _by_id(pg.assemble_plan_gate(tmp_path, subject="held-1"), "held-1")
+    assert subject["held"] is True
+    assert subject["candidate"] is False
+
+
+def test_a_hold_with_no_reason_is_not_honoured(tmp_path):
+    """An unexplained suppression is the thing this REPLACES, not a lighter
+    version of it. A cite or an until without a reason leaves the baton a
+    candidate rather than removing it on nobody's stated authority."""
+    _baton(tmp_path, "half-held-1", plan_blitz_hold_cite="DR-2048", plan_blitz_hold_until="later")
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert report["counts"]["held"] == 0
+    assert _by_id(report, "half-held-1")["candidate"] is True
+
+
+def test_a_hold_is_not_an_edge_and_does_not_hold_its_dependents(tmp_path):
+    """DR-2048's refusal, pinned.
+
+    A hold suppresses ONE baton's candidacy. Spelling it as a `blocked_by` edge
+    would also shut every dependent's gates — which is why DR-2048 refuses the
+    edge, and why this must not quietly reintroduce one.
+    """
+    _baton(tmp_path, "held-1", plan_blitz_hold_reason="not yet")
+    _baton(tmp_path, "dependent-1", blocked_by=["held-1"])
+
+    report = pg.assemble_plan_gate(tmp_path)
+    dependent = _by_id(report, "dependent-1")
+
+    # The dependent is held by `held-1` being UNPLANNED, which it genuinely is —
+    # not by the hold, which contributes no edge of its own.
+    assert dependent["blocked_by"] == ["held-1"]
+    assert [b["blocker"] for b in dependent["blockers"]] == ["held-1"]
+    assert report["counts"]["held"] == 1
+
+
+def test_an_ordinary_baton_carries_held_false(tmp_path):
+    """The negative verdict: the flag is present-as-False, never absent, so a
+    reader never has to tell "not held" from "this gate is too old to say"."""
+    _baton(tmp_path, "plain-1")
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert _by_id(report, "plain-1")["held"] is False
+    assert report["held"] == []

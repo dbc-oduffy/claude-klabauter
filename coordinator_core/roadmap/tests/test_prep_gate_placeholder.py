@@ -129,6 +129,7 @@ def test_refusal_names_the_converter() -> None:
             },
             "EXTERNAL_DEPS": passing,
             "PRIME_EXIT": passing,
+            "SCHEMA": passing,
         },
         [],
     )
@@ -180,6 +181,7 @@ def test_every_path_the_refusal_names_resolves_from_where_its_reader_stands() ->
             },
             "EXTERNAL_DEPS": passing,
             "PRIME_EXIT": passing,
+            "SCHEMA": passing,
         },
         [],
     )

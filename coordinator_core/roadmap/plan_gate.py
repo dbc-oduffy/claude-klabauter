@@ -164,6 +164,10 @@ _BATON_FIELDS = frozenset(
         # here so a sweep does not re-plan work that already has its marching orders.
         "handoff_phase", "execution_authorized_by", "execution_authorized_at",
         "execution_authorized_sha", "execution_authorized_note",
+        # The plan-blitz hold. FLAT keys, not a nested mapping, because this
+        # scanner cannot read one — the constraint the schema's own field
+        # descriptions record so nobody tidies them into a map later.
+        "plan_blitz_hold_reason", "plan_blitz_hold_cite", "plan_blitz_hold_until",
         # NOT a link basis, and read anyway: `plan` is undeclared in
         # handoff.schema.json, so records carry it freely while `link_plans`
         # reads `governing_plan`. Two names for one edge, one written and the
@@ -425,6 +429,49 @@ def _resolve_sizing_citations(
         else:
             unresolved.append(rel)
     return resolved, unresolved
+
+
+#: `route` values whose baton carries NO PLANNING CONTENT. An XS is dispatched
+#: straight to execution and an S parks a light spec — neither produces a plan a
+#: blitz could write, so neither is planning work waiting to be done.
+_ROUTES_WITHOUT_PLANNING_CONTENT = frozenset({"dispatch", "spec-dispatch"})
+
+#: Lines read from a sizing object's head before `route:` is declared absent.
+#: `route` is a REQUIRED top-level key of sizing-object.schema.json, so it is
+#: near the top of every conforming document; this is a malformed-file cap, not
+#: a budget.
+_SIZING_MAX_LINES = 80
+
+
+def _sizing_route(worktree_root: Path, resolved: Sequence[str]) -> Optional[str]:
+    """The `route` of the first resolvable sizing object, or None.
+
+    A bounded head-read, not a YAML parse, for the reason `_scan_fields` is one:
+    this runs per candidate and the general parser costs an order of magnitude
+    more for a single scalar. `_strip_comment` is reused because the scaffold
+    ships `route:` with its whole enum as a trailing comment
+    (`route: plan  # dispatch | spec-dispatch | ...`), and reading that comment
+    as part of the value makes every sized baton's route unrecognisable.
+
+    None is the answer for an UNSIZED baton, and it is not a finding — the gate
+    already reports `unsized` separately, and a scout is what fixes it.
+    """
+    for citation in resolved:
+        path = worktree_root / citation
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                for count, raw in enumerate(fh):
+                    if count > _SIZING_MAX_LINES:
+                        break
+                    key, sep, value = raw.rstrip("\n").rstrip("\r").partition(":")
+                    if sep and key.strip() == "route":
+                        route = _unquote(_strip_comment(value))
+                        if route:
+                            return route
+                        break
+        except OSError:
+            continue
+    return None
 
 
 def _archived_sizing_index(worktree_root: Path) -> "Dict[str, str]":
@@ -1318,25 +1365,6 @@ def assemble_plan_gate(
             if record["candidate"] and not (wanted & set(record["ids"]) or record["path"] in wanted):
                 record["candidate"] = False
 
-    # One gate evaluation per baton, shared by the wave pass and the report —
-    # see plan_waves' `gates` parameter for why this is a correctness property
-    # and not just a saved read.
-    memo: Dict[str, Dict[str, Any]] = {}
-    subjects = [
-        record
-        for record in records
-        if record["candidate"]
-        or (subject is not None and (subject in record["ids"] or subject == record["path"]))
-    ]
-    gate_by_id = {
-        record["id"]: gates_for(record, batons_by_id, plans, memo) for record in subjects
-    }
-
-    wave_by_id, waves, cycles = plan_waves(records, batons_by_id, plans, gate_by_id)
-
-    reported: List[Dict[str, Any]] = []
-    unresolved: List[Dict[str, str]] = []
-
     # One archive index per gate read, built only if some citation missed the
     # live tree, and memoised so the two reads per record cost one resolution.
     _sizing_archive: Dict[str, Dict[str, str]] = {}
@@ -1356,6 +1384,111 @@ def assemble_plan_gate(
             )
         _sizing_memo[key] = (resolved, unresolved_cites)
         return _sizing_memo[key]
+
+    # One gate evaluation per baton, shared by the wave pass and the report —
+    # see plan_waves' `gates` parameter for why this is a correctness property
+    # and not just a saved read.
+    memo: Dict[str, Dict[str, Any]] = {}
+
+    # A baton somebody decided must not fire is HELD, not a candidate —
+    # example-retrieval-repo, 2026-09-11, the friction that cost them the most.
+    #
+    # 5 of their 8 wave-0 candidates had a recorded reason not to fire, and 4
+    # had been re-fired across five runs since 09-06: the reason lived in a DR
+    # or a run report, nothing joined it to the gate, and every session
+    # re-derived it. DR-2048 refuses to spell a hold as a `blocked_by` edge and
+    # is right to — an edge is a DISCOVERED dependency, and inventing one to
+    # suppress a candidate gives the graph edges nobody can later justify, and
+    # fails the baton closed forever if the gate cannot resolve it. So the only
+    # mechanism left was a per-fire `--exclude` list the driver retyped each
+    # run, which is the exact retype the emitter exists to remove.
+    #
+    # Neither a candidate nor an edge: the gate reports it with its reason, and
+    # never refuses. A hold with no reason is NOT honoured — an unexplained
+    # suppression is the thing this replaces, not a lighter version of it.
+    held_rows: List[Dict[str, Any]] = []
+    for record in records:
+        if not record["candidate"]:
+            continue
+        reason = str(record["_fm"].get("plan_blitz_hold_reason") or "").strip()
+        if not reason:
+            continue
+        record["candidate"] = False
+        record["held"] = True
+        held_rows.append(
+            {
+                "baton": record["id"],
+                "path": record["path"],
+                "reason": reason,
+                "cite": str(record["_fm"].get("plan_blitz_hold_cite") or "").strip() or None,
+                "until": str(record["_fm"].get("plan_blitz_hold_until") or "").strip() or None,
+            }
+        )
+
+    # A baton with no planning content, waiting on a blocker's EXECUTION, is not
+    # a planning candidate — example-retrieval-repo, 2026-09-11.
+    #
+    # Their cq-17's whole job is "score once the corpus exists". Its dependency
+    # is a real `blocked_by` edge that resolves cleanly and correctly shuts the
+    # EXECUTION gate; but the blocker's plan is approved, so the PLANNING gate is
+    # open and the baton sat in `waves[0]` with nothing to plan. It was dispatched
+    # and declined three times against the same unmet wait. The two-gate model can
+    # say "blocked on planning" and "blocked on execution"; it had no way to say
+    # "has no planning content".
+    #
+    # Keyed on ROUTE, which needs the sizing object — and measured before being
+    # written, because the obvious worry is per-candidate I/O against the
+    # brightline. On claude-klabauter's corpus that worry is the wrong one: 242 candidates
+    # carry 5 sizing citations between them, so this reads almost nothing, and
+    # even a fully-sized corpus costs ~0.06ms per distinct sizing against a
+    # ~155ms gate. The real limit is COVERAGE, not cost: an unsized baton has no
+    # route to read, is untouched here, and is already reported `unsized`.
+    #
+    # Deliberately NOT the weaker predicate "no plan and a shut execution gate",
+    # which needs no sizing read at all: an M or L waiting on a blocker's
+    # execution is exactly the baton a wave SHOULD plan now, and withholding it
+    # would trade this silence for a worse one.
+    waiting_on_execution_rows: List[Dict[str, Any]] = []
+    for record in records:
+        if not (record["candidate"] and record["needs_plan"]):
+            continue
+        gate = gates_for(record, batons_by_id, plans, memo)
+        if gate["execution_gate"]["open"]:
+            continue
+        resolved_cites, _ = _sizing_resolution(record)
+        route = _sizing_route(worktree_root, resolved_cites)
+        if route not in _ROUTES_WITHOUT_PLANNING_CONTENT:
+            continue
+        record["candidate"] = False
+        record["waiting_on_execution"] = True
+        waiting_on_execution_rows.append(
+            {
+                "baton": record["id"],
+                "path": record["path"],
+                "route": route,
+                "blocking": [d["blocker"] for d in gate["execution_gate"]["blocking"]],
+                "reason": (
+                    f"route: {route} carries no planning content, and its execution "
+                    "gate is shut — this is waiting on a blocker to be CODED, not "
+                    "on a plan to be written"
+                ),
+            }
+        )
+
+    subjects = [
+        record
+        for record in records
+        if record["candidate"]
+        or (subject is not None and (subject in record["ids"] or subject == record["path"]))
+    ]
+    gate_by_id = {
+        record["id"]: gates_for(record, batons_by_id, plans, memo) for record in subjects
+    }
+
+    wave_by_id, waves, cycles = plan_waves(records, batons_by_id, plans, gate_by_id)
+
+    reported: List[Dict[str, Any]] = []
+    unresolved: List[Dict[str, str]] = []
 
     for record in subjects:
         if subject is not None and subject not in record["ids"] and subject != record["path"]:
@@ -1402,6 +1535,8 @@ def assemble_plan_gate(
                 # True/False is index membership; None is "could not tell"
                 # (see `index_unreadable`), never "untracked".
                 "tracked": record["tracked"],
+                "waiting_on_execution": bool(record.get("waiting_on_execution")),
+                "held": bool(record.get("held")),
             }
         )
 
@@ -1430,6 +1565,8 @@ def assemble_plan_gate(
             for r in candidate_records
             if r["needs_plan"] and wave_by_id.get(r["id"]) is None
         ),
+        "waiting_on_execution": len(waiting_on_execution_rows),
+        "held": len(held_rows),
     }
 
     # `counts.unschedulable` says HOW MANY this pass cannot schedule and never
@@ -1492,6 +1629,8 @@ def assemble_plan_gate(
         "untracked": untracked_rows,
         "index_unreadable": index_unreadable,
         "resurrected": resurrected_rows,
+        "waiting_on_execution": waiting_on_execution_rows,
+        "held": held_rows,
         "counts": dict(
             counts, untracked=len(untracked_rows), resurrected=len(resurrected_rows)
         ),

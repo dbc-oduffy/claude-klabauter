@@ -116,7 +116,7 @@ REFUSED = "REFUSED"
 #: Report-class order. Fixed, because the refusal message enumerates in it and a
 #: message whose line order varies per plan is harder to diff than one that does
 #: not.
-CLASS_ORDER = ("SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT")
+CLASS_ORDER = ("SPINE", "CENSUS", "EXTERNAL_DEPS", "PRIME_EXIT", "SCHEMA")
 
 #: ``external_gate[].requires`` — the discriminant the three-way split turns on.
 #: ``condition:`` is reader-facing prose the schema itself says no consumer parses
@@ -641,6 +641,69 @@ def _prime_exit(fm: Dict[str, Any]) -> Dict[str, Any]:
     return _pass("declared")
 
 
+#: The plan schema this gate validates against, resolved off this module's own
+#: location for the reason `_UPGRADE_SCRIPT` is: it names the tree that actually
+#: answered, not whichever tree a caller's cwd happens to sit in.
+_PLAN_SCHEMA = (
+    Path(__file__).resolve().parents[1] / "frontmatter" / "schemas" / "plan.schema.json"
+)
+
+#: Schema error fields whose defect another class already reports. Suppressed so
+#: the message states one fact once: a plan with no `prime_exit_criterion` would
+#: otherwise be told so twice, by PRIME_EXIT and again by the schema walk.
+_SCHEMA_FIELDS_OWNED_ELSEWHERE = ("prime_exit_criterion",)
+
+#: The mise-prep attest. Excluded from the schema walk ALWAYS — not as noise
+#: reduction but because a gate cannot condition on its own output. These four
+#: fields are what `plan.stamp_prepped` WRITES after this bar passes, and a
+#: partial hand-written quartet is a schema error whose documented repair is a
+#: full re-stamp. Letting it defect here deadlocks that repair: the gate refuses
+#: the plan over the exact malformation the stamp it is blocking would fix.
+_SCHEMA_STAMP_FIELDS = "mise_prepped"
+
+
+def _schema(fm: Dict[str, Any], prime_exit: Dict[str, Any]) -> Dict[str, Any]:
+    """``plan.schema.json`` over the frontmatter this gate is about to certify.
+
+    example-retrieval-repo, 2026-09-11: a plan reached approved AND certified carrying
+    ``prime_exit_criterion.derived_from`` with a paragraph of prose where the
+    schema wants ``^state/sizings/.+\\.yaml$``. The prep gate passed it because
+    its own predicates check PRESENCE and non-placeholder-ness, never SHAPE —
+    two different questions about the same field. Only the frontmatter-schema
+    hook caught it, and only because the author happened to edit the file for an
+    unrelated reason, which is not a mechanism.
+
+    Advisory about its own instrument, never about the plan: a schema that
+    cannot be read or does not parse PASSES here. A gate that fails closed on a
+    missing schema file would refuse every plan in a tree whose vendored schemas
+    have not been re-published yet, which is a defect in this gate, not in the
+    plans.
+    """
+    try:
+        from coordinator_core.frontmatter.schema_validate import validate_frontmatter
+
+        errors = validate_frontmatter(fm, _PLAN_SCHEMA)
+    except Exception:
+        return _pass("not checked: plan.schema.json is unreadable beside this engine")
+    errors = [
+        e for e in errors if _SCHEMA_STAMP_FIELDS not in str(e.get("field") or "")
+    ]
+    if prime_exit["status"] != "PASS":
+        errors = [
+            e
+            for e in errors
+            if not str(e.get("field") or "").startswith(_SCHEMA_FIELDS_OWNED_ELSEWHERE)
+        ]
+    if not errors:
+        return _pass("valid")
+    detail = "; ".join(
+        f"{e.get('field')}: {e.get('error')}" for e in errors[:4]
+    )
+    if len(errors) > 4:
+        detail += f" (+{len(errors) - 4} more)"
+    return _defect("schema-invalid", f"frontmatter violates plan.schema.json — {detail}")
+
+
 # ---------------------------------------------------------------------------
 # Readers
 # ---------------------------------------------------------------------------
@@ -708,11 +771,13 @@ def evaluate_plan(
     if text is None:
         text = plan_path.read_text(encoding="utf-8", errors="replace")
     fm = plan_frontmatter(text)
+    prime_exit = _prime_exit(fm)
     classes = {
         "SPINE": _spine(plan_path, text),
         "CENSUS": _census(fm),
         "EXTERNAL_DEPS": _external_deps(raw_spine_rows(text), root_names, siblings),
-        "PRIME_EXIT": _prime_exit(fm),
+        "PRIME_EXIT": prime_exit,
+        "SCHEMA": _schema(fm, prime_exit),
     }
     if any(v["status"] == "REFUSE" for v in classes.values()):
         verdict = REFUSED
