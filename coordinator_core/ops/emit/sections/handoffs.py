@@ -139,6 +139,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.artifact_id_slug import id_slug
 from coordinator_core.ops.ceremony.records_query import query_records as _ceremony_query_records
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.priority_resolve import (
@@ -357,7 +358,7 @@ def _derive_handoff_id(repo: str, path: Optional[str]) -> tuple[str, str]:
     """
     basename = Path(path).name if path else ""
     digest = hashlib.sha1(f"{repo}:{basename}".encode("utf-8")).hexdigest()[:6]
-    slug = _slugify_basename(basename) or "derived"
+    slug = id_slug(_slugify_basename(basename)) or "derived"
     return f"hnd-{slug}-{digest}", "derived"
 
 

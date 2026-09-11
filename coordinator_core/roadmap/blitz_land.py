@@ -57,6 +57,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from coordinator_core.locked_write import MutateAbort, locked_rmw
+from coordinator_core.artifact_id_slug import id_slug
 from coordinator_core.roadmap.plan_gate import (
     BATON_CODED_STATES,
     PLAN_APPROVED_STATUSES,
@@ -468,7 +469,7 @@ def mint_replan_baton(
     be compressing the one artifact whose whole purpose is to survive the context
     boundary.
     """
-    stem = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:60]
+    stem = id_slug(re.sub(r"[^a-z0-9]+", "-", title.lower()), 60)
     if not stem.startswith("replan-"):
         stem = f"replan-{stem}"
     out = worktree_root / "state" / "handoffs" / f"{_today()}-{stem}.md"
@@ -777,7 +778,7 @@ def land_wave(
                 worktree_root,
                 source_baton_path=source_path,
                 brief=entry.get("replanBrief") or entry.get("reason") or "",
-                handoff_id=f"hnd-{slug[:40]}-{suffix}",
+                handoff_id=f"hnd-{id_slug(slug, 40)}-{suffix}",
                 deliverable_id=deliverable_id,
                 title=f"Replan — {entry['batonId']}",
                 branch=branch,
