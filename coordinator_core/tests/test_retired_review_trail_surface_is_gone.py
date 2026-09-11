@@ -74,7 +74,7 @@ def test_no_retired_review_trail_file_remains_on_disk():
 
 
 def test_no_registration_surface_names_the_retired_ops():
-    """Six registration surfaces, not five, must stop naming the retired ops once deletion
+    """Seven registration surfaces, not five, must stop naming the retired ops once deletion
     lands: `_registry_map.py`, `authz/classification.py`, `authz/registration_quad.py`,
     `ops/__init__.py`, the `_EAGER_OP_MODULES` list (inside `ops/__init__.py`), and
     `authz/dispatchable.py`'s `ASSEMBLER_DISPATCHABLE["workstream_complete"]` (which names
@@ -88,6 +88,13 @@ def test_no_registration_surface_names_the_retired_ops():
     registration_quad = (_REPO_ROOT / "coordinator_core/authz/registration_quad.py").read_text(encoding="utf-8")
     ops_init = (_REPO_ROOT / "coordinator_core/ops/__init__.py").read_text(encoding="utf-8")
     dispatchable = (_REPO_ROOT / "coordinator_core/authz/dispatchable.py").read_text(encoding="utf-8")
+    # SIXTH surface, added 2026-09-11 after the deletion had already landed. The
+    # op-keying table kept `review_trail.scan_unresolved_ubt` for twelve days
+    # because it was not on this list, so the falsifier went green over a surface
+    # it never read. A falsifier that enumerates its surfaces is only as complete
+    # as the enumeration, which is the failure mode it exists to prevent one level
+    # down. Found by an op-scope parity sweep, not by this test.
+    op_scopes = (_REPO_ROOT / "coordinator_core/op_scopes.py").read_text(encoding="utf-8")
 
     op_ids = ("review_trail.write", "review_trail.scan_unresolved_ubt")
 
@@ -97,6 +104,7 @@ def test_no_registration_surface_names_the_retired_ops():
         ("authz/classification.py", classification),
         ("authz/registration_quad.py", registration_quad),
         ("ops/__init__.py (incl. _EAGER_OP_MODULES)", ops_init),
+        ("op_scopes.py", op_scopes),
     ):
         for op_id in op_ids:
             # Match the quoted op-id literal, not history comments/prose about the op.

@@ -688,6 +688,25 @@ def test_provenance_structured_claim_never_replaces_the_diff_check():
     assert "NOT a substitute for reading the" in block
 
 
+def test_provenance_reconciles_structured_reports_per_report_reaches_the_emitted_script():
+    """Review: coordinator:code-reviewer, finding P2 -- the constant-level
+    assertion above stays green even if a refactor stops threading this
+    clause through to the emitted script; pin the reaching leg too, the
+    same idiom `test_the_per_hunk_clause_reaches_the_emitted_script` uses."""
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    if "Pathspec provenance" in script:
+        assert "PER-REPORT, NEVER PER-WAVE" in script
+
+
+def test_provenance_structured_claim_never_replaces_the_diff_check_reaches_the_emitted_script():
+    """Review: coordinator:code-reviewer, finding P2 -- same reaching-the-
+    emitted-script leg for the diff-still-governs clause."""
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    if "Pathspec provenance" in script:
+        assert "NARROWS WHAT YOU EXPECT" in script
+        assert "NEVER REPLACES THE" in script
+
+
 def test_provenance_partial_wave_clause_unmodified():
     """The `abf69cd326` partial-wave clause is additive-only: this chunk must
     not touch it."""
@@ -2163,6 +2182,18 @@ def test_dispatch_report_path_is_inside_the_bookkeeping_allowlist():
     assert any(report_path.startswith(prefix) for prefix in emit._BOOKKEEPING_PREFIXES)
 
 
+def test_dispatch_report_path_refuses_a_row_id_containing_path_separators():
+    """Review: coordinator:code-reviewer, finding P3, EM-overridden to APPLY
+    -- a row id spliced raw with `../` would pass the allowlist's
+    `str.startswith` check while resolving outside `_BOOKKEEPING_PREFIXES`
+    on disk. Must refuse loud, never silently sanitize."""
+    import pytest
+
+    for bad_id in ("../escape", "a/b", "a\\b", "..", "."):
+        with pytest.raises(ValueError):
+            emit._dispatch_report_path("docs/plans/example.md", bad_id)
+
+
 def test_emitted_script_never_instructs_a_halt_on_the_dispatch_report_path():
     """End-to-end: compose a script for a wave whose row writes nothing
     else, and confirm the commit phase's rendered provenance heading would
@@ -2174,15 +2205,12 @@ def test_emitted_script_never_instructs_a_halt_on_the_dispatch_report_path():
 
     report_path = emit._dispatch_report_path("docs/plans/example.md", "C1")
     assert report_path in script
-    # The provenance heading's allowlist carve-out must be present in the
-    # SAME emitted script that names the report path (escaped through
-    # `_escape_for_js_template_literal` for the commit prompt's own template
-    # literal, so backticks survive as `\``, not the raw form), and the
-    # report path itself must sit under the rendered allowlist prefix.
+    # The provenance heading's allowlist carve-out must co-occur, in this
+    # SAME emitted script, with the report path it is meant to cover.
+    # Prefix rendering itself is pinned once, above (test_emit.py:~1743);
+    # `report_path.startswith(prefix)` is pinned once, in the test
+    # immediately above this one -- neither is re-derived here.
     assert "DISPATCH-LAYER BOOKKEEPING" in script
-    for prefix in emit._BOOKKEEPING_PREFIXES:
-        assert f"{prefix}**" in script
-    assert any(report_path.startswith(prefix) for prefix in emit._BOOKKEEPING_PREFIXES)
 
 
 def test_row_prompt_return_contract_is_escaped_via_js_string_literal_not_template_literal():
@@ -2198,16 +2226,7 @@ def test_row_prompt_return_contract_is_escaped_via_js_string_literal_not_templat
     script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
 
     row_prompt = emit._row_prompt(
-        WaveRow(
-            id="C1",
-            title="title-C1",
-            surface="dispatch_emit",
-            writes=["coordinator_core/ops/dispatch_emit/emit.py"],
-            reads=[],
-            depends_on=[],
-            agent_type=None,
-            agent_model=None,
-        ),
+        _wave_row("C1", ["coordinator_core/ops/dispatch_emit/emit.py"]),
         "docs/plans/example.md",
     )
     literal = _js_string_literal(row_prompt)

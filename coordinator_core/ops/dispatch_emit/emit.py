@@ -336,17 +336,9 @@ ReviewRosterFragmentError = RosterFragmentError
 #: contract-gets-one-de.md § C3): on the emitted path neither commit nor
 #: broader verification is "the EM" -- a `coordinator:git-commit-agent`
 #: phase commits once per wave, and a terminal `coordinator:test-runner`
-#: phase runs broader verification. One string names both, since the
-#: builder threads a single `commit_authority` value into both clauses.
-#: Kept to a bare noun phrase on purpose. The builder splices this value
-#: into TWO slots of one sentence-run, and the second already supplies its
-#: own "commits, once per wave, after every item in the wave passes
-#: verification" tail. A value carrying parenthetical glosses renders that
-#: tail twice and reads as garbled duplication -- measured at 8b0ee94908,
-#: where the emitted clause ended "...(which runs broader verification)
-#: commits, once per wave, after every item in the wave passes
-#: verification." The hand-dispatch caller passes "the EM" and is the shape
-#: this sentence was written for; match its register, not its brevity alone.
+#: phase runs broader verification. Must be a bare noun phrase -- see that
+#: builder's own docstring for why (it, not this call site, is the one
+#: place the constraint needs to live).
 _EMITTED_COMMIT_AUTHORITY = (
     "this wave's `coordinator:git-commit-agent` commit phase and the run's "
     "terminal `coordinator:test-runner` phase"
@@ -978,7 +970,24 @@ def _dispatch_report_path(plan_path: str, row_id: str) -> str:
     (``_spec_path_for_prompt``'s output), so no second plan read is needed.
     Lands under ``_DISPATCH_REPORT_DIR``, inside ``_BOOKKEEPING_PREFIXES`` --
     see that constant's docstring and module docstring § THE REPORT PATH.
+
+    ``row_id`` MUST be a single path segment (Review: coordinator:code-
+    reviewer, finding P3, EM-overridden to APPLY) -- spliced raw with no
+    validation, a row id containing ``../`` would produce a report path
+    that still passes ``test_dispatch_report_path_is_inside_the_bookkeeping_
+    allowlist``'s ``str.startswith`` check (a string-prefix test, not a
+    containment guarantee) while resolving OUTSIDE ``_BOOKKEEPING_PREFIXES``
+    on disk. Row ids are author-controlled plan-spine data, not adversarial
+    input, but this diff adds a new consumer of an already-unvalidated
+    field, so the check moves here rather than staying deferred. Refuses
+    loud (``ValueError``) rather than silently sanitizing -- a malformed row
+    id must fail at emit time, not produce a quietly-relocated report path.
     """
+    if not row_id or "/" in row_id or "\\" in row_id or row_id in (".", ".."):
+        raise ValueError(
+            f"row_id {row_id!r} is not a single path segment -- refusing to "
+            "compose a dispatch report path from it"
+        )
     return f"{_DISPATCH_REPORT_DIR}/{Path(plan_path).stem}/{row_id}.md"
 
 
@@ -1262,7 +1271,13 @@ _PROVENANCE_HEADING = (
     "else's and this run cannot tell you what they were mid-way through."
     "\n\nRead the diff, not just the reports. A report is what an agent says "
     "it wrote; the diff is what is actually there, and only the second one is "
-    "what you are about to commit."
+    "what you are about to commit. This holds even when a claim is "
+    "structured: A STRUCTURED CLAIM NARROWS WHAT YOU EXPECT, IT NEVER "
+    "REPLACES THE DIFF CHECK -- deriving the pathspec by intersecting the "
+    "union of declared writes with what the reports name is NOT a "
+    "substitute for reading the diff, it is the same reports-only posture "
+    "this paragraph exists to kill, only wearing a structured report as "
+    "its excuse."
     "\n\nSOME REPORTS BELOW MAY NOW BE STRUCTURED: an executor return contract "
     "closes with a machine-checkable status line and a changed-path list "
     "instead of prose alone. Read this PER-REPORT, NEVER PER-WAVE -- a wave "
@@ -1273,14 +1288,6 @@ _PROVENANCE_HEADING = (
     "prose rules above instead. Three structured reports in a wave must "
     "never suppress reconciliation of the other two -- a mixed wave gets a "
     "mixed, per-report reconciliation."
-    "\n\nA STRUCTURED CLAIM NARROWS WHAT YOU EXPECT, IT NEVER REPLACES THE "
-    "DIFF CHECK. Deriving the pathspec by intersecting the union of declared "
-    "writes with what the reports name is NOT a substitute for reading the "
-    "diff -- it is the same reports-only posture the paragraph above exists "
-    "to kill, only wearing a structured report as its excuse. A structured "
-    "changed-path list tells you which paths to expect changes in when you "
-    "run `git diff --stat`; it does not tell you the diff came out that way, "
-    "and it does not excuse reading it."
     "\n\nPASTE THE `git diff --stat` OUTPUT VERBATIM into your report, above "
     "your token line, under the heading `DIFF OBSERVED:`. Not a summary of it, "
     "not a table you built from it -- the raw lines, with their real path names "

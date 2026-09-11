@@ -304,6 +304,14 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # path-guarded. Spec: docs/plans/2026-07-12-workflow-skeleton-stamper-
     # claude-klabauter-engine.md § C2.
     "workflow.validate":                     "none",
+    # workflow.bind_args — "none", and the handler already behaves as such: it
+    # receives None as repo_root under this scope, so its relative-script_path
+    # branch never fires and every caller supplies an absolute path. Listed
+    # explicitly because this table's own contract is that a missing entry is an
+    # oversight rather than a silent default, and this one was: the op registered
+    # in workflow_bind.py, declared Scope "none" in its docstring, and appeared in
+    # no row.
+    "workflow.bind_args":                    "none",
     # distill.curate_clusters — pure structural gate over a caller-supplied
     # {system_tag: count} map: no file is read, no repo_root/_origin_worktree
     # state is accessed at all (not even a path read, one level purer than
@@ -1315,10 +1323,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "ci.run_pip_audit":                        "show_top",
     "ci.run_semgrep_scan":                     "show_top",
     "ci.run_shellcheck_sweep":                 "show_top",
-    # review_trail.scan_unresolved_ubt — common_dir: state/review-trail is
-    # main-worktree-rooted per list_review_trail_records.py's own resolution, same
-    # class as the existing review_trail.write op.
-    "review_trail.scan_unresolved_ubt":        "common_dir",
     # findings.self_persist_fallback — "none": target_path is caller-supplied; the
     # op does not resolve relative paths against a repo root itself.
     "findings.self_persist_fallback":          "none",

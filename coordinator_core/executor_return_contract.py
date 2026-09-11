@@ -71,6 +71,17 @@ def self_verify_constraint(*, commit_authority: str) -> str:
     broader verification and who commits share one authority on every
     known surface); hand-dispatch callers pass `"the EM"` and get today's
     bytes back.
+
+    `commit_authority` MUST be a bare noun phrase. This builder, not the
+    caller, supplies the "commits, once per wave, after every item in the
+    wave passes verification" tail — the value is spliced into that
+    sentence, never composes it. A value carrying its own parenthetical
+    gloss of what it does renders that tail a second time and reads as
+    garbled duplication: measured at 8b0ee94908, where an emitted
+    `commit_authority` describing itself mid-value ended "...(which runs
+    broader verification) commits, once per wave, after every item in the
+    wave passes verification." Every caller of this shared builder is
+    bound by this, not just the one that tripped it.
     """
     return (
         "After implementation: (1) re-read the spec's `## Tasks` spine row "
