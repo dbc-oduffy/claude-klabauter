@@ -1636,6 +1636,7 @@ def test_compose_script_commit_prompt_names_every_measured_false_refusal():
     assert "state/subagent-share/**" in script
     assert "SHARED TREE" in script
     assert "UNCHANGED DECLARED PATHS" in script
+    assert "A PARTIAL WAVE STILL COMMITS" in script
     assert "ALREADY COMMITTED" in script
     assert "THE CALL RETURNS THE SHA" in script
     assert "ON THE CALL IS A WRONG KEYWORD, NOT AN ABSENT ROUTE" in script
@@ -1649,6 +1650,41 @@ def test_compose_script_commit_prompt_names_every_measured_false_refusal():
     assert "property of the TARGET REPO" in script
     assert "check-attr text eol" in script
     assert "UNCONDITIONALLY" in script
+
+    errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
+    assert errors == []
+
+
+def test_compose_script_commit_prompt_licenses_a_partial_wave():
+    """A wave with a non-DONE item must still commit the DONE items' work.
+
+    Measured on mise run `20260911T111541-8087eee2`: a five-item wave
+    returned four DONE and one BLOCKED, and the commit phase committed
+    nothing -- reasoning, from this prompt, that five ids in the subject
+    could not all land when one item was blocked and that committing four
+    would report false delivery. It is a coherent read of what the prompt
+    said: the subject rule demanded every dispatched id, and the provenance
+    block told it to refuse pathspec entries no report corroborates, which
+    is exactly the blocked item's paths. Four executors' output then sat
+    uncommitted on a shared checkout while HEAD moved twice underneath it,
+    and the run halted before the next wave.
+
+    The rule it should have applied is /mise-en-place § Partial wave
+    landing. The fix is prompt-side by necessity: the pathspec is derived
+    at EMIT time, before any executor has run, so the union is the only
+    thing the emitter can hand over. Narrowing it against the reports is
+    the committing agent's job, and this is where it is told so.
+    """
+    waves = _two_wave_fixture()
+    script = compose_script(waves, name="wf", description="two waves")
+
+    assert "A PARTIAL WAVE STILL COMMITS" in script
+    assert "Refuse only if NO item is DONE" in script
+    # The blocked item's id leaving the subject is the half the agent got
+    # wrong; asserting only the heading above would leave that green.
+    assert "its id drops out of the subject alongside" in script
+    assert "registering fewer" in script
+    assert "is the failure mode, not the safe choice" in script
 
     errors = [f for f in run_checks(script) if f.severity is Severity.ERROR]
     assert errors == []

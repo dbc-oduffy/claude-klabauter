@@ -8956,8 +8956,12 @@ def check_cat_heredoc_write_advise(
     git_root: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """BX-16 shape 4 -- `cat > FILE <<'EOF' ... EOF` writes a file via a
-    subprocess heredoc; the Write tool authors the same file directly, no
-    subprocess. Advisory only, for the same reason as the sed check above.
+    subprocess heredoc. Advisory only: states the fact the agent lacks at
+    the moment it matters -- this write is recorded and will be in the
+    session's commit (DR-258 § Amendment 2026-08-30), a path the command
+    does not name is not. No tool-preference nudge; see
+    `check_heredoc_repo_write_advise`, the sibling this register is modeled
+    on.
     """
     if not cmd:
         return None
@@ -8990,10 +8994,10 @@ def check_cat_heredoc_write_advise(
     )
     return _advisory(
         (
-            "Advisory: 'cat %s %s <<EOF ... EOF' writes a file via a subprocess "
-            "heredoc -- the Write tool authors the same file directly, no "
-            "subprocess."
-            % (redir, target)
+            "Advisory: this heredoc writes `%s`. This write is recorded and "
+            "will be in this session's commit (DR-258 § Amendment "
+            "2026-08-30); a path this command does not name is not."
+            % target
         )
         + (" %s" % _cat_note if _cat_note else "")
     )

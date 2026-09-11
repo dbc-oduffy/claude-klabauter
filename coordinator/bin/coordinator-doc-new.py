@@ -6340,6 +6340,25 @@ def main(argv: "list[str] | None" = None) -> int:
         )
         return 1
 
+    # A sizing-object is the one scaffold with no useful untitled form: its title
+    # IS the PM's ask, verbatim, and a placeholder one mints a durable record into
+    # `state/sizings/` that says nothing. Measured 2026-09-11 on example-cockpit-repo: a
+    # no-arg invocation, run to discover the interface, wrote one — and the EM could
+    # not clean it up either, because the destructive-rm guard correctly refuses an
+    # untracked file, so the stray outlived the tool that made it. Refused rather
+    # than defaulted; every other type keeps its placeholder, where scaffolding
+    # untitled and filling the title in afterwards is a real workflow.
+    if doc_type == "sizing-object" and not args.title:
+        print(
+            "error: --title is required for --type sizing-object — it carries the "
+            "PM's ask verbatim, and a placeholder one is a durable record that "
+            "says nothing.\n"
+            '  coordinator-doc-new --type sizing-object --title "<the PM ask>" [--out PATH]\n'
+            "  Nothing was written.",
+            file=sys.stderr,
+        )
+        return 1
+
     # Resolve title default.
     title = args.title
     if not title:

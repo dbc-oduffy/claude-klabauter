@@ -13,11 +13,17 @@ asymmetry is load-bearing and must NOT collapse in the port").
 
 Posture: ADVISORY-ONLY — this arm NEVER blocks. It scans the Bash command
 string for ``mv``/``git mv`` destination targets, shell-redirection targets,
-and ``--out``/``-o`` flag values, and on a match returns an
-``allow`` + ``additionalContext`` envelope (never ``deny``). This is
-explicitly a best-effort static scan, NOT the enforcement net — the
-commit/merge backstop is. Four false-positive incidents motivated the
-advisory-only posture on this arm specifically.
+and ``--out``/``-o`` flag values, and on a match APPLIES the safe name it
+already computes -- returning an ``updatedInput`` rewrite of the command
+string, not a request that the agent adopt it (C2,
+``docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md``
+AC5; the guard was already computing the safe suggestion in its message and
+never using it). Falls back to the prior ``allow`` + ``additionalContext``
+envelope only when no locatable rewrite exists (empty safe suggestion, or the
+extracted candidate text no longer appears verbatim in the command). Neither
+path ever ``deny``s. This is explicitly a best-effort static scan, NOT the
+enforcement net — the commit/merge backstop is. Four false-positive
+incidents motivated the advisory-only posture on this arm specifically.
 
 This is a faithful engine-ification of the reference hook's pipeline, with
 one deliberate departure (C3,
@@ -113,7 +119,7 @@ from coordinator_core.bash_guards._helpers import csn_check as _csn_check
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
-from coordinator_core._hook_envelope import allow_advisory
+from coordinator_core._hook_envelope import allow_advisory, rewrite_input
 
 CLASS = "advisory"
 MATCHERS = COMMAND_TOOL_NAMES
@@ -433,6 +439,23 @@ def _advisory_ctx(reason: str) -> str:
     return f"ADVISORY (non-blocking): {reason}"
 
 
+def _rewrite_ctx(
+    raw_name: str, safe_name: str, illegal_char_hint: str, payload: Optional[Dict[str, Any]] = None
+) -> str:
+    """Context prose for the ``updatedInput`` rewrite path (C2,
+    ``docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md``
+    AC5): the guard already computes the safe name, so the message states
+    what was applied rather than asking the agent to apply it itself -- no
+    compliance step is needed, matching ``_make_deny_msg``'s char-hint /
+    Windows-breakage framing minus the "Use instead" instruction, which is
+    moot once the rewrite has already happened."""
+    return (
+        f"'{raw_name}' has '{illegal_char_hint}' -- illegal on Windows, blocks "
+        f"`git checkout`. Auto-corrected to '{safe_name}'. "
+        + operator_override_note(_OVERRIDE_ENV, payload=payload)
+    )
+
+
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         if os.environ.get(_OVERRIDE_ENV, "0") == "1":
@@ -506,6 +529,27 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             if result is None:
                 continue
             basename, hint = result
+            safe_suggestion = _safe_suggestion(basename)
+            # Apply the already-computed safe name in place (C2, AC5) rather
+            # than asking the agent to adopt it -- but only when the rewrite
+            # is a real, locatable substitution: a non-empty suggestion, with
+            # `basename` a literal substring of the candidate text actually
+            # extracted from `cmd` (always true for this module's three
+            # extractors -- see their own docstrings -- but checked rather
+            # than assumed, per this guard's fail-open discipline) and that
+            # candidate text itself present in `cmd` to rewrite.
+            if safe_suggestion and basename in raw_candidate and raw_candidate in cmd:
+                new_candidate = raw_candidate.replace(basename, safe_suggestion, 1)
+                new_cmd = cmd.replace(raw_candidate, new_candidate, 1)
+                updated_input = dict(tool_input)
+                updated_input["command"] = new_cmd
+                ctx = _rewrite_ctx(basename, safe_suggestion, hint, payload=payload)
+                return rewrite_input("PreToolUse", updated_input, ctx)
+
+            # Fallback: no safe rewrite could be located (empty suggestion,
+            # or the candidate text is not a literal match in `cmd` -- e.g.
+            # backslash-continuation joins changed the text between
+            # extraction and this point). Advise, same as before this chunk.
             reason = _make_deny_msg(basename, hint, payload=payload)
             ctx = _advisory_ctx(reason)
             return allow_advisory("PreToolUse", ctx)

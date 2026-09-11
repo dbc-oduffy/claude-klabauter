@@ -346,3 +346,47 @@ _MATRIX_CASES = _quote_target_matrix() + [
 @pytest.mark.parametrize("cmd,expected_fires", _MATRIX_CASES)
 def test_redir_escape_quote_target_matrix(cmd, expected_fires):
     assert _fires(cmd) is expected_fires
+
+
+# ---------------------------------------------------------------------------
+# C2 (`docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md`,
+# AC5) -- the guard already computes a safe name; on a match it now applies
+# that name as `updatedInput` instead of asking the agent to adopt it. No
+# `permissionDecision` is emitted for a rewrite (shape (f) in
+# `_hook_envelope.py`), so `permissionDecision` is absent, not `"deny"`.
+# ---------------------------------------------------------------------------
+
+
+def test_rewrite_returns_updated_input_with_sanitized_command():
+    out = m.check(_payload('echo x > "bad?name.txt"'))
+    assert out is not None
+    hso = out.get("hookSpecificOutput", {})
+    assert "permissionDecision" not in hso
+    updated_input = hso.get("updatedInput")
+    assert updated_input is not None
+    new_cmd = updated_input.get("command")
+    assert new_cmd is not None
+    assert "bad?name.txt" not in new_cmd
+    assert "bad-name.txt" in new_cmd
+
+
+def test_rewrite_preserves_other_tool_input_keys():
+    payload = _payload('echo x > "bad?name.txt"')
+    payload["tool_input"]["description"] = "keep me"
+    out = m.check(payload)
+    updated_input = out["hookSpecificOutput"]["updatedInput"]
+    assert updated_input["description"] == "keep me"
+
+
+def test_rewrite_applies_to_mv_destination():
+    out = m.check(_payload("mv a.txt b?.txt"))
+    updated_input = out["hookSpecificOutput"]["updatedInput"]
+    assert "b?.txt" not in updated_input["command"]
+    assert "b-.txt" in updated_input["command"] or "b.txt" in updated_input["command"]
+
+
+def test_rewrite_context_does_not_ask_agent_to_act():
+    out = m.check(_payload('echo x > "bad?name.txt"'))
+    ctx = out["hookSpecificOutput"].get("additionalContext", "")
+    assert "Use instead" not in ctx
+    assert "Auto-corrected" in ctx

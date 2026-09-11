@@ -591,3 +591,66 @@ def test_stamp_accepts_a_writer_that_differs_from_the_holder_by_design(tmp_path)
     record = _record(tmp_path)
     assert record["holder_session_id"] == "crown-A"
     assert record["writer_session_id"] == "crown-B-differs-entirely"
+
+
+def test_rearm_command_spells_both_required_flags():
+    """C3 (AC 13/14): the ONE machine-consumed re-arm spelling this module
+    hands every non-`armed` verdict (`remedy` in `read_liveness` /
+    `human_verdict`) must carry both the launcher name and
+    `--group-em-session-id` -- the flag that, silently defaulted to the
+    caller, stops the holder's own offer log from suppressing an
+    already-answered peer (`watch.py` module docstring, C3's own defect).
+
+    Pinned twice -- the held form and the `--once` form both carry it -- so
+    a future edit that drops the flag from either fails here, not silently
+    downstream on a reader who copies the wrong half.
+    """
+    assert "group-em-watch --repo-root" in watch_heartbeat.REARM_COMMAND
+    assert watch_heartbeat.REARM_COMMAND.count("--group-em-session-id") == 2
+
+
+def test_no_advertised_rearm_instruction_in_these_three_files_omits_the_holder_id():
+    """C3 scope guard, over exactly the three files this row may edit --
+    never an unqualified repo-wide grep (AC 13 forbids one satisfiable only
+    by editing historical records under `state/**`).
+
+    `coordinator_core/group_em/watch.py::_cli`'s docstring deliberately shows
+    a bare `python -m coordinator_core.group_em.watch --repo-root <path>`
+    line (its own unimportable anti-example) and the argparse `prog=`
+    string, neither of which is a re-arm instruction a reader would copy to
+    actually restart a watch -- this test does not require either to carry
+    the flag. What it pins is the two lines that ARE re-arm instructions:
+    `_cli`'s dispatched-teammate `python -m` example, and
+    `coordinator/bin/group-em-watch.py`'s own advertised settings-home
+    launcher form.
+    """
+    import os
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)
+    ))))
+    watch_py = os.path.join(repo_root, "coordinator_core", "group_em", "watch.py")
+    bin_py = os.path.join(repo_root, "coordinator", "bin", "group-em-watch.py")
+
+    with open(watch_py, "r", encoding="utf-8") as fh:
+        watch_src = fh.read()
+    with open(bin_py, "r", encoding="utf-8") as fh:
+        bin_src = fh.read()
+
+    # The dispatched-teammate `python -m` example in `_cli`'s docstring --
+    # the one `python -m` line the module docstring says DOES need the flag.
+    dispatched_teammate_idx = watch_src.index(
+        "When a dispatched teammate holds the watch"
+    )
+    dispatched_teammate_line = watch_src[
+        dispatched_teammate_idx:watch_src.index("\"\"\"", dispatched_teammate_idx)
+    ]
+    assert "python -m coordinator_core.group_em.watch --repo-root <path>" in (
+        dispatched_teammate_line
+    )
+    assert "--group-em-session-id <the Group-EM's session id>" in dispatched_teammate_line
+
+    # `coordinator/bin/group-em-watch.py`'s own module docstring advertises
+    # the settings-home launcher form -- pinned to still carry the flag.
+    assert "group-em-watch --repo-root <root>" in bin_src
+    assert "--group-em-session-id <sid>" in bin_src
