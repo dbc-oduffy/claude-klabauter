@@ -97,7 +97,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.session.declared_writes import declare_write
@@ -288,6 +288,33 @@ def _has_heading(text: str, heading: str) -> bool:
     return _find_heading(text, heading) is not None
 
 
+def _find_findings_heading(text: str) -> Optional[Tuple[int, int]]:
+    """`(start, end_of_heading_line)` of the findings heading, or None.
+
+    Same line-anchoring as `_find_heading` — a prose mention is still not a
+    heading — but the findings heading alone may carry a QUALIFIER after the
+    word: `## Findings table (plan order)` is what the premise-check pass
+    writes, and it is a real findings section, not a different document.
+
+    Measured 2026-09-10, plan-blitz run 20260910T000000Z: two separate fires
+    reported this refusal independently. The premise check is a first-class
+    producer in that pipeline — the wave translates its rows onto
+    REVIEW_SCHEMA and they reach the same integrator every reviewer's do — so
+    its sidecar IS dispositionable, and refusing it meant findings were applied
+    to the plan and never stamped on the sidecar they came from. That is
+    exactly the loss `A-SIDECAR-THE-DISPOSITION-OP-REFUSES-LOSES-ONLY-THE-RECORD`
+    names: the deliverable is fine and the record is gone.
+
+    The qualifier is NOT extended to `## Integrator Dispositions` or
+    `## Exit interview`. Both are boundaries whose whole job is to be matched
+    exactly — `_find_heading`'s docstring records what a loose match costs on
+    each — and a section boundary that tolerates a suffix is a section that
+    can end in the wrong place.
+    """
+    match = re.search(rf"(?m)^{re.escape(_FINDINGS_HEADING)}\b[^\n]*$", text)
+    return (match.start(), match.end()) if match is not None else None
+
+
 class DispositionsError(ValueError):
     """Raised for every fail-loud validation failure in this module."""
 
@@ -306,10 +333,13 @@ def _extract_findings_section(text: str) -> Optional[str]:
     section boundaries. This function does not parse or count individual
     findings; it only carves out the span later checked by
     `_findings_section_is_empty` for pristine-scaffold vs. filled."""
-    idx = _find_heading(text, _FINDINGS_HEADING)
-    if idx is None:
+    span = _find_findings_heading(text)
+    if span is None:
         return None
-    rest = text[idx + len(_FINDINGS_HEADING):]
+    # Slice from the END of the heading LINE, not a fixed offset: the heading
+    # may carry a qualifier, and a fixed length would leave that text in the
+    # body and shift every boundary search after it.
+    rest = text[span[1]:]
     end = len(rest)
     for boundary in (_EXIT_INTERVIEW_HEADING, _DISPOSITIONS_HEADING):
         boundary_idx = _find_heading(rest, boundary)
