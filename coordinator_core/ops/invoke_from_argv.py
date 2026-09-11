@@ -431,6 +431,35 @@ def _render_usage_text(entrypoint: str, stdout_text: str, stderr_text: str) -> s
     return _synthesize_usage(entrypoint)
 
 
+def _help_call_argv(script: Path, argv: list) -> list:
+    """The argv a help gesture hands `main_fn`: `["--help"]`, prefixed by the
+    leading argv tokens that name argparse subcommands the script itself
+    declares (`add_parser("<name>"`), so `merge-gate-and-pr pr-body -h`
+    renders `pr-body`'s usage rather than the top-level one.
+
+    Only a token that is literally a declared subparser name survives, and
+    only in the leading run before any other token. An argparse subparser
+    answers `-h` inside `parse_args`, before any handler runs, so keeping
+    that token cannot reach live work. A hand-rolled dispatcher declares no
+    `add_parser`, keeps no token, and gets the bare `["--help"]` whose
+    per-target safety `_run_entrypoint`'s docstring records. A name built
+    from a variable is not seen and degrades to that same bare form.
+    """
+    import re
+
+    try:
+        source = script.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ["--help"]
+    declared = set(re.findall(r"""add_parser\(\s*["']([^"']+)["']""", source))
+    prefix = []
+    for token in argv:
+        if token not in declared:
+            break
+        prefix.append(token)
+    return prefix + ["--help"]
+
+
 def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
     """Runs `coordinator/bin/<entrypoint>.py`'s OWN `main(argv)` in-process.
 
@@ -507,12 +536,11 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str) -> dict:
         }
 
     # For a help gesture on any other shape, `main_fn` is still called (see
-    # docstring), but with a bare `["--help"]` standing in for the caller's
-    # real argv -- exactly what `entry_point_shim._render_help` hands the
-    # cold-path entry function -- so a target's own parser sees only the
-    # flag it needs to render its usage, never the caller's partial/invalid
-    # arguments.
-    call_argv = ["--help"] if help_requested else argv
+    # docstring), but with `["--help"]` standing in for the caller's real
+    # argv -- prefixed only by a leading declared-subcommand path
+    # (`_help_call_argv`) -- so a target's own parser sees only what it needs
+    # to render its usage, never the caller's partial/invalid arguments.
+    call_argv = _help_call_argv(script, argv) if help_requested else argv
 
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()

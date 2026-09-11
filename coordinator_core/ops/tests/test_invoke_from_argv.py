@@ -725,6 +725,71 @@ def test_help_delegates_for_a_tail_shaped_target_without_leaking_the_parse_error
     assert "unrecognized argument" not in result["stdout"].lower()
 
 
+def _write_subparser_entrypoint(bin_dir: Path, name: str) -> None:
+    """An argparse subcommand CLI in `merge-gate-and-pr`'s shape: `main(argv)`
+    with a `pr-body` subparser whose handler marks the op as entered."""
+    body = (
+        "import argparse\n"
+        "import builtins\n"
+        "\n"
+        "\n"
+        "def _pr_body(args):\n"
+        "    builtins._ENTRYPOINT_OP_ENTERED = True\n"
+        "    return 0\n"
+        "\n"
+        "\n"
+        "def main(argv):\n"
+        "    parser = argparse.ArgumentParser(prog='" + name + "')\n"
+        "    sub = parser.add_subparsers(dest='subcommand', required=True)\n"
+        "    p = sub.add_parser('pr-body')\n"
+        "    p.add_argument('--summary-flag-only-on-the-subcommand')\n"
+        "    p.set_defaults(func=_pr_body)\n"
+        "    sub.add_parser('other')\n"
+        "    args = parser.parse_args(argv)\n"
+        "    return args.func(args)\n"
+        "\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    import sys\n"
+        "    sys.exit(main(sys.argv[1:]))\n"
+    )
+    (bin_dir / f"{name}.py").write_text(body, encoding="utf-8")
+
+
+def test_help_after_a_declared_subcommand_renders_that_subcommands_usage(tmp_path):
+    """`merge-gate-and-pr.exe pr-body -h` printed the top-level usage: the
+    help gesture replaced the whole argv with `["--help"]`, dropping the
+    subcommand. A leading declared subparser name now survives, the flag
+    position after it does not matter, and the subcommand's handler is
+    never entered."""
+    import builtins
+
+    name = "fake-entrypoint-subparser-help"
+    bin_dir = tmp_path / "coordinator" / "bin"
+    bin_dir.mkdir(parents=True)
+    _write_subparser_entrypoint(bin_dir, name)
+
+    builtins._ENTRYPOINT_OP_ENTERED = False
+    try:
+        with mock.patch.object(invoke_from_argv, "_ENGINE_ROOT", tmp_path), mock.patch.object(
+            invoke_from_argv, "_WARM_ENTRYPOINT_ALLOWLIST", frozenset({name})
+        ):
+            sub_help = _run_entrypoint(name, ["pr-body", "--x", "y", "-h"], str(tmp_path))
+            top_help = _run_entrypoint(name, ["-h"], str(tmp_path))
+            undeclared = _run_entrypoint(name, ["not-a-subcommand", "--help"], str(tmp_path))
+
+        assert sub_help["exit_code"] == 0
+        assert f"usage: {name} pr-body" in sub_help["stdout"]
+        assert "--summary-flag-only-on-the-subcommand" in sub_help["stdout"]
+        assert "{pr-body,other}" in top_help["stdout"]
+        assert "{pr-body,other}" in undeclared["stdout"], (
+            "a leading token that is not a declared subparser name is dropped"
+        )
+        assert builtins._ENTRYPOINT_OP_ENTERED is False
+    finally:
+        del builtins._ENTRYPOINT_OP_ENTERED
+
+
 def test_help_synthesizes_only_for_the_argv_shape_none_entrypoint():
     """Positive assertion naming the shape, not an absence: synthesis is
     used ONLY for `workday-start-inbox-blitz-assemble` (the real
