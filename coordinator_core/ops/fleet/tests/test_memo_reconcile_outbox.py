@@ -208,6 +208,54 @@ class TestSweep:
         assert worktree.joinpath(*_OUTBOX, "dupe.md").is_file()
 
 
+class TestDeliveryWithoutASenderReceipt:
+    """The other direction down the same channel: not an entry still sitting
+    in the outbox after delivery, but a delivery this repo has no committed
+    record of. Example-retrieval-repo-em, 2026-09-11."""
+
+    def test_a_draft_with_an_archive_is_a_stale_duplicate_not_work(self, worktree):
+        """memo_send's unlink degrades to a warning, so a send can archive a
+        memo and leave its own original behind reading `status: draft`. Every
+        reader of the outbox depth then counts a delivered memo as work, and
+        nothing ever moves it: a draft's home IS the outbox."""
+        _write_memo(worktree, "dupe.md", "draft")
+        sent = worktree.joinpath(*_NEW_SENT)
+        sent.mkdir(parents=True)
+        (sent / "dupe.md").write_text("the authoritative archived copy\n", encoding="utf-8")
+
+        result = _memo_reconcile_outbox({"dry_run": False}, repo_root=worktree)
+
+        assert result["acted"] == []
+        assert [s["filename"] for s in result["skipped"]] == ["dupe.md"]
+        assert "already exists" in result["skipped"][0]["note"]
+        assert (sent / "dupe.md").read_text(encoding="utf-8") == (
+            "the authoritative archived copy\n"
+        ), "reported, never moved onto the stamped copy"
+        assert worktree.joinpath(*_OUTBOX, "dupe.md").is_file()
+
+    def test_a_draft_without_an_archive_is_still_just_a_draft(self, worktree):
+        """The negative half of the pair — the archive lookup must not turn
+        every draft into a finding."""
+        _write_memo(worktree, "live.md", "draft")
+
+        result = _memo_reconcile_outbox({"dry_run": True}, repo_root=worktree)
+
+        assert _dispositions(result) == {"live.md": "keep"}
+
+    def test_an_unreadable_head_reports_no_uncommitted_receipt(self, worktree):
+        """`worktree` carries a bare `.git` dir with no HEAD, so the spine is
+        unreadable. "Not in HEAD" and "no HEAD to ask" are different answers,
+        and an archived memo here is NOT evidence of a missing receipt — every
+        other test in this module would otherwise report one."""
+        sent = worktree.joinpath(*_NEW_SENT)
+        sent.mkdir(parents=True)
+        (sent / "archived.md").write_text("a delivered memo\n", encoding="utf-8")
+
+        result = _memo_reconcile_outbox({"dry_run": True}, repo_root=worktree)
+
+        assert result["candidates"] == []
+
+
 class TestDryRun:
     def test_dry_run_previews_dispositions_and_moves_nothing(self, worktree):
         _write_memo(worktree, "delivered.md", "sent")

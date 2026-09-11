@@ -16,7 +16,7 @@ empty-list distinction on ``writes`` (AC2), and depends_on referent
 resolution against the row-id set (AC6). It has no fenced-block or YAML
 parsing code of its own.
 
-Four fail-loud behaviours, three AC-bearing and one closing a gap the ACs
+Five fail-loud behaviours, three AC-bearing and two closing gaps the ACs
 didn't name:
 
   1. AC2 — a row with no ``writes:`` key, or a present-but-empty value
@@ -61,8 +61,21 @@ didn't name:
      dict by ``id``, so a duplicate silently collapses two rows' edges
      into one dict entry and corrupts the wave order without raising.
      Enforced once here rather than in every id-keyed consumer.
+  5. ``writes_under:`` names directory PREFIXES for a row whose output
+     filenames are chosen at run time -- a dated audit, a live-run row's
+     output, a write into a growing corpus. Every entry must end in ``/``
+     or ``\\``; a file-shaped entry raises ``FileShapedPrefixError``
+     because a file belongs in ``writes:``, and taking one here would blur
+     the directory-shaped refusal that keeps the two fields apart
+     (``pathspec.DirectoryShapedWriteError``). A scalar raises
+     ``InvalidFieldTypeError``, as it does for ``writes:``. A row declaring
+     a prefix has declared WHERE it writes, so an absent ``writes:`` on
+     that row reads as ``[]``, never UNDECLARED: its files are unknown by
+     name, not by location, and the epistemic-premise holdout (which keys
+     on UNDECLARED) must not hold it. Source:
+     state/improvement-queue/2026-09-11-dispatch-emit-takes-a-writes-under-prefi-309100e2b36b.yaml.
 
-A fifth behaviour, not one of the four fail-loud ones above but load-bearing:
+A further behaviour, not one of the fail-loud ones above but load-bearing:
 ``read_spine`` excludes non-dispatchable rows (closed ``disposition``
 values, ``deferred: true``, and an uncleared ``external_gate`` entry that
 blocks execution) from its returned list entirely, per DoE-claude's
@@ -347,6 +360,12 @@ class InvalidRowIdError(SpineReadError):
     """
 
 
+class FileShapedPrefixError(SpineReadError):
+    """Raised when a ``writes_under:`` entry is not a string ending in ``/``
+    or ``\\`` (module docstring point 5). A file-shaped entry names one file,
+    which belongs in ``writes:``."""
+
+
 class EmitterRow(NamedTuple):
     """One normalized task-spine row for the dispatch-emit pipeline.
 
@@ -361,6 +380,12 @@ class EmitterRow(NamedTuple):
     second place the pattern could drift from the vendored schema's own
     ``pattern``. Both default to ``None``, and a spine declaring neither key
     carries both as ``None`` here exactly as before this field existed.
+
+    ``body`` is carried for exactly one reader: ``emit.py``'s
+    ``_row_agent_type`` asks whether a row's verification has to RUN
+    something, which decides whether the agent it derives can do the row at
+    all. Nothing here interprets it; it defaults to ``""`` like the other
+    tolerant fields.
     """
 
     id: str
@@ -371,6 +396,8 @@ class EmitterRow(NamedTuple):
     depends_on: list
     agent_type: Optional[str] = None
     agent_model: Optional[str] = None
+    body: str = ""
+    writes_under: tuple = ()
 
 
 def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]:
@@ -494,6 +521,24 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
             raise InvalidFieldTypeError(
                 f"row {row_id!r} declares writes: as {writes!r}, not a list"
             )
+        writes_under = raw.get("writes_under")
+        if writes_under is None:
+            writes_under = ()
+        elif not isinstance(writes_under, list):
+            raise InvalidFieldTypeError(
+                f"row {row_id!r} declares writes_under: as {writes_under!r}, not a list"
+            )
+        else:
+            for prefix in writes_under:
+                if not isinstance(prefix, str) or not prefix.endswith(("/", "\\")):
+                    raise FileShapedPrefixError(
+                        f"row {row_id!r} declares writes_under: entry {prefix!r}, "
+                        "which does not end in a path separator. A single file "
+                        "belongs in `writes:`."
+                    )
+            writes_under = tuple(writes_under)
+            if writes is UNDECLARED:
+                writes = []
         reads = raw.get("reads")
         if reads is None:
             reads = []
@@ -535,6 +580,8 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                 depends_on=depends_on,
                 agent_type=raw.get("agent_type"),
                 agent_model=raw.get("agent_model"),
+                body=raw.get("body") or "",
+                writes_under=writes_under,
             )
         )
 

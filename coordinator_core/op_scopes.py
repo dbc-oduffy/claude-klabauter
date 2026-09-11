@@ -1107,6 +1107,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # corpus each of these sweeps classifies, so a per-worktree key would let two
     # worktrees sweep the same rows concurrently.
     "fleet.archive_actioned_memos":          "common_dir",
+    "fleet.archive_completed_plans":          "common_dir",
     # fleet.archive_sweep_status — the receipt READER for the three sweeps above.
     # common_dir, not "none": it reads the append-only receipt under the CALLER's own
     # coordinator-sessions/ tree, so it must resolve main_worktree_root(common_dir) or

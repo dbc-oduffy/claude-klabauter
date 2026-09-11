@@ -41,10 +41,11 @@ archive/?").
 STATUS ALONE IS NOT TRUSTED, by design (dispatch brief: "mirror how
 archive_terminal_handoffs proves terminality rather than trusting a status
 field — close-out stamping fails open"). `coordinator_core.ops.
-plan_status_transition`'s own module docstring documents `stamp-implemented`
-as the plan family's ONLY writer of a terminal `status:` value, and that it
-is reachable only by an explicit call — nothing today stamps a plan
-`implemented` automatically. A plan can therefore sit at a pre-terminal
+plan_status_transition`'s `stamp-implemented` and `stamp-superseded` are the
+plan family's writers of a terminal `status:` value, both reachable only by
+an explicit call — nothing today stamps a plan terminal automatically. Each
+archives the stamped plan in the same pass (`_archive_stamped_plan`), which
+is this module's occasion. A plan can therefore sit at a pre-terminal
 status indefinitely after its work is genuinely done (the failure direction
 `plan_status_transition` itself calls out as unclosed), which this module
 cannot repair — inferring completion from anything OTHER than the status
@@ -130,6 +131,13 @@ Negative-spec:
     from its PRIMARY, never from itself. A sidecar whose primary is missing
     or non-terminal is refused (`sidecar-orphan` / `sidecar-follows-primary`)
     rather than archived on its own say-so.
+  - Does NOT leave a plan's fire script behind. `<stem>.workflow.mjs` and its
+    `<stem>.workflow.mjs.emitted.json` receipt (written beside the plan by
+    `emit-dispatch-workflow`) are sidecars under the same rule, and a sidecar
+    whose primary is ALREADY in `archive/specs/` follows it there rather than
+    reading as an orphan — that is how fire scripts stranded by earlier
+    `.md`-only sweeps drain. A fire script with no primary anywhere (a
+    baton-keyed or truncated-stem emit) stays, refused as `sidecar-orphan`.
 
 REMOVED 2026-08-27 (PM ruling, abd587695): the in-plane archival sweep
 `commit_pipeline._run_in_plane_archive_sweep` and its three legs are GONE from the
@@ -184,6 +192,8 @@ _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: a live session holds this plan's e
 _SCAN_REASON_CANNOT_DERIVE_DATE = "cannot-derive-date"
 _SCAN_REASON_SIDECAR_ORPHAN = "sidecar-orphan: primary plan not found"
 _SCAN_REASON_SIDECAR_FOLLOWS_PRIMARY = "sidecar-follows-primary: primary is not terminal"
+
+_FIRE_SCRIPT_SUFFIXES = (".workflow.mjs", ".workflow.mjs.emitted.json")
 
 _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
 
@@ -259,7 +269,8 @@ def _release_sweep_lock(lock_path: Optional[Path]) -> None:
 
 
 def _is_sidecar(path: Path) -> bool:
-    """Return True if path is a review sidecar (<plan-stem>.<tag>.md).
+    """Return True if path is a sidecar: a review sidecar (<plan-stem>.<tag>.md)
+    or a fire script (<plan-stem>.workflow.mjs[.emitted.json]).
 
     Mirrors backfill_reference_edges._is_sidecar exactly — THIS module is the
     one those docstrings (backfill_reference_edges.py:106,
@@ -273,16 +284,18 @@ def _is_sidecar(path: Path) -> bool:
 
 def _primary_for_sidecar(path: Path) -> Path:
     """Derive a sidecar's primary plan path: same directory, filename is the
-    stem up to (not including) its first dot, plus `.md`.
+    name up to (not including) its first dot, plus `.md`.
 
-    e.g. "2026-08-01-foo.prior-art-check.md" -> "2026-08-01-foo.md".
+    e.g. "2026-08-01-foo.prior-art-check.md" -> "2026-08-01-foo.md";
+         "2026-08-01-foo.workflow.mjs.emitted.json" -> "2026-08-01-foo.md".
     """
-    primary_stem = path.stem.split(".", 1)[0]
+    primary_stem = path.name.split(".", 1)[0]
     return path.with_name(f"{primary_stem}.md")
 
 
 def collect_live_plan_paths(worktree_root: Path) -> List[Path]:
-    """Return sorted absolute paths for all live plan docs in docs/plans/*.md.
+    """Return sorted absolute paths for all live plan docs in docs/plans/*.md,
+    plus the fire scripts (`_FIRE_SCRIPT_SUFFIXES`) that ride with them.
 
     Uses iterdir(), NOT glob("*.md") — mirrors
     _common.collect_live_handoff_paths's own documented reason: Path.glob()'s
@@ -299,7 +312,10 @@ def collect_live_plan_paths(worktree_root: Path) -> List[Path]:
     if not plans_dir.is_dir():
         return []
     entries = list(plans_dir.iterdir())
-    return sorted(p.resolve() for p in entries if p.suffix == ".md" and p.is_file())
+    return sorted(
+        p.resolve() for p in entries
+        if (p.suffix == ".md" or p.name.endswith(_FIRE_SCRIPT_SUFFIXES)) and p.is_file()
+    )
 
 
 def _derive_yyyy_mm(fname: str) -> Optional[str]:
@@ -405,7 +421,17 @@ def _scan_terminal(
         if _is_sidecar(p):
             primary = _primary_for_sidecar(p)
             if not primary.is_file():
-                _refuse(rel, f"{_SCAN_REASON_SIDECAR_ORPHAN}: expected {primary.name!r}")
+                archived_primary = plan_archive_dest(worktree_root, primary)
+                if archived_primary is None or not archived_primary.is_file():
+                    _refuse(rel, f"{_SCAN_REASON_SIDECAR_ORPHAN}: expected {primary.name!r}")
+                    continue
+                terminal_since = _terminal_since(
+                    parse_frontmatter_field(archived_primary, "updated"),
+                    parse_frontmatter_field(archived_primary, "created"),
+                    archived_primary,
+                )
+                note = f"sidecar of already-archived {rel_id(archived_primary, worktree_root)}"
+                results.append((p, note, "archived", terminal_since))
                 continue
             primary_status = parse_frontmatter_status(primary)
             primary_normalized = (primary_status or "").strip().lower()
@@ -601,5 +627,134 @@ def _handle_act(
         record_sweep_outcome(common_dir, _OP_KEY, "nothing-to-do", count=0)
 
     return build_act_result(mode, acted, skipped, failed)
+
+
+# ---------------------------------------------------------------------------
+# Op handler — registers this chunk's own op (the "separate chunk" the module
+# docstring's history section describes is this one; see that docstring's
+# "A future in-plane caller... composes plan_sweep + apply_sweep + its own
+# single batched commit" paragraph for the OTHER, still-unbuilt caller this
+# registration does not attempt to be).
+# ---------------------------------------------------------------------------
+
+
+@register_op("fleet.archive_completed_plans")
+def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """fleet.archive_completed_plans — cap-bounded terminal-plan archiver.
+
+    Wire contract: coordinator_core/contract/cockpit-invoke-producer-contract.md.
+    Mirrors archive_terminal_handoffs._handler's shape verbatim (same
+    validate_params -> cap-required-int -> repo_root/D3 -> single-flight-lock
+    -> dry_run branch structure); see that handler's own docstring for the
+    contract this reproduces.
+
+    dry_run:true  → preview: enumerate terminal plan/sidecar candidates
+                    (`_scan_terminal`), capped oldest-first at `cap`; excess
+                    candidates are named in the additive `deferred` key.
+    dry_run:false → act: re-verify + move up to `cap` of the caller-supplied
+                    candidate_ids, oldest-first (`_handle_act`); excess
+                    candidate_ids are skipped with reason "deferred-cap".
+
+    repo_root arg is the git common dir (_OP_KEY_SCOPE="common_dir").
+
+    SYNCHRONOUS — mirrors archive_terminal_handoffs._handler's own C2
+    rationale (docstring above verbatim): the dispatcher already offloads a
+    sync handler to a thread and applies the per-op timeout itself; the ACT
+    path's own asyncio.run(...) boundary is _handle_act's, not this
+    handler's.
+    """
+    # Bound early (before validate_params) so every setup-error branch below
+    # can record a receipt row when a common_dir is actually resolvable —
+    # mirrors the module docstring's "called on every exit path" observability
+    # claim: a setup error is still an exit path, and the operator's own
+    # "did it happen" question (see module docstring "Requirement discharged")
+    # deserves an answer even when the op never reached _scan_terminal.
+    common_dir = Path(repo_root) if repo_root is not None else None
+
+    def _setup_error(mode, dry_run, reason: str) -> dict:
+        if common_dir is not None:
+            record_sweep_outcome(common_dir, _OP_KEY, "failed", count=0, detail=reason)
+        return build_setup_error_result(mode, dry_run, reason)
+
+    parsed = validate_params(params)
+    if isinstance(parsed, dict):
+        if common_dir is not None:
+            record_sweep_outcome(
+                common_dir, _OP_KEY, "failed", count=0,
+                detail=f"validate_params rejected params: {params!r}",
+            )
+        return parsed  # exit_code:1 setup-error envelope already built
+
+    mode, dry_run, candidate_ids = parsed
+
+    # `cap` is required — absent/invalid is a setup error, never an
+    # unbounded default (mirrors archive_terminal_handoffs's own C0 decision;
+    # see this module's own negative-spec "Does NOT accept an absent cap").
+    cap = params.get("cap")
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
+        return _setup_error(
+            mode, dry_run,
+            f"cap is required and must be a positive int, got {cap!r} — "
+            f"no unbounded default",
+        )
+
+    if repo_root is None:
+        _LOG.error("fleet.archive_completed_plans: repo_root handler arg is None")
+        return build_setup_error_result(mode, dry_run, "repo_root handler arg is None")
+
+    worktree = main_worktree_root(common_dir)
+
+    mismatch = check_repo_root(params.get("repo_root"), common_dir)
+    if mismatch:
+        return _setup_error(mode, dry_run, mismatch)
+
+    lock_path = _acquire_sweep_lock(common_dir)
+    if lock_path is None:
+        # First-class non-error result — a concurrent sweep already running
+        # is the design condition, not an edge case (mirrors
+        # archive_terminal_handoffs._handler's identical contended branch).
+        if dry_run:
+            result = build_dry_run_result(mode, [])
+        else:
+            result = build_act_result(mode, [], [], [])
+        result["contended"] = True
+        return result
+
+    try:
+        if dry_run:
+            terminal = _scan_terminal(worktree, common_dir)
+            accepted = terminal[:cap]
+            deferred = terminal[cap:]
+            candidates = []
+            for plan_path, note, status_label, terminal_since in accepted:
+                candidates.append({
+                    "id": rel_id(plan_path, worktree),
+                    "title": parse_frontmatter_field(plan_path, "title") or plan_path.stem,
+                    "status": status_label,
+                    "family": _FAMILY,
+                    "terminal_since": terminal_since,
+                    "note": note,
+                })
+            result = build_dry_run_result(mode, candidates)
+            if deferred:
+                result["deferred"] = {
+                    "count": len(deferred),
+                    "ids": [rel_id(p, worktree) for p, _n, _s, _t in deferred],
+                }
+            return result
+
+        # `validate_params` already refuses an absent/empty `candidate_ids` on
+        # the act path, so this narrows a type the contract has already made
+        # non-optional rather than adding a second gate.
+        if candidate_ids is None:
+            return build_setup_error_result(
+                mode, dry_run,
+                "candidate_ids resolved to None on the act path after "
+                "validate_params accepted it — contract violation, refusing",
+            )
+
+        return _handle_act(mode, worktree, common_dir, candidate_ids, cap)
+    finally:
+        _release_sweep_lock(lock_path)
 
 

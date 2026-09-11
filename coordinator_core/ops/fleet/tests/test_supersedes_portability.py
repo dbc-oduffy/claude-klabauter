@@ -137,3 +137,10 @@ def test_absence_and_malformed_entries_keep_their_existing_dispositions():
 
     _value, err = _validate_supersedes_param("draft", ["ok", "  "], dry_run=True)
     assert err is not None, "a blank entry inside a list still fails loud"
+
+
+def test_a_state_rooted_corpus_reference_keeps_its_state_prefix():
+    """A receiver whose corpus lives under state/cross-repo/ keeps that prefix rather than being
+    truncated to a legacy-shaped cross-repo/ tail."""
+    ref = "/Users/someone/X/claude-klabauter/state/cross-repo/inbox/2026-09-11-a-memo.md"
+    assert _normalize_supersedes_ref(ref) == "state/cross-repo/inbox/2026-09-11-a-memo.md"

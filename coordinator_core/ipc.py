@@ -232,6 +232,40 @@ Negative-spec (hard-won):
         registry block cites for that leg.
         Classification: MUTATING (DR-208, classification.py).
 
+      AUTO-MEMORY ARCHIVE op (1, DR-413 — PROPOSED, pending PM ratification) —
+        proposed MUTATING in-place-mutation-plus-self-commit category (same third
+        write shape as QUEUE CLOSURE / PLAN STATUS TRANSITION / MEMO TRANSITION above,
+        extended here to a new reserved-noun scope). NOT YET RATIFIED: DR-413's
+        `status:` is `proposed`, not `accepted` — this entry documents the proposal,
+        it does not itself admit the write:
+        - archive_auto_memory_rows: writes the closing session's own auto-memory
+          drain residue, verbatim and append-only, into
+          state/auto-memory-archive/<date>-<short-sid>.md, then issues one scoped
+          commit of that single artifact path via
+          coordinator_core.git.commit.commit_paths (zero git spawns, no push leg).
+          Reached via a direct in-process import from coordinator/bin/archive-
+          auto-memory-rows.py, mirroring check_auto_memory_drained's own CLI shape
+          — not a @register_op'd JSON-RPC method.
+        D2 bounds (proposed, DR-413 § D2): per-record idempotent (append-only,
+        content-addressed by resolved body path; a re-run is a no-op or a refused
+        already-durable NothingToCommit), commutative, git-reversible, no act-time-
+        terminality-re-verify (categorically inapplicable — this op archives, it
+        does not decide promote/drop), same-repo only (writes only its own resolved
+        --root, imported from check_auto_memory_drained's _resolve_root).
+        Write confinement (hard, proposed): archive_auto_memory_rows MAY write ONLY
+        state/auto-memory-archive/, append-only, and MAY issue ONLY one scoped
+        commit over the single artifact path it wrote in the same pass; MUST NOT
+        write any other state/ path, MUST NOT write archive/, MUST NOT write
+        state/handoffs/ (DR-212's noun), MUST NOT push, MUST NOT write rag's
+        relational store (dual-write ban); MUST NOT be invoked from inside a
+        wsc-commit critical section (DR-413 § D4 — a sequencing constraint the DR's
+        bound discharges, not a runtime check this call site enforces itself).
+        Authorization: doe-claude-em accepted option (a), commit-only
+        (cross-repo/inbox/2026-08-07-doe-claude-em-archive-op-carveout-answer-
+        option-a.md) — DR-413 is the registered record of that acceptance, proposed
+        here pending PM ratification.
+        Classification: MUTATING (DR-208, classification.py).
+
       MEMO send op — RETIRED 2026-08-23 (PM ruling: killed op dies outright, no
         stub). The DR-214-send-class cross-tree write category this registry block
         used to authorize (memo.send: schema-valid memo file into a registry-
@@ -383,6 +417,7 @@ Negative-spec (hard-won):
         docs/decisions/DR-216-changelog-completion-reviewtrail-write-carveout.md § D2 / D3 / D4
         docs/decisions/DR-228-distill-disposal-substrate-writer-category.md § D1 / D2a / D2b / D6
         docs/decisions/DR-241-sovereign-tracker-substrate-write-carveout.md § D1 / D2
+        docs/decisions/DR-413-archive-op-substrate-write-carve-out.md § D1 / D2 / D3 / D4 (PROPOSED)
 
     - Do NOT use thread-per-connection. Single asyncio event loop; request-scoped handlers.
       StreamReader.readline() handles partial-line reassembly natively (AC12).

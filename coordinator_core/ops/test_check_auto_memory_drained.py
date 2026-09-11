@@ -15,6 +15,9 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.check_auto_memory_drained import (
+    _own_index_rows,
+    _own_memory_dirs,
+    _own_residue,
     _slugify_repo_root,
     main,
 )
@@ -289,6 +292,172 @@ def test_home_union_checks_both_home_and_userprofile(
     exit_code, _, err = _run("--root", str(repo), "--session-id", _SELF_SID)
     assert exit_code == 1
     assert "stray.md" in err
+
+
+def test_own_index_rows_returns_line_and_resolved_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    home = tmp_path / "home"
+    slug = _slugify_repo_root(str(repo))
+    memory_dir = home / ".claude" / "projects" / slug / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "some-fact.md").write_text(_body_text(_SELF_SID))
+    line = "- [Some fact](some-fact.md) — hook"
+    (memory_dir / "MEMORY.md").write_text(f"# Memory Index\n\n{line}\n")
+
+    rows = _own_index_rows(memory_dir, _SELF_SID)
+    assert len(rows) == 1
+    assert rows[0][0] == line
+    assert rows[0][1] == memory_dir / "some-fact.md"
+
+
+def test_own_index_rows_excludes_dangling_row(tmp_path: Path) -> None:
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "MEMORY.md").write_text(
+        "# Memory Index\n\n- [Gone](missing-fact.md) — hook\n"
+    )
+    assert _own_index_rows(memory_dir, _SELF_SID) == []
+
+
+def test_own_index_rows_excludes_peer_row(tmp_path: Path) -> None:
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "peer-fact.md").write_text(_body_text(_PEER_SID))
+    (memory_dir / "MEMORY.md").write_text(
+        "# Memory Index\n\n- [Peer fact](peer-fact.md) — hook\n"
+    )
+    assert _own_index_rows(memory_dir, _SELF_SID) == []
+
+
+def test_own_index_rows_returns_empty_on_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "MEMORY.md").write_text("# Memory Index\n\n- [X](x.md)\n")
+
+    real_read_text = Path.read_text
+
+    def _boom(self: Path, *a, **kw):
+        if self.name == "MEMORY.md":
+            raise OSError("simulated read failure")
+        return real_read_text(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", _boom)
+    assert _own_index_rows(memory_dir, _SELF_SID) == []
+
+
+def test_own_index_rows_does_not_collapse_duplicate_rows(tmp_path: Path) -> None:
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "some-fact.md").write_text(_body_text(_SELF_SID))
+    (memory_dir / "MEMORY.md").write_text(
+        "# Memory Index\n\n"
+        "- [Some fact](some-fact.md) — hook\n"
+        "- [Some fact again](some-fact.md) — hook\n"
+    )
+    rows = _own_index_rows(memory_dir, _SELF_SID)
+    assert len(rows) == 2
+    assert rows[0][1] == rows[1][1] == memory_dir / "some-fact.md"
+
+
+def test_own_memory_dirs_unions_home_and_userprofile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    home = tmp_path / "home"
+    userprofile = tmp_path / "userprofile"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(userprofile))
+    monkeypatch.delenv("CLAUDE_HOME", raising=False)
+
+    slug = _slugify_repo_root(str(repo))
+    dirs = _own_memory_dirs(str(repo))
+    expected = {
+        home / ".claude" / "projects" / slug / "memory",
+        userprofile / ".claude" / "projects" / slug / "memory",
+    }
+    assert expected.issubset(set(dirs))
+
+
+def test_own_residue_aggregates_bodies_and_rows_across_home_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    home = tmp_path / "home"
+    userprofile = tmp_path / "userprofile"
+    slug = _slugify_repo_root(str(repo))
+    home_memory = home / ".claude" / "projects" / slug / "memory"
+    up_memory = userprofile / ".claude" / "projects" / slug / "memory"
+    home_memory.mkdir(parents=True)
+    up_memory.mkdir(parents=True)
+    (home_memory / "home-fact.md").write_text(_body_text(_SELF_SID))
+    (up_memory / "up-fact.md").write_text(_body_text(_SELF_SID))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(userprofile))
+    monkeypatch.delenv("CLAUDE_HOME", raising=False)
+
+    bodies, rows = _own_residue(str(repo), _SELF_SID)
+    body_names = {p.name for p in bodies}
+    assert body_names == {"home-fact.md", "up-fact.md"}
+    assert rows == []
+
+
+def test_index_has_own_row_unchanged_across_existing_case_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pins the invariant that makes C1's extraction safe: `_index_has_own_row`
+    (now `bool(_own_index_rows(...))`) returns exactly what it did before the
+    extraction, across the same own-row / peer-row / dangling-row cases the
+    existing suite already covers -- this is the oracle, not a rewrite of it."""
+    from coordinator_core.ops.check_auto_memory_drained import _index_has_own_row
+
+    memory_dir = tmp_path / "memory"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "some-fact.md").write_text(_body_text(_SELF_SID))
+    (memory_dir / "peer-fact.md").write_text(_body_text(_PEER_SID))
+    (memory_dir / "MEMORY.md").write_text(
+        "# Memory Index\n\n"
+        "- [Some fact](some-fact.md) — hook\n"
+        "- [Peer fact](peer-fact.md) — hook\n"
+        "- [Gone](missing-fact.md) — hook\n"
+    )
+    assert _index_has_own_row(memory_dir, _SELF_SID) is True
+    assert _index_has_own_row(memory_dir, _PEER_SID) is True
+    assert _index_has_own_row(memory_dir, "nobody") is False
+
+
+def test_check_auto_memory_drained_exposes_no_write_path() -> None:
+    """AC6: source-inspect for mutation calls, and both negative-spec lines
+    are still present verbatim."""
+    import inspect
+
+    import coordinator_core.ops.check_auto_memory_drained as mod
+
+    source = inspect.getsource(mod)
+    for banned in (
+        "os.remove(",
+        "os.unlink(",
+        "shutil.rmtree",
+        ".write_text(",
+        ".write_bytes(",
+        "open(",
+        "Path.unlink",
+    ):
+        assert banned not in source, f"unexpected mutation call: {banned}"
+    assert (
+        "Does NOT decide promote vs. drop for any entry" in source
+    )
+    assert (
+        "Does NOT delete, truncate, or otherwise mutate any file. Read-only"
+        in source
+    )
 
 
 def test_unresolvable_root_is_a_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

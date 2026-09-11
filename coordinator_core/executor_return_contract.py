@@ -22,11 +22,15 @@ outside a row's own `writes:` is handled by including that path IN the
 list at dispatch time — no carve-out clause belongs in this module.
 
 `self_verify_constraint` stays a builder because its commit/verification
-clauses are surface-dependent. Today's hand-dispatch text says "leave it to
-the EM" and "Only the EM commits, once per wave" — TRUE for mise
-hand-dispatch, FALSE on the emitted path, where a
-`coordinator:git-commit-agent` phase commits and a terminal
-`coordinator:test-runner` phase runs broader verification.
+clauses are surface-dependent, and takes TWO separate keyword parameters
+(`commit_authority`, `deferred_verification_authority`) rather than one
+shared value, because those two clauses do not always name the same
+authority. Today's hand-dispatch text says "leave it to the EM" and "Only
+the EM commits, once per wave" — TRUE for mise hand-dispatch (one
+authority, both clauses), FALSE on the emitted path, where a
+`coordinator:git-commit-agent` phase commits alone while broader
+verification is deferred to that phase together with the run's terminal
+`coordinator:test-runner` phase.
 
 `done_summary_constraint` stays a builder because its output path and its
 own DONE-summary field list are per-surface (mise's AC checklist vs.
@@ -57,24 +61,33 @@ FOOTPRINT_CONSTRAINT_TEMPLATE = (
 )
 
 
-def self_verify_constraint(*, commit_authority: str) -> str:
+def self_verify_constraint(
+    *, commit_authority: str, deferred_verification_authority: str | None = None
+) -> str:
     """Render the self-verify constraint: re-read the spec, confirm the
-    footprint, verify scoped-only, then leave commit/broader-verification
-    to `commit_authority`.
+    footprint, verify scoped-only, then leave broader verification to
+    `deferred_verification_authority` and commit to `commit_authority`.
 
     Today's hand-dispatch text (`readers_mise._SELF_VERIFY_CONSTRAINT`) is
     written for mise hand-dispatch specifically — "leave it to the EM" and
-    "Only the EM commits, once per wave" — both FALSE on the emitted path,
-    where a `coordinator:git-commit-agent` phase commits and a terminal
-    `coordinator:test-runner` phase runs broader verification.
-    `commit_authority` parameterizes both clauses at once (deferred
-    broader verification and who commits share one authority on every
-    known surface); hand-dispatch callers pass `"the EM"` and get today's
-    bytes back.
+    "Only the EM commits, once per wave" — both TRUE there (one authority
+    does both jobs), but not on every surface: on the emitted path a
+    `coordinator:git-commit-agent` phase commits, while broader
+    verification is deferred to that phase AND the run's terminal
+    `coordinator:test-runner` phase together. Those are not the same
+    authority, so this builder takes two separate keyword parameters
+    instead of one shared one — sharing one would force slot (4) ("Only
+    <X> commits...") to also name the phase that never commits, which is
+    exactly the false-both-commit defect measured on the emitted path
+    (Review: coordinator:code-reviewer, finding 1, EM-agreed break-class
+    fix). `deferred_verification_authority` defaults to `commit_authority`
+    when omitted, so a caller with one shared authority (every
+    hand-dispatch surface today) supplies one value and gets identical
+    behaviour to a single-parameter builder.
 
-    `commit_authority` MUST be a bare noun phrase. This builder, not the
-    caller, supplies the "commits, once per wave, after every item in the
-    wave passes verification" tail — the value is spliced into that
+    Both values MUST be bare noun phrases. This builder, not the caller,
+    supplies the "commits, once per wave, after every item in the wave
+    passes verification" tail — `commit_authority` is spliced into that
     sentence, never composes it. A value carrying its own parenthetical
     gloss of what it does renders that tail a second time and reads as
     garbled duplication: measured at 8b0ee94908, where an emitted
@@ -83,6 +96,8 @@ def self_verify_constraint(*, commit_authority: str) -> str:
     wave passes verification." Every caller of this shared builder is
     bound by this, not just the one that tripped it.
     """
+    if deferred_verification_authority is None:
+        deferred_verification_authority = commit_authority
     return (
         "After implementation: (1) re-read the spec's `## Tasks` spine row "
         "for this item -- plus its `prime_exit_criterion` if the spec "
@@ -92,7 +107,8 @@ def self_verify_constraint(*, commit_authority: str) -> str:
         "(3) run verification scoped to the files/dirs you touched only — "
         "never the repo's fast-test command, the full suite, or any "
         "unscoped runner invocation; note in the DONE summary if the spec "
-        f"calls for broader verification and leave it to {commit_authority}; "
+        "calls for broader verification and leave it to "
+        f"{deferred_verification_authority}; "
         "(4) leave your changes uncommitted and unstaged — you do not "
         f"invoke git under any circumstance. Only {commit_authority} "
         "commits, once per wave, after every item in the wave passes "

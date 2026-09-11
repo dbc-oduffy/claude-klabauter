@@ -1243,6 +1243,7 @@ def test_fnm_step_disabled_does_not_spawn_brew_or_curl(monkeypatch, capsys):
 
 def test_fnm_step_enabled_installs_via_brew(monkeypatch):
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.setenv("COORDINATOR_INSTALL_FNM", "1")
     monkeypatch.setattr(
         substrate.shutil, "which",
         lambda name: None if name == "fnm" else ("/usr/bin/brew" if name == "brew" else None),

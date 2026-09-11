@@ -1109,7 +1109,13 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "REQUIREMENT survives that removal by the ruling's own words and is "
             "carried by pln-one-corpus-read-or-the-houseke-18d29a, which owns "
             "finding it a non-commit-path host. Not a gravestone: the job is "
-            "wanted, its host is open."
+            "wanted. HOST FOUND 2026-09-11 (487f4d134b): plan_status_transition's "
+            "stamp-implemented / stamp-superseded archive the stamped plan "
+            "in-process through plan_sweep + archive_and_commit, one plan per "
+            "stamp, never a corpus sweep. That in-process call is the intended "
+            "caller. The wire op stays refused here: lifting this row needs a "
+            "measured sub-500ms process-time figure for the rebuilt module, "
+            "not the registration alone."
         ),
         "spinoff": None,
     },

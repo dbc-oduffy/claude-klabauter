@@ -705,7 +705,7 @@ def test_stamp_superseded_by_flag_still_works(tmp_path, capsys):
 
 
 def test_override_reason_writes_canonical_fields(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "override-sid")
+    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda *_a, **_k: "override-sid")
     body = f"---\nstatus: draft\n---\n\n{_AC_OPEN_TABLE}"
     p = _write(tmp_path, "p.md", body)
     rc = main(
@@ -746,7 +746,7 @@ def test_override_reason_still_refused_against_live_foreign_holder(tmp_path, cap
     monkeypatch.setattr(
         "coordinator_core.session.liveness.session_live", lambda sid, cwd=None: sid == "peer-sid-live"
     )
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "closing-sid")
+    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda *_a, **_k: "closing-sid")
 
     rc = main(
         ["stamp-implemented", "--plan", str(p), "--override-reason", "trying to force it anyway"]
@@ -1148,7 +1148,7 @@ _CLOSED_SPINE_FENCE = (
 
 
 def test_stamp_reopened_happy_path(tmp_path, capsys, monkeypatch):
-    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda: "reopen-sid")
+    monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda *_a, **_k: "reopen-sid")
     body = f"---\ntitle: T\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n"
     p = _write(tmp_path, "p.md", body)
     rc = main(["stamp-reopened", "--plan", str(p), "--reason", "spine still has C1 open"])
@@ -1626,7 +1626,7 @@ def test_reopened_then_landed_then_executing_end_to_end(tmp_path, capsys, monkey
     shape, since a plan with nothing open is not one anybody reopens.
     """
     monkeypatch.setattr(
-        "coordinator_core.session.core.resolve_session_id", lambda: "reopen-sid"
+        "coordinator_core.session.core.resolve_session_id", lambda *_a, **_k: "reopen-sid"
     )
     body = f"---\ntitle: T\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n"
     p = _write(tmp_path, "p.md", body)
@@ -1703,3 +1703,100 @@ def test_rung_verb_quoted_status_with_trailing_comment_fails_loud(
     assert rc == 1
     assert "quoted-scalar-plus-trailing-comment" in capsys.readouterr().err
     assert p.read_text(encoding="utf-8") == original
+
+
+# ---------------------------------------------------------------------------
+# Archival occasion (C: "the archival op has no occasion" wiring) -- a
+# successful terminal stamp archives that one plan (and its sidecars) in the
+# same pass, via `_archive_stamped_plan` composing
+# `ops.fleet.archive_plans.plan_sweep` + `ops.fleet._common.archive_and_commit`.
+# ---------------------------------------------------------------------------
+
+
+def test_stamp_implemented_archives_plan_and_sidecar_on_terminal_stamp(tmp_path, capsys):
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    p = _write(
+        tmp_path, "docs/plans/2026-08-01-archive-me.md",
+        "---\ntitle: T\nstatus: executing\n---\n\nBody.\n",
+    )
+    sidecar = _write(
+        tmp_path, "docs/plans/2026-08-01-archive-me.review.md",
+        "---\ntitle: T review\nstatus: implemented\n---\n\nReview body.\n",
+    )
+
+    rc = main(["stamp-implemented", "--plan", str(p)])
+    assert rc == 0
+
+    assert not p.exists()
+    assert not sidecar.exists()
+    dest = tmp_path / "archive" / "specs" / "2026-08" / "2026-08-01-archive-me.md"
+    dest_sidecar = tmp_path / "archive" / "specs" / "2026-08" / "2026-08-01-archive-me.review.md"
+    assert dest.is_file()
+    assert dest_sidecar.is_file()
+    assert "status: implemented" in dest.read_text(encoding="utf-8")
+
+
+def test_stamp_implemented_archival_failure_leaves_stamp_intact_and_reported(tmp_path, capsys):
+    from unittest.mock import patch
+
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    p = _write(
+        tmp_path, "docs/plans/2026-08-02-archive-fails.md",
+        "---\ntitle: T\nstatus: executing\n---\n\nBody.\n",
+    )
+
+    async def _raise(*_a, **_kw):
+        raise RuntimeError("simulated archival commit failure")
+
+    with patch(
+        "coordinator_core.ops.fleet._common.archive_and_commit", side_effect=_raise,
+    ):
+        rc = main(["stamp-implemented", "--plan", str(p)])
+
+    # The stamp itself is unaffected by an archival failure: exit code and the
+    # on-disk status flip both stand, and the plan stays exactly where it was
+    # (never undone, never hidden) -- only reported.
+    assert rc == 0
+    assert p.is_file()
+    assert "status: implemented" in p.read_text(encoding="utf-8")
+    err = capsys.readouterr().err
+    assert "the archival sweep failed" in err
+    assert "simulated archival commit failure" in err
+
+
+def test_stamp_implemented_no_op_on_already_terminal_plan_archives_nothing(tmp_path, capsys):
+    # A plan already at a frozen/terminal status takes the no-op branch,
+    # which returns before ever reaching the archival occasion -- a
+    # non-terminal-transition call (nothing actually flipped this
+    # invocation) moves nothing.
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    p = _write(
+        tmp_path, "docs/plans/2026-08-03-already-implemented.md",
+        "---\ntitle: T\nstatus: implemented\n---\n\nBody.\n",
+    )
+
+    rc = main(["stamp-implemented", "--plan", str(p)])
+    assert rc == 0
+    assert "is terminal/deferred — no-op" in capsys.readouterr().out
+    assert p.is_file()
+    assert not (tmp_path / "archive" / "specs").exists()
+
+
+def test_stamp_superseded_archives_plan_on_terminal_stamp(tmp_path, capsys):
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    p = _write(
+        tmp_path, "docs/plans/2026-08-04-superseded-me.md",
+        "---\ntitle: T\nstatus: executing\n---\n\nBody.\n",
+    )
+    successor = _write(
+        tmp_path, "docs/plans/2026-08-05-successor.md",
+        "---\ntitle: Successor\nstatus: draft\n---\n\nBody.\n",
+    )
+
+    rc = main(["stamp-superseded", "--plan", str(p), "--by", str(successor)])
+    assert rc == 0
+
+    assert not p.exists()
+    dest = tmp_path / "archive" / "specs" / "2026-08" / "2026-08-04-superseded-me.md"
+    assert dest.is_file()
+    assert "status: superseded" in dest.read_text(encoding="utf-8")

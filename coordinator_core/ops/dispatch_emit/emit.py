@@ -82,6 +82,35 @@ preflight's value is that the overwhelmingly common failure — a pathspec
 that was never claimable by a dispatched committer at all — is caught
 before any wave's work exists, instead of after.
 
+## An all-empty wave gets no commit phase, `commit_pathspec` still refuses
+
+A wave/batch where every row declares ``writes: []`` (none UNDECLARED, the
+union of contributions empty) is legitimately representable — a row whose
+author is certain it writes nothing (an operational/EM-owned row, a
+``change_kind: verification`` row) must stay expressible, and
+``pathspec.commit_pathspec``'s own docstring records that raising per row
+was tried and reverted for exactly that reason (staff review finding P0-1).
+But `commit_pathspec` is equally right that an empty pathspec is never a
+legal return — softening it to return ``[]`` would hand a commit phase a
+pathspec matching nothing, the unscoped-commit hazard this whole module
+exists to refuse.
+
+The fix sits one level up, in ``compose_script``: ``_all_writes_declared_
+empty`` detects this exact shape BEFORE ``commit_pathspec`` is called, for
+both the preflight union (AC14) and the per-batch commit phase. For a
+matching wave/batch, ``compose_script`` emits that batch's agent calls, NO
+commit phase after them, a one-line script comment naming why, and no
+contribution to the preflight union. `commit_pathspec` itself is unchanged
+and keeps refusing — nothing in this shape should reach it any more.
+
+This is distinct from two shapes that stay exactly as they were: the
+mixed case (SOME rows `writes: []` alongside real contributors) already
+warns and continues inside `commit_pathspec` by design and is not folded
+into the all-empty branch; the all-UNDECLARED case (refusal 1, no row
+declares at all) still raises, since `_all_writes_declared_empty` only
+matches rows that explicitly declare.
+See state/bug-backlog/2026-09-11-an-all-empty-writes-wave-sinks-the-whole-emit.yaml.
+
 ## Top-level body, never a defined-but-uninvoked wrapper (BREAK-CLASS FIX)
 
 ``compose_script`` emits every ``phase()``/``agent()``/``parallel()`` call as
@@ -307,8 +336,10 @@ from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, spli
 from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.pathspec import (
+    _declared_paths,
     NoTestTargetError,
     commit_pathspec,
+    commit_prefixes,
     terminal_test_scope,
 )
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
@@ -331,15 +362,23 @@ from coordinator_core.write_guards.block_subagent_plan_body_write import _PLAN_B
 # that still names it, without a second exception class to keep in sync.
 ReviewRosterFragmentError = RosterFragmentError
 
-#: Named per `executor_return_contract.self_verify_constraint`'s
-#: `commit_authority` parameter (docs/plans/2026-09-11-the-executor-return-
-#: contract-gets-one-de.md § C3): on the emitted path neither commit nor
-#: broader verification is "the EM" -- a `coordinator:git-commit-agent`
-#: phase commits once per wave, and a terminal `coordinator:test-runner`
-#: phase runs broader verification. Must be a bare noun phrase -- see that
-#: builder's own docstring for why (it, not this call site, is the one
-#: place the constraint needs to live).
-_EMITTED_COMMIT_AUTHORITY = (
+#: Named per `executor_return_contract.self_verify_constraint`'s two
+#: keyword parameters (docs/plans/2026-09-11-the-executor-return-contract-
+#: gets-one-de.md § C3): on the emitted path neither clause is "the EM",
+#: and the two clauses do not share one authority either -- only
+#: `_EMITTED_COMMIT_AUTHORITY`'s `coordinator:git-commit-agent` phase
+#: commits, once per wave; broader verification is deferred to that SAME
+#: phase together with the run's terminal `coordinator:test-runner` phase
+#: (`_EMITTED_DEFERRED_VERIFICATION_AUTHORITY`), which never commits. Each
+#: value must be a bare noun phrase -- see that builder's own docstring for
+#: why (it, not this call site, is the one place the constraint needs to
+#: live). Passing one value for both, as a single-parameter builder would
+#: force, is what previously rendered "Only <commit phase> and <test-runner
+#: phase> commits" -- false, since the test-runner phase never commits
+#: (Review: coordinator:code-reviewer, finding 1, EM-agreed break-class
+#: fix).
+_EMITTED_COMMIT_AUTHORITY = "this wave's `coordinator:git-commit-agent` commit phase"
+_EMITTED_DEFERRED_VERIFICATION_AUTHORITY = (
     "this wave's `coordinator:git-commit-agent` commit phase and the run's "
     "terminal `coordinator:test-runner` phase"
 )
@@ -486,6 +525,61 @@ class MixedAgentTypeRowError(ValueError):
     """
 
 
+class UnverifiableEnricherRowError(ValueError):
+    """Raised when a row derives to ``coordinator:enricher`` but its own
+    verification clause requires RUNNING something — a test set, a
+    falsifier, a script.
+
+    The enricher's tool policy allows Bash for exploration only and forbids
+    builds and tests, so it refuses the verification, correctly; its wave
+    then commits nothing DONE and the run halts on a row that was never
+    runnable as dispatched (example-retrieval-repo mise run wf_8dc1b0ed-32b, row D16).
+
+    Routing the row to ``coordinator:executor`` instead is no fix. The
+    derivation sent it to the enricher BECAUSE it writes under
+    ``docs/plans/`` — the canonical case is a close-out row whose execution
+    record sits beside its plan — and ``block_subagent_plan_body_write``
+    hard-denies an executor that write. No single agent type holds both
+    permissions, so the spine has to split the row, which is what this names.
+
+    Raised on the DERIVED path only. An explicit ``agent_type`` is the
+    author's own decision and the escape from a false positive here.
+    """
+
+
+#: A verification clause's own label, then its text to end of line. Spines
+#: write it as ``Verification: ...`` or ``Verification (this row is DONE
+#: only when this holds): ...``.
+_VERIFICATION_CLAUSE_RE = re.compile(r"verification\b[^:\n]*:(?P<clause>[^\n]*)", re.IGNORECASE)
+
+#: Signals that a verification is a TEST or BUILD run — the exact line the
+#: enricher's own tool policy draws ("exploration only, NOT builds/tests";
+#: "cannot run tests"). Running a script is not the line: the same policy
+#: tells it to "run required validation", and the mise-prep lane's rows —
+#: edit a plan, run mise-prep-gate.py until PREPPED, stamp it — are exactly
+#: that. A first cut keyed on `python`/`.py`/`prints` refused all twelve of
+#: them (measured 2026-09-11 across every mise-inventory spine in claude-klabauter,
+#: example-retrieval-repo and DoE-claude) while the one true positive, D16, needs none
+#: of those words to be caught.
+_RUN_REQUIRED_RE = re.compile(
+    r"\b(pytest|unittest|falsifier|(npm|cargo|go)\s+test|cargo\s+build)\b"
+    r"|\btest\s+(set|suite)\b[^.;\n]*\b(green|pass(es)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _verification_requires_a_run(body: str) -> bool:
+    """True when ``body``'s verification clause names something to run.
+
+    A body with no verification clause answers False: this can only refuse
+    what the row itself states, and silence is not a statement.
+    """
+    return any(
+        _RUN_REQUIRED_RE.search(match.group("clause"))
+        for match in _VERIFICATION_CLAUSE_RE.finditer(body or "")
+    )
+
+
 class NoWavesError(ValueError):
     """Raised when the spine derives zero waves (empty spine or empty rows).
 
@@ -571,6 +665,15 @@ def _row_agent_type(row: WaveRow) -> str:
     if row.writes is UNDECLARED:
         return _EXECUTOR_AGENT_TYPE
     if immutable_body:
+        if _verification_requires_a_run(row.body):
+            raise UnverifiableEnricherRowError(
+                f"row {row.id!r} writes under docs/plans/ or docs/problems/, so "
+                "it derives to coordinator:enricher, but its verification has to "
+                "run something the enricher is not permitted to run — and an "
+                "executor may not write that path. Split it: a verifying row "
+                "(executor, no docs/plans write) and a record row that depends on "
+                "it, or name agent_type explicitly if this is a false positive"
+            )
         return _ENRICHER_AGENT_TYPE
     return _EXECUTOR_AGENT_TYPE
 
@@ -933,7 +1036,8 @@ def _plan_context_preamble(context: PlanContext) -> str:
     before appending -- ``_install_brief_pointers :: doe_row_prompt`` calls
     ``original_row_prompt(row, plan_path, plan_context)`` and concatenates a brief
     pointer onto the result (read at that repo's ``work/machine-a/2026-09-06to11``
-    @ 96f5a9b24, lines 589-601). It is a WRAP, not a replacement: everything
+    @ 96f5a9b24, lines 589-601 -- a point-in-time read of another repo's file;
+    re-verify against that file before relying on this citation). It is a WRAP, not a replacement: everything
     ``_row_prompt`` renders, including the return contract, reaches executors
     dispatched through that shim. "Wholesale" stood here until 2026-09-11 and read
     as replacement -- an adversarial reader took it as grounds to doubt the
@@ -962,6 +1066,29 @@ def _plan_context_preamble(context: PlanContext) -> str:
     return preamble
 
 
+#: Positive allowlist for a `row_id` accepted into `_dispatch_report_path`
+#: (Review: coordinator:code-reviewer, finding 1, EM-confirmed LIVE --
+#: `spine_read`/`InvalidRowIdError` validate row-id presence, type and
+#: uniqueness ONLY, never character shape, so this function is the first
+#: and only place row-id SHAPE is checked; see that function's own
+#: docstring). Ordinary segment characters only -- letters, digits,
+#: underscore, hyphen, and an interior/trailing-but-not-final dot handled by
+#: the trailing-dot check below, since a bare character class cannot express
+#: "no dot as the last character" on its own.
+_ROW_ID_ALLOWLIST_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]*$")
+
+#: Windows reserved device names (case-insensitive), bare or with any
+#: extension (`CON`, `CON.md`) -- cannot be created as a regular file on
+#: Windows and raises an OS-level error far from this function, with no
+#: message naming the row_id as the cause. Claude-klabauter's CLAUDE.md declares
+#: Windows first-class, so this check is not optional politeness.
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{i}" for i in range(1, 10)}
+    | {f"LPT{i}" for i in range(1, 10)}
+)
+
+
 def _dispatch_report_path(plan_path: str, row_id: str) -> str:
     """The executor return contract's own report path for one wave row.
 
@@ -971,22 +1098,38 @@ def _dispatch_report_path(plan_path: str, row_id: str) -> str:
     Lands under ``_DISPATCH_REPORT_DIR``, inside ``_BOOKKEEPING_PREFIXES`` --
     see that constant's docstring and module docstring § THE REPORT PATH.
 
-    ``row_id`` MUST be a single path segment (Review: coordinator:code-
-    reviewer, finding P3, EM-overridden to APPLY) -- spliced raw with no
-    validation, a row id containing ``../`` would produce a report path
-    that still passes ``test_dispatch_report_path_is_inside_the_bookkeeping_
-    allowlist``'s ``str.startswith`` check (a string-prefix test, not a
-    containment guarantee) while resolving OUTSIDE ``_BOOKKEEPING_PREFIXES``
-    on disk. Row ids are author-controlled plan-spine data, not adversarial
-    input, but this diff adds a new consumer of an already-unvalidated
-    field, so the check moves here rather than staying deferred. Refuses
-    loud (``ValueError``) rather than silently sanitizing -- a malformed row
-    id must fail at emit time, not produce a quietly-relocated report path.
+    ``row_id`` MUST be a single, Windows-safe path segment (Review:
+    coordinator:code-reviewer, finding 1, EM-confirmed LIVE -- this
+    function is the first and only place row-id SHAPE is checked; see
+    ``_ROW_ID_ALLOWLIST_RE``'s own docstring). A positive allowlist regex is
+    used rather than enumerating rejected shapes, which needs a new
+    character added every time someone finds one: this closed the class
+    once already, going from four disjuncts (separator, ``.``, ``..``,
+    empty) to a single check that also excludes a bare drive-letter-shaped
+    segment (``C:``), a leading ``~``, a trailing dot or trailing space
+    (both silently stripped by Windows, swapping the file a report lands
+    at), NUL/control characters, and the Windows reserved device names
+    (``_WINDOWS_RESERVED_NAMES``, case-insensitive, with or without an
+    extension). Refuses loud (``ValueError``) rather than silently
+    sanitizing -- a malformed row id must fail at emit time, not produce a
+    quietly-relocated report path.
     """
-    if not row_id or "/" in row_id or "\\" in row_id or row_id in (".", ".."):
+    if not row_id or not _ROW_ID_ALLOWLIST_RE.match(row_id):
         raise ValueError(
-            f"row_id {row_id!r} is not a single path segment -- refusing to "
-            "compose a dispatch report path from it"
+            f"row_id {row_id!r} is not a single, Windows-safe path segment "
+            "-- refusing to compose a dispatch report path from it"
+        )
+    if row_id.endswith(".") or row_id.endswith(" "):
+        raise ValueError(
+            f"row_id {row_id!r} ends in a dot or space, which Windows "
+            "silently strips -- refusing to compose a dispatch report path "
+            "from it"
+        )
+    stem = row_id.split(".", 1)[0]
+    if stem.upper() in _WINDOWS_RESERVED_NAMES:
+        raise ValueError(
+            f"row_id {row_id!r} is a Windows reserved device name -- "
+            "refusing to compose a dispatch report path from it"
         )
     return f"{_DISPATCH_REPORT_DIR}/{Path(plan_path).stem}/{row_id}.md"
 
@@ -1022,24 +1165,93 @@ def _row_return_contract(row: WaveRow, plan_path: str) -> str:
     if row.writes is not UNDECLARED:
         footprint = list(row.writes) + [report_path]
         parts.append(
-            FOOTPRINT_CONSTRAINT_TEMPLATE.replace("[list]", ", ".join(footprint))
+            FOOTPRINT_CONSTRAINT_TEMPLATE.replace(
+                "[list]", ", ".join([*footprint, *row.writes_under])
+            )
         )
     else:
         footprint = [report_path]
 
-    parts.append(self_verify_constraint(commit_authority=_EMITTED_COMMIT_AUTHORITY))
+    parts.append(
+        self_verify_constraint(
+            commit_authority=_EMITTED_COMMIT_AUTHORITY,
+            deferred_verification_authority=_EMITTED_DEFERRED_VERIFICATION_AUTHORITY,
+        )
+    )
 
     porcelain_paths = " ".join(footprint)
+    extra_fields = [
+        "the output of `git status --porcelain -- "
+        f"{porcelain_paths} | cut -c4-`"
+    ]
+    if row.writes_under:
+        extra_fields.append(_prefix_claim_field(row.writes_under))
     parts.append(
         done_summary_constraint(
             output_path_template=report_path,
-            extra_fields=(
-                "the output of `git status --porcelain -- "
-                f"{porcelain_paths} | cut -c4-`",
-            ),
+            extra_fields=extra_fields,
         )
     )
     return "\n\n".join(parts)
+
+
+#: The label a ``writes_under:`` row's executor lists its run-time-named
+#: files under, and the label the commit prompt reads them back from. One
+#: constant so the two prompts cannot drift apart.
+_PREFIX_CLAIM_LABEL = "created-under-prefix:"
+
+
+def _prefix_claim_field(prefixes) -> str:
+    """The DONE-summary field for a row declaring ``writes_under:``.
+
+    The executor names the files itself. The porcelain clause beside it
+    runs over concrete paths only and never over a prefix: on a shared tree
+    a prefix such as ``state/audits/`` holds peers' untracked files, and
+    ``git status`` over it would claim their work as this row's.
+    """
+    rendered = ", ".join(f"`{prefix}`" for prefix in prefixes)
+    return (
+        f"and a `{_PREFIX_CLAIM_LABEL}` list naming, one per line, every file "
+        f"YOU created or modified under {rendered} -- from your own work, "
+        "never from `git status` over the prefix, which also lists other "
+        f"sessions' files there; write `{_PREFIX_CLAIM_LABEL} none` if you "
+        "wrote nothing there"
+    )
+
+
+def _prefix_commit_rule(prefixes: list[tuple[str, tuple[str, ...]]]) -> str:
+    """The commit-prompt clause for a wave carrying ``writes_under:`` rows:
+    the one sanctioned widening of the handed pathspec.
+
+    Bounded per row. A listed file joins the pathspec only under the prefix
+    of the row whose report lists it. A file under the prefix that no report
+    lists is left alone, because peers write under shared prefixes. A prefix
+    row whose report carries no list halts the phase rather than having its
+    files inferred from prose or from ``git status``. The pathspec handed to
+    the commit route stays concrete files, so ``commit_paths`` never sees a
+    directory.
+    """
+    rendered = "; ".join(
+        f"{row_id}: " + ", ".join(f"`{prefix}`" for prefix in row_prefixes)
+        for row_id, row_prefixes in prefixes
+    )
+    return (
+        " RUN-TIME-NAMED WRITES -- the one sanctioned widening of this "
+        f"pathspec. These rows declare `writes_under:` prefixes: {rendered}. "
+        "Each such row's executor report lists the files it wrote there under "
+        f"`{_PREFIX_CLAIM_LABEL}`. Add exactly those files to the pathspec, "
+        "each as a concrete file and never the directory, and only where the "
+        "file sits under THAT row's own prefix. A listed file outside it is a "
+        "divergence, as below. A file under a prefix that the row's own list "
+        "does not name is not this wave's work: other sessions write under "
+        "shared prefixes, so leave it and do not mention it. If a prefix row's "
+        f"report carries no `{_PREFIX_CLAIM_LABEL}` line, STOP: emit no success "
+        "token and name the row. Never infer those files from prose or from "
+        f"`git status`. `{_PREFIX_CLAIM_LABEL} none` is legitimate: that row "
+        "has nothing to commit. If nothing at all is left to commit once every "
+        f"list is resolved, run `git rev-parse HEAD` and end with "
+        f"'{_COMMIT_LANDED_TOKEN} <that sha>'."
+    )
 
 
 def _row_prompt(
@@ -1222,6 +1434,37 @@ _BOOKKEEPING_PREFIX_RENDER = ", ".join(f"`{prefix}**`" for prefix in _BOOKKEEPIN
 #: the exception is a positive allowlist rather than a blanket flip: a flip
 #: re-buys the four halts above, and a commit phase that halts four times in
 #: five is a phase operators learn to override.
+
+#: The machine-checkable success token an emitted commit agent must end its
+#: report with. The emitted gate below tests for exactly this string, so a
+#: refusal, a crash, or a `null` agent result all fail the same way — CLOSED.
+#:
+#: Why a token and not the agent's prose: a declined commit and a landed one
+#: read almost identically in a progress tree, and the decline reason lives
+#: inside an agent result rather than at a phase boundary (example-retrieval-repo-em
+#: cross-repo memo, 2026-08-20). A token is the only part of a free-form
+#: report a generated script can test without parsing narrative.
+#:
+#: Bias is deliberate: an agent that commits but omits the token halts a run
+#: that did not need halting, which costs a `resumeFromRunId`. The opposite
+#: bias loses chunk ids into someone else's commit subject, which is
+#: unrecoverable once pushed. Cheap-and-wrong-way-round beats expensive-and-
+#: silent.
+_COMMIT_LANDED_TOKEN = "COMMIT-LANDED"
+
+#: The machine-checkable verdict token for a commit that landed only PART of
+#: its handed pathspec -- one or more declared paths withheld (claimed by a
+#: live peer, refused, or otherwise not committed), as distinct from the
+#: legitimate drops (an item that did not return DONE, a declared path the
+#: executor examined-but-did-not-change) that still end in
+#: ``_COMMIT_LANDED_TOKEN``. See ``_commit_halt_gate``: this token halts the
+#: run before the next wave's agents run, the same way a lands-nothing commit
+#: already does -- the emitted script has no mechanism to carry a withheld
+#: path into a later wave's pathspec (module docstring has none either), so
+#: a partial landing that rolled on would silently lose the withheld path's
+#: chance to ever be committed by this run.
+_COMMIT_PARTIAL_TOKEN = "COMMIT-PARTIAL"
+
 _PROVENANCE_HEADING = (
     "Pathspec provenance: the pathspec above is this wave's declared "
     "`writes:` scope. The executor report(s) below are, direct from the "
@@ -1339,7 +1582,16 @@ _PROVENANCE_HEADING = (
     "by a session 13 hours idle with both pids dead that had touched ONE of seven "
     "paths; the sanctioned route then committed all seven without complaint. If "
     "both conditions genuinely hold, refuse ONLY the claimed paths and commit the "
-    "remainder -- a live peer editing one file is not a reason to strand six."
+    "remainder -- a live peer editing one file is not a reason to strand six. "
+    "Nothing downstream carries a withheld path forward: no later wave, phase, "
+    "or pathspec is scoped to pick it up. Report every withheld path verbatim "
+    "and its owning chunk id, end your report with the line "
+    f"'{_COMMIT_PARTIAL_TOKEN} <sha> withheld: <path1>, <path2>' (never "
+    f"'{_COMMIT_LANDED_TOKEN}' -- that token is reserved for a commit that "
+    "landed its FULL pathspec, minus only legitimate drops for an unchanged "
+    "declared path or an item that did not return DONE), and the run halts "
+    "at this phase. The EM resolves the claim and resumes -- do not imply, "
+    "predict, or promise that a later wave will handle the withheld path."
     "\n\nUNCHANGED DECLARED PATHS: a path in the pathspec that this wave's "
     "executor legitimately did not change (reported as examined-but-unchanged) "
     "must be DROPPED from the pathspec and the remainder committed. A chunk "
@@ -1445,22 +1697,6 @@ _PROVENANCE_HEADING = (
 
 #: The machine-checkable success token an emitted commit agent must end its
 #: report with. The emitted gate below tests for exactly this string, so a
-#: refusal, a crash, or a `null` agent result all fail the same way — CLOSED.
-#:
-#: Why a token and not the agent's prose: a declined commit and a landed one
-#: read almost identically in a progress tree, and the decline reason lives
-#: inside an agent result rather than at a phase boundary (example-retrieval-repo-em
-#: cross-repo memo, 2026-08-20). A token is the only part of a free-form
-#: report a generated script can test without parsing narrative.
-#:
-#: Bias is deliberate: an agent that commits but omits the token halts a run
-#: that did not need halting, which costs a `resumeFromRunId`. The opposite
-#: bias loses chunk ids into someone else's commit subject, which is
-#: unrecoverable once pushed. Cheap-and-wrong-way-round beats expensive-and-
-#: silent.
-_COMMIT_LANDED_TOKEN = "COMMIT-LANDED"
-
-
 def _interpolate_preflight_sha(escaped: str) -> str:
     """Swap the placeholder for a real template-literal interpolation.
 
@@ -1487,9 +1723,12 @@ def _commit_agent_call(
     commit_var: str = "commitResult",
     deliverable_id: Optional[str] = None,
     repo_root: Optional[str] = None,
+    prefixes: list[tuple[str, tuple[str, ...]]] | None = None,
 ) -> str:
     """Emit the wave's commit-agent call, plus the gate that halts the run
-    when that commit did not land (see ``_commit_halt_gate``).
+    when that commit did not land its FULL handed pathspec -- including a
+    commit that landed but withheld one or more declared paths (see
+    ``_commit_halt_gate``, ``_COMMIT_PARTIAL_TOKEN``).
 
     ``chunk_ids`` is load-bearing, not cosmetic: `close-out-and-stamp`
     verifies a commit against a plan chunk via pure sha-ancestry evidence
@@ -1576,21 +1815,44 @@ def _commit_agent_call(
         if deliverable_id
         else ""
     )
+    prefix_rule = _prefix_commit_rule(prefixes) if prefixes else ""
     anchor = f"{_REPO_ANCHOR_LINE.format(root=repo_root)}\n\n" if repo_root else ""
     static_prompt = (
         anchor
         + f"Commit wave {index + 1}'s work. Pathspec: [{', '.join(pathspec)}]."
-        f"{subject_rule}{deliverable_rule}"
+        f"{prefix_rule}{subject_rule}{deliverable_rule}"
         f" If `CommitOutcome.no_delta` comes back non-empty, list those paths"
         f" first and say they contributed nothing to this commit -- they are"
         f" paths you declared that were already at HEAD, and reporting only"
         f" the sha would report them as delivered."
-        f" When (and ONLY when) the commit has landed, end your report with"
-        f" the line '{_COMMIT_LANDED_TOKEN} <sha>'. If you refuse, or the"
-        f" commit does not land for any reason, do NOT emit that line —"
-        f" state the reason instead. The emitted run halts at this phase"
-        f" unless that line is present, so emitting it without a landed"
-        f" commit lets the next wave overwrite uncommitted work."
+        f" WITHHELD MEANS DIRTY-AND-UNCOMMITTED, NOT MERELY DECLARED. A"
+        f" declared path only counts as withheld if it is DIRTY against"
+        f" HEAD (the executor actually changed it, `git diff --stat`"
+        f" shows it) and that dirty state did NOT land in this commit --"
+        f" a live peer's claim refusing it is the ordinary cause. A"
+        f" declared path that is CLEAN against HEAD or absent from the"
+        f" worktree entirely (nothing to commit for it -- the ordinary case"
+        f" for a `memo.send` chunk, whose declared write lands in the"
+        f" gitignored `.coordinator-local/memo-outbox/` and never appears"
+        f" in this repo's tree at all) is NOT withheld: there is nothing to"
+        f" withhold, and it must never trigger the partial verdict below."
+        f" When (and ONLY when) the commit has landed its FULL handed"
+        f" pathspec -- minus only the legitimate drops named above (an item"
+        f" that did not return DONE, a declared path examined but not"
+        f" changed, or a declared path clean/absent as just described) --"
+        f" end your report with the line"
+        f" '{_COMMIT_LANDED_TOKEN} <sha>'. If the commit lands but withholds"
+        f" one or more DIRTY declared paths for any OTHER reason (a live"
+        f" peer's claim, a refusal on a subset, anything else), do NOT emit"
+        f" that line -- end your report instead with"
+        f" '{_COMMIT_PARTIAL_TOKEN} <sha> withheld: <path1>, <path2>',"
+        f" naming every withheld path verbatim. If you refuse outright, or"
+        f" the commit does not land at all, emit neither line -- state the"
+        f" reason instead. The emitted run halts at this phase unless"
+        f" '{_COMMIT_LANDED_TOKEN} <sha>' is present, so a"
+        f" '{_COMMIT_PARTIAL_TOKEN}' verdict halts the run exactly as a"
+        f" tokenless one does -- the halt is the fix; nothing later in this"
+        f" run picks a withheld path back up."
         # Review: overengineering-reviewer flagged this sentence as
         # unconditional payload for a reader who cannot act on it —
         # dispositioned "accepted" in the sidecar, but the dispatching EM
@@ -1672,7 +1934,32 @@ def _commit_agent_call(
 
 
 def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
-    """The JS that stops the run when ``commit_var``'s commit did not land.
+    """The JS that stops the run when ``commit_var``'s commit did not land
+    its FULL handed pathspec.
+
+    Two failure shapes share this one gate, deliberately: a commit that
+    landed NOTHING (the pre-existing case -- no ``_COMMIT_LANDED_TOKEN``
+    line at all) and a commit that landed only PART of its pathspec (one or
+    more declared paths withheld, reported via ``_COMMIT_PARTIAL_TOKEN``).
+    Both fail the same anchored ``_COMMIT_LANDED_TOKEN`` test below, so both
+    halt through the identical code path -- a partial landing is not a
+    softer outcome than landing nothing, because the emitted script has no
+    mechanism anywhere to carry a withheld path into a later wave's
+    pathspec: rolling on would silently strand it forever, the same way
+    rolling on over a lands-nothing commit would. Where the two shapes
+    diverge is narration only -- a ``_COMMIT_PARTIAL_TOKEN`` match extracts
+    the withheld-paths list so the halt message names them, rather than
+    reporting the misleading "did not land a commit" for a commit that, in
+    the partial case, did land.
+
+    "Withheld" is dirty-and-uncommitted, never merely declared -- see the
+    static prompt's own "WITHHELD MEANS DIRTY-AND-UNCOMMITTED" clause. A
+    declared path with nothing dirty against HEAD (a `memo.send` chunk's
+    `writes:` entry into the gitignored `.coordinator-local/memo-outbox/`
+    is the measured case) has nothing to commit and must never read as
+    withheld -- that is a prompt-level distinction this gate cannot itself
+    enforce (it only ever sees the agent's two verdict tokens), which is
+    why the prompt states it explicitly rather than leaving it inferred.
 
     `return { halted: ... }` from the script's top-level body is the engine's
     one sanctioned way to stop a run (workflow-orchestration.md); the emitter
@@ -1748,12 +2035,36 @@ def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
     # was the hex-sha requirement, not the absence of asterisks: the
     # instruction every commit agent is holding while it writes carries the
     # literal placeholder `<sha>`, which is not hex however it is decorated.
+    # A `COMMIT-PARTIAL` verdict already fails the `COMMIT-LANDED` test below
+    # (the two tokens never both match), so it already halts without any
+    # extra branch. What it does NOT get for free is a message naming WHICH
+    # paths were withheld and why -- the generic `reason` above only ever
+    # says "did not land a commit", which is false (a partial commit DID
+    # land) and omits the one fact an operator needs to resolve the claim
+    # and resume. This capture is best-effort narration on top of an
+    # unconditional halt, never a gate on whether the halt fires.
+    partial_reason = (
+        f"{phase_title} landed only PART of its handed pathspec -- one or "
+        "more declared paths were withheld. Halting before the next wave "
+        "writes over uncommitted work, exactly as a lands-nothing commit "
+        "does. Nothing later in this run picks a withheld path back up: "
+        "the EM resolves the claim (or other cause) named below and then "
+        "resumes (see RECOVERY IS RESUME below)."
+    )
     return (
         f"  if (!{commit_var} || "
         f"!/^[*_]{{0,2}}{_COMMIT_LANDED_TOKEN}[*_]{{0,2}} +[*_]{{0,2}}"
         f"[0-9a-f]{{7,40}}[*_]{{0,2}} *$/m.test(String({commit_var}))) {{\n"
-        f"    return {{ halted: {_js_string_literal(reason)} + "
-        f'" Agent report: " + String({commit_var} ?? "agent returned null") }};\n'
+        f"    const partialMatch = {commit_var} ? "
+        f"String({commit_var}).match(/^[*_]{{0,2}}{_COMMIT_PARTIAL_TOKEN}"
+        f"[*_]{{0,2}} +[*_]{{0,2}}[0-9a-f]{{7,40}}[*_]{{0,2}}.*?withheld:"
+        f"\\s*(.+)$/m) : null;\n"
+        f"    const halted = partialMatch\n"
+        f"      ? {_js_string_literal(partial_reason)} + \" Withheld: \" + "
+        f'partialMatch[1].trim() + " " + {_js_string_literal(reason)}\n'
+        f"      : {_js_string_literal(reason)};\n"
+        f'    return {{ halted: halted + " Agent report: " + '
+        f'String({commit_var} ?? "agent returned null") }};\n'
         "  }"
     )
 
@@ -1780,7 +2091,10 @@ _PREFLIGHT_SHA_PLACEHOLDER = "<<<PREFLIGHT_HEAD_SHA>>>"
 
 
 def _preflight_agent_call(
-    pathspec: list[str], phase_title: str, repo_root: Optional[str] = None
+    pathspec: list[str],
+    phase_title: str,
+    repo_root: Optional[str] = None,
+    prefixes: list[str] | None = None,
 ) -> str:
     """Compose the preflight phase's ``phase()`` + ``agent()`` call (AC14).
 
@@ -1789,12 +2103,27 @@ def _preflight_agent_call(
     phase's pathspec, asked to verify claimability only -- no staging, no
     commit. See module docstring § Commit-claimability preflight.
 
+    ``prefixes`` (every ``writes_under:`` entry in the spine) get a narrower
+    check than the pathspec: whether files under them would be ignored.
+    Files already under a shared prefix belong to other sessions, so a claim
+    check there would refuse on work this run never touches.
+
     The call's result is bound to a variable and gated by
     ``_preflight_halt_gate`` (see there for why an unbound ``await agent(...)``
     is not decorative-only -- it discards the one verdict the phase exists to
     produce). Mirrors ``_commit_agent_call``/``_commit_halt_gate``'s shape.
     """
     phase_call = f"  phase({_js_string_literal(phase_title)});"
+    prefix_clause = (
+        f" Entries in [{', '.join(prefixes)}] are write PREFIXES: the files "
+        "under them are named at run time. For each prefix, check only that a "
+        "file under it would not be ignored (`git check-ignore -q -- "
+        "<prefix>probe` exiting 0 means ignored, which is BLOCKED). Files "
+        "already under a prefix belong to other sessions and are never a "
+        "claim conflict."
+        if prefixes
+        else ""
+    )
     prompt = (
         (f"{_REPO_ANCHOR_LINE.format(root=repo_root)}\n\n" if repo_root else "")
         + "Preflight only -- do not stage or commit anything. Every path below is "
@@ -1803,7 +2132,9 @@ def _preflight_agent_call(
         "refusal. Report BLOCKED only if a path would be refused by a claim "
         "conflict, an ignore rule, or a guard. Verify that "
         f"every path in [{', '.join(pathspec)}] is currently claimable and "
-        "committable by you. If any path would be refused, report BLOCKED "
+        "committable by you."
+        + prefix_clause
+        + " If any path would be refused, report BLOCKED "
         "immediately, naming the refused paths and the denial reason, "
         "before any further phase runs -- and end your report with the line "
         f"'{_PREFLIGHT_BLOCKED_TOKEN} <reason>'. If every path is claimable, "
@@ -2151,6 +2482,34 @@ def _excluded_rows_narration(excluded: list) -> str:
     return "\n".join(lines)
 
 
+def _all_writes_declared_empty(rows: list[WaveRow]) -> bool:
+    """True iff every row in ``rows`` declares ``writes:`` (none UNDECLARED,
+    checked by sentinel identity, never truthiness) and every declared
+    contribution is empty -- the exact all-empty shape
+    ``pathspec.commit_pathspec``'s refusal 2 raises on
+    (state/bug-backlog/2026-09-11-an-all-empty-writes-wave-sinks-the-whole-emit.yaml).
+
+    Distinct from the mixed case (staff review finding P0-1: some rows
+    declare ``writes: []`` alongside others that contribute real paths) --
+    that shape already warns-and-continues inside ``commit_pathspec`` itself
+    and must not be folded into this branch; this function only returns
+    ``True`` when EVERY row contributes nothing. Also distinct from refusal
+    1 (every row UNDECLARED), which still raises unchanged -- an UNDECLARED
+    row never reaches this check as a declared, zero-contribution row.
+
+    A row declaring ``writes_under:`` is never zero-contribution here, even
+    when its ``writes:`` is empty: its files exist by the time the commit
+    phase runs, only their names are unknown at emit time, so its wave
+    keeps a commit phase.
+    """
+    return bool(rows) and all(
+        row.writes is not UNDECLARED
+        and not _declared_paths(row)
+        and not row.writes_under
+        for row in rows
+    )
+
+
 def compose_script(
     waves: list[list[WaveRow]],
     *,
@@ -2169,8 +2528,16 @@ def compose_script(
 
     Refuses (``NoWavesError``) if ``waves`` is empty — see module docstring
     § Reuse boundary. ``NoWritesDeclaredError`` is raised by
-    ``pathspec.commit_pathspec`` and propagates unchanged: this function
-    adds no derivation of its own there. ``pathspec.terminal_test_scope``'s
+    ``pathspec.commit_pathspec`` and propagates unchanged for every shape
+    except one: a wave/batch where every row declares ``writes: []`` (none
+    UNDECLARED, union empty) never reaches ``commit_pathspec`` at all —
+    ``_all_writes_declared_empty`` detects it first, this function emits
+    that wave's agent calls with NO commit phase after them and a one-line
+    comment in the script saying why, and contributes nothing to the
+    preflight union for it. The all-UNDECLARED refusal (refusal 1) and the
+    mixed-rows warn-and-continue case (staff review P0-1) are both
+    untouched — see module docstring § An all-empty wave gets no commit
+    phase. ``pathspec.terminal_test_scope``'s
     ``NoTestTargetError`` no longer propagates — see module docstring § The
     terminal phase degrades, it never vetoes; this function catches it and
     composes rung 2 (``falsifier``) or rung 3 (a loud narration) instead.
@@ -2212,9 +2579,27 @@ def compose_script(
     # per-wave order/refusal behaviour as before) so the preflight phase can
     # be composed from their union BEFORE the first wave/commit phase block
     # is built -- see module docstring § Commit-claimability preflight.
-    wave_pathspecs = [commit_pathspec(wave) for wave in waves]
+    #
+    # An all-``writes: []`` wave (every row declares, none UNDECLARED, union
+    # empty) contributes nothing here rather than calling ``commit_pathspec``
+    # -- that wave gets no commit phase at all (see the per-batch loop below
+    # and module docstring § An all-empty wave gets no commit phase), so it
+    # must not raise or contribute to the preflight union either. Refusal 1
+    # (every row UNDECLARED) is untouched: ``_all_writes_declared_empty``
+    # only matches a wave where every row explicitly declares, so that shape
+    # still reaches ``commit_pathspec`` and still raises.
+    wave_pathspecs = [
+        [] if _all_writes_declared_empty(wave) else commit_pathspec(wave)
+        for wave in waves
+    ]
     preflight_pathspec = _dedupe_preserve_order(
         path for pathspec in wave_pathspecs for path in pathspec
+    )
+    preflight_prefixes = _dedupe_preserve_order(
+        prefix
+        for wave in waves
+        for _, row_prefixes in commit_prefixes(wave)
+        for prefix in row_prefixes
     )
 
     body_blocks: list[str] = []
@@ -2228,7 +2613,10 @@ def compose_script(
     repo_anchor = plan_context.repo_root if plan_context is not None else None
     body_blocks.append(
         _preflight_agent_call(
-            preflight_pathspec, _PREFLIGHT_PHASE_TITLE, repo_root=repo_anchor
+            preflight_pathspec,
+            _PREFLIGHT_PHASE_TITLE,
+            repo_root=repo_anchor,
+            prefixes=preflight_prefixes,
         )
     )
 
@@ -2258,6 +2646,18 @@ def compose_script(
                 )
             )
 
+            if _all_writes_declared_empty(batch):
+                # Every row in this batch declares `writes: []` -- no commit
+                # phase is emitted (state/bug-backlog/2026-09-11-an-all-empty
+                # -writes-wave-sinks-the-whole-emit.yaml); `commit_pathspec`
+                # keeps refusing an empty pathspec, so this batch never asks
+                # it the question.
+                body_blocks.append(
+                    "  // commit phase omitted: every row in this wave "
+                    "declares `writes: []` (nothing to commit)"
+                )
+                continue
+
             batch_pathspec = commit_pathspec(batch)
             commit_title = f"{_commit_phase_title(index)}{suffix}"
             phase_titles.append(commit_title)
@@ -2271,6 +2671,7 @@ def compose_script(
                     commit_var=f"commit{results_var[0].upper()}{results_var[1:]}",
                     deliverable_id=deliverable_id,
                     repo_root=repo_anchor,
+                    prefixes=commit_prefixes(batch),
                 )
             )
 

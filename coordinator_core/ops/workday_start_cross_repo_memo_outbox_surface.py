@@ -12,17 +12,32 @@ Output format (one line per stale draft):
     Outbox draft <topic> staged <N>h ago -> <to>  :: <title>
       -> send | compose | discard
 
-Exit: always 0. Emits nothing when no qualifying drafts exist (silent per
-spec) — this is an orientation surfacer, never a gate.
+Also surfaces the missing sibling of the stale-draft nudge above: sent
+deliveries whose commit is no longer an object in the receiver (the
+2026-09-11 seven-lost-deliveries incident — memo.check_deliveries existed
+but had no trigger, so it went unrun for two days). Reuses
+`memo_send.check_deliveries`'s own sweep verbatim (`_iter_ledger_rows` +
+`_check_ledger_row`) — no second implementation of the object-existence
+check. One line per `gone` verdict, naming the receiver ref the delivery landed on
+when the ledger row recorded one (absent on pre-`delivery_branch` rows —
+omitted, never printed as "None"):
+    Delivery <topic> to <to> is gone — commit <sha> is not in the receiver (landed on <ref>)
+      -> re-run memo.send <topic> to re-deliver
+
+Exit: always 0. Emits nothing when no qualifying drafts AND no gone
+deliveries exist (silent per spec) — this is an orientation surfacer, never
+a gate.
 
 Spec backlink: docs/plans/2026-06-15-cross-repo-memo-draft-lifecycle.md § C4
                docs/plans/2026-07-16-bash-clean-slate-residual-migration.md
+               docs/plans/2026-09-11-memo-send-returns-ok-with-a-commit-sha-t.md
 
 Negative-spec:
-    - Surfacer is offer-shape ONLY — emits three action verbs as options,
-      never auto-discards, never auto-sends. Lifecycle mutation lives solely
-      in the CLI subcommands per the /workstream-start surfaces, /pickup acts
-      boundary (cross-repo-communication.md:315).
+    - Surfacer is offer-shape ONLY — emits action verbs as options, never
+      auto-discards, never auto-sends, and NEVER auto-re-sends a gone
+      delivery. Lifecycle mutation lives solely in the CLI subcommands per
+      the /workstream-start surfaces, /pickup acts boundary
+      (cross-repo-communication.md:315).
     - Resolves the coordinator_state_root seam via the native in-process
       port (`coordinator_core.state_root.coordinator_state_root`, bare/
       Rule-5 call) rather than shelling out to `coordinator-state-root.sh`
@@ -38,6 +53,15 @@ Negative-spec:
       (strip key, strip quotes, strip surrounding whitespace).
     - Does NOT recurse into subdirectories of the outbox — top-level `*.md`
       only, exactly as the oracle's `for f in "${OUTBOX_DIR}"/*.md` glob.
+    - The gone-deliveries sweep does NOT emit a line for `not_checkable` —
+      a receiver repo absent from this machine says nothing about whether a
+      memo arrived, and a nudge that cries wolf on that verdict gets
+      ignored, recreating the defect this closes in a new place. Only
+      `gone` is news at workday start.
+    - The gone-deliveries sweep degrades SILENTLY on any resolution failure
+      (missing worktree root, unreadable ledger, import failure) — same
+      discipline as the stale-draft leg's `StateRootError` degrade above:
+      no line, no traceback, exit 0.
 """
 
 from __future__ import annotations
@@ -142,6 +166,50 @@ def _parse_frontmatter_field(text: str, pattern: re.Pattern) -> Optional[str]:
     return None
 
 
+def _resolve_worktree_root(repo_root_arg: str) -> Optional[str]:
+    """The worktree root to sweep the sent-ledger from — repo_root_arg if
+    given, else the git toplevel (zero-spawn, `show_toplevel`). `None` when
+    neither resolves, mirroring `_resolve_draft_paths`'s own "not in a git
+    repo — stay silent" branch."""
+    if repo_root_arg and os.path.isdir(repo_root_arg):
+        return repo_root_arg
+    return show_toplevel(os.getcwd())
+
+
+def _gone_delivery_lines(repo_root_arg: str) -> List[str]:
+    """One two-line nudge per `gone` sent-ledger row, reusing
+    `memo_send`'s own C5 sweep verbatim. Degrades silently (empty list) on
+    any resolution failure — see module negative-spec."""
+    try:
+        worktree_root = _resolve_worktree_root(repo_root_arg)
+        if not worktree_root:
+            return []
+
+        from coordinator_core.ops.fleet import memo_send as _memo_send_mod
+
+        sender_worktree = Path(worktree_root)
+        ledger_path = _memo_send_mod._sent_ledger_path(sender_worktree)
+        rows = _memo_send_mod._iter_ledger_rows(ledger_path)
+        candidates = [_memo_send_mod._check_ledger_row(row) for row in rows]
+    except Exception:
+        return []
+
+    lines: List[str] = []
+    for candidate in candidates:
+        if candidate.get("status") != _memo_send_mod._VERDICT_GONE:
+            continue
+        topic = candidate.get("topic") or "unknown"
+        to = candidate.get("to") or "unknown"
+        sha = candidate.get("delivery_commit_sha") or "unknown"
+        branch = candidate.get("delivery_branch")
+        branch_clause = f" (landed on {branch})" if isinstance(branch, str) and branch else ""
+        lines.append(
+            f"Delivery {topic} to {to} is gone — commit {sha} is not in the receiver{branch_clause}"
+        )
+        lines.append(f"  → re-run memo.send {topic} to re-deliver")
+    return lines
+
+
 def _list_md_files(outbox_dir: str) -> List[str]:
     try:
         names = os.listdir(outbox_dir)
@@ -156,8 +224,13 @@ def _list_md_files(outbox_dir: str) -> List[str]:
 def main(argv: List[str]) -> int:
     repo_root_arg = argv[0] if argv else ""
 
+    lines: List[str] = []
+    lines.extend(_gone_delivery_lines(repo_root_arg))
+
     draft_paths = _resolve_draft_paths(repo_root_arg)
     if not draft_paths:
+        if lines:
+            sys.stdout.write("\n".join(lines) + "\n")
         return 0
 
     stale_hours_raw = os.environ.get("COORDINATOR_OUTBOX_STALE_HOURS", "24")
@@ -169,7 +242,6 @@ def main(argv: List[str]) -> int:
 
     now_epoch = int(time.time())
 
-    lines: List[str] = []
     for f in draft_paths:
         if not os.path.isfile(f):
             continue

@@ -74,7 +74,7 @@ def _plan(root: Path, *, frontmatter: str = _FM, spine: str | None = _SPINE) -> 
     if spine is not None:
         body += ["## Tasks", "", "```yaml plan-tasks", spine.strip(), "```", ""]
     (plans / "2026-09-07-fixture.md").write_text(
-        "---\ntitle: fixture\nstatus: draft\ncreated: 2026-09-07\n"
+        "---\ntitle: fixture\nauthor: fixture\nstatus: draft\ncreated: 2026-09-07\n"
         + frontmatter
         + "---\n"
         + "\n".join(body),

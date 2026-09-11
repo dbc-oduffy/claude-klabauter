@@ -23,7 +23,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     derive_review_tier,
     emit_script,
 )
-from coordinator_core.ops.dispatch_emit.pathspec import NoWritesDeclaredError
+from coordinator_core.ops.dispatch_emit.pathspec import NoWritesDeclaredError, commit_pathspec
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, build_waves
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
@@ -926,6 +926,74 @@ def test_compose_script_propagates_no_writes_declared_from_commit_pathspec():
     waves = [[_wave_row("C1", UNDECLARED, surface="dispatch_emit")]]
     with pytest.raises(NoWritesDeclaredError):
         compose_script(waves, name="wf", description="undeclared")
+
+
+# ---------------------------------------------------------------------------
+# All-empty-writes wave: no commit phase, not a whole-plan refusal
+# (state/bug-backlog/2026-09-11-an-all-empty-writes-wave-sinks-the-whole-emit.yaml)
+# ---------------------------------------------------------------------------
+
+
+def test_all_empty_writes_wave_emits_with_no_commit_phase():
+    waves = [[_wave_row("C1", []), _wave_row("C2", [])]]
+    script = compose_script(waves, name="wf", description="all-empty wave")
+
+    # No refusal: the wave's agent calls still emit.
+    assert _AGENT_CALL_RE.search(script) is not None
+    # No commit phase title for this wave.
+    titles = _extract_phase_titles(script)
+    assert not any("Commit" in title for title in titles)
+    # The omission is stated in the emitted script, not silently absent.
+    assert "commit phase omitted" in script
+    assert "writes: []" in script
+
+
+def test_all_empty_writes_wave_contributes_nothing_to_the_preflight_pathspec():
+    waves = [[_wave_row("C1", []), _wave_row("C2", [])]]
+    script = compose_script(waves, name="wf", description="all-empty wave")
+
+    # An all-empty wave contributes zero paths to the preflight union, so
+    # the preflight prompt's rendered pathspec is the empty list.
+    assert "every path in []" in script
+
+
+def test_all_empty_writes_wave_still_dispatches_its_agent_calls():
+    waves = [[_wave_row("C1", [])]]
+    script = compose_script(waves, name="wf", description="all-empty wave")
+    assert "C1" in script
+
+
+def test_mixed_writes_wave_is_unaffected_by_the_all_empty_branch():
+    # Staff review finding P0-1: SOME rows `writes: []` alongside a real
+    # contributor still warns-and-continues via commit_pathspec, unchanged --
+    # it must not be folded into the new all-empty branch, so a commit phase
+    # still emits for this wave.
+    waves = [
+        [
+            _wave_row("C1", []),
+            _wave_row("C2", ["coordinator_core/ops/dispatch_emit/wave_map.py"]),
+        ]
+    ]
+    script = compose_script(waves, name="wf", description="mixed wave")
+    titles = _extract_phase_titles(script)
+    assert any("Commit" in title for title in titles)
+    assert "commit phase omitted" not in script
+
+
+def test_all_undeclared_wave_still_raises_not_folded_into_all_empty_branch():
+    # Refusal 1 (every row UNDECLARED) must keep raising -- it is not the
+    # same shape as every row explicitly declaring `writes: []`.
+    waves = [[_wave_row("C1", UNDECLARED, surface="dispatch_emit")]]
+    with pytest.raises(NoWritesDeclaredError):
+        compose_script(waves, name="wf", description="all-undeclared")
+
+
+def test_commit_pathspec_directly_still_refuses_an_all_empty_wave():
+    # commit_pathspec itself is unchanged -- it keeps refusing an all-empty
+    # wave; only compose_script now avoids asking it the question.
+    waves = [_wave_row("C1", []), _wave_row("C2", [])]
+    with pytest.raises(NoWritesDeclaredError):
+        commit_pathspec(waves)
 
 
 def test_compose_script_no_longer_propagates_no_test_target_but_degrades_loudly():
@@ -1968,6 +2036,95 @@ def test_commit_prompt_requires_the_landed_token_only_on_success():
     assert "do NOT emit that line" in script
 
 
+def test_commit_prompt_no_longer_promises_a_subsequent_wave():
+    """(a) The withheld-paths brief must not promise anything picks the
+    path back up later -- nothing does (wf_8dc1b0ed-32b: D4's withheld path
+    was never handled, because no later wave's pathspec is scoped to it).
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    assert "subsequent wave" not in script
+    assert "will be handled" not in script
+    # The replacement instruction: withheld paths are reported, and the run
+    # halts -- no promise that anything later resolves them.
+    assert "Nothing downstream carries a withheld path forward" in script
+    assert "do not imply, predict, or promise that a later wave" in script
+
+
+def test_commit_gate_halts_on_a_partial_verdict_before_the_next_wave():
+    """(b) A COMMIT-PARTIAL verdict must halt the run, the same as a
+    tokenless report -- before the next wave's agent calls, not after.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    gate = _emitted_gate(script)
+
+    # A partial verdict never satisfies the COMMIT-LANDED gate...
+    assert not gate.search(
+        "committed D2 and D8\nCOMMIT-PARTIAL 5e4a76ea706dd35cc1045f22708f20d64b0d9a91"
+        " withheld: chunks/D4.py\n"
+    )
+    # ...and the halt fires ahead of the next wave's phase in the emitted
+    # script order.
+    commit1_idx = script.index("const commitWave1Results = await agent(")
+    gate1_halt_idx = script.index("return { halted:", commit1_idx)
+    wave2_phase_idx = script.index("Wave 2", gate1_halt_idx + 1)
+    assert gate1_halt_idx < wave2_phase_idx
+
+    # The halt message names withheld paths when the agent supplied them.
+    assert "landed only PART of its handed pathspec" in script
+    assert "partialMatch" in script
+    assert "withheld" in script
+
+
+def test_commit_gate_still_continues_on_a_fully_committed_wave():
+    """(c) The existing fully-landed path is unchanged: COMMIT-LANDED <sha>
+    still satisfies the gate and the run proceeds.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    gate = _emitted_gate(script)
+
+    assert gate.search("committed the wave\nCOMMIT-LANDED a805587fd8d0\n")
+
+
+def test_a_declared_but_untouched_path_is_landed_not_partial():
+    """A declared path with nothing dirty against HEAD (the memo-outbox
+    case: `memo.send` writes into the gitignored
+    `.coordinator-local/memo-outbox/`, so a `writes:` entry for it never
+    appears in this repo's tree) is NOT withheld -- there is nothing to
+    commit for it. The prompt must say so explicitly, and a report naming
+    that path alongside COMMIT-LANDED must still satisfy the gate rather
+    than being read as a reason to hold out for COMMIT-PARTIAL.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+
+    # The prompt states the discriminator plainly.
+    assert "WITHHELD MEANS DIRTY-AND-UNCOMMITTED, NOT MERELY DECLARED" in script
+    assert "memo-outbox" in script
+    assert "must never trigger the partial verdict" in script
+
+    gate = _emitted_gate(script)
+    # A committer that landed every dirty path and reports a declared,
+    # untouched memo-outbox path as clean still emits COMMIT-LANDED, and the
+    # gate passes -- the run continues, no COMMIT-PARTIAL involved.
+    assert gate.search(
+        "committed chunks/D2.py and chunks/D8.py; "
+        "state/memo-outbox/sent/D2-notify.md was declared but never appeared "
+        "in the worktree (memo.send route, gitignored) -- clean, nothing to "
+        "commit\nCOMMIT-LANDED a805587fd8d0\n"
+    )
+
+
+def test_commit_gate_land_nothing_halt_is_unchanged():
+    """(d) The pre-existing halt-on-nothing-landed behaviour is unchanged:
+    a null result and a tokenless report both still fail the gate.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    gate = _emitted_gate(script)
+
+    assert not gate.search("the commit agent declined; nothing landed\n")
+    assert not gate.search("")
+    assert "did not land a commit" in script
+
+
 def test_commit_gate_names_resume_path_not_just_the_failure():
     # A halt the operator cannot act on is a stall. The reason must say how to
     # continue after clearing the cause.
@@ -2126,6 +2283,25 @@ def test_emitted_row_prompt_carries_the_self_verify_constraint_naming_emitted_au
     assert "Only the EM commits, once per wave" not in script
 
 
+def test_emitted_row_prompt_commit_clause_names_only_the_commit_phase():
+    """Slot (4) ("Only <X> commits, once per wave...") must name ONLY the
+    commit phase -- never the terminal test-runner phase, which does not
+    commit (Review: coordinator:code-reviewer, finding 1, EM-agreed
+    break-class fix). Asserted against `compose_script` output, not the
+    module constant, per the reviewer's brief."""
+    waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
+    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
+
+    assert (
+        "Only this wave\\'s `coordinator:git-commit-agent` commit phase "
+        "commits, once per wave"
+    ) in script
+    assert (
+        "Only this wave\\'s `coordinator:git-commit-agent` commit phase and "
+        "the run\\'s terminal `coordinator:test-runner` phase commits"
+    ) not in script
+
+
 def test_emitted_row_prompt_carries_the_done_summary_constraint_with_reply_and_porcelain():
     """The done-summary constraint's structured-reply rule and its
     porcelain changed-path clause must both reach the emitted script,
@@ -2190,6 +2366,41 @@ def test_dispatch_report_path_refuses_a_row_id_containing_path_separators():
     import pytest
 
     for bad_id in ("../escape", "a/b", "a\\b", "..", "."):
+        with pytest.raises(ValueError):
+            emit._dispatch_report_path("docs/plans/example.md", bad_id)
+
+
+def test_dispatch_report_path_accepts_ordinary_row_ids():
+    """Review: coordinator:code-reviewer, finding 1 -- the allowlist rewrite
+    must still accept every ordinary row-id shape a plan spine writes today."""
+    for good_id in ("C1", "c-1", "C_1.a"):
+        report_path = emit._dispatch_report_path("docs/plans/example.md", good_id)
+        assert report_path == f".coordinator-local/subagent-share/dispatch-reports/example/{good_id}.md"
+
+
+def test_dispatch_report_path_refuses_windows_hazardous_row_ids():
+    """Review: coordinator:code-reviewer, finding 1, EM-confirmed LIVE --
+    `spine_read` validates row-id presence, type and uniqueness only, never
+    character shape, so a row id shaped like a drive letter, a leading
+    `~`, a trailing dot/space, a control character, or a Windows reserved
+    device name (bare or with an extension) reaches this function
+    untouched and must be refused here."""
+    import pytest
+
+    bad_ids = [
+        "C:",  # bare drive-letter-shaped segment
+        "~foo",  # leading ~
+        "foo.",  # trailing dot -- Windows silently strips it
+        "foo ",  # trailing space -- Windows silently strips it
+        "foo\x00bar",  # NUL character
+        "foo\x01bar",  # control character
+        "CON",  # reserved device name
+        "con",  # reserved device name, case-insensitive
+        "CON.md",  # reserved device name with an extension
+        "COM1",  # reserved device name
+        "LPT1.md",  # reserved device name with an extension
+    ]
+    for bad_id in bad_ids:
         with pytest.raises(ValueError):
             emit._dispatch_report_path("docs/plans/example.md", bad_id)
 

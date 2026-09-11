@@ -383,12 +383,21 @@ class GitResult:
             committed instead must re-stage it and re-call -- this field
             exists purely to make the exclusion visible, not to change which
             content lands.
+        cas_ref_relpath — the repo-relative ref path (e.g. `refs/heads/main`,
+            or `HEAD` for a detached checkout) this commit landed onto,
+            taken from the same `_resolve_cas_ref_target` resolution
+            `_commit_via_head_spine`'s `cas_ref()` call used, never a
+            later re-resolution (docs/plans/2026-09-11-memo-send-returns-
+            ok-with-a-commit-sha-t.md, C4). `None` is never an error --
+            "no ref is being reported here" -- and is the default on
+            every `GitResult` this module builds.
     """
 
     returncode: int
     stdout: str
     stderr: str
     worktree_excluded: Tuple[str, ...] = ()
+    cas_ref_relpath: Optional[str] = None
 
     @property
     def ok(self) -> bool:
@@ -4810,7 +4819,12 @@ def _commit_via_head_spine(
             ),
         )
 
-    return GitResult(returncode=0, stdout=new_commit_sha, stderr="")
+    return GitResult(
+        returncode=0,
+        stdout=new_commit_sha,
+        stderr="",
+        cas_ref_relpath=ref_relpath,
+    )
 
 
 def _head_entry_for(root: Path, normalized: str) -> Optional[Tuple[int, str]]:
@@ -5060,8 +5074,17 @@ def commit_authored_content(
         if not fast_result.ok:
             return fast_result
         new_commit_sha = fast_result.stdout.strip()
+        # Review: code-reviewer finding 2 -- C4 (7fd7c86f) threaded
+        # cas_ref_relpath through commit_authored_new_file but left this
+        # sibling's fast path dropping it; carried through here the same way.
+        fast_path_cas_ref_relpath = fast_result.cas_ref_relpath
     else:
         # ---- fall-back: today's ladder, unchanged --------------------
+        # Never goes through `_commit_via_head_spine`'s `cas_ref()` call,
+        # so there is no ref-landed-onto fact to report here -- matches
+        # `GitResult.cas_ref_relpath`'s documented "no ref is being
+        # reported here" meaning for `None`, not "the CAS failed".
+        fast_path_cas_ref_relpath = None
         temp_index = Path(tempfile.gettempdir()) / f"git-index-{os.getpid()}-{uuid.uuid4().hex}"
         try:
             private_env: Dict[str, str] = dict(os.environ)
@@ -5161,7 +5184,12 @@ def commit_authored_content(
         committer_id_override=attributed_session_id,
     )
 
-    return GitResult(returncode=0, stdout=new_commit_sha, stderr="")
+    return GitResult(
+        returncode=0,
+        stdout=new_commit_sha,
+        stderr="",
+        cas_ref_relpath=fast_path_cas_ref_relpath,
+    )
 
 
 def commit_authored_new_file(
@@ -5451,7 +5479,12 @@ def commit_authored_new_file(
             committer_id_override=attributed_session_id,
         )
 
-    return GitResult(returncode=0, stdout=new_commit_sha, stderr="")
+    return GitResult(
+        returncode=0,
+        stdout=new_commit_sha,
+        stderr="",
+        cas_ref_relpath=landed.cas_ref_relpath,
+    )
 
 
 def rev_parse_head(cwd: Union[str, Path]) -> GitResult:

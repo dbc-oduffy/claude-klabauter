@@ -563,6 +563,81 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
     return 2
 
 
+def _archive_stamped_plan(plan_path: Path, worktree_root: Path, common_dir: Path) -> Optional[str]:
+    """Archive `plan_path` and any of its sidecars immediately after this op
+    just stamped it terminal and committed the flip -- the archival OCCASION
+    `coordinator_core.ops.fleet.archive_plans`'s own module docstring names
+    as unclosed ("nothing calls `plan_status_transition stamp-implemented`
+    on a cadence" was the sweep-side half; this is the writer-side half:
+    nothing fired archive_plans.plan_sweep at the moment a plan actually
+    went terminal). Composes `archive_plans.plan_sweep` (classification) +
+    `_common.archive_and_commit` (the same DR-211 D3/D4 move+commit helper
+    `archive_plans._handle_act` already uses) rather than writing a second
+    mover, per this chunk's own dispatch brief ("Don't write a second
+    mover").
+
+    Runs as a SEPARATE commit from the status-flip commit `_commit_plan_flip`
+    already landed immediately before this is called: the flip write goes
+    through `commit_authored_content` (exact caller-supplied bytes, no
+    worktree read -- see module docstring "No-worktree-read commit"), while
+    a plan move is a multi-path tree-delta `archive_and_commit` assembles
+    from the worktree/index directly -- there is no shared commit route
+    between those two shapes to land in one commit without building a new
+    one, which this chunk's brief scopes out ("if they can't [land in one
+    commit], commit the move immediately after").
+
+    Returns None on success (archived, or genuinely nothing to archive --
+    e.g. a live claim still held the plan, or the corpus scan raced the
+    write and found it already gone). Returns a human-readable failure
+    reason string on a genuine archival failure -- the caller NEVER treats
+    a non-None return as a reason to undo or hide the stamp that already
+    landed; it is reported (stderr) only.
+    """
+    import asyncio
+
+    from coordinator_core.ops.fleet._common import archive_and_commit
+    from coordinator_core.ops.fleet.archive_plans import (
+        _is_sidecar,
+        _primary_for_sidecar,
+        collect_live_plan_paths,
+        plan_sweep,
+    )
+
+    try:
+        plan_relpath = rel_id(plan_path.resolve(), worktree_root.resolve())
+    except ValueError as exc:
+        return f"could not resolve {plan_path} as repo-relative to {worktree_root}: {exc}"
+
+    candidate_ids = [plan_relpath]
+    try:
+        for p in collect_live_plan_paths(worktree_root):
+            if _is_sidecar(p) and _primary_for_sidecar(p) == plan_path.resolve():
+                candidate_ids.append(rel_id(p, worktree_root))
+    except OSError as exc:
+        return f"could not scan docs/plans/ for sidecars of {plan_path}: {exc}"
+
+    moves, skipped = plan_sweep(
+        worktree_root, common_dir, cap=len(candidate_ids), candidate_ids=candidate_ids,
+    )
+    if not moves:
+        return None  # nothing archivable right now (e.g. live claim, or already gone) -- not a failure
+
+    subject = (
+        f"{_PROG}: archive {len(moves)} plan document(s) "
+        f"(archived on the stamp-terminal occasion, not a corpus sweep)\n"
+    )
+    try:
+        acted, failed = asyncio.run(
+            archive_and_commit(worktree_root=worktree_root, moves=moves, subject=subject)
+        )
+    except Exception as exc:  # noqa: BLE001 -- report, never let archival raise past the stamp
+        return f"archive_and_commit raised: {exc}"
+
+    if failed:
+        return f"{len(failed)} of {len(moves)} move(s) failed: {failed}"
+    return None
+
+
 def _relpath_for_commit(plan_path: Path, worktree_root: Path) -> "tuple[Optional[str], Optional[str]]":
     """Resolve the plan path's repo-relative id, without ever letting a raw
     ``ValueError`` escape into ``_stamp_implemented`` after the write has
@@ -1465,7 +1540,24 @@ def _stamp_implemented(opts: _Opts) -> int:
 
     print(f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → implemented")
 
-    return _run_cascade(opts.plan, _state["deliverable_id"])
+    cascade_exit = _run_cascade(opts.plan, _state["deliverable_id"])
+
+    # Archival occasion (see _archive_stamped_plan docstring): only attempted
+    # when the flip itself was actually committed (worktree resolved, not
+    # untracked) -- an uncommitted flip has nothing archival should be
+    # allowed to move yet. Best-effort/advisory: a failure here is reported
+    # on stderr and never changes this function's own exit code, mirroring
+    # _ac_open_rows_warning's identical "never blocks, never reverts" posture.
+    if worktree_root is not None and relpath is not None and untracked_reason is None:
+        archive_err = _archive_stamped_plan(plan_path, worktree_root, git_common_dir)
+        if archive_err is not None:
+            print(
+                f"{_PROG}: {opts.plan} was stamped implemented and committed, but "
+                f"the archival sweep failed: {archive_err}",
+                file=sys.stderr,
+            )
+
+    return cascade_exit
 
 
 def _stamp_superseded(opts: _Opts) -> int:
@@ -1655,6 +1747,19 @@ def _stamp_superseded(opts: _Opts) -> int:
                     file=sys.stderr,
                 )
                 return 1
+
+            # Archival occasion (see _archive_stamped_plan docstring, and the
+            # identical call site in _stamp_implemented): only when the flip
+            # itself actually committed. Best-effort/advisory only -- never
+            # undoes or hides the stamp, never changes this function's exit
+            # code.
+            archive_err = _archive_stamped_plan(plan_path, worktree_root, git_common_dir)
+            if archive_err is not None:
+                print(
+                    f"{_PROG}: {opts.plan} was stamped superseded and committed, but "
+                    f"the archival sweep failed: {archive_err}",
+                    file=sys.stderr,
+                )
 
     print(
         f"{_PROG}: {opts.plan} status \"{_state['prior_status']}\" → superseded (by {by_value})"

@@ -80,8 +80,10 @@ import json
 import os
 import re
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+
+from coordinator_core.memo_corpus import memo_corpus_root
 from typing import Any
 
 from coordinator_core.distill import harvest_debt as _harvest_debt
@@ -295,6 +297,25 @@ PM_RULING_2026_08_06_COHORT_SPECS: tuple[CohortSpec, ...] = (
 )
 
 
+_LEGACY_MEMO_ARCHIVE = "cross-repo/archive"
+
+
+def _memo_archive_reldir(worktree_root: Path) -> str:
+    """This repo's own memo archive, worktree-relative: `state/cross-repo/archive`, or legacy
+    `cross-repo/archive` in a repo not yet migrated (memo_corpus_root decides)."""
+    root = os.path.relpath(memo_corpus_root(str(worktree_root)), str(worktree_root))
+    return f"{Path(root).as_posix()}/archive"
+
+
+def _rebase_memo_glob(spec: CohortSpec, memo_archive: str) -> CohortSpec:
+    """A cohort row that names the memo archive by its legacy path (as
+    PM_RULING_2026_08_06_COHORT_SPECS does) scans it where this repo's corpus lives."""
+    legacy_prefix = f"{_LEGACY_MEMO_ARCHIVE}/"
+    if memo_archive == _LEGACY_MEMO_ARCHIVE or not spec.glob.startswith(legacy_prefix):
+        return spec
+    return replace(spec, glob=f"{memo_archive}/{spec.glob[len(legacy_prefix):]}")
+
+
 def _scan_cohort(worktree_root: Path, spec: CohortSpec) -> list[str]:
     """Glob+filter one CohortSpec row; returns sorted worktree-relative paths."""
     filter_fn = _COHORT_FILTERS[spec.filter] if spec.filter is not None else None
@@ -338,7 +359,7 @@ def compute_scope(
     run_id: str,
     specs_dir: str = "archive/specs",
     handoffs_dir: str = "archive/handoffs",
-    memos_dir: str = "cross-repo/archive",
+    memos_dir: str | None = None,
     log_path: str = "state/distillation-log.md",
     wiki_dirs: list[str] | None = None,
     batch_size: int = 30,
@@ -389,10 +410,11 @@ def compute_scope(
     sidecar_cohort = sorted(row["path"] for row in sidecar_result.deletion_manifest)
     sidecar_retained_cohort = sorted(row["path"] for row in sidecar_result.retained)
 
+    memo_archive = _memo_archive_reldir(worktree_root)
     resolved_cohort_specs = (
-        list(cohort_specs)
+        [_rebase_memo_glob(spec, memo_archive) for spec in cohort_specs]
         if cohort_specs is not None
-        else _default_cohort_specs(handoffs_dir, memos_dir)
+        else _default_cohort_specs(handoffs_dir, memos_dir if memos_dir is not None else memo_archive)
     )
     data_driven_cohorts: dict[str, list[str]] = {}
     harvest_mode_names: list[str] = []

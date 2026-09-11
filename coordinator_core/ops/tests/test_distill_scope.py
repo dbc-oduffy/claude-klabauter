@@ -461,3 +461,27 @@ def test_handler_cohort_specs_non_dict_row_raises_value_error(fixture_repo):
             {"run_id": "2026-07-23-01h00", "cohort_specs": ["not-a-dict"]},
             repo_root=fixture_repo / ".git",
         )
+
+
+def test_memo_cohorts_follow_a_state_rooted_corpus(fixture_repo):
+    """A repo whose memo corpus lives under state/cross-repo/ is scanned there, for the default
+    cohort and for the 2026-08-06 ruling's row, which names the legacy path."""
+    (fixture_repo / "state").mkdir(exist_ok=True)
+    (fixture_repo / "cross-repo").rename(fixture_repo / "state" / "cross-repo")
+    _write(
+        fixture_repo / "state" / "cross-repo" / "archive" / "2026-07-01-memo-one.md",
+        "---\ndistill_fate: ratification\n---\nmemo one\n",
+    )
+
+    default = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
+    assert default.manifest["cohorts"]["memos"] == [
+        "state/cross-repo/archive/2026-07-01-memo-one.md",
+        "state/cross-repo/archive/2026-07-02-memo-two.md",
+    ]
+
+    ruling = compute_scope(
+        fixture_repo,
+        run_id="2026-07-23-01h00",
+        cohort_specs=list(PM_RULING_2026_08_06_COHORT_SPECS),
+    )
+    assert ruling.manifest["cohorts"]["memos"] == ["state/cross-repo/archive/2026-07-01-memo-one.md"]

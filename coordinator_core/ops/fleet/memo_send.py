@@ -115,6 +115,8 @@ from coordinator_core.git.commit import (
     hash_worktree_blobs_via_spawn,
 )
 from coordinator_core.git.commit_trailers import apply_missing_trailers
+from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.git.git_objects import _read_object
 from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteError
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, locked_rmw
@@ -549,7 +551,16 @@ def _ledger_row(
     *, topic: str, to: str, kind: str, summary: Optional[str],
     delivered_to: str, in_reply_to: Optional[str],
     delivery_commit_sha: Optional[str], sent_by: str,
+    delivery_branch: Optional[str] = None,
 ) -> dict:
+    """`delivery_branch` — the repo-relative ref (`git_native.GitResult.
+    cas_ref_relpath`, e.g. `refs/heads/main`) the delivery commit was CAS'd
+    onto in the receiver, taken verbatim from the commit call's own result —
+    never re-resolved, since a later read of the receiver's HEAD would name
+    wherever the receiver has since moved, not where this delivery landed.
+    `None` on rows written before this field existed (and on any row whose
+    commit result did not carry one) — C5 must read that as UNKNOWN, never
+    as a mismatch against a receiver's current ref."""
     return {
         "sent_at": datetime.datetime.now(datetime.timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
@@ -561,8 +572,50 @@ def _ledger_row(
         "delivered_to": delivered_to,
         "in_reply_to": in_reply_to,
         "delivery_commit_sha": delivery_commit_sha,
+        "delivery_branch": delivery_branch,
         "sent_by": sent_by,
     }
+
+
+def _delivery_commit_is_object(receiver_repo_path: Path, sha: str) -> bool:
+    """True iff `sha` names a commit object readable in the receiver's own
+    object store — object EXISTENCE, not reachability from a ref.
+
+    Ships the cheaper of the two checks the plan named (design rationale:
+    docs/plans/2026-09-11-memo-send-returns-ok-with-a-commit-sha-t.md).
+
+    Uses the in-process pack/loose object reader (`git_objects._read_object`)
+    against the receiver's git COMMON dir — zero process spawns, and no hook
+    runs in the receiver's tree (`commit_authored_new_file`'s own no-hooks
+    contract, which this read never touches).
+    """
+    common_dir = resolve_git_common_dir(receiver_repo_path)
+    found = _read_object(common_dir, sha)
+    return found is not None and found[0] == "commit"
+
+
+def _rollback_unwritten_file(target_file: Path) -> str:
+    """Undo this call's own O_EXCL write when the commit that was supposed
+    to follow it did not durably land — shared by both refusal arms in
+    `_memo_send` (the declined-commit C1 arm and the unverified-delivery C2
+    arm): same unlink, same rollback-detail suffix text, different reason
+    prefix per arm (kept distinct so a reader can still tell which fired).
+
+    Unlinking is safe precisely here and nowhere else: the O_EXCL open that
+    created `target_file` proves it did not exist before this call, and
+    either failure mode proves nothing references it since. Returns the
+    trailing clause each arm appends to its own `reason` text.
+    """
+    try:
+        target_file.unlink()
+    except OSError as unlink_exc:
+        return (
+            f" WARNING: the file this call wrote could NOT be removed"
+            f" ({unlink_exc}); it is left uncommitted in the receiver's"
+            f" tree and a retry will refuse on the no-clobber guard until"
+            f" it is cleared."
+        )
+    return " the file this call wrote was removed (tree restored)."
 
 
 class _SenderCommit(NamedTuple):
@@ -740,6 +793,165 @@ def _no_reader_gate(
         # permanently; send.
         return None
     return _no_reader_warning(topic, unreachable.evidence)
+
+
+# ---------------------------------------------------------------------------
+# C5 — sender-side sweep: is a ledgered delivery still a commit object in the
+# receiver? Read-only, both repos; reuses `_delivery_commit_is_object`
+# verbatim (no new primitive). See module docstring's C5 spec backlink.
+# ---------------------------------------------------------------------------
+
+_CHECK_DELIVERIES_KNOWN_PARAM_KEYS = frozenset({"dry_run"})
+
+
+def _validate_check_deliveries_params(params: dict):
+    """Validate memo.check_deliveries params; return dry_run or a setup-error dict.
+
+    `dry_run` must be `True` — this op has no act mode, it only ever reads.
+    """
+    dry_run = params.get("dry_run")
+    if dry_run is not True:
+        return build_setup_error_result(
+            "check_deliveries", dry_run,
+            "memo.check_deliveries: dry_run must be true — this op has no "
+            "act mode, it only reads the sent-ledger and each receiver's "
+            "own object store.",
+        )
+    unknown_keys = set(params.keys()) - _CHECK_DELIVERIES_KNOWN_PARAM_KEYS
+    if unknown_keys:
+        return build_setup_error_result(
+            "check_deliveries", dry_run,
+            f"memo.check_deliveries: unrecognized param(s) {sorted(unknown_keys)} "
+            f"— known params: {sorted(_CHECK_DELIVERIES_KNOWN_PARAM_KEYS)}.",
+        )
+    return dry_run
+
+
+def _iter_ledger_rows(ledger_path: Path):
+    """Yield each parseable dict row from the sent-ledger JSONL, in file order.
+
+    A line that is not JSON, or not a JSON object, is skipped rather than
+    raising — same discipline as `_row_is_older_than_cutoff`: a malformed or
+    hand-edited line must not sink the whole sweep.
+    """
+    try:
+        text = ledger_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict):
+            yield row
+
+
+#: Sweep verdicts — three outcomes, never two. A receiver absent from this
+#: machine is UNCHECKABLE, not GONE: it says nothing about whether the
+#: delivery arrived (plan's "The delivery-durability decision", C5).
+_VERDICT_VERIFIED = "verified"
+_VERDICT_GONE = "gone"
+_VERDICT_NOT_CHECKABLE = "not_checkable"
+
+
+def _check_ledger_row(row: dict) -> dict:
+    """Classify one sent-ledger row: verified / gone / not_checkable.
+
+    Reuses `_delivery_commit_is_object` verbatim — the same object-existence
+    read C2 added to the send path itself, run again here, later, read-only.
+    Never writes, never re-sends.
+    """
+    topic = row.get("topic")
+    to = row.get("to")
+    sha = row.get("delivery_commit_sha")
+    branch = row.get("delivery_branch")  # absent -> unknown, never a mismatch
+    candidate = {
+        "id": f"{to}:{topic}:{sha}",
+        "topic": topic,
+        "to": to,
+        "delivery_commit_sha": sha,
+        "delivery_branch": branch if isinstance(branch, str) else None,
+    }
+
+    if not sha or not isinstance(sha, str):
+        candidate["status"] = _VERDICT_NOT_CHECKABLE
+        candidate["note"] = "row carries no delivery_commit_sha — nothing to verify"
+        return candidate
+
+    if not to or not isinstance(to, str):
+        candidate["status"] = _VERDICT_NOT_CHECKABLE
+        candidate["note"] = "row carries no 'to' — cannot resolve a receiver to check"
+        return candidate
+
+    try:
+        _inbox_dir, receiver_repo_path, _all_repos = _resolve_receiver_inbox(to)
+    except (RegistryReadError, AmbiguousReceiverError) as exc:
+        candidate["status"] = _VERDICT_NOT_CHECKABLE
+        candidate["note"] = f"receiver {to!r} could not be resolved: {exc}"
+        return candidate
+
+    if receiver_repo_path is None or not receiver_repo_path.is_dir():
+        candidate["status"] = _VERDICT_NOT_CHECKABLE
+        where = f" ({receiver_repo_path})" if receiver_repo_path is not None else ""
+        candidate["note"] = (
+            f"receiver {to!r} is not checked out on this machine{where} — a "
+            f"peer not checked out here says nothing about delivery"
+        )
+        return candidate
+
+    if _delivery_commit_is_object(receiver_repo_path, sha):
+        candidate["status"] = _VERDICT_VERIFIED
+        candidate["note"] = None
+    else:
+        candidate["status"] = _VERDICT_GONE
+        candidate["note"] = (
+            f"{sha!r} is no longer a commit object in {receiver_repo_path} — "
+            f"delivered, not durable; re-delivery is an operator decision "
+            f"(re-run memo.send)"
+        )
+    return candidate
+
+
+@register_op("memo.check_deliveries")
+def _memo_check_deliveries(params: dict, repo_root=None) -> dict:
+    """JSON-RPC 'memo.check_deliveries' COMPUTE_ONLY op handler.
+
+    A sender-side, read-only sweep over this repo's own sent-ledger: for
+    each row, is `delivery_commit_sha` still a commit object in the
+    receiver's own repository? Converts a silent permanent loss (the
+    incident this plan closes) into a visible one.
+
+    Params:
+        dry_run (bool, required): must be True — no act mode.
+
+    repo_root: git common dir (`_OP_KEY_SCOPE = "common_dir"`) — the
+    SENDER's own worktree, same derivation memo.send uses.
+
+    Reads only: the sender's own ledger file, and object stores of
+    registered receiver repos present on this machine. Never writes into a
+    receiver, never re-sends — see module docstring's C5 negative-spec.
+    """
+    validated = _validate_check_deliveries_params(params)
+    if isinstance(validated, dict):
+        return validated
+    dry_run = validated
+
+    if repo_root is None:
+        return build_setup_error_result(
+            "check_deliveries", dry_run,
+            "memo.check_deliveries: no repo_root supplied — reads the "
+            "CALLING repo's own sent-ledger and requires a resolved "
+            "worktree (common_dir-keyed op).",
+        )
+    sender_worktree = main_worktree_root(Path(repo_root))
+    ledger_path = _sent_ledger_path(sender_worktree)
+
+    candidates = [_check_ledger_row(row) for row in _iter_ledger_rows(ledger_path)]
+    return build_dry_run_result("check_deliveries", candidates)
 
 
 @register_op("memo.send")
@@ -966,16 +1178,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         # Unlinking is safe precisely here and nowhere else: the O_EXCL open
         # above proves the file did not exist before this call, and the failed
         # commit proves nothing references it.
-        rollback_detail = " the file this call wrote was removed (tree restored)."
-        try:
-            target_file.unlink()
-        except OSError as unlink_exc:
-            rollback_detail = (
-                f" WARNING: the file this call wrote could NOT be removed"
-                f" ({unlink_exc}); it is left uncommitted in the receiver's"
-                f" tree and a retry will refuse on the no-clobber guard until"
-                f" it is cleared."
-            )
+        rollback_detail = _rollback_unwritten_file(target_file)
         return build_act_result(_MODE, [], [], [{
             "id": str(target_file),
             "reason": (
@@ -985,6 +1188,22 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         }])
 
     delivery_commit_sha = commit_result.stdout.strip() or None
+
+    # `commit_result.ok` is a return value, not a verified fact.
+    if delivery_commit_sha is None or not _delivery_commit_is_object(
+        receiver_repo_path, delivery_commit_sha
+    ):
+        rollback_detail = _rollback_unwritten_file(target_file)
+        return build_act_result(_MODE, [], [], [{
+            "id": str(target_file),
+            "reason": (
+                f"receiver-side commit could not be verified: "
+                f"{delivery_commit_sha or ''!r} is not a commit object in "
+                f"the receiver's repository — not sent."
+                + rollback_detail
+            ),
+        }])
+
     delivered_to = _portable_delivered_to_form(receiver_repo_path, target_file)
 
     # ── sender-side receipt: sent/ copy + ledger row + one commit ──────────
@@ -1030,6 +1249,7 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         topic=topic, to=to, kind=fm.get("kind"), summary=delivered_fm.get("summary"),
         delivered_to=delivered_to, in_reply_to=fm.get("in_reply_to"),
         delivery_commit_sha=delivery_commit_sha,
+        delivery_branch=commit_result.cas_ref_relpath,
         sent_by=sent_by,
     )
     appended_line = json.dumps(row, ensure_ascii=False) + "\n"

@@ -188,6 +188,25 @@ verification`` rows) that this module must accept, not an illegal spelling
 per-row zero-contribution check that WARNS on it rather than refusing when
 a real-contributing sibling is present).
 
+## Run-time-named writes (``writes_under:``)
+
+A row whose output filename is chosen when it runs (a dated audit, a
+live-run row's output, a write into a growing corpus) declares a directory
+PREFIX in ``writes_under:`` instead of a file in ``writes:``. ``writes:``
+still refuses a directory (``DirectoryShapedWriteError``), so the two
+spellings stay distinct.
+
+This module never resolves a prefix to files. That would be the tree
+survey the negative spec above forbids. ``commit_pathspec`` returns the
+static part, legally empty when the wave carries a prefix, and
+``commit_prefixes`` returns each prefix row's prefixes. The emitted commit
+prompt adds the concrete files each prefix row's own report names, bounded
+to that row's prefix. A prefix contributes no terminal test target: its
+files have no name to map at emit time.
+
+Source: state/improvement-queue/2026-09-11-dispatch-emit-takes-a-writes-under-prefi-309100e2b36b.yaml
+(proposed by doe-claude-em).
+
 ## The executed premise this module's output inherits (AC14)
 
 The orphan-claim gate that ``git-commit-agent`` enforces at runtime binds
@@ -366,7 +385,9 @@ def _declared_paths(row: WaveRow) -> list[str]:
         for path in declared:
             if path.endswith("/") or path.endswith("\\"):
                 raise DirectoryShapedWriteError(
-                    f"{row.id}'s `writes:` entry {path!r} is directory-shaped"
+                    f"{row.id}'s `writes:` entry {path!r} is directory-shaped. "
+                    "Name the file, or declare it under `writes_under:` if "
+                    "the row chooses the name at run time."
                 )
         return list(declared)
     if is_concrete_surface(row.surface):
@@ -439,6 +460,13 @@ def commit_pathspec(wave: list[WaveRow]) -> list[str]:
     other rows via a hand-built wave bypassing ``build_waves`` (as this
     module's own test suite does for coverage) — refusal 1 above already
     covers the real, ``build_waves``-reachable UNDECLARED case.
+
+    One shape returns an EMPTY pathspec legally: a wave carrying a
+    ``writes_under:`` prefix (see ``commit_prefixes``). Its files exist by
+    the time the commit phase runs, but their names are chosen at run time,
+    so the commit prompt adds them from each prefix row's own report. The
+    empty static part is then the correct answer, not a missing one. A
+    prefix row is also never zero-contribution for the warning below.
     """
     declares_writes = [row for row in wave if row.writes is not UNDECLARED]
     if not declares_writes:
@@ -450,7 +478,9 @@ def commit_pathspec(wave: list[WaveRow]) -> list[str]:
     zero_contribution = [
         row
         for row in wave
-        if row.writes is not UNDECLARED and not _declared_paths(row)
+        if row.writes is not UNDECLARED
+        and not _declared_paths(row)
+        and not row.writes_under
     ]
     if zero_contribution:
         _logger.warning(
@@ -463,12 +493,23 @@ def commit_pathspec(wave: list[WaveRow]) -> list[str]:
     for row in wave:
         paths.extend(_declared_paths(row))
     paths = _dedupe(paths)
-    if not paths:
+    if not paths and not commit_prefixes(wave):
         raise NoWritesDeclaredError(
             "wave's declared writes contribute no paths: refusing to emit "
             f"an empty commit phase pathspec (rows: {_named_rows(wave)})"
         )
     return paths
+
+
+def commit_prefixes(wave: list[WaveRow]) -> list[tuple[str, tuple[str, ...]]]:
+    """``(row id, its writes_under prefixes)`` for every row in ``wave``
+    declaring any, in row order.
+
+    Kept per row on purpose. The commit prompt bounds each prefix row's
+    reported files to THAT row's own prefixes, so one row's report can never
+    widen the pathspec under a sibling's prefix.
+    """
+    return [(row.id, tuple(row.writes_under)) for row in wave if row.writes_under]
 
 
 def _normalized_test_name(stem: str) -> str:
@@ -670,8 +711,12 @@ def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = 
         # contribution refusal, never "this wave is prose": there is no
         # surface to call non-testable. Guarding on it keeps the AC16
         # widening from silently swallowing NoWritesDeclaredError's shape 2.
+        # A spine whose only writes are `writes_under:` prefixes names no
+        # file to map, so its empty scope is a fact about the spine, not an
+        # omission: no edit could name a test for files not chosen yet.
         omissions = [path for path in unmapped if _is_testable_surface(path)]
-        if omissions or not unmapped:
+        prefix_only = not unmapped and any(row.writes_under for row in all_rows)
+        if omissions or (not unmapped and not prefix_only):
             raise NoTestTargetError(
                 "every written path mapped to no runnable test target, "
                 f"refusing an empty terminal test scope (paths: {unmapped!r}; "

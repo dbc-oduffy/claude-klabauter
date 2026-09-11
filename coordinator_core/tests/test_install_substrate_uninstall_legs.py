@@ -373,8 +373,8 @@ def test_register_hardware_concern_multiline_array_preserves_existing(tmp_path):
         '  "unreal",\n'
         "]\n"
         "\n"
-        "[cockpit]\n"
-        'meta_repo_slug = ""\n',
+        "[sibling]\n"
+        'key = ""\n',
         encoding="utf-8",
     )
     substrate._register_hardware_concern(registry)
@@ -383,7 +383,7 @@ def test_register_hardware_concern_multiline_array_preserves_existing(tmp_path):
     data = tomllib.loads(registry.read_text(encoding="utf-8"))
     assert set(data["concerns"]) == {"example_retrieval_repo", "unreal", "hardware"}
     # Sibling section survived the migration untouched.
-    assert data["cockpit"]["meta_repo_slug"] == ""
+    assert data["sibling"]["key"] == ""
 
 
 def test_register_hardware_concern_noop_when_already_present(tmp_path):

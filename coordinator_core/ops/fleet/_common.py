@@ -994,6 +994,7 @@ def check_repo_root(
 # anywhere else is a defect, not a convenience. All three are relative to the
 # resolved worktree root.
 ARCHIVE_ROOT_SUBDIRS: Tuple[str, ...] = (
+    "state/cross-repo/archive",
     "cross-repo/archive",
     "archive/handoffs",
     "archive/completed",

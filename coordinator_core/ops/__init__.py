@@ -139,6 +139,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.work_state", 'registers "fleet.work_state"'),
     ("coordinator_core.ops.fleet.record_history", 'registers "fleet.record_history"'),
     ("coordinator_core.ops.fleet.archive_terminal_handoffs", 'registers "fleet.archive_completed_handoffs"'),
+    ("coordinator_core.ops.fleet.archive_plans", 'registers "fleet.archive_completed_plans"'),
     # `handoff.housekeeping` (and the `handoff_housekeeping.py` / `handoff_reconcile.py`
     # modules that carried it) is deleted outright — the repoint landed and C7's
     # replacement below is the only door. Kill means kill forever (PM 2026-08-23).

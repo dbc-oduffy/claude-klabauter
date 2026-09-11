@@ -83,7 +83,8 @@ _SENSITIVE_MARKERS = ("CLAUDE.md", "settings.json", "hooks/", "agents/")
 _GATE_FILE_COUNT_THRESHOLD = 10
 
 _UPDATE_OR_NEW = re.compile(r"^(?:UPDATE|NEW): (?P<path>.+)$")
-_DELETING = re.compile(r"\b(deleting|del\.)\b")
+#: The deletion token `publish_sync.py :: sync_mirror` prints (`REMOVE: <path> (not in source)`).
+_DELETING = re.compile(r"^\s*REMOVE: ")
 
 
 def _touched_paths(stdout_text: str) -> List[str]:

@@ -148,6 +148,8 @@ class WaveRow(NamedTuple):
     depends_on: list
     agent_type: Optional[str] = None
     agent_model: Optional[str] = None
+    body: str = ""
+    writes_under: tuple = ()
 
 
 class WaveCycleError(ValueError):
@@ -210,10 +212,16 @@ def _writes_overlap(a: EmitterRow, b: EmitterRow) -> bool:
     Either side UNDECLARED forces separation (AC2): undeclared is unknown,
     not empty, so it cannot be proven disjoint from anything, including
     another UNDECLARED row.
+
+    A ``writes_under:`` prefix counts as a declared write here. Because
+    ``_paths_overlap`` is ancestor-aware, two rows under one prefix, or a
+    prefix and a file beneath it, cannot share a wave.
     """
     if a.writes is UNDECLARED or b.writes is UNDECLARED:
         return True
-    return any(_paths_overlap(x, y) for x in a.writes for y in b.writes)
+    a_paths = [*a.writes, *a.writes_under]
+    b_paths = [*b.writes, *b.writes_under]
+    return any(_paths_overlap(x, y) for x in a_paths for y in b_paths)
 
 
 def _declared_closure(declared: dict[str, set[str]]) -> dict[str, set[str]]:
@@ -308,16 +316,25 @@ def _predecessors(
         if writer.writes is UNDECLARED or not isinstance(writer.writes, list):
             continue
         write_paths = {_normalize_path(path): path for path in writer.writes}
+        write_prefixes = {
+            _normalize_path(prefix): prefix for prefix in writer.writes_under
+        }
         for reader in rows:
             if reader.id == writer.id:
                 continue
-            collisions = [
-                (read_path, write_paths[normalized])
-                for read_path, normalized in (
-                    (path, _normalize_path(path)) for path in reader.reads
-                )
-                if normalized in write_paths
-            ]
+            collisions = []
+            for read_path in reader.reads:
+                normalized = _normalize_path(read_path)
+                if normalized in write_paths:
+                    collisions.append((read_path, write_paths[normalized]))
+                    continue
+                under = [
+                    prefix
+                    for norm_prefix, prefix in write_prefixes.items()
+                    if norm_prefix == normalized or norm_prefix in normalized.parents
+                ]
+                if under:
+                    collisions.append((read_path, under[0]))
             if not collisions:
                 continue
             if reader.id in declared_closure[writer.id]:
@@ -600,10 +617,12 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
                 title=row.title,
                 surface=row.surface,
                 writes=row.writes,
+                writes_under=row.writes_under,
                 reads=row.reads,
                 depends_on=row.depends_on,
                 agent_type=row.agent_type,
                 agent_model=row.agent_model,
+                body=row.body,
             )
             for row in wave
         ]

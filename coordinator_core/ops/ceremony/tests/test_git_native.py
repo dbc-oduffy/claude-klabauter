@@ -96,6 +96,7 @@ _WRAPPER_INVOCATIONS = [
     (git_native.log_diff_filter, ("/tmp/repo", "R"), {}),
     (git_native.remote, ("/tmp/repo",), {}),
     (git_native.push, ("/tmp/repo",), {}),
+    (git_native.push_set_upstream, ("/tmp/repo", "origin", "work/day"), {}),
     (git_native.fetch, ("/tmp/repo", "origin"), {}),
     (git_native.rebase_onto, ("/tmp/repo", "origin/main", "abc123"), {}),
     (git_native.rebase_abort, ("/tmp/repo",), {}),
@@ -470,6 +471,57 @@ def test_phantom_clearing_readers_keep_the_optional_lock(fn, args, kwargs, subco
         f"stat-cache write-back the flag suppresses. Got argv={argv!r}"
     )
     assert argv[1] == subcommand
+
+
+# ---------------------------------------------------------------------------
+# push_set_upstream -- the PUBLISH form (writes branch.<branch>.remote/.merge
+# on success). Mocked seam only, per `push`'s own family pattern above and
+# the dispatch-brief hard constraint: this wrapper must NEVER be exercised
+# against a real remote in a test, so there is no real-git fixture for it,
+# only `subprocess.run` interception (the same seam `test_flags_present_on_
+# every_wrapper` uses for every other push-family entry).
+# ---------------------------------------------------------------------------
+
+
+def test_push_set_upstream_builds_the_explicit_refspec_argv():
+    """Refspec must be explicit and NEVER carry `--force`/`--force-with-lease`/
+    a `+` prefix -- the negative spec `push_set_upstream`'s own docstring
+    names (create-or-fast-forward publish only)."""
+    with patch.object(git_native.subprocess, "run", return_value=_make_completed()) as mock_run:
+        git_native.push_set_upstream("/tmp/repo", "origin", "work/day")
+
+    assert mock_run.call_count == 1
+    argv = mock_run.call_args.args[0]
+    assert argv == ["git", "push", "--set-upstream", "origin", "work/day"]
+    assert "--force" not in argv
+    assert "--force-with-lease" not in argv
+    assert not any(token.startswith("+") for token in argv if isinstance(token, str))
+
+
+def test_push_set_upstream_reports_success():
+    with patch.object(
+        git_native.subprocess,
+        "run",
+        return_value=_make_completed(0, "branch 'work/day' set up to track 'origin/work/day'.\n", ""),
+    ):
+        result = git_native.push_set_upstream("/tmp/repo", "origin", "work/day")
+
+    assert result.ok is True
+    assert result.returncode == 0
+    assert result.stderr == ""
+
+
+def test_push_set_upstream_reports_rejection_without_raising():
+    with patch.object(
+        git_native.subprocess,
+        "run",
+        return_value=_make_completed(1, "", "! [rejected]  work/day -> work/day (fetch first)\n"),
+    ):
+        result = git_native.push_set_upstream("/tmp/repo", "origin", "work/day")
+
+    assert result.ok is False
+    assert result.returncode == 1
+    assert "[rejected]" in result.stderr
 
 
 # ---------------------------------------------------------------------------

@@ -206,6 +206,7 @@ from coordinator_core.lifecycle_constants import (
     HANDOFF_TERMINAL_DEPLOYMENT,
     HANDOFF_TERMINAL_STATUS,
 )
+from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.text.query_record_display import (
     TYPE_DISPLAY as _TYPE_DISPLAY,
@@ -1356,6 +1357,17 @@ def _apply_sibling_exclusion(
     return kept
 
 
+def _memo_glob(worktree_root: Path, record_type: str) -> str | None:
+    """The memo record types' glob under this repo's own corpus root (`state/cross-repo/` or
+    legacy `cross-repo/`, per memo_corpus_root); None for every other type. `_TYPE_TO_GLOB` keeps
+    the corpus-relative literal, which the schema-parity check pins."""
+    leaf = {'cross-repo-memo': 'inbox', 'archived-memo': 'archive'}.get(record_type)
+    if leaf is None:
+        return None
+    root = Path(os.path.relpath(memo_corpus_root(str(worktree_root)), str(worktree_root))).as_posix()
+    return f'{root}/{leaf}/*.md'
+
+
 def _collect_files(worktree_root: Path, record_type: str) -> list[Path]:
     """Collect candidate record files in node-parity order.
 
@@ -1375,7 +1387,7 @@ def _collect_files(worktree_root: Path, record_type: str) -> list[Path]:
     "readdir parity" fix mandated by AC8 and the parity test — sort IS the faithful
     strangle because node sorts via scandir.
     """
-    glob_pat = _TYPE_TO_GLOB[record_type]
+    glob_pat = _memo_glob(worktree_root, record_type) or _TYPE_TO_GLOB[record_type]
 
     if record_type in _WILDCARD_DIR_TYPES:
         # Wildcard DIRECTORY component — e.g. state/roadmap/*/OVERVIEW.md (single
@@ -1815,7 +1827,11 @@ def _collect_type_records(
 
     archive_candidates: list[Path] = []
     if include_archived:
-        archive_glob = _ARCHIVE_GLOB_FOR_TYPE.get(record_type)
+        archive_glob = (
+            _memo_glob(worktree_root, 'archived-memo')
+            if record_type == 'cross-repo-memo'
+            else _ARCHIVE_GLOB_FOR_TYPE.get(record_type)
+        )
         if archive_glob is not None:
             archive_candidates = _walk_glob_segments(worktree_root, archive_glob.split('/'))
             if record_type == 'plan':

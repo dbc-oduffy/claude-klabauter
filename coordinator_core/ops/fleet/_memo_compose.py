@@ -188,6 +188,8 @@ def _validate_space_param(op_mode: str, value: Any, dry_run: bool):
 #: through to the "absolute, no anchor" basename-only case instead. Both
 #: stay live for as long as any live `supersedes` value can cite either.
 _SUPERSEDES_ANCHORS = (
+    "state/cross-repo/inbox/",
+    "state/cross-repo/archive/",
     "cross-repo/inbox/",
     "cross-repo/archive/",
     f"{MEMO_OUTBOX_RELDIR}/",

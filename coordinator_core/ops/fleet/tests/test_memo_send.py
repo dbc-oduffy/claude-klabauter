@@ -25,6 +25,7 @@ from __future__ import annotations
 import datetime
 import json
 import subprocess
+import time
 from pathlib import Path
 
 from types import SimpleNamespace
@@ -35,11 +36,16 @@ from coordinator_core.frontmatter.primitives import split_frontmatter, read_fm_f
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.fleet import memo_send as memo_send_module
 from coordinator_core.ops.fleet.memo_send import (
+    _CHECK_DELIVERIES_KNOWN_PARAM_KEYS,
     _KNOWN_PARAM_KEYS,
     _MODE,
     _SENT_LEDGER_FILENAME,
     _SENT_LEDGER_MAX_AGE_DAYS,
     _SENT_LEDGER_MAX_ROWS,
+    _VERDICT_GONE,
+    _VERDICT_NOT_CHECKABLE,
+    _VERDICT_VERIFIED,
+    _memo_check_deliveries,
     _memo_send,
     _validate_send_params,
 )
@@ -766,6 +772,73 @@ class TestReceiverCommitDeclineFailsLoud:
 
 
 # ---------------------------------------------------------------------------
+# C3 (docs/plans/2026-09-11-memo-send-returns-ok-with-a-commit-sha-t.md):
+# the receipt asserts a VERIFIED commit, never a merely-returned one. The
+# incident's exact shape: `commit_authored_new_file` reports ok=True and a
+# sha, but that sha names no object in the receiver's own store.
+# ---------------------------------------------------------------------------
+
+_UNVERIFIABLE_SHA = "deadbeef" * 5  # 40 hex chars, never written anywhere
+
+
+def _fake_ok_but_unverifiable_commit(*args, **kwargs):
+    """Simulates the incident: `commit_authored_new_file` reports success
+    while naming a sha that is not a real object in the receiver's repo —
+    e.g. a ref that got reset/force-updated between the write and this
+    return, per this plan's leading (unestablished) C1 hypothesis."""
+    return git_native.GitResult(returncode=0, stdout=_UNVERIFIABLE_SHA, stderr="")
+
+
+class TestUnverifiedDeliveryCommitFailsLoud:
+    def test_unverified_commit_sha_leaves_nothing_half_done(self, tmp_path, monkeypatch):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _write_draft(sender_repo, "unverifiable-topic")
+
+        monkeypatch.setattr(
+            memo_send_module.git_native, "commit_authored_new_file",
+            _fake_ok_but_unverifiable_commit,
+        )
+
+        result = _memo_send(
+            {"dry_run": False, "topic": "unverifiable-topic"}, repo_root=sender_repo
+        )
+
+        assert result["exit_code"] != 0, result
+        assert result["acted"] == []
+        assert len(result["failed"]) == 1
+
+        # Half 1: no sent-copy written in the sender's outbox sent/.
+        assert not (
+            sender_repo / ".coordinator-local" / "memo-outbox" / "sent" / "unverifiable-topic.md"
+        ).exists()
+
+        # Half 2: no row appended to the sender's sent-ledger.
+        ledger_path = sender_repo / ".coordinator-local" / "memo-outbox" / _SENT_LEDGER_FILENAME
+        assert not ledger_path.exists()
+
+        # Half 3: no file left behind in the receiver's inbox — the O_EXCL
+        # write is unlinked, tree restored.
+        inbox_files = [
+            p for p in (receiver_repo / "cross-repo" / "inbox").glob("*.md")
+            if p.name != ".gitkeep"
+        ]
+        assert inbox_files == []
+        status = _git(receiver_repo, "status", "--porcelain")
+        assert status.stdout.decode("utf-8").strip() == ""
+
+        # Half 4: a refusal the caller can act on, naming the sha.
+        reason = result["failed"][0]["reason"]
+        assert _UNVERIFIABLE_SHA in reason, reason
+        assert "not sent" in reason, reason
+
+        # The original draft is still there, unsent — a re-run is not blocked.
+        assert (sender_repo / "state" / "memo-outbox" / "unverifiable-topic.md").exists()
+
+
+# ---------------------------------------------------------------------------
 # AC6: collision refused on both legs, independently
 # ---------------------------------------------------------------------------
 
@@ -1210,3 +1283,153 @@ class TestIndexLockOnReceiptIsNotAFailedSend:
         assert delivered, (
             f"the memo must be in the receiver's inbox: {list(inbox.iterdir())}"
         )
+
+
+# ---------------------------------------------------------------------------
+# C5 — memo.check_deliveries: sender-side sweep over the sent-ledger
+# ---------------------------------------------------------------------------
+
+def _write_ledger_rows(sender_repo: Path, rows: list[dict]) -> Path:
+    ledger_path = memo_send_module._sent_ledger_path(sender_repo)
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    return ledger_path
+
+
+def _receiver_head_sha(receiver_repo: Path) -> str:
+    return _git(receiver_repo, "rev-parse", "HEAD").stdout.decode().strip()
+
+
+class TestCheckDeliveriesParams:
+    def test_known_param_keys_is_exactly_dry_run(self):
+        assert _CHECK_DELIVERIES_KNOWN_PARAM_KEYS == frozenset({"dry_run"})
+
+    def test_dry_run_must_be_bool(self):
+        result = _memo_check_deliveries({"dry_run": "yes"}, repo_root=None)
+        assert result["exit_code"] == 1
+
+    def test_dry_run_false_is_setup_error(self, tmp_path):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        result = _memo_check_deliveries({"dry_run": False}, repo_root=sender_repo)
+        assert result["exit_code"] == 1
+
+    def test_unknown_param_rejected(self):
+        result = _memo_check_deliveries(
+            {"dry_run": True, "topic": "nope"}, repo_root=None
+        )
+        assert result["exit_code"] == 1
+
+    def test_no_repo_root_is_setup_error(self):
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=None)
+        assert result["exit_code"] == 1
+
+
+class TestCheckDeliveriesSweep:
+    def test_empty_ledger_is_no_candidates(self, tmp_path):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+        assert result["exit_code"] == 0
+        assert result["candidates"] == []
+
+    def test_separates_verified_from_gone(self, tmp_path, monkeypatch):
+        """One row's commit is a real object in the receiver, one row's is not
+        — the sweep must classify each independently, never collapsing them."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        real_sha = _receiver_head_sha(receiver_repo)
+        gone_sha = "a" * 40
+
+        _write_ledger_rows(sender_repo, [
+            {
+                "sent_at": "2026-09-09T13:00:00Z",
+                "to": "example-retrieval-repo-em",
+                "topic": "landed-one",
+                "delivery_commit_sha": real_sha,
+                "delivery_branch": "refs/heads/main",
+            },
+            {
+                "sent_at": "2026-09-09T13:00:10Z",
+                "to": "example-retrieval-repo-em",
+                "topic": "lost-one",
+                "delivery_commit_sha": gone_sha,
+                "delivery_branch": "refs/heads/main",
+            },
+        ])
+
+        started = time.monotonic()
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+        assert result["exit_code"] == 0
+        by_topic = {c["topic"]: c for c in result["candidates"]}
+
+        assert by_topic["landed-one"]["status"] == _VERDICT_VERIFIED
+        assert by_topic["lost-one"]["status"] == _VERDICT_GONE
+        assert gone_sha in by_topic["lost-one"]["note"]
+
+        assert elapsed_ms < 500.0, (
+            "brightline: the whole sweep must stay inside 500ms end-to-end"
+        )
+
+    def test_unregistered_receiver_is_not_checkable_not_gone(self, tmp_path, monkeypatch):
+        """A receiver absent from this machine's registry must never read as
+        GONE — that would manufacture a false loss report for a peer nobody
+        checked out here."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        _write_ledger_rows(sender_repo, [{
+            "sent_at": "2026-09-09T13:00:00Z",
+            "to": "some-unregistered-em",
+            "topic": "unreachable-peer",
+            "delivery_commit_sha": "b" * 40,
+            "delivery_branch": "refs/heads/main",
+        }])
+
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+        assert result["exit_code"] == 0
+        candidate = result["candidates"][0]
+        assert candidate["status"] == _VERDICT_NOT_CHECKABLE
+        assert candidate["status"] != _VERDICT_GONE
+
+    def test_missing_delivery_branch_is_unknown_never_a_mismatch(
+        self, tmp_path, monkeypatch
+    ):
+        """A row predating the delivery_branch field must not be misread as a
+        branch mismatch — its verdict rests solely on object existence."""
+        sender_repo = _make_sender_git_repo(tmp_path)
+        receiver_repo = _make_receiver_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        real_sha = _receiver_head_sha(receiver_repo)
+        _write_ledger_rows(sender_repo, [{
+            "sent_at": "2026-09-09T13:00:00Z",
+            "to": "example-retrieval-repo-em",
+            "topic": "pre-branch-field",
+            "delivery_commit_sha": real_sha,
+            # no delivery_branch key at all — predates C4
+        }])
+
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+        candidate = result["candidates"][0]
+        assert candidate["delivery_branch"] is None
+        assert candidate["status"] == _VERDICT_VERIFIED
+
+    def test_malformed_ledger_line_is_skipped_not_fatal(self, tmp_path, monkeypatch):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        claude_home = _make_claude_home(tmp_path, {})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        ledger_path = memo_send_module._sent_ledger_path(sender_repo)
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger_path.write_text("not json at all\n\n", encoding="utf-8")
+
+        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+        assert result["exit_code"] == 0
+        assert result["candidates"] == []

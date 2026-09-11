@@ -260,19 +260,28 @@ def _own_body_files(memory_dir: Path, self_sid: str) -> "List[Path]":
     return [p for p in candidates if _body_origin_session_id(p) == self_sid]
 
 
-def _index_has_own_row(memory_dir: Path, self_sid: str) -> bool:
-    """True iff at least one ``MEMORY.md`` row resolves to a body file
-    owned (per ``originSessionId``) by the closing session. A row whose
-    link target is missing on disk (dangling) or that is not a parseable
-    markdown link does not count, per this module's docstring."""
+def _own_index_rows(memory_dir: Path, self_sid: str) -> "List[tuple[str, Path]]":
+    """Every raw ``MEMORY.md`` line, paired with its resolved body path,
+    whose link target is owned (per ``originSessionId``) by the closing
+    session. A row whose link target is missing on disk (dangling) or that
+    is not a parseable markdown link is excluded, per this module's
+    docstring.
+
+    Returns ``[]`` (never raises) on an ``OSError`` reading the index,
+    matching ``_index_has_own_row``'s prior ``return False`` on the same
+    fault. Two ``MEMORY.md`` rows pointing at the same body both appear in
+    the returned list -- this is deliberately NOT deduped by body; C3a's own
+    dedupe rule (keyed by resolved body path) is what collapses that when
+    building the archive artifact."""
     index_path = memory_dir / _INDEX_FILENAME
     try:
         if not index_path.is_file():
-            return False
+            return []
         lines = index_path.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return False
+        return []
 
+    rows: "List[tuple[str, Path]]" = []
     for line in lines:
         match = _INDEX_ROW_RE.match(line.strip())
         if not match:
@@ -287,8 +296,43 @@ def _index_has_own_row(memory_dir: Path, self_sid: str) -> bool:
         except OSError:
             continue
         if _body_origin_session_id(target_path) == self_sid:
-            return True
-    return False
+            rows.append((line, target_path))
+    return rows
+
+
+def _index_has_own_row(memory_dir: Path, self_sid: str) -> bool:
+    """True iff at least one ``MEMORY.md`` row resolves to a body file
+    owned (per ``originSessionId``) by the closing session. A row whose
+    link target is missing on disk (dangling) or that is not a parseable
+    markdown link does not count, per this module's docstring."""
+    return bool(_own_index_rows(memory_dir, self_sid))
+
+
+def _own_memory_dirs(root: str) -> "List[Path]":
+    """Every ``memory_dir`` this repo root's closing session should be
+    examined under -- the slug derivation plus the multi-home loop that
+    used to live inline in ``main()``. Exported so the archive op (C3a)
+    imports this rather than re-deriving the loop; a divergence here would
+    let the gate report residue under a home the archive op never wrote."""
+    slug = _slugify_repo_root(os.path.abspath(root))
+    return [
+        projects_root / slug / _MEMORY_DIRNAME
+        for projects_root in _guarded_project_roots()
+    ]
+
+
+def _own_residue(
+    root: str, self_sid: str
+) -> "tuple[List[Path], List[tuple[str, Path]]]":
+    """``(body_files, index_rows)`` -- the closing session's own residue
+    across every memory dir ``_own_memory_dirs(root)`` returns. The single
+    universe both the gate and the archive op (C3a, by import) consume."""
+    bodies: "List[Path]" = []
+    rows: "List[tuple[str, Path]]" = []
+    for memory_dir in _own_memory_dirs(root):
+        bodies.extend(_own_body_files(memory_dir, self_sid))
+        rows.extend(_own_index_rows(memory_dir, self_sid))
+    return bodies, rows
 
 
 def main(argv: "List[str]") -> int:
@@ -325,14 +369,16 @@ def main(argv: "List[str]") -> int:
         )
         return 0
 
-    slug = _slugify_repo_root(os.path.abspath(root))
-
-    residue: "List[Path]" = []
-    for projects_root in _guarded_project_roots():
-        memory_dir = projects_root / slug / _MEMORY_DIRNAME
-        residue.extend(_own_body_files(memory_dir, self_sid))
-        if _index_has_own_row(memory_dir, self_sid):
-            residue.append(memory_dir / _INDEX_FILENAME)
+    bodies, rows = _own_residue(root, self_sid)
+    residue: "List[Path]" = list(bodies)
+    seen_index_dirs: "set[str]" = set()
+    for _line, target_path in rows:
+        memory_dir = target_path.parent
+        key = os.path.normcase(str(memory_dir))
+        if key in seen_index_dirs:
+            continue
+        seen_index_dirs.add(key)
+        residue.append(memory_dir / _INDEX_FILENAME)
 
     if not residue:
         return 0

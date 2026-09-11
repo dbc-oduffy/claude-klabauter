@@ -439,6 +439,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #         (D1 terminality re-verify); archive_plans.py:340 live-reference guard at T3.
     #   D2-5 (no remote route): DR-215 retired the UDS/HTTP transport outright;
     #     no HTTP route was ever added, negative-spec in archive_plans.py:48.
+    "fleet.archive_completed_plans": OpClass.MUTATING,
     # fleet.handoffs_for_plan — COMPUTE_ONLY: pure read, the "which handoffs did this
     # plan mint, live and archived" aggregation, built entirely on two unmodified
     # query_records() calls (ops/fleet/plan_handoffs.py). Same DR-208 five-question

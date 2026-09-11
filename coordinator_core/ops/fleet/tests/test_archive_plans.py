@@ -266,6 +266,68 @@ def test_orphan_sidecar_with_no_primary_is_refused(tmp_path: Path) -> None:
     assert reasons["docs/plans/2026-08-10-ghost.review.md"].startswith(m._SCAN_REASON_SIDECAR_ORPHAN)
 
 
+def _write_fire_script(root: Path, stem: str) -> "tuple[Path, Path]":
+    plans_dir = root / "docs" / "plans"
+    plans_dir.mkdir(parents=True, exist_ok=True)
+    script = plans_dir / f"{stem}.workflow.mjs"
+    receipt = plans_dir / f"{stem}.workflow.mjs.emitted.json"
+    script.write_text("export const meta = {}\n", encoding="utf-8")
+    receipt.write_text("{}\n", encoding="utf-8")
+    return script, receipt
+
+
+def test_fire_script_follows_its_terminal_primary(tmp_path: Path) -> None:
+    _write_plan(tmp_path, "2026-08-11-fired.md", "implemented")
+    _write_fire_script(tmp_path, "2026-08-11-fired")
+
+    moves, _ = m.plan_sweep(tmp_path, tmp_path, cap=10)
+    assert {mv.candidate_id for mv in moves} == {
+        "docs/plans/2026-08-11-fired.md",
+        "docs/plans/2026-08-11-fired.workflow.mjs",
+        "docs/plans/2026-08-11-fired.workflow.mjs.emitted.json",
+    }
+    dests = {mv.dst.name: mv.dst.parent for mv in moves}
+    assert set(dests.values()) == {tmp_path / "archive" / "specs" / "2026-08"}
+
+
+def test_fire_script_stays_with_its_live_primary(tmp_path: Path) -> None:
+    _write_plan(tmp_path, "2026-08-12-running.md", "executing")
+    _write_fire_script(tmp_path, "2026-08-12-running")
+
+    skipped: list = []
+    moves, _ = m.plan_sweep(tmp_path, tmp_path, cap=10, scan_skipped=skipped)
+    assert not moves
+    reasons = {row["id"]: row["reason"] for row in skipped}
+    assert reasons["docs/plans/2026-08-12-running.workflow.mjs"].startswith(
+        m._SCAN_REASON_SIDECAR_FOLLOWS_PRIMARY
+    )
+
+
+def test_sidecar_of_an_already_archived_primary_follows_it(tmp_path: Path) -> None:
+    archived = tmp_path / "archive" / "specs" / "2026-08" / "2026-08-13-gone.md"
+    archived.parent.mkdir(parents=True)
+    archived.write_text("---\nstatus: implemented\n---\n", encoding="utf-8")
+    _write_fire_script(tmp_path, "2026-08-13-gone")
+
+    moves, _ = m.plan_sweep(tmp_path, tmp_path, cap=10)
+    assert {mv.dst for mv in moves} == {
+        archived.parent / "2026-08-13-gone.workflow.mjs",
+        archived.parent / "2026-08-13-gone.workflow.mjs.emitted.json",
+    }
+
+
+def test_fire_script_with_no_primary_anywhere_is_refused(tmp_path: Path) -> None:
+    _write_fire_script(tmp_path, "2026-08-14-truncated-st")
+
+    skipped: list = []
+    moves, _ = m.plan_sweep(tmp_path, tmp_path, cap=10, scan_skipped=skipped)
+    assert not moves
+    reasons = {row["id"]: row["reason"] for row in skipped}
+    assert reasons["docs/plans/2026-08-14-truncated-st.workflow.mjs"].startswith(
+        m._SCAN_REASON_SIDECAR_ORPHAN
+    )
+
+
 def test_setup_errors_record_receipt_rows(tmp_path: Path) -> None:
     common_dir = tmp_path
 
@@ -277,6 +339,49 @@ def test_setup_errors_record_receipt_rows(tmp_path: Path) -> None:
 
     # repo_root None -> setup error, no common_dir to write to, must not raise.
     m._handler({"dry_run": True, "cap": 1}, repo_root=None)
+
+
+def test_handler_dry_run_lists_candidates_and_act_moves_them(tmp_path: Path) -> None:
+    worktree = tmp_path
+    common_dir = tmp_path
+    (worktree / ".git").mkdir()
+
+    _write_plan(worktree, "2026-08-11-registered-op.md", "implemented")
+
+    preview = m._handler(
+        {"mode": "already-terminal", "dry_run": True, "cap": 10}, repo_root=common_dir,
+    )
+    assert preview["exit_code"] == 0
+    assert preview["dry_run"] is True
+    ids = {c["id"] for c in preview["candidates"]}
+    assert "docs/plans/2026-08-11-registered-op.md" in ids
+
+    async def _fake_archive_and_commit(*, worktree_root, moves, subject):
+        acted = []
+        for mv in moves:
+            mv.dst.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(mv.src, mv.dst)
+            acted.append({"id": mv.candidate_id, "archived": True})
+        return acted, []
+
+    with patch(
+        "coordinator_core.ops.fleet.archive_plans.archive_and_commit",
+        side_effect=_fake_archive_and_commit,
+    ):
+        acted_result = m._handler(
+            {
+                "mode": "already-terminal",
+                "dry_run": False,
+                "cap": 10,
+                "candidate_ids": ["docs/plans/2026-08-11-registered-op.md"],
+            },
+            repo_root=common_dir,
+        )
+
+    assert acted_result["exit_code"] == 0
+    assert acted_result["acted"] == [{"id": "docs/plans/2026-08-11-registered-op.md", "archived": True}]
+    assert not (worktree / "docs" / "plans" / "2026-08-11-registered-op.md").exists()
+    assert (worktree / "archive" / "specs" / "2026-08" / "2026-08-11-registered-op.md").is_file()
 
 
 def test_sweep_lock_round_trips(tmp_path: Path) -> None:

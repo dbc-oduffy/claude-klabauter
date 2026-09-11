@@ -59,6 +59,44 @@ def test_self_verify_constraint_emitted_path_names_named_authority():
     )
 
 
+def test_self_verify_constraint_deferred_verification_authority_defaults_to_commit_authority():
+    """Omitting `deferred_verification_authority` must reproduce the same
+    bytes as passing it equal to `commit_authority` -- the shape every
+    hand-dispatch caller (one shared authority) relies on."""
+    rendered = self_verify_constraint(commit_authority="the EM")
+    assert rendered == self_verify_constraint(
+        commit_authority="the EM", deferred_verification_authority="the EM"
+    )
+
+
+def test_self_verify_constraint_splits_commit_and_deferred_verification_authority():
+    """The two clauses take independent values -- naming who commits must
+    not also name who broader verification is deferred to, and vice versa
+    (Review: coordinator:code-reviewer, finding 1, EM-agreed break-class
+    fix: a shared value previously rendered "Only <commit phase> and
+    <test-runner phase> commits", which is false)."""
+    rendered = self_verify_constraint(
+        commit_authority="the `coordinator:git-commit-agent` phase",
+        deferred_verification_authority=(
+            "the `coordinator:git-commit-agent` phase and the terminal "
+            "`coordinator:test-runner` phase"
+        ),
+    )
+    assert (
+        "Only the `coordinator:git-commit-agent` phase commits, once per wave"
+        in rendered
+    )
+    assert (
+        "Only the `coordinator:git-commit-agent` phase and the terminal "
+        "`coordinator:test-runner` phase commits"
+    ) not in rendered
+    assert (
+        "leave it to the `coordinator:git-commit-agent` phase and the "
+        "terminal `coordinator:test-runner` phase"
+        in rendered
+    )
+
+
 def test_done_summary_constraint_reproduces_mise_bytes():
     rendered = done_summary_constraint(
         output_path_template="tasks/mise-done/[item-id].md",

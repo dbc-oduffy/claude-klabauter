@@ -1093,7 +1093,7 @@ _FOREIGN_DELIVERY_SUBJECT_RE = re.compile(r"^cross-repo: deliver .+ memo from \S
 #: pathspec-scoped ``git commit -- <memo_relpath>`` where ``memo_relpath`` is
 #: the inbox file it just created. Used as the STRUCTURAL half of the
 #: foreign-authored predicate, so a subject string alone can never classify.
-_FOREIGN_DELIVERY_PATH_PREFIX = "cross-repo/inbox/"
+_FOREIGN_DELIVERY_PATH_PREFIX = ("state/cross-repo/inbox/", "cross-repo/inbox/")
 
 #: Registry key prefix under which the machine-local registry declares every
 #: fleet repo root it knows (``"repos.doe_claude" = '/Users/…/DoE-claude'``).

@@ -10,13 +10,18 @@ during the port (see the golden-oracle snapshot captured for this port).
 from __future__ import annotations
 
 import io
+import json
 import os
+import subprocess
 import time
 from contextlib import redirect_stdout
+from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops.fleet import memo_send as memo_send_module
 from coordinator_core.ops.workday_start_cross_repo_memo_outbox_surface import main
+from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -24,6 +29,77 @@ pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
 ]
+
+
+# ---------------------------------------------------------------------------
+# Gone-delivery fixtures — mirrors coordinator_core/ops/fleet/tests/
+# test_memo_send.py's own git-repo/registry factories (same pattern, kept
+# local rather than imported to avoid a cross-test-file coupling for what is
+# a handful of lines).
+# ---------------------------------------------------------------------------
+
+def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["git"] + list(args), cwd=str(repo), capture_output=True, check=check,
+        **no_console_creationflags(),
+    )
+
+
+def _make_sender_git_repo(tmp_path: Path) -> Path:
+    root = tmp_path / "sender-repo"
+    root.mkdir()
+    _git(root, "init", "-b", "main")
+    _git(root, "config", "user.email", "test@claude-klabauter.test")
+    _git(root, "config", "user.name", "ClaudeKlabauterTest")
+    _git(root, "config", "commit.gpgsign", "false")
+    (root / ".gitkeep").write_text("", encoding="utf-8")
+    _git(root, "add", ".gitkeep")
+    _git(root, "commit", "-m", "init")
+    return root
+
+
+def _make_receiver_git_repo(tmp_path: Path, name: str = "receiver-repo") -> Path:
+    root = tmp_path / name
+    root.mkdir()
+    _git(root, "init", "-b", "main")
+    _git(root, "config", "user.email", "test@claude-klabauter.test")
+    _git(root, "config", "user.name", "ClaudeKlabauterTest")
+    _git(root, "config", "commit.gpgsign", "false")
+    inbox = root / "cross-repo" / "inbox"
+    inbox.mkdir(parents=True)
+    (inbox / ".gitkeep").write_text("", encoding="utf-8")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "init receiver")
+    return root
+
+
+def _make_claude_home(tmp_path: Path, receiver_repos: dict) -> Path:
+    claude_home = tmp_path / "claude-home"
+    machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
+    machine_local.mkdir(parents=True)
+    (machine_local / "registry.toml").write_text("schema = 1\n", encoding="utf-8")
+    lines = []
+    for key_suffix, repo_path in receiver_repos.items():
+        toml_val = str(repo_path).replace("\\", "\\\\").replace('"', '\\"')
+        lines.append(f'"repos.{key_suffix}" = "{toml_val}"')
+    (machine_local / "registry.local.toml").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+    return claude_home
+
+
+def _write_ledger_rows(sender_repo: Path, rows: list) -> Path:
+    ledger_path = memo_send_module._sent_ledger_path(sender_repo)
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    return ledger_path
+
+
+def _receiver_head_sha(receiver_repo: Path) -> str:
+    return _git(receiver_repo, "rev-parse", "HEAD").stdout.decode().strip()
 
 
 def _write_draft(path, to=None, title=None, body="body", extra_frontmatter=""):
@@ -179,5 +255,165 @@ def test_nongit_no_override_no_arg_silent(tmp_path, monkeypatch):
     monkeypatch.delenv("COORDINATOR_OUTBOX_DIR", raising=False)
     monkeypatch.chdir(tmp_path)
     rc, out = _run([], {}, monkeypatch)
+    assert rc == 0
+    assert out == ""
+
+
+# ---------------------------------------------------------------------------
+# C5 sibling: gone-delivery sweep (2026-09-11 fix 1 — the sweep gets a
+# trigger). Same `main()`/`_run` harness; `COORDINATOR_OUTBOX_DIR` points at
+# an empty dir throughout so only the gone-delivery leg is under test.
+# ---------------------------------------------------------------------------
+
+def test_no_deliveries_at_all_silent(tmp_path, monkeypatch):
+    sender_repo = _make_sender_git_repo(tmp_path)
+    claude_home = _make_claude_home(tmp_path, {})
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    outbox = tmp_path / "empty-outbox"
+    outbox.mkdir()
+
+    rc, out = _run(
+        [str(sender_repo)], {"COORDINATOR_OUTBOX_DIR": str(outbox)}, monkeypatch,
+    )
+    assert rc == 0
+    assert out == ""
+
+
+def test_verified_delivery_silent_nothing_gone(tmp_path, monkeypatch):
+    """A ledger row whose commit is still a real object in the receiver must
+    produce no line — the surfacer is silent when nothing is gone, never
+    '0 gone deliveries'."""
+    sender_repo = _make_sender_git_repo(tmp_path)
+    receiver_repo = _make_receiver_git_repo(tmp_path)
+    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    outbox = tmp_path / "empty-outbox"
+    outbox.mkdir()
+
+    real_sha = _receiver_head_sha(receiver_repo)
+    _write_ledger_rows(sender_repo, [{
+        "sent_at": "2026-09-09T13:00:00Z",
+        "to": "example-retrieval-repo-em",
+        "topic": "landed-one",
+        "delivery_commit_sha": real_sha,
+        "delivery_branch": "refs/heads/main",
+    }])
+
+    rc, out = _run(
+        [str(sender_repo)], {"COORDINATOR_OUTBOX_DIR": str(outbox)}, monkeypatch,
+    )
+    assert rc == 0
+    assert out == ""
+
+
+def test_gone_delivery_emits_one_nudge_naming_topic_receiver_and_resend(
+    tmp_path, monkeypatch
+):
+    sender_repo = _make_sender_git_repo(tmp_path)
+    receiver_repo = _make_receiver_git_repo(tmp_path)
+    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    outbox = tmp_path / "empty-outbox"
+    outbox.mkdir()
+
+    gone_sha = "a" * 40
+    _write_ledger_rows(sender_repo, [{
+        "sent_at": "2026-09-09T13:00:00Z",
+        "to": "example-retrieval-repo-em",
+        "topic": "lost-one",
+        "delivery_commit_sha": gone_sha,
+        "delivery_branch": "refs/heads/main",
+    }])
+
+    rc, out = _run(
+        [str(sender_repo)], {"COORDINATOR_OUTBOX_DIR": str(outbox)}, monkeypatch,
+    )
+    assert rc == 0
+    assert "lost-one" in out
+    assert "example-retrieval-repo-em" in out
+    assert gone_sha in out
+    assert "refs/heads/main" in out  # names the ref it landed on
+    assert "memo.send" in out  # the way through: re-run memo.send
+
+
+def test_gone_delivery_with_delivery_branch_names_the_ref(tmp_path, monkeypatch):
+    """delivery_branch is the reader this field was added for: the nudge
+    names WHERE the delivery landed, distinguishing 'the branch we landed on
+    was rewritten' from 'the object vanished outright'."""
+    sender_repo = _make_sender_git_repo(tmp_path)
+    receiver_repo = _make_receiver_git_repo(tmp_path)
+    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    outbox = tmp_path / "empty-outbox"
+    outbox.mkdir()
+
+    gone_sha = "c" * 40
+    _write_ledger_rows(sender_repo, [{
+        "sent_at": "2026-09-09T13:00:00Z",
+        "to": "example-retrieval-repo-em",
+        "topic": "lost-with-branch",
+        "delivery_commit_sha": gone_sha,
+        "delivery_branch": "refs/heads/feature/rewritten",
+    }])
+
+    rc, out = _run(
+        [str(sender_repo)], {"COORDINATOR_OUTBOX_DIR": str(outbox)}, monkeypatch,
+    )
+    assert rc == 0
+    assert "refs/heads/feature/rewritten" in out
+
+
+def test_gone_delivery_without_delivery_branch_names_no_ref_and_no_none(
+    tmp_path, monkeypatch
+):
+    """A ledger row written before delivery_branch existed must read as
+    UNKNOWN, never imply a mismatch or print the literal 'None'."""
+    sender_repo = _make_sender_git_repo(tmp_path)
+    receiver_repo = _make_receiver_git_repo(tmp_path)
+    claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": receiver_repo})
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    outbox = tmp_path / "empty-outbox"
+    outbox.mkdir()
+
+    gone_sha = "d" * 40
+    _write_ledger_rows(sender_repo, [{
+        "sent_at": "2026-09-09T13:00:00Z",
+        "to": "example-retrieval-repo-em",
+        "topic": "lost-no-branch",
+        "delivery_commit_sha": gone_sha,
+        # no delivery_branch key — pre-field ledger row
+    }])
+
+    rc, out = _run(
+        [str(sender_repo)], {"COORDINATOR_OUTBOX_DIR": str(outbox)}, monkeypatch,
+    )
+    assert rc == 0
+    assert "lost-no-branch" in out
+    assert "None" not in out
+    assert "landed on" not in out  # no ref clause at all when unrecorded
+
+
+def test_not_checkable_delivery_emits_no_line(tmp_path, monkeypatch):
+    """An unregistered receiver is UNCHECKABLE, never news at workday
+    start — a peer repo not on this machine says nothing about delivery, and
+    a nudge that cries wolf on that verdict recreates the defect this
+    closes."""
+    sender_repo = _make_sender_git_repo(tmp_path)
+    claude_home = _make_claude_home(tmp_path, {})  # no receivers registered
+    monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+    outbox = tmp_path / "empty-outbox"
+    outbox.mkdir()
+
+    _write_ledger_rows(sender_repo, [{
+        "sent_at": "2026-09-09T13:00:00Z",
+        "to": "some-unregistered-em",
+        "topic": "unreachable-peer",
+        "delivery_commit_sha": "b" * 40,
+        "delivery_branch": "refs/heads/main",
+    }])
+
+    rc, out = _run(
+        [str(sender_repo)], {"COORDINATOR_OUTBOX_DIR": str(outbox)}, monkeypatch,
+    )
     assert rc == 0
     assert out == ""

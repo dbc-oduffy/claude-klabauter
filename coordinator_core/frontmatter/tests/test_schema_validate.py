@@ -7404,3 +7404,24 @@ class TestQueueRuleIsClaudeKlabauterScoped:
     def test_provenance_predicate_rejects_a_foreign_path(self):
         assert _is_claude_klabauter_vendored_schema(_SCHEMAS_DIR / 'debt-backlog.schema.json') is True
         assert _is_claude_klabauter_vendored_schema('/nowhere/debt-backlog.schema.json') is False
+
+
+@pytest.mark.skipif(
+    _DOE_REPO is None or not (_DOE_REPO / 'coordinator' / 'schemas').is_dir(),
+    reason='the memo schemas are vendored from DoE; no DoE checkout is registered here',
+)
+class TestMemoCorpusRoots:
+    """A memo resolves to its schema under either corpus root: state/cross-repo/ or legacy
+    cross-repo/."""
+
+    @pytest.mark.parametrize('path, expected', [
+        ('cross-repo/inbox/2026-09-11-a-memo.md', 'cross-repo-memo'),
+        ('state/cross-repo/inbox/2026-09-11-a-memo.md', 'cross-repo-memo'),
+        ('cross-repo/archive/2026-09-11-a-memo.md', 'archived-memo'),
+        ('state/cross-repo/archive/2026-09-11-a-memo.md', 'archived-memo'),
+    ])
+    def test_memo_path_resolves_under_either_root(self, path, expected):
+        schemas = load_schemas(str(_DOE_REPO / 'coordinator' / 'schemas'))
+        resolved = match_schema(path, None, schemas)
+        assert resolved is not None
+        assert resolved['schemaName'] == expected

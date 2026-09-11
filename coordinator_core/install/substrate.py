@@ -79,10 +79,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import FrozenSet, List, Optional, Tuple, Union
 
-from coordinator_core import machine_resolver
 from coordinator_core._settings_home import machine_local_dir, settings_home
 from coordinator_core.git.run import run_git
-from coordinator_core.launchable import resolve_launchable
 from coordinator_core.locked_write import held_lock
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 from coordinator_core.install._shared import (
@@ -3207,53 +3205,6 @@ def run(setup_only: bool = False, check_only: bool = False, allow_venv_fallback:
             print("[machine-local] seeded live registry.toml from example")
         else:
             print(f"[machine-local] NOTICE: {_registry_example} absent — live registry.toml not seeded")
-
-    # --- Step 2c-notice: cockpit emit identity keys ---
-    if (ml_dst / _ML_REGISTRY_TOML_NAME).is_file():
-        meta_slug_set = False
-        # Rung 1: the installer's OWN canonical settings-home machine-local
-        # CLI (bin_dst), not the compat mirror — but `_install_bin_resolvers`
-        # (which writes bin_dst/"machine-local") runs AFTER this block on a
-        # fresh install, so this rung is a best-effort probe that tolerates
-        # absence; rungs 2/3 below already handle that case unconditionally.
-        # `is_executable` accepts the bare extension-less name on Windows on
-        # the strength of a PATHEXT sibling (`machine-local.cmd`) — but
-        # CreateProcess cannot exec the bare file itself (WinError 193), so the
-        # argv has to name the sibling. `resolve_launchable` is that mapping;
-        # same constraint as the Step C10a-2 probe below.
-        machine_local_bin = bin_dst / "machine-local"
-        if is_executable(machine_local_bin):
-            val = _quiet_output([*resolve_launchable(str(machine_local_bin)), "get", "cockpit.meta_repo_slug"])
-            if val:
-                meta_slug_set = True
-        # Rung 2: registry.local.toml, via the canonical registry_get reader
-        # (handles both the nested-[cockpit]-table and flat-quoted-dotted-key
-        # write forms — a raw regex on the flat form alone missed a nested
-        # table entirely). MACHINE_LOCAL_REGISTRY_DIR is pinned to ml_dst so
-        # this reads the FRESHLY SEEDED registry this function just wrote,
-        # not a stale ambient settings-home the caller's own env might point
-        # elsewhere (install-verification correctness, not just style).
-        if not meta_slug_set:
-            env_override = os.environ.get("MACHINE_LOCAL_REGISTRY_DIR")
-            os.environ["MACHINE_LOCAL_REGISTRY_DIR"] = str(ml_dst)
-            try:
-                if machine_resolver.registry_get("cockpit.meta_repo_slug"):
-                    meta_slug_set = True
-            finally:
-                if env_override is None:
-                    os.environ.pop("MACHINE_LOCAL_REGISTRY_DIR", None)
-                else:
-                    os.environ["MACHINE_LOCAL_REGISTRY_DIR"] = env_override
-        # Rung 3: an EXPLICIT empty-string declaration in the tracked
-        # registry.toml is the only trigger for the notice — a key simply
-        # ABSENT from registry.toml (e.g. a trimmed template) must stay
-        # silent. This is a deliberately different predicate from rung 2's
-        # "resolved to a real value" — do not collapse the two.
-        if not meta_slug_set:
-            reg_flat = machine_resolver.load_flat_registry_file(ml_dst / "registry.toml")
-            if reg_flat.get("cockpit.meta_repo_slug", None) == "":
-                print("[machine-local] NOTICE: cockpit emit key unset — set this before using cockpit emit:")
-                print('[machine-local]   machine-local set cockpit.meta_repo_slug "<owner/repo, e.g. myowner/my-meta-repo>"')
 
     # --- Step 3a: python3.cmd baked-interpreter rendering ---
     python3_cmd_resolved_bin, _python3_cmd_bake_reason = _resolve_baked_python_bin_detail()

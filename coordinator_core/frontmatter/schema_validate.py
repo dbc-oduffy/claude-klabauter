@@ -6646,6 +6646,13 @@ def match_schema(repo_rel_path: str, frontmatter: dict | None, schemas: dict) ->
     for entry in schemas['_byGlob']:
         if match_glob(entry['glob'], normalised):
             return {'schemaName': entry['schemaName'], 'schema': schemas[entry['schemaName']]}
+    # A memo corpus lives at `state/cross-repo/` or legacy `cross-repo/`; the memo schemas'
+    # `applies_to` globs name the corpus-relative shape, so a state-rooted path matches by its tail.
+    if normalised.startswith('state/cross-repo/'):
+        corpus_relative = normalised[len('state/'):]
+        for entry in schemas['_byGlob']:
+            if match_glob(entry['glob'], corpus_relative):
+                return {'schemaName': entry['schemaName'], 'schema': schemas[entry['schemaName']]}
     return None
 
 
