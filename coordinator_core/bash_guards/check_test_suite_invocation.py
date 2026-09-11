@@ -2018,6 +2018,17 @@ def _configured_test_cmds(repo_root: Optional[str]) -> List[ConfiguredCmd]:
     validation-cmd.py`` by path (that shim's filename is hyphenated, so a
     bareword import can never resolve it regardless of sys.path).
 
+    Note (C1, docs/plans/2026-07-30-diff-scoped-ceremony-gates-elegant.md
+    Design decision 1): the by-path shim is now a thin re-export trampoline
+    over this same coordinator_core module, so the two legs can no longer
+    resolve a tier differently -- the fallback is redundant, not a distinct
+    source of truth, and could be collapsed to the native leg alone. Left
+    in place here rather than collapsed: `coordinator_core/bash_guards/
+    tests/test_check_test_suite_invocation.py` (out of this chunk's writes
+    scope) pins the by-path fallback's own behaviour directly, and collapsing
+    this function would break that pinned suite without authorization to
+    edit it. Tracked as a follow-up, not silently dropped.
+
     Review: code-reviewer — the fallback is PER TIER, not all-or-nothing.
     ``_configured_test_cmds_native`` can resolve ``fast_test_cmd`` and still
     fail on ``full_test_cmd`` (a transient import hiccup inside its per-tier

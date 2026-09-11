@@ -16,10 +16,10 @@ from coordinator_core.op_scopes import OP_KEY_SCOPE
 from coordinator_core.session import machinery_paths
 
 
-def test_payload_has_exactly_eight_keys(tmp_path, monkeypatch):
+def test_payload_has_exactly_nine_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-1")
     monkeypatch.setattr(
-        gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: []
+        gee.group_em_read_pass, "build_roster", lambda *a, **k: []
     )
     monkeypatch.setattr(
         gee.group_em_send_pass,
@@ -40,8 +40,8 @@ def test_payload_has_exactly_eight_keys(tmp_path, monkeypatch):
     result = gee._group_em_enter({"repo_root": str(tmp_path)})
 
     assert set(result.keys()) == {
-        "as_of", "nomination", "roster", "roster_considered", "digest", "baseline", "teammates",
-        "watch_liveness"
+        "as_of", "nomination", "roster", "roster_excluded", "roster_considered", "digest",
+        "baseline", "teammates", "watch_liveness"
     }
 
 
@@ -60,7 +60,7 @@ def test_all_four_registration_points_resolve():
 def test_each_leg_degrades_independently(tmp_path, monkeypatch):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-2")
     monkeypatch.setattr(
-        gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: []
+        gee.group_em_read_pass, "build_roster", lambda *a, **k: []
     )
     monkeypatch.setattr(
         gee.group_em_send_pass,
@@ -83,6 +83,7 @@ def test_each_leg_degrades_independently(tmp_path, monkeypatch):
     assert result["nomination"] is None
     assert "nomination_error" in result
     assert result["roster"] == []
+    assert result["roster_excluded"] == []
     assert result["digest"] == {"entries": [], "gate_declaration_required": True}
     assert result["baseline"] == {
         "spawned": [],
@@ -109,7 +110,7 @@ def test_roster_failure_degrades_digest_but_not_baseline(tmp_path, monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("roster boom")
 
-    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", _boom)
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", _boom)
     monkeypatch.setattr(
         gee.group_em_nomination,
         "claim",
@@ -120,6 +121,8 @@ def test_roster_failure_degrades_digest_but_not_baseline(tmp_path, monkeypatch):
 
     assert result["roster"] is None
     assert "roster_error" in result
+    assert result["roster_excluded"] is None
+    assert result["roster_excluded_error"] == result["roster_error"]
     assert result["digest"] is None
     assert result["digest_error"] == "roster-leg-failed"
     assert result["baseline"] is not None
@@ -154,7 +157,7 @@ def test_baseline_tracks_the_peer_set_not_the_candidate_roster(tmp_path, monkeyp
     # candidate but is emphatically still present.
     monkeypatch.setattr(
         gee.group_em_read_pass,
-        "build_candidate_roster",
+        "build_roster",
         lambda *a, **k: [{"session_id": "peer-idle", "state": "PAUSED", "candidate": True}],
     )
 
@@ -164,7 +167,7 @@ def test_baseline_tracks_the_peer_set_not_the_candidate_roster(tmp_path, monkeyp
     # Second tick: the idle peer picks work back up. It leaves the roster, but
     # it has NOT exited -- and its state transition is what the diff reports.
     agents[1]["status"] = "busy"
-    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: [])
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
 
     second = gee._group_em_enter({"repo_root": str(tmp_path)})
     assert second["baseline"]["exited"] == []
@@ -185,7 +188,7 @@ def test_live_incumbent_refusal_stops_before_digest(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         gee.group_em_read_pass,
-        "build_candidate_roster",
+        "build_roster",
         lambda *a, **k: roster_spy_calls.append((a, k)) or [],
     )
     monkeypatch.setattr(
@@ -232,9 +235,11 @@ def test_live_incumbent_refusal_stops_before_digest(tmp_path, monkeypatch):
     # via `is None`, or this regresses to the exact bug the constraint exists
     # to prevent.
     assert "roster" not in result
+    assert "roster_excluded" not in result
     assert "digest" not in result
     assert "baseline" not in result
     assert "roster_error" not in result
+    assert "roster_excluded_error" not in result
     assert "digest_error" not in result
     assert "baseline_error" not in result
     # A refusal is the earliest-stopping path there is -- `as_of` must still
@@ -258,7 +263,7 @@ def test_unaccounted_incumbent_refusal_also_stops_before_digest(tmp_path, monkey
         lambda *a, **k: digest_spy_calls.append((a, k)) or {"entries": []},
     )
     monkeypatch.setattr(
-        gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: []
+        gee.group_em_read_pass, "build_roster", lambda *a, **k: []
     )
     monkeypatch.setattr(
         gee.group_em_baseline, "diff_and_persist", lambda *a, **k: {"first_tick": True}
@@ -291,9 +296,11 @@ def test_unaccounted_incumbent_refusal_also_stops_before_digest(tmp_path, monkey
     assert result["nomination"]["superseded_incumbent"]["live_reason"] == "no_registry_record"
     assert result["nomination"]["replaced_holder"] is None
     assert "roster" not in result
+    assert "roster_excluded" not in result
     assert "digest" not in result
     assert "baseline" not in result
     assert "roster_error" not in result
+    assert "roster_excluded_error" not in result
     assert "digest_error" not in result
     assert "baseline_error" not in result
     assert result.get("as_of")
@@ -310,7 +317,7 @@ def test_pid_not_running_incumbent_is_auto_replaced_not_refused(tmp_path, monkey
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-11")
 
     digest_spy_calls: list = []
-    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: [])
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_send_pass,
         "build_send_digest",
@@ -355,16 +362,18 @@ def test_pid_not_running_incumbent_is_auto_replaced_not_refused(tmp_path, monkey
     # Group-EM was successfully claimed -- roster/digest/baseline all run, keys present.
     assert digest_spy_calls != [], "an auto-replace must proceed to build the digest"
     assert result["roster"] == []
+    assert result["roster_excluded"] == []
     assert result["digest"] == {"entries": [], "gate_declaration_required": True}
     assert result["baseline"]["first_tick"] is False
     assert "roster_error" not in result
+    assert "roster_excluded_error" not in result
     assert "digest_error" not in result
     assert "baseline_error" not in result
 
 
-def test_successful_claim_still_returns_all_five_keys(tmp_path, monkeypatch):
+def test_successful_claim_still_returns_all_expected_keys(tmp_path, monkeypatch):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-9")
-    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: [])
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_send_pass,
         "build_send_digest",
@@ -389,12 +398,13 @@ def test_successful_claim_still_returns_all_five_keys(tmp_path, monkeypatch):
     result = gee._group_em_enter({"repo_root": str(tmp_path)})
 
     assert set(result.keys()) >= {
-        "nomination", "roster", "roster_considered", "digest", "baseline", "teammates",
-        "watch_liveness"
+        "nomination", "roster", "roster_excluded", "roster_considered", "digest", "baseline",
+        "teammates", "watch_liveness"
     }
     assert result["nomination"]["claimed"] is True
     assert result["nomination"]["already_held"] is False
     assert result["roster"] == []
+    assert result["roster_excluded"] == []
     assert result["digest"] == {"entries": [], "gate_declaration_required": True}
     assert result["baseline"]["first_tick"] is True
 
@@ -404,7 +414,7 @@ def test_reentry_by_holder_is_distinguishable_from_fresh_claim(tmp_path, monkeyp
     claim and a refreshed re-entry by the same holder are two different lines to a
     human operator and must be distinguishable from the payload alone."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-10")
-    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: [])
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_send_pass,
         "build_send_digest",
@@ -432,13 +442,14 @@ def test_reentry_by_holder_is_distinguishable_from_fresh_claim(tmp_path, monkeyp
     assert result["nomination"]["already_held"] is True
     assert result["nomination"]["superseded_incumbent"] is None
     assert result["roster"] == []
+    assert result["roster_excluded"] == []
 
 
 def test_auto_replace_group_em_is_not_a_refusal_and_runs_roster(tmp_path, monkeypatch):
     """`replaced_holder` (case 4 -- pid_not_running) is NOT a refusal: `claimed` is True,
     so roster/digest/baseline must all run, unlike the two refusal cases above."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-11")
-    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: [])
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_send_pass,
         "build_send_digest",
@@ -476,6 +487,7 @@ def test_auto_replace_group_em_is_not_a_refusal_and_runs_roster(tmp_path, monkey
     assert result["nomination"]["replaced_holder"]["live_reason"] == "pid_not_running"
     # Not a refusal -- roster/digest/baseline all ran, none absent.
     assert result["roster"] == []
+    assert result["roster_excluded"] == []
     assert result["digest"] == {"entries": [], "gate_declaration_required": False}
     assert result["baseline"]["first_tick"] is True
 
@@ -488,7 +500,7 @@ def test_baseline_leg_writes_under_the_acted_on_repo_root_not_claude_klabauter(t
     it exercises the real function, over a real `tmp_path` `repo_root`, and
     asserts the baseline file lands under THAT root."""
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-6")
-    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: [])
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_send_pass,
         "build_send_digest",
@@ -552,7 +564,7 @@ def _group_em_with_teammates(tmp_path, monkeypatch, metas, session_id):
 
 def _stub_legs(monkeypatch, session_id, claimed=True):
     monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: session_id)
-    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: [])
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_send_pass,
         "build_send_digest",
@@ -679,6 +691,7 @@ def test_teammates_leg_degrades_without_taking_the_others(tmp_path, monkeypatch)
     assert result["teammates"] is None
     assert result["teammates_error"] == "RuntimeError: probe exploded"
     assert result["roster"] == []
+    assert result["roster_excluded"] == []
     assert result["digest"] == {"entries": [], "gate_declaration_required": True}
     assert result.get("as_of")
 
@@ -766,7 +779,7 @@ def test_roster_considered_separates_looked_from_found(tmp_path, monkeypatch):
         {"sessionId": "peer-b", "cwd": str(tmp_path), "status": "busy"},
         {"sessionId": "peer-c", "cwd": str(tmp_path), "status": "idle"},
     ])
-    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", lambda *a, **k: [])
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: [])
     monkeypatch.setattr(
         gee.group_em_send_pass,
         "build_send_digest",
@@ -786,6 +799,7 @@ def test_roster_considered_separates_looked_from_found(tmp_path, monkeypatch):
     result = gee._group_em_enter({"repo_root": str(tmp_path)})
 
     assert result["roster"] == []
+    assert result["roster_excluded"] == []
     assert result["roster_considered"] == 3
 
 
@@ -801,7 +815,7 @@ def test_roster_considered_survives_a_raising_roster_leg(tmp_path, monkeypatch):
     def _boom(*a, **k):
         raise RuntimeError("roster leg blew up")
 
-    monkeypatch.setattr(gee.group_em_read_pass, "build_candidate_roster", _boom)
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", _boom)
     monkeypatch.setattr(
         gee.group_em_nomination,
         "claim",
@@ -817,6 +831,8 @@ def test_roster_considered_survives_a_raising_roster_leg(tmp_path, monkeypatch):
 
     assert result["roster"] is None
     assert "roster_error" in result
+    assert result["roster_excluded"] is None
+    assert result["roster_excluded_error"] == result["roster_error"]
     assert result["roster_considered"] == 1
 
 
@@ -838,3 +854,148 @@ def test_roster_considered_is_absent_on_a_refused_group_em(tmp_path, monkeypatch
 
     assert "roster_considered" not in result
     assert "roster" not in result
+    assert "roster_excluded" not in result
+
+
+# --- roster_excluded: C1, docs/plans/2026-09-06-group-em-tooling-surface-six-defects.md -----
+
+
+def test_roster_excluded_is_the_strict_complement_of_the_admitted_population(tmp_path, monkeypatch):
+    """AC 3/5: a peer weighed and dropped (plain PRODUCING/UNKNOWN, none of
+    `candidate`/`unclassifiable`/`contradicted`) lands in `roster_excluded`,
+    never `roster` -- while `candidate`/`unclassifiable`/`contradicted` rows
+    stay in `roster` (AC 6's own population, and the C4 close that keeps
+    `contradicted` INSIDE `roster`)."""
+    monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rx1")
+    classified = [
+        {"session_id": "peer-candidate", "state": "PAUSED", "candidate": True,
+         "unclassifiable": False, "contradicted": False, "reason": "tail-paused"},
+        {"session_id": "peer-unclassifiable", "state": "UNKNOWN", "candidate": False,
+         "unclassifiable": True, "contradicted": False, "reason": "stale-producing-unresolved"},
+        {"session_id": "peer-contradicted", "state": "PAUSED", "candidate": False,
+         "unclassifiable": False, "contradicted": True, "reason": "live-busy-contradicts-paused"},
+        {"session_id": "peer-excluded", "state": "PRODUCING", "candidate": False,
+         "unclassifiable": False, "contradicted": False, "reason": "status-busy"},
+    ]
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: classified)
+    monkeypatch.setattr(
+        gee.group_em_read_pass,
+        "fetch_live_agents",
+        lambda *a, **k: [{"sessionId": v["session_id"], "cwd": str(tmp_path), "status": "idle"} for v in classified],
+    )
+    monkeypatch.setattr(
+        gee.group_em_send_pass,
+        "build_send_digest",
+        lambda *a, **k: {"entries": [], "gate_declaration_required": True},
+    )
+    monkeypatch.setattr(
+        gee.group_em_nomination,
+        "claim",
+        lambda *a, **k: {"claimed": True, "holder": "caller-sid-rx1", "superseded_incumbent": None},
+    )
+    monkeypatch.setattr(
+        gee.group_em_baseline,
+        "diff_and_persist",
+        lambda *a, **k: {"spawned": [], "exited": [], "changed": [], "first_tick": True},
+    )
+
+    result = gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    roster_ids = {v["session_id"] for v in result["roster"]}
+    excluded_ids = {v["session_id"] for v in result["roster_excluded"]}
+    assert roster_ids == {"peer-candidate", "peer-unclassifiable", "peer-contradicted"}
+    assert excluded_ids == {"peer-excluded"}
+    # AC 5: len(roster) + len(roster_excluded) == roster_considered, for a
+    # fixture forcing at least one peer that is none of the three signals.
+    assert len(result["roster"]) + len(result["roster_excluded"]) == result["roster_considered"]
+    # AC 6: the excluded entry carries the reader/tail reason already
+    # attached by classify_peer -- not a generic string.
+    assert result["roster_excluded"][0]["reason"] == "status-busy"
+
+
+def test_roster_excluded_absent_on_a_refused_group_em(tmp_path, monkeypatch):
+    """AC 4: same rule as `roster`/`digest`/`baseline` -- ABSENT, not `None`."""
+    monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rx2")
+    monkeypatch.setattr(
+        gee.group_em_nomination,
+        "claim",
+        lambda *a, **k: {
+            "claimed": False,
+            "superseded_incumbent": {"session_id": "other", "live_reason": "live"},
+        },
+    )
+
+    result = gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert "roster_excluded" not in result
+    assert "roster_excluded_error" not in result
+
+
+def test_shared_roster_call_feeds_both_roster_and_digest_admitted_population(tmp_path, monkeypatch):
+    """AC 7b: `result["roster"]` is the SAME admitted list `_run_digest` -> `build_send_digest`
+    receives -- asserted on the digest leg's actual call argument, not merely on the
+    payload gaining a key."""
+    monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rx3")
+    classified = [
+        {"session_id": "peer-candidate", "state": "PAUSED", "candidate": True,
+         "unclassifiable": False, "contradicted": False, "reason": "tail-paused"},
+        {"session_id": "peer-excluded", "state": "PRODUCING", "candidate": False,
+         "unclassifiable": False, "contradicted": False, "reason": "status-busy"},
+    ]
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", lambda *a, **k: classified)
+
+    digest_calls: list = []
+    monkeypatch.setattr(
+        gee.group_em_send_pass,
+        "build_send_digest",
+        lambda repo_root, roster, session_id: digest_calls.append(roster)
+        or {"entries": [], "gate_declaration_required": True},
+    )
+    monkeypatch.setattr(
+        gee.group_em_nomination,
+        "claim",
+        lambda *a, **k: {"claimed": True, "holder": "caller-sid-rx3", "superseded_incumbent": None},
+    )
+    monkeypatch.setattr(
+        gee.group_em_baseline,
+        "diff_and_persist",
+        lambda *a, **k: {"spawned": [], "exited": [], "changed": [], "first_tick": True},
+    )
+
+    result = gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert len(digest_calls) == 1
+    assert digest_calls[0] == result["roster"]
+    assert digest_calls[0] == [classified[0]]
+
+
+def test_one_shared_build_roster_call_per_invocation(tmp_path, monkeypatch):
+    """AC 7a: exactly one classification pass -- `build_roster` is called ONCE per
+    `groupem.enter` invocation, not once for `roster` and again for `roster_excluded`."""
+    monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rx4")
+    call_count = {"n": 0}
+
+    def _build_roster(*a, **k):
+        call_count["n"] += 1
+        return []
+
+    monkeypatch.setattr(gee.group_em_read_pass, "build_roster", _build_roster)
+    monkeypatch.setattr(
+        gee.group_em_send_pass,
+        "build_send_digest",
+        lambda *a, **k: {"entries": [], "gate_declaration_required": True},
+    )
+    monkeypatch.setattr(
+        gee.group_em_nomination,
+        "claim",
+        lambda *a, **k: {"claimed": True, "holder": "caller-sid-rx4", "superseded_incumbent": None},
+    )
+    monkeypatch.setattr(
+        gee.group_em_baseline,
+        "diff_and_persist",
+        lambda *a, **k: {"spawned": [], "exited": [], "changed": [], "first_tick": True},
+    )
+
+    gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert call_count["n"] == 1

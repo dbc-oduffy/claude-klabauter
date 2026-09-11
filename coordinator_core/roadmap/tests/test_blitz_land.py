@@ -1129,3 +1129,121 @@ def test_a_verdict_carrying_no_route_still_refuses_a_missing_plan(tmp_path):
     out = bl.land_wave(root, {"waveIndex": 0, "pulled": [{"batonId": "b-1"}]})
 
     assert [r["baton"] for r in out["refused"]] == ["b-1"]
+
+
+# ---------------------------------------------------------------------------
+# An unfinished wave is not a wave that opened nothing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        {"completed": False, "incompleteReason": "fire 1: 4 agents errored"},
+        {"completed": False},
+        {"incompleteReason": "session limit reached mid-wave"},
+        {"agentErrors": 4},
+        {"erroredAgents": ["plan:b-1", "review:b-1"]},
+        {"failedAgents": 2},
+    ],
+)
+def test_a_wave_that_declares_it_did_not_finish_is_refused(tmp_path, declaration):
+    """Measured on example-market-data-repo 2026-09-11: an unfinished fire does not lose
+    verdicts, it manufactures them. A baton came back `pulled` with a well-argued
+    reason whose substance was that the integration pass had not run, then `ready`
+    once it did. Landing the first writes an absence of judgment as a judgment."""
+    root = _repo(tmp_path)
+    plan = _plan(root, "the-plan", "draft")
+    _baton(root, "b-1")
+
+    with pytest.raises(bl.LandingRefused, match="unfinished wave"):
+        bl.land_wave(
+            root,
+            dict(
+                {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan}]},
+                **declaration,
+            ),
+        )
+
+
+def test_the_refusal_fires_before_any_write(tmp_path):
+    """A half-landed wave is worse than a silent one: the refusal must precede the
+    first stamp, not interleave with it."""
+    root = _repo(tmp_path)
+    plan = _plan(root, "the-plan", "draft")
+    _baton(root, "b-1")
+    before = (root / plan).read_text(encoding="utf-8")
+
+    with pytest.raises(bl.LandingRefused):
+        bl.land_wave(
+            root,
+            {
+                "waveIndex": 0,
+                "ready": [{"batonId": "b-1", "planPath": plan}],
+                "completed": False,
+            },
+        )
+
+    assert (root / plan).read_text(encoding="utf-8") == before
+
+
+def test_an_incompleteness_declared_on_the_envelope_is_read_too(tmp_path):
+    """The workflow writes the reason onto its return value; the harness records the
+    agent failures onto the envelope around it. A caller passing the envelope whole
+    must not lose the outer half."""
+    root = _repo(tmp_path)
+    plan = _plan(root, "the-plan", "draft")
+    _baton(root, "b-1")
+
+    with pytest.raises(bl.LandingRefused, match="unfinished wave"):
+        bl.land_wave(
+            root,
+            {
+                "summary": "a wave",
+                "agentErrors": 4,
+                "result": {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan}]},
+            },
+        )
+
+
+def test_a_wave_that_says_it_finished_still_lands(tmp_path):
+    """`completed: true` and a zero error count are the ordinary shape, not evidence."""
+    root = _repo(tmp_path)
+    plan = _plan(root, "the-plan", "draft")
+    _baton(root, "b-1")
+
+    out = bl.land_wave(
+        root,
+        {
+            "waveIndex": 0,
+            "ready": [{"batonId": "b-1", "planPath": plan}],
+            "completed": True,
+            "agentErrors": 0,
+            "incompleteReason": "",
+        },
+    )
+
+    assert out["approved"][0]["stamped"] is True
+
+
+def test_a_wave_result_declaring_nothing_is_admitted_not_refused(tmp_path):
+    """Absence is admitted: every wave result already on disk predates these fields,
+    and a check that failed closed on absence would refuse the whole corpus."""
+    root = _repo(tmp_path)
+    plan = _plan(root, "the-plan", "draft")
+    _baton(root, "b-1")
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [{"batonId": "b-1", "planPath": plan}]})
+
+    assert out["approved"][0]["stamped"] is True
+
+
+def test_an_empty_wave_is_not_confused_with_an_unfinished_one(tmp_path):
+    """The discriminator is the incompleteness FACT, never an empty `ready` — a wave
+    that genuinely opens nothing is a legitimate outcome and must still land."""
+    root = _repo(tmp_path)
+    _baton(root, "b-1")
+
+    out = bl.land_wave(root, {"waveIndex": 0, "ready": [], "pulled": [], "completed": True})
+
+    assert out["approved"] == [] and out["refused"] == []

@@ -832,6 +832,18 @@ def _upgrade_fix_line() -> str:
     )
 
 
+def _only_schema_defect(classes: Dict[str, Any]) -> bool:
+    """True when SCHEMA is the only class not passing.
+
+    The discriminator for which repair line to print. Scoped to SCHEMA ALONE
+    on purpose: a plan that also misses a census or a prime_exit_criterion has
+    derivable work the converter really can do, and routing it away from the
+    converter over a co-occurring shape error would cost more than it saves.
+    """
+    failing = [k for k, v in classes.items() if v["status"] != "PASS"]
+    return failing == ["SCHEMA"]
+
+
 def refusal_message(
     plan_path: Path, verdict: str, classes: Dict[str, Any], withheld: Sequence[str]
 ) -> str:
@@ -855,6 +867,18 @@ def refusal_message(
         lines.append(f"  {key:<14} {value['detail']}")
     if verdict == REFUSED:
         lines.append("  route: PM, not the plan author.")
+    elif _only_schema_defect(classes):
+        # The converter DERIVES missing declarations from the plan's own body.
+        # It cannot repair a value that is present and the wrong SHAPE, so for
+        # a schema-only refusal it writes nothing and reports `0 would be
+        # written` — a repair line pointing at a no-op, which costs the author
+        # the run it takes to discover that. (example-retrieval-repo, 2026-09-11: ran
+        # `--upgrade` across the whole refused set and got exactly that.)
+        lines.append(
+            "  fix: correct the named field(s) in the plan's frontmatter by hand — "
+            "mise-prep-upgrade derives missing declarations and cannot repair a "
+            "value that is present and the wrong shape"
+        )
     else:
         # NOT-PREPPED only. A plan authored before this bar existed is missing
         # keys its generator never emitted, and the repair is mechanical for the

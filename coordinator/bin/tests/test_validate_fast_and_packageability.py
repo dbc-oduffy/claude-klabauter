@@ -161,10 +161,10 @@ class FastSubcommandTest(unittest.TestCase):
         coordinator_core/test_diff_scoped_tests.py exercise
         `diff_scoped_tests` directly and never drove this wired path, so a
         green suite there missed a broken integration entirely. This test
-        drives `run_fast` in-process (monkeypatching `find_changed_test_files`
-        to return a non-empty set, matching the module's own T7 in-process
-        pattern) so the `if diff_paths:` branch and its diagnostic call
-        actually execute here.
+        drives `run_fast` in-process (monkeypatching `compute_diff_scoped_paths`
+        to return a non-empty, fully-mapped set, matching the module's own T7
+        in-process pattern) so the `if diff_paths:` branch and its diagnostic
+        call actually execute here.
         """
         import importlib.util
 
@@ -195,7 +195,7 @@ class FastSubcommandTest(unittest.TestCase):
         mod._resolver.resolve_fast_test_cmd = lambda repo_root: _FakeResolveResult(
             resolved_cmd + "\n", 0
         )
-        mod.find_changed_test_files = lambda repo_root: ["pkg/test_changed.py"]
+        mod.compute_diff_scoped_paths = lambda repo_root: (["pkg/test_changed.py"], True)
         mod.enforce_tier_u_gate = lambda cmd, repo_root=None: TierUGateResult(
             proceed=True, refusal_message=None
         )
@@ -218,6 +218,103 @@ class FastSubcommandTest(unittest.TestCase):
         self.assertIn("pkg/test_changed.py", captured_cmds[0])
         self.assertIn(marker_expr, captured_cmds[0])
         self.assertTrue(captured_cmds[0].startswith(resolved_cmd))
+
+    def test_t9_source_only_diff_scopes_via_mapped_tests(self) -> None:
+        """C3 (docs/plans/2026-07-30-diff-scoped-ceremony-gates-elegant.md):
+        a diff that changed only a SOURCE file (never a test file directly)
+        must still narrow, via `compute_diff_scoped_paths`'s union with
+        `coordinator_core.source_test_map`."""
+        import importlib.util
+
+        from coordinator_core.session.tier_u_gate import TierUGateResult
+
+        spec = importlib.util.spec_from_file_location("_vfp_source_only_regress", _CLI)
+        mod = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(mod)
+
+        marker_expr = "-m 'not cadence and not pending_fix and not designed_red'"
+        resolved_cmd = f"true {marker_expr}"
+
+        class _FakeResolveResult:
+            def __init__(self, stdout: str, returncode: int) -> None:
+                self.stdout = stdout
+                self.returncode = returncode
+
+        mod._resolver.resolve_fast_test_cmd = lambda repo_root: _FakeResolveResult(
+            resolved_cmd + "\n", 0
+        )
+        # A source-only diff: no directly-changed test file, but a mapped
+        # covering test comes back fully_mapped=True.
+        mod.compute_diff_scoped_paths = lambda repo_root: (
+            ["pkg/test_mapped_from_source.py"],
+            True,
+        )
+        mod.enforce_tier_u_gate = lambda cmd, repo_root=None: TierUGateResult(
+            proceed=True, refusal_message=None
+        )
+        captured_cmds: list[str] = []
+
+        def _fake_run_resolved_command(cmd: str) -> int:
+            captured_cmds.append(cmd)
+            return 0
+
+        mod._run_resolved_command = _fake_run_resolved_command
+
+        validation_result, exit_code = mod.run_fast("/tmp")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(validation_result, "0")
+        self.assertEqual(len(captured_cmds), 1)
+        self.assertIn("pkg/test_mapped_from_source.py", captured_cmds[0])
+        self.assertIn(marker_expr, captured_cmds[0])
+
+    def test_t10_unmapped_source_diff_falls_back_to_unscoped_command(self) -> None:
+        """The conjunctive fail-safe (AC9): fully_mapped=False must run the
+        UNSCOPED command, not a partial narrowing."""
+        import importlib.util
+
+        from coordinator_core.session.tier_u_gate import TierUGateResult
+
+        spec = importlib.util.spec_from_file_location("_vfp_unmapped_regress", _CLI)
+        mod = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(mod)
+
+        marker_expr = "-m 'not cadence and not pending_fix and not designed_red'"
+        resolved_cmd = f"true {marker_expr}"
+
+        class _FakeResolveResult:
+            def __init__(self, stdout: str, returncode: int) -> None:
+                self.stdout = stdout
+                self.returncode = returncode
+
+        mod._resolver.resolve_fast_test_cmd = lambda repo_root: _FakeResolveResult(
+            resolved_cmd + "\n", 0
+        )
+        # One mappable candidate exists, but fully_mapped is False -- the
+        # caller MUST discard the candidate and run the unscoped command.
+        mod.compute_diff_scoped_paths = lambda repo_root: (
+            ["pkg/test_partial.py"],
+            False,
+        )
+        mod.enforce_tier_u_gate = lambda cmd, repo_root=None: TierUGateResult(
+            proceed=True, refusal_message=None
+        )
+        captured_cmds: list[str] = []
+
+        def _fake_run_resolved_command(cmd: str) -> int:
+            captured_cmds.append(cmd)
+            return 0
+
+        mod._run_resolved_command = _fake_run_resolved_command
+
+        validation_result, exit_code = mod.run_fast("/tmp")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(captured_cmds), 1)
+        self.assertEqual(captured_cmds[0], resolved_cmd)
+        self.assertNotIn("pkg/test_partial.py", captured_cmds[0])
 
 
 class PackageabilitySubcommandTest(unittest.TestCase):
@@ -303,7 +400,7 @@ class SuiteMutexTakeSideTest(unittest.TestCase):
         mod._resolver.resolve_fast_test_cmd = lambda repo_root: _FakeResolveResult(
             resolved_cmd + "\n", 0
         )
-        mod.find_changed_test_files = lambda repo_root: []
+        mod.compute_diff_scoped_paths = lambda repo_root: ([], True)
 
         from coordinator_core.session.tier_u_gate import TierUGateResult
 

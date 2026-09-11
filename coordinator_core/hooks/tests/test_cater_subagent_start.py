@@ -1310,3 +1310,119 @@ def test_a_non_receipt_type_gets_a_sentinel_without_a_receipt_block(tmp_path, mo
     assert "provisioning: missed" in doc
     assert "integrator_receipt:" not in doc
     assert "review_receipt:" not in doc
+
+
+# ---------------------------------------------------------------------------
+# C6 (docs/plans/2026-09-07-doctrine-enforcement-surfaces.md § Approach C6,
+# AC10/AC11): policy.report_type_map is resolved at the
+# compose_catering -> _provision seam for a reviewer-typed dispatch with no
+# payload["type"], instead of never being consulted on this path at all.
+# ---------------------------------------------------------------------------
+
+
+def test_report_type_map_entry_resolves_the_mapped_template_via_compose_catering(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """AC10: a reviewer-typed dispatch with no `type` key on its payload, on
+    a policy whose `report_type_map` DOES carry an entry for it, gets that
+    template's body shape -- not the legacy run-report shape it got before
+    this seam consulted the map at all."""
+    policy = tmp_path / "subagent-sandbox-policy.yaml"
+    policy.write_text(
+        "report_sidecar:\n"
+        f"  - {ELIGIBLE_TYPE}\n"
+        "report_type_map:\n"
+        f"  {ELIGIBLE_TYPE}: review-findings\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy))
+
+    payload = _payload(ELIGIBLE_TYPE, "session-type-map-1", str(git_repo))
+    assert "type" not in payload
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    marker_line = next(
+        line for line in result.splitlines() if line.startswith(SIDECAR_PATH_MARKER_PREFIX)
+    )
+    rel_path = marker_line[len(SIDECAR_PATH_MARKER_PREFIX):]
+    doc_text = (git_repo / rel_path).read_text(encoding="utf-8")
+    assert "## Findings" in doc_text
+    assert "## Run notes" not in doc_text  # legacy run-report shape did not fire
+
+
+def test_empty_report_type_map_allows_the_dispatch_no_decline(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """AC11: a policy that resolved but carries no `report_type_map` at all
+    (the non-DoE-consumer / OSS-install / unset-CLAUDE_PLUGIN_ROOT case, per
+    `load_policy`'s own fail-open contract) allows the dispatch exactly as
+    before -- the legacy run-report shape, never a decline."""
+    policy = tmp_path / "subagent-sandbox-policy.yaml"
+    policy.write_text(f"report_sidecar:\n  - {ELIGIBLE_TYPE}\n", encoding="utf-8")
+    monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy))
+
+    payload = _payload(ELIGIBLE_TYPE, "session-type-map-2", str(git_repo))
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    marker_line = next(
+        line for line in result.splitlines() if line.startswith(SIDECAR_PATH_MARKER_PREFIX)
+    )
+    rel_path = marker_line[len(SIDECAR_PATH_MARKER_PREFIX):]
+    doc_text = (git_repo / rel_path).read_text(encoding="utf-8")
+    assert "## Run notes" in doc_text  # legacy shape -- no decline, no miss notice
+    assert SIDECAR_MISS_MARKER not in result
+
+
+def test_report_type_map_does_not_fire_for_a_type_absent_from_the_map(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """AC11: a non-empty `report_type_map` that simply has no entry for THIS
+    eligible type resolves through the same fail-open lookup-miss path as an
+    absent map -- legacy shape, no decline."""
+    policy = tmp_path / "subagent-sandbox-policy.yaml"
+    policy.write_text(
+        "report_sidecar:\n"
+        f"  - {ELIGIBLE_TYPE}\n"
+        "report_type_map:\n"
+        "  coordinator:some-other-reviewer: review-findings\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy))
+
+    payload = _payload(ELIGIBLE_TYPE, "session-type-map-3", str(git_repo))
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    marker_line = next(
+        line for line in result.splitlines() if line.startswith(SIDECAR_PATH_MARKER_PREFIX)
+    )
+    rel_path = marker_line[len(SIDECAR_PATH_MARKER_PREFIX):]
+    doc_text = (git_repo / rel_path).read_text(encoding="utf-8")
+    assert "## Run notes" in doc_text
+
+
+def test_payload_type_key_still_wins_over_report_type_map(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An explicit payload["type"] (the CLI axis, main()'s --type default)
+    is never overridden by the map -- the map is consulted only as a
+    fallback for a payload that carries no type at all."""
+    policy = tmp_path / "subagent-sandbox-policy.yaml"
+    policy.write_text(
+        "report_sidecar:\n"
+        f"  - {ELIGIBLE_TYPE}\n"
+        "report_type_map:\n"
+        f"  {ELIGIBLE_TYPE}: review-findings\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy))
+
+    payload = _payload(ELIGIBLE_TYPE, "session-type-map-4", str(git_repo))
+    payload["type"] = "assessment"
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    marker_line = next(
+        line for line in result.splitlines() if line.startswith(SIDECAR_PATH_MARKER_PREFIX)
+    )
+    rel_path = marker_line[len(SIDECAR_PATH_MARKER_PREFIX):]
+    doc_text = (git_repo / rel_path).read_text(encoding="utf-8")
+    assert "## Questions" in doc_text  # assessment shape, not review-findings

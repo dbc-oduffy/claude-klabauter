@@ -80,3 +80,43 @@ def test_every_verdict_lane_is_searched(tmp_path, key):
     wave = {key: [{"batonId": "dlv-archived-me"}]}
     found = blitz_land._archived_records_this_wave_names(tmp_path, wave, [])
     assert len(found) == 1
+
+
+def test_an_in_place_archive_is_resolved_too(tmp_path):
+    """Not every repo archives to a dated `archive/handoffs/`. Example-game-workbench-repo
+    archives in place, under `state/handoffs/archive/`, and an XS baton whose own
+    remit WAS that move came back from the landing as "no baton on disk carries id"
+    — a record-missing refusal for a record one directory away, at the end of a wave
+    that had done exactly what the repo's closure convention asks (measured
+    2026-09-11, blitz-2026-09-11 wave 0)."""
+    _record(
+        tmp_path / "state" / "handoffs" / "archive" / "closed.md",
+        deliverable_id="dlv-archived-in-place",
+        state="shipped",
+    )
+    found = blitz_land._archived_records_this_wave_names(
+        tmp_path, _wave("dlv-archived-in-place"), []
+    )
+    assert [r["path"] for r in found] == ["state/handoffs/archive/closed.md"]
+
+
+def test_both_archive_shapes_resolve_in_one_wave(tmp_path):
+    """A fleet-wide landing meets both conventions, and neither may shadow the other."""
+    _record(
+        tmp_path / "archive" / "handoffs" / "2026-08" / "dated.md",
+        deliverable_id="dlv-dated",
+        state="shipped",
+    )
+    _record(
+        tmp_path / "state" / "handoffs" / "archive" / "in-place.md",
+        deliverable_id="dlv-in-place",
+        state="shipped",
+    )
+    wave = {"ready": [{"batonId": "dlv-dated"}, {"batonId": "dlv-in-place"}]}
+
+    found = blitz_land._archived_records_this_wave_names(tmp_path, wave, [])
+
+    assert sorted(r["path"] for r in found) == [
+        "archive/handoffs/2026-08/dated.md",
+        "state/handoffs/archive/in-place.md",
+    ]

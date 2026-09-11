@@ -176,3 +176,16 @@ def test_the_ack_marker_lands_untracked_under_coordinator_local(no_reader, tmp_p
     # `a-b` and `a b` onto one marker, letting one topic eat another's warning.
     assert markers[0].name == memo_send._send_ack_path(tmp_path, "topic").name
     assert markers[0].name != "topic"
+
+
+def test_the_warning_separates_liveness_from_drainage(no_reader, tmp_path):
+    """Measured 2026-09-11 on example-cockpit-repo: an EM read "no peer EM is reachable",
+    knew it had been messaging that session all day, and overrode a refusal that was
+    right — it had measured inbox drainage, not session liveness. The text has to make
+    the claim it actually makes, because the override is one keystroke."""
+    warning = memo_send._no_reader_warning("topic", "12 memos sampled, none stamped")
+
+    assert "draining that inbox" in warning
+    assert "Not a claim that the session is dead" in warning
+    assert "Measured: 12 memos sampled, none stamped" in warning
+    assert "no peer EM is reachable" not in warning

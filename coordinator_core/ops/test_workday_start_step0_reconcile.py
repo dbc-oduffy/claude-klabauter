@@ -153,3 +153,43 @@ def test_reconcile_conflict_aborts_and_exits_3(tmp_path, capsys, monkeypatch):
     assert status.stdout.strip() == ""
     merge_head = clone / ".git" / "MERGE_HEAD"
     assert not merge_head.exists()
+
+
+def test_reconcile_merge_commit_refused_by_hook_aborts_and_exits_3(tmp_path, capsys, monkeypatch):
+    """A merge that applies cleanly (no content conflict) but is refused at
+    the commit step by a planted `pre-merge-commit` hook must classify as
+    `RECONCILE-MERGE-COMMIT-REFUSED`, not `RECONCILE-CONFLICT` — the
+    MERGE_HEAD-present / index-readable discrimination this plan adds."""
+    origin, clone = _make_origin_and_clone(tmp_path)
+    _git(clone, "checkout", "-q", "-b", "work/testmachine/2026-01-01")
+    (clone / "local-only.txt").write_text("local\n")
+    _git(clone, "add", "local-only.txt")
+    _git(clone, "commit", "-q", "-m", "local-only work")
+
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(origin), str(other)], check=True, **no_console_passthrough_kwargs())
+    _git(other, "config", "user.email", "test@example.com")
+    _git(other, "config", "user.name", "Test")
+    _git(other, "checkout", "-q", "-B", "main", "origin/main")
+    (other / "upstream.txt").write_text("more\n")
+    _git(other, "add", "upstream.txt")
+    _git(other, "commit", "-q", "-m", "upstream advance")
+    _git(other, "push", "-q", "origin", "main")
+
+    hooks_dir = clone / ".git" / "hooks"
+    hooks_dir.mkdir(exist_ok=True)
+    hook_path = hooks_dir / "pre-merge-commit"
+    hook_path.write_text("#!/bin/sh\nexit 1\n")
+    hook_path.chmod(0o755)
+
+    monkeypatch.chdir(clone)
+    rc = main([])
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "RECONCILE-MERGE-COMMIT-REFUSED branch=work/testmachine/2026-01-01" in captured.out
+    assert "NOT the A/B/C" in captured.err
+
+    status = _git(clone, "status", "--porcelain=v1")
+    assert status.stdout.strip() == ""
+    merge_head = clone / ".git" / "MERGE_HEAD"
+    assert not merge_head.exists()

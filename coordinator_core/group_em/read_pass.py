@@ -758,6 +758,22 @@ def build_roster(
     ]
 
 
+def is_admitted(verdict: Mapping[str, Any]) -> bool:
+    """The one admission predicate -- True when `verdict` belongs in
+    `build_candidate_roster`'s shortlist: `candidate`, `unclassifiable`, or
+    `contradicted` (never folded together, never redefined per caller).
+
+    Extracted (chunk C1,
+    docs/plans/2026-09-06-group-em-tooling-surface-six-defects.md,
+    eng-director F3) so `group_em_enter._run_roster_and_excluded` can derive
+    `roster_excluded` -- the strict complement of this predicate against one
+    shared `build_roster` population -- without a second, drifting copy of
+    this rule in the ops layer. `build_candidate_roster` below is this
+    module's only other caller; there are no others in the tree
+    (plan census, non-test callers of `build_candidate_roster` == 1)."""
+    return bool(verdict["candidate"] or verdict.get("unclassifiable") or verdict.get("contradicted"))
+
+
 def build_candidate_roster(
     repo_root: str,
     agents: Optional[list[dict[str, Any]]] = None,
@@ -792,8 +808,4 @@ def build_candidate_roster(
         now=now,
         read_tail=read_tail,
     )
-    return [
-        verdict
-        for verdict in verdicts
-        if verdict["candidate"] or verdict.get("unclassifiable") or verdict.get("contradicted")
-    ]
+    return [verdict for verdict in verdicts if is_admitted(verdict)]

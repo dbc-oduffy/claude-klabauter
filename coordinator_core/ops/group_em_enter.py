@@ -23,8 +23,9 @@ per-worktree), and `coordinator_core/authz/classification.py` (MUTATING --
 see that module's comment on this entry for the reason).
 
 Returns exactly one payload:
-    {"as_of": "<iso>", "nomination": {...}, "roster": [...], "roster_considered": int,
-     "digest": {...}, "baseline": {...}, "teammates": {...}, "watch_liveness": {...}}
+    {"as_of": "<iso>", "nomination": {...}, "roster": [...], "roster_excluded": [...],
+     "roster_considered": int, "digest": {...}, "baseline": {...}, "teammates": {...},
+     "watch_liveness": {...}}
 
 `as_of` is the ONE clock struck before any leg runs (`time.time()`, formatted like
 `group_em.idle_report.build_report`'s own `as_of` -- same key name, same
@@ -50,6 +51,26 @@ an EMPTY roster (§ PAYLOAD SHAPE ON REFUSAL) also holds WITHIN a roster that
 ran. Reported top-level beside `roster`, never inside it: a roster leg that
 raised still leaves the enumeration count answerable, and that is exactly
 the tick on which "did anything look at the fleet" matters most.
+
+`roster_excluded` (chunk C1) is the strict complement: the peers
+`group_em.read_pass.build_roster` classified but `build_candidate_roster`'s
+admission predicate (`read_pass.is_admitted` -- one definition, never
+copied into this module) dropped -- not `candidate`, not `unclassifiable`,
+not `contradicted`. `contradicted` peers stay INSIDE `roster`, not here (the
+C4 close made `contradicted` an inclusion signal). `roster` and
+`roster_excluded` are derived from ONE shared `build_roster` call
+(`_run_roster_and_excluded`), never two independent classification passes --
+a peer that was weighed and dropped is now distinguishable, in the payload
+itself, from one this op never enumerated at all. Same looked-versus-found
+register as `roster_considered` above: `len(roster) + len(roster_excluded)
+== roster_considered` on the success path, for a fixed enumeration. Each
+excluded entry keeps the reader/tail `reason` `classify_peer` already
+attached to it -- never a generic string. Omitted (not `None`) on a refused
+Group-EM, same as `roster` (§ PAYLOAD SHAPE ON REFUSAL). On a raised shared
+`build_roster` call, both `roster` and `roster_excluded` are written `None`,
+each with its own `_error` sibling carrying the same error text
+(`roster_error` / `roster_excluded_error`) -- the shared-call failure, not
+two independent leg failures.
 
 DEGRADE, NEVER RAISE. Each leg's own exception is caught HERE (not inside
 the leg module, which is untouched) and reported as `null` for that key
@@ -111,8 +132,9 @@ are OMITTED from the returned dict entirely, and so is `teammates` -- `"roster" 
 cosmetic choice: an EMPTY roster (`[]`) is a live fact -- "I looked, nobody is there" --
 while an ABSENT roster means "I had no standing to look, do not reason about peers from
 this." Collapsing the two into "falsy" would tell a session "no peers need you" when
-this op never looked. No `roster_error` / `digest_error` / `baseline_error` sibling is
-written on this path either, for the same reason the value key itself is omitted -- the
+this op never looked. No `roster_error` / `roster_excluded_error` / `digest_error` /
+`baseline_error` sibling is written on this path either, for the same reason the
+value key itself is omitted -- the
 per-leg degrade convention (`_leg`, below) is for a leg that RAN and failed, not one
 that never ran.
 
@@ -146,10 +168,13 @@ Negative-spec:
       warm assistant or fleet watcher is REPORTED every tick and never
       remediated here. It is also never inferred from a clock -- see that
       module's negative-spec.
-    - Never re-enumerates the harness. The roster leg is built over
-      `group_em.read_pass.build_candidate_roster`, which itself only reads
-      `claude agents --json` / the receiver-state reader -- no second
-      enumeration is added at this layer.
+    - Never re-enumerates the harness. The roster/roster_excluded legs are
+      built over one shared `group_em.read_pass.build_roster` call, which
+      itself only reads `claude agents --json` / the receiver-state reader --
+      no second enumeration is added at this layer.
+    - Never re-spells the admission predicate. `roster_excluded` is the
+      strict complement of `roster` against `read_pass.is_admitted` -- read
+      from that one definition, never copied or re-derived in this module.
     - No fallback beyond the one named per-leg degrade above -- a failing
       leg is reported null-plus-reason, never guessed at or retried.
 """
@@ -192,18 +217,24 @@ def _run_nomination(repo_root: str, caller_session_id: str) -> tuple[Optional[di
         return None, _leg_error(exc)
 
 
-def _run_roster(
+def _run_roster_and_excluded(
     repo_root: str, caller_session_id: str, agents: Optional[list] = None
-) -> tuple[Optional[list], Optional[str]]:
+) -> tuple[Optional[list], Optional[list], Optional[str]]:
+    """One shared `build_roster` call feeding BOTH `roster` (admitted) and
+    `roster_excluded` (its strict complement) -- never a second, independent
+    classification pass (module docstring; AC 7a's one-classification-pass
+    budget). Admission is read off `read_pass.is_admitted`, the single
+    predicate definition -- never re-spelled here (AC 7c)."""
     try:
-        return (
-            group_em_read_pass.build_candidate_roster(
-                repo_root, agents=agents, caller_session_id_value=caller_session_id
-            ),
-            None,
+        classified = group_em_read_pass.build_roster(
+            repo_root, agents=agents, caller_session_id_value=caller_session_id
         )
     except Exception as exc:  # noqa: BLE001
-        return None, _leg_error(exc)
+        error = _leg_error(exc)
+        return None, None, error
+    admitted = [verdict for verdict in classified if group_em_read_pass.is_admitted(verdict)]
+    excluded = [verdict for verdict in classified if not group_em_read_pass.is_admitted(verdict)]
+    return admitted, excluded, None
 
 
 def _run_roster_considered(
@@ -351,13 +382,15 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Returns:
         {"as_of": "<iso>", "nomination": {...} | None, "roster": [...] | None,
-         "roster_considered": int | None, "digest": {...} | None,
-         "baseline": {...} | None, "teammates": {...} | None,
-         "watch_liveness": {...} | None}
+         "roster_excluded": [...] | None, "roster_considered": int | None,
+         "digest": {...} | None, "baseline": {...} | None,
+         "teammates": {...} | None, "watch_liveness": {...} | None}
     `as_of` is the single clock struck before any leg runs -- see module docstring.
     `roster_considered` is how many peers the roster leg classified, of which
     `roster` is the kept subset -- see module docstring for why the count is
     top-level and why a consumer cannot read `len(roster)` as a population.
+    `roster_excluded` is that same classified population's strict complement
+    against `roster` -- see module docstring's `roster_excluded` paragraph.
     `teammates` carries `dispatch_required` plus per-agent `present` flags
     for the Group-EM's two standing teammates (fleet watcher first, then the
     assistant) -- the `gate_declaration_required` shape for an obligation
@@ -438,9 +471,20 @@ def _group_em_enter(params: dict, repo_root: Optional[Path] = None) -> dict:
     except Exception:  # noqa: BLE001
         agents = None
 
-    _leg(result, "roster", _run_roster(target_root, caller_session_id, agents))
+    # ONE shared `build_roster` call feeds both `roster` (admitted) and
+    # `roster_excluded` (its strict complement) -- never two independent
+    # classification passes. See `_run_roster_and_excluded` and module
+    # docstring's `roster_excluded` paragraph.
+    roster, roster_excluded, roster_error = _run_roster_and_excluded(
+        target_root, caller_session_id, agents
+    )
+    result["roster"] = roster
+    result["roster_excluded"] = roster_excluded
+    if roster_error is not None:
+        result["roster_error"] = roster_error
+        result["roster_excluded_error"] = roster_error
+
     _leg(result, "roster_considered", _run_roster_considered(agents, caller_session_id))
-    roster = result["roster"]
 
     _leg(result, "digest", _run_digest(target_root, roster, caller_session_id))
 

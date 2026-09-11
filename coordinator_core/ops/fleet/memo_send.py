@@ -676,15 +676,26 @@ def _no_reader_warning(topic: str, evidence: str) -> str:
     EM applies, and the way through — no self-legitimacy, no apology, no
     override key dressed up as a punishment.
 
+    It names WHAT WAS MEASURED, because the override is one keystroke and the
+    reasoning that justifies it is easy to fake to yourself. Measured 2026-09-11
+    on example-cockpit-repo: an EM read "no peer EM is reachable", knew it had been
+    exchanging live messages with that session all day, and overrode — answering
+    a claim the guard had not made. The guard was right; 21 memos from four repos
+    sat unstamped over nine days. Liveness and drainage are different facts, and
+    only drainage is observable from here, so only drainage is asserted.
+
     It does not say "do not send". A memo is still the right artifact for
     plan-weight work with no reader today, because it is a durable record for
     whoever picks the repo up. It says what sending here does and does not
     buy, and hands the decision back.
     """
     return (
-        "memo.send: no peer EM is reachable on this host, so this memo will "
-        "not be read — it is a record, not a dispatch.\n"
-        "  Why: %s\n"
+        "memo.send: nobody is draining that inbox, so this memo will not be "
+        "read — it is a record, not a dispatch.\n"
+        "  Not a claim that the session is dead. It may be live, and you may "
+        "be messaging it right\n"
+        "  now; what is not happening is anyone working its inbox.\n"
+        "  Measured: %s\n"
         "\n"
         "  If the work is a clear win you are confident in and within your "
         "competence, doing it\n"

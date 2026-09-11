@@ -518,6 +518,19 @@ def _today() -> str:
 # ---------------------------------------------------------------------------
 
 
+#: Where an archived baton can be. Two shapes, because the archive move is done by
+#: whoever finishes the work and the repos do not agree: claude-klabauter's own convention is
+#: a dated `archive/handoffs/<YYYY-MM>/`, while example-game-workbench-repo archives in
+#: place under `state/handoffs/archive/`. Only the first was searched, so a
+#: example-game-repo XS baton whose own remit WAS the archive move came back from the landing
+#: as "no baton on disk carries id ..." — a record-missing refusal for a record
+#: sitting one directory away, at the end of a wave that had done everything right
+#: (measured 2026-09-11, blitz-2026-09-11 wave 0, `hnd-example-game-repo-control-mcp-proce…`).
+#: Both are walked lazily and only when an id is otherwise unresolved, so the added
+#: directory costs nothing on the normal path.
+_ARCHIVE_SUBDIRS = (("archive", "handoffs"), ("state", "handoffs", "archive"))
+
+
 def _archived_records_this_wave_names(
     worktree_root: Path,
     wave_result: Dict[str, Any],
@@ -568,14 +581,15 @@ def _archived_records_this_wave_names(
         return []
 
     found: List[Dict[str, Any]] = []
-    for path in _iter_record_paths(worktree_root, ("archive", "handoffs"), recursive=True):
-        fm = _read_baton_fields(path)
-        if not fm:
-            continue
-        rel = path.relative_to(worktree_root).as_posix()
-        record = _baton_record(rel, path, fm, live=False)
-        if wanted & (set(record["ids"]) | {rel}):
-            found.append(record)
+    for subdir in _ARCHIVE_SUBDIRS:
+        for path in _iter_record_paths(worktree_root, subdir, recursive=True):
+            fm = _read_baton_fields(path)
+            if not fm:
+                continue
+            rel = path.relative_to(worktree_root).as_posix()
+            record = _baton_record(rel, path, fm, live=False)
+            if wanted & (set(record["ids"]) | {rel}):
+                found.append(record)
     return found
 
 
@@ -853,9 +867,14 @@ def _unwrap_wave_result(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         raise LandingRefused("wave_result must be an object")
     if any(key in payload for key in _VERDICT_KEYS):
+        _refuse_incomplete_wave(payload)
         return payload
     inner = payload.get("result")
     if isinstance(inner, dict) and any(key in inner for key in _VERDICT_KEYS):
+        # Both halves are read: the workflow writes the reason onto its own return
+        # value, the harness records the agent failures onto the envelope around it,
+        # and a caller passing the envelope whole must not lose the outer half.
+        _refuse_incomplete_wave(inner, payload)
         return inner
     raise LandingRefused(
         "wave_result carries none of "
@@ -863,6 +882,73 @@ def _unwrap_wave_result(payload: Dict[str, Any]) -> Dict[str, Any]:
         + " — this is not a plan-blitz wave result. Pass the workflow's own return "
         "value, or the task-output file's `result` field."
     )
+
+
+#: Fields by which a wave result DECLARES it did not finish. Read on the wave result
+#: and on the task-output envelope alike, because the harness records the agent
+#: failures and the workflow records the reason, and either one alone is enough.
+_INCOMPLETE_COUNT_KEYS = ("agentErrors", "erroredAgents", "failedAgents")
+
+
+def _incompleteness(payload: Dict[str, Any]) -> Optional[str]:
+    """Why this payload says the wave did not finish, or None when it claims nothing.
+
+    Absence is admitted, not refused: a payload predating these fields carries none
+    of them, and a check that failed closed on absence would refuse every wave result
+    already on disk without a single unfinished wave among them. Only a POSITIVE
+    declaration refuses.
+    """
+    reason = payload.get("incompleteReason")
+    if isinstance(reason, str) and reason.strip():
+        return reason.strip()
+    if payload.get("completed") is False:
+        return "the wave result declares completed: false and names no reason"
+    for key in _INCOMPLETE_COUNT_KEYS:
+        value = payload.get(key)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int) and value > 0:
+            return f"{key}: {value}"
+        if isinstance(value, (list, tuple)) and value:
+            return f"{key}: {len(value)} agent(s) errored"
+    return None
+
+
+def _refuse_incomplete_wave(*payloads: Dict[str, Any]) -> None:
+    """Refuse a landing whose own payload says agents errored mid-wave.
+
+    A session limit or an agent error mid-wave does not merely lose work — it
+    MANUFACTURES verdicts, and they are plausible ones. Measured on
+    example-market-data-repo 2026-09-11: each of wave 0's three fires had to complete
+    three times before its agent set was clean, and verdicts MOVED between runs in
+    the direction that matters. One baton came back `pulled` with a long, well-argued
+    reason whose substance was that the integration pass had not run, then `ready`
+    once it did; another's `converged` row read `skipped: no integration report to
+    resolve over` and became `settled: 2, unaddressed: 0`.
+
+    So an unfinished fire hands the driver an absence of judgment wearing the shape of
+    a judgment, at exactly the moment the cheap read — lane counts — says the wave is
+    done. Landing it writes that absence to disk as a verdict. The skill teaches this
+    (tripwire AN-UNFINISHED-WAVE-IS-NOT-A-WAVE-THAT-OPENED-NOTHING) and the teaching
+    held on the day it was measured; what it costs is driver diligence spent on every
+    landing forever, which is what a mechanical check is for.
+
+    Refused rather than downgraded to a per-baton refusal: the corruption is not
+    localised to the lanes that errored. An agent that died is one whose absence
+    changed a DIFFERENT baton's verdict, and nothing in the payload says which.
+    """
+    for payload in payloads:
+        if not isinstance(payload, dict):
+            continue
+        reason = _incompleteness(payload)
+        if reason:
+            raise LandingRefused(
+                f"wave result reports an unfinished wave ({reason}) — refusing to land. "
+                "An unfinished fire manufactures verdicts rather than losing them: a "
+                "baton whose integration pass never ran returns `pulled` with a reason "
+                "that reads as judgment. Re-run the fire until its agent set is clean, "
+                "then land that result."
+            )
 
 
 def _plan_path_from_trail(entry: Dict[str, Any], wave_result: Dict[str, Any]) -> Optional[str]:

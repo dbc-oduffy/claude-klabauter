@@ -719,6 +719,45 @@ def test_the_candidate_shortlist_is_a_subset_of_the_full_roster(monkeypatch):
     assert {v["session_id"] for v in shortlist} <= full_ids
 
 
+class TestIsAdmitted:
+    """AC 7c: `is_admitted` is the ONE admission-predicate definition in the
+    tree (chunk C1) -- pinned against all four verdict shapes so a later
+    caller (the ops-layer `roster_excluded` complement, or a fifth admission
+    signal) cannot drift from `build_candidate_roster`'s own filter."""
+
+    def test_candidate_is_admitted(self):
+        verdict = {"candidate": True, "unclassifiable": False, "contradicted": False}
+        assert read_pass.is_admitted(verdict) is True
+
+    def test_unclassifiable_is_admitted(self):
+        verdict = {"candidate": False, "unclassifiable": True, "contradicted": False}
+        assert read_pass.is_admitted(verdict) is True
+
+    def test_contradicted_is_admitted(self):
+        verdict = {"candidate": False, "unclassifiable": False, "contradicted": True}
+        assert read_pass.is_admitted(verdict) is True
+
+    def test_none_of_the_three_is_not_admitted(self):
+        verdict = {"candidate": False, "unclassifiable": False, "contradicted": False}
+        assert read_pass.is_admitted(verdict) is False
+
+    def test_build_candidate_roster_calls_through_is_admitted(self, monkeypatch):
+        """Regression pin for AC 7c's "exactly ONE definition" claim: if
+        `build_candidate_roster` ever stops calling `is_admitted`, a stubbed
+        `is_admitted` that always returns True/False must change its output."""
+        agents = [{"sessionId": "peer-a", "cwd": "/repo", "status": "idle"}]
+        monkeypatch.setattr(read_pass, "is_admitted", lambda verdict: True)
+        admitted_all = read_pass.build_candidate_roster(
+            "/repo", agents=agents, caller_session_id_value=None
+        )
+        monkeypatch.setattr(read_pass, "is_admitted", lambda verdict: False)
+        admitted_none = read_pass.build_candidate_roster(
+            "/repo", agents=agents, caller_session_id_value=None
+        )
+        assert len(admitted_all) == 1
+        assert admitted_none == []
+
+
 class TestFallbackStatusFallThroughNamesWhatItSaw:
     """An absent status and an unrecognized one are different facts, and the
     reason string is all a reader gets. Reporting both as "unrecognized" sent

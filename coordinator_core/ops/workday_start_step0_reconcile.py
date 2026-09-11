@@ -19,8 +19,14 @@ Branch Reconciliation Decision.
 Exit codes (parity-critical, preserved from the bash oracle):
     0 — already-includes (`ALREADY-CURRENT`) / fast-forward
         (`RECONCILED-FF`) / non-ff merge succeeded (`RECONCILED-MERGE`).
-    3 — merge conflict; merge aborted, PM resolves first
-        (`RECONCILE-CONFLICT`).
+    3 — a failed `--no-ff` merge, discriminated (MERGE_HEAD-first, spawn-
+        free) into one of three outcome strings: `RECONCILE-CONFLICT`
+        (genuine content conflict; merge aborted, PM resolves first),
+        `RECONCILE-MERGE-COMMIT-REFUSED` (the merge applied and reached the
+        commit step but was refused there, e.g. by a commit hook), or
+        `RECONCILE-MERGE-NOT-STARTED` (the merge never began — dirty
+        worktree, unrelated histories, bad ref). None of the three is the
+        A/B/C Branch Reconciliation Decision except `RECONCILE-CONFLICT`.
     1 — unexpected error (git not a repo, fetch failure, etc. — the bash
         oracle's `set -euo pipefail` propagates the failing git command's
         own exit code; this port does the same).
@@ -52,7 +58,11 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
+from coordinator_core.git.git_dir import resolve_git_dir
+from coordinator_core.git.git_state import IndexParseError, read_index
+from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.win_portability import no_console_creationflags
 
 
@@ -71,6 +81,51 @@ def _echo_to_stderr(proc: subprocess.CompletedProcess) -> None:
         sys.stderr.write(proc.stdout)
     if proc.stderr:
         sys.stderr.write(proc.stderr)
+
+
+def _merge_in_progress(repo_root: Path) -> bool:
+    """Whether `MERGE_HEAD` is present in this worktree's private gitdir —
+    read via `resolve_git_dir` (spawn-free by its own docstring), never via
+    a `git rev-parse --git-path` spawn. Matches
+    `push_failure_verdict::_merge_head_present`'s resolution shape."""
+    try:
+        return (resolve_git_dir(repo_root) / "MERGE_HEAD").exists()
+    except (OSError, ValueError):
+        # `resolve_git_dir` reads the `.git` pointer file as UTF-8; a
+        # non-UTF-8 pointer file raises `UnicodeDecodeError` (a `ValueError`
+        # subclass), not `OSError` — caught here too.
+        return False
+
+
+def _index_readable(repo_root: Path) -> bool:
+    """Whether `.git/index` parses cleanly — one `read_index(fresh=True)`
+    call, zero spawns. `fresh=True` because the index was mutated by the
+    merge subprocess microseconds earlier; a cached read would be stale.
+    Any `IndexParseError`, for any of its reasons, reads as *not readable*
+    — deliberately conservative (see module Design table / docstring)."""
+    try:
+        read_index(repo_root, fresh=True)
+        return True
+    except IndexParseError:
+        return False
+
+
+def _classify_failed_merge(merge_in_progress: bool, index_readable: bool) -> str:
+    """Three-way discrimination of a failed `--no-ff` merge, MERGE_HEAD-first:
+
+    | merge_in_progress | index_readable | outcome |
+    |---|---|---|
+    | True  | False (raised) | RECONCILE-CONFLICT (unchanged, today's arm) |
+    | True  | True           | RECONCILE-MERGE-COMMIT-REFUSED |
+    | False | either         | RECONCILE-MERGE-NOT-STARTED |
+
+    Pure, no I/O — the two probes above do the I/O and pass their booleans
+    in."""
+    if not merge_in_progress:
+        return "RECONCILE-MERGE-NOT-STARTED"
+    if index_readable:
+        return "RECONCILE-MERGE-COMMIT-REFUSED"
+    return "RECONCILE-CONFLICT"
 
 
 def main(argv: list[str]) -> int:
@@ -124,14 +179,50 @@ def main(argv: list[str]) -> int:
         print(f"RECONCILED-MERGE branch={current}")
         return 0
 
+    # Both probes MUST be read strictly before the abort below — `git merge
+    # --abort` clears unmerged index entries and removes MERGE_HEAD, and a
+    # probe placed after it would read clean every time, inverting the
+    # discrimination to "always RECONCILE-MERGE-NOT-STARTED".
+    repo_root = Path(show_toplevel() or Path.cwd())
+    merge_in_progress = _merge_in_progress(repo_root)
+    index_readable = _index_readable(repo_root)
+    outcome = _classify_failed_merge(merge_in_progress, index_readable)
+
     abort = _run(["merge", "--abort"])
     _echo_to_stderr(abort)
-    print(f"RECONCILE-CONFLICT branch={current}")
-    print(
-        "Reconcile with origin/main hit a conflict — surface A/B/C Branch "
-        "Reconciliation Decision.",
-        file=sys.stderr,
-    )
+    print(f"{outcome} branch={current}")
+    if outcome == "RECONCILE-CONFLICT":
+        # Byte-identical to today's text (AC3) — the conservative-arm note
+        # below is an ADDITION, never a replacement of this line.
+        print(
+            "Reconcile with origin/main hit a conflict — surface A/B/C Branch "
+            "Reconciliation Decision.",
+            file=sys.stderr,
+        )
+        if not index_readable:
+            # The conservative arm: `.git/index` could not be parsed, so this
+            # outcome also covers "genuinely unparseable for a non-conflict
+            # reason" (e.g. a core.splitIndex box, where this arm fires on
+            # every failed merge). Named explicitly rather than silently
+            # folded into "conflict" so the degradation is visible.
+            print(
+                "The index could not be read to confirm this is a genuine "
+                "content conflict; treated conservatively as one.",
+                file=sys.stderr,
+            )
+    elif outcome == "RECONCILE-MERGE-COMMIT-REFUSED":
+        print(
+            "Reconcile with origin/main applied but was refused at the commit "
+            "step (commonly a commit hook) — this is NOT the A/B/C Branch "
+            "Reconciliation Decision.",
+            file=sys.stderr,
+        )
+    else:  # RECONCILE-MERGE-NOT-STARTED
+        print(
+            "Reconcile with origin/main's merge never started — this is NOT "
+            "the A/B/C Branch Reconciliation Decision.",
+            file=sys.stderr,
+        )
     return 3
 
 

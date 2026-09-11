@@ -1477,13 +1477,26 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     # so an adopting spawn leaves no stray empty session dir behind.
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    # SUBSUME: --type axis. `type` is read straight off the payload -- the
-    # direct-call caller (fan-out-dispatch.py) never sets it, so `.get`
-    # returns None and _build_doc_text falls back to the frozen legacy
-    # run-report shape (see _build_doc_text's docstring). main() injects a
-    # "run-report"-default type into the payload before reaching here, so
-    # CLI invocations always resolve to the (enhanced) registry entry.
-    doc_type = payload.get("type") or None
+    # SUBSUME: --type axis. `type` is read straight off the payload first --
+    # the direct-call caller (fan-out-dispatch.py) never sets it, and main()
+    # injects a "run-report"-default type into the payload before reaching
+    # here, so CLI invocations always resolve to the (enhanced) registry
+    # entry via this leg alone.
+    #
+    # C6 (docs/plans/2026-09-07-doctrine-enforcement-surfaces.md § Approach
+    # C6, AC10/AC11): when the payload carries NO `type` (the
+    # `cater_subagent_start.compose_catering` -> `_provision` seam this
+    # module docstring's "Additive second seam" section names -- that caller
+    # never sets `payload["type"]`), consult `policy.report_type_map` for
+    # `effective_label` -- a lookup against a mapping already parsed and in
+    # hand (`policy` was already loaded above for the eligibility check), not
+    # a second policy read. RESOLVE, never decline: a type absent from the
+    # map, or a map that is empty because the policy did not resolve
+    # (`load_policy`'s own fail-open `_empty_policy()`), falls through to the
+    # same `None` this leg has always produced on a payload with no `type` --
+    # `_build_doc_text` then falls back to the frozen legacy run-report shape,
+    # exactly as before this change. No hard-decline leg is added.
+    doc_type = payload.get("type") or policy.report_type_map.get(effective_label) or None
 
     spawned_at = datetime.now(timezone.utc).isoformat()
     # SUBSUME: lead_session_id frontmatter stamp -- the REQUESTING EM's

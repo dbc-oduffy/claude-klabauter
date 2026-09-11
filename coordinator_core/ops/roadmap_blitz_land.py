@@ -34,6 +34,12 @@ Negative-spec:
     keeps a runaway loop impossible.
   - Does NOT stamp a plan it cannot link to its baton. An unlinked approval is a
     silent no-op that reads as success — refusal is the point, not a limitation.
+  - Does NOT land a wave whose own payload says it did not finish. An agent that
+    errored mid-wave does not merely lose a verdict, it manufactures one: the
+    integration pass that never ran comes back as a `pulled` verdict carrying a
+    well-argued reason. `completed: false`, an `incompleteReason`, or a nonzero
+    agent-error count on either the result or its envelope refuses the landing
+    whole, before any write.
   - Does NOT re-queue `surfacedToPm`. Those await a PM answer, and retrying one
     would be answering on the PM's behalf.
 

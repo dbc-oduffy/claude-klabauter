@@ -16,12 +16,18 @@ leaves alone.
 
 Spec backlink: PM-ratified scope cut, sizing record
 state/sizings/2026-07-30-diff-scoped-routine-ceremony-gates.yaml -- "the
-trivial bit" of a larger diff-scoped-ceremony-gates plan. The larger
-version (source-to-test mapping via a ``<mod>/tests/`` convention, and
-consolidating the resolver duplication between
-``coordinator_core/resolve_validation_cmd.py`` and
-``coordinator/bin/coordinator-resolve-validation-cmd.py``) is a separate
-spinoff and is explicitly anti-scope here.
+trivial bit" of a larger diff-scoped-ceremony-gates plan, landed in two
+stages per that record's own two-stage-landing rationale. The FIRST stage
+(this module's original scope) appended only DIRECTLY-changed test files.
+The SECOND stage -- docs/plans/2026-07-30-diff-scoped-ceremony-gates-elegant.md
+(C3) -- is this module's CURRENT scope: it also maps changed SOURCE files to
+their covering tests via ``coordinator_core.source_test_map`` and unions the
+two sets, and it is the consolidation-completed seam (the resolver
+duplication between ``coordinator_core/resolve_validation_cmd.py`` and
+``coordinator/bin/coordinator-resolve-validation-cmd.py`` was resolved by
+that same plan's C1). Both lines below that the module's ORIGINAL negative-
+spec named as anti-scope are deliberately REVERSED here, as the planned
+second stage, not as drift.
 
 Placement decision: this module lives in ``coordinator_core/`` (not
 duplicated into ``coordinator/bin/``) because both call sites --
@@ -36,19 +42,18 @@ anti-scope to fix, in a brand new module instead of an existing one --
 there is no reason to mint a second copy when the existing in-process
 import path already reaches both callers.
 
-Negative-spec (anti-scope, PM-ratified, do not build any of this here):
-  - Does NOT map changed SOURCE files to their covering tests via a
-    ``<mod>/tests/`` convention or any other heuristic. Only test files
-    that changed directly are ever appended.
-  - Does NOT consolidate ``coordinator_core/resolve_validation_cmd.py``
-    and ``coordinator/bin/coordinator-resolve-validation-cmd.py`` -- that
-    duplication is untouched by this module.
+Negative-spec (anti-scope, do not build any of this here):
   - Does NOT add a hook or a ``coordinator.local.md`` config key for the
-    source-to-test mapping leg -- there is nothing "ready for" it here.
+    source-to-test mapping leg -- ``coordinator_core.source_test_map`` is a
+    pure convention reader, not a configurable one.
   - Does NOT rebuild or reorder the resolved command string. It only
     APPENDS shell-quoted paths after the caller's already-resolved
     command, so the load-bearing ``-m '...'`` marker selector this repo's
     ``fast_test_cmd`` carries is never touched, dropped, or rebuilt.
+  - Does NOT itself decide to run the full tier -- ``fully_mapped=False``
+    from ``compute_diff_scoped_paths`` is a SIGNAL; the caller is the one
+    that reacts to it by keeping its already-resolved unscoped command
+    (see each gate CLI's own call site).
 """
 
 from __future__ import annotations
@@ -58,6 +63,13 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
+
+# coordinator_core.source_test_map imports ``_read_testpaths`` FROM this
+# module -- importing it back at module scope here would be a circular
+# import (whichever module loads first would find the other only
+# partially initialized). Imported lazily inside ``compute_diff_scoped_paths``
+# instead, which also keeps every OTHER caller of this module's original
+# (test-files-only) functions from paying source_test_map's import cost.
 
 #: Matches this repo's test-file convention (``test_*.py``), applied to the
 #: basename only -- never the full path, so a directory named e.g.
@@ -175,6 +187,72 @@ def find_changed_test_files(repo_root: Optional[str] = None) -> list[str]:
         result.append(posix_path)
 
     return sorted(result)
+
+
+def find_changed_source_files(repo_root: Optional[str] = None) -> list:
+    """Changed NON-test ``.py`` source files in ``repo_root``'s working tree
+    under a configured testpaths root, relative to ``repo_root``,
+    POSIX-separated. Sibling to `find_changed_test_files`, sharing its exact
+    "changed" definition (working-tree + staged vs HEAD, union untracked)
+    and its existence/testpaths-membership filters -- the only difference is
+    the basename filter is INVERTED (excludes ``test_*.py`` instead of
+    requiring it) and a ``.py`` extension is required (a changed non-Python
+    file under a testpaths root has no test-map entry to look up).
+    """
+    root = repo_root if repo_root is not None else "."
+    root_path = Path(root)
+
+    changed = set(_run_git(["diff", "--name-only", "HEAD"], root))
+    changed.update(_run_git(["ls-files", "--others", "--exclude-standard"], root))
+
+    testpaths = _read_testpaths(root)
+
+    result: list = []
+    for raw in changed:
+        posix_path = raw.replace("\\", "/").strip()
+        if not posix_path:
+            continue
+        if not posix_path.endswith(".py"):
+            continue
+        if not (root_path / posix_path).is_file():
+            continue
+        if _TEST_FILE_RE.match(Path(posix_path).name):
+            continue
+        if not _under_testpaths(posix_path, testpaths):
+            continue
+        result.append(posix_path)
+
+    return sorted(result)
+
+
+def compute_diff_scoped_paths(repo_root: Optional[str] = None):
+    """The union of (changed test files) and (tests mapped from changed
+    SOURCE files) -- the combined signal `append_test_paths` should be
+    given, or the caller's cue to fall back to its full configured tier.
+
+    Returns ``(paths, fully_mapped)``:
+      - ``paths`` -- the sorted union of `find_changed_test_files` and
+        whatever `coordinator_core.source_test_map.map_changed_sources`
+        derives from the changed SOURCE files. Directly-changed test files
+        are ALWAYS included regardless of ``fully_mapped`` -- they need no
+        derivation, the diff named them explicitly.
+      - ``fully_mapped`` -- ``True`` when either no source files changed, or
+        every changed source file mapped to at least one covering test
+        (AC9's conjunctive fail-safe, inherited unchanged from
+        `map_changed_sources`). ``False`` means: do not trust ``paths`` for
+        narrowing -- the caller MUST run its full configured tier instead
+        (this function does not do that itself; see the module's own
+        negative-spec).
+    """
+    changed_tests = find_changed_test_files(repo_root)
+    changed_sources = find_changed_source_files(repo_root)
+
+    from coordinator_core.source_test_map import map_changed_sources
+
+    mapped, fully_mapped = map_changed_sources(changed_sources, repo_root)
+
+    paths = sorted(set(changed_tests) | set(mapped))
+    return (paths, fully_mapped)
 
 
 def append_test_paths(cmd: str, paths: Sequence[str]) -> str:

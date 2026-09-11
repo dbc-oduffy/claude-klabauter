@@ -795,3 +795,82 @@ def test_the_gate_never_spawns_a_subprocess(monkeypatch):
         report = pg.evaluate_plan(path, root_names=root_names, siblings=siblings)
         pg.read_stamp(path.read_text(encoding="utf-8", errors="replace"))
         assert report["verdict"] in (pg.PREPPED, pg.NOT_PREPPED, pg.REFUSED)
+
+
+def test_a_schema_only_refusal_does_not_name_a_converter_that_cannot_fix_it(tmp_path):
+    """example-retrieval-repo, 2026-09-11: they ran `mise-prep-upgrade --upgrade` across the
+    whole refused set and got `0 would be written`.
+
+    The converter DERIVES missing declarations from the plan's body. It cannot
+    repair a value that is present and the wrong SHAPE, so naming it for a
+    schema-only refusal costs the author the run it takes to find that out.
+    """
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    report = _gate(
+        tmp_path,
+        _write_plan(
+            tmp_path,
+            frontmatter=(
+                "census: []\n"
+                "prime_exit_criterion:\n"
+                "  statement: the four fields land and validate\n"
+                "  derived_from: this is prose, not a sizings path\n"
+            ),
+            spine=_CLEAN_SPINE,
+        ),
+    )
+    assert report["verdict"] == pg.NOT_PREPPED
+    assert report["classes"]["SCHEMA"]["kind"] == "schema-invalid"
+    assert "mise-prep-upgrade.py" not in report["message"]
+    assert "by hand" in report["message"]
+
+
+def test_a_derivable_defect_still_routes_to_the_converter(tmp_path):
+    """The negative verdict, and why `_only_schema_defect` is scoped to SCHEMA
+    ALONE: a plan also missing a census has derivable work the converter really
+    can do, so a co-occurring shape error must not route it away."""
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    report = _gate(
+        tmp_path,
+        _write_plan(
+            tmp_path,
+            frontmatter=(
+                "prime_exit_criterion:\n"
+                "  statement: the four fields land and validate\n"
+                "  derived_from: this is prose, not a sizings path\n"
+            ),
+            spine=_CLEAN_SPINE,
+        ),
+    )
+    assert report["verdict"] == pg.NOT_PREPPED
+    assert report["classes"]["CENSUS"]["status"] != "PASS"
+    assert "mise-prep-upgrade.py" in report["message"]
+
+
+def test_a_date_typed_created_is_not_a_schema_defect(tmp_path):
+    """The false positive example-retrieval-repo reported fleet-wide on 2026-09-11, pinned
+    against so it cannot become true later.
+
+    `created: 2026-08-20` unquoted parses as a `datetime.date` while the schema
+    says `type: string`. `validate_frontmatter` coerces it — that leniency is
+    CONTRACT (claude-klabauter CLAUDE.md § Architecture: ~1350 records rely on
+    it), and `blitz_land` writes `execution_authorized_at` the same way, so a
+    gate rejecting these would reject the engine's own writer's output.
+
+    Measured when the report came in: across example-retrieval-repo's 248 plans, 43 are
+    schema-invalid and ZERO are invalid only on date-typed fields.
+    """
+    import datetime
+
+    fm = {
+        "title": "fixture",
+        "author": "fixture-session",
+        "status": "draft",
+        "created": datetime.date(2026, 8, 20),
+        "census": [],
+        "prime_exit_criterion": {
+            "statement": "the four fields land and validate",
+            "derived_from": "state/sizings/2026-09-07-fixture.yaml",
+        },
+    }
+    assert pg._schema(fm, pg._pass("declared"))["status"] == "PASS"

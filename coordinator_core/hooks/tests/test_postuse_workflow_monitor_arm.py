@@ -627,3 +627,104 @@ def test_sentinel_is_not_written_when_the_launcher_is_missing(tmp_path, monkeypa
         tempfile.gettempdir(), SESSION, "task-abc"
     )
     assert not os.path.isfile(sentinel)
+
+
+# ---------------------------------------------------------------------------
+# Concurrent launches: the "last match wins" premise is false, and the
+# advisory must say so rather than assert a task id it cannot verify.
+# ---------------------------------------------------------------------------
+
+
+def test_concurrent_launches_are_flagged_rather_than_guessed_through(tmp_path, capsys):
+    """Reported independently three times on 2026-09-11 — example-store-repo-fb,
+    example-market-data-repo-fa (wrong id on FOUR of five launches in one run), and
+    example-cockpit-repo-f6. Routed by doe-claude-b9.
+
+    Nothing in this function can see the tool call it fired on: the hook's
+    declared input carries no tool_response. So under concurrent fires it
+    cannot know which launch is its own, and a driver pasting the line watches
+    the wrong workflow with no tell that anything is wrong.
+    """
+    transcript_path = _write_transcript(
+        tmp_path,
+        _async_launched_record(task_id="task-fire-1", run_id="wf_one"),
+        _async_launched_record(task_id="task-fire-2", run_id="wf_two"),
+        _async_launched_record(task_id="task-fire-3", run_id="wf_three"),
+    )
+
+    result = pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
+
+    assert "WORKFLOW MONITOR" in result
+    # Still names the most recent — the advisory stays useful, since refusing
+    # outright would silence it in exactly the concurrent case it is for.
+    assert "task-fire-3" in result
+    # ...but the reader, who holds the tool result this hook cannot see, is
+    # told what to check and what happens if it does not match.
+    assert "CHECK BEFORE PASTING" in result
+    assert "wf_three" in result
+    assert "watches the wrong run" in result
+
+    # Same-type shadowing breadcrumbs too. The pre-existing branch only
+    # breadcrumbed a DIFFERENT taskType, so the plan-blitz case — every
+    # reported case — passed silently.
+    err = capsys.readouterr().err
+    assert "3 local_workflow launches" in err
+
+
+def test_an_ambiguous_read_does_not_write_the_once_per_task_sentinel(tmp_path):
+    """The sentinel is keyed on task_id, so a wrong id suppresses the advisory
+    for a task that never got one while leaving the real task unguarded — a
+    silent wrong answer made permanent. Re-advising is the cheap failure."""
+    transcript_path = _write_transcript(
+        tmp_path,
+        _async_launched_record(task_id="task-fire-1", run_id="wf_one"),
+        _async_launched_record(task_id="task-fire-2", run_id="wf_two"),
+    )
+
+    first = pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
+    second = pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
+
+    assert first != ""
+    assert second != "", "an ambiguous read must stay re-advisable, not self-suppress"
+
+    sentinel = pad._workflow_monitor_sentinel_path(
+        tempfile.gettempdir(), SESSION, "task-fire-2"
+    )
+    assert not os.path.isfile(sentinel)
+
+
+def test_a_single_launch_is_unchanged_and_still_writes_its_sentinel(tmp_path, capsys):
+    """The negative verdict. One launch is unambiguous, so nothing about the
+    ordinary path moves: no caveat, no breadcrumb, and the once-per-task
+    sentinel is written exactly as before."""
+    transcript_path = _write_transcript(
+        tmp_path, _async_launched_record(task_id="task-solo", run_id="wf_solo")
+    )
+
+    result = pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
+
+    assert "WORKFLOW MONITOR" in result
+    assert "CHECK BEFORE PASTING" not in result
+    assert "local_workflow launches" not in capsys.readouterr().err
+
+    sentinel = pad._workflow_monitor_sentinel_path(
+        tempfile.gettempdir(), SESSION, "task-solo"
+    )
+    assert os.path.isfile(sentinel)
+    assert pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow") == ""
+
+
+def test_a_repeated_launch_record_for_one_task_is_not_ambiguity(tmp_path, capsys):
+    """Ambiguity is DISTINCT task ids, not record count. A transcript window
+    holding the same launch twice (a re-read, or a resumed tail overlapping
+    what it already saw) names one run and must take the ordinary path."""
+    transcript_path = _write_transcript(
+        tmp_path,
+        _async_launched_record(task_id="task-same", run_id="wf_same"),
+        _async_launched_record(task_id="task-same", run_id="wf_same"),
+    )
+
+    result = pad._check_workflow_monitor_arm_sync(SESSION, transcript_path, "Workflow")
+
+    assert "CHECK BEFORE PASTING" not in result
+    assert "local_workflow launches" not in capsys.readouterr().err

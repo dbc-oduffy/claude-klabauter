@@ -694,3 +694,346 @@ def cs_resolve_full_test_cmd(repo_root: Optional[str] = None) -> ResolvedCommand
         file=sys.stderr,
     )
     return ResolvedCommand(None, 2)
+
+
+# ==============================================================================
+# Bin-shape API — the CONSOLIDATED implementation (C1,
+# docs/plans/2026-07-30-diff-scoped-ceremony-gates-elegant.md, Design decision 1).
+#
+# The bin script (coordinator/bin/coordinator-resolve-validation-cmd.py) used
+# to carry its OWN independent implementation, which had drifted ahead of the
+# ``cs_*``/``ResolvedCommand`` API above on three fronts: a repo-local
+# ``.venv``-first interpreter preference (``_venv_interp``), a Windows
+# ``sys.executable`` preference over probing PATH (Store App Execution Alias
+# hazard), and a return type (``ResolveResult.stdout``/``.returncode``/
+# ``.stderr``) the bin file's three in-process callers
+# (workday-complete-step1-validate.py, validate-fast-and-packageability.py,
+# coordinator-ceremony-hook.py) consume directly. This section IS that
+# implementation now, moved here so it has exactly one home; the bin script
+# re-exports these names rather than re-implementing them.
+#
+# The ``cs_*``/``ResolvedCommand`` API above is UNCHANGED and stays the
+# canonical name for coordinator_core's own historical callers/tests — it has
+# zero production callers outside coordinator_core/test_resolve_validation_cmd.py
+# (AC11 pins the bin path's behaviour, not this one), so preserving it exactly
+# costs nothing and avoids rewriting that pinned 46-test suite. The two APIs
+# are independent implementations of the same algorithm from this point on,
+# not layered on one another — deliberately, so a monkeypatch of one (e.g.
+# ``coordinator_core.resolve_validation_cmd.shutil.which``) predictably
+# affects only the code path actually under test.
+# ==============================================================================
+
+
+@dataclass
+class ResolveResult:
+    """Bin-shape return type. See module docstring's Output contract."""
+
+    stdout: str
+    returncode: int
+    stderr: str = ""
+
+
+class InterpreterMissing(Exception):
+    """Raised when a bare `python` token needs normalizing but no interpreter
+    exists. Bin-shape sibling of NoPythonInterpreterError above."""
+
+
+class MalformedValue(Exception):
+    """Raised when a resolved value carries an un-interpretable escaped
+    quote. Bin-shape sibling of MalformedValueError above."""
+
+
+def _venv_interp(repo_root: Optional[str]) -> Optional[str]:
+    """Repo-local virtualenv interpreter, when the repo has one.
+
+    A bare `python` token means the config declined to name an interpreter,
+    so the resolver picks — and for a venv-primary repo the ambient system
+    python3 is the wrong pick: it has none of the runtime deps, so the gate
+    reports a wall of collection errors that read as test failures rather
+    than as an environment mismatch (example-retrieval-repo saw 314 of them,
+    2026-07-22). A `.venv` sitting in the repo root is an unambiguous
+    declaration of which interpreter that repo's tests expect. Returns None
+    when there is no repo root or no `.venv` — the ambient python3-first
+    path then applies unchanged.
+    """
+    if not repo_root:
+        return None
+    from coordinator_core.win_portability import is_executable
+
+    for rel in ("bin/python", "Scripts/python.exe"):
+        cand = os.path.join(repo_root, ".venv", *rel.split("/"))
+        if os.path.isfile(cand) and is_executable(cand):
+            return cand
+    return None
+
+
+def _resolve_python_interp(repo_root: Optional[str] = None) -> Optional[str]:
+    """venv-first, then platform-appropriate interpreter resolution.
+
+    Returns the repo-local `.venv` interpreter when present. Otherwise, on
+    Windows (`os.name == "nt"`), prefers `sys.executable` over probing
+    `python3` on PATH (Store App Execution Alias hazard — see
+    `_venv_interp`'s sibling docstring in the bin script's history). Falls
+    back to `python3`/`python` on PATH if `sys.executable` is unset. POSIX
+    behavior is unchanged: `python3` is still probed first there. Returns
+    None when nothing resolves.
+    """
+    venv = _venv_interp(repo_root)
+    if venv:
+        return venv
+    if os.name == "nt" and sys.executable:
+        return sys.executable
+    if shutil.which("python3"):
+        return "python3"
+    if shutil.which("python"):
+        return "python"
+    return None
+
+
+def _normalize_python_token(cmd: str, repo_root: Optional[str] = None) -> str:
+    """Interpreter-portability normalization — bin-shape sibling of
+    normalize_python_token above, threading repo_root through to
+    `_resolve_python_interp` for venv-first resolution.
+
+    Raises InterpreterMissing (not NoPythonInterpreterError) when the token
+    is bare `python` and no interpreter exists — callers of THIS function
+    map that to exit 127.
+    """
+    if cmd == "python" or cmd.startswith("python "):
+        interp = _resolve_python_interp(repo_root)
+        if interp is None:
+            print(
+                f"[cs_resolve] no python3/python on PATH — cannot run '{cmd}' "
+                "(refusing to skip; fail loud)",
+                file=sys.stderr,
+            )
+            raise InterpreterMissing(cmd)
+        print(f"[cs_resolve] step=interp bare `python` token -> {interp}", file=sys.stderr)
+        import shlex
+
+        return shlex.quote(interp) + cmd[len("python"):]
+    return cmd
+
+
+def _read_frontmatter(local_md: str) -> list:
+    """Read the YAML frontmatter block of a coordinator.local.md file as a
+    list of body lines. [] if unreadable or fewer than two `---` markers."""
+    lines: list = []
+    n = 0
+    try:
+        with open(local_md, encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.rstrip("\n")
+                if line == "---":
+                    n += 1
+                    if n == 2:
+                        break
+                    continue
+                if n == 1:
+                    lines.append(line)
+    except OSError:
+        return []
+    return lines
+
+
+def _read_frontmatter_key(local_md: str, key: str) -> str:
+    """Extract a flat top-level frontmatter key from an open-able local.md
+    path. Shared parser for read_local_md_key and resolve_fast_test_cmd's
+    local-md step."""
+    needle = f"{key}:"
+    for line in _read_frontmatter(local_md):
+        if line.startswith(needle):
+            return _strip_wrapping_quotes(line[len(needle):].strip())
+    return ""
+
+
+def read_local_md_key(repo_root: str, key: str) -> str:
+    """Bin-shape sibling of cs_read_local_md_key above (identical
+    contract/behaviour, independent implementation)."""
+    local_md = os.path.join(repo_root, "coordinator.local.md")
+    if not os.path.isfile(local_md):
+        return ""
+    return _read_frontmatter_key(local_md, key)
+
+
+def resolve_fast_test_cmd(repo_root: Optional[str] = None) -> ResolveResult:
+    """Bin-shape resolver — see module docstring's Output contract. Returns
+    ResolveResult(stdout, returncode, stderr) rather than
+    ResolvedCommand(cmd, exit_code); this is the shape the in-process bin
+    callers consume."""
+    repo_root = repo_root or os.getcwd()
+    stderr_acc = []
+
+    def _say(msg: str) -> None:
+        print(msg, file=sys.stderr)
+        stderr_acc.append(msg + "\n")
+
+    # Step 1 — COORDINATOR_FAST_TEST_CMD env var
+    env_val = os.environ.get(FAST_TEST_CMD_ENV, "")
+    if env_val:
+        _say(f"[cs_resolve_fast_test_cmd] step=env-var resolved: {redact_for_diag(env_val)}")
+        warn = _metachar_warn(env_val, "env-var")
+        if warn:
+            stderr_acc.append(warn)
+        try:
+            _check_escape_residue(env_val, "env-var", "cs_resolve_fast_test_cmd")
+            norm = _normalize_python_token(env_val, repo_root)
+        except MalformedValueError:
+            return ResolveResult("", 126, "".join(stderr_acc))
+        except InterpreterMissing:
+            return ResolveResult("", 127, "".join(stderr_acc))
+        return ResolveResult(norm + "\n", 0, "".join(stderr_acc))
+
+    # Step 2 — coordinator.local.md flat top-level fast_test_cmd: key
+    local_md = os.path.join(repo_root, "coordinator.local.md")
+    if os.path.isfile(local_md):
+        fast_test_cmd = _read_frontmatter_key(local_md, "fast_test_cmd")
+        if fast_test_cmd:
+            _say(
+                f"[cs_resolve_fast_test_cmd] step=local-md resolved: "
+                f"{redact_for_diag(fast_test_cmd)}"
+            )
+            warn = _metachar_warn(fast_test_cmd, "local-md")
+            if warn:
+                stderr_acc.append(warn)
+            try:
+                _check_escape_residue(fast_test_cmd, "local-md", "cs_resolve_fast_test_cmd")
+                norm = _normalize_python_token(fast_test_cmd, repo_root)
+            except MalformedValueError:
+                return ResolveResult("", 126, "".join(stderr_acc))
+            except InterpreterMissing:
+                return ResolveResult("", 127, "".join(stderr_acc))
+            return ResolveResult(norm + "\n", 0, "".join(stderr_acc))
+
+    # Step 3 — skip-with-notice (no conventional fallback — the Staff Engineer F1)
+    _say("[cs_resolve_fast_test_cmd] step=skipped — no fast-test command configured.")
+    _say("[cs_resolve_fast_test_cmd] To configure, choose one of:")
+    _say('  a) Set env var: export COORDINATOR_FAST_TEST_CMD="<your-command>"')
+    _say('  b) Add to coordinator.local.md frontmatter: fast_test_cmd: "<your-command>"')
+    return ResolveResult("", 2, "".join(stderr_acc))
+
+
+def _metachar_warn(s: str, step: str, caller: str = "cs_resolve_fast_test_cmd") -> str:
+    """Bin-shape sibling of metachar_warn above — returns the printed text
+    (empty when not fired) so CLI callers can accumulate it into
+    ResolveResult.stderr, rather than returning None."""
+    if os.environ.get(SUPPRESS_METACHAR_WARN_ENV, "0") == "1":
+        return ""
+    if "$(" in s or "`" in s or "; " in s:
+        msg = (
+            f"[{caller}] WARN (step={step}): resolved value contains shell "
+            "metacharacters ($( or backtick or ;) — confirm this is intended; "
+            f"set {SUPPRESS_METACHAR_WARN_ENV}=1 to silence this warning for "
+            "this and other callers."
+        )
+        print(msg, file=sys.stderr)
+        return msg + "\n"
+    return ""
+
+
+def resolve_full_test_cmd(repo_root: Optional[str] = None) -> ResolveResult:
+    """Bin-shape sibling of cs_resolve_full_test_cmd above — see module
+    docstring's Output contract."""
+    repo_root = repo_root or os.getcwd()
+    stderr_acc = []
+
+    def _say(msg: str) -> None:
+        print(msg, file=sys.stderr)
+        stderr_acc.append(msg + "\n")
+
+    # Step 1 — COORDINATOR_FULL_TEST_CMD env var
+    env_val = os.environ.get(FULL_TEST_CMD_ENV, "")
+    if env_val:
+        _say(f"[cs_resolve_full_test_cmd] step=env-var resolved: {redact_for_diag(env_val)}")
+        warn = _metachar_warn(env_val, "env-var", "cs_resolve_full_test_cmd")
+        if warn:
+            stderr_acc.append(warn)
+        try:
+            _check_escape_residue(env_val, "env-var", "cs_resolve_full_test_cmd")
+            norm = _normalize_python_token(env_val, repo_root)
+        except MalformedValueError:
+            return ResolveResult("", 126, "".join(stderr_acc))
+        except InterpreterMissing:
+            return ResolveResult("", 127, "".join(stderr_acc))
+        return ResolveResult(norm + "\n", 0, "".join(stderr_acc))
+
+    # Step 2 — coordinator.local.md flat top-level full_test_cmd: key
+    full_test_cmd = read_local_md_key(repo_root, "full_test_cmd")
+    if full_test_cmd:
+        _say(f"[cs_resolve_full_test_cmd] step=local-md resolved: {redact_for_diag(full_test_cmd)}")
+        warn = _metachar_warn(full_test_cmd, "local-md", "cs_resolve_full_test_cmd")
+        if warn:
+            stderr_acc.append(warn)
+        try:
+            _check_escape_residue(full_test_cmd, "local-md", "cs_resolve_full_test_cmd")
+            norm = _normalize_python_token(full_test_cmd, repo_root)
+        except MalformedValueError:
+            return ResolveResult("", 126, "".join(stderr_acc))
+        except InterpreterMissing:
+            return ResolveResult("", 127, "".join(stderr_acc))
+        return ResolveResult(norm + "\n", 0, "".join(stderr_acc))
+
+    # Step 3 — FALL BACK to the fast tier (not skip). fast-tier diags are
+    # suppressed from stderr (matches the bash oracle's `2>/dev/null` on the
+    # fallback call) so they don't bleed into full-tier output.
+    import contextlib
+    import io
+
+    with contextlib.redirect_stderr(io.StringIO()):
+        fast = resolve_fast_test_cmd(repo_root)
+    if fast.returncode == 0:
+        _say(
+            "[cs_resolve_full_test_cmd] step=fast-fallback — no full_test_cmd configured; "
+            "running the FAST tier. Coverage is fast-tier-only. To run the full suite, set "
+            "full_test_cmd: in coordinator.local.md or $COORDINATOR_FULL_TEST_CMD."
+        )
+        return ResolveResult(fast.stdout, 3, "".join(stderr_acc))
+    if fast.returncode != 2:
+        _say(
+            f"[cs_resolve_full_test_cmd] step=fast-fallback — fast resolver hard-failed "
+            f"(rc={fast.returncode}); propagating (NOT a skip)."
+        )
+        return ResolveResult("", fast.returncode, "".join(stderr_acc))
+
+    # Step 4 — neither tier configured (fast.returncode == 2)
+    _say("[cs_resolve_full_test_cmd] step=skipped — no full or fast test command configured.")
+    return ResolveResult("", 2, "".join(stderr_acc))
+
+
+def main(argv: list) -> int:
+    """CLI entrypoint — moved here from the bin script verbatim; the bin
+    script re-exports this name (its module-level `main` must stay
+    importable — see the bin script's own docstring on
+    d_step2_resolve_validation_cmd's getattr dispatch)."""
+    if not argv:
+        print(
+            "usage: coordinator_resolve_validation_cmd.py --fast|--full [repo_root] | "
+            "--read-key <repo_root> <key>",
+            file=sys.stderr,
+        )
+        return 1
+
+    mode = argv[0]
+    if mode == "--fast":
+        repo_root = argv[1] if len(argv) > 1 else None
+        result = resolve_fast_test_cmd(repo_root)
+    elif mode == "--full":
+        repo_root = argv[1] if len(argv) > 1 else None
+        result = resolve_full_test_cmd(repo_root)
+    elif mode == "--read-key":
+        if len(argv) < 3:
+            print(
+                "usage: coordinator_resolve_validation_cmd.py --read-key <repo_root> <key>",
+                file=sys.stderr,
+            )
+            return 1
+        val = read_local_md_key(argv[1], argv[2])
+        print(val)
+        return 0
+    else:
+        print(f"unknown mode: {mode}", file=sys.stderr)
+        return 1
+
+    if result.stdout:
+        sys.stdout.write(result.stdout)
+    return result.returncode

@@ -139,31 +139,38 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
     second = pad._check_context_pressure_sync(session_id, "")
     assert second == ""
 
-def test_throttle_suppresses_even_when_content_would_otherwise_fire(tmp_path):
+def test_throttle_suppresses_even_when_content_would_otherwise_fire(
+    tmp_path, monkeypatch
+):
     """Isolates the throttle guard specifically (not bark-once): pre-seed
     throttle_last_check to "just now" for a session that has NEVER fired
-    before, then confirm a critical-sized transcript is still suppressed."""
+    before, then confirm a critical sidecar reading is still suppressed.
+
+    Phase 2 is sidecar-sourced, not transcript-byte-sourced (see the module
+    docstring above _check_context_pressure_sync) -- so "content that would
+    otherwise fire critical" is a sidecar reading in the red band, not a
+    byte-sized transcript file.
+    """
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    from coordinator_core.session import context_usage_sidecar as sidecar_module
+
+    sidecar_module._last_written.clear()
     transcript = tmp_path / "transcript.jsonl"
-    model_line = json.dumps({"model": "claude-sonnet-4-5-20250929"})
-    context_window = 200_000
-    bytes_per_token = 7
-    critical_pct = 50
-    critical_bytes = context_window * critical_pct * bytes_per_token // 100
-    filler_line = json.dumps({"type": "user", "message": {"content": "x" * 500}})
-    lines = [model_line]
-    needed_lines = (critical_bytes // len(filler_line)) + 10
-    lines.extend([filler_line] * needed_lines)
-    transcript.write_text("\n".join(lines) + "\n")
-    assert transcript.stat().st_size >= critical_bytes
+    transcript.write_text(json.dumps({"model": "claude-sonnet-4-5-20250929"}) + "\n")
 
     session_id = "test-session-throttle-isolated"
+    sidecar_module.write_usage(
+        session_id,
+        {"used_percentage": 50, "context_window_size": 1_000_000},
+        now=time.time(),
+    )
     pad._save_advisory_state(
         tempfile.gettempdir(), session_id, {"throttle_last_check": time.time()}
     )
 
     result = pad._check_context_pressure_sync(session_id, str(transcript))
 
-    assert result == ""  # throttled despite content that would otherwise fire critical
+    assert result == ""  # throttled despite a sidecar reading that would otherwise fire critical
 
 
 def test_compaction_advisory_fires_exactly_once_per_sentinel_and_rearms(tmp_path):

@@ -1104,6 +1104,108 @@ def test_provision_direct_call_no_type_key_in_payload_matches_legacy_shape(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# C6 (docs/plans/2026-09-07-doctrine-enforcement-surfaces.md § Approach C6,
+# AC10/AC11): `_provision` resolves `policy.report_type_map` for the
+# `effective_label` it already computed, rather than never consulting it on
+# this path -- RESOLVE, never decline, and an empty/absent map falls open to
+# the same legacy shape reached today.
+# ---------------------------------------------------------------------------
+
+
+def test_report_type_map_entry_resolves_template_when_payload_has_no_type(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    policy_path = tmp_path / "subagent-sandbox-policy.yaml"
+    policy_path.write_text(
+        yaml.safe_dump(
+            {
+                "report_sidecar": [REPORT_SIDECAR_TYPE],
+                "report_type_map": {REPORT_SIDECAR_TYPE: "review-findings"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    session_id = "sess-type-map-entry"
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id=session_id
+    )
+    assert "type" not in payload
+
+    report_sidecar = _provision(payload, str(policy_path), str(git_repo))
+    assert report_sidecar is not None
+    text = (git_repo / report_sidecar).read_text(encoding="utf-8")
+    assert "## Findings" in text
+    assert "## Run notes" not in text
+
+
+def test_payload_type_wins_over_report_type_map_entry(git_repo: Path, tmp_path: Path) -> None:
+    policy_path = tmp_path / "subagent-sandbox-policy.yaml"
+    policy_path.write_text(
+        yaml.safe_dump(
+            {
+                "report_sidecar": [REPORT_SIDECAR_TYPE],
+                "report_type_map": {REPORT_SIDECAR_TYPE: "review-findings"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    session_id = "sess-type-map-wins"
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID,
+        agent_type=REPORT_SIDECAR_TYPE,
+        session_id=session_id,
+        doc_type="assessment",
+    )
+
+    report_sidecar = _provision(payload, str(policy_path), str(git_repo))
+    assert report_sidecar is not None
+    text = (git_repo / report_sidecar).read_text(encoding="utf-8")
+    assert "## Questions" in text
+    assert "## Findings" not in text
+
+
+def test_report_type_map_absent_entry_falls_open_to_legacy_no_decline(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    policy_path = tmp_path / "subagent-sandbox-policy.yaml"
+    policy_path.write_text(
+        yaml.safe_dump(
+            {
+                "report_sidecar": [REPORT_SIDECAR_TYPE],
+                "report_type_map": {"coordinator:some-other-reviewer": "review-findings"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    session_id = "sess-type-map-miss"
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id=session_id
+    )
+
+    report_sidecar = _provision(payload, str(policy_path), str(git_repo))
+    assert report_sidecar is not None
+    text = (git_repo / report_sidecar).read_text(encoding="utf-8")
+    assert "## Run notes" in text
+
+
+def test_report_type_map_empty_policy_allows_dispatch_no_decline(
+    git_repo: Path, policy_path: Path
+) -> None:
+    """`policy_path` fixture here carries no `report_type_map` key at all --
+    the non-DoE-consumer / unresolved-config case. Must still allow (legacy
+    shape), never decline the spawn."""
+    session_id = "sess-type-map-empty-policy"
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id=session_id
+    )
+
+    report_sidecar = _provision(payload, str(policy_path), str(git_repo))
+    assert report_sidecar is not None
+    text = (git_repo / report_sidecar).read_text(encoding="utf-8")
+    assert "## Run notes" in text
+
+
 def test_integrator_agent_type_is_not_a_delegate_reviewer() -> None:
     from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS
 

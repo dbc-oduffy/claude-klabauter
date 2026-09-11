@@ -1105,9 +1105,22 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 
     # Last match wins: PostToolUse fires immediately after the tool returns,
     # so the most recent async_launched record in the tail IS this launch.
+    #
+    # THAT PREMISE IS FALSE UNDER CONCURRENT FIRES, and `shadowed_by` below is
+    # how this stops asserting through it. Example-market-data-repo-fa saw a wrong
+    # id on FOUR of five launches in one run; example-cockpit-repo-f6 filed the same
+    # thing independently; example-store-repo-fb hit it first. Nothing in this
+    # function can see the tool call it is firing on — the hook's declared
+    # input carries no tool_response — so where the tail holds more than one
+    # candidate launch, the right answer is to say so, not to pick one.
     match = None
+    seen_task_ids: list[str] = []
     for candidate in _ASYNC_LAUNCH_RE.finditer(text):
         match = candidate
+        if candidate.group("task_type") == "local_workflow":
+            task = candidate.group("task_id")
+            if task and task not in seen_task_ids:
+                seen_task_ids.append(task)
     if match is None:
         # Breadcrumb, not silence. Every other failure path in this module
         # surfaces through _text_or_breadcrumb; a regex that stopped matching
@@ -1138,6 +1151,21 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
 
     task_id = match.group("task_id")
     run_id = match.group("run_id")
+    # More than one distinct local_workflow launch in the window means the
+    # "last match wins" premise above cannot be checked from here. The branch
+    # below already breadcrumbs a DIFFERENT-taskType shadow; same-type
+    # shadowing — which is exactly the plan-blitz case, and the only one that
+    # has ever been reported — passed it silently (doe-claude-b9, 2026-09-11).
+    shadowed_by = [t for t in seen_task_ids if t != task_id]
+    if shadowed_by:
+        print(
+            "postuse_advisory_dispatch: workflow_monitor_arm saw "
+            f"{len(seen_task_ids)} local_workflow launches in the transcript "
+            f"tail ({', '.join(seen_task_ids)}) and cannot tell which is this "
+            "tool call's own — the advisory below names the most recent and "
+            "says so",
+            file=sys.stderr,
+        )
     # The regex captures a JSON STRING LITERAL out of the raw transcript text,
     # so a Windows path arrives with its separators still escaped
     # (C:\Users\... as two characters each). Feeding that to os.path.join
@@ -1155,6 +1183,12 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     sentinel = _workflow_monitor_sentinel_path(tmpdir, session_id, task_id)
     if os.path.isfile(sentinel):
         return ""
+    # An ambiguous read must not WRITE the once-per-task guard. The sentinel is
+    # keyed on task_id, so a wrong id suppresses the advisory for a task that
+    # never got one while leaving the real task unguarded — a silent wrong
+    # answer made permanent. Re-advising is the cheap failure; suppressing
+    # forever on a guessed key is not.
+    write_sentinel = not shadowed_by
 
     # The watcher's own wall-clock cap default (coordinator_core.workflow_watch,
     # C1b) is the single source of truth for this number — the emitted
@@ -1250,9 +1284,12 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     # invisible, so the suppression would be permanent AND undiagnosed.
     # _check_first_agent_dispatch_sync can write early because only a static
     # string follows it; this leg cannot. (Review: code-reviewer slice 2, P1.)
+    #
+    # Skipped entirely when the task id is ambiguous — see `write_sentinel`.
     try:
-        with open(sentinel, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(str(int(time.time())))
+        if write_sentinel:
+            with open(sentinel, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(str(int(time.time())))
     except Exception:
         # Sentinel unwritable — fail open toward silence this call rather than
         # raising or emitting an advisory whose one-time firing can't be
@@ -1273,12 +1310,27 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     # completion notification, so a driver told to "arm the watcher" hears a
     # second instruction beside plan-blitz's "then wait". The watcher is for
     # following a run live, and its cap can end before a long run does.
+    #
+    # Under concurrent fires the id may be the wrong one, and the reader is the
+    # only party who can tell — they are holding the tool result this hook
+    # cannot see. So the uncertainty is stated where it is acted on, naming the
+    # run id to check against, rather than left for them to discover by
+    # watching the wrong workflow to its cap.
+    caveat = ""
+    if shadowed_by:
+        caveat = (
+            f" CHECK BEFORE PASTING: {len(seen_task_ids)} Workflow runs launched"
+            " close together and this hook cannot see which one it fired on, so"
+            f" it names the most recent — run {run_id}, task {task_id}. If the"
+            " result you just received names a different runId, this command"
+            " watches the wrong run and will report nothing about yours."
+        )
     return (
         "WORKFLOW MONITOR (optional): completion arrives as a task notification"
         " without any watcher. To follow this run live instead:"
         f' Monitor(command="{monitor_command}", timeout_ms={cap_ms},'
         f" persistent=false). It stops at its own {cap_seconds}s cap or at the"
-        " run's end, whichever comes first."
+        " run's end, whichever comes first." + caveat
     )
 
 

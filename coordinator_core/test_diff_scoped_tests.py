@@ -14,6 +14,8 @@ import pytest
 from coordinator_core.diff_scoped_tests import (
     PYTEST_NO_TESTS_COLLECTED,
     append_test_paths,
+    compute_diff_scoped_paths,
+    find_changed_source_files,
     find_changed_test_files,
 )
 from coordinator_core.win_portability import no_console_creationflags
@@ -190,3 +192,78 @@ def test_rc5_reproduces_against_real_pytest(tmp_path):
         **no_console_creationflags(),
     )
     assert proc.returncode == PYTEST_NO_TESTS_COLLECTED
+
+
+# --- C3: source-only-diff narrowing (docs/plans/2026-07-30-diff-scoped- ----
+# --- ceremony-gates-elegant.md) ---------------------------------------------
+
+
+def _init_repo_with_mappable_source(tmp_path):
+    """A repo like `_init_repo`, but the committed source file has a
+    covering test under the same testpaths root (`pkg/test_mod.py`) -- so a
+    change to ONLY the source file (never itself a test file) is the
+    source-only-diff case C3 wires up."""
+    _git(["init", "-q"], tmp_path)
+    _git(["config", "user.email", "test@example.com"], tmp_path)
+    _git(["config", "user.name", "Test"], tmp_path)
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\ntestpaths = ["pkg"]\n'
+    )
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "mod.py").write_text("x = 1\n")
+    (pkg / "test_mod.py").write_text("def test_a():\n    assert True\n")
+    (pkg / "unmappable.py").write_text("y = 2\n")
+    _git(["add", "-A"], tmp_path)
+    _git(["commit", "-q", "-m", "init"], tmp_path)
+    return tmp_path
+
+
+def test_find_changed_source_files_excludes_test_files(tmp_path):
+    root = _init_repo_with_mappable_source(tmp_path)
+    (root / "pkg" / "mod.py").write_text("x = 2\n")
+
+    changed = find_changed_source_files(str(root))
+    assert changed == ["pkg/mod.py"]
+
+
+def test_compute_diff_scoped_paths_source_only_diff_maps_to_covering_test(tmp_path):
+    root = _init_repo_with_mappable_source(tmp_path)
+    (root / "pkg" / "mod.py").write_text("x = 2\n")
+
+    paths, fully_mapped = compute_diff_scoped_paths(str(root))
+    assert paths == ["pkg/test_mod.py"]
+    assert fully_mapped is True
+
+
+def test_compute_diff_scoped_paths_unions_changed_test_and_mapped_source(tmp_path):
+    root = _init_repo_with_mappable_source(tmp_path)
+    (root / "pkg" / "mod.py").write_text("x = 2\n")
+    (root / "pkg" / "test_existing_direct.py").write_text(
+        "def test_b():\n    assert True\n"
+    )
+    _git(["add", "-A"], root)
+    # Leave test_existing_direct.py staged (a changed test file) alongside
+    # the unstaged mod.py change (a changed source file) -- both legs fire
+    # in the same diff, and both must appear in the union.
+
+    paths, fully_mapped = compute_diff_scoped_paths(str(root))
+    assert paths == ["pkg/test_existing_direct.py", "pkg/test_mod.py"]
+    assert fully_mapped is True
+
+
+def test_compute_diff_scoped_paths_unmapped_source_forces_full_tier_signal(tmp_path):
+    root = _init_repo_with_mappable_source(tmp_path)
+    (root / "pkg" / "unmappable.py").write_text("y = 3\n")
+
+    paths, fully_mapped = compute_diff_scoped_paths(str(root))
+    assert fully_mapped is False
+
+
+def test_compute_diff_scoped_paths_no_changes_is_fully_mapped_empty(tmp_path):
+    root = _init_repo_with_mappable_source(tmp_path)
+
+    paths, fully_mapped = compute_diff_scoped_paths(str(root))
+    assert paths == []
+    assert fully_mapped is True
