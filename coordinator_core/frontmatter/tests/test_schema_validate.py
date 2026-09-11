@@ -1174,10 +1174,25 @@ class TestGraphFieldsKindGate:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'blocked_by' for e in errors)
 
-    def test_roadmap_id_on_non_roadmap_kind_fails(self):
+    def test_roadmap_id_is_not_kind_gated(self):
+        """DR-198(b): roadmap_id is REFERENTIAL, not kind-gated. Both rules that
+        refused it on a non-baton kind are deleted (see the gravestone above
+        `_ROADMAP_GRAPH_OVERRIDE_ENV_VAR`). Measured population: example-retrieval-repo-
+        ue-addon's 65 strict-refs failures, all roadmap_id, plus its rqsi-01..08
+        batons, which are session-handoff or spinoff with no wave -- the one
+        branch the validator left them then hard-refused on `wave: required`."""
         fm = _valid_handoff(roadmap_id='r-001')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
-        assert any('roadmap_id' in e['field'] for e in errors)
+        assert not any('roadmap_id' in e['field'] for e in errors)
+
+    def test_a_roadmap_baton_still_owes_its_serialization_order(self):
+        """The negative spec for the deletion above: membership stops being
+        kind-gated, the baton REQUIREMENT does not move. A record claiming
+        `kind: roadmap-baton` still owes wave and its graph edges."""
+        fm = _valid_handoff(kind='roadmap-baton', predecessor=None,
+                            roadmap_id='r-001', stub_id='s-01')
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert any('wave' in e['field'] for e in errors)
 
     def test_roadmap_baton_missing_required_fields_fails(self):
         fm = _valid_handoff(kind='roadmap-baton', predecessor=None, roadmap_id='r-001')

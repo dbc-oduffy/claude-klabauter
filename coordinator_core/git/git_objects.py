@@ -824,6 +824,22 @@ def read_packed_ref(gitdir: Path, ref: str) -> Optional[str]:
     return None
 
 
+def _ref_exists_loose_or_packed(common_dir: Path, ref_rel: str) -> bool:
+    """True iff `ref_rel` (e.g. `refs/heads/main`) resolves to a value
+    either as a loose file under `common_dir` or as a line in
+    `common_dir/packed-refs` -- the existence half of `cas_ref`'s own
+    loose-first-packed-second precedence, extracted so the two CAS-target
+    resolvers (`coordinator_core.git.commit._cas_target` and
+    `coordinator_core.ops.ceremony.git_native._resolve_cas_ref_target`)
+    share one implementation instead of two hand-kept-in-sync copies.
+
+    Existence only -- never returns the ref's value, and never claims a
+    definite answer either way for a lock-held ref (that question belongs
+    to `cas_ref`, not to a CAS-target resolver deciding whether to proceed
+    at all)."""
+    return (common_dir / ref_rel).is_file() or read_packed_ref(common_dir, ref_rel) is not None
+
+
 def _log_all_ref_updates(gitdir: Path) -> bool:
     """`core.logAllRefUpdates` -- git defaults this to true for any repo
     with a worktree (only a bare repo defaults it to false); this reads

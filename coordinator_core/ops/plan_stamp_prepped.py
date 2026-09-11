@@ -34,7 +34,16 @@ Reply fields:
     {"plan": "docs/plans/....md", "stamped": bool, "outcome": str,
      "verdict": "PREPPED"|"NOT-PREPPED"|"REFUSED", "mise_prepped_sha": str|None,
      "mise_prepped_findings": [row_id, ...], "message": str,
-     "classes": {...}, "stamp": {...}}
+     "classes": {...}, "stamp": {...},
+     "engine_build": {"engine_sha": str|None, "engine_dirty": None}}
+
+    `engine_build` is the build that COMPUTED the verdict, carried on the refusal
+    for the same reason `plan.prep_gate` carries it: a refusal that does not name
+    its own build reads identically whether the plan under-declares or the engine
+    predates the leg that would have exempted it, and only one of those is
+    repaired by editing the plan. Reported on every outcome, not only "refused" —
+    a caller needs the certifying build recorded to know what a later refusal is
+    disagreeing with. See `coordinator_core.engine_version.engine_build`.
 
     `outcome` is one of "stamped", "already-certified", "refused". A refusal is a
     REPLY, not an exception: the per-class breakdown is what tells an author
@@ -60,7 +69,8 @@ Negative-spec:
     verb mutates ``status:`` and whose ``review_verified_*`` fields ride there
     only because they share a ``locked_rmw`` closure with the flip they
     accompany.
-  - Does NOT spawn, and does NOT shell out for the sha.
+  - Does NOT spawn, and does NOT shell out for the sha. (``engine_build`` reads
+    the engine's own ``.git`` refs as files; no process, see its own budget.)
     ``primitives.canonical_body_sha`` is pure Python and byte-identical to
     `git hash-object` over the plan body; a process creation costs 25.3ms to
     compute what sha1 already answers. Not ``blitz_land :: _git_blob_sha``, which
@@ -105,6 +115,7 @@ from coordinator_core.frontmatter.primitives import (
     serialize_yaml_scalar,
     split_frontmatter,
 )
+from coordinator_core.engine_version import engine_build
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
@@ -293,6 +304,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "message": message,
             "classes": report["classes"] if report else {},
             "stamp": state.get("stamp"),
+            "engine_build": engine_build(),
         }
 
     report = state["report"]
@@ -309,4 +321,5 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "message": report["message"],
         "classes": report["classes"],
         "stamp": read_stamp(plan_path.read_text(encoding="utf-8", errors="replace")),
+        "engine_build": engine_build(),
     }

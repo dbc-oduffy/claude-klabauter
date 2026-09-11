@@ -1406,33 +1406,16 @@ def assemble_plan_gate(
     plans = build_plan_index(worktree_root)
     batons_by_id, records = scan_batons(worktree_root)
 
-    # Withheld from candidacy, never from the scan: an untracked baton still
-    # resolves as a BLOCKER, so its dependents wait on it rather than planning
-    # past it. Named in `untracked`, because a baton that silently left the
-    # candidate set reads as one that never needed planning.
+    # The `tracked` ANNOTATION only; the withdrawal it used to perform is a
+    # rule in `_WITHDRAWALS` below. Left here because every rule reads a record
+    # that is already fully annotated, which is what lets them be order-free.
     tracked, index_unreadable = _tracked_paths(worktree_root)
-    untracked_rows: List[Dict[str, Any]] = []
     for record in records:
         record["tracked"] = (
             record["path"] in tracked if tracked is not None and record["live"] else None
         )
-        if record["candidate"] and record["tracked"] is False:
-            record["candidate"] = False
-            untracked_rows.append(
-                {"id": record["id"], "path": record["path"], "title": record["title"]}
-            )
 
-    # Same withholding, same naming, for the other shape a baton takes when the
-    # tree is wrong rather than the record: see `_resurrected`.
-    resurrected_rows: List[Dict[str, Any]] = []
     archived_by_name = _archived_basenames(worktree_root)
-    for record in records:
-        if not record["candidate"]:
-            continue
-        hit = _resurrected(worktree_root, record, archived_by_name)
-        if hit is not None:
-            record["candidate"] = False
-            resurrected_rows.append(hit)
 
     # `needs_plan` — does a blitz have work to do on this baton? Annotated here
     # rather than in `_baton_record` because it needs the plan index, which is
@@ -1452,21 +1435,6 @@ def assemble_plan_gate(
         authorized = str(record["_fm"].get("handoff_phase") or "").strip() == "execution"
         record["execution_authorized"] = authorized
         record["needs_plan"] = not (own and own["approved"]) and not authorized
-
-    if roadmap_id is not None:
-        for record in records:
-            if record["candidate"] and record["roadmap_id"] != roadmap_id:
-                record["candidate"] = False
-
-    if targets:
-        # Targeted mode: the caller named the batons. Everything else stops being
-        # a candidate — which also stops it being a wave member, while leaving it
-        # fully available as a BLOCKER. Narrowing the target set must never
-        # narrow what the gates are computed against.
-        wanted = set(targets)
-        for record in records:
-            if record["candidate"] and not (wanted & set(record["ids"]) or record["path"] in wanted):
-                record["candidate"] = False
 
     # One archive index per gate read, built only if some citation missed the
     # live tree, and memoised so the two reads per record cost one resolution.
@@ -1493,40 +1461,168 @@ def assemble_plan_gate(
     # and not just a saved read.
     memo: Dict[str, Dict[str, Any]] = {}
 
-    # A baton somebody decided must not fire is HELD, not a candidate —
-    # example-retrieval-repo, 2026-09-11, the friction that cost them the most.
+    # ------------------------------------------------------------------
+    # WITHDRAWAL RULES -- the one place a baton stops being a candidate.
     #
-    # 5 of their 8 wave-0 candidates had a recorded reason not to fire, and 4
-    # had been re-fired across five runs since 09-06: the reason lived in a DR
-    # or a run report, nothing joined it to the gate, and every session
-    # re-derived it. DR-2048 refuses to spell a hold as a `blocked_by` edge and
-    # is right to — an edge is a DISCOVERED dependency, and inventing one to
-    # suppress a candidate gives the graph edges nobody can later justify, and
-    # fails the baton closed forever if the gate cannot resolve it. So the only
-    # mechanism left was a per-fire `--exclude` list the driver retyped each
-    # run, which is the exact retype the emitter exists to remove.
+    # Every rule is a function of a FULLY ANNOTATED record plus this call's
+    # knobs, and the table below is the whole precedence. That is the point:
+    # this was six separate in-place passes, each skipping records an earlier
+    # pass had already withdrawn, so the order was whatever the passes happened
+    # to be written in, and every rule added since had to be inserted at the one
+    # position where it saw the right prior state. Nothing declared the order
+    # and no test could pin it.
     #
-    # Neither a candidate nor an edge: the gate reports it with its reason, and
-    # never refuses. A hold with no reason is NOT honoured — an unexplained
-    # suppression is the thing this replaces, not a lighter version of it.
-    held_rows: List[Dict[str, Any]] = []
+    # FIRST MATCH WINS, and that is not a tie-break convention -- it is the
+    # behaviour the passes had. A baton that is both untracked and held is
+    # reported ONLY under `untracked`, because the held pass skipped records the
+    # untracked pass had already withdrawn. Precedence here is therefore "which
+    # reason the reader is told", and it reads top to bottom.
+    #
+    # Within that, the order is by COST: the first five read frontmatter and two
+    # prebuilt indexes; `waiting_on_execution` evaluates a gate and resolves a
+    # sizing citation, so it sits last and runs only for a record nothing
+    # cheaper has already answered.
+    # ------------------------------------------------------------------
+    def _w_untracked(record):
+        """Withheld from candidacy, never from the scan: an untracked baton
+        still resolves as a BLOCKER, so its dependents wait on it rather than
+        planning past it. Named in the report, because a baton that silently
+        left the candidate set reads as one that never needed planning."""
+        if record["tracked"] is not False:
+            return None
+        return {"id": record["id"], "path": record["path"], "title": record["title"]}
+
+    def _w_resurrected(record):
+        """Same withholding, same naming, for the other shape a baton takes
+        when the TREE is wrong rather than the record -- see `_resurrected`."""
+        return _resurrected(worktree_root, record, archived_by_name)
+
+    def _w_out_of_roadmap(record):
+        """`roadmap_id` narrows the CANDIDATE set to one roadmap. Reported
+        nowhere: asking about one roadmap is not a finding about the others."""
+        if roadmap_id is None or record["roadmap_id"] == roadmap_id:
+            return None
+        return {}
+
+    def _w_not_targeted(record):
+        """Targeted mode: the caller named the batons, so everything else stops
+        being a candidate -- and a wave member -- while staying fully available
+        as a BLOCKER. Narrowing the target set must never narrow what the gates
+        are computed against. Reported nowhere, for the reason above."""
+        if not targets:
+            return None
+        wanted = set(targets)
+        if wanted & set(record["ids"]) or record["path"] in wanted:
+            return None
+        return {}
+
+    def _w_held(record):
+        """A baton somebody decided must not fire is HELD -- example-retrieval-repo,
+        2026-09-11, the friction that cost them the most.
+
+        5 of their 8 wave-0 candidates had a recorded reason not to fire, and 4
+        had been re-fired across five runs since 09-06: the reason lived in a DR
+        or a run report, nothing joined it to the gate, and every session
+        re-derived it. DR-2048 refuses to spell a hold as a `blocked_by` edge
+        and is right to -- an edge is a DISCOVERED dependency, and inventing one
+        to suppress a candidate gives the graph edges nobody can later justify,
+        and fails the baton closed forever if the gate cannot resolve it. So the
+        only mechanism left was a per-fire `--exclude` list the driver retyped
+        each run, which is the exact retype the emitter exists to remove.
+
+        Neither a candidate nor an edge: the gate reports it with its reason,
+        and never refuses. A hold with no reason is NOT honoured -- an
+        unexplained suppression is the thing this replaces, not a lighter
+        version of it."""
+        reason = str(record["_fm"].get("plan_blitz_hold_reason") or "").strip()
+        if not reason:
+            return None
+        record["held"] = True
+        return {
+            "baton": record["id"],
+            "path": record["path"],
+            "reason": reason,
+            "cite": str(record["_fm"].get("plan_blitz_hold_cite") or "").strip() or None,
+            "until": str(record["_fm"].get("plan_blitz_hold_until") or "").strip() or None,
+        }
+
+    def _w_waiting_on_execution(record):
+        """A baton with no planning content, waiting on a blocker's EXECUTION,
+        is not a planning candidate -- example-retrieval-repo, 2026-09-11.
+
+        Their cq-17's whole job is "score once the corpus exists". Its
+        dependency is a real `blocked_by` edge that resolves cleanly and
+        correctly shuts the EXECUTION gate; but the blocker's plan is approved,
+        so the PLANNING gate is open and the baton sat in `waves[0]` with
+        nothing to plan. It was dispatched and declined three times against the
+        same unmet wait. The two-gate model can say "blocked on planning" and
+        "blocked on execution"; it had no way to say "has no planning content".
+
+        Keyed on ROUTE, which needs the sizing object -- and measured before
+        being written, because the obvious worry is per-candidate I/O against
+        the brightline. On claude-klabauter's corpus that worry is the wrong one: 242
+        candidates carry 5 sizing citations between them, so this reads almost
+        nothing, and even a fully-sized corpus costs ~0.06ms per distinct
+        sizing against a ~155ms gate. The real limit is COVERAGE, not cost: an
+        unsized baton has no route to read, is untouched here, and is already
+        reported `unsized`.
+
+        Deliberately NOT the weaker predicate "no plan and a shut execution
+        gate", which needs no sizing read at all: an M or L waiting on a
+        blocker's execution is exactly the baton a wave SHOULD plan now, and
+        withholding it would trade this silence for a worse one."""
+        if not record["needs_plan"]:
+            return None
+        gate = gates_for(record, batons_by_id, plans, memo)
+        if gate["execution_gate"]["open"]:
+            return None
+        resolved_cites, _ = _sizing_resolution(record)
+        route = _sizing_route(worktree_root, resolved_cites)
+        if route not in _ROUTES_WITHOUT_PLANNING_CONTENT:
+            return None
+        record["waiting_on_execution"] = True
+        return {
+            "baton": record["id"],
+            "path": record["path"],
+            "route": route,
+            "blocking": [d["blocker"] for d in gate["execution_gate"]["blocking"]],
+            "reason": (
+                f"route: {route} carries no planning content, and its execution "
+                "gate is shut -- this is waiting on a blocker to be CODED, not "
+                "on a plan to be written"
+            ),
+        }
+
+    #: (bucket, rule), in precedence order. `bucket` is None for a rule whose
+    #: withdrawal is the caller's own narrowing, and so reports nothing.
+    _WITHDRAWALS = [
+        ("untracked", _w_untracked),
+        ("resurrected", _w_resurrected),
+        (None, _w_out_of_roadmap),
+        (None, _w_not_targeted),
+        ("held", _w_held),
+        ("waiting_on_execution", _w_waiting_on_execution),
+    ]
+
+    withdrawn: Dict[str, List[Dict[str, Any]]] = {
+        bucket: [] for bucket, _ in _WITHDRAWALS if bucket
+    }
     for record in records:
         if not record["candidate"]:
             continue
-        reason = str(record["_fm"].get("plan_blitz_hold_reason") or "").strip()
-        if not reason:
-            continue
-        record["candidate"] = False
-        record["held"] = True
-        held_rows.append(
-            {
-                "baton": record["id"],
-                "path": record["path"],
-                "reason": reason,
-                "cite": str(record["_fm"].get("plan_blitz_hold_cite") or "").strip() or None,
-                "until": str(record["_fm"].get("plan_blitz_hold_until") or "").strip() or None,
-            }
-        )
+        for bucket, rule in _WITHDRAWALS:
+            row = rule(record)
+            if row is None:
+                continue
+            record["candidate"] = False
+            if bucket:
+                withdrawn[bucket].append(row)
+            break
+
+    untracked_rows = withdrawn["untracked"]
+    resurrected_rows = withdrawn["resurrected"]
+    held_rows = withdrawn["held"]
+    waiting_on_execution_rows = withdrawn["waiting_on_execution"]
 
     # A baton whose OWNER declared a gate says so in the report —
     # example-cockpit-repo, 2026-09-11.
@@ -1583,56 +1679,6 @@ def assemble_plan_gate(
                     f"awaiting_gate and gate_dependency names {dependency!r}. This "
                     "does not withhold the baton from planning — use "
                     "plan_blitz_hold_reason for that"
-                ),
-            }
-        )
-
-    # A baton with no planning content, waiting on a blocker's EXECUTION, is not
-    # a planning candidate — example-retrieval-repo, 2026-09-11.
-    #
-    # Their cq-17's whole job is "score once the corpus exists". Its dependency
-    # is a real `blocked_by` edge that resolves cleanly and correctly shuts the
-    # EXECUTION gate; but the blocker's plan is approved, so the PLANNING gate is
-    # open and the baton sat in `waves[0]` with nothing to plan. It was dispatched
-    # and declined three times against the same unmet wait. The two-gate model can
-    # say "blocked on planning" and "blocked on execution"; it had no way to say
-    # "has no planning content".
-    #
-    # Keyed on ROUTE, which needs the sizing object — and measured before being
-    # written, because the obvious worry is per-candidate I/O against the
-    # brightline. On claude-klabauter's corpus that worry is the wrong one: 242 candidates
-    # carry 5 sizing citations between them, so this reads almost nothing, and
-    # even a fully-sized corpus costs ~0.06ms per distinct sizing against a
-    # ~155ms gate. The real limit is COVERAGE, not cost: an unsized baton has no
-    # route to read, is untouched here, and is already reported `unsized`.
-    #
-    # Deliberately NOT the weaker predicate "no plan and a shut execution gate",
-    # which needs no sizing read at all: an M or L waiting on a blocker's
-    # execution is exactly the baton a wave SHOULD plan now, and withholding it
-    # would trade this silence for a worse one.
-    waiting_on_execution_rows: List[Dict[str, Any]] = []
-    for record in records:
-        if not (record["candidate"] and record["needs_plan"]):
-            continue
-        gate = gates_for(record, batons_by_id, plans, memo)
-        if gate["execution_gate"]["open"]:
-            continue
-        resolved_cites, _ = _sizing_resolution(record)
-        route = _sizing_route(worktree_root, resolved_cites)
-        if route not in _ROUTES_WITHOUT_PLANNING_CONTENT:
-            continue
-        record["candidate"] = False
-        record["waiting_on_execution"] = True
-        waiting_on_execution_rows.append(
-            {
-                "baton": record["id"],
-                "path": record["path"],
-                "route": route,
-                "blocking": [d["blocker"] for d in gate["execution_gate"]["blocking"]],
-                "reason": (
-                    f"route: {route} carries no planning content, and its execution "
-                    "gate is shut — this is waiting on a blocker to be CODED, not "
-                    "on a plan to be written"
                 ),
             }
         )

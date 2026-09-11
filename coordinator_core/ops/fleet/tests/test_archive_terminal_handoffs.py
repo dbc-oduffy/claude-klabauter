@@ -1561,15 +1561,23 @@ def test_a_non_list_out_accumulator_is_refused_by_name(repo: Path):
 
 
 def test_apply_sweep_takes_what_plan_sweep_returns(repo: Path):
-    """`apply_sweep(plan_sweep(...))` is the obvious composition; it used to
-    die on `'list' object has no attribute 'force'`."""
-    from coordinator_core.ops.fleet.archive_terminal_handoffs import apply_sweep, plan_sweep
+    """The obvious composition has its own name; it used to die on `'list'
+    object has no attribute 'force'`.
+
+    `apply_sweep` itself takes a bare list and nothing else: accepting both
+    shapes made it read, to a caller passing the pair, as though the skips
+    had been handled (Review: coordinator:overengineering-reviewer — a public
+    signature permanently widened to absorb one mis-call)."""
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import (
+        apply_planned_sweep,
+        plan_sweep,
+    )
 
     name = "2026-01-02-pair-shape.md"
     path = _seed(repo, name, "status: claimed\ndeployment_state: continued\ncontinued_into: hnd-x")
     common_dir = _common_dir(repo)
 
-    acted, failed = apply_sweep(plan_sweep(repo, common_dir, 10))
+    acted, failed = apply_planned_sweep(plan_sweep(repo, common_dir, 10))
 
     assert failed == [], failed
     assert [item["id"] for item in acted] == [_cid(name)]

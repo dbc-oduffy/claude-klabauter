@@ -84,7 +84,11 @@ from coordinator_core.git.content_hash import (
     _text_attribute_pinned,
 )
 from coordinator_core.git.git_index import parse_index_identity
-from coordinator_core.git.git_objects import cas_ref, read_packed_ref, write_object
+from coordinator_core.git.git_objects import (
+    _ref_exists_loose_or_packed,
+    cas_ref,
+    write_object,
+)
 from coordinator_core.git.git_state import head_sha, head_tree_sha, read_tree_spine
 from coordinator_core.git.tree_spine import (
     _ABSENT,
@@ -377,6 +381,11 @@ def _cas_target(repo: Union[str, Path]) -> Optional[Tuple[Path, str]]:
     than refusing: `cas_ref` reads its comparand out of `packed-refs` and
     writes a loose ref that shadows it, which is what git itself does on the
     first ref update after a pack.
+
+    # Review: coordinator-code-reviewer -- the loose-or-packed existence
+    # check is shared with the sibling resolver in git_native.py via
+    # `git_objects._ref_exists_loose_or_packed`, so the two stay in sync
+    # rather than drifting as hand-kept-identical copies.
     """
     worktree_gitdir = resolve_git_dir(repo)
     try:
@@ -387,7 +396,7 @@ def _cas_target(repo: Union[str, Path]) -> Optional[Tuple[Path, str]]:
         return worktree_gitdir, "HEAD"
     ref_rel = head_text[len("ref:"):].strip()
     common = resolve_git_common_dir(repo)
-    if not (common / ref_rel).is_file() and read_packed_ref(common, ref_rel) is None:
+    if not _ref_exists_loose_or_packed(common, ref_rel):
         return None
     return common, ref_rel
 

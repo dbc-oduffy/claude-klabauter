@@ -292,6 +292,34 @@ def test_a_memo_git_checked_out_as_crlf_is_still_adopted(tmp_path):
     assert _anchor_for(common_dir, "checked-out.md") == [("checked-out.md", head, blob)]
 
 
+def test_ref_illegal_filename_is_refused_without_poisoning_the_other_candidates(tmp_path):
+    # Review: code-reviewer F1 -- an on-disk inbox filename is untrusted
+    # input to the ref namespace. A single ref-illegal filename in the
+    # SAME batch as a legitimate candidate must not fail the whole
+    # `update-ref --stdin` transaction; it must be refused on its own and
+    # the legitimate candidate must still land.
+    repo = _make_repo(tmp_path)
+    common_dir = _common_dir(repo)
+    head, blob = _commit_file(
+        repo, "state/cross-repo/inbox/good.md", "good body\n", "deliver good.md",
+    )
+    bad_rel = "state/cross-repo/inbox/bad file.md"
+    (repo / bad_rel).write_text("bad body\n", encoding="utf-8", newline="\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "deliver bad file.md")
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    result = _run(repo, dry_run=False)
+
+    assert {"id": "good.md", "action": "adopted"} in result["acted"]
+    assert _anchor_for(common_dir, "good.md") == [("good.md", head, blob)]
+    assert any(
+        f["id"] == "bad file.md" and "ref path component" in f["reason"]
+        for f in result["failed"]
+    )
+    assert _anchor_for(common_dir, "bad file.md") == []
+
+
 def test_untracked_inbox_memo_is_not_adopted_and_is_counted(tmp_path):
     repo = _make_repo(tmp_path)
     inbox = repo / "state" / "cross-repo" / "inbox"
@@ -421,6 +449,11 @@ def test_refused_transaction_is_reported_without_retrying(tmp_path, monkeypatch)
 
     def _always_refuse(cwd, commands):
         calls["n"] += 1
+        # Review: code-reviewer F4 -- pin the boundary contract mechanically:
+        # `update_refs_stdin` is documented as `Sequence[Tuple[str, str, str]]`,
+        # not the formatted-string shape an intermediate commit in this
+        # slice's own history briefly regressed to (Finding 3).
+        assert all(isinstance(c, tuple) and len(c) == 3 for c in commands)
         return git_native.GitResult(returncode=128, stdout="", stderr="lock contention")
 
     monkeypatch.setattr(git_native, "update_refs_stdin", _always_refuse)

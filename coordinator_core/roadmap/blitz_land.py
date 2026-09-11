@@ -380,8 +380,13 @@ def _baton_kind(baton_abs: Path) -> Optional[str]:
     return _read_field(baton_abs.read_text(encoding="utf-8"), "kind")
 
 
-def _admits_execution_phase(baton_abs: Path) -> bool:
+def _admits_execution_phase(kind: Optional[str]) -> bool:
     """True when this baton's kind may carry `handoff_phase` (H-CROSS-EXEC-2).
+
+    Takes the kind the caller already read, never the path: the fallback branch
+    needs that same kind for its own message, and reading the file twice to
+    answer one question is how three reads and two evaluations of one predicate
+    appeared per row (Review: coordinator:overengineering-reviewer).
 
     Read before choosing the S-lane landing, so a kind that can never take the
     stamp routes to the plan approval up front instead of being refused and then
@@ -395,7 +400,7 @@ def _admits_execution_phase(baton_abs: Path) -> bool:
     (e.g. `spinoff` while the mirror sat at 10.4.0) drops from a named refusal to a
     quiet approval in the window between the two.
     """
-    return _baton_kind(baton_abs) in _EXECUTION_PHASE_KINDS
+    return kind in _EXECUTION_PHASE_KINDS
 
 
 def authorize_execution(
@@ -760,7 +765,7 @@ def land_wave(
                     row["prior_shipped_in_rejected"] = rejected
                 closed.append(row)
             elif entry.get("route") == "spec-dispatch" and not _admits_execution_phase(
-                worktree_root / baton_path
+                (baton_kind := _baton_kind(worktree_root / baton_path))
             ):
                 # The S lane cannot be expressed on this baton's kind, so the plan
                 # lands on the ordinary approval instead — the landing every EM made
@@ -770,7 +775,7 @@ def land_wave(
                 row = approve_ready(worktree_root, baton_path, plan_path, report)
                 row["fell_back_from"] = "spec-dispatch"
                 row["fallback_reason"] = (
-                    f"kind {_baton_kind(worktree_root / baton_path)!r} is not one "
+                    f"kind {baton_kind!r} is not one "
                     f"H-CROSS-EXEC-2 admits ({', '.join(sorted(_EXECUTION_PHASE_KINDS))})"
                 )
                 approved.append(row)

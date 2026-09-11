@@ -109,18 +109,32 @@ def _report_heal_inbox(result: dict) -> None:
     one line per restored memo, adopt/retire counts only when non-zero, and
     (to stderr) one line naming a per-item failure count. Never raises —
     a malformed result prints nothing rather than crashing the cycle it must
-    not stop."""
+    not stop.
+
+    Dry-run and act share this reporter but not an action-name vocabulary:
+    `memo_heal.py`'s dry-run candidates are named in the not-yet-acted
+    singular (`"restore"`, `"adopt"`, `"retire"`), the act path in the
+    past-tense (`"restored"`, `"adopted"`, `"retired"`) — a dry run must
+    report candidates in candidate voice and never claim a completed
+    action."""
     try:
-        items = (result.get("candidates") if result.get("dry_run") else result.get("acted")) or []
+        dry_run = bool(result.get("dry_run"))
+        items = (result.get("candidates") if dry_run else result.get("acted")) or []
+        restore_action = "restore" if dry_run else "restored"
+        adopt_action = "adopt" if dry_run else "adopted"
+        retire_action = "retire" if dry_run else "retired"
         for item in items:
-            if item.get("action") in ("restored", "restore"):
-                print(f"restored from anchor: {item.get('id')}")
-        adopted = sum(1 for it in items if it.get("action") in ("adopted", "adopt"))
-        retired = sum(1 for it in items if it.get("action") in ("retired", "retire"))
+            if item.get("action") == restore_action:
+                verb = "would restore" if dry_run else "restored"
+                print(f"{verb} from anchor: {item.get('id')}")
+        adopted = sum(1 for it in items if it.get("action") == adopt_action)
+        retired = sum(1 for it in items if it.get("action") == retire_action)
         if adopted:
-            print(f"heal: adopted {adopted} memo(s)")
+            verb = "would adopt" if dry_run else "adopted"
+            print(f"heal: {verb} {adopted} memo(s)")
         if retired:
-            print(f"heal: retired {retired} anchor(s)")
+            verb = "would retire" if dry_run else "retired"
+            print(f"heal: {verb} {retired} anchor(s)")
         failed = result.get("failed") or []
         if failed:
             print(

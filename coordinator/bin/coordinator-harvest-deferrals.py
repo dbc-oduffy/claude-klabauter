@@ -1357,6 +1357,16 @@ def _harvest(
         # A row harvested under this plan's OTHER key (see `_path_harvest_id`)
         # is already queued; writing it again under the new key would duplicate
         # it, which is the failure the key exists to prevent.
+        #
+        # The window is PROSPECTIVE, not historical. Kira (2026-09-11, F6) read
+        # `legacy_plan_id` as dead on the grounds that no row can have been
+        # harvested under the path key before the commit that introduced it —
+        # true, and not the case it covers. The refusal this commit added tells
+        # authors to add a `plan_id` to a plan that has none; the moment one
+        # does, that plan's rows flip from the path key to the minted key, and
+        # any row harvested under the path key in between is the duplicate.
+        # `legacy_plan_id` is set exactly when a minted id exists AND a path id
+        # would also have resolved, which is that transition and nothing else.
         prior_keys = [key]
         if legacy_plan_id:
             prior_keys.append(_harvest_key(legacy_plan_id, row_id))

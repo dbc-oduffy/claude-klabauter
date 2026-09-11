@@ -205,9 +205,16 @@ def test_the_op_writes_nothing(tmp_path):
 def test_the_op_never_spawns_a_subprocess(tmp_path, monkeypatch):
     import subprocess
 
+    from coordinator_core import engine_version
+
     common = _repo(tmp_path)
     rel = _plan(tmp_path)
     _gate({"plan": rel}, common)  # warm the deferred imports
+    # The `engine_build` memo is what the warm-up above also fills, so clear it:
+    # the FIRST call in a process is the only one that reads anything, and a pin
+    # that only ever exercised the memoized path would not notice a provenance
+    # field that resolved itself with `git rev-parse`.
+    engine_version._BUILD_MEMO = None
 
     def _boom(*args, **kwargs):
         raise AssertionError("plan.prep_gate must not create a process")
@@ -215,3 +222,35 @@ def test_the_op_never_spawns_a_subprocess(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", _boom)
     monkeypatch.setattr(subprocess, "Popen", _boom)
     assert _gate({"plan": rel}, common)["verdict"] == pg.PREPPED
+
+
+def test_the_report_names_the_build_that_computed_it(tmp_path):
+    """Every verdict carries `engine_build`, PREPPED included.
+
+    Without it a DEFECT reads the same whether the plan under-declares or the
+    engine predates the leg that exempts it, and only one of those is repaired by
+    editing the plan — the misread that sent 7 example-game-repo plans toward a fabricated
+    `external_gate` (example-game-workbench-repo-00, 2026-09-11).
+    """
+    common = _repo(tmp_path)
+    rel = _plan(tmp_path)
+    report = _gate({"plan": rel}, common)
+    assert report["verdict"] == pg.PREPPED
+    assert set(report["engine_build"]) == {"engine_sha", "engine_dirty"}
+
+
+def test_the_build_is_the_engines_own_not_the_gated_repos(tmp_path):
+    """`engine_build` answers "which engine ran", never "which repo was gated".
+
+    The fixture worktree is a bare `.git` directory with no HEAD at all; a field
+    derived from the CALLER's root would report None here and would silently
+    become the gated repo's sha on a real consumer — the one reading that cannot
+    ancestry-check an engine leg against it.
+    """
+    from coordinator_core import engine_version
+
+    common = _repo(tmp_path)
+    rel = _plan(tmp_path)
+    engine_version._BUILD_MEMO = None
+    report = _gate({"plan": rel}, common)
+    assert report["engine_build"]["engine_sha"] == engine_version.engine_build()["engine_sha"]

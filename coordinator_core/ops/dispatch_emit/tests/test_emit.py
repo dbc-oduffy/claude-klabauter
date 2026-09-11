@@ -915,12 +915,16 @@ def test_a_non_done_chunk_report_flips_completed_false_and_names_the_chunk():
     """
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
     assert "const _incompleteChunks = [];" in script
-    # Every fixture wave is single-row, so each gets the single-row push
-    # form, keyed to that row's own results binding -- never a single global
-    # check blind to which chunk actually reported.
+    # One classification pass per batch walks that batch's own row-id list
+    # against its own results binding, single-row batches included -- never a
+    # single global check blind to which chunk actually reported. The row id
+    # is pinned through that list, not a per-row push literal (Review:
+    # coordinator:overengineering-reviewer -- two emitters were walking the
+    # same results for adjacent purposes).
+    assert "_incompleteChunks.push(id)" in script
     for wave in _two_wave_fixture():
         for row in wave:
-            assert f"_incompleteChunks.push('{row.id}')" in script, row.id
+            assert f"[{_js_string_literal(row.id)}].forEach((id, i) => {{" in script, row.id
     assert "incomplete_chunks: _incompleteChunks" in script
 
 
@@ -955,7 +959,7 @@ def test_multi_row_wave_status_check_indexes_by_row_order():
     waves = [[_wave_row("C1", ["a.py"]), _wave_row("C2", ["b.py"])]]
     script = compose_script(waves, name="wf", description="one parallel wave")
     assert "['C1', 'C2'].forEach((id, i) => {" in script
-    assert "wave1Results[i]" in script
+    assert "wave1Results?.[i]" in script
 
 
 # ---------------------------------------------------------------------------
@@ -2274,10 +2278,15 @@ def test_declared_and_still_dirty_after_landing_halts_the_wave():
     """
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
 
-    assert "POST-COMMIT VERIFICATION IS MANDATORY, NOT OPTIONAL" in script
+    # The REQUIREMENT is pinned, not the incident that produced it: this is
+    # static prompt text copied into every commit phase of every generated
+    # script, where a retold incident is paid for once per emission
+    # (Review: coordinator:overengineering-reviewer -- one instruction said
+    # four ways, multiplied across the emitted corpus). The incident itself
+    # lives in this docstring, which no emitted script carries.
+    assert "POST-COMMIT VERIFICATION" in script
     assert "git status --porcelain --" in script
-    assert "registry/materialize.ts" in script
-    assert "b550e655" in script
+    assert "still dirty is withheld" in script
 
     gate = _emitted_gate(script)
     assert not gate.search(
@@ -2628,12 +2637,10 @@ def test_row_prompt_return_contract_is_escaped_via_js_string_literal_not_templat
 
 
 def test_emitted_row_prompt_tells_an_executor_how_to_declare_a_fired_stop_rule():
-    """Without a declared token a stop rule is invisible to the script: the
-    executor did what its row asked, so its status is DONE and no non-DONE
-    check can see it. Asserted against the emitted SCRIPT, not the builder's
-    return value, for the reason
+    """Asserted against the emitted SCRIPT, not the builder's return value,
+    for the reason
     `test_emitted_row_prompt_carries_the_footprint_constraint_over_writes_plus_report`
-    gives."""
+    gives. Why the token exists: `emit._stop_rule_halt_gate`."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
     script = compose_script(
         waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
@@ -2647,23 +2654,23 @@ def test_emitted_row_prompt_tells_an_executor_how_to_declare_a_fired_stop_rule()
 
 
 def test_the_stop_rule_gate_is_emitted_after_the_commit_phase_not_before_it():
-    """Placement is the whole design: the stopped chunk's work is real and
-    declared, so it lands, and only the NEXT wave is prevented."""
+    """Placement is the whole design -- see `emit._stop_rule_halt_gate`."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
     script = compose_script(
         waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
     )
 
-    gate_at = script.index(f"{emit._STOP_RULE_TOKEN}[*_]")
+    # The halt itself, not the token: classification now runs in one pass with
+    # the status check, which is emitted BEFORE the commit by design.
+    gate_at = script.index("_stoppedWave1Results.length")
     commit_at = script.index("commitWave1Results")
     assert commit_at < gate_at
     assert "a STOP RULE in the chunk" in script  # reason text, JS-escaped
 
 
 def test_a_wave_that_commits_nothing_still_carries_the_stop_rule_gate():
-    """The two branches that emit no commit phase (all `writes: []`, and
-    every declared write gitignored) must not become the hole a stop rule
-    falls through."""
+    """The two branches that emit no commit phase must not become the hole a
+    stop rule falls through."""
     waves = [[_wave_row("C1", [])]]
     script = compose_script(
         waves, name="wf", description="one wave", plan_path="docs/plans/example.md"
@@ -2684,9 +2691,7 @@ def test_the_stop_rule_pattern_matches_a_declaration_and_not_a_bare_mention():
     bounded `[*_]{0,2}` repeat, `\s`, `\S`), and the emitted text itself is
     pinned by the placement test above.
     """
-    gate = emit._stop_rule_halt_gate("wave1Results", ["C1"], "Wave 1")
-    pattern = gate.split("/(?:")[1].split("/.test")[0]
-    rx = re.compile("(?:" + pattern)
+    rx = re.compile(emit._STOP_RULE_JS_RE.strip("/"))
 
     assert rx.search(f'{emit._STOP_RULE_TOKEN}: "if the shape needs a new rule" — it does')
     assert rx.search(f'DONE: report.md\n{emit._STOP_RULE_TOKEN}: the rule fired')

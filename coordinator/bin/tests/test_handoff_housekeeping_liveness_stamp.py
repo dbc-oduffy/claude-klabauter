@@ -127,6 +127,63 @@ class TestHealInboxOnTheHousekeepingDoor:
             "the cycle's own outcome would otherwise have been zero"
         )
 
+    def test_heal_inbox_partial_failure_flips_exit_code_and_reports_failed_count(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        mod = _load_module()
+        ran = self._stub_cycle(mod, monkeypatch, tmp_path)
+        self._stub_heal(
+            monkeypatch,
+            result={
+                "exit_code": 2,
+                "acted": [],
+                "failed": [{"id": "2026-09-11-b-memo.md", "reason": "restore commit declined"}],
+            },
+        )
+
+        exit_code = mod.main(["--cap", "5"])
+        assert ran, "a DETERMINATE-PARTIAL heal must never stop or skip the handoff cycle"
+        assert exit_code == 1, (
+            "a non-zero, non-None heal exit_code is a heal failure and flips this "
+            "door's own exit code the same way a raise does"
+        )
+        assert "1 memo(s) failed to heal" in capsys.readouterr().err, (
+            "a per-item heal failure count is reported on stderr — the only place "
+            "an operator sees a partially-failed heal on this door"
+        )
+
+    def test_dry_run_reports_candidates_in_candidate_voice(self, tmp_path, monkeypatch, capsys):
+        mod = _load_module()
+        monkeypatch.setattr(mod, "_ensure_claude_klabauter_on_path", lambda: str(tmp_path))
+        import coordinator_core.lifecycle as lifecycle
+        import coordinator_core.ops.fleet._common as fleet_common
+        import coordinator_core.ops.fleet.archive_terminal_handoffs as ath
+
+        monkeypatch.setattr(lifecycle, "git_common_dir", lambda _p: tmp_path / ".git")
+        monkeypatch.setattr(fleet_common, "main_worktree_root", lambda _c: tmp_path)
+        monkeypatch.setattr(ath, "plan_sweep", lambda *_a, **_k: ([], []))
+        self._stub_heal(
+            monkeypatch,
+            result={
+                "dry_run": True,
+                "candidates": [
+                    {"action": "restore", "id": "2026-09-11-c-memo.md"},
+                    {"action": "adopt", "id": "2026-09-11-d-memo.md"},
+                    {"action": "retire", "id": "2026-09-11-e-anchor.md"},
+                ],
+            },
+        )
+
+        assert mod.main(["--dry-run"]) == 0
+        out = capsys.readouterr().out
+        assert "would restore from anchor: 2026-09-11-c-memo.md" in out, (
+            "a dry run reports a restore CANDIDATE — never the past-tense "
+            "'restored from anchor' line, since nothing wrote or committed anything"
+        )
+        assert "restored from anchor:" not in out
+        assert "heal: would adopt 1 memo(s)" in out
+        assert "heal: would retire 1 anchor(s)" in out
+
     @staticmethod
     def _stub_heal(monkeypatch, result=None, raises=None):
         import coordinator_core.ops.fleet.memo_heal as memo_heal

@@ -1176,6 +1176,23 @@ def test_a_hold_is_not_an_edge_and_does_not_hold_its_dependents(tmp_path):
     assert report["counts"]["held"] == 1
 
 
+def test_a_baton_two_rules_would_withdraw_is_reported_under_the_first(tmp_path, monkeypatch):
+    """The precedence `_WITHDRAWALS` declares, which nothing pinned while it
+    was six in-place passes: each pass skipped what an earlier one had already
+    withdrawn, so "which reason the reader is told" was decided by the order
+    the passes happened to be written in. First match wins, top to bottom —
+    untracked before held — and a baton is named ONCE, never in two buckets."""
+    _baton(tmp_path, "settled")
+    _baton(tmp_path, "both", plan_blitz_hold_reason="PM said not yet")
+    _index_holds(monkeypatch, "settled")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert [row["id"] for row in report["untracked"]] == ["both"]
+    assert report["held"] == []
+    assert _by_id(pg.assemble_plan_gate(tmp_path, subject="both"), "both")["candidate"] is False
+
+
 def test_an_ordinary_baton_carries_held_false(tmp_path):
     """The negative verdict: the flag is present-as-False, never absent, so a
     reader never has to tell "not held" from "this gate is too old to say"."""

@@ -20,7 +20,20 @@ Reply fields:
     {"plan": "docs/plans/....md", "verdict": "PREPPED"|"NOT-PREPPED"|"REFUSED",
      "withheld_rows": [row_id, ...], "classes": {SPINE|CENSUS|EXTERNAL_DEPS|
      PRIME_EXIT: {"status", "kind", "detail", "withheld"}}, "message": str,
-     "stamp": {"state": "CERTIFIED"|"STALE"|"UNSTAMPED"|"MALFORMED", ...}}
+     "stamp": {"state": "CERTIFIED"|"STALE"|"UNSTAMPED"|"MALFORMED", ...},
+     "engine_build": {"engine_sha": str|None, "engine_dirty": None}}
+
+    `engine_build` is the build this verdict was computed BY, not a property of
+    the plan. It is reported on every verdict, PREPPED included, because a
+    caller that only got it on a refusal would have nothing to compare a later
+    refusal against. Without it a DEFECT means either "your plan under-declares"
+    or "your engine predates the leg that exempts this" — opposite repairs, and
+    a consumer holding a correct plan follows the refusal's prescribed repair
+    into fabricating a declaration. Measured: 7 example-game-repo plans refused on
+    `ide/` against a mirror predating the `created_roots` exemption, two of
+    them already carrying the exact declaration the refusal text prescribed
+    (example-game-workbench-repo-00, 2026-09-11). See
+    `coordinator_core.engine_version.engine_build`.
 
     `classes` is the product, not `verdict`. The four classes are fixed in four
     different places — a spine row, a frontmatter key, an `external_gate`, a
@@ -40,11 +53,14 @@ Negative-spec:
     refusing on it is the caller's act, and stamping on it is
     ``plan.stamp_prepped``'s. Making this op the refusal would put an
     authorization decision behind a derived read.
-  - Does NOT spawn, and does NOT consult git. The body sha is
+  - Does NOT spawn, and does NOT INVOKE git. The body sha is
     ``primitives.canonical_body_sha``, pure Python and byte-identical to
     `git hash-object` over the plan body; shelling out for it would cost a
     process creation (25.3ms for `git --version` alone) to compute what sha1
-    already answers.
+    already answers. ``engine_build`` reads the engine's own ``.git`` refs as
+    FILES for the same reason — stated as "does not invoke git" rather than
+    "does not consult git", because that read is a consultation and the claim
+    this op has to keep is the process count.
   - Does NOT sweep the corpus. One plan per call, and the bound is a
     measurement, not a preference — see ``roadmap.prep_gate.gate_plan`` for the
     numbers and for the census surface a corpus-wide question routes to.
@@ -64,6 +80,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.engine_version import engine_build
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._path_guard import contained_path
@@ -118,4 +135,5 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "classes": report["classes"],
         "message": report["message"],
         "stamp": read_stamp(text),
+        "engine_build": engine_build(),
     }

@@ -1401,16 +1401,32 @@ def plan_sweep(
     return moves, skipped
 
 
-def apply_sweep(moves: "List[Move] | Tuple[List[Move], List[dict]]") -> Tuple[List[dict], List[dict]]:
+def apply_planned_sweep(
+    plan_result: "Tuple[List[Move], List[dict]]",
+) -> Tuple[List[dict], List[dict]]:
+    """`apply_sweep` over `plan_sweep`'s own `(moves, skipped)` pair.
+
+    Exists because `apply_sweep(plan_sweep(...))` is the obvious composition
+    and used to die inside the loop on `'list' object has no attribute
+    'force'` — a shape error wearing a dataclass field's name
+    (example-store-repo-fb, mise run 20260911T144351).
+
+    Negative spec: the skips are DROPPED here, and that is the whole reason
+    this is a second name rather than a second accepted shape on
+    `apply_sweep`. A function that silently accepted either would read, to
+    the next caller passing a pair, as though the skips had been handled;
+    a caller reaching for this name is choosing to report them itself.
+    """
+    moves, _skipped = plan_result
+    return apply_sweep(moves)
+
+
+def apply_sweep(moves: List[Move]) -> Tuple[List[dict], List[dict]]:
     """Apply pre-planned moves via `os.replace` only — no git spawn.
 
-    Takes `plan_sweep`'s `(moves, skipped)` pair as well as a bare moves
-    list, because `apply_sweep(plan_sweep(...))` is the obvious composition
-    and the pair is unmistakable. Handed the pair, it applies the moves and
-    ignores the skips, which are already the caller's to report. Before
-    this, that call reached the loop and died on `'list' object has no
-    attribute 'force'` — a shape error wearing a dataclass field's name
-    (example-store-repo-fb, mise run 20260911T144351).
+    Takes a bare moves list. For `plan_sweep`'s `(moves, skipped)` pair, call
+    `apply_planned_sweep` — see its negative spec for why this signature is
+    not widened to accept both.
 
     Ensures `dst.parent` exists before each replace. Refuses a non-`force`
     move onto an existing `dst` (`os.replace` has no fail-if-exists mode, so
@@ -1422,7 +1438,7 @@ def apply_sweep(moves: "List[Move] | Tuple[List[Move], List[dict]]") -> Tuple[Li
     Returns (acted, failed) — `acted` items are `{id, archived: True}`;
     `failed` items are `{id, reason}`.
     """
-    planned: List[Move] = moves[0] if isinstance(moves, tuple) else moves
+    planned: List[Move] = moves
 
     acted: List[dict] = []
     failed: List[dict] = []

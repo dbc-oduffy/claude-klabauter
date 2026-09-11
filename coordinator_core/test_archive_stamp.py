@@ -2167,6 +2167,31 @@ class TestShipHandoff:
         assert "refusing before any write" in err
         assert "handoff_phase" in err
 
+    def test_the_archiving_flip_is_also_refused_before_the_stamp(self, tmp_path, capsys):
+        """The twin of the test above on the archive=True route. That route takes
+        mode="stamp_shipped", whose stamp and flip sit ~450 lines apart with the
+        git-mv between them, so it half-wrote for the same reason and needed its
+        own pre-check (example-retrieval-repo-ue-addon-d9, 2026-09-11: rqsi-14, a
+        session-handoff carrying roadmap_id)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(
+            repo, "ship-wrong-kind-archive.md", "open", "ready_to_fire",
+            extra=(
+                "kind: goal-seed\n"
+                "handoff_phase: execution\n"
+                "scope:\n  - state/handoffs/ship-wrong-kind-archive.md\n"
+            ),
+        )
+        before = hp.read_text(encoding="utf-8")
+
+        rc = arstamp.cs_ship_handoff(str(hp), archive=True)
+
+        assert rc != 0
+        assert hp.exists()
+        assert hp.read_text(encoding="utf-8") == before
+        assert "refusing before any write" in capsys.readouterr().err
+
     def test_idempotent_second_call_on_already_shipped_is_clean_noop(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)

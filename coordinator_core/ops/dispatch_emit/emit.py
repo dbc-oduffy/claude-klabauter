@@ -576,11 +576,35 @@ def _verification_requires_a_run(body: str) -> bool:
 
     A body with no verification clause answers False: this can only refuse
     what the row itself states, and silence is not a statement.
+
+    The FALLBACK, not the answer: see ``_row_verification_runs``. A row that
+    declares ``verification_runs`` never reaches here.
     """
     return any(
         _RUN_REQUIRED_RE.search(match.group("clause"))
         for match in _VERIFICATION_CLAUSE_RE.finditer(body or "")
     )
+
+
+def _row_verification_runs(row) -> bool:
+    """Whether ``row``'s verification has to RUN something.
+
+    The row's own ``verification_runs`` when it declares one, and only then
+    the prose classifier over its body. Declared beats inferred because the
+    author knows and the regex is guessing: the phrasebook above learned
+    `pytest`, `falsifier`, `cargo test` and a "test suite ... green" shape
+    because each one was missed once, and the next phrasing nobody thought
+    of is a false negative that routes the row to an agent forbidden to run
+    it. A declaration ends that, one row at a time.
+
+    Why the prose leg stays rather than being replaced: every row already
+    written declares nothing, and a missing key is not a claim that the
+    verification runs nothing.
+    """
+    declared = getattr(row, "verification_runs", None)
+    if declared is not None:
+        return declared
+    return _verification_requires_a_run(row.body)
 
 
 class NoWavesError(ValueError):
@@ -731,7 +755,7 @@ def _row_agent_type(row: WaveRow) -> str:
     if row.writes is UNDECLARED:
         return _EXECUTOR_AGENT_TYPE
     if immutable_body:
-        if _verification_requires_a_run(row.body):
+        if _row_verification_runs(row):
             raise UnverifiableEnricherRowError(
                 f"row {row.id!r} writes under docs/plans/ or docs/problems/, so "
                 "it derives to coordinator:enricher, but its verification has to "
@@ -1200,16 +1224,17 @@ def _dispatch_report_path(plan_path: str, row_id: str) -> str:
     return f"{_DISPATCH_REPORT_DIR}/{Path(plan_path).stem}/{row_id}.md"
 
 
-#: The line an executor ends its reply with when a STOP RULE written into
-#: its own spine row fired. A stop rule is not a failure: the row asked the
-#: executor to stop at a named condition, and an executor that stops has
-#: done exactly what it was told -- so its status is DONE and no status the
-#: return contract carries (`_NON_DONE_STATUS_JS_RE`) is true of it. Before
-#: this token there was therefore NO signal at all that the run must not
-#: continue: measured on example-retrieval-repo-ue-addon's tc-25, whose C0 fired its
-#: stop rule, replied DONE, was committed, and whose C1 the script then
-#: started anyway; the operator stopped the run by hand.
+#: The line an executor ends its reply with when a STOP RULE in its own spine
+#: row fired. Why a token is needed at all: `_stop_rule_halt_gate`.
 _STOP_RULE_TOKEN = "STOP-RULE-FIRED"
+
+#: `_STOP_RULE_TOKEN` declared on a line of its own, matched against both a
+#: real newline and the backslash-n a JSON-stringified object reply carries.
+#: Line-anchored for `_preflight_halt_gate`'s reason: the prompt itself names
+#: the token, so a substring test fails OPEN on an agent quoting it back.
+_STOP_RULE_JS_RE = (
+    f"/(?:^|\\n|\\\\n)[*_]{{0,2}}{_STOP_RULE_TOKEN}[*_]{{0,2}}:\\s*\\S/"
+)
 
 
 def _stop_rule_clause() -> str:
@@ -1238,27 +1263,27 @@ def _stop_rule_clause() -> str:
     )
 
 
-def _stop_rule_halt_gate(
-    results_var: str, row_ids: list[str], phase_title: str
-) -> str:
-    """The JS that stops the run when any executor in this batch declared
-    ``_STOP_RULE_TOKEN``.
+def _stop_rule_halt_gate(stopped_var: str, phase_title: str) -> str:
+    """The JS that stops the run when `_status_check_block` recorded a row in
+    this batch declaring ``_STOP_RULE_TOKEN``.
+
+    A fired stop rule is the row's own instruction obeyed, so the executor
+    returns DONE and no non-DONE check (`_NON_DONE_STATUS_JS_RE`) can see it
+    -- before this token nothing in the emitted script could. Measured on
+    example-retrieval-repo-ue-addon's tc-25: C0 fired its stop rule, replied DONE, was
+    committed, and the script started C1 anyway.
 
     Emitted AFTER the batch's commit phase, which is the whole point: the
     stopped chunk's work is real, declared and finished, so it lands, and
     the halt only prevents the NEXT wave from starting on a premise the stop
-    rule just refuted.
-
-    Matched line-anchored, like `_commit_halt_gate` and
-    `_preflight_halt_gate`, and against both a real newline and the
-    backslash-n a JSON-stringified object reply carries, because an agent
-    result is a string on some paths and an object on others.
+    rule just refuted. The classification itself happened once, up with the
+    status check -- this reads the list that pass built.
 
     The fail direction is deliberate and matches the commit gate's: an
-    executor that quotes this instruction back at line-start halts a run
-    that did not need halting, which costs one `resumeFromRunId`. The
-    opposite bias costs a wave running against a refuted premise, which is
-    the defect this exists to close.
+    executor that quotes the instruction back at line-start halts a run that
+    did not need halting, which costs one `resumeFromRunId`. The opposite
+    bias costs a wave running against a refuted premise, which is the defect
+    this exists to close.
     """
     reason = (
         f"{phase_title}: a STOP RULE in the chunk's own spec fired. Its "
@@ -1267,27 +1292,10 @@ def _stop_rule_halt_gate(
         "reads the report, decides, and resumes (or re-plans) -- nothing "
         "later in this run picks this up by itself."
     )
-    pattern = (
-        f"/(?:^|\\n|\\\\n)[*_]{{0,2}}{_STOP_RULE_TOKEN}[*_]{{0,2}}:\\s*\\S/"
-    )
-    ids_js = ", ".join(_js_string_literal(rid) for rid in row_ids)
-    if len(row_ids) == 1:
-        subject = f"const _stopped = {pattern}.test(String({results_var} ?? \"\")) " \
-                  f"|| {pattern}.test(JSON.stringify({results_var} ?? \"\")) " \
-                  f"? [{ids_js}] : [];"
-    else:
-        subject = (
-            f"const _stopped = [{ids_js}].filter((id, i) => "
-            f"{pattern}.test(String({results_var}?.[i] ?? \"\")) || "
-            f"{pattern}.test(JSON.stringify({results_var}?.[i] ?? \"\")));"
-        )
     return (
-        "  {\n"
-        f"    {subject}\n"
-        "    if (_stopped.length) return { halted: "
-        f"{_js_string_literal(reason)} + \" Chunk(s): \" + _stopped.join(\", \") "
-        f"+ \" Agent report: \" + JSON.stringify({results_var} ?? null) }};\n"
-        "  }"
+        f"  if ({stopped_var}.length) return {{ halted: "
+        f"{_js_string_literal(reason)} + \" Chunk(s): \" + "
+        f"{stopped_var}.join(\", \") }};"
     )
 
 
@@ -2001,22 +2009,10 @@ def _commit_agent_call(
         f" gitignored `.coordinator-local/memo-outbox/` and never appears"
         f" in this repo's tree at all) is NOT withheld: there is nothing to"
         f" withhold, and it must never trigger the partial verdict below."
-        f" POST-COMMIT VERIFICATION IS MANDATORY, NOT OPTIONAL: your OWN"
-        f" belief that you committed the full pathspec is not evidence of"
-        f" it -- a chunk reported registry/materialize.ts as changed, the"
-        f" declared pathspec named it, and it still stayed dirty after a"
-        f" commit that reported success, because nothing had checked the"
-        f" tree AFTER `commit_paths` returned (example-retrieval-repo-4a, b550e655)."
-        f" After the call returns, run `git status --porcelain --"
-        f" <full declared pathspec>` against the sha it gave you and read"
-        f" the actual output -- not your memory of what you passed in."
-        f" Every declared path you are about to report as landed MUST show"
-        f" no output there. A path that still shows dirty is withheld,"
-        f" full stop, whether you chose a narrower pathspec yourself, the"
-        f" commit call silently dropped it, or anything else -- name it and"
-        f" fall through to the PARTIAL verdict below exactly as you would"
-        f" for a live peer's claim. Do not emit the landed token on an"
-        f" unverified assumption."
+        f" POST-COMMIT VERIFICATION: after `commit_paths` returns, run `git"
+        f" status --porcelain -- <full declared pathspec>` and read that"
+        f" output. Any declared path still dirty is withheld -- name it and"
+        f" take the PARTIAL verdict below, whatever the cause."
         f" When (and ONLY when) the commit has landed its FULL handed"
         f" pathspec -- minus only the legitimate drops named above (an item"
         f" that did not return DONE, a declared path examined but not"
@@ -2788,13 +2784,10 @@ def compose_script(
         [] if _all_writes_declared_empty(wave) else commit_pathspec(wave)
         for wave in waves
     ]
-    # Defect fix: a gitignored declared-write path (a derived store such as
-    # `registry/registry.db`) can never be committed, so it must never reach
-    # the preflight claimability set or a commit phase's pathspec -- see
-    # `_gitignored_paths`'s own docstring. ONE batched spawn over the
-    # whole-run union, computed here before any per-wave/per-batch pathspec
-    # is filtered against it -- a batch's own pathspec is always a subset of
-    # this union, so no second spawn is needed below.
+    # ONE batched spawn over the whole-run union, before any per-wave or
+    # per-batch pathspec is filtered against it -- a batch's pathspec is
+    # always a subset of this union, so nothing below needs a second spawn.
+    # Why ignored paths are filtered at all: `_gitignored_paths`.
     gitignored = _gitignored_paths(
         _dedupe_preserve_order(path for pathspec in wave_pathspecs for path in pathspec),
         repo_root=repo_root,
@@ -2862,15 +2855,13 @@ def compose_script(
                     batch, wave_title, plan_path, results_var, plan_context
                 )
             )
+            stopped_var = f"_stopped{results_var[0].upper()}{results_var[1:]}"
             body_blocks.append(
-                _status_check_block(results_var, [row.id for row in batch])
+                _status_check_block(results_var, [row.id for row in batch], stopped_var)
             )
-            # Every path out of this batch below gets the same halt gate,
-            # emitted LAST so a commit phase (when there is one) has already
-            # landed the stopped chunk's work -- see `_stop_rule_halt_gate`.
-            stop_gate = _stop_rule_halt_gate(
-                results_var, [row.id for row in batch], wave_title
-            )
+            # Emitted LAST on every path out of this batch -- see
+            # `_stop_rule_halt_gate`.
+            stop_gate = _stop_rule_halt_gate(stopped_var, wave_title)
 
             if _all_writes_declared_empty(batch):
                 # Every row in this batch declares `writes: []` -- no commit
@@ -2968,10 +2959,19 @@ _NON_DONE_STATUS_JS_RE = (
 )
 
 
-def _status_check_block(results_var: str, row_ids: list[str]) -> str:
-    """Record every row in this batch whose agent result carries a non-DONE
-    status into `_incompleteChunks` (Defect: a workflow reports `completed:
-    true` when a chunk returned PARTIAL).
+def _status_check_block(results_var: str, row_ids: list[str], stopped_var: str) -> str:
+    """Classify this batch's agent results ONCE: a non-DONE status pushes the
+    row id onto `_incompleteChunks` (Defect: a workflow reports `completed:
+    true` when a chunk returned PARTIAL), and a declared `_STOP_RULE_TOKEN`
+    pushes it onto `stopped_var`, which `_stop_rule_halt_gate` reads after
+    this batch's commit phase.
+
+    The two signals are read in one pass over `results_var` rather than by
+    two emitters walking the same results for adjacent purposes -- what
+    status the row reported, and what token it declared (Review:
+    coordinator:overengineering-reviewer). The halt itself stays where it
+    was: classification here, the `return { halted: ... }` after the commit,
+    so a stopped chunk's work lands before the run stops.
 
     `results_var` names the JS binding `_wave_agent_calls` already bound the
     batch's `agent()`/`parallel()` return value to -- this function never
@@ -2995,16 +2995,17 @@ def _status_check_block(results_var: str, row_ids: list[str]) -> str:
     (`executor_return_contract.done_summary_constraint`), not the broader
     hand-dispatch enum a different surface uses.
     """
-    if len(row_ids) == 1:
-        return (
-            f"  if ({_NON_DONE_STATUS_JS_RE}.test(JSON.stringify({results_var}))) "
-            f"_incompleteChunks.push({_js_string_literal(row_ids[0])});"
-        )
     ids_js = ", ".join(_js_string_literal(rid) for rid in row_ids)
+    row_expr = results_var if len(row_ids) == 1 else f"{results_var}?.[i]"
     return (
-        f"  [{ids_js}].forEach((id, i) => {{ if "
-        f"({_NON_DONE_STATUS_JS_RE}.test(JSON.stringify({results_var}[i]))) "
-        "_incompleteChunks.push(id); });"
+        f"  const {stopped_var} = [];\n"
+        f"  [{ids_js}].forEach((id, i) => {{\n"
+        f"    const _text = JSON.stringify({row_expr} ?? null);\n"
+        f"    if ({_NON_DONE_STATUS_JS_RE}.test(_text)) _incompleteChunks.push(id);\n"
+        f"    if ({_STOP_RULE_JS_RE}.test(_text) || "
+        f"{_STOP_RULE_JS_RE}.test(String({row_expr} ?? \"\"))) "
+        f"{stopped_var}.push(id);\n"
+        "  });"
     )
 
 

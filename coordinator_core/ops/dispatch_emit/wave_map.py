@@ -150,6 +150,7 @@ class WaveRow(NamedTuple):
     agent_model: Optional[str] = None
     body: str = ""
     writes_under: tuple = ()
+    verification_runs: Optional[bool] = None
 
 
 class WaveCycleError(ValueError):
@@ -634,6 +635,7 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
                 agent_type=row.agent_type,
                 agent_model=row.agent_model,
                 body=row.body,
+                verification_runs=getattr(row, "verification_runs", None),
             )
             for row in wave
         ]

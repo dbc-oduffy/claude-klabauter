@@ -141,3 +141,92 @@ def resolve_engine_dirty() -> bool | None:
         return None
 
     return bool(result.stdout.strip())
+
+
+#: Process-wide memo for `engine_build()`. One entry, set on first call and never
+#: invalidated: a process that re-resolved would report two different builds for
+#: one run, which is exactly the ambiguity this surface exists to remove. The
+#: warm server's lifetime is the memo's lifetime, and a source edit under a live
+#: server is `warm.skew`'s axis to detect, not this one's to paper over.
+_BUILD_MEMO: dict | None = None
+
+
+def engine_build() -> dict:
+    """The build identity a verdict-returning op stamps on its own answer.
+
+    Returns ``{"engine_sha": str | None, "engine_dirty": None}`` — the commit the
+    running engine copy is checked out at, read from `.git` DIRECTLY, plus a
+    `engine_dirty` that is always `None` here and is explained below. Never
+    raises; `engine_sha` is `None` when the running copy is not inside a repo
+    at all.
+
+    Purpose, stated as the consumer's question: a verdict op that reports a
+    DEFECT without naming its own build makes "your engine predates this leg"
+    indistinguishable from "your plan is wrong". Those have opposite repairs —
+    one waits for a publish, the other edits the plan — and a consumer that
+    cannot tell them apart follows the refusal's prescribed repair into
+    fabricating a declaration to satisfy a check its engine simply does not
+    carry yet. Measured: `plan.prep_gate` on a mirror predating the
+    `created_roots` exemption refused 7 example-game-repo plans, two of which already
+    carried the exact declaration the refusal text prescribed
+    (example-game-workbench-repo-00, 2026-09-11). A sha the consumer can
+    ancestry-check is the whole repair.
+
+    Budget: 0 spawns. 0.32 ms to resolve, 5.5 ms on the very first call in a
+    process that has not yet imported the two git readers (their import, not
+    the read), and ~0 on every call after — measured, this box.
+    DELIBERATELY NOT `resolve_engine_sha()` + `resolve_engine_dirty()`, which
+    answer richer questions and cost 23.8 ms + 69.3 ms of `git` (measured, this
+    box). Their callers pay that once per receipt; this one is stamped on EVERY
+    verdict, and `plan.prep_gate`'s callers gate a plan at a time — 93 ms times
+    a corpus, on ops whose own negative-spec is zero spawns and no git. A
+    provenance field that breaks the budget of the op it annotates would be
+    retired by DR-344 before a consumer ever read it.
+
+    `engine_dirty` is `None` — "not determined" — and is carried rather than
+    dropped so a reader is told which half is missing instead of inferring a
+    clean tree from a bare sha. Answering it needs `git status`, which is the
+    spawn this function exists to avoid; `resolve_engine_dirty()` is that
+    answer for a caller that wants it, and `warm.skew` is where a live server's
+    source drift is actually detected.
+
+    Negative-spec:
+      - Does NOT spawn, and does NOT invoke git. That is the whole design
+        constraint, not an incidental property: see Budget.
+      - Does NOT re-resolve, and takes no invalidation argument. See `_BUILD_MEMO`.
+      - Does NOT report the CONSUMING repo's HEAD. `Path(__file__)`-derived, per
+        this module's own negative-spec — a vendored or published copy correctly
+        reports the sha of the copy that is executing, which for a klabauter
+        consumer is the mirror's own commit and is exactly what it needs to
+        ancestry-check.
+      - Does NOT claim the sha identifies the code byte-for-byte. It names a
+        commit; `engine_dirty` is the discriminator, and here it is unanswered.
+    """
+    global _BUILD_MEMO
+    if _BUILD_MEMO is None:
+        _BUILD_MEMO = {"engine_sha": _engine_head_sha(), "engine_dirty": None}
+    return dict(_BUILD_MEMO)
+
+
+def _engine_head_sha() -> str | None:
+    """The running engine copy's HEAD sha, read from `.git`, no process.
+
+    Climbs from this file to the enclosing repo (`repo_root._walk_for_repo`,
+    the same climb `resolve_git_dir` cannot do for a SUBDIRECTORY) and reads
+    the sha with `git_state.head_sha`, which follows HEAD's one ref hop and
+    falls back to `packed-refs`. Both are existing spawn-free readers; nothing
+    here reimplements a git format.
+
+    Returns `None` — never raises — when the engine copy is not in a repo, when
+    HEAD is unreadable, or when the branch is unborn (`head_sha`'s own `None`).
+    """
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.git.repo_root import _walk_for_repo
+
+    try:
+        found = _walk_for_repo(Path(__file__).resolve().parent)
+        if found is None:
+            return None
+        return head_sha(found[1])
+    except OSError:
+        return None

@@ -86,7 +86,11 @@ from coordinator_core.git.divergence import (
 )
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
 from coordinator_core.git.git_index import scoped_status as _git_index_scoped_status
-from coordinator_core.git.git_objects import cas_ref, read_packed_ref, write_object
+from coordinator_core.git.git_objects import (
+    _ref_exists_loose_or_packed,
+    cas_ref,
+    write_object,
+)
 from coordinator_core.git.git_state import (
     IndexEntry,
     IndexParseError,
@@ -4521,6 +4525,11 @@ def _resolve_cas_ref_target(root: Path) -> Optional[Tuple[Path, str]]:
     is a repo that has just been gc'd, could never commit the memo it had
     just recovered. `None` still means a ref that is neither loose nor
     packed, which is genuinely unresolvable.
+
+    # Review: coordinator-code-reviewer -- the loose-or-packed existence
+    # check is shared with the sibling resolver in `git/commit.py` via
+    # `git_objects._ref_exists_loose_or_packed`, so the two stay in sync
+    # rather than drifting as hand-kept-identical copies.
     """
     worktree_gitdir = resolve_git_dir(root)
     try:
@@ -4531,7 +4540,7 @@ def _resolve_cas_ref_target(root: Path) -> Optional[Tuple[Path, str]]:
         return worktree_gitdir, "HEAD"
     ref_rel = head_text[len("ref:") :].strip()
     common_dir = resolve_git_common_dir(root)
-    if not (common_dir / ref_rel).is_file() and read_packed_ref(common_dir, ref_rel) is None:
+    if not _ref_exists_loose_or_packed(common_dir, ref_rel):
         return None
     return common_dir, ref_rel
 

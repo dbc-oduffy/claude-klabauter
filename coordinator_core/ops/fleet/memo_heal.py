@@ -60,6 +60,11 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from coordinator_core.git.content_hash import (
+    _autocrlf_checkin_normalize,
+    _repo_autocrlf_true,
+    _text_attribute_pinned,
+)
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import _read_object
 from coordinator_core.git.git_state import head_sha as _git_state_head_sha
@@ -75,6 +80,8 @@ from coordinator_core.ops.fleet._common import (
 from coordinator_core.ops.fleet._memo_anchor import (
     ANCHOR_REF_PREFIX,
     CORPUS_ROOT_RELDIRS,
+    _valid_commit_sha,
+    _valid_ref_component,
     anchor_names,
     present_filenames,
     resolve_anchor,
@@ -453,6 +460,10 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
     # matching bytes, capped per run, zero object writes.
     adopt_items: List[dict] = []
     adopt_skipped = 0
+    # Loop-invariant: `core.autocrlf` is a repo-level config read (three
+    # files per call), so resolving it per candidate would pay it once per
+    # memo on a 100-adopt run for an answer that cannot change mid-run.
+    autocrlf_true = _repo_autocrlf_true(worktree_root) if head_sha else False
     if head_sha:
         unanchored = sorted(
             fname for fname, entry in present.items()
@@ -479,8 +490,37 @@ def _memo_heal_inbox(params: dict, repo_root=None) -> dict:
             # HEAD's existing blob and writes no bytes, so the only question here
             # is whether the CONTENT differs from what is committed; a line-ending
             # difference is not a content difference.
-            if head_blob_sha not in (_blob_sha1(data), _blob_sha1(data.replace(b"\r\n", b"\n"))):
+            #
+            # Review: code-reviewer F2 -- the CRLF-collapsed candidate is only
+            # tried when it is actually reachable via git's own checkin-side
+            # normalization (`_repo_autocrlf_true` + no `.gitattributes` pin on
+            # this path, `git.content_hash`'s canonical helpers, the single
+            # implementation `git_native.py` itself defers to). Skipping this
+            # gate would accept content that is NOT what HEAD committed for a
+            # path where CRLF bytes are literal content rather than a
+            # line-ending artifact (e.g. `-text`/`binary` pinned, or
+            # autocrlf off).
+            candidates = {_blob_sha1(data)}
+            if autocrlf_true and _text_attribute_pinned(worktree_root, pres.relpath) is None:
+                candidates.add(_blob_sha1(_autocrlf_checkin_normalize(data)))
+            if head_blob_sha not in candidates:
                 adopt_skipped += 1
+                continue
+            # Review: code-reviewer F1 -- a raw on-disk inbox filename is
+            # untrusted input to the ref namespace: `write_anchor` (the
+            # `memo.send` path) refuses the same shape via these same two
+            # validators before ever building a ref string, so ADOPT must
+            # refuse here too rather than let one ref-illegal filename reach
+            # `_anchor_ref`/`update_refs_stdin` and poison the whole batch
+            # (git's `update-ref --stdin` transaction is all-or-nothing, so
+            # one bad line fails every legitimate retire/rekey/adopt in the
+            # same run, and the file stays unanchored to re-poison the next
+            # run too).
+            if not _valid_ref_component(fname) or not _valid_commit_sha(head_sha):
+                failed_items.append({
+                    "id": fname,
+                    "reason": "adopt refused: filename is not a valid ref path component",
+                })
                 continue
             adopt_items.append({
                 "filename": fname, "commit_sha": head_sha, "blob_sha": head_blob_sha,

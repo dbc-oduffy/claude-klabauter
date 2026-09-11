@@ -386,6 +386,15 @@ class EmitterRow(NamedTuple):
     something, which decides whether the agent it derives can do the row at
     all. Nothing here interprets it; it defaults to ``""`` like the other
     tolerant fields.
+
+    ``verification_runs`` is the DECLARED answer to that same question, and
+    it wins over the body when present. The author knows whether their
+    verification has to run something; ``emit.py``'s
+    ``_verification_requires_a_run`` can only guess it from the words they
+    happened to use, and a phrasebook classifier gets better with every
+    phrase it learns and never becomes correct. ``None`` means the row
+    declared nothing and the prose fallback answers, which is every row
+    written before this key existed.
     """
 
     id: str
@@ -398,6 +407,7 @@ class EmitterRow(NamedTuple):
     agent_model: Optional[str] = None
     body: str = ""
     writes_under: tuple = ()
+    verification_runs: Optional[bool] = None
 
 
 def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]:
@@ -588,6 +598,15 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                 agent_model=raw.get("agent_model"),
                 body=raw.get("body") or "",
                 writes_under=writes_under,
+                # Tolerant like every non-fail-loud field here: only a real
+                # bool is a declaration. Anything else (a string, a null, a
+                # typo'd key) leaves it None and the prose fallback answers,
+                # rather than making a malformed value mean False.
+                verification_runs=(
+                    raw["verification_runs"]
+                    if isinstance(raw.get("verification_runs"), bool)
+                    else None
+                ),
             )
         )
 

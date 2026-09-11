@@ -1407,6 +1407,28 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             mode,
         )
 
+    # stamp_shipped's half-write twin of the stamp_only pre-check at
+    # `do_stamp_only` below: the stamp lands here, the flip is ~450 lines
+    # later, and a record the validator refuses for a reason neither write
+    # touches was left carrying shipped_in on a baton still reading
+    # ready_to_fire. Measured by example-retrieval-repo-ue-addon-d9 on rqsi-14: a
+    # session-handoff carrying roadmap_id, refused by the flip, stamped
+    # anyway. Not run for mode="supersede" — that mode performs no ship
+    # flip, so there is no refusal to project.
+    if mode == "stamp_shipped":
+        would_refuse = _ship_would_refuse(contained, rel_id, stamp_sha, stamp_kind)
+        if would_refuse is not None:
+            out = _err(
+                f"stamp_shipped: refusing before any write for {rel_id} — the "
+                f"deployment_state:shipped flip would be refused, so stamping "
+                f"shipped_in first would leave a half-shipped record. Nothing was "
+                f"written. Flip refusal: {would_refuse}"
+            )
+            out["mode"] = mode
+            out["stamped"] = False
+            out["warnings"] = warnings
+            return out
+
     # ------------------------------------------------------------------
     # DO_STAMP block (stamp_shipped / supersede) — BEFORE the guard,
     # unconditionally (mirrors bash :219-273 — the stamp lands even if the

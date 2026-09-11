@@ -1318,20 +1318,35 @@ def _cf_gate_dependency_not_path_shaped(fm: dict) -> ErrorDict | None:
 _ROADMAP_BATON_KINDS = frozenset(kind_values_for_canonical('roadmap-baton'))
 
 
-def _cf_graph_fields_roadmap_only(fm: dict) -> ErrorDict | None:
-    graph_fields = ['roadmap_id']
-    present = [f for f in graph_fields if fm.get(f) is not None]
-    if present and fm.get('kind') not in _ROADMAP_BATON_KINDS:
-        return {
-            'field': ', '.join(present),
-            'error': f'permitted only when kind=roadmap-baton (current kind: {fm.get("kind") or "unset"})',
-            'hint': (
-                'roadmap_id is roadmap-only. '
-                'Remove it, or set kind: roadmap-baton if this is a roadmap stub. '
-                '(blocks/blocked_by are permitted on any kind.)'
-            ),
-        }
-    return None
+#: GRAVESTONE — `_cf_graph_fields_roadmap_only` and `_cf_roadmap_id_implies_kind`,
+#: the two rules that rejected `roadmap_id` on any kind but roadmap-baton.
+#: DELETED 2026-09-11 under DR-198(b) (DoE-claude, landed `0add2b70`), whose ask
+#: reached this repo as `state/cross-repo/inbox/2026-09-06-doe-claude-em-roadmap-
+#: id-referential-and-two-rule-deletions.md` and had been open since.
+#:
+#: `roadmap_id` is REFERENTIAL, not kind-gated: when carried it must name a
+#: cluster that actually exists under `state/roadmap/`, and presence on a
+#: non-baton kind was never the thing worth refusing. Both rules rejected the
+#: same record independently, so deleting one would have left it rejected.
+#:
+#: What is NOT relaxed: `kind: roadmap-baton` still REQUIRES roadmap_id, stub_id,
+#: wave, blocks and blocked_by via `_cf_spinoff_roadmap_requires_graph` below.
+#: A baton still owes its serialization order; only membership stops being
+#: kind-gated.
+#:
+#: The referential check does NOT return as a write-time deny. Its oracle reads
+#: live state (`state/roadmap/`), which SC-DR-016's deny-from-day-one carve-out
+#: does not cover, so DR-198(c)-iii routes it to resolve/audit time — mirroring
+#: `gate_eval`'s dangling-`blocked_by` treatment rather than inventing a mode.
+#: Do not re-add a presence gate here as a stand-in for it.
+#:
+#: WHAT IT UNBLOCKS, measured: example-retrieval-repo-ue-addon had 65 files failing
+#: `lint-frontmatter --strict-refs`, every one of them on `roadmap_id`, blocking
+#: that repo's /workweek-complete; and its rqsi-01..rqsi-08 batons are every one
+#: `session-handoff` or `spinoff` carrying roadmap_id with no `wave`, so the
+#: validator's one remaining branch (`kind: roadmap-baton`) then hard-refused on
+#: `wave: required` for records whose planning_wave the engine computes as None.
+#: Reported from that side as F23. No migration is needed anywhere.
 
 
 #: Operator escape hatch for `_cf_spinoff_roadmap_requires_graph`, minted as a
@@ -1384,16 +1399,6 @@ def _cf_spinoff_roadmap_requires_graph(fm: dict) -> ErrorDict | None:
                 'serialization order (wave), and graph edges (blocks, blocked_by — empty list ok). '
                 'See skills/roadmap-planning/SKILL.md § Phase 2.1.'
             ),
-        }
-    return None
-
-
-def _cf_roadmap_id_implies_kind(fm: dict) -> ErrorDict | None:
-    if fm.get('roadmap_id') and fm.get('kind') not in _ROADMAP_BATON_KINDS:
-        return {
-            'field': 'roadmap_id',
-            'error': f'present but kind is "{fm.get("kind") or "unset"}" — roadmap_id requires kind: roadmap-baton',
-            'hint': 'Either set kind: roadmap-baton (if this is a roadmap stub), or remove roadmap_id (if not).',
         }
     return None
 
@@ -3898,9 +3903,7 @@ _HANDOFF_CROSS_FIELD_RULES = [
     _cf_gate_dependency_not_path_shaped,
     _cf_execution_stamp_required,
     _cf_handoff_phase_kind_gate,
-    _cf_graph_fields_roadmap_only,
     _cf_spinoff_roadmap_requires_graph,
-    _cf_roadmap_id_implies_kind,
     _cf_cost_enum,
     _cf_category_required_post_cutoff,
     _cf_summary_required_post_cutoff,

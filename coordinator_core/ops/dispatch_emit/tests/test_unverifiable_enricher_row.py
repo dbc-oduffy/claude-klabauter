@@ -138,3 +138,83 @@ def test_the_body_reaches_emit_from_spine_text(tmp_path):
 
     with pytest.raises(UnverifiableEnricherRowError):
         compose_script(build_waves(read_spine(plan_path)), name="wf", description="e2e")
+
+
+# ---------------------------------------------------------------------------
+# `verification_runs:` — declared beats inferred (Kira F2)
+# ---------------------------------------------------------------------------
+
+
+def test_a_declared_false_beats_a_body_the_classifier_reads_as_a_run():
+    """The false-positive escape that is not `agent_type`. D16's exact body
+    says `pytest`, so the phrasebook refuses the row; an author who knows the
+    verification is a read says so and keeps the derivation."""
+    row = _row([_RECORD], _D16_BODY)._replace(verification_runs=False)
+    script = compose_script([[row]], name="wf", description="declared false")
+    assert "agentType: 'coordinator:enricher'" in script
+
+
+def test_a_declared_true_beats_a_body_the_classifier_reads_as_a_read():
+    """The false NEGATIVE, which is the one with no prior escape: a phrasing
+    the regex does not know routes the row to an agent forbidden to run it,
+    and nothing catches it until the wave halts mid-run."""
+    body = "Verification: the harness reconciles clean against the baseline\n"
+    assert not _verification_requires_a_run(body)
+    row = _row([_RECORD], body)._replace(verification_runs=True)
+    with pytest.raises(UnverifiableEnricherRowError):
+        compose_script([[row]], name="wf", description="declared true")
+
+
+def test_an_undeclared_row_still_reads_its_prose():
+    """Every row written before the key exists declares nothing, and a missing
+    key is not a claim that the verification runs nothing."""
+    assert _row([_RECORD], _D16_BODY).verification_runs is None
+
+
+def test_the_declaration_reaches_emit_from_spine_text(tmp_path):
+    """Same seam as `test_the_body_reaches_emit_from_spine_text`: the key
+    crosses two tuples that each default it, so a WaveRow-level test cannot
+    see a break in the parsing seam."""
+    plan_path = tmp_path / "plan.md"
+    plan_path.write_text(
+        "# fixture plan\n\n## Tasks\n\n"
+        "```yaml plan-tasks\n"
+        "- id: D16\n"
+        "  title: close-out\n"
+        "  surface: dispatch_emit\n"
+        "  change_kind: doc-edit\n"
+        "  verification_runs: false\n"
+        "  body: |\n"
+        "    Verification (this row is DONE only when this holds): targeted pytest set green\n"
+        "  writes:\n"
+        f"    - {_RECORD}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    script = compose_script(build_waves(read_spine(plan_path)), name="wf", description="e2e")
+    assert "agentType: 'coordinator:enricher'" in script
+
+
+def test_a_non_bool_declaration_falls_back_rather_than_meaning_false(tmp_path):
+    """Tolerant read: only a real bool is a declaration. A string `"no"` that
+    silently meant False would be worse than the classifier it replaces."""
+    plan_path = tmp_path / "plan.md"
+    plan_path.write_text(
+        "# fixture plan\n\n## Tasks\n\n"
+        "```yaml plan-tasks\n"
+        "- id: D16\n"
+        "  title: close-out\n"
+        "  surface: dispatch_emit\n"
+        "  change_kind: doc-edit\n"
+        "  verification_runs: \"no\"\n"
+        "  body: |\n"
+        "    Verification (this row is DONE only when this holds): targeted pytest set green\n"
+        "  writes:\n"
+        f"    - {_RECORD}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UnverifiableEnricherRowError):
+        compose_script(build_waves(read_spine(plan_path)), name="wf", description="e2e")
