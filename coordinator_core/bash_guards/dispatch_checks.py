@@ -6690,6 +6690,43 @@ def _fixture_suppressible_detail(rel_path: str, detail: str) -> bool:
     return detail.startswith("ERROR")
 
 
+#: Commands whose exit status is load-bearing: a swallowed failure here lets the
+#: NEXT command in the chain run against a state that never happened.
+_EXIT_STATUS_LOAD_BEARING = ("commit", "push", "merge", "rebase", "cherry-pick", "mv", "rm", "tag")
+
+
+def _piped_exit_code_chain(command):
+    """The offending segment when a git mutation's status is read through a pipe.
+
+    `git commit -F msg.txt | tail -3 && git push` tests TAIL, not the commit.
+    `$?` after a pipeline is the LAST stage's status, so a failed commit is
+    invisible and the push runs anyway against a commit that never landed.
+
+    Measured 2026-09-11 in two repos independently, by two sessions who were at
+    that moment each telling the other to distrust unverified green signals. The
+    habit that produces it is benign -- piping to `tail`/`head` to keep output
+    short -- which is why it goes unnoticed: it is invisible until the first
+    stage actually fails, and then it is invisible again.
+
+    Static string work only. No spawn, no git, nothing to budget.
+    """
+    for segment in re.split(r"&&|[|][|]", command):
+        if "|" not in segment:
+            continue
+        head = segment.split("|", 1)[0].strip()
+        # Routed through the module's own resolver rather than a local regex:
+        # `git -C <path> commit` and `git -c k=v commit` both put a VALUE between
+        # the flag and the subcommand, and a hand-rolled pattern that misses them
+        # is a detector with a hole exactly where a scripted call sits.
+        _head_tokens = _bt_tokenize_full_command(head)
+        if not _head_tokens:
+            continue
+        if _bt_git_resolved_subcommand(_head_tokens) not in _EXIT_STATUS_LOAD_BEARING:
+            continue
+        return head
+    return None
+
+
 def check_validate_commit(
     cmd: str,
     session_id: str = "",
@@ -7940,6 +7977,20 @@ def check_validate_commit(
             "COORDINATOR_OVERRIDE_UNDECLARED_DELETION", payload=payload
         ):
             warnings.append(undeclared_deletion_violation)
+
+    # PIPED-EXIT-CODE-IS-THE-PIPES, chained form. Static, no spawn, and placed
+    # here rather than in its own guard because the shape that matters is a git
+    # MUTATION whose status is swallowed, which is what this function already
+    # exists to see.
+    _piped_head = _piped_exit_code_chain(command)
+    if _piped_head is not None:
+        warnings.append(
+            "PIPED-EXIT-CODE: `%s` is piped, so the status reported is the LAST "
+            "stage's, not the git command's. A failed commit reads as success -- to "
+            "the harness, and to any `&&` after it.\n\n"
+            "Drop the pipe, or open with:\n"
+            "  set -o pipefail" % _piped_head
+        )
 
     # Single warn-only flush (bash: the "Single warn-only flush" comment near
     # the end of validate-commit.sh). Every warn-only check above (5, 7 soft/

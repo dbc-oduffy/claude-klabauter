@@ -338,11 +338,18 @@ ReviewRosterFragmentError = RosterFragmentError
 #: phase commits once per wave, and a terminal `coordinator:test-runner`
 #: phase runs broader verification. One string names both, since the
 #: builder threads a single `commit_authority` value into both clauses.
+#: Kept to a bare noun phrase on purpose. The builder splices this value
+#: into TWO slots of one sentence-run, and the second already supplies its
+#: own "commits, once per wave, after every item in the wave passes
+#: verification" tail. A value carrying parenthetical glosses renders that
+#: tail twice and reads as garbled duplication -- measured at 8b0ee94908,
+#: where the emitted clause ended "...(which runs broader verification)
+#: commits, once per wave, after every item in the wave passes
+#: verification." The hand-dispatch caller passes "the EM" and is the shape
+#: this sentence was written for; match its register, not its brevity alone.
 _EMITTED_COMMIT_AUTHORITY = (
-    "this wave's `coordinator:git-commit-agent` commit phase (which commits, "
-    "once per wave, after every item in the wave passes scoped verification) "
-    "and the run's terminal `coordinator:test-runner` phase (which runs "
-    "broader verification)"
+    "this wave's `coordinator:git-commit-agent` commit phase and the run's "
+    "terminal `coordinator:test-runner` phase"
 )
 
 #: `.coordinator-local/subagent-share/` is already inside

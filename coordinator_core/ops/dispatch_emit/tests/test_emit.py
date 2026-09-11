@@ -26,6 +26,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
 from coordinator_core.ops.dispatch_emit.pathspec import NoWritesDeclaredError
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, build_waves
+from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 _AGENT_CALL_RE = re.compile(r"agent\s*\(")
 _META_PHASE_LINE_RE = re.compile(r"phases\s*:\s*\[([^\]]*)\]")
@@ -2064,3 +2065,153 @@ def test_commit_prompt_tells_the_agent_a_claim_is_not_a_refusal_condition():
     assert "clear-claim-if-dead" in prompt
     # And why that verb is safe to hand a haiku agent unsupervised.
     assert "no-op against a LIVE holder" in prompt
+
+
+# ---------------------------------------------------------------------------
+# C3 -- the emitted row prompt carries the executor return contract, and
+# that contract lands somewhere safe to commit on its own
+# (docs/plans/2026-09-11-the-executor-return-contract-gets-one-de.md § C3)
+# ---------------------------------------------------------------------------
+
+
+def _one_wave_fixture_with_writes(writes):
+    return [[_wave_row("C1", writes)]]
+
+
+def test_emitted_row_prompt_carries_the_footprint_constraint_over_writes_plus_report():
+    """The footprint constraint must be spliced into the emitted SCRIPT text
+    (never asserted against the module constant alone -- see
+    `test_compose_script_commit_prompt_names_every_measured_false_refusal`'s
+    docstring for why a constant-level assertion would stay green through a
+    refactor that stopped threading the text into the emitted prompt)."""
+    waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
+    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
+
+    assert "You MUST NOT create or modify any file outside this footprint" in script
+    assert "coordinator_core/ops/dispatch_emit/emit.py" in script
+    assert ".coordinator-local/subagent-share/dispatch-reports/example/C1.md" in script
+
+
+def test_emitted_row_prompt_carries_the_self_verify_constraint_naming_emitted_authority():
+    """The self-verify clause must name the EMITTED commit/verification
+    authority (the wave's own commit phase + the terminal test-runner
+    phase) -- never the hand-dispatch "the EM" text, which is false on this
+    path."""
+    waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
+    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
+
+    assert "leave your changes uncommitted and unstaged" in script
+    assert "coordinator:git-commit-agent` commit phase" in script
+    assert "terminal `coordinator:test-runner` phase" in script
+    # The hand-dispatch text this must never regress to.
+    assert "Only the EM commits, once per wave" not in script
+
+
+def test_emitted_row_prompt_carries_the_done_summary_constraint_with_reply_and_porcelain():
+    """The done-summary constraint's structured-reply rule and its
+    porcelain changed-path clause must both reach the emitted script,
+    scoped to THIS row's own footprint (writes + report path)."""
+    waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
+    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
+
+    expected_report_path = ".coordinator-local/subagent-share/dispatch-reports/example/C1.md"
+    assert f"Reply EXACTLY `DONE: {expected_report_path}`" in script
+    assert "git status --porcelain -- " in script
+    assert "coordinator_core/ops/dispatch_emit/emit.py" in script
+    assert expected_report_path in script
+    assert "| cut -c4-`" in script
+
+
+def test_emitted_row_prompt_omits_footprint_constraint_when_writes_undeclared():
+    """An UNDECLARED `writes:` is a legal epistemic-premise-gated state,
+    distinct from `writes: []` -- the footprint constraint must not render
+    at all (never as "you may write nothing"), while the report path still
+    threads through the self-verify/porcelain clauses.
+
+    Composed directly through `_row_prompt`/`_row_return_contract`, not
+    `compose_script`: a wave whose only row is UNDECLARED never reaches a
+    commit phase at all (`pathspec.commit_pathspec` refuses
+    `NoWritesDeclaredError` first) -- this is the row-prompt-rendering
+    behaviour in isolation, the same UNDECLARED-row shape the module
+    docstring calls "a safe placeholder never actually dispatched"."""
+    row = _wave_row("C1", UNDECLARED)
+    prompt = emit._row_prompt(row, "docs/plans/example.md")
+
+    assert "You MUST NOT create or modify any file outside this footprint" not in prompt
+    assert "you may write nothing" not in prompt
+    expected_report_path = ".coordinator-local/subagent-share/dispatch-reports/example/C1.md"
+    assert expected_report_path in prompt
+
+
+def test_dispatch_report_path_uses_plan_stem_and_row_id_never_mise_done():
+    """The report path is `.coordinator-local/subagent-share/dispatch-
+    reports/<plan stem>/<row id>.md`, NOT `tasks/mise-done/` -- see the C3
+    row body's three-reason argument."""
+    assert (
+        emit._dispatch_report_path("docs/plans/example.md", "C7")
+        == ".coordinator-local/subagent-share/dispatch-reports/example/C7.md"
+    )
+    assert "tasks/mise-done" not in emit._dispatch_report_path("docs/plans/example.md", "C7")
+
+
+def test_dispatch_report_path_is_inside_the_bookkeeping_allowlist():
+    """C3 must be safe to land alone: the report path this module renders
+    into every row prompt must already fall under one of
+    `_BOOKKEEPING_PREFIXES`, so the commit phase's own provenance heading
+    never instructs a halt on a wave's own dispatch report."""
+    report_path = emit._dispatch_report_path("docs/plans/example.md", "C1")
+    assert any(report_path.startswith(prefix) for prefix in emit._BOOKKEEPING_PREFIXES)
+
+
+def test_emitted_script_never_instructs_a_halt_on_the_dispatch_report_path():
+    """End-to-end: compose a script for a wave whose row writes nothing
+    else, and confirm the commit phase's rendered provenance heading would
+    treat the row's OWN dispatch report as dispatch-layer bookkeeping (the
+    allowlisted, silent branch) rather than as an unaccounted divergence
+    that halts the run."""
+    waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
+    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
+
+    report_path = emit._dispatch_report_path("docs/plans/example.md", "C1")
+    assert report_path in script
+    # The provenance heading's allowlist carve-out must be present in the
+    # SAME emitted script that names the report path (escaped through
+    # `_escape_for_js_template_literal` for the commit prompt's own template
+    # literal, so backticks survive as `\``, not the raw form), and the
+    # report path itself must sit under the rendered allowlist prefix.
+    assert "DISPATCH-LAYER BOOKKEEPING" in script
+    for prefix in emit._BOOKKEEPING_PREFIXES:
+        assert f"{prefix}**" in script
+    assert any(report_path.startswith(prefix) for prefix in emit._BOOKKEEPING_PREFIXES)
+
+
+def test_row_prompt_return_contract_is_escaped_via_js_string_literal_not_template_literal():
+    """Row prompts (including the return-contract text spliced into them)
+    go through `workflow_scaffold._js_string_literal` at the
+    `_wave_agent_calls` splice points -- never
+    `_escape_for_js_template_literal`, which is reserved for the commit
+    phase's own runtime-interpolating prompt. A row prompt containing a
+    backtick or `${...}`-shaped substring (as the return contract's
+    porcelain clause can, via its literal backticked command) must survive
+    as a single-quoted JS string literal, not a template literal."""
+    waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
+    script = compose_script(waves, name="wf", description="one wave", plan_path="docs/plans/example.md")
+
+    row_prompt = emit._row_prompt(
+        WaveRow(
+            id="C1",
+            title="title-C1",
+            surface="dispatch_emit",
+            writes=["coordinator_core/ops/dispatch_emit/emit.py"],
+            reads=[],
+            depends_on=[],
+            agent_type=None,
+            agent_model=None,
+        ),
+        "docs/plans/example.md",
+    )
+    literal = _js_string_literal(row_prompt)
+    assert literal in script
+    # Never spliced as a backtick template literal at the wave-agent-call
+    # splice point.
+    assert f"`{row_prompt}`" not in script
