@@ -74,9 +74,20 @@ def _stub_operator_config(monkeypatch):
 
 
 def _never_claimed_predecessor_fm() -> list[str]:
-    """`_PREDECESSOR_FM` with the claim stripped -- the shape
-    `claimed_or_shipped_at_path` (DR-242) answers False for, and the frontmatter
-    shape of the live 2026-08-03 `/handoff` input."""
+    """`_PREDECESSOR_FM` with the claim stripped.
+
+    HISTORICAL NOTE (2026-09-12): this shape alone no longer produces a
+    decline, and the tests below no longer use it on its own. A never-claimed
+    predecessor whose successor THIS RUN minted is now ADMITTED -- DR-242
+    Amendment A2 section 7.3, in force, engine-attested door; see
+    `handoff_archive_transition._attested_succession_refusal`. That admission
+    is the whole point of
+    docs/plans/2026-09-12-supersede-admits-an-apply-minted-success.md, and it
+    is what DoE-claude reported as a defect on this very shape.
+
+    Kept because `_declining_harness` still composes it: the decline now comes
+    from the SECOND half of that harness's shape, not this one.
+    """
     return [
         line
         for line in _PREDECESSOR_FM
@@ -84,7 +95,36 @@ def _never_claimed_predecessor_fm() -> list[str]:
     ]
 
 
+def _unidentifiable_predecessor_fm() -> list[str]:
+    """A never-claimed predecessor that ALREADY carries a DIFFERENT
+    `continued_into`.
+
+    This is what still declines, and why: clause 4 of DR-242 Amendment A2
+    section 7.3 -- predecessor-side evidence always takes precedence. A
+    predecessor that already records where it continued is decided by that
+    field, and an attestation naming some other successor may not override it.
+
+    WHY THIS SUITE CHANGED VEHICLES (2026-09-12). Every guard below is about
+    what a DECLINE must and must not do -- the successor survives it,
+    compensation never fires, the report names it honestly. None of that is
+    about WHICH shape declines. The suite previously used "never claimed" as
+    its vehicle, and that shape is now admitted, so the guards were repaired by
+    swapping the vehicle, never by weakening an assertion. The invariants are
+    byte-identical; only the input that triggers them moved.
+    """
+    return _never_claimed_predecessor_fm() + [
+        'continued_into: "state/handoffs/a-previously-recorded-successor.md"'
+    ]
+
+
 def _declining_harness(tmp_path, monkeypatch) -> _ReplayHarness:
+    return _ReplayHarness(
+        tmp_path, monkeypatch, predecessor_fm=_unidentifiable_predecessor_fm()
+    )
+
+
+def _admitted_harness(tmp_path, monkeypatch) -> _ReplayHarness:
+    """The shape that now LANDS: never claimed, but identity-checkable."""
     return _ReplayHarness(
         tmp_path, monkeypatch, predecessor_fm=_never_claimed_predecessor_fm()
     )
@@ -144,14 +184,28 @@ class TestADegradeCompensatesNothing:
     def test_the_predecessor_is_left_untouched_by_the_decline(
         self, tmp_path, monkeypatch
     ):
-        """DR-242's substance is unchanged: an unclaimed predecessor is still
-        never superseded, and the op is never composed. Only the blast radius
-        of that refusal changed."""
+        """DR-242's substance is unchanged: a predecessor that fails the gate
+        is still never superseded, and the predecessor is left byte-identical.
+
+        WHAT CHANGED (2026-09-12): the op IS now composed. The refusal moved to
+        `handoff_archive_transition`'s own `mode == "supersede"` choke point,
+        which is where it always belonged -- this wrapper's pre-check was
+        defense in depth, and keeping it as an early return is what made a
+        never-claimed predecessor unfixable (the DoE-claude defect). What this
+        guard protects is unchanged and is asserted below: nothing is mutated,
+        nothing is archived, and no succession edge is written."""
         harness = _declining_harness(tmp_path, monkeypatch)
         harness.run()
 
         assert harness.archived_predecessor() is None
-        assert harness.continued_into() is None
+        # UNCHANGED, not absent: this vehicle declines via clause 4, so the
+        # predecessor arrives already carrying its own recorded edge. The
+        # guarantee is that the decline did not OVERWRITE it with the successor
+        # this run minted -- which is clause 4's whole point.
+        assert (
+            harness.continued_into()
+            == "state/handoffs/a-previously-recorded-successor.md"
+        )
         assert "deployment_state: continued" not in harness.predecessor_text()
 
 
@@ -219,14 +273,18 @@ class TestTheReportDistinguishesTheTwoCases:
         harness = _declining_harness(tmp_path, monkeypatch)
         _, report = harness.run()
 
-        assert report["degraded"] == [
-            {
-                "directive_id": "d6",
-                "cli": "handoff.supersede_predecessor",
-                "reason": "predecessor-not-claimed-or-shipped",
-                "predecessor": _PRED_REL,
-            }
-        ]
+        assert len(report["degraded"]) == 1, report
+        row = report["degraded"][0]
+        assert row["directive_id"] == "d6"
+        assert row["cli"] == "handoff.supersede_predecessor"
+        assert row["reason"] == "predecessor-not-claimed-or-shipped"
+        assert row["predecessor"] == _PRED_REL
+        # The row now also relays the choke point's OWN refusal text, so a
+        # reader learns which clause declined rather than only that something
+        # did. Asserted by substring, not by whole-dict equality: the message
+        # is the op's to word (docs/wiki/guard-messaging.md), and pinning it
+        # verbatim here would make this suite a second owner of that text.
+        assert "clause 4" in row["error"], row
 
     def test_a_clean_run_reports_an_empty_degraded_list(self, tmp_path, monkeypatch):
         """Present-as-[] -- "nothing declined" and "this report does not say"
@@ -321,9 +379,18 @@ class TestTheDeclineIsVisibleAtTheHandlerSeam:
     """The unit-level shape of the degrade the report rows above are built
     from, asserted without a whole `apply()` run."""
 
-    def test_the_gate_returns_a_degrade_and_never_composes_the_op(
+    def test_a_choke_point_refusal_returns_a_degrade_and_keeps_the_successor(
         self, tmp_path, monkeypatch
     ):
+        """Renamed from `..._never_composes_the_op` (2026-09-12).
+
+        The op IS composed now, deliberately: this wrapper stopped pre-empting
+        the decision, and `handoff_archive_transition`'s own
+        `mode == "supersede"` block makes the call. Asserting "never composed"
+        pinned the early return that made a never-claimed predecessor
+        unfixable -- the DoE-claude defect. What this guard is actually for is
+        unchanged and asserted below: a refusal comes back as a DEGRADE, and
+        the successor this run minted survives it."""
         from coordinator_core.test_baton_assemble import (
             _render_real_scaffold,
             _write_artifact,
@@ -337,7 +404,26 @@ class TestTheDeclineIsVisibleAtTheHandlerSeam:
 
         def _fake_invoke(op_name, params, repo_root):
             calls.append((op_name, params))
-            return {"exit_code": 0, "superseded": True, "moved": True}
+            return {
+                "exit_code": 1,
+                "transition": {
+                    "exit_code": 1,
+                    "superseded": False,
+                    # The STRUCTURED discriminator is what apply keys on. It is
+                    # set on every `mode='supersede'` choke-point refusal; the
+                    # prose beside it is the op's to reword freely, which is
+                    # exactly why the wrapper no longer prefix-matches it.
+                    "choke_point_refusal": True,
+                    "error": (
+                        "mode='supersede' refused: state/handoffs/predecessor.md "
+                        "was never claimed or shipped, and the attested succession "
+                        "(DR-242 Amendment A2 section 7.3) was not admitted — "
+                        "clause 3 (identity-checked edge): this predecessor carries "
+                        "handoff_id 'hnd-pred-1a2b4c' but the successor carries no "
+                        "'predecessor_id' to check it against"
+                    ),
+                },
+            }
 
         monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _fake_invoke)
 
@@ -345,13 +431,18 @@ class TestTheDeclineIsVisibleAtTheHandlerSeam:
             [_PRED_REL, successor_rel, successor_rel], tmp_path
         )
 
-        assert calls == [], "the op must never be composed behind a DR-242 decline"
-        assert successor_abs.exists()
+        assert len(calls) == 1, "the wrapper now composes and lets the op decide"
+        # The attestation is a ContextVar, not a param -- there is deliberately
+        # no `attested_succession` key to assert on. `test_archive_transition_
+        # attested_succession.py` pins that a supplied param is IGNORED.
+        assert "attested_succession" not in calls[0][1]["transition"]
+        assert successor_abs.exists(), (
+            "a choke-point refusal must not delete the successor this run minted"
+        )
         assert result["result"] is None
-        assert result["degraded"] == {
-            "reason": "predecessor-not-claimed-or-shipped",
-            "predecessor": _PRED_REL,
-        }
+        assert result["degraded"]["reason"] == "predecessor-not-claimed-or-shipped"
+        assert result["degraded"]["predecessor"] == _PRED_REL
+        assert "clause 3" in result["degraded"]["error"]
 
 
 class TestAKilledArchiveTransitionDegradesToo:

@@ -176,7 +176,30 @@ class TestRegisterWorkspace:
 
         local_md = (tmp_path / "coordinator.local.md").read_text(encoding="utf-8")
         assert "vcs_mirror: p4" in local_md
-        assert not any(k.endswith(".port") is False and "vcs_mirror" in k for k in recorded)
+        assert not any("vcs_mirror" in k for k in recorded)
+
+    def test_repo_key_is_readable_from_coordinator_local_md(
+        self, monkeypatch, tmp_path
+    ):
+        """Every identity lookup is keyed `p4.<repo_key>.*`, so a caller that
+        cannot obtain the key cannot reach the machine-local store at all.
+        The key is repo-true and identical on every box — and it cannot live
+        in the registry it is needed to read."""
+        recorded: dict = {}
+        self._patch_confirm_and_registry(monkeypatch, str(tmp_path), recorded)
+
+        register._register_workspace(
+            {
+                "repo_key": "p4-studio/fifa-main",
+                "repo_root": str(tmp_path),
+                "port": "ssl:p4.example.com:1666",
+                "user": "agent",
+                "client": "agent-ws",
+            }
+        )
+
+        local_md = (tmp_path / "coordinator.local.md").read_text(encoding="utf-8")
+        assert "p4_repo_key: p4-studio/fifa-main" in local_md
 
     def test_gitattributes_conflict_refuses_loudly(self, monkeypatch, tmp_path):
         (tmp_path / ".gitattributes").write_text(

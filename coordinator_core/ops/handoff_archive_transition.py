@@ -293,6 +293,7 @@ import sys
 import asyncio
 import logging
 import tempfile
+from contextvars import ContextVar
 from pathlib import Path
 from typing import List, Optional
 
@@ -578,6 +579,217 @@ def _current_continued_into(handoff_abs: Path) -> Optional[str]:
     supersession before the new gate is ever evaluated.
     """
     return _current_fm_field(handoff_abs, "continued_into")
+
+
+def _frontmatter_text_or_empty(path: Path) -> str:
+    """Return `path`'s raw frontmatter block text, or "" on any read/parse miss.
+
+    Thin wrapper over `split_frontmatter` for the attested-succession
+    admission check below, which reads a SUCCESSOR's frontmatter (a file
+    other than the one this op's other accessors operate on) rather than the
+    candidate predecessor `_current_fm_field` and friends are scoped to.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    split = split_frontmatter(text)
+    return split.fm_text if split is not None else ""
+
+
+_APPLY_MINTED_SUCCESSOR: "ContextVar[str | None]" = ContextVar(
+    "coordinator_apply_minted_successor", default=None
+)
+"""The repo-relative successor path the CURRENT PROCESS's own `baton_assemble.apply`
+run minted at d1, set only by `_dispatch_handoff_supersede_predecessor` around its
+own composition of this op and cleared in its `finally`.
+
+This is the attestation, and it is deliberately NOT a parameter.
+
+A parameter is forgeable. `handoff.archive_transition`'s `_handler` is reachable
+from the generic dispatch surface via `housekeeping.cycle`, which forwards
+`params["transition"]` VERBATIM (`coordinator_core/housekeeping/cycle.py`), so
+`python -m coordinator_core.invoke housekeeping.cycle '{"transition":{...}}'`
+would carry any boolean a caller cared to type. That was a real hole, not a
+hypothetical one: it was reached and confirmed by probe on 2026-09-12, and it
+would have reopened DR-242 § 3 — a speculative successor-named child whose author
+also wrote matching `predecessor:`/`predecessor_id:` fields would have been enough.
+
+A ContextVar cannot cross that boundary. The generic dispatch runs in its own
+process where nothing has set this, so it reads `None` and the door stays shut.
+In-process, only apply's d6 sets it.
+
+It holds the PATH rather than a boolean for a second reason: the admission below
+requires it to EQUAL the `continued_into` being stamped, so even in-process the
+attestation cannot be redirected to some other successor.
+
+Negative-spec: do NOT add a parameter that sets this, and do NOT read
+`params.get("attested_succession")` — an earlier cut did, and that is the defect
+this shape exists to close.
+"""
+
+
+def _attested_succession_refusal(
+    contained: Path, continued_into: str, worktree: Path
+) -> Optional[str]:
+    """DR-242 Amendment A2 section 7.3's admission clauses as they apply to the
+    ENGINE-attested door, fail-closed on any indeterminacy. Returns the text of
+    the first clause that fails, or None when the attested succession is
+    admitted.
+
+    Clauses 1, 3 and 4 are implemented as A2 drafts them, with clause 3
+    TIGHTENED to fail closed. Clause 2 is discharged by provenance rather than
+    re-checked — A2 drafted it for an operator door, and applied literally here
+    it refuses the very case section 7.1 exists to close. The clause-2 note
+    below carries the full reasoning; do not "restore" the check without
+    reading it.
+
+    Reached ONLY from the `mode == "supersede"` block below, and only on the
+    branch where `claimed_or_shipped_at_path(contained)` already returned
+    False AND the caller passed `attested_succession=True` — never on the
+    ordinary claimed-or-shipped path, and never for a caller that did not ask
+    for this door. `claimed_or_shipped_at_path` itself is NOT called here and is
+    NOT widened anywhere — clause 2 is discharged by PROVENANCE on this door;
+    see its own note below. That predicate stays the first gate every caller
+    passes, this door included: it is read on the predecessor before
+    `attested_succession` is ever consulted.
+
+    Clause 5 (§ 7.3: "the attestation is recorded in the artifact — who
+    asserted it, when, and under which session") is deliberately not checked
+    here — see the module docstring's own note and DR-242 section 7.3's
+    landed-shape divergence: `attested_succession` is an ENGINE fact (this
+    run minted or owns the successor — see `baton_assemble.apply`'s
+    `_dispatch_handoff_supersede_predecessor`), not an operator assertion, so
+    there is no operator identity to record. Clause 5 as drafted answers a
+    question this landing's narrower shape does not raise.
+
+    Negative-spec:
+      - Does NOT accept a `--force`-shaped override; every clause below is
+        evidence read off a durable record, never a bare caller assertion.
+      - Does NOT widen what `claimed_or_shipped_at_path` itself considers
+        claimed-or-shipped. That predicate is byte-unchanged.
+      - Is NOT reachable by an unattended sweep or an operator, and this is
+        enforced by the TRANSPORT, not by caller discipline: the attestation is
+        a process-local ContextVar (`_APPLY_MINTED_SUCCESSOR`), so a caller in
+        another process reads `None` however it dresses its params. An earlier
+        cut claimed the same property for a parameter on the grounds that only
+        apply passed it; that claim was false and was reached by probe through
+        `housekeeping.cycle`'s verbatim passthrough. This is what makes
+        discharging clause 2 by provenance safe HERE and unsafe on the operator
+        door A2 drafted.
+    """
+    # Clause 1: continued_into is supplied and resolves to a real, existing
+    # successor record.
+    candidate = (continued_into or "").strip()
+    if not candidate:
+        return "clause 1 (continued_into names a real successor): empty"
+    successor_p = Path(candidate)
+    if not successor_p.is_absolute():
+        successor_p = worktree / successor_p
+    try:
+        successor_resolved = successor_p.resolve()
+    except OSError:
+        return (
+            f"clause 1 (continued_into names a real successor): "
+            f"{candidate!r} could not be resolved"
+        )
+    if not successor_resolved.is_file():
+        return (
+            f"clause 1 (continued_into names a real successor): "
+            f"{candidate!r} does not exist on disk"
+        )
+
+    # Clause 2 is DISCHARGED BY PROVENANCE on this door, not re-checked. A2
+    # drafts it for an OPERATOR door; applied literally here it refuses every
+    # case this door exists for, because a successor apply minted seconds ago is
+    # `status: open` by construction. Full reasoning: DR-242 section 7 header.
+    #
+    # Negative-spec: do NOT "restore" a literal clause-2 check. It looks like
+    # fidelity to A2 and it reintroduces the DoE-claude defect;
+    # `test_admits_a_never_claimed_predecessor_and_a_freshly_minted_successor`
+    # is the pin. Clause 3 below is FAIL-CLOSED on the id pair to carry the
+    # exclusion clause 2 was doing.
+
+    # Clause 3: the edge is identity-checked, not name-matched.
+    successor_fm = _frontmatter_text_or_empty(successor_resolved)
+    successor_predecessor = (
+        read_fm_field_unquoted(successor_fm, "predecessor") or ""
+    ).strip()
+    if not successor_predecessor or successor_predecessor.lower() in ("none", "null", "~"):
+        return (
+            "clause 3 (identity-checked edge): successor names no "
+            "'predecessor:' pointer"
+        )
+    named_path = Path(successor_predecessor.replace("\\", "/"))
+    if not named_path.is_absolute():
+        named_path = worktree / named_path
+    try:
+        named_resolved = named_path.resolve()
+    except OSError:
+        return (
+            "clause 3 (identity-checked edge): successor's 'predecessor:' "
+            f"pointer {successor_predecessor!r} does not resolve"
+        )
+    try:
+        contained_resolved = contained.resolve()
+    except OSError:
+        contained_resolved = contained
+    if named_resolved != contained_resolved:
+        return (
+            "clause 3 (identity-checked edge): successor's 'predecessor:' "
+            f"names {successor_predecessor!r}, not this predecessor — "
+            "declining rather than guessing"
+        )
+    predecessor_fm = _frontmatter_text_or_empty(contained)
+    predecessor_handoff_id = (
+        read_fm_field_unquoted(predecessor_fm, "handoff_id") or ""
+    ).strip()
+    successor_predecessor_id = (
+        read_fm_field_unquoted(successor_fm, "predecessor_id") or ""
+    ).strip()
+    # Fail-closed, not fail-open: an ABSENT id on either side refuses. See the
+    # compensating-tightening note under clause 2 -- with clause 2 discharged
+    # by provenance, this pair is the whole of what excludes a speculative
+    # successor-named child, and a check that passes on a missing field is not
+    # an identity check.
+    # A predecessor with NO `handoff_id` is not a refusal. DR-102's backfill
+    # explicitly grandfathered `archive/handoffs/`, and mode="supersede"'s common
+    # call shape IS an already-archived predecessor (the boot sweep archives it
+    # before d6 runs), so a pre-backfill vintage legitimately has no id to check
+    # against. Refusing there would reproduce the exact stranding this amendment
+    # closes, for that predecessor shape alone -- the id pair carries the edge
+    # only when there IS an id to carry it. The path-identity check above has
+    # already run unconditionally and is what holds in that case.
+    #
+    # What stays fail-closed is the DISAGREEMENT and the half-present case below:
+    # a predecessor that HAS an id and a successor that names a different one, or
+    # names none, is a mismatch, not a vintage.
+    if predecessor_handoff_id and not successor_predecessor_id:
+        return (
+            "clause 3 (identity-checked edge): this predecessor carries "
+            f"handoff_id {predecessor_handoff_id!r} but the successor carries no "
+            "'predecessor_id' to check it against"
+        )
+    if predecessor_handoff_id and predecessor_handoff_id != successor_predecessor_id:
+        return (
+            "clause 3 (identity-checked edge): successor's 'predecessor_id' "
+            f"{successor_predecessor_id!r} disagrees with this predecessor's "
+            f"own 'handoff_id' {predecessor_handoff_id!r}"
+        )
+
+    # Clause 4: predecessor-side evidence always takes precedence — a
+    # predecessor already carrying its own continued_into is decided by that
+    # field, never by the attestation.
+    existing_continued_into = _current_continued_into(contained)
+    if existing_continued_into and existing_continued_into.strip() != candidate:
+        return (
+            "clause 4 (predecessor-side evidence takes precedence): this "
+            f"predecessor already carries continued_into={existing_continued_into!r} "
+            f"— an attestation naming {candidate!r} may not override recorded "
+            "predecessor-side evidence"
+        )
+
+    return None
 
 
 def _sha_canonically_matches(supplied: str, prior_value: str) -> bool:
@@ -1176,6 +1388,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     )
     successor_path_raw: str = (params.get("successor_path") or "").strip()
     restage_src_opt_in: bool = bool(params.get("restage_src", False))
+    # DR-242 Amendment A2 section 7.3. Read off a process-local ContextVar, never
+    # off `params` -- see `_APPLY_MINTED_SUCCESSOR`'s own docstring for why a
+    # parameter here is forgeable through `housekeeping.cycle`'s verbatim
+    # passthrough. A caller that supplies an `attested_succession` key is
+    # IGNORED, deliberately and silently: it was never a supported input.
+    attested_successor: str | None = _APPLY_MINTED_SUCCESSOR.get()
     # DR-096 (2026-07-26): stamp_shipped_in's `kind` param is now required at
     # the choke point, with no default. This module never invents its own
     # scope: paths — a caller-supplied `stamp_sha` (params["sha"]) is, by
@@ -1308,13 +1526,30 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         from coordinator_core.archival import claimed_or_shipped_at_path
 
         if not claimed_or_shipped_at_path(str(contained)):
-            out = _err(
-                f"mode='supersede' refused: {rel_id} was never claimed or shipped "
-                "(DR-242: a successor-named child is not evidence of succession; "
-                "nothing to supersede)"
-            )
-            out["mode"] = mode
-            return out
+            if attested_successor is None or attested_successor != (
+                continued_into or ""
+            ).strip():
+                out = _err(
+                    f"mode='supersede' refused: {rel_id} was never claimed or shipped "
+                    "(DR-242: a successor-named child is not evidence of succession; "
+                    "nothing to supersede)"
+                )
+                out["mode"] = mode
+                out["choke_point_refusal"] = True
+                return out
+            refusal = _attested_succession_refusal(contained, continued_into, worktree)
+            if refusal is not None:
+                out = _err(
+                    f"mode='supersede' refused: {rel_id} was never claimed or shipped, "
+                    "and the attested succession (DR-242 Amendment A2 section 7.3) was "
+                    f"not admitted — {refusal}"
+                )
+                out["mode"] = mode
+                out["choke_point_refusal"] = True
+                return out
+            # Admitted under DR-242 Amendment A2 section 7.3 — every clause
+            # held, so this attested succession proceeds exactly as a
+            # claimed-or-shipped predecessor would from here on.
 
         # ------------------------------------------------------------------
         # Closed-baton-is-terminal gate (docs/plans/2026-08-13-closed-
@@ -1359,6 +1594,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "wrong, reopen it first"
             )
             out["mode"] = mode
+            out["choke_point_refusal"] = True
             return out
 
     do_stamp = mode in ("stamp_shipped", "supersede")

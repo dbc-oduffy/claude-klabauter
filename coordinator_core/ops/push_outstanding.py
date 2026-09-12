@@ -143,6 +143,36 @@ already falls through on. This module does not open a second, more
 expensive path just to establish a range in those cases -- it pushes
 normally, unmodified, deferring entirely to `push_with_retry`/the
 installed hook, the same "correctness first" default as arm 3 above.
+
+THE P4 LEG (C3, D4) -- one p4 leg of this op, run behind
+`coordinator_core.p4.workspace.is_p4_repo` (D1's marker, zero spawns when
+absent) with a function-local import of `coordinator_core.p4.shelve` so a
+git-only repo never imports the p4 package at all (C4's isolation
+guarantee). It is ADDITIVE, not "instead of" the git leg above: it runs
+after the git leg in every case, including the git leg's own zero-spawn
+`push:nothing-outstanding` return, EXCEPT when the git leg's outcome
+carries `push:no-remote` -- gated on no-remote, never no-upstream, because
+no-upstream is also the ordinary first push of a brand-new branch against a
+perfectly good remote (see the no-upstream-ref note above); gating on it
+would silently never shelve a marker repo's new branches.
+
+The leg's own no-op check -- session meta's `p4_shelved_sha == head_sha` --
+runs BEFORE the git leg's zero-spawn no-op return, not after: a marker repo
+whose commits were already published by a prior tick, an auto_push, or a
+peer's push must still shelve even though the git leg sees nothing
+outstanding. Equal means the shelve is already current and the whole leg
+returns at zero p4 spawns.
+
+The leg needs `session_id` (optional on this function and the op handler)
+to resolve the session's `meta.json` (CL, base sha, prior shelve state) --
+absent, it records `push.outstanding.p4:no-session` and spends zero p4
+spawns; this is the cadence-surface shape, which calls with no session
+identity at all.
+
+Its own telemetry class is `push.outstanding.p4`, a third arm beside
+`_ARM_NOOP`/`_ARM_NETWORK` below. The git-only arm (`_ARM_NOOP`/
+`_ARM_NETWORK` and the git leg's own decision logic) is untouched by any of
+this.
 """
 
 from __future__ import annotations
@@ -166,6 +196,7 @@ from coordinator_core.hooks.auto_push import (
     _cockpit_publish_script,
     _maybe_publish_cockpit_contract,
 )
+from coordinator_core.session.core import session_dir
 
 __all__ = ["push_outstanding"]
 
@@ -178,6 +209,13 @@ __all__ = ["push_outstanding"]
 #: over 500ms), and no percentile computed over that name describes either.
 _ARM_NOOP = "push.outstanding.noop"
 _ARM_NETWORK = "push.outstanding.network"
+#: C3, D4 -- the p4 leg's own telemetry identity, a third arm beside the
+#: two above. `_ARM_P4_NO_SESSION` is its own op name (not a shared arm
+#: carrying a label) so a session-less cadence call -- the population this
+#: exists to make legible -- is distinguishable at the census level from a
+#: session-supplied shelve/refusal without parsing `error_kind`.
+_ARM_P4 = "push.outstanding.p4"
+_ARM_P4_NO_SESSION = "push.outstanding.p4:no-session"
 
 
 def _record_arm_latency(arm_op: str, t_start: float, root: Path) -> None:
@@ -200,6 +238,119 @@ def _record_arm_latency(arm_op: str, t_start: float, root: Path) -> None:
         )
     except Exception:
         pass
+
+
+def _is_p4_repo(root: Path) -> bool:
+    """D1's marker check, duplicated from `workspace.is_p4_repo` rather than
+    called through it -- importing `coordinator_core.p4.workspace` at all
+    imports the `coordinator_core.p4` PACKAGE (its `__init__` pulls in
+    `runner` too), which is exactly what C4's isolation test asserts never
+    happens for a git-only repo. This reads the same key with the same
+    primitive `workspace.is_p4_repo` itself uses
+    (`resolve_validation_cmd.cs_read_local_md_key`), so the two can never
+    disagree, without paying the import."""
+    from coordinator_core.resolve_validation_cmd import cs_read_local_md_key
+
+    return cs_read_local_md_key(str(root), "vcs_mirror").strip() == "p4"
+
+
+def _p4_leg_precheck(root: Path, session_id: Optional[str]) -> Optional[dict]:
+    """The p4 leg's zero-spawn phase (C3, D4) -- runs BEFORE the git leg's
+    own zero-spawn no-op return, textually and at call time (see the two
+    call sites in `push_outstanding` below). Behind `_is_p4_repo` (D1's
+    marker, zero spawns when absent); `coordinator_core.p4.workspace` is
+    imported here ONLY once the marker is confirmed present, so a git-only
+    repo never imports the p4 package at all (C4's isolation guarantee).
+
+    Returns `None` when the deferred, spawn-bearing phase
+    (`_p4_leg_execute`) has nothing to do -- not a marker repo, no
+    `session_id` (recorded as `push.outstanding.p4:no-session`, zero p4
+    spawns), or the shelve is already current (`p4_shelved_sha ==
+    head_sha`, zero p4 spawns). A non-`None` return carries the session dir
+    and prior state `_p4_leg_execute` needs, so that call does not
+    re-derive them.
+    """
+    if not _is_p4_repo(root):
+        return None
+
+    from coordinator_core.p4 import workspace
+
+    if session_id is None:
+        _record_arm_latency(_ARM_P4_NO_SESSION, time.time(), root)
+        return None
+
+    sdir = session_dir(session_id, cwd=str(root))
+    state = workspace.session_change(sdir)
+    current_head = head_sha(root)
+    if state["p4_shelved_sha"] is not None and state["p4_shelved_sha"] == current_head:
+        return None
+
+    return {"sdir": sdir, "state": state}
+
+
+def _p4_leg_execute(
+    pending: Optional[dict], root: Path, session_id: Optional[str], git_skipped_no_remote: bool
+) -> None:
+    """The p4 leg's spawn-bearing phase (C3, D4) -- additive after the git
+    leg in every case EXCEPT `push:no-remote` (gated on no-remote, never
+    no-upstream -- see module docstring). `pending` is `None` on any of
+    `_p4_leg_precheck`'s zero-spawn short-circuits, in which case this is a
+    no-op. Never raises: a classified p4 refusal or an unregistered
+    workspace is recorded on the telemetry arm and swallowed here, matching
+    `shelve.shelve_outstanding`'s own "never raises into the git leg"
+    contract one layer up.
+    """
+    if pending is None or git_skipped_no_remote:
+        return
+
+    t_start = time.time()
+    # Dotted-module import, not `from coordinator_core.p4 import
+    # session_change` -- the package re-exports `workspace.session_change`
+    # (the D9 reader function) under that same attribute name, which would
+    # shadow the submodule and hide `ensure_session_change`/
+    # `_resolve_repo_key` (see `p4/shelve.py`'s own note on this).
+    import coordinator_core.p4.session_change as p4_session_change
+    from coordinator_core.p4 import shelve as p4_shelve
+    from coordinator_core.p4 import workspace
+
+    try:
+        repo_key = p4_session_change._resolve_repo_key(str(root))
+        identity = workspace.identity(repo_key)
+        cl = p4_session_change.ensure_session_change(str(root), session_id)
+        base_sha = pending["state"]["p4_base_sha"] or head_sha(root)
+        outcome = p4_shelve.shelve_outstanding(
+            str(root), session_id, pending["sdir"], identity, cl, base_sha
+        )
+    except Exception as exc:  # noqa: BLE001 -- never raises into the git leg
+        try:
+            from coordinator_core.telemetry.op_latency import record_op_latency
+
+            record_op_latency(
+                op=_ARM_P4,
+                t_start=t_start,
+                elapsed_ms=(time.time() - t_start) * 1000.0,
+                outcome="error",
+                repo_root=root,
+                error_kind=type(exc).__name__,
+            )
+        except Exception:
+            pass
+        return
+
+    try:
+        from coordinator_core.telemetry.op_latency import record_op_latency
+
+        record_op_latency(
+            op=_ARM_P4,
+            t_start=t_start,
+            elapsed_ms=(time.time() - t_start) * 1000.0,
+            outcome="ok" if outcome.ok else "error",
+            repo_root=root,
+            error_kind=None if outcome.ok else (outcome.error.kind if outcome.error else None),
+        )
+    except Exception:
+        pass
+
 
 #: `.gitattributes`, repo-root only -- this predicate answers "can this
 #: repo's push range carry an LFS-tracked path at all", not the precise
@@ -344,6 +495,7 @@ def push_outstanding(
     protected_branch_override_reason: Optional[str] = None,
     budget_secs: float = PUSH_RETRY_BUDGET_SECS,
     decide_only: bool = False,
+    session_id: Optional[str] = None,
 ) -> PushOutcome:
     """Push `worktree_root`'s current branch iff it is ahead of its own
     upstream tracking ref -- decided at zero git spawns (see module
@@ -426,9 +578,17 @@ def push_outstanding(
     op is judged on -- letting a measurement harness append to the census it
     is measuring is how a population gets quietly reshaped by whoever
     profiled it most recently.
+
+    `session_id` (C3, D4) -- optional; the p4 leg runs only when it is
+    supplied, since it is what resolves the session's `meta.json` (CL, base
+    sha, prior shelve state). A `decide_only` call never reaches the p4
+    leg either -- same "instrument, not an invocation" rule as above, since
+    the leg's `reconcile`/`revert`/`shelve` sequence mutates p4 state.
     """
     root = Path(worktree_root)
     arm_t_start = time.time()
+
+    p4_pending = None if decide_only else _p4_leg_precheck(root, session_id)
 
     branch = head_branch(root)
     current_sha = head_sha(root) if branch is not None else None
@@ -439,6 +599,7 @@ def push_outstanding(
         if upstream_sha is not None and upstream_sha == current_sha:
             if not decide_only:
                 _record_arm_latency(_ARM_NOOP, arm_t_start, root)
+            _p4_leg_execute(p4_pending, root, session_id, git_skipped_no_remote=False)
             return PushOutcome(exit_code=0, skipped=["push:nothing-outstanding"])
 
     lfs_note: list[str] = []
@@ -460,6 +621,10 @@ def push_outstanding(
     )
     if lfs_note:
         outcome.skipped.extend(lfs_note)
+
+    _p4_leg_execute(
+        p4_pending, root, session_id, git_skipped_no_remote="push:no-remote" in outcome.skipped
+    )
 
     # Fire the cockpit-contract publish on a genuinely LANDED push -- read
     # from the OUTCOME, never the pre-call sha pair (see module/brief note:
@@ -518,9 +683,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             and recording no telemetry arm. See `push_outstanding`'s own
             docstring; this is how a caller asks "would you push?" without
             a remote moving.
+        session_id (str) -- (C3, D4) the calling session's id. The p4 leg
+            (marker repos only) runs only when this is present; absent, it
+            is recorded as `push.outstanding.p4:no-session` and the leg
+            spends zero p4 spawns -- the cadence-surface shape, which calls
+            with no session identity at all.
 
-    Neither adds an override surface of its own; see `push_with_retry`'s
-    docstring for what they mean and what they still refuse.
+    None of these adds an override surface of its own; see
+    `push_with_retry`'s docstring for what they mean and what they still
+    refuse.
 
     repo_root:
         The git common dir (from `_OP_KEY_SCOPE = "common_dir"`). The worktree
@@ -613,6 +784,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             params.get("protected_branch_override_reason") or None
         ),
         decide_only=bool(params.get("decide_only") or False),
+        session_id=params.get("session_id") or None,
     )
 
     return {

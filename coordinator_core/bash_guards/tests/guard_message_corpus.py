@@ -688,6 +688,24 @@ def _rehomed_subagent_bash_ban_setup(
     return dict(_EXECUTOR_IDENTITY)
 
 
+def _p4_verb_fence_setup(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, str]:
+    """`p4-verb-fence` (C6, docs/plans/2026-09-12-perforce-second-class-
+    commit-and-shelve.md) is MARKER-GATED (D1): `check()` returns allow
+    immediately for any repo whose `coordinator.local.md` does not declare
+    `vcs_mirror: p4`, before any command-text parsing runs. Declaring the
+    marker in the scratch dir (which `fire_row` also uses as `cwd` by
+    default) is the only setup this guard needs -- its own `_find_repo_
+    root_no_spawn` walk starts at `cwd` itself, so no subdirectory nesting
+    is required."""
+    (scratch_dir / "coordinator.local.md").write_text(
+        "---" + chr(10) + "vcs_mirror: p4" + chr(10) + "---" + chr(10),
+        encoding="utf-8",
+    )
+    return {}
+
+
 def _rehomed_subagent_spawn_shapes_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -1183,6 +1201,32 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
         _DENY,
         False,
+    ),
+    # `p4-verb-fence` (dispatch.py, C6/D6/D7/S4 of docs/plans/2026-09-12-
+    # perforce-second-class-commit-and-shelve.md) landed at a26acc982f with
+    # no corpus row -- the same coverage-gap shape as `block-fleet-
+    # delegation-creation` above. Marker-gated (D1), so `setup` declares
+    # `vcs_mirror: p4` in the scratch cwd `fire_row` already provides;
+    # verb-matching (not a literal-string match), so the firing cell uses
+    # a global-flag-bearing `p4.exe -p <port> ... submit` invocation, not a
+    # bare `p4 submit`, to prove the parsed-verb classifier is what denies.
+    CorpusRow(
+        "p4-verb-fence",
+        "p4-verb-fence-fire",
+        "p4.exe -p ssl:host:1666 -c client submit",
+        True,
+        _DENY,
+        False,
+        setup=_p4_verb_fence_setup,
+    ),
+    CorpusRow(
+        "p4-verb-fence",
+        "p4-verb-fence-control",
+        "p4 info",
+        False,
+        _DENY,
+        False,
+        setup=_p4_verb_fence_setup,
     ),
 ]
 
@@ -2873,6 +2917,80 @@ def _wg_session_display_name_as_identifier_fire(
     }
 
 
+def _wg_p4_checkout_before_edit_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """Fires `p4_checkout_before_edit.check`: a READ-ONLY target in a
+    marker (`vcs_mirror: p4`) repo. Patched exactly as this guard's own
+    `_ReadOnlyFixture.setup` (`test_p4_checkout_before_edit.py`) patches
+    it -- `resolve_repo_root`/`workspace.is_p4_repo`/`_resolve_repo_key`/
+    `workspace.identity`/`ensure_session_change` all stubbed so the only
+    live call is `runner.run`, faked here to a `binary` headType (the
+    simplest deny leg: one fstat spawn, no edit spawn, D5's own
+    'binary is a type property, not a lock' reading). This exercises the
+    guard's own applicability gates (marker + not-writable), not a real p4
+    spawn -- same isolation `CorpusRow`/`WriteGuardRow` rows use elsewhere
+    in this module."""
+    import os
+    import stat as _stat
+
+    from coordinator_core.p4 import runner as _runner, workspace as _workspace
+    from coordinator_core.write_guards import p4_checkout_before_edit as guard_mod
+
+    target = scratch_dir / "locked.txt"
+    target.write_text("hi", encoding="utf-8")
+    os.chmod(target, _stat.S_IREAD)
+
+    mp.setattr(guard_mod, "resolve_repo_root", lambda cwd: str(scratch_dir))
+    mp.setattr(_workspace, "is_p4_repo", lambda root: True)
+    mp.setattr(guard_mod, "_resolve_repo_key", lambda root: "p4-studio/probe")
+    mp.setattr(
+        _workspace,
+        "identity",
+        lambda repo_key: _workspace.P4Identity(
+            port="p4.example.com:1666", user="bob", client="bob-ws", client_root="/root"
+        ),
+    )
+    mp.setattr(guard_mod, "ensure_session_change", lambda root, sid: 101)
+    mp.setattr(
+        _runner,
+        "run",
+        lambda *a, **kw: _runner.P4Result(ok=True, stdout="... headType binary\n"),
+    )
+
+    return {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(target)},
+        "cwd": str(scratch_dir),
+        "session_id": "guard-message-corpus-p4-checkout",
+    }
+
+
+def _wg_p4_checkout_before_edit_control(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """Non-firing control: a WRITABLE target in the same marker repo.
+    `_is_writable` short-circuits to allow before any p4 spawn, so
+    `runner.run` is left unpatched here -- a real spawn would prove the
+    zero-spawn-on-writable contract broken, not merely fail the test the
+    hard way."""
+    from coordinator_core.p4 import workspace as _workspace
+    from coordinator_core.write_guards import p4_checkout_before_edit as guard_mod
+
+    target = scratch_dir / "writable.txt"
+    target.write_text("hi", encoding="utf-8")
+
+    mp.setattr(guard_mod, "resolve_repo_root", lambda cwd: str(scratch_dir))
+    mp.setattr(_workspace, "is_p4_repo", lambda root: True)
+
+    return {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(target)},
+        "cwd": str(scratch_dir),
+        "session_id": "guard-message-corpus-p4-checkout-control",
+    }
+
+
 WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_completion_monolith_write", "fire", True, _wg_completion_monolith_fire),
     WriteGuardRow("block_completion_monolith_write", "control", False, _wg_benign),
@@ -3079,6 +3197,18 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
             "AC2-registration-only: same sibling-checkout dependency as "
             "validate_frontmatter_schema_advisory above."
         ),
+    ),
+    # C5 (D5, docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md),
+    # landed at 4fb4c84f4f with no corpus row -- the same coverage-gap shape
+    # as p4-verb-fence's own gap above. Fire: a read-only target in a marker
+    # repo (binary headType, the simplest one-spawn deny leg). Control: a
+    # writable target in the same marker repo, which allows with zero p4
+    # spawns per D5's own "writable... allows with zero spawns" contract.
+    WriteGuardRow(
+        "p4_checkout_before_edit", "fire", True, _wg_p4_checkout_before_edit_fire
+    ),
+    WriteGuardRow(
+        "p4_checkout_before_edit", "control", False, _wg_p4_checkout_before_edit_control
     ),
 ]
 

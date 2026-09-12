@@ -2476,46 +2476,85 @@ _RESET_MODE_FLAGS = ("--hard", "--soft", "--mixed", "--keep", "--merge")
 
 
 def _git_reset_invocation(seg: str) -> bool:
-    """True when `reset` is actually git's SUBCOMMAND in this segment.
+    r"""True when `reset` is git's SUBCOMMAND in this segment, or when the
+    segment is too ambiguous to rule that out.
 
-    A bare `\\breset\\b` scan is not that, and the difference is a hard deny on
-    prose. Measured 2026-09-12: a `python - <<'PY'` heredoc writing a YAML
-    sizing object was blocked because its body said "it resets an engine_root
-    process memo", the word `git` appeared elsewhere in the same body, and a
-    `$(...)` pair appeared later still — three unrelated pieces of English that
-    CHECK 1's subshell arm read as one unverifiable `git reset --mixed`. The
-    heredoc body is deliberately KEPT visible to the prose scan (a Python body
-    can spawn), so no stripper removes it; the narrowing has to be here.
+    CHECK 1's gate was a bare `\breset\b` word match, which denied a 14.6KB
+    sizing command whose PROSE contained the word -- the operator is told
+    their read-only command is a destructive ref-move. The repair is
+    positional resolution, and it must be built on this module's existing
+    quote-aware walk rather than a fresh one: an earlier hand-rolled
+    `seg.split()` version of this function shipped and was caught in review
+    allowing `git 'reset' --hard HEAD~3`, `git re""set --hard`, `git r\eset
+    --hard` and `git -c user.name="John Doe" reset --hard` -- every one a real
+    shell construct that executes a genuine ref-move. A false negative here
+    orphans commits on a tree ~50 peer sessions share, so this predicate is
+    over-inclusive BY CONSTRUCTION and only ever narrows on a positive
+    resolution.
 
-    Not a coverage loss: with no `git ... reset` token sequence in the segment
-    there is no ref to move, so there is nothing for CHECK 1 to protect. Every
-    pre-subcommand option form still reaches it — `git -C <dir> reset --hard`,
-    `git -c k=v reset --soft`, `git --git-dir=<d> reset`.
+    Three answers, in strict order:
 
-    Tokenizes `seg` ONCE and walks forward from each `git` token's position,
-    rather than re-splitting the remaining tail per `git` occurrence: this
-    guard runs on every Bash tool call, and a multi-KB heredoc body mentioning
-    `git` several times made the per-occurrence re-split quadratic in segment
-    length. Review: overengineering-reviewer — single-pass tokenization keeps
-    the same coverage without the repeated whole-tail `.split()`.
+    - `_seg_resolved_git_subcommand` resolved a subcommand: trust it. That
+      walk is `shlex`-based, so quoting, concatenation and backslash forms
+      all normalize to the same token, and it consumes git's own global
+      options (`git -C <dir> reset`, `git -c k=v reset`).
+    - `_seg_confirmed_not_git_invocation`: the segment positively resolves to
+      an enumerated non-git, non-spawning utility, so no `reset` inside its
+      operands can be a subcommand. Same narrowing CHECK 2 already makes.
+    - Otherwise the segment is genuinely ambiguous -- unparseable, or a
+      heredoc whose body is not this command's argv -- and the original word
+      match stands unchanged.
+
+    NEGATIVE SPEC -- this does NOT fix the reported sizing-command denial.
+    That command is a `python - <<'PY'` heredoc whose prose contains the token
+    `subprocess`, so `_heredoc_body_has_spawn_indicator` keeps the body
+    visible (correctly: a Python body that can spawn really can run git), the
+    segment stays ambiguous, and the third branch denies on the prose
+    `reset`. That is NOT a stripper defect -- measured 2026-09-12,
+    `_strip_heredoc_bodies` reduces the same input 14661 -> 15 bytes.
+    Narrowing it would mean deciding a spawn-capable body does not spawn THIS
+    command, which needs a language parser rather than a token scan, and the
+    cost of guessing wrong is an orphaned commit on a shared tree. The
+    fixture at `tests/data/check1_reset_prose_false_positive.cmd.txt` is kept
+    as the reproduction, asserted as a known accepted false positive.
     """
-    tokens = seg.split()
-    for i, token in enumerate(tokens):
-        if not re.search(r"\bgit\b", token):
-            continue
-        index = i + 1
-        while index < len(tokens):
-            candidate = tokens[index]
-            if candidate == "reset":
-                return True
-            if candidate in _GIT_GLOBAL_OPT_WITH_ARG:
-                index += 2
-                continue
-            if candidate.startswith("-"):
-                index += 1
-                continue
-            break
-    return False
+    resolved = _seg_resolved_git_subcommand(seg)
+    if resolved is not None:
+        return resolved == "reset"
+    if _seg_confirmed_not_git_invocation(seg):
+        return False
+    return bool(re.search(r"\breset\b", seg))
+
+
+def _after_reset_slice(seg: str) -> str:
+    r"""The argv slice FOLLOWING git's `reset` subcommand -- the text CHECK 1
+    reads the reset TARGET out of.
+
+    Split quote-aware, not on a bare `reset` word. The regex fallback below
+    (`.*(^|\s)reset(\s|$)`) requires whitespace on both sides of the token,
+    so `git 'reset' --hard HEAD~3` matches nothing, `after` keeps the whole
+    segment, no target is extracted, and a real ref-move is allowed. Measured
+    2026-09-12 against a throwaway 4-commit repo: `git 'reset' --hard HEAD~3`,
+    `git "reset" --hard HEAD~3` and `git re""set --hard HEAD~3` were all
+    ALLOWED while the unquoted form denied -- identically before and after
+    that day's `_git_reset_invocation` rewrite, so this is the extractor's own
+    blind spot and not a regression in the invocation predicate.
+
+    Falls back to the original regex whenever `shlex` cannot resolve the
+    segment (unparseable, a heredoc, no command-position `git`). That keeps
+    the pre-existing over-inclusive behaviour on exactly the inputs it already
+    covered, and never trades a deny for an allow.
+    """
+    if "<<" not in seg and not _bt_exceeds_tokenizable_ceiling(seg):
+        try:
+            tokens = shlex.split(seg, posix=True)
+        except ValueError:
+            tokens = None
+        if tokens and _seg_resolved_git_subcommand(seg) == "reset":
+            for index, token in enumerate(tokens):
+                if token == "reset":
+                    return " " + " ".join(tokens[index + 1:])
+    return re.sub(r".*(^|\s)reset(\s|$)", " ", seg, count=1)
 
 
 def _reset_ref_moving_mode(seg: str):
@@ -2678,7 +2717,7 @@ def check_destructive_git_orphan(
         # `git reset` resolves target HEAD and counts zero.
         _reset_mode = _reset_ref_moving_mode(seg)
         if _reset_mode:
-            after = re.sub(r".*(^|\s)reset(\s|$)", " ", seg, count=1)
+            after = _after_reset_slice(seg)
             # A lone `$(`/backtick in `after` is not proof of a subshell-
             # resolved target: prose that NAMES the hazard (a markdown code
             # span, a comment, a string literal assembled elsewhere) can

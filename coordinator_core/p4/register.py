@@ -7,8 +7,8 @@ Spec backlink: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md
 Classified MUTATING (``coordinator_core.authz.classification``). Writes the
 machine-local ``p4.<repo_key>.{port,user,client,client_root}`` identity row
 (``registry_set`` — untracked, machine-local only), and separately writes the
-repo-true ``vcs_mirror: p4`` marker plus the two optional
-``p4_submit_tool``/``p4_checkout_tool`` slots into the repo's
+repo-true ``vcs_mirror: p4`` marker, the ``p4_repo_key`` read surface, plus
+the two optional ``p4_submit_tool``/``p4_checkout_tool`` slots into the repo's
 ``coordinator.local.md`` frontmatter (tracked, repo-true — never identity).
 It also authors ``.p4ignore`` (adds a ``.git/`` line so p4 never depot-adds
 the parallel git repo this op creates) and a UE-derived-artifact
@@ -341,7 +341,11 @@ def _register_workspace(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "than relying on it for full ignore semantics."
             )
 
-        local_md_keys = {"vcs_mirror": "p4"}
+        # `p4_repo_key` is the read surface for every `p4.<repo_key>.*`
+        # lookup. It belongs here rather than in the machine-local registry
+        # because the key needed to READ that registry cannot live inside
+        # it, and because the minted key is the same identity on every box.
+        local_md_keys = {"vcs_mirror": "p4", "p4_repo_key": repo_key}
         if submit_tool is not None:
             local_md_keys["p4_submit_tool"] = submit_tool
         if checkout_tool is not None:
