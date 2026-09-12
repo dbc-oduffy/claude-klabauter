@@ -283,6 +283,23 @@ _REGISTRY_NEW_FILE_HEADER = (
 )
 
 
+#: A TOML table or array-of-tables header line. Anchored to a whole line so a
+#: nested array value's continuation line (`[1, 2],`) never reads as one.
+_TOML_TABLE_HEADER_RE = re.compile(r"^[ \t]*\[\[?[^\]\n]+\]\]?[ \t]*(#.*)?$", re.MULTILINE)
+
+
+def _parse_toml_text_strict(text: str) -> dict:
+    """``tomllib.loads`` that RAISES on malformed content -- the post-write
+    check in ``registry_set`` must never mistake a corrupt rewrite for an
+    empty-but-valid one, which is exactly what ``_parse_toml_text``'s
+    degrade-to-``{}`` contract would do."""
+    try:
+        import tomllib as _tomllib  # type: ignore[import-not-found]
+    except ImportError:
+        import tomli as _tomllib  # type: ignore[no-redef]
+    return _tomllib.loads(text)
+
+
 def _parse_toml_text(text: str) -> dict:
     """Best-effort ``tomllib.loads`` over in-memory text — malformed content
     degrades to ``{}`` (mirrors ``_load_toml``'s own graceful-degradation
@@ -368,17 +385,46 @@ def registry_set(key: str, value: str) -> None:
     date_tag = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     new_line = f"\"{key}\" = '{value}'  # set {date_tag}"
 
+    # A root key must be written ABOVE the first `[table]` header. TOML scopes
+    # every key after a header into that table, so a key appended to the end
+    # of a file that ends in a table silently becomes `<table>.<key>` and
+    # never resolves at root (2026-09-12: six `p4.*` workspace keys landed
+    # under `[plugin.mirrors.example-retrieval-repo]` and every p4 edit was denied).
+    header = _TOML_TABLE_HEADER_RE.search(content)
+    root_end = header.start() if header else len(content)
+    root, tables = content[:root_end], content[root_end:]
+
     pattern = re.compile(r'^"' + re.escape(key) + r'"\s*=.*$', re.MULTILINE)
-    match = pattern.search(content)
-    if match:
+    match = pattern.search(root)
+    # Lines for this exact key found BELOW a header are earlier mis-scoped
+    # writes by this function: a root-namespace dotted key has no meaning
+    # inside a table. They are migrated out, not left trapped.
+    trapped = list(pattern.finditer(tables))
+    if match and not trapped:
         existing_value = _flatten(_parse_toml_text(content)).get(key)
         if existing_value == value:
             return  # already correct -- no-op, no write, no journal-worthy mutation
-        new_content = content[: match.start()] + new_line + content[match.end() :]
+    for m in reversed(trapped):
+        end = m.end() + 1 if tables[m.end():m.end() + 1] == "\n" else m.end()
+        tables = tables[: m.start()] + tables[end:]
+    if match:
+        root = root[: match.start()] + new_line + root[match.end() :]
+    elif header:
+        stripped = root.rstrip("\n")
+        root = (stripped + "\n" if stripped else "") + new_line + "\n\n"
     else:
-        if not content.endswith("\n"):
-            content += "\n"
-        new_content = content + new_line + "\n"
+        if root and not root.endswith("\n"):
+            root += "\n"
+        root = root + new_line + "\n"
+    new_content = root + tables
+
+    # Fail loud rather than silently re-scope: the rewrite must read back with
+    # this key at ROOT carrying the value just written, or nothing is replaced.
+    if _flatten(_parse_toml_text_strict(new_content)).get(key) != value:
+        raise ValueError(
+            f"registry_set({key!r}, ...): the rewritten {_REGISTRY_TARGET_FILE} does not "
+            "resolve this key at root; refusing to write it"
+        )
 
     tmp_path = target_path.with_name(target_path.name + f".tmp{os.getpid()}")
     tmp_path.write_text(new_content, encoding="utf-8", newline="\n")
