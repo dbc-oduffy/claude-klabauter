@@ -3494,6 +3494,25 @@ def _gate_cascade_clear(
                 "retired to blocking_notes)"
             )
 
+        # Review: coordinator-code-reviewer — re-check every blocker id's
+        # clearing verdict immediately before the write, not only once at the
+        # top of this closure (mirrors the same fix in _gate_add_blocker, its
+        # sibling with the identical shape). The gap between the first
+        # resolve and this write spans the whole NARROW/FLIP branch above; a
+        # peer could archive/delete a blocker record inside that window, and
+        # the dependent's own lock never covers the blocker's file. Re-running
+        # the same predicate right before the commit closes that window as
+        # far as it can be closed from inside one synchronous mutate call.
+        for blocker_id in blocker_ids:
+            clears, detail = _blocker_clears_gate(blocker_id, worktree)
+            if not clears:
+                raise MutateAbort(
+                    f"gate-cascade-clear: blocker {blocker_id!r} no longer clears "
+                    f"the gate ({detail}) — it did at the start of this write but "
+                    "not at the end; no write performed. Adjudicate the dependent "
+                    "instead: gate-recheck with cleared: true."
+                )
+
         # Post-mutation schema validation gate — raise MutateAbort to skip the write.
         errors = _validate_fm(fm)
         if errors:
@@ -3641,6 +3660,24 @@ def _gate_add_blocker(
                 fm = replace_fm_field(fm, "gate_dependency", joined)
             else:
                 fm = insert_fm_field(fm, "gate_dependency", joined, after_key="blocked_by")
+
+        # Review: coordinator-code-reviewer — re-check every blocker id's
+        # resolution immediately before the write, not only at the top of this
+        # closure. The first resolve (above) and this write are the two ends
+        # of the window a peer could archive/delete a blocker record in; the
+        # dependent's own lock never covers the blocker's file, so the only
+        # way to close that window is to make it as short as possible by
+        # re-reading right before the commit rather than trusting a resolve
+        # taken several statements earlier.
+        for blocker_id in blocker_ids:
+            state = _resolve_blocker_deployment_state(blocker_id, worktree)
+            if not state.resolved:
+                raise MutateAbort(
+                    f"gate-add-blocker: blocker {blocker_id!r} no longer resolves to a "
+                    "record on disk (it existed at the start of this write but not at "
+                    "the end) — an edge naming nothing can never be cleared; no write "
+                    "performed"
+                )
 
         errors = _validate_fm(fm)
         if errors:

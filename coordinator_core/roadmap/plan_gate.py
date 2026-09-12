@@ -1482,6 +1482,16 @@ def assemble_plan_gate(
     # prebuilt indexes; `waiting_on_execution` evaluates a gate and resolves a
     # sizing citation, so it sits last and runs only for a record nothing
     # cheaper has already answered.
+    #
+    # PRECONDITION a rule added here must keep: read only the CURRENT record's
+    # own annotations (`tracked`, `_fm`, `needs_plan`, ...) plus static, whole-
+    # corpus lookups (`batons_by_id`, `plans`, `archived_by_name`) -- never
+    # another record's `candidate`/`held`/`waiting_on_execution`. That is what
+    # lets one interleaved per-record pass stand in for six full sweeps: a rule
+    # that read a sibling's withdrawal state would see it differently depending
+    # on whether that sibling had been visited yet in this single pass, which is
+    # exactly the iteration-order dependence the six-sweeps design avoided.
+    # (Review: coordinator:code-reviewer)
     # ------------------------------------------------------------------
     def _w_untracked(record):
         """Withheld from candidacy, never from the scan: an untracked baton
@@ -1831,12 +1841,44 @@ def assemble_plan_gate(
         if r["needs_plan"] and wave_by_id.get(r["id"]) is None
     ]
 
+    # `waves` is keyed by baton id, and a baton id is NOT unique across candidate
+    # records: a succession chain and a roadmap stub's fan-out BOTH share one id by
+    # design (`recycle-check.py` says so in as many words). So N candidate records can
+    # collapse into ONE wave slot, and every consumer that walks `waves` then reaches
+    # exactly one of them. `emit-wave-fire.py` binds whichever record it resolves first
+    # and drops the rest with no warning on any surface -- the dropped baton is never
+    # planned, never lands, and returns as a candidate on every later gate read, which
+    # reads as an unplanned backlog rather than a drop.
+    #
+    # Reported rather than repaired: the sharing is legitimate, so the gate must not
+    # pick a survivor. Naming the collapse is what lets a driver decide -- hold the
+    # stale one, re-mint a genuinely-separate one, or fire the group knowingly.
+    # Measured 2026-09-12 on claude-klabauter: 9 ids held two or three live batons each,
+    # and a wave-1 gate report read `candidates: 9` against `waves: [8]` with nothing
+    # naming the missing one.
+    slot_members: dict[str, list[dict]] = {}
+    for r in candidate_records:
+        slot_members.setdefault(r["id"], []).append(r)
+    shared_wave_slot_rows = [
+        {
+            "id": baton_id,
+            "wave": wave_by_id.get(baton_id),
+            "members": [
+                {"path": m.get("path"), "title": m.get("title")}
+                for m in sorted(members, key=lambda m: m.get("path") or "")
+            ],
+        }
+        for baton_id, members in sorted(slot_members.items())
+        if len(members) > 1
+    ]
+
     return {
         "batons": reported,
         "waves": waves,
         "cycles": cycles,
         "unresolved_blockers": unresolved,
         "unschedulable": unschedulable_rows,
+        "shared_wave_slot": shared_wave_slot_rows,
         "untracked": untracked_rows,
         "index_unreadable": index_unreadable,
         "resurrected": resurrected_rows,
@@ -1845,7 +1887,10 @@ def assemble_plan_gate(
         "gated": gated_rows,
         "inert_fields": inert_rows,
         "counts": dict(
-            counts, untracked=len(untracked_rows), resurrected=len(resurrected_rows)
+            counts,
+            untracked=len(untracked_rows),
+            resurrected=len(resurrected_rows),
+            shared_wave_slot=len(shared_wave_slot_rows),
         ),
         "scanned": {"batons": len(records), "plans": len(plans.by_path)},
     }

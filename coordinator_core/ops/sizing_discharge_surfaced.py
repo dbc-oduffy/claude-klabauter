@@ -215,7 +215,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if p is None:
         return _err(f"sizing_path escapes state/sizings/: {sizing_path_raw!r}")
     if not p.is_file():
-        return _err(f"sizing-object not found on disk: {sizing_path_raw}")
+        # Review: coordinator-code-reviewer — deliberately distinct wording
+        # from the locked_rmw FileNotFoundError branch below: this refusal
+        # means the path never resolved to a file at all (pre-check, before
+        # any lock is taken), while the other means the file existed a moment
+        # ago and lost the race to a peer's delete between this check and the
+        # lock. A caller grepping either string can now tell which happened
+        # instead of getting two overlapping "not found" shapes.
+        return _err(f"sizing-object never existed at {sizing_path_raw} — pre-check found no file")
 
     resolver = Path(resolved_by_raw)
     if not resolver.is_absolute():
@@ -292,7 +299,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         locked_rmw(p, mutate, repo_root=repo_root)
     except FileNotFoundError:
-        return _err(f"sizing-object not found: {p}")
+        # Review: coordinator-code-reviewer — distinct from the pre-check
+        # refusal above: this means the file was present when the pre-check
+        # ran but disappeared before `locked_rmw` could acquire the lock —
+        # deleted between check and lock, not "never existed".
+        return _err(f"sizing-object disappeared before the lock could be acquired: {p}")
     except LockTimeout as exc:
         return _err(f"timed out waiting for file lock on {p}: {exc}")
     except MutateAbort as exc:

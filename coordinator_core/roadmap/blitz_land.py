@@ -58,7 +58,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from coordinator_core.locked_write import MutateAbort, locked_rmw
 from coordinator_core.artifact_id_slug import id_slug
-from coordinator_core.frontmatter.schema_validate import _HANDOFF_PHASE_KINDS
+from coordinator_core.frontmatter.schema_validate import HANDOFF_PHASE_KINDS
 from coordinator_core.roadmap.plan_gate import (
     BATON_CODED_STATES,
     PLAN_APPROVED_STATUSES,
@@ -67,7 +67,7 @@ from coordinator_core.roadmap.plan_gate import (
 
 #: Kinds `handoff_phase` is legal on (H-CROSS-EXEC-2). Read from the validator
 #: that enforces it rather than re-derived here: this was a hand-maintained twin
-#: of `_HANDOFF_PHASE_KINDS`, and when schema 10.5.0 admitted `kind: spinoff`
+#: of `HANDOFF_PHASE_KINDS`, and when schema 10.5.0 admitted `kind: spinoff`
 #: the twin was the half that would have stayed wrong. A gate that disagrees
 #: with the rule it guards refuses writes the schema accepts, which is how the
 #: S lane spent two landings refusing its own batons.
@@ -75,7 +75,7 @@ from coordinator_core.roadmap.plan_gate import (
 #: The set is still checked before the write, not left to the schema: a stamp
 #: this module writes onto a kind `pickup-assemble apply` will bounce succeeds
 #: here and kills the baton at claim instead.
-_EXECUTION_PHASE_KINDS = _HANDOFF_PHASE_KINDS
+_EXECUTION_PHASE_KINDS = HANDOFF_PHASE_KINDS
 
 #: The status a `ready` verdict advances a plan to. Deliberately a constant rather
 #: than a parameter: this is the single seam the whole two-gate design keys on
@@ -359,16 +359,26 @@ def _verified_prior_sha(
     COMMIT present in this repo's object store (read in process, no spawn); an
     abbreviated or absent one falls back to the landing's SHA and is named.
     `(None, None)` means none was reported.
+
+    Limitation (Review: coordinator:code-reviewer): this checks that an object
+    of kind `commit` exists on disk, not that it is reachable from any ref or
+    otherwise part of this repo's HISTORY — a loose commit object left over
+    from a reset, or one written directly, passes identically to a properly-
+    landed one. A ref-reachability check would need a spawn (or its
+    read-in-process equivalent) this function exists to avoid, and the threat
+    model here is an honest-but-fallible agent misreporting a SHA, not an
+    adversarial one, so that cost is not paid — the guarantee is deliberately
+    "the object exists", not "the object is history".
     """
     if prior in (None, ""):
         return None, None
     if not isinstance(prior, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", prior):
         return None, f"not a full 40-hex SHA: {prior!r}"
     from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.git_objects import _read_object
+    from coordinator_core.git.git_objects import read_object
 
     try:
-        found = _read_object(resolve_git_common_dir(worktree_root), prior)
+        found = read_object(resolve_git_common_dir(worktree_root), prior)
     except Exception as exc:  # noqa: BLE001 - any read failure is "cannot verify"
         return None, f"object store unreadable: {type(exc).__name__}: {exc}"
     if found is None or found[0] != "commit":
@@ -393,7 +403,7 @@ def _admits_execution_phase(kind: Optional[str]) -> bool:
     landed by hand. `authorize_execution` keeps its own check inside the lock —
     this read decides the ROUTE, that one guards the WRITE.
 
-    Negative spec: the admitted set must be THIS tree's `_HANDOFF_PHASE_KINDS`,
+    Negative spec: the admitted set must be THIS tree's `HANDOFF_PHASE_KINDS`,
     never one read from a published mirror or a vendored schema elsewhere. Same-tree
     is what makes the fallback and any widening of the set ship in one publish; read
     them from different places and a kind the source admits but the reader does not
@@ -436,7 +446,7 @@ def authorize_execution(
     exists to be self-attesting about who named execution, and a session writing a
     sentence that reads like the PM's is the one way this stamp could lie.
 
-    **`handoff_phase` is legal only on the kinds `_HANDOFF_PHASE_KINDS` admits
+    **`handoff_phase` is legal only on the kinds `HANDOFF_PHASE_KINDS` admits
     (H-CROSS-EXEC-2, `schema_validate.py::_cf_handoff_phase_kind_gate`).** A
     stamp written onto any other kind writes a shape `pickup-assemble apply`
     refuses on claim — the write here would "succeed" and the baton would die at

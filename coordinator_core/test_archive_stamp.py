@@ -2192,6 +2192,52 @@ class TestShipHandoff:
         assert hp.read_text(encoding="utf-8") == before
         assert "refusing before any write" in capsys.readouterr().err
 
+    def test_a_valid_record_permits_the_stamp_only_flip(self, tmp_path, capsys):
+        """Review: code-reviewer (P2, Finding 2) — the two refusal tests above
+        pin `_ship_would_refuse` returning text; nothing added by this slice
+        pinned it returning None for an ordinary shippable record. A
+        regression making the projection spuriously refuse a valid record
+        (e.g. a quoting mismatch between this pre-check's numeric_quoting and
+        the real stamp op's own) would block every ship and go uncaught by
+        the refusal-only pair — this is the targeted positive pin, not
+        reliance on the pre-existing, unrelated happy-path tests elsewhere in
+        this file."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(
+            repo, "ship-permits-stamp-only.md", "claimed", "in_flight",
+            extra="scope:\n  - state/handoffs/ship-permits-stamp-only.md\n",
+        )
+        before = hp.read_text(encoding="utf-8")
+
+        rc = arstamp.cs_ship_handoff(str(hp))
+
+        assert rc == 0, capsys.readouterr().err
+        text = hp.read_text(encoding="utf-8")
+        assert text != before
+        assert "deployment_state: shipped" in text
+        assert "shipped_in:" in text
+
+    def test_a_valid_record_permits_the_archiving_flip(self, tmp_path, capsys):
+        """Twin of the test above on the archive=True (mode="stamp_shipped")
+        route — see that test's docstring (Finding 2)."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        hp = _seed_handoff(
+            repo, "ship-permits-archive.md", "claimed", "in_flight",
+            extra="scope:\n  - state/handoffs/ship-permits-archive.md\n",
+        )
+
+        rc = arstamp.cs_ship_handoff(str(hp), archive=True)
+
+        assert rc == 0, capsys.readouterr().err
+        assert not hp.exists()
+        archived = list((repo / "archive" / "handoffs").rglob("ship-permits-archive.md"))
+        assert len(archived) == 1
+        text = archived[0].read_text(encoding="utf-8")
+        assert "deployment_state: shipped" in text
+        assert "shipped_in:" in text
+
     def test_idempotent_second_call_on_already_shipped_is_clean_noop(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)

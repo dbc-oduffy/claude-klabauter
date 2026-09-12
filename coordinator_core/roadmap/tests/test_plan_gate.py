@@ -1329,3 +1329,74 @@ def test_a_comment_after_a_quoted_scalar_is_still_a_comment():
     assert pg._unquote('"unterminated  # not ours to truncate') == (
         '"unterminated  # not ours to truncate'
     )
+
+
+# ---------------------------------------------------------------------------
+# One wave slot, several batons: the collapse that used to be silent
+# ---------------------------------------------------------------------------
+
+
+def _shared_id_baton(root: Path, filename: str, stub_id: str, **fields) -> Path:
+    """A baton at an arbitrary FILENAME carrying a caller-chosen `stub_id`.
+
+    `_baton` names the file after the stub, so it cannot express the case under
+    test here — two live records sharing one id, which is exactly what a
+    succession chain and a roadmap stub's fan-out both produce by design.
+    """
+    lines = [
+        "kind: roadmap-baton",
+        f"title: {fields.pop('title', filename)}",
+        f"stub_id: {stub_id}",
+        f"status: {fields.pop('status', 'open')}",
+        f"deployment_state: {fields.pop('deployment_state', 'ready_to_fire')}",
+        "baton_role: work",
+    ]
+    for key, value in fields.items():
+        lines.append(f"{key}: {value}")
+    return _write(root / "state" / "handoffs" / f"{filename}.md", "\n".join(lines))
+
+
+def test_shared_wave_slot_names_every_baton_collapsed_into_one_id(tmp_path):
+    """`waves` is keyed by baton id, and ids are NOT unique across candidates.
+
+    Two candidate records on one id collapse to a single wave slot, so a
+    consumer walking `waves` reaches one of them and never learns the other
+    exists. The report must name the whole group; picking a survivor is the
+    driver's call, not the gate's.
+    """
+    _shared_id_baton(tmp_path, "older-record", "shared-1")
+    _shared_id_baton(tmp_path, "newer-record", "shared-1")
+    _shared_id_baton(tmp_path, "solo-record", "solo-1")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["counts"]["shared_wave_slot"] == 1
+    (row,) = report["shared_wave_slot"]
+    assert row["id"] == "shared-1"
+    assert [member["path"] for member in row["members"]] == [
+        "state/handoffs/newer-record.md",
+        "state/handoffs/older-record.md",
+    ]
+
+    # The collapse itself, pinned alongside the report of it: three candidate
+    # records, two wave slots. Without this line the test passes against a
+    # report that names a group the waves never actually merged.
+    assert report["counts"]["candidates"] == 3
+    assert sum(len(wave) for wave in report["waves"]) == 2
+
+
+def test_shared_wave_slot_is_empty_when_every_candidate_id_is_unique(tmp_path):
+    """The negative verdict, proved rather than assumed.
+
+    An instrument that cannot report green is not evidence when it reports red:
+    the case above would pass just as well against a field hard-wired to name
+    every id it sees.
+    """
+    _shared_id_baton(tmp_path, "first-record", "unique-1")
+    _shared_id_baton(tmp_path, "second-record", "unique-2")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["shared_wave_slot"] == []
+    assert report["counts"]["shared_wave_slot"] == 0
+    assert report["counts"]["candidates"] == 2

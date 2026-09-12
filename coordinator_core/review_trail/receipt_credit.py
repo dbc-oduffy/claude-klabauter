@@ -56,17 +56,27 @@ range), so these stay uncovered.
 
 WHY THE RECEIPT BLOCK AND NOT THE DISPOSITIONS BLOCK. `## Integrator
 Dispositions` is the other candidate surface and it is the wrong one, for two
-independent reasons. It is append-once with no amend or supersede path
-(`ops/append_integrator_dispositions.py` returns `already_dispositioned=True`
-rather than writing a second block), so a finding escalated and later
-resolved reads `escalated-ask` permanently — a reader keyed on it inherits
-that staleness wholesale (filed: `state/bug-backlog/2026-08-27-the-sole-
-review-receipt-cannot-record-that-an-escalation-was-answered.yaml`). And the
-close ceremony permits an EM to apply a reviewer's findings itself rather
-than dispatching a `review-integrator`, which produces no dispositions block
-at all while the review demonstrably happened. The `review_receipt:` block is
-present in both cases. Do not "improve" this module by repointing it at the
-dispositions block; that is the same defect in a new place, not a cleanup.
+independent reasons.
+
+Review: coordinator-code-reviewer, 2026-09-11 — the first reason below
+described `ops/append_integrator_dispositions.py` as it stood before commit
+1b44e2138c and is now stale prose, corrected here rather than left to drift:
+`already_dispositioned=True` no longer means the call declined to write a
+second block — it now means a block was already there, and the call appends
+a NEW block naming the one it supersedes (the last block is the operative
+one). So a finding escalated and later resolved is no longer permanently
+stuck reading `escalated-ask` the way the bug-backlog entry below describes;
+a re-dispositioning integrator run now updates it. The conclusion of this
+section is unchanged by that fix — see the SECOND reason, which stands on its
+own: the close ceremony still permits an EM to apply a reviewer's findings
+itself rather than dispatching a `review-integrator`, which still produces no
+dispositions block at all while the review demonstrably happened, and the
+`review_receipt:` block is still present in both cases. (Original filing:
+`state/bug-backlog/2026-08-27-the-sole-review-receipt-cannot-record-that-an-
+escalation-was-answered.yaml` — its own root cause is fixed; this module's
+choice of surface does not depend on it having been.) Do not "improve" this
+module by repointing it at the dispositions block; the second reason alone
+is still the same defect in a new place, not a cleanup.
 
 Relationship to `workstream_complete._compute_review_receipt_gate`: that gate
 reads the same block to answer a DIFFERENT question — "did a review run for

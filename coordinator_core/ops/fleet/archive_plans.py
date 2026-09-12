@@ -160,6 +160,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.liveness import cs_claim_holder_live
+from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.liveness import claim_held_by_me
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle_constants import PLAN_ARCHIVABLE_STATUS
@@ -692,21 +693,91 @@ def _apply_untracked_sidecar_moves(moves: List[Move]) -> Tuple[List[dict], List[
     diff against, so there is no safe "identical duplicate" check to fall
     back on the way `_is_identical_duplicate` gives tracked moves — see this
     module's own negative-spec.
+
+    ALL-OR-NOTHING PER PLAN, never a transaction across the whole call. A
+    plan's untracked sidecars (`.workflow.mjs` and its `.emitted.json`) carry
+    DIFFERENT `candidate_id`s each (one per file, not one per plan — see
+    `plan_sweep`), so `candidate_id` cannot be the grouping key; the unit
+    that must travel together is whatever shares one primary plan, derived
+    via `_primary_for_sidecar(move.src)` (the same derivation
+    `_partition_untracked_sidecars` implicitly relies on to route sidecars
+    alongside their primary's own archival cycle). If a later sibling's
+    `os.replace` raises (e.g. its destination directory was removed mid-run
+    by a peer), the sidecar(s) already moved for that SAME primary are
+    rolled back via a reverse `os.replace` before either is reported, so the
+    pair is never left split across two directories with no named
+    re-driving path. This is honest about what it can guarantee: the
+    rollback is itself a best-effort `os.replace`, and a rollback that ALSO
+    raises is logged and the affected ids are still reported failed — there
+    is no third leg to fall back to for a destination or source that has
+    gone missing on both sides. A different plan's moves are never rolled
+    back by another's failure: only sidecars sharing one primary are one
+    unit.
     """
     acted: List[dict] = []
     failed: List[dict] = []
+
+    moves_by_primary: "dict[Path, List[Move]]" = {}
+    order: List[Path] = []
     for move in moves:
-        if move.dst.exists():
-            failed.append({"id": move.candidate_id, "reason": _REASON_SIDECAR_DEST_EXISTS})
-            continue
-        try:
-            move.dst.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(str(move.src), str(move.dst))
-        except OSError as exc:
-            failed.append({"id": move.candidate_id, "reason": f"sidecar-replace-failed: {exc}"})
-            continue
-        acted.append({"id": move.candidate_id, "archived": True})
+        primary = _primary_for_sidecar(move.src)
+        if primary not in moves_by_primary:
+            moves_by_primary[primary] = []
+            order.append(primary)
+        moves_by_primary[primary].append(move)
+
+    for primary in order:
+        group = moves_by_primary[primary]
+        completed: List[Move] = []
+        group_failed: List[dict] = []
+        for move in group:
+            if move.dst.exists():
+                group_failed.append({"id": move.candidate_id, "reason": _REASON_SIDECAR_DEST_EXISTS})
+                break
+            try:
+                move.dst.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(str(move.src), str(move.dst))
+            except OSError as exc:
+                for done in reversed(completed):
+                    try:
+                        os.replace(str(done.dst), str(done.src))
+                    except OSError as rollback_exc:
+                        _LOG.warning(
+                            "archive_plans: rollback of sidecar %s -> %s failed after "
+                            "sibling sidecar move for primary=%s failed (%s): %s",
+                            done.dst, done.src, primary, exc, rollback_exc,
+                        )
+                group_failed.extend(
+                    {
+                        "id": m.candidate_id,
+                        "reason": f"sidecar-set-rolled-back: sibling sidecar move failed: {exc}",
+                    }
+                    for m in completed
+                )
+                group_failed.append({"id": move.candidate_id, "reason": f"sidecar-replace-failed: {exc}"})
+                completed = []
+                break
+            completed.append(move)
+        if group_failed:
+            failed.extend(group_failed)
+        else:
+            acted.extend({"id": m.candidate_id, "archived": True} for m in completed)
+
     return acted, failed
+
+
+def _caller_session_id() -> Optional[str]:
+    """The archiving caller's own session id, normalized for `exempt_session_id`.
+
+    `resolve_session_id` returns `""` for an unresolvable caller and never
+    raises (see that function's own docstring); normalized here to `None` so
+    the self-claim exemption is simply absent rather than an empty-string id
+    `claim_held_by_me` would otherwise have to special-case. Under the warm
+    server this reads the per-request identity the caller carried in
+    (`session_identity_override`'s bound ContextVar — tier 0 of
+    `resolve_session_id`'s resolution order), not the server process's own.
+    """
+    return resolve_session_id() or None
 
 
 def _handle_act(
@@ -725,7 +796,10 @@ def _handle_act(
     rename (`_apply_untracked_sidecar_moves`) AFTER the tracked-commit call
     below returns — see both helpers' own docstrings.
     """
-    moves, skipped = plan_sweep(worktree_root, common_dir, cap, candidate_ids=candidate_ids)
+    moves, skipped = plan_sweep(
+        worktree_root, common_dir, cap, candidate_ids=candidate_ids,
+        exempt_session_id=_caller_session_id(),
+    )
 
     acted: List[dict] = []
     failed: List[dict] = []
@@ -872,7 +946,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     try:
         if dry_run:
-            terminal = _scan_terminal(worktree, common_dir)
+            terminal = _scan_terminal(
+                worktree, common_dir, exempt_session_id=_caller_session_id(),
+            )
             accepted = terminal[:cap]
             deferred = terminal[cap:]
             candidates = []

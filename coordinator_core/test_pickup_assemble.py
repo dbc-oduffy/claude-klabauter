@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+import coordinator_core.git.git_objects as git_objects
 import coordinator_core.pickup_assemble as pa
 import coordinator_core.pickup_assemble.apply as apply_mod
 import coordinator_core.review_assemble.exec_auth_stamp as exec_auth_stamp
@@ -1905,24 +1906,31 @@ def _commit_backdated_isolated(
 
 
 @contextmanager
-def _watch_calls(func_name: str):
-    """Patches `pa.<func_name>` for the duration of the `with` block and
-    yields a list that accumulates one entry (the call's positional args)
-    per invocation. Shared call-counting helper for the T1/T2/T3/T4 tests
-    below (the Staff Engineer review § 9) — each test differs only in which module-
-    level function it watches and what invariant it checks against the
-    recorded count, not in how the watching is done. Uses
+def _watch_calls(func_name: str, module=pa):
+    """Patches `module.<func_name>` (default `pa`) for the duration of the
+    `with` block and yields a list that accumulates one entry (the call's
+    positional args) per invocation. Shared call-counting helper for the
+    T1/T2/T3/T4 tests below (the Staff Engineer review § 9) — each test differs only in
+    which module-level function it watches and what invariant it checks
+    against the recorded count, not in how the watching is done. Uses
     `pytest.MonkeyPatch.context()` rather than the `monkeypatch` fixture so
-    it can be nested and reused freely within a single test."""
+    it can be nested and reused freely within a single test.
+
+    `module` matters: `pickup_assemble` imports some git-object helpers
+    (`_read_object`/`_read_loose_object`) from `coordinator_core.git.
+    git_objects` rather than defining them itself, and `_read_object`'s own
+    body calls `_read_loose_object` via ITS module's global namespace, not
+    via `pa.`'s re-exported binding — patching `pa._read_loose_object`
+    leaves that internal call untouched. Watch it on `git_objects` directly."""
     calls: list[tuple] = []
-    original = getattr(pa, func_name)
+    original = getattr(module, func_name)
 
     def wrapper(*args, **kwargs):
         calls.append(args)
         return original(*args, **kwargs)
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(pa, func_name, wrapper)
+        mp.setattr(module, func_name, wrapper)
         yield calls
 
 
@@ -2085,7 +2093,7 @@ class TestObjectLoaderMemoized:
         assert not pa._iter_pack_files(common_dir), "fixture repo unexpectedly packed"
 
         since_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-        with _watch_calls("_read_object") as object_calls, _watch_calls("_read_loose_object") as loose_calls:
+        with _watch_calls("_read_object") as object_calls, _watch_calls("_read_loose_object", module=git_objects) as loose_calls:
             evidence = pa.compute_deliverable_evidence(repo, ["f0.py", "f3.py", "f7.py"], since_date)
         assert evidence
 
@@ -2580,7 +2588,12 @@ class TestClaimGrantTruthTable:
         assert grant["holder"] == "peer-sid"
         assert grant["holder_live"] is True
 
-    def test_row4_not_live_within_settling_window_is_denied(self, tmp_path, monkeypatch):
+    def test_row4_not_live_within_former_settling_window_is_granted_with_warning(self, tmp_path, monkeypatch):
+        """R4 rewrite (08b70ef90e, "C1, C2, C5, C11: wave 1 of the
+        ceremony-assembler rebuild") deletes the age-keyed settling-window
+        split: a not-live claimant is `granted-with-warning` regardless of
+        how recently it went not-live, and `claim_age_minutes` is never read
+        to reach this row (always `None`)."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         _write_claim(repo, "handoff", "h1.md", "peer-sid", age_minutes=29)
@@ -2589,12 +2602,15 @@ class TestClaimGrantTruthTable:
 
         grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
-        assert grant["verdict"] == "denied"
+        assert grant["verdict"] == "granted-with-warning"
         assert grant["holder"] == "peer-sid"
         assert grant["holder_live"] is False
-        assert grant["claim_age_minutes"] == 29
+        assert grant["claim_age_minutes"] is None
 
-    def test_row4_boundary_exactly_at_stale_after_is_still_denied(self, tmp_path, monkeypatch):
+    def test_row4_boundary_exactly_at_stale_after_is_also_granted_with_warning(self, tmp_path, monkeypatch):
+        """Same R4 rewrite (08b70ef90e) — the former stale-after boundary is
+        no longer a decision input at all, so the old boundary value produces
+        the same not-live outcome as any other age."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         _write_claim(repo, "handoff", "h1.md", "peer-sid", age_minutes=pa.CLAIM_STALE_AFTER_MINUTES)
@@ -2603,7 +2619,7 @@ class TestClaimGrantTruthTable:
 
         grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
-        assert grant["verdict"] == "denied"
+        assert grant["verdict"] == "granted-with-warning"
 
     def test_row5_not_live_past_settling_window_is_granted_with_warning(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
@@ -2616,7 +2632,7 @@ class TestClaimGrantTruthTable:
 
         assert grant["verdict"] == "granted-with-warning"
         assert grant["holder"] == "peer-sid"
-        assert grant["claim_age_minutes"] == 94
+        assert grant["claim_age_minutes"] is None
 
     def test_row5_boundary_one_minute_past_stale_after_is_granted_with_warning(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
@@ -2629,7 +2645,11 @@ class TestClaimGrantTruthTable:
 
         assert grant["verdict"] == "granted-with-warning"
 
-    def test_unparseable_claim_age_defaults_to_denied_not_warning(self, tmp_path, monkeypatch):
+    def test_unparseable_claim_age_still_resolves_on_liveness_not_age(self, tmp_path, monkeypatch):
+        """Same R4 rewrite (08b70ef90e) — age is not read to reach row 4 at
+        all, so a claim with no `claimed_at` (an evidence gap) resolves
+        identically to any other not-live claimant: `granted-with-warning`,
+        never `denied` on account of the missing age."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         claims_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
@@ -2641,7 +2661,7 @@ class TestClaimGrantTruthTable:
 
         grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
-        assert grant["verdict"] == "denied"
+        assert grant["verdict"] == "granted-with-warning"
         assert grant["claim_age_minutes"] is None
 
     def test_row3_held_by_self_survives_a_poisoned_evidence_key(self, tmp_path, monkeypatch):
@@ -3886,168 +3906,16 @@ def _seed_successor_handoff(
     return path
 
 
-class TestComputeSuccessorHandoffs:
-    """Unit coverage for `compute_successor_handoffs` (plan
-    2026-08-01-wsc-completeness-gate-and-pickup-successor.md, C5/AC7) — a
-    SEPARATE computation from `compute_claim_grant`, keyed on
-    `deployment_state`, never on claim-emptiness."""
-
-    def test_path_form_predecessor_ready_to_fire_surfaces(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-        _seed_successor_handoff(repo, "h2.md", predecessor='"state/handoffs/h1.md"')
-
-        result = pa.compute_successor_handoffs(repo, "state/handoffs/h1.md")
-
-        assert len(result["candidates"]) == 1
-        candidate = result["candidates"][0]
-        assert candidate["kind"] == "ready_to_fire"
-        assert candidate["path"].endswith("h2.md")
-
-    def test_bare_basename_predecessor_surfaces(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-        _seed_successor_handoff(repo, "h2.md", predecessor="h1.md")
-
-        result = pa.compute_successor_handoffs(repo, "state/handoffs/h1.md")
-
-        assert len(result["candidates"]) == 1
-        assert result["candidates"][0]["path"].endswith("h2.md")
-
-    def test_predecessor_id_only_surfaces(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff_with_fields(repo, "h1.md", "handoff_id: hnd-widget-ab12cd\n")
-        _seed_successor_handoff(
-            repo, "h2.md", predecessor='"none"', extra_fm="predecessor_id: hnd-widget-ab12cd\n"
-        )
-
-        result = pa.compute_successor_handoffs(repo, "state/handoffs/h1.md")
-
-        assert len(result["candidates"]) == 1
-        assert result["candidates"][0]["path"].endswith("h2.md")
-
-    def test_archived_successor_does_not_surface(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-        archived_dir = repo / "archive" / "handoffs"
-        archived_dir.mkdir(parents=True, exist_ok=True)
-        fm = (
-            'title: "Archived successor"\n'
-            "created: 2026-01-01\n"
-            "branch: work/test/2026-01-01\n"
-            "status: open\n"
-            'predecessor: "state/handoffs/h1.md"\n'
-            "deployment_state: ready_to_fire\n"
-        )
-        (archived_dir / "h2.md").write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
-        _git(repo, "add", "archive/handoffs/h2.md")
-        _git(repo, "commit", "-m", "add archived h2")
-
-        result = pa.compute_successor_handoffs(repo, "state/handoffs/h1.md")
-
-        assert result["candidates"] == []
-
-    def test_in_flight_and_live_surfaces(self, tmp_path, monkeypatch):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-        _seed_successor_handoff(
-            repo,
-            "h2.md",
-            predecessor='"state/handoffs/h1.md"',
-            deployment_state="in_flight",
-            extra_fm="claimed_by: peer-sid\n",
-        )
-        monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: sid == "peer-sid")
-
-        result = pa.compute_successor_handoffs(repo, "state/handoffs/h1.md")
-
-        assert len(result["candidates"]) == 1
-        assert result["candidates"][0]["kind"] == "in_flight_live"
-        assert result["candidates"][0]["claimed_by"] == "peer-sid"
-
-    def test_in_flight_and_not_live_does_not_surface(self, tmp_path, monkeypatch):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-        _seed_successor_handoff(
-            repo,
-            "h2.md",
-            predecessor='"state/handoffs/h1.md"',
-            deployment_state="in_flight",
-            extra_fm="claimed_by: peer-sid\n",
-        )
-        monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: False)
-
-        result = pa.compute_successor_handoffs(repo, "state/handoffs/h1.md")
-
-        assert result["candidates"] == []
-
-    def test_reaped_ready_to_fire_with_claim_keys_removed_surfaces(self, tmp_path):
-        """AC7's oracle — a REAPED `ready_to_fire` baton has its claim keys
-        (`claimed_at`/`claimed_by`/`consumed_at`/`consumed_by`) REMOVED, not
-        blanked, by `handoff_transition._unclaim`, and is byte-indistinguishable
-        from a never-claimed one; `park_note` is narration colour for
-        evidence, never a gate. Must surface identically to the never-claimed
-        case above."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-        _seed_successor_handoff(
-            repo,
-            "h2.md",
-            predecessor='"state/handoffs/h1.md"',
-            deployment_state="ready_to_fire",
-            extra_fm='park_note: "parked pending peer campaign"\n',
-        )
-
-        result = pa.compute_successor_handoffs(repo, "state/handoffs/h1.md")
-
-        assert len(result["candidates"]) == 1
-        candidate = result["candidates"][0]
-        assert candidate["kind"] == "ready_to_fire"
-        assert candidate["claimed_by"] is None
-        assert candidate["park_note"] == "parked pending peer campaign"
-
-
 class TestBriefSuccessorHandoffSurfacesJudgmentPoint:
     """AC7/AC8 — `gates.successor` + the `jsucc` judgment point surface when
-    a live successor exists, and join `d2`'s `depends_on` AND-list."""
+    a live successor exists, and join `d2`'s `depends_on` AND-list.
 
-    def test_ready_to_fire_successor_surfaces_gate_and_jsucc(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-        _seed_successor_handoff(repo, "h2.md", predecessor='"state/handoffs/h1.md"')
-
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        obj = result.decision_object
-
-        assert "successor" in obj["gates"]
-        assert len(obj["gates"]["successor"]["candidates"]) == 1
-
-        jsucc = next(jp for jp in obj["judgment_points"] if jp["id"] == "jsucc")
-        values = {d["value"] for d in jsucc["dispositions"]}
-        assert values == {"divert-to-successor", "stand-down-live-peer", "acknowledge-and-proceed"}
-
-        acknowledge = next(d for d in jsucc["dispositions"] if d["value"] == "acknowledge-and-proceed")
-        assert acknowledge["resolves"] == ["d2"]
-        divert = next(d for d in jsucc["dispositions"] if d["value"] == "divert-to-successor")
-        assert divert["resolves"] == []
-        stand_down = next(d for d in jsucc["dispositions"] if d["value"] == "stand-down-live-peer")
-        assert stand_down["resolves"] == []
-
-        consume = next(d for d in obj["directives"] if d["cli"] == "archive-stamp-cli")
-        assert consume["depends_on"] == "jsucc"
-
-        assert obj["gates"]["coast"]["verdict"] != "clear"
-        assert "jsucc" in obj["gates"]["coast"]["blocked_by"]
+    `compute_successor_handoffs` (and `gates.successor`/`jsucc` themselves)
+    were deleted outright by d3b3fffd3c ("C3, C9, C13: wave 3 of the
+    ceremony-assembler rebuild") — the cross-repo memo audit found zero
+    consumers of `gates.successor`/`gates.commit_reality`. The tests that
+    exercised the presence of that gate/judgment point are deleted with it;
+    the tests that assert its ABSENCE remain valid and are kept below."""
 
     def test_no_successor_omits_gate_and_jsucc(self, tmp_path):
         repo = tmp_path / "repo"
@@ -4074,52 +3942,6 @@ class TestBriefSuccessorHandoffSurfacesJudgmentPoint:
         obj = result.decision_object
         assert "successor" not in obj["gates"]
         assert "jsucc" not in {jp["id"] for jp in obj["judgment_points"]}
-
-    def test_jsucc_joins_depends_on_and_list_with_gate_check(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        path = repo / "state" / "handoffs" / "h1.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fm = (
-            'title: "Test"\n'
-            "created: 2020-01-01\n"
-            "branch: work/test/2026-01-01\n"
-            "status: open\n"
-            'predecessor: "none"\n'
-            "deployment_state: awaiting_gate\n"
-            'gate_dependency: "peer campaign must settle first"\n'
-        )
-        path.write_text(f"---\n{fm}---\n\n# Handoff\n\nBody.\n", encoding="utf-8")
-        _git(repo, "add", str(path.relative_to(repo)))
-        _git(repo, "commit", "-m", "add h1")
-        _seed_successor_handoff(repo, "h2.md", predecessor='"state/handoffs/h1.md"')
-
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
-
-        obj = result.decision_object
-        jp_ids = {jp["id"] for jp in obj["judgment_points"]}
-        assert {"jgate", "jsucc"} <= jp_ids
-        consume = next(
-            d for d in obj["directives"] if d["cli"] == "archive-stamp-cli" and d["args"][0] == "claim-handoff"
-        )
-        assert consume["depends_on"] == ["jgate", "d-gate-recheck", "jsucc"]
-
-    def test_compute_coast_remedy_non_empty_when_jsucc_fires(self, tmp_path):
-        """AC8's self-sufficiency contract — `compute_coast`'s `remedy`
-        derivation filters dispositions on truthy `resolves`; an all-empty
-        `jsucc` would otherwise yield a blocked coast with an empty
-        `remedy`."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-        _seed_successor_handoff(repo, "h2.md", predecessor='"state/handoffs/h1.md"')
-
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
-
-        obj = result.decision_object
-        assert obj["gates"]["coast"]["verdict"] != "clear"
-        assert obj["gates"]["coast"].get("remedy")
-
 
 class TestSpinoffSuccessorNarrationCarveOut:
     """AC9 — the spinoff narration prefix keeps its adjacency clause and
@@ -4200,7 +4022,9 @@ class TestBriefKindDispatchJudgment:
         assert obj["artifact"]["kind_resolved"] == "proposal"
         kind_jp = next(jp for jp in obj["judgment_points"] if jp["id"] == "j-kind")
         values = {d["value"] for d in kind_jp["dispositions"]}
-        assert values == {"adopt", "decline", "negotiate"}
+        # `fold-into-plan` (a66b3da7c5, PM-directed 2026-07-27 memo) added a
+        # fourth `proposal` disposition alongside the original three.
+        assert values == {"adopt", "decline", "negotiate", "fold-into-plan"}
 
     def test_absent_kind_defaults_to_ask(self, tmp_path):
         repo = tmp_path / "repo"
@@ -4910,12 +4734,17 @@ class TestBriefEmitsClaimGrant:
         assert gates["coast"]["verdict"] == "clear"
 
     def test_denied_claim_grant_forces_coast_blocked(self, tmp_path, monkeypatch):
+        """R4 rewrite (08b70ef90e, "C1, C2, C5, C11: wave 1 of the
+        ceremony-assembler rebuild") — `denied` is reached only via row 3
+        (a DIFFERENT, LIVE, non-lineage-related holder), never via a
+        not-live holder's age; a not-live holder now resolves
+        `granted-with-warning` regardless of `claimed_at`."""
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
         _write_claim(repo, "handoff", "h1.md", "peer-sid", age_minutes=1)
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
-        monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: False)
+        monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: True)
 
         result = pa.brief("state/handoffs/h1.md", repo_root=repo)
 
@@ -6867,7 +6696,12 @@ class TestMemoTerminalDirectivesC8:
         change with no test failure). The union of the two literal sets
         below MUST equal every entry in `_KIND_DISPOSITIONS` — a newly added
         disposition that nobody classifies fails this test until it is
-        deliberately sorted into one bucket or the other."""
+        deliberately sorted into one bucket or the other.
+
+        `fold-into-plan` (a66b3da7c5, "pickup: fold-into-plan lands on both
+        kinds, and re-plan stops forbidding the edit that carries the
+        finding" — PM-directed 2026-07-27 memo) is receiver-done on both
+        `fyi` and `proposal`: it resolves `d-action-memo` on both kinds."""
         receiver_done = {
             ("ask", "accept-mechanical-direct"),
             ("ask", "accept-escalate-to-sizing"),
@@ -6877,8 +6711,10 @@ class TestMemoTerminalDirectivesC8:
             ("proposal", "adopt"),
             ("proposal", "decline"),
             ("proposal", "negotiate"),
+            ("proposal", "fold-into-plan"),
             ("fyi", "ack-nil"),
             ("fyi", "surgical-fix"),
+            ("fyi", "fold-into-plan"),
         }
         work_still_owed = {
             ("ask", "surface-to-PM"),
@@ -6965,7 +6801,12 @@ class TestDispositionValueAwarePredicateZoliV2Finding1:
 
         assert exit_code == apply_mod.APPLY_EXIT_HALTED_AT_JUDGMENT
         assert "d-action-memo" not in report["landed"]
-        assert "j-kind" in report["unresolved_judgment_points"]
+        # 0b21f600fd (C1, docs/plans/2026-09-06-declined-judgment-answer-is-
+        # not-silence.md) — `j-kind` WAS answered here (`surface-to-PM`), and
+        # that disposition's own `resolves` doesn't cover `d-action-memo`, so
+        # it now classifies as DECLINED, not unresolved (silence).
+        assert "j-kind" in report["declined_judgment_points"]
+        assert "j-kind" not in report["unresolved_judgment_points"]
 
     def test_non_terminal_liveness_disposition_leaves_d2_unfired_and_halted(self, tmp_path):
         repo = tmp_path / "repo"
@@ -7369,7 +7210,12 @@ class TestMemoTerminalEndToEndC6:
 
         assert exit_code == apply_mod.APPLY_EXIT_HALTED_AT_JUDGMENT
         assert "d-action-memo" not in report["landed"]
-        assert "j-kind" in report["unresolved_judgment_points"]
+        # 0b21f600fd (C1, docs/plans/2026-09-06-declined-judgment-answer-is-
+        # not-silence.md) — `j-kind` WAS answered (`surface-to-PM`), and that
+        # disposition's own `resolves` doesn't cover `d-action-memo`, so it
+        # classifies as DECLINED, not unresolved (silence).
+        assert "j-kind" in report["declined_judgment_points"]
+        assert "j-kind" not in report["unresolved_judgment_points"]
 
         text = (repo / "cross-repo" / "inbox" / "m1.md").read_text(encoding="utf-8")
         assert "status: in_progress" in text
@@ -7788,7 +7634,12 @@ class TestMemoLivenessJ1ResolvesActionMemo:
 
         assert exit_code == apply_mod.APPLY_EXIT_HALTED_AT_JUDGMENT
         assert report["landed"] == []
-        assert "j1" in report["unresolved_judgment_points"]
+        # 0b21f600fd (C1, docs/plans/2026-09-06-declined-judgment-answer-is-
+        # not-silence.md) — `j1` WAS answered (`stand-down-and-surface`), and
+        # that disposition's own `resolves` is `[]`, so it classifies as
+        # DECLINED, not unresolved (silence).
+        assert "j1" in report["declined_judgment_points"]
+        assert "j1" not in report["unresolved_judgment_points"]
 
     def test_j1_absent_action_taking_j_kind_still_lands_action_memo(self, tmp_path):
         """No liveness signal fired at all (today's working path, unchanged
@@ -8065,15 +7916,44 @@ class TestGateNotesAdvisoryAtPickupBrief:
 # ---------------------------------------------------------------------------
 
 
-def _seed_self_stamped_handoff(repo: Path, name: str, sha: str | None = None) -> Path:
-    """A handoff carrying its OWN `execution_authorized_sha` — the
-    no-pointer fallback branch of `compute_execution_stamp_match`, which
-    reaches the same gate shape as a `## Plan to Execute` pointer without
-    a second file. Pass `sha` to bake a value that never reproduces
-    (the `unstampable` fixture); omit it for a correct stamp."""
-    path = repo / "state" / "handoffs" / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fm_template = (
+def _seed_self_stamped_handoff(repo: Path, name: str, sha: str | None = None) -> tuple[Path, Path]:
+    """A handoff pointing at a plan via `## Plan to Execute`, mirroring the
+    plan's `execution_authorized_sha` on its own frontmatter for human
+    readability. `d8f4378468` ("pickup: a handoff mirroring a plan stamp
+    stops being hashed as if it were the plan") retired the previous
+    no-pointer own-body fallback this fixture exercised: a non-plan artifact
+    (by `_artifact_is_a_plan`'s location check) with no pointer now resolves
+    `None` deliberately ("nothing to verify"), never hashing the handoff's
+    own body against a mirrored value. The plan — not the handoff — is now
+    the hash target; pass `sha` to bake a plan value that never reproduces
+    (the `unstampable` fixture), omit it for a correct stamp.
+
+    Returns `(handoff_path, plan_path)` — `plan_path` is the file
+    `compute_execution_stamp_match` actually diffs and hashes; callers that
+    want to move `stamp_commit`'s comparison base (e.g. a bookkeeping-only
+    edit) must edit the PLAN, not the handoff."""
+    plan_path = repo / "docs" / "plans" / name
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_fm_template = (
+        f'title: "Test Plan {name}"\n'
+        "created: 2026-01-01\n"
+        "execution_authorized_by: \"PM (Test)\"\n"
+        "execution_authorized_at: 2026-01-01\n"
+        "execution_authorized_sha: PENDING\n"
+    )
+    plan_body = "# Plan\n\nBody.\n"
+    plan_template_text = f"---\n{plan_fm_template}---\n\n{plan_body}"
+    # `execution_authorized_sha` is frontmatter, which the body hash excludes,
+    # so one pass over the template yields the sha the final text will carry.
+    stamped = sha or _canonical_body_sha(repo, plan_template_text)
+    plan_path.write_text(plan_template_text.replace("PENDING", stamped), encoding="utf-8")
+    _git(repo, "add", str(plan_path.relative_to(repo)))
+    _git(repo, "commit", "-m", f"stamp plan for {name}")
+
+    plan_rel = plan_path.relative_to(repo).as_posix()
+    handoff_path = repo / "state" / "handoffs" / name
+    handoff_path.parent.mkdir(parents=True, exist_ok=True)
+    handoff_fm = (
         f'title: "Test Handoff {name}"\n'
         "created: 2026-01-01\n"
         "branch: work/test/2026-01-01\n"
@@ -8082,17 +7962,17 @@ def _seed_self_stamped_handoff(repo: Path, name: str, sha: str | None = None) ->
         "deployment_state: active\n"
         "execution_authorized_by: \"PM (Test)\"\n"
         "execution_authorized_at: 2026-01-01\n"
-        "execution_authorized_sha: PENDING\n"
+        f"execution_authorized_sha: {stamped}\n"
     )
-    body = "# Handoff\n\nBody.\n"
-    template_text = f"---\n{fm_template}---\n\n{body}"
-    # `execution_authorized_sha` is frontmatter, which the body hash excludes,
-    # so one pass over the template yields the sha the final text will carry.
-    stamped = sha or _canonical_body_sha(repo, template_text)
-    path.write_text(template_text.replace("PENDING", stamped), encoding="utf-8")
-    _git(repo, "add", str(path.relative_to(repo)))
-    _git(repo, "commit", "-m", f"stamp {name}")
-    return path
+    handoff_text = (
+        f"---\n{handoff_fm}---\n\n"
+        "## Plan to Execute\n\n"
+        f"**Plan:** `{plan_rel}`\n"
+    )
+    handoff_path.write_text(handoff_text, encoding="utf-8")
+    _git(repo, "add", str(handoff_path.relative_to(repo)))
+    _git(repo, "commit", "-m", f"add {name}")
+    return handoff_path, plan_path
 
 
 def _append_bookkeeping_line(repo: Path, path: Path) -> None:
@@ -8116,8 +7996,8 @@ class TestStaleBookkeepingPromotesNoRestamp:
     def test_bookkeeping_delta_next_move_does_not_instruct_a_restamp(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
-        path = _seed_self_stamped_handoff(repo, "h-bookkeeping.md")
-        _append_bookkeeping_line(repo, path)
+        path, plan_path = _seed_self_stamped_handoff(repo, "h-bookkeeping.md")
+        _append_bookkeeping_line(repo, plan_path)
 
         rel = path.relative_to(repo).as_posix()
         fm = pa._parse_fm_dict(pa.split_frontmatter(path.read_text(encoding="utf-8")).fm_text)
@@ -8133,8 +8013,8 @@ class TestStaleBookkeepingPromotesNoRestamp:
     def test_bookkeeping_delta_emits_no_restamp_directive(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
         _init_repo(repo)
-        path = _seed_self_stamped_handoff(repo, "h-bookkeeping-brief.md")
-        _append_bookkeeping_line(repo, path)
+        path, plan_path = _seed_self_stamped_handoff(repo, "h-bookkeeping-brief.md")
+        _append_bookkeeping_line(repo, plan_path)
 
         monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: False)
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
@@ -8154,7 +8034,7 @@ class TestStaleBookkeepingPromotesNoRestamp:
         the directive the bookkeeping arm just lost."""
         repo = tmp_path / "repo"
         _init_repo(repo)
-        path = _seed_self_stamped_handoff(repo, "h-unstampable.md", sha="0" * 40)
+        path, _plan_path = _seed_self_stamped_handoff(repo, "h-unstampable.md", sha="0" * 40)
 
         monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: False)
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)

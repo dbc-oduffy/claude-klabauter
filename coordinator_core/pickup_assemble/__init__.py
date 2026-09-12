@@ -640,6 +640,14 @@ def _parse_commit(content: bytes) -> dict[str, Any]:
                 committer_epoch = None
     subject_lines = text.split("\n\n", 1)
     subject = subject_lines[1].split("\n", 1)[0] if len(subject_lines) == 2 else ""
+    # A CRLF-authored commit message leaves the subject ending in a CR.
+    # Consumers that render through `_dispatch_log` never saw it, because
+    # `_git_log_oneline`'s `.splitlines()` strips it; consumers reading
+    # `commit["subject"]` straight off this dict (`compute_deliverable_evidence`,
+    # and any shared-walk caller) did. Normalising here is what makes those two
+    # routes agree on the same commit, rather than leaving the difference to be
+    # rediscovered per caller.
+    subject = subject.rstrip("\r")
     return {"tree": tree, "parents": parents, "committer_epoch": committer_epoch, "subject": subject}
 
 
@@ -2714,6 +2722,59 @@ def _git_log_oneline(repo_root: Path, args: list[str]) -> list[tuple[str, str]]:
     return pairs
 
 
+def _log_oneline_multi_path(
+    repo_root: Path, paths: list[str], since_epoch: Optional[int]
+) -> dict[str, list[tuple[str, str]]]:
+    """One commit walk answering `log --oneline -- <path>` for EVERY
+    path at once, instead of `_git_log_oneline(repo_root, ["--", path])` once
+    per path (each of which re-resolves HEAD and re-walks the whole history
+    from the tip). Same restructure, and for the same two reasons, as
+    `compute_deliverable_evidence`'s shared walk — see its docstring.
+
+    The correctness half matters as much as the cost: resolving HEAD once per
+    path lets two cited paths be evaluated against DIFFERENT tips on a branch
+    with concurrent committers, producing one `closure_signals` object
+    internally inconsistent about what history it describes. This repo's tree
+    is shared by design, so that is the ordinary case here, not a corner.
+
+    Bounded by `since_epoch` through `_walk_commits_since`, as
+    `compute_deliverable_evidence` bounds its walk and as
+    `compute_closure_signals` bounds its own `subjects` walk: the window is
+    the artifact's own date (`_artifact_since_date`).
+
+    The bound is a PM-ratified tradeoff (2026-09-12), not a free win.
+    Measured at `0558923f02`: unbounded 20.03s over 34,945 commits, windowed
+    0.02s over 744. Across every handoff in the corpus it dropped real chunk
+    commits for 1 of the only 2 pending items whose cited path resolves
+    (6 -> 4, a handoff citing its day-earlier predecessor). Accepted because
+    this is candidate evidence the EM weighs, never a verdict, and the full
+    walk put every pickup ~26x over DR-344. The caller records the window as
+    `plan_chunk_commits_since` so an empty list reads as "none in this
+    window", not "none ever". Do not unbound it to recover that one case.
+
+    Order-preserving: results are appended in `_walk_commits` pop order, the
+    same order the per-path calls produced. On any read-model failure the
+    caller falls back to the per-path form, so a degraded object store costs
+    speed, never results.
+    """
+    per_path: dict[str, list[tuple[str, str]]] = {path: [] for path in paths}
+    if not paths:
+        return per_path
+    discovered = _discover_git_dirs(repo_root)
+    if discovered is None:
+        raise _GitReadModelError("no enclosing git worktree for multi-path log")
+    _root, dirs = discovered
+    common_dir = dirs.common_dir
+    head_sha = _resolve_revision(dirs, "HEAD")
+    if head_sha is None:
+        return per_path
+    for sha, commit in _walk_commits_since(common_dir, head_sha, since_epoch):
+        for path in paths:
+            if _commit_touches_path(common_dir, sha, commit, path):
+                per_path[path].append((sha, commit["subject"]))
+    return per_path
+
+
 def compute_closure_signals(
     repo_root: Path, since_date: str, pending_items: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -2724,6 +2785,36 @@ def compute_closure_signals(
     """
     subjects = _git_log_oneline(repo_root, [f"--since={since_date}"])
     signals: list[dict[str, Any]] = []
+
+    cited_paths = [
+        cited
+        for cited in (_extract_cited_path(item.get("text", "")) for item in pending_items)
+        if cited
+    ]
+    # Deduped: two pending items citing the same path are one walk's worth of
+    # work, and were two full history walks before.
+    unique_cited = list(dict.fromkeys(cited_paths))
+    try:
+        path_commits = _log_oneline_multi_path(
+            repo_root, unique_cited, _parse_since_date(since_date)
+        )
+    except (
+        _GitReadModelError,
+        OSError,
+        zlib.error,
+        struct.error,
+        UnicodeDecodeError,
+        IndexError,
+        ValueError,
+        RecursionError,
+    ):
+        # Degraded object store or no worktree: fall back to the per-path form,
+        # which funnels through `_run_git`'s never-raises guard. Slower, same
+        # results.
+        path_commits = {
+            cited: _git_log_oneline(repo_root, [f"--since={since_date}", "--", cited])
+            for cited in unique_cited
+        }
 
     for item in pending_items:
         text = item.get("text", "")
@@ -2747,9 +2838,10 @@ def compute_closure_signals(
             entry["plan_status"] = plan_status
             entry["plan_chunk_commits"] = [
                 {"sha": sha, "subject": subject}
-                for sha, subject in _git_log_oneline(repo_root, ["--", cited_path])
+                for sha, subject in path_commits.get(cited_path, [])
                 if re.match(r"^[\w][\w.\-]*:\s", subject)
             ]
+            entry["plan_chunk_commits_since"] = since_date
 
         signals.append(entry)
 
