@@ -1501,3 +1501,256 @@ def test_an_explicit_run_report_still_wins_over_the_routed_check(tmp_path):
 
     head = named.read_text(encoding="utf-8").split("---")[1]
     assert "\nintegrated_from: [coordinatoroverengineering-reviewer.aRRR]\n" in head
+
+
+class TestPartitionAudit:
+    """`_partition_audit` — the arithmetic half of "every finding in exactly
+    one bucket", which the op used to leave entirely to the calling agent.
+
+    Origin: example-retrieval-repo-em memo, 2026-09-12. An integrator applied all seven
+    findings, then bucketed five, omitted two and mislabelled one.
+    """
+
+    def test_none_when_no_findings_array_to_check_against(self):
+        # The review-findings shape carries no per-finding ids; there is
+        # nothing to audit and the block must stay byte-identical.
+        assert mod._partition_audit(None, {"applied": ["1", "2"]}) is None
+
+    def test_none_when_the_partition_is_exactly_right(self):
+        findings = [{"title": f"F{i}"} for i in range(1, 4)]
+        buckets = {"applied": ["1", "3"], "deferred": ["2"]}
+        assert mod._partition_audit(findings, buckets) is None
+
+    def test_the_memo_case_two_findings_bucketed_nowhere(self):
+        findings = [{"title": f"F{i}"} for i in range(1, 8)]
+        buckets = {
+            "applied": ["1", "3", "5"],
+            "deferred": ["2"],
+            "verified-no-action": ["4"],
+        }
+        report = mod._partition_audit(findings, buckets)
+        assert report == {"unbucketed": ["6", "7"]}
+
+    def test_an_index_in_two_buckets_is_self_contradicting(self):
+        findings = [{"title": "a"}, {"title": "b"}]
+        buckets = {"applied": ["1", "2"], "deferred": ["2"]}
+        report = mod._partition_audit(findings, buckets)
+        assert report["duplicated"] == ["2"]
+
+    def test_an_index_past_the_end_of_the_array(self):
+        findings = [{"title": "a"}, {"title": "b"}]
+        buckets = {"applied": ["1", "2", "9"]}
+        report = mod._partition_audit(findings, buckets)
+        assert report["out_of_range"] == ["9"]
+
+    def test_an_id_naming_no_index_is_reported_never_guessed_at(self):
+        findings = [{"title": "a"}]
+        buckets = {"applied": ["1"], "deferred": ["summary"]}
+        report = mod._partition_audit(findings, buckets)
+        assert report["unrecognized"] == ["summary"]
+
+    def test_the_f_prefix_spelling_is_the_same_index(self):
+        findings = [{"title": "a"}, {"title": "b"}]
+        # DoE's prose uses F<n>, its worked CLI example uses bare integers.
+        assert mod._partition_audit(findings, {"applied": ["F1", "f2"]}) is None
+
+
+class TestPartitionAuditRendering:
+    def test_a_clean_call_renders_no_audit_key_at_all(self):
+        block = mod._build_block({"applied": ["1"]}, None)
+        assert "partition_audit" not in block
+
+    def test_a_mismatch_is_recorded_in_the_block_not_only_on_stderr(self):
+        block = mod._build_block(
+            {"applied": ["1"]}, None, partition_audit={"unbucketed": ["6", "7"]}
+        )
+        assert "partition_audit:" in block
+        assert "  unbucketed: [6, 7]" in block
+
+    def test_the_audit_stays_inside_the_yaml_fence(self):
+        block = mod._build_block(
+            {"applied": ["1"]}, None, partition_audit={"unbucketed": ["2"]}
+        )
+        body = block.split("```yaml", 1)[1].split("```", 1)[0]
+        assert "partition_audit:" in body
+
+
+class TestIdSpellingsMeasuredOnDisk:
+    """Every positional spelling that actually occurs in the 1189 landed
+    sidecars. `finding-N` is the MOST COMMON of them (2526 tokens, ahead of
+    bare integers at 2411) and the first cut of `_index_for_id` mapped it to
+    None — reporting the single most popular correct id as `unrecognized`.
+
+    A false positive here is worse than the silence the audit replaced: it
+    libels a correct record and teaches readers to skip the field. These are
+    regression tests for that, not taste.
+    """
+
+    @pytest.mark.parametrize(
+        "spelling",
+        ["3", "F3", "f3", "finding-3", "finding 3", "finding_3", "Finding 3", "FINDING-3"],
+    )
+    def test_every_measured_positional_spelling_maps_to_its_index(self, spelling):
+        assert mod._index_for_id(spelling) == 3
+
+    @pytest.mark.parametrize("token", ["F3a", "P1", "P2", "summary", "", "finding-"])
+    def test_a_token_naming_no_index_is_not_coerced(self, token):
+        assert mod._index_for_id(token) is None
+
+    @pytest.mark.parametrize("token", ["0", "F0", "finding-0"])
+    def test_zero_is_an_index_not_a_rejection(self, token):
+        # Reversed deliberately: this function used to reject 0, which made a
+        # complete zero-based partition read as unrecognized AND unbucketed.
+        # `_partition_audit` infers the base; see TestIndexBaseIsInferredNotAssumed.
+        assert mod._index_for_id(token) == 0
+
+    def test_finding_n_spelling_does_not_false_fire_the_audit(self):
+        findings = [{"t": i} for i in range(1, 4)]
+        buckets = {"applied": ["finding-1", "finding-3"], "deferred": ["finding-2"]}
+        assert mod._partition_audit(findings, buckets) is None
+
+    def test_mixed_spellings_in_one_call_still_resolve_to_one_partition(self):
+        # Observed shape: an integrator that copies some ids from the
+        # reviewer's prose and types the rest.
+        findings = [{"t": i} for i in range(1, 4)]
+        buckets = {"applied": ["finding-1", "F2"], "deferred": ["3"]}
+        assert mod._partition_audit(findings, buckets) is None
+
+    def test_the_same_index_in_two_spellings_is_still_a_duplicate(self):
+        findings = [{"t": 1}, {"t": 2}]
+        buckets = {"applied": ["finding-1", "2"], "deferred": ["F1"]}
+        report = mod._partition_audit(findings, buckets)
+        assert report["duplicated"] == ["1"]
+
+
+class TestIndexBaseIsInferredNotAssumed:
+    """46 ids on disk are zero-based (`0`, `F0`, `finding-0`). A 1..N
+    expectation reports a COMPLETE 0-based partition as two kinds of broken
+    at once, which is the false-positive class this audit can least afford.
+    """
+
+    def test_a_complete_zero_based_partition_is_clean(self):
+        assert mod._partition_audit([{}, {}, {}], {"applied": ["0", "1", "2"]}) is None
+
+    def test_zero_based_across_buckets_and_spellings(self):
+        buckets = {"applied": ["finding-0", "F1"], "deferred": ["2"]}
+        assert mod._partition_audit([{}, {}, {}], buckets) is None
+
+    def test_an_incomplete_zero_based_set_still_fires(self):
+        # Ambiguous by construction — it matches neither base exactly. The
+        # audit's job is to raise the flag, not to guess which was intended.
+        report = mod._partition_audit([{}, {}, {}], {"applied": ["0", "1"]})
+        assert report is not None
+
+    def test_one_based_is_unchanged_by_the_inference(self):
+        assert mod._partition_audit([{}, {}, {}], {"applied": ["1", "2", "3"]}) is None
+
+    def test_the_memo_case_is_unchanged_by_the_inference(self):
+        report = mod._partition_audit(
+            [{}] * 7,
+            {"applied": ["1", "3", "5"], "deferred": ["2"], "verified-no-action": ["4"]},
+        )
+        assert report == {"unbucketed": ["6", "7"]}
+
+    def test_a_quoted_id_is_not_reported_as_unrecognized(self):
+        # The renderer never emits quotes; hand-authored blocks do.
+        assert mod._partition_audit([{}, {}], {"applied": ['"1"', '"2"']}) is None
+
+
+class TestPartitionAuditEndToEnd:
+    """The audit wired through `append_dispositions` against a real file on
+    disk, rather than hand-built args. Every case here was named by the
+    code-reviewer on f776d9c779 as an unverified integration seam.
+    """
+
+    @staticmethod
+    def _sidecar(tmp_path, body: str) -> "tuple[Path, Path]":
+        root = tmp_path
+        share = root / "state" / "subagent-share" / "sess"
+        share.mkdir(parents=True)
+        target = share / "code-reviewer-deadbeef.md"
+        target.write_text(body, encoding="utf-8")
+        return root, target
+
+    @staticmethod
+    def _json_block(n: int) -> str:
+        import json as _json
+
+        return "```json\n" + _json.dumps({"findings": [{"t": i} for i in range(n)]}) + "\n```\n"
+
+    def test_the_audit_reads_the_array_off_the_actual_file(self, tmp_path):
+        root, sc = self._sidecar(
+            tmp_path,
+            "---\nagent_type: coordinator:code-reviewer\n---\n\n" + self._json_block(7),
+        )
+        result = mod.append_dispositions(
+            sc, {"applied": ["1", "3", "5"], "deferred": ["2"], "verified-no-action": ["4"]},
+            git_root=root,
+        )
+        assert result["partition_audit"] == {"unbucketed": ["6", "7"]}
+
+    def test_the_both_shape_sidecar_is_still_audited(self, tmp_path):
+        # 19 of 307 live sidecars carry both; _detect_findings_shape calls
+        # them `review-findings`, which is exactly why the audit must not key
+        # on its verdict. Argued in the docstring, exercised here.
+        body = (
+            "---\nagent_type: coordinator:code-reviewer\n---\n\n"
+            "## Findings\n\nThree real findings.\n\n" + self._json_block(3)
+        )
+        root, sc = self._sidecar(tmp_path, body)
+        assert mod._detect_findings_shape(body)[0] == mod._SHAPE_REVIEW_FINDINGS
+        result = mod.append_dispositions(sc, {"applied": ["1"]}, git_root=root)
+        assert result["partition_audit"] == {"unbucketed": ["2", "3"]}
+
+    def test_no_findings_skips_the_audit_entirely(self, tmp_path):
+        root, sc = self._sidecar(
+            tmp_path,
+            "---\nagent_type: coordinator:code-reviewer\n---\n\n"
+            "## Findings\n\nThe reviewer declared none.\n\n",
+        )
+        result = mod.append_dispositions(sc, {}, no_findings=True, git_root=root)
+        assert result["partition_audit"] is None
+        assert "partition_audit" not in sc.read_text(encoding="utf-8")
+
+    def test_two_candidate_json_blocks_report_the_ambiguity(self, tmp_path):
+        # A finding whose own evidence quotes this very shape.
+        body = (
+            "---\nagent_type: coordinator:code-reviewer\n---\n\n"
+            + self._json_block(2)
+            + "\n### Finding 1\n\nThe op mis-reads this shape:\n\n"
+            + self._json_block(9)
+        )
+        root, sc = self._sidecar(tmp_path, body)
+        result = mod.append_dispositions(sc, {"applied": ["1", "2"]}, git_root=root)
+        assert result["partition_audit"] == {"ambiguous_block": ["true"]}
+
+    def test_a_multi_class_report_renders_parseable_yaml_in_order(self, tmp_path):
+        import yaml
+
+        root, sc = self._sidecar(
+            tmp_path,
+            "---\nagent_type: coordinator:code-reviewer\n---\n\n" + self._json_block(4),
+        )
+        mod.append_dispositions(
+            sc, {"applied": ["1", "9", "summary"], "deferred": ["1"]}, git_root=root
+        )
+        fence = sc.read_text(encoding="utf-8").split("```yaml", 1)[1].split("```", 1)[0]
+        parsed = yaml.safe_load(fence)
+        audit = parsed["partition_audit"]
+        assert audit["unbucketed"] == [2, 3, 4]
+        assert audit["duplicated"] == [1]
+        assert audit["out_of_range"] == [9]
+        assert audit["unrecognized"] == ["summary"]
+        assert list(audit) == ["unbucketed", "duplicated", "out_of_range", "unrecognized"]
+
+    def test_the_cli_prints_the_warning_to_stderr(self, tmp_path, capsys, monkeypatch):
+        root, sc = self._sidecar(
+            tmp_path,
+            "---\nagent_type: coordinator:code-reviewer\n---\n\n" + self._json_block(3),
+        )
+        monkeypatch.chdir(root)
+        code = mod.main(["--sidecar", str(sc), "--applied", "1", "--root", str(root)])
+        captured = capsys.readouterr()
+        assert code == 0
+        assert "WARNING" in captured.err
+        assert "do not cover" in captured.err

@@ -123,6 +123,7 @@ from coordinator_core._repo_root_probe import (
     resolve_repo_root as _resolve_repo_root,
 )
 from coordinator_core.daily_branch import sanitize_slug
+from coordinator_core.win_portability import same_path as _same_path
 
 _LOG = logging.getLogger(__name__)
 
@@ -490,6 +491,112 @@ def canonical_repo_key_for_root(root, repo_key_paths: dict) -> Optional[str]:
         chosen,
     )
     return chosen
+
+
+def _identity_repo_aliases() -> dict[str, str]:
+    # Review: coordinator-code-reviewer Finding 3 — sibling reader:
+    # coordinator/bin/lib/coordinator_registry.py's REPO_ALIASES (eager,
+    # import-time). Keep both in sync by hand on any manifest-shape change.
+    """`{registryKey: shortname}` from the DoE manifest's `identity.repoAliases` —
+    the same projection `coordinator_registry.REPO_ALIASES` computes eagerly at
+    import time in `coordinator/bin/lib/`, recomputed here lazily (function-local
+    import — see module docstring's "Circular-import note") from the engine's own
+    manifest reader (`coordinator_core.ops.fleet._memo_resolver.read_doe_identity`,
+    the DR-071-laddered, graceful-degradation-to-`{}` reader every other
+    identity/receiver surface in this repo already shares) rather than a second
+    top-level manifest load on this hot-path module."""
+    from coordinator_core.ops.fleet._memo_resolver import read_doe_identity
+
+    return {
+        entry["registryKey"]: entry["shortname"]
+        for entry in read_doe_identity().get("repoAliases", [])
+        if isinstance(entry, dict) and entry.get("registryKey") and entry.get("shortname")
+    }
+
+
+def _identity_central_canonical_id() -> str:
+    # Review: coordinator-code-reviewer Finding 3 — sibling reader:
+    # coordinator/bin/lib/coordinator_registry.py's _central_canonical_id().
+    # Keep both in sync by hand on any manifest-shape change.
+    """The single canonical central-EM identity string — `identity.
+    centralReceiverIds[0]` in the DoE manifest, mirroring `coordinator_registry.
+    _central_canonical_id()`'s own index-0-is-canonical convention (itself
+    mirroring DoE's frontmatter validator). Degrades to the well-known default
+    `"doe-claude-em"` when the manifest does not resolve — the same graceful-
+    degradation floor every reader in `_memo_resolver` already uses; never
+    raises."""
+    from coordinator_core.ops.fleet._memo_resolver import read_doe_identity
+
+    central_ids = read_doe_identity().get("centralReceiverIds") or []
+    return central_ids[0] if central_ids else "doe-claude-em"
+
+
+def repo_key_to_em_id(key: str) -> str:
+    """Reverse a repos.<name> registry key to its EM identity string.
+
+    Special-case: repos.doe_claude → the manifest-derived canonical central
+    identity (see `_identity_central_canonical_id()` — identity.centralReceiverIds[0],
+    currently "doe-claude-em"). "claude-central-em", "central-em" and "central"
+    were RETIRED OUTRIGHT from identity.centralReceiverIds by DoE at their
+    b787bf0f0 (2026-08-26): they are not aliases, not members of
+    CENTRAL_RECEIVER_IDS, and do not resolve — their absence is the operative
+    rule and a send to one is meant to fail loudly. Sequenced with this repo's
+    own test_central_receiver_ids narrowing at 4164ae195.
+
+    Otherwise applies the manifest's repoAliases for doctrine-shortname
+    divergence (e.g. Example_game_workbench_repo → example-game-repo → example-game-repo-em), then
+    converts remaining underscores to dashes.
+
+    Callers are expected to pass fully-qualified `repos.<name>` keys; bare keys
+    are handled defensively but unsupported.
+
+    Negative-spec: the ~/.claude/home path is NOT special-cased here — central
+    identity is anchored on repos.doe_claude, not the home directory.
+
+    Moved 2026-09-12 (DoE e267d18336) from `coordinator/bin/lib/
+    coordinator_registry.py` — that module is NOT on `coordinator_core`'s
+    import path (DR-047), so the engine could not call it where it used to
+    live. `coordinator_registry.repo_key_to_em_id` now delegates here.
+    """
+    if key == "repos.doe_claude":
+        return _identity_central_canonical_id()
+    shortname = key[len("repos."):] if key.startswith("repos.") else key
+    canonical = _identity_repo_aliases().get(shortname)
+    if canonical is not None:
+        return canonical + "-em"
+    return shortname.replace("_", "-") + "-em"
+
+
+def em_id_for_root(root: Optional[str], repo_key_paths: dict[str, str]) -> str:
+    """Resolve a repo root path to its EM identity string.
+
+    Resolution order:
+      1. root is None  → 'unknown-sender-em'
+      2. root path-matches repo_key_paths['repos.doe_claude']  → the manifest-derived
+         canonical central identity (see `_identity_central_canonical_id()`)
+      3. root path-matches any other registered repos.* path   → repo_key_to_em_id(key),
+         the key chosen by `canonical_repo_key_for_root` when
+         several keys point at one repo (a canonical key plus its receive-only
+         aliases) — never by whatever order the caller enumerated the registry in
+      4. unregistered git repo  → basename(root) + '-em'
+
+    Negative-spec: the old ~/.claude/home special-case is REMOVED — ~/.claude is no
+    longer a memo-identity anchor. Central identity flows through repos.doe_claude only.
+
+    Moved 2026-09-12 (DoE e267d18336) from `coordinator/bin/lib/
+    coordinator_registry.py` alongside `repo_key_to_em_id` — see that
+    function's docstring for the DR-047 rationale. `coordinator_registry.
+    em_id_for_root` now delegates here.
+    """
+    if root is None:
+        return "unknown-sender-em"
+    doe_claude_path = repo_key_paths.get("repos.doe_claude")
+    if doe_claude_path and _same_path(str(root), str(doe_claude_path)):
+        return _identity_central_canonical_id()
+    key = canonical_repo_key_for_root(root, repo_key_paths)
+    if key is not None:
+        return repo_key_to_em_id(key)
+    return os.path.basename(str(root).rstrip("/\\")) + "-em"
 
 
 def registry_value(key: str, flat: dict) -> Optional[str]:

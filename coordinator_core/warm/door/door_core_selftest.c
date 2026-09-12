@@ -289,6 +289,45 @@ int main(void) {
                   door_argv_declares_params_stdin(3, NULL), 0);
     }
 
+    /* ---- 7. The stdin-reading basename gate (door_core.h). Mirrors
+     * check 6's shape: a door that misses a listed name delivers a
+     * stdin-reading entrypoint warm, where `sys.stdin` is None; a door
+     * that over-matches pays a cold spawn for a route that works warm. */
+    {
+        check_int("stdin_basename/listed",
+                  door_basename_declares_stdin_read("claims-emit"), 1);
+
+        check_int("stdin_basename/unlisted",
+                  door_basename_declares_stdin_read("coordinator-invoke"), 0);
+
+        check_int("stdin_basename/empty_string",
+                  door_basename_declares_stdin_read(""), 0);
+
+        /* A prefix of a listed name is the substring bug this shape
+         * invites -- "claims" must not match "claims-emit". */
+        check_int("stdin_basename/prefix_of_listed_is_not_a_match",
+                  door_basename_declares_stdin_read("claims"), 0);
+
+        /* Comparison policy is exact strcmp (door_core.h's own comment):
+         * a case-variant of a listed name is NOT a match, on either
+         * platform's compile of this shared table. */
+        check_int("stdin_basename/case_variant_is_not_a_match",
+                  door_basename_declares_stdin_read("Claims-Emit"), 0);
+
+        /* The unresolvable-basename case: `g_own_basename_ok == 0` means
+         * each platform door's own `door_entrypoint_basename()` falls
+         * back to `DOOR_DEFAULT_ENTRYPOINT`/`DOOR_DEFAULT_ENTRYPOINT_W`
+         * ("coordinator-invoke", see door.c/door_posix.c) rather than
+         * ever passing NULL here -- so the gate is exercised the same way
+         * as the "unlisted" case above, and NULL itself must also refuse
+         * rather than crash. */
+        check_int("stdin_basename/default_entrypoint_when_unresolvable",
+                  door_basename_declares_stdin_read("coordinator-invoke"), 0);
+
+        check_int("stdin_basename/null_basename",
+                  door_basename_declares_stdin_read(NULL), 0);
+    }
+
     printf("%s: %d checks, %d failures\n",
            failures == 0 ? "PASS" : "FAIL", checks, failures);
     return failures == 0 ? 0 : 1;

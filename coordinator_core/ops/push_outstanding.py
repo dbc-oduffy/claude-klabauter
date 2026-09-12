@@ -243,10 +243,17 @@ def _record_arm_latency(arm_op: str, t_start: float, root: Path) -> None:
 def _is_p4_repo(root: Path) -> bool:
     """D1's marker check, duplicated from `workspace.is_p4_repo` rather than
     called through it -- importing `coordinator_core.p4.workspace` at all
-    imports the `coordinator_core.p4` PACKAGE (its `__init__` pulls in
-    `runner` too), which is exactly what C4's isolation test asserts never
-    happens for a git-only repo. This reads the same key with the same
-    primitive `workspace.is_p4_repo` itself uses
+    imports the `coordinator_core.p4` PACKAGE first (Python always imports
+    the parent package before a submodule), landing `coordinator_core.p4` in
+    `sys.modules` regardless of what `__init__.py` itself does or does not
+    import. That is exactly what C4's isolation test asserts never happens
+    for a git-only repo. Review: overengineering-reviewer F1 asked whether
+    emptying `p4/__init__.py`'s re-export facade (applied, see that module)
+    retires this duplication -- it does not, since the trigger is the
+    package-before-submodule import order, not the facade's own eager
+    `runner` import; re-verified against `test_git_only_isolation.py`, still
+    green, kept as-is. This reads the same key with the same primitive
+    `workspace.is_p4_repo` itself uses
     (`resolve_validation_cmd.cs_read_local_md_key`), so the two can never
     disagree, without paying the import."""
     from coordinator_core.resolve_validation_cmd import cs_read_local_md_key
@@ -275,13 +282,39 @@ def _p4_leg_precheck(root: Path, session_id: Optional[str]) -> Optional[dict]:
 
     from coordinator_core.p4 import workspace
 
-    if session_id is None:
+    # Review: coordinator-code-reviewer F1 -- `is None` alone left the
+    # function's own no-op contract resting on the op handler's `"" -> None`
+    # normalization rather than holding on its own; `session_dir` raises on
+    # a falsy-but-not-None id, so a direct `push_outstanding()` caller
+    # passing `session_id=""` bypassed this guard.
+    if not session_id:
         _record_arm_latency(_ARM_P4_NO_SESSION, time.time(), root)
         return None
 
-    sdir = session_dir(session_id, cwd=str(root))
-    state = workspace.session_change(sdir)
-    current_head = head_sha(root)
+    t_start = time.time()
+    try:
+        sdir = session_dir(session_id, cwd=str(root))
+        state = workspace.session_change(sdir)
+        current_head = head_sha(root)
+    except Exception as exc:  # noqa: BLE001 -- Review: coordinator-code-reviewer F1 --
+        # structural isolation to match `_p4_leg_execute`: a raise in any
+        # callee here must record on the p4 telemetry arm and return `None`,
+        # never propagate into the git leg that runs after this call.
+        try:
+            from coordinator_core.telemetry.op_latency import record_op_latency
+
+            record_op_latency(
+                op=_ARM_P4,
+                t_start=t_start,
+                elapsed_ms=(time.time() - t_start) * 1000.0,
+                outcome="error",
+                repo_root=root,
+                error_kind=type(exc).__name__,
+            )
+        except Exception:
+            pass
+        return None
+
     if state["p4_shelved_sha"] is not None and state["p4_shelved_sha"] == current_head:
         return None
 
@@ -304,12 +337,11 @@ def _p4_leg_execute(
         return
 
     t_start = time.time()
-    # Dotted-module import, not `from coordinator_core.p4 import
-    # session_change` -- the package re-exports `workspace.session_change`
-    # (the D9 reader function) under that same attribute name, which would
-    # shadow the submodule and hide `ensure_session_change`/
-    # `_resolve_repo_key` (see `p4/shelve.py`'s own note on this).
-    import coordinator_core.p4.session_change as p4_session_change
+    # Review: overengineering-reviewer F1 (integrator-applied) -- the
+    # package's re-export facade that used to shadow this submodule under
+    # `from coordinator_core.p4 import session_change` is gone; a plain
+    # submodule import is unambiguous now.
+    from coordinator_core.p4 import session_change as p4_session_change
     from coordinator_core.p4 import shelve as p4_shelve
     from coordinator_core.p4 import workspace
 
@@ -340,6 +372,9 @@ def _p4_leg_execute(
     try:
         from coordinator_core.telemetry.op_latency import record_op_latency
 
+        # Review: overengineering-reviewer F4 (integrator-applied) --
+        # `restored`/`adopted`/`remint` were built on `ShelveOutcome`
+        # explicitly for this call's own telemetry arm; this is that arm.
         record_op_latency(
             op=_ARM_P4,
             t_start=t_start,
@@ -347,6 +382,9 @@ def _p4_leg_execute(
             outcome="ok" if outcome.ok else "error",
             repo_root=root,
             error_kind=None if outcome.ok else (outcome.error.kind if outcome.error else None),
+            restored=outcome.restored,
+            adopted=outcome.adopted,
+            remint=outcome.remint,
         )
     except Exception:
         pass

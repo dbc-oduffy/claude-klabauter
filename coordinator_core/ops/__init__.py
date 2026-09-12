@@ -275,6 +275,21 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "not by the op's own tests.",
     ),
     (
+        "coordinator_core.p4.register",
+        'registers "p4.register_workspace" (C7). Lives under coordinator_core/p4/, '
+        "not coordinator_core/ops/ — a module outside this package is reachable "
+        "for DISPATCH through OP_MODULE_MAP's targeted import, which is why the "
+        "op resolves, but reachability for the registry-miss SAFE FALLBACK and "
+        "for every census enumerator comes from THIS list alone. Same shape as "
+        "`sizing.read_object_fields` above: the p4 suites stayed green because "
+        "they import the module directly.",
+    ),
+    (
+        "coordinator_core.p4.session_state",
+        'registers "p4.session_state" (C7, D9 S3) — see the sibling p4.register '
+        "row above for why an out-of-package op module still needs this entry.",
+    ),
+    (
         "coordinator_core.ops.handoff_columns_query",
         'registers "handoff.columns" (2026-08-11 pull-surface-four-columns C3 — '
         "batch-computed status/deployment_state/predecessor/shipped_in over live "

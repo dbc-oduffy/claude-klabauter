@@ -161,6 +161,7 @@ from coordinator_core.bash_guards import guard_doctrine_surface_bash_write
 from coordinator_core.bash_guards import guard_repo_setup_claude_home_refusal
 from coordinator_core.bash_guards import guard_host_subagent_bash_ban
 from coordinator_core.bash_guards import guard_host_subagent_bash_spawn_shapes
+from coordinator_core.bash_guards import p4_verb_fence
 from coordinator_core.daily_day import local_day
 
 _PROBE_TIMEOUT_SEC = 10
@@ -587,6 +588,24 @@ def _trigger_check_blanket_git_add() -> Optional[Dict[str, Any]]:
         _dc._is_hazard_repo = orig_hazard
 
 
+def _trigger_p4_verb_fence() -> Optional[Dict[str, Any]]:
+    """``p4_verb_fence.check`` gates entirely on ``_is_p4_gated(cwd)`` (a
+    zero-spawn ``coordinator.local.md`` marker walk + ``is_p4_repo``) before
+    any command-text parsing runs, so a deterministic fire needs that gate
+    forced open rather than a real p4-mirrored scratch repo -- same
+    module-attribute swap-and-restore convention as
+    ``_trigger_check_blanket_git_add`` above, on this guard's own
+    ``_is_p4_gated`` rather than ``dispatch_checks._is_hazard_repo``.
+    ``p4 submit`` is D6's own always-denied verb, independent of any
+    changelist/session state."""
+    orig_gated = p4_verb_fence._is_p4_gated
+    p4_verb_fence._is_p4_gated = lambda cwd: True
+    try:
+        return p4_verb_fence.check(_payload("p4 submit -c 1", agent_id=None))
+    finally:
+        p4_verb_fence._is_p4_gated = orig_gated
+
+
 def _trigger_guard_branch_set_precedence() -> Optional[Dict[str, Any]]:
     """C5's own `ahead_of_main` (the count actually named in its advisory)
     is a REAL `git rev-list` call, never injectable through `check()`'s own
@@ -702,6 +721,7 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
         'echo "=== SESSION FACTS ==="; pwd; whoami; git status --short', "altlive-probe"
     ),
     "check_blanket_git_add": _trigger_check_blanket_git_add,
+    "p4_verb_fence": _trigger_p4_verb_fence,
     "check_head_tail_plumbing_rewrite": lambda: guard_head_tail_rewrite.check_head_tail_plumbing_rewrite(
         "find . -name '*.py' | head -n 5", "altlive-probe"
     ),

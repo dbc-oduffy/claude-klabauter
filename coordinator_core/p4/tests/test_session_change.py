@@ -17,15 +17,13 @@ from pathlib import Path
 
 import pytest
 
-import coordinator_core.p4.session_change as session_change
 from coordinator_core.git.run import GitResult
-from coordinator_core.p4 import runner, workspace
+from coordinator_core.p4 import runner, session_change, workspace
 
-# NOTE: `coordinator_core.p4.__init__` re-exports `workspace.session_change`
-# (the D9 reader function) under the package attribute name `session_change`,
-# shadowing this submodule on a plain `from coordinator_core.p4 import
-# session_change`. The dotted-module import above binds the submodule
-# directly and is unaffected by that re-export.
+# Review: overengineering-reviewer F1 (integrator-applied) -- the package
+# used to re-export `workspace.session_change` under this same attribute
+# name, shadowing this submodule on a plain import; that facade is gone,
+# so a plain submodule import is unambiguous now.
 
 
 @pytest.fixture
@@ -45,7 +43,7 @@ def identity(tmp_path):
     )
 
 
-def _patch_repo_key(monkeypatch, repo_root, identity, repo_key="p4-studio/fifa-main"):
+def _patch_repo_key(monkeypatch, repo_root, identity, repo_key="p4-studio/game-main"):
     monkeypatch.setattr(
         session_change,
         "merged_flat_registry",
@@ -122,6 +120,27 @@ class TestEnsureSessionChange:
 
         with pytest.raises(session_change.P4SessionChangeError):
             session_change.ensure_session_change(repo_root, "sid-1")
+
+    def test_duplicate_repo_root_registration_raises_never_picks_arbitrary_match(
+        self, monkeypatch, tmp_path, sdir
+    ):
+        """Review: code-reviewer F4 (integrator-applied). Two repo_keys
+        resolving to the same physical repo_root (a stale row left behind
+        by a re-registration) must raise, not silently pick the
+        alphabetically-first key."""
+        repo_root = str(tmp_path)
+        monkeypatch.setattr(
+            session_change,
+            "merged_flat_registry",
+            lambda: {
+                "p4.p4-studio/game-main.repo_root": repo_root,
+                "p4.p4-studio/game-main-old.repo_root": repo_root,
+            },
+        )
+        monkeypatch.setattr(session_change, "session_dir", lambda sid, cwd=None: str(sdir))
+
+        with pytest.raises(session_change.P4SessionChangeError):
+            session_change._resolve_repo_key(repo_root)
 
     def test_mint_failure_raises(self, monkeypatch, tmp_path, sdir, identity):
         repo_root = str(tmp_path)

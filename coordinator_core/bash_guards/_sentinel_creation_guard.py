@@ -198,6 +198,25 @@ from typing import List, Optional, Tuple
 REASON_DIRECT = "direct"
 REASON_INDIRECTION = "indirection"
 
+#: Shared indirection-remedy clause, one copy for every sentinel guard on
+#: this engine (Review: overengineering-reviewer -- the remedy is generic
+#: shell-invocation guidance with nothing guard-specific left in it once
+#: the explaining/justifying clauses are cut, so it belongs here once
+#: rather than hand-copied per guard; the copy-paste drift this closes was
+#: observed inside a single commit, one guard in the family still carrying
+#: the pre-fix wording while its four siblings had already moved on).
+INDIRECTION_REMEDY = (
+    # Opens `_advisory_dedupe._CUE_WINDOW_RE`'s cue window deliberately:
+    # `_message_size` exempts a backticked command only inside one, so the
+    # earlier "rather than naming an interpreter" phrasing was charged 295
+    # prose bytes against a 220 cap for saying the same thing. Measured
+    # 2026-09-12: 252 total / 45 exempt / 207 prose.
+    "Use instead: `./path/to/script.sh` -- invoke the script, do not name "
+    "an interpreter (`bash path/to/script.sh` is what denies). For a "
+    "non-script payload, run its steps directly, not through an "
+    "interpreter/stdin/xargs wrapper, or ask the EM/PM to run it."
+)
+
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _BUNDLED_C_FLAG_RE,
     _C_FLAG_INTERPRETERS,

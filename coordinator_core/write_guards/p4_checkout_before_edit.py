@@ -30,8 +30,13 @@ Deny conditions, in order:
      the deny envelope this call returns, never the open attempt already
      made (D5).
 
-Every deny points the agent at the UE editor or example-game-repo's checkout tool
-directly — no provider registry (D9).
+Every deny points the agent back at its dispatching EM
+directly — no provider registry (D9). This does not contradict
+``p4.register_workspace``'s optional ``p4_checkout_tool``/``p4_submit_tool``
+slots (``p4/register.py``): a named tool SLOT, written once at registration
+time for an external cross-repo caller to read later, is not a runtime
+resolve-and-dispatch registry — nothing here or there resolves a tool from
+those slots at guard-deny time. Review: overengineering-reviewer F2.
 
 Deny, never ask, under bypassPermissions (D5). Covers Edit, Write, MultiEdit
 and NotebookEdit.
@@ -64,7 +69,11 @@ CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
 PRIORITY = 40
 
-_ALTERNATIVE = "Use the UE editor's checkout, or example-game-repo's checkout tool, directly."
+# Register B7: the earlier text ("Use the UE editor's checkout, or example-game-repo's
+# checkout tool, directly.") named tools outside this repo, so it read as a
+# remedy while naming nothing this caller can reach. The reachable move is to
+# stop and say so -- whoever can take the checkout is not this session.
+_ALTERNATIVE = "Report to the EM that dispatched you: this file needs a checkout this session cannot take."
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:
@@ -200,6 +209,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         identity.client,
         ["-ztag", "fstat", "-T", "headType,otherOpen,otherLock", abs_path],
         cwd=repo_root,
+        # Review: coordinator-code-reviewer F3 -- explicit timeout stating
+        # this call site deliberately accepts the engine-wide default
+        # rather than inheriting it silently; value unchanged.
+        timeout=runner.DEFAULT_TIMEOUT_S,
     )
     if fstat.error is not None:
         return _deny_refused(abs_path, fstat.error)
@@ -221,6 +234,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         identity.client,
         ["edit", "-c", str(cl), abs_path],
         cwd=repo_root,
+        # Review: coordinator-code-reviewer F3 -- explicit timeout, same
+        # rationale as the fstat call above; value unchanged.
+        timeout=runner.DEFAULT_TIMEOUT_S,
     )
     if edit.error is not None:
         return _deny_refused(abs_path, edit.error)

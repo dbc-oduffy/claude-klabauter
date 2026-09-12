@@ -108,7 +108,7 @@ class _ReadOnlyFixture:
         os.chmod(target, stat.S_IREAD)
         monkeypatch.setattr(guard, "resolve_repo_root", lambda cwd: str(tmp_path))
         monkeypatch.setattr(workspace, "is_p4_repo", lambda root: True)
-        monkeypatch.setattr(guard, "_resolve_repo_key", lambda root: "p4-studio/fifa-main")
+        monkeypatch.setattr(guard, "_resolve_repo_key", lambda root: "p4-studio/game-main")
         monkeypatch.setattr(workspace, "identity", lambda repo_key: identity)
         monkeypatch.setattr(guard, "ensure_session_change", lambda root, sid: 101)
         return target
@@ -254,6 +254,28 @@ class TestReadOnlyTargetAllows(_ReadOnlyFixture):
 
         assert result is None
         assert len(calls) == 2
+
+
+class TestExplicitTimeout(_ReadOnlyFixture):
+    """Review: coordinator-code-reviewer F3 -- both spawns now pass an
+    explicit `timeout=` rather than relying on the implicit default."""
+
+    def test_fstat_and_edit_pass_explicit_timeout(self, monkeypatch, tmp_path, identity):
+        target = self.setup(monkeypatch, tmp_path, identity)
+        seen_timeouts = []
+
+        def fake_run(port, user, client, args, *, cwd=None, timeout=None, spec_input=None):
+            seen_timeouts.append(timeout)
+            if args[0] == "-ztag":
+                return runner.P4Result(ok=True, stdout="... headType text\n")
+            return runner.P4Result(ok=True, stdout="opened for edit\n")
+
+        monkeypatch.setattr(runner, "run", fake_run)
+
+        result = guard.check(_payload("Edit", str(target), str(tmp_path)))
+
+        assert result is None
+        assert seen_timeouts == [runner.DEFAULT_TIMEOUT_S, runner.DEFAULT_TIMEOUT_S]
 
 
 class TestUnregisteredWorkspace(_ReadOnlyFixture):

@@ -141,7 +141,7 @@ class TestSessionSuppliedInvocationShelves:
         )
         monkeypatch.setattr(p4_workspace_mod, "identity", lambda repo_key: _identity())
         monkeypatch.setattr(
-            p4_session_change_mod, "_resolve_repo_key", lambda root: "p4-studio/fifa-main"
+            p4_session_change_mod, "_resolve_repo_key", lambda root: "p4-studio/game-main"
         )
         monkeypatch.setattr(
             p4_session_change_mod, "ensure_session_change", lambda root, sid: 101
@@ -251,3 +251,73 @@ class TestGatedOnNoRemoteNeverNoUpstream:
         outcome = push_outstanding(repo, session_id="sid-1")
 
         assert "push:no-remote" in outcome.skipped
+
+
+class TestPrecheckIsExceptionIsolated:
+    """Review: coordinator-code-reviewer F1 -- `_p4_leg_precheck` must be as
+    structurally exception-isolated as `_p4_leg_execute`. A raise from any
+    callee it reaches (here `workspace.session_change`) must not propagate
+    into the git leg, and the returned `PushOutcome` must still report the
+    genuine git result."""
+
+    def test_precheck_raise_does_not_propagate_or_alter_git_outcome(self, monkeypatch, repo):
+        monkeypatch.setattr(push_outstanding_mod, "_is_p4_repo", lambda root: True)
+        monkeypatch.setattr(
+            push_outstanding_mod, "session_dir", lambda sid, cwd=None: str(repo / "sdir")
+        )
+        monkeypatch.setattr(
+            p4_workspace_mod,
+            "session_change",
+            _fail_if_called("workspace.session_change"),
+        )
+
+        def _raising_session_change(sdir):
+            raise RuntimeError("boom -- simulated precheck callee failure")
+
+        monkeypatch.setattr(p4_workspace_mod, "session_change", _raising_session_change)
+        monkeypatch.setattr(
+            push_outstanding_mod,
+            "push_with_retry",
+            lambda *a, **kw: PushOutcome(exit_code=0, acted=["push"], pushed_range="a..b"),
+        )
+        monkeypatch.setattr(p4_workspace_mod, "identity", _fail_if_called("workspace.identity"))
+        monkeypatch.setattr(
+            p4_session_change_mod,
+            "ensure_session_change",
+            _fail_if_called("session_change.ensure_session_change"),
+        )
+        monkeypatch.setattr(
+            p4_shelve_mod, "shelve_outstanding", _fail_if_called("shelve.shelve_outstanding")
+        )
+        telemetry = _RecordingTelemetry(monkeypatch)
+
+        outcome = push_outstanding(repo, session_id="sid-1")
+
+        assert outcome.exit_code == 0
+        assert outcome.acted == ["push"]
+        assert outcome.pushed_range == "a..b"
+        p4_error_calls = [
+            c
+            for c in telemetry.calls
+            if c["op"] == push_outstanding_mod._ARM_P4 and c["outcome"] == "error"
+        ]
+        assert len(p4_error_calls) == 1
+        assert p4_error_calls[0]["error_kind"] == "RuntimeError"
+
+    def test_falsy_empty_session_id_is_treated_as_no_session(self, monkeypatch, repo):
+        monkeypatch.setattr(push_outstanding_mod, "_is_p4_repo", lambda root: True)
+        monkeypatch.setattr(
+            push_outstanding_mod, "session_dir", _fail_if_called("session_dir")
+        )
+        monkeypatch.setattr(
+            p4_workspace_mod, "session_change", _fail_if_called("workspace.session_change")
+        )
+        telemetry = _RecordingTelemetry(monkeypatch)
+
+        outcome = push_outstanding(repo, session_id="")
+
+        assert outcome.exit_code == 0
+        no_session_calls = [
+            c for c in telemetry.calls if c["op"] == push_outstanding_mod._ARM_P4_NO_SESSION
+        ]
+        assert len(no_session_calls) == 1

@@ -494,6 +494,41 @@ int door_argv_declares_params_stdin(int argc, const char *const *argv) {
     return 0;
 }
 
+/* =========================================================================
+ * The stdin-reading basename table -- see door_core.h for the full policy
+ * and cross-reference to C1's derivation. THE LIST LIVES HERE, NOT IN A
+ * GENERATED HEADER: a build-time codegen step would add a generator, a
+ * generated artifact, and a staleness question, to remove a `git diff` a
+ * reviewer can read. `test_stdin_reading_table_parity.py` is this table's
+ * anti-staleness mechanism -- keep this name and spelling exact, the
+ * parity test's falsifier greps for `door_stdin_reading_basenames`.
+ * ========================================================================= */
+static const char *const door_stdin_reading_basenames[] = {
+    "claims-emit",
+    "detect-initiative-candidates",
+    "distill-log-append",
+    "fan-out-dispatch",
+    "misc-session-and-guards",
+    "normalize-snippet",
+    "percolate-mirror",
+    "queue-triage",
+    "refresh-plugin-live-install",
+    "statusline",
+    "workday-complete-backfill-anchor",
+    "workday-complete-close",
+};
+
+#define DOOR_STDIN_READING_BASENAMES_COUNT \
+    (sizeof(door_stdin_reading_basenames) / sizeof(door_stdin_reading_basenames[0]))
+
+int door_basename_declares_stdin_read(const char *basename) {
+    if (basename == NULL) return 0;
+    for (size_t i = 0; i < DOOR_STDIN_READING_BASENAMES_COUNT; i++) {
+        if (strcmp(basename, door_stdin_reading_basenames[i]) == 0) return 1;
+    }
+    return 0;
+}
+
 int build_hook_deny_envelope(buf_t *out, const char *reason) {
     int ok = 1;
     ok &= buf_append_cstr(out,

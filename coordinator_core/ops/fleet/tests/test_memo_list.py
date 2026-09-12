@@ -34,7 +34,6 @@ from coordinator_core.ops.fleet.memo_list import (
     _validate_list_params,
 )
 from coordinator_core.ops.fleet._memo_compose import (
-    _ENGINE_ACTOR_ID,
     _TOPIC_SLUG_RE,
     _memo_filename,
     resolve_sender_id,
@@ -762,7 +761,7 @@ class TestResolvedFilename:
         assert candidate["resolved"] is True
 
         today = datetime.date.today().isoformat()
-        expected = _memo_filename(today, _ENGINE_ACTOR_ID, "example-topic")
+        expected = _memo_filename(today, resolve_sender_id(None), "example-topic")
         assert candidate["resolved_filename"] == expected
 
     def test_non_claude_klabauter_caller_preview_matches_send_shared_derivation(
@@ -809,8 +808,11 @@ class TestResolvedFilename:
     def test_claude_klabauter_origin_caller_still_previews_correctly(self, tmp_path, monkeypatch):
         """Guard against regressing the currently-accidentally-correct case:
         a caller that supplies NO from_id (claude-klabauter-origin / engine-default
-        send) still previews with the engine actor id — identical to
-        memo.send's own no-from_id default."""
+        send) still previews with the SAME resolved sender id memo.send
+        would actually sign with — a RESOLVED RECEIVER identity
+        (`resolve_sender_id(None)`), never a fixed `claude-klabauter-engine` literal
+        (DoE e267d18336 withdrew the concurrence that made that literal
+        sufficient)."""
         rag_repo = tmp_path / "example-retrieval-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"example_retrieval_repo": str(rag_repo)})
@@ -827,7 +829,57 @@ class TestResolvedFilename:
         today = datetime.date.today().isoformat()
         expected = _memo_filename(today, resolve_sender_id(None), "smoke")
         assert candidate["resolved_filename"] == expected
-        assert _ENGINE_ACTOR_ID in candidate["resolved_filename"]
+        assert "claude-klabauter-engine" not in candidate["resolved_filename"]
+
+    def test_root_threaded_preview_matches_caller_worktree_not_ambient_cwd(
+        self, tmp_path, monkeypatch
+    ):
+        """Review: coordinator-code-reviewer Finding 1 — memo.list's
+        `repo_root` handler param must be threaded through to the defaulted-
+        sender resolution, never left to the engine process's ambient cwd
+        under the warm resident engine (DR-315: one process serves several
+        callers' repos). Registers two DISTINCT repos — one the caller's
+        actual `repo_root`, one what `_resolve_repo_root()`'s ambient-cwd
+        probe would return — and asserts the preview resolves against the
+        former. Fails on the unfixed code (which called
+        `resolve_sender_id(from_id)` with no `root`, falling through to the
+        ambient-cwd fallback)."""
+        rag_repo = tmp_path / "example-retrieval-repo"
+        rag_repo.mkdir()
+        caller_repo = tmp_path / "caller-repo"
+        caller_repo.mkdir()
+        ambient_repo = tmp_path / "ambient-repo"
+        ambient_repo.mkdir()
+        claude_home = _make_claude_home(tmp_path, {
+            "example_retrieval_repo": str(rag_repo),
+            "caller_repo": str(caller_repo),
+            "ambient_repo": str(ambient_repo),
+        })
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        from coordinator_core.ops.fleet import _memo_compose as mc
+        monkeypatch.setattr(mc, "_resolve_repo_root", lambda: str(ambient_repo))
+
+        import datetime
+
+        result = _run(
+            _memo_list(
+                {"dry_run": True, "to": "example-retrieval-repo-em", "topic": "root-thread"},
+                repo_root=caller_repo,
+            )
+        )
+
+        assert result["exit_code"] == 0
+        candidate = result["candidates"][0]
+        assert candidate["resolved"] is True
+
+        today = datetime.date.today().isoformat()
+        expected = _memo_filename(
+            today, resolve_sender_id(None, root=str(caller_repo)), "root-thread"
+        )
+        assert candidate["resolved_filename"] == expected
+        assert "caller-repo-em" in candidate["resolved_filename"]
+        assert "ambient-repo-em" not in candidate["resolved_filename"]
 
     def test_unknown_caller_identity_fails_loud_not_engine_fallback(
         self, tmp_path, monkeypatch

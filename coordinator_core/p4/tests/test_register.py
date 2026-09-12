@@ -4,7 +4,7 @@ test_register.py — pytest coverage for coordinator_core.p4.register.
 Spec backlink: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md § C7.
 
 Cases named by the plan spine row C7:
-  - shape-only repo_key validation accepts "p4-studio/fifa-main" and refuses
+  - shape-only repo_key validation accepts "p4-studio/game-main" and refuses
     a derived or multi-segment key.
   - a workspace with a pre-existing .p4ignore records its path.
   - a workspace without one records the no-`-a` condition.
@@ -23,19 +23,19 @@ from coordinator_core.p4.runner import P4Result
 
 class TestValidateRepoKey:
     def test_accepts_single_slash_lowercase(self):
-        assert register._validate_repo_key("p4-studio/fifa-main") == "p4-studio/fifa-main"
+        assert register._validate_repo_key("p4-studio/game-main") == "p4-studio/game-main"
 
     def test_refuses_multi_segment_key(self):
         with pytest.raises(register.P4RegisterError):
-            register._validate_repo_key("p4-studio/fifa/main")
+            register._validate_repo_key("p4-studio/game/main")
 
     def test_refuses_zero_segment_key(self):
         with pytest.raises(register.P4RegisterError):
-            register._validate_repo_key("fifa-main")
+            register._validate_repo_key("game-main")
 
     def test_refuses_uppercase(self):
         with pytest.raises(register.P4RegisterError):
-            register._validate_repo_key("P4-Studio/Fifa-Main")
+            register._validate_repo_key("P4-Studio/Game-Main")
 
     def test_refuses_non_string(self):
         with pytest.raises(register.P4RegisterError):
@@ -84,7 +84,7 @@ class TestRegisterWorkspace:
 
         result = register._register_workspace(
             {
-                "repo_key": "p4-studio/fifa-main",
+                "repo_key": "p4-studio/game-main",
                 "repo_root": str(tmp_path),
                 "port": "ssl:p4.example.com:1666",
                 "user": "agent",
@@ -93,8 +93,8 @@ class TestRegisterWorkspace:
         )
 
         assert result["ok"] is True
-        assert f"p4.p4-studio/fifa-main.p4ignore_path" in recorded
-        assert "p4.p4-studio/fifa-main.p4ignore_absent" not in recorded
+        assert f"p4.p4-studio/game-main.p4ignore_path" in recorded
+        assert "p4.p4-studio/game-main.p4ignore_absent" not in recorded
         p4ignore_text = (tmp_path / ".p4ignore").read_text(encoding="utf-8")
         assert ".git/" in p4ignore_text.splitlines()
         assert "*.uasset" in p4ignore_text.splitlines()
@@ -107,7 +107,7 @@ class TestRegisterWorkspace:
 
         result = register._register_workspace(
             {
-                "repo_key": "p4-studio/fifa-main",
+                "repo_key": "p4-studio/game-main",
                 "repo_root": str(tmp_path),
                 "port": "ssl:p4.example.com:1666",
                 "user": "agent",
@@ -116,8 +116,8 @@ class TestRegisterWorkspace:
         )
 
         assert result["ok"] is True
-        assert recorded.get("p4.p4-studio/fifa-main.p4ignore_absent") == "true"
-        assert "p4.p4-studio/fifa-main.p4ignore_path" not in recorded
+        assert recorded.get("p4.p4-studio/game-main.p4ignore_absent") == "true"
+        assert "p4.p4-studio/game-main.p4ignore_path" not in recorded
 
     def test_authored_gitignore_excludes_all_four_derived_dirs(
         self, monkeypatch, tmp_path
@@ -127,7 +127,7 @@ class TestRegisterWorkspace:
 
         register._register_workspace(
             {
-                "repo_key": "p4-studio/fifa-main",
+                "repo_key": "p4-studio/game-main",
                 "repo_root": str(tmp_path),
                 "port": "ssl:p4.example.com:1666",
                 "user": "agent",
@@ -145,7 +145,7 @@ class TestRegisterWorkspace:
 
         result = register._register_workspace(
             {
-                "repo_key": "fifa-main",
+                "repo_key": "game-main",
                 "repo_root": str(tmp_path),
                 "port": "ssl:p4.example.com:1666",
                 "user": "agent",
@@ -166,7 +166,7 @@ class TestRegisterWorkspace:
 
         register._register_workspace(
             {
-                "repo_key": "p4-studio/fifa-main",
+                "repo_key": "p4-studio/game-main",
                 "repo_root": str(tmp_path),
                 "port": "ssl:p4.example.com:1666",
                 "user": "agent",
@@ -190,7 +190,7 @@ class TestRegisterWorkspace:
 
         register._register_workspace(
             {
-                "repo_key": "p4-studio/fifa-main",
+                "repo_key": "p4-studio/game-main",
                 "repo_root": str(tmp_path),
                 "port": "ssl:p4.example.com:1666",
                 "user": "agent",
@@ -199,7 +199,7 @@ class TestRegisterWorkspace:
         )
 
         local_md = (tmp_path / "coordinator.local.md").read_text(encoding="utf-8")
-        assert "p4_repo_key: p4-studio/fifa-main" in local_md
+        assert "p4_repo_key: p4-studio/game-main" in local_md
 
     def test_gitattributes_conflict_refuses_loudly(self, monkeypatch, tmp_path):
         (tmp_path / ".gitattributes").write_text(
@@ -210,7 +210,7 @@ class TestRegisterWorkspace:
 
         result = register._register_workspace(
             {
-                "repo_key": "p4-studio/fifa-main",
+                "repo_key": "p4-studio/game-main",
                 "repo_root": str(tmp_path),
                 "port": "ssl:p4.example.com:1666",
                 "user": "agent",
@@ -228,7 +228,7 @@ class TestRegisterWorkspace:
 
         result = register._register_workspace(
             {
-                "repo_key": "p4-studio/fifa-main",
+                "repo_key": "p4-studio/game-main",
                 "repo_root": str(tmp_path),
                 "port": "ssl:p4.example.com:1666",
                 "user": "agent",
@@ -239,3 +239,34 @@ class TestRegisterWorkspace:
         assert result["ok"] is True
         gitattrs_lines = (tmp_path / ".gitattributes").read_text(encoding="utf-8").splitlines()
         assert "* -text" in gitattrs_lines
+
+
+class TestRootContainsCaseHandling:
+    """Review: code-reviewer F2. A `p4 client -o` `Root:`/`AltRoots:` value
+    routinely differs in casing from the OS-reported repo directory on
+    Windows (hand-authored client specs vs. tool-cloned repos)."""
+
+    def test_case_differing_root_is_accepted(self, tmp_path):
+        repo_root_resolved = tmp_path.resolve()
+        differently_cased = str(repo_root_resolved).swapcase()
+
+        result = register._root_contains(differently_cased, repo_root_resolved)
+
+        import os as _os
+
+        if _os.name == "nt":
+            assert result is True
+        else:
+            # POSIX filesystems are case-sensitive by default -- this
+            # fix is Windows-only by design (`os.path.normcase` is
+            # identity on POSIX), so a differently-cased root is
+            # legitimately still refused there.
+            assert result is False
+
+    def test_sibling_directory_sharing_a_name_prefix_is_still_refused(self, tmp_path):
+        real_repo = tmp_path / "claude-klabauter"
+        real_repo.mkdir()
+        sibling = tmp_path / "claude-klabauter-other"
+        sibling.mkdir()
+
+        assert register._root_contains(str(sibling), real_repo.resolve()) is False

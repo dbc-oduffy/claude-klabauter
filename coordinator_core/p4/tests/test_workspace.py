@@ -83,6 +83,20 @@ class TestIdentity:
         with pytest.raises(workspace.P4WorkspaceUnregistered):
             workspace.identity("studio/repo")
 
+    def test_missing_client_root_does_not_raise(self, monkeypatch):
+        """F5 (overengineering-reviewer, integrator-applied) -- `client_root`
+        has no in-repo reader and is carried for a cross-repo consumer
+        only; its absence must never block a local p4-gated op."""
+        values = {
+            "p4.studio/repo.port": "ssl:p4.example.com:1666",
+            "p4.studio/repo.user": "agent",
+            "p4.studio/repo.client": "agent-ws",
+            # client_root deliberately absent
+        }
+        monkeypatch.setattr(workspace, "registry_get", lambda key: values.get(key))
+        ident = workspace.identity("studio/repo")
+        assert ident.client_root is None
+
 
 class TestSessionChange:
     def test_all_fields_present(self, tmp_path):

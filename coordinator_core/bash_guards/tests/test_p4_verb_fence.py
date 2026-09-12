@@ -5,7 +5,10 @@ Spec backlink: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md
 plan-spine row C6.
 
 Cases named by the C6 row body:
-  - `submit` denied outright, distinct "no submit provider installed" message.
+  - `submit` denied outright, with its own message distinct from the generic
+    fence text (asserted on "agents do not submit" -- the earlier phrase, "no
+    submit provider installed", routed the reader to another repo's tool and
+    tripped register rule B7).
   - Unparseable p4 invocations denied: `-x`, `P4ALIASES`, `p4vc`, `git p4`.
   - `attrib -r` / `chmod +w` denied.
   - A bare `reconcile -n` denied; a path-scoped `reconcile -n` allowed.
@@ -76,13 +79,13 @@ class TestSubmitDenied:
     def test_bare_submit_denied(self):
         env = _deny("p4 submit -d 'commit'")
         assert env["permissionDecision"] == "deny"
-        assert "no submit provider installed" in env["permissionDecisionReason"]
+        assert "agents do not submit" in env["permissionDecisionReason"]
 
     def test_flag_interposed_submit_denied(self):
         # Example-Game-Repo's spike broke a phrase matcher on exactly this shape --
         # the verb is never adjacent to the binary.
         env = _deny("p4.exe -p ssl:p4.example.com:1666 -u agent -c agent-ws submit -c 41")
-        assert "no submit provider installed" in env["permissionDecisionReason"]
+        assert "agents do not submit" in env["permissionDecisionReason"]
 
 
 class TestUnparseable:
@@ -207,17 +210,17 @@ class TestChainedSegments:
 
     def test_powershell_ampersand_p4_spelling(self):
         env = _deny("& p4 submit -d 'x'")
-        assert "no submit provider installed" in env["permissionDecisionReason"]
+        assert "agents do not submit" in env["permissionDecisionReason"]
 
     def test_cmd_c_p4_spelling(self):
         env = _deny('cmd /c p4 submit -d "x"', tool_name="Bash")
-        assert "no submit provider installed" in env["permissionDecisionReason"]
+        assert "agents do not submit" in env["permissionDecisionReason"]
 
 
 class TestPowerShellDialect:
     def test_submit_denied_under_powershell_tool_name(self):
         env = _deny("p4 submit -d 'x'", tool_name="PowerShell")
-        assert "no submit provider installed" in env["permissionDecisionReason"]
+        assert "agents do not submit" in env["permissionDecisionReason"]
 
     def test_status_allowed_under_powershell(self):
         _allow("p4 status", tool_name="PowerShell")
@@ -249,6 +252,81 @@ class TestGitOnlyRepoPaysNothing:
         nested = tmp_path / "sub" / "dir"
         nested.mkdir(parents=True)
         assert _REAL_IS_P4_GATED(str(nested)) is True
+
+
+class TestReopenAdoption:
+    """D4b's own gain -- `reopen -c <CL> <paths>` allowed, form only (no CL
+    number validated against the session's own, same as edit/add/delete/move)."""
+
+    def test_reopen_with_cl_and_path_allowed(self):
+        _allow("p4 reopen -c 101 -- Content/Foo.uasset")
+
+    def test_bare_reopen_denied(self):
+        env = _deny("p4 reopen")
+        assert "reopen" in env["permissionDecisionReason"]
+
+    def test_reopen_with_cl_but_no_path_denied(self):
+        _deny("p4 reopen -c 101")
+
+    def test_reopen_with_cl_missing_value_denied(self):
+        _deny("p4 reopen -c")
+
+
+class TestNestedShellInterpreterDenied:
+    """Review: coordinator-code-reviewer F1 -- `bash -c`/`sh -c`/
+    `pwsh -Command`/`powershell -Command` were not classified at all and
+    fell through to allow. Denied now, conservatively, only when the inner
+    string plausibly names a surface this fence governs; a non-p4 nested
+    command stays allowed so this cannot become a blanket nested-shell
+    deny."""
+
+    def test_bash_c_p4_submit_denied(self):
+        _deny('bash -c "p4 submit -d x"')
+
+    def test_sh_c_p4_submit_denied(self):
+        _deny('sh -c "p4 submit -d x"')
+
+    def test_pwsh_command_p4_submit_denied(self):
+        _deny('pwsh -Command "p4 submit -d x"', tool_name="PowerShell")
+
+    def test_pwsh_c_p4_submit_denied(self):
+        _deny('pwsh -c "p4 submit -d x"', tool_name="PowerShell")
+
+    def test_powershell_command_p4_submit_denied(self):
+        _deny('powershell -Command "p4 submit -d x"', tool_name="PowerShell")
+
+    def test_powershell_encodedcommand_p4_denied(self):
+        _deny('powershell -EncodedCommand "cAA0IHN1Ym1pdA=="', tool_name="PowerShell")
+
+    def test_bash_c_git_checkout_denied(self):
+        _deny('bash -c "git checkout -- Content/Foo.uasset"')
+
+    def test_bash_c_non_p4_command_allowed(self):
+        _allow('bash -c "ls"')
+
+    def test_sh_c_non_p4_command_allowed(self):
+        _allow('sh -c "echo hi"')
+
+
+class TestChangeScoped:
+    """Review: coordinator-code-reviewer F2 -- `p4 change` was allowed
+    unconditionally; scoped to `-o`/`-i` (the session-changelist forms),
+    same pattern as `reopen`/`shelve`."""
+
+    def test_change_dash_o_allowed(self):
+        _allow("p4 change -o")
+
+    def test_change_dash_i_allowed(self):
+        _allow("p4 change -i")
+
+    def test_change_dash_d_denied(self):
+        _deny("p4 change -d 41")
+
+    def test_change_dash_f_denied(self):
+        _deny("p4 change -f -i")
+
+    def test_change_bare_denied(self):
+        _deny("p4 change")
 
 
 class TestNonCommandToolNamesIgnored:

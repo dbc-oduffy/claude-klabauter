@@ -243,6 +243,43 @@ door_stdin_status_t door_drain_stdin_bounded(
  * only move the same error. */
 int door_argv_declares_params_stdin(int argc, const char *const *argv);
 
+/* =========================================================================
+ * The stdin-reading basename gate -- deliberately mirrors
+ * `door_argv_declares_params_stdin` above, for the same stated reason: "so
+ * the two cannot disagree about which argv shapes name the route" applies
+ * verbatim to "which basenames name an entrypoint that reads stdin".
+ *
+ * Spec backlink: docs/plans/2026-09-12-warm-door-drops-stdin-for-every-
+ * entrypoint.md § C2. Semantic source of truth is C1's derivation over the
+ * resolved `.py` bodies
+ * (`coordinator_core/warm/door/tests/test_stdin_reading_entrypoint_
+ * population.py :: derive_stdin_reading_entrypoints`); the runtime source
+ * of truth is `door_stdin_reading_basenames` in `door_core.c`.
+ * `test_stdin_reading_table_parity.py` is the one hop between them -- no
+ * allowlist JSON key sits in between (the earlier `stdin_reading_
+ * entrypoints` allowlist key was cut: grep-confirmed zero runtime
+ * consumers). The door reads no file at runtime for this gate and pays
+ * nothing on the hot path.
+ *
+ * COMPARISON POLICY: exact byte compare (`strcmp`), on both platforms.
+ * `door_entrypoint_basename()` (`door.c` / `door_posix.c`) always returns
+ * the basename WITHOUT a `.exe` suffix, so no stripping happens here or at
+ * any call site.
+ *
+ * THE ONE PLACE THE TWO DOORS CANNOT AGREE. POSIX filenames are
+ * case-sensitive; Windows's are not. An exact `strcmp` is therefore the
+ * SAME comparison on both platforms, but not the same OUTCOME on both
+ * platforms: a forwarder invoked as `Claims-Emit.exe` yields a Windows
+ * basename this table misses (`strcmp("Claims-Emit", "claims-emit") !=
+ * 0`), so the gate falls through WARM -- i.e. pre-fix behaviour -- for
+ * that spelling only, on Windows only. Folding the comparison
+ * case-insensitively would fix that spelling at the cost of a false
+ * positive no POSIX caller could ever produce (a POSIX basename is never
+ * a case-variant of itself). This is named as a limit, not papered over
+ * with a per-platform comparison the "shared predicate" framing above
+ * would then no longer be honest about. */
+int door_basename_declares_stdin_read(const char *basename);
+
 /* Builds `{"hookSpecificOutput":{"hookEventName":"PreToolUse",
  * "permissionDecision":"deny","permissionDecisionReason":"<reason>"}}`
  * into `out` (which the caller must `buf_init` first), appending a

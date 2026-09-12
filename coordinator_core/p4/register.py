@@ -7,8 +7,10 @@ Spec backlink: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md
 Classified MUTATING (``coordinator_core.authz.classification``). Writes the
 machine-local ``p4.<repo_key>.{port,user,client,client_root}`` identity row
 (``registry_set`` — untracked, machine-local only), and separately writes the
-repo-true ``vcs_mirror: p4`` marker, the ``p4_repo_key`` read surface, plus
-the two optional ``p4_submit_tool``/``p4_checkout_tool`` slots into the repo's
+repo-true ``vcs_mirror: p4`` marker, the ``p4_repo_key`` cross-repo read
+surface (F6 — in-repo lookups resolve via ``session_change._resolve_repo_key``'s
+reverse scan instead; see that inline comment below), plus the two optional
+``p4_submit_tool``/``p4_checkout_tool`` slots into the repo's
 ``coordinator.local.md`` frontmatter (tracked, repo-true — never identity).
 It also authors ``.p4ignore`` (adds a ``.git/`` line so p4 never depot-adds
 the parallel git repo this op creates) and a UE-derived-artifact
@@ -19,6 +21,31 @@ Called by DoE's H4 ``/repo-setup`` skill step, which does not reimplement
 this — this op is the one documented stable entry point for ANY surface that
 registers a p4 workspace (cockpit's desktop registration affordance calls it
 too; this signature is a cross-repo contract, not an internal detail).
+
+Review: overengineering-reviewer F2 (integrator-applied — documentation
+fix, params kept). ``p4_submit_tool``/``p4_checkout_tool`` are written but
+read by NOTHING in this repo, BY DESIGN — they are a cross-repo contract
+row, not residue. The reader contract is DoE's committed
+``coordinator/contract/p4-provider-fragment.md`` (doe-claude-bc landed
+``repo_key`` alongside ``changelist`` on the submit slot at DoE
+``a05d95ba8``); DoE's ``finishing-a-development-branch`` H5 skill step
+reads the submit slot to call the tool directly, and claude-unreal-
+Example-game-repo's C12 is the work that fills the tool in. Neither reader lives in
+this repo, so a grep here finding only register.py itself, its docstring,
+and its test is expected, not evidence of dead code.
+
+This is NOT a provider registry (D9 still holds — see
+``write_guards/p4_checkout_before_edit.py``'s own deny text): a registry
+would resolve/dispatch to a tool at runtime from these slots, and nothing
+here does that. A named tool SLOT, written once at registration time for
+an external caller to read later, is a narrower thing than a registry —
+the two are not in tension despite looking related.
+
+The route cockpit's TypeScript desktop app spawns to reach this op is the
+engine's command-type dispatch CLI (DR-215 left this in place of the retired
+resident daemon), never an import or a socket::
+
+    python3 -m coordinator_core.invoke p4.register_workspace '<json params>'
 
 Negative-spec:
   - ``repo_key`` is validated SHAPE ONLY (single slash, lowercase) — never
@@ -135,7 +162,25 @@ def _root_contains(candidate_root: str, repo_root_resolved: Path) -> bool:
         repo_root_resolved.relative_to(candidate)
         return True
     except ValueError:
-        return repo_root_resolved == candidate
+        pass
+    if repo_root_resolved == candidate:
+        return True
+    # Review: code-reviewer F2 (integrator-applied) -- `Path.resolve()` does
+    # not reliably case-normalize a component that doesn't already exist
+    # verbatim under that casing on disk, and a `p4 client -o` `Root:`/
+    # `AltRoots:` value routinely differs in casing from what the OS
+    # reports for the git repo directory (hand-authored/migrated client
+    # specs vs. tool-cloned repos). `os.path.normcase` lowercases on
+    # Windows and is identity on POSIX, so this widens acceptance only
+    # where the filesystem is itself case-insensitive -- containment
+    # semantics are unchanged (a sibling directory sharing a name prefix is
+    # still refused by the boundary check below); this is a comparison
+    # fix, not a loosening of what counts as contained.
+    candidate_norm = os.path.normcase(os.path.normpath(str(candidate)))
+    repo_norm = os.path.normcase(os.path.normpath(str(repo_root_resolved)))
+    if repo_norm == candidate_norm:
+        return True
+    return repo_norm.startswith(candidate_norm + os.sep)
 
 
 def _confirm_client(port: str, user: str, client: str, repo_root: str) -> str:
@@ -341,10 +386,17 @@ def _register_workspace(params: dict, repo_root: Optional[Path] = None) -> dict:
                 "than relying on it for full ignore semantics."
             )
 
-        # `p4_repo_key` is the read surface for every `p4.<repo_key>.*`
-        # lookup. It belongs here rather than in the machine-local registry
-        # because the key needed to READ that registry cannot live inside
-        # it, and because the minted key is the same identity on every box.
+        # Review: overengineering-reviewer F6 (integrator-applied --
+        # documentation fix, both derivations kept). `p4_repo_key` is the
+        # read surface for a CROSS-REPO consumer that cannot run the
+        # reverse scan below (example-game-repo hit exactly this wall and correctly
+        # refused to derive a key of its own) -- it belongs here rather
+        # than in the machine-local registry because the key needed to
+        # READ that registry cannot live inside it, and because the minted
+        # key is the same identity on every box. In-repo lookups do NOT
+        # read this frontmatter key -- they resolve via
+        # `session_change._resolve_repo_key`'s reverse scan over the
+        # `p4.<repo_key>.repo_root` rows, which is the live local path.
         local_md_keys = {"vcs_mirror": "p4", "p4_repo_key": repo_key}
         if submit_tool is not None:
             local_md_keys["p4_submit_tool"] = submit_tool

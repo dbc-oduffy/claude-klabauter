@@ -26,6 +26,15 @@ Audit 5 — dependency-order invariant: for every edge A blocked_by B (B ships
   (sprint(A), wave(A))`` (strict; equal slot is a violation). Missing sprint on
   either endpoint fails loud. Edges to absent stub_ids are unresolved (not
   silently dropped). Cycles fail loud.
+Audit 6 (whole-roadmap only, C1 of docs/plans/2026-09-12-audit-roadmap-
+  derives-its-write-set-from.md) — write-set disjointness: no two LIVE plans
+  in the roadmap may declare the same repo-relative `writes:`/`writes_under:`
+  path in their task-spine. Resolves each baton's plan via
+  `plan_gate.link_plans`/`_best_plan` (honouring the weak-sizing-object-basis
+  decline) and reads each resolved plan's spine via
+  `dispatch_emit.spine_read.read_spine`. Always emits a COVERAGE line naming
+  how many batons resolved to a live plan, so a PASS is never ambiguous
+  between "checked and clean" and "could not see".
 
 Sprint-scoped mode (C4, ``run_audit(..., sprint_id=...)`` / CLI ``--sprint``)
 — stubs now arrive one sprint at a time (docs/plans/2026-08-21-engine-half-
@@ -133,7 +142,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from coordinator_core._settings_home import machine_local_dir, settings_home
 from coordinator_core.engine_root import coordinator_engine_root_env
@@ -144,6 +153,23 @@ from coordinator_core.roadmap.spine import (  # noqa: F401 -- re-exported
 )
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.win_portability import same_path
+
+# Audit 6 (write-set disjointness) reads a PLAN's own task-spine, a completely
+# different document from `coordinator_core.roadmap.spine.read_spine` above
+# (state/roadmap/<run-id>/SPINE.md's sprint descriptor). Aliased on import so
+# the two never collide under one bare name in this module.
+from coordinator_core.ops.dispatch_emit.spine_read import (
+    NON_DISPATCHABLE_DISPOSITIONS,
+    SpineReadError,
+)
+from coordinator_core.ops.dispatch_emit.spine_read import read_spine as read_task_spine
+from coordinator_core.ops.plan_tasks_render import load_rows
+from coordinator_core.roadmap.plan_gate import (
+    PlanIndex,
+    _best_plan,
+    build_plan_index,
+    link_plans,
+)
 
 # `kind in (...)` term covering the canonical `roadmap-baton` value plus any
 # still-live retired pre-rename spelling(s) — derived at import time from
@@ -1227,6 +1253,299 @@ def _audit5_dependency_order(r: _Reporter, run_id: str, data_root: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# Audit 6 — write-set disjointness. Incident, reuse rationale and the three
+# reported states are in the module docstring above and in
+# docs/plans/2026-09-12-audit-roadmap-derives-its-write-set-from.md
+# § Anti-scope; not restated here.
+# ---------------------------------------------------------------------------
+
+#: Plan `status` values (plan.schema.json) whose plan is shelved and
+#: publishes no live commitment. The measured false positive (memo, `§ The
+#: three questions`) was a path shared with a `status: superseded` plan —
+#: reporting a collision against a plan that will never write anything is
+#: the check's own worst outcome. Named from the SAME status vocabulary
+#: `plan_gate.PLAN_APPROVED_STATUSES`'s docstring already draws this line
+#: against ("`deferred`/`abandoned`/`superseded` ... a shelved plan publishes
+#: no decisions a dependent can build on"), not a second one invented here.
+#:
+#: Spelled out locally because plan_gate exports no shelved-status symbol to
+#: import — its public constants are POSITIVE (`PLAN_APPROVED_STATUSES`,
+#: `PLAN_CODED_STATUSES`), and neither is the right axis here: a `draft` or
+#: `reviewed` plan is excluded from both and is nonetheless LIVE for this
+#: check, because its declared writes are work that has not happened yet and
+#: can still collide. Inverting an approval set would silence exactly the
+#: early-roadmap plans this audit is for.
+_PLAN_TERMINAL_STATUSES = frozenset({"deferred", "abandoned", "superseded"})
+
+
+def _normalize_declared_path(value: str, *, directory: bool = False) -> str:
+    """Repo-relative POSIX form of a declared path.
+
+    A Windows-authored plan and a macOS-authored plan declaring the same file
+    must collide: backslashes become forward slashes and a leading `./` or
+    `/` is stripped, so `./foo/bar.py`, `/foo/bar.py` and `foo\bar.py` all
+    normalize onto one string.
+
+    *directory* is for a `writes_under:` prefix, which keeps its trailing
+    separator. That is what marks it a DIRECTORY declaration, per
+    `prep_gate._created_roots`' reading, and it keeps prefixes in their own
+    string space: a plan creating `foo/` and a plan writing a file named
+    `foo` are not making the same claim and must not fuse. The schema already
+    keeps the two spaces disjoint by input (`writes:` items refuse a trailing
+    separator, `writes_under:` items require one), so this only has to hold
+    for a plan that is already non-conformant — which an AUDIT reads by
+    definition, since nothing has validated the plan before it gets here.
+    """
+    v = str(value).strip().replace("\\", "/")
+    while v.startswith("./"):
+        v = v[2:]
+    v = v.lstrip("/")
+    if directory and not v.endswith("/"):
+        v = v + "/"
+    return v
+
+
+def _plan_declared_write_set(
+    plan_abs_path: Path,
+) -> Tuple[Optional[Set[str]], bool, bool, Optional[str]]:
+    """`(paths, declared_anything, fully_resolved, None)` for one plan's
+    task-spine, or `(None, False, False, <error class name>)` if it could not
+    be read — the caller reports that failure by plan name and moves on to
+    the next plan. The class name is carried rather than assumed: the guard
+    below catches more than `SpineReadError`, so a hardcoded label would
+    mislabel a missing or undecodable file as a malformed spine and send a
+    reader to the wrong repair.
+
+    `fully_resolved` is true when the spine HAD rows and every one of them was
+    excluded as landed-or-never-happening. It exists because "this plan
+    declares nothing about what it writes" and "this plan's every row has
+    already shipped" are the two states the caller's third report line is
+    there to separate, and they are indistinguishable from
+    `declared_anything` alone — both leave it false. Reported against a live
+    run on `fifa-substrate-coverage-2026-09-12`
+    (example-retrieval-repo-ue-addon-em, 2026-09-12), where a `status: landed` plan
+    carrying five rows and nine paths was announced as declaring no writes at
+    all. Excluding its rows was right; describing it as silent was not, and a
+    reader who trusts that line concludes a plan never said what it writes
+    when in truth it is finished saying it.
+
+    `read_task_spine` (`dispatch_emit.spine_read.read_spine`) is called for
+    its VALIDATION only — dangling `depends_on`, duplicate/missing row ids,
+    an unknown disposition — so a spine that would refuse a dispatch refuses
+    this audit too rather than being silently half-read. Its RETURN value is
+    deliberately not the write set.
+
+    The write set is computed from a raw `load_rows` parse under this
+    module's own, narrower rule: a row's declared paths count unless its
+    work has already LANDED or will never happen — a closed disposition
+    (`NON_DISPATCHABLE_DISPOSITIONS`) or `deferred: true`. Everything else
+    counts, because everything else is work that has not run and whose
+    writes are therefore still a FUTURE collision.
+
+    Not an `exclusions`-out-parameter re-admit, which is what this function
+    did first and is a silent under-report. `read_task_spine` appends an
+    exclusions entry only for a row excluded on its OWN properties; a row
+    dropped by the transitive closure — blocked solely because something it
+    `depends_on` is gated — is removed from the return value with no entry
+    appended. Keying re-admission off that list therefore drops exactly the
+    rows nobody has executed, while the list's apparent completeness hides
+    it. The rule above cannot have that bug: it never asks what was dropped,
+    only what has landed.
+    """
+    # One guard over BOTH reads, and deliberately broad. A narrow
+    # `except SpineReadError` around the validating call alone leaves the
+    # `read_text`/`load_rows` pair below free to raise `FileNotFoundError`
+    # (a baton's `governing_plan` outliving its file), `UnicodeDecodeError`,
+    # or `PermissionError` — each of which escapes to `main()`'s blanket
+    # handler and converts the WHOLE run to exit 3, destroying five passing
+    # audits over one unreadable plan. That is the failure this function's
+    # per-plan catch exists to prevent, so the catch has to cover every read
+    # it performs, not only the one that raises a typed error.
+    try:
+        read_task_spine(plan_abs_path)
+        rows = load_rows(plan_abs_path.read_text(encoding="utf-8")).rows
+    except (SpineReadError, OSError, UnicodeDecodeError, ValueError) as exc:
+        return None, False, False, exc.__class__.__name__
+
+    declared: Set[str] = set()
+    declared_anything = False
+    counted_rows = 0
+
+    for row in rows:
+        # LANDED or never-happening work only. A gated row, an
+        # `execution_mode: operator` row, and a row blocked solely by a gated
+        # predecessor all fall through to be counted — none of that work has
+        # run, so all of it can still collide.
+        if row.get("disposition") in NON_DISPATCHABLE_DISPOSITIONS:
+            continue
+        if row.get("deferred") is True:
+            continue
+        counted_rows += 1
+        # An ABSENT `writes:` is UNDECLARED, not empty, and contributes
+        # nothing while still leaving the plan counted as having declared
+        # something if any OTHER row did — `declared_anything` is a property
+        # of the plan, not of the row.
+        writes = row.get("writes")
+        if isinstance(writes, list):
+            declared_anything = True
+            for path in writes:
+                if isinstance(path, str):
+                    declared.add(_normalize_declared_path(path))
+        under = row.get("writes_under")
+        if isinstance(under, list) and under:
+            declared_anything = True
+            for prefix in under:
+                if isinstance(prefix, str):
+                    declared.add(_normalize_declared_path(prefix, directory=True))
+
+    return declared, declared_anything, bool(rows) and counted_rows == 0, None
+
+
+def derive_write_set(run_id: str, data_root: Path, worktree_root: Path) -> Dict[str, Any]:
+    """Which live plan declares which path, for this roadmap.
+
+    Returns a dict:
+      - ``paths``: ``{normalized_path: sorted [plan_rel_path, ...]}`` — every
+        declared path and the LIVE plan(s) that declare it. A path with more
+        than one plan is a collision; a path within only one plan's own list
+        never appears twice there (the collision unit is the PLAN, not the
+        row — two rows of one plan declaring one path is normal).
+      - ``unresolved_stub_ids``: sorted stub_ids of batons with no resolvable
+        LIVE plan (`_best_plan` returned nothing, OR its plan's `status` is
+        `_PLAN_TERMINAL_STATUSES`). Honours `plan_gate._WEAK_PLAN_LINK_BASES`'
+        decline — a multi-hit `sizing_object` basis resolves to no plan
+        rather than guessing, so two batons sharing one sizing object never
+        manufacture a collision between each other's plans.
+      - ``undeclared_plans``: sorted plan paths whose spine parsed, still has
+        rows in play, and declares no writes at all (every live row
+        UNDECLARED, no `writes_under:`) — a third state, distinct from "no
+        plan" and from "declared empty".
+      - ``fully_resolved_plans``: sorted plan paths whose every row was
+        excluded as landed-or-never-happening. Reported SEPARATELY from
+        ``undeclared_plans`` rather than folded into it: contributing no paths
+        because your work is done is not the same fact as contributing none
+        because you never said what you write, and only the second is a gap in
+        what this audit can see.
+      - ``parse_failures``: sorted ``[plan_rel_path, error_class_name]``
+        pairs for a plan whose task-spine failed to parse. Caught PER PLAN
+        so one malformed spine cannot destroy this audit's read of every
+        other plan.
+      - ``baton_count``: the coverage denominator — how many roadmap-baton
+        records carry this ``roadmap_id``. How many RESOLVED is this minus
+        ``len(unresolved_stub_ids)`` and is not stored: a second key that can
+        only ever restate the arithmetic is a second key that can disagree
+        with it.
+    """
+    plans = build_plan_index(worktree_root)
+
+    where = f"{_ROADMAP_BATON_KIND_WHERE} AND roadmap_id={run_id}"
+    live_records = query_records("handoff", data_root, where=where)
+    arch_records = query_records("handoff-archived", data_root, where=where)
+    all_records = [*live_records, *arch_records]
+
+    baton_stub_ids: Set[str] = set()
+    resolved_plan_paths: Set[str] = set()
+    unresolved_stub_ids: Set[str] = set()
+
+    for rec in all_records:
+        fm = rec.get("frontmatter", {})
+        stub_id = str(fm.get("stub_id") or "") or f"<untagged:{id(rec)}>"
+        baton_stub_ids.add(stub_id)
+
+        hits, basis = link_plans(fm, plans)
+        best = _best_plan(hits, basis)
+        if best is None or best["status"] in _PLAN_TERMINAL_STATUSES:
+            unresolved_stub_ids.add(stub_id)
+            continue
+        resolved_plan_paths.add(best["path"])
+
+    paths: Dict[str, List[str]] = {}
+    undeclared_plans: List[str] = []
+    fully_resolved_plans: List[str] = []
+    parse_failures: List[List[str]] = []
+
+    for plan_path in sorted(resolved_plan_paths):
+        declared, declared_anything, fully_resolved, error_name = _plan_declared_write_set(
+            worktree_root / plan_path
+        )
+        if declared is None:
+            parse_failures.append([plan_path, error_name or "UnknownError"])
+            continue
+        if fully_resolved:
+            fully_resolved_plans.append(plan_path)
+        elif not declared_anything:
+            undeclared_plans.append(plan_path)
+        for norm_path in declared:
+            paths.setdefault(norm_path, []).append(plan_path)
+
+    for norm_path, owning_plans in paths.items():
+        owning_plans.sort()
+
+    return {
+        "paths": paths,
+        "unresolved_stub_ids": sorted(unresolved_stub_ids),
+        "undeclared_plans": sorted(undeclared_plans),
+        "fully_resolved_plans": sorted(fully_resolved_plans),
+        "parse_failures": sorted(parse_failures),
+        "baton_count": len(baton_stub_ids),
+    }
+
+
+def _audit6_write_set_disjointness(
+    r: _Reporter, run_id: str, data_root: Path, worktree_root: Path
+) -> None:
+    """r.fail once per colliding path (naming the path and every plan
+    declaring it) and once per plan whose spine failed to parse (naming the
+    plan and the error class — never letting a malformed spine reach
+    `main()`'s blanket handler, which would convert the whole run to exit 3
+    and destroy the other five passing audits). Always r.passed a COVERAGE
+    line, whether or not anything collided, so a PASS is never ambiguous
+    between "checked and clean" and "could not see" — see the plan's § The
+    three questions.
+    """
+    result = derive_write_set(run_id, data_root, worktree_root)
+
+    collisions = {
+        path: owners for path, owners in result["paths"].items() if len(owners) > 1
+    }
+    for path in sorted(collisions):
+        owners = collisions[path]
+        r.fail(
+            f"Write-set collision: {path!r} is declared by {len(owners)} live "
+            f"plans in roadmap_id={run_id}: {', '.join(owners)}."
+        )
+
+    for plan_path, error_class in result["parse_failures"]:
+        r.fail(
+            f"Write-set: plan {plan_path} task-spine failed to parse "
+            f"({error_class}) — excluded from write-set disjointness; other "
+            f"plans in roadmap_id={run_id} were still checked."
+        )
+
+    unresolved = result["unresolved_stub_ids"]
+    unresolved_note = (
+        f"; unresolved (no live plan): {', '.join(unresolved)}" if unresolved else ""
+    )
+    r.passed(
+        f"Write-set disjointness: {result['baton_count']} baton(s) carry "
+        f"roadmap_id={run_id}, {result['baton_count'] - len(unresolved)} resolved "
+        f"to a live plan{unresolved_note}."
+    )
+    if result["undeclared_plans"]:
+        r.passed(
+            "Write-set disjointness: plan(s) with live rows declaring no writes: at "
+            "all, so this audit cannot see what they write — "
+            + ", ".join(result["undeclared_plans"])
+        )
+    if result["fully_resolved_plans"]:
+        r.passed(
+            "Write-set disjointness: plan(s) contributing no paths because every row "
+            "has landed or will not happen (NOT a missing declaration) — "
+            + ", ".join(result["fully_resolved_plans"])
+        )
+
+
+# ---------------------------------------------------------------------------
 # CLI entry
 # ---------------------------------------------------------------------------
 
@@ -1394,6 +1713,13 @@ def run_audit(
     _audit3_pm_gates_cross_reference(r, run_id, data_root, pmg_path)
     _audit4_pending_rows_reference_stubs(r, run_id, data_root, pmg_path)
     _audit5_dependency_order(r, run_id, data_root)
+    # DATA_ROOT doubles as the worktree root here: resolve_data_root's Rule-5
+    # branch already resolves DATA_ROOT to the repo root in the ordinary
+    # (non-meta-repo) case, and `docs/plans/**` is worktree-relative — the
+    # same relationship `build_plan_index` assumes everywhere else it is
+    # called. Whole-roadmap only, per the plan's C1 body: the C4 sprint-scoped
+    # mode runs Audits 1/3/5 by name and is deliberately not extended here.
+    _audit6_write_set_disjointness(r, run_id, data_root, data_root)
 
     r.stdout_lines.append("")
     if r.exit_code == 0:

@@ -37,7 +37,15 @@ from coordinator_core.session.core import read_meta_field
 _MARKER_KEY = "vcs_mirror"
 _MARKER_VALUE = "p4"
 
-_IDENTITY_FIELDS = ("port", "user", "client", "client_root")
+#: Review: overengineering-reviewer F5 (integrator-applied) -- `client_root`
+#: is required on the `p4.<repo_key>.*` registry ROW (register.py still
+#: writes both rows) but dropped from the fields `identity()` treats as
+#: hard-fail. No in-repo consumer reads `identity().client_root` (shelve,
+#: session_change._mint, the checkout guard, session_state all use only
+#: port/user/client) -- it exists for a cross-repo reader (cockpit takes
+#: provider identity from `.client_root`), which should not hold hard-fail
+#: authority over local ops that never touch it.
+_IDENTITY_FIELDS = ("port", "user", "client")
 
 
 class P4WorkspaceUnregistered(Exception):
@@ -56,7 +64,9 @@ class P4Identity:
     port: str
     user: str
     client: str
-    client_root: str
+    #: Optional (F5) -- carried for a cross-repo reader (cockpit), not
+    #: read by any in-repo consumer; absence never blocks `identity()`.
+    client_root: Optional[str] = None
 
 
 def is_p4_repo(repo_root: str) -> bool:
@@ -68,9 +78,13 @@ def is_p4_repo(repo_root: str) -> bool:
 def identity(repo_key: str) -> P4Identity:
     """The machine-local ``p4.<repo_key>.{port,user,client,client_root}`` row.
 
-    Raises ``P4WorkspaceUnregistered`` if any of the four fields is absent
-    — a partial row is treated the same as no row, since a partial
-    identity cannot spawn a valid ``p4`` invocation either.
+    Raises ``P4WorkspaceUnregistered`` if any of ``port``/``user``/``client``
+    is absent — a partial row is treated the same as no row, since a
+    partial identity cannot spawn a valid ``p4`` invocation either.
+    ``client_root`` (F5) is read best-effort and never blocks: it has no
+    in-repo consumer and exists for a cross-repo reader (cockpit), so an
+    incomplete registration on that one field should not fail every
+    p4-gated local op.
     """
     values = {}
     for name in _IDENTITY_FIELDS:
@@ -78,6 +92,7 @@ def identity(repo_key: str) -> P4Identity:
         if not value:
             raise P4WorkspaceUnregistered(repo_key)
         values[name] = value
+    values["client_root"] = registry_get(f"p4.{repo_key}.client_root") or None
     return P4Identity(**values)
 
 

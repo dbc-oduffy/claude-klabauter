@@ -86,6 +86,14 @@ def _base_params(**overrides) -> dict:
         # `kind` is required by memo.draft (it matches memo.send's own gate);
         # a params dict without it never reaches the behaviour under test.
         "kind": "fyi",
+        # An explicit caller-supplied from_id bypasses the engine-defaulted-
+        # sender compose-time assertion (DoE e267d18336) — most tests in this
+        # file are not exercising sender-identity resolution and have no
+        # machine-local registry fixture registering their sender repo as a
+        # receiver, so they need an explicit `from_id` to keep passing
+        # through `_resolve_and_assert_sender_id` unchecked. Tests that DO
+        # exercise the defaulting behaviour override this back to `None`.
+        "from_id": "test-sender-em",
     }
     params.update(overrides)
     return params
@@ -364,10 +372,23 @@ class TestDryRunPreview:
 # ===========================================================================
 
 class TestActWritesDraft:
-    def test_act_writes_draft_file(self, tmp_path):
+    def test_act_writes_draft_file(self, tmp_path, monkeypatch):
         sender = _make_sender_git_repo(tmp_path)
         common_dir = sender / ".git"
-        result = _run(_memo_draft(_base_params(dry_run=False, kind="ask"), repo_root=common_dir))
+        # The sending repo must resolve to a RECEIVER `--list-receivers`
+        # accepts (DoE e267d18336) — register it under its own key, mirroring
+        # a real machine where the sending repo is also a registered
+        # receiver (it can otherwise never be replied to).
+        claude_home = _make_claude_home(
+            tmp_path, {"sender_repo": sender, "example_retrieval_repo": tmp_path / "example-retrieval-repo"}
+        )
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        result = _run(
+            _memo_draft(
+                _base_params(dry_run=False, kind="ask", from_id=None), repo_root=common_dir
+            )
+        )
 
         assert result["exit_code"] == 0
         target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
@@ -380,8 +401,11 @@ class TestActWritesDraft:
         assert read_fm_field(split.fm_text, "title") == '"A draft memo"'
         assert read_fm_field(split.fm_text, "to") == '"example-retrieval-repo-em"'
         assert read_fm_field(split.fm_text, "kind") == '"ask"'
-        # from: defaults to the engine actor id when from_id is not supplied.
-        assert read_fm_field(split.fm_text, "from") == '"claude-klabauter-engine"'
+        # from: resolves to the SENDING REPO'S OWN registered receiver
+        # identity — a resolved receiver, never the old "claude-klabauter-engine"
+        # literal the publish transform could rewrite into an unaddressable
+        # wire identity (DoE e267d18336).
+        assert read_fm_field(split.fm_text, "from") == '"sender-repo-em"'
 
     def test_act_no_repo_root_is_setup_error(self):
         result = _run(_memo_draft(_base_params(dry_run=False), repo_root=None))

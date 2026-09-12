@@ -2374,6 +2374,24 @@ def _wg_goals_log_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, A
     }
 
 
+def _wg_hand_authored_sidecar_creation_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """Fires `block_hand_authored_sidecar_creation.check`: a Write CREATING
+    a new file under `state/subagent-share/<session-id>/<leaf>.md` whose
+    content carries no non-empty `agent_type:` frontmatter -- the exact
+    hand-authored-scaffold shape the 2026-08-16 incident produced."""
+    sidecar_path = scratch_dir / "state" / "subagent-share" / "sess-1" / "hand-made.md"
+    return {
+        "tool_name": "Write",
+        "cwd": str(scratch_dir),
+        "tool_input": {
+            "file_path": str(sidecar_path),
+            "content": "---\nstatus: open\n---\n\nhand-authored body\n",
+        },
+    }
+
+
 def _wg_home_dir_memo_delivery_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     mp.setenv("HOME", str(scratch_dir))
     mp.setenv("USERPROFILE", str(scratch_dir))
@@ -3054,6 +3072,13 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("block_foreign_family_sidecar_write", "control", False, _wg_benign),
     WriteGuardRow("block_goals_log_hand_write", "fire", True, _wg_goals_log_fire),
     WriteGuardRow("block_goals_log_hand_write", "control", False, _wg_benign),
+    WriteGuardRow(
+        "block_hand_authored_sidecar_creation",
+        "fire",
+        True,
+        _wg_hand_authored_sidecar_creation_fire,
+    ),
+    WriteGuardRow("block_hand_authored_sidecar_creation", "control", False, _wg_benign),
     WriteGuardRow("block_home_dir_memo_delivery", "fire", True, _wg_home_dir_memo_delivery_fire),
     WriteGuardRow("block_home_dir_memo_delivery", "control", False, _wg_benign),
     WriteGuardRow("block_illegal_filename", "fire", True, _wg_illegal_filename_fire),

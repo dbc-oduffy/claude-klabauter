@@ -54,7 +54,12 @@ from coordinator_core.ops.fleet._memo_resolver import (
     AmbiguousReceiverError,
     RegistryReadError,
     canonical_receiver_id as _canonical_receiver_id,
+    publish_mirror_path_match as _publish_mirror_path_match,
+    read_publish_mirrors as _read_publish_mirrors,
+    read_registry_repos as _read_registry_repos,
+    resolve_receiver_inbox as _resolve_receiver_inbox,
 )
+from coordinator_core._repo_root_probe import resolve_repo_root as _resolve_repo_root
 from coordinator_core.ops.fleet._memo_summary import (
     derive_prose_summary,
     is_placeholder_summary,
@@ -74,26 +79,100 @@ _SENDER_SLUG_INVALID_RE = re.compile(r"[^a-z0-9-]+")
 _SENDER_SLUG_RUN_DASH_RE = re.compile(r"-{2,}")
 _TOPIC_DOUBLED_DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}-)+")
 
-# Engine actor-id for from: when the caller does not supply from_id.
-# The asyncio engine has no EM session identity; this is the engine-actor sentinel.
-# DoE Ask-1 concurrence: consumers key on the file at the path (schema-valid frontmatter),
-# not on the writing process — an engine actor-id in from: is sufficient.
-_ENGINE_ACTOR_ID = "claude-klabauter-engine"
+def _resolve_engine_sender_id(root: Optional[str] = None) -> str:
+    """Resolve the SENDING REPO'S OWN identity for a defaulted (falsy) `from_id`.
+
+    `root`, when supplied, is the CALLER'S OWN resolved worktree (e.g.
+    memo.draft's `caller_worktree`, itself derived from the op's `repo_root`
+    param) — the warm resident engine (DR-315) serves callers from several
+    repos out of one process, so identity MUST be derived from the caller's
+    own repo_root, never from this process's ambient `os.getcwd()` (which
+    reflects the engine's own launch directory, not whichever caller's
+    request is in flight). `root` is only left to default to the ambient-cwd
+    probe (`_resolve_repo_root()`) for a genuinely rootless caller (e.g.
+    memo.list's preview, which has no `repo_root` param at all).
+
+    Replaces the old `_ENGINE_ACTOR_ID = "claude-klabauter-engine"` literal (deleted
+    2026-09-12, DoE `e267d18336`). That literal was justified in this
+    module's history by a "DoE Ask-1 concurrence: consumers key on the file
+    at the path, not on the writing process — an engine actor-id in from: is
+    sufficient" — doe-claude-bc WITHDREW that concurrence at `e267d18336`.
+    The publish transform rewrites repo names as a CONTENT rewrite (`claude-klabauter`
+    -> `claude-klabauter`), so a literal constant is rewritable by the same
+    transform regardless of what string it holds — the published engine
+    shipped memos signed `claude-klabauter-engine`, a wire identity no
+    receiver table knows, observed landing unreplyable in real inboxes. The
+    fix is not a better constant; it is resolving to a REGISTERED RECEIVER,
+    which `cross-repo-memo --list-receivers` can mechanically check.
+
+    Resolution:
+      1. The current process's git repo root (`_resolve_repo_root` — parent-
+         chain walk, cwd-memoized, no subprocess spawn on the hot path; see
+         that module's docstring).
+      2. If that root is a registered publish-target mirror
+         (`_publish_mirror_path_match`), resolve to the mirror's declared
+         `.owner` — the receiver table's own answer for this exact case:
+         `claude-klabauter-em` (a mirror, not a receiver) is owned by
+         `claude-klabauter-em`, so a published-mirror engine resolves to the
+         OWNER, never the mirror's own unaddressable alias.
+      3. Otherwise, the ordinary repo-root -> EM-id resolution
+         (`coordinator_core.machine_resolver.em_id_for_root`), against the
+         locally-registered `repos.*` table.
+
+    Never raises (mirrors every other reader `resolve_sender_id` degrades
+    through) — a registry-read failure or an unresolvable root degrades to
+    `em_id_for_root`'s own `None`-root sentinel (`"unknown-sender-em"`),
+    which the compose-time assertion (`resolve_and_assert_sender_id`) then
+    refuses to ship rather than silently signing a memo with it.
+    """
+    from coordinator_core.machine_resolver import em_id_for_root
+
+    if not root:
+        try:
+            root = _resolve_repo_root()
+        except Exception:  # noqa: BLE001 — identity resolution must never raise
+            root = None
+    if root:
+        try:
+            mirror_key = _publish_mirror_path_match(Path(root))
+        except Exception:  # noqa: BLE001 — identity resolution must never raise
+            mirror_key = None
+        if mirror_key:
+            owner = _read_publish_mirrors().get(mirror_key, {}).get("owner")
+            if owner:
+                return owner
+    # Review: overengineering-reviewer — _read_registry_repos() is only
+    # consumed by the terminal em_id_for_root() leg below; moved past the
+    # mirror-owner early return so it is not paid on a path that discards it.
+    try:
+        all_repos = _read_registry_repos()
+    except RegistryReadError:
+        all_repos = {}
+    return em_id_for_root(root, all_repos)
 
 
-def resolve_sender_id(from_id: Optional[str]) -> str:
-    """Resolve the caller-declared sender identity, defaulting to the engine actor.
+def resolve_sender_id(from_id: Optional[str], root: Optional[str] = None) -> str:
+    """Resolve the caller-declared sender identity, defaulting to the sending
+    repo's own identity.
 
-    Single authority for the `from_id or _ENGINE_ACTOR_ID` default every
+    `root` (optional): the caller's own resolved repo worktree, forwarded to
+    `_resolve_engine_sender_id` — see that function's docstring for why this
+    must be the CALLER'S root, not the engine process's ambient cwd, under
+    the warm resident engine. Callers with no repo context (e.g. memo.list's
+    preview) omit it and get the ambient-cwd fallback.
+
+    Single authority for the `from_id or <engine default>` default every
     memo-writing op applies to its own `from_id` param. memo.list's
     resolution-mode preview (`memo_list._resolve_candidate`) calls this SAME
-    function — rather than hardcoding `_ENGINE_ACTOR_ID` — so a caller that
-    declares `from_id` to memo.list's preview and later to a real send gets a
+    function — rather than hardcoding a sentinel — so a caller that declares
+    `from_id` to memo.list's preview and later to a real send gets a
     byte-identical `resolved_filename`/actual-write filename pair.
 
-    A falsy `from_id` (None or empty string) resolves to `_ENGINE_ACTOR_ID` —
-    the asyncio engine has no EM session identity of its own; this is the
-    sentinel it signs sends with when the caller declines to declare one.
+    A falsy `from_id` (None or empty string) resolves via
+    `_resolve_engine_sender_id()` — the asyncio engine has no EM session
+    identity of its own, so it signs a defaulted send with the SENDING
+    REPO'S resolved receiver identity, not a fixed literal (see that
+    function's docstring for why a literal is the defect this replaces).
 
     Sender-side canonicalization: when the resolved identity is itself a
     central/redirect alias (the DoE seat sending FROM e.g. `claude-central-em`
@@ -108,7 +187,7 @@ def resolve_sender_id(from_id: Optional[str]) -> str:
     the addressee-gate correctness surface, so it must never raise out of a
     function every memo-writing op's param validation calls unconditionally.
     """
-    raw = from_id or _ENGINE_ACTOR_ID
+    raw = from_id or _resolve_engine_sender_id(root)
     try:
         return _canonical_receiver_id(raw)
     except (RegistryReadError, AmbiguousReceiverError) as exc:
@@ -121,6 +200,79 @@ def resolve_sender_id(from_id: Optional[str]) -> str:
             exc,
         )
         return raw
+
+
+def resolve_and_assert_sender_id(from_id: Optional[str], root: Optional[str] = None) -> str:
+    """Like `resolve_sender_id`, but for a compose call that will actually
+    WRITE a memo: when `from_id` was defaulted (falsy), additionally asserts
+    the resolved identity is one `cross-repo-memo --list-receivers` accepts
+    on this machine, raising `ValueError` at compose time rather than
+    shipping an unaddressable `from:` — the invariant DoE `e267d18336`
+    establishes: an engine-composed memo's `from:` must be a name the
+    receiver resolver accepts, mechanically checkable at compose time, not a
+    constant trusted to survive the publish transform.
+
+    `root`: the caller's own resolved repo worktree — see `resolve_sender_id`
+    and `_resolve_engine_sender_id` for why this must be threaded through
+    rather than left to the ambient-cwd fallback under the warm resident
+    engine, which serves several callers' repos out of one process.
+
+    Caller-SUPPLIED `from_id` values pass straight through `resolve_sender_id`
+    unchecked — this assertion is scoped to the engine's own defaulted
+    identity, the wire-identity defect this function exists to close, not a
+    general `from:` validator.
+
+    Reuses `_memo_resolver.resolve_receiver_inbox` — the SAME receiver-
+    vocabulary authority `memo.list --list-receivers`/`_resolve_candidate`
+    already resolve through — rather than a second copy of the receiver
+    vocabulary. Degrades to permissive (returns the resolved id unchecked) on
+    `RegistryReadError`/`AmbiguousReceiverError` — a registry-read hiccup
+    should not itself block a send that `resolve_sender_id` already degraded
+    gracefully through.
+
+    An unaccepted defaulted identity now WARNS and composes anyway, rather
+    than raising. This repo's own CLAUDE.md already rules the symmetric
+    receiver-side case: "Where no peer EM is reachable `memo.send` warns
+    once and then sends: there a memo is a record, not a dispatch." Making
+    an unaddressable SENDER a hard compose-time refusal was stricter than
+    that doctrine sitting right next to it. DoE `e267d18336` asked that
+    `from:` hold a RESOLVED receiver rather than a constant trusted to
+    survive the publish transform — `resolve_sender_id` already satisfies
+    that; refusing to compose at all was an addition beyond the ask, not
+    part of it.
+    """
+    was_defaulted = not from_id
+    resolved = resolve_sender_id(from_id, root)
+    if not was_defaulted:
+        return resolved
+    try:
+        inbox_dir, _receiver_repo_path, _all_repos = _resolve_receiver_inbox(resolved)
+    except (RegistryReadError, AmbiguousReceiverError) as exc:
+        # Review: coordinator-code-reviewer Finding 2 — the degrade itself is
+        # deliberate (a registry-read hiccup should not block a send
+        # resolve_sender_id already degraded through), but it must not be
+        # SILENT: this is the compose-time addressability assertion being
+        # skipped, matching resolve_sender_id's own degrade-branch warning.
+        _LOG.warning(
+            "resolve_and_assert_sender_id: compose-time addressability "
+            "assertion for defaulted sender %r SKIPPED (degrading to "
+            "permissive, NOT raising) due to a registry-read failure; "
+            "underlying error: %s: %s",
+            resolved,
+            type(exc).__name__,
+            exc,
+        )
+        return resolved
+    if inbox_dir is None:
+        _LOG.warning(
+            "resolve_and_assert_sender_id: engine-defaulted sender identity "
+            "%r is not a name `cross-repo-memo --list-receivers` accepts on "
+            "this machine — composing anyway (NOT raising; an unaddressable "
+            "sender is a record, not a blocked dispatch, matching this "
+            "repo's own no-reachable-peer-EM receiver-side posture).",
+            resolved,
+        )
+    return resolved
 
 
 def _normalize_in_reply_to(value: str) -> str:
@@ -340,9 +492,10 @@ def _memo_filename(today: str, sender: str, topic: str) -> str:
     Negative-spec / deviation from DoE: DoE's _memo_filename falls back to a
     bare <date>-<topic>.md when the sanitized sender reduces to empty (its
     "defensive empty-sender fallback"). This port does NOT replicate that
-    fallback — a sender always resolves to a non-empty default
-    (_ENGINE_ACTOR_ID) before this function is called, so a sender that
-    sanitizes to empty here means a caller-supplied from_id consisting
+    fallback — a sender always resolves to a non-empty default (see
+    `resolve_sender_id`/`_resolve_engine_sender_id`) before this function is
+    called, so a sender that sanitizes to empty here means a caller-supplied
+    from_id consisting
     entirely of punctuation/non-ASCII chars. Silently degrading to the
     pre-DR-026 filename shape in that case would silently defeat the
     namespacing guarantee this port exists to provide; failing loud instead

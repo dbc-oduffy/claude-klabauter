@@ -16,14 +16,31 @@ import json
 import pytest
 
 from coordinator_core.git.run import GitResult
-from coordinator_core.p4 import runner, shelve, workspace
-import coordinator_core.p4.session_change as session_change
+from coordinator_core.p4 import runner, session_change, shelve, workspace
 
-# NOTE: `coordinator_core.p4.__init__` re-exports `workspace.session_change`
-# (the D9 reader function) under the package attribute name `session_change`,
-# shadowing this submodule on a plain `from coordinator_core.p4 import
-# session_change`. The dotted-module import above binds the submodule
-# directly and is unaffected by that re-export (mirrors test_session_change.py).
+# Review: overengineering-reviewer F1 (integrator-applied) -- the package
+# used to re-export `workspace.session_change` under this same attribute
+# name, shadowing this submodule on a plain import; that facade is gone,
+# so a plain submodule import is unambiguous now (mirrors
+# test_session_change.py).
+
+
+def _spawn_with_verb(spawned, verb):
+    """The one spawn whose p4 VERB is `verb`.
+
+    The verb is the first token that is not a global option or its value —
+    `runner.run` argv may lead with `-d <dir>`, and more globals could be
+    added. Asserts exactly one match so a duplicated spawn fails loudly
+    rather than silently resolving to the first."""
+    matches = []
+    for argv in spawned:
+        i = 0
+        while i < len(argv) and argv[i].startswith("-"):
+            i += 2 if argv[i] in ("-d", "-p", "-u", "-c") else 1
+        if i < len(argv) and argv[i] == verb:
+            matches.append(argv)
+    assert len(matches) == 1, f"expected exactly one {verb!r} spawn, got {len(matches)}: {spawned}"
+    return matches[0]
 
 
 @pytest.fixture
@@ -79,20 +96,28 @@ class TestHealthyBaseShelves:
         assert outcome.paths == ["a/b.uasset", "c/d.uasset"]
         assert outcome.shelved_sha == "newheadsha"
         assert not outcome.remint
-        # Asserted by MEANING, not by index: the argv carries a leading
-        # global `-d <repo_root>` (p4 ignores subprocess cwd for relative
-        # path resolution), so anything keyed on position shifts whenever
-        # that prefix changes and fails for a reason unrelated to the
-        # behaviour under test.
-        reconcile = spawned[0]
+        # Asserted by MEANING, never by index — at BOTH levels. Within an
+        # argv, because the leading global `-d <repo_root>` shifts every
+        # position (p4 ignores subprocess cwd for relative path resolution).
+        # Across the spawn list, because C9 adds probe spawns around this
+        # sequence: an earlier version of this assertion read `spawned[0]`
+        # and broke the moment the orphaned-open probe landed in front of
+        # reconcile — failing for a reason unrelated to the behaviour under
+        # test. Find each verb's spawn by its verb.
+        reconcile = _spawn_with_verb(spawned, "reconcile")
         assert reconcile[:2] == ["-d", repo_root]
-        assert reconcile[2] == "reconcile"
         assert reconcile[reconcile.index("-c") + 1] == "101"
         assert {"-e", "-a", "-d"} <= set(reconcile)
         # No end-of-options token: real `p4 reconcile` refuses `--`.
         assert "--" not in reconcile
-        assert spawned[1] == ["revert", "-a", "-c", "101"]
-        assert spawned[2] == ["shelve", "-r", "-c", "101"]
+        revert = _spawn_with_verb(spawned, "revert")
+        assert revert[revert.index("-c") + 1] == "101"
+        assert "-a" in revert
+        shelve_spawn = _spawn_with_verb(spawned, "shelve")
+        assert shelve_spawn[shelve_spawn.index("-c") + 1] == "101"
+        assert "-r" in shelve_spawn
+        # Ordering is the invariant that matters, not absolute position.
+        assert spawned.index(reconcile) < spawned.index(revert) < spawned.index(shelve_spawn)
 
         meta = json.loads((sdir / "meta.json").read_text())
         assert meta["p4_shelved_sha"] == "newheadsha"
@@ -124,6 +149,51 @@ class TestHealthyBaseShelves:
         assert outcome.ok
         assert outcome.paths == []
         assert outcome.shelved_sha is None
+
+
+class TestP4ignoreAbsentDropsDashA:
+    """F3 (overengineering-reviewer, integrator-applied) -- `_p4ignore_absent`
+    drives whether `reconcile` carries `-a`; the two arms are exercised
+    directly here by monkeypatching `_p4ignore_absent` itself, which keeps
+    this test independent of the registry/repo_key plumbing that function
+    reads (that plumbing is `session_change`'s own coverage)."""
+
+    def _run(self, monkeypatch, tmp_path, sdir, identity, *, p4ignore_absent):
+        repo_root = str(tmp_path)
+        spawned = []
+
+        def fake_run_git(args, **kw):
+            if "cat-file" in args:
+                return _git_ok()
+            if "log" in args:
+                return _git_ok("a.uasset\n")
+            if args[-1] == "HEAD":
+                return _git_ok("newheadsha\n")
+            raise AssertionError(f"unexpected git args: {args}")
+
+        monkeypatch.setattr(shelve, "run_git", fake_run_git)
+        monkeypatch.setattr(shelve, "_p4ignore_absent", lambda repo_root: p4ignore_absent)
+
+        def fake_p4_run(port, user, client, args, *, spec_input=None):
+            spawned.append(list(args))
+            return runner.P4Result(ok=True, stdout="")
+
+        monkeypatch.setattr(shelve.runner, "run", fake_p4_run)
+
+        outcome = shelve.shelve_outstanding(
+            repo_root, "sid-1", str(sdir), identity, cl=101, base_sha="basesha"
+        )
+        assert outcome.ok
+        return _spawn_with_verb(spawned, "reconcile")
+
+    def test_absent_drops_dash_a(self, monkeypatch, tmp_path, sdir, identity):
+        reconcile = self._run(monkeypatch, tmp_path, sdir, identity, p4ignore_absent=True)
+        assert "-a" not in reconcile
+        assert {"-e", "-d"} <= set(reconcile)
+
+    def test_present_keeps_dash_a(self, monkeypatch, tmp_path, sdir, identity):
+        reconcile = self._run(monkeypatch, tmp_path, sdir, identity, p4ignore_absent=False)
+        assert {"-e", "-a", "-d"} <= set(reconcile)
 
 
 class TestUnreachableBaseReMints:
@@ -166,7 +236,11 @@ class TestUnreachableBaseReMints:
         assert outcome.cl == 202
         # never reads the unreachable base as an empty path set
         assert outcome.paths == ["a/b.uasset"]
-        assert spawned[0][spawned[0].index("-c") + 1] == "202"
+        # The re-minted CL, not the original: every p4 spawn in this leg must
+        # carry 202. Found by verb rather than by position — C9's probes sit
+        # around this sequence.
+        reconcile = _spawn_with_verb(spawned, "reconcile")
+        assert reconcile[reconcile.index("-c") + 1] == "202"
 
     def test_unreachable_base_with_no_upstream_merge_base_is_a_typed_refusal(
         self, monkeypatch, tmp_path, sdir, identity
@@ -225,3 +299,104 @@ class TestTypedRefusalNeverRaises:
         assert outcome.error.kind == "lock_held"
         meta = json.loads((sdir / "meta.json").read_text())
         assert "p4_shelved_sha" not in meta
+
+
+class TestFstatRecordsAreKeyedByNameNeverByPosition:
+    """Review: code-reviewer F1. Three paths, two returned fstat records --
+    `zip()` would silently misalign the second record onto the third path.
+    Keying by `clientFile` must either resolve correctly or refuse; it must
+    never produce a misaligned `ok=True`."""
+
+    def test_fewer_records_than_paths_resolves_correctly_never_misaligned(
+        self, monkeypatch, tmp_path, sdir, identity
+    ):
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        for name in ("a.uasset", "b.uasset", "c.uasset"):
+            (repo_root / name).write_text("x\n", encoding="utf-8")
+
+        def fake_run_git(args, **kw):
+            if "cat-file" in args:
+                return _git_ok()
+            if "log" in args:
+                return _git_ok("a.uasset\nb.uasset\nc.uasset\n")
+            if args[-1] == "HEAD":
+                return _git_ok("newheadsha\n")
+            raise AssertionError(f"unexpected git args: {args}")
+
+        monkeypatch.setattr(shelve, "run_git", fake_run_git)
+
+        spawned = []
+
+        def fake_p4_run(port, user, client, args, *, spec_input=None):
+            spawned.append(list(args))
+            if "fstat" in args:
+                # b.uasset is not yet in the depot -- p4 emits no block for
+                # it. Only a.uasset and c.uasset get records. A positional
+                # zip would pair c.uasset's path with b's absent slot's
+                # neighbor, i.e. misalign entirely.
+                return runner.P4Result(
+                    ok=True,
+                    stdout=(
+                        "... clientFile //bob-ws/a.uasset\n"
+                        "... haveRev 1\n"
+                        "... change 101\n"
+                        "\n"
+                        "... clientFile //bob-ws/c.uasset\n"
+                        "... haveRev 1\n"
+                        "... action edit\n"
+                    ),
+                )
+            return runner.P4Result(ok=True, stdout="")
+
+        monkeypatch.setattr(shelve.runner, "run", fake_p4_run)
+
+        outcome = shelve.shelve_outstanding(
+            str(repo_root), "sid-1", str(sdir), identity, cl=101, base_sha="basesha"
+        )
+
+        # a.uasset's record carries `change 101` == effective_cl -- not an
+        # orphan; it also carries `haveRev` with no `action`, so D4a
+        # correctly restores it. c.uasset carries `action edit` -- not a
+        # restore candidate. b.uasset has no record at all -- absent,
+        # never misassigned another path's data (a positional zip would
+        # have paired c.uasset's `action edit` record onto b.uasset here).
+        assert outcome.ok
+        assert outcome.adopted == 0
+        assert outcome.restored == 1
+
+    def test_record_naming_an_unrequested_path_is_a_typed_refusal(
+        self, monkeypatch, tmp_path, sdir, identity
+    ):
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        (repo_root / "a.uasset").write_text("x\n", encoding="utf-8")
+
+        def fake_run_git(args, **kw):
+            if "cat-file" in args:
+                return _git_ok()
+            if "log" in args:
+                return _git_ok("a.uasset\n")
+            raise AssertionError(f"unexpected git args: {args}")
+
+        monkeypatch.setattr(shelve, "run_git", fake_run_git)
+
+        def fake_p4_run(port, user, client, args, *, spec_input=None):
+            if "fstat" in args:
+                # p4 reports a path this call never asked about -- the
+                # record/path correspondence cannot be trusted by name.
+                return runner.P4Result(
+                    ok=True,
+                    stdout="... clientFile //bob-ws/unrelated.uasset\n... haveRev 1\n",
+                )
+            raise AssertionError("must not proceed past an unreconciled fstat record")
+
+        monkeypatch.setattr(shelve.runner, "run", fake_p4_run)
+
+        outcome = shelve.shelve_outstanding(
+            str(repo_root), "sid-1", str(sdir), identity, cl=101, base_sha="basesha"
+        )
+
+        assert not outcome.ok
+        assert outcome.error is not None
+        assert outcome.error.kind == "refused"

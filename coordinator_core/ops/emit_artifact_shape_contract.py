@@ -353,7 +353,7 @@ from coordinator_core.session.declared_writes import declare_write
 # Constants
 # ---------------------------------------------------------------------------
 
-CONTRACT_VERSION = "9.0.0"
+CONTRACT_VERSION = "9.1.0"
 
 # Generator-provenance: emits artifact-shape-contract/artifact-shape-contract.
 # schema.json under the DoE-claude coordinator/ tree, explicitly NOT claude-klabauter
@@ -788,27 +788,55 @@ SUB_SHAPES: dict = {
         "type": "object",
         "properties": {
             "source_kind": {
-                "enum": ["github_graphql", "github_rest", "git_commit", "local_fs", "coordinator_artifact", "transcript_summary", "sec_edgar", "code_comparison"],
-                "description": "How the fact was obtained. github_* and git_commit are git-backed and carry a non-null ref; local_fs, coordinator_artifact, transcript_summary, sec_edgar, and code_comparison are filesystem/artifact/consumer/regulatory/code-comparison-derived and carry no git ref.",
+                "enum": ["github_graphql", "github_rest", "git_commit", "local_fs", "coordinator_artifact", "transcript_summary", "sec_edgar", "code_comparison", "p4_server", "p4_workspace"],
+                "description": "How the fact was obtained. github_*, git_commit, p4_server and p4_workspace are VCS-backed and carry a non-null ref; local_fs, coordinator_artifact, transcript_summary, sec_edgar, and code_comparison are filesystem/artifact/consumer/regulatory/code-comparison-derived and carry no ref.",
             },
             "repo": {
                 "type": "string",
                 "description": "Repo slug the fact pertains to.",
             },
             "ref": {
+                # NESTED, not a flat 3-member anyOf: the cockpit envelope emits
+                # anyOf:[{anyOf:[git, p4]}, null] because emit_schema's
+                # _nest_multivariant_nullable_union reproduces Zod's
+                # non-flattened `.nullable()` shape on a multi-variant union.
+                # These two definitions are held byte-equal by
+                # test_provenance_parity, so this one nests too. Flattening
+                # here is semantically identical and still breaks parity.
                 "anyOf": [
                     {
-                        "type": "object",
-                        "properties": {
-                            "branch": {"type": "string"},
-                            "sha": {"type": "string"},
-                        },
-                        "required": ["branch", "sha"],
-                        "additionalProperties": False,
+                        "anyOf": [
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "branch": {"type": "string"},
+                                    "sha": {"type": "string"},
+                                },
+                                "required": ["branch", "sha"],
+                                "additionalProperties": False,
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "stream": {"type": "string"},
+                                    # SafeInt bounds, as the cockpit envelope
+                                    # emits them (Zod z.number().int() clamps to
+                                    # JS MIN/MAX_SAFE_INTEGER). Parity is byte-
+                                    # equal, so these must be carried here too.
+                                    "change": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991,
+                                    },
+                                },
+                                "required": ["stream", "change"],
+                                "additionalProperties": False,
+                            },
+                        ]
                     },
                     {"type": "null"},
                 ],
-                "description": "Git ref the fact was observed at. Present-as-null (D9): key always present; non-null for github_* sources, null for local_fs / coordinator_artifact / transcript_summary / sec_edgar / code_comparison. Bidirectional conditional enforces the polarity.",
+                "description": "VCS ref the fact was observed at. Present-as-null (D9): key always present; non-null for VCS-backed sources (git arm {branch, sha} for github_* / git_commit, Perforce arm {stream, change} for p4_server / p4_workspace), null for local_fs / coordinator_artifact / transcript_summary / sec_edgar / code_comparison. Untagged union — the arms are closed and their field sets disjoint, so presence discriminates. Bidirectional conditional enforces the polarity.",
             },
             "path": {
                 "type": "string",
@@ -843,9 +871,9 @@ SUB_SHAPES: dict = {
         "additionalProperties": False,
         "allOf": [
             {
-                # (i) github_* and git_commit sources must supply a non-null ref (D9 bidirectional conditional).
+                # (i) VCS-backed sources must supply a non-null ref (D9 bidirectional conditional).
                 "if": {
-                    "properties": {"source_kind": {"enum": ["github_graphql", "github_rest", "git_commit"]}},
+                    "properties": {"source_kind": {"enum": ["github_graphql", "github_rest", "git_commit", "p4_server", "p4_workspace"]}},
                     "required": ["source_kind"],
                 },
                 "then": {

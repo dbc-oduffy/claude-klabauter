@@ -81,7 +81,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
     unique_nearest_receiver as _unique_nearest_receiver,
 )
 from coordinator_core.ops.fleet._memo_compose import (
-    _ENGINE_ACTOR_ID,
+    resolve_and_assert_sender_id as _resolve_and_assert_sender_id,
     _SCOPED_TO_KNOWN_SUBKEYS,
     _TOPIC_SLUG_RE,
     _VALID_KINDS,
@@ -753,7 +753,10 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
                                    classify_receiver below for the OPTIONAL
                                    draft-time validation opt-in.
         title   (str, required):  memo title.
-        from_id (str, optional):  sender identity; defaults to "claude-klabauter-engine".
+        from_id (str, optional):  sender identity; defaults to the CALLING repo's
+                                   own resolved receiver identity (see
+                                   `_memo_compose.resolve_and_assert_sender_id`) —
+                                   never a fixed literal (DoE e267d18336).
         summary (str, optional):  tl;dr ≤120 chars; left empty-string when absent
                                    (filled in / re-derived by memo.compose once
                                    a body exists — footgun #4).
@@ -888,7 +891,6 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         )
     caller_worktree = main_worktree_root(Path(repo_root))
 
-    from_id: str = params.get("from_id") or _ENGINE_ACTOR_ID
     today = datetime.date.today().isoformat()
 
     target_path = resolve_outbox_draft_path(caller_worktree, topic)
@@ -916,6 +918,18 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         }])
 
     # ── act path ──────────────────────────────────────────────────────────
+    # from_id is resolved (and, when defaulted, compose-time-asserted) only
+    # here — the dry-run preview above never renders `from:` at all, so a
+    # dry-run call on a machine where the caller's own repo is not yet
+    # registered must still preview cleanly (unchanged from before this
+    # fix); only an actual WRITE risks shipping an unaddressable sender.
+    try:
+        from_id: str = _resolve_and_assert_sender_id(
+            params.get("from_id"), root=str(caller_worktree)
+        )
+    except ValueError as exc:
+        return build_setup_error_result(_MODE, dry_run, f"memo.draft: {exc}")
+
     if collision_exists:
         return build_act_result(_MODE, [], [], [{
             "id": str(target_path),

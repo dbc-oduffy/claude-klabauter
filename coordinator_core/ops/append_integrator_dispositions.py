@@ -63,14 +63,24 @@ second block that names the one it supersedes. It used to no-op. See
 `append_dispositions` for why that was break-class.
 
 Negative-spec:
-  - Does NOT verify that the supplied finding ids are a set-complete partition
-    of every finding actually in the sidecar body — the review-findings
-    template (DR-091) has no structured per-finding id field to check
-    against (same absence `block_em_hand_edit_pending_review_integration`
-    documents for its own coverage heuristic). Completeness is the calling
-    agent's responsibility, per `agents/review-integrator.md` § Sidecar
-    Disposition Annotation ("Every finding in the sidecar must appear in
-    exactly one bucket").
+  - Does NOT REFUSE on a bucket map that fails to cover the findings exactly
+    once — but it no longer stays silent about one either. Where the sidecar
+    carries a fenced ```json `findings` array, `_partition_audit` compares the
+    supplied ids against it and records `partition_audit:` in the appended
+    block, naming the unbucketed, duplicated, out-of-range and unrecognized
+    ids. WARN, not refuse: see the comment at the write site for why a
+    refusal here would brick every file the reviewer cited.
+    Where the sidecar carries only the `review-findings` shape there is
+    nothing to check against — the template (DR-091) has no structured
+    per-finding id field (the same absence
+    `block_em_hand_edit_pending_review_integration` documents for its own
+    coverage heuristic) — so the audit renders nothing and completeness stays
+    the calling agent's responsibility, per `agents/review-integrator.md`
+    § Sidecar Disposition Annotation ("Every finding in the sidecar must
+    appear in exactly one bucket").
+  - Does NOT check that a finding reached the RIGHT bucket. Nothing on disk
+    records what the correct disposition was, so a mislabel stays invisible.
+    The audit closes the arithmetic half of the gap, never the judgment half.
   - Does NOT touch `state/review-trail/*.json` trail records — a completely
     separate ledger (`agents/review-integrator.md` § Trail-File Ownership);
     this module only ever writes to the `.md` findings sidecar.
@@ -441,6 +451,31 @@ def _find_json_findings_block(text: str) -> Optional[List[Any]]:
     return None
 
 
+def _count_json_findings_blocks(text: str) -> int:
+    """How many fenced blocks parse as an object carrying a `findings` list.
+
+    `_find_json_findings_block` returns the FIRST and has always been enough
+    for a presence check. `_partition_audit` is its first consumer to treat
+    that array as ground truth for an exact COUNT, and the two questions come
+    apart the moment a sidecar carries more than one candidate -- a finding
+    whose own evidence quotes this very shape (entirely plausible in a review
+    OF this module) would be audited against instead, producing a bogus
+    `partition_audit:` on a correct call or masking a real miscount.
+
+    Rather than guess which block is authoritative, the audit reports the
+    ambiguity and lets a reader adjudicate. (code-reviewer, P2 on f776d9c779.)
+    """
+    count = 0
+    for body in _iter_fenced_blocks(text):
+        try:
+            parsed = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(parsed, dict) and isinstance(parsed.get("findings"), list):
+            count += 1
+    return count
+
+
 def _detect_findings_shape(text: str) -> "tuple[Optional[str], bool]":
     """Dispatch to whichever of the two named shapes `text` matches.
 
@@ -693,12 +728,141 @@ def _resolve_git_root(cwd: Optional[str] = None) -> str:
     return root
 
 
+#: Every id spelling that names a finding by position, longest-prefix first so
+#: `finding-3` is not mis-read as the `f` prefix followed by garbage. Measured
+#: over the 1189 sidecars on disk carrying a dispositions block: `finding-N`
+#: 2526 tokens, bare integers 2411, `F<n>`/`f<n>` 485, `Finding N` (space) ~74.
+#: The first of those is the MOST COMMON live spelling and the first cut of
+#: this function mapped it to None -- which would have reported the single
+#: most popular correct id as `unrecognized` on half of all real calls. A
+#: false positive here is worse than the silence it replaced: it libels a
+#: correct record and teaches every reader to skip the field.
+#: Surrounding quotes seen on hand-authored blocks (`["0", "1"]`); the
+#: renderer never emits them, so this only ever forgives someone else's.
+_ID_QUOTES = "\"'"
+
+_INDEX_ID_RE = re.compile(r"^(?:finding[ _-]?|F)?(\d+)$", re.IGNORECASE)
+
+
+def _index_for_id(raw: str) -> Optional[int]:
+    """Return the 1-based finding index `raw` names, or ``None`` if it names
+    no index at all.
+
+    Accepts every positional spelling measured on disk: `3`, `F3`, `f3`,
+    `finding-3`, `finding 3`, `finding_3`, `Finding 3`. Anything else
+    (`F3a`, `P1`, `summary`, a persona's own label) is NOT coerced: an id this
+    function cannot map is reported as unrecognized rather than silently
+    dropped, because a dropped id is exactly the miscount this audit exists
+    to catch.
+
+    Spelling provenance: `agents/review-integrator.md` does NOT itself carry
+    an `F<n>` example — the worked example lives in the wiki page that file
+    routes to, `coordinator/docs/wiki/review-integration-doctrine.md`
+    (`applied: [F1, F2, F3, F7, F10]`). Both are DoE-claude. Naming the agent
+    file here was wrong in this function's first cut.
+    """
+    match = _INDEX_ID_RE.match(raw.strip().strip(_ID_QUOTES))
+    if match is None:
+        return None
+    # 0 is returned, not rejected. Some reviewers number their findings from
+    # zero (46 such ids on disk: `0`, `F0`, `finding-0`), and rejecting the
+    # token here would report a COMPLETE 0-based partition as both
+    # `unrecognized` and `unbucketed`. `_partition_audit` infers the base from
+    # the supplied set instead.
+    return int(match.group(1))
+
+
+def _partition_audit(
+    findings: Optional[List[Any]],
+    buckets: Dict[str, List[str]],
+    *,
+    candidate_blocks: int = 1,
+) -> Optional[Dict[str, List[str]]]:
+    """Compare the supplied bucket map against the reviewer's own findings
+    array, returning the discrepancies or ``None`` when there is nothing to
+    report.
+
+    Returns ``None`` both when no findings array exists to check against AND
+    when the partition is exactly right — the caller renders nothing in either
+    case, so a correct call keeps the block byte-identical to a pre-audit one.
+
+    Keyed on the PRESENCE of a JSON findings array, never on
+    `_detect_findings_shape`'s verdict. 19 of the 307 live sidecars carry both
+    shapes, and that dispatcher returns `review-findings` for every one of them
+    — so keying on the shape would skip the audit on exactly the files where
+    the array is sitting right there to check against. The shape answers "did
+    this reviewer fill anything in"; this answers "are the indices covered",
+    and they are not the same question.
+
+    Reports four classes, each a list of strings so the rendered YAML needs no
+    per-class special-casing: `unbucketed` (a finding no bucket names —
+    example-retrieval-repo-em's 2026-09-12 case, two findings applied and recorded
+    nowhere), `duplicated` (an index in more than one bucket, which makes the
+    record self-contradicting), `out_of_range` (an index past the end of the
+    array), and `unrecognized` (an id naming no index, which this function
+    will not guess at).
+
+    NEGATIVE SPEC: does NOT check that a finding landed in the RIGHT bucket.
+    Nothing in the sidecar records what the correct disposition was, so a
+    mislabel — the third error in that same memo — stays invisible here and is
+    still the calling agent's to get right. This closes the arithmetic half of
+    the gap, not the judgment half.
+    """
+    if findings is None:
+        return None
+
+    # Base inferred, never assumed. A reviewer numbering 0..N-1 and an
+    # integrator bucketing all of them has produced a COMPLETE partition, and
+    # an audit that hard-codes 1..N calls it two kinds of broken. The 0-based
+    # reading is only accepted when it is exact -- any other set falls through
+    # to the 1-based expectation, so this widens what counts as correct
+    # without widening what counts as silent.
+    count = len(findings)
+    expected = set(range(1, count + 1))
+    seen: Dict[int, int] = {}
+    unrecognized: List[str] = []
+    for bucket in BUCKET_ORDER:
+        for raw in buckets.get(bucket) or []:
+            # `_split_ids` already drops falsy tokens on the CLI path, so this
+            # is unreachable from `main` today. It is here because a bare ""
+            # would render as `unrecognized: []` -- a report that fires the
+            # WARNING while looking, in the block, exactly like nothing wrong.
+            # (code-reviewer, nit on f776d9c779.)
+            if not raw.strip():
+                continue
+            index = _index_for_id(raw)
+            if index is None:
+                if raw not in unrecognized:
+                    unrecognized.append(raw)
+                continue
+            seen[index] = seen.get(index, 0) + 1
+
+    if count and set(seen) == set(range(0, count)):
+        expected = set(range(0, count))
+
+    unbucketed = sorted(expected - set(seen))
+    duplicated = sorted(i for i, n in seen.items() if n > 1)
+    out_of_range = sorted(set(seen) - expected)
+
+    report = {
+        "ambiguous_block": ["true"] if candidate_blocks > 1 else [],
+        "unbucketed": [str(i) for i in unbucketed],
+        "duplicated": [str(i) for i in duplicated],
+        "out_of_range": [str(i) for i in out_of_range],
+        "unrecognized": unrecognized,
+    }
+    if not any(report.values()):
+        return None
+    return {k: v for k, v in report.items() if v}
+
+
 def _build_block(
     buckets: Dict[str, List[str]],
     rationale: Optional[str],
     *,
     no_findings: bool = False,
     prior_blocks: int = 0,
+    partition_audit: Optional[Dict[str, List[str]]] = None,
 ) -> str:
     """Render the canonical `## Integrator Dispositions` block, matching
     `agents/review-integrator.md`'s own example byte-for-byte in structure
@@ -715,6 +879,14 @@ def _build_block(
     block this one displaces. Like `verified-no-action`, they render ONLY when
     they apply — a first block stays byte-identical to a pre-history one, so
     the byte-parity claim above survives.
+
+    `partition_audit` renders a `partition_audit:` mapping when the supplied
+    ids did not cover the reviewer's findings array exactly once. It goes in
+    the BLOCK, not only on stderr, because the block is the artifact a later
+    reader consults and stderr is gone by then: a record that under-reports
+    its own coverage silently "reads as authoritative" (example-retrieval-repo-em,
+    2026-09-12). Same render-only-when-it-applies discipline as the two
+    fields above, so a clean call is byte-identical to a pre-audit block.
     """
     lines: List[str] = []
     lines.append("")
@@ -741,6 +913,18 @@ def _build_block(
         lines.append(f"{_BUCKET_YAML_KEY[bucket]}: {rendered}")
     if no_findings:
         lines.append("no_findings: true")
+    if partition_audit:
+        lines.append("partition_audit:")
+        for key in (
+            "ambiguous_block",
+            "unbucketed",
+            "duplicated",
+            "out_of_range",
+            "unrecognized",
+        ):
+            values = partition_audit.get(key)
+            if values:
+                lines.append(f"  {key}: [" + ", ".join(values) + "]")
     lines.append("```")
     if rationale and rationale.strip():
         lines.append("")
@@ -884,8 +1068,31 @@ def append_dispositions(
             "declared no findings at all, pass --no-findings."
         )
 
+    # WARN, never refuse. A misdirected write above has no correct record to
+    # land and refusing costs a retry; a miscount does not -- the findings are
+    # already applied by the time this is called, and refusing would write no
+    # `## Integrator Dispositions` heading at all. That heading is the single
+    # thing `block_em_hand_edit_pending_review_integration` unblocks on, so a
+    # refusal here would brick every file the reviewer cited over an
+    # arithmetic slip in the record of work that is already done -- strictly
+    # worse than the miscount. The mismatch is recorded instead, in the block,
+    # and a second call with the right map supersedes it cleanly.
+    audit = (
+        None
+        if no_findings
+        else _partition_audit(
+            _find_json_findings_block(text),
+            buckets,
+            candidate_blocks=_count_json_findings_blocks(text),
+        )
+    )
+
     block = _build_block(
-        buckets, rationale, no_findings=no_findings, prior_blocks=prior_blocks
+        buckets,
+        rationale,
+        no_findings=no_findings,
+        prior_blocks=prior_blocks,
+        partition_audit=audit,
     )
     with sidecar_path.open("a", encoding="utf-8") as handle:
         handle.write(block)
@@ -898,6 +1105,7 @@ def append_dispositions(
         "path": str(sidecar_path),
         "already_dispositioned": bool(prior_blocks),
         "prior_blocks": prior_blocks,
+        "partition_audit": audit,
     }
 
 
@@ -1093,6 +1301,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     else:
         print(f"append-integrator-dispositions: OK — appended dispositions block to {result['path']}.")
+
+    audit = result.get("partition_audit")
+    if audit:
+        detail = "; ".join(f"{k}: {', '.join(v)}" for k, v in audit.items())
+        print(
+            f"append-integrator-dispositions: WARNING — the block landed, but the ids do "
+            f"not cover this reviewer's findings array exactly once ({detail}). The block "
+            f"records this as `partition_audit:` so a later reader is not misled. Re-run "
+            f"with the corrected map to supersede it — a second call appends a new block, "
+            f"it does not no-op.",
+            file=sys.stderr,
+        )
 
     # Secondary write: the routing stamp the stop guard reads. Never fails the
     # call -- the dispositions block above is the primary deliverable and is

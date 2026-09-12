@@ -48,6 +48,13 @@ DENY set (verbatim from the C6 plan-spine row body):
     ``checkout-index``, ``bisect``. ``reset --mixed``/``--soft`` stay
     ALLOWED -- refs and index only, never the worktree (D7's own carve-out).
 
+D4b's own gain: ``reopen`` is a p4 session-CL write verb, allowed only as
+``reopen -c <CL> <paths>`` (form only -- like ``edit``/``add``/``delete``/
+``move`` above, neither this fence nor those verbs validate the CL NUMBER
+against the session's own) -- moves D4b's own orphan-adoption remedy INTO
+whatever CL is named. Denied bare or with no path argument. Without this
+addition the fence would deny the floor's own remedy.
+
 Deny, never ask -- every returned envelope is a hard
 ``permissionDecision: "deny"``, under every permission mode
 (``bypassPermissions`` included, per D6's own "the verdict is deny, never
@@ -104,6 +111,22 @@ _MAX_UPWARD_WALK = 50
 
 _P4_BASENAMES = frozenset({"p4", "p4.exe"})
 
+#: Review: coordinator-code-reviewer F1 (P1, confirmed) -- `cmd /c`/`cmd -c`
+#: was special-cased to recurse into the inner command, but `bash -c`,
+#: `sh -c`, `pwsh -Command`/`-c`, and `powershell -Command`/`-c` were not,
+#: so `bash -c "p4 submit"` tokenized cleanly, fell through every branch in
+#: `_classify_segment`, and was ALLOWED -- a fail-open bypass of a
+#: fail-closed fence. Conservative arm taken (not the recursion arm the
+#: reviewer also offered): the inner string handed to a `-c`/`-Command`
+#: interpreter is not reliably argv-shaped the way this fence's own
+#: tokenizer expects, so recursing into it risks a second bypass through
+#: quoting the outer tokenizer normalizes differently. Treated as an
+#: immediate unparseable-invocation deny instead, matching this module's
+#: own "anything unparseable ... denied" posture (see `_GOVERNED_MENTION_RE`
+#: and D6's `-x` handling above).
+_SHELL_DASH_C_BASENAMES = frozenset({"bash", "sh", "pwsh", "powershell"})
+_SHELL_DASH_C_FLAGS = frozenset({"-c", "-command"})
+
 #: D6's read verbs taking no further constraint beyond being invoked at all.
 _P4_SIMPLE_READ_VERBS = frozenset(
     {
@@ -116,6 +139,13 @@ _P4_SIMPLE_READ_VERBS = frozenset(
 #: D6's session-CL write verbs, each allowed only in the constrained form
 #: named in the module docstring -- see ``_classify_p4_segment``.
 _P4_ADD_LIKE_VERBS = frozenset({"edit", "add", "delete", "move"})
+
+#: D4b -- the fence's own gain: ``reopen -c <CL>`` with at least one path,
+#: constrained like every other write verb here (form only, same as
+#: ``_P4_ADD_LIKE_VERBS`` -- neither this fence nor those verbs validate the
+#: CL NUMBER against the session's own, only that ``-c`` carries a value).
+#: Without this the fence would deny the D4b floor's own remedy.
+_P4_REOPEN_VERB = "reopen"
 
 #: p4 global options that consume the following token as a value, so the
 #: verb resolver must skip both (D6: "skips the binary ... and every global
@@ -269,9 +299,26 @@ def _classify_p4_segment(rest: List[str]) -> Optional[str]:
     if verb == "revert":
         return None if ("-a" in args or "-c" in args) else "unrecognized p4 verb form (default-deny)"
     if verb == "change":
-        return None
+        # Review: coordinator-code-reviewer F2 -- was unconditionally
+        # allowed, letting `p4 change -d <CL>` (delete a pending
+        # changelist) and `p4 change -f` (force-edit a changelist's
+        # owner/description) through unconstrained, unlike every sibling
+        # write verb here. Scoped to the forms the session-changelist
+        # machinery actually issues (`change -o`, `change -i` via
+        # `spec_input` -- see `p4/session_change.py`), form only, same
+        # pattern as `reopen`/`shelve` above.
+        return None if (args[:1] == ["-o"] or args[:1] == ["-i"]) else "unrecognized p4 verb form (default-deny)"
     if verb == "shelve":
         return None if ("-c" in args or "-r" in args) else "unrecognized p4 verb form (default-deny)"
+    if verb == _P4_REOPEN_VERB:
+        if "-c" not in args:
+            return "bare `reopen` (needs -c <CL> and paths)"
+        idx = args.index("-c")
+        if idx + 1 >= len(args):
+            return "bare `reopen` (needs -c <CL> and paths)"
+        remaining = args[:idx] + args[idx + 2 :]
+        positional = [a for a in remaining if not a.startswith("-")]
+        return None if positional else "bare `reopen` (needs -c <CL> and paths)"
     return "unrecognized p4 verb (default-deny)"
 
 
@@ -339,6 +386,30 @@ def _classify_segment(tokens: List[str]) -> Optional[str]:
             return _classify_git_segment(inner[1:])
         return None
 
+    # Review: coordinator-code-reviewer F1 -- a `-c`/`-Command`/
+    # `-EncodedCommand` interpreter head is treated as an unparseable
+    # invocation (conservative arm) ONLY when the inner string plausibly
+    # names a surface this fence governs -- same "governed mention" gate
+    # `_GOVERNED_MENTION_RE` already applies to the top-level unparseable
+    # fallback, so `bash -c "ls"` stays allowed and this cannot become a
+    # blanket nested-shell deny. Never recursed into and never classified
+    # through `_classify_p4_segment`/`_classify_git_segment` -- the inner
+    # string is not reliably argv-shaped the way this fence's tokenizer
+    # expects.
+    if head_base in _SHELL_DASH_C_BASENAMES:
+        for idx, tok in enumerate(rest):
+            flag = tok.lower()
+            if flag == "-encodedcommand":
+                # Base64 payload -- plaintext content is unknowable at this
+                # layer, so it is an unconditional unparseable deny (never
+                # a governed-mention check, which would require decoding).
+                return "unparseable invocation (shell -EncodedCommand interpreter)"
+            if flag in _SHELL_DASH_C_FLAGS:
+                inner_text = " ".join(rest[idx + 1 :])
+                if _GOVERNED_MENTION_RE.search(inner_text):
+                    return "unparseable invocation (shell -c/-Command interpreter)"
+                break
+
     if head_base in _P4_BASENAMES:
         return _classify_p4_segment(rest)
     if head_base == "git":
@@ -386,11 +457,17 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
 
 def _deny_reason(deny_kind: str) -> str:
     if deny_kind == "submit":
+        # Register B7: the earlier text routed the reader to "example-game-repo's own
+        # submit tool" -- a repo this caller cannot reach, so it read as a
+        # remedy while naming nothing actionable here. Same failure the
+        # sibling guard messages were corrected for at b8b04c28e2 (name the
+        # remedy that works, not the one that reads as replication). What IS
+        # reachable from here is the shelf and the EM.
         return (
-            "BLOCKED: p4 submit -- no submit provider installed. Submit is "
-            "example-game-repo's (D8); this engine builds no submit gate. Use "
-            "example-game-repo's own submit tool against this session's changelist "
-            "(see `p4.session_state`)."
+            "BLOCKED: p4 submit -- agents do not submit. This repo mirrors "
+            "Perforce for commit and shelve only; the shelved changelist "
+            "(see `p4.session_state`) is the deliverable. Report to the EM "
+            "that dispatched you if a submit is genuinely owed."
         )
     return (
         "BLOCKED: %s is outside this repo's p4 verb fence -- this repo "
