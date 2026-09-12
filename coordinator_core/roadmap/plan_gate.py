@@ -802,11 +802,62 @@ def _unlinked_plan_claim(fm: Dict[str, Any], worktree_root: Path) -> Optional[Di
     return None
 
 
-def _best_plan(hits: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """The most advanced of several linked plans: coded > approved > anything."""
+#: Link bases that cannot distinguish THIS baton's plan from a sibling's. A
+#: sizing object is cited by every baton minted from one sizing — the normal
+#: shape of a roadmap wave — so a hit set resolved on it is "the plans of every
+#: baton in this sizing", not "this baton's plans".
+_WEAK_PLAN_LINK_BASES = frozenset({"sizing_object", "sizing_objects"})
+
+
+def _best_plan(
+    hits: Sequence[Dict[str, Any]], basis: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """The most advanced of several linked plans: coded > approved > anything.
+
+    The reduction presupposes the hit set is the baton's OWN plans — true for
+    `governing_plan`/`origin_plan_id`/`plan_ids`/`deliverable_id`, where a
+    fan-in baton legitimately carries several. Under a weak basis it is false:
+    `max()` then reads "whichever sibling is furthest along" and hands the
+    baton a disposition it did not earn. Reported by `roadmap.plan_gate`
+    against example-cockpit-repo's pvcs-01..04 (2026-09-12), where four batons
+    sharing one sizing object let pvcs-04's approved plan open pvcs-04's own
+    planning gate through pvcs-01, whose real plan was `reviewed`.
+
+    So a multi-hit weak-basis set is DECLINED, not reduced: no linked plan, and
+    `_plan_link_ambiguity` names the candidates. A gate that fails OPEN on a
+    mis-resolution authorises exactly the work the edge existed to hold; an
+    honest "I cannot tell which of these is yours" is a closed gate.
+    """
     if not hits:
         return None
+    if len(hits) > 1 and basis in _WEAK_PLAN_LINK_BASES:
+        return None
     return max(hits, key=lambda p: (bool(p["coded"]), bool(p["approved"])))
+
+
+def _plan_link_ambiguity(
+    hits: Sequence[Dict[str, Any]], basis: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """The candidate set `_best_plan` declined to reduce, or None.
+
+    Present-as-null in the report for `unlinked_plan_claim`'s reason: a baton
+    whose plan link resolved to several siblings' plans is indistinguishable in
+    the output from one that has no plan at all, and the repair differs —
+    write `governing_plan:` (or the plan's own `deliverable_id:`) onto the
+    baton, rather than write a plan.
+    """
+    if len(hits) < 2 or basis not in _WEAK_PLAN_LINK_BASES:
+        return None
+    paths = sorted(p["path"] for p in hits)
+    return {
+        "basis": basis,
+        "paths": paths,
+        "repair": (
+            f"{len(paths)} plans link on `{basis}` alone, which every baton in a "
+            "sizing shares — cannot tell which is this baton's. Write "
+            "`governing_plan:` (or the plan's own `deliverable_id:`) onto the baton"
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -996,7 +1047,8 @@ def blocker_disposition(
         }
 
     hits, basis = link_plans(record["_fm"], plans)
-    plan = _best_plan(hits)
+    plan = _best_plan(hits, basis)
+    ambiguity = _plan_link_ambiguity(hits, basis)
     if plan is None:
         # `unplanned` normally means "a sweep will plan this". For an EXECUTION-PARKED
         # blocker it does not, and the difference is invisible in the ordinary wording:
@@ -1017,7 +1069,9 @@ def blocker_disposition(
             "path": record["path"],
             "plan": None,
             "reason": (
-                "baton is stamped `handoff_phase: execution` but no plan links to it — "
+                ambiguity["repair"]
+                if ambiguity
+                else "baton is stamped `handoff_phase: execution` but no plan links to it — "
                 "its governing_plan is missing or was moved. It is NOT queued work: "
                 "`needs_plan` is False for a parked baton, so no sweep will plan it, and "
                 "this blocker holds its dependents shut until the link is restored"
@@ -1421,8 +1475,10 @@ def assemble_plan_gate(
     # rather than in `_baton_record` because it needs the plan index, which is
     # a property of the corpus, not of the record.
     for record in records:
-        own = _best_plan(link_plans(record["_fm"], plans)[0])
+        own_hits, own_basis = link_plans(record["_fm"], plans)
+        own = _best_plan(own_hits, own_basis)
         record["own_plan"] = own
+        record["ambiguous_plan_link"] = _plan_link_ambiguity(own_hits, own_basis)
         record["unlinked_plan_claim"] = (
             None if own else _unlinked_plan_claim(record["_fm"], worktree_root)
         )
@@ -1740,6 +1796,9 @@ def assemble_plan_gate(
                 # Present-as-null, never absent: an omitted key and "no claim" would
                 # be one value, and this field exists to make a silent case loud.
                 "unlinked_plan_claim": record["unlinked_plan_claim"],
+                # Present-as-null, never absent, for the same reason: a link
+                # that resolved to several siblings' plans is not "no plan".
+                "ambiguous_plan_link": record["ambiguous_plan_link"],
                 "execution_authorized": record["execution_authorized"],
                 "sized": bool(_sizing_resolution(record)[0]),
                 "sizing_objects": record["sizing_objects"],
@@ -1872,8 +1931,21 @@ def assemble_plan_gate(
         if len(members) > 1
     ]
 
+    # A target is MATCHED when it names a scanned record, whatever became of
+    # that record afterwards -- never derived from the surviving candidates.
+    # Why, and the measurement: `test_a_held_target_is_matched_not_unmatched`.
+    matched_targets = sorted(
+        {
+            t
+            for t in (targets or ())
+            for r in records
+            if t in r["ids"] or t == r["path"]
+        }
+    )
+
     return {
         "batons": reported,
+        "matched_targets": matched_targets,
         "waves": waves,
         "cycles": cycles,
         "unresolved_blockers": unresolved,

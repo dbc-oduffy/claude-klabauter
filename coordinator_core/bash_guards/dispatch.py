@@ -308,6 +308,10 @@ from coordinator_core.bash_guards.block_worktree_creation import (
     check as _check_worktree_creation,
     MATCHERS as _matchers_worktree_creation,
 )
+from coordinator_core.bash_guards.p4_verb_fence import (
+    check as _check_p4_verb_fence,
+    MATCHERS as _matchers_p4_verb_fence,
+)
 from coordinator_core.bash_guards.block_approval_sentinel_creation import (
     check as _check_approval_sentinel_creation,
     MATCHERS as _matchers_approval_sentinel_creation,
@@ -2170,6 +2174,19 @@ def _build_guard_chain(
         # bypassable by prefixing a `cd`. Hard-denies belong ahead of every
         # rewrite/offer check for exactly this reason.
         GuardEntry("block-worktree-creation", lambda: _check_worktree_creation(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_worktree_creation)),
+        # C6 (docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md,
+        # D6/D7/S4): the p4 verb fence -- marker-gated (`is_p4_repo`, a
+        # zero-spawn `coordinator.local.md` read), so a git-only repo pays
+        # only that one flat read before this guard returns `None`. Not
+        # identity-gated (fires for every caller including the EM, same
+        # posture as `block-worktree-creation` immediately above) -- a p4
+        # workspace's own consistency invariant (D4a) does not distinguish
+        # who ran the command that broke it. Registered directly adjacent to
+        # `block-worktree-creation`, ahead of `offer-git-c`, for the
+        # identical short-circuit reason recorded on that entry's own
+        # preceding comment: `offer-git-c` allow+updatedInput would let a
+        # `cd <p4-repo> && p4 submit ...` bypass this guard if it sat below.
+        GuardEntry("p4-verb-fence", lambda: _check_p4_verb_fence(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_p4_verb_fence)),
         # Same ordering requirement as block-worktree-creation immediately
         # above, for the identical reason: `offer-git-c` short-circuits any
         # guard placed after it via allow+updatedInput, so a guard denying

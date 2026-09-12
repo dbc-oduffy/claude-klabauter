@@ -394,6 +394,69 @@ def test_the_most_advanced_of_several_linked_plans_wins(tmp_path):
     assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_PLAN_APPROVED
 
 
+def test_a_shared_sizing_object_does_not_hand_a_blocker_a_siblings_plan(tmp_path):
+    """The weak-basis fail-open, reported by example-cockpit-repo 2026-09-12.
+
+    Four batons minted from one sizing all cite it, so a `sizing_object` hit set
+    is every sibling's plan. Reducing it with `max(coded, approved)` gave a
+    blocker whose own plan was `reviewed` the disposition of a sibling's
+    `approved` plan, and the dependent's PLANNING gate opened on work the edge
+    existed to hold. Declining the reduction is the closed answer."""
+    _plan(tmp_path, "blockers-own", "reviewed", sizing_object="szo-wave")
+    _plan(tmp_path, "siblings", "approved", sizing_object="szo-wave")
+    _baton(tmp_path, "blocker-1", sizing_object="szo-wave")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"], sizing_object="szo-wave")
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+    blocker = dependent["blockers"][0]
+    assert blocker["disposition"] == pg.BLOCKER_UNPLANNED
+    assert blocker["plan"] is None
+    assert dependent["planning_gate"]["open"] is False
+    assert dependent["execution_gate"]["open"] is False
+
+
+def test_an_ambiguous_weak_link_is_named_rather_than_read_as_no_plan(tmp_path):
+    """`unlinked_plan_claim`'s reason, one basis over: "no plan links here" and
+    "several siblings' plans link here" take different repairs, and the second
+    is invisible if the report renders it as the first."""
+    _plan(tmp_path, "one", "approved", sizing_object="szo-wave")
+    _plan(tmp_path, "two", "draft", sizing_object="szo-wave")
+    _baton(tmp_path, "subject-1", sizing_object="szo-wave")
+
+    subject = _by_id(pg.assemble_plan_gate(tmp_path, subject="subject-1"), "subject-1")
+    assert subject["plan"] is None
+    ambiguity = subject["ambiguous_plan_link"]
+    assert ambiguity["basis"] == "sizing_object"
+    assert ambiguity["paths"] == ["docs/plans/one.md", "docs/plans/two.md"]
+    assert "governing_plan" in ambiguity["repair"]
+
+
+def test_a_strong_basis_still_reduces_a_multi_hit_set(tmp_path):
+    """The decline is scoped to the weak bases. A fan-in baton carrying two of
+    its OWN plans by `deliverable_id` is the case `_best_plan` was written for,
+    and must keep reducing — otherwise the fix trades a fail-open for a
+    fail-closed on every fan-in."""
+    _plan(tmp_path, "early", "draft", deliverable_id="dlv-x")
+    _plan(tmp_path, "later", "approved", deliverable_id="dlv-x")
+    _baton(tmp_path, "subject-1", deliverable_id="dlv-x")
+
+    subject = _by_id(pg.assemble_plan_gate(tmp_path, subject="subject-1"), "subject-1")
+    assert subject["plan"]["path"] == "docs/plans/later.md"
+    assert subject["ambiguous_plan_link"] is None
+
+
+def test_a_single_weak_basis_hit_still_links(tmp_path):
+    """One plan in the sizing is not a coincidence of siblings — there is no
+    other candidate to confuse it with, and declining it would unlink every
+    baton whose only link basis is its sizing."""
+    _plan(tmp_path, "only", "approved", sizing_object="szo-wave")
+    _baton(tmp_path, "blocker-1", sizing_object="szo-wave")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_PLAN_APPROVED
+
+
 def test_a_blocker_may_be_named_by_handoff_id_as_well_as_stub_id(tmp_path):
     """handoff.schema.json admits both spellings in `blocked_by`. Indexing only
     `stub_id` reports every handoff_id edge as `unresolved`."""
@@ -1372,10 +1435,15 @@ def test_shared_wave_slot_names_every_baton_collapsed_into_one_id(tmp_path):
 
     assert report["counts"]["shared_wave_slot"] == 1
     (row,) = report["shared_wave_slot"]
+    # The WHOLE row shape, not just the fields this repo reads: DoE-claude's
+    # `emit-wave-fire.py` consumes these rows from a published mirror, so a key
+    # renamed or dropped here breaks a reader in a repo this suite never runs.
+    assert set(row) == {"id", "wave", "members"}
     assert row["id"] == "shared-1"
-    assert [member["path"] for member in row["members"]] == [
-        "state/handoffs/newer-record.md",
-        "state/handoffs/older-record.md",
+    assert row["wave"] == _by_id(report, "shared-1")["planning_wave"]
+    assert row["members"] == [
+        {"path": "state/handoffs/newer-record.md", "title": "newer-record"},
+        {"path": "state/handoffs/older-record.md", "title": "older-record"},
     ]
 
     # The collapse itself, pinned alongside the report of it: three candidate

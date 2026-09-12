@@ -1,0 +1,137 @@
+python - <<'PY'
+import io,re,os
+
+def write(path, body, did):
+    with open(path,'w',encoding='utf-8') as f:
+        f.write(body.rstrip()+'\ndeliverable_id: "%s"\n'%did)
+
+def did_of(p):
+    for l in open(p,encoding='utf-8'):
+        if l.startswith('deliverable_id:'):
+            return l.split('"')[1]
+
+p1='state/sizings/2026-09-12-directive-resolution-reaches-a-plugin-lo.yaml'
+write(p1, '''schema: sizing-object
+name: "Directive resolution reaches a plugin-local CLI"
+intent: "Make ceremony directive resolution reach a plugin-local CLI that lives in DoE's own coordinator/bin/, with no launcher added to that tree, so the three named DoE scripts are invocable from the workday/workstream/workweek ceremonies"
+intent_source: em-elaborated
+estimate:
+  tshirt: M
+  provisional: true
+route: plan  # verbatim from sizing-assemble --tshirt M --premise-provenance read --precedent shipped-before
+detents:
+  - post_size_prompt_pending
+  - premise_unproven
+  - precedent_shipped_before
+fork: null
+xl_exit: null
+status: routed
+precedent: shipped-before
+scout_evidence:
+  - "coordinator_core/workstream_complete/apply.py, workday_complete/apply.py, workweek_complete/apply.py each carry a private _resolve_script_path/_CLI_DISPATCH copy (EM re-confirmed by grep at HEAD)"
+  - "coordinator_core/ops/coordinator_doe_root.py is the mature cross-repo DoE root resolver, ~149 consumers -- the hard half of this job is already built"
+  - "coordinator_core/ceremony_common/cli_dispatch.py :: load_cli_module already loads extensionless scripts via explicit SourceFileLoader"
+  - "No coordinator_core module exists for uhura or bug_sweep (EM re-confirmed: absent); group_em exists"
+  - "Originating memo state/cross-repo/archive/2026-09-01-example-game-repo-em-mandated-steps-no-directive-emits.md is status actioned, realized_by d49f9eb2ac -- DoE ceded the shape"
+premise:
+  provenance: read
+  evidence: "EM spot-check at HEAD on branch work/machine-a/2026-09-06to11: grep confirms _resolve_script_path/_CLI_DISPATCH present in all three trio apply.py copies; `[ -d coordinator_core/uhura ]` and `[ -d coordinator_core/bug_sweep ]` both absent, coordinator_core/group_em present. The one premise NOT executed is the load-bearing one: whether the three DoE scripts import cleanly in-process, which cannot be executed from this repo because DoE-claude is not under this root."
+em_analysis:
+  em_resolution: "Held the scout's M; I did not raise or lower the notch, but I dissolved one of the two unknowns it rested on (see ac4_scope_cut) and left the other standing. The surviving size driver is a single named mechanism: in-process import of a sibling-repo script via spec_from_file_location, where the failure mode (relative imports assuming DoE's package layout) is invisible from this tree and forces a fallback decision mid-build. coordinator_core/launchable.py :: resolve_launchable is the named subprocess-shaped fallback, so the unknown is a fork in the road, not an unbounded one. The trio's three private copies are BREADTH of one edit, not three problems, and did not contribute to the notch."
+  ac4_scope_cut: "AC4 ('B10/B11 unblocked, demonstrated by one directive from each dispatching') read literally would require standing up directive/apply engines for uhura and bug-sweep, neither of which has a coordinator_core module at all. That reading contradicts the baton's OWN anti-scope, which disclaims B10/B11 emits as separate stubs, so it is a defect in the AC and not work in this baton. Settled by the EM, not deferred: the planner narrows AC4 to demonstrating the RESOLUTION MECHANISM against the three named DoE scripts, and records the engine-build for uhura/bug-sweep as belonging to B10/B11's own batons. A plan that builds ceremony dispatch machinery under this baton is out of scope and should be blocked in review."
+  cross_team_is_a_gate: "The DoE dependency is settled, not negotiated -- the originating memo cedes the shape with one constraint (no launcher in DoE's coordinator/bin/ by construction). That constraint is a design input to the plan and the courtesy memo back is a post-land gate. Neither is a size driver, and neither belongs in the t-shirt."
+''', did_of(p1))
+
+p2='state/sizings/2026-09-12-document-scaffolding-is-emitted-not-reme.yaml'
+write(p2, '''schema: sizing-object
+name: "Document scaffolding is emitted, not remembered"
+intent: "Stop relying on an operator remembering to scaffold a document: have each ceremony EMIT the coordinator-doc-new directive for the scaffold types it owns, as baton-assemble and sprint-planning already do"
+intent_source: em-elaborated
+estimate:
+  tshirt: M
+  provisional: true
+route: plan  # verbatim from sizing-assemble --tshirt M --premise-provenance read --precedent shipped-before
+detents:
+  - post_size_prompt_pending
+  - premise_unproven
+  - precedent_shipped_before
+fork: null
+xl_exit: null
+status: routed
+precedent: shipped-before
+scout_evidence:
+  - "coordinator_core/baton_assemble/__init__.py already emits coordinator-doc-new with replay-safe already_satisfied logic (37 references at HEAD) -- the pattern donor"
+  - "coordinator_core/sprint_planning_assemble/__init__.py already emits the same directive"
+  - "roadmap_planning_assemble, sizing_assemble, plan_assemble, review_assemble and the workday/workweek/workstream trio all already run apply_base.execute_directives -- the engine they need exists"
+  - "EM re-confirmed absent at HEAD: coordinator_core/architecture_audit, debt_triage, goal_setting, shape, strategic_self_description_refresh -- no module backs those ceremonies"
+  - "state/audits/2026-09-01-mandated-steps-not-emitted-census.md sizes the surface at ~14 scaffold types"
+premise:
+  provenance: read
+  evidence: "EM spot-check at HEAD: `grep -c coordinator-doc-new coordinator_core/baton_assemble/__init__.py` returns 37, confirming the donor emits for real; directory existence checks confirm no coordinator_core module for architecture_audit, debt_triage, goal_setting, shape, or strategic_self_description_refresh. The per-type required-flag computation is READ from baton_assemble d1, not executed for any new type."
+em_analysis:
+  em_resolution: "Revised the scout's XL DOWN two notches to M. The XL was not a depth read: it was a bundle plus a count. The bundle -- 7 of the ~14 cited types are backed by NO coordinator_core ceremony module, so 'emit the directive like baton_assemble does' is not an extension for them, it is a request to build directive-dispatch plumbing first. That is a second, materially larger job and it is not this baton. The count -- the remaining types sit on ceremonies that ALREADY run apply_base.execute_directives, so adding an emit to each is one proven edit repeated, which is breadth and not a notch. What survives as real size is a single named mechanism: per-type required-flag computation (predecessor fan-in, deliverable-id minting, --blocks, --sizing-object) is non-trivial even in the donor, and each type's flags have to be derived from that ceremony's own state. One mechanism over proven substrate is an M."
+  scope_split: "IN SCOPE: emit coordinator-doc-new from the ceremonies that already have an apply engine (roadmap_planning_assemble, sizing_assemble, plan_assemble, review_assemble, workday/workweek/workstream_complete). OUT OF SCOPE and to be recorded on the baton, not planned here: the ~7 types whose ceremonies (architecture-audit, debt-triage, goal-setting, shape, strategic-self-description-refresh) have no module at all. Those need a directive-dispatch engine built first and want their own baton. NOTE for the wave EM: that same missing engine is what hnd-directive-resolution-reaches-a-918ff3's AC4 collided with -- one absent capability surfacing in two batons, which argues it is a baton of its own rather than a rider on either."
+  ac_wellformedness: "The AC as written is not well-formed for the out-of-scope 7: it presumes a dispatch surface that does not exist. The plan must restate its acceptance criteria over the in-scope set only; an AC that silently keeps all 14 re-imports the XL."
+''', did_of(p2))
+
+p3='state/sizings/2026-09-12-engine-test-fixture-memos-leak-into-a-li.yaml'
+write(p3, '''schema: sizing-object
+name: "Engine test fixture memos leak into a live peer inbox"
+intent: "Stop the engine's own memo test fixtures writing into a real peer repo's cross-repo inbox, and establish what was already written there"
+intent_source: em-elaborated
+estimate:
+  tshirt: S
+  provisional: true
+route: spec-dispatch  # verbatim from sizing-assemble --tshirt S --premise-provenance read --precedent shipped-before
+detents:
+  - precedent_shipped_before
+fork: null
+xl_exit: null
+status: routed
+precedent: shipped-before
+scout_evidence:
+  - "coordinator_core/conftest.py :: _quarantine_real_home did not delenv COORDINATOR_SETTINGS_HOME until commit 0f0cd2b180 (2026-09-06); _settings_home.settings_home() checks that var AHEAD of CLAUDE_HOME, and every memo test sets only CLAUDE_HOME"
+  - "The leaked commits are dated 2026-09-04, predating 0f0cd2b180 -- the timeline fits"
+  - "The baton's own named candidate vector (MACHINE_LOCAL_IMPL) is used only by test_memo_resolver.py, not by test_memo_send/list/draft -- it does not explain the leak"
+  - "coordinator_core/conftest.py :: _no_new_live_session_hub_entries is a directly reusable before/after dir-diff guard template for the regression guard this baton needs"
+premise:
+  provenance: read
+  evidence: "EM spot-check at HEAD: `git log -S COORDINATOR_SETTINGS_HOME --oneline -- coordinator_core/conftest.py` returns 0f0cd2b180 ('tests: stop three suites depending on machine state and neighbour order') as the most recent touch, confirming the scout's dated fix. It also returns an EARLIER commit f602bc561f (2026-08-25) whose subject literally reads '...and stop the memo leak' -- EM read its conftest hunk and it is an engine_root memo-cache reset, unrelated to the inbox leak, and it predates the 2026-09-04 leak regardless. The end-to-end repro under an ambient COORDINATOR_SETTINGS_HOME has NOT been executed."
+em_analysis:
+  em_resolution: "Held the scout's S and confirmed the substituted cause. The scout's real contribution is that it replaced the baton's own named vector with a better-fitting one and dated both sides, which converts the job from mechanism design into verification plus a guard whose template already lives in the same file. That is what keeps this an S rather than an M."
+  disambiguation_lead: "Two commits in this file's history read as memo-leak fixes. f602bc561f (2026-08-25) is NOT one -- it resets an engine_root process memo -- and the planner should not spend a chunk on it. Recorded here because the subject line is a trap for the next reader grepping for 'memo leak'."
+  scope_note: "Three legs, and only two are engineering. (1) Repro pre/post 0f0cd2b180 with COORDINATOR_SETTINGS_HOME set ambiently. (2) Regression guard on the _no_new_live_session_hub_entries template, plus a decision on whether test_memo_resolver.py's direct MACHINE_LOCAL_IMPL use is an independent second vector. (3) Whether a real example-retrieval-repo memo was overwritten is a DATA question over a peer's git history and is a memo to example-retrieval-repo-em, not a chunk -- the plan should not size it as work, and must not block the guard on the answer."
+''', did_of(p3))
+
+p4='state/sizings/2026-09-12-every-bash-call-pays-23k-lines-of-guard.yaml'
+write(p4, '''schema: sizing-object
+name: "Every Bash call pays 23k lines of guard"
+intent: "Every Bash call pays 23k lines of guard -- refactor or kill: decide, per element of the hot-path guard surface, whether it is kept, targeted-fixed, or deleted under DR-344"
+intent_source: em-elaborated
+estimate:
+  tshirt: M
+  provisional: true
+route: plan  # verbatim from sizing-assemble --tshirt M --premise-provenance read --precedent shipped-before
+detents:
+  - post_size_prompt_pending
+  - premise_unproven
+  - precedent_shipped_before
+fork: null
+xl_exit: null
+status: routed
+precedent: shipped-before
+scout_evidence:
+  - "docs/research/2026-08-21-hot-path-guards-measured-in-process-time.md already settled that call-time dominates import-time for this entrypoint -- the premise that would have made this an L is retired"
+  - "dispatch.py 3,126 lines and dispatch_checks.py 11,512 lines at HEAD, matching the immediately prior scout pass exactly -- growth has plateaued"
+  - "docs/plans/2026-09-11-every-bash-call-pays-23k-lines-of-guard.md is a complete 7-chunk plan already on disk at status draft"
+  - "roster.py and the guard bodies are explicitly out of file scope, which is what keeps DoE's hook-delivery-manifest contract out of this baton"
+premise:
+  provenance: read
+  evidence: "EM read the baton's sizing trail rather than re-measuring: this baton has now been sized three times (scout L -> EM-revised M -> concurring scout M) on a line count that the latest pass reproduced exactly, and the dominant-cost question is answered in a committed research doc. The measurement this baton still owes -- Finding 7's 3.0 procs/call against 1 traced spawn -- has NOT been executed and is a chunk of the work, not of the sizing."
+em_analysis:
+  em_resolution: "Held M, deliberately and without re-litigating. This is the third sizing of this baton and the second at M; the first pass's L rested on an import-cost premise that committed research has since falsified. Re-raising it now would be agreeing with an anxiety, not naming a mechanism. The size is carried by ONE thing: dispatch.py's ~150-line evaluation-order parity contract is hand-proven with only three partial pairwise sentinels, so every import-shedding edit needs manual pre/post verification that no test performs. Line count is not the driver -- it is measured, plateaued, and enumerated."
+  delete_must_stay_reachable: "Per-element disposition is genuinely undecided, and DR-344's kill bar means DELETE is a live outcome for any element over 500ms -- not a rhetorical option to be argued down into a refactor. A plan that arrives with every element dispositioned 'targeted fix' has decided the question the baton exists to ask, and review should treat that as a finding. The baton's own prior art warns of the failure mode: four shaving rounds on ceremony.scoped_git_commit left it at 1513ms."
+  existing_draft_plan: "A complete 7-chunk plan for this exact baton is already checked in at docs/plans/2026-09-11-every-bash-call-pays-23k-lines-of-guard.md (status draft). The planner reconciles with that draft rather than re-authoring from scratch, and states explicitly what it changed -- a second independent plan for one baton is how two executors end up editing dispatch.py against different orderings."
+''', did_of(p4))
+print("ok")
+PY

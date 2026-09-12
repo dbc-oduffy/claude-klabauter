@@ -473,6 +473,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "session.resolve_chain_terminal_disposition"',
     ),
     ("coordinator_core.ops.resolve_baton_path", 'registers "baton.resolve_path_and_repo"'),
+    ("coordinator_core.ops.baton_carry_forward", 'registers "baton.carry_forward", "baton.carry_forward_read"'),
     ("coordinator_core.ops.poll_scratch_dir", 'registers "fanout.poll_scratch_dir"'),
     ("coordinator_core.ops.scratchpad_sweep", 'registers "scratchpad.sweep"'),
     ("coordinator_core.ops.memo_fate_partition", 'registers "memo.fate_partition"'),

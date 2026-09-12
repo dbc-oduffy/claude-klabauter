@@ -2475,6 +2475,49 @@ def _seg_confirmed_not_git_invocation(seg: str) -> bool:
 _RESET_MODE_FLAGS = ("--hard", "--soft", "--mixed", "--keep", "--merge")
 
 
+def _git_reset_invocation(seg: str) -> bool:
+    """True when `reset` is actually git's SUBCOMMAND in this segment.
+
+    A bare `\\breset\\b` scan is not that, and the difference is a hard deny on
+    prose. Measured 2026-09-12: a `python - <<'PY'` heredoc writing a YAML
+    sizing object was blocked because its body said "it resets an engine_root
+    process memo", the word `git` appeared elsewhere in the same body, and a
+    `$(...)` pair appeared later still — three unrelated pieces of English that
+    CHECK 1's subshell arm read as one unverifiable `git reset --mixed`. The
+    heredoc body is deliberately KEPT visible to the prose scan (a Python body
+    can spawn), so no stripper removes it; the narrowing has to be here.
+
+    Not a coverage loss: with no `git ... reset` token sequence in the segment
+    there is no ref to move, so there is nothing for CHECK 1 to protect. Every
+    pre-subcommand option form still reaches it — `git -C <dir> reset --hard`,
+    `git -c k=v reset --soft`, `git --git-dir=<d> reset`.
+
+    Tokenizes `seg` ONCE and walks forward from each `git` token's position,
+    rather than re-splitting the remaining tail per `git` occurrence: this
+    guard runs on every Bash tool call, and a multi-KB heredoc body mentioning
+    `git` several times made the per-occurrence re-split quadratic in segment
+    length. Review: overengineering-reviewer — single-pass tokenization keeps
+    the same coverage without the repeated whole-tail `.split()`.
+    """
+    tokens = seg.split()
+    for i, token in enumerate(tokens):
+        if not re.search(r"\bgit\b", token):
+            continue
+        index = i + 1
+        while index < len(tokens):
+            candidate = tokens[index]
+            if candidate == "reset":
+                return True
+            if candidate in _GIT_GLOBAL_OPT_WITH_ARG:
+                index += 2
+                continue
+            if candidate.startswith("-"):
+                index += 1
+                continue
+            break
+    return False
+
+
 def _reset_ref_moving_mode(seg: str):
     """Return the reset MODE string for a segment that is a ref-moving
     `git reset`, or None if the segment is not one.
@@ -2495,7 +2538,7 @@ def _reset_ref_moving_mode(seg: str):
     Deliberately word-boundary matched on `reset` exactly as the pre-existing
     gate was, so no segment that previously reached CHECK 1 stops reaching it.
     """
-    if not re.search(r"\breset\b", seg):
+    if not _git_reset_invocation(seg):
         return None
     for flag in _RESET_MODE_FLAGS:
         if re.search(r"(^|\s)" + re.escape(flag) + r"(\s|$)", seg):
@@ -4334,9 +4377,12 @@ _GR_BASE_RE = (
 
 #: git global options taking a SPACE-SEPARATED value, which must be consumed
 #: with their operand when walking argv to the real subcommand. Kept in step
-#: with the same options `_GR_BASE_RE` above already enumerates.
+#: with the same options `_GR_BASE_RE` above already enumerates, plus
+#: `--super-prefix` (real git global option, used by `_git_reset_invocation`'s
+#: prose-vs-invocation walk; `_GR_BASE_RE` itself has no `--super-prefix` leg
+#: since no fix has needed it there yet).
 _GIT_GLOBAL_OPT_WITH_ARG = frozenset(
-    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix"}
 )
 
 #: git global options KNOWN to take no operand at all. Closed and small on

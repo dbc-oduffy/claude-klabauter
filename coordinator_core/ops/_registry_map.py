@@ -333,6 +333,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "percolate.scan_content_leakage_tiers":   "coordinator_core.ops.scan_content_leakage",
     "session.resolve_chain_terminal_disposition": "coordinator_core.ops.session.resolve_chain_terminal_disposition",
     "baton.resolve_path_and_repo":            "coordinator_core.ops.resolve_baton_path",
+    "baton.carry_forward":                    "coordinator_core.ops.baton_carry_forward",
+    "baton.carry_forward_read":               "coordinator_core.ops.baton_carry_forward",
     "fanout.poll_scratch_dir":                "coordinator_core.ops.poll_scratch_dir",
     "scratchpad.sweep":                       "coordinator_core.ops.scratchpad_sweep",
     "distill.curation_status":                "coordinator_core.ops.distill_curation_status",
@@ -377,6 +379,12 @@ OP_MODULE_MAP: Dict[str, str] = {
     "merge_assemble.apply":                    "coordinator_core.merge_assemble.ops",
     "baton_assemble.brief":                    "coordinator_core.baton_assemble.ops",
     "baton_assemble.apply":                    "coordinator_core.baton_assemble.ops",
+    # C7 (docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md):
+    # workspace registration writer + the read-only session-state seam DoE's
+    # H5 skill step and example-game-repo's C12 both call. Two separate owning
+    # modules, not a shared-value pair like the hooks.* block above.
+    "p4.register_workspace":                   "coordinator_core.p4.register",
+    "p4.session_state":                        "coordinator_core.p4.session_state",
 }
 
 

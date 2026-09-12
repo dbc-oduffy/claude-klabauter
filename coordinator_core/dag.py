@@ -320,7 +320,14 @@ def _parse_scalar(text: str) -> Any:
         pass
     # Quoted string — strip quotes and handle single-quoted '' escape
     if len(text) >= 2 and text[0] == '"' and text[-1] == '"':
-        return text[1:-1]
+        # Unescaped, for the same reason the single-quoted branch below undoubles
+        # `''`: a double-quoted scalar carrying a quoted phrase (a verbatim PM
+        # utterance is the field most likely to) came back with literal
+        # backslashes, and `plan_gate._unquote` — the narrow scanner this parser
+        # is the oracle for — already unescapes. The disagreement surfaced as a
+        # red `test_narrow_scan_agrees_with_the_general_parser`, not as a wrong
+        # gate verdict, only because that test reads the live corpus.
+        return text[1:-1].replace('\\"', '"').replace('\\\\', '\\')
     if len(text) >= 2 and text[0] == "'" and text[-1] == "'":
         return text[1:-1].replace("''", "'")
     return text
@@ -1270,12 +1277,19 @@ def _ref_names_foreign_family(ref: str) -> bool:
     )
 
 
+#: A ref whose whole stripped value is a bare git commit SHA (7-40 lowercase
+#: hex chars) — see resolve_target's SHA-shaped short-circuit (C9 #1).
+#: Anchored full-string match so a ref that merely CONTAINS hex (a filename
+#: fragment, say) is unaffected.
+_SHA_SHAPED_REF_RE = re.compile(r'^[0-9a-f]{7,40}$')
+
+
 def resolve_target(
     ref: Any,
     handoff_dir: str,
     repo_root: str,
     git_history_cache: Optional[Set[str]] = None,
-    id_index: Optional[Dict[str, str]] = None,
+    id_index: Optional[Union['_LazyHandoffIdIndex', Dict[str, str]]] = None,
     *,
     include_history_tier: bool = True,
 ) -> Optional[str]:
@@ -1330,6 +1344,18 @@ def resolve_target(
         return None
     target = str(ref).strip()
     if not target or target in ('none', 'null'):
+        return None
+
+    # SHA-shaped ref short-circuit (C9 #1). A ref whose WHOLE stripped value
+    # looks like a git commit SHA (7-40 lowercase hex chars) is not a path
+    # and not a handoff_id — it is the `kind: recovery` baton convention of
+    # carrying a crash-commit SHA in `predecessor:` (schema comment: "NOT a
+    # predecessor handoff path"). Must sit BEFORE the id_index lookup below —
+    # id_index's `__contains__` is what triggers _LazyHandoffIdIndex's
+    # corpus-wide scan, so checking after it would only save the tier-3 git
+    # spawns, not the scan. A ref that merely CONTAINS hex (e.g. a filename)
+    # does not match `fullmatch`-anchored ^...$ and is unaffected.
+    if _SHA_SHAPED_REF_RE.match(target):
         return None
 
     if id_index and not target.endswith('.md') and target in id_index:
@@ -1486,16 +1512,147 @@ def build_handoff_id_index(
         # has usually just read for its own reasons (62.5ms over 267 handoffs,
         # measured on the boot backstop). Keyed by os.path.abspath, matching
         # the key this function itself writes.
-        meta = None if metas is None else metas.get(os.path.abspath(p))
-        if meta is None:
-            meta = _read_meta(p)
-        hid = meta.get('handoff_id') if meta else None
+        if metas is not None:
+            meta = metas.get(os.path.abspath(p))
+            if meta is None:
+                meta = _read_meta(p)
+            hid = meta.get('handoff_id') if meta else None
+        else:
+            # Raw 4KB-header scan (C9 #2): a `metas`-supplied call is
+            # untouched above — this branch only fires when the caller has
+            # not already parsed the corpus. Regex off the first 4KB instead
+            # of a full YAML parse: 31ms against 219ms for an identical
+            # 636-entry index (spike § 4). Falls back to `_read_meta` for any
+            # file whose frontmatter terminator is not inside that window,
+            # or whose `handoff_id` value the regex cannot read unambiguously.
+            hid = _raw_scan_handoff_id(p)
+            if hid is _RAW_SCAN_FALLBACK:
+                meta = _read_meta(p)
+                hid = meta.get('handoff_id') if meta else None
         if hid is None:
             continue
         hid_str = str(hid).strip()
         if hid_str:
             index[hid_str] = os.path.abspath(p)
     return index
+
+
+#: Sentinel distinguishing "scanned the 4KB window, found no handoff_id" (a
+#: genuine None — do not fall back) from "the window was insufficient to
+#: answer the question at all" (fall back to `_read_meta`) in
+#: `_raw_scan_handoff_id`. `None` itself cannot serve as this sentinel — it
+#: is exactly the first case's legitimate return value.
+_RAW_SCAN_FALLBACK = object()
+
+#: Matches the closing YAML frontmatter terminator line, anchored at the
+#: start of a line (MULTILINE) — mirrors `_parse_frontmatter`'s own
+#: `re.search(r'^---\s*$', ..., re.MULTILINE)` closing-terminator match.
+_RAW_SCAN_TERMINATOR_RE = re.compile(r'^---\s*$', re.MULTILINE)
+
+#: Matches an unambiguous `handoff_id:` scalar line within the frontmatter
+#: window: anchored at line start, a bare (unquoted, unfolded) value up to
+#: end-of-line. A quoted, block/folded (`|`/`>`), or otherwise non-trivial
+#: value does not match — the regex is deliberately narrow so any shape it
+#: cannot read unambiguously falls through to `_read_meta` rather than being
+#: mis-parsed (Review 2026-09-12 staff-eng: see module comment above).
+_RAW_SCAN_HANDOFF_ID_RE = re.compile(r'^handoff_id:[ \t]*(\S.*?)[ \t]*$', re.MULTILINE)
+
+#: 4KB read window for the raw frontmatter-header scan (C9 #2).
+_RAW_SCAN_WINDOW_BYTES = 4096
+
+
+def _raw_scan_handoff_id(file_path: str) -> Any:
+    """Best-effort `handoff_id` extraction from the first 4KB of *file_path*
+    via a terminator-anchored regex, instead of a full YAML parse.
+
+    Returns the found id (a possibly-empty string, or None if the key is
+    absent-but-the-window-was-sufficient), or the `_RAW_SCAN_FALLBACK`
+    sentinel when the window cannot answer the question at all:
+      - the closing `---` frontmatter terminator does not appear inside the
+        4KB window (file's frontmatter may extend past it), or
+      - a `handoff_id:` line is found but its value is quoted, folded, or
+        otherwise not a bare unambiguous scalar the regex can read.
+
+    The scan locates the closing terminator FIRST and searches only the
+    bytes BEFORE it — this is what keeps a `handoff_id:` line appearing in
+    the file's BODY (prose, a fenced code block, past the closing `---`)
+    from being picked up: the body is never in the searched span at all.
+
+    Skips an optional leading HTML-comment prologue before the opening
+    `---`, same as `_parse_frontmatter` and `plan_gate._skip_leading_
+    comments` — a banner record read from byte 0 without this skip would
+    read as having no frontmatter at all and fall back silently (Review
+    2026-09-12: 0/194 live records carry one today, so this is
+    future-proofing, not a live break).
+    """
+    try:
+        with open(file_path, 'rb') as fh:
+            raw = fh.read(_RAW_SCAN_WINDOW_BYTES)
+    except OSError:
+        return _RAW_SCAN_FALLBACK
+
+    try:
+        text = raw.decode('utf-8', errors='replace')
+    except Exception:
+        return _RAW_SCAN_FALLBACK
+    # Normalize CRLF -> LF before any regex work. Without this, a CRLF file
+    # (common in this corpus) leaves a trailing '\r' inside the MULTILINE
+    # '$' anchor's captured span for both the terminator and the handoff_id
+    # value regexes -- '\r' is not in `[ \t]`, so `_RAW_SCAN_HANDOFF_ID_RE`'s
+    # `(\S.*?)[ \t]*$` is forced to swallow it into the captured group,
+    # producing e.g. "hnd-foo-123\r" instead of "hnd-foo-123". Caught by
+    # test_raw_scan_agrees_with_the_general_parser_over_the_live_corpus
+    # (Latent-bug fix, C9 #2 review addendum).
+    text = text.replace('\r\n', '\n')
+
+    # Skip optional leading HTML comment block(s) before the opening `---`
+    # — mirrors _parse_frontmatter's own prologue skip.
+    cursor = 0
+    while True:
+        ws_match = re.match(r'^\s*', text[cursor:])
+        ws_len = len(ws_match.group(0)) if ws_match else 0
+        after_ws = cursor + ws_len
+        if text[after_ws:after_ws + 4] == '<!--':
+            close_idx = text.find('-->', after_ws + 4)
+            if close_idx == -1:
+                # Unclosed within the window — ambiguous, defer to _read_meta.
+                return _RAW_SCAN_FALLBACK
+            cursor = close_idx + 3
+        else:
+            cursor = after_ws
+            break
+    text = text[cursor:]
+
+    # The frontmatter's OPENING delimiter is itself a `^---$` line at the
+    # very start of the file — search for the CLOSING terminator only from
+    # just after it, or the opening line would match first and the header
+    # window would be empty.
+    if not text.startswith('---'):
+        return _RAW_SCAN_FALLBACK
+    first_newline = text.find('\n')
+    if first_newline == -1:
+        return _RAW_SCAN_FALLBACK
+    term_match = _RAW_SCAN_TERMINATOR_RE.search(text, first_newline + 1)
+    if term_match is None:
+        # Terminator not inside the window — frontmatter may extend past
+        # 4KB (or this isn't frontmatter at all); can't answer either way.
+        return _RAW_SCAN_FALLBACK
+
+    header = text[:term_match.start()]
+    id_match = _RAW_SCAN_HANDOFF_ID_RE.search(header)
+    if id_match is None:
+        # No handoff_id line found within the (fully-captured) header —
+        # a genuine "this file has none", not a window-insufficiency.
+        return None
+
+    value = id_match.group(1)
+    # Ambiguous shapes (quoted, block/folded scalar, inline comment) are
+    # deliberately NOT handled here — defer to the full parser rather than
+    # risk misreading a quoted/escaped value.
+    if not value or value[0] in ('"', "'", '|', '>') or '#' in value:
+        return _RAW_SCAN_FALLBACK
+
+    return value
 
 
 def _scan_handoff_corpus_paths(repo_root: str) -> List[str]:
@@ -1670,6 +1827,8 @@ def walk_forward(
     node_gate: Optional[Callable[[dict], bool]] = None,
     handoff_dir: Optional[str] = None,
     repo_root: Optional[str] = None,
+    *,
+    include_history_tier: bool = True,
 ) -> Dict[str, Any]:
     """Forward traversal from start_path, following edges named in edge_kinds.
 
@@ -1700,6 +1859,12 @@ def walk_forward(
                      node lives in `<repo_root>/state|archive/handoffs`; pass explicitly
                      when the start node may be month-nested under
                      `archive/handoffs/YYYY-MM/` (which breaks the two-up inference).
+        include_history_tier: keyword-only, defaults to True (current behaviour
+                     unchanged for every existing caller). Threaded straight into
+                     this walk's own `resolve_target` call (C9 #3) — resolve_target
+                     already had the parameter; walk_forward did not. No existing
+                     caller passes it, so every existing caller's behaviour is
+                     unchanged by construction.
 
     Returns:
         dict with keys:
@@ -1789,7 +1954,10 @@ def walk_forward(
         # Resolve edges and collect valid targets
         edges_to_push: List[str] = []
         for raw_ref in raw_edges:
-            target_abs = resolve_target(raw_ref, handoff_dir, repo_root, id_index=id_index)
+            target_abs = resolve_target(
+                raw_ref, handoff_dir, repo_root, id_index=id_index,
+                include_history_tier=include_history_tier,
+            )
             if target_abs is None:
                 # Unresolvable edge — record missing-link but continue
                 terminated_early = 'missing-link'

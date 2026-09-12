@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from coordinator_core.ops import baton_carry_forward as CF
 from coordinator_core.session_baton import store
-from coordinator_core.win_portability import no_console_passthrough_kwargs
+from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 
 def _make_repo(tmp_path):
@@ -124,10 +127,35 @@ def test_appending_does_not_advance_the_batons_lifecycle(tmp_path):
     assert rec["promoted_to"] is None
 
 
-def test_ops_are_registered_under_their_documented_names():
-    """The advisory names these op strings verbatim, so a rename that misses
-    the advisory would leave it pointing at nothing."""
-    from coordinator_core import ipc
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_ops_are_reachable_through_dispatch_under_their_documented_names():
+    """The advisory names these op strings verbatim, so they must resolve the
+    way a real caller resolves them: `ipc._lazy_import_and_lookup`, in an
+    interpreter that has NOT imported this module.
 
-    for name in ("baton.carry_forward", "baton.carry_forward_read"):
-        assert ipc._REGISTRY.get(name) is not None, f"{name} is not registered"
+    Checking `ipc._REGISTRY` from here proves nothing. This file's own
+    `import baton_carry_forward` registers both ops as a side effect, so that
+    form stayed green while every live `coordinator-invoke baton.carry_forward`
+    returned "Method not found": the module was in neither `_registry_map` nor
+    `ops/__init__`'s import list, so no dispatch path ever loaded it.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    probe = (
+        "import sys\n"
+        "from coordinator_core import ipc\n"
+        "assert 'coordinator_core.ops.baton_carry_forward' not in sys.modules\n"
+        "missing = [n for n in ('baton.carry_forward', 'baton.carry_forward_read')\n"
+        "           if ipc._lazy_import_and_lookup(n) is None]\n"
+        "print(','.join(missing))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+        timeout=60,
+        **no_console_creationflags(),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "", f"not reachable through dispatch: {result.stdout.strip()}"

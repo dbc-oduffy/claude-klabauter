@@ -6071,6 +6071,26 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # 4 -> 3, 2026-08-30 (two-ratchet-gates C3): scope.py::_git_run's removal from
     # the reachable set.
     "fleet.archive_actioned_memos": 3,
+    # Added 2026-09-12. RECORDS the live reachable count; it does not endorse it.
+    # Sibling of `fleet.archive_actioned_memos` above and reached through the same
+    # `archive_and_commit` path, which is why the two numbers sit together.
+    #
+    # WHY THIS IS NOT A RESURRECTION PIN. The op carries kill-ledger entry K-051
+    # (`f3516e1409`, the fourteen-op sweep), so a pin on it reads at first glance
+    # like ratifying killed code back into the budget against kill-means-kill-
+    # forever. It is not. K-051 was cut on two arguments the PM then OVERRULED --
+    # "nothing reads it" (a human does) and "off since 2026-08-21 with no
+    # consequence filed" (a fleet routing around a missing affordance files no
+    # bug) -- and the op was rebuilt FROM ITS REQUIREMENT, not restored from the
+    # deleted bytes, at `b8795931a`, with its ACs discharged at `904dd9e9a`. The
+    # kill ledger's own audit records the correction:
+    # `state/audits/2026-08-27-kill-ledger-cost-lines-without-a-measurement-scope.md`
+    # § Settled -- no re-work needed, row "K-051, K-052, K-047". Its measured cost
+    # there is 1 spawn / 0.0ms, under the bar. `487f4d134b` (2026-09-11) is what
+    # made it reachable at all: the module had a complete classify/act path but
+    # imported `register_op` without registering, so nothing could invoke it. That
+    # commit supplied the occasion, not the resurrection.
+    "fleet.archive_completed_plans": 3,
     # Added 2026-09-03. RECORDS the live reachable count, and does not endorse it.
     # `fleet.reap_review_trail_rest` landed at `0c7f7a3f42` with no pin, so this
     # whole file was red and every other pin in it unguarded until one was added.
@@ -6102,7 +6122,10 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.plan_persistence_check": 1,
     "git.maintenance": 1,
     "housekeeping.cycle": 5,
-    "session.safe_commit_offer": 1,
+    # 1 -> 2: 98f04d91ca added scope.release_committed_claims to _commit_group, reaching
+    # git/run.py::run_git via normalize_touch_path's `ls-files` slow arm (zero-spawn fast arm
+    # first). That site is already priced into memo.transition and housekeeping.cycle.
+    "session.safe_commit_offer": 2,
     "plugin_health.sentinel": 26,
     "fleet.migrate_handoff_vocabulary": 5,
     "handoff.transition": 5,

@@ -148,7 +148,10 @@ def _read_field(text: str, field: str) -> Optional[str]:
     if span is None:
         return None
     body = text[span[0] : span[1]]
-    match = re.search(rf"^{re.escape(field)}:\s*(.*)$", body, re.MULTILINE)
+    # `[ \t]*`, never `\s*`: `\s` matches a newline, so on a present-but-empty
+    # key the pad crosses the line break and this reads the FOLLOWING line's
+    # text as this field's value.
+    match = re.search(rf"^{re.escape(field)}:[ \t]*(.*)$", body, re.MULTILINE)
     if not match:
         return None
     value = match.group(1).strip()

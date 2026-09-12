@@ -46,6 +46,8 @@ body lines across that pass.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.bash_guards.dispatch_checks import (
@@ -640,3 +642,51 @@ class TestCheck2WrapperOwnFlagsAreNotGitsFlags:
         raw `\bpush\b` fallback exists for keeps denying."""
         cmd = "subprocess.run(['g" + "it', '" + "push" + "', '--" + "force" + "'])"
         assert check_destructive_git_orphan(cmd) is not None
+
+
+class TestCheck1ResetIsAnInvocationNotAWord:
+    r"""Third instance of this file's own class: match what the command DOES,
+    not what free text SAYS. CHECK 1 asked only whether the segment contained
+    `git` somewhere and `\breset\b` somewhere, so a heredoc body whose prose
+    said "it resets an engine_root process memo", mentioned git elsewhere, and
+    carried a `$(...)` pair later still was hard-denied as an unverifiable
+    `git reset --mixed`. Measured 2026-09-12: it blocked a plan-blitz sizing
+    agent writing a YAML file, which contains no git invocation at all.
+
+    Unlike CHECK 2/3, no stripper can fix this one — a Python heredoc body is
+    deliberately KEPT visible to the prose scan because such a body can spawn.
+    """
+
+    #: The command as the sizing agent actually sent it, verbatim. A shorter
+    #: hand-written stand-in does NOT reproduce: this body reaches the prose
+    #: scan only because this particular payload defeats
+    #: `_strip_heredoc_bodies_for_prose_scan`'s quote tracking, and every
+    #: attempt to shrink it was stripped and passed pre-fix. The fixture IS the
+    #: evidence, recovered from the wave's journal, which does not outlive the
+    #: firing session.
+    FIXTURE = (
+        Path(__file__).parent / "data" / "check1_reset_prose_false_positive.cmd.txt"
+    )
+
+    def test_the_real_sizing_write_is_not_a_reset(self):
+        cmd = self.FIXTURE.read_text(encoding="utf-8")
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": cmd},
+            "cwd": str(Path(__file__).resolve().parents[3]),
+        }
+        assert check_destructive_git_orphan(cmd, "sid", payload=payload) is None
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git reset --hard $(git rev-parse origin/main)",
+            "git reset --soft `git rev-parse HEAD~1`",
+            "git -C /x/repo reset --mixed $(cat ref.txt)",
+            "git -c core.pager=cat reset --hard $(echo HEAD~2)",
+            "git --git-dir=/x/.git reset --soft $(echo HEAD~1)",
+        ],
+    )
+    def test_every_real_subshell_resolved_reset_still_denies(self, cmd):
+        result = check_destructive_git_orphan(cmd)
+        assert result is not None, cmd
