@@ -6155,7 +6155,18 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "orientation.regenerate_cache": 4,
     "branch.merge_into_workstream": 3,
     "distill.assemble_disposal_manifest": 3,
-    "push.outstanding": 4,
+    # 4 -> 5, 2026-09-12: the Perforce second-class plan's p4 leg adds one
+    # reachable spawn site (`coordinator_core/p4/runner.py::run`), reached
+    # through `p4/shelve.py`. DELIBERATE growth, recorded rather than drifted.
+    # This table is a COUNT ratchet over statically REACHABLE sites, not
+    # execution evidence, so the new site raises the count even though a
+    # git-only repo never enters it. That the runtime cost for a git-only repo
+    # is still ZERO is a separate claim, proved separately and at runtime by
+    # `coordinator_core/p4/tests/test_git_only_isolation.py`: it spies on
+    # `subprocess.Popen` for any p4 argv0 and asserts `coordinator_core.p4`
+    # never lands in `sys.modules`. Do not read this 5 as a git-only repo
+    # paying for Perforce — it does not.
+    "push.outstanding": 5,
     "plan.suggest_completion_steps": 3,
     "release.cut_tag_and_publish": 3,
     # 3 -> 4, 2026-09-06: same `_existing_origin_url` site as

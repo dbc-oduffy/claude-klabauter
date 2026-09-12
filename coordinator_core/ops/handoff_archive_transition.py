@@ -584,10 +584,13 @@ def _current_continued_into(handoff_abs: Path) -> Optional[str]:
 def _frontmatter_text_or_empty(path: Path) -> str:
     """Return `path`'s raw frontmatter block text, or "" on any read/parse miss.
 
-    Thin wrapper over `split_frontmatter` for the attested-succession
-    admission check below, which reads a SUCCESSOR's frontmatter (a file
-    other than the one this op's other accessors operate on) rather than the
-    candidate predecessor `_current_fm_field` and friends are scoped to.
+    Exists to read a record ONCE for SEVERAL fields. `_current_fm_field` is the
+    sibling for a single field and takes any path (an earlier version of this
+    docstring claimed it was predecessor-scoped; it is not) — but clause 3 below
+    reads `predecessor` and `predecessor_id` off the successor and `handoff_id`
+    off the predecessor, and routing those through it would re-read and re-parse
+    each file per field. That is the only reason this exists; if a future caller
+    needs one field, use `_current_fm_field`.
     """
     try:
         text = path.read_text(encoding="utf-8")

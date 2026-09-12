@@ -52,6 +52,8 @@ import pytest
 
 from coordinator_core.bash_guards.dispatch_checks import (
     _after_reset_slice,
+    _git_argv_subcommand_position,
+    _seg_resolved_git_subcommand,
     _git_reset_invocation,
     _seg_confirmed_not_git_invocation,
     _seg_excluding_freetext_operands,
@@ -762,3 +764,51 @@ class TestCheck1ResetTargetSurvivesQuoting:
         """A heredoc body is not this command's argv, so it stays ambiguous --
         and ambiguous must keep denying, never start allowing."""
         assert _git_reset_invocation("cat <<EOF\ngit reset --hard HEAD~3\n") is True
+
+
+class TestResetTargetComesFromSubcommandPosition:
+    """The target slice is cut at git's SUBCOMMAND, not at the first token
+    that happens to read as the verb.
+
+    An earlier form of _after_reset_slice took the first token equal to
+    "reset". That is the same answer for almost every real command and the
+    wrong one whenever a preceding global option takes the verb as its VALUE:
+    in 'git -C reset reset --hard HEAD~3' it matched the -C operand, so the
+    slice kept the real subcommand and its target, CHECK 1 resolved no target,
+    and the ref-move was allowed. The greedy regex it replaced got this right
+    by accident, because .* backs off to the LAST match.
+
+    Caught in review before it shipped. Both the verb's NAME and its POSITION
+    now come from one walk, _git_argv_subcommand_position.
+    """
+
+    @pytest.mark.parametrize(
+        "cmd,expected",
+        [
+            ("git -C reset reset --hard HEAD~3", ["--hard", "HEAD~3"]),
+            ("git --git-dir reset reset --hard HEAD~3", ["--hard", "HEAD~3"]),
+            ("git --work-tree reset reset --soft HEAD~2", ["--soft", "HEAD~2"]),
+            ("git -C /tmp reset --hard HEAD~3", ["--hard", "HEAD~3"]),
+            ("git reset --hard HEAD~3", ["--hard", "HEAD~3"]),
+        ],
+    )
+    def test_a_global_option_valued_reset_is_not_the_subcommand(self, cmd, expected):
+        assert _after_reset_slice(cmd).split() == expected, cmd
+
+    def test_the_position_walk_agrees_with_the_name_it_resolves(self):
+        """One walk, so the two answers cannot drift apart."""
+        import shlex
+
+        for cmd in (
+            "git -C reset reset --hard HEAD~3",
+            "git -c k=v reset --soft HEAD~1",
+            "git --git-dir=/d status",
+            "git status",
+        ):
+            tokens = shlex.split(cmd, posix=True)
+            position = _git_argv_subcommand_position(tokens)
+            assert position is not None, cmd
+            assert tokens[position] == _seg_resolved_git_subcommand(cmd), cmd
+
+    def test_an_unrecognized_global_flag_still_fails_closed(self):
+        assert _git_argv_subcommand_position(["git", "--not-a-real-flag", "reset"]) is None

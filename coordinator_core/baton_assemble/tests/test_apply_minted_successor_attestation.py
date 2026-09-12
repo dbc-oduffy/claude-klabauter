@@ -3,13 +3,14 @@ coordinator_core.baton_assemble.tests.test_apply_minted_successor_attestation
 
 Pins C2 (docs/plans/2026-09-12-supersede-admits-an-apply-minted-success.md):
 `_dispatch_handoff_supersede_predecessor` (`coordinator_core/baton_assemble/
-apply.py`, apply's d6) now composes `handoff.archive_transition` with
-`attested_succession=True` unconditionally -- correct BY CONSTRUCTION, not by
-a caller-supplied flag: `continued_into`/`exclude_path` here is ALWAYS
-`lineage["output_path"]`, the SAME value `_build_directives`'s d6 loop
-computes for d1's own `--out` target this run (fresh mint, replay resumption,
-or a DR-242 Amendment A1 adoption) -- see that param's own comment at its
-call site for why no fourth, foreign-successor route reaches this handler.
+apply.py`, apply's d6) sets the attested succession around its composition of
+`handoff.archive_transition`. It is a process-local ContextVar carrying the
+successor path, NOT a parameter -- a parameter proved forgeable through
+`housekeeping.cycle`'s verbatim passthrough. `continued_into`/`exclude_path`
+here is ALWAYS `lineage["output_path"]`, the SAME value `_build_directives`'s
+d6 loop computes for d1's own `--out` target this run (fresh mint, replay
+resumption, or a DR-242 Amendment A1 adoption), which is what makes it an
+engine fact. See `_APPLY_MINTED_SUCCESSOR`'s own docstring.
 
 Covers:
   - The DoE-claude reproduction AS REPORTED: apply's d6 (composing the real
@@ -192,38 +193,11 @@ def test_refused_attestation_leaves_the_successor_on_disk(tmp_path):
     )
 
     assert result.get("degraded") is not None, result
+    assert "clause 4" in (result["degraded"].get("error") or ""), result
     # `_cleanup_successor` must NOT fire on a choke-point refusal -- nothing
     # was mutated, and the successor this run's own d1 minted must survive
     # (2026-08-03 break-class fix, generalized to the attestation shape).
-    assert successor.exists(), "a refused attestation must not delete the successor"
-
-
-def test_refused_attestation_via_the_composed_op_also_leaves_the_successor(tmp_path):
-    """The SAME guarantee on a successor that fails clause 3 by pointing its
-    `predecessor:` at a different file. Every refusal now comes from INSIDE
-    the op's own choke point -- this wrapper pre-filters nothing -- and must
-    still degrade, not raise/cleanup."""
-    repo = tmp_path / "repo"
-    _seed_repo(repo)
-    fm = [
-        "title: Unrelated successor",
-        "created: 2026-09-12",
-        "branch: work/test/2026-01-01",
-        "status: claimed",
-        'predecessor: "state/handoffs/some-other-parent.md"',
-        "deployment_state: active",
-        'claimed_by: "successor-session"',
-        'claimed_at: "2026-09-12T00:00:00Z"',
-    ]
-    successor = _write_artifact(repo / _SUCC_REL, fm)
-    _git(repo, "add", _SUCC_REL)
-    _git(repo, "commit", "-m", "add unrelated successor")
-
-    result = ba_apply._dispatch_handoff_supersede_predecessor(
-        [_PRED_REL, _SUCC_REL, _SUCC_REL], repo
-    )
-
-    assert result.get("degraded") is not None, result
-    assert result["degraded"]["reason"] == "predecessor-not-claimed-or-shipped"
-    assert "clause 3" in (result["degraded"].get("error") or ""), result
+    # (The third refusal test this file used to carry was the intersection of
+    # this one and its sibling -- deleted per overengineering review, with its
+    # one distinct assertion folded in above.)
     assert successor.exists(), "a refused attestation must not delete the successor"
