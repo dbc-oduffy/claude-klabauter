@@ -1313,7 +1313,7 @@ def canonical_body_sha(file_text: str) -> Optional[str]:
     the plan body (everything below the second ``---`` delimiter);
     frontmatter fields never enter the hash — only a material change to the
     plan BODY invalidates a previously-computed stamp. Both
-    `coordinator_core.pickup_assemble.compute_execution_stamp_match` (the
+    `coordinator_core.pickup_brief.compute_execution_stamp_match` (the
     read-side checker) and `coordinator_core.review_assemble.exec_auth_stamp.
     stamp_execution_authorization` (the write-side stamper) route through
     this one recipe.

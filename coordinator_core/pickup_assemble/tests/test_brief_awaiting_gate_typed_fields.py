@@ -35,7 +35,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pa
 from coordinator_core.session.work_state import _parse_fm_dict
 
 # Declared, not excused: this file spawns a real process (git) because

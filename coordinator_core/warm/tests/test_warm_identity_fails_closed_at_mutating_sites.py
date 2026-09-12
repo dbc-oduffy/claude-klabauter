@@ -200,7 +200,7 @@ def test_compute_claim_grant_honours_the_identity_its_caller_scoped(
     correctly refused the ambient id, and the session was denied its own
     claim.
     """
-    import coordinator_core.pickup_assemble as pa
+    import coordinator_core.pickup_brief as pa
     from coordinator_core.contract import apply_base
 
     repo = tmp_path / "repo"
@@ -230,7 +230,7 @@ def test_claim_already_self_held_honours_the_identity_its_caller_scoped(
     re-entry; refusing here makes a re-apply re-invoke `claim_artifact`,
     which rejects a same-session memo reclaim by design and raises.
     """
-    import coordinator_core.pickup_assemble as pa
+    import coordinator_core.pickup_brief as pa
     from coordinator_core.contract import apply_base
 
     repo = tmp_path / "repo"
@@ -256,7 +256,7 @@ def test_pickup_callers_still_fail_closed_with_nothing_scoped(
     still refuse. If this goes red, the `my_sid` threading has reintroduced
     the ambient grant through the parameter meant to close it.
     """
-    import coordinator_core.pickup_assemble as pa
+    import coordinator_core.pickup_brief as pa
 
     repo = tmp_path / "repo"
     (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
@@ -281,7 +281,7 @@ def test_cold_pickup_callers_still_recognise_their_own_claim(
     No scope, no warm flag: both callers must still resolve off the ambient
     environment exactly as they did before.
     """
-    import coordinator_core.pickup_assemble as pa
+    import coordinator_core.pickup_brief as pa
 
     repo = tmp_path / "repo"
     (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)

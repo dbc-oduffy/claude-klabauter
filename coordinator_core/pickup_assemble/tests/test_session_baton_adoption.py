@@ -28,6 +28,7 @@ import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
 import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pb
 from coordinator_core.session import liveness as liveness_mod
 from coordinator_core.session_baton.store import read_baton
 
@@ -97,7 +98,7 @@ def test_pickup_adopts_artifact_into_session_baton(tmp_path, as_session):
     as_session("sid-a")
     _ensure_session_dir(repo, "sid-a")
 
-    pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
+    pb.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
 
     record = read_baton("sid-a", cwd=str(repo))
     assert record["adopted_artifacts"] == ["state/handoffs/h1.md"]
@@ -110,8 +111,8 @@ def test_rebrief_same_artifact_does_not_duplicate(tmp_path, as_session):
     as_session("sid-a")
     _ensure_session_dir(repo, "sid-a")
 
-    pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
-    pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
+    pb.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
+    pb.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
 
     record = read_baton("sid-a", cwd=str(repo))
     assert record["adopted_artifacts"] == ["state/handoffs/h1.md"]
@@ -126,15 +127,12 @@ def test_brief_survives_broken_baton_store(tmp_path, as_session, monkeypatch):
     _seed_handoff(repo, "h1.md")
     as_session("sid-a")
 
-    from coordinator_core.pickup_assemble import merge_baton as _mb  # noqa: F401
-    import coordinator_core.pickup_assemble as pa_mod
-
     def _boom(*args, **kwargs):
         raise OSError("simulated baton-store failure")
 
-    monkeypatch.setattr(pa_mod, "merge_baton", _boom)
+    monkeypatch.setattr(pb, "merge_baton", _boom)
 
-    result = pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
+    result = pb.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
 
     assert result is not None
     assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
@@ -147,7 +145,7 @@ def test_intent_prefers_session_goal_when_the_handoff_carries_one(tmp_path, as_s
     as_session("sid-goal")
     _ensure_session_dir(repo, "sid-goal")
 
-    pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
+    pb.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
 
     record = read_baton("sid-goal", cwd=str(repo))
     assert record["intent"] == "Ship the thing."
@@ -174,7 +172,7 @@ def test_intent_falls_back_to_summary_and_says_so(tmp_path, as_session):
     as_session("sid-sum")
     _ensure_session_dir(repo, "sid-sum")
 
-    pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
+    pb.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
 
     record = read_baton("sid-sum", cwd=str(repo))
     assert record["intent"] == "(from summary) What the session did."
@@ -214,7 +212,7 @@ def test_intent_stays_unset_when_neither_field_is_present(tmp_path, as_session):
     as_session("sid-none")
     _ensure_session_dir(repo, "sid-none")
 
-    pa.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
+    pb.brief("state/handoffs/h1.md", repo_root=repo, claim_at_brief=True)
 
     record = read_baton("sid-none", cwd=str(repo))
     assert not record.get("intent")

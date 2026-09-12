@@ -92,6 +92,10 @@ _DERIVED_DIRS = ("Intermediate/", "Saved/", "DerivedDataCache/", "Binaries/")
 #: the append-only pin refuses loudly rather than rewriting past it.
 _GITATTRS_CONFLICT_RE = re.compile(r"(?<![\w-])(text\b|eol=)")
 
+#: ``runner.run`` always passes ``-s``, which tags every output line
+#: (``info: Root:\tE:\ws``, ``info: \tE:\alt``); the spec fields sit behind it.
+_SCRIPT_TAG_RE = re.compile(r"^info\d*: ?")
+
 
 class P4RegisterError(Exception):
     """A loud, fail-closed refusal (bad repo_key shape, client Root/Host
@@ -127,12 +131,14 @@ def _parse_client_spec(stdout: str) -> dict:
     """Best-effort parse of ``p4 client -o <client>`` output for the three
     fields registration confirms against: ``Root``, ``AltRoots`` (each on
     its own tab-indented continuation line under the ``AltRoots:`` header),
-    and ``Host``."""
+    and ``Host``. Accepts ``-s`` script-tagged lines and untagged spec text
+    alike."""
     root: Optional[str] = None
     alt_roots: list = []
     host: Optional[str] = None
     in_alt_roots = False
-    for line in stdout.splitlines():
+    for raw_line in stdout.splitlines():
+        line = _SCRIPT_TAG_RE.sub("", raw_line, count=1)
         if line.startswith("Root:"):
             root = line[len("Root:"):].strip()
             in_alt_roots = False
@@ -229,16 +235,28 @@ def _ensure_p4ignore(repo_root: str) -> dict:
     """Ensures ``.p4ignore`` contains a ``.git/`` line so p4 never depot-adds
     the parallel git repo this op creates. Returns whether the file existed
     BEFORE this write (drives the .gitignore seed and the P4IGNORE/`-a`
-    recording below) and its pre-existing text."""
+    recording below) and its pre-existing text.
+
+    Never rewrites a file that already carries ``.git/``: a depot-tracked
+    ``.p4ignore`` is read-only under ``noallwrite``, and one that already
+    ignores the git repo needs no checkout. One that lacks it refuses --
+    this op never opens a depot file for edit on the operator's behalf."""
     p4ignore_path = Path(repo_root) / ".p4ignore"
     existed = p4ignore_path.is_file()
     prior_text = p4ignore_path.read_text(encoding="utf-8") if existed else ""
     lines = prior_text.splitlines()
-    if ".git/" not in lines:
-        lines.append(".git/")
-    p4ignore_path.write_text(
-        "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
-    )
+    if ".git/" in lines:
+        return {"existed": existed, "prior_text": prior_text, "path": str(p4ignore_path)}
+    lines.append(".git/")
+    try:
+        p4ignore_path.write_text(
+            "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
+        )
+    except PermissionError as exc:
+        raise P4RegisterError(
+            f"{p4ignore_path} is read-only (depot-tracked) and lacks '.git/'. "
+            "Run `p4 edit .p4ignore`, add a '.git/' line, then re-register."
+        ) from exc
     return {"existed": existed, "prior_text": prior_text, "path": str(p4ignore_path)}
 
 
@@ -257,10 +275,10 @@ def _author_gitignore(repo_root: str, seed_text: str) -> str:
     return str(gitignore_path)
 
 
-def _pin_gitattributes(repo_root: str) -> dict:
-    """Append-only line-ending pin. Refuses loudly on a conflicting existing
-    text/eol rule rather than rewriting; states the renormalization
-    consequence for existing history in its returned message either way."""
+def _refuse_gitattributes_conflict(repo_root: str) -> str:
+    """Raises on an existing text/eol rule; returns the prior text. Split out
+    so the handler refuses before its first write, not after the .p4ignore
+    and .gitignore writes have landed."""
     gitattrs_path = Path(repo_root) / ".gitattributes"
     prior_text = gitattrs_path.read_text(encoding="utf-8") if gitattrs_path.is_file() else ""
     for line in prior_text.splitlines():
@@ -274,6 +292,15 @@ def _pin_gitattributes(repo_root: str) -> dict:
                 "Pin the line-ending rule by hand if this repo's existing "
                 "history should be renormalized."
             )
+    return prior_text
+
+
+def _pin_gitattributes(repo_root: str, prior_text: str) -> dict:
+    """Append-only line-ending pin over ``prior_text``, which
+    ``_refuse_gitattributes_conflict`` has already cleared; states the
+    renormalization consequence for existing history in its returned message
+    either way."""
+    gitattrs_path = Path(repo_root) / ".gitattributes"
     if "* -text" in prior_text.splitlines():
         message = "'.gitattributes' already pins '* -text'; left unchanged."
     else:
@@ -354,32 +381,20 @@ def _register_workspace(params: dict, repo_root: Optional[Path] = None) -> dict:
 
         client_root = _confirm_client(port, user, client, resolved_repo_root)
 
-        registry_set(f"p4.{repo_key}.port", port)
-        registry_set(f"p4.{repo_key}.user", user)
-        registry_set(f"p4.{repo_key}.client", client)
-        # Two facts, two rows. `.client_root` is the CLIENT's root — that is what the
-        # cross-repo p4-provider contract's read-surface table labels it, and
-        # what example-game-repo takes identity from to open its own p4 connection.
-        # `.repo_root` is this git repo. They coincide only when the client
-        # maps exactly one project; a Root that is a parent directory is an
-        # ordinary layout, and collapsing them silently hands a provider the
-        # wrong directory in precisely that case (both being real paths, it
-        # would never surface as an error).
-        registry_set(f"p4.{repo_key}.client_root", client_root)
-        registry_set(f"p4.{repo_key}.repo_root", resolved_repo_root)
-
+        # Every refusal and every repo-file write precedes the first
+        # registry_set: a refusal part-way must never leave a half-registered
+        # workspace, while the file writes are idempotent on a re-run.
+        gitattrs_prior_text = _refuse_gitattributes_conflict(resolved_repo_root)
         p4ignore_state = _ensure_p4ignore(resolved_repo_root)
         gitignore_path = _author_gitignore(resolved_repo_root, p4ignore_state["prior_text"])
-        gitattrs_result = _pin_gitattributes(resolved_repo_root)
+        gitattrs_result = _pin_gitattributes(resolved_repo_root, gitattrs_prior_text)
 
         if p4ignore_state["existed"]:
-            registry_set(f"p4.{repo_key}.p4ignore_path", p4ignore_state["path"])
             ignore_message = (
                 f".p4ignore pre-existed at {p4ignore_state['path']} — recorded "
                 "for P4IGNORE."
             )
         else:
-            registry_set(f"p4.{repo_key}.p4ignore_absent", "true")
             ignore_message = (
                 ".p4ignore did not pre-exist (this op authored one containing "
                 "only '.git/') — recorded so the D2a runner drops '-a' rather "
@@ -403,6 +418,24 @@ def _register_workspace(params: dict, repo_root: Optional[Path] = None) -> dict:
         if checkout_tool is not None:
             local_md_keys["p4_checkout_tool"] = checkout_tool
         local_md_path = _upsert_local_md_keys(resolved_repo_root, local_md_keys)
+
+        registry_set(f"p4.{repo_key}.port", port)
+        registry_set(f"p4.{repo_key}.user", user)
+        registry_set(f"p4.{repo_key}.client", client)
+        # Two facts, two rows. `.client_root` is the CLIENT's root — that is what the
+        # cross-repo p4-provider contract's read-surface table labels it, and
+        # what example-game-repo takes identity from to open its own p4 connection.
+        # `.repo_root` is this git repo. They coincide only when the client
+        # maps exactly one project; a Root that is a parent directory is an
+        # ordinary layout, and collapsing them silently hands a provider the
+        # wrong directory in precisely that case (both being real paths, it
+        # would never surface as an error).
+        registry_set(f"p4.{repo_key}.client_root", client_root)
+        registry_set(f"p4.{repo_key}.repo_root", resolved_repo_root)
+        if p4ignore_state["existed"]:
+            registry_set(f"p4.{repo_key}.p4ignore_path", p4ignore_state["path"])
+        else:
+            registry_set(f"p4.{repo_key}.p4ignore_absent", "true")
 
         return {
             "ok": True,

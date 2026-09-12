@@ -41,6 +41,7 @@ import subprocess
 from pathlib import Path
 
 import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pb
 
 import pytest
 
@@ -254,7 +255,7 @@ def test_recommendation_via_brief_tmp_path_corpus_cleared(tmp_path: Path) -> Non
     _seed_blocker_handoff(repo, "sat-06.md", stub_id="sat-06", deployment_state="shipped")
     _seed_awaiting_gate_handoff(repo, "sat-08.md", blocked_by_block="blocked_by: [sat-06]\n")
 
-    result = pa.brief("state/handoffs/sat-08.md", repo_root=repo)
+    result = pb.brief("state/handoffs/sat-08.md", repo_root=repo)
 
     gate_check = result.decision_object["gates"]["gate_check"]
     assert gate_check is not None
@@ -278,7 +279,7 @@ def test_recommendation_via_brief_tmp_path_corpus_not_cleared(tmp_path: Path) ->
     _seed_blocker_handoff(repo, "sat-06.md", stub_id="sat-06", deployment_state="open")
     _seed_awaiting_gate_handoff(repo, "sat-08.md", blocked_by_block="blocked_by: [sat-06]\n")
 
-    result = pa.brief("state/handoffs/sat-08.md", repo_root=repo)
+    result = pb.brief("state/handoffs/sat-08.md", repo_root=repo)
 
     jgate = next(jp for jp in result.decision_object["judgment_points"] if jp["id"] == "jgate")
     assert jgate["recommendation"]["disposition"] == "not-cleared"
@@ -293,7 +294,7 @@ def test_recommendation_via_brief_tmp_path_corpus_unresolved(tmp_path: Path) -> 
     _init_repo(repo)
     _seed_awaiting_gate_handoff(repo, "sat-08.md", blocked_by_block="blocked_by: [ghost-id]\n")
 
-    result = pa.brief("state/handoffs/sat-08.md", repo_root=repo)
+    result = pb.brief("state/handoffs/sat-08.md", repo_root=repo)
 
     jgate = next(jp for jp in result.decision_object["judgment_points"] if jp["id"] == "jgate")
     assert jgate["recommendation"] is not None

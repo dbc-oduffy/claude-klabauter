@@ -64,7 +64,7 @@ from pathlib import Path
 
 import pytest
 
-import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pa
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.frontmatter.primitives import canonical_body_sha
 
@@ -160,8 +160,9 @@ def test_always_emitted_paths_resolve_on_plain_handoff_brief(tmp_path, monkeypat
     for directive in do["directives"]:
         assert "already_satisfied" in directive
 
-    # 3. gates.branch.current_branch
-    assert "current_branch" in do["gates"]["branch"]
+    # 3. gates.branch.current_branch — DR-415 group 8 deletes `gates.branch`
+    # (a cheap advisory field no mechanism reads); this assertion goes with
+    # it.
 
     # 4. gates.liveness_signal
     assert "liveness_signal" in do["gates"]

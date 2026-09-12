@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pb
 from coordinator_core.pickup_assemble.stamp_check import stamp_check
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -99,7 +100,7 @@ class TestStampCheckWrapper:
         rel = str(plan_path.relative_to(repo))
 
         fm = pa._parse_fm_dict(pa.split_frontmatter(plan_path.read_text(encoding="utf-8")).fm_text)
-        direct_hit = pa.compute_execution_stamp_match(repo, fm, rel)
+        direct_hit = pb.compute_execution_stamp_match(repo, fm, rel)
         assert direct_hit is not None
         expected_gate, _target = direct_hit
 

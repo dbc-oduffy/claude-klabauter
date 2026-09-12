@@ -792,7 +792,7 @@ class TestRevalidateAtDispatchGeneralRule:
 
         # "Compute": an earlier read of the brief sees a clear coast — no
         # live peer yet, so no j1 judgment point.
-        from coordinator_core.pickup_assemble import brief as real_brief
+        from coordinator_core.pickup_brief import brief as real_brief
 
         compute_time_result = real_brief("state/handoffs/h1.md", repo_root=repo)
         assert compute_time_result.decision_object["judgment_points"] == []

@@ -36,11 +36,9 @@ klabauter's or DoE-claude's own `coordinator/bin/` changes this derivation's
 answer with no corresponding commit here. GREEN IS THE DANGEROUS POLARITY: a
 newly stdin-reading DoE entrypoint whose body this derivation cannot resolve
 (bin root unset, tree absent, or the file missing) silently drops off the
-returned set rather than failing loud — `resolve_entrypoint_body` reports an
-unresolved name as such (see `UNRESOLVED_REASON_NO_BIN_ROOT` /
-`UNRESOLVED_REASON_FILE_ABSENT`) so a caller CAN surface it, but this
-module's own test only asserts the derivation runs and returns a non-empty
-set — it does not, and cannot, assert every name in the allowlist resolved.
+returned set rather than failing loud — this module's own test only asserts
+the derivation runs and returns a non-empty set — it does not, and cannot,
+assert every name in the allowlist resolved.
 
 Negative-spec: this module does NOT hardcode the twelve names the plan's
 Problem section names as today's known-broken population. Hardcoding them
@@ -53,7 +51,6 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -73,39 +70,19 @@ _BIN_ROOT_REGISTRY_KEYS = ("repos.claude_klabauter", "repos.doe_claude")
 #: docstring/comment/dead-branch match, or otherwise a known false positive
 #: this textual scan cannot itself tell apart from a live read). Empty
 #: today -- add a name here only with a citation of WHY the match is not a
-#: live stdin read; `explain_population` still prints an excluded name's
-#: matched spelling so a false enrolment stays diagnosable without
-#: re-running the regex by hand.
+#: live stdin read. Kept per this chunk's C1 body, which requires "a
+#: hand-maintained exclusion the derivation honours" even while unused.
 HAND_EXCLUDED_NAMES: frozenset = frozenset()
 
 #: Per-spelling patterns this scan matches against a body's raw text, in
-#: report order. Keys are the human-readable spelling name surfaced in
-#: `explain_population`'s per-name diagnosis; values are the compiled
-#: pattern. `sys.stdin` and `from sys import stdin` are Python's two import
-#: shapes for reaching the same stream; `argparse.FileType('-')` is the
-#: argparse idiom that opens stdin without ever spelling `sys.stdin`.
+#: report order. `sys.stdin` and `from sys import stdin` are Python's two
+#: import shapes for reaching the same stream; `argparse.FileType('-')` is
+#: the argparse idiom that opens stdin without ever spelling `sys.stdin`.
 _STDIN_SPELLING_PATTERNS: "dict[str, re.Pattern]" = {
     "sys.stdin": re.compile(r"\bsys\.stdin\b"),
     "from sys import stdin": re.compile(r"from\s+sys\s+import\s+[^\n]*\bstdin\b"),
-    "argparse.FileType('-')": re.compile(r"argparse\.FileType\(\s*['\"]-['\"]\s*\)"),
+    "argparse.FileType('-')": re.compile(r"argparse\.FileType\(\s*(?:mode\s*=\s*)?['\"]-['\"]"),
 }
-
-UNRESOLVED_REASON_NO_BIN_ROOT = "no_bin_root_configured"
-UNRESOLVED_REASON_FILE_ABSENT = "file_absent_under_every_configured_bin_root"
-
-
-@dataclass(frozen=True)
-class EntrypointDiagnosis:
-    """Per-name derivation outcome. `matched_spelling` is None when the body
-    resolved but no pattern matched; `unresolved_reason` is set (and
-    `matched_spelling` is None) when no configured bin root has this name's
-    `.py` body at all."""
-
-    name: str
-    resolved_path: "Optional[Path]"
-    matched_spelling: "Optional[str]"
-    unresolved_reason: "Optional[str]"
-    hand_excluded: bool
 
 
 def load_allowlisted_names() -> "frozenset[str]":
@@ -120,8 +97,8 @@ def configured_bin_roots() -> "list[Path]":
     """The `coordinator/bin` directories under every configured sibling
     working tree, in registry-key order, filtered to directories that exist
     on this machine. An unset registry key or an absent tree is silently
-    skipped here -- callers see the consequence per-name via
-    `UNRESOLVED_REASON_NO_BIN_ROOT` / `UNRESOLVED_REASON_FILE_ABSENT`."""
+    skipped here -- an entrypoint that cannot be resolved under any
+    configured root simply does not match and drops off the derived set."""
     roots = []
     for key in _BIN_ROOT_REGISTRY_KEYS:
         raw = registry_get(key)
@@ -143,44 +120,18 @@ def resolve_entrypoint_body(name: str, bin_roots: "list[Path]") -> "Optional[Pat
     return None
 
 
-def diagnose_entrypoint(name: str, bin_roots: "list[Path]") -> EntrypointDiagnosis:
-    """The full per-name derivation: resolve the body, scan it for one of
-    the known stdin spellings, and record enough to diagnose a false
-    enrolment (or a silent non-resolution) without re-running the regex by
-    hand."""
+def matched_spelling_for(name: str, bin_roots: "list[Path]") -> "Optional[str]":
+    """The stdin spelling matched in `name`'s resolved body, or None when
+    the body did not resolve under any configured bin root or matched no
+    known spelling."""
     resolved = resolve_entrypoint_body(name, bin_roots)
     if resolved is None:
-        reason = UNRESOLVED_REASON_NO_BIN_ROOT if not bin_roots else UNRESOLVED_REASON_FILE_ABSENT
-        return EntrypointDiagnosis(
-            name=name,
-            resolved_path=None,
-            matched_spelling=None,
-            unresolved_reason=reason,
-            hand_excluded=name in HAND_EXCLUDED_NAMES,
-        )
-
+        return None
     text = resolved.read_text(encoding="utf-8", errors="replace")
-    matched_spelling = None
     for spelling, pattern in _STDIN_SPELLING_PATTERNS.items():
         if pattern.search(text):
-            matched_spelling = spelling
-            break
-
-    return EntrypointDiagnosis(
-        name=name,
-        resolved_path=resolved,
-        matched_spelling=matched_spelling,
-        unresolved_reason=None,
-        hand_excluded=name in HAND_EXCLUDED_NAMES,
-    )
-
-
-def explain_population() -> "dict[str, EntrypointDiagnosis]":
-    """Every allowlisted name's diagnosis, keyed by name -- the full
-    per-name report C2 (or a human) can read to see WHICH spelling matched,
-    or why a name did not resolve, without re-deriving anything."""
-    bin_roots = configured_bin_roots()
-    return {name: diagnose_entrypoint(name, bin_roots) for name in load_allowlisted_names()}
+            return spelling
+    return None
 
 
 def derive_stdin_reading_entrypoints() -> "frozenset[str]":
@@ -188,9 +139,11 @@ def derive_stdin_reading_entrypoints() -> "frozenset[str]":
     resolved body matched a stdin spelling AND is not hand-excluded. C2's
     parity test compares this against the static name table in
     `door_core.c`; this module does not hardcode that comparison itself."""
-    diagnoses = explain_population()
+    bin_roots = configured_bin_roots()
     return frozenset(
-        d.name for d in diagnoses.values() if d.matched_spelling is not None and not d.hand_excluded
+        name
+        for name in load_allowlisted_names()
+        if name not in HAND_EXCLUDED_NAMES and matched_spelling_for(name, bin_roots) is not None
     )
 
 
@@ -235,37 +188,19 @@ def test_derivation_runs_and_returns_non_empty_set():
     )
 
 
-@pytest.mark.real_home
-def test_every_returned_name_is_allowlisted():
-    """Every name the derivation enrols is a member of the allowlist union
-    it started from -- the derivation classifies the allowlist, it does not
-    invent names outside it."""
-    allowlisted = load_allowlisted_names()
-    result = derive_stdin_reading_entrypoints()
-    assert result <= allowlisted
-
-
-@pytest.mark.real_home
-def test_every_returned_name_has_a_diagnosable_matched_spelling():
-    """Per-name diagnosability (staff-eng finding 5): every enrolled name's
-    diagnosis records WHICH spelling matched, so a false enrolment is
-    diagnosable without re-running the regex by hand."""
-    diagnoses = explain_population()
-    result = derive_stdin_reading_entrypoints()
-    for name in result:
-        diagnosis = diagnoses[name]
-        assert diagnosis.matched_spelling in _STDIN_SPELLING_PATTERNS
-        assert diagnosis.resolved_path is not None
-
-
-@pytest.mark.real_home
-def test_hand_excluded_names_are_never_in_the_derived_set():
-    """The exclusion hatch actually excludes -- a name in
-    `HAND_EXCLUDED_NAMES` is never in the derived set even if its body
-    matches a spelling, and its diagnosis still records the match (not
-    silently, as an UNPROBEABLE-style reason)."""
-    diagnoses = explain_population()
-    result = derive_stdin_reading_entrypoints()
-    for name in HAND_EXCLUDED_NAMES:
-        assert name not in result
-        assert diagnoses[name].hand_excluded is True
+def test_a_known_spelling_is_diagnosable_independent_of_the_derived_set(tmp_path):
+    """Per-name diagnosability (staff-eng finding 5): a body known to carry
+    one of the three stdin spellings resolves to that exact spelling via
+    `matched_spelling_for`, checked against a fixture this test controls --
+    not against `derive_stdin_reading_entrypoints`'s own membership test,
+    which would make the assertion tautological (finding 1)."""
+    fixture_root = tmp_path / "coordinator" / "bin"
+    fixture_root.mkdir(parents=True)
+    (fixture_root / "fixture-entrypoint.py").write_text(
+        "import sys\nsys.stdin.read()\n", encoding="utf-8"
+    )
+    bin_roots = [fixture_root]
+    spelling = matched_spelling_for("fixture-entrypoint", bin_roots)
+    assert spelling == "sys.stdin"
+    assert spelling in _STDIN_SPELLING_PATTERNS
+    assert resolve_entrypoint_body("fixture-entrypoint", bin_roots) is not None

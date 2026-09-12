@@ -40,6 +40,7 @@ import pytest
 
 import coordinator_core.claim_state as claim_state_mod
 import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pb
 from coordinator_core.win_portability import no_console_creationflags
 
 _HANDOFF_SCHEMA_PATH = (
@@ -418,7 +419,7 @@ def test_brief_self_claimed_ledger_only_stamped_marks_d2_already_satisfied(
     # by this chunk).
     monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: True)
 
-    result = pa.brief("state/handoffs/h1.md", repo_root=repo, decisions={})
+    result = pb.brief("state/handoffs/h1.md", repo_root=repo, decisions={})
 
     directives_by_id = {d["id"]: d for d in result.decision_object["directives"]}
     assert directives_by_id["d2"]["already_satisfied"] is True
@@ -441,7 +442,7 @@ def test_brief_self_claimed_ledger_only_unstamped_does_not_mark_d2_already_satis
 
     monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: True)
 
-    result = pa.brief("state/handoffs/h1.md", repo_root=repo, decisions={})
+    result = pb.brief("state/handoffs/h1.md", repo_root=repo, decisions={})
 
     directives_by_id = {d["id"]: d for d in result.decision_object["directives"]}
     assert directives_by_id["d2"]["already_satisfied"] is False
@@ -458,7 +459,7 @@ def test_brief_self_claimed_frontmatter_still_works_pre_revert(tmp_path, monkeyp
 
     monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
 
-    result = pa.brief("state/handoffs/h1.md", repo_root=repo, decisions={})
+    result = pb.brief("state/handoffs/h1.md", repo_root=repo, decisions={})
 
     directives_by_id = {d["id"]: d for d in result.decision_object["directives"]}
     # held_by_self is False here (no live-self ledger claim), so the AND's

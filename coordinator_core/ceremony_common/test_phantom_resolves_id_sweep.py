@@ -81,7 +81,9 @@ _PROVIDERS: dict[str, object] = {
     "roadmap_planning_assemble": lambda monkeypatch, tmp_path: providers.sweep_roadmap_planning_assemble(),
     "sprint_planning_assemble": lambda monkeypatch, tmp_path: providers.sweep_sprint_planning_assemble(),
     "review_assemble": lambda monkeypatch, tmp_path: providers.sweep_review_assemble(monkeypatch, tmp_path),
-    "pickup_assemble": lambda monkeypatch, tmp_path: providers.sweep_pickup_assemble(monkeypatch, tmp_path),
+    # Keyed by the discovered name: `brief(` moved out of the `pickup_assemble`
+    # package into the top-level `pickup_brief.py` module at the DR-415 cutover.
+    "pickup_brief.py": lambda monkeypatch, tmp_path: providers.sweep_pickup_assemble(monkeypatch, tmp_path),
 }
 
 #: Packages verified (dynamically, below) to emit `judgment_points` whose

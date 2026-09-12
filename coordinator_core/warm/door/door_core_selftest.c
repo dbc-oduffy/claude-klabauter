@@ -297,8 +297,11 @@ int main(void) {
         check_int("stdin_basename/listed",
                   door_basename_declares_stdin_read("claims-emit"), 1);
 
-        check_int("stdin_basename/unlisted",
-                  door_basename_declares_stdin_read("coordinator-invoke"), 0);
+        /* Review: coordinator-overengineering-reviewer finding 5 (EM-applied)
+         * -- this used to be duplicated as "unlisted" with an identical call
+         * and expectation; the unresolvable-basename case below is the one
+         * that carries meaning (see its comment), so the plain duplicate was
+         * deleted. */
 
         check_int("stdin_basename/empty_string",
                   door_basename_declares_stdin_read(""), 0);
@@ -318,9 +321,9 @@ int main(void) {
          * each platform door's own `door_entrypoint_basename()` falls
          * back to `DOOR_DEFAULT_ENTRYPOINT`/`DOOR_DEFAULT_ENTRYPOINT_W`
          * ("coordinator-invoke", see door.c/door_posix.c) rather than
-         * ever passing NULL here -- so the gate is exercised the same way
-         * as the "unlisted" case above, and NULL itself must also refuse
-         * rather than crash. */
+         * ever passing NULL here -- so the gate is exercised on that
+         * fallback name, and NULL itself must also refuse rather than
+         * crash. */
         check_int("stdin_basename/default_entrypoint_when_unresolvable",
                   door_basename_declares_stdin_read("coordinator-invoke"), 0);
 

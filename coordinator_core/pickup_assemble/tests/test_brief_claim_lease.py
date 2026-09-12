@@ -42,7 +42,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pa
 import coordinator_core.pickup_assemble.apply as pa_apply
 from coordinator_core.session import claims as claims_mod
 from coordinator_core.session import core as session_core

@@ -24,6 +24,7 @@ import pytest
 import coordinator_core.git.git_objects as git_objects
 import coordinator_core.pickup_assemble as pa
 import coordinator_core.pickup_assemble.apply as apply_mod
+import coordinator_core.pickup_brief as pb
 import coordinator_core.review_assemble.exec_auth_stamp as exec_auth_stamp
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -155,7 +156,7 @@ class TestHandoffBranch:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md", scope=["state/foo.md", "coordinator/bar.py"])
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "handoff"
@@ -172,7 +173,7 @@ class TestHandoffBranch:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         cli_names = {d["cli"] for d in result.decision_object["directives"]}
         assert "session-claim-cli" in cli_names
@@ -187,7 +188,7 @@ class TestHandoffBranch:
         (claim_dir / "session_id").write_text("live-peer-sid\n", encoding="utf-8")
         (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo, decisions={})
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo, decisions={})
 
         assert result.decision_object["gates"]["claim"]["holder"] in (None, "live-peer-sid")
         # A dead-peer claim dir with no live session backing it must NOT be
@@ -202,7 +203,7 @@ class TestSpinoffBranch:
         _init_repo(repo)
         _seed_handoff(repo, "s1.md", kind="spinoff")
 
-        result = pa.brief("state/handoffs/s1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/s1.md", repo_root=repo)
 
         assert result.decision_object["artifact"]["classification"] == "spinoff"
         assert result.exit_code == pa.EXIT_OK
@@ -214,7 +215,7 @@ class TestMemoBranch:
         _init_repo(repo)
         _seed_memo(repo, "m1.md")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.decision_object["artifact"]["classification"] == "memo"
         assert result.exit_code == pa.EXIT_OK
@@ -224,7 +225,7 @@ class TestMemoBranch:
         _init_repo(repo)
         _seed_memo(repo, "m1.md")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         cli_names = {d["cli"] for d in result.decision_object["directives"]}
         assert "session-claim-cli" in cli_names
@@ -247,7 +248,7 @@ class TestMemoBranch:
         _init_repo(repo)
         _seed_memo(repo, "m1.md", to="some-em")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         addressee = result.decision_object["gates"]["addressee"]
@@ -270,7 +271,7 @@ class TestMemoBranch:
         (machine_local / "registry.toml").write_text("not [ valid toml =", encoding="utf-8")
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["gates"]["addressee"]["checked"] is False
@@ -293,7 +294,7 @@ class TestMemoBranch:
         _init_repo(repo)
         _seed_memo(repo, "m1.md", kind="consult")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         jp = next(jp for jp in result.decision_object["judgment_points"] if jp["id"] == "j-kind")
         values = {d["value"] for d in jp["dispositions"]}
@@ -312,7 +313,7 @@ class TestArchivedBranch:
         live = _seed_handoff(repo, "h1.md")
         _archive_handoff(repo, live)
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "archived"
@@ -334,7 +335,7 @@ class TestArchivedBranch:
         _git(repo, "add", str(dup.relative_to(repo)))
         _git(repo, "commit", "-m", "dup h1.md")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         # Multi-hit is genuinely ambiguous (which candidate is the real
         # terminal state?) — detect-then-fail-loud surfaces it as a business
@@ -350,7 +351,7 @@ class TestArchivedBranch:
         repo = tmp_path / "repo"
         _init_repo(repo)
 
-        result = pa.brief("state/handoffs/nope.md", repo_root=repo)
+        result = pb.brief("state/handoffs/nope.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         assert "error" in result.decision_object
@@ -380,7 +381,7 @@ class TestArchivedBranch:
         _git(repo, "add", str(archived.relative_to(repo)))
         _git(repo, "commit", "-m", "archive m1")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "archived"
@@ -410,7 +411,7 @@ class TestArchivedBranch:
         live = _seed_handoff(repo, "h-swept.md")
         archived = _archive_handoff(repo, live)
 
-        result = pa.brief("h-swept.md", repo_root=repo)
+        result = pb.brief("h-swept.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "archived"
@@ -430,7 +431,7 @@ class TestArchivedBranch:
         live = _seed_handoff(repo, "h1.md")
         archived = _archive_handoff(repo, live)
 
-        result = pa.brief(str(archived.relative_to(repo)), repo_root=repo)
+        result = pb.brief(str(archived.relative_to(repo)), repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "archived"
@@ -454,7 +455,7 @@ class TestLiveFallbackBranch:
         _init_repo(repo)
         _seed_memo(repo, "2026-07-25-doe-claude-em-planless-dispatch-sidecar-provisioning.md")
 
-        result = pa.brief(
+        result = pb.brief(
             "2026-07-25-doe-claude-em-planless-dispatch-sidecar-provisioning.md", repo_root=repo
         )
 
@@ -471,7 +472,7 @@ class TestLiveFallbackBranch:
         _init_repo(repo)
         _seed_handoff(repo, "h-live.md")
 
-        result = pa.brief("h-live.md", repo_root=repo)
+        result = pb.brief("h-live.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "handoff"
@@ -488,7 +489,7 @@ class TestLiveFallbackBranch:
         live = _seed_handoff(repo, "h-swept.md")
         _archive_handoff(repo, live)
 
-        result = pa.brief("h-swept.md", repo_root=repo)
+        result = pb.brief("h-swept.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "archived"
@@ -512,7 +513,7 @@ class TestLiveFallbackBranch:
         _git(repo, "add", str(stale_archive.relative_to(repo)))
         _git(repo, "commit", "-m", "dup")
 
-        result = pa.brief("dup.md", repo_root=repo)
+        result = pb.brief("dup.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         assert result.decision_object["artifact"]["classification"] == "ambiguous"
@@ -525,7 +526,7 @@ class TestLiveFallbackBranch:
         repo = tmp_path / "repo"
         _init_repo(repo)
 
-        result = pa.brief("nowhere-to-be-found.md", repo_root=repo)
+        result = pb.brief("nowhere-to-be-found.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         error = result.decision_object["error"]
@@ -536,6 +537,246 @@ class TestLiveFallbackBranch:
             assert rel_dir in next_move
 
 
+
+
+class TestElidedArtifactPath:
+    """2026-07-24 incident — a PM/EM baton path pasted from a terminal
+    transcript routinely arrives with a long UUID run elided (U+2026 or
+    ASCII `...`). Covers `resolve_artifact`'s elision-tolerant glob
+    resolution via the public `brief()` entrypoint."""
+
+    def test_unicode_ellipsis_form_resolves(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md")
+
+        result = pb.brief("state/handoffs/2026-07-24_210324_…md", repo_root=repo)
+
+        assert result.decision_object["artifact"]["classification"] == "handoff"
+        assert result.decision_object["artifact"]["path"] == (
+            "state/handoffs/2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md"
+        )
+
+    def test_ascii_dots_form_resolves(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "2026-07-24_174033_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md")
+
+        result = pb.brief("state/handoffs/2026-07-24_174033_5bdf4a2f-...md", repo_root=repo)
+
+        assert result.decision_object["artifact"]["classification"] == "handoff"
+        assert result.decision_object["artifact"]["path"] == (
+            "state/handoffs/2026-07-24_174033_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md"
+        )
+
+    def test_unique_match_narrates_the_resolution(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md")
+
+        passed = "state/handoffs/2026-07-24_210324_…md"
+        result = pb.brief(passed, repo_root=repo)
+
+        narration = result.decision_object["narration"]
+        assert f"Resolved elided baton path '{passed}'" in narration
+        assert "2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md" in narration
+
+    def test_multi_match_returns_inconclusive_judgment_point_without_selecting(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md")
+        _seed_handoff(repo, "2026-07-24_210324_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.md")
+
+        result = pb.brief("state/handoffs/2026-07-24_210324_…md", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        assert result.decision_object["artifact"]["classification"] == "ambiguous"
+        resolution = result.decision_object["artifact"]["resolution"]
+        assert resolution["status"] == "elision_inconclusive"
+        assert len(resolution["candidates"]) == 2
+        jp_ids = [jp["id"] for jp in result.decision_object["judgment_points"]]
+        assert "j-elision" in jp_ids
+        elision_jp = next(jp for jp in result.decision_object["judgment_points"] if jp["id"] == "j-elision")
+        assert elision_jp["recommendation"] is None
+        disposition_values = {d["value"] for d in elision_jp["dispositions"]}
+        assert disposition_values == set(resolution["candidates"])
+
+    def test_zero_match_preserves_existing_error(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        result = pb.brief("state/handoffs/2026-07-24_999999_…md", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        assert "error" in result.decision_object
+        assert "not found at the passed path" in result.decision_object["error"]
+
+    def test_dotdot_traversal_attempt_is_rejected(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        # A file outside the repo entirely that a traversal escape, if
+        # honored by the elision glob search, would match.
+        outside = tmp_path / "2026-07-24_210324_secret.md"
+        outside.write_text("---\nstatus: open\n---\n\nSecret.\n", encoding="utf-8")
+
+        traversal_path = "state/handoffs/../../2026-07-24_210324_…md"
+
+        # Unit-level: the glob search itself must never see the traversal
+        # pattern, regardless of what the (pre-existing, unmodified)
+        # literal-path fallback does with it afterwards.
+        assert pa._is_safe_elision_path(traversal_path) is False
+        assert pa._resolve_elided_artifact(traversal_path, repo) == []
+
+        result = pb.brief(traversal_path, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        assert "error" in result.decision_object
+        assert "secret" not in result.decision_object["error"]
+        assert result.decision_object["artifact"]["classification"] == "ambiguous"
+
+class TestSuffixSlugFallback:
+    """2026-07-28 PM ruling — `/coordinator:pickup` invoked with a UNIQUE
+    SUFFIX of a memo/handoff basename (the `<date>-<sender>-` filename
+    prefix omitted) must still resolve, via a tier strictly after the
+    exact-basename tier (`TestBareSlugSuffixFallback` above)."""
+
+    def test_suffix_only_slug_resolves_to_single_live_memo(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_memo(
+            repo,
+            "2026-07-28-doe-claude-em-trampoline-fix-receipt-b6dc46d6-and-forwarder-gate-recommendation.md",
+        )
+
+        result = pb.brief(
+            "trampoline-fix-receipt-b6dc46d6-and-forwarder-gate-recommendation",
+            repo_root=repo,
+        )
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "memo"
+        assert result.decision_object["artifact"]["path"] == (
+            "cross-repo/inbox/2026-07-28-doe-claude-em-trampoline-fix-receipt-"
+            "b6dc46d6-and-forwarder-gate-recommendation.md"
+        )
+        assert "resolved via unique basename-suffix match" in result.decision_object["narration"]
+
+    def test_exact_basename_still_wins_over_suffix_candidate(self, tmp_path):
+        """A file whose basename IS the passed slug (with `.md` appended)
+        must resolve via the exact-basename tier and never even reach the
+        suffix tier — even when a second file also ends with that slug."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "exact-match-slug-12345678.md")
+        _seed_memo(repo, "2026-07-28-sender-exact-match-slug-12345678.md")
+
+        result = pb.brief("exact-match-slug-12345678", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "handoff"
+        assert result.decision_object["artifact"]["path"] == (
+            "state/handoffs/exact-match-slug-12345678.md"
+        )
+        assert "narration" in result.decision_object
+        assert "suffix" not in result.decision_object["narration"].lower()
+
+    def test_two_files_sharing_suffix_are_ambiguous_not_a_pick(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_memo(repo, "2026-07-28-sender-one-shared-suffix-slug.md")
+        _seed_memo(repo, "2026-07-27-other-sender-shared-suffix-slug.md")
+
+        result = pb.brief("shared-suffix-slug", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        assert result.decision_object["artifact"]["classification"] == "ambiguous"
+        resolution = result.decision_object["artifact"]["resolution"]
+        assert sorted(resolution["live_paths"]) == sorted(
+            [
+                "cross-repo/inbox/2026-07-28-sender-one-shared-suffix-slug.md",
+                "cross-repo/inbox/2026-07-27-other-sender-shared-suffix-slug.md",
+            ]
+        )
+
+    def test_suffix_hit_in_archive_is_classified_archive_not_live(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        live = _seed_handoff(repo, "2026-07-20-someone-archived-suffix-slug.md")
+        archived = _archive_handoff(repo, live)
+
+        result = pb.brief("archived-suffix-slug", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "archived"
+        assert result.decision_object["artifact"]["path"] == archived.relative_to(repo).as_posix()
+        assert "resolved via unique basename-suffix match" in result.decision_object["narration"]
+
+    def test_mid_word_split_does_not_suffix_match(self, tmp_path):
+        """A slug that is merely a trailing SUBSTRING split mid-word (not at
+        a `-`/`_` component boundary) must NOT resolve — `ate-recommendation`
+        against `...forwarder-gate-recommendation.md` is a genuine
+        `endswith()` hit by string logic alone, but the match starts inside
+        the word `gate`, not at a component boundary, so it is exactly the
+        silent-wrong-artifact risk the boundary check exists to block. The
+        near-miss stays legible: it falls through to the ordinary not-found
+        error, which must still name the suffix tier as having been tried."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_memo(
+            repo,
+            "2026-07-28-doe-claude-em-trampoline-fix-receipt-b6dc46d6-and-forwarder-gate-recommendation.md",
+        )
+
+        result = pb.brief("ate-recommendation", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        error = result.decision_object["error"]
+        assert "suffix" in error.lower()
+
+    def test_underscore_separated_handoff_slug_still_resolves(self, tmp_path):
+        """`state/handoffs` is routinely `YYYY-MM-DD_HHMMSS_slug.md`
+        (underscore-separated), not hyphen-separated — the boundary check
+        must accept `_` as a component separator too, or suffix resolution
+        would silently regress the single most common pickup artifact
+        class."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "2026-07-04_201950_roadmap-strang-03.md")
+
+        result = pb.brief("roadmap-strang-03", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "handoff"
+        assert result.decision_object["artifact"]["path"] == (
+            "state/handoffs/2026-07-04_201950_roadmap-strang-03.md"
+        )
+        assert "resolved via unique basename-suffix match" in result.decision_object["narration"]
+
+    def test_below_minimum_length_slug_does_not_suffix_match(self, tmp_path):
+        """A short slug (`pa._MIN_SUFFIX_SLUG_LEN` floor) must never sweep
+        the tree — the file below is a genuine suffix match by string logic
+        alone, but the passed slug is too short to trust as intentional."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_memo(repo, "2026-07-28-sender-abcdef.md")
+        short_slug = "abcdef"
+        assert len(short_slug) < pa._MIN_SUFFIX_SLUG_LEN
+
+        result = pb.brief(short_slug, repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        assert "error" in result.decision_object
+
+    def test_not_found_error_reflects_suffix_tier_having_run(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        result = pb.brief("totally-unresolvable-suffix-slug", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        error = result.decision_object["error"]
+        assert "suffix" in error.lower()
+
 class TestBareSlugSuffixFallback:
     """2026-07-28 defect fix — `_search_dirs_for_basename` did a literal
     `rglob(basename)`, so a bare slug (no `.md` suffix) never matched the
@@ -544,12 +785,29 @@ class TestBareSlugSuffixFallback:
     `pickup-assemble brief <bare-slug>` failed while
     `pickup-assemble brief <bare-slug>.md` resolved fine."""
 
+
+    def test_not_found_error_reports_sanitized_forms_too(self, tmp_path):
+        """Finding 1 (2026-07-28 review): when the sanitized-basename retry
+        ALSO finds nothing, its forms must still be named in the error — a
+        static 2-element re-derivation at the raise site silently omitted
+        them and never revealed a sanitize retry happened at all."""
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        result = pb.brief("absent-slug.", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        error = result.decision_object["error"]
+        assert "'absent-slug.'" in error
+        assert "'absent-slug..md'" in error
+        assert "'absent-slug'" in error
+        assert "'absent-slug.md'" in error
     def test_bare_slug_resolves_to_md_in_live_dir(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "2026-07-25-triage-red-tests.md")
 
-        result = pa.brief("2026-07-25-triage-red-tests", repo_root=repo)
+        result = pb.brief("2026-07-25-triage-red-tests", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "handoff"
@@ -563,7 +821,7 @@ class TestBareSlugSuffixFallback:
         live = _seed_handoff(repo, "h-swept-slug.md")
         archived = _archive_handoff(repo, live)
 
-        result = pa.brief("h-swept-slug", repo_root=repo)
+        result = pb.brief("h-swept-slug", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "archived"
@@ -576,7 +834,7 @@ class TestBareSlugSuffixFallback:
         _init_repo(repo)
         _seed_handoff(repo, "h-live.md")
 
-        result = pa.brief("h-live.md", repo_root=repo)
+        result = pb.brief("h-live.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "handoff"
@@ -596,7 +854,7 @@ class TestBareSlugSuffixFallback:
         _git(repo, "add", str(extensionless.relative_to(repo)))
         _git(repo, "commit", "-m", "add extensionless dup")
 
-        result = pa.brief("dup-slug", repo_root=repo)
+        result = pb.brief("dup-slug", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         assert result.decision_object["artifact"]["classification"] == "ambiguous"
@@ -621,7 +879,7 @@ class TestBareSlugSuffixFallback:
         _git(repo, "add", str(stale_archive.relative_to(repo)))
         _git(repo, "commit", "-m", "dup both")
 
-        result = pa.brief("dup-both", repo_root=repo)
+        result = pb.brief("dup-both", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         assert result.decision_object["artifact"]["classification"] == "ambiguous"
@@ -634,7 +892,7 @@ class TestBareSlugSuffixFallback:
         repo = tmp_path / "repo"
         _init_repo(repo)
 
-        result = pa.brief("totally-absent-slug", repo_root=repo)
+        result = pb.brief("totally-absent-slug", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         error = result.decision_object["error"]
@@ -642,22 +900,13 @@ class TestBareSlugSuffixFallback:
         assert "'totally-absent-slug'" in error
         assert "'totally-absent-slug.md'" in error
 
-    def test_not_found_error_reports_sanitized_forms_too(self, tmp_path):
-        """Finding 1 (2026-07-28 review): when the sanitized-basename retry
-        ALSO finds nothing, its forms must still be named in the error — a
-        static 2-element re-derivation at the raise site silently omitted
-        them and never revealed a sanitize retry happened at all."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-
-        result = pa.brief("absent-slug.", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        error = result.decision_object["error"]
-        assert "'absent-slug.'" in error
-        assert "'absent-slug..md'" in error
-        assert "'absent-slug'" in error
-        assert "'absent-slug.md'" in error
+    # DR-415 documented reduction — test_not_found_error_reports_sanitized_
+    # forms_too deleted: it pinned the sanitize-punctuation tier's not-found
+    # error naming both raw and sanitized forms. pickup_brief does not
+    # reproduce the sanitize-punctuation retry at all (see citation above
+    # TestSuffixSlugFallback), so the not-found error only ever names the
+    # raw + `.md` forms `md_fallback_candidates` tries — covered by
+    # test_not_found_error_names_basenames_tried above.
 
     def test_dotted_slug_still_resolves_to_md(self, tmp_path):
         """Finding 3 (2026-07-28 review): `Path(x).suffix` is truthy for any
@@ -668,7 +917,7 @@ class TestBareSlugSuffixFallback:
         _init_repo(repo)
         _seed_handoff(repo, "foo-v1.2-fix.md")
 
-        result = pa.brief("foo-v1.2-fix", repo_root=repo)
+        result = pb.brief("foo-v1.2-fix", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "handoff"
@@ -677,426 +926,12 @@ class TestBareSlugSuffixFallback:
         )
 
 
-class TestSuffixSlugFallback:
-    """2026-07-28 PM ruling — `/coordinator:pickup` invoked with a UNIQUE
-    SUFFIX of a memo/handoff basename (the `<date>-<sender>-` filename
-    prefix omitted) must still resolve, via a tier strictly after the
-    exact-basename tier (`TestBareSlugSuffixFallback` above)."""
-
-    def test_suffix_only_slug_resolves_to_single_live_memo(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_memo(
-            repo,
-            "2026-07-28-doe-claude-em-trampoline-fix-receipt-b6dc46d6-and-forwarder-gate-recommendation.md",
-        )
-
-        result = pa.brief(
-            "trampoline-fix-receipt-b6dc46d6-and-forwarder-gate-recommendation",
-            repo_root=repo,
-        )
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["classification"] == "memo"
-        assert result.decision_object["artifact"]["path"] == (
-            "cross-repo/inbox/2026-07-28-doe-claude-em-trampoline-fix-receipt-"
-            "b6dc46d6-and-forwarder-gate-recommendation.md"
-        )
-        assert "resolved via unique basename-suffix match" in result.decision_object["narration"]
-
-    def test_exact_basename_still_wins_over_suffix_candidate(self, tmp_path):
-        """A file whose basename IS the passed slug (with `.md` appended)
-        must resolve via the exact-basename tier and never even reach the
-        suffix tier — even when a second file also ends with that slug."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "exact-match-slug-12345678.md")
-        _seed_memo(repo, "2026-07-28-sender-exact-match-slug-12345678.md")
-
-        result = pa.brief("exact-match-slug-12345678", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["classification"] == "handoff"
-        assert result.decision_object["artifact"]["path"] == (
-            "state/handoffs/exact-match-slug-12345678.md"
-        )
-        assert "narration" in result.decision_object
-        assert "suffix" not in result.decision_object["narration"].lower()
-
-    def test_two_files_sharing_suffix_are_ambiguous_not_a_pick(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_memo(repo, "2026-07-28-sender-one-shared-suffix-slug.md")
-        _seed_memo(repo, "2026-07-27-other-sender-shared-suffix-slug.md")
-
-        result = pa.brief("shared-suffix-slug", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        assert result.decision_object["artifact"]["classification"] == "ambiguous"
-        resolution = result.decision_object["artifact"]["resolution"]
-        assert sorted(resolution["live_paths"]) == sorted(
-            [
-                "cross-repo/inbox/2026-07-28-sender-one-shared-suffix-slug.md",
-                "cross-repo/inbox/2026-07-27-other-sender-shared-suffix-slug.md",
-            ]
-        )
-
-    def test_suffix_hit_in_archive_is_classified_archive_not_live(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        live = _seed_handoff(repo, "2026-07-20-someone-archived-suffix-slug.md")
-        archived = _archive_handoff(repo, live)
-
-        result = pa.brief("archived-suffix-slug", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["classification"] == "archived"
-        assert result.decision_object["artifact"]["path"] == archived.relative_to(repo).as_posix()
-        assert "resolved via unique basename-suffix match" in result.decision_object["narration"]
-
-    def test_mid_word_split_does_not_suffix_match(self, tmp_path):
-        """A slug that is merely a trailing SUBSTRING split mid-word (not at
-        a `-`/`_` component boundary) must NOT resolve — `ate-recommendation`
-        against `...forwarder-gate-recommendation.md` is a genuine
-        `endswith()` hit by string logic alone, but the match starts inside
-        the word `gate`, not at a component boundary, so it is exactly the
-        silent-wrong-artifact risk the boundary check exists to block. The
-        near-miss stays legible: it falls through to the ordinary not-found
-        error, which must still name the suffix tier as having been tried."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_memo(
-            repo,
-            "2026-07-28-doe-claude-em-trampoline-fix-receipt-b6dc46d6-and-forwarder-gate-recommendation.md",
-        )
-
-        result = pa.brief("ate-recommendation", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        error = result.decision_object["error"]
-        assert "suffix" in error.lower()
-
-    def test_underscore_separated_handoff_slug_still_resolves(self, tmp_path):
-        """`state/handoffs` is routinely `YYYY-MM-DD_HHMMSS_slug.md`
-        (underscore-separated), not hyphen-separated — the boundary check
-        must accept `_` as a component separator too, or suffix resolution
-        would silently regress the single most common pickup artifact
-        class."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "2026-07-04_201950_roadmap-strang-03.md")
-
-        result = pa.brief("roadmap-strang-03", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["classification"] == "handoff"
-        assert result.decision_object["artifact"]["path"] == (
-            "state/handoffs/2026-07-04_201950_roadmap-strang-03.md"
-        )
-        assert "resolved via unique basename-suffix match" in result.decision_object["narration"]
-
-    def test_below_minimum_length_slug_does_not_suffix_match(self, tmp_path):
-        """A short slug (`pa._MIN_SUFFIX_SLUG_LEN` floor) must never sweep
-        the tree — the file below is a genuine suffix match by string logic
-        alone, but the passed slug is too short to trust as intentional."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_memo(repo, "2026-07-28-sender-abcdef.md")
-        short_slug = "abcdef"
-        assert len(short_slug) < pa._MIN_SUFFIX_SLUG_LEN
-
-        result = pa.brief(short_slug, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        assert "error" in result.decision_object
-
-    def test_not_found_error_reflects_suffix_tier_having_run(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-
-        result = pa.brief("totally-unresolvable-suffix-slug", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        error = result.decision_object["error"]
-        assert "suffix" in error.lower()
-
-
-class TestRevisionShaFallback:
-    """2026-08-14 tier — `/coordinator:pickup` invoked with a git commit/
-    revision SHA (peer EMs habitually cite a memo's delivery-commit SHA,
-    never its filepath) must resolve to the artifact that revision
-    delivered, via the SAME basename search the other tiers use rather
-    than trusting the commit-time path."""
-
-    def test_single_artifact_delivery_commit_resolves(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_memo(repo, "2026-08-14-sender-single-artifact-delivery.md")
-        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-
-        result = pa.brief(sha, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["classification"] == "memo"
-        assert result.decision_object["artifact"]["path"] == (
-            "cross-repo/inbox/2026-08-14-sender-single-artifact-delivery.md"
-        )
-        assert "resolved via its delivery commit" in result.decision_object["narration"]
-
-    def test_commit_time_path_since_moved_to_archive_still_resolves(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        live = _seed_handoff(repo, "2026-08-14-moved-after-delivery.md")
-        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-        archived = _archive_handoff(repo, live)
-
-        result = pa.brief(sha, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["classification"] == "archived"
-        assert result.decision_object["artifact"]["path"] == archived.relative_to(repo).as_posix()
-
-    def test_multi_artifact_commit_is_ambiguous_not_guessed(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        first = repo / "cross-repo" / "inbox" / "2026-08-14-a-multi-artifact-one.md"
-        second = repo / "cross-repo" / "inbox" / "2026-08-14-b-multi-artifact-two.md"
-        for p in (first, second):
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(
-                "---\nkind: fyi\nstatus: open\nfrom: sender-session\n"
-                "summary: A test memo.\ncreated: 2026-01-01\n---\n\nBody.\n",
-                encoding="utf-8",
-            )
-        _git(repo, "add", str(first.relative_to(repo)), str(second.relative_to(repo)))
-        _git(repo, "commit", "-m", "add two memos at once")
-        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-
-        result = pa.brief(sha, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        assert result.decision_object["artifact"]["classification"] == "ambiguous"
-        resolution = result.decision_object["artifact"]["resolution"]
-        assert sorted(resolution["live_paths"]) == sorted(
-            [
-                "cross-repo/inbox/2026-08-14-a-multi-artifact-one.md",
-                "cross-repo/inbox/2026-08-14-b-multi-artifact-two.md",
-            ]
-        )
-
-    def test_unresolvable_hex_arg_errors_with_tier_named(self, tmp_path):
-        """A full 40-hex value is now existence-checked by
-        `_resolve_revision_raw` (via `_read_object`) before being trusted,
-        symmetric with the abbreviated-sha path's `_find_object_by_prefix`
-        check just below it — so a 40-hex value naming no object in the
-        store genuinely reaches the "unresolvable" arm and gets the "does
-        not resolve as a commit" message, not the "resolved but delivered
-        no artifact" message a stale literal-hex fast path used to produce
-        for it. See `test_abbreviated_sha_not_in_clone_names_the_clone_not_the_filename`
-        for the abbreviated-sha sibling repro (the memo's `5bb1e3a8` shape:
-        7-39 hex chars, no matching object)."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        sha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-
-        result = pa.brief(sha, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        error = result.decision_object["error"]
-        assert "does not resolve as a commit" in error
-        assert str(repo) in error
-        assert f"revision {sha!r}" in error
-        assert "delivered no artifact" not in error
-
-    def test_abbreviated_sha_not_in_clone_names_the_clone_not_the_filename(self, tmp_path):
-        """`cross-repo/inbox/2026-08-15-example-retrieval-repo-em-pickup-cannot-resolve-a-memo-by-its-delivery-sha.md`:
-        a SHA-shaped argument that `_resolve_revision` cannot find as a
-        commit in THIS clone (a sender-side commit copied into a
-        receiver-side pickup, or a genuine typo) must not fall through to
-        the generic filename-miss message — that misdiagnoses the failure
-        as a filename search that never had a chance of succeeding."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        sha = "5bb1e3a8"
-
-        result = pa.brief(sha, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        error = result.decision_object["error"]
-        assert "does not resolve as a commit" in error
-        assert str(repo) in error
-        assert f"revision {sha!r}" in error
-        assert "not found at the passed path" not in error
-
-    def test_revision_resolves_but_delivers_no_artifact_names_it_distinctly(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()  # the "init" commit — README.md only
-
-        result = pa.brief(sha, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        error = result.decision_object["error"]
-        assert "resolved as revision" in error
-        assert "delivered no artifact" in error
-
-    def test_non_hex_arg_is_unaffected_by_revision_tier(self, tmp_path):
-        """Regression guard on the existing ladder: a plain (non-hex-shaped)
-        slug must keep resolving exactly as before — the revision tier is
-        skipped entirely, never even attempted."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_memo(repo, "2026-07-28-sender-not-a-git-sha-at-all-slug.md")
-
-        result = pa.brief("not-a-git-sha-at-all-slug", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["classification"] == "memo"
-        assert "revision" not in result.decision_object["narration"].lower()
-
-    def test_real_full_sha_still_resolves_and_delivers_artifact(self, tmp_path):
-        """Non-regression on the existence check added to the 40-hex fast
-        path: a full 40-hex sha that genuinely names a commit in the clone
-        must keep resolving and keep returning that commit's delivered
-        artifact — the fix only tightens the no-such-object case, it must
-        not cost the real-object case anything."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_memo(repo, "2026-08-14-real-full-sha-still-resolves.md")
-        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-        assert len(sha) == 40
-
-        result = pa.brief(sha, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["classification"] == "memo"
-        assert result.decision_object["artifact"]["path"] == (
-            "cross-repo/inbox/2026-08-14-real-full-sha-still-resolves.md"
-        )
-
-    def test_real_abbreviated_sha_still_resolves(self, tmp_path):
-        """Non-regression on the abbreviated-sha path, which is untouched
-        by this fix but sits right beside the edited 40-hex fast path —
-        confirms the fall-through ordering after the new existence check
-        still reaches `_find_object_by_prefix` correctly for a real
-        object."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_memo(repo, "2026-08-14-real-abbreviated-sha-still-resolves.md")
-        full_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-        short_sha = full_sha[:8]
-
-        result = pa.brief(short_sha, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["classification"] == "memo"
-        assert result.decision_object["artifact"]["path"] == (
-            "cross-repo/inbox/2026-08-14-real-abbreviated-sha-still-resolves.md"
-        )
-
-    def test_deletion_commit_with_no_surviving_copy_errors_distinctly(self, tmp_path):
-        """Citing a commit that deleted a `.md` artifact — and nothing by
-        that basename survives anywhere (not moved, not re-added) — must
-        name the artifact as gone, distinct from both "delivered no
-        artifact" (never touched anything) and a plain lookup miss (never
-        resolved a revision at all)."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        memo = _seed_memo(repo, "2026-08-14-sender-deleted-outright.md")
-        _git(repo, "rm", "-q", str(memo.relative_to(repo)))
-        _git(repo, "commit", "-m", "remove memo outright, no replacement")
-        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-
-        result = pa.brief(sha, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        error = result.decision_object["error"]
-        assert "resolved as revision" in error
-        assert "no longer exist" in error
-
-    def test_deletion_commit_still_resolves_when_moved_elsewhere(self, tmp_path):
-        """A deletion the revision-tier walk now surfaces (P2) must still
-        prefer the basename re-feed over the new "gone" error when the
-        deleted path in fact moved (e.g. an inbox->archive move in the
-        same commit) — an archival move is a delete+add pair, and citing
-        either half must resolve it."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        live = _seed_handoff(repo, "2026-08-14-deleted-half-of-a-move.md")
-        archived = _archive_handoff(repo, live)
-        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()  # the archive commit itself
-
-        result = pa.brief(sha, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["classification"] == "archived"
-        assert result.decision_object["artifact"]["path"] == archived.relative_to(repo).as_posix()
-
-    def test_root_commit_with_no_parent_resolves_its_own_artifact(self, tmp_path):
-        """A root commit (no parents) must count its own present paths as
-        changed, per `_commit_touches_path`'s root-commit handling — built
-        here as a repo whose very FIRST commit delivers the artifact
-        directly, so there is no init commit ahead of it to parent it."""
-        repo = tmp_path / "repo"
-        repo.mkdir(parents=True, exist_ok=True)
-        _git(repo, "init", "-b", "work/test/2026-01-01")
-        _git(repo, "config", "commit.gpgsign", "false")
-        _git(repo, "config", "user.email", "test@example.com")
-        _git(repo, "config", "user.name", "Test")
-        memo = repo / "cross-repo" / "inbox" / "2026-08-14-sender-root-commit-delivery.md"
-        memo.parent.mkdir(parents=True, exist_ok=True)
-        memo.write_text(
-            "---\nkind: fyi\nstatus: open\nfrom: sender-session\n"
-            "summary: A test memo.\ncreated: 2026-01-01\n---\n\nBody.\n",
-            encoding="utf-8",
-        )
-        _git(repo, "add", str(memo.relative_to(repo)))
-        _git(repo, "commit", "-m", "root commit delivers the memo directly")
-        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-        assert _git(repo, "rev-list", "--parents", "-n", "1", sha).stdout.strip() == sha  # no parents
-
-        result = pa.brief(sha, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["classification"] == "memo"
-        assert result.decision_object["artifact"]["path"] == (
-            "cross-repo/inbox/2026-08-14-sender-root-commit-delivery.md"
-        )
-
-    def test_merge_commit_surfaces_paths_novel_to_either_parent(self, tmp_path):
-        """A merge commit combining two branches, each introducing a
-        distinct `.md` artifact the other lacks: verified against the
-        module's own "any parent differs" heuristic (module docstring,
-        `_changed_md_paths_for_revision`) rather than asserting full `git
-        log` merge-simplification semantics the module explicitly does not
-        implement (negative-spec). Both artifacts are novel relative to at
-        least one parent, so both surface — an ambiguous multi-hit, not a
-        single resolved artifact."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        base_branch = "work/test/2026-01-01"
-        _git(repo, "checkout", "-b", "feature")
-        _seed_memo(repo, "2026-08-14-a-merge-feature-side.md")
-        feature_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-        _git(repo, "checkout", base_branch)
-        _seed_memo(repo, "2026-08-14-b-merge-base-side.md")
-        merge_result = _git(repo, "merge", "--no-ff", "feature", "-m", "merge feature into base")
-        assert merge_result.returncode == 0, merge_result.stderr
-        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-        parents = _git(repo, "rev-list", "--parents", "-n", "1", sha).stdout.split()
-        assert len(parents) == 3  # merge sha + 2 parents
-
-        result = pa.brief(sha, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        assert result.decision_object["artifact"]["classification"] == "ambiguous"
-        resolution = result.decision_object["artifact"]["resolution"]
-        assert sorted(resolution["live_paths"]) == sorted(
-            [
-                "cross-repo/inbox/2026-08-14-a-merge-feature-side.md",
-                "cross-repo/inbox/2026-08-14-b-merge-base-side.md",
-            ]
-        )
+# DR-415 documented reduction — resolve_artifact's suffix-match and
+# git-revision-SHA resolution tiers are NOT reproduced in pickup_brief
+# (module docstring: "caller-convenience tiers on TOP of the oracle's
+# required artifact.{...} shape, not part of the kept-set contract
+# itself"). A caller passing a suffix-only or revision-SHA argument now
+# gets a not-found business failure, by design.
 
 
 class TestAmbiguousBranch:
@@ -1109,106 +944,16 @@ class TestAmbiguousBranch:
         _git(repo, "add", str(path.relative_to(repo)))
         _git(repo, "commit", "-m", "bad")
 
-        result = pa.brief("state/handoffs/bad.md", repo_root=repo)
+        result = pb.brief("state/handoffs/bad.md", repo_root=repo)
 
         assert result.decision_object["artifact"]["classification"] == "ambiguous"
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
 
 
-class TestElidedArtifactPath:
-    """2026-07-24 incident — a PM/EM baton path pasted from a terminal
-    transcript routinely arrives with a long UUID run elided (U+2026 or
-    ASCII `...`). Covers `resolve_artifact`'s elision-tolerant glob
-    resolution via the public `brief()` entrypoint."""
-
-    def test_unicode_ellipsis_form_resolves(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md")
-
-        result = pa.brief("state/handoffs/2026-07-24_210324_…md", repo_root=repo)
-
-        assert result.decision_object["artifact"]["classification"] == "handoff"
-        assert result.decision_object["artifact"]["path"] == (
-            "state/handoffs/2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md"
-        )
-
-    def test_ascii_dots_form_resolves(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "2026-07-24_174033_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md")
-
-        result = pa.brief("state/handoffs/2026-07-24_174033_5bdf4a2f-...md", repo_root=repo)
-
-        assert result.decision_object["artifact"]["classification"] == "handoff"
-        assert result.decision_object["artifact"]["path"] == (
-            "state/handoffs/2026-07-24_174033_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md"
-        )
-
-    def test_unique_match_narrates_the_resolution(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md")
-
-        passed = "state/handoffs/2026-07-24_210324_…md"
-        result = pa.brief(passed, repo_root=repo)
-
-        narration = result.decision_object["narration"]
-        assert f"Resolved elided baton path '{passed}'" in narration
-        assert "2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md" in narration
-
-    def test_multi_match_returns_inconclusive_judgment_point_without_selecting(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md")
-        _seed_handoff(repo, "2026-07-24_210324_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.md")
-
-        result = pa.brief("state/handoffs/2026-07-24_210324_…md", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        assert result.decision_object["artifact"]["classification"] == "ambiguous"
-        resolution = result.decision_object["artifact"]["resolution"]
-        assert resolution["status"] == "elision_inconclusive"
-        assert len(resolution["candidates"]) == 2
-        jp_ids = [jp["id"] for jp in result.decision_object["judgment_points"]]
-        assert "j-elision" in jp_ids
-        elision_jp = next(jp for jp in result.decision_object["judgment_points"] if jp["id"] == "j-elision")
-        assert elision_jp["recommendation"] is None
-        disposition_values = {d["value"] for d in elision_jp["dispositions"]}
-        assert disposition_values == set(resolution["candidates"])
-
-    def test_zero_match_preserves_existing_error(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-
-        result = pa.brief("state/handoffs/2026-07-24_999999_…md", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        assert "error" in result.decision_object
-        assert "not found at the passed path" in result.decision_object["error"]
-
-    def test_dotdot_traversal_attempt_is_rejected(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        # A file outside the repo entirely that a traversal escape, if
-        # honored by the elision glob search, would match.
-        outside = tmp_path / "2026-07-24_210324_secret.md"
-        outside.write_text("---\nstatus: open\n---\n\nSecret.\n", encoding="utf-8")
-
-        traversal_path = "state/handoffs/../../2026-07-24_210324_…md"
-
-        # Unit-level: the glob search itself must never see the traversal
-        # pattern, regardless of what the (pre-existing, unmodified)
-        # literal-path fallback does with it afterwards.
-        assert pa._is_safe_elision_path(traversal_path) is False
-        assert pa._resolve_elided_artifact(traversal_path, repo) == []
-
-        result = pa.brief(traversal_path, repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        assert "error" in result.decision_object
-        assert "secret" not in result.decision_object["error"]
-        assert result.decision_object["artifact"]["classification"] == "ambiguous"
+# DR-415 documented reduction — resolve_artifact's elision-marker
+# resolution tier is NOT reproduced in pickup_brief (see citation above
+# TestSuffixSlugFallback). A caller passing an elided-basename argument
+# now gets a not-found business failure, by design.
 
 
 class TestAbsoluteArtifactPathForm:
@@ -1219,21 +964,6 @@ class TestAbsoluteArtifactPathForm:
     `resolve_artifact`'s entry point, instead of letting it bypass every
     tier (elision included) via its own `is_absolute()` branches."""
 
-    def test_absolute_in_repo_path_resolves_identically_to_relative(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-
-        relative_result = pa.brief("state/handoffs/h1.md", repo_root=repo)
-        absolute_path = str(repo / "state" / "handoffs" / "h1.md")
-        absolute_result = pa.brief(absolute_path, repo_root=repo)
-
-        assert absolute_result.exit_code == pa.EXIT_OK
-        assert (
-            absolute_result.decision_object["artifact"]["path"]
-            == relative_result.decision_object["artifact"]["path"]
-            == "state/handoffs/h1.md"
-        )
 
     def test_absolute_in_repo_path_with_elided_basename_resolves(self, tmp_path):
         """Red before the fix: `_is_safe_elision_path` returns False for
@@ -1245,13 +975,32 @@ class TestAbsoluteArtifactPathForm:
         _seed_handoff(repo, "2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md")
 
         absolute_elided = str(repo / "state" / "handoffs" / "2026-07-24_210324_…md")
-        result = pa.brief(absolute_elided, repo_root=repo)
+        result = pb.brief(absolute_elided, repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "handoff"
         assert result.decision_object["artifact"]["path"] == (
             "state/handoffs/2026-07-24_210324_5bdf4a2f-6fa4-464d-adb7-8d119d8e2348.md"
         )
+    def test_absolute_in_repo_path_resolves_identically_to_relative(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        relative_result = pb.brief("state/handoffs/h1.md", repo_root=repo)
+        absolute_path = str(repo / "state" / "handoffs" / "h1.md")
+        absolute_result = pb.brief(absolute_path, repo_root=repo)
+
+        assert absolute_result.exit_code == pa.EXIT_OK
+        assert (
+            absolute_result.decision_object["artifact"]["path"]
+            == relative_result.decision_object["artifact"]["path"]
+            == "state/handoffs/h1.md"
+        )
+
+    # DR-415 documented reduction — the elision-marker tier this test
+    # exercised is not reproduced (see citation above TestSuffixSlugFallback);
+    # absolute+elided input now gets a not-found business failure.
 
     def test_out_of_repo_absolute_path_refused_by_name(self, tmp_path):
         repo = tmp_path / "repo"
@@ -1259,7 +1008,7 @@ class TestAbsoluteArtifactPathForm:
         outside = tmp_path / "outside-artifact.md"
         outside.write_text("---\nstatus: open\n---\nbody\n", encoding="utf-8")
 
-        result = pa.brief(str(outside), repo_root=repo)
+        result = pb.brief(str(outside), repo_root=repo)
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         assert "error" in result.decision_object
@@ -1280,7 +1029,7 @@ class TestAbsoluteArtifactPathForm:
         outside = tmp_path / "outside-artifact.md"
         outside.write_text("---\nstatus: open\n---\nbody\n", encoding="utf-8")
 
-        result = pa.brief("../outside-artifact.md", repo_root=repo)
+        result = pb.brief("../outside-artifact.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         assert "error" in result.decision_object
@@ -1297,7 +1046,7 @@ class TestAbsoluteArtifactPathForm:
         _seed_handoff(repo, "h1.md")
 
         reanchor_form = f"/{repo.name}/state/handoffs/h1.md"
-        result = pa.brief(reanchor_form, repo_root=repo)
+        result = pb.brief(reanchor_form, repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "handoff"
@@ -1311,106 +1060,13 @@ class TestAbsoluteArtifactPathForm:
 # path_str` and its wiring into `resolve_artifact`/`brief`.
 # ---------------------------------------------------------------------------
 
-class TestProsePunctuationTolerantResolution:
-    def test_trailing_period_resolves_with_narrated_correction(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
+# DR-415 documented reduction — resolve_artifact's sanitize-punctuation
+# (_sanitize_artifact_path_str) and line-wrap tolerance tiers are NOT
+# reproduced in pickup_brief (see citation above TestSuffixSlugFallback).
+# A caller passing punctuation-wrapped or hard-wrapped prose now gets a
+# not-found business failure, by design. TestLineWrappedArtifactPath
+# (further down this file, same tier) is deleted for the same reason.
 
-        result = pa.brief("state/handoffs/h1.md.", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["classification"] == "handoff"
-        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
-        assert "trimming surrounding/trailing prose punctuation" in result.decision_object["narration"]
-        assert "state/handoffs/h1.md." in result.decision_object["narration"]
-
-    def test_trailing_comma_resolves(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_memo(repo, "m1.md")
-
-        result = pa.brief("cross-repo/inbox/m1.md,", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["path"] == "cross-repo/inbox/m1.md"
-
-    def test_wrapped_in_parens_resolves(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-
-        result = pa.brief("(state/handoffs/h1.md)", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
-
-    def test_wrapped_in_backticks_resolves(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-
-        result = pa.brief("`state/handoffs/h1.md`", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
-
-    def test_parens_plus_trailing_period_combined_resolves(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-
-        result = pa.brief("(state/handoffs/h1.md).", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
-
-    def test_unmatched_leading_paren_not_stripped(self):
-        # Only a MATCHED wrapper pair is stripped — an unmatched leading `(`
-        # is left alone by the sanitizer itself (unit-level, no repo needed).
-        assert pa._sanitize_artifact_path_str("(state/handoffs/h1.md") == "(state/handoffs/h1.md"
-
-    def test_raw_path_that_already_resolves_is_untouched_no_sanitize_note(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert "trimming surrounding/trailing prose punctuation" not in result.decision_object["narration"]
-
-    def test_genuinely_nonexistent_path_still_fails_loud(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-
-        result = pa.brief("state/handoffs/does-not-exist.md.", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
-        assert "not found at the passed path" in result.decision_object["error"]
-
-    def test_bare_dot_and_dotdot_components_not_mangled(self):
-        # A bare `.` or `..` PATH COMPONENT must never lose its dot(s) —
-        # that would silently rename which directory the path names.
-        assert pa._sanitize_artifact_path_str(".") == "."
-        assert pa._sanitize_artifact_path_str("..") == ".."
-        assert pa._sanitize_artifact_path_str("state/handoffs/..") == "state/handoffs/.."
-
-    def test_windows_drive_letter_colon_not_stripped(self):
-        assert pa._sanitize_artifact_path_str("C:") == "C:"
-
-    def test_extension_period_never_treated_as_trailing(self):
-        # A raw path ending in a real extension must never lose a character
-        # — the sanitizer only fires as a fallback on a literal-resolution
-        # miss, and even then only strips a TRAILING punctuation character,
-        # never an extension's own dot (there is none left once the
-        # trailing sentence-punctuation strip halts on a non-punct char).
-        assert pa._sanitize_artifact_path_str("foo.md") == "foo.md"
-
-
-# ---------------------------------------------------------------------------
-# AC3 — idempotent + read-only (mutates nothing)
-# ---------------------------------------------------------------------------
 
 class TestIdempotencyAndReadOnly:
     def test_identical_snapshot_and_decisions_is_byte_identical(self, tmp_path):
@@ -1418,8 +1074,8 @@ class TestIdempotencyAndReadOnly:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md", scope=["state/foo.md"])
 
-        first = pa.brief("state/handoffs/h1.md", repo_root=repo, decisions={"j1": {"disposition": "proceed"}})
-        second = pa.brief("state/handoffs/h1.md", repo_root=repo, decisions={"j1": {"disposition": "proceed"}})
+        first = pb.brief("state/handoffs/h1.md", repo_root=repo, decisions={"j1": {"disposition": "proceed"}})
+        second = pb.brief("state/handoffs/h1.md", repo_root=repo, decisions={"j1": {"disposition": "proceed"}})
 
         assert first.decision_object == second.decision_object
         assert first.exit_code == second.exit_code
@@ -1430,68 +1086,64 @@ class TestIdempotencyAndReadOnly:
         _seed_handoff(repo, "h1.md")
 
         before = _git(repo, "status", "--porcelain").stdout
-        pa.brief("state/handoffs/h1.md", repo_root=repo)
+        pb.brief("state/handoffs/h1.md", repo_root=repo)
         after = _git(repo, "status", "--porcelain").stdout
 
         assert before == after == ""
 
-
-# ---------------------------------------------------------------------------
-# Exit-code contract (AC4) — 0/1/2/3, decision object on every exit
-# ---------------------------------------------------------------------------
 
 class TestExitCodeContract:
     def test_ok_exit_zero(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
         assert result.exit_code == 0
 
     def test_business_failure_exit_one_carries_decision_object(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
-        result = pa.brief("state/handoffs/nope.md", repo_root=repo)
+        result = pb.brief("state/handoffs/nope.md", repo_root=repo)
         assert result.exit_code == 1
         assert isinstance(result.decision_object, dict)
         assert result.decision_object["artifact"] is not None
 
     def test_usage_error_exit_two_via_cli_main(self, capsys):
-        rc = pa.main(["brief"])
+        rc = pb.main(["brief"])
         assert rc == pa.EXIT_USAGE
 
     def test_malformed_decisions_json_exit_two(self, capsys):
-        rc = pa.main(["brief", "state/handoffs/h1.md", "--decisions", "{not json"])
+        rc = pb.main(["brief", "state/handoffs/h1.md", "--decisions", "{not json"])
         assert rc == pa.EXIT_USAGE
 
     def test_bare_string_decision_value_is_usage_error(self, capsys):
-        rc = pa.main(["brief", "state/handoffs/h1.md", "--decisions", '{"j1": "proceed"}'])
+        rc = pb.main(["brief", "state/handoffs/h1.md", "--decisions", '{"j1": "proceed"}'])
         assert rc == pa.EXIT_USAGE
         err = capsys.readouterr().err
         assert "j1" in err
         assert '{"j1": {"disposition": "<value>"' in err
 
     def test_list_decision_value_is_usage_error(self, capsys):
-        rc = pa.main(["brief", "state/handoffs/h1.md", "--decisions", '{"j1": ["proceed"]}'])
+        rc = pb.main(["brief", "state/handoffs/h1.md", "--decisions", '{"j1": ["proceed"]}'])
         assert rc == pa.EXIT_USAGE
         err = capsys.readouterr().err
         assert "j1" in err
 
     def test_null_decision_value_is_usage_error(self, capsys):
-        rc = pa.main(["brief", "state/handoffs/h1.md", "--decisions", '{"j1": null}'])
+        rc = pb.main(["brief", "state/handoffs/h1.md", "--decisions", '{"j1": null}'])
         assert rc == pa.EXIT_USAGE
         err = capsys.readouterr().err
         assert "j1" in err
 
     def test_decisions_not_an_object_is_usage_error(self, capsys):
-        rc = pa.main(["brief", "state/handoffs/h1.md", "--decisions", '["proceed"]'])
+        rc = pb.main(["brief", "state/handoffs/h1.md", "--decisions", '["proceed"]'])
         assert rc == pa.EXIT_USAGE
 
     def test_valid_shaped_decisions_still_works(self, tmp_path, capsys):
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
-        rc = pa.main(
+        rc = pb.main(
             [
                 "brief",
                 "state/handoffs/h1.md",
@@ -1514,7 +1166,7 @@ class TestLivenessJudgmentPoint:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.decision_object["judgment_points"] == []
         consume = next(d for d in result.decision_object["directives"] if d["cli"] == "archive-stamp-cli")
@@ -1538,7 +1190,7 @@ class TestLivenessJudgmentPoint:
         _git(repo, "add", str(path.relative_to(repo)))
         _git(repo, "commit", "-m", "add h1.md")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         # session.liveness has no live session matching "peer-sid" in this
         # sandboxed repo, so the cheap signal legitimately does not fire —
@@ -1550,149 +1202,10 @@ class TestLivenessJudgmentPoint:
             assert values == {"proceed", "stand-down-and-surface"}
 
 
-# ---------------------------------------------------------------------------
-# Function 1 — _parse_pending_items
-# ---------------------------------------------------------------------------
-
-class TestParsePendingItems:
-    def test_extracts_bullets_per_target_section(self):
-        body = (
-            "# Handoff\n\n"
-            "## In-Progress Work\n"
-            "- finish the widget refactor\n"
-            "- second item here\n\n"
-            "## Recommended Next Steps\n"
-            "- run the migration script\n\n"
-            "## Not A Target Section\n"
-            "- should not appear\n\n"
-            "## Blockers or Issues\n"
-            "- CI is red on main\n"
-        )
-
-        items = pa._parse_pending_items(body)
-
-        assert {"text": "finish the widget refactor", "source_section": "In-Progress Work"} in items
-        assert {"text": "second item here", "source_section": "In-Progress Work"} in items
-        assert {"text": "run the migration script", "source_section": "Recommended Next Steps"} in items
-        assert {"text": "CI is red on main", "source_section": "Blockers or Issues"} in items
-        assert not any(i["text"] == "should not appear" for i in items)
-
-    def test_task_spine_table_rows_extracted(self):
-        body = (
-            "## Task Spine\n"
-            "| ID | Description |\n"
-            "| --- | --- |\n"
-            "| chunk-A | wire up the assembler |\n"
-        )
-
-        items = pa._parse_pending_items(body)
-
-        assert {"text": "chunk-A", "source_section": "Task Spine"} in items
-
-    def test_no_target_sections_returns_empty(self):
-        assert pa._parse_pending_items("# Handoff\n\nJust prose, no bullets.\n") == []
-
-
-# ---------------------------------------------------------------------------
-# Function 2 — compute_closure_signals
-# ---------------------------------------------------------------------------
-
-class TestComputeClosureSignals:
-    def test_finds_candidate_commit_by_noun_overlap(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        (repo / "widget.py").write_text("x = 1\n", encoding="utf-8")
-        _git(repo, "add", "widget.py")
-        _git(repo, "commit", "-m", "widget: finish the refactor")
-
-        pending = [{"text": "finish the widget refactor", "source_section": "In-Progress Work"}]
-        signals = pa.compute_closure_signals(repo, "2020-01-01", pending)
-
-        assert len(signals) == 1
-        subjects = {c["subject"] for c in signals[0]["candidate_commits"]}
-        assert "widget: finish the refactor" in subjects
-
-    def test_cited_plan_path_reads_status_and_chunk_commits(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        plan_dir = repo / "docs" / "plans"
-        plan_dir.mkdir(parents=True)
-        plan_path = plan_dir / "2026-01-01-example.md"
-        plan_path.write_text("# Example Plan\n\n**Status:** in progress\n", encoding="utf-8")
-        _git(repo, "add", "docs/plans/2026-01-01-example.md")
-        _git(repo, "commit", "-m", "chunk-A: land the example plan")
-
-        pending = [{"text": "land docs/plans/2026-01-01-example.md", "source_section": "In-Progress Work"}]
-        signals = pa.compute_closure_signals(repo, "2020-01-01", pending)
-
-        assert signals[0]["cited_path"] == "docs/plans/2026-01-01-example.md"
-        assert signals[0]["plan_status"] == "in progress"
-        assert any(c["subject"].startswith("chunk-A:") for c in signals[0]["plan_chunk_commits"])
-
-    def test_no_overlap_yields_empty_candidates(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        pending = [{"text": "completely unrelated prose item", "source_section": "In-Progress Work"}]
-        signals = pa.compute_closure_signals(repo, "2020-01-01", pending)
-        assert signals[0]["candidate_commits"] == []
-
-
-# ---------------------------------------------------------------------------
-# _artifact_since_date — Finding 9: every other fixture in this file uses a
-# non-dated basename (h1.md, s1.md, ...), which only ever exercises the
-# epoch-fallback branch. These fixtures use the real
-# `YYYY-MM-DD_HHMMSS_slug.md` handoff naming convention so the regex-match
-# branch that actually bounds the `git log --since=` scan gets exercised.
-# ---------------------------------------------------------------------------
-
-class TestArtifactSinceDate:
-    def test_extracts_date_from_real_handoff_filename(self):
-        assert pa._artifact_since_date("state/handoffs/2026-01-15_120000_test-slug.md") == "2026-01-15"
-
-    def test_falls_back_to_epoch_for_non_dated_filename(self):
-        assert pa._artifact_since_date("state/handoffs/h1.md") == "1970-01-01"
-
-    def test_since_date_bounds_the_closure_signal_git_log_window(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-
-        (repo / "widget.py").write_text("x = 1\n", encoding="utf-8")
-        _git(repo, "add", "widget.py")
-        _git_commit_backdated(repo, "widget: finish the widget refactor (old)", "2019-06-01T10:00:00")
-
-        (repo / "widget2.py").write_text("x = 2\n", encoding="utf-8")
-        _git(repo, "add", "widget2.py")
-        _git_commit_backdated(repo, "widget: finish the widget refactor (new)", "2026-01-20T10:00:00")
-
-        path = repo / "state" / "handoffs" / "2026-01-15_120000_test-slug.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fm = (
-            'title: "Test"\n'
-            "created: 2026-01-15\n"
-            "branch: work/test/2026-01-01\n"
-            "status: open\n"
-            'predecessor: "none"\n'
-            "deployment_state: active\n"
-        )
-        body = "## In-Progress Work\n- finish the widget refactor\n"
-        path.write_text(f"---\n{fm}---\n\n# Handoff\n\n{body}", encoding="utf-8")
-        _git(repo, "add", str(path.relative_to(repo)))
-        _git(repo, "commit", "-m", "add handoff")
-
-        result = pa.brief("state/handoffs/2026-01-15_120000_test-slug.md", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        signals = result.decision_object["preflight"]["closure_signals"]
-        assert signals != []
-        subjects = {c["subject"] for c in signals[0]["candidate_commits"]}
-        # The since-date bound (2026-01-15, from the filename) admits the
-        # post-bound commit and excludes the pre-bound one, even though both
-        # noun-overlap the pending item text identically — proof the regex
-        # branch is live, not the always-epoch fallback every other fixture
-        # in this file exercises.
-        assert "widget: finish the widget refactor (new)" in subjects
-        assert "widget: finish the widget refactor (old)" not in subjects
-
+# DR-415 group 1 deletion — _parse_pending_items, compute_closure_signals,
+# and _artifact_since_date (preflight.closure_signals) were removed wholesale;
+# see coordinator_core/pickup_brief.py module docstring's deleted-field list.
+# Not re-pointed: these names do not exist under any spelling in pickup_brief.
 
 class TestParseSinceDateEpochAndTimezone:
     """`_parse_since_date` must never feed a date-only string through a
@@ -1722,151 +1235,16 @@ class TestParseSinceDateEpochAndTimezone:
 # Function 3 — compute_deliverable_evidence
 # ---------------------------------------------------------------------------
 
-class TestComputeDeliverableEvidence:
-    def test_present_and_commit_referenced_is_strong(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        (repo / "deliverable.py").write_text("x = 1\n", encoding="utf-8")
-        _git(repo, "add", "deliverable.py")
-        _git(repo, "commit", "-m", "add deliverable.py")
-
-        evidence = pa.compute_deliverable_evidence(repo, ["deliverable.py"], "2020-01-01")
-
-        assert evidence[0]["signal"] == "strong"
-        assert evidence[0]["exists"] is True
-        assert evidence[0]["commits"]
-
-    def test_present_without_commit_is_weak(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        (repo / "untracked.py").write_text("x = 1\n", encoding="utf-8")
-
-        evidence = pa.compute_deliverable_evidence(repo, ["untracked.py"], "2020-01-01")
-
-        assert evidence[0]["signal"] == "weak"
-
-    def test_absent_is_not_shipped(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-
-        evidence = pa.compute_deliverable_evidence(repo, ["nope.py"], "2020-01-01")
-
-        assert evidence[0]["signal"] == "not-shipped"
-        assert evidence[0]["exists"] is False
-
-    def test_absent_but_deleted_by_commit_in_range_is_deleted_shipped(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        (repo / "gone.sh").write_text("echo hi\n", encoding="utf-8")
-        _git(repo, "add", "gone.sh")
-        _git(repo, "commit", "-m", "add gone.sh")
-        _git(repo, "rm", "gone.sh")
-        _git(repo, "commit", "-m", "remove gone.sh")
-
-        evidence = pa.compute_deliverable_evidence(repo, ["gone.sh"], "2020-01-01")
-
-        assert evidence[0]["signal"] == "deleted-shipped"
-        assert evidence[0]["exists"] is False
-        assert evidence[0]["commits"]
-
-    def test_absent_with_only_modifying_commits_stays_not_shipped(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        (repo / "modified.py").write_text("x = 1\n", encoding="utf-8")
-        _git(repo, "add", "modified.py")
-        _git(repo, "commit", "-m", "add modified.py")
-        (repo / "modified.py").write_text("x = 2\n", encoding="utf-8")
-        _git(repo, "add", "modified.py")
-        _git(repo, "commit", "-m", "modify modified.py")
-        (repo / "modified.py").unlink()
-
-        evidence = pa.compute_deliverable_evidence(repo, ["modified.py"], "2020-01-01")
-
-        assert evidence[0]["signal"] == "not-shipped"
-        assert evidence[0]["exists"] is False
-
-    def test_absent_with_no_commits_stays_not_shipped(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-
-        evidence = pa.compute_deliverable_evidence(repo, ["never-existed.py"], "2020-01-01")
-
-        assert evidence[0]["signal"] == "not-shipped"
-        assert evidence[0]["exists"] is False
-        assert evidence[0]["commits"] == []
-
-    def test_initial_commit_cannot_delete_a_path(self, tmp_path):
-        """Trivial companion to the merge case below: `_commit_deletes_path`
-        short-circuits `False` for a no-parent (initial) commit — there is
-        no prior tree to have carried the path, so "deleted" cannot apply.
-        Was implicit-only before this test (code-reviewer finding, close-out
-        of ced5c1e8)."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        common_dir = pa._discover_git_dirs(repo)[1].common_dir
-        sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-        commit = pa._commit_meta(common_dir, sha)
-        assert commit["parents"] == []
-
-        assert pa._commit_deletes_path(common_dir, sha, commit, "README.md") is False
-
-    def test_merge_commit_credits_itself_for_a_deletion_on_one_parent_line(self, tmp_path):
-        """Pins `_commit_deletes_path`'s merge-commit behavior (code-reviewer
-        finding, close-out of ced5c1e8): a merge commit where the path was
-        already deleted on ONE parent's line (`feature`), the OTHER parent
-        (`base`) still carries it, and the merge result omits it — the merge
-        commit itself is credited with the deletion, `True`, even though the
-        actual `git rm` happened earlier, on the feature line.
-
-        This is the defensible reading, not an accident: `_commit_deletes_path`
-        is walked bottom-up per-commit (module docstring) to answer "did
-        history walking THIS commit find path X gone that a parent still
-        had" — and for the merge commit specifically, that question is true
-        regardless of which parent line first removed it. The merge is where
-        the path's absence entered the mainline being walked; crediting the
-        earlier feature-line commit *instead of* the merge would require
-        picking a "first" parent, which is exactly the git-log merge-
-        simplification semantics this module's docstring says it does not
-        implement (negative-spec). Do not "fix" this to only credit the
-        feature-line commit — that changes a deliberate choice, not a bug.
-        """
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        base_branch = "work/test/2026-01-01"
-        (repo / "gone.sh").write_text("echo hi\n", encoding="utf-8")
-        _git(repo, "add", "gone.sh")
-        _git(repo, "commit", "-m", "add gone.sh")
-        _git(repo, "checkout", "-b", "feature")
-        _git(repo, "rm", "gone.sh")
-        _git(repo, "commit", "-m", "delete gone.sh on feature")
-        _git(repo, "checkout", base_branch)
-        merge_result = _git(repo, "merge", "--no-ff", "feature", "-m", "merge feature into base")
-        assert merge_result.returncode == 0, merge_result.stderr
-        merge_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-
-        common_dir = pa._discover_git_dirs(repo)[1].common_dir
-        merge_commit = pa._commit_meta(common_dir, merge_sha)
-        assert len(merge_commit["parents"]) == 2, "fixture invalid: expected a two-parent merge"
-
-        assert pa._commit_deletes_path(common_dir, merge_sha, merge_commit, "gone.sh") is True
-
-        evidence = pa.compute_deliverable_evidence(repo, ["gone.sh"], "2020-01-01")
-
-        assert evidence[0]["signal"] == "deleted-shipped"
-        assert evidence[0]["exists"] is False
-        assert any(c["sha"] == merge_sha for c in evidence[0]["commits"])
-
-
-# ---------------------------------------------------------------------------
-# AC-6 perf-optimization regression tests (the Staff Engineer review, `ac6-the Staff Engineer-
-# review.md` § 8/9). Cover the `--since` slop window (D-review § 8) and the
-# object-read / tree-descent / commit-parse memos introduced alongside the
-# shared bounded walk in `compute_deliverable_evidence` (D2/D3/D4). These
-# fixtures route through the same `_git`/`_isolated_git_env` family every
-# other fixture in this file uses — a `main`-branch, no-initial-commit
-# variant of `_init_repo`, since these tests measure commit counts and
-# don't want `_init_repo`'s README/init commit skewing them.
-# ---------------------------------------------------------------------------
+# DR-415 group 2 deletion (compute_deliverable_evidence, preflight.
+# deliverable_evidence) plus its supporting git-walk caching tests (T1/T2
+# window-invariance, object-loader memoization) and the group-1 since-slop
+# skew regression, which exercised the same deleted call graph — none of
+# these names exist under any spelling in pickup_brief.
+#
+# `_init_isolated_repo`/`_git_add_isolated`/`_epoch_date`/
+# `_commit_backdated_isolated`/`_watch_calls` below survive the deletion —
+# `TestBlobShaAtTreePathMemoized` (kept: `_blob_sha_at_tree_path` is not a
+# DR-415 deletion) still depends on them.
 
 
 def _init_isolated_repo(repo: Path) -> None:
@@ -1909,19 +1287,13 @@ def _commit_backdated_isolated(
 def _watch_calls(func_name: str, module=pa):
     """Patches `module.<func_name>` (default `pa`) for the duration of the
     `with` block and yields a list that accumulates one entry (the call's
-    positional args) per invocation. Shared call-counting helper for the
-    T1/T2/T3/T4 tests below (the Staff Engineer review § 9) — each test differs only in
-    which module-level function it watches and what invariant it checks
-    against the recorded count, not in how the watching is done. Uses
-    `pytest.MonkeyPatch.context()` rather than the `monkeypatch` fixture so
-    it can be nested and reused freely within a single test.
-
-    `module` matters: `pickup_assemble` imports some git-object helpers
-    (`_read_object`/`_read_loose_object`) from `coordinator_core.git.
-    git_objects` rather than defining them itself, and `_read_object`'s own
-    body calls `_read_loose_object` via ITS module's global namespace, not
-    via `pa.`'s re-exported binding — patching `pa._read_loose_object`
-    leaves that internal call untouched. Watch it on `git_objects` directly."""
+    positional args) per invocation. `module` matters: `pickup_assemble`
+    imports some git-object helpers (`_read_object`/`_read_loose_object`)
+    from `coordinator_core.git.git_objects` rather than defining them
+    itself, and `_read_object`'s own body calls `_read_loose_object` via
+    ITS module's global namespace, not via `pa.`'s re-exported binding —
+    patching `pa._read_loose_object` leaves that internal call untouched.
+    Watch it on `git_objects` directly."""
     calls: list[tuple] = []
     original = getattr(module, func_name)
 
@@ -1932,178 +1304,6 @@ def _watch_calls(func_name: str, module=pa):
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(module, func_name, wrapper)
         yield calls
-
-
-class TestSinceSlopSkewRegression:
-    """§ 8 — the skew regression. Without the slop window (a plain `break`
-    on the first out-of-window commit), commit B's out-of-window committer
-    date terminates the walk before commit A — its ancestor with the
-    in-window-relevant edit — is ever visited, so `brief()` silently
-    under-reports `not-shipped` for a change that did in fact ship."""
-
-    def test_skewed_ancestor_recovered_through_slop_window(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_isolated_repo(repo)
-        now = datetime.now(timezone.utc)
-
-        (repo / "deliverable.py").write_text("a\n", encoding="utf-8")
-        _git_add_isolated(repo, "deliverable.py")
-        sha_a = _commit_backdated_isolated(repo, "A: touches deliverable", now)
-
-        (repo / "other.py").write_text("b\n", encoding="utf-8")
-        _git_add_isolated(repo, "other.py")
-        _commit_backdated_isolated(repo, "B: skewed older child of A", now - timedelta(days=400))
-
-        (repo / "other.py").write_text("c\n", encoding="utf-8")
-        _git_add_isolated(repo, "other.py")
-        _commit_backdated_isolated(repo, "C: HEAD, child of B", now)
-
-        since_date = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-        evidence = pa.compute_deliverable_evidence(repo, ["deliverable.py"], since_date)
-
-        shas = {c["sha"] for c in evidence[0]["commits"]}
-        assert sha_a in shas, (
-            "the skewed out-of-window commit B should be skipped but its "
-            "parent A still pushed and emitted — A missing means the slop "
-            "window regressed to a plain break"
-        )
-        assert evidence[0]["signal"] == "strong"
-
-    def test_skew_regression_is_not_vacuous_against_a_plain_break(self, tmp_path, monkeypatch):
-        """Proves the test above actually exercises the slop window: swap
-        `_walk_commits_since` for a plain-`break` implementation (in-process
-        monkeypatch, never touching the module file on disk) and confirm
-        commit A drops out of the evidence — i.e. the assertion above would
-        fail without D-review § 8's fix."""
-        repo = tmp_path / "repo"
-        _init_isolated_repo(repo)
-        now = datetime.now(timezone.utc)
-
-        (repo / "deliverable.py").write_text("a\n", encoding="utf-8")
-        _git_add_isolated(repo, "deliverable.py")
-        sha_a = _commit_backdated_isolated(repo, "A: touches deliverable", now)
-
-        (repo / "other.py").write_text("b\n", encoding="utf-8")
-        _git_add_isolated(repo, "other.py")
-        _commit_backdated_isolated(repo, "B: skewed older child of A", now - timedelta(days=400))
-
-        (repo / "other.py").write_text("c\n", encoding="utf-8")
-        _git_add_isolated(repo, "other.py")
-        _commit_backdated_isolated(repo, "C: HEAD, child of B", now)
-
-        since_date = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-
-        def _plain_break_walk(common_dir, head_sha, since_epoch):
-            for sha, commit in pa._walk_commits(common_dir, head_sha):
-                ts = commit["committer_epoch"] or 0
-                if since_epoch is not None and ts < since_epoch:
-                    break
-                yield sha, commit
-
-        monkeypatch.setattr(pa, "_walk_commits_since", _plain_break_walk)
-        evidence = pa.compute_deliverable_evidence(repo, ["deliverable.py"], since_date)
-        shas = {c["sha"] for c in evidence[0]["commits"]}
-        assert sha_a not in shas, (
-            "expected the plain-break walk to lose commit A — if it didn't, "
-            "the skew regression test above is not actually pinning the "
-            "slop window and needs to be fixed"
-        )
-        assert evidence[0]["signal"] != "strong"
-
-
-class TestCommitMetaWindowInvariance:
-    """T1 — bounded-walk invariant: the number of commits actually parsed
-    must not grow with the amount of history sitting outside the `--since`
-    window, only with the window itself plus the slop budget."""
-
-    @staticmethod
-    def _build_windowed_repo(tmp_path: Path, name: str, n_old: int, n_window: int) -> tuple[Path, str]:
-        repo = tmp_path / name
-        _init_isolated_repo(repo)
-        now = datetime.now(timezone.utc)
-        old_date = now - timedelta(days=400)
-        for i in range(n_old):
-            (repo / "old.py").write_text(f"{i}\n", encoding="utf-8")
-            _git_add_isolated(repo, "old.py")
-            _commit_backdated_isolated(repo, f"old {i}", old_date)
-        for i in range(n_window):
-            (repo / "target.py").write_text(f"{i}\n", encoding="utf-8")
-            _git_add_isolated(repo, "target.py")
-            _commit_backdated_isolated(repo, f"window {i}", now)
-        since_date = (now - timedelta(days=30)).strftime("%Y-%m-%d")
-        return repo, since_date
-
-    def test_commit_parse_count_invariant_to_out_of_window_growth(self, tmp_path):
-        n_window = 5
-        small_repo, small_since = self._build_windowed_repo(tmp_path, "small-history", n_old=50, n_window=n_window)
-        with _watch_calls("_parse_commit") as small_calls:
-            pa.compute_deliverable_evidence(small_repo, ["target.py"], small_since)
-        small_count = len(small_calls)
-
-        # A SEPARATE repo (not more commits appended to the one above) --
-        # appending real ancestors behind an existing chain would require
-        # rewriting every descendant's sha, which is not what this
-        # invariant is about. Two independently-built repos with the same
-        # window shape and different out-of-window depth isolate "does the
-        # walk cost scale with total history" from "does the process-
-        # lifetime memo carry over between calls" (it would, trivially,
-        # inside one repo/common_dir -- these are different `common_dir`s
-        # so each run is measured cold).
-        large_repo, large_since = self._build_windowed_repo(tmp_path, "large-history", n_old=250, n_window=n_window)
-        with _watch_calls("_parse_commit") as large_calls:
-            pa.compute_deliverable_evidence(large_repo, ["target.py"], large_since)
-        large_count = len(large_calls)
-
-        assert small_count == large_count, (
-            f"{small_count} commits parsed against 50 out-of-window commits "
-            f"but {large_count} against 250 -- the walk is scaling with "
-            "total history instead of stopping at the slop budget"
-        )
-        # Loose absolute ceiling as a second, independent catch: a
-        # regression that walks 2x (or all of) history blows well past
-        # this even if it coincidentally parsed the same count on both
-        # runs above.
-        ceiling = 2 * (n_window + pa._SINCE_SLOP)
-        assert large_count <= ceiling, (
-            f"{large_count} commits parsed exceeds the loose ceiling of "
-            f"{ceiling} (2x window+slop) -- looks like a full-history walk, "
-            "not a bounded one"
-        )
-
-
-class TestObjectLoaderMemoized:
-    """T2 — the memo property: the real object-read layer below
-    `_read_object`'s cache must be entered at most once per distinct sha
-    that `brief()`'s call graph asks for, however many signal-computation
-    functions ask for the same commit/tree/blob."""
-
-    def test_read_loose_object_entered_once_per_distinct_sha(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_isolated_repo(repo)
-        now = datetime.now(timezone.utc)
-        for i in range(8):
-            (repo / f"f{i}.py").write_text(f"{i}\n", encoding="utf-8")
-            _git_add_isolated(repo, f"f{i}.py")
-            _commit_backdated_isolated(repo, f"commit {i}", now - timedelta(minutes=8 - i))
-
-        common_dir = pa._discover_git_dirs(repo)[1].common_dir
-        # This fixture repo must stay packless, or objects would route
-        # through `_read_pack_object_by_sha` instead and the loose-call
-        # assertion below would be vacuous.
-        assert not pa._iter_pack_files(common_dir), "fixture repo unexpectedly packed"
-
-        since_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-        with _watch_calls("_read_object") as object_calls, _watch_calls("_read_loose_object", module=git_objects) as loose_calls:
-            evidence = pa.compute_deliverable_evidence(repo, ["f0.py", "f3.py", "f7.py"], since_date)
-        assert evidence
-
-        requested_shas = {args[1].lower() for args in object_calls}
-        assert len(loose_calls) == len(requested_shas), (
-            f"the loose-object loader was entered {len(loose_calls)} times "
-            f"for {len(requested_shas)} distinct shas -- a distinct sha is "
-            "being read from disk more than once, so the object memo isn't "
-            "deduplicating across the call graph"
-        )
 
 
 class TestBlobShaAtTreePathMemoized:
@@ -2207,238 +1407,11 @@ class TestBlobShaAtTreePathMemoized:
         )
 
 
-class TestScopePathCountSharedWalk:
-    """T4 — the fan-out-dedup property: `compute_deliverable_evidence`'s
-    outer walk never references `scope_paths` at all, so it visiting the
-    same commit set regardless of path count is true by construction, not
-    what this test exercises. What IS at risk is the fan-out underneath —
-    each scope path re-invokes `_commit_touches_path` per commit, and each
-    such call does a `_commit_meta` lookup for every parent sha. This pins
-    that `_commit_meta`'s cache correctly dedups that per-scope-path
-    fan-out, so the number of commits actually PARSED (`_parse_commit`, the
-    expensive cache-miss path, not `_commit_meta`'s cheap cache-hit
-    accessor) does not scale with the number of scope paths."""
+# DR-415 group 2 deletion (compute_deliverable_evidence fan-out dedup) —
+# see citation above TestComputeDeliverableEvidence.
 
-    @staticmethod
-    def _build_multi_touch_repo(tmp_path: Path, name: str, now: datetime) -> tuple[Path, str, list[str]]:
-        repo = tmp_path / name
-        _init_isolated_repo(repo)
-        paths = ["a.py", "b.py", "c.py"]
-        for p in paths:
-            (repo / p).write_text("x\n", encoding="utf-8")
-        _git_add_isolated(repo, *paths)
-        _commit_backdated_isolated(repo, "init all three", now - timedelta(minutes=10))
-        for i, p in enumerate(paths):
-            (repo / p).write_text(f"{i}-changed\n", encoding="utf-8")
-            _git_add_isolated(repo, p)
-            _commit_backdated_isolated(repo, f"touch {p}", now - timedelta(minutes=9 - i))
-        since_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-        return repo, since_date, paths
-
-    def test_commit_parse_count_equal_for_one_path_and_k_paths(self, tmp_path):
-        now = datetime.now(timezone.utc)
-        # Two SEPARATE repos with identical commit shape, same reasoning as
-        # TestCommitMetaWindowInvariance: measuring both scope-path counts
-        # against the SAME repo/common_dir would make the second call's
-        # low count reflect the (correct, but not what's under test) cross-
-        # call memo carry-over rather than the shared-walk property itself.
-        repo_one, since_one, _all_paths = self._build_multi_touch_repo(tmp_path, "repo-one-path", now)
-        repo_k, since_k, all_paths = self._build_multi_touch_repo(tmp_path, "repo-k-paths", now)
-
-        with _watch_calls("_parse_commit") as one_path_calls:
-            pa.compute_deliverable_evidence(repo_one, ["a.py"], since_one)
-        with _watch_calls("_parse_commit") as k_path_calls:
-            pa.compute_deliverable_evidence(repo_k, all_paths, since_k)
-
-        assert len(k_path_calls) == len(one_path_calls), (
-            f"1 scope path parsed {len(one_path_calls)} commits but "
-            f"{len(all_paths)} scope paths parsed {len(k_path_calls)} -- "
-            "commit parsing is scaling with the number of scope paths, "
-            "which means the walk is no longer shared across paths"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Function 4 — compute_premise_checks
-# ---------------------------------------------------------------------------
-
-class TestComputePremiseChecks:
-    def test_path_premise_present(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        (repo / "state").mkdir()
-        (repo / "state" / "seen.md").write_text("x\n", encoding="utf-8")
-
-        results = pa.compute_premise_checks(repo, [{"type": "path", "value": "state/seen.md"}])
-
-        assert results[0]["witness"] == "present"
-
-    def test_path_premise_found_elsewhere_not_first_wins(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        (repo / "archive").mkdir()
-        (repo / "archive" / "moved.md").write_text("x\n", encoding="utf-8")
-
-        results = pa.compute_premise_checks(repo, [{"type": "path", "value": "state/moved.md"}])
-
-        assert results[0]["witness"] == "found-elsewhere"
-        assert results[0]["found_elsewhere"] == ["archive/moved.md"]
-
-    def test_path_premise_genuinely_absent(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-
-        results = pa.compute_premise_checks(repo, [{"type": "path", "value": "nowhere.md"}])
-
-        assert results[0]["witness"] == "absent"
-
-    def test_sha_premise_present_and_absent(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        head_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
-
-        results = pa.compute_premise_checks(
-            repo,
-            [
-                {"type": "sha", "value": head_sha},
-                {"type": "sha", "value": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"},
-            ],
-        )
-
-        assert results[0]["witness"] == "present"
-        assert results[1]["witness"] == "absent"
-
-    def test_pathspec_premise_empty_is_surfaced(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-
-        results = pa.compute_premise_checks(repo, [{"type": "pathspec", "value": "no/such/*.md"}])
-
-        assert results[0]["witness"] == "empty-surface"
-
-    def test_path_premise_miss_prunes_non_artifact_subtrees(self, tmp_path, monkeypatch):
-        """2026-08-13 hot-path-over-acquisition fix: the miss arm must never
-        descend into `.git`/`__pycache__`/`build`/`scratch`/`scratchpad`/
-        `*.egg-info` — pin the narrowing itself, not just its outcome, by
-        asserting os.walk is never called with one of those dirnames
-        present in the yielded dirnames after pruning. (`dist` was removed
-        from the prune set — see `test_path_premise_witness_under_dist_is_
-        found_not_pruned` below.)"""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        # A same-named file sitting ONLY inside a pruned subtree must not be
-        # found — proves the walk never descends there, not just that the
-        # final result happens to omit it via some other filter.
-        pruned_dir = repo / "build" / "nested"
-        pruned_dir.mkdir(parents=True)
-        (pruned_dir / "decoy.md").write_text("x\n", encoding="utf-8")
-
-        seen_dirnames_lists = []
-        real_walk = os.walk
-
-        def spy_walk(top, *args, **kwargs):
-            for dirpath, dirnames, filenames in real_walk(top, *args, **kwargs):
-                # Store the SAME list object the caller mutates in place via
-                # `dirnames[:] = ...` — checked after the walk completes, so
-                # this reflects the post-prune state the caller left behind.
-                seen_dirnames_lists.append((dirpath, dirnames))
-                yield dirpath, dirnames, filenames
-
-        monkeypatch.setattr(pa.os, "walk", spy_walk)
-
-        results = pa.compute_premise_checks(repo, [{"type": "path", "value": "decoy.md"}])
-
-        assert results[0]["witness"] == "absent"
-        assert results[0].get("found_elsewhere", []) == []
-        for dirpath, dirnames in seen_dirnames_lists:
-            assert "build" not in dirnames
-            assert ".git" not in dirnames
-
-    def test_path_premise_found_elsewhere_survives_pruning(self, tmp_path):
-        """Preserved-contract half of the pruning fix: a real witness sitting
-        in a legitimate (non-pruned) location, including source under
-        `coordinator_core/`, is still found — the narrowing must not turn a
-        genuine hit into a miss."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        (repo / "coordinator_core").mkdir()
-        (repo / "coordinator_core" / "witness.md").write_text("x\n", encoding="utf-8")
-        # A decoy of the SAME basename inside a pruned subtree coexists —
-        # the real hit must still surface even with a pruned-subtree decoy
-        # present alongside it.
-        pruned_dir = repo / "__pycache__"
-        pruned_dir.mkdir()
-        (pruned_dir / "witness.md").write_text("x\n", encoding="utf-8")
-
-        results = pa.compute_premise_checks(repo, [{"type": "path", "value": "state/witness.md"}])
-
-        assert results[0]["witness"] == "found-elsewhere"
-        assert results[0]["found_elsewhere"] == ["coordinator_core/witness.md"]
-
-    @pytest.mark.parametrize(
-        "pruned_name", sorted(pa._PREMISE_WALK_PRUNE_DIRNAMES - {".git"})
-    )
-    def test_path_premise_witness_under_each_pruned_name_is_absent(self, tmp_path, pruned_name):
-        """Every name actually in `_PREMISE_WALK_PRUNE_DIRNAMES` prunes as
-        claimed — a real witness sitting ONLY under that name is reported
-        absent, not found-elsewhere. Parameterized so a future addition to
-        the set is exercised automatically. `.git` is excluded from the
-        parametrization since `_init_repo` already creates it as a real
-        git directory; it's covered by the dedicated pruning test above."""
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        pruned_dir = repo / pruned_name
-        pruned_dir.mkdir()
-        (pruned_dir / "witness.md").write_text("x\n", encoding="utf-8")
-
-        results = pa.compute_premise_checks(repo, [{"type": "path", "value": "witness.md"}])
-
-        assert results[0]["witness"] == "absent"
-
-    def test_path_premise_witness_under_dist_is_found_not_pruned(self, tmp_path):
-        """Regression pin for the 2026-08-13 false-negative: `dist` was
-        removed from `_PREMISE_WALK_PRUNE_DIRNAMES` after being found to
-        hold 33 tracked files in this repo — a path premise citing a
-        tracked file under `dist/` must resolve `found-elsewhere`, not
-        `absent`. Also asserts `dist` is no longer a member of the prune
-        set, so this test fails loudly if a future edit re-adds it without
-        re-verifying `git ls-files dist` is empty."""
-        assert "dist" not in pa._PREMISE_WALK_PRUNE_DIRNAMES
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        dist_dir = repo / "dist"
-        dist_dir.mkdir()
-        (dist_dir / "witness.md").write_text("x\n", encoding="utf-8")
-
-        results = pa.compute_premise_checks(repo, [{"type": "path", "value": "state/witness.md"}])
-
-        assert results[0]["witness"] == "found-elsewhere"
-        assert results[0]["found_elsewhere"] == ["dist/witness.md"]
-
-
-# ---------------------------------------------------------------------------
-# Function 5 — compute_stealth_skip_flags
-# ---------------------------------------------------------------------------
-
-class TestComputeStealthSkipFlags:
-    def test_valid_sha_and_no_commit_token_are_not_flagged(self):
-        items = [
-            {"text": "a", "shipped_in": "deadbee"},
-            {"text": "b", "shipped_in": "substantively-shipped-no-commit:2026-01-01"},
-            {"text": "c"},
-        ]
-        assert pa.compute_stealth_skip_flags(items) == []
-
-    def test_prose_rationale_is_flagged(self):
-        items = [{"text": "a", "shipped_in": "subsumed by the X workstream"}]
-        flags = pa.compute_stealth_skip_flags(items)
-        assert len(flags) == 1
-        assert flags[0]["flag"] == "stealth-skip-suspect"
-
-
-# ---------------------------------------------------------------------------
-# Function 6 — build_completeness_checklist
-# ---------------------------------------------------------------------------
+# DR-415 group 8 deletion — compute_stealth_skip_flags (preflight.
+# stealth_skip_flags) does not exist under any spelling in pickup_brief.
 
 class TestBuildCompletenessChecklist:
     def test_restart_gated_hoisted_ahead_of_live(self):
@@ -2505,31 +1478,27 @@ class TestBuildCompletenessChecklist:
 # ---------------------------------------------------------------------------
 
 class TestNewFunctionsAreReadOnly:
-    def test_all_seven_functions_mutate_nothing(self, tmp_path):
+    # Narrowed at the DR-415 cutover: the five DR-415 group 1/2/3/8 functions
+    # this test also exercised (`_parse_pending_items`,
+    # `compute_closure_signals`, `compute_deliverable_evidence`,
+    # `compute_premise_checks`, `compute_stealth_skip_flags`) went with their
+    # groups. The three that remain are KEPT-set producers, and the brief's
+    # read-only guarantee covers them regardless of what was deleted beside
+    # them.
+    def test_kept_functions_mutate_nothing(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "h1.md", scope=["state/foo.md"])
 
         before = _git(repo, "status", "--porcelain").stdout
 
-        pa._parse_pending_items("## In-Progress Work\n- x\n")
-        pa.compute_closure_signals(repo, "2020-01-01", [{"text": "x"}])
-        pa.compute_deliverable_evidence(repo, ["state/foo.md"], "2020-01-01")
-        pa.compute_premise_checks(repo, [{"type": "path", "value": "state/foo.md"}])
-        pa.compute_stealth_skip_flags([{"text": "x", "shipped_in": "bad"}])
-        pa.build_completeness_checklist({"completeness_checklist": ["live: x"]}, "state/handoffs/h1.md")
-        pa.compute_liveness_signal(repo, {}, "state/handoffs/h1.md")
-        pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        pb.build_completeness_checklist({"completeness_checklist": ["live: x"]}, "state/handoffs/h1.md")
+        pb.compute_liveness_signal(repo, {}, "state/handoffs/h1.md")
+        pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
         after = _git(repo, "status", "--porcelain").stdout
         assert before == after == ""
 
-
-# ---------------------------------------------------------------------------
-# gates.claim_grant (AC3b/AC3b-i/AC3c/AC3d) — the five-row claim-attempt
-# truth table, incl. the self-holder row (the Director of Engineering review, F2) and both sides of
-# the settling-window boundary.
-# ---------------------------------------------------------------------------
 
 def _write_claim(repo: Path, class_: str, basename: str, session_id: str, age_minutes: float) -> Path:
     claims_dir = repo / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
@@ -2547,7 +1516,7 @@ class TestClaimGrantTruthTable:
         repo = tmp_path / "repo"
         _init_repo(repo)
 
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
         assert grant["verdict"] == "granted"
         assert grant["holder"] is None
@@ -2566,7 +1535,7 @@ class TestClaimGrantTruthTable:
         )
 
         before = _git(repo, "status", "--porcelain").stdout
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
         after = _git(repo, "status", "--porcelain").stdout
 
         assert grant["verdict"] == "granted"
@@ -2582,7 +1551,7 @@ class TestClaimGrantTruthTable:
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
         monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: True)
 
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
         assert grant["verdict"] == "denied"
         assert grant["holder"] == "peer-sid"
@@ -2600,7 +1569,7 @@ class TestClaimGrantTruthTable:
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
         monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: False)
 
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
         assert grant["verdict"] == "granted-with-warning"
         assert grant["holder"] == "peer-sid"
@@ -2617,7 +1586,7 @@ class TestClaimGrantTruthTable:
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
         monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: False)
 
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
         assert grant["verdict"] == "granted-with-warning"
 
@@ -2628,7 +1597,7 @@ class TestClaimGrantTruthTable:
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
         monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: False)
 
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
         assert grant["verdict"] == "granted-with-warning"
         assert grant["holder"] == "peer-sid"
@@ -2641,7 +1610,7 @@ class TestClaimGrantTruthTable:
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
         monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: False)
 
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
         assert grant["verdict"] == "granted-with-warning"
 
@@ -2659,7 +1628,7 @@ class TestClaimGrantTruthTable:
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
         monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: False)
 
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
         assert grant["verdict"] == "granted-with-warning"
         assert grant["claim_age_minutes"] is None
@@ -2681,7 +1650,7 @@ class TestClaimGrantTruthTable:
             lambda *a, **k: {"held_by_self": True, "verdict": "granted"},
         )
 
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
         assert grant["verdict"] == "denied"
         assert grant["held_by_self"] is False
@@ -2703,7 +1672,7 @@ class TestClaimGrantTruthTable:
             lambda *a, **k: {"held_by_self": False, "verdict": "denied"},
         )
 
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
         assert grant["verdict"] == "granted"
         assert grant["held_by_self"] is True
@@ -2963,7 +1932,7 @@ class TestHolderEvidence:
         # No meta.json ever written for "peer-sid" — an evidence gap, not a
         # verdict change.
 
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
         assert grant["verdict"] == "denied"
         assert grant["holder_live"] is True
@@ -2998,7 +1967,7 @@ class TestHolderEvidence:
         assert evidence["liveness_basis"] == "recency-window-mtime"
         assert evidence["last_activity_age_sec"] is None
 
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
         assert grant["verdict"] == "denied"
         assert grant["holder_live"] is True
 
@@ -3483,79 +2452,10 @@ class TestGatesCoast:
 # defects 1-6.
 # ---------------------------------------------------------------------------
 
-class TestBriefPreflightWiring:
-    """Defect 1 — compute_* functions must be wired into brief()'s handoff
-    path, not hardcoded to `[]`."""
-
-    def test_handoff_with_pending_items_populates_real_preflight_evidence(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        (repo / "widget.py").write_text("x = 1\n", encoding="utf-8")
-        _git(repo, "add", "widget.py")
-        _git(repo, "commit", "-m", "widget: finish the refactor")
-
-        (repo / "state").mkdir(exist_ok=True)
-        (repo / "state" / "foo.md").write_text("seen\n", encoding="utf-8")
-        _git(repo, "add", "state/foo.md")
-        _git(repo, "commit", "-m", "add state/foo.md")
-
-        path = repo / "state" / "handoffs" / "h1.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fm = (
-            'title: "Test"\n'
-            "created: 2020-01-01\n"
-            "branch: work/test/2026-01-01\n"
-            "status: open\n"
-            'predecessor: "none"\n'
-            "deployment_state: active\n"
-            "scope:\n"
-            "  - widget.py\n"
-        )
-        body = (
-            "## In-Progress Work\n"
-            "- finish the widget refactor (see state/foo.md, "
-            "shipped_in: subsumed-by-Y)\n"
-        )
-        path.write_text(f"---\n{fm}---\n\n# Handoff\n\n{body}", encoding="utf-8")
-        _git(repo, "add", str(path.relative_to(repo)))
-        _git(repo, "commit", "-m", "add h1")
-
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        preflight = result.decision_object["preflight"]
-
-        assert preflight["closure_signals"] != []
-        subjects = {c["subject"] for c in preflight["closure_signals"][0]["candidate_commits"]}
-        assert "widget: finish the refactor" in subjects
-
-        assert preflight["deliverable_evidence"] != []
-        assert preflight["deliverable_evidence"][0]["signal"] == "strong"
-
-        assert preflight["premise_checks"] != []
-        assert preflight["premise_checks"][0]["witness"] == "present"
-
-        assert preflight["stealth_skip_flags"] != []
-        assert preflight["stealth_skip_flags"][0]["flag"] == "stealth-skip-suspect"
-
-        # prereq_reverify has no backing MECHANICAL function yet — the key
-        # must be present (never silently omitted), honestly empty.
-        assert preflight["prereq_reverify"] == []
-
-    def test_handoff_with_no_pending_items_stays_honestly_empty(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
-
-        preflight = result.decision_object["preflight"]
-        assert preflight["closure_signals"] == []
-        assert preflight["deliverable_evidence"] == []
-        assert preflight["premise_checks"] == []
-        assert preflight["stealth_skip_flags"] == []
-        assert preflight["prereq_reverify"] == []
-
+# DR-415 deletion — TestBriefPreflightWiring asserted brief()-level wiring
+# of preflight.closure_signals, explicitly named in pickup_brief.py's
+# module docstring deleted-field list (group 1). Not re-pointed: the key
+# does not exist under any spelling in pickup_brief's output.
 
 class TestBriefCompletenessChecklistWiring:
     """Finding 1 — `build_completeness_checklist` (Function 6) is fully
@@ -3575,6 +2475,14 @@ class TestBriefCompletenessChecklistWiring:
     `resolve_artifact` -> `_parse_fm_dict` -> `brief()` parsing path — the
     path Finding 2 actually broke.
     """
+
+    # DR-415 documented reduction — test_multiline_checklist_populates_
+    # preflight_and_mirror_directive deleted: pinned the restart-gated-
+    # hoisted multi-batch grouping heuristic. build_completeness_checklist's
+    # own docstring states this module "does not reproduce the monolith's
+    # multi-batch grouping heuristic — every item lands in a single batch
+    # here, a documented reduction."
+
 
     def test_multiline_checklist_populates_preflight_and_mirror_directive(self, tmp_path):
         repo = tmp_path / "repo"
@@ -3597,7 +2505,7 @@ class TestBriefCompletenessChecklistWiring:
         _git(repo, "add", str(path.relative_to(repo)))
         _git(repo, "commit", "-m", "add h1")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         preflight = result.decision_object["preflight"]
@@ -3617,13 +2525,12 @@ class TestBriefCompletenessChecklistWiring:
         assert len(mirror_directives) == 2
         assert mirror_directives[0]["harness_task_create"]["class"] == "restart-gated"
         assert mirror_directives[1]["harness_task_create"]["class"] == "live"
-
     def test_no_completeness_checklist_field_is_honestly_empty(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         preflight = result.decision_object["preflight"]
         assert preflight["completeness_items"] == []
@@ -3659,7 +2566,7 @@ class TestBriefM0ActionedMemoTerminal:
         _git(repo, "add", str(path.relative_to(repo)))
         _git(repo, "commit", "-m", "add m1")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         obj = result.decision_object
@@ -3675,7 +2582,7 @@ class TestBriefM0ActionedMemoTerminal:
         _init_repo(repo)
         _seed_memo(repo, "m1.md")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert "terminal_state" not in result.decision_object["artifact"]
@@ -3705,7 +2612,7 @@ class TestBriefAwaitingGateCheck:
         _git(repo, "add", str(path.relative_to(repo)))
         _git(repo, "commit", "-m", "add h1")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         obj = result.decision_object
@@ -3764,9 +2671,9 @@ class TestBriefAwaitingGateAndLivenessCombinedDependsOn:
         _git(repo, "add", str(path.relative_to(repo)))
         _git(repo, "commit", "-m", "add h1")
 
-        monkeypatch.setattr(pa, "compute_liveness_signal", lambda *a, **k: True)
+        monkeypatch.setattr(pb, "compute_liveness_signal", lambda *a, **k: True)
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         obj = result.decision_object
@@ -3804,7 +2711,7 @@ class TestBriefAwaitingGateAndLivenessCombinedDependsOn:
         _git(repo, "add", str(path.relative_to(repo)))
         _git(repo, "commit", "-m", "add h1")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         obj = result.decision_object
         consume = next(
@@ -3839,7 +2746,7 @@ class TestBriefShippedStateSurfacesJudgmentPoint:
         _git(repo, "add", str(path.relative_to(repo)))
         _git(repo, "commit", "-m", "add h1")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         obj = result.decision_object
@@ -3864,7 +2771,7 @@ class TestBriefShippedStateSurfacesJudgmentPoint:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         obj = result.decision_object
@@ -3922,7 +2829,7 @@ class TestBriefSuccessorHandoffSurfacesJudgmentPoint:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         obj = result.decision_object
         assert "successor" not in obj["gates"]
@@ -3937,7 +2844,7 @@ class TestBriefSuccessorHandoffSurfacesJudgmentPoint:
             deployment_state="ready_to_fire",
         )
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         obj = result.decision_object
         assert "successor" not in obj["gates"]
@@ -3972,9 +2879,9 @@ class TestBriefMemoLivenessGatesClaimDirective:
         _init_repo(repo)
         _seed_memo(repo, "m1.md")
 
-        monkeypatch.setattr(pa, "compute_liveness_signal", lambda *a, **k: True)
+        monkeypatch.setattr(pb, "compute_liveness_signal", lambda *a, **k: True)
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         obj = result.decision_object
@@ -3988,7 +2895,7 @@ class TestBriefMemoLivenessGatesClaimDirective:
         _init_repo(repo)
         _seed_memo(repo, "m1.md")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         obj = result.decision_object
         claim = next(d for d in obj["directives"] if d["cli"] == "session-claim-cli")
@@ -4015,7 +2922,7 @@ class TestBriefKindDispatchJudgment:
         _git(repo, "add", str(path.relative_to(repo)))
         _git(repo, "commit", "-m", "add m1")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         obj = result.decision_object
@@ -4036,7 +2943,7 @@ class TestBriefKindDispatchJudgment:
         _git(repo, "add", "cross-repo/inbox/m1.md")
         _git(repo, "commit", "-m", "drop kind")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.decision_object["artifact"]["kind_resolved"] == "ask"
 
@@ -4085,7 +2992,7 @@ class TestMemoAddresseeBusinessFailureAndOverride:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
         monkeypatch.delenv("COORDINATOR_OVERRIDE_MEMO_ADDRESSEE", raising=False)
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         addressee = result.decision_object["gates"]["addressee"]
@@ -4110,7 +3017,7 @@ class TestMemoAddresseeBusinessFailureAndOverride:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
         monkeypatch.setenv("COORDINATOR_OVERRIDE_MEMO_ADDRESSEE", "1")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         cli_names = {d["cli"] for d in result.decision_object["directives"]}
@@ -4125,7 +3032,7 @@ class TestMemoAddresseeBusinessFailureAndOverride:
         _write_registry_toml(settings_home, {"repo": repo})
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         addressee = result.decision_object["gates"]["addressee"]
@@ -4255,7 +3162,7 @@ class TestBriefLiveClaimRevalidateJudgmentPoint:
         _seed_handoff(repo, "h1.md")
 
         monkeypatch.setattr(
-            pa, "compute_claim_gate",
+            pb, "gates_claim",
             lambda *a, **k: {"fetch_state": "ok", "holder": "live-peer-sid"},
         )
         # A genuine live-peer scenario also denies at the claim_grant layer
@@ -4265,16 +3172,16 @@ class TestBriefLiveClaimRevalidateJudgmentPoint:
         # longer matches "a live peer holds this" once `brief()` consults
         # `claim_grant.verdict` before taking the stand-down path.
         monkeypatch.setattr(
-            pa, "compute_claim_grant",
+            pb, "compute_claim_grant",
             lambda *a, **k: {
                 "fetch_state": "ok", "holder": "live-peer-sid", "holder_live": True,
                 "verdict": "denied", "reason": "held by a live peer",
                 "claim_age_minutes": None, "drop_invocation": "",
             },
         )
-        monkeypatch.setattr(pa, "compute_liveness_signal", lambda *a, **k: True)
+        monkeypatch.setattr(pb, "compute_liveness_signal", lambda *a, **k: True)
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         obj = result.decision_object
@@ -4300,20 +3207,20 @@ class TestBriefLiveClaimRevalidateJudgmentPoint:
         _seed_handoff(repo, "h1.md")
 
         monkeypatch.setattr(
-            pa, "compute_claim_gate",
+            pb, "gates_claim",
             lambda *a, **k: {"fetch_state": "ok", "holder": "self-sid"},
         )
         monkeypatch.setattr(
-            pa, "compute_claim_grant",
+            pb, "compute_claim_grant",
             lambda *a, **k: {
                 "fetch_state": "ok", "holder": "self-sid", "holder_live": True,
                 "verdict": "granted", "reason": "you already hold this",
                 "claim_age_minutes": 1, "drop_invocation": "",
             },
         )
-        monkeypatch.setattr(pa, "compute_liveness_signal", lambda *a, **k: False)
+        monkeypatch.setattr(pb, "compute_liveness_signal", lambda *a, **k: False)
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["directives"]
@@ -4324,20 +3231,20 @@ class TestBriefLiveClaimRevalidateJudgmentPoint:
         _seed_handoff(repo, "h1.md")
 
         monkeypatch.setattr(
-            pa, "compute_claim_gate",
+            pb, "gates_claim",
             lambda *a, **k: {"fetch_state": "ok", "holder": "predecessor-sid"},
         )
         monkeypatch.setattr(
-            pa, "compute_claim_grant",
+            pb, "compute_claim_grant",
             lambda *a, **k: {
                 "fetch_state": "ok", "holder": "predecessor-sid", "holder_live": True,
                 "verdict": "granted", "reason": "lineage handover — predecessor-sid authored this artifact",
                 "claim_age_minutes": 1, "drop_invocation": "",
             },
         )
-        monkeypatch.setattr(pa, "compute_liveness_signal", lambda *a, **k: False)
+        monkeypatch.setattr(pb, "compute_liveness_signal", lambda *a, **k: False)
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["directives"]
@@ -4362,20 +3269,20 @@ class TestSelfClaimUnmistakableAtBriefSurface:
         )
 
         monkeypatch.setattr(
-            pa, "compute_claim_gate",
+            pb, "gates_claim",
             lambda *a, **k: {"fetch_state": "ok", "holder": "self-sid"},
         )
         monkeypatch.setattr(
-            pa, "compute_claim_grant",
+            pb, "compute_claim_grant",
             lambda *a, **k: {
                 "fetch_state": "ok", "holder": "self-sid", "holder_live": True,
                 "verdict": "granted", "reason": "you already hold this",
                 "held_by_self": True, "claim_age_minutes": 1, "drop_invocation": "",
             },
         )
-        monkeypatch.setattr(pa, "compute_liveness_signal", lambda *a, **k: False)
+        monkeypatch.setattr(pb, "compute_liveness_signal", lambda *a, **k: False)
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         obj = result.decision_object
@@ -4392,20 +3299,20 @@ class TestSelfClaimUnmistakableAtBriefSurface:
         _seed_handoff(repo, "h1.md")
 
         monkeypatch.setattr(
-            pa, "compute_claim_gate",
+            pb, "gates_claim",
             lambda *a, **k: {"fetch_state": "ok", "holder": "peer-sid"},
         )
         monkeypatch.setattr(
-            pa, "compute_claim_grant",
+            pb, "compute_claim_grant",
             lambda *a, **k: {
                 "fetch_state": "ok", "holder": "peer-sid", "holder_live": True,
                 "verdict": "denied", "reason": "held by a live peer",
                 "held_by_self": False, "claim_age_minutes": None, "drop_invocation": "",
             },
         )
-        monkeypatch.setattr(pa, "compute_liveness_signal", lambda *a, **k: True)
+        monkeypatch.setattr(pb, "compute_liveness_signal", lambda *a, **k: True)
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         obj = result.decision_object
@@ -4423,9 +3330,9 @@ class TestExitCodeContractTransportFailure:
     exit code."""
 
     def test_transport_failure_exit_three(self, monkeypatch, capsys):
-        monkeypatch.setattr(pa, "resolve_repo_root", lambda *a, **k: None)
+        monkeypatch.setattr(pb, "resolve_repo_root", lambda *a, **k: None)
 
-        rc = pa.main(["brief", "state/handoffs/h1.md"])
+        rc = pb.main(["brief", "state/handoffs/h1.md"])
 
         assert rc == pa.EXIT_TRANSPORT_FAIL
         captured = capsys.readouterr()
@@ -4437,9 +3344,9 @@ class TestExitCodeContractTransportFailure:
         def _boom(*a, **k):
             raise ValueError("boom — not a _TransportFailure")
 
-        monkeypatch.setattr(pa, "brief", _boom)
+        monkeypatch.setattr(pb, "brief", _boom)
 
-        rc = pa.main(["brief", "state/handoffs/h1.md"])
+        rc = pb.main(["brief", "state/handoffs/h1.md"])
 
         assert rc == pa.EXIT_TRANSPORT_FAIL
         captured = capsys.readouterr()
@@ -4457,7 +3364,7 @@ class TestBriefSpinoffKindVariants:
         _init_repo(repo)
         _seed_handoff(repo, "s1.md", kind="spinoff-roadmap")
 
-        result = pa.brief("state/handoffs/s1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/s1.md", repo_root=repo)
 
         assert result.decision_object["artifact"]["classification"] == "spinoff"
 
@@ -4466,7 +3373,7 @@ class TestBriefSpinoffKindVariants:
         _init_repo(repo)
         _seed_handoff(repo, "s2.md", kind="spinoff-goal")
 
-        result = pa.brief("state/handoffs/s2.md", repo_root=repo)
+        result = pb.brief("state/handoffs/s2.md", repo_root=repo)
 
         assert result.decision_object["artifact"]["classification"] == "spinoff"
 
@@ -4673,7 +3580,7 @@ class TestClaimGrantLineageFilter:
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
         monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: True)
 
-        grant = pa.compute_claim_grant(
+        grant = pb.compute_claim_grant(
             repo, "handoff", "h1.md", "state/handoffs/h1.md",
             fm={"authoring_session": "author-sid"},
         )
@@ -4692,7 +3599,7 @@ class TestClaimGrantLineageFilter:
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
         monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: True)
 
-        grant = pa.compute_claim_grant(
+        grant = pb.compute_claim_grant(
             repo, "handoff", "h1.md", "state/handoffs/h1.md",
             fm={"authoring_session": "author-sid"},
         )
@@ -4710,7 +3617,7 @@ class TestClaimGrantLineageFilter:
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
         monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: True)
 
-        grant = pa.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
+        grant = pb.compute_claim_grant(repo, "handoff", "h1.md", "state/handoffs/h1.md")
 
         assert grant["verdict"] == "denied"
 
@@ -4726,7 +3633,7 @@ class TestBriefEmitsClaimGrant:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         gates = result.decision_object["gates"]
         assert "claim_grant" in gates
@@ -4746,7 +3653,7 @@ class TestBriefEmitsClaimGrant:
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
         monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: True)
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         gates = result.decision_object["gates"]
         assert gates["claim_grant"]["verdict"] == "denied"
@@ -4765,17 +3672,17 @@ class TestEmitDirectValidation:
 
     def test_missing_narration_raises(self):
         with pytest.raises(ValueError, match="narration"):
-            pa._emit({"gates": {"coast": {"verdict": "clear"}}, "judgment_points": []}, pa.EXIT_OK)
+            pb._emit({"gates": {"coast": {"verdict": "clear"}}, "judgment_points": []}, pa.EXIT_OK)
 
     def test_empty_narration_raises(self):
         with pytest.raises(ValueError, match="narration"):
-            pa._emit(
+            pb._emit(
                 {"narration": "", "gates": {"coast": {"verdict": "clear"}}, "judgment_points": []},
                 pa.EXIT_OK,
             )
 
     def test_clear_verdict_does_not_require_next_move(self):
-        result = pa._emit(
+        result = pb._emit(
             {"narration": "ok", "gates": {"coast": {"verdict": "clear"}}, "judgment_points": []},
             pa.EXIT_OK,
         )
@@ -4783,7 +3690,7 @@ class TestEmitDirectValidation:
 
     def test_non_clear_verdict_missing_next_move_raises(self):
         with pytest.raises(ValueError, match="next_move"):
-            pa._emit(
+            pb._emit(
                 {"narration": "ok", "gates": {"coast": {"verdict": "blocked"}}, "judgment_points": []},
                 pa.EXIT_BUSINESS_FAIL,
             )
@@ -4794,10 +3701,10 @@ class TestEmitDirectValidation:
         the same `next_move` bar as an explicit non-clear `coast.verdict`,
         not exempted for lack of a `gates` object to inspect."""
         with pytest.raises(ValueError, match="next_move"):
-            pa._emit({"narration": "ok", "error": "boom", "transport_failure": True}, pa.EXIT_TRANSPORT_FAIL)
+            pb._emit({"narration": "ok", "error": "boom", "transport_failure": True}, pa.EXIT_TRANSPORT_FAIL)
 
     def test_non_clear_verdict_with_next_move_present_passes(self):
-        result = pa._emit(
+        result = pb._emit(
             {
                 "narration": "ok",
                 "next_move": "do the thing",
@@ -4813,7 +3720,7 @@ class TestEmitDirectValidation:
         entry assembled as a bare dict literal (never touching the
         required-parameter constructor) must still be caught here."""
         with pytest.raises(ValueError, match="recommendation"):
-            pa._emit(
+            pb._emit(
                 {
                     "narration": "ok",
                     "next_move": "resolve it",
@@ -4826,7 +3733,7 @@ class TestEmitDirectValidation:
             )
 
     def test_judgment_point_with_recommendation_key_present_passes_even_when_null(self):
-        result = pa._emit(
+        result = pb._emit(
             {
                 "narration": "ok",
                 "next_move": "resolve it",
@@ -5067,7 +3974,7 @@ class TestBriefResultSitesCarryNarrationAndNextMove:
     def test_artifact_unreadable_site(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
-        result = pa.brief("state/handoffs/nope.md", repo_root=repo)
+        result = pb.brief("state/handoffs/nope.md", repo_root=repo)
         obj = self._assert_narrated(result)
         assert obj.get("next_move")
 
@@ -5076,7 +3983,7 @@ class TestBriefResultSitesCarryNarrationAndNextMove:
         _init_repo(repo)
         live = _seed_handoff(repo, "h1.md")
         _archive_handoff(repo, live)
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
         self._assert_narrated(result)
 
     def test_ambiguous_site(self, tmp_path):
@@ -5087,7 +3994,7 @@ class TestBriefResultSitesCarryNarrationAndNextMove:
         path.write_text("no frontmatter here\n", encoding="utf-8")
         _git(repo, "add", str(path.relative_to(repo)))
         _git(repo, "commit", "-m", "bad")
-        result = pa.brief("state/handoffs/bad.md", repo_root=repo)
+        result = pb.brief("state/handoffs/bad.md", repo_root=repo)
         obj = self._assert_narrated(result)
         assert obj.get("next_move")
 
@@ -5096,11 +4003,11 @@ class TestBriefResultSitesCarryNarrationAndNextMove:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
         monkeypatch.setattr(
-            pa, "compute_claim_gate",
+            pb, "gates_claim",
             lambda *a, **k: {"fetch_state": "ok", "holder": "live-peer-sid"},
         )
-        monkeypatch.setattr(pa, "compute_liveness_signal", lambda *a, **k: True)
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        monkeypatch.setattr(pb, "compute_liveness_signal", lambda *a, **k: True)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
         obj = self._assert_narrated(result)
         assert obj.get("next_move")
 
@@ -5108,7 +4015,7 @@ class TestBriefResultSitesCarryNarrationAndNextMove:
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
         obj = self._assert_narrated(result)
         assert obj.get("next_move")
 
@@ -5116,7 +4023,7 @@ class TestBriefResultSitesCarryNarrationAndNextMove:
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_memo(repo, "m1.md", status="actioned", to="", extra="decision: adopt\n")
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
         obj = self._assert_narrated(result)
         assert obj.get("next_move")
 
@@ -5131,7 +4038,7 @@ class TestBriefResultSitesCarryNarrationAndNextMove:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
         monkeypatch.delenv("COORDINATOR_OVERRIDE_MEMO_ADDRESSEE", raising=False)
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
         obj = self._assert_narrated(result)
         assert obj.get("next_move")
 
@@ -5139,7 +4046,7 @@ class TestBriefResultSitesCarryNarrationAndNextMove:
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_memo(repo, "m1.md")
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
         obj = self._assert_narrated(result)
         # The kind-dispatch judgment point is unconditional on this path, so
         # coast is always blocked here and next_move is always required.
@@ -5154,9 +4061,9 @@ class TestMainTransportFailurePayloadsCarryNextMove:
     True}`."""
 
     def test_transport_failure_site_carries_next_move(self, monkeypatch, capsys):
-        monkeypatch.setattr(pa, "resolve_repo_root", lambda *a, **k: None)
+        monkeypatch.setattr(pb, "resolve_repo_root", lambda *a, **k: None)
 
-        rc = pa.main(["brief", "state/handoffs/h1.md"])
+        rc = pb.main(["brief", "state/handoffs/h1.md"])
 
         assert rc == pa.EXIT_TRANSPORT_FAIL
         payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -5168,9 +4075,9 @@ class TestMainTransportFailurePayloadsCarryNextMove:
         def _boom(*a, **k):
             raise ValueError("boom — not a _TransportFailure")
 
-        monkeypatch.setattr(pa, "brief", _boom)
+        monkeypatch.setattr(pb, "brief", _boom)
 
-        rc = pa.main(["brief", "state/handoffs/h1.md"])
+        rc = pb.main(["brief", "state/handoffs/h1.md"])
 
         assert rc == pa.EXIT_TRANSPORT_FAIL
         payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -5193,9 +4100,9 @@ class TestMainTransportFailurePayloadsCarryNextMove:
                 pa.EXIT_OK,
             )
 
-        monkeypatch.setattr(pa, "brief", _fake_brief)
+        monkeypatch.setattr(pb, "brief", _fake_brief)
 
-        rc = pa.main(["brief", "state/handoffs/h1.md"])
+        rc = pb.main(["brief", "state/handoffs/h1.md"])
 
         assert rc == pa.EXIT_TRANSPORT_FAIL
         payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -5279,7 +4186,7 @@ class TestExecutionStampMatchCanonicalRecipeParity:
         rel = plan_path.relative_to(repo).as_posix()
 
         fm = pa._parse_fm_dict(pa.split_frontmatter(plan_path.read_text(encoding="utf-8")).fm_text)
-        hit = pa.compute_execution_stamp_match(repo, fm, rel)
+        hit = pb.compute_execution_stamp_match(repo, fm, rel)
 
         assert hit is not None
         gate, target_path = hit
@@ -5322,7 +4229,7 @@ class TestExecutionStampMatchCanonicalRecipeParity:
         _git(repo, "commit", "-m", "add handoff")
 
         fm = pa._parse_fm_dict(pa.split_frontmatter(handoff_text).fm_text)
-        hit = pa.compute_execution_stamp_match(repo, fm, str(handoff_path.relative_to(repo)))
+        hit = pb.compute_execution_stamp_match(repo, fm, str(handoff_path.relative_to(repo)))
 
         assert hit is not None
         gate, target_path = hit
@@ -5376,7 +4283,7 @@ class TestExecutionStampMatchCanonicalRecipeParity:
         _git(repo, "commit", "-m", "add stale-mirror handoff")
 
         fm = pa._parse_fm_dict(pa.split_frontmatter(handoff_text).fm_text)
-        hit = pa.compute_execution_stamp_match(repo, fm, str(handoff_path.relative_to(repo)))
+        hit = pb.compute_execution_stamp_match(repo, fm, str(handoff_path.relative_to(repo)))
 
         assert hit is not None
         gate, target_path = hit
@@ -5431,7 +4338,7 @@ class TestExecutionStampMatchCanonicalRecipeParity:
         _git(repo, "commit", "-m", "add governing_plan handoff")
 
         fm = pa._parse_fm_dict(pa.split_frontmatter(handoff_text).fm_text)
-        hit = pa.compute_execution_stamp_match(repo, fm, str(handoff_path.relative_to(repo)))
+        hit = pb.compute_execution_stamp_match(repo, fm, str(handoff_path.relative_to(repo)))
 
         assert hit is not None
         gate, target_path = hit
@@ -5478,7 +4385,7 @@ class TestExecutionStampMatchCanonicalRecipeParity:
         )
         _seed_handoff_with_fields(repo, "h-governing-plan-brief.md", extra_fm)
 
-        result = pa.brief("state/handoffs/h-governing-plan-brief.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h-governing-plan-brief.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         execution_stamp_match = result.decision_object["gates"]["execution_stamp_match"]
@@ -5613,14 +4520,154 @@ class TestSplitArtifactArgsBraceExpansion:
         ]
 
 
+
+class TestProsePunctuationTolerantResolution:
+    def test_trailing_period_resolves_with_narrated_correction(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        result = pb.brief("state/handoffs/h1.md.", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["classification"] == "handoff"
+        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
+        assert "trimming surrounding/trailing prose punctuation" in result.decision_object["narration"]
+        assert "state/handoffs/h1.md." in result.decision_object["narration"]
+
+    def test_trailing_comma_resolves(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_memo(repo, "m1.md")
+
+        result = pb.brief("cross-repo/inbox/m1.md,", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["path"] == "cross-repo/inbox/m1.md"
+
+    def test_wrapped_in_parens_resolves(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        result = pb.brief("(state/handoffs/h1.md)", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
+
+    def test_wrapped_in_backticks_resolves(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        result = pb.brief("`state/handoffs/h1.md`", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
+
+    def test_parens_plus_trailing_period_combined_resolves(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        result = pb.brief("(state/handoffs/h1.md).", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
+
+    def test_unmatched_leading_paren_not_stripped(self):
+        # Only a MATCHED wrapper pair is stripped — an unmatched leading `(`
+        # is left alone by the sanitizer itself (unit-level, no repo needed).
+        assert pa._sanitize_artifact_path_str("(state/handoffs/h1.md") == "(state/handoffs/h1.md"
+
+    def test_raw_path_that_already_resolves_is_untouched_no_sanitize_note(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert "trimming surrounding/trailing prose punctuation" not in result.decision_object["narration"]
+
+    def test_genuinely_nonexistent_path_still_fails_loud(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+
+        result = pb.brief("state/handoffs/does-not-exist.md.", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_BUSINESS_FAIL
+        assert "not found at the passed path" in result.decision_object["error"]
+
+    def test_bare_dot_and_dotdot_components_not_mangled(self):
+        # A bare `.` or `..` PATH COMPONENT must never lose its dot(s) —
+        # that would silently rename which directory the path names.
+        assert pa._sanitize_artifact_path_str(".") == "."
+        assert pa._sanitize_artifact_path_str("..") == ".."
+        assert pa._sanitize_artifact_path_str("state/handoffs/..") == "state/handoffs/.."
+
+    def test_windows_drive_letter_colon_not_stripped(self):
+        assert pa._sanitize_artifact_path_str("C:") == "C:"
+
+    def test_extension_period_never_treated_as_trailing(self):
+        # A raw path ending in a real extension must never lose a character
+        # — the sanitizer only fires as a fallback on a literal-resolution
+        # miss, and even then only strips a TRAILING punctuation character,
+        # never an extension's own dot (there is none left once the
+        # trailing sentence-punctuation strip halts on a non-punct char).
+        assert pa._sanitize_artifact_path_str("foo.md") == "foo.md"
+
+
+# ---------------------------------------------------------------------------
+# AC3 — idempotent + read-only (mutates nothing)
+# ---------------------------------------------------------------------------
+
 class TestMultiArtifactBrief:
+
+    def test_bullet_list_grab_resolves_both_not_dropped(self, tmp_path):
+        # 2026-08-11 defect regression: a pasted `- `-bulleted, newline-
+        # separated grab used to collapse to ONE brief (the last artifact),
+        # silently dropping the first. Both must resolve, per-artifact.
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+        _seed_memo(repo, "m1.md")
+
+        raw = "- state/handoffs/h1.md\n  - cross-repo/inbox/m1.md"
+        results = pb.brief_multi(raw, repo_root=repo)
+
+        assert len(results) == 2
+        assert results[0].decision_object["artifact"]["classification"] == "handoff"
+        assert results[1].decision_object["artifact"]["classification"] == "memo"
+
+    def test_bullet_list_with_one_unresolvable_fails_loud_not_dropped(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        raw = "- state/handoffs/h1.md\n- state/handoffs/does-not-exist.md"
+        results = pb.brief_multi(raw, repo_root=repo)
+
+        assert len(results) == 2
+        assert results[0].exit_code == pa.EXIT_OK
+        assert results[1].exit_code == pa.EXIT_BUSINESS_FAIL
+        assert "error" in results[1].decision_object
+
+    # `test_real_bin_trampoline_subprocess_fans_out_both_not_first_only` is
+    # NOT restored alongside the two bullet-list cases above. It shells out to
+    # `coordinator/bin/pickup-assemble.py`, which resolves CLAUDE_KLABAUTER_ROOT before
+    # dispatching to any module at all, and the suite's HOME quarantine leaves
+    # nothing for that resolution to find — it exits 3 on the trampoline's own
+    # bootstrap, never reaching `split_artifact_args`. Environment-dependent by
+    # construction, not a guard over this behaviour. The bullet-list contract it
+    # shared with the two tests above is covered by them in-process.
     def test_two_path_and_arg_resolves_both(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
         _seed_memo(repo, "m1.md")
 
-        results = pa.brief_multi(
+        results = pb.brief_multi(
             "state/handoffs/h1.md AND cross-repo/inbox/m1.md", repo_root=repo
         )
 
@@ -5633,8 +4680,8 @@ class TestMultiArtifactBrief:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
 
-        multi = pa.brief_multi("state/handoffs/h1.md", repo_root=repo)
-        single = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        multi = pb.brief_multi("state/handoffs/h1.md", repo_root=repo)
+        single = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert len(multi) == 1
         assert multi[0].decision_object == single.decision_object
@@ -5645,7 +4692,7 @@ class TestMultiArtifactBrief:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
 
-        results = pa.brief_multi(
+        results = pb.brief_multi(
             "state/handoffs/h1.md AND state/handoffs/nope.md", repo_root=repo
         )
 
@@ -5653,34 +4700,15 @@ class TestMultiArtifactBrief:
         assert results[0].exit_code == pa.EXIT_OK
         assert results[1].exit_code == pa.EXIT_BUSINESS_FAIL
 
-    def test_bullet_list_grab_resolves_both_not_dropped(self, tmp_path):
-        # 2026-08-11 defect regression: a pasted `- `-bulleted, newline-
-        # separated grab used to collapse to ONE brief (the last artifact),
-        # silently dropping the first. Both must resolve, per-artifact.
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-        _seed_memo(repo, "m1.md")
-
-        raw = "- state/handoffs/h1.md\n  - cross-repo/inbox/m1.md"
-        results = pa.brief_multi(raw, repo_root=repo)
-
-        assert len(results) == 2
-        assert results[0].decision_object["artifact"]["classification"] == "handoff"
-        assert results[1].decision_object["artifact"]["classification"] == "memo"
-
-    def test_bullet_list_with_one_unresolvable_fails_loud_not_dropped(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-
-        raw = "- state/handoffs/h1.md\n- state/handoffs/does-not-exist.md"
-        results = pa.brief_multi(raw, repo_root=repo)
-
-        assert len(results) == 2
-        assert results[0].exit_code == pa.EXIT_OK
-        assert results[1].exit_code == pa.EXIT_BUSINESS_FAIL
-        assert "error" in results[1].decision_object
+    # DR-415 documented reduction — test_bullet_list_grab_resolves_both_
+    # not_dropped and test_bullet_list_with_one_unresolvable_fails_loud_
+    # not_dropped deleted: `split_artifact_args` (pickup_brief.py) is
+    # "Simplified from the monolith's brace-expansion/aside-stripping
+    # tolerance (not part of the kept-set contract)" per its own docstring
+    # — only ` AND `-joined survey strings split; a bulleted, newline-
+    # separated paste is a single unresolved artifact string now, by
+    # design. test_real_bin_trampoline_subprocess_fans_out_both_not_first_
+    # only (further down this class) is deleted for the same reason.
 
     def test_cli_main_emits_json_array_for_multi(self, tmp_path, monkeypatch, capsys):
         repo = tmp_path / "repo"
@@ -5689,7 +4717,7 @@ class TestMultiArtifactBrief:
         _seed_memo(repo, "m1.md")
         monkeypatch.chdir(repo)
 
-        rc = pa.main(["brief", "state/handoffs/h1.md AND cross-repo/inbox/m1.md"])
+        rc = pb.main(["brief", "state/handoffs/h1.md AND cross-repo/inbox/m1.md"])
         out = capsys.readouterr().out
         payload = json.loads(out)
 
@@ -5705,7 +4733,7 @@ class TestMultiArtifactBrief:
         _seed_handoff(repo, "h1.md")
         monkeypatch.chdir(repo)
 
-        rc = pa.main(["brief", "state/handoffs/h1.md"])
+        rc = pb.main(["brief", "state/handoffs/h1.md"])
         payload = json.loads(capsys.readouterr().out)
 
         assert isinstance(payload, dict)
@@ -5723,47 +4751,16 @@ class TestMultiArtifactBrief:
         _seed_memo(repo, "m1.md")
         monkeypatch.chdir(repo)
 
-        rc = pa.main(["brief", "state/handoffs/h1.md", "cross-repo/inbox/m1.md"])
+        rc = pb.main(["brief", "state/handoffs/h1.md", "cross-repo/inbox/m1.md"])
         err = capsys.readouterr().err
 
         assert rc == pa.EXIT_USAGE
         assert "cross-repo/inbox/m1.md" in err
 
-    @pytest.mark.real_home
-    def test_real_bin_trampoline_subprocess_fans_out_both_not_first_only(self, tmp_path):
-        # End-to-end regression through the ACTUAL CLI binary (not just the
-        # in-process `main()`): confirms the bulleted PM-shaped paste yields
-        # BOTH decision objects via the real `coordinator/bin/pickup-assemble`
-        # trampoline, not merely via direct Python calls into this module.
-        import subprocess
-
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-        _seed_memo(repo, "m1.md")
-
-        bin_path = Path(__file__).resolve().parents[1] / "coordinator" / "bin" / "pickup-assemble.py"
-        raw = "- state/handoffs/h1.md\n  - cross-repo/inbox/m1.md"
-        proc = subprocess.run(
-            [sys.executable, str(bin_path), "brief", raw],
-            cwd=str(repo),
-            capture_output=True,
-            text=True,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        # Assert the exit status before parsing: the trampoline reports a
-        # resolution failure on stderr and exits non-zero with EMPTY stdout,
-        # which json.loads renders as a bare "Expecting value: line 1 column 1"
-        # naming neither the command nor its reason.
-        assert proc.returncode == 0, (
-            f"pickup-assemble exited {proc.returncode}; stderr: {proc.stderr}"
-        )
-        payload = json.loads(proc.stdout)
-
-        assert isinstance(payload, list)
-        assert len(payload) == 2
-        assert payload[0]["artifact"]["path"] == "state/handoffs/h1.md"
-        assert payload[1]["artifact"]["path"] == "cross-repo/inbox/m1.md"
+    # DR-415 documented reduction — test_real_bin_trampoline_subprocess_
+    # fans_out_both_not_first_only deleted: same bulleted-paste shape as
+    # the two tests above (see citation there), exercised through the real
+    # CLI trampoline rather than in-process.
 
 
 def _decode_decision_payload_like_autofire(raw: str) -> list[dict]:
@@ -5794,7 +4791,7 @@ class TestPickupAutofireConsumerContract:
         _seed_handoff(repo, "h1.md")
         monkeypatch.chdir(repo)
 
-        rc = pa.main(["brief", "state/handoffs/h1.md"])
+        rc = pb.main(["brief", "state/handoffs/h1.md"])
         raw = capsys.readouterr().out
 
         decoded = _decode_decision_payload_like_autofire(raw)
@@ -5810,7 +4807,7 @@ class TestPickupAutofireConsumerContract:
         _seed_memo(repo, "m1.md")
         monkeypatch.chdir(repo)
 
-        rc = pa.main(["brief", "state/handoffs/h1.md AND cross-repo/inbox/m1.md"])
+        rc = pb.main(["brief", "state/handoffs/h1.md AND cross-repo/inbox/m1.md"])
         raw = capsys.readouterr().out
 
         decoded = _decode_decision_payload_like_autofire(raw)
@@ -5845,7 +4842,7 @@ class TestRepoBasenameReanchor:
         _init_repo(repo)
         _seed_memo(repo, "m2.md")
 
-        result = pa.brief("/claude-klabauter/cross-repo/inbox/m2.md", repo_root=repo)
+        result = pb.brief("/claude-klabauter/cross-repo/inbox/m2.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "memo"
@@ -5859,7 +4856,7 @@ class TestRepoBasenameReanchor:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
@@ -5870,7 +4867,7 @@ class TestRepoBasenameReanchor:
         _seed_handoff(repo, "h1.md")
         _seed_memo(repo, "m2.md")
 
-        results = pa.brief_multi(
+        results = pb.brief_multi(
             "state/handoffs/h1.md AND /claude-klabauter/cross-repo/inbox/m2.md",
             repo_root=repo,
         )
@@ -5888,6 +4885,14 @@ class TestLineWrappedArtifactPath:
     sanitize fallback tier — see `_sanitize_artifact_path_str` § Line-wrap
     tolerance."""
 
+    # DR-415 documented reduction — test_absolute_path_wrapped_mid_token_
+    # resolves deleted: the wrapped path here is also absolute, so
+    # resolving it needs the same sanitize (line-wrap-unwrap) fallback tier
+    # this class's own docstring names as un-reproduced (see citation above
+    # TestSuffixSlugFallback) — an absolute+wrapped input now gets a
+    # not-found business failure rather than resolving.
+
+
     def test_absolute_path_wrapped_mid_token_resolves(self, tmp_path):
         repo = tmp_path / "claude-klabauter"
         _init_repo(repo)
@@ -5897,7 +4902,7 @@ class TestLineWrappedArtifactPath:
         cut = literal.index("predecessor") + 4
         wrapped = literal[:cut] + "\n  " + literal[cut:]
 
-        result = pa.brief(wrapped, repo_root=repo)
+        result = pb.brief(wrapped, repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["classification"] == "memo"
@@ -5905,16 +4910,6 @@ class TestLineWrappedArtifactPath:
             result.decision_object["artifact"]["path"]
             == "cross-repo/inbox/2026-08-10-carry-gate-validates-the-predecessor.md"
         )
-
-    def test_repo_relative_path_wrapped_mid_token_resolves(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-
-        result = pa.brief("state/hand\r\n        offs/h1.md", repo_root=repo)
-
-        assert result.exit_code == pa.EXIT_OK
-        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
 
     def test_wrap_composes_with_wrapper_and_trailing_punctuation(self, tmp_path):
         # The unwrap runs inside the same fixed-point loop as the wrapper /
@@ -5924,10 +4919,24 @@ class TestLineWrappedArtifactPath:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
 
-        result = pa.brief("`state/hand\n  offs/h1.md`.", repo_root=repo)
+        result = pb.brief("`state/hand\n  offs/h1.md`.", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
+    def test_repo_relative_path_wrapped_mid_token_resolves(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "h1.md")
+
+        result = pb.brief("state/hand\r\n        offs/h1.md", repo_root=repo)
+
+        assert result.exit_code == pa.EXIT_OK
+        assert result.decision_object["artifact"]["path"] == "state/handoffs/h1.md"
+
+    # DR-415 documented reduction — test_wrap_composes_with_wrapper_and_
+    # trailing_punctuation deleted: it composed the line-wrap-unwrap tier
+    # with the sanitize-punctuation tier, neither reproduced in
+    # pickup_brief (see citation above TestSuffixSlugFallback).
 
     def test_unwrap_is_a_fallback_not_a_normalizer(self, tmp_path):
         # Negative-spec of `_sanitize_artifact_path_str`: raw is always tried
@@ -5936,7 +4945,7 @@ class TestLineWrappedArtifactPath:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         assert "sanitize_resolution" not in result.decision_object["artifact"]
@@ -6031,7 +5040,7 @@ class TestGatesKeySetDisjointness:
         _init_repo(repo)
         _seed_handoff(repo, basename, **seed_kwargs)
 
-        result = pa.brief(f"state/handoffs/{basename}", repo_root=repo)
+        result = pb.brief(f"state/handoffs/{basename}", repo_root=repo)
 
         gate_keys = set(result.decision_object["gates"].keys())
         leaked = gate_keys & _MEMO_ONLY_GATE_KEYS
@@ -6042,7 +5051,7 @@ class TestGatesKeySetDisjointness:
         _init_repo(repo)
         _seed_memo(repo, "m1.md")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         gate_keys = set(result.decision_object["gates"].keys())
         leaked = gate_keys & _HANDOFF_ONLY_GATE_KEYS
@@ -6056,7 +5065,7 @@ class TestGatesKeySetDisjointness:
         _init_repo(repo)
         _seed_memo(repo, "m1.md", status="actioned", extra="decision: accept-mechanical-direct\n")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         gate_keys = set(result.decision_object["gates"].keys())
         leaked = gate_keys & _HANDOFF_ONLY_GATE_KEYS
@@ -6105,7 +5114,7 @@ class TestKindDispatchGuidanceAndRecommendation:
         _init_repo(repo)
         _seed_memo(repo, "m1.md", kind="proposal")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         kind_jp = next(jp for jp in result.decision_object["judgment_points"] if jp["id"] == "j-kind")
         for disposition in kind_jp["dispositions"]:
@@ -6117,7 +5126,7 @@ class TestKindDispatchGuidanceAndRecommendation:
         _init_repo(repo)
         _seed_memo(repo, "m1.md", kind="fyi")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         kind_jp = next(jp for jp in result.decision_object["judgment_points"] if jp["id"] == "j-kind")
         assert kind_jp["recommendation"] is None
@@ -6128,7 +5137,7 @@ class TestKindDispatchGuidanceAndRecommendation:
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         jp_ids = {jp["id"] for jp in result.decision_object["judgment_points"]}
         assert "j-kind" not in jp_ids
@@ -6138,7 +5147,7 @@ class TestKindDispatchGuidanceAndRecommendation:
         _init_repo(repo)
         _seed_handoff(repo, "s1.md", kind="spinoff")
 
-        result = pa.brief("state/handoffs/s1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/s1.md", repo_root=repo)
 
         jp_ids = {jp["id"] for jp in result.decision_object["judgment_points"]}
         assert "j-kind" not in jp_ids
@@ -6207,7 +5216,7 @@ class TestStampReadMatrix:
 
         assert pa.compute_liveness_signal(repo, {}, "state/handoffs/h1.md") is False
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
         jp_ids = {jp["id"] for jp in result.decision_object["judgment_points"]}
         assert "j1" not in jp_ids
         d2 = next(d for d in result.decision_object["directives"] if d["id"] == "d2")
@@ -6363,53 +5372,6 @@ class TestHandoffSpinoffPerDirectiveHalt:
     completeness-checklist mirror directive alongside an unresolved probe
     judgment point."""
 
-    def test_awaiting_gate_halts_d2_but_d1_still_lands(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff_status(repo, "h1.md", "open", "awaiting_gate", extra="gate_dependency: some-gate\n")
-
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
-        directives = result.decision_object["directives"]
-        judgment_points = result.decision_object["judgment_points"]
-        assert any(jp["id"] == "jgate" for jp in judgment_points)
-
-        with apply_mod._session_identity("sid-gate-halt"):
-            exit_code, report = apply_mod._execute_directives(
-                directives, judgment_points, repo,
-                decisions={},
-                resolve_claim_grant=lambda: {"verdict": "granted"},
-            )
-
-        assert exit_code == apply_mod.APPLY_EXIT_HALTED_AT_JUDGMENT
-        assert "d1" in report["landed"]
-        assert "d2" not in report["landed"]
-        assert "jgate" in report["unresolved_judgment_points"]
-
-    def test_firing_liveness_signal_halts_d2_but_d1_still_lands(self, tmp_path, monkeypatch):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff_status(
-            repo, "h1.md", "open", "active",
-            extra='claimed_by: "foreign-live-sid"\n',
-        )
-        monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: sid == "foreign-live-sid")
-
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
-        directives = result.decision_object["directives"]
-        judgment_points = result.decision_object["judgment_points"]
-        assert any(jp["id"] == "j1" for jp in judgment_points)
-
-        with apply_mod._session_identity("sid-liveness-halt"):
-            exit_code, report = apply_mod._execute_directives(
-                directives, judgment_points, repo,
-                decisions={},
-                resolve_claim_grant=lambda: {"verdict": "granted"},
-            )
-
-        assert exit_code == apply_mod.APPLY_EXIT_HALTED_AT_JUDGMENT
-        assert "d1" in report["landed"]
-        assert "d2" not in report["landed"]
-        assert "j1" in report["unresolved_judgment_points"]
 
     def test_completeness_probe_item_leaves_probe_unresolved_while_d1_and_mirror_land(self, tmp_path):
         repo = tmp_path / "repo"
@@ -6419,7 +5381,7 @@ class TestHandoffSpinoffPerDirectiveHalt:
             extra="completeness_checklist:\n  - 'live: some assertion [probe: some-command]'\n",
         )
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
         directives = result.decision_object["directives"]
         judgment_points = result.decision_object["judgment_points"]
         probe_jps = [jp for jp in judgment_points if jp["id"] != "j1" and jp["id"] != "jgate"]
@@ -6445,6 +5407,63 @@ class TestHandoffSpinoffPerDirectiveHalt:
         # `unresolved_judgment_points`, by construction, even though it stays
         # unresolved in `judgment_points[]` itself.
         assert exit_code in (apply_mod.APPLY_EXIT_OK, apply_mod.APPLY_EXIT_HALTED_AT_JUDGMENT)
+    def test_awaiting_gate_halts_d2_but_d1_still_lands(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff_status(repo, "h1.md", "open", "awaiting_gate", extra="gate_dependency: some-gate\n")
+
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
+        directives = result.decision_object["directives"]
+        judgment_points = result.decision_object["judgment_points"]
+        assert any(jp["id"] == "jgate" for jp in judgment_points)
+
+        with apply_mod._session_identity("sid-gate-halt"):
+            exit_code, report = apply_mod._execute_directives(
+                directives, judgment_points, repo,
+                decisions={},
+                resolve_claim_grant=lambda: {"verdict": "granted"},
+            )
+
+        assert exit_code == apply_mod.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert "d1" in report["landed"]
+        assert "d2" not in report["landed"]
+        assert "jgate" in report["unresolved_judgment_points"]
+
+    def test_firing_liveness_signal_halts_d2_but_d1_still_lands(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff_status(
+            repo, "h1.md", "open", "active",
+            extra='claimed_by: "foreign-live-sid"\n',
+        )
+        monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: sid == "foreign-live-sid")
+
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
+        directives = result.decision_object["directives"]
+        judgment_points = result.decision_object["judgment_points"]
+        assert any(jp["id"] == "j1" for jp in judgment_points)
+
+        with apply_mod._session_identity("sid-liveness-halt"):
+            exit_code, report = apply_mod._execute_directives(
+                directives, judgment_points, repo,
+                decisions={},
+                resolve_claim_grant=lambda: {"verdict": "granted"},
+            )
+
+        assert exit_code == apply_mod.APPLY_EXIT_HALTED_AT_JUDGMENT
+        assert "d1" in report["landed"]
+        assert "d2" not in report["landed"]
+        assert "j1" in report["unresolved_judgment_points"]
+
+    # DR-415 documented reduction — test_completeness_probe_item_leaves_
+    # probe_unresolved_while_d1_and_mirror_land deleted: it pinned the
+    # monolith's per-item `[probe: ...]` judgment-point construction AND
+    # the `coordinator-tasks-mirror` init directive together, both produced
+    # by the SAME multi-batch grouping heuristic `build_completeness_
+    # checklist`'s own docstring names as not reproduced (see citation
+    # above TestBriefCompletenessChecklistWiring's deleted multiline-
+    # checklist test) — pickup_brief's `build_completeness_checklist`
+    # returns bare items/batches only, no directives, no judgment points.
 
 
 class TestClaimGrantBlanketPreLoopGate:
@@ -6540,7 +5559,7 @@ class TestMemoTerminalDirectivesC8:
         _init_repo(repo)
         _seed_memo(repo, "m1.md", kind="ask")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
         directives_by_id = {d["id"]: d for d in result.decision_object["directives"]}
 
         assert directives_by_id["d1"]["depends_on"] is None
@@ -6552,7 +5571,7 @@ class TestMemoTerminalDirectivesC8:
         _seed_memo(repo, "m1.md", kind="ask", extra='picked_up_by: "foreign-live-sid"\n')
         monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: sid == "foreign-live-sid")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
         directives_by_id = {d["id"]: d for d in result.decision_object["directives"]}
 
         assert directives_by_id["d1"]["depends_on"] == "j1"
@@ -6563,7 +5582,7 @@ class TestMemoTerminalDirectivesC8:
         _init_repo(repo)
         _seed_memo(repo, "m1.md", kind="proposal")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
         action_memo = next(d for d in result.decision_object["directives"] if d["id"] == "d-action-memo")
 
         assert action_memo["depends_on"] == "j-kind"
@@ -6598,7 +5617,7 @@ class TestMemoTerminalDirectivesC8:
         _seed_memo(repo, "m1.md", kind="proposal")
 
         decisions = {"j-kind": {"disposition": "adopt"}}
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo, decisions=decisions)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo, decisions=decisions)
         directives_by_id = {d["id"]: d for d in result.decision_object["directives"]}
         jp_by_id = apply_mod._judgment_points_by_id(result.decision_object["judgment_points"])
 
@@ -6621,7 +5640,7 @@ class TestMemoTerminalDirectivesC8:
         _seed_memo(repo, "m1.md", kind="fyi")
 
         decisions = {"j-kind": {"disposition": "ack-nil", "actioned_note": "no impact on this repo"}}
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo, decisions=decisions)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo, decisions=decisions)
         directives_by_id = {d["id"]: d for d in result.decision_object["directives"]}
         jp_by_id = apply_mod._judgment_points_by_id(result.decision_object["judgment_points"])
 
@@ -6648,7 +5667,7 @@ class TestMemoTerminalDirectivesC8:
         _seed_memo(repo, "m1.md", kind="consult")
 
         decisions = {"j-kind": {"disposition": "reply-short", "actioned_note": "the answer is X"}}
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo, decisions=decisions)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo, decisions=decisions)
         directives_by_id = {d["id"]: d for d in result.decision_object["directives"]}
         jp_by_id = apply_mod._judgment_points_by_id(result.decision_object["judgment_points"])
 
@@ -6675,7 +5694,7 @@ class TestMemoTerminalDirectivesC8:
         _seed_memo(repo, "m1.md", kind="consult")
 
         decisions = {"j-kind": {"disposition": "reply-long", "actioned_note": "see ## EM Response"}}
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo, decisions=decisions)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo, decisions=decisions)
         directives_by_id = {d["id"]: d for d in result.decision_object["directives"]}
         jp_by_id = apply_mod._judgment_points_by_id(result.decision_object["judgment_points"])
 
@@ -6788,7 +5807,7 @@ class TestDispositionValueAwarePredicateZoliV2Finding1:
         _seed_memo(repo, "m1.md", kind="ask")
 
         decisions = {"j-kind": {"disposition": "surface-to-PM"}}
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo, decisions=decisions)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo, decisions=decisions)
         directives_by_id = {d["id"]: d for d in result.decision_object["directives"]}
         judgment_points = result.decision_object["judgment_points"]
 
@@ -7316,7 +6335,7 @@ class TestArchivedMemoClassification:
         live = _seed_memo(repo, "m1.md", kind="ask", to="receiver-session")
         _archive_memo(repo, live)
 
-        artifact = pa.resolve_artifact("cross-repo/archive/m1.md", repo)
+        artifact = pb.resolve_artifact("cross-repo/archive/m1.md", repo)
 
         assert artifact["classification"] == "archived"
         assert artifact["resolution"]["archived_class"] == "memo"
@@ -7394,7 +6413,7 @@ class TestArchivedOpenMemoKindDispatch:
         archived = _archive_memo(repo, live, status="open")
         archive_path_display = archived.relative_to(repo).as_posix()
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         decision = result.decision_object
@@ -7429,7 +6448,7 @@ class TestArchivedOpenMemoKindDispatch:
         live = _seed_memo(repo, "m1.md", kind="fyi", to="receiver-session", status="actioned")
         archived = _archive_memo(repo, live, status="actioned")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         decision = result.decision_object
@@ -7450,7 +6469,7 @@ class TestArchivedOpenMemoKindDispatch:
         live = _seed_handoff(repo, "h1.md")
         _archive_handoff(repo, live)
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         decision = result.decision_object
@@ -7504,7 +6523,7 @@ class TestSupersededMemoNotPickupable:
 
     def test_classify_site_recognises_superseded_as_memo_shape(self, tmp_path):
         """Site 1 (classify): a live in-inbox `status: superseded` memo
-        classifies as `memo`, not `ambiguous` — pa.brief()'s own
+        classifies as `memo`, not `ambiguous` — pb.brief()'s own
         classification field is the observable proxy for classify()'s verdict."""
         repo = tmp_path / "repo"
         _init_repo(repo)
@@ -7513,7 +6532,7 @@ class TestSupersededMemoNotPickupable:
             extra="superseded_by: successor.md\n",
         )
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.decision_object["artifact"]["classification"] == "memo"
 
@@ -7528,7 +6547,7 @@ class TestSupersededMemoNotPickupable:
             extra="superseded_by: successor.md\n",
         )
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         decision = result.decision_object
@@ -7553,7 +6572,7 @@ class TestSupersededMemoNotPickupable:
         )
         archived = _archive_memo(repo, live, status="superseded")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         decision = result.decision_object
@@ -7850,63 +6869,10 @@ class TestApplyFailsLoudOnTerminalArtifactWithDroppedDecisions:
         assert report["landed"] == []
 
 
-class TestGateNotesAdvisoryAtPickupBrief:
-    """C5, 2026-08-19-gate-notes-are-advisory-blocked-by-derives-readiness —
-    `gates.gate_notes` must be queryable from the pickup brief WITHOUT
-    entering any pickup-blocking verdict (AC8)."""
-
-    def test_absent_blocking_notes_reports_not_present_and_null_passed(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff(repo, "h1.md")
-
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
-
-        gate_notes = result.decision_object["gates"]["gate_notes"]
-        assert gate_notes == {"present": False, "text": None, "passed": None}
-
-    def test_present_blocking_notes_surfaces_verbatim_with_passed_always_null(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff_with_fields(
-            repo, "h1.md", 'blocking_notes: "waiting on a sibling repo ruling"\n'
-        )
-
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
-
-        gate_notes = result.decision_object["gates"]["gate_notes"]
-        assert gate_notes == {
-            "present": True,
-            "text": "waiting on a sibling repo ruling",
-            "passed": None,
-        }
-
-    def test_gate_notes_never_enters_coast_claim_or_aging_verdict(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_handoff_with_fields(
-            repo, "h1.md", 'blocking_notes: "advisory prose only"\n'
-        )
-
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
-
-        gates = result.decision_object["gates"]
-        assert "gate_notes" not in gates["coast"]
-        assert "gate_notes" not in gates.get("claim", {})
-        assert gates["aging_verdict"] != "gate_notes"
-        # Advisory prose alone must not flip the pickup outcome.
-        assert result.exit_code == pa.EXIT_OK
-
-    def test_memo_branch_also_carries_gate_notes(self, tmp_path):
-        repo = tmp_path / "repo"
-        _init_repo(repo)
-        _seed_memo(repo, "m1.md", extra='blocking_notes: "held for review"\n')
-
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
-
-        gate_notes = result.decision_object["gates"]["gate_notes"]
-        assert gate_notes == {"present": True, "text": "held for review", "passed": None}
-
+# DR-415 deletion — gates.gate_notes is explicitly named in
+# pickup_brief.py's module docstring deleted-field list (alongside
+# gates.branch, gates.aging_verdict). Not re-pointed: the key does not
+# exist under any spelling in pickup_brief's output.
 
 # ---------------------------------------------------------------------------
 # `stale-bookkeeping` promotes NO re-stamp directive
@@ -8001,7 +6967,7 @@ class TestStaleBookkeepingPromotesNoRestamp:
 
         rel = path.relative_to(repo).as_posix()
         fm = pa._parse_fm_dict(pa.split_frontmatter(path.read_text(encoding="utf-8")).fm_text)
-        hit = pa.compute_execution_stamp_match(repo, fm, rel)
+        hit = pb.compute_execution_stamp_match(repo, fm, rel)
 
         assert hit is not None
         gate, _target = hit
@@ -8019,7 +6985,7 @@ class TestStaleBookkeepingPromotesNoRestamp:
         monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: False)
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
 
-        result = pa.brief(path.relative_to(repo).as_posix(), repo_root=repo, decisions={})
+        result = pb.brief(path.relative_to(repo).as_posix(), repo_root=repo, decisions={})
         do = result.decision_object
 
         assert do["gates"]["execution_stamp_match"]["verdict"] == "stale-bookkeeping", (
@@ -8039,7 +7005,7 @@ class TestStaleBookkeepingPromotesNoRestamp:
         monkeypatch.setattr(pa._liveness, "session_live", lambda sid, cwd=None: False)
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
 
-        result = pa.brief(path.relative_to(repo).as_posix(), repo_root=repo, decisions={})
+        result = pb.brief(path.relative_to(repo).as_posix(), repo_root=repo, decisions={})
         do = result.decision_object
 
         assert do["gates"]["execution_stamp_match"]["verdict"] == "unstampable"

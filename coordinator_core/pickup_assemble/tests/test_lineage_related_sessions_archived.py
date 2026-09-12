@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pb
 from coordinator_core.test_pickup_assemble import (
     _archive_handoff,
     _init_repo,
@@ -170,7 +171,7 @@ class TestClaimGrantArchivedPredecessorHandover:
         monkeypatch.setattr(pa._liveness, "claim_held_by_me", lambda *a, **k: False)
         monkeypatch.setattr(pa._liveness, "claim_holder_live", lambda *a, **k: True)
 
-        grant = pa.compute_claim_grant(
+        grant = pb.compute_claim_grant(
             repo, "handoff", "h1.md", "state/handoffs/h1.md",
             fm={"predecessor": "state/handoffs/pred.md"},
         )

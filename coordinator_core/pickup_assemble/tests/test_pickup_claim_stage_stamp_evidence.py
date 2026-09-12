@@ -36,7 +36,7 @@ import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
 import coordinator_core.claim_state as claim_state_mod
-import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pa
 from coordinator_core.session import claims as claims_mod
 from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness as liveness_mod

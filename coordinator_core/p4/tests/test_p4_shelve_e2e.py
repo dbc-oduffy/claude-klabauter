@@ -514,3 +514,33 @@ class TestClosedCLReMintsRatherThanFailing:
         changes_after = _shelved_changes(p4d, user, client)
         assert len(changes_after) == 1, changes_after
         assert changes_after[0]["change"] != session_cl  # re-minted, not reused
+
+
+class TestRegisterWorkspaceAgainstRealServer:
+    """`p4.register_workspace` through the real `runner.run` (`-s` tagged
+    output) -- every other e2e leg here seeds the registry by hand and so
+    never exercised the client-spec parse."""
+
+    def test_registers_a_real_client(self, monkeypatch, tmp_path, p4d):
+        user, client = "bob", "bob-register-ws"
+        client_root = tmp_path / "ws"
+        _init_client_and_seed(p4d, client_root, client, user)
+        registry_dir = tmp_path / "registry"
+        registry_dir.mkdir()
+        monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(registry_dir))
+
+        from coordinator_core.machine_resolver import registry_get
+        from coordinator_core.p4 import register
+
+        result = register._register_workspace(
+            {
+                "repo_key": "p4-studio/game-main",
+                "repo_root": str(client_root),
+                "port": p4d.p4port,
+                "user": user,
+                "client": client,
+            }
+        )
+
+        assert result["ok"] is True, result
+        assert Path(registry_get("p4.p4-studio/game-main.client_root")).resolve() == client_root.resolve()

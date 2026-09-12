@@ -270,3 +270,102 @@ class TestRootContainsCaseHandling:
         sibling.mkdir()
 
         assert register._root_contains(str(sibling), real_repo.resolve()) is False
+
+
+class TestScriptTaggedClientSpec:
+    """`runner.run` always passes `-s`, so a real `p4 client -o` arrives with
+    every line tagged `info: ` -- the shape the untagged fixtures above
+    never exercised."""
+
+    def test_parses_tagged_root_altroots_and_host(self):
+        stdout = (
+            "info: Client:\tagent-ws\n"
+            "info: \n"
+            "info: Host:\tMACHINE-A\n"
+            "info: \n"
+            "info: Root:\t/ws/ue-game-main\n"
+            "info: \n"
+            "info: AltRoots:\n"
+            "info: \t/alt/one\n"
+            "info: \t/alt/two\n"
+            "info: \n"
+            "info: Options:\tnoallwrite clobber\n"
+            "exit: 0\n"
+        )
+
+        spec = register._parse_client_spec(stdout)
+
+        assert spec == {
+            "root": "/ws/ue-game-main",
+            "alt_roots": ["/alt/one", "/alt/two"],
+            "host": "MACHINE-A",
+        }
+
+    def test_tagged_client_spec_confirms_the_repo_root(self, monkeypatch, tmp_path):
+        stdout = (
+            f"info: Root:\t{tmp_path}\n"
+            f"info: Host:\t{register.socket.gethostname()}\n"
+            "exit: 0\n"
+        )
+        monkeypatch.setattr(
+            register.runner,
+            "run",
+            lambda port, user, client, args, **kw: P4Result(ok=True, stdout=stdout),
+        )
+
+        assert register._confirm_client("p", "u", "c", str(tmp_path)) == str(tmp_path)
+
+
+class TestReadOnlyTrackedP4ignore:
+    """A depot-tracked `.p4ignore` is read-only under `noallwrite`."""
+
+    _PARAMS = {
+        "repo_key": "p4-studio/game-main",
+        "port": "ssl:p4.example.com:1666",
+        "user": "agent",
+        "client": "agent-ws",
+    }
+
+    def _patch(self, monkeypatch, repo_root, recorded):
+        TestRegisterWorkspace()._patch_confirm_and_registry(monkeypatch, repo_root, recorded)
+
+    def test_already_ignoring_git_registers_without_writing(self, monkeypatch, tmp_path):
+        p4ignore = tmp_path / ".p4ignore"
+        p4ignore.write_text("*.uasset\n.git/\n", encoding="utf-8")
+        p4ignore.chmod(0o444)
+        recorded: dict = {}
+        self._patch(monkeypatch, str(tmp_path), recorded)
+        try:
+            result = register._register_workspace({**self._PARAMS, "repo_root": str(tmp_path)})
+        finally:
+            p4ignore.chmod(0o644)
+
+        assert result["ok"] is True, result
+        assert recorded["p4.p4-studio/game-main.p4ignore_path"] == str(p4ignore)
+
+    def test_lacking_git_refuses_before_any_registry_row(self, monkeypatch, tmp_path):
+        p4ignore = tmp_path / ".p4ignore"
+        p4ignore.write_text("*.uasset\n", encoding="utf-8")
+        p4ignore.chmod(0o444)
+        recorded: dict = {}
+        self._patch(monkeypatch, str(tmp_path), recorded)
+        try:
+            result = register._register_workspace({**self._PARAMS, "repo_root": str(tmp_path)})
+        finally:
+            p4ignore.chmod(0o644)
+
+        assert result["ok"] is False
+        assert "p4 edit .p4ignore" in result["error"]
+        assert recorded == {}
+
+    def test_gitattributes_conflict_refuses_before_any_write(self, monkeypatch, tmp_path):
+        (tmp_path / ".gitattributes").write_text("*.cpp text eol=lf\n", encoding="utf-8")
+        recorded: dict = {}
+        self._patch(monkeypatch, str(tmp_path), recorded)
+
+        result = register._register_workspace({**self._PARAMS, "repo_root": str(tmp_path)})
+
+        assert result["ok"] is False
+        assert recorded == {}
+        assert not (tmp_path / ".p4ignore").exists()
+        assert not (tmp_path / ".gitignore").exists()

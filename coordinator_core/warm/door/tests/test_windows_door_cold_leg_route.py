@@ -26,6 +26,7 @@ whichever leg it did not mean to take.
 from __future__ import annotations
 
 import json
+import atexit
 import os
 import re
 import shutil
@@ -47,7 +48,6 @@ from coordinator_core.warm.tests.test_door_read_deadline import (
     _ReplyingServer,
 )
 from coordinator_core.warm.door.tests.test_door_stdin_mode import (
-    _DOOR_CORE_C,
     _DOOR_WINDOWS_C,
     _read,
     _WINDOWS_ONLY,
@@ -93,9 +93,9 @@ def _locally_built_door() -> Path:
     un-rebuilt one silently ships the old gate): the same trap reaches the
     tests, where it reads as "the basename gate did not fire".
 
-    Built once per module via `door.build.build`, against the same stamped
-    source root `test_cold_leg_cost_for_declared_names` (C5) resolves --
-    reused, not re-derived. `build()` refuses a root with no
+    Built once per module via `door.build.build`, against the stamped source
+    root `test_warm_door_process_time_gate :: _resolve_stamped_source_root`
+    resolves -- reused, not re-derived. `build()` refuses a root with no
     `coordinator_core/_engine_stamp` (DR-315 SS2); that refusal is
     inherited here as a NAMED skip, never relaxed."""
     if not _BUILT_DOOR:
@@ -107,7 +107,9 @@ def _locally_built_door() -> Path:
                 "gate-carrying door.exe from, and the committed prebuilt is "
                 "pre-C6 and therefore pre-gate"
             )
-        out = Path(tempfile.mkdtemp(prefix="cold-leg-route-door-")) / "door.exe"
+        tmpdir = tempfile.TemporaryDirectory(prefix="cold-leg-route-door-")
+        atexit.register(tmpdir.cleanup)
+        out = Path(tmpdir.name) / "door.exe"
         _BUILT_DOOR.append(door_build.build(source_root, output=out))
     return _BUILT_DOOR[0]
 
@@ -167,8 +169,8 @@ def _release_unconnected_server(root: Path) -> None:
         return
     try:
         _winapi.CloseHandle(handle)
-    except OSError:
-        pass
+    except OSError as exc:
+        print(f"_release_unconnected_server: CloseHandle failed: {exc!r}")
 
 
 def _run(door: Path, root: Path) -> subprocess.CompletedProcess:

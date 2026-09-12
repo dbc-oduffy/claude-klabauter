@@ -460,7 +460,7 @@ def pickup_assemble_variants(monkeypatch: Any, tmp_path: Path) -> list[tuple[str
     reduces down to) as its own explicit, named-regression test, per the
     2026-07-27 follow-up dispatch's own instruction: "so a future
     regression to partial coverage fails rather than passes."""
-    from coordinator_core import pickup_assemble as pa
+    from coordinator_core import pickup_brief as pb
     from coordinator_core.test_pickup_assemble import _init_repo, _seed_handoff, _seed_memo
 
     repo = tmp_path / "repo"
@@ -471,20 +471,20 @@ def pickup_assemble_variants(monkeypatch: Any, tmp_path: Path) -> list[tuple[str
     # -- handoff/spinoff branch (classification in ("handoff", "spinoff")) --
 
     _seed_handoff(repo, "h-normal.md")
-    variants.append(("handoff-normal", pa.brief("state/handoffs/h-normal.md", repo_root=repo)))
+    variants.append(("handoff-normal", pb.brief("state/handoffs/h-normal.md", repo_root=repo)))
 
     _seed_handoff(repo, "h-awaiting-gate.md", deployment_state="awaiting_gate")
-    variants.append(("handoff-awaiting-gate", pa.brief("state/handoffs/h-awaiting-gate.md", repo_root=repo)))
+    variants.append(("handoff-awaiting-gate", pb.brief("state/handoffs/h-awaiting-gate.md", repo_root=repo)))
 
     _seed_handoff(repo, "h-shipped.md", deployment_state="shipped")
-    variants.append(("handoff-shipped", pa.brief("state/handoffs/h-shipped.md", repo_root=repo)))
+    variants.append(("handoff-shipped", pb.brief("state/handoffs/h-shipped.md", repo_root=repo)))
 
     _seed_handoff(repo, "s-normal.md", kind="spinoff")
-    variants.append(("spinoff-normal", pa.brief("state/handoffs/s-normal.md", repo_root=repo)))
+    variants.append(("spinoff-normal", pb.brief("state/handoffs/s-normal.md", repo_root=repo)))
 
     _seed_handoff(repo, "h-liveness.md")
-    monkeypatch.setattr(pa, "compute_liveness_signal", lambda *a, **k: True)
-    variants.append(("handoff-liveness-fired", pa.brief("state/handoffs/h-liveness.md", repo_root=repo)))
+    monkeypatch.setattr(pb, "compute_liveness_signal", lambda *a, **k: True)
+    variants.append(("handoff-liveness-fired", pb.brief("state/handoffs/h-liveness.md", repo_root=repo)))
     monkeypatch.undo()
 
     # The live-claim stand-down bail (dispatch brief's flagged finding,
@@ -498,9 +498,9 @@ def pickup_assemble_variants(monkeypatch: Any, tmp_path: Path) -> list[tuple[str
     # actually built (a non-firing signal returns `None` -- nothing to
     # check here at all).
     _seed_handoff(repo, "h-live-claim.md")
-    monkeypatch.setattr(pa, "compute_claim_gate", lambda *a, **k: {"fetch_state": "ok", "holder": "live-peer-sid"})
+    monkeypatch.setattr(pb, "gates_claim", lambda *a, **k: {"fetch_state": "ok", "holder": "live-peer-sid"})
     monkeypatch.setattr(
-        pa,
+        pb,
         "compute_claim_grant",
         lambda *a, **k: {
             "fetch_state": "ok",
@@ -512,8 +512,8 @@ def pickup_assemble_variants(monkeypatch: Any, tmp_path: Path) -> list[tuple[str
             "drop_invocation": "",
         },
     )
-    monkeypatch.setattr(pa, "compute_liveness_signal", lambda *a, **k: True)
-    variants.append(("handoff-live-claim-bail", pa.brief("state/handoffs/h-live-claim.md", repo_root=repo)))
+    monkeypatch.setattr(pb, "compute_liveness_signal", lambda *a, **k: True)
+    variants.append(("handoff-live-claim-bail", pb.brief("state/handoffs/h-live-claim.md", repo_root=repo)))
     monkeypatch.undo()
 
     # -- memo branch (classification == "memo"), all four `kind` values --
@@ -521,7 +521,7 @@ def pickup_assemble_variants(monkeypatch: Any, tmp_path: Path) -> list[tuple[str
     for kind in ("ask", "consult", "proposal", "fyi"):
         name = f"m-{kind}.md"
         _seed_memo(repo, name, kind=kind)
-        variants.append((f"memo-kind-{kind}", pa.brief(f"cross-repo/inbox/{name}", repo_root=repo)))
+        variants.append((f"memo-kind-{kind}", pb.brief(f"cross-repo/inbox/{name}", repo_root=repo)))
 
     # memo branch's liveness gate (`__init__.py` ~5407) -- the one class-(c)
     # dynamically-composed `resolves` in the whole package (recon §4/§5):
@@ -529,8 +529,8 @@ def pickup_assemble_variants(monkeypatch: Any, tmp_path: Path) -> list[tuple[str
     # decision object's own directive ids, so it should never phantom --
     # swept anyway, so a future regression that de-syncs the two is caught.
     _seed_memo(repo, "m-liveness.md", kind="ask")
-    monkeypatch.setattr(pa, "compute_liveness_signal", lambda *a, **k: True)
-    variants.append(("memo-liveness-fired", pa.brief("cross-repo/inbox/m-liveness.md", repo_root=repo)))
+    monkeypatch.setattr(pb, "compute_liveness_signal", lambda *a, **k: True)
+    variants.append(("memo-liveness-fired", pb.brief("cross-repo/inbox/m-liveness.md", repo_root=repo)))
     monkeypatch.undo()
 
     return variants

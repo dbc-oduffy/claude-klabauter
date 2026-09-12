@@ -27,9 +27,9 @@ from coordinator_core.pickup_assemble import (
     EXIT_OK,
     EXIT_USAGE,
     _parse_fm_dict,
-    compute_execution_stamp_match,
     resolve_repo_root,
 )
+from coordinator_core.pickup_brief import compute_execution_stamp_match
 
 
 def stamp_check(

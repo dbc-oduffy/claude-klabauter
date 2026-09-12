@@ -55,8 +55,14 @@ constraint). Modules this file imports, and why:
         index_sha`, the normalize-then-hash settle for a stat-mismatch
         candidate (never a raw-bytes hash; see that module's own
         docstring for the CRLF hazard this respects).
-    coordinator_core.claim_state                  -- gates.claim (the
-        ledger-first accessor; a LEAF module, no coordinator_core.ops import).
+    coordinator_core.claim_state                  -- `resolve_claim_state`/
+        `handoff_claim_dir`, the ledger-first accessor used for `d2`'s
+        stamp-evidence check (C11 row 35: ledger-first so a branch-switch-
+        revert desync still reads correctly); a LEAF module, no
+        coordinator_core.ops import.
+    coordinator_core.lifecycle                    -- `git_common_dir`
+        (`lru_cache`d, no extra spawn), resolving the claim-dir root for the
+        same `d2` stamp-evidence check.
     coordinator_core.session.claims                -- claim-dir path
         convention, claim_stage, brief_lease_expired, claim_artifact (the
         brief-stage claim take for a single-artifact invocation).
@@ -105,32 +111,30 @@ own sake" discipline DR-415/P0 C5 apply elsewhere on this plan.
 Documented reductions from the monolith's behaviour (this module is a
 REWRITE from the requirement, not a byte-identical port — see the row body,
 "Write from the requirement, not from the old code"):
-    - `resolve_artifact` implements the literal-path and live/archive
-      basename-fallback tiers only. The monolith's elision-marker,
-      sanitize-punctuation, suffix-match and git-revision-SHA resolution
-      tiers are NOT reproduced here — they are caller-convenience tiers on
-      TOP of the oracle's required `artifact.{path,classification,
-      resolution,frontmatter}` shape, not part of the kept-set contract
-      itself, and reproducing all four from the deleted-as-reference
-      monolith would either require reading it (forbidden) or re-deriving
-      four independent parsing tiers blind. A caller passing an elided,
-      sanitize-needing, suffix-only or revision-SHA argument gets a
-      not-found business failure (exit 1) from this module where the
-      monolith would have resolved it. This is a real behavioural gap,
-      flagged in the row report, not silently absorbed.
+    - `resolve_artifact` implements the literal-path, prose-sanitize and
+      live/archive basename-fallback tiers. The elision-marker form
+      (`…/<basename>`) resolves through the basename fallback rather than a
+      dedicated tier, matching the monolith's output. NOT reproduced: the
+      suffix-match tier (a prefix-omitted slug resolved by unique
+      basename-suffix match, 2026-07-28) and the git-revision-SHA tier
+      (2026-08-14). A caller passing either gets a not-found business
+      failure (exit 1) where the monolith would have resolved it — a real
+      behavioural gap, named here rather than silently absorbed.
+
+      The revision-SHA tier is the one deliberately left out on cost
+      grounds rather than scope: it walks git history to map a SHA to the
+      artifact it touched, which is exactly the "corpus walk for an answer"
+      DR-344 targets. Restoring it needs a measurement, not a reflex.
     - `gates.execution_stamp_match` computes `computed_sha` via
       `frontmatter.primitives.canonical_body_sha` (a pure-Python git-blob-hash,
       zero spawns) and reports `verdict in {"match", "mismatch"}` (or `None`
-      when the artifact carries no stamp to check). It does NOT reproduce
-      the monolith's `stamp_commit`/`delta_class`
-      (`stale-bookkeeping`/`stale-substantive`) classification, which
-      requires a git history search to find the commit that introduced the
-      recorded value — exactly the kind of "corpus walk for an answer"
-      R1 disqualifies, and it would be a SECOND git fact on this brief's
-      path beyond `preflight.tree_quiescence`, which § Design's "Git: one
-      fact only" line forbids. `build_execution_stamp_directive`'s
-      re-stamp suggestion is preserved (`computed_sha` is always known);
-      the finer mismatch narration is not.
+      when the artifact carries no stamp to check). `stamp_commit` and
+      `delta_class` (`stale-bookkeeping`/`stale-substantive`) ARE
+      reproduced: the classification is governance-load-bearing — it is
+      what routes substantive drift to `surface-to-PM` instead of offering
+      a re-stamp — so dropping it changed a verdict, not just a narration.
+      Its git spawns sit off the zero-spawn hot path, reached only once a
+      stamp or pointer is already present.
 """
 from __future__ import annotations
 
@@ -144,14 +148,26 @@ from pathlib import Path
 from typing import Any, Optional
 
 from coordinator_core import dag
+from coordinator_core import lifecycle as lifecycle_mod
 from coordinator_core.artifact_basename import md_fallback_candidates
+from coordinator_core.claim_state import handoff_claim_dir, resolve_claim_state
+from coordinator_core.machine_resolver import registry_get
+from coordinator_core.ops.parse_completeness_item import (
+    _Malformed as _CompletenessMalformed,
+    parse_completeness_item as _parse_completeness_item,
+)
 from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
 )
-from coordinator_core.contract.apply_base import current_session_env
+from coordinator_core.contract.apply_base import (
+    OutOfRepoPath,
+    assert_in_repo_root,
+    current_session_env,
+)
 from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point as _shared_build_judgment_point,
+    build_untrusted_gate_judgment_point as _shared_build_untrusted_gate_judgment_point,
 )
 from coordinator_core.frontmatter.primitives import (
     canonical_body_sha,
@@ -163,7 +179,9 @@ from coordinator_core.git import git_state as _git_state
 from coordinator_core.git import repo_root as _repo_root_mod
 from coordinator_core.git.content_hash import content_matches_index_sha
 from coordinator_core.session import claims as _claims
+from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _liveness
+from coordinator_core.session_baton.store import merge_baton, read_baton
 from coordinator_core.session.work_state import _parse_fm_dict
 from coordinator_core.shipped_in_tokens import (
     _NO_COMMIT_TOKEN_RE as _SHIPPED_NO_COMMIT_RE,
@@ -256,9 +274,258 @@ def classify(fm_text: str, path: Path) -> str:
     return "ambiguous"
 
 
+#: Matched-pair wrapper punctuation a caller-pasted path is commonly found
+#: wrapped in when it is rendered inline in prose (a memo sentence, a chat
+#: message) — see `_sanitize_artifact_path_str`.
+_PATH_WRAPPERS = {"(": ")", "[": "]", "<": ">", '"': '"', "'": "'", "`": "`"}
+
+#: Sentence-final punctuation a caller-pasted path commonly picks up when a
+#: human ends a sentence with it (`...fix.md.`, `...fix.md,` etc).
+_TRAILING_SENTENCE_PUNCT = ".,;:!?"
+
+#: A hard line wrap the rendering surface inserted into a pasted path, plus
+#: the continuation indent on either side of it. Deliberately NOT `\s` on
+#: either side: a match must be anchored on a real newline, so a path
+#: containing an ordinary interior space is never touched.
+_LINE_WRAP_RE = re.compile("[ \t]*\r?\n[ \t]*")
+
+
+def _last_path_segment(path_str: str) -> str:
+    r"""Returns the final `/`- or `\`-delimited segment of `path_str` (both
+    separators, since Windows paths pasted here may use either) — used by
+    `_sanitize_artifact_path_str` to detect a bare `.`/`..` component before
+    stripping trailing punctuation would corrupt it."""
+    return path_str.replace("\\", "/").rsplit("/", 1)[-1] if path_str else path_str
+
+
+def _sanitize_artifact_path_str(raw: str) -> str:
+    """Fallback-candidate generator: strips prose wrappers and trailing
+    sentence punctuation a human commonly pastes around an inline artifact
+    path (2026-07-27 incident — `/coordinator:pickup <path>.` with a
+    sentence-final period reported "not found" for a file that plainly
+    existed, because the literal string carried the trailing `.`).
+
+    Strips, to a fixed point (so a wrapped-and-punctuated path like
+    "(`foo.md`)." resolves fully in one call): surrounding whitespace; an
+    interior HARD LINE WRAP rejoined with NO separator; a matched wrapper
+    pair, ONLY when BOTH ends match; a single trailing `.`/`,`/`;`/`:`/
+    `!`/`?`.
+
+    Line-wrap tolerance (2026-08-10, PM ask — the Windows case): a long
+    absolute path pasted into a prompt or slash-command argument is
+    routinely hard-wrapped mid-token by the rendering surface. A newline is
+    not a legal character in a Windows filename and is vanishingly rare in
+    a POSIX one, so its presence is evidence of the wrap itself, never of
+    the path.
+
+    Negative-spec — the rejoin uses NO separator, so a wrap that fell on a
+    genuine SPACE inside a path is NOT recovered: nothing in the wrapped
+    string distinguishes a consumed space from a mid-token break, and
+    coordinator artifact basenames are kebab-case by construction.
+
+    Negative-spec — this is a FALLBACK CANDIDATE, never a normalizer: the
+    caller must attempt resolution with the RAW string first and only fall
+    back to this function's output on a miss, so a legitimately-period-
+    ending or dot-component path is never mutated out from under a caller
+    whose raw input already resolves.
+
+    Guards (do not weaken without re-reading the incident writeup): never
+    strips trailing punctuation off a bare `.` or `..` PATH COMPONENT;
+    never strips a lone trailing `:` off a bare Windows drive letter.
+    """
+    s = raw
+    while True:
+        stripped = s.strip()
+        if stripped != s:
+            s = stripped
+            continue
+        unwrapped = _LINE_WRAP_RE.sub("", s)
+        if unwrapped != s:
+            s = unwrapped
+            continue
+        if len(s) >= 2 and s[0] in _PATH_WRAPPERS and s[-1] == _PATH_WRAPPERS[s[0]]:
+            s = s[1:-1]
+            continue
+        if s and s[-1] in _TRAILING_SENTENCE_PUNCT:
+            if _last_path_segment(s) in (".", ".."):
+                break
+            if s[-1] == ":" and re.match(r"^[A-Za-z]:$", s):
+                break
+            s = s[:-1]
+            continue
+        break
+    return s
+
+
+#: Separator characters a suffix match must land on, so a bare `.endswith()`
+#: cannot match mid-word (slug `ate-recommendation` matching
+#: `...forwarder-gate-recommendation.md` — a silent wrong-artifact pick).
+_SUFFIX_BOUNDARY_CHARS = ("-", "_")
+
+#: Length floor below which the suffix tier does not fire at all — a short
+#: slug would sweep the whole tree and match arbitrarily.
+_MIN_SUFFIX_SLUG_LEN = 8
+
+
+def _basename_has_slug_suffix(candidate_name: str, slug: str) -> bool:
+    """True when `candidate_name` ends with `slug` once a trailing `.md` is
+    stripped from BOTH sides (2026-07-28 suffix-match tier), AND the match
+    starts at a genuine filename-COMPONENT boundary — either index 0 of the
+    stripped stem, or immediately preceded by a `_SUFFIX_BOUNDARY_CHARS`
+    separator.
+
+    The boundary check exists because a bare `.endswith()` also matches
+    mid-word — a silent wrong-artifact pick with no ambiguity signal, worse
+    than a clean not-found for a resolver whose result gets claimed and
+    mutated (2026-07-28 review finding, PM ruling: fail-loud beats fuzzy).
+
+    Suffix-only, deliberately: filenames in this contract are always
+    `<date>-<sender>-<slug>`, so a caller who omitted the prefix is missing
+    the HEAD of the name, not the tail. Case-sensitive by design (contract
+    ask): do not lowercase either side.
+    """
+    stripped_name = candidate_name[: -len(".md")] if candidate_name.endswith(".md") else candidate_name
+    stripped_slug = slug[: -len(".md")] if slug.endswith(".md") else slug
+    if not stripped_name.endswith(stripped_slug):
+        return False
+    boundary_index = len(stripped_name) - len(stripped_slug)
+    if boundary_index == 0:
+        return True
+    return stripped_name[boundary_index - 1] in _SUFFIX_BOUNDARY_CHARS
+
+
+def _search_dirs_for_slug_suffix(repo_root: Path, slug: str, rel_dirs) -> list[Path]:
+    """The ONE place that walks a set of repo-relative dirs looking for a
+    file whose basename ENDS WITH `slug` (see `_basename_has_slug_suffix`).
+
+    Callers are responsible for the `_MIN_SUFFIX_SLUG_LEN` floor — this
+    function applies the predicate to whatever `slug` it is given and does
+    not itself refuse a short one, so a caller skipping the length check
+    would sweep the whole tree.
+    """
+    hits: list[Path] = []
+    for rel_dir in rel_dirs:
+        base = repo_root / rel_dir
+        if not base.is_dir():
+            continue
+        for candidate in base.rglob("*"):
+            if candidate.is_file() and _basename_has_slug_suffix(candidate.name, slug):
+                hits.append(candidate)
+    return hits
+
+
+# ---------------------------------------------------------------------------
+# Elision-tolerant path resolution (2026-07-24 incident) — a PM/EM baton
+# handoff is routinely copy-pasted out of a terminal transcript, and the
+# terminal elides long paths (a UUID mid-filename gets replaced with a
+# single-glyph U+2026 or an ASCII `...` run). `resolve_artifact` treats
+# such a basename as a glob pattern instead of failing closed on a path
+# that was never going to exist literally.
+# ---------------------------------------------------------------------------
+
+#: Single-glyph ellipsis a terminal may substitute for an elided path run.
+_ELLIPSIS_CHAR = "…"
+
+
+def _is_elided_basename(basename: str) -> bool:
+    """True when `basename` carries either elision marker (U+2026 or the
+    ASCII `...` three-dot run) — the trigger for glob-based resolution."""
+    return _ELLIPSIS_CHAR in basename or "..." in basename
+
+
+def _elision_glob_pattern(basename: str) -> str:
+    """Split `basename` on its elision marker into a `<prefix>*<suffix>`
+    glob pattern. Prefers the ASCII `...` split when both markers happen to
+    be present; callers only invoke this after `_is_elided_basename`
+    confirms at least one is."""
+    marker = "..." if "..." in basename else _ELLIPSIS_CHAR
+    prefix, _, suffix = basename.partition(marker)
+    return f"{prefix}*{suffix}"
+
+
+def _is_safe_elision_path(artifact_path: str) -> bool:
+    """False for an absolute path or a path carrying a literal `..`
+    traversal component — elision resolution never globs on those inputs
+    (contract § security: search stays inside the repo). A caller that
+    fails this check simply gets no elision resolution, which falls through
+    to the pre-existing not-found error path unchanged."""
+    candidate = Path(artifact_path)
+    if candidate.is_absolute():
+        return False
+    return not any(part == ".." for part in candidate.parts)
+
+
+def _elision_search_roots(artifact_path: str, repo_root: Path) -> list[tuple[Path, bool]]:
+    """`(root, recursive)` pairs to glob, in search order: the directory
+    named in the passed path first (non-recursive — that is the exact
+    directory the caller named), then each `LIVE_DIRS` entry (recursive),
+    then each `ARCHIVE_DIRS` entry (recursive — those are `YYYY-MM`-sharded).
+    Live roots are searched before archive roots, matching
+    `resolve_artifact`'s "search live first" ordering."""
+    passed_dir = repo_root / Path(artifact_path).parent
+    roots: list[tuple[Path, bool]] = [(passed_dir, False)]
+    roots.extend((repo_root / rel_dir, True) for rel_dir in LIVE_DIRS)
+    roots.extend((repo_root / rel_dir, True) for rel_dir in ARCHIVE_DIRS)
+    return roots
+
+
+def _resolve_elided_artifact(artifact_path: str, repo_root: Path) -> list[Path]:
+    """Glob-resolve an elided `artifact_path`'s basename against the search
+    roots. Returns every distinct match found, in root-search order,
+    deduplicated by resolved absolute path. Returns `[]` unconditionally for
+    an unsafe path (§ `_is_safe_elision_path`) rather than raising — the
+    caller falls through to the ordinary not-found flow."""
+    if not _is_safe_elision_path(artifact_path):
+        return []
+    pattern = _elision_glob_pattern(Path(artifact_path).name)
+    hits: list[Path] = []
+    seen: set[Path] = set()
+    for root_dir, recursive in _elision_search_roots(artifact_path, repo_root):
+        if not root_dir.is_dir():
+            continue
+        globber = root_dir.rglob(pattern) if recursive else root_dir.glob(pattern)
+        for candidate in sorted(globber):
+            if not candidate.is_file():
+                continue
+            resolved = candidate.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            hits.append(candidate)
+    return hits
+
+
+class _ArtifactElisionInconclusive(Exception):
+    """Raised when an elided `artifact_path` glob-resolves to 2+ distinct
+    candidates — a genuine ask, never a "most recent wins" guess (contract
+    § "surface to PM, do not guess"). Carries every candidate (repo-relative
+    where possible) so `brief()` can build the judgment point verbatim."""
+
+    def __init__(self, artifact_path: str, candidates: list[str]):
+        super().__init__(artifact_path)
+        self.artifact_path = artifact_path
+        self.candidates = candidates
+
+
 def _literal_hit(p: Path) -> bool:
+    """`is_file()`, but rejects a hit that only "exists" because Win32
+    silently strips trailing dots/spaces off the final path component
+    (`Path("h1.md.").is_file()` is True on Windows, resolving to `h1.md` —
+    POSIX has no such normalization). Without this guard, a raw literal
+    carrying caller-pasted trailing punctuation spuriously "hits" on
+    Windows only, so the RAW-then-sanitized fallback below silently skips
+    the sanitize step and the punctuation leaks into the display path —
+    never reproducible on POSIX, so it must be caught here."""
     try:
-        return p.is_file()
+        if not p.is_file():
+            return False
+    except OSError:
+        return False
+    name = p.name
+    if not name or name[-1] not in ". ":
+        return True
+    try:
+        return any(entry.name == name for entry in p.parent.iterdir())
     except OSError:
         return False
 
@@ -380,27 +647,161 @@ def _build_archived_resolution(display_path: str, archive_hit: Path, repo_root: 
     }
 
 
+def _tag_elision(result: dict[str, Any], elision_resolution) -> dict[str, Any]:
+    """Attaches `elision_resolution` to a resolved-artifact dict when the
+    elision tier is what got the caller there, so `_emit` can narrate the
+    guess instead of silently swallowing it."""
+    if elision_resolution is None:
+        return result
+    return {**result, "elision_resolution": elision_resolution}
+
+
 def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
     """`artifact.{path,classification,resolution,frontmatter}` — the one
     resolver `pickup_brief` owns (§ Design, "one rule, one home"); C11
     re-points `apply`'s own recompute at this function.
 
-    See the module docstring's documented reductions: literal-path and
-    live/archive basename-fallback tiers only.
+    See the module docstring's documented reductions: literal-path,
+    prose-sanitize and live/archive basename-fallback tiers only. The
+    suffix-match and git-revision-SHA tiers are NOT reproduced.
+
+    Containment: an absolute `artifact_path` resolving outside `repo_root`,
+    or a relative one carrying a literal `..` traversal component, raises
+    `OutOfRepoPath` — ported from `pickup_assemble._repo_relative_artifact_
+    path`'s P1 regression fix (2026-08-30). Not a caller-convenience tier
+    (the four documented reductions above); a bound on what this function
+    will ever read, kept even though the ladder above it was rewritten.
     """
+    # Collapse the absolute form to the same repo-relative string the rest
+    # of the ladder is written against, instead of letting it survive as a
+    # second, parallel addressing scheme: every tier below joins back onto
+    # `repo_root`, and `_is_safe_elision_path` refuses an absolute outright,
+    # so an un-normalized absolute silently bypassed all of them.
+    candidate = Path(artifact_path)
+    if candidate.is_absolute():
+        resolved_abs = assert_in_repo_root(candidate, repo_root)
+        artifact_path = resolved_abs.relative_to(repo_root.resolve()).as_posix()
+    elif any(part == ".." for part in candidate.parts):
+        raise OutOfRepoPath(f"{artifact_path} carries a '..' traversal component")
+
+    #: The caller's path exactly as passed (post absolute-normalization) —
+    #: the not-found error names it even after a later tier has replaced
+    #: `artifact_path` with a transformed form.
+    _raw_artifact_path = artifact_path
+
+    elision_resolution: Optional[dict[str, str]] = None
+    if _is_elided_basename(Path(artifact_path).name):
+        candidates = _resolve_elided_artifact(artifact_path, repo_root)
+        if len(candidates) > 1:
+            raise _ArtifactElisionInconclusive(
+                artifact_path,
+                sorted(
+                    rel_id(c, repo_root) if _is_relative(c, repo_root) else str(c)
+                    for c in candidates
+                ),
+            )
+        if len(candidates) == 1:
+            resolved = candidates[0]
+            resolved_display = (
+                rel_id(resolved, repo_root) if _is_relative(resolved, repo_root) else str(resolved)
+            )
+            elision_resolution = {"passed": artifact_path, "resolved": resolved_display}
+            artifact_path = resolved_display
+        # else: zero matches — fall through with artifact_path unchanged.
+
     live_path = repo_root / artifact_path
     if _literal_hit(live_path):
-        return _resolve_found_file(live_path, repo_root)
+        return _tag_elision(_resolve_found_file(live_path, repo_root), elision_resolution)
+
+    #: Set the moment a sanitized (wrapper-/punctuation-stripped) form of the
+    #: passed path is what actually resolved, so a caller sees the correction
+    #: instead of it being silently swallowed.
+    sanitize_resolution: Optional[dict[str, str]] = None
+
+    # RAW path missed literally — retry with the sanitized form as a FALLBACK
+    # candidate, never a mutation of the working input (raw always tried
+    # first, above).
+    sanitized_path = _sanitize_artifact_path_str(artifact_path)
+    if sanitized_path != artifact_path:
+        sanitized_candidate = Path(sanitized_path)
+        if sanitized_candidate.is_absolute():
+            assert_in_repo_root(sanitized_candidate, repo_root)
+        elif any(part == ".." for part in sanitized_candidate.parts):
+            raise OutOfRepoPath(f"{sanitized_path} carries a '..' traversal component")
+        sanitized_live = repo_root / sanitized_path
+        if _literal_hit(sanitized_live):
+            sanitize_resolution = {"passed": artifact_path, "resolved": sanitized_path}
+            return _tag_elision({
+                **_resolve_found_file(sanitized_live, repo_root),
+                "sanitize_resolution": sanitize_resolution,
+            }, elision_resolution)
+        artifact_path = sanitized_path
 
     basename = Path(artifact_path).name
-    live_hits = _fallback_search(repo_root, LIVE_DIRS, basename)
-    archive_hits = _fallback_search(repo_root, ARCHIVE_DIRS, basename)
+    # A tier that ran but is only recorded on success hides that it ran at
+    # all from the not-found error (2026-07-28 review, Finding 1): the raw
+    # basename's candidates stay named even once the sanitized form took
+    # over the search.
+    raw_basename = Path(_raw_artifact_path).name
+    tried = list(md_fallback_candidates(raw_basename))
+    for cand in md_fallback_candidates(basename):
+        if cand not in tried:
+            tried.append(cand)
+    live_hits = []
+    archive_hits = []
+    seen: set[Path] = set()
+    for candidate_basename in tried:
+        for hit in _fallback_search(repo_root, LIVE_DIRS, candidate_basename):
+            if hit not in seen:
+                seen.add(hit)
+                live_hits.append(hit)
+        for hit in _fallback_search(repo_root, ARCHIVE_DIRS, candidate_basename):
+            if hit not in seen:
+                seen.add(hit)
+                archive_hits.append(hit)
     total = len(live_hits) + len(archive_hits)
 
+    #: Set the moment a bare, prefix-omitted SUFFIX of the passed slug is
+    #: what actually resolved (2026-07-28 tier, PM ruling) — narrated the
+    #: same way as `sanitize_resolution` so a caller can see the engine
+    #: guessed and what it landed on, never silently.
+    suffix_resolution: Optional[dict[str, str]] = None
+
+    # Suffix tier: a caller citing a slug with the `<date>-<sender>-` prefix
+    # omitted. Spawn-free, and only reached once every exact tier above has
+    # found nothing, so a real path/basename never gets here.
     if total == 0:
-        tried = md_fallback_candidates(basename)
+        stripped_slug = basename[: -len(".md")] if basename.endswith(".md") else basename
+        if len(stripped_slug) >= _MIN_SUFFIX_SLUG_LEN:
+            tried = list(tried) + [f"*{stripped_slug} (suffix match)"]
+            suffix_live = _search_dirs_for_slug_suffix(repo_root, basename, LIVE_DIRS)
+            suffix_archive = _search_dirs_for_slug_suffix(repo_root, basename, ARCHIVE_DIRS)
+            if suffix_live or suffix_archive:
+                live_hits, archive_hits = suffix_live, suffix_archive
+                total = len(live_hits) + len(archive_hits)
+                if total == 1:
+                    # A multi-hit suffix match falls into the ambiguous
+                    # branch below unnarrated — that branch already surfaces
+                    # every candidate path, so there is no single "resolved"
+                    # value to name.
+                    only_hit = (suffix_live or suffix_archive)[0]
+                    suffix_resolution = {
+                        "passed": artifact_path,
+                        "resolved": (
+                            rel_id(only_hit, repo_root)
+                            if _is_relative(only_hit, repo_root)
+                            else str(only_hit)
+                        ),
+                    }
+
+    def _tag(result: dict[str, Any]) -> dict[str, Any]:
+        if suffix_resolution is not None:
+            result = {**result, "suffix_resolution": suffix_resolution}
+        return _tag_elision(result, elision_resolution)
+
+    if total == 0:
         raise _ArtifactUnreadable(
-            f"{artifact_path}: not found at the passed path and not in any of "
+            f"{_raw_artifact_path}: not found at the passed path and not in any of "
             f"{', '.join(LIVE_DIRS + ARCHIVE_DIRS)} (basenames tried: {', '.join(repr(b) for b in tried)})"
         )
 
@@ -408,7 +809,7 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
         live_paths = sorted(rel_id(h, repo_root) for h in live_hits)
         archive_paths = sorted(rel_id(h, repo_root) for h in archive_hits)
         status = "archived" if archive_hits and not live_hits else "multi_hit"
-        return {
+        return _tag({
             "path": artifact_path,
             "classification": "ambiguous",
             "frontmatter": {},
@@ -418,13 +819,13 @@ def resolve_artifact(artifact_path: str, repo_root: Path) -> dict[str, Any]:
                 "archive_paths": archive_paths,
                 "terminal_fields": None,
             },
-        }
+        })
 
     if live_hits:
-        return _resolve_found_file(live_hits[0], repo_root)
+        return _tag(_resolve_found_file(live_hits[0], repo_root))
 
     resolved_archive_path = rel_id(archive_hits[0], repo_root)
-    return _build_archived_resolution(resolved_archive_path, archive_hits[0], repo_root)
+    return _tag(_build_archived_resolution(resolved_archive_path, archive_hits[0], repo_root))
 
 
 # ---------------------------------------------------------------------------
@@ -514,14 +915,46 @@ def _lineage_related_sessions(repo_root: Path, fm: dict[str, Any]) -> frozenset:
     """Narrow re-derivation of the monolith's handover exception (AC3e): a
     holder session is lineage-related when it is this artifact's own
     author, or the author of a directly-named predecessor. Simplified —
-    reads `fm["author_session"]`/`fm["session_id"]` and, per predecessor
-    path, the same field on that predecessor's own frontmatter, rather than
-    the monolith's transitive walk over every claim in the tree."""
+    reads `fm["authoring_session"]`/`fm["session_id"]` (the field name
+    every other producer in this codebase writes — `baton_assemble`,
+    `backlog_grind_assemble`, `archive_stamp` — not the singular
+    `author_session` spelling) and, per predecessor path, the same field
+    on that predecessor's own frontmatter — resolved through
+    `resolve_artifact` itself, so an archived predecessor (moved to
+    `archive/handoffs/YYYY-MM/...`) still contributes its
+    `authoring_session` rather than reading as a bare-path miss — rather
+    than the monolith's transitive walk over every claim in the tree."""
     related: set = set()
-    for key in ("author_session", "session_id"):
+    for key in ("authoring_session", "session_id"):
         v = fm.get(key)
         if isinstance(v, str) and v.strip():
             related.add(v.strip())
+
+    predecessor = fm.get("predecessor")
+    if isinstance(predecessor, str) and predecessor.strip() and predecessor.strip() != "none":
+        try:
+            predecessor_artifact = resolve_artifact(predecessor.strip(), repo_root)
+        except (_ArtifactUnreadable, OutOfRepoPath):
+            predecessor_artifact = None
+        if predecessor_artifact is not None:
+            # `resolve_artifact`'s "archived" branch deliberately returns
+            # `frontmatter: {}` (a fixed-field `terminal_fields` extract,
+            # not the full block — see `_build_archived_resolution`), so
+            # an archived predecessor's `authoring_session` never lands in
+            # `frontmatter` itself. Re-read the resolved path's own full
+            # frontmatter directly rather than widening the archived tier's
+            # deliberately-narrow extract for every OTHER caller's sake.
+            predecessor_path = repo_root / predecessor_artifact["path"]
+            try:
+                predecessor_text = predecessor_path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                predecessor_text = ""
+            predecessor_fm = _read_fm_dict(predecessor_text)
+            for key in ("authoring_session", "session_id"):
+                v = predecessor_fm.get(key)
+                if isinstance(v, str) and v.strip():
+                    related.add(v.strip())
+
     return frozenset(related)
 
 
@@ -629,6 +1062,68 @@ CLAIM_STALE_AFTER_MINUTES = int(
 )
 
 
+def _adopt_into_baton(
+    repo_root: Path, artifact_path: str, fm: Optional[dict[str, Any]] = None
+) -> None:
+    """Ported verbatim (HEAD's own `_adopt_into_baton`) — record the
+    artifact this pickup just claimed into THIS session's baton record's
+    `adopted_artifacts[]` (dedup-extends, never replaces). Also names the
+    baton from the artifact being adopted when the baton doesn't already
+    carry a title or an intent. Fail-open throughout: any failure to
+    resolve this session's id, or to read/write the baton store, is
+    swallowed here — an advisory fan-in edge must never block a pickup."""
+    try:
+        sid = _session_core.resolve_session_id(str(repo_root))
+    except Exception:  # noqa: BLE001 — advisory write must never raise into brief()
+        return
+    if not sid:
+        return
+
+    kwargs: dict[str, Any] = {
+        "adopted_artifacts": [artifact_path],
+        "closed_into": artifact_path,
+    }
+    if fm:
+        try:
+            _existing_baton = read_baton(sid, cwd=str(repo_root))
+            already_named = bool(_existing_baton.get("title")) or bool(
+                _existing_baton.get("intent")
+            )
+        except Exception:  # noqa: BLE001 — naming is best-effort, never load-bearing
+            already_named = True
+        if not already_named:
+            title = fm.get("title")
+            if title:
+                kwargs["title"] = title
+            intent = fm.get("session_goal")
+            if intent:
+                kwargs["intent"] = intent
+            else:
+                summary = fm.get("summary")
+                if summary:
+                    kwargs["intent"] = f"(from summary) {summary}"
+
+    try:
+        kwargs["closed_at"] = _session_core.now_iso()
+        merge_baton(sid, cwd=str(repo_root), **kwargs)
+    except Exception:  # noqa: BLE001 — advisory write must never raise into brief()
+        pass
+
+
+def route_baton_adoption(
+    root: Path, artifact_path: str, fm: Optional[dict[str, Any]]
+) -> None:
+    """Ported verbatim (HEAD's own `route_baton_adoption`) — the `/pickup`
+    adoption seam, called from both `claim_at_brief` call sites in
+    `brief()` (handoff branch and memo branch). Unconditional plain
+    adoption via `_adopt_into_baton`; the multi-baton fan-in inference this
+    function used to route into was removed at HEAD (structurally unsound
+    — see HEAD's own docstring) and stays gone here too. A genuine
+    multi-baton fan-in has its own explicit, operator-invoked route
+    (`/mise-en-place`), out of this module's scope."""
+    _adopt_into_baton(root, artifact_path, fm)
+
+
 def acquire_brief_claim(
     repo_root: Path, class_: str, basename: str, cwd: Optional[str] = None
 ) -> Optional[dict[str, Any]]:
@@ -643,7 +1138,10 @@ def acquire_brief_claim(
         {"holder": <the sid we took it from>,
          "basis": "expired-brief-lease" | "dead-holder" | "holder-absent"
                   | "holder-liveness-unknown",
-         "claim_age_minutes": <age of the claim we displaced>}
+         "claim_age_minutes": <age of the claim we displaced>,
+         "liveness_basis": <the session.liveness basis behind "basis", or None>,
+         "liveness_live": <the session_verdict boolean behind "basis", or None
+                  when no verdict was available (see "holder-absent")>}
 
     `basis` is `"dead-holder"` only when `session_verdict` both ran and
     confirmed the prior holder's process gone (`stable-pid`, live=False);
@@ -706,7 +1204,13 @@ def acquire_brief_claim(
     else:
         basis = "holder-liveness-unknown"
 
-    return {"holder": prior_holder, "basis": basis, "claim_age_minutes": prior_age}
+    return {
+        "holder": prior_holder,
+        "basis": basis,
+        "claim_age_minutes": prior_age,
+        "liveness_basis": prior_liveness_basis,
+        "liveness_live": prior_liveness_live,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -887,6 +1391,61 @@ def _settle_candidates_in_process(root: Path, candidates: set[str]) -> Optional[
     return sorted(dirty)
 
 
+#: A `scope:` entry naming a SIBLING repo — `<repo-id>: <path>`. The
+#: `(?!//)` guard keeps a URL (`https://...`) from parsing as a repo-id.
+_SCOPE_SIBLING_PREFIX_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_-]+):(?!//)\s*(.+)$")
+
+
+def _partition_scope_entries(
+    scope_entries: list[str],
+) -> tuple[list[str], dict[str, list[str]], list[str]]:
+    """Split `scope:` entries into this repo's own paths, per-sibling-repo
+    paths, and entries that parse as neither.
+
+    A `scope:` entry that is prose rather than a bare `<repo-id>: <path>`
+    pair is detect-then-fail-loud into the unparseable bucket — never
+    silently counted as dirty (the defect this replaces) and never silently
+    dropped. A sibling entry must never reach this repo's own pathspec:
+    `git status --porcelain -- "<repo-id>: <path>"` answers a question
+    nobody asked.
+    """
+    local_paths: list[str] = []
+    sibling_paths: dict[str, list[str]] = {}
+    unparseable: list[str] = []
+    for entry in scope_entries:
+        match = _SCOPE_SIBLING_PREFIX_RE.match(entry)
+        if match is None:
+            local_paths.append(entry)
+            continue
+        repo_id, rest = match.group(1), match.group(2).strip()
+        if not rest or " " in rest:
+            unparseable.append(entry)
+            continue
+        sibling_paths.setdefault(repo_id, []).append(rest)
+    return local_paths, sibling_paths, unparseable
+
+
+def _scoped_porcelain_dirty(root: Path, paths: list[str]) -> list[str]:
+    """`git status --porcelain` restricted to `paths`, as a list of
+    repo-relative dirty paths. Short-circuits on an empty pathspec before
+    ever invoking `git` — an unscoped call must never widen to the whole
+    worktree (see `compute_tree_quiescence`'s own docstring on the
+    `.git/index` stat-cache side effect that would cause)."""
+    if not paths:
+        return []
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain", "--"] + paths,
+            cwd=str(root), capture_output=True, text=True, timeout=10,
+            **_NO_CONSOLE,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    return [line[3:].strip() for line in proc.stdout.splitlines() if len(line) > 3]
+
+
 def compute_tree_quiescence(root: Path, scope_entries: list[str]) -> dict[str, Any]:
     """`preflight.tree_quiescence` — the ONE git fact on this brief's path
     (§ Design, "Git: one fact only"). For a bounded `scope:` (directories/
@@ -917,36 +1476,53 @@ def compute_tree_quiescence(root: Path, scope_entries: list[str]) -> dict[str, A
     if not scope_entries:
         return {"verdict": "quiet", "repos": [{"repo": ".", "dirty": [], "unparseable_scope_entries": []}]}
 
-    paths = scope_entries
-    try:
-        candidates = _expand_scope_entries(root, paths)
-    except _ScopeExpansionUnsupported:
-        candidates = None
-    if candidates is not None:
-        dirty = _settle_candidates_in_process(root, candidates)
-        if dirty is not None:
-            return {
-                "verdict": "dirty" if dirty else "quiet",
-                "repos": [{"repo": ".", "dirty": dirty, "unparseable_scope_entries": []}],
-            }
+    local_paths, sibling_paths, unparseable = _partition_scope_entries(list(scope_entries))
 
-    try:
-        proc = subprocess.run(
-            ["git", "status", "--porcelain", "--"] + paths,
-            cwd=str(root), capture_output=True, text=True, timeout=10,
-            **_NO_CONSOLE,
+    local_dirty: Optional[list[str]] = None
+    if local_paths:
+        try:
+            candidates = _expand_scope_entries(root, local_paths)
+        except _ScopeExpansionUnsupported:
+            candidates = None
+        if candidates is not None:
+            local_dirty = _settle_candidates_in_process(root, candidates)
+    if local_dirty is None:
+        local_dirty = _scoped_porcelain_dirty(root, local_paths)
+
+    dirty_found = bool(local_dirty)
+    repos: list[dict[str, Any]] = [
+        {"repo": ".", "dirty": local_dirty, "unparseable_scope_entries": unparseable}
+    ]
+
+    # Sibling repos are settled in-process only — never a `git status` spawn
+    # per sibling, which is a fan-out over the scope's repo count. A sibling
+    # the in-process reader cannot settle (a scope past `_SCOPE_CANDIDATE_CAP`,
+    # or an index it declines to read) is reported as unsettled rather than
+    # silently counted quiet: fail loud, as for an unresolvable repo-id.
+    for repo_id, rel_paths in sibling_paths.items():
+        resolved = registry_get(f"repos.{repo_id.replace('-', '_')}")
+        if not resolved:
+            repos[0]["unparseable_scope_entries"].extend(f"{repo_id}: {p}" for p in rel_paths)
+            continue
+        sibling_root = Path(resolved)
+        try:
+            sibling_candidates = _expand_scope_entries(sibling_root, rel_paths)
+        except _ScopeExpansionUnsupported:
+            sibling_candidates = None
+        sibling_dirty = (
+            _settle_candidates_in_process(sibling_root, sibling_candidates)
+            if sibling_candidates is not None else None
         )
-    except (OSError, subprocess.SubprocessError):
-        return {"verdict": "quiet", "repos": [{"repo": ".", "dirty": [], "unparseable_scope_entries": []}]}
-    dirty = []
-    if proc.returncode == 0:
-        for line in proc.stdout.splitlines():
-            if len(line) > 3:
-                dirty.append(line[3:].strip())
-    return {
-        "verdict": "dirty" if dirty else "quiet",
-        "repos": [{"repo": ".", "dirty": dirty, "unparseable_scope_entries": []}],
-    }
+        if sibling_dirty is None:
+            repos[0]["unparseable_scope_entries"].extend(
+                f"{repo_id}: {p} (not settled in-process)" for p in rel_paths
+            )
+            continue
+        if sibling_dirty:
+            dirty_found = True
+        repos.append({"repo": str(sibling_root), "dirty": sibling_dirty, "unparseable_scope_entries": []})
+
+    return {"verdict": "dirty" if dirty_found else "quiet", "repos": repos}
 
 
 def _resolve_lineage_artifact_path(repo_root: Path, relative_path: str) -> Optional[Path]:
@@ -1162,21 +1738,31 @@ def compute_liveness_signal(
         return False
 
 
-def build_liveness_judgment_point(fired: bool, evidence_pointer: str, resolves: list[str]) -> Optional[dict[str, Any]]:
-    if not fired:
+def build_liveness_judgment_point(
+    liveness_signal_fired: bool, evidence_pointer: str, resolves: list[str]
+) -> Optional[dict[str, Any]]:
+    """Ported verbatim (HEAD's own `build_liveness_judgment_point`) — the
+    single JUDGMENT entry every mechanical liveness-signal computation
+    feeds. `id` is always `j1`; `resolves` (the directive ids a `proceed`
+    disposition unblocks) is threaded straight into the `proceed`
+    disposition's own `resolves` list — never collapsed to a bare bool.
+    No longer `revalidate_at_dispatch: true` (chunk C7 Part A4 — HEAD
+    parity): `compute_liveness_signal` reads a durable committed
+    frontmatter stamp, stable across the brief-to-apply gap, so a recorded
+    `proceed` disposition here is honored rather than discarded and
+    recomputed at dispatch."""
+    if not liveness_signal_fired:
         return None
-    return _shared_build_judgment_point(
-        None,
-        id="j-liveness",
-        question="The prior claim holder is not live (or its liveness could not be resolved) — resume anyway?",
-        dispositions=[
-            {"value": "resume", "resolves": True},
-            {"value": "hold", "resolves": True},
+    return build_judgment_point(
+        "j1",
+        "Any peer live on this handoff/plan? Stand down?",
+        evidence_pointer,
+        [
+            {"value": "proceed", "resolves": resolves},
+            {"value": "stand-down-and-surface", "resolves": []},
         ],
-        evidence=evidence_pointer,
-        reason="unclean prior holder",
-        reportable=True,
-        resolves_computed=bool(resolves),
+        None,
+        reason="insufficient-evidence",
     )
 
 
@@ -1491,6 +2077,123 @@ def compute_shipped_state(fm: dict[str, Any]) -> Optional[dict[str, Any]]:
     return {"deployment_state": "shipped", "shipped_in": fm.get("shipped_in")}
 
 
+_BLOCKER_HOLDER_FIELDS = ("claimed_by", "consumed_by", "picked_up_by")
+
+
+def _blocker_holder(record: dict[str, Any]) -> Optional[str]:
+    """Ported verbatim (HEAD's own `_blocker_holder`)."""
+    for key in _BLOCKER_HOLDER_FIELDS:
+        value = record.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def compute_gate_blocker_evidence(
+    repo_root: Path, blocked_by: Optional[list[Any]]
+) -> list[dict[str, Any]]:
+    """Ported (HEAD's own `compute_gate_blocker_evidence`) — a PM-ruled kept
+    behaviour, not one of DR-415's eight deletions (plan 2026-08-30-the-
+    gate-brief-reads-a-list-where-the-record-wrote-one, chunk C2/C3; see
+    test_gate_check_shipped_blocker_evidence.py's own docstring, which
+    names the deliberate retirement of the earlier "never a corpus walk"
+    bound). One bounded index build
+    (`reconcile.handoff_corpus._build_blocker_index`) over the live+
+    archived corpus, then a dict-hit lookup per id, resolved to a
+    continuation-chain head via `reconcile.gate_eval.collapse_to_chain_
+    heads` — never a per-id corpus walk."""
+    if not blocked_by:
+        return []
+
+    if isinstance(blocked_by, str):
+        raw = blocked_by.strip()
+        if raw.startswith("[") or raw.endswith("]"):
+            return [
+                {
+                    "id": raw,
+                    "status": "unresolvable",
+                    "resolved": False,
+                    "deployment_state": None,
+                    "holder": None,
+                    "holder_address": None,
+                    "holder_live": None,
+                }
+            ]
+        blocked_by = [raw]
+
+    from coordinator_core.reconcile.gate_eval import collapse_to_chain_heads
+    from coordinator_core.reconcile.handoff_corpus import _build_blocker_index
+
+    index, scan_errors = _build_blocker_index(repo_root)
+    scan_incomplete = bool(scan_errors)
+
+    results: list[dict[str, Any]] = []
+    for raw_id in blocked_by:
+        blocker_id = str(raw_id)
+        entry: dict[str, Any] = {
+            "id": blocker_id,
+            "status": "unresolvable",
+            "resolved": False,
+            "deployment_state": None,
+            "holder": None,
+            "holder_address": None,
+            "holder_live": None,
+        }
+
+        paths = index.get(blocker_id)
+        if not paths:
+            if scan_incomplete:
+                entry["status"] = "scan_incomplete"
+            results.append(entry)
+            continue
+
+        records: list[dict[str, Any]] = []
+        unreadable = False
+        for path in paths:
+            meta = dag._read_meta(str(path))
+            if not meta:
+                try:
+                    path.read_bytes()
+                except OSError:
+                    unreadable = True
+                continue
+            meta = dict(meta)
+            meta["_path"] = str(path)
+            records.append(meta)
+
+        if not records:
+            entry["status"] = (
+                "scan_incomplete" if (scan_incomplete or unreadable) else "unresolvable"
+            )
+            results.append(entry)
+            continue
+
+        heads = collapse_to_chain_heads(records)
+        if len(heads) > 1:
+            entry["status"] = "ambiguous"
+            results.append(entry)
+            continue
+
+        head = heads[0]
+        entry["status"] = "resolved"
+        entry["resolved"] = True
+        entry["deployment_state"] = head.get("deployment_state")
+        holder = _blocker_holder(head)
+        entry["holder"] = holder
+        if holder:
+            try:
+                from coordinator_core.session import reachability
+
+                address = reachability.resolve_advisory_address(holder)
+            except Exception:
+                address = ""
+            entry["holder_address"] = address or ""
+            entry["holder_live"] = bool(address)
+        results.append(entry)
+
+    return results
+
+
 def compute_gate_check_recommendation(blockers: list[dict[str, Any]]) -> dict[str, str]:
     """Ported verbatim (HEAD's own `compute_gate_check_recommendation`)."""
     if not blockers:
@@ -1578,17 +2281,56 @@ def build_gate_recheck_directive(artifact_path: str) -> dict[str, Any]:
 
 
 def build_shipped_state_judgment_point(evidence_pointer: str, resolves: list[str]) -> dict[str, Any]:
-    return _shared_build_judgment_point(
-        None,
-        id="j-shipped",
-        question="This handoff is already marked deployment_state: shipped — proceed anyway?",
-        dispositions=[
-            {"value": "proceed", "resolves": True},
-            {"value": "hold", "resolves": True},
+    """The `deployment_state: shipped` JUDGMENT entry (2026-07-25 defect fix —
+    a handoff already stamped shipped previously briefed as freely
+    dispatchable, `gates.coast.verdict == "clear"`, `judgment_points: []`,
+    telling a peer session to redo finished work). A shipped baton is
+    presumptively done, but re-opening one is legitimate (a fix regressed,
+    or the stamp landed prematurely) — so this never hard-blocks; it
+    surfaces a judgment point the EM resolves, mirroring
+    `build_gate_check_judgment_point`'s shape for the sibling
+    `awaiting_gate` deployment_state. `compute_coast` blocks on ANY
+    `judgment_points[]` entry carrying an `id` (this one always does), so
+    `gates.coast.verdict` is never `"clear"` while this is unresolved —
+    closing the exact silent-coast-is-clear gap the defect named.
+
+    Tier: `insufficient-evidence` — `deployment_state`/`shipped_in` are
+    engine-read frontmatter fields (not a quote of untrusted body text), but
+    whether the shipped stamp still reflects reality — has the fix since
+    regressed, was the stamp premature — is exactly the read this module
+    never mechanizes."""
+    return build_judgment_point(
+        "jshipped",
+        "This handoff is already stamped deployment_state: shipped — reopen "
+        "it, or stand down and leave it closed?",
+        evidence_pointer,
+        [
+            {
+                "value": "reopen-and-proceed",
+                "resolves": resolves,
+                "guidance": (
+                    "Treat the shipped stamp as stale or premature — the work needs "
+                    "further action after all (a fix regressed, or the ship landed "
+                    "before the baton was genuinely done). Check `shipped_in` (when "
+                    "present) against what actually landed on disk/git before "
+                    "proceeding, and record why this baton is being reopened."
+                ),
+            },
+            {
+                "value": "confirm-shipped-stand-down",
+                "resolves": [],
+                "guidance": (
+                    "Confirm the shipped stamp is accurate — this baton is "
+                    "genuinely done. Stand down; do not claim it. The "
+                    "handoff sitting in state/handoffs/ awaiting an archival sweep "
+                    "is expected (ship-handoff retains it in place for later "
+                    "archival, per `handoff_archive_transition`'s stamp_shipped "
+                    "mode) — not a sign it needs picking up."
+                ),
+            },
         ],
-        evidence=evidence_pointer,
+        None,
         reason="insufficient-evidence",
-        reportable=True,
     )
 
 
@@ -1692,18 +2434,150 @@ def compute_addressee_gate(repo_root: Path, to_value: Optional[str]) -> dict[str
 # preflight.completeness_items / completeness_batches
 # ---------------------------------------------------------------------------
 
-def build_completeness_checklist(fm: dict[str, Any]) -> dict[str, Any]:
-    """`preflight.{completeness_items,completeness_batches}` — reads the
-    frontmatter `completeness_checklist` field (a list of item strings) and
-    partitions it into a flat items list plus one batch (this module does
-    not reproduce the monolith's multi-batch grouping heuristic — every
-    item lands in a single batch here, a documented reduction)."""
-    raw = fm.get("completeness_checklist")
-    items = raw if isinstance(raw, list) else []
-    items = [str(i) for i in items if isinstance(i, (str, int, float))]
-    if not items:
-        return {"items": [], "batches": []}
-    return {"items": items, "batches": [{"batch": items}]}
+def build_untrusted_gate_judgment_point(
+    id: str,
+    question: str,
+    evidence: str,
+    dispositions: list[dict[str, Any]],
+    *,
+    round_trip: str = "terminal",
+    revalidate_at_dispatch: bool = False,
+) -> dict[str, Any]:
+    """The judgment-point constructor for evidence sourced from
+    branch-writable content this engine did not itself compute (a
+    memo/handoff body quoted verbatim into `evidence`) — the Director of Engineering's
+    discriminator: "can the thing being recommended about influence the
+    recommendation?" Here the answer is yes, so recommending is structurally
+    forbidden rather than merely discouraged, mirroring
+    `build_completeness_checklist`'s existing `resolves: []`
+    structural-unreachability shape for its probe-confirmation gate.
+
+    Carries NO `recommendation` parameter — a caller cannot pass one even by
+    mistake, a type-level guarantee rather than a runtime assertion on one
+    gate. Always emits `recommendation: None`, `reason:
+    "recommendation-forbidden"`.
+
+    Composes the shared seam's own `build_untrusted_gate_judgment_point`
+    (C6, see `build_judgment_point` above) for the dict construction --
+    this module's positional signature and default `revalidate_at_dispatch`
+    are preserved by this wrapper, not by a second implementation.
+    """
+    return _shared_build_untrusted_gate_judgment_point(
+        id=id,
+        question=question,
+        dispositions=dispositions,
+        evidence=evidence,
+        reason="recommendation-forbidden",
+        revalidate_at_dispatch=revalidate_at_dispatch,
+        round_trip=round_trip,
+    )
+
+
+def build_completeness_checklist(fm: dict[str, Any], artifact_path: str) -> dict[str, Any]:
+    """Function 6 — parses `completeness_checklist:` items (in-process, via
+    `coordinator_core.ops.parse_completeness_item`, AC16 — never re-derives
+    the grammar here), hoists `restart-gated` items ahead of `live` items
+    (Step 5.5b fixed ordering rule), and returns one `coordinator-tasks-mirror
+    init` EM-run directive per item.
+
+    MIRROR IS PRIMARY, HARNESS TASK IS BEST-EFFORT. Each directive carries an
+    additive `harness_task_create` payload for a consumer that mirrors the item
+    into the agent harness's own task surface. That payload is advisory: this
+    repo has no consumer for it, it commands no directive of its own, and an EM
+    whose harness lacks `TaskCreate` simply does not act on it. The disk-backed
+    `coordinator-tasks-mirror` CLI is the durable half and the only half that
+    executes — confirmed inert-but-harmless in a live session on 2026-08-17,
+    when `TaskCreate` was absent from an EM tool surface entirely
+    (`cross-repo/inbox/2026-08-17-example-cockpit-repo-em-harness-task-create-payload-inert.md`).
+    NEGATIVE SPEC: do not invert these. Promoting the harness task to primary
+    and demoting the mirror to fallback trades a durable on-disk record for a
+    harness capability that has already vanished once.
+
+    SECURITY-LOAD-BEARING (contract § "Probe-confirmation is JUDGMENT, not a
+    gates boolean"): a `[probe: ...]` command is UNTRUSTED input with full
+    agent-Bash blast radius. This function NEVER returns a directive that
+    runs a probe — the only artifact a probe-carrying item produces is a
+    `judgment_points` entry ("Run untrusted completeness probe `<cmd>`?")
+    whose `dispositions` resolve NOTHING (`resolves: []` on both choices) —
+    there is no downstream directive for either disposition to unblock,
+    by construction. An autonomous no-human consumer MUST leave that
+    judgment point unresolved and the probe unrun; this function's shape
+    makes "auto-run the probe" structurally unreachable rather than merely
+    discouraged.
+    """
+    raw_items = fm.get("completeness_checklist")
+    if not raw_items:
+        return {"items": [], "directives": [], "judgment_points": [], "batches": []}
+    if isinstance(raw_items, str):
+        raw_items = [raw_items]
+
+    parsed: list[dict[str, Any]] = []
+    for raw in raw_items:
+        try:
+            item_class, assertion, probe = _parse_completeness_item(raw)
+        except _CompletenessMalformed as exc:
+            parsed.append({"raw": raw, "malformed": True, "error": str(exc)})
+            continue
+        parsed.append({
+            "raw": raw,
+            "malformed": False,
+            "class": item_class,
+            "assertion": assertion,
+            "probe": probe or None,
+        })
+
+    # Step 5.5b — restart-gated items hoisted ahead of live items (fixed
+    # ordering rule; stable sort preserves within-class declaration order).
+    ordered = sorted(
+        (item for item in parsed if not item["malformed"]),
+        key=lambda item: 0 if item["class"] == "restart-gated" else 1,
+    )
+
+    basename = Path(artifact_path).name
+    directives: list[dict[str, Any]] = []
+    judgment_points: list[dict[str, Any]] = []
+
+    for idx, item in enumerate(ordered):
+        task_id = f"ct{idx + 1}"
+        directives.append({
+            "id": f"d-{task_id}-mirror",
+            "cli": "coordinator-tasks-mirror",
+            "args": ["init", basename, item["assertion"]],
+            "depends_on": None,
+            "already_satisfied": False,
+            "harness_task_create": {"content": item["assertion"], "class": item["class"]},
+        })
+        if item["probe"]:
+            # SECURITY-LOAD-BEARING (see module docstring/negative-spec):
+            # `item["probe"]` is untrusted, branch-writable content quoted
+            # verbatim into `evidence` — recommending here would nudge an
+            # operator toward running attacker-influenceable input.
+            # `build_untrusted_gate_judgment_point` makes `recommendation`
+            # structurally unreachable rather than merely discouraged.
+            judgment_points.append(build_untrusted_gate_judgment_point(
+                f"j-{task_id}-probe",
+                f"Run untrusted completeness probe `{item['probe']}`?",
+                item["probe"],
+                [
+                    {"value": "confirm-and-run", "resolves": []},
+                    {"value": "skip-and-validate-manually", "resolves": []},
+                ],
+            ))
+
+    # Step 5.5b — `preflight.completeness_batches`: the restart-gated-hoisted
+    # ordering as its own evidence field (contract § computed-skills.md
+    # "Restart-gated hoist/partition (fixed ordering rule)"), independent of
+    # `directives[]`'s parallel ordering above.
+    # Review: code-reviewer — Finding 5: `probe` is duplicated here rather
+    # than replaced with an index back into `items[]` intentionally — batches
+    # is self-contained ordering evidence, requiring no cross-referencing by
+    # consumers.
+    batches = [
+        {"class": item["class"], "assertion": item["assertion"], "probe": item["probe"]}
+        for item in ordered
+    ]
+
+    return {"items": parsed, "directives": directives, "judgment_points": judgment_points, "batches": batches}
 
 
 # ---------------------------------------------------------------------------
@@ -2462,6 +3336,23 @@ def _build_action_memo_args(artifact_path: str, kind_resolved: str, decisions: d
     return args
 
 
+def _claim_already_self_held(repo_root: Path, class_: str, basename: str) -> bool:
+    """Ported verbatim (HEAD's own `_claim_already_self_held`) — True iff
+    THIS session is the recorded holder of the `<class>-claims/<basename>`
+    lock dir, so a directive builder can mark its own `claim-artifact`
+    directive `already_satisfied` for idempotent same-session re-entry
+    (memo's `claim_artifact` REJECTS a same-session reclaim by design)."""
+    claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    if not claims_dir.is_dir():
+        return False
+    try:
+        return _liveness.claim_held_by_me(
+            str(claims_dir), my_sid=_explicitly_scoped_session_id(), cwd=str(repo_root)
+        )
+    except (OSError, ValueError):
+        return False
+
+
 def build_memo_directives(
     artifact_path: str, kind_resolved: str = "ask", decisions: Optional[dict[str, Any]] = None
 ) -> list[dict[str, Any]]:
@@ -2569,6 +3460,28 @@ def build_execution_stamp_directive(execution_stamp_match: dict[str, Any], targe
     }
 
 
+def _handoff_stamp_evidence(root: Path, abs_artifact_path: Path) -> bool:
+    """Ledger-first evidence that `d2` (`archive-stamp-cli claim-handoff`)
+    already landed — a mirror-sourced holder, or a ledger-sourced holder
+    whose claim dir carries the durable `stamped` marker (`apply` stage
+    alone is reachable on a refused stamp too; see C11 row 35 /
+    cross-repo/inbox/2026-08-13-doe-claude-em-pickup-already-satisfied-
+    masks-a-refused-write.md). Ledger-first so a branch-switch-revert
+    desync (the mirror reverted, the ledger claim did not) still reads
+    correctly (C11 row 35)."""
+    claim_state = resolve_claim_state(abs_artifact_path, repo_root=root)
+    if claim_state.mirror_holder is not None:
+        return True
+    if claim_state.ledger_holder is not None:
+        try:
+            common_dir = lifecycle_mod.git_common_dir(root)
+        except Exception:
+            return False
+        claim_dir = handoff_claim_dir(common_dir, abs_artifact_path)
+        return _claims.claim_stamped(claim_dir)
+    return False
+
+
 def _build_directives(
     classification: str,
     display_path: str,
@@ -2578,12 +3491,17 @@ def _build_directives(
     fm: dict[str, Any],
     decisions: dict[str, Any],
     kind_resolved: Optional[str],
+    root: Optional[Path] = None,
+    abs_artifact_path: Optional[Path] = None,
 ) -> list[dict[str, Any]]:
     """`directives[]` assembly, dispatched on `classification` — the wiring
     C10b restores (DR-415 kept this construction; only the wiring lived in
     `pickup_assemble.brief`'s own body, not a separate function there)."""
     if classification in ("handoff", "spinoff"):
-        self_claimed_in_frontmatter = bool(claim_grant.get("held_by_self")) and fm.get("status") == "claimed"
+        stamp_evidence = False
+        if root is not None and abs_artifact_path is not None:
+            stamp_evidence = _handoff_stamp_evidence(root, abs_artifact_path)
+        self_claimed_in_frontmatter = bool(claim_grant.get("held_by_self")) and stamp_evidence
         return build_handoff_directives(display_path, claim.get("holder"), basename, self_claimed_in_frontmatter)
     if classification == "memo":
         return build_memo_directives(display_path, kind_resolved or "ask", decisions)
@@ -2597,9 +3515,10 @@ def _build_judgment_points(
     kind_resolved: Optional[str],
     kind_raw: Optional[Any],
     kind_unrecognized: bool,
+    liveness_resolves: list[str],
 ) -> list[dict[str, Any]]:
     points: list[dict[str, Any]] = []
-    jp = build_liveness_judgment_point(liveness_fired, "gates.liveness_signal", ["j-liveness"])
+    jp = build_liveness_judgment_point(liveness_fired, "gates.liveness_signal", liveness_resolves)
     if jp is not None:
         points.append(jp)
     if stamp_gate is not None:
@@ -2681,6 +3600,72 @@ class BriefResult:
 
 
 def _emit(decision_object: dict[str, Any], exit_code: int) -> BriefResult:
+    """The single validation chokepoint every decision-object construction
+    site routes through — ported verbatim from `pickup_assemble._emit`
+    (AC14/AC15/AC5b's enforcement backstop): fails loud (`ValueError`) on
+    a missing/empty `narration`, a missing/empty `next_move` whenever
+    `gates.coast.verdict` is not `"clear"` (a bare error payload with no
+    `gates` object reads as verdict `None`, held to the same bar), and any
+    `judgment_points[]` entry missing a `recommendation` key regardless of
+    how it was constructed. Does NOT fabricate a default for either field
+    — a caller that omits one is a bug at the call site, not this
+    chokepoint's to paper over."""
+    sanitize_resolution = (decision_object.get("artifact") or {}).get("sanitize_resolution")
+    if sanitize_resolution:
+        # `passed` is rendered with its line breaks escaped: the sanitize tier
+        # also repairs a hard line wrap, and a raw newline here would split
+        # this one-line note across the narration.
+        _passed = sanitize_resolution["passed"].replace("\r", "\\r").replace("\n", "\\n")
+        decision_object = {
+            **decision_object,
+            "narration": (
+                f"Passed path '{_passed}' only resolved after "
+                f"trimming surrounding/trailing prose punctuation and rejoining "
+                f"any hard line wrap -> "
+                f"'{sanitize_resolution['resolved']}'. "
+            ) + (decision_object.get("narration") or ""),
+        }
+
+    elision_resolution = (decision_object.get("artifact") or {}).get("elision_resolution")
+    if elision_resolution:
+        decision_object = {
+            **decision_object,
+            "narration": (
+                f"Resolved elided baton path '{elision_resolution['passed']}' -> "
+                f"'{elision_resolution['resolved']}'. "
+            ) + (decision_object.get("narration") or ""),
+        }
+
+    suffix_resolution = (decision_object.get("artifact") or {}).get("suffix_resolution")
+    if suffix_resolution:
+        decision_object = {
+            **decision_object,
+            "narration": (
+                f"Passed slug '{suffix_resolution['passed']}' had no exact match — resolved "
+                f"via unique basename-suffix match -> '{suffix_resolution['resolved']}'. "
+            ) + (decision_object.get("narration") or ""),
+        }
+
+    narration = decision_object.get("narration")
+    if not narration:
+        raise ValueError("_emit: decision object missing non-empty 'narration'")
+
+    coast_verdict = (((decision_object.get("gates") or {}).get("coast")) or {}).get("verdict")
+    if coast_verdict != "clear":
+        next_move = decision_object.get("next_move")
+        if not next_move:
+            raise ValueError(
+                f"_emit: decision object with gates.coast.verdict={coast_verdict!r} "
+                "missing non-empty 'next_move'"
+            )
+
+    for jp in decision_object.get("judgment_points") or []:
+        if "recommendation" not in jp:
+            raise ValueError(
+                f"_emit: judgment_points entry {jp.get('id', '<no id>')!r} missing "
+                "required 'recommendation' key"
+            )
+
     return BriefResult(decision_object, exit_code)
 
 
@@ -2697,9 +3682,53 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
         artifact = resolve_artifact(artifact_path, root)
     except _ArtifactUnreadable as exc:
         return _emit({
+            "artifact": {
+                "path": artifact_path, "classification": None,
+                "frontmatter": {}, "resolution": None,
+            },
+            "error": str(exc),
+            "narration": f"Could not resolve {artifact_path!r}: {exc}",
+            "next_move": (
+                "Confirm the path or basename, then retry — checked "
+                f"{', '.join(LIVE_DIRS + ARCHIVE_DIRS)}."
+            ),
+        }, EXIT_BUSINESS_FAIL)
+    except OutOfRepoPath as exc:
+        return _emit({
+            "artifact": {
+                "path": artifact_path, "classification": "ambiguous",
+                "frontmatter": {}, "resolution": None,
+            },
             "error": str(exc),
             "narration": f"Could not resolve {artifact_path!r}: {exc}",
             "next_move": "Confirm the path or basename, then retry.",
+        }, EXIT_BUSINESS_FAIL)
+    except _ArtifactElisionInconclusive as exc:
+        candidates_str = ", ".join(exc.candidates)
+        jp = build_judgment_point(
+            "j-elision",
+            f"Which baton does the elided path '{exc.artifact_path}' resolve to?",
+            f"candidates: {candidates_str}",
+            [{"value": c, "resolves": []} for c in exc.candidates],
+            None,
+            reason="insufficient-evidence",
+        )
+        return _emit({
+            "artifact": {
+                "path": exc.artifact_path,
+                "classification": "ambiguous",
+                "frontmatter": {},
+                "resolution": {"status": "elision_inconclusive", "candidates": exc.candidates},
+            },
+            "preflight": {"tree_quiescence": compute_tree_quiescence(root, [])},
+            "gates": {"claim": {}, "addressee": {}, "coast": compute_coast([])},
+            "directives": [],
+            "judgment_points": [jp],
+            "narration": (
+                f"'{exc.artifact_path}' is an elided path that matches {len(exc.candidates)} "
+                f"candidates — cannot resolve without operator input: {candidates_str}."
+            ),
+            "next_move": "Pick the intended baton from the candidates and re-run brief with its literal path.",
         }, EXIT_BUSINESS_FAIL)
 
     classification = artifact["classification"]
@@ -2708,13 +3737,13 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
     abs_path = root / display_path
 
     if classification == "ambiguous":
-        tree_quiescence = compute_tree_quiescence(root, [])
+        tree_quiescence = compute_tree_quiescence(root, fm.get("scope", []) or [])
         return _emit({
             "artifact": artifact,
             "gates": {"claim": {}, "addressee": {}, "coast": compute_coast([])},
             "directives": [],
             "judgment_points": [],
-            "narration": f"Could not classify {artifact_path} against the handoff/spinoff/memo shape.",
+            "narration": f"Could not classify {display_path} against the handoff/spinoff/memo shape.",
             "next_move": "Read the artifact directly and confirm its kind by hand before proceeding.",
             "preflight": {"tree_quiescence": tree_quiescence},
         }, EXIT_BUSINESS_FAIL)
@@ -2733,9 +3762,7 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
         # discriminator here (mirrors HEAD): an archived handoff's
         # terminal_fields never carries that key, so the reply-closure
         # check (memo-only) only runs when this archived artifact is
-        # actually a memo. The archived-open-memo kind-dispatch HEAD also
-        # runs alongside this is NOT ported (documented reduction) — see
-        # module docstring's "documented reductions" for the discipline.
+        # actually a memo.
         if "from" in terminal_fields:
             closure = compute_reply_closure(terminal_fields, display_path, root)
             judgment_points, narration, next_move = _render_reply_closure(
@@ -2745,6 +3772,25 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
                 base_next_move,
                 status=terminal_fields.get("status"),
             )
+        # Archived-memo-still-open kind-dispatch (2026-07-27 doe-claude-em
+        # memo defect fix) — an archived memo whose terminal `status` is
+        # NOT already a terminal disposition was swept into the archive
+        # without ever having a disposition stamped on it; fire the same
+        # `j-kind` judgment point and memo directives the live in-place
+        # memo branch fires, keyed off `archived_class` (never the
+        # `"from" in terminal_fields` heuristic above it, which only
+        # gates the reply-closure check).
+        if (
+            archived_class == "memo"
+            and terminal_fields.get("status") not in _MEMO_TERMINAL_STATUS
+        ):
+            kind_resolved, kind_unrecognized = resolve_memo_kind(terminal_fields)
+            directives = build_memo_directives(display_path, kind_resolved, decisions or {})
+            judgment_points = judgment_points + [
+                build_kind_dispatch_judgment_point(
+                    kind_resolved, terminal_fields.get("kind"), kind_unrecognized
+                )
+            ]
         tree_quiescence = compute_tree_quiescence(root, [])
         archived_artifact = artifact
         if archived_class != "memo":
@@ -2826,6 +3872,7 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
     reclaimed: Optional[dict[str, Any]] = None
     if claim_at_brief and classification != "archived":
         reclaimed = acquire_brief_claim(root, class_token, basename, cwd=str(root))
+        route_baton_adoption(root, display_path, fm)
 
     claim = gates_claim(abs_path, root, class_token, basename)
     claim_grant = compute_claim_grant(root, class_token, basename, display_path, cwd=str(root), fm=fm)
@@ -2833,6 +3880,46 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
 
     scope = fm.get("scope") if isinstance(fm.get("scope"), list) else []
     tree_quiescence = compute_tree_quiescence(root, [str(s) for s in scope])
+
+    if claim["holder"] is not None and claim_grant.get("verdict") != "granted":
+        # Live-claim-holder stand-down (HEAD parity, both the handoff/
+        # spinoff branch and the memo/handoff parity fix, cross-repo/inbox/
+        # 2026-08-17-doe-claude-em-memo-claim-fires-after-the-em-can-
+        # already-act.md): a DENIED grant against a live foreign holder
+        # halts the brief before the artifact body is worth reading — no
+        # directives, a liveness judgment point as the only offer. Row 2 of
+        # `compute_claim_grant` (`held_by_self`) resolves `granted` for a
+        # same-session re-brief, so this branch is never reached for that
+        # case.
+        live_claim_jp = build_liveness_judgment_point(liveness_fired, "gates.liveness_signal", [])
+        live_claim_judgment_points = [jp for jp in (live_claim_jp,) if jp]
+        if live_claim_judgment_points:
+            claim_next_move = "Resolve the open judgment point(s) below before proceeding."
+        else:
+            claim_next_move = (
+                f"{claim['holder']} holds the claim but no live signal fired for it — "
+                "confirm by hand whether that session is still active before proceeding."
+            )
+        stand_down_gates: dict[str, Any] = {
+            "claim": claim,
+            "claim_grant": claim_grant,
+            "liveness_signal": liveness_fired,
+            "coast": compute_coast(
+                live_claim_judgment_points, claim_grant=claim_grant, tree_quiescence=tree_quiescence
+            ),
+        }
+        if classification == "memo":
+            stand_down_gates["addressee"] = compute_addressee_gate(root, fm.get("to"))
+            stand_down_gates["sender_reachability"] = compute_sender_reachability(fm.get("sent_by"))
+        return _emit({
+            "artifact": artifact,
+            "gates": stand_down_gates,
+            "directives": [],
+            "judgment_points": live_claim_judgment_points,
+            "narration": f"{display_path} is already claimed by {claim['holder']}.",
+            "next_move": claim_next_move,
+            "preflight": {"tree_quiescence": tree_quiescence},
+        }, EXIT_BUSINESS_FAIL)
 
     stamp_gate_hit = compute_execution_stamp_match(root, fm, display_path)
     stamp_gate = stamp_gate_hit[0] if stamp_gate_hit else None
@@ -2843,18 +3930,28 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
     kind_unrecognized = False
     if classification == "memo":
         kind_resolved, kind_unrecognized = resolve_memo_kind(fm)
+        artifact_out["kind_resolved"] = kind_resolved
 
+    directives = _build_directives(
+        classification, display_path, basename, claim, claim_grant, fm, decisions or {}, kind_resolved,
+        root=root, abs_artifact_path=abs_path,
+    )
+    if classification == "memo" and directives and _claim_already_self_held(root, class_token, basename):
+        # Idempotent same-session re-entry (HEAD parity) — d1 (claim-
+        # artifact) already landed for THIS session on a prior partial
+        # apply; skip re-dispatching its handler rather than hard-failing
+        # on the designed same-session-reclaim rejection.
+        directives[0]["already_satisfied"] = True
+
+    liveness_resolves = ["d2"] if classification in ("handoff", "spinoff") else [d["id"] for d in directives]
     judgment_points = _build_judgment_points(
-        classification, liveness_fired, stamp_gate, kind_resolved, fm.get("kind"), kind_unrecognized
+        classification, liveness_fired, stamp_gate, kind_resolved, fm.get("kind"), kind_unrecognized,
+        liveness_resolves,
     )
 
     shipped_state = compute_shipped_state(fm) if classification in ("handoff", "spinoff") else None
     if shipped_state is not None:
         judgment_points.append(build_shipped_state_judgment_point("gates.shipped_state", ["d2"]))
-
-    directives = _build_directives(
-        classification, display_path, basename, claim, claim_grant, fm, decisions or {}, kind_resolved
-    )
 
     # AC18 — the pre-tagged tier split (HEAD parity): `unstampable` promotes
     # to an unconditional re-stamp directive; `stale-substantive` already
@@ -2867,13 +3964,13 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
 
     gate_check: Optional[dict[str, Any]] = None
     if classification in ("handoff", "spinoff") and fm.get("deployment_state") == "awaiting_gate":
-        # `awaiting_gate` branch (HEAD parity, Defect 3 + Piece A/B) —
-        # reduced: `compute_gate_blocker_evidence`'s corpus-wide index walk
-        # is NOT reproduced (documented reduction); the empty-`blocked_by`
-        # case (the common one — an aging-only gate with no recorded
-        # blocker ids) resolves identically to HEAD's own short-circuit.
-        # A non-empty `blocked_by` degrades every id to `unresolvable`
-        # rather than resolving it against the corpus.
+        # `awaiting_gate` branch (HEAD parity, Defect 3 + Piece A/B). The
+        # corpus-wide `blocked_by` resolution (`compute_gate_blocker_
+        # evidence`) is NOT one of DR-415's eight deletions and is itself a
+        # PM-ruled kept behaviour (plan 2026-08-30-the-gate-brief-reads-a-
+        # list-where-the-record-wrote-one, chunk C2/C3 — see
+        # test_gate_check_shipped_blocker_evidence.py's own docstring), so
+        # it is ported here rather than reduced.
         typed_meta = dag._read_meta(str(abs_path))
         blocked_by = typed_meta.get("blocked_by")
         gate_check = {
@@ -2882,31 +3979,86 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
             "blocking_notes": fm.get("blocking_notes"),
             "gate_evidence": typed_meta.get("gate_evidence"),
         }
-        if not blocked_by:
-            gate_check["blockers"] = []
-        else:
-            gate_check["blockers"] = [
-                {"stub_id": str(b), "status": "unresolvable", "resolved": False,
-                 "deployment_state": None, "holder": None, "holder_address": None, "holder_live": None}
-                for b in blocked_by
-            ]
+        gate_check["blockers"] = [
+            {
+                "stub_id": entry["id"],
+                "status": entry["status"],
+                "resolved": entry["resolved"],
+                "deployment_state": entry["deployment_state"],
+                "holder": entry["holder"],
+                "holder_address": entry["holder_address"],
+                "holder_live": entry["holder_live"],
+            }
+            for entry in compute_gate_blocker_evidence(root, blocked_by)
+        ]
         gate_recommendation = compute_gate_check_recommendation(gate_check["blockers"])
         gate_jp = build_gate_check_judgment_point("gates.gate_check", ["d2", "d-gate-recheck"], recommendation=gate_recommendation)
         judgment_points.append(gate_jp)
         directives.append(build_gate_recheck_directive(display_path))
 
-    if gate_check is not None and len(directives) >= 2:
-        blocking_ids: list[Any] = ["jgate", "d-gate-recheck"]
+    if classification in ("handoff", "spinoff") and len(directives) >= 2:
+        # `depends_on` for `d2` (claim-handoff) — AND-semantics across
+        # every blocking judgment point that independently claims to gate
+        # it (HEAD parity): `jgate` (+ `d-gate-recheck`, awaiting_gate),
+        # `jshipped` (shipped), and `j1` (a firing liveness signal),
+        # unconditional on any of the three — not only when `gate_check`
+        # fires.
+        blocking_ids: list[Any] = []
+        if gate_check is not None:
+            blocking_ids.append("jgate")
+            blocking_ids.append("d-gate-recheck")
         if shipped_state is not None:
             blocking_ids.append("jshipped")
         if liveness_fired:
             blocking_ids.append("j1")
-        directives[1]["depends_on"] = blocking_ids[0] if len(blocking_ids) == 1 else blocking_ids
+        if not blocking_ids:
+            directives[1]["depends_on"] = None
+        elif len(blocking_ids) == 1:
+            directives[1]["depends_on"] = blocking_ids[0]
+        else:
+            directives[1]["depends_on"] = blocking_ids
+    elif classification == "memo" and liveness_fired and directives:
+        # Same gating rule, `d1`/`claim-memo-stamp` side — a memo carries
+        # no `jgate`/`jshipped` (handoff-only gates), so `j1` is the only
+        # blocking id a memo's claim directives can ever carry. Both the
+        # session-claim (`d1`) and the archive-stamp claim-memo-stamp
+        # directive share it (HEAD parity) — neither should land ahead of
+        # a firing liveness signal.
+        directives[0]["depends_on"] = "j1"
+        if len(directives) >= 2:
+            directives[1]["depends_on"] = "j1"
+        if len(directives) >= 3:
+            # `d-action-memo`'s own `depends_on` is unconditionally
+            # `j-kind` (widened here to `["j-kind", "j1"]`, AND-semantics,
+            # once liveness fires) — without this, a firing liveness
+            # signal blocks only the claim-side directives while the
+            # terminal memo write still lands unguarded by the contended-
+            # claim judgment point ahead of it.
+            existing = directives[2]["depends_on"]
+            if existing in (None, "j1"):
+                directives[2]["depends_on"] = "j1"
+            elif isinstance(existing, list):
+                if "j1" not in existing:
+                    directives[2]["depends_on"] = [*existing, "j1"]
+            else:
+                directives[2]["depends_on"] = [existing, "j1"]
+
+    is_handoff_like = classification in ("handoff", "spinoff")
+    if is_handoff_like:
+        completeness = build_completeness_checklist(fm, display_path)
+        # Completeness-checklist directives (one `coordinator-tasks-mirror
+        # init` per item, restart-gated-hoisted) and the probe-confirmation
+        # judgment points are independent of the claim chain — appended, not
+        # gated behind j1/jgate. They are appended BEFORE `compute_coast`
+        # reads `judgment_points`: an unresolved untrusted-probe gate must
+        # hold the coast, or an autonomous consumer reads "clear" past it.
+        directives = directives + completeness["directives"]
+        judgment_points = judgment_points + completeness["judgment_points"]
+    else:
+        completeness = {"items": None, "batches": None}
 
     coast = compute_coast(judgment_points, claim_grant, tree_quiescence)
-    is_handoff_like = classification in ("handoff", "spinoff")
     sizing = compute_sizing_disposition(root, fm) if is_handoff_like else None
-    completeness = build_completeness_checklist(fm) if is_handoff_like else {"items": None, "batches": None}
 
     narration, next_move = _ready_summary(classification, directives, judgment_points)
     if classification in ("handoff", "spinoff"):
@@ -2916,22 +4068,27 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
             narration = f"Already held by you — resuming, not contending. {narration}"
             if not judgment_points:
                 next_move = "Already held by you — resume. " + next_move
-    elif classification == "memo":
+    reply_obligation: Optional[str] = None
+    if classification == "memo":
         reply_prefix = reply_obligation_at_open(fm)
         if reply_prefix:
             next_move = reply_prefix + next_move
+            reply_obligation = "reply-owed-on-action"
 
     gates_obj: dict[str, Any] = {
         "claim": claim,
         "claim_grant": claim_grant,
         "liveness_signal": liveness_fired,
         "coast": coast,
-        "execution_stamp_match": stamp_gate,
-        "sender_reachability": sender_reachability,
     }
+    if stamp_gate is not None:
+        gates_obj["execution_stamp_match"] = stamp_gate
     if shipped_state is not None:
         gates_obj["shipped_state"] = shipped_state
+    if gate_check is not None:
+        gates_obj["gate_check"] = gate_check
     if classification == "memo":
+        gates_obj["sender_reachability"] = sender_reachability
         gates_obj["addressee"] = compute_addressee_gate(root, fm.get("to"))
 
     decision_object: dict[str, Any] = {
@@ -2948,6 +4105,8 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
             "tree_quiescence": tree_quiescence,
         },
     }
+    if classification == "memo":
+        decision_object["preflight"]["reply_obligation"] = reply_obligation
 
     if reclaimed is not None:
         basis = reclaimed["basis"]
@@ -2974,17 +4133,211 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
         decision_object["narration"] = note + decision_object.get("narration", "")
         decision_object["gates"]["claim_reclaim"] = reclaimed
 
-    exit_code = EXIT_BUSINESS_FAIL if claim_grant.get("verdict") == "denied" else EXIT_OK
+    addressee_gate = gates_obj.get("addressee") or {}
+    addressee_business_fail = (
+        addressee_gate.get("checked")
+        and addressee_gate.get("exit_code") not in (0, None)
+        and not os.environ.get("COORDINATOR_OVERRIDE_MEMO_ADDRESSEE")
+    )
+    if addressee_business_fail:
+        # `cross_seat_override` names the bypass only where the gate actually
+        # fires — an addressee gate that passed has no override to offer.
+        decision_object["gates"]["addressee"] = {
+            **addressee_gate,
+            "cross_seat_override": "COORDINATOR_OVERRIDE_MEMO_ADDRESSEE",
+        }
+        decision_object["directives"] = []
+        decision_object["judgment_points"] = []
+        decision_object["narration"] = (
+            f"{artifact['path']} names an addressee this session is not — "
+            f"{addressee_gate.get('message', 'addressee mismatch')}."
+        )
+        decision_object["next_move"] = (
+            "Confirm the addressee, or set COORDINATOR_OVERRIDE_MEMO_ADDRESSEE "
+            "if you and the PM judge otherwise."
+        )
+    exit_code = (
+        EXIT_BUSINESS_FAIL
+        if claim_grant.get("verdict") == "denied" or addressee_business_fail
+        else EXIT_OK
+    )
     return _emit(decision_object, exit_code)
 
 
-def split_artifact_args(artifact_arg: str) -> list[str]:
-    """Splits an ` AND `-joined survey argument. Simplified from the
-    monolith's brace-expansion/aside-stripping tolerance (not part of the
-    kept-set contract)."""
-    if " AND " not in artifact_arg:
+def _strip_aside(artifact_arg: str) -> str:
+    """Strips a documented trailing ` -- <prose>` EM-facing aside off the
+    whole multi-artifact argument before any path-splitting runs, so the
+    aside is never glued onto the last artifact's path (2026-08-11 defect:
+    an unstripped aside on an ` AND `-joined argument corrupted the final
+    path's resolution instead of surfacing as prose).
+
+    Matches ONCE, against the raw argument as a whole — the aside is
+    documented as trailing the entire multi-artifact expression, not any
+    one bullet line, so this runs before bullet-line splitting reassembles
+    a newline-separated grab into the ` AND `-joined form below.
+    """
+    match = _ASIDE_RE.search(artifact_arg)
+    if match is None:
+        return artifact_arg
+    return artifact_arg[: match.start()]
+
+
+def _reassemble_bullet_lines(artifact_arg: str) -> str:
+    """Recombines a pasted markdown bullet list of artifact paths — one per
+    line, each optionally prefixed with `- `/`* ` and leading indentation —
+    into the ` AND `-joined form `split_artifact_args` already knows how to
+    split, so a newline-separated grab and an ` AND `-joined grab dispose
+    through the identical downstream path.
+
+    CONTRACT REVERSAL (`_baton_unification_routing_enabled` is now True).
+    The rule this function was written under — "N independent dispositions,
+    one decision object per artifact" — described the pre-unification
+    world. One decision object per artifact still holds, and this function
+    is unchanged by the flip: the splitting is what makes the paths
+    separable at all. What no longer holds is the INDEPENDENCE of the
+    dispositions downstream. A multi-artifact grab whose members are
+    inheritable batons now converges: each is claimed, and the held set
+    unifies into ONE successor carrying them as fan-in legs, rather than N
+    batons standing separately. Do not restore the old sentence from a
+    reading of this function alone — the reversal lives one layer down, in
+    the routing, not in the parsing.
+
+    Only fires when the input contains a REAL newline AND at least one
+    resulting line is bullet-prefixed. An unmarked multi-line paste (no
+    bullets at all) is left byte-identical — that shape is the existing
+    hard-line-wrap-inside-ONE-path signal `_sanitize_artifact_path_str`
+    already tolerates as a single mid-token wrap, and reinterpreting every
+    newline here as an artifact boundary would break that fallback and
+    silently fragment a single long path instead.
+    """
+    if "\n" not in artifact_arg and "\r" not in artifact_arg:
+        return artifact_arg
+    raw_lines = re.split(r"\r\n|\r|\n", artifact_arg)
+    if not any(_BULLET_PREFIX_RE.match(line) for line in raw_lines):
+        return artifact_arg
+    paths = [
+        stripped
+        for line in raw_lines
+        if (stripped := _BULLET_PREFIX_RE.sub("", line, count=1).strip())
+    ]
+    if not paths:
+        return artifact_arg
+    return " AND ".join(paths)
+
+
+def _expand_braces(artifact_arg: str) -> list[str]:
+    """Expand ONE `PREFIX{a,b,c}SUFFIX` brace group into N literal paths.
+
+    Alternatives are comma-split at the group's own nesting depth (a nested
+    `{...}` inside an alternative doesn't fragment the split) and each
+    alternative is whitespace/newline-stripped, so a shell-style line-wrapped
+    brace list (`{a,\n  b}`) resolves the same as `{a,b}`. A string with no
+    `{`, or an unbalanced `{` with no matching `}` at the same depth, passes
+    through UNCHANGED as `[artifact_arg]` — this is the no-behavior-change
+    guarantee for every pre-existing single-path caller.
+
+    A second (or further) brace group in the same string is expanded by
+    recursing on each already-substituted alternative; each recursive call
+    operates on a strictly shorter string than its parent (the matched group
+    is replaced by one alternative), so recursion is depth-bounded by the
+    number of brace groups in the input and cannot loop.
+    """
+    start = artifact_arg.find("{")
+    if start == -1:
         return [artifact_arg]
-    return [p.strip() for p in artifact_arg.split(" AND ") if p.strip()]
+    depth = 0
+    end = -1
+    for i in range(start, len(artifact_arg)):
+        ch = artifact_arg[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end == -1:
+        return [artifact_arg]
+
+    prefix = artifact_arg[:start]
+    suffix = artifact_arg[end + 1 :]
+    inner = artifact_arg[start + 1 : end]
+
+    alternatives: list[str] = []
+    nested_depth = 0
+    current: list[str] = []
+    for ch in inner:
+        if ch == "{":
+            nested_depth += 1
+            current.append(ch)
+        elif ch == "}":
+            nested_depth -= 1
+            current.append(ch)
+        elif ch == "," and nested_depth == 0:
+            alternatives.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    alternatives.append("".join(current))
+
+    if len(alternatives) < 2:
+        return [artifact_arg]
+
+    expanded: list[str] = []
+    for alt in alternatives:
+        combined = prefix + alt.strip() + suffix
+        expanded.extend(_expand_braces(combined))
+    return expanded
+
+
+#: Standalone multi-artifact join token. `/pickup` is explicitly multi-artifact
+#: ("one decision object per artifact") and callers commonly join paths with the
+#: bare word ` AND `. Split is whitespace-bounded and case-sensitive on purpose:
+#: the `\s+AND\s+` boundary never fires inside a path segment (`/BRAND/`,
+#: `COMMAND.md`, a lowercase `and`), so single-path behavior is untouched.
+_ARTIFACT_JOIN_RE = re.compile(r"\s+AND\s+")
+
+
+#: A markdown list-item bullet at the start of a line — optional leading
+#: horizontal whitespace (a nested/indented sub-bullet renders the same as a
+#: top-level one when a caller pastes a bullet list; both mean "one more
+#: artifact"), then a literal `-`/`*` marker, then required whitespace before
+#: the path itself.
+_BULLET_PREFIX_RE = re.compile(r"^[ \t]*[-*][ \t]+")
+
+
+#: Trailing EM-facing aside marker (contract § Multi-Artifact Grab:
+#: `pickup a AND b -- <free text>`). Recognized once, at the FIRST standalone
+#: ` -- ` (whitespace-bounded on both sides, so a hyphenated path segment is
+#: never mistaken for it) — everything from there to the end of the argument
+#: is the aside, not an artifact-path candidate.
+_ASIDE_RE = re.compile(r"\s+--\s+")
+
+
+def split_artifact_args(artifact_arg: str) -> list[str]:
+    """Split a `brief` argument on the standalone ` AND ` token into N paths,
+    then brace-expand (`PREFIX{a,b,c}SUFFIX`) each resulting path.
+
+    A single path with no standalone ` AND ` and no `{...}` group returns
+    `[path]` unchanged. Empty/whitespace-only segments are dropped; a
+    fully-empty result degrades to `[artifact_arg]` so the caller still gets
+    a resolvable-or-failing single entry rather than an empty batch.
+
+    A trailing ` -- <prose>` EM-facing aside is stripped first
+    (`_strip_aside`) so it is never swallowed as (part of) a path. A
+    newline-separated bullet list is then reassembled into the ` AND `-joined
+    form (`_reassemble_bullet_lines`) before the split below runs, so
+    bullets, `AND`, and brace groups all compose freely.
+    """
+    working = _reassemble_bullet_lines(_strip_aside(artifact_arg))
+    parts = [p.strip() for p in _ARTIFACT_JOIN_RE.split(working)]
+    paths = [p for p in parts if p]
+    if not paths:
+        paths = [artifact_arg]
+    expanded: list[str] = []
+    for path in paths:
+        expanded.extend(_expand_braces(path))
+    return expanded
 
 
 def brief_multi(
@@ -3006,6 +4359,84 @@ def _usage(prog: str, stream=None) -> int:
     print(f"       {prog} drop <artifact-path> [--session-id <id>]", file=stream)
     print(f"       {prog} stamp-check <plan-path>", file=stream)
     return EXIT_USAGE
+
+
+#: `--decisions[jp_id]` optional content keys `cs_action_memo` accepts
+#: alongside `disposition`/`value` — ported verbatim from
+#: `pickup_assemble.DISPOSITION_CONTENT_KEYS` (same closed set,
+#: `validate_decisions_shape` below is this module's own copy of that
+#: validator, not an import — this module's import closure must not
+#: include `coordinator_core.pickup_assemble`).
+DISPOSITION_CONTENT_KEYS = (
+    "decision_note",
+    "realized_by",
+    "actioned_note",
+    "distill_fate",
+    "in_repo_capture",
+)
+
+
+def validate_decisions_shape(decisions: Any) -> Optional[str]:
+    """Validates a parsed `--decisions` JSON value against the required
+    judgment-point-id -> `{"disposition": <str>, ...}` map shape, failing
+    loud on a wrong-shaped payload rather than silently leaving the
+    judgment point unresolved. `disposition` is required on every entry,
+    or its exact equivalent `value` (normalized to `disposition` in
+    place). Returns `None` when `decisions` is a valid map (including the
+    empty map), else a one-line actionable error string naming the first
+    offending id and the expected shape."""
+    if not isinstance(decisions, dict):
+        return (
+            f"--decisions must be a JSON object mapping judgment-point id to "
+            f'{{"disposition": <value>}}, got {type(decisions).__name__}'
+        )
+    allowed_keys = {"disposition", "value", *DISPOSITION_CONTENT_KEYS}
+    expected_form = (
+        '{"disposition": "<value>"'
+        + "".join(f', "{key}": "<value>"' for key in DISPOSITION_CONTENT_KEYS)
+        + " (all but disposition optional)}"
+    )
+    for jp_id, value in decisions.items():
+        if not isinstance(value, dict):
+            return (
+                f"--decisions[{jp_id!r}] must be shaped "
+                f'{{"disposition": <value>}}, got {value!r} — expected form: '
+                f'{{"{jp_id}": {expected_form}}}'
+            )
+        has_disposition = "disposition" in value
+        has_value = "value" in value
+        if not has_disposition and not has_value:
+            return (
+                f"--decisions[{jp_id!r}] must be shaped "
+                f'{{"disposition": <value>}}, got {value!r} — expected form: '
+                f'{{"{jp_id}": {expected_form}}}'
+            )
+        if has_disposition and has_value and value["disposition"] != value["value"]:
+            return (
+                f"--decisions[{jp_id!r}] carries both 'disposition' "
+                f"({value['disposition']!r}) and 'value' ({value['value']!r}) "
+                f"and they disagree — supply only one"
+            )
+        unknown_keys = set(value) - allowed_keys
+        if unknown_keys:
+            return (
+                f"--decisions[{jp_id!r}] has unrecognized key(s) "
+                f"{sorted(unknown_keys)!r} — accepted keys are "
+                f"{sorted(allowed_keys)!r}"
+            )
+        if not has_disposition:
+            value["disposition"] = value.pop("value")
+        elif has_value:
+            del value["value"]
+        if value.get("distill_fate") == "ratification" and not value.get("in_repo_capture"):
+            return (
+                f"--decisions[{jp_id!r}] sets distill_fate=\"ratification\" but "
+                f"omits \"in_repo_capture\" — supply the in-repo capture path "
+                f'(e.g. "docs/decisions/..." or "docs/plans/...") the '
+                f"ratification was captured to; cs_action_memo hard-requires it "
+                f"for this distill_fate"
+            )
+    return None
 
 
 def main(argv: list[str]) -> int:
@@ -3050,6 +4481,11 @@ def main(argv: list[str]) -> int:
         else:
             print(f"pickup-assemble: unrecognized argument {tok!r}", file=sys.stderr)
             return EXIT_USAGE
+
+    shape_error = validate_decisions_shape(decisions)
+    if shape_error is not None:
+        print(f"pickup-assemble: {shape_error}", file=sys.stderr)
+        return EXIT_USAGE
 
     try:
         results = brief_multi(artifact_path, decisions)
