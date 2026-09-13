@@ -93,6 +93,21 @@ CLONES: dict[str, dict[str, str]] = {
     # not. Absent, the retrieval steps skip with a recorded verdict.
 }
 
+#: The retrieval repo's hyphenated slug, and the underscored module-name
+#: prefix derived from it. Read from an env var FIRST, the real in-repo name
+#: second. That ordering is what makes an operator-side override survive the
+#: publish scrub: the scrub rewrites literal SOURCE TEXT (so the fallback
+#: below still turns into the public placeholder in the published mirror,
+#: exactly as before), but it cannot see or touch a value that only exists at
+#: runtime in someone's own environment. So an operator whose Setup-script
+#: bash does ``export COORDINATOR_RETRIEVAL_REPO_SLUG=example-retrieval-repo`` ahead of
+#: the ``curl | python3`` line restores the real name for every retrieval-half
+#: step below, with no edit to this file and no change to what gets scrubbed.
+#: Unset, behavior is exactly what it was before this override existed.
+RETRIEVAL_REPO_SLUG = (os.environ.get("COORDINATOR_RETRIEVAL_REPO_SLUG") or "example-retrieval-repo").strip()
+RETRIEVAL_MODULE_PREFIX = RETRIEVAL_REPO_SLUG.replace("-", "_")
+RETRIEVAL_UE_ADDON_SLUG = f"{RETRIEVAL_REPO_SLUG}-ue-addon"
+
 #: Where a cloud environment puts the repositories an operator selected for it.
 #: DISCOVERED, not assumed: the first cut hardcoded /workspace, which does not
 #: exist on this platform — the selected checkouts live under /home/user — so the
@@ -102,8 +117,8 @@ CLONES: dict[str, dict[str, str]] = {
 #: Registry key per retrieval repo, so a session resolves either checkout by
 #: key rather than by a literal path this script happened to choose.
 MACHINE_LOCAL_REPO_KEYS: dict[str, str] = {
-    "example-retrieval-repo": "repos.example_retrieval_repo",
-    "example-retrieval-repo-ue-addon": "repos.example_retrieval_repo_ue_addon",
+    RETRIEVAL_REPO_SLUG: f"repos.{RETRIEVAL_MODULE_PREFIX}",
+    RETRIEVAL_UE_ADDON_SLUG: f"repos.{RETRIEVAL_MODULE_PREFIX}_ue_addon",
 }
 
 #: Where this run's own verdicts land. A process exiting 0 is not evidence that
@@ -796,8 +811,8 @@ def retrieval_half_skipped(report: Report) -> bool:
     consequential failures for a shape the operator chose.
     """
     return (
-        "example-retrieval-repo" in report.rag_roots
-        and report.rag_roots.get("example-retrieval-repo") is None
+        RETRIEVAL_REPO_SLUG in report.rag_roots
+        and report.rag_roots.get(RETRIEVAL_REPO_SLUG) is None
     )
 
 
@@ -867,7 +882,7 @@ def register_machine_local_repo_keys(report: Report) -> None:
     # indistinguishable in the report from a step that never ran, against a
     # docstring promising each key's verdict individually.
     # Review: coordinator:code-reviewer.
-    for _key in ("repos.example_retrieval_repo", "repos.example_retrieval_repo_ue_addon"):
+    for _key in MACHINE_LOCAL_REPO_KEYS.values():
         report.machine_local_keys.setdefault(_key, "skipped: no machine-local CLI resolved")
     argv = _machine_local_argv()
     failures: list[str] = []
@@ -929,8 +944,8 @@ def _resolve_rag_project_root(report: Report) -> str:
         # back to the one root that is defensible without guessing.
         # Review: coordinator:code-reviewer.
         report.rag_project_root_ambiguity = [c.name for c in checkouts]
-        return str(_resolved_root("example-retrieval-repo", report))
-    return str(_resolved_root("example-retrieval-repo", report))
+        return str(_resolved_root(RETRIEVAL_REPO_SLUG, report))
+    return str(_resolved_root(RETRIEVAL_REPO_SLUG, report))
 
 
 def run_example_retrieval_repo_cloud_install(report: Report) -> None:
@@ -960,11 +975,15 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
         print("[cloud_setup] cloud install: skipped — retrieval half not installed.")
         return
 
-    rag_root = _resolved_root("example-retrieval-repo", report)
-    installer = rag_root / "example_retrieval_repo_scripts" / "install_example_retrieval_repo_plugin.py"
+    rag_root = _resolved_root(RETRIEVAL_REPO_SLUG, report)
+    installer = (
+        rag_root
+        / f"{RETRIEVAL_MODULE_PREFIX}_scripts"
+        / f"install_{RETRIEVAL_MODULE_PREFIX}_plugin.py"
+    )
     if not installer.is_file():
         raise FileNotFoundError(
-            f"example-retrieval-repo installer not found at {installer} — the checkout is "
+            f"{RETRIEVAL_REPO_SLUG} installer not found at {installer} — the checkout is "
             "incomplete or its layout changed"
         )
     project_root = _resolve_rag_project_root(report)
@@ -1011,7 +1030,7 @@ def run_example_retrieval_repo_cloud_install(report: Report) -> None:
     report.rag_install["exit_code"] = result.returncode
     if result.returncode != 0:
         raise RuntimeError(
-            f"example-retrieval-repo installer exited {result.returncode}; its combined output is above"
+            f"{RETRIEVAL_REPO_SLUG} installer exited {result.returncode}; its combined output is above"
         )
 
 
@@ -1038,7 +1057,7 @@ def _expected_daemon_url(rag_root: Path) -> tuple[str | None, str]:
     is stdlib-only, so this works on an interpreter that carries none of
     example-retrieval-repo's dependencies — which is exactly the interpreter running here.
     """
-    config_path = rag_root / "example_retrieval_repo_mcp" / "http_config.py"
+    config_path = rag_root / f"{RETRIEVAL_MODULE_PREFIX}_mcp" / "http_config.py"
     if not config_path.is_file():
         return None, f"{config_path} not found"
     try:
@@ -1049,8 +1068,8 @@ def _expected_daemon_url(rag_root: Path) -> tuple[str | None, str]:
             return None, f"{config_path} could not be loaded as a module"
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        host = getattr(module, "EXAMPLE_RETRIEVAL_REPO_HTTP_HOST")
-        port = getattr(module, "EXAMPLE_RETRIEVAL_REPO_HTTP_PORT")
+        host = getattr(module, f"{RETRIEVAL_MODULE_PREFIX.upper()}_HTTP_HOST")
+        port = getattr(module, f"{RETRIEVAL_MODULE_PREFIX.upper()}_HTTP_PORT")
     except Exception as e:  # noqa: BLE001 - an unreadable truth source is a recorded miss
         return None, f"{config_path} did not yield host/port: {type(e).__name__}: {e}"
     return f"http://{host}:{port}/mcp", str(config_path)
@@ -1097,14 +1116,14 @@ def register_retrieval_mcp_entry(report: Report) -> None:
     servers = data.get("mcpServers")
     if not isinstance(servers, dict):
         servers = {}
-    servers["example-retrieval-repo"] = entry
+    servers[RETRIEVAL_REPO_SLUG] = entry
     data["mcpServers"] = servers
     config_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = config_path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(config_path)
     report.mcp_entry_written = {"config_path": str(config_path), "entry": entry}
-    print(f"[cloud_setup] MCP entry registered: example-retrieval-repo -> {entry['url']}")
+    print(f"[cloud_setup] MCP entry registered: {RETRIEVAL_REPO_SLUG} -> {entry['url']}")
 
 
 def verify_mcp_registration(report: Report) -> None:
@@ -1122,8 +1141,8 @@ def verify_mcp_registration(report: Report) -> None:
     to nothing, and it looks identical to a healthy one in the config file.
     """
     config_path = _claude_json_path()
-    expected_url, port_source = (None, "example-retrieval-repo checkout unresolved")
-    rag_root = report.rag_roots.get("example-retrieval-repo")
+    expected_url, port_source = (None, f"{RETRIEVAL_REPO_SLUG} checkout unresolved")
+    rag_root = report.rag_roots.get(RETRIEVAL_REPO_SLUG)
     if rag_root:
         expected_url, port_source = _expected_daemon_url(Path(rag_root))
     result = {
@@ -1141,7 +1160,7 @@ def verify_mcp_registration(report: Report) -> None:
         result["read_error"] = f"{type(e).__name__}: {e}"
         report.mcp_registration = result
         return
-    entry = data.get("mcpServers", {}).get("example-retrieval-repo")
+    entry = data.get("mcpServers", {}).get(RETRIEVAL_REPO_SLUG)
     if isinstance(entry, dict):
         result["registered"] = True
         result["type"] = entry.get("type")
@@ -1251,14 +1270,18 @@ def main() -> int:
     # The registration goes first and unconditionally: it is the half a session
     # cannot repair, and it needs nothing from the checkout.
     run_step("register retrieval MCP entry", lambda: register_retrieval_mcp_entry(report), report)
-    run_step("locate or clone example-retrieval-repo", lambda: locate_or_clone_repo("example-retrieval-repo", report), report)
     run_step(
-        "locate or clone example-retrieval-repo-ue-addon",
-        lambda: locate_or_clone_repo("example-retrieval-repo-ue-addon", report),
+        f"locate or clone {RETRIEVAL_REPO_SLUG}",
+        lambda: locate_or_clone_repo(RETRIEVAL_REPO_SLUG, report),
+        report,
+    )
+    run_step(
+        f"locate or clone {RETRIEVAL_UE_ADDON_SLUG}",
+        lambda: locate_or_clone_repo(RETRIEVAL_UE_ADDON_SLUG, report),
         report,
     )
     run_step("register machine-local repo keys", lambda: register_machine_local_repo_keys(report), report)
-    run_step("example-retrieval-repo cloud install", lambda: run_example_retrieval_repo_cloud_install(report), report)
+    run_step(f"{RETRIEVAL_REPO_SLUG} cloud install", lambda: run_example_retrieval_repo_cloud_install(report), report)
     run_step("verify MCP registration", lambda: verify_mcp_registration(report), report)
 
     _print_summary(report)
