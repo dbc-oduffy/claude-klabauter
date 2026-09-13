@@ -22,6 +22,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pb
 from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -320,7 +321,7 @@ class TestBriefActionedInPlaceEmitPath:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
         _seed_inbox_memo(repo, "m1.md", kind="consult")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         obj = result.decision_object
@@ -346,7 +347,7 @@ class TestBriefActionedInPlaceEmitPath:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
         _seed_inbox_memo(repo, "m1.md", kind="consult")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         obj = result.decision_object
         assert "--in-reply-to m1.md" in obj["next_move"]
@@ -364,7 +365,7 @@ class TestBriefActionedInPlaceEmitPath:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
         _seed_inbox_memo(repo, "m1.md", kind="consult", created="2026-07-20")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         obj = result.decision_object
         assert obj["judgment_points"] == []
@@ -376,7 +377,7 @@ class TestBriefActionedInPlaceEmitPath:
         _init_repo(repo)
         _seed_inbox_memo(repo, "m1.md", kind="fyi")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         obj = result.decision_object
         assert obj["judgment_points"] == []
@@ -400,7 +401,7 @@ class TestBriefArchivedFallbackEmitPath:
         live = _seed_inbox_memo(repo, "m1.md", kind="consult")
         _archive_memo(repo, live, "cross-repo/archive/2026-07/m1.md")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         assert result.exit_code == pa.EXIT_OK
         obj = result.decision_object
@@ -429,7 +430,7 @@ class TestBriefArchivedFallbackEmitPath:
         live = _seed_inbox_memo(repo, "m1.md", kind="consult", created="2026-07-20")
         _archive_memo(repo, live, "cross-repo/archive/2026-07/m1.md")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         obj = result.decision_object
         assert obj["artifact"]["classification"] == "archived"
@@ -454,7 +455,7 @@ class TestBriefArchivedFallbackEmitPath:
         live = _seed_inbox_memo(repo, "m1.md", kind="consult", status="open")
         _archive_memo(repo, live, "cross-repo/archive/2026-07/m1.md")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         obj = result.decision_object
         jp_ids = {jp["id"]: jp for jp in obj["judgment_points"]}
@@ -493,7 +494,7 @@ class TestBriefArchivedFallbackEmitPath:
         _git(repo, "add", str(archived.relative_to(repo)))
         _git(repo, "commit", "-m", "archive h1")
 
-        result = pa.brief("state/handoffs/h1.md", repo_root=repo)
+        result = pb.brief("state/handoffs/h1.md", repo_root=repo)
 
         obj = result.decision_object
         assert obj["artifact"]["classification"] == "archived"
@@ -904,7 +905,7 @@ class TestBothEmitPathsSurfaceUnlinkedOnlyOpen:
         )
         _seed_inbox_memo(repo, "m1.md", kind="consult", created="2026-07-20")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         obj = result.decision_object
         jp_ids = {jp["id"] for jp in obj["judgment_points"]}
@@ -930,7 +931,7 @@ class TestBothEmitPathsSurfaceUnlinkedOnlyOpen:
         live = _seed_inbox_memo(repo, "m1.md", kind="consult", created="2026-07-20")
         _archive_memo(repo, live, "cross-repo/archive/2026-07/m1.md")
 
-        result = pa.brief("cross-repo/inbox/m1.md", repo_root=repo)
+        result = pb.brief("cross-repo/inbox/m1.md", repo_root=repo)
 
         obj = result.decision_object
         assert obj["artifact"]["classification"] == "archived"

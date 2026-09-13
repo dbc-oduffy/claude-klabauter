@@ -139,11 +139,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         roadmap_id=roadmap_id or None,
         targets=targets,
     )
-    if targets:
-        report["unmatched_targets"] = sorted(
-            t for t in targets if not any(t in (b["id"], b["path"], b["stub_id"]) for b in report["batons"])
-        )
-    else:
-        report["unmatched_targets"] = []
+    # Matched is decided against every SCANNED record, not the surviving
+    # candidates -- `test_a_held_target_is_matched_not_unmatched` pins why.
+    matched = set(report.pop("matched_targets", ()))
+    report["unmatched_targets"] = sorted(t for t in targets or () if t not in matched)
     report["verdict"] = _select_verdict(report, subject or None, gate)
     return report

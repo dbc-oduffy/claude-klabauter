@@ -752,6 +752,15 @@ def _object_cache_put(key: tuple[str, str], value: Optional[tuple[str, bytes]]) 
         _OBJECT_CACHE.popitem(last=False)
 
 
+def read_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
+    """Public entry point for `_read_object` -- this module's only public read
+    path, matching `write_object`'s public/private split. Callers outside this
+    module (e.g. a landing step verifying an agent-reported SHA) should use
+    this name rather than reaching for the private `_read_object` directly.
+    """
+    return _read_object(common_dir, sha)
+
+
 def _read_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
     """Reads a git object by full 40-hex sha -- packs first (v2 idx binary
     search across every pack in `objects/pack/`), loose second. Cached per

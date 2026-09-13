@@ -1157,6 +1157,36 @@ int main(int argc, char **argv) {
         return rc;
     }
 
+    /* ---- 0b. THE STDIN-READING ENTRYPOINT ROUTE IS DECIDED HERE, ALSO
+     * PRE-DELIVERY (door_core.h :: door_basename_declares_stdin_read -- the
+     * shared table, so this door and `door.c` cannot disagree about which
+     * installed NAMES read stdin, matching door.c's own wiring exactly).
+     * Same placement rationale as 0a: after the engine root resolves, and
+     * excluding hook mode.
+     *
+     * FAIL DIRECTION IS THE OPPOSITE OF 0a's. `g_own_basename_ok == 0` means
+     * `resolve_own_basename()` could not resolve THIS running image's own
+     * name (see that function's comment) -- `door_entrypoint_basename()`
+     * would then answer for `DOOR_DEFAULT_ENTRYPOINT`, the pre-C0 literal,
+     * not the name actually invoked. Asking the table about the wrong name
+     * is silently unsafe here, in a way it is not for 0a's argv-shaped gate:
+     * an unresolvable basename says nothing about whether argv named stdin,
+     * but it says everything about whether this predicate is being asked
+     * about the right entrypoint at all. So an unresolved basename takes the
+     * COLD leg UNCONDITIONALLY -- one slow cold spawn beats a guaranteed
+     * pool-worker crash for a forwarder this door cannot even name.
+     *
+     * The gate itself is one condition, no handle-kind conjunct (EM-selected
+     * option (a), coordinator:apm finding 2) -- the declared name, exactly
+     * as `door.c`'s twin gate reads it. */
+    if (!g_door_hook_mode &&
+        (!g_own_basename_ok ||
+         door_basename_declares_stdin_read(door_entrypoint_basename()))) {
+        int rc = fall_through(argc, argv, engine_root);
+        free(engine_root);
+        return rc;
+    }
+
     /* ---- 1. identity. Windows puts the SID in the pipe NAME; POSIX
      * enforces the uid as OWNERSHIP of the socket directory (see
      * `dir_is_private`), which is why nothing uid-shaped goes into the path

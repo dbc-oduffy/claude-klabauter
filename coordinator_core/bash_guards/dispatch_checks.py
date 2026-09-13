@@ -2267,6 +2267,46 @@ def _seg_excluding_freetext_operands(seg: str) -> str:
     return " ".join(kept)
 
 
+def _git_argv_subcommand_position(tokens: List[str]) -> Optional[int]:
+    """Index of git's SUBCOMMAND in `tokens`, or `None` when that cannot be
+    established with confidence.
+
+    Extracted so the subcommand's NAME and its POSITION come from one walk.
+    They were briefly derived separately: `_after_reset_slice` found its
+    subcommand by taking the first token equal to `"reset"`, which is the
+    same answer for almost every real command and the WRONG one whenever a
+    preceding global option takes `reset` as its VALUE. `git -C reset reset
+    --hard HEAD~3` matched the `-C` operand, so the target slice kept
+    `reset --hard HEAD~3`, CHECK 1 resolved no target, and a genuine
+    ref-move was allowed -- a deny the greedy regex it replaced had caught,
+    because `.*` backs off to the LAST match. Caught in review before it
+    shipped; a position derived from a second walk is what made it possible.
+
+    Fails CLOSED exactly as its caller contract requires: no command-position
+    `git`, or an unrecognized flag whose consumption shape is unknown,
+    returns `None` and never guesses.
+    """
+    if not tokens or _normalize_executable_basename(tokens[0]) != "git":
+        return None
+    index = 1
+    count = len(tokens)
+    while index < count:
+        token = tokens[index]
+        if token in _GIT_GLOBAL_OPT_WITH_ARG:
+            index += 2
+            continue
+        if token.startswith("--") and "=" in token:
+            index += 1
+            continue
+        if token.startswith("-"):
+            if token in _GIT_GLOBAL_OPT_NO_ARG_SIMPLE:
+                index += 1
+                continue
+            return None
+        return index
+    return None
+
+
 def _seg_resolved_git_subcommand(seg: str) -> Optional[str]:
     """Positionally resolve the git SUBCOMMAND `seg` invokes -- the first
     non-flag token after a command-position `git`, walking past git's own
@@ -2325,26 +2365,8 @@ def _seg_resolved_git_subcommand(seg: str) -> Optional[str]:
         tokens = shlex.split(seg, posix=True)
     except ValueError:
         return None
-    if not tokens or _normalize_executable_basename(tokens[0]) != "git":
-        return None
-    i = 1
-    n = len(tokens)
-    while i < n:
-        tok = tokens[i]
-        if tok in _GIT_GLOBAL_OPT_WITH_ARG:
-            i += 2
-            continue
-        if tok.startswith("--") and "=" in tok:
-            i += 1
-            continue
-        if tok.startswith("-"):
-            if tok in _GIT_GLOBAL_OPT_NO_ARG_SIMPLE:
-                i += 1
-                continue
-            # Unrecognized flag -- consumption shape unknown, do not guess.
-            return None
-        return tok
-    return None
+    position = _git_argv_subcommand_position(tokens)
+    return None if position is None else tokens[position]
 
 
 def _seg_forcing_form_scan_text(seg: str) -> str:
@@ -2475,6 +2497,87 @@ def _seg_confirmed_not_git_invocation(seg: str) -> bool:
 _RESET_MODE_FLAGS = ("--hard", "--soft", "--mixed", "--keep", "--merge")
 
 
+def _git_reset_invocation(seg: str) -> bool:
+    r"""True when `reset` is git's SUBCOMMAND in this segment, or when the
+    segment is too ambiguous to rule that out.
+
+    CHECK 1's gate was a bare `\breset\b` word match, which denied a 14.6KB
+    sizing command whose PROSE contained the word -- the operator is told
+    their read-only command is a destructive ref-move. The repair is
+    positional resolution, and it must be built on this module's existing
+    quote-aware walk rather than a fresh one: an earlier hand-rolled
+    `seg.split()` version of this function shipped and was caught in review
+    allowing `git 'reset' --hard HEAD~3`, `git re""set --hard`, `git r\eset
+    --hard` and `git -c user.name="John Doe" reset --hard` -- every one a real
+    shell construct that executes a genuine ref-move. A false negative here
+    orphans commits on a tree ~50 peer sessions share, so this predicate is
+    over-inclusive BY CONSTRUCTION and only ever narrows on a positive
+    resolution.
+
+    Three answers, in strict order:
+
+    - `_seg_resolved_git_subcommand` resolved a subcommand: trust it. That
+      walk is `shlex`-based, so quoting, concatenation and backslash forms
+      all normalize to the same token, and it consumes git's own global
+      options (`git -C <dir> reset`, `git -c k=v reset`).
+    - `_seg_confirmed_not_git_invocation`: the segment positively resolves to
+      an enumerated non-git, non-spawning utility, so no `reset` inside its
+      operands can be a subcommand. Same narrowing CHECK 2 already makes.
+    - Otherwise the segment is genuinely ambiguous -- unparseable, or a
+      heredoc whose body is not this command's argv -- and the original word
+      match stands unchanged.
+
+    NEGATIVE SPEC -- this does NOT fix the reported sizing-command denial.
+    That command is a `python - <<'PY'` heredoc whose prose contains the token
+    `subprocess`, so `_heredoc_body_has_spawn_indicator` keeps the body
+    visible (correctly: a Python body that can spawn really can run git), the
+    segment stays ambiguous, and the third branch denies on the prose
+    `reset`. That is NOT a stripper defect -- measured 2026-09-12,
+    `_strip_heredoc_bodies` reduces the same input 14661 -> 15 bytes.
+    Narrowing it would mean deciding a spawn-capable body does not spawn THIS
+    command, which needs a language parser rather than a token scan, and the
+    cost of guessing wrong is an orphaned commit on a shared tree. The
+    fixture at `tests/data/check1_reset_prose_false_positive.cmd.txt` is kept
+    as the reproduction, asserted as a known accepted false positive.
+    """
+    resolved = _seg_resolved_git_subcommand(seg)
+    if resolved is not None:
+        return resolved == "reset"
+    if _seg_confirmed_not_git_invocation(seg):
+        return False
+    return bool(re.search(r"\breset\b", seg))
+
+
+def _after_reset_slice(seg: str) -> str:
+    r"""The argv slice FOLLOWING git's `reset` subcommand -- the text CHECK 1
+    reads the reset TARGET out of.
+
+    Split quote-aware, not on a bare `reset` word. The regex fallback below
+    (`.*(^|\s)reset(\s|$)`) requires whitespace on both sides of the token,
+    so `git 'reset' --hard HEAD~3` matches nothing, `after` keeps the whole
+    segment, no target is extracted, and a real ref-move is allowed. Measured
+    2026-09-12 against a throwaway 4-commit repo: `git 'reset' --hard HEAD~3`,
+    `git "reset" --hard HEAD~3` and `git re""set --hard HEAD~3` were all
+    ALLOWED while the unquoted form denied -- identically before and after
+    that day's `_git_reset_invocation` rewrite, so this is the extractor's own
+    blind spot and not a regression in the invocation predicate.
+
+    Falls back to the original regex whenever `shlex` cannot resolve the
+    segment (unparseable, a heredoc, no command-position `git`). That keeps
+    the pre-existing over-inclusive behaviour on exactly the inputs it already
+    covered, and never trades a deny for an allow.
+    """
+    if "<<" not in seg and not _bt_exceeds_tokenizable_ceiling(seg):
+        try:
+            tokens = shlex.split(seg, posix=True)
+        except ValueError:
+            tokens = None
+        position = _git_argv_subcommand_position(tokens or [])
+        if position is not None and tokens[position] == "reset":
+            return " " + " ".join(tokens[position + 1:])
+    return re.sub(r".*(^|\s)reset(\s|$)", " ", seg, count=1)
+
+
 def _reset_ref_moving_mode(seg: str):
     """Return the reset MODE string for a segment that is a ref-moving
     `git reset`, or None if the segment is not one.
@@ -2495,7 +2598,7 @@ def _reset_ref_moving_mode(seg: str):
     Deliberately word-boundary matched on `reset` exactly as the pre-existing
     gate was, so no segment that previously reached CHECK 1 stops reaching it.
     """
-    if not re.search(r"\breset\b", seg):
+    if not _git_reset_invocation(seg):
         return None
     for flag in _RESET_MODE_FLAGS:
         if re.search(r"(^|\s)" + re.escape(flag) + r"(\s|$)", seg):
@@ -2635,7 +2738,7 @@ def check_destructive_git_orphan(
         # `git reset` resolves target HEAD and counts zero.
         _reset_mode = _reset_ref_moving_mode(seg)
         if _reset_mode:
-            after = re.sub(r".*(^|\s)reset(\s|$)", " ", seg, count=1)
+            after = _after_reset_slice(seg)
             # A lone `$(`/backtick in `after` is not proof of a subshell-
             # resolved target: prose that NAMES the hazard (a markdown code
             # span, a comment, a string literal assembled elsewhere) can
@@ -4334,9 +4437,12 @@ _GR_BASE_RE = (
 
 #: git global options taking a SPACE-SEPARATED value, which must be consumed
 #: with their operand when walking argv to the real subcommand. Kept in step
-#: with the same options `_GR_BASE_RE` above already enumerates.
+#: with the same options `_GR_BASE_RE` above already enumerates, plus
+#: `--super-prefix` (real git global option, used by `_git_reset_invocation`'s
+#: prose-vs-invocation walk; `_GR_BASE_RE` itself has no `--super-prefix` leg
+#: since no fix has needed it there yet).
 _GIT_GLOBAL_OPT_WITH_ARG = frozenset(
-    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
+    {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix"}
 )
 
 #: git global options KNOWN to take no operand at all. Closed and small on

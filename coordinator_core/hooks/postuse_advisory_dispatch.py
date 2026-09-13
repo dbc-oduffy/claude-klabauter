@@ -1114,13 +1114,16 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     # input carries no tool_response — so where the tail holds more than one
     # candidate launch, the right answer is to say so, not to pick one.
     match = None
-    seen_task_ids: list[str] = []
+    # Review: code-reviewer (F2) — scoped to local_workflow launches only
+    # (the different-taskType case is handled by the breadcrumb branch below);
+    # named accordingly so a future reader doesn't assume general-purpose scope.
+    seen_local_workflow_task_ids: list[str] = []
     for candidate in _ASYNC_LAUNCH_RE.finditer(text):
         match = candidate
         if candidate.group("task_type") == "local_workflow":
             task = candidate.group("task_id")
-            if task and task not in seen_task_ids:
-                seen_task_ids.append(task)
+            if task and task not in seen_local_workflow_task_ids:
+                seen_local_workflow_task_ids.append(task)
     if match is None:
         # Breadcrumb, not silence. Every other failure path in this module
         # surfaces through _text_or_breadcrumb; a regex that stopped matching
@@ -1156,12 +1159,12 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     # below already breadcrumbs a DIFFERENT-taskType shadow; same-type
     # shadowing — which is exactly the plan-blitz case, and the only one that
     # has ever been reported — passed it silently (doe-claude-b9, 2026-09-11).
-    shadowed_by = [t for t in seen_task_ids if t != task_id]
+    shadowed_by = [t for t in seen_local_workflow_task_ids if t != task_id]
     if shadowed_by:
         print(
             "postuse_advisory_dispatch: workflow_monitor_arm saw "
-            f"{len(seen_task_ids)} local_workflow launches in the transcript "
-            f"tail ({', '.join(seen_task_ids)}) and cannot tell which is this "
+            f"{len(seen_local_workflow_task_ids)} local_workflow launches in the transcript "
+            f"tail ({', '.join(seen_local_workflow_task_ids)}) and cannot tell which is this "
             "tool call's own — the advisory below names the most recent and "
             "says so",
             file=sys.stderr,
@@ -1319,7 +1322,7 @@ def _check_workflow_monitor_arm_sync(session_id: str, transcript_path: str, tool
     caveat = ""
     if shadowed_by:
         caveat = (
-            f" CHECK BEFORE PASTING: {len(seen_task_ids)} Workflow runs launched"
+            f" CHECK BEFORE PASTING: {len(seen_local_workflow_task_ids)} Workflow runs launched"
             " close together and this hook cannot see which one it fired on, so"
             f" it names the most recent — run {run_id}, task {task_id}. If the"
             " result you just received names a different runId, this command"

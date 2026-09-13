@@ -122,6 +122,7 @@ from typing import Any, Dict, Optional
 import re
 
 from coordinator_core.bash_guards._sentinel_creation_guard import (
+    INDIRECTION_REMEDY,
     REASON_INDIRECTION,
     SentinelCreationDetector,
     _REDIR_PREFIX_RE,
@@ -343,14 +344,12 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
             "fleet-delegation grant record.\n\n"
             "Detected shape: %s\n\n"
             "If this command genuinely does not touch the grant record: "
-            "run its underlying steps directly (not through an "
-            "interpreter/stdin/xargs wrapper) so this guard can see them, "
-            "or ask the EM/PM to run it.\n\n"
+            "%s\n\n"
             "Reading or removing an existing grant record remains available "
             "as a DIRECT command -- `cat`, `ls`, `stat`, `rm` -- but not "
             "through a wrapper like this one: inside an interpreter payload "
             "this guard cannot tell a read from a write, so it denies "
-            "either way. Removal only re-locks the boundary." % safe_shape
+            "either way. Removal only re-locks the boundary." % (safe_shape, INDIRECTION_REMEDY)
         )
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     return (

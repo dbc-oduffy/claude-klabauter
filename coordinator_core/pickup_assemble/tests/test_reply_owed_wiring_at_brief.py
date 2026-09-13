@@ -23,7 +23,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pa
 
 # Declared, not excused: real git spawns to build the memo fixture, same
 # convention as test_brief_claim_lease.py in this directory.
@@ -76,5 +76,7 @@ def test_an_fyi_kind_memo_pickup_does_not_produce_the_reply_owed_signal(tmp_path
 
     obj = result.decision_object
     assert obj["preflight"]["reply_obligation"] is None
-    assert "reply-owed-on-action" not in str(obj["preflight"]["closure_signals"])
+    # DR-415 group 1 deletes `preflight.closure_signals` — the assertion
+    # against it here (a belt-and-braces check on the same string this
+    # `reply_obligation` field already answers) is gone with it.
     assert pa.reply_obligation_at_open({"kind": "fyi"}) is None

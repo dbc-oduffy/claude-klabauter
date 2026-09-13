@@ -80,6 +80,7 @@ from typing import Any, Dict, Optional
 from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_name
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._sentinel_removal_guard import (
+    INDIRECTION_REMEDY,
     REASON_INDIRECTION,
     VERDICT_ADVISORY,
     VERDICT_ALLOW,
@@ -149,12 +150,9 @@ def _deny_reason(
             "[dev-repo guard] BLOCKED: this command was denied because its "
             "payload is delivered through an interpreter, stdin, or "
             "command-assembly indirection this guard cannot examine.\n\n"
-            "Instead: run its underlying steps directly (not through an "
-            "interpreter/stdin/xargs wrapper) so this guard can see them, "
-            "or, if this genuinely does not touch the dev-repo discriminant "
-            "sentinel, ask the EM/PM to run it.\n\n"
+            "Instead: %s\n\n"
             "Detected shape: %s"
-            % (safe_shape,)
+            % (INDIRECTION_REMEDY, safe_shape)
         ) + ("\n\n%s" % _note if _note else "")
     return (
         "[dev-repo guard] BLOCKED: instead, confirm this removal/relocation "

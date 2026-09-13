@@ -329,7 +329,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import yaml
 
@@ -553,6 +553,21 @@ class UnverifiableEnricherRowError(ValueError):
 #: A verification clause's own label, then its text to end of line. Spines
 #: write it as ``Verification: ...`` or ``Verification (this row is DONE
 #: only when this holds): ...``.
+#:
+#: Negative spec: the capture is ``[^\n]*`` DELIBERATELY -- it stops at the
+#: first newline and never follows a clause onto a soft-wrapped continuation
+#: line. A hand-authored ``body: |`` block that wraps a long verification
+#: clause across two lines is therefore invisible to `_RUN_REQUIRED_RE`: a
+#: `pytest`/`falsifier` keyword on the wrapped line is not seen, and the row
+#: reads as not-requiring-a-run even though it does (Review:
+#: coordinator:code-reviewer, dispatch-emit slice, Finding 1). This is not a
+#: gap left open by oversight -- it is the same "the phrasebook is always
+#: guessing" problem `_row_verification_runs` exists to end. A row whose
+#: verification clause wraps has the exact same escape as a row whose
+#: phrasing the regex never learned: declare ``verification_runs: true``
+#: (or ``false``) on the row and skip the prose classifier entirely, rather
+#: than this module growing a bounded multi-line window that is still just
+#: another guess at where a clause ends.
 _VERIFICATION_CLAUSE_RE = re.compile(r"verification\b[^:\n]*:(?P<clause>[^\n]*)", re.IGNORECASE)
 
 #: Signals that a verification is a TEST or BUILD run — the exact line the
@@ -618,7 +633,32 @@ class NoWavesError(ValueError):
     """
 
 
-def _gitignored_paths(paths: list[str], *, repo_root: Optional[Path] = None) -> frozenset[str]:
+class _GitignoreFilterResult(NamedTuple):
+    """``_gitignored_paths``'s return shape: the matched subset, plus whether
+    the filter itself ran at all.
+
+    ``degraded`` is what makes the fail-open leg below more than a silent
+    ``logging.warning`` a reader never sees (Review: coordinator:code-reviewer,
+    dispatch-emit slice, Finding 5, corroborated independently by the
+    engine-ops slice reviewer on the same call). The filter can only ever
+    widen what a preflight/commit pathspec contains, never narrow it below
+    truth -- a real path that IS gitignored still reaches the pathspec when
+    the filter is degraded, and the original PREFLIGHT-BLOCKED-on-an-ignored-
+    path defect this module exists to close can resurface. Fail-open is
+    still the right call (reproducing pre-fix behaviour beats inventing a new
+    failure mode on a best-effort filter that would halt a whole run over a
+    transient git hiccup) -- ``degraded`` just carries that fact to the one
+    place a human reading the emitted script can see it,
+    `_gitignore_degraded_narration`.
+    """
+
+    matched: frozenset[str]
+    degraded: bool
+
+
+def _gitignored_paths(
+    paths: list[str], *, repo_root: Optional[Path] = None
+) -> _GitignoreFilterResult:
     """The subset of ``paths`` that ``git check-ignore`` matches, via ONE
     batched spawn (Defect: a gitignored ``writes:`` path halts the whole run
     at preflight).
@@ -654,9 +694,14 @@ def _gitignored_paths(paths: list[str], *, repo_root: Optional[Path] = None) -> 
     names no concrete file at emit time, so there is nothing here yet to
     check; the runtime preflight prompt already tells the dispatched agent
     to check-ignore a prefix's own probe file itself.
+    Returns a ``_GitignoreFilterResult``: the matched-path set, and a
+    ``degraded`` flag the caller uses to make a fail-open run visible in the
+    emitted script itself (see ``_GitignoreFilterResult`` and
+    ``_gitignore_degraded_narration``) rather than only in a log line nothing
+    downstream reads.
     """
     if not paths:
-        return frozenset()
+        return _GitignoreFilterResult(frozenset(), degraded=False)
 
     from coordinator_core.git.run import run_git
 
@@ -671,13 +716,16 @@ def _gitignored_paths(paths: list[str], *, repo_root: Optional[Path] = None) -> 
             result.timed_out,
             len(paths),
         )
-        return frozenset()
+        return _GitignoreFilterResult(frozenset(), degraded=True)
     if not result.stdout_bytes:
-        return frozenset()
-    return frozenset(
-        segment.decode("utf-8", "replace")
-        for segment in result.stdout_bytes.split(b"\0")
-        if segment
+        return _GitignoreFilterResult(frozenset(), degraded=False)
+    return _GitignoreFilterResult(
+        frozenset(
+            segment.decode("utf-8", "replace")
+            for segment in result.stdout_bytes.split(b"\0")
+            if segment
+        ),
+        degraded=False,
     )
 
 
@@ -2679,6 +2727,29 @@ def _excluded_rows_narration(excluded: list) -> str:
     return "\n".join(lines)
 
 
+def _gitignore_degraded_narration() -> str:
+    """A comment block making a fail-open ``_gitignored_paths`` run visible
+    in the script itself, not only in a ``logging.warning`` a reader of the
+    emitted script never sees (Review: coordinator:code-reviewer,
+    dispatch-emit slice, Finding 5; independently corroborated by the
+    engine-ops slice reviewer on the same call).
+
+    Emitted ONCE, at the top of the body, whenever ``git check-ignore``
+    could not run at all for this compose — so a PREFLIGHT-BLOCKED on a
+    path that looks gitignored in the plan is self-explaining (the filter
+    that would have excluded it never ran) instead of a mystery an operator
+    has to re-derive from the module's source.
+    """
+    return (
+        "  // GITIGNORE FILTER DID NOT RUN -- git was absent, timed out, or\n"
+        "  // otherwise could not run `check-ignore` for this compose. Every\n"
+        "  // declared write below is treated as NOT gitignored, so a path\n"
+        "  // that actually IS gitignored can still reach the preflight or a\n"
+        "  // commit pathspec and get a correct-but-confusing PREFLIGHT-BLOCKED.\n"
+        "  // If that happens, this is why -- re-run once git is reachable."
+    )
+
+
 def _all_writes_declared_empty(rows: list[WaveRow]) -> bool:
     """True iff every row in ``rows`` declares ``writes:`` (none UNDECLARED,
     checked by sentinel identity, never truthiness) and every declared
@@ -2788,7 +2859,7 @@ def compose_script(
     # per-batch pathspec is filtered against it -- a batch's pathspec is
     # always a subset of this union, so nothing below needs a second spawn.
     # Why ignored paths are filtered at all: `_gitignored_paths`.
-    gitignored = _gitignored_paths(
+    gitignored, gitignore_filter_degraded = _gitignored_paths(
         _dedupe_preserve_order(path for pathspec in wave_pathspecs for path in pathspec),
         repo_root=repo_root,
     )
@@ -2807,6 +2878,9 @@ def compose_script(
 
     body_blocks: list[str] = []
     phase_titles: list[str] = []
+
+    if gitignore_filter_degraded:
+        body_blocks.append(_gitignore_degraded_narration())
 
     # Defect fix: a chunk report carrying a non-DONE status (PARTIAL,
     # BLOCKED) must not let the run's terminal record read `completed: true`
@@ -2982,10 +3056,12 @@ def _status_check_block(results_var: str, row_ids: list[str], stopped_var: str) 
     names the right chunk without re-deriving the pairing.
 
     Matched via `_NON_DONE_STATUS_JS_RE` against `JSON.stringify(result)`,
-    not a literal-reply equality check: the return contract asks an executor
-    to reply exactly `DONE: <path>` and to write PARTIAL/BLOCKED only inside
-    its report FILE, but nothing here re-reads that file (no new fs access,
-    no new spawn) -- this reads whatever text the dispatched agent's own
+    not a literal-reply equality check. The return contract
+    (`executor_return_contract.done_summary_constraint`) asks an executor to
+    reply exactly ``<STATUS>: <path>``, so a non-DONE status arrives on the
+    terminal line itself rather than only inside the report FILE -- which is
+    what makes matching the reply sufficient here. Nothing re-reads that file
+    (no new fs access, no new spawn) -- this reads whatever text the agent's own
     reply actually carried, which is the one signal already flowing through
     `results_var` today (see `_wave_agent_calls`'s docstring: the commit
     phase already treats this value as the executor's own report).
@@ -2994,6 +3070,17 @@ def _status_check_block(results_var: str, row_ids: list[str], stopped_var: str) 
     -- this emitted return contract's enum is DONE/BLOCKED/PARTIAL only
     (`executor_return_contract.done_summary_constraint`), not the broader
     hand-dispatch enum a different surface uses.
+
+    Negative spec: the stop-rule test reads `_text` ONLY, never a second
+    `String(result ?? "")` alternation. `_text` is
+    `JSON.stringify(result ?? null)`, which already round-trips a string or
+    JSON-serializable-object reply through the escaped-`\n` leg of
+    `_STOP_RULE_JS_RE` -- no reachable reply shape needs a second read (Review:
+    coordinator:code-reviewer, dispatch-emit slice, Finding 2). A prior
+    version carried that second alternation for an unnamed, untested reply
+    shape; per this repo's "zero cost is not a reason to keep code"
+    convention it was removed rather than kept as insurance against a case
+    nothing names.
     """
     ids_js = ", ".join(_js_string_literal(rid) for rid in row_ids)
     row_expr = results_var if len(row_ids) == 1 else f"{results_var}?.[i]"
@@ -3002,9 +3089,7 @@ def _status_check_block(results_var: str, row_ids: list[str], stopped_var: str) 
         f"  [{ids_js}].forEach((id, i) => {{\n"
         f"    const _text = JSON.stringify({row_expr} ?? null);\n"
         f"    if ({_NON_DONE_STATUS_JS_RE}.test(_text)) _incompleteChunks.push(id);\n"
-        f"    if ({_STOP_RULE_JS_RE}.test(_text) || "
-        f"{_STOP_RULE_JS_RE}.test(String({row_expr} ?? \"\"))) "
-        f"{stopped_var}.push(id);\n"
+        f"    if ({_STOP_RULE_JS_RE}.test(_text)) {stopped_var}.push(id);\n"
         "  });"
     )
 

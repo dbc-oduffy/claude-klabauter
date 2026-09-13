@@ -140,7 +140,7 @@ Negative-spec:
       (2026-07-26 defect fix) — never re-derive a path from the raw,
       possibly-bare-basename `artifact_path` argument a second time in this
       module; there is exactly one resolver
-      (`pickup_assemble.resolve_artifact`) and `apply()` threads its output
+      (`pickup_brief.resolve_artifact`) and `apply()` threads its output
       through unchanged.
     - Do NOT let `APPLY_EXIT_OK`/`landed: []` be reachable when the caller
       supplied a non-empty `decisions` payload (via `--decisions` or the
@@ -193,11 +193,13 @@ from coordinator_core.pickup_assemble import (
     EXIT_OK as _BRIEF_EXIT_OK,
     _ArtifactUnreadable,
     _run_git,
+    split_artifact_args,
+    validate_decisions_shape,
+)
+from coordinator_core.pickup_brief import (
     brief,
     compute_claim_grant,
     resolve_artifact,
-    split_artifact_args,
-    validate_decisions_shape,
 )
 from coordinator_core.session import liveness as _liveness
 from coordinator_core.session.claims import (

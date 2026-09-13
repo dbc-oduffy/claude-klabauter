@@ -394,6 +394,69 @@ def test_the_most_advanced_of_several_linked_plans_wins(tmp_path):
     assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_PLAN_APPROVED
 
 
+def test_a_shared_sizing_object_does_not_hand_a_blocker_a_siblings_plan(tmp_path):
+    """The weak-basis fail-open, reported by example-cockpit-repo 2026-09-12.
+
+    Four batons minted from one sizing all cite it, so a `sizing_object` hit set
+    is every sibling's plan. Reducing it with `max(coded, approved)` gave a
+    blocker whose own plan was `reviewed` the disposition of a sibling's
+    `approved` plan, and the dependent's PLANNING gate opened on work the edge
+    existed to hold. Declining the reduction is the closed answer."""
+    _plan(tmp_path, "blockers-own", "reviewed", sizing_object="szo-wave")
+    _plan(tmp_path, "siblings", "approved", sizing_object="szo-wave")
+    _baton(tmp_path, "blocker-1", sizing_object="szo-wave")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"], sizing_object="szo-wave")
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+    blocker = dependent["blockers"][0]
+    assert blocker["disposition"] == pg.BLOCKER_UNPLANNED
+    assert blocker["plan"] is None
+    assert dependent["planning_gate"]["open"] is False
+    assert dependent["execution_gate"]["open"] is False
+
+
+def test_an_ambiguous_weak_link_is_named_rather_than_read_as_no_plan(tmp_path):
+    """`unlinked_plan_claim`'s reason, one basis over: "no plan links here" and
+    "several siblings' plans link here" take different repairs, and the second
+    is invisible if the report renders it as the first."""
+    _plan(tmp_path, "one", "approved", sizing_object="szo-wave")
+    _plan(tmp_path, "two", "draft", sizing_object="szo-wave")
+    _baton(tmp_path, "subject-1", sizing_object="szo-wave")
+
+    subject = _by_id(pg.assemble_plan_gate(tmp_path, subject="subject-1"), "subject-1")
+    assert subject["plan"] is None
+    ambiguity = subject["ambiguous_plan_link"]
+    assert ambiguity["basis"] == "sizing_object"
+    assert ambiguity["paths"] == ["docs/plans/one.md", "docs/plans/two.md"]
+    assert "governing_plan" in ambiguity["repair"]
+
+
+def test_a_strong_basis_still_reduces_a_multi_hit_set(tmp_path):
+    """The decline is scoped to the weak bases. A fan-in baton carrying two of
+    its OWN plans by `deliverable_id` is the case `_best_plan` was written for,
+    and must keep reducing — otherwise the fix trades a fail-open for a
+    fail-closed on every fan-in."""
+    _plan(tmp_path, "early", "draft", deliverable_id="dlv-x")
+    _plan(tmp_path, "later", "approved", deliverable_id="dlv-x")
+    _baton(tmp_path, "subject-1", deliverable_id="dlv-x")
+
+    subject = _by_id(pg.assemble_plan_gate(tmp_path, subject="subject-1"), "subject-1")
+    assert subject["plan"]["path"] == "docs/plans/later.md"
+    assert subject["ambiguous_plan_link"] is None
+
+
+def test_a_single_weak_basis_hit_still_links(tmp_path):
+    """One plan in the sizing is not a coincidence of siblings — there is no
+    other candidate to confuse it with, and declining it would unlink every
+    baton whose only link basis is its sizing."""
+    _plan(tmp_path, "only", "approved", sizing_object="szo-wave")
+    _baton(tmp_path, "blocker-1", sizing_object="szo-wave")
+    _baton(tmp_path, "dependent-1", blocked_by=["blocker-1"])
+
+    dependent = _by_id(pg.assemble_plan_gate(tmp_path), "dependent-1")
+    assert dependent["blockers"][0]["disposition"] == pg.BLOCKER_PLAN_APPROVED
+
+
 def test_a_blocker_may_be_named_by_handoff_id_as_well_as_stub_id(tmp_path):
     """handoff.schema.json admits both spellings in `blocked_by`. Indexing only
     `stub_id` reports every handoff_id edge as `unresolved`."""
@@ -1329,3 +1392,79 @@ def test_a_comment_after_a_quoted_scalar_is_still_a_comment():
     assert pg._unquote('"unterminated  # not ours to truncate') == (
         '"unterminated  # not ours to truncate'
     )
+
+
+# ---------------------------------------------------------------------------
+# One wave slot, several batons: the collapse that used to be silent
+# ---------------------------------------------------------------------------
+
+
+def _shared_id_baton(root: Path, filename: str, stub_id: str, **fields) -> Path:
+    """A baton at an arbitrary FILENAME carrying a caller-chosen `stub_id`.
+
+    `_baton` names the file after the stub, so it cannot express the case under
+    test here — two live records sharing one id, which is exactly what a
+    succession chain and a roadmap stub's fan-out both produce by design.
+    """
+    lines = [
+        "kind: roadmap-baton",
+        f"title: {fields.pop('title', filename)}",
+        f"stub_id: {stub_id}",
+        f"status: {fields.pop('status', 'open')}",
+        f"deployment_state: {fields.pop('deployment_state', 'ready_to_fire')}",
+        "baton_role: work",
+    ]
+    for key, value in fields.items():
+        lines.append(f"{key}: {value}")
+    return _write(root / "state" / "handoffs" / f"{filename}.md", "\n".join(lines))
+
+
+def test_shared_wave_slot_names_every_baton_collapsed_into_one_id(tmp_path):
+    """`waves` is keyed by baton id, and ids are NOT unique across candidates.
+
+    Two candidate records on one id collapse to a single wave slot, so a
+    consumer walking `waves` reaches one of them and never learns the other
+    exists. The report must name the whole group; picking a survivor is the
+    driver's call, not the gate's.
+    """
+    _shared_id_baton(tmp_path, "older-record", "shared-1")
+    _shared_id_baton(tmp_path, "newer-record", "shared-1")
+    _shared_id_baton(tmp_path, "solo-record", "solo-1")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["counts"]["shared_wave_slot"] == 1
+    (row,) = report["shared_wave_slot"]
+    # The WHOLE row shape, not just the fields this repo reads: DoE-claude's
+    # `emit-wave-fire.py` consumes these rows from a published mirror, so a key
+    # renamed or dropped here breaks a reader in a repo this suite never runs.
+    assert set(row) == {"id", "wave", "members"}
+    assert row["id"] == "shared-1"
+    assert row["wave"] == _by_id(report, "shared-1")["planning_wave"]
+    assert row["members"] == [
+        {"path": "state/handoffs/newer-record.md", "title": "newer-record"},
+        {"path": "state/handoffs/older-record.md", "title": "older-record"},
+    ]
+
+    # The collapse itself, pinned alongside the report of it: three candidate
+    # records, two wave slots. Without this line the test passes against a
+    # report that names a group the waves never actually merged.
+    assert report["counts"]["candidates"] == 3
+    assert sum(len(wave) for wave in report["waves"]) == 2
+
+
+def test_shared_wave_slot_is_empty_when_every_candidate_id_is_unique(tmp_path):
+    """The negative verdict, proved rather than assumed.
+
+    An instrument that cannot report green is not evidence when it reports red:
+    the case above would pass just as well against a field hard-wired to name
+    every id it sees.
+    """
+    _shared_id_baton(tmp_path, "first-record", "unique-1")
+    _shared_id_baton(tmp_path, "second-record", "unique-2")
+
+    report = pg.assemble_plan_gate(tmp_path)
+
+    assert report["shared_wave_slot"] == []
+    assert report["counts"]["shared_wave_slot"] == 0
+    assert report["counts"]["candidates"] == 2

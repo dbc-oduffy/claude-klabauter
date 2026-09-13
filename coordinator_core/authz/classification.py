@@ -4241,6 +4241,29 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The handoff corpus is read by every peer session.
     #   5. Persistent state changes observable across process boundaries?       Yes.
     "handoff.repair_deployment_state": OpClass.MUTATING,
+
+    # p4.register_workspace — MUTATING: `coordinator_core.p4.register::
+    # _register_workspace` writes the machine-local `p4.<repo_key>.*` identity
+    # row (registry_set), upserts `vcs_mirror`/`p4_submit_tool`/
+    # `p4_checkout_tool` into the repo's coordinator.local.md frontmatter, and
+    # authors/rewrites `.p4ignore`, `.gitignore`, `.gitattributes` on disk.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   Yes.
+    #      Machine-local registry row plus three repo-tree files.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              Yes.
+    #   4. Mutates shared mutable state outside its own module?                 Yes.
+    #      coordinator.local.md is read by every op that gates on `vcs_mirror`.
+    #   5. Persistent state changes observable across process boundaries?       Yes.
+    # Spec: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md § C7
+    "p4.register_workspace": OpClass.MUTATING,
+
+    # p4.session_state — COMPUTE_ONLY: `coordinator_core.p4.session_state::
+    # _session_state` is a thin adapter over C1's own never-raises readers
+    # (`workspace.identity`, `workspace.session_change`) — zero p4 spawns,
+    # zero writes, pure computed dict.
+    # Spec: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md § C7, D9
+    "p4.session_state": OpClass.COMPUTE_ONLY,
 })
 
 

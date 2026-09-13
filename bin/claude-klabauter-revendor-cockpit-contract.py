@@ -1,6 +1,6 @@
 """
 bin/claude-klabauter-revendor-cockpit-contract.py — repeatable cockpit-contract pin+bundle re-vendor
-with an inline magnitude-aware MAJOR-delta ack gate.
+with an inline shape-delta ack gate.
 
 Purpose: fail-closed, repeatable re-vendor of the DoE cockpit-contract bundle into claude-klabauter's
 vendored pin at coordinator_core/ops/emit/_vendor/cockpit-contract/. Vendors ONLY the
@@ -10,9 +10,22 @@ TS/Zod derivative.
 Enforces the correctness invariants that previously lived only in lesson prose:
   - Full-SHA pin (never a short SHA; never ABSENT from the re-vendor path).
   - Consumer-visible-delta inline ack gate (reader-first invariant, fail-closed before any
-    writes) — magnitude-aware: minor/additive/no-delta re-vendors proceed with NO gate;
-    a MAJOR / consumer-visible shape-changing delta requires an explicit inline
-    ``--ack-major`` flag. No on-disk sentinel file is used or required.
+    writes): ANY structural delta on the schema surfaces requires an explicit inline
+    ``--ack-major`` flag. Only a pure version-stamp bump (no shape change at all)
+    proceeds ungated. No on-disk sentinel file is used or required.
+
+    ``--ack-major`` IS NOT A SEMVER ASSERTION, despite its name. It does not claim the
+    re-vendor is MAJOR and passing it on a MINOR is not a misuse — it asserts only that
+    an operator was shown the delta and reviewed it. ``_detect_consumer_visible_delta``
+    is deliberately conservative on SHAPE and flags an additive-optional widen exactly
+    as it flags an enum narrowing, because the reader-first invariant is about having
+    LOOKED, not about magnitude. An additive MINOR therefore still needs the flag.
+
+    This paragraph previously claimed 'magnitude-aware: minor/additive/no-delta
+    re-vendors proceed with NO gate'. That was false and cost a round trip on the
+    4.6.0 re-vendor (2026-09-12), where an additive-optional MINOR ruled MINOR by DoE
+    was refused until the flag was passed. Do not reinstate the claim: the accurate
+    contract is the one on ``_detect_consumer_visible_delta`` itself.
   - Direction-aware downgrade guard (fail-closed before any writes, independent of the
     shape-delta gate above): refuses whenever the incoming semver version is LOWER than
     the currently-vendored version, whether or not a shape delta also fired. Requires an

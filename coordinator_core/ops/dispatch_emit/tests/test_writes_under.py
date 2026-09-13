@@ -314,6 +314,45 @@ def test_the_executor_names_its_own_prefix_files_and_never_runs_porcelain_over_t
     assert "state/audits" not in porcelain
 
 
+@pytest.mark.spawns_process
+def test_a_gitignored_batch_with_a_prefix_still_keeps_its_commit_phase(tmp_path):
+    """The gitignore-empty-batch skip (`compose_script`'s `not batch_pathspec
+    and not any(row.writes_under for row in batch)` guard) must not fire on a
+    batch that ALSO carries a `writes_under:` prefix -- the prefix names no
+    concrete file at emit time, so it never appears in `batch_pathspec` and
+    can never itself be gitignored, but it still needs a commit agent for
+    whatever it writes at run time. Only the pure all-gitignored shape (no
+    prefix at all) is covered by
+    `test_a_wave_whose_only_write_is_gitignored_gets_no_commit_phase`
+    (Review: coordinator:code-reviewer, dispatch-emit slice, Finding 4)."""
+    import subprocess as _subprocess
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    nowin = {"creationflags": getattr(_subprocess, "CREATE_NO_WINDOW", 0)}
+
+    @pytest.mark.spawns_process
+    @pytest.mark.cadence
+    def _git(*args, check=True):
+        return _subprocess.run(
+            ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **nowin
+        )
+
+    _git("init", "-q", "-b", "work/z")
+    _git("config", "user.email", "t@local")
+    _git("config", "user.name", "t")
+    (repo / ".gitignore").write_text("registry/registry.db\n", encoding="utf-8")
+    (repo / "registry").mkdir()
+    _git("add", "-A")
+    _git("commit", "-q", "-m", "seed")
+
+    waves = [[_wave_row("C1", ["registry/registry.db"], [_AUDITS])]]
+    script = compose_script(waves, name="wf", description="ignored+prefix", repo_root=repo)
+
+    assert "commit phase omitted" not in script
+    assert "phase('Commit wave 1')" in script
+
+
 def test_a_row_without_prefixes_gets_no_prefix_claim_field():
     contract = emit._row_return_contract(
         _wave_row("C1", ["a.py"]), "docs/plans/2026-09-11-x.md"

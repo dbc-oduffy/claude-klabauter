@@ -590,7 +590,10 @@ def _enumerate_candidates() -> list:
 
 
 def _resolve_candidate(
-    to: str, topic: Optional[str] = None, from_id: Optional[str] = None
+    to: str,
+    topic: Optional[str] = None,
+    from_id: Optional[str] = None,
+    root: Optional[str] = None,
 ) -> dict:
     """Resolve a single `to` target through the shared resolver (resolution mode).
 
@@ -643,7 +646,11 @@ def _resolve_candidate(
         }
         if topic:
             today = datetime.date.today().isoformat()
-            sender = resolve_sender_id(from_id)
+            # Review: coordinator-code-reviewer Finding 1 — root must be
+            # threaded from the caller's own repo_root, not left to the
+            # ambient-cwd fallback, under the warm resident engine (DR-315)
+            # serving several callers' repos out of one process.
+            sender = resolve_sender_id(from_id, root=root)
             candidate["resolved_filename"] = _memo_filename(today, sender, topic)
         return candidate
 
@@ -695,9 +702,16 @@ def _memo_list(params: dict, repo_root: Optional[Path] = None) -> dict:
     `--dry-run`/`--check` preview (footgun #1). Never writes, commits, or
     reaches the network; provably side-effect-free (AC2).
 
-    repo_root is accepted (per the standard handler signature) but unused —
-    receiver enumeration/resolution has no sender-worktree dependency; unlike
-    memo.send there is no own-inbox check to make here (nothing is written).
+    repo_root IS used, threaded through to `_resolve_candidate`'s `root` so
+    the `resolved_filename` preview resolves a defaulted sender against the
+    CALLER's own repo worktree, not the warm resident engine's ambient
+    `os.getcwd()` (DR-315: one engine process serves several callers' repos).
+    Receiver enumeration/resolution itself has no sender-worktree dependency
+    — unlike memo.send there is no own-inbox check to make here (nothing is
+    written) — only the sender-namespaced filename preview needs it.
+    # Review: coordinator-code-reviewer Finding 1 — this claim was true
+    # before c563c26174 turned the sender default into a root-dependent
+    # resolution, and is false after it.
 
     Params:
         dry_run (bool, required): must be True — memo.list has no act mode.
@@ -750,7 +764,12 @@ def _memo_list(params: dict, repo_root: Optional[Path] = None) -> dict:
         if to is None:
             candidates = _enumerate_candidates()
         else:
-            candidates = [_resolve_candidate(to, topic, from_id)]
+            candidates = [
+                _resolve_candidate(
+                    to, topic, from_id,
+                    root=str(repo_root) if repo_root is not None else None,
+                )
+            ]
     except RegistryReadError as exc:
         return build_setup_error_result(
             _MODE, dry_run,

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pa
 
 # Real-git spawn in the fixture (git init/add/commit) is load-bearing —
 # `brief()`'s classifiers read actual git-tracked repo state. Declares the

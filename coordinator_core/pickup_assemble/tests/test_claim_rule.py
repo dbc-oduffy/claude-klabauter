@@ -37,6 +37,7 @@ import pytest
 from coordinator_core.win_portability import no_console_creationflags
 
 import coordinator_core.pickup_assemble as pa
+import coordinator_core.pickup_brief as pb
 from coordinator_core.session import liveness as liveness_mod
 
 pytestmark = [
@@ -145,7 +146,7 @@ def test_no_claim_dir_grants(tmp_path, as_self):
     _init_repo(repo)
     _seed_handoff(repo, "h1.md")
 
-    grant = pa.compute_claim_grant(
+    grant = pb.compute_claim_grant(
         repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
     )
 
@@ -165,7 +166,7 @@ def test_claim_dir_with_no_recorded_session_id_grants(tmp_path, as_self):
     cdir.mkdir(parents=True, exist_ok=True)
     (cdir / "pid").write_text("4242\n", encoding="utf-8")
 
-    grant = pa.compute_claim_grant(
+    grant = pb.compute_claim_grant(
         repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
     )
 
@@ -182,7 +183,7 @@ def test_claimant_is_self_grants_held_by_self(tmp_path, as_self):
     _seed_handoff(repo, "h1.md")
     _write_claim(repo, "handoff", "h1.md", "sid-self", age_minutes=5)
 
-    grant = pa.compute_claim_grant(
+    grant = pb.compute_claim_grant(
         repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
     )
 
@@ -200,7 +201,7 @@ def test_live_peer_claimant_is_denied(tmp_path, as_self, holder_reads_live):
     _seed_handoff(repo, "h1.md")
     _write_claim(repo, "handoff", "h1.md", "sid-peer", age_minutes=5)
 
-    grant = pa.compute_claim_grant(
+    grant = pb.compute_claim_grant(
         repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
     )
 
@@ -222,7 +223,7 @@ def test_not_live_peer_claimant_is_granted_with_warning(
     _seed_handoff(repo, "h1.md")
     _write_claim(repo, "handoff", "h1.md", "sid-dead", age_minutes=5)
 
-    grant = pa.compute_claim_grant(
+    grant = pb.compute_claim_grant(
         repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
     )
 
@@ -246,7 +247,7 @@ def test_unresolvable_liveness_is_granted_with_warning(
     _seed_handoff(repo, "h1.md")
     _write_claim(repo, "handoff", "h1.md", "sid-unknown", age_minutes=5)
 
-    grant = pa.compute_claim_grant(
+    grant = pb.compute_claim_grant(
         repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
     )
 
@@ -265,7 +266,7 @@ def test_live_but_ancient_claim_still_denied(tmp_path, as_self, holder_reads_liv
     _seed_handoff(repo, "h1.md")
     _write_claim(repo, "handoff", "h1.md", "sid-peer", age_minutes=10_000)
 
-    grant = pa.compute_claim_grant(
+    grant = pb.compute_claim_grant(
         repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
     )
 
@@ -286,7 +287,7 @@ def test_claimant_with_no_claimed_at_resolves_on_liveness_only(
     _write_claim(repo, "handoff", "h1.md", "sid-dead", age_minutes=None)
     assert not (_claim_dir(repo, "handoff", "h1.md") / "claimed_at").exists()
 
-    grant = pa.compute_claim_grant(
+    grant = pb.compute_claim_grant(
         repo, "handoff", "h1.md", "state/handoffs/h1.md", cwd=str(repo)
     )
 

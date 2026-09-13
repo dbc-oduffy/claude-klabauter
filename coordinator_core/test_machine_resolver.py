@@ -460,3 +460,61 @@ def test_registry_set_refuses_value_with_single_quote(monkeypatch, tmp_path):
         mr.registry_set("repos.weird", "it's/a/path")
 
     assert not (reg_dir / "registry.local.toml").exists()
+
+
+def test_registry_set_writes_root_key_above_a_trailing_table(monkeypatch, tmp_path):
+    """2026-09-12: a file ending in a `[table]` must not swallow an appended
+    root key. Six `p4.*` workspace keys landed under
+    `[plugin.mirrors.example-retrieval-repo]` this way and never resolved at root."""
+    reg_dir = tmp_path / "reg"
+    reg_dir.mkdir(parents=True)
+    (reg_dir / "registry.local.toml").write_text(
+        "schema = 1\n\"repos.doe_claude\" = '/srv/DoE-claude'\n\n"
+        "[plugin.mirrors.example-retrieval-repo]\npath = '/srv/rag-mirror'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    mr.registry_set("p4.example-studio/sample-game.repo_root", "/srv/sample-game")
+
+    flat = mr.merged_flat_registry()
+    assert flat["p4.example-studio/sample-game.repo_root"] == "/srv/sample-game"
+    assert flat["plugin.mirrors.example-retrieval-repo.path"] == "/srv/rag-mirror"
+    assert flat["repos.doe_claude"] == "/srv/DoE-claude"
+    assert not any(k.startswith("plugin.mirrors.example-retrieval-repo.p4.") for k in flat)
+
+
+def test_registry_set_migrates_a_key_already_trapped_under_a_table(monkeypatch, tmp_path):
+    """A key an earlier write scoped into a table is moved to root on the next
+    write of that key, not re-written in its trapped position -- including a
+    re-register with the SAME value, which must not no-op on a key that does
+    not resolve."""
+    reg_dir = tmp_path / "reg"
+    reg_dir.mkdir(parents=True)
+    (reg_dir / "registry.local.toml").write_text(
+        "schema = 1\n\n[plugin.mirrors.example-retrieval-repo]\npath = '/srv/rag-mirror'\n"
+        "\"p4.ws.repo_root\" = 'E:/dev/ws'  # set 2026-09-12T19:39:13Z\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    mr.registry_set("p4.ws.repo_root", "E:/dev/ws")
+
+    content = (reg_dir / "registry.local.toml").read_text(encoding="utf-8")
+    assert content.count('"p4.ws.repo_root"') == 1
+    flat = mr.merged_flat_registry()
+    assert flat["p4.ws.repo_root"] == "E:/dev/ws"
+    assert "plugin.mirrors.example-retrieval-repo.p4.ws.repo_root" not in flat
+    assert flat["plugin.mirrors.example-retrieval-repo.path"] == "/srv/rag-mirror"
+
+
+def test_registry_set_to_a_file_with_no_table_still_appends(monkeypatch, tmp_path):
+    reg_dir = tmp_path / "reg"
+    reg_dir.mkdir(parents=True)
+    (reg_dir / "registry.local.toml").write_text("schema = 1", encoding="utf-8")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    mr.registry_set("repos.claude_klabauter", "/srv/claude-klabauter")
+
+    assert mr.registry_get("repos.claude_klabauter") == "/srv/claude-klabauter"
+    assert (reg_dir / "registry.local.toml").read_text(encoding="utf-8").startswith("schema = 1")

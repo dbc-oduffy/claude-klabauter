@@ -862,6 +862,43 @@ def test_a_gitignored_write_alongside_a_real_one_still_commits_the_real_path(tmp
     assert "commit phase omitted" not in script
 
 
+def test_a_degraded_gitignore_filter_is_visible_in_the_emitted_script(tmp_path, monkeypatch, caplog):
+    """Fail-open on git absence/timeout stays fail-open (reproducing pre-fix
+    behaviour beats halting a whole run over a transient git hiccup), but
+    the degradation must be MORE than a `logging.warning` nothing downstream
+    reads -- the emitted script itself has to carry the fact that the
+    ignore-filter did not run, so a PREFLIGHT-BLOCKED on a path that looks
+    gitignored in the plan is self-explaining (Review: coordinator:code-
+    reviewer, dispatch-emit slice, Finding 5)."""
+    import logging
+
+    from coordinator_core.git.run import GitResult
+
+    def _fake_run_git(*args, **kwargs):
+        return GitResult(
+            returncode=127, timed_out=False, stdout="", stderr="", stdout_bytes=b""
+        )
+
+    monkeypatch.setattr("coordinator_core.git.run.run_git", _fake_run_git)
+
+    with caplog.at_level(logging.WARNING):
+        waves = [[_wave_row("C1", ["registry/registry.db"])]]
+        script = compose_script(
+            waves, name="wf", description="degraded", repo_root=tmp_path
+        )
+
+    assert "GITIGNORE FILTER DID NOT RUN" in script
+    assert "could not run" in caplog.text
+
+
+def test_a_healthy_gitignore_filter_carries_no_degraded_narration(tmp_path):
+    """The negative half: an ordinary run (no paths to filter, so the early
+    return never touches git) must not emit the degraded narration."""
+    waves = [[_wave_row("C1", ["a.py"])]]
+    script = compose_script(waves, name="wf", description="healthy", repo_root=tmp_path)
+    assert "GITIGNORE FILTER DID NOT RUN" not in script
+
+
 def _preflight_body(script: str) -> str:
     """The preflight phase's own `agent()` call text -- the segment between
     its result binding and the next phase's body `phase(...)` call. The

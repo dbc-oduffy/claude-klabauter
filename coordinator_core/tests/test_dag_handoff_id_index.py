@@ -350,3 +350,201 @@ class TestDanglingIdFailsClosed:
         # Only the successor itself was resolvable -- the dangling id must
         # not accidentally resolve to some unrelated node.
         assert result["orderedPaths"] == [str(successor.absolute())]
+
+
+# ---------------------------------------------------------------------------
+# (5) C9 #2 — raw 4KB-header id index (metas=None path)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildHandoffIdIndexRawScan:
+    def test_raw_scan_matches_full_parse_for_bare_handoff_id(self, tmp_path):
+        root = _init_repo(tmp_path)
+        p = _write_handoff(root, "state/handoffs/raw.md", ["handoff_id: hnd-raw-1"])
+
+        index = dag.build_handoff_id_index([str(p)])
+
+        assert index == {"hnd-raw-1": str(Path(p).absolute())}
+
+    def test_metas_supplied_call_is_untouched_by_raw_scan(self, tmp_path, monkeypatch):
+        root = _init_repo(tmp_path)
+        p = _write_handoff(root, "state/handoffs/meta.md", ["handoff_id: hnd-meta-1"])
+
+        def boom(*_a, **_kw):
+            raise AssertionError("raw scan must not run when metas is supplied")
+
+        monkeypatch.setattr(dag, "_raw_scan_handoff_id", boom)
+
+        index = dag.build_handoff_id_index(
+            [str(p)], metas={str(Path(p).absolute()): {"handoff_id": "hnd-meta-1"}}
+        )
+
+        assert index == {"hnd-meta-1": str(Path(p).absolute())}
+
+    def test_frontmatter_terminator_beyond_4kb_falls_back_to_read_meta(self, tmp_path):
+        root = _init_repo(tmp_path)
+        p = root / "state" / "handoffs" / "big.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # Pad the frontmatter well past the 4KB scan window before the
+        # closing terminator, so the raw scan cannot find `---` inside its
+        # read window and must fall back to the full parser.
+        padding = "\n".join(f"pad_field_{i}: value_{i}" for i in range(400))
+        body = "---\nhandoff_id: hnd-big-1\n" + padding + "\n---\n\nbody\n"
+        p.write_text(body, encoding="utf-8")
+        assert len(body[:4096].encode("utf-8")) == 4096  # sanity: window is exhausted
+        assert "---" not in body[:4096].split("handoff_id", 1)[1][-50:]
+
+        index = dag.build_handoff_id_index([str(p)])
+
+        assert index == {"hnd-big-1": str(p.absolute())}
+
+    def test_quoted_handoff_id_value_falls_back_to_read_meta(self, tmp_path):
+        root = _init_repo(tmp_path)
+        p = _write_handoff(
+            root, "state/handoffs/quoted.md", ['handoff_id: "hnd-quoted-1"']
+        )
+
+        index = dag.build_handoff_id_index([str(p)])
+
+        # The full parser strips the quotes; the raw regex must defer to it
+        # rather than index the literal quoted string.
+        assert index == {"hnd-quoted-1": str(p.absolute())}
+
+    def test_body_handoff_id_line_past_terminator_is_not_picked_up(self, tmp_path):
+        """Review 2026-09-12 (staff-eng): a `handoff_id:` line in the BODY
+        (past the closing frontmatter `---`) must not be picked up by the
+        raw scan -- the scan searches only bytes BEFORE the terminator."""
+        root = _init_repo(tmp_path)
+        p = root / "state" / "handoffs" / "body-id.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            "---\ntitle: no real id here\n---\n\n"
+            "Some prose mentions handoff_id: hnd-body-decoy in passing.\n",
+            encoding="utf-8",
+        )
+
+        index = dag.build_handoff_id_index([str(p)])
+
+        assert index == {}
+
+    def test_short_frontmatter_body_quotes_handoff_id_in_prose_not_matched(self, tmp_path):
+        """Review 2026-09-12 (staff-eng): a SHORT frontmatter (terminator
+        well inside the 4KB window) whose BODY quotes a `handoff_id:` line
+        in prose must not have that body line matched by the scan."""
+        root = _init_repo(tmp_path)
+        p = root / "state" / "handoffs" / "prose-decoy.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            "---\ntitle: short frontmatter\n---\n\n"
+            "Example fenced block:\n```\nhandoff_id: hnd-fenced-decoy\n```\n",
+            encoding="utf-8",
+        )
+
+        index = dag.build_handoff_id_index([str(p)])
+
+        assert index == {}
+
+
+class TestRawScanHandoffIdUnit:
+    def test_returns_none_when_key_absent_within_window(self, tmp_path):
+        p = tmp_path / "no-id.md"
+        p.write_text("---\ntitle: none here\n---\n\nbody\n", encoding="utf-8")
+
+        assert dag._raw_scan_handoff_id(str(p)) is None
+
+    def test_returns_fallback_sentinel_when_terminator_missing(self, tmp_path):
+        p = tmp_path / "unterminated.md"
+        p.write_text("---\nhandoff_id: hnd-x\n" + ("pad\n" * 2000), encoding="utf-8")
+
+        assert dag._raw_scan_handoff_id(str(p)) is dag._RAW_SCAN_FALLBACK
+
+    def test_returns_fallback_sentinel_for_unreadable_path(self, tmp_path):
+        missing = tmp_path / "does-not-exist.md"
+
+        assert dag._raw_scan_handoff_id(str(missing)) is dag._RAW_SCAN_FALLBACK
+
+
+# ---------------------------------------------------------------------------
+# (6) C9 #2 review addenda (2026-09-12, peer who owns plan_gate's narrow
+# scanner) -- leading HTML-comment prologue skip, and a corpus-wide parity
+# pin against the general parser.
+# ---------------------------------------------------------------------------
+
+
+class TestRawScanSkipsLeadingHtmlCommentPrologue:
+    def test_banner_before_frontmatter_does_not_defeat_the_raw_scan(self, tmp_path):
+        """dag._parse_frontmatter skips an optional leading HTML-comment
+        banner before the opening `---`; plan_gate._skip_leading_comments
+        exists for the identical case. A raw scan that starts matching at
+        byte 0 without this skip reads a banner record as having no
+        frontmatter at all and silently drops it from the index."""
+        p = tmp_path / "banner.md"
+        p.write_text(
+            "<!-- generated, do not hand-edit -->\n"
+            "---\nhandoff_id: hnd-banner-1\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+
+        index = dag.build_handoff_id_index([str(p)])
+
+        assert index == {"hnd-banner-1": str(p.absolute())}
+
+    def test_unclosed_leading_comment_falls_back_to_read_meta(self, tmp_path):
+        p = tmp_path / "unclosed-banner.md"
+        p.write_text(
+            "<!-- unterminated banner\n"
+            "---\nhandoff_id: hnd-unclosed-1\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+
+        # _parse_frontmatter also treats an unclosed leading comment as "no
+        # frontmatter" -- both readers agree this record has no handoff_id,
+        # so build_handoff_id_index's fallback to _read_meta produces {}.
+        index = dag.build_handoff_id_index([str(p)])
+
+        assert index == {}
+
+
+def test_raw_scan_agrees_with_the_general_parser_over_the_live_corpus():
+    """Parity pin, same shape as `roadmap/tests/test_plan_gate.py::
+    test_narrow_scan_agrees_with_the_general_parser` -- read this repo's
+    whole live+archived handoff corpus through both readers and assert
+    per-file agreement on `handoff_id`, the one field this scanner reads.
+
+    Read against a corpus rather than only a fixture on purpose: a
+    hand-built fixture only proves the scanner handles shapes its author
+    thought of, and a corpus-shaped disagreement (Review 2026-09-12,
+    staff-eng) is exactly the failure mode fixtures do not catch. Not a
+    committed sweep of assembled record semantics -- narrowly, the one
+    field `_raw_scan_handoff_id` reads.
+    """
+    root = Path(__file__).resolve().parents[2]
+    paths = dag.scan_repo_handoff_corpus(str(root))
+    if not paths:
+        pytest.skip("no handoff corpus in this checkout")
+
+    disagreements = []
+    for p in paths:
+        raw = dag._raw_scan_handoff_id(p)
+        if raw is dag._RAW_SCAN_FALLBACK:
+            # A window-insufficient shape defers to the general parser by
+            # construction (build_handoff_id_index falls back to
+            # _read_meta for it) -- the two readers are the SAME reader
+            # for this file, nothing to compare.
+            continue
+        raw_value = raw if raw else None
+
+        general_meta = dag.read_handoff_meta(p)
+        general_hid = general_meta.get("handoff_id") if general_meta else None
+        general_value = (
+            str(general_hid).strip() if general_hid not in (None, "") else None
+        )
+        general_value = general_value or None
+
+        if raw_value != general_value:
+            disagreements.append((p, raw_value, general_value))
+
+    assert not disagreements, (
+        f"{len(disagreements)} handoff file(s) read differently by the raw "
+        f"4KB scan and the general parser; first 5: {disagreements[:5]}"
+    )

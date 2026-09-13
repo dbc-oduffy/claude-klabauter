@@ -30,6 +30,19 @@
  * error, so the ordinary fallback path prints nothing -- see
  * `fall_through()`.
  *
+ * TWO ROUTES ARE DECIDED PRE-DELIVERY, NEVER SERVED WARM (step 0a below,
+ * both gated out of hook mode -- its stdin is already drained above and
+ * its own fall-through is a deny envelope, not a cold spawn): argv
+ * declaring the stdin params-file flag (`door_argv_declares_params_stdin_w`,
+ * over DOOR_PARAMS_FILE_FLAG; door_core.h's own docstring has the full
+ * incident and spells the flag once, where it is defined) and the invoked
+ * entrypoint's own basename being one of the ones that reads stdin
+ * directly (`door_basename_declares_stdin_read_w`, over C2's shared
+ * table in door_core.c) -- both because a warm pool worker's `sys.stdin`
+ * is `None` (`warm/server.py :: _suppress_pool_worker_consoles`) and
+ * nothing this door forwards across the wire can stand in for the
+ * caller's own piped bytes.
+ *
  * PM RULING (2026-08-21): a live op must never silently execute claude-klabauter
  * (the live working tree) -- the published engine, or a loud failure, are
  * the only two acceptable outcomes; a slow-but-working degrade to the
@@ -671,6 +684,32 @@ static int door_argv_declares_params_stdin_w(int argc, wchar_t **wargv) {
     return declared;
 }
 
+/* Wide-basename adapter over `door_basename_declares_stdin_read`
+ * (door_core.c) -- mirrors `door_argv_declares_params_stdin_w` immediately
+ * above, including that predicate's own reason for reusing the shared
+ * char* table rather than hand-rolling a second wcscmp list: C2's table
+ * is the one place the stdin-reading basenames are named, and the two
+ * doors must not be able to disagree about it.
+ *
+ * FAIL DIRECTION IS THE OPPOSITE of the argv gate's. `basename` here is
+ * always `door_entrypoint_basename()`'s result, which is never NULL, so a
+ * conversion failure is the only "can't tell" case this function itself
+ * sees -- and it returns 1 (cold), not 0 (warm): an entrypoint this door
+ * cannot even render the name of cannot be proven safe to serve warm, and
+ * one slow cold spawn beats a guaranteed crash. (The other "can't tell"
+ * case -- `resolve_own_basename()` itself failing, `g_own_basename_ok ==
+ * 0` -- is handled at the call site, not here: this function is never
+ * told whether the name it was given is the real one or the pre-C0
+ * default.) */
+static int door_basename_declares_stdin_read_w(const wchar_t *basename) {
+    int len = 0;
+    char *basename_u8 = wide_to_utf8(basename, &len);
+    if (!basename_u8) return 1;
+    int declared = door_basename_declares_stdin_read(basename_u8);
+    free(basename_u8);
+    return declared;
+}
+
 /* Forward declaration -- `write_all` is defined below (used by
  * `emit_indeterminate`, further down still), needed here one section
  * earlier by `emit_hook_deny` immediately below. */
@@ -1237,6 +1276,25 @@ int main(void) {
      * and its disposition on every fall-through is a deny envelope, not a
      * cold spawn. */
     if (!g_door_hook_mode && door_argv_declares_params_stdin_w(argc, wargv)) {
+        free(engine_root_u8);
+        return fall_through_and_free(argc, wargv, engine_root_w);
+    }
+
+    /* ---- 0a (cont). THE DECLARED-BASENAME STDIN GATE -- C2's shared
+     * table (`door_basename_declares_stdin_read`), reached via the wide
+     * wrapper immediately above. Same placement reasons as the argv gate
+     * just above (validated engine root, hook mode excluded -- its stdin
+     * is already drained and its fall-through is a deny envelope, not a
+     * cold spawn), plus one more: `!g_own_basename_ok` takes the cold leg
+     * UNCONDITIONALLY, the opposite of the argv gate's own-basename-blind
+     * degrade. An unresolved image name means `door_entrypoint_basename()`
+     * would hand the predicate `DOOR_DEFAULT_ENTRYPOINT_W`, the pre-C0
+     * literal, instead of the name actually invoked -- this door cannot
+     * prove that invocation safe to serve warm, and one slow cold spawn
+     * beats a guaranteed crash. */
+    if (!g_door_hook_mode &&
+        (!g_own_basename_ok ||
+         door_basename_declares_stdin_read_w(door_entrypoint_basename()))) {
         free(engine_root_u8);
         return fall_through_and_free(argc, wargv, engine_root_w);
     }

@@ -79,6 +79,7 @@ _EXPECTED_GUARD_NAMES = frozenset(
         "nudge_terminal_artifact_edit",
         "nudge_unmarked_spawning_test",
         "nudge_windows_subprocess_popup",
+        "p4_checkout_before_edit",
         "validate_frontmatter_schema_advisory",
         "validate_frontmatter_schema_deny",
     }

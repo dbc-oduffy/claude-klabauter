@@ -84,7 +84,16 @@ def _churn(repo: Path, commits: int) -> None:
       a newline does not gain a second one in the blob.
     """
     branch = run_git(["symbolic-ref", "--short", "HEAD"], cwd=str(repo)).stdout.strip()
-    ref = "refs/heads/%s" % branch if branch else "refs/heads/master"
+    # Review: code-reviewer (F3) — a detached HEAD used to fall back to a
+    # hardcoded "refs/heads/master" guess. Say-so-don't-guess: fail loud
+    # instead, naming the repo that could not resolve a branch, rather than
+    # silently fast-importing onto a possibly-nonexistent ref.
+    if not branch:
+        raise RuntimeError(
+            "maintenance_tier_budget._churn: %s is on a detached HEAD; "
+            "cannot resolve a branch ref to fast-import commits onto" % repo
+        )
+    ref = "refs/heads/%s" % branch
     tip = run_git(["rev-parse", "HEAD"], cwd=str(repo)).stdout.strip()
     base_ts = int(time.time())
     parts: list = []

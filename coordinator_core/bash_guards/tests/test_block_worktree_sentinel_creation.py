@@ -21,6 +21,7 @@ import json
 from coordinator_core.bash_guards import block_worktree_sentinel_creation as guard
 from coordinator_core.bash_guards import block_approval_sentinel_creation as doctrine_guard
 from coordinator_core.bash_guards import dispatch
+from coordinator_core.bash_guards._alternative_liveness import _BACKTICK_RE
 
 
 SENTINEL = ".coordinator-override-worktree-guard"
@@ -286,10 +287,22 @@ class TestReasonClassSpecificMessages:
         assert "indirection wrapper" in reason
 
     def test_indirection_deny_offers_a_path_forward(self):
+        # Review: review-integrator (mirrors
+        # test_block_approval_sentinel_creation.py::
+        # test_indirection_deny_names_the_guard_and_offers_a_path_forward)
+        # -- was pinning a verbatim substring of the shared
+        # `_sentinel_creation_guard.INDIRECTION_REMEDY` constant, which
+        # cannot catch a regression where the recommended route becomes
+        # something this guard itself denies. Structural check instead:
+        # extract the recommended command from the message and assert this
+        # same guard allows it.
         out = guard.check(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
-        assert "run its underlying steps directly" in reason
         assert "EM/PM" in reason
+        recommended = next(
+            c for c in _BACKTICK_RE.findall(reason) if c.startswith("./")
+        )
+        assert guard.check(_payload(recommended)) is None
 
     def test_recursive_indirection_deny_still_redacts_the_sentinel(self):
         out = guard.check(_payload('bash -c "touch %s"' % SENTINEL))

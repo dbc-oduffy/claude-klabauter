@@ -74,6 +74,61 @@ class CoordinatorRoot(BaseModel):
     """ISO-8601 UTC — branch-tip committedDate, NOT pushedAt."""
     open_pr_count: SafeInt | None
     """Open PR count from GitHub census; null for non-GitHub producers (present-as-null, D9)."""
+    open_review_count: SafeInt | None = Field(
+        default=None,
+        json_schema_extra={"x-zod-nullable-optional": True},
+    )
+    """
+    Count of open reviews for VCS producers whose review unit is not a GitHub
+    PR. Perforce: shelved changelists (`p4 changes -s shelved`) — pending
+    changelists are excluded, being readable only in their own client and so
+    the analogue of a dirty working tree, not of a review.
+
+    D9 shape: NULLABLE-OPTIONAL (`anyOf: [integer, null]`, out of `required`),
+    which the `x-zod-nullable-optional` marker above is what actually buys —
+    NOT the `| None` annotation. `SafeInt | None = None` without the marker
+    emits omit-when-absent (bare integer, null ILLEGAL), and a producer
+    writing null on a refusal would fail its own published schema. All three
+    states are load-bearing here: absent = not collected, null = the server
+    refused, integer = a count.
+
+    VERSION-NEUTRAL OPTIONAL, not D9-required — the same carve-out
+    `content_hash` takes in this entity, and the shape 4.3.0 and 4.4.0 both
+    chose (roadmap_id, actioned_at). Landing these in `required` on an
+    additionalProperties:false entity is a MAJOR that DoE's tooling
+    hard-throws on; absent here means "producer predates the field", a
+    transition-window fact, not the absent/null confusion D9 exists to stop.
+
+    Null spans BOTH "the server refused" (MaxScanRows /
+    MaxResults is routine Helix group config, and refusal is not truncation)
+    and "not collected" — a bare integer would collapse either into 0, which
+    a reader cannot tell from "nothing is in review".
+
+    Which review system this counts is NOT carried by a sibling label field:
+    `provenance.source_kind` already discriminates the producer (p4_server /
+    p4_workspace), and a second discriminant that could only ever hold one
+    value would invite consumers to branch on it instead of on provenance.
+    """
+    open_review_count_is_lower_bound: bool = False
+    """
+    True iff `open_review_count` is a floor rather than an exact count — the
+    query ran capped (`p4 changes -m N` returned N rows) and the true count is
+    >= it. Renders the difference between a chip reading `50` and one reading
+    `50+`.
+
+    FALSE whenever `open_review_count` is null: a null count asserts no bound,
+    so there is nothing for this flag to qualify. Reader's rule is one line —
+    read this flag only when the count is non-null.
+
+    Always false on GitHub-backed roots: GitHub's PR count has no refusal or
+    cap state, so `open_pr_count` needs no companion flag.
+
+    AGGREGATION: any surface that SUMS `open_review_count` across roots must
+    OR this flag across the same inputs and render the total as `N+`. A rollup
+    that adds the integers and drops the flags understates silently the moment
+    one contributor is capped — worse than the bare integer this shape
+    rejects, because it launders the loss through an aggregate nobody doubts.
+    """
     provenance: ProvenanceEnvelope
     content_hash: ContentHash | None = None
     """

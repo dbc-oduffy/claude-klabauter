@@ -3414,6 +3414,21 @@ _COMMITTING_OP_NAMES = frozenset(
         # K-110 on its own module's gravestone. `fleet.archive_actioned_
         # memos` below is NOT one of the six -- it is the earlier RETURN
         # (see the "Seventh pass" note above): registered again, still live.
+        # Ninth pass (2026-09-12): `fleet.archive_completed_plans` is now a
+        # RETURN too -- the same shape as `fleet.archive_actioned_memos`, and
+        # the C3 removal above describes only the era when the op was dead.
+        # The op was rebuilt from its requirement (b8795931a) and now lands at
+        # ops/fleet/archive_plans.py -- NOT the archive_completed_plans.py the
+        # removal comment implies, which is why a path-shaped search for it
+        # comes back empty and reads as "still dead". Verified against the
+        # handler's source per the fourth-pass rule, not taken from the
+        # failure message: `@register_op("fleet.archive_completed_plans")` at
+        # archive_plans.py:865, `archive_and_commit(...)` at :819. Found by
+        # test_committing_op_names_covers_registry_sink_scan, which had been
+        # red; a /workstream-complete close-out drives this exact sink
+        # ("plan-status-transition: archive N plan document(s)"), so the gap
+        # was live on the ceremony path, not theoretical.
+        "fleet.archive_completed_plans",     # ops/fleet/archive_plans.py -- archive_and_commit(...)
         "fleet.archive_actioned_memos",      # ops/fleet/archive_actioned_memos.py -- archive_and_commit(...)
         # C3 (docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md):
         # `ceremony.commit_v2` (ops/ceremony/commit_v2.py :: _handler) is the

@@ -764,7 +764,11 @@ _SCHEMA_FIELDS_OWNED_ELSEWHERE = ("prime_exit_criterion",)
 #: partial hand-written quartet is a schema error whose documented repair is a
 #: full re-stamp. Letting it defect here deadlocks that repair: the gate refuses
 #: the plan over the exact malformation the stamp it is blocking would fix.
-_SCHEMA_STAMP_FIELDS = "mise_prepped"
+#:
+#: Anchored to the field path's top-level segment (Review: coordinator:code-
+#: reviewer) — not a substring match, which would also suppress an unrelated
+#: field whose name merely happened to contain "mise_prepped".
+_SCHEMA_STAMP_FIELD_PREFIX = "mise_prepped"
 
 
 def _schema(fm: Dict[str, Any], prime_exit: Dict[str, Any]) -> Dict[str, Any]:
@@ -791,7 +795,9 @@ def _schema(fm: Dict[str, Any], prime_exit: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         return _pass("not checked: plan.schema.json is unreadable beside this engine")
     errors = [
-        e for e in errors if _SCHEMA_STAMP_FIELDS not in str(e.get("field") or "")
+        e
+        for e in errors
+        if str(e.get("field") or "").split(".")[0] != _SCHEMA_STAMP_FIELD_PREFIX
     ]
     if prime_exit["status"] != "PASS":
         errors = [

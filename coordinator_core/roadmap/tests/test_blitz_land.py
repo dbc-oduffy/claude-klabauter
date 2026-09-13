@@ -1351,3 +1351,49 @@ def test_an_empty_wave_is_not_confused_with_an_unfinished_one(tmp_path):
     out = bl.land_wave(root, {"waveIndex": 0, "ready": [], "pulled": [], "completed": True})
 
     assert out["approved"] == [] and out["refused"] == []
+
+
+class TestReadFieldStopsAtTheLineEnd:
+    r"""`_read_field`'s pad is `[ \t]*`, never `\s*`.
+
+    `\s` matches a newline, so on a present-but-EMPTY key the pad crossed the
+    line break and the trailing `(.*)` captured the FOLLOWING line -- the field
+    came back carrying the next field's text, which reads downstream as a real
+    value rather than an absent one. The narrowing shipped without a test; these
+    pin the four shapes that distinguish the two pads.
+    """
+
+    @staticmethod
+    def _fm(body: str) -> str:
+        return "---\n" + body + "---\n\nbody text\n"
+
+    def test_a_present_but_empty_key_does_not_swallow_the_next_line(self):
+        text = self._fm("handoff_id:\nstatus: open\n")
+        assert bl._read_field(text, "handoff_id") is None
+
+    def test_a_present_but_empty_key_with_trailing_spaces_is_still_empty(self):
+        text = self._fm("handoff_id:   \nstatus: open\n")
+        assert bl._read_field(text, "handoff_id") is None
+
+    def test_an_ordinary_value_still_reads(self):
+        text = self._fm("handoff_id: abc-123\nstatus: open\n")
+        assert bl._read_field(text, "handoff_id") == "abc-123"
+
+    def test_an_absent_key_reads_none(self):
+        text = self._fm("status: open\n")
+        assert bl._read_field(text, "handoff_id") is None
+
+    def test_a_crlf_record_does_not_carry_a_stray_carriage_return(self):
+        """`(.*)$` under `re.MULTILINE` captures the `\r` of a CRLF line ending.
+
+        Every record on this box is CRLF on disk, so a value that keeps its
+        `\r` compares unequal to the same id read anywhere else. Today only the
+        `.strip()` two lines down removes it; this pins the OUTCOME so a future
+        edit reordering that strip cannot reintroduce the corruption silently.
+        """
+        text = self._fm("handoff_id: abc-123\nstatus: open\n").replace("\n", "\r\n")
+        assert bl._read_field(text, "handoff_id") == "abc-123"
+
+    def test_a_crlf_present_but_empty_key_is_still_empty(self):
+        text = self._fm("handoff_id:\nstatus: open\n").replace("\n", "\r\n")
+        assert bl._read_field(text, "handoff_id") is None

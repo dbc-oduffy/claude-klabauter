@@ -66,6 +66,14 @@ CONFINEMENT_DENY_NAMES = [
     "guard-host-subagent-bash-ban",
     "guard-host-subagent-bash-spawn-shapes",
     "guard-doctrine-surface-bash-write",
+    # C6 (D6/D7/S4, docs/plans/2026-09-12-perforce-second-class-commit-and-
+    # shelve.md): a fail-closed hard deny on p4 verbs (submit outright,
+    # everything outside cockpit's read/session-CL-write allowlist
+    # default-denied) plus D7's git worktree-rewrite deny and the
+    # attrib/chmod read-only-strip deny, all marker-gated to p4-mirrored
+    # repos. Same confinement posture as its CONFINEMENT_DENY neighbors
+    # above -- registered here, not classified by default.
+    "p4-verb-fence",
 ]
 
 # Every ADVISORY_REWRITE guard, in registration order. `inprocess-search`

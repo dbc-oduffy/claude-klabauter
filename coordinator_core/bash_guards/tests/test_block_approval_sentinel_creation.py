@@ -21,6 +21,7 @@ import pytest
 
 from coordinator_core.bash_guards import block_approval_sentinel_creation as guard
 from coordinator_core.bash_guards import dispatch
+from coordinator_core.bash_guards._alternative_liveness import _BACKTICK_RE
 
 
 SENTINEL = ".coordinator-doctrine-edit-approved"
@@ -300,11 +301,44 @@ class TestReasonClassSpecificMessages:
         assert "indirection wrapper" in reason
 
     def test_indirection_deny_names_the_guard_and_offers_a_path_forward(self):
+        """The path forward must be the one that WORKS, named concretely.
+
+        The message used to say only "run its underlying steps directly",
+        which reads as "replicate what the script does". Two sessions did
+        exactly that on a falsifier whose entire contract is its exit status,
+        producing an instrument reasoned about and never run -- the failure
+        that instrument exists to prevent, one level up. Measured 2026-09-12:
+        the direct form is ALLOWED by this guard and by the worktree, disarm
+        marker and fleet-delegation guards; only the interpreter-invoked form
+        denies. So the remedy is dropping the interpreter, and the message now
+        names it rather than leaving the reader to infer replication.
+
+        # Review: overengineering-reviewer -- was three verbatim prose pins
+        # (one of them pinning the clause since deleted for restating a
+        # fact already said once). Structural check instead: extract the
+        # recommended command from the message and assert this same guard
+        # allows it, which pins "a concrete working route is named" as a
+        # property rather than pinning wording.
+        """
         out = guard.check(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
         assert "approval-sentinel guard" in reason
-        assert "run its underlying steps directly" in reason
         assert "EM/PM" in reason
+        recommended = next(
+            c for c in _BACKTICK_RE.findall(reason) if c.startswith("./")
+        )
+        assert guard.check(_payload(recommended)) is None
+
+    def test_the_direct_invocation_the_message_recommends_is_actually_allowed(self):
+        """The remedy the deny message names must not itself be denied.
+
+        A message recommending a route this same guard blocks would send the
+        reader in a circle, which is worse than naming no route at all.
+        """
+        # Review: overengineering-reviewer -- dropped the paired
+        # `bash ... is not None` assertion; it duplicated the preceding
+        # test's deny and `test_bash_bare_file_denies` below.
+        assert guard.check(_payload("./bin/install-git-hooks.sh")) is None
 
     def test_recursive_indirection_deny_still_redacts_the_sentinel(self):
         # bash -c "touch <sentinel>" -- the flagship confirmed bypass.

@@ -680,6 +680,9 @@ def record_op_latency(
     caller: Optional[str] = None,
     error_code: Optional[int] = None,
     error_kind: Optional[str] = None,
+    restored: Optional[int] = None,
+    adopted: Optional[int] = None,
+    remint: Optional[bool] = None,
 ) -> None:
     """Append one JSON line recording a single op invocation's wall-clock cost.
 
@@ -688,7 +691,15 @@ def record_op_latency(
          "outcome": "ok"|"error"|"timeout", "pid": int, "sid": str|null,
          "repo_key": str|null, "repo_key_source": "envelope"|"cwd",
          "kind": "complete", "corr_id": str|null, "caller": str|null,
-         "error_code": int|null, "error_kind": str|null}
+         "error_code": int|null, "error_kind": str|null,
+         "restored": int|null, "adopted": int|null, "remint": bool|null}
+
+    ``restored``/``adopted``/``remint`` (2026-09-12, review:
+    overengineering-reviewer F4) are additive and optional in the same way
+    as ``corr_id``/``caller`` — default ``None``, existing callers
+    unaffected. They exist for `p4/shelve.py::ShelveOutcome`'s own
+    same-named fields, which were built for this call and previously never
+    reached it (`push_outstanding.py::_p4_leg_execute`).
 
     ``error_code`` is the JSON-RPC ``error.code`` when the response carried
     one, and it is what makes the ``outcome == "error"`` population READABLE.
@@ -757,6 +768,9 @@ def record_op_latency(
         "caller": caller,
         "error_code": error_code,
         "error_kind": _bounded_error_kind(error_kind),
+        "restored": restored,
+        "adopted": adopted,
+        "remint": remint,
     }
     _write_entry(entry, repo_root)
 

@@ -117,6 +117,7 @@ from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._blanket_disarm import MARKER_BASENAME
 from coordinator_core.bash_guards._sentinel_creation_guard import (
+    INDIRECTION_REMEDY,
     REASON_INDIRECTION,
     SentinelCreationDetector,
 )
@@ -180,11 +181,9 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
             "marker.\n\n"
             "Detected shape: %s\n\n"
             "If this command genuinely does not touch the disarm marker: "
-            "run its underlying steps directly (not through an "
-            "interpreter/stdin/xargs wrapper) so this guard can see them, "
-            "or ask the EM/PM to run it.\n\n"
+            "%s\n\n"
             "Reading or removing an existing marker remains available -- "
-            "removal only re-arms the guard suite." % safe_shape
+            "removal only re-arms the guard suite." % (safe_shape, INDIRECTION_REMEDY)
         )
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     return (

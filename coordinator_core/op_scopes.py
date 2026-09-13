@@ -675,6 +675,17 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # git_common_dir because the handler derives its worktree via
     # main_worktree_root(common_dir), same as ceremony.post_commit_tail above.
     "push.outstanding":                      "common_dir",
+    # p4.* — common_dir, both of them, for the same reason push.outstanding is:
+    # each resolves the repo it acts on and nothing per-worktree is in play
+    # (git worktrees are banned fleet-wide, so the linked-worktree split these
+    # verdicts discriminate cannot arise here). p4.register_workspace writes
+    # the repo's coordinator.local.md marker plus .p4ignore/.gitignore/
+    # .gitattributes at the repo root, and p4.session_state reads that repo's
+    # session meta.json. Neither is "none": both are repo-scoped, and omitting
+    # them would default that verdict silently.
+    # Spec: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md § C7, § D1, § D9.
+    "p4.register_workspace":                 "common_dir",
+    "p4.session_state":                      "common_dir",
     # strang-10 A+B residual writer strangle — changelog / completion / review-trail write ops.
     # Keyed on git_common_dir: changelog.* + review_trail.write write main-worktree-rooted state/
     # (handler derives worktree via main_worktree_root(common_dir), never repo_root/'state' directly);
@@ -914,6 +925,15 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Spec: docs/plans/2026-08-16-one-engine-for-the-whole-box.md § C25.
     "session_baton.mint":                    "none",
     "session_baton.promote":                 "none",
+    # baton.carry_forward / baton.carry_forward_read -- "common_dir", NOT
+    # "none" like the two ops above. Their handlers pass `repo_root` as the
+    # `cwd` that locates the session hub (`store.baton_path(sid, cwd)`) and,
+    # when no session_id param is given, the calling session itself
+    # (`resolve_current_session_id(cwd)`). Under "none" the handler would get
+    # None and fall back to the ambient process cwd, which in the warm engine
+    # names whatever repo the daemon started in, not the caller's.
+    "baton.carry_forward":                   "common_dir",
+    "baton.carry_forward_read":              "common_dir",
     "session.reap":                          "common_dir",
     # session.audit_unreapable — read-only naming of the permanently-unreapable
     # hub population session.reap's uuid-shape gate rejects (count-only there by

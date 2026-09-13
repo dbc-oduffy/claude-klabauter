@@ -196,6 +196,52 @@ def test_the_declaration_reaches_emit_from_spine_text(tmp_path):
     assert "agentType: 'coordinator:enricher'" in script
 
 
+# ---------------------------------------------------------------------------
+# `_VERIFICATION_CLAUSE_RE` is single-line by design -- a wrapped clause is
+# deliberately not seen; `verification_runs:` is the escape, not a bounded
+# multi-line capture (Review: coordinator:code-reviewer, Finding 1).
+# ---------------------------------------------------------------------------
+
+
+def test_a_soft_wrapped_verification_clause_is_not_seen_by_the_classifier():
+    """Negative spec, made concrete: a clause split across two lines of a
+    hand-authored ``body: |`` block loses its second line to the classifier
+    entirely -- `pytest` on the wrapped line never reaches `_RUN_REQUIRED_RE`.
+    This is the documented, intentional single-line assumption, not a bug to
+    fix by widening the capture."""
+    wrapped = (
+        "Verification (this row is DONE only when this holds): the record names\n"
+        "every AC and its disposition; targeted pytest set green\n"
+    )
+    assert _verification_requires_a_run(wrapped) is False
+
+
+def test_verification_runs_true_is_the_escape_for_a_wrapped_clause(tmp_path):
+    """The row-level escape for exactly the gap the test above documents: a
+    wrapped clause the prose classifier cannot see still gets refused when
+    the author declares `verification_runs: true`."""
+    plan_path = tmp_path / "plan.md"
+    plan_path.write_text(
+        "# fixture plan\n\n## Tasks\n\n"
+        "```yaml plan-tasks\n"
+        "- id: D16\n"
+        "  title: close-out\n"
+        "  surface: dispatch_emit\n"
+        "  change_kind: doc-edit\n"
+        "  verification_runs: true\n"
+        "  body: |\n"
+        "    Verification (this row is DONE only when this holds): the record names\n"
+        "    every AC and its disposition; targeted pytest set green\n"
+        "  writes:\n"
+        f"    - {_RECORD}\n"
+        "```\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(UnverifiableEnricherRowError):
+        compose_script(build_waves(read_spine(plan_path)), name="wf", description="wrapped")
+
+
 def test_a_non_bool_declaration_falls_back_rather_than_meaning_false(tmp_path):
     """Tolerant read: only a real bool is a declaration. A string `"no"` that
     silently meant False would be worse than the classifier it replaces."""

@@ -38,7 +38,7 @@ the field without bound.
 
 Canonical hashing recipe (byte-identical to
 `docs/wiki/plan-execute-session-split.md` § Pinned conventions and to
-`coordinator_core.pickup_assemble.compute_execution_stamp_match`'s own
+`coordinator_core.pickup_brief.compute_execution_stamp_match`'s own
 recipe): the plan BODY is everything below the second `---` frontmatter
 delimiter line, hashed via the literal `git hash-object --stdin` blob-hash
 algorithm -- byte-identical to what a reader re-deriving the hash with the
@@ -50,7 +50,7 @@ Shares an "exec-auth-stamp" contract family with
 `coordinator_core.pickup_assemble.stamp_check` (the READ-side verb,
 `coordinator_core/pickup_assemble/stamp_check.py`, built concurrently in a
 sibling chunk of the same baton) -- both compute the same canonical
-plan-body hash. This module and `pickup_assemble.compute_execution_stamp_match`
+plan-body hash. This module and `pickup_brief.compute_execution_stamp_match`
 both route through the ONE shared
 `coordinator_core.frontmatter.primitives.canonical_body_sha` recipe (Review:
 code-reviewer -- Finding 3, extracted from two independently

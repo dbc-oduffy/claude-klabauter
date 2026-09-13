@@ -40,4 +40,18 @@ advisory:
 8. Reuse shared helpers from `coordinator_core.ops._path_guard` (e.g. `contained_path`) and mirror subagent_sandbox's path-normalization helpers where the guard normalizes paths — don't reinvent.
 9. Provenance: top-of-file docstring citing the DoE `.sh` reference path (`coordinator/hooks/scripts/<name>.sh`).
 
+## A hard-deny guard that MUTATES on its allow path must clear the H6 bar
+
+Rule 4 above governs side effects a port INHERITS. A guard that acquires one — any hard-deny
+guard that writes, not only a p4 one — is a new design decision and is judged against the bar in
+DoE-claude `coordinator/docs/wiki/perforce-second-class.md` § The floor, in the
+checkout-before-edit bullet: the mutation must be idempotent, self-healing, bounded by a runner
+timeout, fail-closed, and the guard must be the only seam that sees the write before it lands.
+
+All five, not a majority. The bar lives there because that guard is what forced it to be written;
+it governs every future side-effecting guard proposal, and this file is where an engine-side
+author will be standing when they need it. `p4_checkout_before_edit.py` is the worked example —
+it runs `p4 edit` BEFORE it decides, so a one-shot operator unlock waives the deny and never the
+open.
+
 Only write your assigned `<name>.py` module(s). Do NOT edit engine.py, __main__.py, or hooks.json.

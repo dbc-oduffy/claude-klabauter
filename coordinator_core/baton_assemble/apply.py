@@ -1034,27 +1034,17 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
                 "error": reconcile_error,
             },
         }
-    if not reconciled:
-        print(
-            "baton-assemble apply: handoff.supersede_predecessor degraded -- "
-            f"{predecessor_path!r} was never claimed or shipped -- neither its own "
-            "frontmatter nor the durable handoff-claims ledger carries a claim "
-            "record -- so DR-242 leaves it nothing to supersede (a successor-named "
-            "child is not evidence of succession). The predecessor was left exactly "
-            "as it was; the mint and every other directive in this run proceeded "
-            "normally. If that predecessor SHOULD have been superseded, claim it and "
-            "re-run -- do not hand-stamp the succession.",
-            file=sys.stderr,
-        )
-        return {
-            "cli": "handoff.supersede_predecessor",
-            "args": args,
-            "result": None,
-            "degraded": {
-                "reason": "predecessor-not-claimed-or-shipped",
-                "predecessor": predecessor_path,
-            },
-        }
+    # `reconciled` is deliberately NOT branched on any more. It used to gate an
+    # unconditional degrade here, before the op was ever composed -- the
+    # DoE-claude defect. The decision belongs to
+    # `handoff_archive_transition`'s `mode == "supersede"` block, which is the
+    # load-bearing choke point; this site is defense in depth.
+    # `_reconcile_claim_from_ledger` above still runs for its own sake.
+    #
+    # Negative-spec: do NOT reintroduce a successor-side pre-filter here. The
+    # obvious one -- "skip composing unless the successor is itself
+    # claimed_or_shipped" -- reproduces the bug exactly, because a successor d1
+    # minted seconds ago is `status: open` by construction.
 
     # 2026-07-27 review fix (Finding 2): the successor-cleanup below must
     # fire on ANY failure to compose this op -- including an exception
@@ -1065,7 +1055,27 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
     # disk, contradicting this handler's own docstring claim ("Also removes
     # the successor artifact ... before raising").
     from coordinator_core.op_budget_suspension import OpSuspendedError
+    from coordinator_core.ops.handoff_archive_transition import (
+        _APPLY_MINTED_SUCCESSOR,
+    )
 
+    # The attested succession (DR-242 Amendment A2 section 7.3), set here and
+    # nowhere else. It is a process-local ContextVar rather than an op parameter
+    # BECAUSE a parameter is forgeable: `housekeeping.cycle` forwards
+    # `params["transition"]` verbatim into the same handler, so any caller of
+    # `python -m coordinator_core.invoke housekeeping.cycle` could have typed the
+    # flag themselves. Confirmed by probe 2026-09-12, not assumed. A separate
+    # process reads `None` here and the door stays shut.
+    #
+    # The value is the successor PATH, not a bare True, so the op can require it
+    # to equal the `continued_into` being stamped -- an attestation that cannot
+    # be redirected to a different successor even in-process.
+    #
+    # `continued_into` is `exclude_path`, which `_build_directives`'s d6 emission
+    # sets to `lineage["output_path"]` -- the same value d1's `--out` target used
+    # this run, whether a fresh mint, a replay resumption, or a DR-242 A1
+    # adoption. That is what makes this an engine fact rather than an assertion.
+    attestation_token = _APPLY_MINTED_SUCCESSOR.set(continued_into)
     try:
         housekeeping = _invoke_op_in_process(
             "housekeeping.cycle",
@@ -1135,8 +1145,58 @@ def _dispatch_handoff_supersede_predecessor(args: list[str], repo_root: Path) ->
     except Exception:
         _cleanup_successor()
         raise
+    finally:
+        # Reset on EVERY exit, success or raise: the attestation is scoped to
+        # this one composition and must not outlive it for anything else this
+        # process goes on to do.
+        _APPLY_MINTED_SUCCESSOR.reset(attestation_token)
 
     if not result.get("superseded"):
+        # Two shapes hide behind `superseded is False`, and only one of them
+        # is safe to raise on. `handoff_archive_transition.py`'s own
+        # `mode == "supersede"` gate declines BEFORE any mutation -- DR-242,
+        # the closed-baton gate, and (2026-09-12, DR-242 Amendment A2 section
+        # 7.3) the attested-succession admission check -- and every one of
+        # those refusals shares the SAME `_err` prefix
+        # (`"mode='supersede' refused: "`), the choke point's own load-bearing
+        # discriminator. A refusal with that prefix is the not-applicable
+        # shape the 2026-08-03 break-class fix already degrades the
+        # deterministic-DR-242-gate case on (see this handler's own
+        # docstring, "THAT GATE DEGRADES; IT DOES NOT RAISE") -- generalized
+        # here because the op's own gate, not this wrapper's pre-check, is
+        # now the one that actually declines an unadmitted attestation.
+        # `_cleanup_successor` must NOT fire on this branch: nothing was
+        # mutated, and a successor this run itself minted must not be
+        # deleted over a refusal that leaves the predecessor byte-identical.
+        # Anything else reaching this point ran PAST the choke point (the
+        # predecessor may be half-stamped) and stays a raise, unchanged.
+        # Keyed on the op's own STRUCTURED flag, not on its prose. An earlier
+        # cut matched `refusal_text.startswith("mode='supersede' refused:")`,
+        # which made a reworded refusal message silently flip this branch back
+        # into the raise below -- and that raise runs `_cleanup_successor`,
+        # deleting the successor this run just minted (the 2026-08-03
+        # break-class incident, verbatim). Guard text is the op's to word; a
+        # cross-module predicate may not depend on how it is worded.
+        refusal_text = result.get("error") or ""
+        if result.get("choke_point_refusal"):
+            print(
+                "baton-assemble apply: handoff.supersede_predecessor degraded -- "
+                f"the op's own choke point declined {predecessor_path!r} before "
+                f"any mutation ({refusal_text!r}). The successor was minted and "
+                "every other directive in this run proceeded normally; the "
+                "predecessor was left exactly as it was.",
+                file=sys.stderr,
+            )
+            return {
+                "cli": "handoff.supersede_predecessor",
+                "args": args,
+                "result": None,
+                "degraded": {
+                    "reason": "predecessor-not-claimed-or-shipped",
+                    "predecessor": predecessor_path,
+                    "error": refusal_text,
+                },
+            }
         _cleanup_successor()
         raise RuntimeError(
             "handoff.housekeeping's supersede transition did not supersede "

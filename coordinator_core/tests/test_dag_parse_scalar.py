@@ -145,3 +145,12 @@ def test_int_vs_bool_vs_float_not_conflated():
     assert type(as_int) is int and as_int == 1
     assert type(as_bool) is bool and as_bool is True
     assert type(as_float) is float and as_float == 1.0
+
+
+def test_double_quoted_string_unescapes_like_yaml_does():
+    """The sibling single-quoted branch already undoubles `''`; this one left
+    `\\"` as literal backslash-quote, so a scalar carrying a quoted phrase read
+    back wrong — and disagreed with `plan_gate._unquote`, the narrow scanner
+    this parser is the oracle for."""
+    assert _parse_scalar(r'"the PM said \"it always does\""') == 'the PM said "it always does"'
+    assert _parse_scalar(r'"a backslash \\ stays one"') == "a backslash \\ stays one"

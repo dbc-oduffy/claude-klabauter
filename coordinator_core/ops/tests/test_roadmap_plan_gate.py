@@ -162,3 +162,26 @@ def test_a_missing_repo_root_is_refused(corpus):
     makes the answer depend on the caller's directory."""
     with pytest.raises(ValueError, match="repo_root"):
         asyncio.run(op_module._handler({}, repo_root=None))
+
+
+def test_a_held_target_is_matched_not_unmatched(corpus):
+    """`unmatched_targets` means "this id names nothing on disk", and a driver
+    reads it as a typo. A held baton is named by its target and deliberately
+    withheld, so reporting it there sends the driver back to re-type an id that
+    was correct — measured 2026-09-12, where two held batons came back under
+    both `held` and `unmatched_targets` at once."""
+    _baton(
+        corpus,
+        "held-1",
+        'plan_blitz_hold_reason: "the PM ruled it does not fire"\n',
+    )
+
+    report = _call(corpus, targets=["held-1", "no-such-baton"])
+
+    assert [row["baton"] for row in report["held"]] == ["held-1"]
+    assert report["unmatched_targets"] == ["no-such-baton"]
+    assert "matched_targets" not in report
+
+
+def test_a_sweep_reports_no_unmatched_targets(corpus):
+    assert _call(corpus)["unmatched_targets"] == []

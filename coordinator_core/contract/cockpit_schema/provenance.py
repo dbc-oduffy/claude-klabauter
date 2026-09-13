@@ -42,6 +42,8 @@ SourceKind = Literal[
     "transcript_summary",  # consumer-derived session-transcript summary — not git-backed, ref-null
     "sec_edgar",  # regulatory-filing provenance source, SEC EDGAR XBRL HTTP fetch — not git-backed, ref-null
     "code_comparison",  # deep-research code-comparison emission mode — not git-backed, ref-null
+    "p4_server",  # Helix server observation (census) — VCS-backed, non-null ref
+    "p4_workspace",  # local client have-list (GSD) — VCS-backed, non-null ref
 ]
 """Where a datum physically came from."""
 
@@ -50,7 +52,10 @@ Derivation = Literal["raw", "parsed", "rolled_up", "computed", "synthesized"]
 (e.g. a DAG edge); `synthesized` = agent-derived from other facts rather than fetched,
 parsed, or aggregated (D42, member-only additive)."""
 
-_GIT_BACKED_KINDS = frozenset({"github_graphql", "github_rest", "git_commit"})
+_VCS_BACKED_KINDS = frozenset(
+    {"github_graphql", "github_rest", "git_commit", "p4_server", "p4_workspace"}
+)
+_GIT_BACKED_KINDS = _VCS_BACKED_KINDS
 _NON_GIT_KINDS = frozenset(
     {
         "local_fs",
@@ -69,6 +74,15 @@ class Ref(BaseModel):
 
     branch: str
     sha: str
+
+
+class P4Ref(BaseModel):
+    """The Perforce coordinate a fact was observed at — stream + changelist."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    stream: str
+    change: int
 
 
 class EntityAnchor(BaseModel):
@@ -121,7 +135,7 @@ class ProvenanceEnvelope(BaseModel):
     #   local_fs / coordinator_artifact / transcript_summary / sec_edgar /
     #   code_comparison → ref MUST be null (not git-backed)
     # present-as-null (no default — see module docstring).
-    ref: Ref | None
+    ref: Ref | P4Ref | None
     path: str
     observed_at: IsoDateTime
     derivation: Derivation
@@ -130,9 +144,10 @@ class ProvenanceEnvelope(BaseModel):
 
     @model_validator(mode="after")
     def _check_ref_git_backed_directionality(self) -> "ProvenanceEnvelope":
-        if self.source_kind in _GIT_BACKED_KINDS and self.ref is None:
+        if self.source_kind in _VCS_BACKED_KINDS and self.ref is None:
             raise ValueError(
-                "ref is required for git-backed sources (github_graphql, github_rest, git_commit)"
+                "ref is required for VCS-backed sources (github_graphql, github_rest, "
+                "git_commit, p4_server, p4_workspace)"
             )
         if self.source_kind in _NON_GIT_KINDS and self.ref is not None:
             raise ValueError(

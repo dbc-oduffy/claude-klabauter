@@ -46,9 +46,15 @@ body lines across that pass.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.bash_guards.dispatch_checks import (
+    _after_reset_slice,
+    _git_argv_subcommand_position,
+    _seg_resolved_git_subcommand,
+    _git_reset_invocation,
     _seg_confirmed_not_git_invocation,
     _seg_excluding_freetext_operands,
     check_destructive_git_orphan,
@@ -640,3 +646,169 @@ class TestCheck2WrapperOwnFlagsAreNotGitsFlags:
         raw `\bpush\b` fallback exists for keeps denying."""
         cmd = "subprocess.run(['g" + "it', '" + "push" + "', '--" + "force" + "'])"
         assert check_destructive_git_orphan(cmd) is not None
+
+
+class TestCheck1ResetIsAnInvocationNotAWord:
+    r"""Third instance of this file's own class: match what the command DOES,
+    not what free text SAYS. CHECK 1 asked only whether the segment contained
+    `git` somewhere and `\breset\b` somewhere, so a heredoc body whose prose
+    said "it resets an engine_root process memo", mentioned git elsewhere, and
+    carried a `$(...)` pair later still was hard-denied as an unverifiable
+    `git reset --mixed`. Measured 2026-09-12: it blocked a plan-blitz sizing
+    agent writing a YAML file, which contains no git invocation at all.
+
+    Unlike CHECK 2/3, no stripper can fix this one — a Python heredoc body is
+    deliberately KEPT visible to the prose scan because such a body can spawn.
+    """
+
+    #: The command as the sizing agent actually sent it, verbatim, recovered
+    #: from the wave's journal (which does not outlive the firing session).
+    #: A shorter hand-written stand-in does NOT reproduce: this body stays
+    #: visible to the prose scan because it contains the token `subprocess`
+    #: -- its prose discusses spawn counts -- and
+    #: `_heredoc_body_has_spawn_indicator` therefore keeps the whole body for
+    #: CHECK 2/3. An earlier note here blamed the stripper's quote tracking;
+    #: that was wrong, measured 2026-09-12: `_strip_heredoc_bodies` reduces
+    #: this same input 14661 -> 15 bytes, so the quote tracking is fine and
+    #: the retention is the spawn-indicator rule doing its job.
+    FIXTURE = (
+        Path(__file__).parent / "data" / "check1_reset_prose_false_positive.cmd.txt"
+    )
+
+    def test_the_real_sizing_write_still_denies_and_that_is_correct(self):
+        """This command IS still denied, and the deny is the right answer.
+
+        Recorded as an executable statement of a KNOWN, accepted false
+        positive rather than left as a passing allow-assertion, because the
+        allow this test used to assert was not real: it rested on a mangled
+        `\breset\b` fallback whose backslashes had been eaten into literal
+        backspace characters, so the regex matched nothing and every ambiguous
+        segment silently allowed. Restoring the word boundary restored this
+        deny.
+
+        Resolving it soundly would mean deciding that a `subprocess`-naming
+        Python heredoc body cannot spawn `git reset`, which needs a Python
+        parser, not a token scan -- and the failure direction of guessing
+        wrong is an orphaned commit on a tree ~50 peer sessions share. The
+        fixture stays as the reproduction; what CHECK 1 narrowed is the
+        RESOLVABLE case, pinned by `TestCheck1ResetTargetSurvivesQuoting`.
+        """
+        cmd = self.FIXTURE.read_text(encoding="utf-8")
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": cmd},
+            "cwd": str(Path(__file__).resolve().parents[3]),
+        }
+        assert check_destructive_git_orphan(cmd, "sid", payload=payload) is not None
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git reset --hard $(git rev-parse origin/main)",
+            "git reset --soft `git rev-parse HEAD~1`",
+            "git -C /x/repo reset --mixed $(cat ref.txt)",
+            "git -c core.pager=cat reset --hard $(echo HEAD~2)",
+            "git --git-dir=/x/.git reset --soft $(echo HEAD~1)",
+        ],
+    )
+    def test_every_real_subshell_resolved_reset_still_denies(self, cmd):
+        result = check_destructive_git_orphan(cmd)
+        assert result is not None, cmd
+
+
+class TestCheck1ResetTargetSurvivesQuoting:
+    r"""A quoted `reset` token is still git's subcommand, and CHECK 1 must
+    still extract the target behind it.
+
+    The target slice was cut with `.*(^|\s)reset(\s|$)`, which needs bare
+    whitespace on both sides of the token. `git 'reset' --hard HEAD~3` matches
+    nothing, so the slice kept the whole segment, no target was ever probed,
+    and a genuine ref-move was ALLOWED. Measured 2026-09-12 against a
+    throwaway 4-commit repo: the three quoted forms below were allowed while
+    the identical unquoted command denied.
+
+    This predates the `_git_reset_invocation` rewrite and survived it
+    unchanged -- the differential run showed the same ALLOW on both sides --
+    so it is the extractor's blind spot, not a regression in the predicate.
+    Pinned at the extractor because that is where the quoting is lost.
+    """
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git 'reset' --hard HEAD~3",
+            'git "reset" --hard HEAD~3',
+            'git re""set --hard HEAD~3',
+            "git 'reset' --soft HEAD~2",
+        ],
+    )
+    def test_a_quoted_reset_token_still_yields_its_target(self, cmd):
+        assert _after_reset_slice(cmd).split() == cmd.split()[2:], cmd
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "git 'reset' --hard HEAD~3",
+            'git "reset" --hard HEAD~3',
+            'git re""set --hard HEAD~3',
+            'git -c user.name="J D" reset --hard HEAD~3',
+        ],
+    )
+    def test_a_quoted_reset_is_an_invocation(self, cmd):
+        assert _git_reset_invocation(cmd) is True, cmd
+
+    def test_prose_reset_is_still_not_an_invocation(self):
+        assert _git_reset_invocation("echo git and reset are words here") is False
+
+    def test_an_unresolvable_segment_keeps_the_over_inclusive_fallback(self):
+        """A heredoc body is not this command's argv, so it stays ambiguous --
+        and ambiguous must keep denying, never start allowing."""
+        assert _git_reset_invocation("cat <<EOF\ngit reset --hard HEAD~3\n") is True
+
+
+class TestResetTargetComesFromSubcommandPosition:
+    """The target slice is cut at git's SUBCOMMAND, not at the first token
+    that happens to read as the verb.
+
+    An earlier form of _after_reset_slice took the first token equal to
+    "reset". That is the same answer for almost every real command and the
+    wrong one whenever a preceding global option takes the verb as its VALUE:
+    in 'git -C reset reset --hard HEAD~3' it matched the -C operand, so the
+    slice kept the real subcommand and its target, CHECK 1 resolved no target,
+    and the ref-move was allowed. The greedy regex it replaced got this right
+    by accident, because .* backs off to the LAST match.
+
+    Caught in review before it shipped. Both the verb's NAME and its POSITION
+    now come from one walk, _git_argv_subcommand_position.
+    """
+
+    @pytest.mark.parametrize(
+        "cmd,expected",
+        [
+            ("git -C reset reset --hard HEAD~3", ["--hard", "HEAD~3"]),
+            ("git --git-dir reset reset --hard HEAD~3", ["--hard", "HEAD~3"]),
+            ("git --work-tree reset reset --soft HEAD~2", ["--soft", "HEAD~2"]),
+            ("git -C /tmp reset --hard HEAD~3", ["--hard", "HEAD~3"]),
+            ("git reset --hard HEAD~3", ["--hard", "HEAD~3"]),
+        ],
+    )
+    def test_a_global_option_valued_reset_is_not_the_subcommand(self, cmd, expected):
+        assert _after_reset_slice(cmd).split() == expected, cmd
+
+    def test_the_position_walk_agrees_with_the_name_it_resolves(self):
+        """One walk, so the two answers cannot drift apart."""
+        import shlex
+
+        for cmd in (
+            "git -C reset reset --hard HEAD~3",
+            "git -c k=v reset --soft HEAD~1",
+            "git --git-dir=/d status",
+            "git status",
+        ):
+            tokens = shlex.split(cmd, posix=True)
+            position = _git_argv_subcommand_position(tokens)
+            assert position is not None, cmd
+            assert tokens[position] == _seg_resolved_git_subcommand(cmd), cmd
+
+    def test_an_unrecognized_global_flag_still_fails_closed(self):
+        assert _git_argv_subcommand_position(["git", "--not-a-real-flag", "reset"]) is None

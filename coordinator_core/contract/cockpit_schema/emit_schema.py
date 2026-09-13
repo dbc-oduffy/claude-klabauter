@@ -465,7 +465,7 @@ GENERATES = [
 # defect at higher confidence. `test_emit_schema_pin.py` does not gate this
 # bump; it pins `emit_schemas()` against a fixture entity never registered in
 # `ENTITY_SCHEMAS`. Same D39 sequence as every bump above.
-CONTRACT_VERSION = "4.5.0"
+CONTRACT_VERSION = "4.7.0"
 
 # ---------------------------------------------------------------------------
 # ProvenanceEnvelope conditional injection — ported verbatim from
@@ -473,7 +473,16 @@ CONTRACT_VERSION = "4.5.0"
 # Spec backlink: cockpit-contract/src/provenance.ts § ProvenanceEnvelope.superRefine
 # ---------------------------------------------------------------------------
 
-_GIT_BACKED_ENUM = ["github_graphql", "github_rest", "git_commit"]
+# VCS-backed, not git-backed: a set still named for git is how a third VCS gets
+# mis-partitioned (example-cockpit-repo-em, 2026-09-12). It happened on the 4.7.0 bump
+# before the rename landed — see _assert_provenance_conditionals_injected below.
+_VCS_BACKED_ENUM = [
+    "github_graphql",
+    "github_rest",
+    "git_commit",
+    "p4_server",
+    "p4_workspace",
+]
 _NON_GIT_ENUM = [
     "local_fs",
     "coordinator_artifact",
@@ -481,12 +490,12 @@ _NON_GIT_ENUM = [
     "sec_edgar",
     "code_comparison",
 ]
-_ALL_SOURCE_KINDS = frozenset(_GIT_BACKED_ENUM + _NON_GIT_ENUM)
+_ALL_SOURCE_KINDS = frozenset(_VCS_BACKED_ENUM + _NON_GIT_ENUM)
 
 _PROVENANCE_CONDITIONALS: list[dict[str, Any]] = [
     {
         "if": {
-            "properties": {"source_kind": {"enum": _GIT_BACKED_ENUM}},
+            "properties": {"source_kind": {"enum": _VCS_BACKED_ENUM}},
             "required": ["source_kind"],
         },
         "then": {"properties": {"ref": {"not": {"type": "null"}}}},
@@ -954,6 +963,64 @@ def _raw_json_schema(entity: Any) -> dict[str, Any]:
     return TypeAdapter(entity).json_schema()
 
 
+def _count_provenance_sites(node: Any) -> int:
+    """Count objects that LOOK like a ProvenanceEnvelope, independently of
+    whether the site-matcher recognised them."""
+    if isinstance(node, list):
+        return sum(_count_provenance_sites(v) for v in node)
+    if not isinstance(node, dict):
+        return 0
+    total = sum(_count_provenance_sites(v) for v in node.values())
+    props = node.get("properties")
+    if (
+        isinstance(props, dict)
+        and isinstance(props.get("source_kind"), dict)
+        and "enum" in props["source_kind"]
+        and "derivation" in props
+        and "observed_at" in props
+    ):
+        total += 1
+    return total
+
+
+def _count_injected_conditionals(node: Any) -> int:
+    if isinstance(node, list):
+        return sum(_count_injected_conditionals(v) for v in node)
+    if not isinstance(node, dict):
+        return 0
+    total = sum(_count_injected_conditionals(v) for v in node.values())
+    if isinstance(node.get("allOf"), list):
+        total += len(node["allOf"])
+    return total
+
+
+def _assert_provenance_conditionals_injected(entity_name: str, schema: dict[str, Any]) -> None:
+    """
+    A site-matcher that silently matches NOTHING is this module's worst
+    failure mode: emission succeeds, byte-identity checks on unrelated
+    members pass, and every provenance conditional vanishes.
+
+    It happened on the 4.7.0 bump. `_is_provenance_site` gates on exact
+    membership of `_ALL_SOURCE_KINDS`, so widening `SourceKind` with
+    `p4_server`/`p4_workspace` made every emitted enum 10 members against a
+    matcher expecting 8 — zero matches, no error, all 58 conditionals gone
+    fleet-wide. A `local_fs` fact could then carry a populated `ref` and
+    validate, which is exactly the lie D5/D9 exist to prevent.
+
+    The matcher being keyed on the very enum a bump widens is the trap. This
+    assertion is the tripwire: if a provenance-shaped site is present and
+    carries no conditionals, refuse to emit rather than publish the lie.
+    """
+    if _count_provenance_sites(schema) and not _count_injected_conditionals(schema):
+        raise RuntimeError(
+            f'emit_schema: entity "{entity_name}" contains a ProvenanceEnvelope-shaped '
+            "site but NO conditionals were injected — _is_provenance_site matched "
+            "nothing. Almost certainly SourceKind was widened without updating "
+            "_VCS_BACKED_ENUM / _NON_GIT_ENUM, so _ALL_SOURCE_KINDS no longer equals "
+            "the model's own enum. Fix the lists; do not relax the matcher."
+        )
+
+
 def build_entity_schema(entity: Any) -> dict[str, Any]:
     """
     Produce the Zod-emission-shaped, byte-comparable JSON Schema for one
@@ -977,7 +1044,9 @@ def build_entity_schema(entity: Any) -> dict[str, Any]:
     # per-entity emission (top-level only — not on nested/inlined sites,
     # which pydantic never added $schema to in the first place).
     stamped = {"$schema": "https://json-schema.org/draft/2020-12/schema", **injected}
-    return _reorder(stamped)
+    result = _reorder(stamped)
+    _assert_provenance_conditionals_injected(getattr(entity, "__name__", str(entity)), result)
+    return result
 
 
 # ---------------------------------------------------------------------------

@@ -526,7 +526,7 @@ def _slug_from_scope(scope: str) -> str:
 # rather than imported: this CLI is invoked from an arbitrary consumer repo's cwd (the
 # reviewer's own confined Bash call), and must keep working even when claude-klabauter's own
 # package tree is not importable from there — see _resolve_session_id's docstring.
-_SESSION_SEGMENT_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_SESSION_SEGMENT_WHITELIST_RE = re.compile(r"[^A-Za-z0-9._@-]+")  # Review: code-reviewer -- was missing '@', diverging from provision_report._sanitize_segment despite the "exactly" claim above
 _REJECTED_SESSION_SEGMENTS = {"", ".", ".."}
 
 
@@ -583,7 +583,7 @@ def _sanitize_session_segment(seg: str) -> str:
     """Reduce ``seg`` to a single safe path segment for the subagent-share
     session directory leaf, or 'em-unknown' if sanitizing empties it out.
 
-    Whitelists [A-Za-z0-9._-] (dropping '/', '\\', and everything else that
+    Whitelists [A-Za-z0-9._@-] (dropping '/', '\\', and everything else that
     could smuggle a directory separator), then rejects the degenerate
     '.'/'..'/empty results the whitelist alone would let through -- mirrors
     provision_report._sanitize_segment's contract (see module comment above),

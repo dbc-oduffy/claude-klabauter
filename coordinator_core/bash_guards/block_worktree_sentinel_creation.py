@@ -71,6 +71,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._sentinel_creation_guard import (
+    INDIRECTION_REMEDY,
     REASON_INDIRECTION,
     SentinelCreationDetector,
 )
@@ -137,8 +138,8 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         return (
             "[worktree guard] BLOCKED: interpreter/stdin/xargs indirection "
             "this guard cannot examine -- NOT because the payload was "
-            "found to touch the sentinel. Shape: %s -- run its underlying "
-            "steps directly (no wrapper), or ask the EM/PM." % safe_shape
+            "found to touch the sentinel. Shape: %s\n\n%s"
+            % (safe_shape, INDIRECTION_REMEDY)
         )
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     return (

@@ -2133,6 +2133,18 @@ def _cf_mise_prepped_stamp_quartet(fm: dict) -> ErrorDict | None:
 #: session-handoff-only (DR-126).
 _HANDOFF_PHASE_KINDS = frozenset({'session-handoff', 'spinoff'}) | _ROADMAP_BATON_KINDS
 
+#: Public alias of `_HANDOFF_PHASE_KINDS`, added alongside rather than in place
+#: of the private name (Review: coordinator:code-reviewer) -- this set is
+#: already a fleet-wide cross-module contract (H-CROSS-EXEC-2) and
+#: `blitz_land.py` depends on it as the single source of truth for the kinds
+#: `handoff_phase` is legal on, so its privacy was a naming gap, not a policy.
+#: The private name stays: this file is imported BY FILE PATH from sibling
+#: repos and its leniency is contract, so an in-place rename cannot be
+#: verified safe from here. Any renumber of the admitted kinds must touch
+#: `_HANDOFF_PHASE_KINDS` -- `HANDOFF_PHASE_KINDS` mirrors it, never the
+#: reverse.
+HANDOFF_PHASE_KINDS = _HANDOFF_PHASE_KINDS
+
 
 def _cf_handoff_phase_kind_gate(fm: dict) -> ErrorDict | None:
     # foreign-identity: OUT-OF-CLASS — the "DoE-claude coordinator/bin/lib/schema.js"

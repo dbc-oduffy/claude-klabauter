@@ -246,6 +246,18 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     "guard_doctrine_surface_bash_write": (
         lambda mod: "Set-Content CLAUDE.md 'corrupted'"
     ),
+    # `p4_verb_fence` matches the PARSED ARGV VERB, never the literal string
+    # "p4 submit" -- a matcher on that phrase would let `p4.exe -p <port>
+    # ... submit` through, which is the exact defect D6 exists to prevent.
+    # This fixture carries a global flag (`-p ssl:host:1666`) and a `-c`
+    # flag ahead of the verb, so a PASS here proves the verb-resolution
+    # walk (`_p4_verb_and_args`'s global-flag skip loop), not a naive
+    # string match, is what reaches `submit` under PowerShell. Applicability
+    # (`_is_p4_gated`, D1's marker check) is supplied via `_MONKEYPATCH_FOR`
+    # below -- this repo's own `coordinator.local.md` is not p4-mirrored.
+    "p4_verb_fence": (
+        lambda mod: "p4.exe -p ssl:host:1666 -c client submit"
+    ),
 }
 
 
@@ -372,6 +384,15 @@ _MONKEYPATCH_FOR: Dict[str, Callable[[Any, pytest.MonkeyPatch], Dict[str, Any]]]
             "AGENTS.md",
         ]
     },
+    # D1's marker gate (`_is_p4_gated`), not a dialect question: `check()`
+    # returns allow immediately for any repo whose `coordinator.local.md`
+    # does not declare `vcs_mirror: p4` -- this repo's own does not, so
+    # without this patch the fixture never reaches `_evaluate_powershell`
+    # under either dialect and the clean says nothing about PowerShell.
+    "p4_verb_fence": lambda mod, mp: (
+        mp.setattr(mod, "_is_p4_gated", lambda cwd: True),
+        {},
+    )[-1],
 }
 
 

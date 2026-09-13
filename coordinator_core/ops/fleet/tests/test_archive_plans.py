@@ -427,6 +427,72 @@ def test_handler_dry_run_lists_candidates_and_act_moves_them(tmp_path: Path) -> 
     assert (worktree / "archive" / "specs" / "2026-08" / "2026-08-11-registered-op.md").is_file()
 
 
+def test_handler_wires_caller_session_id_as_exemption_on_both_branches(tmp_path: Path) -> None:
+    """example-store-repo-fb defect, op-level regression (2026-09-11): Finding 1 of
+    the fleet-memo review — `exempt_session_id` was threaded correctly
+    through `plan_sweep`/`_scan_terminal`/`_is_claim_live`, but neither
+    `_handler`'s dry-run branch nor `_handle_act` ever resolved a caller
+    session id to pass it, so a session stamping its own plan `implemented`
+    while still holding that plan's execute-plan claim was refused as
+    `_SCAN_REASON_LIVE_CLAIM` in the real op path even though the unit tests
+    covering `plan_sweep` directly (see `test_own_claim_exempted_archives_
+    anyway` above) passed. This test goes through `_handler`, the layer the
+    prior tests bypassed, on both the dry_run preview and the act path, and
+    would have failed red against the unwired op (both would have reported
+    the plan skipped/absent rather than exempted)."""
+    worktree = tmp_path
+    common_dir = tmp_path
+    (worktree / ".git").mkdir()
+
+    plan_path = _write_plan(worktree, "2026-08-12-self-claimed.md", "implemented")
+    claim_dir = m.plan_claim_dir(common_dir, plan_path)
+    claim_dir.mkdir(parents=True, exist_ok=True)
+
+    with patch(_CS_CLAIM_HOLDER_LIVE_PATCH, return_value=True), \
+         patch("coordinator_core.ops.fleet.archive_plans.claim_held_by_me") as mock_held_by_me, \
+         patch(
+             "coordinator_core.ops.fleet.archive_plans.resolve_session_id",
+             return_value="my-sid",
+         ):
+        mock_held_by_me.side_effect = lambda claim_dir, my_sid="": my_sid == "my-sid"
+
+        preview = m._handler(
+            {"mode": "already-terminal", "dry_run": True, "cap": 10}, repo_root=common_dir,
+        )
+        ids = {c["id"] for c in preview["candidates"]}
+        assert "docs/plans/2026-08-12-self-claimed.md" in ids
+
+        async def _fake_archive_and_commit(*, worktree_root, moves, subject):
+            acted = []
+            for mv in moves:
+                mv.dst.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(mv.src, mv.dst)
+                acted.append({"id": mv.candidate_id, "archived": True})
+            return acted, []
+
+        with patch(
+            "coordinator_core.ops.fleet.archive_plans.archive_and_commit",
+            side_effect=_fake_archive_and_commit,
+        ):
+            acted_result = m._handler(
+                {
+                    "mode": "already-terminal",
+                    "dry_run": False,
+                    "cap": 10,
+                    "candidate_ids": ["docs/plans/2026-08-12-self-claimed.md"],
+                },
+                repo_root=common_dir,
+            )
+
+    assert acted_result["acted"] == [
+        {"id": "docs/plans/2026-08-12-self-claimed.md", "archived": True}
+    ]
+    assert not acted_result["skipped"]
+    assert mock_held_by_me.call_args_list, "claim_held_by_me was never consulted"
+    for call in mock_held_by_me.call_args_list:
+        assert call.args[1] == "my-sid"
+
+
 def test_sweep_lock_round_trips(tmp_path: Path) -> None:
     common_dir = tmp_path
     lock1 = m._acquire_sweep_lock(common_dir)
