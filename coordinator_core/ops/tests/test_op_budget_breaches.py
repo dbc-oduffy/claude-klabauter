@@ -465,7 +465,22 @@ def test_ledger_absent_is_a_distinguishable_result_not_an_empty_finding_list(mon
     assert dead_dials["findings"][0]["fate"] is None
 
 
-def test_breach_report_reports_no_dead_dials_on_a_clean_population():
+def test_breach_report_reports_no_dead_dials_on_a_clean_population(tmp_path, monkeypatch):
+    """`ledger_status: "ok"` on a clean population.
+
+    PINS THE LEDGER TO A FIXTURE (2026-09-18) rather than reading whatever the
+    box happens to have. `KILL_LEDGER` resolves under `.coordinator-local/`, a
+    machine-local, gitignored path that does not exist on a fresh checkout or
+    in CI -- so this asserted `ok` against ambient state and returned `absent`
+    on any box without it, which its own sibling
+    (`test_empty_findings_with_an_absent_ledger_is_not_asserted_ok`) documents
+    as the CORRECT answer for a missing ledger. The two tests were asserting
+    opposite verdicts over the same uncontrolled input; only the environment
+    decided which one was right. Each now controls the ledger it describes."""
+    ledger = tmp_path / "kill-ledger.md"
+    ledger.write_text("# kill ledger\n", encoding="utf-8")
+    monkeypatch.setattr(op_budget_breaches, "KILL_LEDGER", ledger)
+
     summary = breach_report(entries=[_complete("op.a", 12.0)], now=BASE_T)
 
     assert summary["dead_dials"]["ledger_status"] == DEAD_DIAL_LEDGER_OK

@@ -139,7 +139,14 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.work_state", 'registers "fleet.work_state"'),
     ("coordinator_core.ops.fleet.record_history", 'registers "fleet.record_history"'),
     ("coordinator_core.ops.fleet.archive_terminal_handoffs", 'registers "fleet.archive_completed_handoffs"'),
-    ("coordinator_core.ops.fleet.archive_plans", 'registers "fleet.archive_completed_plans"'),
+    # "fleet.archive_completed_plans" is KILLED, not suspended (op_budget_suspension:
+    # p50 996ms against the 200ms bar; compute retained as a library, resolved
+    # in-process by ceremony/commit_pipeline.py and tail_ops.py). The annotation must
+    # not say "registers": the table would be advertising a name that cannot dispatch,
+    # which test_registration_annotations_resolve exists to catch -- its own remedy is
+    # "strike the name, never resurrect". The module stays in this table because it
+    # still declares @register_op and eager-import coverage is a separate invariant.
+    ("coordinator_core.ops.fleet.archive_plans", 'eager-imported for library compute; its op is killed'),
     # `handoff.housekeeping` (and the `handoff_housekeeping.py` / `handoff_reconcile.py`
     # modules that carried it) is deleted outright — the repoint landed and C7's
     # replacement below is the only door. Kill means kill forever (PM 2026-08-23).
@@ -147,6 +154,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.capability_index", 'registers "fleet.aggregate_capability_index"'),
     ("coordinator_core.ops.fleet.sweep_status", 'registers "fleet.archive_sweep_status"'),
     ("coordinator_core.ops.fleet.archive_actioned_memos", 'registers "fleet.archive_actioned_memos"'),
+    ("coordinator_core.ops.fleet.memo_heal", 'registers "memo.heal_inbox"'),
     ("coordinator_core.ops.fleet.mode_control", 'registers "fleet.mode_set", "fleet.mode_show"'),
     ("coordinator_core.ops.commit_anchors", 'registers "commit.anchors"'),
     ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),

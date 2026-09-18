@@ -92,6 +92,8 @@ from typing import Any, Optional
 
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 
+GENERATES = []  # appends a line to the runtime override log and creates its sink directory — an append-only audit trail of events, never regenerated and never stale relative to sources
+
 
 def environment_stands_the_bump_down(env: Optional[Any] = None):
     """The capability that decides whether a write-confinement bump is a real

@@ -679,20 +679,60 @@ def test_live_spelling_is_preferred_when_both_are_present(tmp_path):
     assert [c.holder for c in claims] == ["live"]
 
 
+#: Frontmatter keys that stamp a claim HOLDER, in any spelling this corpus has
+#: ever used -- the probe below is deliberately spelling-agnostic (it must be
+#: able to see a spelling the module does NOT read, or it cannot detect the
+#: blindness it exists to detect). `claimed_by_name` is a RELEASED-claim
+#: residue, not a live holder: it rides on `status: open` records alongside
+#: `reaped_from_session`, so it is excluded.
+_LIVE_HOLDER_KEYS = ("claimed_by", "consumed_by")
+
+
 def test_the_real_corpus_is_not_invisible_to_this_module():
-    """Corpus-truth pin, not a fixture: if `state/handoffs` carries in_flight
-    claims at all, this module must SEE them. The 0/0 defect is exactly what a
-    fixture-only suite cannot catch, so this one test reads real disk."""
+    """Corpus-truth pin, not a fixture: if `state/handoffs` carries claim
+    stamps at all, this module must SEE them. The 0/0 defect is exactly what a
+    fixture-only suite cannot catch, so this one test reads real disk.
+
+    PRECONDITION, NOT AN ASSERTION (2026-09-18): "no record has a holder" has
+    TWO causes -- the module reads a field the corpus does not use (the defect
+    this pin exists for), and nothing is claimed right now (an ordinary, valid
+    state). The original form asserted on the first and so false-failed on the
+    second: measured this date, all 177 live handoffs are `status: open` with
+    ZERO `claimed_by`/`consumed_by` stamps, every historical claim having been
+    reaped. It had been asserting against a corpus that simply had no claims in
+    it, which is why it went red with no code change behind it.
+
+    So the holder probe now reads raw frontmatter INDEPENDENTLY of the module,
+    in every spelling, and only then demands the module agree. A corpus with no
+    claims skips; a corpus whose claims the module cannot read still fails
+    loudly, which is the whole point -- the discrimination is what was missing,
+    not the strictness."""
     corpus_dir = Path(__file__).resolve().parents[3] / "state" / "handoffs"
     if not corpus_dir.is_dir():
         pytest.skip("no live corpus in this checkout")
     corpus = mod._build_corpus(corpus_dir)
     if not corpus:
         pytest.skip("empty corpus")
-    stamped = [r for r in corpus if r.holder]
-    assert stamped, (
-        "every record in the live corpus parsed with an EMPTY holder — the module "
-        "is reading a field name the corpus does not use"
+
+    on_disk = [
+        r for r in corpus
+        if any(
+            line.split(":", 1)[0].strip() in _LIVE_HOLDER_KEYS
+            for line in r.path.read_text(encoding="utf-8", errors="replace").splitlines()
+            if ":" in line
+        )
+    ]
+    if not on_disk:
+        pytest.skip(
+            f"live corpus carries no claim stamps at all ({len(corpus)} records, none "
+            f"bearing any of {_LIVE_HOLDER_KEYS}) — nothing for this module to be blind to"
+        )
+
+    invisible = [r.path.name for r in on_disk if not r.holder]
+    assert not invisible, (
+        f"{len(invisible)} record(s) carry a claim stamp on disk that this module parsed "
+        f"as an EMPTY holder — it is reading a field name the corpus does not use: "
+        f"{invisible[:5]}"
     )
 
 

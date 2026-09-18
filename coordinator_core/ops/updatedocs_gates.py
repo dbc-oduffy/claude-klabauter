@@ -206,9 +206,19 @@ def _windows_pathext() -> tuple[str, ...]:
 
     Read from `PATHEXT` rather than hard-coded so a box that publishes its
     entrypoints under a non-default extension resolves them; the fallback is
-    the Windows default value of that variable."""
+    the Windows default value of that variable.
+
+    Split on `";"`, never `os.pathsep`: `PATHEXT` is a Windows variable and is
+    semicolon-delimited by definition, which `os.pathsep` only happens to equal
+    WHEN ALREADY RUNNING ON WINDOWS. Off Windows `os.pathsep` is `":"`, so the
+    whole value collapsed into one bogus suffix (`".com;.exe;.bat;.cmd"`) and
+    no candidate ever resolved. That made every `sys.platform`-simulated
+    Windows test in `test_updatedocs_gates.py` unpassable on a POSIX host --
+    and simulating Windows from macOS is the entire reason those tests exist,
+    Windows being first-class here. The character is identical on Windows, so
+    this changes no real-Windows behaviour."""
     raw = os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD"
-    return tuple(e.strip().lower() for e in raw.split(os.pathsep) if e.strip().startswith("."))
+    return tuple(e.strip().lower() for e in raw.split(";") if e.strip().startswith("."))
 
 
 def _resolve_cli(bin_dir: Path, name: str) -> Path:

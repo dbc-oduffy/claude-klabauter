@@ -771,6 +771,40 @@ _SCHEMA_FIELDS_OWNED_ELSEWHERE = ("prime_exit_criterion",)
 _SCHEMA_STAMP_FIELD_PREFIX = "mise_prepped"
 
 
+def _is_stamp_field_error(error: Dict[str, Any]) -> bool:
+    """True when every field an error names belongs to the mise-prep stamp quartet.
+
+    THIS GATE MUST NOT REFUSE OVER THE STAMP IT IS ABOUT TO WRITE. The quartet
+    is engine-written metadata, not plan content, so a half-written stamp has
+    to stay repairable BY re-stamping -- otherwise the damage blocks its own
+    repair path and the plan is bricked out of certification forever.
+
+    The predicate this replaces could never fire (2026-09-18). It compared
+    `field.split(".")[0]` against the bare prefix `"mise_prepped"`, but these
+    fields are underscore-suffixed (`mise_prepped_by`, `mise_prepped_at`, ...)
+    and carry no dot at all, so `split(".")[0]` returned the WHOLE name and the
+    comparison was false for every stamp field that has ever existed -- dead
+    code written for a dotted-path shape the schema does not use. On top of
+    that, `_cf_mise_prepped_stamp_quartet` reports its `field` as a
+    COMMA-JOINED list of the missing members (`", ".join(missing)`), which no
+    single-name comparison could match either.
+
+    Net effect while it was dead: a plan carrying a partial hand-written
+    quartet was graded SCHEMA/DEFECT and `plan.stamp_prepped` refused it
+    NOT-PREPPED, telling the author to hand-correct engine-owned fields -- the
+    exact outcome the exemption exists to prevent.
+
+    Prefix-matched over every comma-separated member so both shapes resolve,
+    and deliberately ALL-of rather than ANY-of: an error naming a stamp field
+    alongside a genuine plan-content field is a real defect and must survive.
+    """
+    raw = str(error.get("field") or "")
+    names = [n.strip() for n in raw.split(",") if n.strip()]
+    if not names:
+        return False
+    return all(n.split(".")[0].startswith(_SCHEMA_STAMP_FIELD_PREFIX) for n in names)
+
+
 def _schema(fm: Dict[str, Any], prime_exit: Dict[str, Any]) -> Dict[str, Any]:
     """``plan.schema.json`` over the frontmatter this gate is about to certify.
 
@@ -794,11 +828,7 @@ def _schema(fm: Dict[str, Any], prime_exit: Dict[str, Any]) -> Dict[str, Any]:
         errors = validate_frontmatter(fm, _PLAN_SCHEMA)
     except Exception:
         return _pass("not checked: plan.schema.json is unreadable beside this engine")
-    errors = [
-        e
-        for e in errors
-        if str(e.get("field") or "").split(".")[0] != _SCHEMA_STAMP_FIELD_PREFIX
-    ]
+    errors = [e for e in errors if not _is_stamp_field_error(e)]
     if prime_exit["status"] != "PASS":
         errors = [
             e

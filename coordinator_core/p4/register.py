@@ -75,6 +75,8 @@ from coordinator_core.ipc import register_op
 from coordinator_core.machine_resolver import registry_set
 from coordinator_core.p4 import runner
 
+GENERATES = []  # writes .p4ignore/.gitignore/.gitattributes into the P4 workspace being registered, a caller-supplied tree outside claude-klabauter's own tracked artifacts
+
 #: D9 — shape-only: exactly one lowercase '<segment>/<segment>' pair. Never a
 #: regex match against a derived/multi-segment/uppercase key.
 _REPO_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*$")

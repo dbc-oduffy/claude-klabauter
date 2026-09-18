@@ -65,6 +65,8 @@ from coordinator_core.roadmap.plan_gate import (
     assemble_plan_gate,
 )
 
+GENERATES = []  # writes an authored roadmap/plan document to a per-run derived path — session output, not a regenerable artifact with a stamp
+
 #: Kinds `handoff_phase` is legal on (H-CROSS-EXEC-2). Read from the validator
 #: that enforces it rather than re-derived here: this was a hand-maintained twin
 #: of `HANDOFF_PHASE_KINDS`, and when schema 10.5.0 admitted `kind: spinoff`

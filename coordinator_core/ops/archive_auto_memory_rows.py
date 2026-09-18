@@ -118,6 +118,8 @@ from coordinator_core.ops.check_auto_memory_drained import (
 )
 from coordinator_core.session.worktree_safety import resolve_self_session_id
 
+GENERATES = []  # appends rows onto an archive destination as it moves them — a relocation of existing content, not an artifact derived from sources
+
 # Name-collision narrowing tradeoff: a ceremony can run twice on the same
 # calendar day, so the archive filename is not unique on the date alone.
 # 12 hex characters of a UUID4-shaped session id leaves an astronomically

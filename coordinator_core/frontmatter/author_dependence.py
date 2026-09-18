@@ -142,6 +142,8 @@ from coordinator_core.frontmatter.primitives import (
     split_frontmatter,
 )
 
+GENERATES = []  # `--write` refreshes the test golden coordinator_core/frontmatter/tests/_goldens/author_dependence_labels.json, which carries no stamp field of any kind (it is a pure contingency-table fixture); GENERATES exists for staleness computation and requires a non-empty stamp_key, so an unstamped golden is out of its scope rather than an undeclared artifact
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 CORPUS_DIRS = ("archive/handoffs", "state/handoffs", "docs/plans")
