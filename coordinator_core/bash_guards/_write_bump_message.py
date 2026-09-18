@@ -381,13 +381,33 @@ def render_em_message(
     dispatch signature and the sibling subagent-class renderer -- none is
     rendered here.
 
-    THE IN-BAND ROUTE IS NAMED, THE KEY IS NOT (2026-09-03). C4d left this
-    copy naming a precondition ("check with your PM") with no way to record
-    that it had been SATISFIED, so a compliant EM whose PM had already said
-    yes was indistinguishable from one who never asked -- the guard fired
-    hardest on the obedient case. `DR-298` (`session.em_guard_grant`) is the
-    EM-exercisable in-band route for exactly this guard pair; the deny now
-    names it. A decision-record id is not a recipe: it is one hop, it hands
+    THE IN-BAND ROUTE IS THE LEAD, THE KEY IS NOT (2026-09-18, superseding
+    the 2026-09-03 framing). C4d left this copy naming a precondition
+    ("check with your PM") with no way to record that it had been
+    SATISFIED, so a compliant EM whose PM had already said yes was
+    indistinguishable from one who never asked -- the guard fired hardest
+    on the obedient case. 2026-09-03 named `DR-298` but kept the PM ask as
+    the LEAD and cast the grant as a way to RECORD a yes already given.
+
+    That framing inverted the ruling it cited, and the copy is now the
+    other way round. `DR-298` § Decision is explicit: "The EM self-grants,
+    on a small allowlist, with NO PM utterance required at the moment of
+    use", and the `bump-*` pair is exactly that allowlist. The grant does
+    not record a PM's yes -- it IS the authorization, minted by the EM on
+    its own recognizance, and DR-298's four deliberateness properties
+    (separate action, one-shot, per-(session,guard), durable record) are
+    what stand in for the PM's words.
+
+    Measured cost of the inverted copy, and why this is not a style edit:
+    on 2026-09-18 an EM hit this deny mid-`/percolate`, read "check with
+    your PM" as the operative instruction, and escalated a `machine-local`
+    path repair -- BOOKKEEPING-tier by DR-298's own failure-mode table --
+    to the PM as a blocking question. That is precisely the "guard fired
+    hardest on the obedient case" defect this passage already claimed to
+    have fixed, reintroduced by the fix's own wording. The PM ruling
+    behind DR-298 reads "I do agree that the EM should be able to get
+    around this sort of thing. It's annoying. It bites."; copy that leads
+    with the PM ask makes it bite. A decision-record id is not a recipe: it is one hop, it hands
     over no parameterized command, and `message_register._rules` B8 grades
     it clean (measured -- B8 fires on pointers into the override-key/unlock
     doc surface, which `DR-298` is not; see `guard_unlock_sentinel.
@@ -414,10 +434,10 @@ def render_em_message(
     # is NOT-FOREIGN, so it renders untouched. A future edit adding a fourth
     # rendered path here must add its own declaration, not extend this one.
     return (
-        "Coordinator guard — instead: check with your PM before writing into "
-        f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`). "
-        "Got their yes? `DR-298` records it in-band. "
-        "Still unsure? cross-repo-memo is the sanctioned channel."
+        "Coordinator guard — instead: writing into "
+        f"{_target_phrase(target_repo, raw_target)} (not `{session_repo}`) "
+        "is yours to grant in-band — `DR-298`, no PM utterance needed. "
+        "Beyond your remit? cross-repo-memo is the sanctioned channel."
     )
 
 

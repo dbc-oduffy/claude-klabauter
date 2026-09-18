@@ -77,6 +77,25 @@ from coordinator_core.machine_resolver import merged_flat_registry as _merged_fl
 # "are not unclassifiable repos; they are not repos at all, and never reach a
 # verdict." Same generic/public-slug class as 'game_dev', 'web_dev',
 # 'data_science', 'coordinator', 'experiments' above.
+# 'claude_klabauter' kept: this is THIS MIRROR'S OWN PUBLIC IDENTITY -- the
+# name every other slug in the store scrubs TO, not a private codename that
+# leaks. Same class as 'doe_claude' above (the sibling mirror's public
+# identity), and the two were jointly renamed onto each mirror's public
+# identity by the 2026-08-05 cross-mirror audit
+# (cross-repo/inbox/2026-08-05-doe-claude-em-joint-rename-agreed-our-outlier-
+# is-worse.md); 'doe_claude' was added to KEEPSET then and this one was not.
+# Scrubbing it is incoherent by construction: `base.depersonalize` maps
+# claude_klabauter -> claude_klabauter, so a rule satisfying the leak oracle
+# for this slug would have to rewrite the placeholder the sweep itself
+# just produced, corrupting every published byte that names the mirror.
+# Registered as `repos.claude_klabauter` and classified by
+# `consumer_corpus_preflight` (NON_FLEET_EXCLUDED_KEYS, not FLEET_REPO_KEYS),
+# which is how it entered the leak oracle's slug universe with no KEEPSET
+# entry and left `test_registry_slug_scrub_coverage` red across 9 targets --
+# so the pin that exists to catch a missing scrub rule before a live publish
+# was itself failing, and caught nothing. Found 2026-09-18 when
+# `example_orchestration_hub_repo` reached a live publish refusal behind
+# that silence. KEEPSET is the narrow, named fix; not a pattern loosen.
 KEEPSET: Sequence[str] = (
     "example_retrieval_repo",
     "deep_research",
@@ -88,6 +107,7 @@ KEEPSET: Sequence[str] = (
     "doe_claude",
     "example_doctrine_repo",
     "fleet_root",
+    "claude_klabauter",
 )
 
 _EXCLUDE_DIRS = {".git"}

@@ -103,17 +103,18 @@ class TestBashCrossRepoDenyIsSentinelClearable:
     filename/touch command) for EITHER audience -- see
     ``_write_bump_message.render_em_message``'s docstring. The message
     register contract (docs/wiki/guard-messaging.md) is now: one fact,
-    stated once ("check with your PM"), plus a terse alternative
+    stated once (the EM's own in-band grant route, `DR-298` -- 2026-09-18,
+    superseding the "check with your PM" lead), plus a terse alternative
     (cross-repo-memo) -- never the override key. Sentinel-clearability
     itself (b) is unaffected and still covered by
     ``test_sentinel_clears_the_deny_and_is_consumed_once`` below."""
 
-    def test_deny_advertises_the_pm_escalation_not_the_unlock_recipe(self, repos, monkeypatch):
+    def test_deny_advertises_the_in_band_route_not_the_unlock_recipe(self, repos, monkeypatch):
         _set_anchor(monkeypatch, repos, "sess-deny-1")
         decision, out = _decision(_cross_repo_payload("sess-deny-1", repos))
         assert decision == "deny"
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert "check with your PM" in reason
+        assert "yours to grant in-band" in reason
         assert "cross-repo-memo" in reason
         assert "guard-unlock-" not in reason, (
             "deny reason must never hand out a pasteable unlock recipe (AC-2)"
