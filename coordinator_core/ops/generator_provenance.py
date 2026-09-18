@@ -1677,7 +1677,23 @@ def _scan_or_reuse_file_writes(path: Path) -> FileWrites:
     return _scan_file_writes(tree)
 
 
-def discover_generators(repo_root: Path) -> list[GeneratorRecord]:
+def discover_generators(
+    repo_root: Path, unparseable: "list[str] | None" = None
+) -> list[GeneratorRecord]:
+    """`unparseable`, when supplied, collects the repo-relative path of every
+    tracked module this sweep could not parse or read.
+
+    WHY THIS IS AN OUT-PARAMETER AND NOT A SECOND WALK (2026-09-18): a module
+    whose `FileWrites` carries `syntax_error=True` short-circuits the loop
+    below and yields NO record, so it vanishes from coverage entirely instead
+    of failing loud -- the ratchet stayed GREEN while two modules in this tree
+    were syntactically broken, which is how the gap was found. A gate that
+    cannot parse a module knows nothing about what it writes, and "knows
+    nothing" must not read as "declares nothing to declare". Surfacing it via
+    this collector reuses the ONE discovery routine (§ Anti-scope: no second
+    hand-authored walk) and changes no existing caller's behaviour -- callers
+    that pass nothing get exactly today's records.
+    """
     from coordinator_core.ops import generator_scan_cache
 
     records: list[GeneratorRecord] = []
@@ -1781,6 +1797,8 @@ def discover_generators(repo_root: Path) -> list[GeneratorRecord]:
                 }
 
                 if writes.syntax_error:
+                    if unparseable is not None:
+                        unparseable.append(key)
                     continue
 
                 rel_path = key

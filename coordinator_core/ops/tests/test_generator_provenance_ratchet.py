@@ -283,3 +283,28 @@ def test_proof_future_review_by_passes_the_review_gate():
     }
     offenders = entries_past_review_by(baseline_entries, datetime.date(2026, 8, 14))
     assert offenders == []
+
+
+def test_no_tracked_module_is_unparseable_to_this_gate():
+    """A module this gate cannot parse must fail LOUDLY, never vanish.
+
+    Found 2026-09-18: `FileWrites(syntax_error=True)` short-circuits
+    `discover_generators`' sweep before any record is built, so an unparseable
+    module produces no record and simply drops out of coverage. The whole
+    ratchet stayed GREEN while two modules in this tree were syntactically
+    broken -- a gate that cannot read a module knows nothing about what it
+    writes, and "knows nothing" must never read as "has nothing to declare".
+
+    This is the discriminator the suite lacked: every other assertion here
+    reasons over modules that PARSED, so none of them can see this class.
+    """
+    from coordinator_core.ops.generator_provenance import discover_generators
+
+    unparseable: list[str] = []
+    discover_generators(REPO_ROOT, unparseable=unparseable)
+
+    assert not unparseable, (
+        "tracked module(s) could not be parsed or read by the provenance sweep, so "
+        "they contribute NO record and are invisible to every other check in this "
+        f"file: {sorted(unparseable)}"
+    )
