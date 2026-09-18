@@ -211,6 +211,54 @@ class TestRatchetWatermarkEnforced:
         assert "permissionDecision" not in out
         assert "additionalContext" in out
 
+    def test_over_watermark_shrink_is_admitted(self, tmp_path):
+        # C7c: a surface already over its watermark (grown by a route this
+        # edit-time leg never saw) must still accept the edits that shrink
+        # it back down -- refusing them leaves "raise the watermark" as the
+        # only way out, which is the trap this leg now closes.
+        target = self._governed_target(tmp_path)
+        self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
+        target.write_text("x" * 8000, encoding="utf-8")  # pre-edit: already over watermark
+
+        result = guard.check(_write_payload("Write", str(target), content="x" * 7000))
+
+        assert result is None
+
+    def test_over_watermark_growth_is_still_denied(self, tmp_path):
+        target = self._governed_target(tmp_path)
+        self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
+        target.write_text("x" * 8000, encoding="utf-8")
+
+        result = guard.check(_write_payload("Write", str(target), content="x" * 8001))
+
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert "6000" in out["additionalContext"]
+
+    def test_over_watermark_same_size_is_still_denied(self, tmp_path):
+        target = self._governed_target(tmp_path)
+        self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
+        target.write_text("x" * 8000, encoding="utf-8")
+
+        result = guard.check(_write_payload("Write", str(target), content="x" * 8000))
+
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert "6000" in out["additionalContext"]
+
+    def test_over_watermark_shrink_via_edit_is_admitted(self, tmp_path):
+        target = self._governed_target(tmp_path)
+        self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
+        target.write_text("PREFIX" + ("x" * 8000), encoding="utf-8")
+
+        result = guard.check(
+            _write_payload(
+                "Edit", str(target), old_string="x" * 8000, new_string="x" * 6500
+            )
+        )
+
+        assert result is None
+
     def test_genuine_ratchet_failure_still_denies(self, tmp_path):
         # Regression: a well-formed watermark whose ratchet check genuinely
         # fails (growth past the recorded watermark) still denies exactly

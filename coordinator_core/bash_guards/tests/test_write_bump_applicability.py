@@ -987,3 +987,57 @@ def test_memory_store_case_insensitive_directory_matches(tmp_path, monkeypatch):
 
 def test_memory_store_path_empty_string_does_not_match():
     assert applicability.is_agent_memory_store_path("") is False
+
+
+# ---------------------------------------------------------------------------
+# coordinator-claude#42 B2 -- `own_repo_write_gitdir`, the no-repo-anchor
+# tiebreaker.
+# ---------------------------------------------------------------------------
+
+
+def test_own_repo_write_gitdir_resolves_from_cwd(tmp_path):
+    repo = _init_repo(tmp_path, name="cwd-repo")
+    resolved = applicability.own_repo_write_gitdir(str(repo), {})
+    assert resolved is not None
+    assert str(resolved).rstrip("/").endswith(".git")
+
+
+def test_own_repo_write_gitdir_falls_back_to_declared_claude_project_dir_env(
+    tmp_path, monkeypatch
+):
+    repo = _init_repo(tmp_path, name="declared-repo")
+    not_a_repo = tmp_path / "not-a-repo"
+    not_a_repo.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(repo))
+
+    resolved = applicability.own_repo_write_gitdir(str(not_a_repo), {})
+
+    assert resolved is not None
+
+
+def test_own_repo_write_gitdir_prefers_payload_env_over_process_env(tmp_path, monkeypatch):
+    """A `CLAUDE_PROJECT_DIR` carried on the payload's own `env` mapping (a
+    per-request, harness-authored value) takes precedence over whatever the
+    engine process's own `os.environ` happens to hold."""
+    payload_repo = _init_repo(tmp_path, name="payload-declared-repo")
+    process_env_repo = _init_repo(tmp_path, name="process-env-repo")
+    not_a_repo = tmp_path / "not-a-repo-2"
+    not_a_repo.mkdir()
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(process_env_repo))
+
+    payload = {"env": {"CLAUDE_PROJECT_DIR": str(payload_repo)}}
+    resolved = applicability.own_repo_write_gitdir(str(not_a_repo), payload)
+
+    assert resolved is not None
+    assert str(payload_repo) in str(resolved)
+
+
+def test_own_repo_write_gitdir_returns_none_when_nothing_resolves(tmp_path):
+    not_a_repo = tmp_path / "nowhere"
+    not_a_repo.mkdir()
+    assert applicability.own_repo_write_gitdir(str(not_a_repo), {}) is None
+
+
+def test_own_repo_write_gitdir_returns_none_for_empty_cwd_and_no_env(monkeypatch):
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    assert applicability.own_repo_write_gitdir("", {}) is None

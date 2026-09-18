@@ -1,12 +1,15 @@
 """C4 (docs/plans/2026-08-26-the-destructive-core-learns-the-shell-it-guards.md,
-Bucket B): the five ADVISORY_REWRITE-band entries widened from
-``matchers=("Bash",)`` to ``matchers=COMMAND_TOOL_NAMES`` in this chunk --
-``validate-commit``, ``probe-spray``, ``reap-stale-git-lock``,
+Bucket B): the ADVISORY_REWRITE-band entries widened from
+``matchers=("Bash",)`` to ``matchers=COMMAND_TOOL_NAMES`` in this chunk and
+still live -- ``validate-commit``, ``reap-stale-git-lock``,
 ``git-no-optional-locks``, ``block-dev-repo-sentinel-removal-advisory``.
+(``probe-spray`` was a fifth such entry; deleted -- see
+docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md
+C5 -- and its own dialect-parity test class along with it.)
 
-None of these five guards' own detection bodies read ``tool_name`` (four
+None of these four guards' own detection bodies read ``tool_name`` (three
 match a foreign binary's argv/text spelled identically under both dialects;
-the fifth, ``block-dev-repo-sentinel-removal-advisory``, was ALREADY fully
+the fourth, ``block-dev-repo-sentinel-removal-advisory``, was ALREADY fully
 dialect-aware via ``dialect_from_tool_name`` before this chunk -- see that
 entry's own registration comment in ``dispatch.py``). The only thing this
 chunk's widening changes is whether the chain-entry ``matchers`` gate lets a
@@ -125,40 +128,6 @@ class TestReapStaleGitLockBothDialects:
 
         assert not bash_lock.exists(), "Bash-dialect call did not reap the aged lock"
         assert not ps_lock.exists(), "PowerShell-dialect call did not reap the aged lock"
-
-
-class TestProbeSprayBothDialects:
-    NAME = "probe-spray"
-
-    def test_matchers_declare_both_dialects(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("COORDINATOR_PROBE_SPRAY_STATE_DIR", str(tmp_path))
-        chain = _chain("echo alive", "sess-a", str(tmp_path), "Bash")
-        entry = _entry(chain, self.NAME)
-        assert "Bash" in entry.matchers
-        assert "PowerShell" in entry.matchers
-
-    def test_strong_probe_advises_identically_under_both_dialects(
-        self, tmp_path, monkeypatch
-    ):
-        monkeypatch.setenv("COORDINATOR_PROBE_SPRAY_STATE_DIR", str(tmp_path))
-
-        # Distinct session ids: probe-spray's cooldown is keyed per session,
-        # so reusing one session for both calls would suppress the second
-        # firing regardless of dialect -- see this file's module docstring.
-        bash_entry = _entry(
-            _chain("echo alive", "sess-bash", str(tmp_path), "Bash"), self.NAME
-        )
-        ps_entry = _entry(
-            _chain("echo alive", "sess-ps", str(tmp_path), "PowerShell"), self.NAME
-        )
-
-        bash_out = bash_entry.fn()
-        ps_out = ps_entry.fn()
-
-        assert bash_out is not None, "expected the strong-probe advisory to fire (Bash)"
-        assert ps_out is not None, "expected the strong-probe advisory to fire (PowerShell)"
-        assert "PROBE-SPRAY" in bash_out["hookSpecificOutput"]["additionalContext"]
-        assert "PROBE-SPRAY" in ps_out["hookSpecificOutput"]["additionalContext"]
 
 
 class TestBlockDevRepoSentinelRemovalAdvisoryBothDialects:

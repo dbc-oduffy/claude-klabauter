@@ -57,10 +57,9 @@ this module (C3's advisory/platform rows, C10's DR-118 shim rows):
 Per-cell isolation is load-bearing, not hygiene (state/lessons/2026-08-01-
 adding-suppression-to-an-emitter-silently-breaks-*): ``fire_row`` mints a
 FRESH session id and a FRESH scratch tempdir per call, following
-``_alternative_liveness.fire_guard``'s ``_isolated_session_scope`` shape
-and ``_guard_coverage.measure_probe_spray``'s per-run scratch-tempdir
-pattern -- combined here at PER-CELL granularity (stricter than either
-individual precedent), so a later row in the same test session never
+``_alternative_liveness.fire_guard``'s ``_isolated_session_scope``
+scratch-tempdir pattern -- applied here at PER-CELL granularity (stricter
+than that precedent), so a later row in the same test session never
 observes another row's monkeypatch state, working directory, or any
 session-scoped suppression latch. ``guard_inprocess_search._footer()`` is
 the loudest example in this tree: its latch keys off the process
@@ -1582,22 +1581,6 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
     CorpusRow(
         "inprocess-search",
         "inprocess-search-control",
-        "echo hi",
-        False,
-        _REWRITE,
-        False,
-    ),
-    CorpusRow(
-        "probe-spray",
-        "probe-spray-fire",
-        "echo alive",
-        True,
-        _REWRITE,
-        False,
-    ),
-    CorpusRow(
-        "probe-spray",
-        "probe-spray-control",
         "echo hi",
         False,
         _REWRITE,

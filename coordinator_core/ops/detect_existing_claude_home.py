@@ -56,7 +56,10 @@ Negative-spec / faithful-oracle notes:
       redirects on `find`/`ls`/file reads: any `OSError` (permission denied,
       race-deleted entry, unreadable file) during a predicate degrades that
       predicate to its negative case rather than raising — read-only best-effort
-      classification, never a hard crash on a transient FS hiccup.
+      classification, never a hard crash on a transient FS hiccup. An ABSENT
+      path is the pristine-home answer, not a hiccup, so it degrades silently;
+      only other OSErrors print a `skip:` line (a stderr `skip:` on every fresh
+      home misdirected claude-klabauter#15's diagnosis onto these probes).
     - HOME resolution deliberately does NOT reproduce the bash oracle's bare
       `${HOME}` (POSIX-only) fallback verbatim: `HOME` is frequently unset on
       Windows, where the bash oracle never had to run. `os.path.expanduser("~")`
@@ -164,6 +167,8 @@ def _installed_plugins_json_nonempty(target: str) -> bool:
     try:
         with open(f, "r", encoding="utf-8") as fh:
             raw = fh.read()
+    except FileNotFoundError:
+        return False
     except OSError:
         print(f"skip: _installed_plugins_json_nonempty: with open(f, \"r\", encoding=\"utf-8\") as fh: failed: {sys.exc_info()[1]}", file=sys.stderr)
         return False
@@ -183,6 +188,8 @@ def _has_installed_plugin(target: str) -> bool:
     plugins_dir = os.path.join(target, "plugins")
     try:
         entries = os.listdir(plugins_dir)
+    except FileNotFoundError:
+        return False
     except OSError:
         print(f"skip: _has_installed_plugin: entries = os.listdir(plugins_dir) failed: {sys.exc_info()[1]}", file=sys.stderr)
         return False
@@ -209,6 +216,8 @@ def _plugins_dir_nonempty(target: str) -> bool:
     plugins_dir = os.path.join(target, "plugins")
     try:
         return bool(os.listdir(plugins_dir))
+    except FileNotFoundError:
+        return False
     except OSError:
         print(f"skip: _plugins_dir_nonempty: return bool(os.listdir(plugins_dir)) failed: {sys.exc_info()[1]}", file=sys.stderr)
         return False

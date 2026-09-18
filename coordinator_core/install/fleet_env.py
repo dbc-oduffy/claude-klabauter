@@ -90,8 +90,9 @@ Health contract / probe set: `_FLEET_ENV_IMPORT_PROBES` below is a
 deliberately small, representative subset of the fleet union's DIRECT
 (first-class) requests — not its full transitive closure, and not every
 package in the lock — chosen to cover the union's genuinely distinct
-consumption shapes (lightweight cross-repo utility, GPU-heavy ML stack, and
-the PM-ruled `huggingface_hub` floor) without making every provisioning run
+consumption shapes (lightweight cross-repo utility, GPU-heavy ML stack, the
+vector store, and the PM-ruled `huggingface_hub` floor) without making
+every provisioning run
 pay for probing all ~250 packages. This is also documented in
 `docs/reference/fleet-shared-environment-contract.md` § Provisioning the
 environment (C4) — that is the promise this constant discharges; the two
@@ -101,6 +102,17 @@ added as a follow-up to C6 (which flipped the minor 3.12 -> 3.14 and
 regenerated the lock without any propagation path to an already-provisioned
 box): import success alone cannot detect a stale minor, since an old
 environment imports its own contracted modules just fine.
+
+The same probe gates on the interpreter's `releaselevel` being `final`. A
+version-only contract is satisfied by a RELEASE CANDIDATE, and a provisioner
+whose download catalog has gone stale will hand one over without complaint:
+`--python 3.14` against a catalog topping out at `3.14.0rc2` selects rc2,
+which then fails the locked dependency set on signatures that changed between
+the candidate and the release (observed: `pydantic` cannot construct a model
+under `3.14.0rc2`, because `typing._eval_type` was still carrying a
+pre-release keyword name). Nothing in the lock pins against a candidate, so
+accepting one provisions an interpreter no dependency was resolved for. The
+remedy is to update the provisioner, never to retreat the contracted minor.
 
 Binding registry (C6): a sibling repo binds through exactly one call,
 `register_sibling_binding(repo, sibling, sibling_root)`, which (1) persists a
@@ -233,7 +245,7 @@ _FLEET_ENV_IMPORT_PROBES = (
     "numpy",
     "torch",
     "transformers",
-    "chromadb",
+    "lancedb",
     "huggingface_hub",
 )
 
@@ -508,7 +520,18 @@ def _fleet_env_healthy(python_bin: Path, *, diagnostic: dict | None = None) -> b
         "assert _got == _want, "
         "'python minor mismatch: found ' + _got + ', contract requires ' + _want"
     )
-    probe = minor_check + "; " + "; ".join(f"import {mod}" for mod in _FLEET_ENV_IMPORT_PROBES)
+    release_check = (
+        "import sys; "
+        "assert sys.version_info.releaselevel == 'final', "
+        "'pre-release interpreter: %s%s -- the contract names a released "
+        "minor, and a provisioner whose catalog tops out at a release "
+        "candidate satisfies the minor while shipping an interpreter no "
+        "dependency pins against (update the provisioner, e.g. `uv self "
+        "update`)' % (sys.version_info.releaselevel, sys.version_info.serial)"
+    )
+    probe = "; ".join(
+        (minor_check, release_check, *(f"import {mod}" for mod in _FLEET_ENV_IMPORT_PROBES))
+    )
     try:
         proc = subprocess.run(
             [str(python_bin), "-c", probe],

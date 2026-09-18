@@ -521,21 +521,35 @@ def parse_watermark(ledger_path: Union[str, Path]) -> Optional[RatchetWatermark]
     return RatchetWatermark(bytes=bytes_val, reason=reason_val)
 
 
-def ratchet_check(new_size_bytes: int, watermark: Optional[RatchetWatermark]) -> Tuple[bool, str]:
+def ratchet_check(
+    new_size_bytes: int,
+    watermark: Optional[RatchetWatermark],
+    old_size_bytes: Optional[int] = None,
+) -> Tuple[bool, str]:
     """The AC4 ratchet predicate: a governed surface may shrink or hold,
     never grow past its recorded watermark, without an explicit reasoned
     bump. `watermark is None` means the ratchet is unarmed for this surface
-    (nothing to check yet) -- always allowed."""
+    (nothing to check yet) -- always allowed.
+
+    A surface already over its watermark (grown by a route this check never
+    saw -- a merge, a Bash write, an unhooked session) must still accept the
+    edits that shrink it back down: `old_size_bytes` is the pre-edit size on
+    the SAME measurement (encoded-byte count) as `new_size_bytes`; when it is
+    known and the edit strictly reduces size, the edit is admitted even while
+    still over the watermark. A growing or same-size edit is refused exactly
+    as before. Callers that cannot establish a pre-edit size pass `None`,
+    which keeps the prior (no-shrink-exception) behavior on this leg.
+    """
     if watermark is None:
         return True, ""
     if new_size_bytes > watermark.bytes:
+        if old_size_bytes is not None and new_size_bytes < old_size_bytes:
+            return True, ""
         return False, (
             f"Refused: this edit grows the surface to {new_size_bytes} bytes, "
             f"past its recorded ratchet watermark of {watermark.bytes} bytes "
-            f"(bumped for: {watermark.reason}). The budget only shrinks or "
-            f"holds without an explicit, reasoned watermark bump -- raise "
-            f"the ledger's '## Watermark' 'Bytes:' row and state a new "
-            f"'Reason:' for the bump, or trim the addition back under the "
-            f"watermark."
+            f"(bumped for: {watermark.reason}). Shrink the file back toward "
+            f"the watermark -- a watermark bump is a separate, reasoned act, "
+            f"not this edit's fix."
         )
     return True, ""

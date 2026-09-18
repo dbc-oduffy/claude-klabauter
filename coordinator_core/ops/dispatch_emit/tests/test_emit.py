@@ -125,8 +125,9 @@ def test_first_statement_after_meta_block_is_a_phase_call():
 
     meta_end = script.index("};\n") + len("};\n")
     remainder = script[meta_end:].lstrip()
-    assert remainder.startswith("const _incompleteChunks = [];")
-    after_decl = remainder[len("const _incompleteChunks = [];") :].lstrip()
+    decls = "const _incompleteChunks = [];\n\n  const _unansweredBriefs = [];"
+    assert remainder.startswith(decls)
+    after_decl = remainder[len(decls) :].lstrip()
     assert after_decl.startswith("phase(")
 
 

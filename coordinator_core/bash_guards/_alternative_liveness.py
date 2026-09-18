@@ -199,7 +199,7 @@ _OURS_MODULE_GUARDS = frozenset({"guard_grep_via_bash", "guard_multiprobe_banner
 #: rewrite/advisory family plus check_offer_git_c. Every OTHER check_*
 #: function in dispatch_checks.py (the hard-deny/content class: no-verify,
 #: destructive-git-*, destructive-rm, blanket-git-add, runaway-find,
-#: probe-spray, validate-commit) defaults to PEER.
+#: validate-commit) defaults to PEER.
 _OURS_DISPATCH_CHECKS = frozenset(
     {
         "check_find_exec_rewrite",
@@ -925,16 +925,6 @@ UNTRIGGERED: Dict[str, str] = {
         "worktree remove --force) returned None against a real scratch "
         "repo. Needs a read of the function body to pin the exact trigger "
         "shape, not a black-box guess."
-    ),
-    "check_probe_spray": (
-        "Stateful: gates on its own internal is-probe SHAPE classifier "
-        "(distinct from the trigger commands tried here, e.g. `ps -ef | "
-        "grep python`) plus a same-session recurrence ring. "
-        "`_guard_coverage.py`'s own measurement of this same guard needed a "
-        "62,487-command real corpus to find shapes that reliably trip it "
-        "even with the threshold/cooldown patched to 1/0 -- reproducing "
-        "that from a hand-picked trigger command was not completed within "
-        "this dispatch's bounded time."
     ),
     "check_validate_commit": (
         "Requires a real staged/committed git state matching several "

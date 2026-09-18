@@ -61,6 +61,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core._settings_home import (
@@ -68,13 +69,14 @@ from coordinator_core._settings_home import (
     native_path_form,
     resolve_machine_local_cli,
 )
+from coordinator_core.coordinator_root import _resolve_plugin_root_for_machine_local
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import no_console_creationflags
 
 GENERATES = []  # writes only <settings-home>/machine-local/.doe-root, outside any git tree
 
-_PROG = "gen-doe-root-pointer.sh"  # literal program-name prefix, matches the DoE filename
+_PROG = "gen-doe-root-pointer.py"  # literal program-name prefix; this module IS the implementation now (not a bash oracle to byte-match)
 
 #: Operator kill switch for real-machine-state mutation. Spelled here rather than
 #: imported from `install.substrate` (its definition site) on purpose: this module
@@ -135,7 +137,7 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
             file=sys.stderr,
         )
         print(
-            "  Remediation: run /coordinator:install (Phase 3) to install machine-local,\n"
+            "  Remediation: python3 <claude-klabauter>/scripts/setup.py  (installs machine-local),\n"
             "  or set REPO_DOE_CLAUDE=<path> to bypass the registry lookup.",
             file=sys.stderr,
         )
@@ -155,7 +157,8 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
     if result is None or result.returncode != 0:
         print(f"{_PROG}: machine-local get repos.doe_claude failed", file=sys.stderr)
         print(
-            "  Remediation: machine-local set repos.doe_claude <path>  then /coordinator:install",
+            "  Remediation: machine-local set repos.doe_claude <path>\n"
+            "  Then: python3 <claude-klabauter>/scripts/setup.py",
             file=sys.stderr,
         )
         return None, 1
@@ -167,7 +170,8 @@ def _resolve_doe_root() -> "tuple[Optional[str], int]":
             file=sys.stderr,
         )
         print(
-            "  Remediation: machine-local set repos.doe_claude <path>  then /coordinator:install",
+            "  Remediation: machine-local set repos.doe_claude <path>\n"
+            "  Then: python3 <claude-klabauter>/scripts/setup.py",
             file=sys.stderr,
         )
         return None, 1
@@ -366,7 +370,8 @@ def main(argv: List[str]) -> int:
         if graceful_skip_unresolved and not check_only:
             print(
                 "doe_root_pointer: skipped (repos.doe_claude unset — "
-                "machine-local set repos.doe_claude <path>  then /coordinator:install)"
+                "machine-local set repos.doe_claude <path>; then python3 "
+                "<claude-klabauter>/scripts/setup.py)"
             )
             return 0
         return rc
@@ -378,19 +383,24 @@ def main(argv: List[str]) -> int:
         print(f'{_PROG}: resolved root not found at "{doe_root}"', file=sys.stderr)
         print(
             "  Remediation: confirm repos.doe_claude in the registry is a valid directory,\n"
-            "  or set REPO_DOE_CLAUDE=<path>  then /coordinator:install",
+            "  or set REPO_DOE_CLAUDE=<path>, then: python3 <claude-klabauter>/scripts/setup.py",
             file=sys.stderr,
         )
         print("doe_root_pointer: failed (see stderr for gen-doe-root-pointer.py output)")
         return 1
 
-    if not os.path.isdir(os.path.join(doe_root, "coordinator")):
+    if _resolve_plugin_root_for_machine_local(Path(doe_root)) is None:
         print(
-            f'{_PROG}: coordinator/ subdir absent at "{doe_root}/coordinator"',
+            f'{_PROG}: no coordinator-claude content found under "{doe_root}" '
+            f'(neither "{doe_root}/coordinator" nor "{doe_root}" itself carries the '
+            "plugin marker)",
             file=sys.stderr,
         )
         print(
-            "  Remediation: confirm the resolved repos.doe_claude root has coordinator/ populated (W4.2 cutover required).",
+            "  Remediation: confirm the resolved repos.doe_claude root is a coordinator-claude "
+            "clone — either a dev clone (content nested under coordinator/) or a flat "
+            "OSS/marketplace clone (content at the repo root), then re-run:\n"
+            "  python3 <claude-klabauter>/scripts/setup.py",
             file=sys.stderr,
         )
         print("doe_root_pointer: failed (see stderr for gen-doe-root-pointer.py output)")

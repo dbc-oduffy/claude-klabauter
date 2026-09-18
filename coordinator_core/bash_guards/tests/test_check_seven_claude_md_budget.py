@@ -284,3 +284,51 @@ class TestCheckSevenRatchetWatermark:
             'git commit -m "bump doctrine"', "no-session", cwd=root
         )
         assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
+
+    def _commit_over_watermark_surface(self, tmp_path: Path, bytes_val: int, size: int) -> str:
+        # C7c: seed a surface whose LAST-COMMITTED (HEAD) size is already
+        # over the armed watermark -- grown by a route this edit-time check
+        # never saw (a merge, a Bash write, an unhooked session).
+        root = self._init_watermarked_repo(tmp_path, bytes_val=bytes_val, reason="post-cut arming")
+        _stage_claude_md(root, "coordinator/CLAUDE.md", size)
+        _git(root, "commit", "-q", "-m", "land an over-watermark surface")
+        return root
+
+    def test_over_watermark_shrink_admitted(self, tmp_path):
+        # Refusing this would freeze the file and leave "raise the
+        # watermark" as the only way out -- the trap the PM named.
+        root = self._commit_over_watermark_surface(tmp_path, bytes_val=6000, size=8000)
+        _stage_claude_md(root, "coordinator/CLAUDE.md", 7000)  # smaller, still over 6000
+
+        result = dispatch_checks.check_validate_commit(
+            'git commit -m "shrink doctrine"', "no-session", cwd=root
+        )
+        assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
+
+    def test_over_watermark_growth_still_denied(self, tmp_path):
+        root = self._commit_over_watermark_surface(tmp_path, bytes_val=6000, size=8000)
+        _stage_claude_md(root, "coordinator/CLAUDE.md", 8001)  # grows further
+
+        result = dispatch_checks.check_validate_commit(
+            'git commit -m "grow doctrine"', "no-session", cwd=root
+        )
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        assert "6000" in out["permissionDecisionReason"]
+
+    def test_over_watermark_same_size_still_denied(self, tmp_path):
+        root = self._commit_over_watermark_surface(tmp_path, bytes_val=6000, size=8000)
+        # Same SIZE as HEAD but different bytes, so git sees a real staged
+        # change (identical bytes would leave nothing staged to check).
+        target = Path(root) / "coordinator/CLAUDE.md"
+        target.write_text("y" * 8000, encoding="utf-8")
+        _git(root, "add", "coordinator/CLAUDE.md")
+
+        result = dispatch_checks.check_validate_commit(
+            'git commit -m "no-op re-stage"', "no-session", cwd=root
+        )
+        assert result is not None
+        out = result["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny"
+        assert "6000" in out["permissionDecisionReason"]

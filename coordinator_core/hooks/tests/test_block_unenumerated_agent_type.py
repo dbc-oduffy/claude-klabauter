@@ -25,8 +25,21 @@ from pathlib import Path
 
 import pytest
 
+import coordinator_core.hooks.block_ungranted_opus_subagent as opus_gate_mod
 import coordinator_core.hooks.block_unenumerated_agent_type as mod
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
+
+
+def _patch_opus_gate_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Composition (2026-09-18): `check()` now also delegates to
+    `block_ungranted_opus_subagent`, an orthogonal concern (Opus/Fable
+    persona-or-grant gating) this module's own test suite predates and does
+    not exercise. Tests here that assert on ENUMERATION behavior alone stub
+    this leg to a no-op so they are not incidentally coupled to real
+    pin-resolution/transcript-resolution state -- that gate has its own
+    dedicated test module, `test_block_ungranted_opus_subagent.py`.
+    """
+    monkeypatch.setattr(opus_gate_mod, "check", lambda payload: None)
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +378,7 @@ def test_named_and_unnamed_invented_type_both_denied(monkeypatch: pytest.MonkeyP
 
 def test_enumerated_coordinator_type_silent(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_roster(monkeypatch, frozenset({"coordinator:executor"}))
+    _patch_opus_gate_noop(monkeypatch)
     assert mod.check(_agent_payload("coordinator:executor")) is None
 
 
@@ -422,6 +436,7 @@ def test_override_marker_with_empty_reason_does_not_suppress(monkeypatch: pytest
 
 def test_named_and_unnamed_fork_type_both_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_roster(monkeypatch, frozenset({"coordinator:executor"}) | mod._HARNESS_BUILTIN_TYPES)
+    _patch_opus_gate_noop(monkeypatch)
 
     unnamed = mod.check(_agent_payload("fork"))
     named = mod.check(_agent_payload("fork", name="fork-named"))
@@ -510,6 +525,7 @@ def test_live_roster_allows_via_check_not_just_resolve_roster(monkeypatch: pytes
     # coordinator's ask that this test be deterministic in the one
     # environment that matters.
     monkeypatch.setattr(mod, "read_doe_root_pointer", lambda: doe_root)
+    _patch_opus_gate_noop(monkeypatch)
     for subagent_type in (
         "Explore",
         "Plan",

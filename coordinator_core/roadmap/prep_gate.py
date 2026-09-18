@@ -14,7 +14,8 @@ it rests on no counted premise, and why an ``external_gate`` entry's
 ``requires:`` is an author saying which side of DR-127 their cross-repo
 dependency falls on. The four report classes are a routing aid, not four bars.
 
-  SPINE          ``read_spine()`` succeeds, no row carries ``UNDECLARED`` writes,
+  SPINE          ``read_spine()`` succeeds, every row carries an executable ``body``
+                 (not a title restatement), no row carries ``UNDECLARED`` writes,
                  ``build_waves()`` returns without ``WaveCycleError``. EXECUTED,
                  never reviewed — the predicate is the engine's own reader
                  answering, not a human reading a spine and agreeing.
@@ -259,6 +260,7 @@ def _spine(plan_path: Path, text: str) -> Dict[str, Any]:
     from coordinator_core.ops.dispatch_emit.spine_read import (
         UNDECLARED,
         SpineReadError,
+        executable_body,
         read_spine,
     )
     from coordinator_core.ops.dispatch_emit.wave_map import WaveCycleError, build_waves
@@ -283,7 +285,46 @@ def _spine(plan_path: Path, text: str) -> Dict[str, Any]:
         waves = build_waves(rows)
     except WaveCycleError as exc:
         return _defect("wave-cycle", str(exc).strip().splitlines()[0][:300])
+    no_body = [row.id for row in rows if not executable_body(row.title, row.body)]
+    if no_body:
+        return _defect(
+            "body-absent",
+            f"rows with nothing to execute: {', '.join(no_body)} "
+            "(a row's `body:` states the work, not only its title)",
+            withheld=no_body,
+        )
+    unroutable, first = _unroutable_rows(waves)
+    if unroutable:
+        return _defect(type(first).__name__, str(first).strip()[:300], withheld=unroutable)
     return _pass(f"{len(rows)} dispatchable row(s) across {len(waves)} wave(s)")
+
+
+def _unroutable_rows(waves: Sequence[Sequence[Any]]) -> "tuple[List[str], Optional[Exception]]":
+    """The rows the emitter would refuse to route, judged by the emitter itself.
+
+    ``emit._row_agent_type`` is where dispatch raises MixedAgentTypeRowError,
+    UnroutableWorkKindRowError, UnverifiableEnricherRowError and
+    MalformedAgentOverrideError -- all static spine facts. Calling it here means
+    a plan the gate certifies is one the emitter will route (DoE-claude#75).
+    """
+    from coordinator_core.ops.dispatch_emit import emit
+
+    refusals = (
+        emit.MixedAgentTypeRowError,
+        emit.UnroutableWorkKindRowError,
+        emit.UnverifiableEnricherRowError,
+        emit.MalformedAgentOverrideError,
+    )
+    ids: List[str] = []
+    first: Optional[Exception] = None
+    for wave in waves:
+        for row in wave:
+            try:
+                emit._row_agent_type(row)
+            except refusals as exc:
+                ids.append(row.id)
+                first = first or exc
+    return ids, first
 
 
 # ---------------------------------------------------------------------------

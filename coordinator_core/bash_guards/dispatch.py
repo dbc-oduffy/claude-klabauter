@@ -45,7 +45,6 @@ first-non-empty-stdout-wins, in hooks.json REGISTRATION order:
        h. check_offer_git_c                (soft, fail-open; cwd-forwarded)
        i. check_validate_commit            (content, fail-open, NOT
                                              crash-deny-routed)
-       j. check_probe_spray                (advisory, fail-open)
   2. block_illegal_filename       (cohort 1, Bash leg -- advisory, fail-open)
   3. block_subagent_plan_body_bash_write   (cohort 1 -- hard, fail-closed)
   4. block_reviewer_bash_outside_allowlist (cohort 1 -- hard, fail-closed)
@@ -2772,39 +2771,16 @@ def _build_guard_chain(
         # foreign-binary-argv case as the two entries above. No detection
         # change.
         GuardEntry("validate-commit", lambda: _dc.check_validate_commit(cmd, session_id, cwd, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
-        # Review: review-integrator -- Finding 2. Registered AHEAD of
-        # `probe-spray` (moved up from the dispatcher's own tail below it),
-        # satisfying two ordering constraints at once:
-        #   1. It still sits after every hard-deny above (identity/
-        #      confinement/git-history denies all outrank a search answer),
-        #      same invariant every rewrite/advisory entry in this chain
-        #      already honors.
-        #   2. It must precede `probe-spray` specifically: `check_probe_
-        #      spray`'s ring-buffer recurrence check (`in_ring`) fires on
-        #      ANY exact-repeated command shape, including a repeated grep,
-        #      and its advisory envelope short-circuits this loop before
-        #      `inprocess-search` would ever run. An answered search spawns
-        #      nothing, so probe-spray's machine-load concern is moot for it
-        #      -- answering a repeated grep in-process is strictly better
-        #      for the machine than nudging about it and then letting the
-        #      grep spawn anyway. `inprocess-search` never denies a command
-        #      it cannot answer, so moving it earlier cannot introduce a new
-        #      bypass of anything below it (same reasoning already applied
-        #      to its position relative to the rewrite guards further down).
+        # Review: review-integrator -- Finding 2. Still sits after every
+        # hard-deny above (identity/confinement/git-history denies all
+        # outrank a search answer), same invariant every rewrite/advisory
+        # entry in this chain already honors. (Its former second ordering
+        # constraint -- precede `probe-spray` -- is moot: that guard is
+        # deleted.) `inprocess-search` never denies a command it cannot
+        # answer, so its position cannot introduce a new bypass of anything
+        # below it (same reasoning already applied to its position relative
+        # to the rewrite guards further down).
         GuardEntry("inprocess-search", lambda: _check_inprocess_search(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_inprocess_search)),
-        # Advisory (dispatcher own tail).
-        #
-        # Widened from ("Bash",) to COMMAND_TOOL_NAMES (C4, docs/plans/
-        # 2026-08-26-the-destructive-core-learns-the-shell-it-guards.md,
-        # Bucket B): every `is_probe`/`is_strong_probe` test above is a raw
-        # `re.match`/`re.search` against `cmd`'s own text (`echo`, `true`,
-        # `sleep <n>`, ...) plus the session-keyed ring-buffer recurrence
-        # check, none of which reads through the bash-only tokenizer -- a
-        # probe-shaped one-liner is spelled identically whether the caller
-        # names the tool `Bash` or `PowerShell` (`echo probe` is valid text
-        # under either), so this is the same foreign-binary/literal-text
-        # case as the other four Bucket B entries. No detection change.
-        GuardEntry("probe-spray", lambda: _dc.check_probe_spray(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # 2. block-illegal-filename.sh (cohort 1, Bash leg, advisory).
         GuardEntry("block-illegal-filename", lambda: _check_illegal_filename(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_illegal_filename)),
         # 5b. check-test-suite-invocation -- no legacy bash predecessor (new
@@ -2830,8 +2806,8 @@ def _build_guard_chain(
         # None of these five ever deny (see their shared module comment) --
         # they only offer an auto-rewrite or an advisory, so their own
         # position relative to EACH OTHER carries no confinement risk.
-        # `inprocess-search` (formerly registered here) moved up ahead of
-        # `probe-spray` -- see that entry's own comment above for why.
+        # `inprocess-search` (formerly registered here) moved up -- see
+        # that entry's own comment above for why.
         # Bash-only is correct by construction, not unconverted -- reason:
         # docs/reference/guard-tool-name-membership.md §8.
         GuardEntry("find-exec-rewrite", lambda: _dc.check_find_exec_rewrite(cmd, session_id, payload=payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.WINDOWS_COST_ONLY, matchers=("Bash",)),

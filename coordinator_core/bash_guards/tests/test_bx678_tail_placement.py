@@ -76,9 +76,9 @@ GREP_VIA_BASH_GUARD_NAME = "grep-via-bash-guard"
 
 # Every ADVISORY_REWRITE entry that can return allow+updatedInput (a genuine
 # rewrite) -- the subset of ADVISORY_REWRITE_NAMES this test cares about
-# short-circuiting ahead of the platform guards. `validate-commit`,
-# `inprocess-search` and `probe-spray` are advisory/content, not rewrites,
-# and are deliberately excluded here (mirrors the retired
+# short-circuiting ahead of the platform guards. `validate-commit` and
+# `inprocess-search` are advisory/content, not rewrites, and are
+# deliberately excluded here (mirrors the retired
 # `test_hard_denies_precede_rewrites.py`'s own `REWRITING_GUARDS` set).
 REWRITING_GUARDS = {
     "offer-git-c",

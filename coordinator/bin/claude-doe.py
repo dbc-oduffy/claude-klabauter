@@ -483,6 +483,40 @@ def _resolve_stamped_engine_root() -> str | None:
     return None
 
 
+def _resolve_plugin_root(coord_path: str) -> str | None:
+    """Map a resolved DoE-clone root onto the coordinator-claude PLUGIN dir
+    (the one `--plugin-dir` wants), deciding nested-vs-flat by MARKER, never
+    by path shape.
+
+    Inline mirror of `coordinator_core.coordinator_root ::
+    _resolve_plugin_root_for_machine_local` -- source of truth there, adopted
+    by `coordinator_core.install._shared :: _repo_to_coordinator_content_root`
+    in 79d0dbd719. Kept inline (not imported) because this wrapper is
+    installed STANDALONE and cannot import coordinator_core (see
+    `_machine_local_argv`'s docstring, same constraint, same reason).
+
+    Two accepted layouts:
+      - nested (DoE dev-clone): plugin payload lives under `<root>/coordinator`.
+      - flat (published OSS/marketplace clone, claude-klabauter#6 / DoE F7):
+        the plugin payload IS the repo root.
+
+    Probes for the artifact `--plugin-dir` actually needs
+    (`templates/bin/_machine_local.py`) under each candidate first, then falls
+    back to the flat marketplace marker (`.claude-plugin/plugin.json`) for a
+    published clone that ships no templates/bin. Returns None when NEITHER
+    layout's marker is present -- the caller then knows the clone predates
+    the coordinator/ cutover (or is not a coordinator-claude clone at all)
+    rather than silently guessing a path that does not exist.
+    """
+    coord = Path(coord_path)
+    for candidate in (coord / "coordinator", coord):
+        if (candidate / "templates" / "bin" / "_machine_local.py").is_file():
+            return str(candidate)
+    if (coord / ".claude-plugin" / "plugin.json").is_file():
+        return str(coord)
+    return None
+
+
 def _resolve_doe_clone(cli_doe_root: str = "") -> str | None:
     """Resolution order documented in the module header. Returns the clone
     root path, or None with a fail-loud message already written to stderr.
@@ -744,10 +778,26 @@ def main(argv: list[str]) -> int:
         sys.stderr.write("  Then: python3 <engine-clone>/scripts/setup.py\n")
         return 1
 
-    doe_coordinator = os.path.join(doe_clone, "coordinator")
+    # Marker-based, not path-shape: a nested DoE dev-clone nests the plugin
+    # payload under <clone>/coordinator, but a flat published OSS/marketplace
+    # clone (claude-klabauter#6 / DoE F7) carries it at the clone root itself.
+    # Guessing "always append coordinator" resolved every flat clone to a
+    # nonexistent directory and failed closed with a misleading "pull" hint.
+    resolved_plugin_root = _resolve_plugin_root(doe_clone)
+    doe_coordinator = resolved_plugin_root if resolved_plugin_root is not None else os.path.join(doe_clone, "coordinator")
     if not os.path.isdir(doe_coordinator):
         sys.stderr.write(f'claude-doe: DoE coordinator/ dir not found at "{doe_coordinator}"\n')
-        sys.stderr.write(f'  Remediation: git -C "{doe_clone}" pull   (clone predates the coordinator/ cutover)\n')
+        if resolved_plugin_root is None:
+            # Neither accepted layout's marker is present — the historical
+            # cutover case this message was written for.
+            sys.stderr.write(f'  Remediation: git -C "{doe_clone}" pull   (clone predates the coordinator/ cutover)\n')
+        else:
+            sys.stderr.write(
+                "  Remediation: re-run python3 <engine-clone>/scripts/setup.py, or confirm "
+                f'"{doe_clone}" is a coordinator-claude clone -- either a nested dev-clone '
+                "(payload under coordinator/) or a flat OSS/marketplace clone (payload at the "
+                "clone root)\n"
+            )
         return 1
 
     if dry_run:

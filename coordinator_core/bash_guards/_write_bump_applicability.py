@@ -127,9 +127,9 @@ session hub, a race) NEVER blocks the write it is merely logging, and never
 raises.
 
 Negative-spec:
-  - Does NOT resolve or compare against the live payload `cwd` -- see
-    "ANCHORING" above. Every function here takes an explicit `cwd` only to
-    locate the *in-repo* session hub (mirroring
+  - Does NOT resolve or compare against the live payload `cwd` AS THE
+    SESSION'S IDENTITY -- see "ANCHORING" above. Every function here takes
+    an explicit `cwd` only to locate the *in-repo* session hub (mirroring
     `_write_bump_session_start.read_session_start_record`'s own `cwd`
     parameter, which exists for the same reason). That in-repo hub MOVES
     when `cwd` crosses a repo boundary -- `sessions_dir(cwd)` resolves a
@@ -139,7 +139,12 @@ Negative-spec:
     settings-home anchor (cwd-INDEPENDENT by construction) first, falling
     back to the in-repo hub only when the settings-home read is empty. See
     `_write_bump_session_start.read_session_start_record`'s own docstring
-    for the corrected argument.
+    for the corrected argument. `own_repo_write_gitdir` (coordinator-
+    claude#42 B2) is the one deliberate, narrow exception: a same-request
+    tiebreaker consulted ONLY inside a caller's already-established
+    no-repo-anchor branch, never a second route to the session identity
+    this bullet otherwise forbids -- see that function's own docstring for
+    why it does not reopen AC12.
   - Does NOT add a bounded-age expiry to anything it reads or writes here
     -- matches `_write_bump_marker.py` / `_write_bump_session_start.py`'s
     own "no read-path expiry" posture; irrelevant to this module's scope,
@@ -654,6 +659,79 @@ def anchor_subtree_contains(anchor: str, target: str) -> bool:
     if anchor_cf is None or target_cf is None:
         return True
     return _is_under(target_cf, anchor_cf)
+
+
+def own_repo_write_gitdir(
+    cwd: Optional[str],
+    payload: Optional[dict] = None,
+    env: Optional[dict] = None,
+) -> Optional[Path]:
+    """coordinator-claude#42 B2 root-cause fix: an OWN-REPO signal for THIS
+    ONE write, independent of the session-start anchor record.
+
+    NARROWER THAN "ANCHORING -- WHY NOT THE LIVE PAYLOAD `cwd`" ABOVE, not a
+    reversal of it. That section forbids using live `cwd` as the SESSION's
+    persistent identity -- the value that decides `session_repo` display,
+    sandbox routing, and every OTHER write this session makes for the rest
+    of its life -- because an ordinary intervening `cd` would then silently
+    move that identity out from under a later, unrelated call (AC12). This
+    function is consulted for none of that: callers use it ONLY as a
+    same-request tiebreaker, and ONLY inside the no-repo-anchor branch
+    (`own_gitdir`/`anchor_has_repo` is already `False`, i.e. the session-
+    start record itself resolved to no git repo at all) -- never when the
+    anchor already resolved to a real, different repo, which is exactly the
+    case AC12's protection covers. Re-derived fresh from THIS call's own
+    payload every time, never cached across calls, so it cannot accumulate
+    into a standing identity claim the way a session-wide anchor would.
+
+    Root cause this closes: on a launcher-less host (a Claude Code Cloud
+    container, `HOME` pointing outside the repo tree, repos cloned one
+    level under an ungoverned parent directory), the session-start record
+    this module's anchor primarily reads can resolve to a directory that is
+    itself in no git repo (e.g. the parent workspace directory) even though
+    the write actually lands squarely inside the session's OWN, correctly
+    cloned repo. Before this fix, the no-repo-anchor branch's own "a
+    REGISTERED target still bumps unconditionally" rule (2026-08-10 PM
+    ruling, aimed at a genuinely foreign sibling checkout) fired for that
+    same-repo write too, because a repo this fleet already knows about is,
+    by definition, registered. The top-level, PM-facing session then saw
+    its OWN repo bumped to a subagent sandbox that does not apply to it at
+    all (`coordinator-claude#42` issue body, "B2").
+
+    Tries, in order, the payload's own `cwd` (the harness-supplied working
+    directory for THIS tool call) and a declared `CLAUDE_PROJECT_DIR` --
+    read from the payload's own `env` mapping if it carries one, else from
+    `env`/`os.environ` -- exactly the same declared-project-dir fallback
+    `resolve_launch_anchor` already treats as a legitimate (if normally
+    unpopulated) anchor source. Returns the first candidate's resolved
+    git-dir (a pure filesystem walk via the already-memoized
+    `_write_bump_marker.resolve_gitdir` -- no new process spawn on this
+    path), or `None` if neither candidate resolves to a git repo at all.
+
+    Fail open (`None`) on any resolution failure, matching this module's
+    overall posture: an unresolvable candidate here means the caller's
+    EXISTING no-repo-anchor verdict stands, never a wrong ALLOW manufactured
+    from nothing.
+    """
+    candidates = []
+    if cwd:
+        candidates.append(cwd)
+    payload_env = payload.get("env") if isinstance(payload, dict) else None
+    if isinstance(payload_env, dict) and payload_env.get("CLAUDE_PROJECT_DIR"):
+        candidates.append(payload_env["CLAUDE_PROJECT_DIR"])
+    env = os.environ if env is None else env
+    declared = env.get("CLAUDE_PROJECT_DIR")
+    if declared:
+        candidates.append(declared)
+
+    for candidate in candidates:
+        probe_dir = nearest_existing_ancestor(candidate)
+        if probe_dir is None:
+            continue
+        gitdir = resolve_gitdir(probe_dir)
+        if gitdir is not None:
+            return gitdir
+    return None
 
 
 def bump_applies(

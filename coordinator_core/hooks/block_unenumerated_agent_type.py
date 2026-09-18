@@ -118,6 +118,21 @@ one already-registered `PreToolUse(Agent)` entry lands the pin guard live
 with no cross-repo registration ask. The import is function-local inside
 `check()` -- `enforce_agent_model_pin` imports `resolve_model_pins` from
 this module, so a module-level import here would be circular.
+
+COMPOSITION WITH `block_ungranted_opus_subagent` (2026-09-18). A THIRD leg,
+chained after `enforce_agent_model_pin`, on the identical enumerated-pass
+condition: a pin-fidelity DENY from `enforce_agent_model_pin` short-circuits
+and returns immediately (that violation is reported, the Opus-tier gate
+never runs on top of it -- one deny per fire, and the pin violation is
+already the more specific fact); otherwise
+`block_ungranted_opus_subagent.check(payload)` runs and, if IT denies, that
+result wins over whatever `enforce_agent_model_pin` returned (including a
+non-blocking advisory-allow for a downward override -- a genuine Opus/Fable
+gate deny always outranks an advisory). If neither leg denies, the pin
+module's own result (`None` or an advisory-allow) is returned unchanged.
+Same "why compose here" reasoning as the pin leg: no new `PreToolUse(Agent)`
+registration needed, DoE-side wiring is untouched. See that module's own
+docstring for the Opus/Fable persona-or-grant rule it enforces.
 """
 
 from __future__ import annotations
@@ -900,8 +915,19 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         from coordinator_core.hooks.enforce_agent_model_pin import (
             check as _enforce_model_pin_check,
         )
+        from coordinator_core.hooks.block_ungranted_opus_subagent import (
+            check as _enforce_opus_gate_check,
+        )
 
-        return _enforce_model_pin_check(payload)
+        pin_result = _enforce_model_pin_check(payload)
+        if pin_result and pin_result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny":
+            return pin_result
+
+        opus_result = _enforce_opus_gate_check(payload)
+        if opus_result:
+            return opus_result
+
+        return pin_result
 
     return deny(
         "PreToolUse",

@@ -9,6 +9,7 @@ the bash sourced-lib.
 Trust boundary: a resolved root is trusted iff it sits under one of four
 anchors:
   1. the marketplace-cache install (``${CLAUDE_HOME:-$HOME}/.claude/``),
+     descendants only — that directory is a container, never a plugin root,
   2. the DoE clone at the ``.doe-root`` sentinel's content, read registry-first
      per DR-071 (2026-07-22 — the settings-home machine-local registry key
      ``repos.doe_claude`` is the canonical, authoritative coordinator-root
@@ -29,6 +30,9 @@ anchors:
      one of them false-rejects its own repo as untrusted, or
   4. an arbitrary ``--plugin-dir`` checkout with the explicit
      ``COORDINATOR_PLUGIN_ROOT_TRUSTED=1`` developer opt-out —
+Anchors 2 and 3 match the anchor path ITSELF as well as its descendants
+(``_at_or_under``): each names a clone whose own root is a legitimate plugin
+root in a flat checkout. Anchor 1 stays descendants-only.
 AND does not contain a ``/..`` traversal segment (closes the
 ``$HOME/.claude/../../tmp/evil`` bypass that plain prefix-matching would
 miss; realpath is banned per DR-148, so this is a textual traversal check,
@@ -419,6 +423,32 @@ def _diagnose_untrusted(root: str, env: dict) -> str:
     return "\n".join(lines)
 
 
+def _at_or_under(root_cmp: str, anchor: str) -> bool:
+    """Whether ``root_cmp`` IS ``anchor`` or sits strictly beneath it.
+
+    The registry-resolved anchors (``repos.doe_claude``, ``repos.claude_klabauter``)
+    name a content root that is itself a legitimate ``CLAUDE_PLUGIN_ROOT``, not
+    merely the parent of one. A strict-descendant-only match trusted
+    ``<clone>/coordinator`` while rejecting ``<clone>`` — which is the exact
+    spelling a FLAT checkout uses, where the repo root IS the plugin root: the
+    published mirror a cloud container registers as a ``directory`` marketplace,
+    and every engine bin script invoked with the engine root as its own plugin
+    root. Both false-rejected their own operator-registered clone and aborted
+    the installer mid-phase with a message that named no empty anchor, because
+    none was empty.
+
+    Deliberate divergence from the bash oracle's ``case "$_root" in "$_cc_doe"/*)``
+    glob, which is descendant-only. The oracle predates the flat-checkout install
+    shape and never had to serve it; reproducing the off-by-one faithfully leaves
+    the anchor unable to trust the very directory it names.
+
+    Still purely textual and still narrow: equality only, never the anchor's
+    PARENT, and a sibling sharing a name prefix (``<clone>-evil``) matches
+    neither arm. The traversal reset in ``is_trusted`` applies unchanged.
+    """
+    return root_cmp == anchor or root_cmp.startswith(anchor + "/")
+
+
 def is_trusted(root: str, *, env: dict | None = None) -> bool:
     """Pure trust-core predicate — byte-identical decision to the bash
     sourced-lib's inline check (§ "shared trust-core" comment block).
@@ -444,7 +474,7 @@ def is_trusted(root: str, *, env: dict | None = None) -> bool:
     # stripped) and must not be broadened here.
     if os.name == "nt" and doe_root.endswith("/"):
         doe_root = doe_root[:-1]
-    if doe_root and root_cmp.startswith(doe_root + "/"):
+    if doe_root and _at_or_under(root_cmp, doe_root):
         trusted = True
 
     claude_klabauter_root = _norm(_claude_klabauter_root(env))
@@ -452,7 +482,7 @@ def is_trusted(root: str, *, env: dict | None = None) -> bool:
     # branch's comment; kept symmetric rather than "fixed" for either anchor.
     if os.name == "nt" and claude_klabauter_root.endswith("/"):
         claude_klabauter_root = claude_klabauter_root[:-1]
-    if claude_klabauter_root and root_cmp.startswith(claude_klabauter_root + "/"):
+    if claude_klabauter_root and _at_or_under(root_cmp, claude_klabauter_root):
         trusted = True
 
     # Checked against the normalized form so Windows "\.." is caught too.

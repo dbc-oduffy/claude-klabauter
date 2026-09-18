@@ -56,6 +56,7 @@ from typing import Optional
 
 import pytest
 
+import coordinator_core.hooks.block_ungranted_opus_subagent as opus_gate_mod
 import coordinator_core.hooks.block_unenumerated_agent_type as mod
 
 # Repo root -- prepended onto PYTHONPATH for the one genuine subprocess spawn
@@ -175,6 +176,13 @@ def test_enumerated_type_channel_emits_nothing_and_exits_zero(monkeypatch: pytes
     path.
     """
     _patch_roster(monkeypatch, frozenset({"coordinator:executor"}))
+    # This probe pins the harness DENY CHANNEL, not the Opus/Fable
+    # persona-or-grant gate composed in alongside it (2026-09-18) -- that
+    # gate has its own dedicated test module,
+    # test_block_ungranted_opus_subagent.py. Stub it to a no-op so this
+    # allow-path assertion is not incidentally coupled to real
+    # pin-resolution/transcript state.
+    monkeypatch.setattr(opus_gate_mod, "check", lambda payload: None)
     payload = {
         "tool_name": "Agent",
         "tool_input": {"subagent_type": "coordinator:executor", "prompt": "do the thing"},

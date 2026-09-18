@@ -417,6 +417,10 @@ def verify_installed_provenance(bin_dst: Path) -> ProvenanceVerdict:
     dest_exe = bin_dst / DOOR_INSTALLED_NAME
     if not dest_exe.exists():
         return ProvenanceVerdict("no-door", f"no door binary at {dest_exe}")
+    # A failed door build leaves the name on its Python forwarder, which has no
+    # sidecar by design; demanding one failed every compiler-less fresh install.
+    if not is_native_image(dest_exe):
+        return ProvenanceVerdict("no-door", f"{dest_exe} is the Python forwarder, not a door image")
 
     provenance_path = installed_provenance_path(bin_dst)
     try:

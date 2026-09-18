@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -35,7 +36,7 @@ def _write_record(records_root: Path, platform: str, machine: str, surface: str,
         "command": "python3 setup.py --check-only",
         "outcome": "pass",
         "exit_code": 0,
-        "observed_at": "2026-08-14T00:00:00Z",
+        "observed_at": (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "machine": machine,
         "surface_sha": "deadbeef" * 5,
         "invoking_repo": "claude-klabauter",

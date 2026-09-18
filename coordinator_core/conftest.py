@@ -678,48 +678,6 @@ def _reset_engine_root_process_state():
 
 
 # ---------------------------------------------------------------------------
-# probe-spray counter quarantine (2026-08-03 xdist cross-worker contamination)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _quarantine_probe_spray_state(tmp_path_factory, monkeypatch):
-    """Give every test its own ``check_probe_spray`` counter directory.
-
-    That guard keeps a rate-limit counter in ``tempfile.gettempdir()`` keyed by
-    ``session_id`` or, absent one, the PARENT PID. Under pytest-xdist every
-    worker shares the pytest process's parent, so the whole run accumulates
-    into a single counter no matter what logical session id each test passes.
-    Once three channel-test-shaped commands (``echo x``, a ``sed -n`` range
-    read) land inside the 90s window from anywhere in the suite, the guard
-    starts prepending a ``PROBE-SPRAY:`` ``additionalContext`` to the next
-    Bash-shaped guard response — displacing the message an unrelated guard's
-    test was asserting on. Observed as an intermittent failure of
-    ``test_sed_range_read_advise_suppressed_by_machine_total_marker`` and
-    ``test_crash_deny_is_scoped_to_the_crashed_guard_target_class`` together,
-    roughly one run in eight at ``-n 6``, each passing in isolation.
-
-    Ordering: defined ABOVE ``_fail_on_environ_leak`` so this ``setenv`` is
-    part of that fixture's baseline snapshot rather than reported as a leak.
-
-    Negative-spec: this quarantines only where the counter is STORED. It does
-    not disable the nudge (``COORDINATOR_PROBE_NUDGE_OFF`` does that) — a test
-    that wants to exercise probe-spray still can, and now gets a clean counter
-    to do it against instead of whatever the rest of the suite left behind.
-
-    Deliberately NOT ``tmp_path``: several tests assert on an exact traversal
-    count over their own ``tmp_path`` (``test_tail_still_observes_whole_stream``
-    counts ``os.walk`` yields), so materialising a directory inside it changes
-    the number under test. ``tmp_path_factory`` puts the counter in a sibling
-    directory the test never walks.
-    """
-    monkeypatch.setenv(
-        "COORDINATOR_PROBE_SPRAY_STATE_DIR",
-        str(tmp_path_factory.mktemp("probe-spray")),
-    )
-
-
-# ---------------------------------------------------------------------------
 # os.environ leak guard (2026-07-21 interpreter-global-state sweep)
 # ---------------------------------------------------------------------------
 #

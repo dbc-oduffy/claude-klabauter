@@ -72,7 +72,13 @@ def write_fake_executable(bin_dir, name: str, python_body: str) -> Path:
         )
         return cmd_path
     script = bin_dir / name
-    script.write_text("#!/usr/bin/env python3\n" + python_body, encoding="utf-8", newline="\n")
+    # Pin the CURRENT interpreter, not a PATH-resolved "python3": tests scope
+    # PATH down to the fake bin dir plus a couple of system dirs (so a real
+    # `machine-local`, if installed, never leaks in), and on macOS
+    # `/usr/bin/python3` is the Xcode Command Line Tools stub -- unusable
+    # until its license is accepted. `env python3` picked that stub up under
+    # a shortened PATH and died before this script's own body ever ran.
+    script.write_text(f"#!{sys.executable}\n" + python_body, encoding="utf-8", newline="\n")
     st = script.stat()
     script.chmod(st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
     return script

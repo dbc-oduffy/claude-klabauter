@@ -37,6 +37,7 @@ from coordinator_core._settings_home import (  # noqa: F401  (settings_home re-e
     reject_doubled_claude_home,
     settings_home,
 )
+from coordinator_core.coordinator_root import _resolve_plugin_root_for_machine_local
 from coordinator_core.machine_resolver import registry_get
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -185,6 +186,29 @@ def _strip_trailing_sep(path: str) -> str:
     return stripped if stripped else path
 
 
+def _repo_to_coordinator_content_root(repo_root: str) -> str:
+    """Map a resolved ``repos.doe_claude``-shaped repo root onto its
+    coordinator-claude CONTENT root, deciding nested-vs-flat by marker
+    (``coordinator_root._resolve_plugin_root_for_machine_local``), never by
+    path shape.
+
+    A dev clone nests the plugin payload under ``<repo>/coordinator``; the
+    published OSS/marketplace tree (``dbc-oduffy/coordinator-claude``) is
+    flat, payload directly at ``<repo>``. Guessing "always append
+    ``coordinator``" (the prior behavior at every rung below) resolves a
+    flat clone to a directory that does not exist and fails every downstream
+    consumer closed (claude-klabauter#6 / DoE F7). Falls back to the legacy
+    ``<repo>/coordinator`` join when NEITHER shape's marker is present, so an
+    unrecognized layout still fails the same way it always did (fail loud
+    downstream, not fail loud here) rather than silently resolving to the
+    repo root itself.
+    """
+    resolved = _resolve_plugin_root_for_machine_local(Path(repo_root))
+    if resolved is not None:
+        return str(resolved)
+    return os.path.join(repo_root, "coordinator")
+
+
 def resolve_coordinator_root(
     coordinator_root_env: Optional[str] = None,
 ) -> str:
@@ -200,9 +224,19 @@ def resolve_coordinator_root(
         1. ``COORDINATOR_ROOT`` env var (explicit override).
         2. machine-local registry ``repos.doe_claude`` — direct tomllib read
            via ``machine_resolver.registry_get``, falling back to the
-           ``machine-local get`` CLI if that can't resolve -> ``<repo>/coordinator``.
-        3. ``REPO_DOE_CLAUDE`` env var -> ``<repo>/coordinator``.
-        4. ``${CLAUDE_HOME:-$HOME}/.doe-root`` pointer file -> ``<repo>/coordinator``.
+           ``machine-local get`` CLI if that can't resolve ->
+           ``_repo_to_coordinator_content_root(<repo>)``.
+        3. ``REPO_DOE_CLAUDE`` env var -> ``_repo_to_coordinator_content_root(<repo>)``.
+        4. ``${CLAUDE_HOME:-$HOME}/.doe-root`` pointer file ->
+           ``_repo_to_coordinator_content_root(<repo>)``.
+
+    Rungs 2-4 each resolve a ``repos.doe_claude``-shaped REPO root first, then
+    decide nested-vs-flat CONTENT root by marker via
+    ``_repo_to_coordinator_content_root`` (claude-klabauter#6 / DoE F7) —
+    a dev clone nests the plugin payload under ``<repo>/coordinator``, the
+    published OSS/marketplace tree is flat at ``<repo>`` itself, and guessing
+    "always append ``coordinator``" resolved every OSS install to a
+    nonexistent directory and failed closed.
 
     Raises :class:`RuntimeError` (fail loud, per the Staff Engineer F7) if no resolution
     succeeds or the resolved dir does not exist on disk — callers MUST NOT
@@ -221,10 +255,10 @@ def resolve_coordinator_root(
             if ml:
                 doe_claude = _run_quiet([ml, "get", "repos.doe_claude"])
         if doe_claude:
-            root = os.path.join(_strip_trailing_sep(doe_claude), "coordinator")
+            root = _repo_to_coordinator_content_root(_strip_trailing_sep(doe_claude))
 
     if not root and os.environ.get("REPO_DOE_CLAUDE"):
-        root = os.path.join(_strip_trailing_sep(os.environ["REPO_DOE_CLAUDE"]), "coordinator")
+        root = _repo_to_coordinator_content_root(_strip_trailing_sep(os.environ["REPO_DOE_CLAUDE"]))
 
     if not root:
         try:
@@ -246,7 +280,7 @@ def resolve_coordinator_root(
                 doe_claude = ""
             doe_claude = _strip_trailing_sep(doe_claude.strip())
             if doe_claude:
-                root = os.path.join(doe_claude, "coordinator")
+                root = _repo_to_coordinator_content_root(doe_claude)
 
     if not root or not os.path.isdir(root):
         msg = [

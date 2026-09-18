@@ -75,7 +75,6 @@ def test_untriggered_set_is_documented_not_silently_empty():
 EXPECTED_UNTRIGGERED = frozenset(
     {
         "check_destructive_git_orphan",
-        "check_probe_spray",
         "check_validate_commit",
         "check_test_suite_invocation",
     }

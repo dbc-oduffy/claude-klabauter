@@ -129,6 +129,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import re
 from typing import NamedTuple, Optional
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus
@@ -717,3 +718,20 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
             dispatchable_rows[i] = row._replace(depends_on=stripped)
 
     return dispatchable_rows
+
+
+def executable_body(title: str, body: str) -> bool:
+    """Whether a row hands its executor something to do.
+
+    Judged on ``EmitterRow.body``, the exact text the emitter composes into the
+    executor's prompt, so every caller -- the prep gate (claude-klabauter#20) and
+    the plan-blitz minting check (coordinator-claude#48) -- agrees with dispatch.
+    A body that only restates the title is the "apply the fix" / "apply the fix"
+    shape that certified and then blocked at dispatch.
+    """
+    words = _body_words(body)
+    return bool(words) and words != _body_words(title)
+
+
+def _body_words(text: str) -> "list[str]":
+    return re.findall(r"[a-z0-9]+", (text or "").lower())

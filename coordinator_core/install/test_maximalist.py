@@ -384,6 +384,49 @@ def test_full_success_returns_zero_and_calls_every_phase_in_order(stub_env):
     assert "ensure-coordinator-venv" not in names
 
 
+def test_registry_seeds_run_before_install_health_run(stub_env, capsys):
+    """install-health-run's trusted-root guard anchors on the `repos.doe_claude`
+    and `repos.claude_klabauter` keys; on a fresh home it must run after they are
+    seeded or it refuses the coordinator clone and halts the chain
+    (claude-klabauter#15)."""
+    maximalist.run(
+        check_only=False,
+        non_interactive=True,
+        coord_root=str(stub_env["coord_root"]),
+        claude_klabauter_root=str(stub_env["claude_klabauter_root"]),
+        doe_clone=str(stub_env["doe_clone"]),
+        claude_home_dir=str(stub_env["claude_home"]),
+    )
+    out = capsys.readouterr().out
+    health = out.index("install-health-run (Phase 3 Step 1b")
+    assert out.index("Seed repos.doe_claude registry key") < health
+    assert out.index("Seed repos.claude_klabauter registry key") < health
+
+
+def test_standalone_plugin_clone_skips_the_doe_launch_chain(stub_env):
+    """A consumer install hands the published plugin itself as the clone --
+    `.claude-plugin/plugin.json` at its root, no `coordinator/` -- so there is
+    no DoE root to point at and no claude-doe to launch. Those phases skip;
+    the rest of the chain still runs and succeeds."""
+    plugin = stub_env["claude_home"].parent / "coordinator-claude"
+    (plugin / ".claude-plugin").mkdir(parents=True)
+    (plugin / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    rc = maximalist.run(
+        check_only=False,
+        non_interactive=True,
+        coord_root=str(stub_env["coord_root"]),
+        claude_klabauter_root=str(stub_env["claude_klabauter_root"]),
+        doe_clone=str(plugin),
+        claude_home_dir=str(stub_env["claude_home"]),
+    )
+    assert rc == 0
+    names = [line.split(" ", 1)[0] for line in _log_lines(stub_env["call_log"])]
+    for skipped in ("gen-doe-root-pointer", "gen-claude-doe-shim", "gen-claude-doe-launcher"):
+        assert skipped not in names
+    assert "gen-settings-hooks" in names
+    assert "coordinator-setup-state" in names
+
+
 def test_halts_on_required_failure(stub_env, monkeypatch):
     monkeypatch.setenv(_rc_env("gen-doe-root-pointer"), "1")
     rc = maximalist.run(

@@ -477,6 +477,158 @@ def test_outside_any_repo_anchor_registered_target_still_bumps(tmp_path, monkeyp
 
 
 # ---------------------------------------------------------------------------
+# coordinator-claude#42 B2 -- CLOUD REPRO: a top-level, PM-facing session
+# whose anchor resolves to no git repo at all (a launcher-less container's
+# workspace PARENT, one level above the repo it actually cloned) must still
+# be recognized as writing its OWN repo when the payload's own `cwd` sits
+# squarely inside it -- even though that same repo is ALSO a registered
+# sibling (every fleet repo is). Before the fix, `own_repo_write_gitdir` did
+# not exist and this fell straight into the 2026-08-10 "a REGISTERED target
+# still bumps unconditionally" rule, denying a session's own repo the
+# identical write `test_outside_any_repo_anchor_registered_target_still_
+# bumps` above correctly denies for a GENUINELY foreign registered target.
+# ---------------------------------------------------------------------------
+
+
+def test_cloud_top_level_session_own_registered_repo_allows(tmp_path, monkeypatch):
+    """The exact B2 shape: `HOME`/session-anchor machinery resolves to a
+    non-repo workspace parent (simulated here via `CLAUDE_PROJECT_DIR`
+    pointing one level above the clone, matching the no-session-start-record
+    fallback a launcher-less host hits), while this PreToolUse payload's own
+    `cwd` -- and the write target -- sit inside the session's actual,
+    registered repo. Must ALLOW."""
+    reg_dir = tmp_path / "registry"
+    own = _init_repo(tmp_path, "coordinator-claude")
+    _write_registry(reg_dir, coordinator_claude=str(own))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    workspace_parent = tmp_path  # `own` lives one level under this, mirroring
+    # the cloud container's workspace root sitting one level above the repo
+    # it actually cloned (coordinator-claude#42 issue body).
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(workspace_parent))
+    session_id = "sess-cloud-top-level-own-repo"
+
+    payload = _payload("Write", str(own / "f.txt"), session_id, str(own))
+
+    assert guard.check(payload) is None
+
+
+def test_cloud_repro_does_not_widen_to_a_different_repo_reached_only_via_cwd(
+    tmp_path, monkeypatch
+):
+    """AC12 companion: the fix must not become a general 'trust live cwd'
+    bypass. A session whose anchor is genuinely rootless, whose declared
+    project dir points at NEITHER the anchor NOR the write target, and whose
+    `cwd` sits in a THIRD, unrelated registered repo must still bump when
+    the write targets a DIFFERENT registered repo than that `cwd` -- i.e.
+    `own_repo_write_gitdir` matching `cwd`'s own repo never excuses a write
+    into some OTHER repo (mirrors `test_outside_any_repo_anchor_registered_
+    target_still_bumps`'s genuinely-foreign shape, with `cwd` now populated
+    by a real repo instead of a bare scaffold directory)."""
+    reg_dir = tmp_path / "registry"
+    cwd_repo = _init_repo(tmp_path, "operator-cwd-repo")
+    target_repo = _init_repo(tmp_path, "registered-target-repo")
+    _write_registry(reg_dir, cwd_repo=str(cwd_repo), target_repo=str(target_repo))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    scaffold = tmp_path / "Documents" / "rootless-scaffold"
+    scaffold.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(scaffold))
+    session_id = "sess-cwd-does-not-widen"
+
+    payload = _payload("Write", str(target_repo / "f.txt"), session_id, str(cwd_repo))
+
+    result = guard.check(payload)
+    assert result is not None
+
+
+def test_genuine_subagent_in_cloud_layout_still_bumped_for_a_foreign_target(
+    tmp_path, monkeypatch
+):
+    """coordinator-claude#42 B2, Do step 4: the fix must not loosen
+    confinement for a POSITIVELY resolved subagent writing into a repo other
+    than the one its own `cwd` sits in -- same layout as the cloud repro
+    (rootless anchor, `CLAUDE_PROJECT_DIR` set), but `agent_id` is present
+    and the write target is a genuinely different, registered repo. Must
+    still bump, AND must still render the subagent-sandbox message (never
+    the EM/unknown one)."""
+    reg_dir = tmp_path / "registry"
+    subagent_cwd = _init_repo(tmp_path, "subagent-own-repo")
+    foreign_target = _init_repo(tmp_path, "registered-foreign-for-subagent")
+    _write_registry(reg_dir, foreign_target=str(foreign_target))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    workspace_parent = tmp_path
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(workspace_parent))
+    session_id = "sess-subagent-cloud-layout"
+
+    payload = _payload(
+        "Write",
+        str(foreign_target / "f.txt"),
+        session_id,
+        str(subagent_cwd),
+        # Bare-hex form -- `_canonical_agent_id`'s leg (a) -- so this
+        # canonicalizes to a non-empty `agent_id` and `resolve_agent_class`
+        # actually resolves SUBAGENT rather than degrading to UNKNOWN on an
+        # unrecognized id shape.
+        agent_id="abcdef123456789012",
+    )
+
+    result = guard.check(payload)
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "sandbox" in reason
+
+
+def test_unknown_agent_identity_never_gets_sandbox_routing_or_subagent_copy(
+    tmp_path, monkeypatch
+):
+    """coordinator-claude#42 B2, Do step 3: when `resolve_agent_class`
+    degrades to `AGENT_CLASS_UNKNOWN` (a resolution failure, never a
+    positive claim either way -- see `_write_bump_message.resolve_agent_
+    class`'s own docstring), this guard must render the non-subagent path's
+    copy and must not compute a sandbox path for a class that was never
+    positively identified as confined to one."""
+    own = _init_repo(tmp_path, "own-repo")
+    foreign = _init_repo(tmp_path, "foreign-repo")
+    session_id = "sess-unknown-identity"
+    session_start.write_session_start_record(session_id, launch_cwd=str(own))
+    try:
+        payload = _payload("Write", str(foreign / "f.txt"), session_id, str(own))
+
+        # Force `resolve_agent_class`'s own verdict to UNKNOWN directly,
+        # rather than making the shared `resolve_effective_types` raise --
+        # `check()` also calls that resolver a second time (to canonicalize
+        # `agent_id` for `effective_session_id`), unguarded by its own
+        # try/except, so breaking it globally would fail the WHOLE guard
+        # open before ever reaching message rendering. Patching the class
+        # verdict directly isolates the one thing this test is about.
+        monkeypatch.setattr(guard, "resolve_agent_class", lambda *_a, **_k: "unknown")
+
+        result = guard.check(payload)
+
+        assert result is not None
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "sandbox" not in reason
+        assert "report to the EM that dispatched you" not in reason
+    finally:
+        import shutil
+
+        for anchor_dir in (
+            session_start._settings_home_anchor_dir(),
+            session_start.sessions_dir(str(own)),
+        ):
+            if not anchor_dir:
+                continue
+            record_path = Path(anchor_dir) / session_id
+            if record_path.exists():
+                if record_path.is_dir():
+                    shutil.rmtree(record_path, ignore_errors=True)
+                else:
+                    record_path.unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
 # ANCHOR-RESOLUTION MISFIRE REGRESSION (bug reproduced live in-session,
 # 2026-08-15). `resolve_gitdir(anchor)` returning `None` is ambiguous
 # between "the anchor genuinely sits in no git repo" and "the `git rev-parse

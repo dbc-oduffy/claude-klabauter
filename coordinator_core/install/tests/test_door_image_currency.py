@@ -270,7 +270,7 @@ def test_an_unanswerable_currency_question_is_not_reported_as_ok(tmp_path, monke
     inside the very change that exists to stop that shape."""
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    payload = b"whatever this box installed"
+    payload = door_install.NATIVE_IMAGE_MAGIC[0] + b"whatever this box installed"
     _plant_door(bin_dst, payload)
 
     def _unreadable() -> "dict[str, str]":
@@ -312,7 +312,7 @@ def test_a_current_posix_door_is_not_rebuilt(tmp_path, monkeypatch):
         pytest.skip("the POSIX build branch is not reached on Windows")
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    _plant_door(bin_dst, b"already current for these sources")
+    _plant_door(bin_dst, door_install.NATIVE_IMAGE_MAGIC[0] + b"already current for these sources")
 
     monkeypatch.setattr(door_install, "is_engine_root", lambda _root: True)
     builds: list[Path] = []

@@ -56,6 +56,17 @@ dependencies = [
     # jsonschema/pydantic.
     "referencing>=0.30",
     "typing_extensions>=4.14.1",
+    # tree-sitter + tree-sitter-pwsh are what ARM the PowerShell dialect guard
+    # (coordinator_core/bash_guards/_dialect.py :: _parser). The import is lazy
+    # and its absence routes the guard to SILENT rather than crashing the hot
+    # path, so an install missing them is quiet: the guard simply declines to
+    # rule on every PowerShell command line for the life of the box. Both ship
+    # prebuilt manylinux/macOS/Windows wheels, so declaring them costs no
+    # toolchain. They belong here and not only in the authoring repo's root
+    # pyproject because THIS file is the dependency contract every
+    # published-engine install provisions from.
+    "tree-sitter>=0.21,<1",
+    "tree-sitter-pwsh>=0.38,<1",
 ]
 
 [project.optional-dependencies]

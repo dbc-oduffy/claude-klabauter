@@ -59,6 +59,7 @@ prime_exit_criterion:
 
 _SPINE = """- id: C1
   title: Ship it
+  body: Do the named work and pin it with a test.
   change_kind: code-edit
   surface: coordinator_core/ops/plan_prep_gate.py
   writes: [coordinator_core/ops/plan_prep_gate.py]

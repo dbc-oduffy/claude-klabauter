@@ -53,7 +53,7 @@ def test_stale_minor_reports_unhealthy(monkeypatch: pytest.MonkeyPatch) -> None:
     honoured forever."""
     monkeypatch.setattr(fleet_env, "LOCK_PYTHON_MINOR", _mismatched_minor_string())
     # Isolate the minor check from package availability in the test venv --
-    # the running interpreter almost certainly lacks torch/chromadb/etc.
+    # the running interpreter almost certainly lacks torch/lancedb/etc.
     monkeypatch.setattr(fleet_env, "_FLEET_ENV_IMPORT_PROBES", ())
 
     assert fleet_env._fleet_env_healthy(Path(sys.executable)) is False

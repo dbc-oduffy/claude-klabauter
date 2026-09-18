@@ -302,17 +302,7 @@ EXPECTED: Dict[str, _Expected] = {
     # same argv under both -- the PowerShell-applicability audit these rows
     # were waiting on IS the C4 conversion plus its own per-entry test
     # (test_git_shaped_advisories_fire_under_both.py). Moved to bucket (1).
-    # NOTE `probe-spray` is slated for deletion by
-    # state/handoffs/2026-08-21-2026-08-21_191819_guards-under-the-
-    # brightline.md and was PM-cut from this plan's Bucket B; C4 widened it
-    # anyway. Harmless (advisory band, and it fires on identical argv), but
-    # the row is recorded here rather than silently inheriting the cohort's
-    # rationale, so whoever deletes the entry does not read this as an
-    # endorsement of keeping it.
     "validate-commit": _Expected(
-        ("Bash", "PowerShell"),
-    ),
-    "probe-spray": _Expected(
         ("Bash", "PowerShell"),
     ),
     # -- formerly dual-declaring-but-Bash-detecting (9), now CONVERTED

@@ -61,6 +61,18 @@ Negative-spec -- do NOT "complete" this port while reading it:
     C2 priority map, not ``write_guards/INTERFACE.md``'s illustrative
     four-matcher example.
 
+C7c addendum (mirrors DoE-claude ``coordinator/hooks/scripts/_claude_md_ledger.py``
+``admission_check_for_surface``, commit ``0f59b1abc``): a surface already over
+its watermark must still admit the edits that SHRINK it -- refusing those
+freezes the file and leaves "raise the watermark" as the only way out, which
+is a trap, not an escape hatch. ``ratchet_check`` (``coordinator_core.
+claude_md_budget``) now takes an optional pre-edit size and admits a
+strictly-smaller post-edit size even while still over the watermark; a
+growing or same-size edit over the watermark is still refused. This module
+supplies that pre-edit size as the CURRENT on-disk file size (read once,
+before ``_simulate``) -- ``None`` when the target does not yet exist (a new
+file has no shrink to admit).
+
 C7b addendum (``docs/plans/2026-07-30-boot-doctrine-cut-and-refill-gate.md``
 § C7b): this leg now ALSO enforces the AC4 per-surface ratchet watermark
 (``coordinator_core.claude_md_budget.parse_watermark`` / ``ratchet_check``),
@@ -216,6 +228,13 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     ):
         return None
 
+    pre_edit_size: Optional[int] = None
+    try:
+        with open(abs_file_path, "r", encoding="utf-8") as f:
+            pre_edit_size = len(f.read().encode("utf-8"))
+    except Exception:
+        pre_edit_size = None
+
     try:
         new_content = _simulate(tool_name, tool_input, abs_file_path)
     except Exception:
@@ -255,7 +274,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 file=sys.stderr,
             )
             watermark = None
-        ratchet_ok, ratchet_msg = ratchet_check(size, watermark)
+        ratchet_ok, ratchet_msg = ratchet_check(size, watermark, pre_edit_size)
         if not ratchet_ok:
             return {
                 "hookSpecificOutput": {

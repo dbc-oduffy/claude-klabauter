@@ -1008,6 +1008,38 @@ def test_resolve_coordinator_root_env_override(tmp_path):
     assert _shared.resolve_coordinator_root(str(root)) == str(root)
 
 
+def test_resolve_coordinator_root_repo_doe_claude_nested_dev_clone(tmp_path, monkeypatch):
+    """A dev-clone-shaped `REPO_DOE_CLAUDE` (content nested under
+    `<repo>/coordinator`, carrying the machine-local marker) resolves to
+    that nested dir -- unchanged dev-tree behavior."""
+    monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
+    monkeypatch.setattr(_shared, "registry_get", lambda key: None)
+    monkeypatch.setenv("PATH", "/nonexistent-bin-dir")
+    repo = tmp_path / "doe-clone"
+    nested = repo / "coordinator"
+    (nested / "templates" / "bin").mkdir(parents=True)
+    (nested / "templates" / "bin" / "_machine_local.py").write_text("")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(repo))
+
+    assert _shared.resolve_coordinator_root() == str(nested)
+
+
+def test_resolve_coordinator_root_repo_doe_claude_flat_published_clone(tmp_path, monkeypatch):
+    """claude-klabauter#6 / DoE F7: a flat OSS/marketplace-shaped
+    `REPO_DOE_CLAUDE` (content directly at the repo root, no `coordinator/`
+    subdir) must resolve to the repo root itself, decided by the same
+    machine-local marker probe -- never by guessing a fixed subpath."""
+    monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
+    monkeypatch.setattr(_shared, "registry_get", lambda key: None)
+    monkeypatch.setenv("PATH", "/nonexistent-bin-dir")
+    repo = tmp_path / "flat-clone"
+    (repo / "templates" / "bin").mkdir(parents=True)
+    (repo / "templates" / "bin" / "_machine_local.py").write_text("")
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(repo))
+
+    assert _shared.resolve_coordinator_root() == str(repo)
+
+
 def test_resolve_coordinator_root_doe_root_pointer_rung_uses_userprofile(tmp_path, monkeypatch):
     """Native-Windows condition for the `.doe-root` pointer-file rung
     (home-resolution-lint bare_home_or_chain fix, 2026-07-29): HOME absent,

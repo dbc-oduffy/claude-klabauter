@@ -1,7 +1,7 @@
 """Both-host verdict-parity matrix + the confinement overlap test (H6,
 docs/plans/2026-07-30-os-aware-guard-advisory-defaults.md).
 
-AC-3 requires each of the 16 advisory-emitting guards OBSERVED FIRING
+AC-3 requires each of the 15 advisory-emitting guards OBSERVED FIRING
 THROUGH THE REAL DISPATCHER (``dispatch.evaluate_payload_json``) under
 both host verdicts. Because several of these guards are, by design,
 SHADOWED by an earlier-registered guard on the same command shape in the
@@ -17,14 +17,12 @@ against exactly that one guard's real `fn` closure and real classification,
 without an earlier guard shadowing it. This is not a synthetic guard; it is
 the real registered entry, isolated.
 
-Two guards (`validate-commit`, `probe-spray`) have no cheap, deterministic
-single-call trigger -- `check_validate_commit` reads real git-repo staged
-state, and `check_probe_spray`'s ring-buffer recurrence needs several prior
-calls in the same session before it fires. Both are named explicitly below
-(never silently dropped) and exercised via the REAL suppression predicate
-against a representative envelope shaped exactly like each guard's own
-`_advisory(...)`/`allow_advisory(...)` return, rather than through a live
-trigger command.
+One guard (`validate-commit`) has no cheap, deterministic single-call
+trigger -- `check_validate_commit` reads real git-repo staged state. It is
+named explicitly below (never silently dropped) and exercised via the REAL
+suppression predicate against a representative envelope shaped exactly like
+its own `_advisory(...)`/`allow_advisory(...)` return, rather than through a
+live trigger command.
 
 Spec backlink: DoE-claude:pln-os-aware-guard-advisory-defaul-060dbe
 (DoE-claude) row H6.
@@ -155,7 +153,7 @@ def _cwd_for(name, tmp_path, monkeypatch):
 
 # ---------------------------------------------------------------------------
 # Per-guard triggers -- one real, verified-firing command per advisory-
-# emitting guard (16 of them), keyed by name. `None` marks the two guards
+# emitting guard (15 of them), keyed by name. `None` marks the one guard
 # with no cheap deterministic single-call trigger (see module docstring).
 # ---------------------------------------------------------------------------
 
@@ -189,7 +187,7 @@ _TRIGGERS = {
     # comment on this guard's entry for why WINDOWS_COST_ONLY would have
     # silenced it on exactly the host it targets.
     "grep-via-bash-guard": "grep -Pn TODO src/",
-    # not_cost_argued (5)
+    # not_cost_argued (4)
     "offer-git-c": "cd /tmp && git status",
     "validate-commit": None,  # no cheap trigger -- see module docstring
     "git-commit-safe-commit-advise": "git commit -m 'h6 probe'",
@@ -203,7 +201,6 @@ _TRIGGERS = {
             }
         )
     ),
-    "probe-spray": None,  # no cheap trigger -- see module docstring
     # docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C2. Both
     # never deny (advisory-only), never Windows-cost-argued -- see
     # `_EXPECTED_VALUE` below. `cwd` for both is supplied per-test via
@@ -229,7 +226,6 @@ _EXPECTED_VALUE = {
     "validate-commit": AdvisoryValue.NOT_COST_ARGUED,
     "git-commit-safe-commit-advise": AdvisoryValue.NOT_COST_ARGUED,
     "offer-invoke-params-stdin": AdvisoryValue.NOT_COST_ARGUED,
-    "probe-spray": AdvisoryValue.NOT_COST_ARGUED,
     "branch-set-precedence": AdvisoryValue.NOT_COST_ARGUED,
     "longlived-branch-naming": AdvisoryValue.NOT_COST_ARGUED,
 }
@@ -237,11 +233,11 @@ _EXPECTED_VALUE = {
 
 @pytest.fixture(autouse=True)
 def _isolated_tempdir(tmp_path, monkeypatch):
-    """probe-spray's ring buffer and a couple of guards live in
-    `tempfile.gettempdir()`-scoped files keyed by session id -- point that
-    at a fresh per-test dir so cells never interact with a prior run's
-    leftover state (same discipline `test_guard_band_membership.py`'s
-    `_SIX_COMBINATIONS` parametrization already uses)."""
+    """A couple of guards live in `tempfile.gettempdir()`-scoped files keyed
+    by session id -- point that at a fresh per-test dir so cells never
+    interact with a prior run's leftover state (same discipline
+    `test_guard_band_membership.py`'s `_SIX_COMBINATIONS` parametrization
+    already uses)."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     (tmp_path / "h6-somefile.txt").write_text("one\ntwo\nTODO: probe\nfour\nfive\n", encoding="utf-8")
     # sed/grep triggers above reference /tmp/h6-somefile.txt directly (not
@@ -272,7 +268,7 @@ def _isolated_tempdir(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# The 16-guard x {True, False} matrix (AC-3's core requirement).
+# The 15-guard x {True, False} matrix (AC-3's core requirement).
 # ---------------------------------------------------------------------------
 
 _MATRIX_NAMES = [name for name, cmd in _TRIGGERS.items() if cmd is not None]
@@ -321,9 +317,9 @@ def test_non_windows_host_default(name, monkeypatch, capsys, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Two guards with no cheap live trigger: validate-commit, probe-spray.
-# Exercised via the REAL suppression predicate against a representative
-# envelope shaped exactly like each guard's own return constructor.
+# One guard with no cheap live trigger: validate-commit. Exercised via the
+# REAL suppression predicate against a representative envelope shaped
+# exactly like its own return constructor.
 # ---------------------------------------------------------------------------
 
 
@@ -338,27 +334,6 @@ def test_validate_commit_predicate_never_suppresses_not_cost_argued():
     assert (
         suppress_advisory(
             envelope,
-            advisory_value=AdvisoryValue.NOT_COST_ARGUED,
-            band=GuardBand.ADVISORY_REWRITE,
-            host_is_windows=False,
-        )
-        is False
-    )
-
-
-def test_probe_spray_fires_after_ring_recurrence_and_predicate_never_suppresses():
-    from coordinator_core.bash_guards import dispatch_checks as dc
-
-    session_id = "h6-probe-spray-recurrence"
-    out = None
-    for _ in range(6):
-        out = dc.check_probe_spray("pwd", session_id)
-        if out is not None:
-            break
-    assert out is not None, "probe-spray never fired across 6 identical bare-command calls"
-    assert (
-        suppress_advisory(
-            out,
             advisory_value=AdvisoryValue.NOT_COST_ARGUED,
             band=GuardBand.ADVISORY_REWRITE,
             host_is_windows=False,

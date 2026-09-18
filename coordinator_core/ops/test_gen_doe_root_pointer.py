@@ -18,8 +18,23 @@ from coordinator_core.testing.home_sandbox import sandbox_home
 
 
 def _make_doe_root(tmp_path: Path, name: str = "doe-clone") -> Path:
+    """A nested (dev-clone-shaped) doe_claude root -- content under
+    ``coordinator/``, carrying the marker
+    ``_resolve_plugin_root_for_machine_local`` actually probes for."""
     root = tmp_path / name
-    (root / "coordinator").mkdir(parents=True)
+    machine_local_impl = root / "coordinator" / "templates" / "bin" / "_machine_local.py"
+    machine_local_impl.parent.mkdir(parents=True)
+    machine_local_impl.write_text("")
+    return root
+
+
+def _make_flat_doe_root(tmp_path: Path, name: str = "flat-doe-clone") -> Path:
+    """A flat (published OSS/marketplace-shaped) doe_claude root -- content
+    directly at the repo root (claude-klabauter#6 / DoE F7 repro shape)."""
+    root = tmp_path / name
+    machine_local_impl = root / "templates" / "bin" / "_machine_local.py"
+    machine_local_impl.parent.mkdir(parents=True)
+    machine_local_impl.write_text("")
     return root
 
 
@@ -141,7 +156,7 @@ def test_nonexistent_root_fails_loud(tmp_path, monkeypatch, capsys, _isolated_en
     assert not (_pointer_path(_isolated_env)).exists()
 
 
-def test_root_missing_coordinator_subdir_fails_loud(tmp_path, monkeypatch, capsys, _isolated_env):
+def test_root_missing_coordinator_content_fails_loud(tmp_path, monkeypatch, capsys, _isolated_env):
     bare_root = tmp_path / "bare-clone"
     bare_root.mkdir()
     monkeypatch.setenv("REPO_DOE_CLAUDE", str(bare_root))
@@ -149,7 +164,34 @@ def test_root_missing_coordinator_subdir_fails_loud(tmp_path, monkeypatch, capsy
     rc = main([])
 
     assert rc == 1
-    assert "coordinator/ subdir absent" in capsys.readouterr().err
+    assert "no coordinator-claude content found" in capsys.readouterr().err
+
+
+def test_flat_published_layout_writes_pointer(tmp_path, monkeypatch, _isolated_env):
+    """claude-klabauter#6 / DoE F7: a flat OSS/marketplace-shaped
+    ``repos.doe_claude`` (content at the repo root, no ``coordinator/``
+    subdir) must resolve, not fail closed."""
+    doe_root = _make_flat_doe_root(tmp_path)
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe_root))
+
+    rc = main([])
+
+    assert rc == 0
+    pointer = _pointer_path(_isolated_env)
+    assert pointer.read_text() == f"{doe_root}\n"
+
+
+def test_a_flat_directory_without_its_plugin_manifest_is_not_a_root(
+    tmp_path, monkeypatch, capsys, _isolated_env
+):
+    # The marker is load-bearing: `.claude-plugin/plugin.json`, not "flat and
+    # therefore fine". An unmarked directory must keep failing.
+    flat_root = tmp_path / "coordinator-claude"
+    (flat_root / ".claude-plugin").mkdir(parents=True)
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(flat_root))
+
+    assert main([]) == 1
+    assert "no coordinator-claude content found" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

@@ -209,12 +209,14 @@ What this does:
   install phase sequence, end-to-end, in the exact order documented in
   coordinator/commands/install.md:
     1.  install-substrate.sh           (Phase 3 Step 1 -- machine-local substrate)
-    2.  install-health-run.sh          (Phase 3 Step 1b -- drop-in health scripts)
-    3.  seed repos.doe_claude registry (best-effort, self-resolved clone path)
+    2.  seed repos.doe_claude registry (best-effort, self-resolved clone path)
+    3.  install-health-run.sh          (Phase 3 Step 1b -- drop-in health scripts;
+                                          after the seed, which its trust guard reads)
     4.  gen-doe-root-pointer.sh        (Step 3.5a.1 -- ~/.claude/.doe-root pointer)
     5.  gen-claude-doe-shim.sh         (Step 3.5a.2 -- claude() shell shim)
     6.  claude-doe wrapper install     (Step 3.5b -- ~/.local/bin/claude-doe)
     6.5 gen-claude-doe-launcher.sh     (Step 3.5b.2 -- Windows-only launcher; no-op elsewhere)
+        (4-6.5 skip when the clone is the standalone plugin -- no DoE root to point at)
     7.  gen-settings-hooks.sh          (Step 3.5c -- settings.json hook block)
     8.  register-coordinator-mirror.sh (Step 5 -- plugin.mirrors registration)
     9.  ensure-coordinator-venv         (Step 6 -- coordinator_whoami venv; native;
@@ -1064,6 +1066,23 @@ def _defender_offer(check_only: bool, non_interactive: bool, orch: _Orchestrator
         orch.failed = True
 
 
+def _is_standalone_plugin_clone(doe_clone: str) -> bool:
+    """True when the coordinator clone is the published plugin itself
+    (`.claude-plugin/plugin.json` at its root, no `coordinator/` subdir) rather
+    than a DoE-claude working repo.
+
+    The `.doe-root` pointer and the claude-doe shim, wrapper and launcher exist
+    to launch `claude --plugin-dir <DoE>/coordinator` for someone working ON the
+    doctrine repo. A consumer (coordinator-claude + klabauter, e.g. the cloud
+    pre-boot) loads the plugin through the marketplace instead, has no DoE root
+    to point at, and must not be failed for lacking one (claude-klabauter#15).
+    """
+    return (
+        os.path.isfile(os.path.join(doe_clone, ".claude-plugin", "plugin.json"))
+        and not os.path.isdir(os.path.join(doe_clone, "coordinator"))
+    )
+
+
 def _install_claude_doe_wrapper(
     coord_root: str,
     claude_home_dir: str,
@@ -1458,25 +1477,6 @@ def _run_body(
     # orchestration in `run()` above -- see that docstring's env-scoping note.
     os.environ["PATH"] = env["PATH"]
 
-    # -- Phase 3 Step 1b -- install-health-run --
-    # Retired the ["bash", install-health-run.sh] spawn (C13): that DoE-side
-    # script was only a thin polyglot trampoline back into THIS repo's
-    # coordinator_core.ops.install_health_run -- called in-process now. The
-    # orchestrator's own OWN sub-scripts (bin/install-health/*.sh drop-ins)
-    # remain bash and are still subprocess-delegated BY that module -- out of
-    # C13's scope (a genuinely DoE/plugin-owned drop-in surface, not a
-    # trampoline back into this package).
-    from coordinator_core.ops.install_health_run import (  # local import: avoid import cost on --help
-        main as _install_health_run_main,
-    )
-
-    orch.run_required_py(
-        "install-health-run (Phase 3 Step 1b -- install-health drop-ins)",
-        _install_health_run_main,
-        [],
-        env=env,
-    )
-
     # -- Phase 3 Step 1c -- Windows Defender process-exclusion offer --
     _defender_offer(check_only, non_interactive, orch)
 
@@ -1580,6 +1580,29 @@ def _run_body(
                 file=sys.stderr,
             )
 
+    # -- Phase 3 Step 1b -- install-health-run --
+    # Runs AFTER both registry seeds above, never before: its trusted-root
+    # guard anchors on `repos.doe_claude` / `repos.claude_klabauter`, so on a
+    # fresh home an earlier slot refuses the coordinator clone as untrusted
+    # and aborts the whole chain before gen-settings-hooks (claude-klabauter#15).
+    # Retired the ["bash", install-health-run.sh] spawn (C13): that DoE-side
+    # script was only a thin polyglot trampoline back into THIS repo's
+    # coordinator_core.ops.install_health_run -- called in-process now. The
+    # orchestrator's own OWN sub-scripts (bin/install-health/*.sh drop-ins)
+    # remain bash and are still subprocess-delegated BY that module -- out of
+    # C13's scope (a genuinely DoE/plugin-owned drop-in surface, not a
+    # trampoline back into this package).
+    from coordinator_core.ops.install_health_run import (  # local import: avoid import cost on --help
+        main as _install_health_run_main,
+    )
+
+    orch.run_required_py(
+        "install-health-run (Phase 3 Step 1b -- install-health drop-ins)",
+        _install_health_run_main,
+        [],
+        env=env,
+    )
+
     # -- Step 3.5a.1c -- git-perf-config fleet sweep (advisory) --
     # `core.untrackedCache` lives inside `.git/index` (per-repo, not a global
     # `~/.gitconfig` stanza -- see git_perf_config's own module docstring),
@@ -1606,121 +1629,128 @@ def _run_body(
         except Exception as exc:  # noqa: BLE001 -- advisory step, never fails the install
             print(f"[ADVISORY] git-perf-config fleet sweep not applied: {exc}", file=sys.stderr)
 
-    # -- Step 3.5a.1 -- gen-doe-root-pointer --
-    # Retired the ["bash", gen-doe-root-pointer.sh] spawn (C13): that DoE-side
-    # script was only a thin polyglot trampoline back into THIS repo's
-    # coordinator_core.ops.gen_doe_root_pointer -- called in-process now.
-    from coordinator_core.ops.gen_doe_root_pointer import (  # local import: avoid import cost on --help
-        main as _gen_doe_root_pointer_main,
-    )
-
-    pointer_args = ["--check-only"] if check_only else []
-    orch.run_required_py(
-        "gen-doe-root-pointer (Step 3.5a.1 -- ~/.claude/.doe-root pointer)",
-        _gen_doe_root_pointer_main,
-        pointer_args,
-        env=env,
-    )
-
-    # -- Step 3.5a.1b -- gen-claude-klabauter-root-pointer.py (advisory) --
-    # Same migrated-`bin/` bug class as `_install_claude_doe_wrapper`'s
-    # `claude-doe` below: this script lives at
-    # `<claude_klabauter_root>/coordinator/bin/gen-claude-klabauter-root-pointer.py` post
-    # b644d5a9, not under the DoE clone's `coord_root/bin/`.
-    py_bin = shutil.which("python3") or shutil.which("python")
-    if py_bin:
-        claude_klabauter_pointer_args = ["--check-only"] if check_only else []
-        orch.run_advisory(
-            "gen-claude-klabauter-root-pointer.py (Step 3.5a.1b -- <settings-home>/machine-local/.claude-klabauter-live-root pointer)",
-            [
-                py_bin,
-                os.path.join(claude_klabauter_root, "coordinator", "bin", "gen-claude-klabauter-root-pointer.py"),
-                *claude_klabauter_pointer_args,
-            ],
-            env=env,
+    if _is_standalone_plugin_clone(doe_clone):
+        orch.skip_note(
+            "DoE launch chain (Steps 3.5a.1-3.5b.2 -- .doe-root pointer, claude-doe shim, "
+            f"wrapper, launcher) -- {doe_clone} is the standalone plugin, not a DoE-claude "
+            "working repo; the plugin loads through the marketplace"
         )
     else:
-        print(
-            "WARN: no python3/python interpreter found on PATH -- skipping gen-claude-klabauter-root-pointer.py (Step 3.5a.1b)",
-            file=sys.stderr,
+        # -- Step 3.5a.1 -- gen-doe-root-pointer --
+        # Retired the ["bash", gen-doe-root-pointer.sh] spawn (C13): that DoE-side
+        # script was only a thin polyglot trampoline back into THIS repo's
+        # coordinator_core.ops.gen_doe_root_pointer -- called in-process now.
+        from coordinator_core.ops.gen_doe_root_pointer import (  # local import: avoid import cost on --help
+            main as _gen_doe_root_pointer_main,
         )
 
-    # -- Step 3.5a.2 -- gen-claude-doe-shim --
-    # Retired the ["bash", gen-claude-doe-shim.sh] spawn (C13): that DoE-side
-    # script was only a thin polyglot trampoline back into THIS repo's
-    # coordinator_core.ops.gen_claude_doe_shim -- called in-process now.
-    from coordinator_core.ops.gen_claude_doe_shim import (  # local import: avoid import cost on --help
-        _default_shell_family as _gen_claude_doe_shim_default_family,
-        main as _gen_claude_doe_shim_main,
-    )
+        pointer_args = ["--check-only"] if check_only else []
+        orch.run_required_py(
+            "gen-doe-root-pointer (Step 3.5a.1 -- ~/.claude/.doe-root pointer)",
+            _gen_doe_root_pointer_main,
+            pointer_args,
+            env=env,
+        )
 
-    # `gen_claude_doe_shim.main()` has no co-located DoE-side script path of
-    # its own to derive the oracle's `${_script_dir}/../templates/shell/...`
-    # default from -- its own docstring says the DoE trampoline resolves
-    # that default and always passes `--template` explicitly. `coord_root`
-    # (this repo's resolved DoE-clone `coordinator/` dir) is exactly that
-    # default location: `<coord_root>/templates/shell/claude-doe-shim.sh.tmpl`
-    # -- `templates/` is DoE doctrine content, unaffected by the b644d5a9
-    # `bin/` migration, so `coord_root` (not `claude_klabauter_root`) is correct here.
-    # D7 cold-install dogfood fix (2026-07-24): this call site previously
-    # omitted `--template` entirely, so every `--check-only` (and live) run
-    # hard-failed this required phase with "no default resolvable". `
-    # --check-only` is listed first so it stays a literal prefix of the
-    # logged argv line (test_c13_check_only_forwarded_to_each_native_phase
-    # substring-matches "gen-claude-doe-shim --check-only").
-    # The template must follow the SHELL FAMILY, not be hardcoded. The generator
-    # copies template bytes verbatim but names its destination from the family
-    # (`_shim_filename`), and that family defaults to "powershell" on native
-    # Windows. A hardcoded `.sh.tmpl` here therefore wrote 62 lines of bash into
-    # `claude-doe-shim.ps1`, whose dot-source defines no `claude()` at all — a
-    # plugin-less session on every launch, with the profile's sentinel block
-    # present and correct so nothing downstream reported a problem.
-    # `--shell` is passed explicitly rather than left to the default so the
-    # template and the family cannot drift apart again from this call site.
-    _shim_family = _gen_claude_doe_shim_default_family()
-    _shim_tmpl_name = (
-        "claude-doe-shim.ps1.tmpl" if _shim_family == "powershell" else "claude-doe-shim.sh.tmpl"
-    )
-    _shim_tmpl = os.path.join(coord_root, "templates", "shell", _shim_tmpl_name)
-    shim_args = (["--check-only"] if check_only else []) + [
-        "--template",
-        _shim_tmpl,
-        "--shell",
-        _shim_family,
-    ]
-    orch.run_required_py(
-        "gen-claude-doe-shim (Step 3.5a.2 -- claude() shell shim)",
-        _gen_claude_doe_shim_main,
-        shim_args,
-        env=env,
-    )
+        # -- Step 3.5a.1b -- gen-claude-klabauter-root-pointer.py (advisory) --
+        # Same migrated-`bin/` bug class as `_install_claude_doe_wrapper`'s
+        # `claude-doe` below: this script lives at
+        # `<claude_klabauter_root>/coordinator/bin/gen-claude-klabauter-root-pointer.py` post
+        # b644d5a9, not under the DoE clone's `coord_root/bin/`.
+        py_bin = shutil.which("python3") or shutil.which("python")
+        if py_bin:
+            claude_klabauter_pointer_args = ["--check-only"] if check_only else []
+            orch.run_advisory(
+                "gen-claude-klabauter-root-pointer.py (Step 3.5a.1b -- <settings-home>/machine-local/.claude-klabauter-live-root pointer)",
+                [
+                    py_bin,
+                    os.path.join(claude_klabauter_root, "coordinator", "bin", "gen-claude-klabauter-root-pointer.py"),
+                    *claude_klabauter_pointer_args,
+                ],
+                env=env,
+            )
+        else:
+            print(
+                "WARN: no python3/python interpreter found on PATH -- skipping gen-claude-klabauter-root-pointer.py (Step 3.5a.1b)",
+                file=sys.stderr,
+            )
 
-    # -- Step 3.5b -- claude-doe wrapper install --
-    _install_claude_doe_wrapper(coord_root, claude_home_dir, check_only, orch, claude_klabauter_root, settings_bin)
+        # -- Step 3.5a.2 -- gen-claude-doe-shim --
+        # Retired the ["bash", gen-claude-doe-shim.sh] spawn (C13): that DoE-side
+        # script was only a thin polyglot trampoline back into THIS repo's
+        # coordinator_core.ops.gen_claude_doe_shim -- called in-process now.
+        from coordinator_core.ops.gen_claude_doe_shim import (  # local import: avoid import cost on --help
+            _default_shell_family as _gen_claude_doe_shim_default_family,
+            main as _gen_claude_doe_shim_main,
+        )
 
-    # -- Step 3.5b.2 -- gen-claude-doe-launcher --
-    # Retired the ["bash", gen-claude-doe-launcher.sh] spawn (C13): that
-    # DoE-side script was only a thin polyglot trampoline back into THIS
-    # repo's coordinator_core.ops.gen_claude_doe_launcher -- called
-    # in-process now.
-    from coordinator_core.ops.gen_claude_doe_launcher import (  # local import: avoid import cost on --help
-        main as _gen_claude_doe_launcher_main,
-    )
+        # `gen_claude_doe_shim.main()` has no co-located DoE-side script path of
+        # its own to derive the oracle's `${_script_dir}/../templates/shell/...`
+        # default from -- its own docstring says the DoE trampoline resolves
+        # that default and always passes `--template` explicitly. `coord_root`
+        # (this repo's resolved DoE-clone `coordinator/` dir) is exactly that
+        # default location: `<coord_root>/templates/shell/claude-doe-shim.sh.tmpl`
+        # -- `templates/` is DoE doctrine content, unaffected by the b644d5a9
+        # `bin/` migration, so `coord_root` (not `claude_klabauter_root`) is correct here.
+        # D7 cold-install dogfood fix (2026-07-24): this call site previously
+        # omitted `--template` entirely, so every `--check-only` (and live) run
+        # hard-failed this required phase with "no default resolvable". `
+        # --check-only` is listed first so it stays a literal prefix of the
+        # logged argv line (test_c13_check_only_forwarded_to_each_native_phase
+        # substring-matches "gen-claude-doe-shim --check-only").
+        # The template must follow the SHELL FAMILY, not be hardcoded. The generator
+        # copies template bytes verbatim but names its destination from the family
+        # (`_shim_filename`), and that family defaults to "powershell" on native
+        # Windows. A hardcoded `.sh.tmpl` here therefore wrote 62 lines of bash into
+        # `claude-doe-shim.ps1`, whose dot-source defines no `claude()` at all — a
+        # plugin-less session on every launch, with the profile's sentinel block
+        # present and correct so nothing downstream reported a problem.
+        # `--shell` is passed explicitly rather than left to the default so the
+        # template and the family cannot drift apart again from this call site.
+        _shim_family = _gen_claude_doe_shim_default_family()
+        _shim_tmpl_name = (
+            "claude-doe-shim.ps1.tmpl" if _shim_family == "powershell" else "claude-doe-shim.sh.tmpl"
+        )
+        _shim_tmpl = os.path.join(coord_root, "templates", "shell", _shim_tmpl_name)
+        shim_args = (["--check-only"] if check_only else []) + [
+            "--template",
+            _shim_tmpl,
+            "--shell",
+            _shim_family,
+        ]
+        orch.run_required_py(
+            "gen-claude-doe-shim (Step 3.5a.2 -- claude() shell shim)",
+            _gen_claude_doe_shim_main,
+            shim_args,
+            env=env,
+        )
 
-    # Same class of bug as the shim call site above: `gen_claude_doe_launcher`
-    # has no co-located script path to derive its `--template-dir` default
-    # from, and expects the DoE trampoline to pass it explicitly (default
-    # location: `<coord_root>/templates/bin` -- also DoE doctrine content,
-    # unaffected by the `bin/` migration). `--check-only` first for the same
-    # logged-argv-substring reason as the shim call site.
-    _launcher_tmpl_dir = os.path.join(coord_root, "templates", "bin")
-    launcher_args = (["--check-only"] if check_only else []) + ["--template-dir", _launcher_tmpl_dir]
-    orch.run_required_py(
-        "gen-claude-doe-launcher (Step 3.5b.2 -- Windows claude-doe.cmd/.ps1 launcher)",
-        _gen_claude_doe_launcher_main,
-        launcher_args,
-        env=env,
-    )
+        # -- Step 3.5b -- claude-doe wrapper install --
+        _install_claude_doe_wrapper(coord_root, claude_home_dir, check_only, orch, claude_klabauter_root, settings_bin)
+
+        # -- Step 3.5b.2 -- gen-claude-doe-launcher --
+        # Retired the ["bash", gen-claude-doe-launcher.sh] spawn (C13): that
+        # DoE-side script was only a thin polyglot trampoline back into THIS
+        # repo's coordinator_core.ops.gen_claude_doe_launcher -- called
+        # in-process now.
+        from coordinator_core.ops.gen_claude_doe_launcher import (  # local import: avoid import cost on --help
+            main as _gen_claude_doe_launcher_main,
+        )
+
+        # Same class of bug as the shim call site above: `gen_claude_doe_launcher`
+        # has no co-located script path to derive its `--template-dir` default
+        # from, and expects the DoE trampoline to pass it explicitly (default
+        # location: `<coord_root>/templates/bin` -- also DoE doctrine content,
+        # unaffected by the `bin/` migration). `--check-only` first for the same
+        # logged-argv-substring reason as the shim call site.
+        _launcher_tmpl_dir = os.path.join(coord_root, "templates", "bin")
+        launcher_args = (["--check-only"] if check_only else []) + ["--template-dir", _launcher_tmpl_dir]
+        orch.run_required_py(
+            "gen-claude-doe-launcher (Step 3.5b.2 -- Windows claude-doe.cmd/.ps1 launcher)",
+            _gen_claude_doe_launcher_main,
+            launcher_args,
+            env=env,
+        )
 
     # -- Step 3.5c -- gen-settings-hooks (no --check-only support upstream) --
     #

@@ -164,10 +164,9 @@ if TYPE_CHECKING:
     from coordinator_core.session.scope import OwnerFact
 
 # Generator-provenance declaration (generator_provenance.py). Every real
-# write in this module (override_log, the probe-spray ring/times/cooldown
-# files, scope-warnings.log) resolves under <git_root>/.git/coordinator-
-# sessions/<session_id>/ or a session_dir -- untracked guard bookkeeping,
-# never a tracked repo artifact.
+# write in this module (override_log, scope-warnings.log) resolves under
+# <git_root>/.git/coordinator-sessions/<session_id>/ or a session_dir --
+# untracked guard bookkeeping, never a tracked repo artifact.
 GENERATES = []
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _normalize_executable_basename,
@@ -1411,7 +1410,9 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0,
     return result.returncode, result.stdout
 
 
-def _batch_show_index_blobs(paths: List[str], cwd: Optional[str]) -> Dict[str, Optional[str]]:
+def _batch_show_index_blobs(
+    paths: List[str], cwd: Optional[str], ref: str = ""
+) -> Dict[str, Optional[str]]:
     """Batched replacement for a per-file `git show :<path>` index-blob read
     (used by `check_validate_commit`'s CLAUDE.md-budget check). ONE
     `git cat-file --batch` feed (stdin, byte mode) resolves every path's
@@ -1424,6 +1425,11 @@ def _batch_show_index_blobs(paths: List[str], cwd: Optional[str]) -> Dict[str, O
     desync every slice after the first multi-byte character or CRLF. Also
     honors this module's git-probe budget (`_git_probe_budget_spent`), which
     the ceremony helper has no reason to know about.
+
+    `ref` selects which tree each `<rev>:<path>` record reads -- `""` (the
+    default) reads the STAGED index blob (`:<path>`, ratchet's post-edit
+    read); a caller wanting the pre-edit (last-committed) blob passes `"HEAD"`
+    (`HEAD:<path>`), same as C7c's shrink-admission leg below.
 
     Reconciliation: every requested path is bound to an explicit slot by
     walking `paths` in order -- resolved -> blob text (utf-8, errors=
@@ -1443,7 +1449,7 @@ def _batch_show_index_blobs(paths: List[str], cwd: Optional[str]) -> Dict[str, O
             file=sys.stderr,
         )
         return {p: None for p in paths}
-    stdin_bytes = ("\n".join(":%s" % p for p in paths) + "\n").encode("utf-8")
+    stdin_bytes = ("\n".join("%s:%s" % (ref, p) for p in paths) + "\n").encode("utf-8")
     try:
         proc = subprocess.run(
             ["git", "cat-file", "--batch"],
@@ -6106,196 +6112,6 @@ def check_runaway_find(
 
 
 # ---------------------------------------------------------------------------
-# 9. check_probe_spray -- nudge-probe-spray.sh (advisory-only, never denies)
-# ---------------------------------------------------------------------------
-
-_WINDOW = 90
-_THRESHOLD = 3
-_COOLDOWN = 30
-_RING_N = 8
-_RING_RECUR_MIN = 2
-
-_TS_PROBE_RE = re.compile(r"(\$\(date|`date|\$EPOCHSECONDS|\$RANDOM)")
-_LEXEME_RE = re.compile(r"(^|[^a-z0-9_])(alive|heartbeat|chan[_-]?ok|still[_-](alive|here|there))([^a-z0-9_]|$)")
-
-
-def check_probe_spray(
-    cmd: str,
-    session_id: str = "",
-    payload: Optional[Dict[str, Any]] = None,
-    git_root: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    """Advisory-only heuristic nudge (never denies). All scratch-state
-    read/write around ring_f/times_f/cool_f below deliberately swallows
-    OSError without a diagnostic: this is best-effort /tmp bookkeeping for a
-    nudge, not a correctness-bearing guard, and it fires on the hot path of
-    every Bash tool call -- a stderr warning on every transient /tmp
-    permission/race hiccup would spam far more often than it would inform.
-    Worst case on a persistent failure is simply "the probe-spray nudge stops
-    firing," which is silently self-limiting, not silently dangerous.
-
-    STATE LOCALITY. The counter is keyed by `session_id`, falling back to the
-    parent PID when no caller threaded one through. That fallback deliberately
-    buckets together everything sharing one parent process -- fine in
-    production, where the parent IS the session -- but it makes the state
-    process-global for any harness that fans one parent out into workers.
-    Under pytest-xdist every worker inherits the SAME parent PID, so all
-    workers accumulate into one counter and cross-contaminate: three
-    channel-test-shaped commands anywhere in the run tripped the nudge, whose
-    `additionalContext` then displaced what an unrelated guard's test was
-    asserting on (observed 2026-08-03 as an intermittent two-test failure
-    under `-n 6`, ~1 run in 8, always the same pair).
-    `COORDINATOR_PROBE_SPRAY_STATE_DIR` redirects the state files so a test
-    can own a private counter; `coordinator_core/conftest.py` points it at a
-    per-test tmp dir for the whole suite. Production reads no such variable
-    and keeps `tempfile.gettempdir()`.
-    """
-    if not cmd:
-        return None
-    if _override("COORDINATOR_PROBE_NUDGE_OFF", payload=payload):
-        return None
-
-    now = int(time.time())
-    key = re.sub(r"[^A-Za-z0-9_-]", "_", session_id or str(os.getppid()) or "default")
-    import tempfile
-
-    state_dir = os.environ.get("COORDINATOR_PROBE_SPRAY_STATE_DIR") or tempfile.gettempdir()
-    prefix = os.path.join(state_dir, "coordinator-probe-spray-%s" % key)
-    times_f = prefix + ".times"
-    ring_f = prefix + ".ring"
-    cool_f = prefix + ".cool"
-
-    import hashlib
-
-    h = hashlib.sha256(cmd.encode("utf-8", "replace")).hexdigest()
-
-    in_ring = False
-    if os.path.isfile(ring_f):
-        try:
-            with open(ring_f, "r", encoding="utf-8", errors="replace") as fh:
-                ring_lines = fh.read().splitlines()
-        except OSError:
-            ring_lines = []
-        if ring_lines.count(h) >= _RING_RECUR_MIN:
-            in_ring = True
-    try:
-        existing: List[str] = []
-        if os.path.isfile(ring_f):
-            with open(ring_f, "r", encoding="utf-8", errors="replace") as fh:
-                existing = fh.read().splitlines()
-        existing.append(h)
-        existing = [x for x in existing if x][-_RING_N:]
-        with open(ring_f, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write("\n".join(existing) + "\n")
-    except OSError:
-        # Ring-buffer state is best-effort recurrence tracking for the
-        # probe-spray nudge; a write failure just means this command isn't
-        # remembered for the next call, not a correctness issue -- silent
-        # here to avoid warning on every bash dispatch when it fails.
-        pass
-
-    is_probe = False
-    if re.match(r'^\s*echo\s+(["\'][A-Za-z0-9][A-Za-z0-9_-]*["\']|[A-Za-z0-9][A-Za-z0-9_-]*)\s*$', cmd):
-        is_probe = True
-    if re.match(r"^\s*(echo|true|false|:|pwd|date)\s*$", cmd):
-        is_probe = True
-    if re.match(r"^\s*printf\s", cmd) and not re.search(r"[|><]", cmd) and len(cmd) < 40:
-        is_probe = True
-    if re.match(r"^\s*sleep\s+[0-9]", cmd):
-        is_probe = True
-    if in_ring:
-        is_probe = True
-
-    is_strong_probe = False
-    cmd_lc = cmd.lower()
-    if re.match(r"^\s*echo\s", cmd) and _TS_PROBE_RE.search(cmd) and not re.search(r"[|>]", cmd):
-        is_strong_probe = True
-    if re.match(r"^\s*echo\s", cmd_lc) and _LEXEME_RE.search(cmd_lc) and not re.search(r"[|>]", cmd):
-        is_strong_probe = True
-    if is_strong_probe:
-        is_probe = True
-
-    if not is_probe:
-        try:
-            open(times_f, "w", encoding="utf-8", newline="\n").close()
-        except OSError:
-            # Best-effort reset of the probe window on a non-probe command;
-            # a stale times_f just means the next probe run over-counts
-            # slightly, which the cooldown already tolerates -- not worth
-            # a warning on this very-hot path.
-            pass
-        try:
-            if os.path.isfile(cool_f):
-                os.remove(cool_f)
-        except OSError:
-            # Same rationale: best-effort cooldown-file cleanup, not
-            # correctness-bearing.
-            pass
-        return None
-
-    newtimes: List[int] = []
-    if os.path.isfile(times_f):
-        try:
-            with open(times_f, "r", encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line.isdigit() and now - int(line) <= _WINDOW:
-                        newtimes.append(int(line))
-        except OSError:
-            # Unreadable times_f just means the prior window is lost --
-            # newtimes falls back to only this call's timestamp below,
-            # which under-counts rather than false-triggers the nudge.
-            pass
-    newtimes.append(now)
-    try:
-        with open(times_f, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write("\n".join(str(t) for t in newtimes) + "\n")
-    except OSError:
-        # Best-effort persistence of the probe window; a write failure
-        # only affects the next call's count, not this one's.
-        pass
-    count = len(newtimes)
-
-    effective_threshold = 1 if is_strong_probe else _THRESHOLD
-
-    if count >= effective_threshold:
-        last_nudge = 0
-        if os.path.isfile(cool_f):
-            try:
-                with open(cool_f, "r", encoding="utf-8", errors="replace") as fh:
-                    v = fh.read().strip()
-                    last_nudge = int(v) if v.isdigit() else 0
-            except OSError:
-                last_nudge = 0
-        if now - last_nudge >= _COOLDOWN:
-            try:
-                with open(cool_f, "w", encoding="utf-8", newline="\n") as fh:
-                    fh.write(str(now))
-            except OSError:
-                # Cooldown stamp is best-effort; a write failure only
-                # risks re-firing the advisory sooner than _COOLDOWN, not
-                # a correctness break -- the advisory below still fires.
-                pass
-            _ps_note = operator_override_note(
-                "COORDINATOR_PROBE_NUDGE_OFF", payload=payload, git_root=git_root
-            )
-            return _advisory(
-                (
-                    "PROBE-SPRAY: %d channel-test commands in %ds — the "
-                    "channel isn't broken, re-probing diagnoses nothing "
-                    "(docs/wiki/tool-output-flakiness-protocol.md).\n\n"
-                    "Use instead:\n"
-                    "  git -C <path> log -1   # one real command, not "
-                    "another probe"
-                    % (count, _WINDOW)
-                )
-                + ("\n\n" + _ps_note if _ps_note else "")
-            )
-
-    return None
-
-
-# ---------------------------------------------------------------------------
 # (retired) check_windows_popup -- nudge-windows-console-popup.sh
 # Removed 2026-07-15: the advisory fired on bare `python -c` at the Bash-tool
 # EXECUTION layer, where the popup is harness-owned (DR-044 popup-a) and NOT
@@ -7879,6 +7695,18 @@ def check_validate_commit(
                 hard_violation += "\n  %s: %s" % (cf, exc)
                 continue
             ok, ratchet_msg = ratchet_check(size, watermark)
+            if not ok:
+                # C7c: admit a shrinking edit on a surface already over its
+                # watermark (mirrors DoE-claude's `admission_check_for_
+                # surface`, commit 0f59b1abc) -- refusing it leaves "raise
+                # the watermark" as the only way out. The pre-edit size is
+                # derived the SAME way the post-edit `size` above is (a
+                # `git cat-file --batch` blob read), just against `HEAD`
+                # instead of the staged index -- spawned only on this
+                # already-violating path, never on the common case.
+                head_blob = _batch_show_index_blobs([cf], _cwd, ref="HEAD").get(cf)
+                pre_edit_size = len(head_blob) if head_blob is not None else None
+                ok, ratchet_msg = ratchet_check(size, watermark, pre_edit_size)
             if not ok:
                 hard_violation += "\n  %s: %s" % (cf, ratchet_msg)
 

@@ -185,6 +185,7 @@ from coordinator_core.bash_guards._write_bump_applicability import (
     anchor_subtree_contains,
     bump_applies,
     is_agent_memory_store_path,
+    own_repo_write_gitdir,
     publish_destination_owner,
     record_applicability_event,
     resolve_launch_anchor,
@@ -1541,6 +1542,7 @@ def _evaluate_foreign_repo_candidate(
     raw_target: Optional[str] = None,
     anchor_root: Optional[str] = None,
     write_verb_label: str = "",
+    cwd: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """One candidate write-sink `target_dir`, already resolved to an
     absolute-or-cwd-relative string by the caller's own extraction leg,
@@ -1567,7 +1569,16 @@ def _evaluate_foreign_repo_candidate(
     `label` from `_iter_write_sink_candidates` -- `"git push"` for a git-push
     candidate, the executable basename for a plain write-sink one. Threaded
     straight through to `render_bump_message`, which only acts on it for the
-    PUBLISH destination class (see `_write_bump_message._GIT_PUSH_WRITE_VERB_LABEL`)."""
+    PUBLISH destination class (see `_write_bump_message._GIT_PUSH_WRITE_VERB_LABEL`).
+
+    `cwd` (coordinator-claude#42 B2) is the caller's own command `cwd` --
+    consulted ONLY in the no-repo-anchor (`not anchor_has_repo`) branch
+    below, as `_write_bump_applicability.own_repo_write_gitdir`'s primary
+    candidate, so a REGISTERED target that is also this command's own
+    working repo never bumps merely because the session-start anchor
+    itself resolved to no git repo. See that helper's own docstring for why
+    this is not a second route to the forbidden live-`cwd`-as-anchor
+    shape."""
     probe_dir = _nearest_existing_ancestor(target_dir)
     if probe_dir is None:
         # No existing ancestor at all -- cannot resolve a git root
@@ -1703,6 +1714,19 @@ def _evaluate_foreign_repo_candidate(
         # exactly the shape Narrow can site a clearable marker for. The
         # marker falls back to the TARGET's own gitdir either way (see
         # module docstring for why).
+        own_repo_cwd_gitdir = own_repo_write_gitdir(cwd, payload, env=env)
+        own_repo_cwd_common_cf = (
+            _common_dir_cf_from_gitdir(own_repo_cwd_gitdir)
+            if own_repo_cwd_gitdir is not None
+            else None
+        )
+        target_common_cf_for_own_repo = _common_dir_cf_from_gitdir(target_gitdir)
+        if (
+            own_repo_cwd_common_cf is not None
+            and target_common_cf_for_own_repo is not None
+            and _same_repo_root(own_repo_cwd_common_cf, target_common_cf_for_own_repo)
+        ):
+            return None
         if not target_is_registered_repo(
             str(target_gitdir), env=env
         ) and anchor_subtree_contains(anchor, target_dir):
@@ -1992,6 +2016,7 @@ def check_bump_foreign_repo_write(
             raw_target=raw_target,
             anchor_root=anchor_root,
             write_verb_label=write_verb_label,
+            cwd=cwd,
         )
         if result is not None:
             return result
@@ -2225,6 +2250,7 @@ def _check_bump_foreign_repo_write_powershell(
             agent_id=agent_id,
             raw_target=raw_target,
             anchor_root=anchor_root,
+            cwd=cwd,
         )
         if result is not None:
             return result

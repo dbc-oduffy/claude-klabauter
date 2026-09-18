@@ -174,6 +174,14 @@ def test_check_only_never_removes_shadowing_ps1_sibling(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_verify_installed_provenance_python_forwarder_is_no_door(tmp_path):
+    """A failed door build leaves the Python forwarder under the door's name;
+    it has no sidecar by design and must not read as a missing one."""
+    (tmp_path / door_install.DOOR_INSTALLED_NAME).write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    verdict = door_install.verify_installed_provenance(tmp_path)
+    assert verdict.status == "no-door"
+
+
 def test_verify_installed_provenance_no_door(tmp_path):
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -184,7 +192,7 @@ def test_verify_installed_provenance_no_door(tmp_path):
 def test_verify_installed_provenance_absent_sidecar(tmp_path):
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"door bytes")
+    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"\x7fELF door bytes")
     verdict = door_install.verify_installed_provenance(bin_dst)
     assert verdict.status == "absent"
 
@@ -192,7 +200,7 @@ def test_verify_installed_provenance_absent_sidecar(tmp_path):
 def test_verify_installed_provenance_unrecorded(tmp_path):
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"door bytes")
+    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"\x7fELF door bytes")
     door_install.installed_provenance_path(bin_dst).write_text(
         json.dumps({"door_c_sha256": "deadbeef"}), encoding="utf-8"
     )
@@ -203,7 +211,7 @@ def test_verify_installed_provenance_unrecorded(tmp_path):
 def test_verify_installed_provenance_mismatch(tmp_path):
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
-    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"door bytes")
+    (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"\x7fELF door bytes")
     door_install.installed_provenance_path(bin_dst).write_text(
         json.dumps({"image_sha256": "0" * 64}), encoding="utf-8"
     )
@@ -235,7 +243,7 @@ def test_verify_installed_provenance_ok(tmp_path):
         door_bytes = door_install._PREBUILT_DOOR_EXE.read_bytes()
         record = {"image_sha256": hashlib.sha256(door_bytes).hexdigest()}
     else:
-        door_bytes = b"whatever this box compiled"
+        door_bytes = b"\x7fELF whatever this box compiled"
         record = {
             "image_sha256": hashlib.sha256(door_bytes).hexdigest(),
             "sources": door_install._current_source_fingerprint(),

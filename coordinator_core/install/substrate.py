@@ -1982,8 +1982,13 @@ exec_cli("{target}")
             f"install-substrate: check failed: {dst.name} is {status} at {dst} "
             f"(would write forwarder)"
         )
-    dst.write_text(content, encoding="utf-8", newline="\n")
-    dst.chmod(dst.stat().st_mode | 0o111)
+    # Replace the directory entry, never write through it: a door cutover
+    # hardlinks one image to hundreds of these names, so an in-place write here
+    # lands on the shared inode and turns every slot into this one forwarder.
+    tmp = dst.with_name(f".{dst.name}.{os.getpid()}.tmp")
+    tmp.write_text(content, encoding="utf-8", newline="\n")
+    tmp.chmod(tmp.stat().st_mode | 0o111)
+    os.replace(tmp, dst)
 
 
 # GRAVESTONE -- `_write_agent_cmd_forwarder` (deleted 2026-08-29, PM ruling:

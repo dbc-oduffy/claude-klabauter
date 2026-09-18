@@ -77,9 +77,9 @@ CONFINEMENT_DENY_NAMES = [
 ]
 
 # Every ADVISORY_REWRITE guard, in registration order. `inprocess-search`
-# must precede every "-rewrite"/"-advise"-suffixed entry and `probe-spray`
-# (its own registration comment: those return allow+rewrite, which would
-# make its search-answering seam unreachable if registered after them).
+# must precede every "-rewrite"/"-advise"-suffixed entry (its own
+# registration comment: those return allow+rewrite, which would make its
+# search-answering seam unreachable if registered after them).
 ADVISORY_REWRITE_NAMES = [
     # Review: staff-eng, Finding 0 (2026-08-05) -- the advisory floor's
     # non-hard-deny leg. Registered immediately after `check-raw-pid-
@@ -113,7 +113,6 @@ ADVISORY_REWRITE_NAMES = [
     "reap-stale-git-lock",
     "validate-commit",
     "inprocess-search",
-    "probe-spray",
     "block-illegal-filename",
     "find-exec-rewrite",
     "grep-via-bash-rewrite",
@@ -341,8 +340,8 @@ def test_advisory_rewrite_guards_never_fail_closed():
 
 def test_inprocess_search_precedes_every_rewrite_and_advise_entry():
     """`inprocess-search` never denies -- it only answers a search in-process
-    -- but every "-rewrite"/"-advise"-suffixed guard and `probe-spray` return
-    allow+updatedInput or an advisory that short-circuits the chain before
+    -- but every "-rewrite"/"-advise"-suffixed guard returns allow+updatedInput
+    or an advisory that short-circuits the chain before
     `inprocess-search` would run if registered after them. Its own
     registration comment: registered after them, "this seam is unreachable
     for exactly the commands it exists to answer." Pinned here structurally
@@ -353,7 +352,6 @@ def test_inprocess_search_precedes_every_rewrite_and_advise_entry():
 
     search_pos = position["inprocess-search"]
     must_follow = [
-        "probe-spray",
         "find-exec-rewrite",
         "grep-via-bash-rewrite",
         "sed-range-read-advise",
@@ -509,23 +507,12 @@ def test_rewrite_band_wins_over_platform_conditioned_deny(label, cmd, host_is_wi
     import tempfile
 
     monkeypatch.setenv("COORDINATOR_DISABLE_INPROCESS_SEARCH", "1")
-    # `probe-spray` keeps its ring buffer in a temp-dir file keyed by session
-    # id, and that file OUTLIVES the pytest process. The unique-session-id
-    # measure below isolates cells from each other within one run, but not
-    # this run from the previous one: re-running this file appends the same
-    # command hash to the same ring file, and on the third run the recurrence
-    # threshold trips and probe-spray's advisory short-circuits the chain
-    # before the seam under test is reached. These six cells then fail with a
-    # message about the rewrite not firing, which is not what went wrong.
     # Pointing `tempfile.tempdir` at pytest's per-test tmp_path gives every
     # cell a fresh state dir, so the assertion depends only on the chain.
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
-    # A unique session id per cell -- `probe-spray`'s own ring-buffer
-    # recurrence check fires on an EXACT-repeated command shape within one
-    # session, and several cells here intentionally reuse the same command
-    # text across the host_is_windows=True/False pair. A shared session id
-    # would trip that unrelated advisory guard and short-circuit the chain
-    # before it ever reaches the seam this test targets.
+    # A unique session id per cell, so no state a guard keys by session id
+    # can leak between cells that intentionally reuse the same command text
+    # across the host_is_windows=True/False pair.
     session_id = "six-combo-probe-%s-%s" % (label, host_is_windows)
     payload = json.dumps(
         {

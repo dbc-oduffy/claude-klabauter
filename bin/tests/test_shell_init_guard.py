@@ -28,8 +28,21 @@ pytestmark = [
 _REPO_ROOT = Path(__file__).parent.parent.parent.resolve()
 _SCRIPT = _REPO_ROOT / "bin" / "shell-init-guard.py"
 
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("shell_init_guard", _SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 _DEFAULT_LINE = "ulimit -S -f 8388608"
-_FAILGLOB_LINE = "shopt -s failglob"
+# Sourced from the module rather than duplicated as a literal: a hardcoded
+# copy here already drifted once when shell-init-guard.py guarded the line
+# for zsh (`if command -v shopt ...`), and every assertion below kept
+# comparing against the retired bare `shopt -s failglob` form.
+_FAILGLOB_LINE = _load_module()._FAILGLOB_LINE
 _ENV_VAR = "COORDINATOR_OVERRIDE_FSIZE_CAP"
 
 
@@ -149,17 +162,10 @@ def test_huge_n_emits_plain_decimal_no_overflow() -> None:
 
 
 # Review: code-reviewer (Finding 3, 4) — unit-level tier importing the module directly (via
-# importlib since the filename has a hyphen) to test _resolve_ulimit_line in isolation and to
-# prove the main() inner fail-open except-Exception branch actually works, which the
-# subprocess-only suite above cannot exercise.
-def _load_module():
-    spec = importlib.util.spec_from_file_location("shell_init_guard", _SCRIPT)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
+# `_load_module`, defined above alongside `_FAILGLOB_LINE`, since the filename has a hyphen)
+# to test _resolve_ulimit_line in isolation and to prove the main() inner fail-open
+# except-Exception branch actually works, which the subprocess-only suite above cannot
+# exercise.
 @pytest.fixture(scope="module")
 def _guard_module():
     return _load_module()

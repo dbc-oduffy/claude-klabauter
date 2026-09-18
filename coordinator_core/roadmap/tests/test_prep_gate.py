@@ -72,6 +72,7 @@ prime_exit_criterion:
 
 _CLEAN_SPINE = """- id: C1
   title: Ship the thing
+  body: Add the SPINE predicate and pin it with a failing-first test.
   change_kind: code-edit
   surface: coordinator_core/roadmap/prep_gate.py
   writes: [coordinator_core/roadmap/prep_gate.py]
@@ -102,6 +103,40 @@ def test_a_fully_declared_plan_is_prepped(tmp_path):
     assert report["withheld_rows"] == []
     assert all(c["status"] == "PASS" for c in report["classes"].values())
     assert report["message"].startswith("mise-prep: PREPPED —")
+
+
+@pytest.mark.parametrize(
+    "body_line",
+    ["", "  body: \"\"\n", "  body: Ship the thing.\n"],
+    ids=["no-body", "empty-body", "title-restatement"],
+)
+def test_a_row_with_nothing_to_execute_is_withheld(tmp_path, body_line):
+    """claude-klabauter#20: a row the emitter would hand an executor with no work
+    in it gated PREPPED and blocked at dispatch. SPINE reads the same row body
+    the emitter does, withholds the row, and the plan is NOT-PREPPED."""
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    spine = _CLEAN_SPINE.replace(
+        "  body: Add the SPINE predicate and pin it with a failing-first test.\n", body_line
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["verdict"] == pg.NOT_PREPPED
+    assert report["classes"]["SPINE"]["kind"] == "body-absent"
+    assert report["withheld_rows"] == ["C1"]
+
+
+def test_a_row_the_emitter_would_refuse_to_route_is_withheld(tmp_path):
+    """DoE-claude#75: a row writing both a plan body and code certified PREPPED
+    and was then refused whole by dispatch. The gate now asks the emitter's own
+    routing predicate and refuses with its message."""
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    spine = _CLEAN_SPINE.replace(
+        "  writes: [coordinator_core/roadmap/prep_gate.py]\n",
+        "  writes: [coordinator_core/roadmap/prep_gate.py, docs/plans/2026-09-07-fixture.md]\n",
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["verdict"] == pg.NOT_PREPPED
+    assert report["classes"]["SPINE"]["kind"] == "MixedAgentTypeRowError"
+    assert report["withheld_rows"] == ["C1"]
 
 
 def test_every_class_is_reported_even_when_it_passes(tmp_path):
@@ -144,6 +179,7 @@ def test_declared_empty_writes_passes(tmp_path):
     same distinction the whole bar is built on."""
     spine = """- id: C1
   title: Verify
+  body: Run the prep-gate suite and confirm it is green.
   change_kind: verification
   surface: coordinator_core/roadmap/prep_gate.py
   writes: []
@@ -342,6 +378,7 @@ def test_an_unreadable_schema_passes_rather_than_refusing_every_plan(
 def _external_plan(tmp_path, gate_block: str = "") -> Path:
     spine = f"""- id: C1
   title: Reaches out
+  body: Call the sibling repo's gate once it clears.
   change_kind: code-edit
   surface: DoE-claude/coordinator/bin/mise-prep-gate.py
   writes: []
@@ -665,7 +702,7 @@ def test_a_new_root_level_entry_is_not_read_as_a_cross_repo_write(tmp_path):
     single-segment value names an entry at THIS repo's root."""
     for value in ("ADOPTERS", "ADOPTERS.md", "brand-new-dir/"):
         spine = (
-            "- id: C1\n  title: t\n  change_kind: doc-edit\n"
+            "- id: C1\n  title: t\n  body: Add the root-level entry.\n  change_kind: doc-edit\n"
             f"  surface: docs/x.md\n  writes: [{value}]\n"
             "  queue_scope: project\n  disposition: open\n"
         )

@@ -153,34 +153,10 @@ class TestMeasureOfferGitC:
         assert result.measured_pct == pytest.approx(50.0)
 
 
-class TestMeasureProbeSpray:
-    def test_bare_probes_are_caught_and_state_does_not_leak_between_runs(self):
-        commands = ["echo hi", "pwd", "git status"]
-        result = cov.measure_probe_spray(commands)
-        assert result.guard == "check_probe_spray"
-        assert result.target_class_size == len(commands)
-        assert result.corpus_size == len(commands)
-        assert result.fired_count == 2  # "echo hi" and "pwd"
-
-    def test_module_globals_are_restored_after_measurement(self):
-        before_threshold = guard._THRESHOLD
-        before_cooldown = guard._COOLDOWN
-        cov.measure_probe_spray(["echo hi"])
-        assert guard._THRESHOLD == before_threshold
-        assert guard._COOLDOWN == before_cooldown
-
-    def test_empty_corpus_reports_zero_pct_not_a_crash(self):
-        result = cov.measure_probe_spray([])
-        assert result.target_class_size == 0
-        assert result.fired_count == 0
-        assert result.measured_pct == 0.0
-
-
 class TestMeasureAllAndReport:
     def test_measure_all_returns_one_result_per_guard(self):
         results = cov.measure_all(["echo hi", "find / -name x", "cd /repo && git log -1"])
         assert {r.guard for r in results} == {
-            "check_probe_spray",
             "check_runaway_find",
             "check_offer_git_c",
         }
@@ -188,7 +164,7 @@ class TestMeasureAllAndReport:
     def test_format_report_names_every_guard(self):
         results = cov.measure_all(["echo hi"])
         report = cov.format_report(results)
-        for name in ("check_probe_spray", "check_runaway_find", "check_offer_git_c"):
+        for name in ("check_runaway_find", "check_offer_git_c"):
             assert name in report
 
 

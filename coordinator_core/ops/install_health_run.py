@@ -360,6 +360,8 @@ def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
 #: coordinator`; anything that cannot reach that line cannot start a session.
 _LAUNCH_CHAIN_NAME = "claude-doe"
 _LAUNCH_CHAIN_PROOF = "exec claude"
+_LAUNCH_CHAIN_SOURCE = "claude-doe.py"
+_LAUNCH_CHAIN_FORWARD = f'exec_cli("{_LAUNCH_CHAIN_SOURCE}")'
 
 
 def check_launch_chain_intact(plugin_root: str, claude_klabauter_root: str) -> int:
@@ -389,16 +391,25 @@ def check_launch_chain_intact(plugin_root: str, claude_klabauter_root: str) -> i
     concern -- the same posture `check_door_provenance` takes for "no-door".
     What this leg refuses is a launcher that EXISTS and cannot launch.
 
-    No subprocess: the leg reads one file. Running the trampoline to see
+    No subprocess: the leg reads one file, or two when the installed one is
+    the generated forwarder and the proof lives in the wrapper it execs. Running the trampoline to see
     whether it runs would put an interpreter start on an install-health leg
     to learn strictly less than its own bytes already say."""
-    del plugin_root, claude_klabauter_root
+    del plugin_root
 
     launcher = settings_home() / "bin" / _LAUNCH_CHAIN_NAME
     if not launcher.is_file():
         return 0
 
     body = launcher.read_bytes()
+    if _LAUNCH_CHAIN_FORWARD.encode("utf-8") in body:
+        # The substrate's generated forwarder, which install-substrate writes
+        # before Step 3.5b lays the wrapper bytes over it; it launches by
+        # exec'ing the engine's own wrapper, so that file carries the proof.
+        try:
+            body = (Path(claude_klabauter_root) / "coordinator" / "bin" / _LAUNCH_CHAIN_SOURCE).read_bytes()
+        except OSError:
+            body = b""
     if body.startswith(door_install.NATIVE_IMAGE_MAGIC):
         detail = "it is a compiled native image, not the Python trampoline"
     elif _LAUNCH_CHAIN_PROOF.encode("utf-8") not in body:

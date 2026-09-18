@@ -1,7 +1,7 @@
 """coordinator_core.bash_guards._guard_coverage -- standing, re-runnable
-measurement of how much of its own target command class each of the three
-machine-tax-shaped guards (``check_probe_spray``, ``check_runaway_find``,
-``check_offer_git_c``) actually fires on.
+measurement of how much of its own target command class each of the
+machine-tax-shaped guards (``check_runaway_find``, ``check_offer_git_c``)
+actually fires on.
 
 Spec backlink: DoE-claude:pln-windows-viability-stop-the-spa-b969d9
 row BX-11 / AC-6 (DoE-claude). BX-11's own words are the reason this module
@@ -46,10 +46,7 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
-import tempfile
-import uuid
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, Iterator, List, Optional, Sequence
 
@@ -67,7 +64,6 @@ from coordinator_core.bash_guards._command_tokenizer import (
 # re-measurement; they are the fixed historical reference point, not a
 # rolling value.
 BASELINE_PCT: Dict[str, float] = {
-    "check_probe_spray": 0.44,
     "check_runaway_find": 1.4,
     "check_offer_git_c": 3.2,
 }
@@ -187,71 +183,16 @@ def measure_offer_git_c(commands: Sequence[str]) -> CoverageResult:
     )
 
 
-def measure_probe_spray(commands: Sequence[str]) -> CoverageResult:
-    """Measure ``check_probe_spray``'s reach against its full target class
-    (every command in the corpus -- the guard's charter is any probe-shaped
-    command, not a pre-filtered subset).
-
-    ``check_probe_spray`` is the one guard in this trio carrying real
-    cross-call state (a same-session recurrence ring plus a threshold/
-    cooldown window -- see its own docstring in ``dispatch_checks.py``).
-    The 2026-07-28 baseline's "273 of 62,487" figure measured shape
-    RECOGNITION, not real multi-call sequencing (it was a static
-    classification pass, not a session replay). To measure the same thing
-    here without hand-duplicating the guard's internal is-probe regex
-    (which would silently drift from the shipped classifier the moment
-    either copy changed), each command is replayed through the REAL
-    ``check_probe_spray`` function: a fresh session id per call, inside one
-    shared scratch tempdir for the whole measurement run (state filenames
-    are keyed by session id, so no cross-call state leak occurs despite the
-    directory being shared), with the module's weak-probe threshold
-    and cooldown window patched to 1/0 for the duration of this call --
-    generalizing the guard's own existing ``is_strong_probe`` short-circuit
-    (which already sets ``effective_threshold = 1``) to every probe shape,
-    for measurement purposes only. The patch is undone in a ``finally``
-    block on every exit path, so a caller never observes a mutated guard
-    module afterward."""
-    scratch = tempfile.mkdtemp(prefix="guard-coverage-probe-spray-")
-    orig_tempdir = tempfile.tempdir
-    orig_threshold = _checks._THRESHOLD
-    orig_cooldown = _checks._COOLDOWN
-    tempfile.tempdir = scratch
-    _checks._THRESHOLD = 1
-    _checks._COOLDOWN = 0
-    try:
-        fired = 0
-        for cmd in commands:
-            sid = uuid.uuid4().hex
-            if _checks.check_probe_spray(cmd, session_id=sid) is not None:
-                fired += 1
-    finally:
-        tempfile.tempdir = orig_tempdir
-        _checks._THRESHOLD = orig_threshold
-        _checks._COOLDOWN = orig_cooldown
-        shutil.rmtree(scratch, ignore_errors=True)
-
-    n = len(commands)
-    return CoverageResult(
-        guard="check_probe_spray",
-        target_class_size=n,
-        fired_count=fired,
-        corpus_size=n,
-        measured_pct=_pct(fired, n),
-        baseline_pct=BASELINE_PCT["check_probe_spray"],
-    )
-
-
 MEASURERS: Dict[str, Callable[[Sequence[str]], CoverageResult]] = {
     "check_runaway_find": measure_runaway_find,
     "check_offer_git_c": measure_offer_git_c,
-    "check_probe_spray": measure_probe_spray,
 }
 
 
 def measure_all(commands: Sequence[str]) -> List[CoverageResult]:
     """Run every registered guard's coverage measurement against the same
     corpus, in a stable, deterministic order."""
-    return [MEASURERS[name](commands) for name in ("check_probe_spray", "check_runaway_find", "check_offer_git_c")]
+    return [MEASURERS[name](commands) for name in ("check_runaway_find", "check_offer_git_c")]
 
 
 def format_report(results: Iterable[CoverageResult]) -> str:
@@ -276,10 +217,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Report measured per-guard coverage of check_probe_spray, "
-            "check_runaway_find, and check_offer_git_c against a real "
-            "Bash command corpus, relative to the 2026-07-28 negative-"
-            "space baseline (0.44% / 1.4% / 3.2%)."
+            "Report measured per-guard coverage of check_runaway_find and "
+            "check_offer_git_c against a real Bash command corpus, "
+            "relative to the 2026-07-28 negative-space baseline "
+            "(1.4% / 3.2%)."
         )
     )
     parser.add_argument(

@@ -1448,13 +1448,14 @@ def test_ac1_ordinary_foreign_repo_keeps_todays_foreign_class_copy(repos, monkey
     """No publish-mirror registry entry for this target -- destination_class
     stays DESTINATION_FOREIGN and the copy is unchanged from today's.
 
-    Agent-class assertion updated 2026-08-15 (`d385e2ed3`, "review
-    integration: close the fail-open seam and the marker-name guess B8 leg
-    (c) inherited", AC-3): `resolve_agent_class` now reads an empty
-    `payload` (the literal `{}` this test passes) as subagent-class rather
-    than EM-class -- a deliberate fail-open inversion, not a regression --
-    so the `{}` payload this test has always passed now renders the
-    FOREIGN/subagent template, not FOREIGN/em. This test's own subject is
+    Agent-class assertion updated 2026-09-18 (coordinator-claude#42 B2):
+    `resolve_agent_class` now reads an empty `payload` (the literal `{}`
+    this test passes) as `AGENT_CLASS_UNKNOWN`, not subagent-class -- the
+    2026-08-15 fail-open-to-subagent inversion this test previously pinned
+    was itself the B2 defect (a resolution failure rendering as a positive
+    "report to the EM that dispatched you" claim to a caller that may have
+    no dispatching EM at all). The `{}` payload this test has always passed
+    now renders the FOREIGN/unknown template. This test's own subject is
     the destination-class axis (FOREIGN vs PUBLISH), not the agent-class
     axis, so the fix keeps that same axis under test against whichever
     template the current contract actually selects for this payload."""
@@ -1465,7 +1466,9 @@ def test_ac1_ordinary_foreign_repo_keeps_todays_foreign_class_copy(repos, monkey
 
     assert result is not None
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "report to the EM that dispatched you" in reason
+    assert "report to the EM that dispatched you" not in reason
+    assert "check with your PM" in reason
+    assert "report to your EM" in reason
     assert "is publish mirror" not in reason
 
 
@@ -1915,6 +1918,59 @@ def test_genuinely_repo_less_anchor_still_bumps_registered_target_after_the_fix(
 
     cmd = f"echo hi > {_posix(registered / 'note.txt')}"
     result = guard.check_bump_foreign_repo_write(cmd, session_id, str(scaffold), {})
+
+    assert result is not None
+
+
+def test_cloud_repro_bash_leg_own_registered_repo_allows(monkeypatch, tmp_path):
+    """coordinator-claude#42 B2, Bash twin of `test_bump_out_of_repo_tool_
+    write.py::test_cloud_top_level_session_own_registered_repo_allows`. A
+    genuinely rootless anchor (`CLAUDE_PROJECT_DIR` pointing at the
+    workspace parent, no `.git` ancestor anywhere) plus a command whose own
+    `cwd` sits inside a REGISTERED repo it is also writing into must ALLOW
+    -- the registered-target-always-bumps rule exists for a genuinely
+    foreign sibling, not for the command's own working repo."""
+    reg_dir = tmp_path / "registry"
+    own = _init_repo(tmp_path, "coordinator-claude")
+    _write_repos_registry(reg_dir, coordinator_claude=str(own))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    workspace_parent = tmp_path
+    home = tmp_path / "home-rootless"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(workspace_parent))
+    session_id = "sess-cloud-bash-own-repo"
+
+    cmd = f"echo hi > {_posix(own / 'note.txt')}"
+    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(own), {})
+
+    assert result is None
+
+
+def test_cloud_repro_bash_leg_does_not_widen_to_a_different_registered_repo(
+    monkeypatch, tmp_path
+):
+    """AC12 companion for the Bash leg: `cwd` matching ITS OWN repo must
+    never excuse a write into a DIFFERENT registered repo -- same rootless
+    anchor, but the command's write sink targets a repo other than the one
+    `cwd` sits in."""
+    reg_dir = tmp_path / "registry"
+    cwd_repo = _init_repo(tmp_path, "operator-cwd-repo")
+    target_repo = _init_repo(tmp_path, "registered-target-repo")
+    _write_repos_registry(reg_dir, cwd_repo=str(cwd_repo), target_repo=str(target_repo))
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+
+    scaffold = tmp_path / "Documents" / "rootless-scaffold"
+    scaffold.mkdir(parents=True)
+    home = tmp_path / "home-rootless-2"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(scaffold))
+    session_id = "sess-cloud-bash-no-widen"
+
+    cmd = f"echo hi > {_posix(target_repo / 'note.txt')}"
+    result = guard.check_bump_foreign_repo_write(cmd, session_id, str(cwd_repo), {})
 
     assert result is not None
 

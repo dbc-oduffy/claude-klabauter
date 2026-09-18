@@ -502,6 +502,7 @@ from coordinator_core.bash_guards._write_bump_applicability import (
     anchor_subtree_contains,
     bump_applies,
     is_agent_memory_store_path,
+    own_repo_write_gitdir,
     publish_destination_owner,
     record_applicability_event,
     resolve_launch_anchor,
@@ -926,6 +927,7 @@ def _verdict_bumps(
     own_gitdir: Optional[Path],
     target_gitdir: Optional[Path],
     target_dir: Optional[str],
+    own_repo_cwd_gitdir: Optional[Path] = None,
 ) -> bool:
     """The one-question verdict described in the module docstring, "VERDICT
     LOGIC" -- does NOT itself consult the marker or applicability; those are
@@ -938,6 +940,15 @@ def _verdict_bumps(
     and natively resolved"). `target_dir is None` (untranslatable) takes the
     same fail-open `return False` branch as `target_gitdir is None` --
     never a bump on a path this guard could not resolve.
+
+    `own_repo_cwd_gitdir` (coordinator-claude#42 B2) is `check()`'s
+    already-resolved `_write_bump_applicability.own_repo_write_gitdir` --
+    consulted ONLY in the no-repo-anchor branch below, ahead of the
+    registered-target rule, so a target that is this call's OWN repo (per
+    its `cwd`/declared `CLAUDE_PROJECT_DIR`) never bumps merely because the
+    session-start anchor itself resolved to no git repo. See that helper's
+    own docstring for why this does not reopen AC12 (the anchor-based
+    branch below, `own_gitdir` non-`None`, is untouched by this parameter).
     """
     if own_gitdir is None:
         # Session anchor is in no git repo -- mirrors C5's outside-repo
@@ -951,6 +962,10 @@ def _verdict_bumps(
         if target_gitdir is None:
             return False
         if target_dir is None:
+            return False
+        if own_repo_cwd_gitdir is not None and _same_gitdir(
+            own_repo_cwd_gitdir, target_gitdir
+        ):
             return False
         if target_is_registered_repo(target_dir):
             return True
@@ -1099,8 +1114,22 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if _target_is_under_settings_home(translated_file_path or "", target_gitdir):
             return None
 
+        # coordinator-claude#42 B2 -- resolved ONLY when the session-start
+        # anchor itself has no git repo (the exact no-repo-anchor branch
+        # `_verdict_bumps` consults it in); a real, different anchor repo
+        # never reaches this, so AC12 (no live-`cwd`-as-session-identity)
+        # stays intact. See `own_repo_write_gitdir`'s own docstring.
+        own_repo_cwd_gitdir = (
+            own_repo_write_gitdir(payload_cwd, payload) if own_gitdir is None else None
+        )
         if not _verdict_bumps(
-            session_id, payload_cwd, anchor, own_gitdir, target_gitdir, target_dir
+            session_id,
+            payload_cwd,
+            anchor,
+            own_gitdir,
+            target_gitdir,
+            target_dir,
+            own_repo_cwd_gitdir=own_repo_cwd_gitdir,
         ):
             return None
 

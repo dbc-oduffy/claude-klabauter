@@ -87,6 +87,26 @@ def test_a_readable_launcher_that_never_execs_fails(settings_bin):
     assert install_health_run.check_launch_chain_intact("p", "m") == 1
 
 
+def test_the_generated_forwarder_is_judged_by_the_wrapper_it_execs(settings_bin, tmp_path):
+    """install-substrate writes a generic forwarder under this name before
+    Step 3.5b lays the wrapper over it, and the forwarder launches by exec'ing
+    the engine's `claude-doe.py` -- so that file, not the forwarder, carries
+    the proof. A forwarder to a wrapper that cannot launch still fails."""
+    (settings_bin / "claude-doe").write_text(
+        "from _resolve_claude_klabauter import exec_cli\nexec_cli(\"claude-doe.py\")\n",
+        encoding="utf-8",
+    )
+    engine_bin = tmp_path / "engine" / "coordinator" / "bin"
+    engine_bin.mkdir(parents=True)
+    wrapper = engine_bin / "claude-doe.py"
+    wrapper.write_text("exec claude --plugin-dir x\n", encoding="utf-8")
+    engine = str(tmp_path / "engine")
+    assert install_health_run.check_launch_chain_intact("p", engine) == 0
+
+    wrapper.write_text("print('hello')\n", encoding="utf-8")
+    assert install_health_run.check_launch_chain_intact("p", engine) == 1
+
+
 def test_an_absent_launcher_is_not_a_failure(settings_bin):
     """The wrapper install is advisory in `scripts/setup.py`, so a
     settings-home that never had one is a different leg's concern -- the

@@ -767,22 +767,40 @@ def _venv_interp(repo_root: Optional[str]) -> Optional[str]:
     return None
 
 
+def _shared_console_python() -> Optional[str]:
+    """Resolve via `coordinator/bin/lib/python_interp.py`, the one shared ladder."""
+    bin_lib = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "coordinator", "bin", "lib"
+    )
+    if bin_lib not in sys.path:
+        sys.path.insert(0, bin_lib)
+    from python_interp import resolve_console_python
+
+    return resolve_console_python()
+
+
 def _resolve_python_interp(repo_root: Optional[str] = None) -> Optional[str]:
     """venv-first, then platform-appropriate interpreter resolution.
 
     Returns the repo-local `.venv` interpreter when present. Otherwise, on
-    Windows (`os.name == "nt"`), prefers `sys.executable` over probing
-    `python3` on PATH (Store App Execution Alias hazard — see
-    `_venv_interp`'s sibling docstring in the bin script's history). Falls
-    back to `python3`/`python` on PATH if `sys.executable` is unset. POSIX
-    behavior is unchanged: `python3` is still probed first there. Returns
-    None when nothing resolves.
+    Windows (`os.name == "nt"`), prefers a console CPython resolved by the
+    shared ladder (`python_interp.resolve_console_python()`) over probing
+    `python3` on PATH, because `shutil.which("python3")` commonly resolves to
+    the Microsoft Store App Execution Alias stub on a clean Windows install.
+    Negative spec: raw `sys.executable` is NOT used — under an installed
+    forwarder it names the forwarder exe, and handing that a script path
+    re-enters the forwarder's own argv parsing rather than running the
+    script. The shared ladder refuses a forwarder and falls through to
+    `sys._base_executable` and then PATH. POSIX behavior is unchanged:
+    `python3` is still probed first there. Returns None when nothing resolves.
     """
     venv = _venv_interp(repo_root)
     if venv:
         return venv
-    if os.name == "nt" and sys.executable:
-        return sys.executable
+    if os.name == "nt":
+        resolved = _shared_console_python()
+        if resolved:
+            return resolved
     if shutil.which("python3"):
         return "python3"
     if shutil.which("python"):

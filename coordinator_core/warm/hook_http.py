@@ -259,7 +259,16 @@ def _is_forwardable_name(name: str) -> bool:
 
 OVERRIDE_CHANNEL_HEADER = "X-Coordinator-Env-Channel"
 OVERRIDE_CANARY_HEADER = "X-Coordinator-Env-Canary"
-OVERRIDE_CANARY_ENV = "COORDINATOR_PROBE_CANARY"
+#: DoE-claude 041cdc2e8 retired the launcher-only `COORDINATOR_PROBE_CANARY` var for
+#: `${HOME}${USERPROFILE}` -- one of the two is present in every session on every OS with
+#: no launcher/installer export required, whereas a canary only a launcher sets interpolated
+#: empty under a bare `claude` (a container, an OSS install, Claude Code on the web) and read
+#: as a permanent veto, denying every Bash call (coordinator-claude#42 B1). Detection here is
+#: unaffected by the rename: `env_from_headers` only tests the interpolated HEADER STRING for
+#: emptiness, never which env var produced it, so this constant is messaging-only and stays
+#: correct against a registration still sending the old `${COORDINATOR_PROBE_CANARY}` header
+#: during the rollout window before every registration is republished.
+OVERRIDE_CANARY_ENV = "HOME/USERPROFILE"
 OVERRIDE_HEADER_PREFIX = "X-Coordinator-Env-"
 
 
@@ -319,10 +328,13 @@ def env_from_headers(
       this channel at all. Absent means an old-style registration, which is not a fault: the
       result is `({}, None)`, today's behaviour exactly.
 
-      `X-Coordinator-Env-Canary` -- `${COORDINATOR_PROBE_CANARY}`, a var the launcher always
-      exports non-empty. Interpolated, so a setting-level veto empties it. Channel declared
-      AND canary empty is a veto that has certainly eaten every other override header too,
-      and returns a `disarm_reason` (one of two causes -- see THIRD DISARM CAUSE below).
+      `X-Coordinator-Env-Canary` -- `${HOME}${USERPROFILE}` (DoE-claude 041cdc2e8; a
+      registration may still send the retired `${COORDINATOR_PROBE_CANARY}` form during the
+      rollout window -- see `OVERRIDE_CANARY_ENV`). One of the two names is non-empty on
+      every OS with no launcher or installer export required. Interpolated, so a
+      setting-level veto empties it. Channel declared AND canary empty is a veto that has
+      certainly eaten every other override header too, and returns a `disarm_reason` (one of
+      two causes -- see THIRD DISARM CAUSE below).
 
     Do NOT "simplify" this to a single header. A lone literal cannot detect the veto (it is
     not interpolated, so it survives one); a lone canary cannot tell a veto from a
@@ -351,9 +363,9 @@ def env_from_headers(
 
     if not (lowered.get(OVERRIDE_CANARY_HEADER.lower()) or "").strip():
         return {}, (
-            "override channel declared but %s interpolated empty -- an "
-            "httpHookAllowedEnvVars setting is vetoing this registration's allowedEnvVars, "
-            "so no caller override reached the guard" % OVERRIDE_CANARY_ENV
+            "override channel declared but the canary header (%s) interpolated empty -- an "
+            "httpHookAllowedEnvVars setting naming neither is vetoing this registration's "
+            "allowedEnvVars, so no caller override reached the guard" % OVERRIDE_CANARY_ENV
         )
 
     reserved = {OVERRIDE_CHANNEL_HEADER.lower(), OVERRIDE_CANARY_HEADER.lower()}

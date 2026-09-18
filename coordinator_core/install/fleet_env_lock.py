@@ -331,8 +331,9 @@ def _flatten_dependency_group(
 def _flatten_pyproject_deps(pyproject: dict) -> List[str]:
     """``[project.dependencies]``, every ``[project.optional-dependencies]``
     group, and every ``[dependency-groups]`` (PEP 735) group, flattened.
-    Extras must not be dropped — the fleet's one real conflict (example-retrieval-repo's
-    ``chroma`` extra declaring ``chromadb``) lives in an optional-dependencies
+    Extras must not be dropped — historically, the fleet's one real conflict
+    (example-retrieval-repo's now-removed ``chroma`` extra declaring ``chromadb``, gone
+    per DR-L3-chromadb-exit-to-lancedb) lived in an optional-dependencies
     group, not the base list. ``[dependency-groups]`` entries may be plain
     PEP 508 strings or ``{include-group = "..."}`` tables that reference
     another group in the same file — both are resolved; anything else raises
@@ -649,10 +650,15 @@ def load_override_dependency_specs(
     ``override-dependencies`` is the only way to make a forced spec win
     over a *conflicting* declared range anywhere else in the union
     (docs.astral.sh/uv/concepts/resolution/ — "a useful last resort ...
-    despite the metadata indicating otherwise"). ``chromadb`` conflicts by
-    declared-range disjunction (example-retrieval-repo's 1.5-floor, 1.6-ceiling range vs the addon's
-    1.4-floor, 1.5-ceiling one — the overrides file's one seeded row, owner + expiry
-    per AC3). ``huggingface_hub``'s first-class floor of 1.0 directly
+    despite the metadata indicating otherwise"). ``chromadb`` used to
+    conflict by declared-range disjunction (example-retrieval-repo's 1.5-floor,
+    1.6-ceiling range vs the addon's 1.4-floor, 1.5-ceiling one — the
+    overrides file's one seeded row, owner + expiry per AC3); that row was
+    retired 2026-08-16 once the declarations converged, and chromadb itself
+    is gone from the union entirely (banned — unfixed pre-auth RCE,
+    PYSEC-2026-311 / CVE-2026-45829 — see
+    docs/decisions/DR-L3-chromadb-exit-to-lancedb.md), so the overrides file
+    is correctly empty. ``huggingface_hub``'s first-class floor of 1.0 directly
     contradicts ``example_game_workbench_repo``'s declared
     0.23-floor, 1.0-ceiling ``huggingface_hub`` cap already present in the
         requirements

@@ -55,6 +55,7 @@ prime_exit_criterion:
 
 _SPINE = """- id: C1
   title: Ship it
+  body: Do the named work and pin it with a test.
   change_kind: code-edit
   surface: coordinator_core/ops/plan_stamp_prepped.py
   writes: [coordinator_core/ops/plan_stamp_prepped.py]
@@ -186,6 +187,7 @@ def test_a_commit_in_owner_repo_gate_stamps_with_its_row_withheld(tmp_path):
     common = _repo(tmp_path)
     spine = f"""- id: C1
   title: Reaches out
+  body: Do the named work and pin it with a test.
   change_kind: code-edit
   surface: DoE-claude/coordinator/schemas/plan.schema.json
   writes: []
@@ -283,6 +285,7 @@ def test_withheld_rows_land_in_findings_as_ids(tmp_path):
     common = _repo(tmp_path)
     spine = f"""- id: C1
   title: Local work
+  body: Do the named work and pin it with a test.
   change_kind: code-edit
   surface: coordinator_core/x.py
   writes: []
@@ -290,6 +293,7 @@ def test_withheld_rows_land_in_findings_as_ids(tmp_path):
   disposition: open
 - id: C4
   title: Waits on a sibling
+  body: Do the named work and pin it with a test.
   change_kind: code-edit
   surface: DoE-claude/coordinator/bin/mise-prep-gate.py
   writes: []

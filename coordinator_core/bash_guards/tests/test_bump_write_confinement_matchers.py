@@ -379,9 +379,13 @@ def test_no_bash_regression_foreign_repo_write_verdict_unchanged_by_tool_name_wi
     session_id = "sess-foreign-bash-regression-%s" % abs(hash(cmd))
     _set_anchor(monkeypatch, home, anchor, session_id)
 
-    result_no_tool_name = foreign_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), {})
+    # Held constant except `tool_name`: an EMPTY payload is its own identity
+    # case (`_write_bump_message.resolve_agent_class` -> AGENT_CLASS_UNKNOWN,
+    # coordinator-claude#42 B2), which is not what this test isolates.
+    base = {"session_id": session_id}
+    result_no_tool_name = foreign_guard.check_bump_foreign_repo_write(cmd, session_id, str(anchor), base)
     result_explicit_bash = foreign_guard.check_bump_foreign_repo_write(
-        cmd, session_id, str(anchor), {"tool_name": "Bash"}
+        cmd, session_id, str(anchor), {**base, "tool_name": "Bash"}
     )
 
     assert (result_no_tool_name is None) == (result_explicit_bash is None)

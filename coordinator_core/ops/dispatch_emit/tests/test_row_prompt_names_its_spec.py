@@ -78,7 +78,7 @@ def test_absent_plan_path_still_composes():
     """``plan_path`` is optional only so callers composing from
     already-derived waves keep working — it degrades to the old shape rather
     than raising."""
-    assert _row_prompt(_ROW) == f"Execute {_ROW.id}: {_ROW.title}"
+    assert _row_prompt(_ROW).endswith(f"\n\nExecute {_ROW.id}: {_ROW.title}")
 
 
 def test_emitted_script_carries_the_spec_pointer_for_every_row():

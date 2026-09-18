@@ -317,14 +317,23 @@ whole fleet as readers, with no lock of their own, on a 50-70-session box.
 
 **Health contract — the probe set, named so it is what consumers are promised, not an executor's
 private choice:** `fleet_env.py::_FLEET_ENV_IMPORT_PROBES` = `yaml`, `pydantic`, `psutil`, `numpy`,
-`torch`, `transformers`, `chromadb`, `huggingface_hub`. This is a deliberately small, representative
+`torch`, `transformers`, `lancedb`, `huggingface_hub`. This is a deliberately small, representative
 subset of the fleet union's direct requests, not its full ~250-package transitive closure — chosen
 to cover the union's genuinely distinct consumption shapes (lightweight cross-repo utility via
 `yaml`/`pydantic`/`psutil`/`numpy`; the GPU-heavy ML stack via `torch`/`transformers`; the vector
-store via `chromadb`; the PM-ruled floor via `huggingface_hub`) without every provisioning run
+store via `lancedb` (example-retrieval-repo's LanceDB migration off chromadb, which carried an unfixed
+pre-auth RCE — DR-L3-chromadb-exit-to-lancedb — retired chromadb from the fleet union entirely);
+the PM-ruled floor via `huggingface_hub`) without every provisioning run
 paying to import all ~250 packages. An environment missing ANY of these imports is rebuilt, never
 silently accepted (AC4). This set and `fleet_env.py`'s own constant must not drift apart
 independently — this section documents the promise, the constant discharges it.
+
+The probe additionally requires the interpreter to be a RELEASED build, not a
+release candidate. The contracted minor alone does not say this, and a provisioner
+with a stale download catalog will satisfy `3.14` with `3.14.0rc2` — an interpreter
+none of the locked dependencies were resolved against. A candidate is therefore an
+unhealthy environment, and the remedy is to update the provisioner; retreating the
+contracted minor to whatever a stale catalog happens to carry is not one.
 
 **Idempotency.** A second run against a healthy environment is a no-op: the health probe (above)
 gates every mutation, and only an unhealthy or absent environment takes the build lock at all.

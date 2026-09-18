@@ -17,7 +17,17 @@ TWO AGENT CLASSES x TWO DESTINATION CLASSES = FOUR TEMPLATES. The agent
 split (EM vs subagent -- see the 2026-08-02 executor-confinement lesson)
 stays exactly two; this chunk adds an ORTHOGONAL destination-class axis
 (`DESTINATION_FOREIGN` vs `DESTINATION_PUBLISH`), never a third agent class
-(Anti-scope, this plan).
+(Anti-scope, this plan) -- that four-template grid is for the two POSITIVELY
+RESOLVED classes only.
+
+`resolve_agent_class` also returns `AGENT_CLASS_UNKNOWN` (coordinator-
+claude#42 B2) when resolution itself fails or finds no agent signal at
+all -- a degrade-only third value, not a fifth/sixth cell added to the
+grid above. It never claims either positive identity: on
+`DESTINATION_FOREIGN` it gets its own neutral template
+(`render_unknown_message`, asserting neither "yours to grant" nor "report
+to your EM"); on `DESTINATION_PUBLISH` it reuses the EM-class template,
+which already makes no audience-specific claim.
 
   - `DESTINATION_FOREIGN` -- today's copy: a sibling source repo, not a
     registered publish mirror. EM-class is told to check with its PM;
@@ -175,11 +185,25 @@ from typing import Any, Dict, Optional
 
 from coordinator_core.subagent_sandbox.engine import resolve_effective_types
 
-#: The two agent classes this module's copy is drafted for (see module
-#: docstring, "TWO AGENT CLASSES"). No third value is ever returned by
-#: `resolve_agent_class()` -- deliberately a two-way split.
+#: The two POSITIVELY RESOLVED agent classes this module's contrast copy is
+#: drafted for (see module docstring, "TWO AGENT CLASSES"). `resolve_agent_
+#: class()` also returns a third value, `AGENT_CLASS_UNKNOWN` below, for the
+#: case where resolution itself failed or found nothing -- that value is
+#: never a positive identity claim and never selects either template this
+#: pair renders (coordinator-claude#42 B2: a resolution failure is not
+#: license to claim EITHER identity, deliberately not folded into a
+#: two-way split).
 AGENT_CLASS_EM = "em"
 AGENT_CLASS_SUBAGENT = "subagent"
+
+#: Resolution did not positively find an agent identity, and did not fail
+#: closed to a manufactured guess either -- an exception out of
+#: `resolve_effective_types`, or a payload carrying no agent signal at all
+#: (see `resolve_agent_class`'s own docstring). Never claims EM's in-band
+#: `DR-298` self-grant (that capability is genuinely EM-only) and never
+#: claims a dispatching EM exists to report to (there may be none) --
+#: `render_unknown_message` states neither and forks the "instead" instead.
+AGENT_CLASS_UNKNOWN = "unknown"
 
 #: The two SURFACES this module's `clear_line()` offer is truthful (or not)
 #: about (chunk 3, state/bug-backlog/2026-08-10-cross-repo-write-boundary-
@@ -269,8 +293,8 @@ def _classification_defect_notice(target_repo: str, session_repo: str, report_to
 
 
 def resolve_agent_class(payload: Dict[str, Any], git_root: Optional[str]) -> str:
-    """Classify a session as EM-class or subagent-class (see module
-    docstring, "TWO AGENT CLASSES").
+    """Classify a session as EM-class, subagent-class, or UNRESOLVED (see
+    module docstring, "TWO AGENT CLASSES", and `AGENT_CLASS_UNKNOWN` above).
 
     NOT MESSAGE SELECTION ALONE, despite living in this module:
     `write_guards.bump_out_of_repo_tool_write` reads this verdict to decide
@@ -280,12 +304,23 @@ def resolve_agent_class(payload: Dict[str, Any], git_root: Optional[str]) -> str
     Uses `coordinator_core.subagent_sandbox.engine.resolve_effective_types`
     -- the fleet's existing OR-resolver -- rather than re-deriving agent
     identity here. Subagent-class the moment either resolved leg
-    (`agent_id`, `subagent_type`) is non-empty; subagent-class ALSO on any
-    resolution failure. Review: staff-eng (AC-3) -- an empty/missing
-    `payload`, or any exception out of `resolve_effective_types`, reads as
-    subagent-class, matching the fail-open inversion AC-3 names for this
-    predicate alongside `annotate_deny` and the dispatch seam; EM-class is
-    the strictly narrower, positively-resolved case.
+    (`agent_id`, `subagent_type`) is non-empty -- that is the only
+    POSITIVE claim this function ever makes, and it is checked first, so it
+    still fires with an empty/missing `git_root` (see "`git_root` IS NOT AN
+    IDENTITY SIGNAL" below).
+
+    coordinator-claude#42 B2: RESOLUTION FAILURE IS NOT AN IDENTITY CLAIM,
+    EITHER WAY. A prior revision degraded both an exception out of
+    `resolve_effective_types` and a falsy `payload` to subagent-class --
+    reasoned at the time (AC-3) as the "safer template", but a resolution
+    failure told a top-level, PM-facing session "no PM here -- report to
+    the EM that dispatched you", which is a POSITIVE claim about an EM that
+    does not exist. Fail-open here means fail to `AGENT_CLASS_UNKNOWN`,
+    never to either positive class -- `render_bump_message` renders that
+    verdict as a message that asserts neither audience's claim (see
+    `render_unknown_message`). A falsy `payload` (the stripped-envelope
+    case AC-3 was written for) degrades to `AGENT_CLASS_UNKNOWN` on the
+    same reasoning.
 
     `git_root` IS NOT AN IDENTITY SIGNAL, and requiring it here produced a
     positive subagent claim out of a lookup that never ran. It exists only
@@ -300,27 +335,29 @@ def resolve_agent_class(payload: Dict[str, Any], git_root: Optional[str]) -> str
     itself a git repo (a container with the clones one level down, the
     2026-09-05 Linux cloud dogfood) resolved `own_git_root` to `None` in
     `write_guards.bump_out_of_repo_tool_write`, which reads this verdict to
-    decide `sandbox_root` -- so every write in that session was bumped into
-    a subagent sandbox and told to report to a dispatcher that did not
-    exist. An empty `payload` still degrades to subagent-class: that is the
-    stripped-envelope case AC-3 was written for, and it is unchanged.
+    decide `sandbox_root` -- so a REAL, non-empty `payload` with no
+    resolvable `git_root` still positively resolves EM-class below (an
+    unanchored session is not itself a subagent claim, nor an unresolved
+    one -- it has no agent signal at all, which is exactly the narrower,
+    positively-resolved EM case this function's docstring already named).
 
     Never raises: any exception
     (malformed `payload`, resolver failure inside `resolve_effective_types`,
     or a filesystem error inside its `_canonical_agent_id` /
     `_read_backpointer_subagent_type` legs) is caught and degrades to
-    subagent-class, same "degrade to terse, never to emitting" direction as
-    `session.identity.resolves_em_audience`.
+    `AGENT_CLASS_UNKNOWN`, same "degrade to terse, never to emitting"
+    direction as `session.identity.resolves_em_audience`, now aimed at a
+    class that itself asserts nothing.
     """
     try:
         agent_id, _agent_type, subagent_type = resolve_effective_types(payload or {}, git_root)
     except Exception:
-        return AGENT_CLASS_SUBAGENT
+        return AGENT_CLASS_UNKNOWN
     if agent_id or subagent_type:
         return AGENT_CLASS_SUBAGENT
     if payload:
         return AGENT_CLASS_EM
-    return AGENT_CLASS_SUBAGENT
+    return AGENT_CLASS_UNKNOWN
 
 
 def _target_phrase(target_repo: str, raw_target: str = "") -> str:
@@ -479,6 +516,54 @@ def render_subagent_message(
         "Coordinator guard — instead: no PM here — report to the EM that "
         f"dispatched you before writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`); "
         f"write in your sandbox `{sandbox_root}` instead."
+    )
+
+
+def render_unknown_message(
+    target_repo: str,
+    session_repo: str,
+    gitdir: Path,
+    session_id: str,
+    raw_target: str = "",
+    surface: str = SURFACE_BASH,
+) -> str:
+    """The FOREIGN-class deny copy for `AGENT_CLASS_UNKNOWN`
+    (coordinator-claude#42 B2) -- caller identity did not positively
+    resolve either way (`resolve_agent_class` returns this class only on a
+    resolution exception, or on a payload carrying no agent signal at all;
+    see that function's own docstring).
+
+    ASSERTS NEITHER POSITIVE CLASS'S CLAIM, by construction: not
+    `render_em_message`'s `DR-298` in-band self-grant (genuinely
+    EM-only -- handing it to an unresolved caller that turns out to be a
+    subagent would advertise a door `block_subagent_guard_grant` exists to
+    keep shut), and not `render_subagent_message`'s "report to the EM that
+    dispatched you" (there may be no dispatching EM at all -- that exact
+    false claim, reaching a top-level, PM-facing session, is the observed
+    B2 defect this template exists to stop repeating). Names the one fact
+    that holds regardless of which audience is actually reading it, and
+    gives the fork as the "instead" rather than guessing.
+
+    NO SANDBOX, NO UNLOCK MECHANISM ON THIS CHANNEL -- same register as
+    `render_subagent_message`: an unresolved caller gets no sandbox path
+    (none was computed for this class at the call site) and no override
+    key, per `docs/wiki/guard-messaging.md` § Register B6's "no compliant
+    pointer shape" for anything short of a positively resolved EM.
+
+    `gitdir`/`session_id`/`surface` are accepted for call-site parity with
+    the other two FOREIGN-class renderers and `render_bump_message`'s
+    single dispatch signature -- none is rendered here.
+
+    CLASSIFICATION-DEFECT GUARD -- same shared check as the two positive-
+    class renderers (see `_classification_defect_notice`'s own docstring)."""
+    del gitdir, session_id, surface
+    defect = _classification_defect_notice(target_repo, session_repo, "your PM or dispatching EM")
+    if defect is not None:
+        return defect
+    return (
+        "Coordinator guard — instead: caller identity did not resolve for "
+        f"writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`) — "
+        "your own session, check with your PM; dispatched, report to your EM."
     )
 
 
@@ -667,4 +752,6 @@ def render_bump_message(
         return render_subagent_message(
             target_repo, session_repo, gitdir, session_id, sandbox_root, raw_target, surface
         )
+    if agent_class == AGENT_CLASS_UNKNOWN:
+        return render_unknown_message(target_repo, session_repo, gitdir, session_id, raw_target, surface)
     return render_em_message(target_repo, session_repo, gitdir, session_id, raw_target, surface)

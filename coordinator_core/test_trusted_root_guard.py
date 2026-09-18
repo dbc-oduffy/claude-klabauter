@@ -53,6 +53,16 @@ def test_trusted_under_doe_root_sentinel(tmp_path, monkeypatch):
     assert is_trusted(str(tmp_path / "DoE-claude" / "coordinator"), env=env)
 
 
+def test_doe_root_itself_is_trusted(tmp_path):
+    """A standalone coordinator-claude clone is its own plugin root, so the
+    cloud pre-boot passes CLAUDE_PLUGIN_ROOT == repos.doe_claude exactly."""
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / ".doe-root").write_text(str(tmp_path / "coordinator-claude") + "\n")
+    env = {"HOME": str(tmp_path)}
+    assert is_trusted(str(tmp_path / "coordinator-claude"), env=env)
+    assert not is_trusted(str(tmp_path / "coordinator-claude-evil"), env=env)
+
+
 def test_doe_root_trailing_slash_normalized(tmp_path):
     home = tmp_path
     (home / ".claude").mkdir()
@@ -215,6 +225,70 @@ def test_absent_repos_claude_klabauter_key_degrades_cleanly(tmp_path):
 
     assert not is_trusted(str(tmp_path / "some" / "unrelated" / "root"), env=env)
     assert is_trusted(str(home / ".claude" / "plugins" / "coordinator"), env=env)
+
+
+def test_a_flat_clone_root_is_trusted_as_itself_not_only_its_children(tmp_path):
+    """Regression: a FLAT checkout's own root false-rejected its own anchor.
+
+    The cloud pre-boot install chain registers the published mirror as a
+    `directory` marketplace and runs the orchestrator with CLAUDE_PLUGIN_ROOT
+    set to that clone's ROOT — the flat shape puts the plugin manifest there,
+    not under a `coordinator/` subdirectory. A descendant-only anchor trusted
+    `<clone>/coordinator` and rejected `<clone>`, so install-health-run refused
+    mid-orchestrator and the whole hook plane was never wired.
+    """
+    settings_home_dir = tmp_path / "settings-home"
+    (settings_home_dir / "machine-local").mkdir(parents=True)
+    clone = tmp_path / "coordinator-claude"
+    (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.doe_claude\" = '{clone}'\n"
+    )
+    env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
+
+    assert is_trusted(str(clone), env=env)
+    assert is_trusted(str(clone / "coordinator"), env=env)
+
+
+def test_the_engine_root_is_trusted_as_itself(tmp_path):
+    """Same widening on the engine anchor: a bin script invoked with the engine
+    clone's own root as its plugin root must not false-reject its own repo."""
+    settings_home_dir = tmp_path / "settings-home"
+    (settings_home_dir / "machine-local").mkdir(parents=True)
+    claude_klabauter_root = tmp_path / "claude-klabauter"
+    (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
+    )
+    env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
+
+    assert is_trusted(str(claude_klabauter_root), env=env)
+
+
+def test_the_widening_stops_at_the_anchor_never_reaches_its_parent(tmp_path):
+    """The equality arm must not be readable as "the anchor's neighbourhood".
+
+    A parent directory, an unrelated sibling, and a sibling sharing a name
+    prefix all stay untrusted — the whole point of the anchor.
+    """
+    settings_home_dir = tmp_path / "settings-home"
+    (settings_home_dir / "machine-local").mkdir(parents=True)
+    clone = tmp_path / "clones" / "coordinator-claude"
+    (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.doe_claude\" = '{clone}'\n"
+    )
+    env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
+
+    assert is_trusted(str(clone), env=env)
+    assert not is_trusted(str(tmp_path / "clones"), env=env)
+    assert not is_trusted(str(tmp_path / "clones" / "coordinator-claude-evil"), env=env)
+    assert not is_trusted(str(tmp_path), env=env)
+
+
+def test_the_marketplace_anchor_stays_descendants_only(tmp_path):
+    """`~/.claude` is a container, not a plugin root: the equality arm is
+    deliberately NOT extended to anchor 1."""
+    env = {"HOME": str(tmp_path)}
+    assert not is_trusted(str(tmp_path / ".claude"), env=env)
+    assert is_trusted(str(tmp_path / ".claude" / "plugins"), env=env)
 
 
 def test_traversal_segment_rejected_even_under_trusted_prefix():

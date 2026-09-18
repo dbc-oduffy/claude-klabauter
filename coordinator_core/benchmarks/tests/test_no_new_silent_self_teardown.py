@@ -62,7 +62,6 @@ _KNOWN_SELF_TEARDOWN: frozenset[tuple[str, str]] = frozenset({
     ("coordinator_core/bash_guards/_alternative_liveness.py", "_trigger_guard_branch_set_precedence"),
     ("coordinator_core/bash_guards/_alternative_liveness.py", "probe_command"),
     ("coordinator_core/bash_guards/_firing_shape.py", "_trigger_inprocess_search_still_violates"),
-    ("coordinator_core/bash_guards/_guard_coverage.py", "measure_probe_spray"),
     ("coordinator_core/benchmarks/measure_read_events.py", "measure"),
     ("coordinator_core/benchmarks/measure_render_status.py", "measure"),
     ("coordinator_core/benchmarks/tests/test_warm_door_process_time_gate.py", "_short_runtime_base"),
