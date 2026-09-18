@@ -155,17 +155,18 @@ from __future__ import annotations
 
 import os
 import re
-import sys
-import time
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-# The stand-down audit line's path convention, shared with
-# `commit_tripwires._log_pathspec_divergence_override` and
-# `check_blanket_git_add` rather than re-derived -- see
-# `_override_log_path`'s own docstring for why one copy of the
-# never-mint-a-phantom-session rule is the point.
-from coordinator_core.bash_guards._override_log_path import _override_log_path
+# The environment stand-down, imported rather than owned: this guard authored
+# the mechanism and was for a while its only holder, which is exactly how the
+# tool surface ended up hard-denying the write this one allowed. One copy, in
+# `_write_bump_stand_down`, is the fix -- see that module's own docstring.
+from coordinator_core.bash_guards._write_bump_stand_down import (
+    environment_stands_the_bump_down as _environment_stands_the_bump_down,
+    log_environment_stand_down as _shared_log_environment_stand_down,
+    stand_down_notice as _stand_down_notice,
+)
 
 from coordinator_core.bash_guards._command_tokenizer import (
     ResolutionConfidence,
@@ -851,138 +852,38 @@ def _deny(reason: str) -> Dict[str, Any]:
     }
 
 
-def _environment_stands_the_bump_down(env=None):
-    """The capability that decides whether this bump is a real rule HERE, or
-    an impossible ask -- or `None` when it applies normally.
-
-    THE CASE THIS EXISTS FOR, measured 2026-09-05. On a managed remote
-    container the session is handed a closed set of repos by explicit grant,
-    coordinator is not installed, and there is no other agent on the box. The
-    "foreign" repo is one this same session was given and is the only writer
-    of. Denying the write there does not protect another team's tree -- there
-    is no other team on this machine -- while the alternative doctrine offers
-    (send a cross-repo memo) has no reader either. So the guard forbids the
-    only correct move while the incorrect one stays available, which inverts
-    the north star it was built to serve.
-
-    Note WHICH capability: `fleet_present`, not `peer_ems_reachable`. This
-    bump asks "is this somebody else's tree", and the answer turns on whether
-    there is a fleet around this session at all. The memo surface asks a
-    different question (will anyone READ this) and consults the other one.
-    They agree today and are not the same question; keeping them distinct is
-    what stops one venue check masquerading as two rules.
-
-    Fail open, like everything else in this module: an unimportable or
-    unhappy capability layer returns `None` and the bump behaves exactly as
-    it did before this function existed.
-    """
-    try:
-        from coordinator_core.environment import capability
-
-        fleet = capability("fleet_present", env=env)
-    except Exception:
-        return None
-    return None if fleet.value else fleet
+#: This surface's audit-line verdict token and tracked-sink filename. Named
+#: per-surface so three guards standing down leave three distinguishable
+#: records rather than one ambiguous stream -- and pinned here rather than at
+#: the call site so the token cannot drift from the log a reader greps for.
+_STAND_DOWN_MARKER = "STAND-DOWN-FOREIGN-REPO-WRITE"
+_STAND_DOWN_SINK = "foreign-repo-write.log"
 
 
 def _log_environment_stand_down(
     git_root: Optional[str], session_id: str, target_repo: str, evidence: str
 ) -> None:
-    """Append one audit line recording that the bump stood down.
+    """This surface's binding of the shared audit-line writer.
 
-    THIS IS NOT OPTIONAL BOOKKEEPING, it is what keeps the downgrade honest.
-    A block leaves evidence by stopping the world; a warning scrolls past in a
-    transcript nobody re-reads. Without a durable trace, "permissive and warn"
-    degrades to "permissive" and the boundary stops existing rather than
-    becoming advisory -- which is a strictly worse outcome than the deny this
-    replaces.
+    A named wrapper rather than a bare import alias for two reasons: it fixes
+    this guard's marker token and sink filename in one place, and it keeps the
+    four-positional-argument signature this module's own call site and test
+    suite already hold. It adds no behaviour of its own -- why the line is
+    written, and why it is written twice on an ephemeral host, lives in
+    `_write_bump_stand_down.log_environment_stand_down`.
 
-    WHICH IS WHY IT WRITES TWICE ON AN EPHEMERAL HOST. The `.git`-resident
-    overrides.log follows the convention peer guards already use
-    (`commit_tripwires._log_pathspec_divergence_override`,
-    `check_blanket_git_add`) and is the right home on a workstation. But `.git`
-    is never tracked and never pushed, and the dominant reason this guard
-    stands down at all is `ephemeral_host` -- whose own evidence says the
-    filesystem does not survive the session. The safeguard would have been
-    destroyed with the container precisely where it was claimed to matter.
-
-    So when `durable_repo` reports a git remote, a second copy lands in a
-    TRACKED path a push can carry off the box. That is what `durable_repo` is
-    for; it had no consumer before this.
+    Negative-spec: does NOT decide whether to stand down
+    (`environment_stands_the_bump_down`) and does NOT return an envelope --
+    the caller returns `None` so the guard chain continues past a stand-down.
     """
-    try:
-        if not git_root:
-            return
-        override_log = _override_log_path(git_root, session_id)
-        if override_log is None:
-            return
-        line = "%s | %s | STAND-DOWN-FOREIGN-REPO-WRITE | %s | %s\n" % (
-            time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            session_id or "no-session",
-            target_repo[:80],
-            evidence[:160],
-        )
-        with open(override_log, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(line)
-        _mirror_to_durable_sink(Path(git_root), line)
-    except OSError as exc:
-        # The write proceeds regardless -- but it is now unrecorded, so say so
-        # rather than standing down silently.
-        print(
-            "foreign-repo-write: failed to write stand-down audit log: %s" % exc,
-            file=sys.stderr,
-        )
-
-
-def _mirror_to_durable_sink(git_root: Path, line: str) -> None:
-    """Second copy of the stand-down line into a TRACKED path, when there is a
-    git remote to carry it off the box. Best-effort in every direction: the
-    `.git` copy has already landed, so a failure here costs redundancy, never
-    the record."""
-    try:
-        from coordinator_core.environment import capability
-
-        if not capability("durable_repo").value:
-            return
-        sink = git_root / "state" / "stand-downs"
-        sink.mkdir(parents=True, exist_ok=True)
-        with open(sink / "foreign-repo-write.log", "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(line)
-    except Exception:
-        return
-
-
-def _stand_down_notice(reason: str) -> None:
-    """Print the stand-down notice to stderr and return NOTHING.
-
-    RETURNING AN ENVELOPE HERE WAS A REGRESSION, and the reasoning that
-    produced it was half-right in a way worth recording. The first version
-    returned `{"systemMessage": ...}` -- carefully NOT
-    `permissionDecision: "allow"`, because auto-approving would be more
-    permissive than deleting the guard. That half was correct. What it never
-    reasoned about was returning a non-None value AT ALL.
-
-    `dispatch`'s chain loop is `if out is not None: ... return out`. Any
-    non-None envelope CLAIMS THE SLOT and ends evaluation, so the advisory
-    silently skipped every guard registered after this one -- `validate-commit`
-    among them, which composes real denies on its normal path. The deny this
-    replaced short-circuited identically, which is exactly why the change
-    looked safe: a deny makes the skipped guards moot, an allow does not.
-
-    Two further reasons the envelope bought nothing it claimed. The warm rung
-    (`ops/warm_guard_evaluate._verdict_from_envelope`) collapses every non-deny
-    dict to NO_OBJECTION, so `systemMessage` never left the process on the
-    transport that serves nearly all PreToolUse events. And `systemMessage` is
-    the OPERATOR channel -- `warm/hook_http.py` states the split -- while this
-    text is addressed to the agent, which reads only a nested
-    `hookSpecificOutput.additionalContext`.
-
-    So the notice goes to stderr, which the cold rung surfaces, and the
-    DURABLE record stays the `overrides.log` line. Returning `None` is what
-    "stand down" actually means: this guard declines to object, and every
-    other guard still runs.
-    """
-    print(reason, file=sys.stderr)
+    _shared_log_environment_stand_down(
+        git_root,
+        session_id,
+        target_repo,
+        evidence,
+        marker=_STAND_DOWN_MARKER,
+        sink_basename=_STAND_DOWN_SINK,
+    )
 
 
 def _resolve_and_casefold(raw: str) -> Optional[str]:

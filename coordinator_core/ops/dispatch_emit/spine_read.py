@@ -395,6 +395,15 @@ class EmitterRow(NamedTuple):
     phrase it learns and never becomes correct. ``None`` means the row
     declared nothing and the prose fallback answers, which is every row
     written before this key existed.
+
+    ``change_kind`` rides the same tolerant read for the same reason: it is
+    what tells ``emit.py`` a row's WORK class, which the write path alone
+    cannot answer. A ``verification`` row writing only an immutable plan body
+    is un-routable — the executor is the plan-body guard's sole block target,
+    the enricher's charter forbids execution-tier work — and without this
+    field ``_row_agent_type`` cannot see the contradiction, so the row emits,
+    dispatches, and burns a wave. Defaults to ``None``; a spine declaring no
+    ``change_kind`` maps exactly as before the field existed.
     """
 
     id: str
@@ -408,6 +417,7 @@ class EmitterRow(NamedTuple):
     body: str = ""
     writes_under: tuple = ()
     verification_runs: Optional[bool] = None
+    change_kind: Optional[str] = None
 
 
 def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]:
@@ -607,6 +617,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                     if isinstance(raw.get("verification_runs"), bool)
                     else None
                 ),
+                change_kind=raw.get("change_kind"),
             )
         )
 

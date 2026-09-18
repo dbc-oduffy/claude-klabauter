@@ -46,10 +46,24 @@ Wire params:
     name (str, optional)          — forwarded to ``emit.emit_script``.
     description (str, optional)   — forwarded to ``emit.emit_script``.
 
+    session_id (str, optional)    — recorded verbatim in the provenance
+                                     receipt. Absent, the fleet-canonical
+                                     ``session.core.resolve_session_id``
+                                     ladder answers (bound request identity,
+                                     ``COORDINATOR_SESSION_ID``,
+                                     ``CLAUDE_SESSION_ID``,
+                                     ``CLAUDE_CODE_SESSION_ID``); absent all
+                                     of those, the empty string. NEVER
+                                     minted — see ``_receipt_session_id``.
+
 Reply fields:
     {"path": "<written path>", "ok": bool,
      "findings": [{"severity","code","message","line"?}, ...],
-     "error_count": int, "warn_count": int}
+     "error_count": int, "warn_count": int,
+     "receipt": "<written receipt path>" | None}
+    ``receipt`` names the provenance sidecar written beside the script, or is
+    ``None`` when it could not be written — receipt writing is best-effort and
+    never fails the emit (§ The receipt is a property of emitting).
     ``ok := error_count == 0`` (WARN findings never fail the verdict) — the
     same run_checks verdict shape ``workflow.validate`` returns. The op
     writes the script to disk and returns this verdict for transparency; it
@@ -63,17 +77,45 @@ Reply fields:
     of vetoing the emit — see ``emit.py`` module docstring § The terminal
     phase degrades, it never vetoes.
 
+The receipt is a property of emitting, not of one repo's wrapper:
+    Every emission route writes a provenance sidecar at
+    ``<script>.mjs.emitted.json``. The OTHER producer of that same sidecar is
+    DoE-claude's wrapper CLI ``coordinator/bin/emit-dispatch-workflow.py``
+    (``_write_emission_receipt`` / ``script_sha256`` / ``restamp``), and the
+    consumer is a DoE-side hook that verifies ``sha256`` against the script
+    bytes on disk. The shape is therefore a CROSS-REPO CONTRACT: same keys,
+    same raw-bytes digest, same ``isoformat(timespec="seconds")``, same
+    ``json.dumps(..., indent=2, sort_keys=True) + "\\n"`` serialisation. A
+    receipt differing by one key reads as tampering to that hook, which is
+    worse than no receipt at all. The shape is REIMPLEMENTED here, never
+    imported: claude-klabauter must not depend on a DoE path. Before this op wrote it,
+    provenance depended on WHICH route emitted — a script emitted through the
+    registered op was indistinguishable from a hand-authored one.
+
+    The receipt is read by a FIRING GATE, not only by humans. ``session_id``
+    and ``sha256`` are load-bearing: an empty or mismatched value has a
+    behavioural consequence, not merely a loss of provenance. A receipt naming
+    no session reads to the gate as a peer's claim and the emission is REFUSED
+    at fire time ("its receipt names session ; this session is <id>") — which
+    is why ``session_id`` resolves through the fleet-canonical ladder rather
+    than a single env var, and why a mis-hashed ``sha256`` reads as tampering.
+
 Negative-spec:
   - Does NOT derive waves, pathspecs, or script text itself — delegates
     entirely to ``emit.emit_script``. This module's only original code is
     the path guard, the foreign-emission refusal, and the disk write.
-  - Does NOT enumerate the tree, glob, or shell out — beyond the guard's own
-    resolve()/relative_to() checks, every filesystem call targets the ONE
-    caller-named, already-guarded ``output_path``: ``is_file()``/
-    ``read_bytes()``/``stat()`` for the foreign-emission comparison and one
-    ``Path.write_text()``. Covered by ``tests/test_no_tree_survey.py``'s AST
-    gate (extended to ``emit.py``; this module reads/writes no tree-survey
-    surface of its own to gate).
+  - Does NOT enumerate the tree, glob, or shell out. Exactly TWO filesystem
+    targets, both fixed by the caller's one already-guarded ``output_path``
+    and neither discovered by survey: (1) the guarded ``output_path`` itself —
+    ``is_file()``/``read_bytes()``/``stat()`` for the foreign-emission
+    comparison, one ``Path.write_text()``, and one ``read_bytes()`` to digest
+    the bytes that actually landed; (2) the provenance receipt beside it,
+    whose path is ``Path.with_name()`` off the ALREADY-GUARDED
+    ``guarded_path`` — never off the raw ``output_path``, since deriving a
+    write target from the unguarded input would reintroduce exactly the path
+    escape ``contained_path`` exists to stop. Covered by
+    ``tests/test_no_tree_survey.py``'s AST gate (extended to ``emit.py``;
+    this module reads/writes no tree-survey surface of its own to gate).
   - Does NOT make ``output_path`` unique per session. Resume addresses the
     script by its deterministic name, so uniqueness would break resume;
     ``ForeignEmissionError`` is the mechanism instead.
@@ -83,6 +125,9 @@ Spec backlink: pln-the-emitter-turns-a-plan-spine-d08dda § C5
 
 from __future__ import annotations
 
+import hashlib
+import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -91,6 +136,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.emit import emit_script
+from coordinator_core.session.core import resolve_session_id
 
 
 # Generator-provenance: writes the emitted script to a caller-supplied,
@@ -123,6 +169,46 @@ class ForeignEmissionError(ValueError):
     """
 
 
+def _repo_root_for_plan(plan_path: str) -> Optional[Path]:
+    """The repo root the PLAN lives in, derived by walking up to the nearest
+    ``.git``.
+
+    Why this exists: ``dispatch.emit`` is registered ``scope: none``
+    (DR-279), so ``--repo`` is refused and the per-request ``repo_root`` this
+    op receives is ALWAYS ``None``. ``emit.emit_script`` uses ``repo_root``
+    to anchor the executor prompts it writes -- which repo each dispatched
+    agent is working in -- so with no anchor every emitted script says
+    nothing about its target tree. That is harmless on a single-repo box and
+    wrong the moment one session drives waves in two repos: the prompts are
+    interchangeable, and an executor picks whichever tree its cwd happens to
+    be in.
+
+    The plan file itself is the one repo-identifying fact this op is always
+    handed, so it is what the anchor is derived from. No subprocess: a plain
+    parent walk, so this costs no spawn on a path already inside the op's
+    invocation budget.
+
+    Negative-spec:
+      - Does NOT shell out to ``git rev-parse``. The walk is a filesystem
+        check on each ancestor, matching the no-tree-survey AST gate this
+        module is held to (``tests/test_no_tree_survey.py``).
+      - Does NOT widen the guard. The returned root feeds ``emit_script``'s
+        prompt anchoring only; ``target_root``/``contained_path`` containment
+        is resolved separately, above, and is unaffected.
+      - Does NOT fall back to the process cwd. An unresolvable plan path
+        returns ``None``, which restores exactly the pre-existing
+        no-anchor behaviour rather than anchoring on an unrelated tree.
+    """
+    try:
+        resolved = Path(plan_path).resolve()
+    except OSError:
+        return None
+    for candidate in resolved.parents:
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
 def _refuse_foreign_emission(output_path: Path, script: str) -> None:
     """Refuse to overwrite an existing emission whose bytes differ from ours.
 
@@ -149,6 +235,121 @@ def _refuse_foreign_emission(output_path: Path, script: str) -> None:
     )
 
 
+def emission_receipt_path(guarded_script_path: Path) -> Path:
+    """The provenance sidecar's path for an ALREADY-GUARDED script path.
+
+    ``<script>.mjs`` -> ``<script>.mjs.emitted.json``, beside the script: the
+    script's own path is the only key the emitter and the fire-leg verifier
+    share, so a registry keyed on it would be a second thing to keep in step
+    with a file that already exists. Same rule as DoE-claude's
+    ``emit-dispatch-workflow.py :: emission_receipt_path`` — the two producers
+    must agree on where the sidecar lands, not just on what is in it.
+
+    Negative-spec:
+      - Does NOT accept the caller's raw ``output_path``. The argument is the
+        value ``contained_path`` returned; ``with_name`` on an unguarded input
+        would place a write outside ``target_root``, which is the escape the
+        guard exists to stop.
+      - Does NOT create directories or probe the tree — pure path arithmetic.
+    """
+    return guarded_script_path.with_name(guarded_script_path.name + ".emitted.json")
+
+
+def _script_sha256(guarded_script_path: Path) -> str:
+    """Digest of the script's RAW BYTES as they landed on disk.
+
+    Negative-spec: NEVER ``read_text()``. Universal-newline decoding collapses
+    a CRLF ``.mjs`` to LF, so a text-mode digest disagrees with the verifier on
+    a file nobody edited. The DoE-side consumer hashes ``read_bytes()``
+    (``emit-dispatch-workflow.py :: script_sha256``); anything writing a
+    receipt has to hash the same way or it writes a digest that reads as
+    tampering.
+    """
+    return hashlib.sha256(guarded_script_path.read_bytes()).hexdigest()
+
+
+def _receipt_session_id(params: dict) -> str:
+    """Who to record as the emitter: the caller's claim, or the fleet-canonical
+    resolution, or "".
+
+    Precedence: an explicit ``session_id`` param, then
+    ``coordinator_core.session.core.resolve_session_id`` — the fleet's ONE
+    session-identity resolver, which is the bound per-request identity
+    ContextVar, then ``COORDINATOR_SESSION_ID``, then ``CLAUDE_SESSION_ID``,
+    then ``CLAUDE_CODE_SESSION_ID``, then "".
+
+    Reusing that resolver rather than reading an env var here is the whole
+    point: a narrow read is what produced the bug this function exists to fix.
+    A receipt written from a ``CLAUDE_SESSION_ID``-only read carried
+    ``"session_id": ""`` on a host where ``CLAUDE_CODE_SESSION_ID`` was the
+    populated tier (measured 2026-09-17, this container), and the fire gate
+    then REFUSED the emission — "its receipt names session ; this session is
+    7f8efcbc". Any fourth private copy of the ladder re-opens exactly that
+    hole the next time a tier is added.
+
+    Negative-spec:
+      - Does NOT invent, mint, derive or uuid-generate an id. A phantom session
+        id in a provenance record is worse than an absent one: it attributes an
+        emission to a session that never ran, which is the false attribution
+        the receipt exists to prevent. All tiers unset yields "", and the
+        receipt says so honestly.
+      - Does NOT re-derive the tier list. ``SESSION_ENV_PRECEDENCE`` lives in
+        ``session.core`` and is read through ``resolve_session_id``, never
+        copied.
+    """
+    claimed = params.get("session_id")
+    if claimed:
+        return str(claimed)
+    return resolve_session_id() or ""
+
+
+def _write_emission_receipt(
+    guarded_script_path: Path, plan_path: str, params: dict
+) -> Optional[str]:
+    """Write the provenance sidecar. Best-effort: never fails the emit.
+
+    The script is the deliverable; the receipt is evidence ABOUT it. An
+    unwritable receipt location (read-only directory, a directory sitting where
+    the sidecar goes, a full disk) must return the same successful verdict as
+    before this op wrote receipts at all — losing the evidence is a degradation,
+    losing the emission is a regression. The failure is narrated on stderr and
+    surfaced as a ``None`` ``receipt`` key in the reply, so it is visible rather
+    than silent.
+
+    Returns the receipt path as a string, or ``None`` if it could not be
+    written.
+
+    Negative-spec:
+      - Does NOT re-raise. Every ``OSError`` (and an unserialisable value) is
+        swallowed after narration.
+      - Does NOT mutate or re-read the script. On a ``force`` overwrite the
+        sidecar is rewritten whole, so its ``sha256`` names the bytes now on
+        disk rather than a superseded emission's.
+    """
+    receipt_path = emission_receipt_path(guarded_script_path)
+    try:
+        receipt = {
+            "sha256": _script_sha256(guarded_script_path),
+            "session_id": _receipt_session_id(params),
+            "emitted_at": datetime.now().isoformat(timespec="seconds"),
+            "plan": Path(plan_path).name,
+        }
+        receipt_path.write_text(
+            json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        print(
+            f"dispatch.emit: wrote {guarded_script_path} but could not write its "
+            f"provenance receipt {receipt_path} ({exc}). The script stands; it "
+            "carries no emission provenance.",
+            file=sys.stderr,
+        )
+        return None
+    return str(receipt_path)
+
+
 @register_op("dispatch.emit")
 def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.emit" handler.
@@ -164,10 +365,17 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         force (bool, optional, default False): overwrite an ``output_path``
             that already holds a different session's emission. Off by
             default -- see ``ForeignEmissionError``.
+        session_id (str, optional): emitter identity recorded in the
+            provenance receipt; falls back to the fleet-canonical
+            ``session.core.resolve_session_id`` ladder, then to "". Never
+            minted -- see ``_receipt_session_id``.
 
     Returns:
         {"path": str, "ok": bool, "findings": [<finding dict>, ...],
-         "error_count": int, "warn_count": int}
+         "error_count": int, "warn_count": int,
+         "receipt": str | None}
+        ``receipt`` is the provenance sidecar's path, or ``None`` when it could
+        not be written -- that failure never changes the verdict.
 
     Raises:
         ValueError — if ``plan_path`` or ``output_path`` is missing
@@ -209,7 +417,7 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         plan_path,
         name=params.get("name"),
         description=params.get("description"),
-        repo_root=repo_root,
+        repo_root=repo_root or _repo_root_for_plan(plan_path),
     )
 
     findings = run_checks(script)
@@ -226,8 +434,11 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     guarded_path.write_text(script, encoding="utf-8", newline="")
 
+    receipt = _write_emission_receipt(guarded_path, plan_path, params)
+
     return {
         "path": str(guarded_path),
+        "receipt": receipt,
         "ok": error_count == 0,
         "findings": [
             {

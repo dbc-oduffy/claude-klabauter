@@ -209,7 +209,8 @@ _GOLDEN_SNAPSHOT = json.loads(
 "nudge_windows_subprocess_popup": ["advisory", ["Write", "Edit", "MultiEdit"], 110],
 "tests": null,
 "validate_frontmatter_schema_advisory": ["advisory", ["Write", "Edit", "MultiEdit"], 100],
-"validate_frontmatter_schema_deny": ["hard-deny", ["Write", "Edit", "MultiEdit"], 5]
+"validate_frontmatter_schema_deny": ["hard-deny", ["Write", "Edit", "MultiEdit"], 5],
+"wiki_changelog_prose_advisory": ["advisory", ["Write", "Edit", "MultiEdit"], 222]
 }
 """
 )

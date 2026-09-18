@@ -155,6 +155,26 @@ ordinary file does not already grant by design (see `_write_bump_marker.py`,
 posture has not already conceded. Both markers remain ordinary,
 forgeable-by-design files -- this change adds gating to neither.
 
+ENVIRONMENT STAND-DOWN -- A DECLINE, NOT A CLASS CHANGE. Where the
+capability `fleet_present` is false (a managed remote container: one session,
+a closed set of repos granted to it together, no peer team and no memo
+reader), `check()` declines to object: it appends a durable audit line,
+prints an after-the-fact advisory to stderr, and returns `None`. `CLASS`
+stays `"hard-deny"`, `MATCHERS` and `PRIORITY` stay exactly as pinned above
+-- this is an environment-conditional decline at ONE call site, and the
+paragraph above forbidding a revert to `"advisory"` is untouched by it.
+Reverting `CLASS` would soften this guard on every host, including the fleet
+workstations where its premise holds; this softens nothing there.
+
+The decision, the notice text, and the audit line all live in
+`bash_guards._write_bump_stand_down` -- import and call, never re-derive. The
+mechanism was authored in `bump_foreign_repo_write.py` alone and never
+ported, and for that whole window a `git commit` into a granted sibling repo
+was ALLOWED on such a host while the identical `Edit` was hard-denied by this
+module. That asymmetry, not the stand-down, was the defect. Consulted at the
+deny site only, after the marker check and after every exemption; it returns
+`None` and never an envelope, per that module's own negative-spec.
+
 VERIFYING THIS GUARD BY HAND? IT NEEDS A REAL SESSION-START RECORD FIRST.
 `check()`'s verdict runs through the SAME `bump_applies`/`resolve_launch_
 anchor` gate the Bash siblings use (see "ONE CLEAR, ONE SET OF HATCHES"
@@ -516,6 +536,19 @@ from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
+from coordinator_core.bash_guards._write_bump_stand_down import (
+    environment_stands_the_bump_down,
+    log_environment_stand_down,
+    stand_down_notice,
+    stand_down_reason,
+)
+
+#: This surface's stand-down audit token and tracked-sink filename. Named
+#: per-surface so the three write-confinement bumps leave three
+#: distinguishable records rather than one ambiguous stream.
+_STAND_DOWN_MARKER = "STAND-DOWN-OUT-OF-REPO-TOOL-WRITE"
+_STAND_DOWN_SINK = "out-of-repo-tool-write.log"
+_STAND_DOWN_LABEL = "out-of-repo-tool-write"
 
 CLASS = "hard-deny"
 MATCHERS = ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -1170,6 +1203,36 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             agent_class=agent_class,
             cwd=anchor,
         )
+
+        # LAST GATE BEFORE THE DENY, deliberately. Every applicability check,
+        # the marker (both locations), and every exemption above have already
+        # resolved that this payload WOULD be denied; the only question left
+        # is whether the rule is coherent on this host at all. Consulting it
+        # any earlier would suppress bumps this host still wants.
+        # `own_git_root`, never `target_repo`: the audit line must not land in
+        # the repo the bump is steering the write away from.
+        stood_down = environment_stands_the_bump_down()
+        if stood_down is not None:
+            log_environment_stand_down(
+                own_git_root,
+                effective_sid or session_id,
+                target_repo,
+                stood_down.evidence,
+                marker=_STAND_DOWN_MARKER,
+                sink_basename=_STAND_DOWN_SINK,
+            )
+            stand_down_notice(
+                stand_down_reason(
+                    _STAND_DOWN_LABEL,
+                    target_repo,
+                    session_repo,
+                    stood_down.evidence,
+                )
+            )
+            # `None`, NOT an envelope -- `write_guards.engine`'s hard-deny
+            # phase takes the first non-`None` verdict, so any value here
+            # would claim the slot and skip every later guard.
+            return None
 
         return {
             "hookSpecificOutput": {

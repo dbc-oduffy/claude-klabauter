@@ -156,10 +156,11 @@ def test_reconcile_conflict_aborts_and_exits_3(tmp_path, capsys, monkeypatch):
 
 
 def test_reconcile_merge_commit_refused_by_hook_aborts_and_exits_3(tmp_path, capsys, monkeypatch):
-    """A merge that applies cleanly (no content conflict) but is refused at
-    the commit step by a planted `pre-merge-commit` hook must classify as
-    `RECONCILE-MERGE-COMMIT-REFUSED`, not `RECONCILE-CONFLICT` — the
-    MERGE_HEAD-present / index-readable discrimination this plan adds."""
+    """A merge that would apply cleanly but whose commit is refused by a
+    planted `pre-merge-commit` hook -- reaches the commit step (unlike
+    `test_reconcile_conflict_aborts_and_exits_3`'s genuine content conflict)
+    and must be classified `RECONCILE-MERGE-COMMIT-REFUSED`, not
+    `RECONCILE-CONFLICT`."""
     origin, clone = _make_origin_and_clone(tmp_path)
     _git(clone, "checkout", "-q", "-b", "work/testmachine/2026-01-01")
     (clone / "local-only.txt").write_text("local\n")
@@ -187,7 +188,7 @@ def test_reconcile_merge_commit_refused_by_hook_aborts_and_exits_3(tmp_path, cap
     captured = capsys.readouterr()
     assert rc == 3
     assert "RECONCILE-MERGE-COMMIT-REFUSED branch=work/testmachine/2026-01-01" in captured.out
-    assert "NOT the A/B/C" in captured.err
+    assert "not the A/B/C" in captured.err
 
     status = _git(clone, "status", "--porcelain=v1")
     assert status.stdout.strip() == ""

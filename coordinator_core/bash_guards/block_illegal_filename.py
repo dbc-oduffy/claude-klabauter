@@ -552,6 +552,25 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # extraction and this point). Advise, same as before this chunk.
             reason = _make_deny_msg(basename, hint, payload=payload)
             ctx = _advisory_ctx(reason)
+
+            # C2 (docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md):
+            # `_make_deny_msg` already computes the sanitized suggestion for the
+            # human-readable reason text; reuse the SAME `_safe_suggestion` call to
+            # rewrite the offending candidate in place, so the fix lands without the
+            # agent having to re-issue the call by hand. Substitution is scoped to the
+            # raw candidate substring within the ORIGINAL (unprocessed) command text —
+            # never `cmd`, which has been heredoc-stripped/continuation-joined and is
+            # not a faithful copy of what the caller actually sent.
+            safe_basename = _safe_suggestion(basename)
+            if basename and safe_basename and basename != safe_basename:
+                original_cmd = tool_input.get("command") or ""
+                new_candidate = raw_candidate.replace(basename, safe_basename, 1)
+                if raw_candidate in original_cmd and new_candidate != raw_candidate:
+                    new_cmd = original_cmd.replace(raw_candidate, new_candidate, 1)
+                    updated_input = dict(tool_input)
+                    updated_input["command"] = new_cmd
+                    return rewrite_input("PreToolUse", updated_input, context=ctx)
+
             return allow_advisory("PreToolUse", ctx)
 
         return None

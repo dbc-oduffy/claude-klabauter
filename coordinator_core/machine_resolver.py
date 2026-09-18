@@ -493,7 +493,7 @@ def canonical_repo_key_for_root(root, repo_key_paths: dict) -> Optional[str]:
 
     Several registry keys legitimately point at one repo: a repo carries its
     canonical key plus any receive-only alias under which siblings may address
-    it (`repos.claude_klabauter` alongside `repos.project_example_orchestration_hub`,
+    it (`repos.claude_klabauter` alongside `repos.example_orchestration_hub_repo`,
     `repos.example-sim-repo` alongside `repos.example_sim_repo_md`). Every caller that turns a
     path back into an identity — a memo's `from:` line above all — must pick the
     same key for the same repo, on every machine, whatever order the registry

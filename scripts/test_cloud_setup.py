@@ -81,6 +81,27 @@ def _restore_process_env():
         os.environ.update(snapshot)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_claude_home(tmp_path, monkeypatch):
+    """Keep every `_claude_home()` write under `tmp_path`, for every arm.
+
+    This module's hermeticity contract is "every filesystem write under
+    `tmp_path`", and `main()` reaches two functions that write into the resolved
+    `.claude` directory — `install_global_doctrine` and `write_session_verdict`.
+    Autouse rather than per-test on purpose: the arm that leaked was the one
+    asserting a non-Linux refusal, which — before it simulated the host rather
+    than reading it — ran the FULL pipeline on a Linux host instead of refusing,
+    so the arms that most need isolation are exactly the ones whose author did
+    not expect to need it.
+
+    Measured: without this, a run on a Linux box writes a real
+    `cloud-preboot-verdict.md` into the operator's own `~/.claude/rules/`, where
+    the harness then loads a pytest tmp_path's verdict into every later session
+    as standing instruction.
+    """
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home"))
+
+
 def _make_scratch_clones(cloud_mod, tmp_path: Path) -> dict:
     # Review: code-reviewer (2026-09-06, Finding 6) -- derived from the real
     # CLONES dict rather than hand-copied, so a URL change in cloud_setup.py
@@ -296,11 +317,28 @@ def test_run_claude_klabauter_setup_records_nonzero_exit_code(monkeypatch, tmp_p
 # ---------------------------------------------------------------------------
 
 
+def _patch_non_linux_host(monkeypatch, cloud_mod):
+    """Simulate a non-Linux host for `host_precondition_met`.
+
+    `cloud_setup.py` is loaded from file into a private module object, but its
+    `platform` global is still the ONE shared `platform` module, so patching the
+    attribute there is what the code under test reads. What does not work is
+    patching `sys.platform` (nothing here reads it) or leaving the host
+    unpatched: this arm used to do the latter and was therefore inert the moment
+    it ran on a Linux container, silently exercising the whole pipeline instead
+    of the refusal it names.
+    """
+    monkeypatch.setattr(cloud_mod.platform, "system", lambda: "Darwin")
+
+
 def test_host_precondition_refuses_on_non_linux_and_records_nothing_executed(
     monkeypatch, tmp_path, cloud_mod
 ):
-    # No monkeypatch of platform/geteuid: this arm exercises the real host, which
-    # on this Windows box is exactly the case the precondition must refuse.
+    _patch_non_linux_host(monkeypatch, cloud_mod)
+    assert cloud_mod.host_precondition_met()[0] is False, (
+        "the non-Linux simulation must reach the code under test, or this arm "
+        "asserts nothing about the refusal path"
+    )
     report_path = tmp_path / "cloud-setup-report.json"
     monkeypatch.setattr(cloud_mod, "INSTALL_REPORT_PATH", report_path)
 
@@ -319,6 +357,33 @@ def test_host_precondition_refuses_on_non_linux_and_records_nothing_executed(
     assert len(report["steps"]) == 1
     assert report["steps"][0]["name"] == "host precondition"
     assert report["steps"][0]["ok"] is False
+
+
+def test_host_precondition_refusal_still_writes_the_session_verdict_surface(
+    monkeypatch, tmp_path, cloud_mod
+):
+    """F1 (code-reviewer 2026-09-17) -- the refusal branch used to call only
+    `_write_report_best_effort`, never `_record_session_surfaces_best_effort`,
+    so the single most severe pre-boot outcome left no `cloud-preboot-verdict.md`
+    for a session that has no other way to learn nothing ran. A separate test
+    from the non-Linux arm above, which simulates the host and exercises the
+    real `host_precondition_met`: here the predicate itself is stubbed, so the
+    verdict surface is pinned independently of how the refusal was reached.
+    """
+    monkeypatch.setattr(
+        cloud_mod, "host_precondition_met", lambda: (False, "host precondition failed: stubbed")
+    )
+    report_path = tmp_path / "cloud-setup-report.json"
+    monkeypatch.setattr(cloud_mod, "INSTALL_REPORT_PATH", report_path)
+
+    rc = cloud_mod.main()
+
+    assert rc == 0
+    claude_home = Path(cloud_mod.os.environ["CLAUDE_HOME"]) / ".claude"
+    verdict_path = claude_home / "rules" / cloud_mod.SESSION_VERDICT_RULE
+    assert verdict_path.exists(), "the refusal is the case that most needs the session surface"
+    body = verdict_path.read_text()
+    assert "host precondition" in body
 
 
 # ---------------------------------------------------------------------------
@@ -370,3 +435,85 @@ def test_non_ascii_step_detail_under_ascii_stdout_still_exits_zero(
     joined = "".join(fake_stdout.written)
     assert "run scripts/setup.py" in joined
     assert "FAILED" in joined
+
+
+# ---------------------------------------------------------------------------
+# publish.mirrors.* seeding — the key cloud never had
+# ---------------------------------------------------------------------------
+
+
+class _Ok:
+    returncode = 0
+    stdout = ""
+    stderr = ""
+
+
+def _publish_mirror_env(cloud_mod, monkeypatch, tmp_path, *, engine, mirror):
+    """Pin the two things this step reads: where the engine clone is, and which
+    roots a mirror checkout is searched under."""
+    monkeypatch.setitem(cloud_mod.CLONES, "claude-klabauter", {"url": "u", "dest": str(engine)})
+    monkeypatch.setattr(cloud_mod, "retrieval_search_roots", lambda: [tmp_path])
+    monkeypatch.setattr(cloud_mod, "_machine_local_argv", lambda: ["machine-local"])
+    calls: list = []
+
+    def _run(argv, **kwargs):
+        calls.append(argv)
+        return _Ok()
+
+    monkeypatch.setattr(cloud_mod.subprocess, "run", _run)
+    return calls
+
+
+def test_a_separate_mirror_checkout_is_registered(cloud_mod, monkeypatch, tmp_path):
+    engine = tmp_path / "engine-clone"
+    (engine / ".git").mkdir(parents=True)
+    mirror = tmp_path / "claude-klabauter"
+    (mirror / ".git").mkdir(parents=True)
+    calls = _publish_mirror_env(cloud_mod, monkeypatch, tmp_path, engine=engine, mirror=mirror)
+
+    report = cloud_mod.Report()
+    cloud_mod.register_publish_mirror_keys(report)
+
+    assert report.machine_local_keys["publish.mirrors.claude_klabauter.path"] == str(mirror)
+    assert calls == [
+        ["machine-local", "set", "publish.mirrors.claude_klabauter.path", str(mirror)]
+    ]
+
+
+def test_the_engine_clone_is_never_written_into_the_publish_key(
+    cloud_mod, monkeypatch, tmp_path
+):
+    """The live trap, refused at the seeding layer: `repos.claude_klabauter` is
+    the DEPLOYED ENGINE -- a real clone on `main` with a live push remote -- and
+    a publish target resolving there pushes onto the published mirror's default
+    branch with nothing warning. The two keys are different keys for exactly
+    this reason, so the engine clone is rejected rather than registered even
+    though it is a valid checkout of the right repository.
+    """
+    engine = tmp_path / "claude-klabauter"
+    (engine / ".git").mkdir(parents=True)
+    calls = _publish_mirror_env(cloud_mod, monkeypatch, tmp_path, engine=engine, mirror=None)
+
+    report = cloud_mod.Report()
+    cloud_mod.register_publish_mirror_keys(report)
+
+    assert calls == []
+    verdict = report.machine_local_keys["publish.mirrors.claude_klabauter.path"]
+    assert verdict.startswith("skipped:")
+    assert str(engine) in verdict
+
+
+def test_a_container_with_no_mirror_checkout_records_why_and_does_not_fail(
+    cloud_mod, monkeypatch, tmp_path
+):
+    """Non-fatal by construction: nothing else in the boot depends on this key,
+    and failing the run over an absent publish mirror would break every
+    container that has no reason to publish."""
+    engine = tmp_path / "engine-clone"
+    (engine / ".git").mkdir(parents=True)
+    _publish_mirror_env(cloud_mod, monkeypatch, tmp_path, engine=engine, mirror=None)
+
+    report = cloud_mod.Report()
+    cloud_mod.register_publish_mirror_keys(report)
+
+    assert "skipped" in report.machine_local_keys["publish.mirrors.claude_klabauter.path"]

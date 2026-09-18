@@ -82,6 +82,7 @@ _EXPECTED_GUARD_NAMES = frozenset(
         "p4_checkout_before_edit",
         "validate_frontmatter_schema_advisory",
         "validate_frontmatter_schema_deny",
+        "wiki_changelog_prose_advisory",
     }
 )
 

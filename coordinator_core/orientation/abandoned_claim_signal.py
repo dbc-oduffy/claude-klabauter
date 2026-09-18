@@ -49,6 +49,24 @@ Fail-open throughout: an unreadable directory, a malformed record, an
 unavailable registry, an import failure, or any exception at all resolves to
 `""` and the section is omitted.
 
+Deprecated-axis replacement (2026-09-02, DoE-claude-em /
+cross-repo/inbox/2026-09-02-doe-claude-em-abandoned-claim-signal-renders-only-
+landed-work.md, mechanism named by example-retrieval-repo-em's addendum the same day):
+this module used to gate on `status == "claimed"` alone, which DR-084
+stripped of terminal meaning -- `status` narrowed to `open|claimed` only,
+with terminality moved onto `deployment_state`. Measured on a live corpus,
+13 of 13 rows the old gate rendered were already-landed work: a deliverable
+cascade (`ops/deliverable_cascade.py`) correctly REFUSES to flip a claimed
+handoff's `deployment_state` to `shipped` when a live successor/continuation
+already carries the work forward (leg (b) of its three-legged predicate) --
+the deliverable shipped, the chain was simply never closed. `deployment_state`
+alone does not discriminate this either: all five sampled confirmed-shipped
+batons still read `deployment_state: in_flight`. So this module now consults
+the cascade's own leg (b) refused-state directly (`_cascade_has_live_successor`,
+below) for each `claimed_by`-carrying candidate whose claimant is absent from
+this box's registry, and excludes a candidate the cascade would refuse to
+advance for exactly that reason -- landed elsewhere, not abandoned.
+
 Negative-spec:
   - Does NOT report a claimed baton carrying no `claimed_by` at all. That is a
     different defect (a claim transition that did not stamp) and folding it in
@@ -58,6 +76,16 @@ Negative-spec:
     construction and would false-positive forever -- the same Anti-scope
     `baton_assemble._scan_deliverable_collision` already states for the closest
     existing corpus scan.
+  - Does NOT consult the cascade's legs (a)/(c)/(d) -- only leg (b) (live
+    successor/continuation), the one concretely-measured false-positive shape
+    both source memos name. Leg (a) (claimed by a live session) is already
+    answered by this module's own registry check above; legs (c)/(d) answer a
+    different question ("would the cascade advance this candidate right now")
+    this module has no reason to ask.
+  - Does NOT run the cascade's leg (b) check over the whole corpus. It runs
+    once per candidate that already cleared the `claimed_by` + dead-claimant
+    filter -- a small, bounded set (measured single digits to low tens), never
+    the full `state/handoffs/` corpus this module scans.
   - Does NOT YAML-parse records. The corpus holds records `yaml.safe_load`
     refuses outright, and a classifier that parses everything crashes on a
     defect unrelated to claims. Frontmatter is read via the canonical
@@ -111,7 +139,43 @@ def _plausible_timestamp(value: Optional[str]) -> str:
     return ""
 
 
-def _scan(handoff_dir: Path, live_session_ids) -> List[Tuple[str, str, str, str]]:
+def _cascade_has_live_successor(path: Path, repo_root: Path) -> bool:
+    """True when `deliverable_cascade`'s own leg (b) predicate would refuse to
+    advance this candidate because a live successor/continuation already
+    carries its deliverable forward -- i.e. the work landed under a later
+    baton and this claim's chain was simply never closed out, not a claim
+    nobody is tracking.
+
+    Reuses `coordinator_core.ops.handoff_children._handoff_has_live_children`
+    over `CONCLUSION_EDGE_KINDS` -- the exact mechanism
+    `deliverable_cascade._predicate_refusal`'s leg (b) itself calls -- rather
+    than re-deriving the DAG walk. Fail-open to `False` (report the row) on
+    any exception: an indeterminate successor check is not evidence the work
+    landed, and this module's whole-function `except Exception` in
+    `emit_abandoned_claims` never needs to see this one.
+    """
+    try:
+        import asyncio
+
+        from coordinator_core.ops.handoff_children import (
+            CONCLUSION_EDGE_KINDS,
+            _handoff_has_live_children,
+        )
+
+        result = asyncio.run(
+            _handoff_has_live_children(
+                {"candidate": str(path), "edge_kinds": CONCLUSION_EDGE_KINDS},
+                repo_root,
+            )
+        )
+        return result.get("exit_code") == 0
+    except Exception:  # noqa: BLE001 — fail-open; see docstring
+        return False
+
+
+def _scan(
+    handoff_dir: Path, live_session_ids, repo_root: Path
+) -> List[Tuple[str, str, str, str]]:
     """Return `(claimed_at, filename, claimant_label, session_id)` per claimed
     baton whose `claimed_by` is absent from `live_session_ids`, oldest first.
 
@@ -129,6 +193,14 @@ def _scan(handoff_dir: Path, live_session_ids) -> List[Tuple[str, str, str, str]
     a fabricated-looking timestamp in the one section a reader must be able to
     trust. Either way the row is KEPT and sorts last under the empty string: an
     unknown claim age is still an unreachable claimant.
+
+    NO LONGER gates on `status == "claimed"` (DR-084 stripped that axis of
+    terminal meaning — see module docstring's "Deprecated-axis replacement").
+    The trigger is `claimed_by` presence plus claimant absence from
+    `live_session_ids`; the deliverable cascade's own leg (b) refused-state
+    (`_cascade_has_live_successor`) is then read per surviving candidate and
+    excludes any the cascade would refuse to advance for already having a
+    live successor — landed elsewhere, not abandoned.
     """
     rows: List[Tuple[str, str, str, str]] = []
     for path in sorted(handoff_dir.glob("*.md")):
@@ -137,12 +209,14 @@ def _scan(handoff_dir: Path, live_session_ids) -> List[Tuple[str, str, str, str]
                 head = handle.read(_HEAD_BYTES)
         except OSError:
             continue  # one unreadable record never sinks the scan
-        if read_fm_field_unquoted(head, "status") != "claimed":
-            continue
         session_id = read_fm_field_unquoted(head, "claimed_by")
         if not session_id:
             continue  # negative-spec: a claim that never stamped is a different defect
         if session_id in live_session_ids:
+            continue
+        if _cascade_has_live_successor(path, repo_root):
+            # Deliverable cascade's own leg (b): already landed under a live
+            # successor/continuation, chain simply never closed out.
             continue
         rows.append(
             (
@@ -179,7 +253,7 @@ def emit_abandoned_claims(repo_root: Path) -> str:
             # harness simply never wrote records. Stay silent.
             return ""
 
-        rows = _scan(handoff_dir, live_session_ids)
+        rows = _scan(handoff_dir, live_session_ids, Path(repo_root))
         if not rows:
             return ""
 

@@ -12,6 +12,14 @@ Run it:
     python -m coordinator_core.group_em.idle_report --repo-root <root> --group-em-session-id <sid>
     python -m coordinator_core.group_em.idle_report --repo-root <root> --group-em-session-id <sid> --peer <sid-or-prefix>
 
+`--repo-root` names the repo to report ON; it does not make that repo importable. `python -m`
+resolves `coordinator_core` off cwd/PYTHONPATH, so this command must be run with cwd (or
+PYTHONPATH) at the engine root -- the tree where `coordinator_core` actually lives -- never at
+the repo passed as `--repo-root`. Run from a Group-EM's own repo (e.g. a DoE-claude checkout)
+this fails `ModuleNotFoundError: No module named 'coordinator_core'`; the identical command run
+from the engine root succeeds. The error text gives no hint that cwd is the variable -- a
+Group-EM cannot tell "the engine is gone" from "wrong cwd" from the failure alone.
+
 THE CONSUMER OWNS THE OUTPUT SHAPE, and it is written down on their side, in
 the DoE-claude sibling repo: `coordinator/docs/wiki/fleet-watch-idle-report-contract.md`,
 read by `coordinator/agents/fleet-watch.md`. The verdict vocabulary, the

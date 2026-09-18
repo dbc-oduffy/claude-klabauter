@@ -139,17 +139,28 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
     second = pad._check_context_pressure_sync(session_id, "")
     assert second == ""
 
-def test_throttle_suppresses_even_when_content_would_otherwise_fire(
+def test_throttle_governs_the_orange_band_only_and_never_sits_on_red(
     tmp_path, monkeypatch
 ):
-    """Isolates the throttle guard specifically (not bark-once): pre-seed
-    throttle_last_check to "just now" for a session that has NEVER fired
-    before, then confirm a critical sidecar reading is still suppressed.
+    """The throttle rate-limits the 40 band; the red band answers to
+    bark-once instead.
+
+    Isolates the throttle guard specifically: pre-seed throttle_last_check to
+    "just now" for sessions that have NEVER fired before, so bark-once cannot
+    be what does the suppressing, and vary only the band.
+
+    The throttle exists to keep the ORANGE band's orientation reading off the
+    channel on every tool call. The red band is a hard call with runway to act
+    on it, and a rate limiter must not be what swallows it -- a red reading
+    arriving 30 seconds after an orange one would otherwise be silent for the
+    rest of the 5-minute window, which is most of the runway the 43 band was
+    moved down to preserve. What bounds the red band's noise is `critical_fired`
+    (bark-once, asserted below), not elapsed time: it says its piece once per
+    session and then stops.
 
     Phase 2 is sidecar-sourced, not transcript-byte-sourced (see the module
-    docstring above _check_context_pressure_sync) -- so "content that would
-    otherwise fire critical" is a sidecar reading in the red band, not a
-    byte-sized transcript file.
+    docstring above _check_context_pressure_sync) -- so a reading "that would
+    otherwise fire" is a sidecar percentage, not a byte-sized transcript file.
     """
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     from coordinator_core.session import context_usage_sidecar as sidecar_module
@@ -158,19 +169,37 @@ def test_throttle_suppresses_even_when_content_would_otherwise_fire(
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text(json.dumps({"model": "claude-sonnet-4-5-20250929"}) + "\n")
 
-    session_id = "test-session-throttle-isolated"
-    sidecar_module.write_usage(
-        session_id,
-        {"used_percentage": 50, "context_window_size": 1_000_000},
-        now=time.time(),
-    )
+    def _seed(session_id, used_percentage):
+        sidecar_module.write_usage(
+            session_id,
+            {"used_percentage": used_percentage, "context_window_size": 1_000_000},
+            now=time.time(),
+        )
+        pad._save_advisory_state(
+            tempfile.gettempdir(), session_id, {"throttle_last_check": time.time()}
+        )
+
+    orange_session = "test-session-throttle-isolated-orange"
+    _seed(orange_session, 41)
+    assert pad._check_context_pressure_sync(orange_session, str(transcript)) == ""
+
+    red_session = "test-session-throttle-isolated-red"
+    _seed(red_session, 50)
+    red = pad._check_context_pressure_sync(red_session, str(transcript))
+    assert "CONTEXT PRESSURE" in red
+    assert "~50% of window used" in red
+
+    # ...and having surfaced once, it is bark-once that holds it down, on a
+    # call whose throttle window has long expired.
     pad._save_advisory_state(
-        tempfile.gettempdir(), session_id, {"throttle_last_check": time.time()}
+        tempfile.gettempdir(),
+        red_session,
+        dict(
+            pad._load_advisory_state(tempfile.gettempdir(), red_session),
+            throttle_last_check=0.0,
+        ),
     )
-
-    result = pad._check_context_pressure_sync(session_id, str(transcript))
-
-    assert result == ""  # throttled despite a sidecar reading that would otherwise fire critical
+    assert pad._check_context_pressure_sync(red_session, str(transcript)) == ""
 
 
 def test_compaction_advisory_fires_exactly_once_per_sentinel_and_rearms(tmp_path):

@@ -1792,7 +1792,7 @@ ARTIFACT_CLASS_PATH = "artifact"
 #: ``<class>-claims`` directory -- that directory NAME is the attractor a
 #: caller reaches for instead of the class token (``plan-claims`` for
 #: ``plan``), so ``_class_token_hint`` defuses it in the fail-loud text.
-_CLASSED_CLAIM_CLASSES = ("handoff", "memo", "plan")
+_CLASSED_CLAIM_CLASSES = ("handoff", "memo", "plan", "artifact")
 
 
 def _class_token_hint(class_: str) -> str:

@@ -334,7 +334,7 @@ pinned policy-grammar + provision/report_sidecar contract.
 
 ### `tests/`, `ops/tests/`, `ops/emit/tests/`, `ops/fleet/tests/`, `ops/session/tests/`, `subagent_sandbox/tests/`
 Pytest suites (`pytest.ini`: `testpaths = ["coordinator_core"]`, `test_*.py` convention,
-established by pcore-05 C1). 19 `conftest.py`/test-support files across the tree.
+established by pcore-05 C1). 10 `conftest.py`/test-support files across the tree.
 
 ---
 *Last regenerated: 2026-07-22. Maintained by `/update-docs` Phase 2 — re-run rather than hand-patch after structural changes (new op modules, package moves).*

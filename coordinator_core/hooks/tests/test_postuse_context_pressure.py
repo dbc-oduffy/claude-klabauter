@@ -506,3 +506,211 @@ class TestModeClauseNamesOnlyWhatIsTrue:
         text = _check(session_id)
         assert "/handoff" not in text
         assert "HANDOFF NOW" not in text
+
+
+# ---------------------------------------------------------------------------
+# The venue split at the red band.
+#
+# DoE-claude docs/decisions/DR-cloud-is-a-venue-where-compaction-is-the-
+# continuation-primitive.md: in a managed-remote container compaction IS the
+# continuation primitive, so the red band names a different terminal there.
+# The suite-wide conftest fixture pins the environment rung to ABSTAIN, i.e.
+# attended-box behaviour; the tests below that exercise the cloud venue
+# re-patch it themselves and say so in their names (that fixture's own
+# instruction).
+# ---------------------------------------------------------------------------
+
+
+def _in_a_cloud_reading(monkeypatch) -> None:
+    """Select the informational variant the way a CLOUD CONTAINER does — via
+    the environment rung of `compaction_warnings`, with no fleet value and no
+    venue re-derived at the call site. Patched at the resolver's own seam
+    rather than by setting `CLAUDE_CODE_REMOTE`, because `env_locality`'s
+    machine rung would still answer for a box whose harness rung says
+    nothing."""
+    monkeypatch.setattr(
+        "coordinator_core.session.mode_resolution."
+        "_compaction_default_for_environment",
+        lambda env=None: "informational",
+    )
+
+
+class TestMiseEnPlaceTerminalIsVenueConditional:
+    """The mise-en-place branch is evaluated BEFORE the informational one, so
+    it decided the terminal on its own and a mise run in a container was told
+    to author the handoff — the one instruction the venue ruling stands down.
+
+    What these pin is the BRANCH's behaviour, not a string: in a cloud reading
+    the mise path must not recommend authoring a handoff by any spelling, and
+    must still name the Phase 6 tail, which is owed in both venues. A test
+    asserting only that some new sentence appears would pass against the
+    defect, because the defective text also contained it.
+    """
+
+    def test_a_cloud_reading_never_recommends_authoring_a_handoff(
+        self, tmp_path, monkeypatch
+    ):
+        session_id = "session-mise-cloud"
+        _in_a_cloud_reading(monkeypatch)
+        _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "author the handoff" not in text
+        assert "/handoff" not in text
+        assert "HANDOFF NOW" not in text
+
+    def test_a_cloud_reading_still_owes_the_full_phase_six_tail(
+        self, tmp_path, monkeypatch
+    ):
+        """Standing down the handoff is not standing down the tail: the review
+        loop, verification, tracker sweep and baton disposition are owed in
+        both venues, and dropping them here would trade one wrong terminal for
+        a wrong body."""
+        session_id = "session-mise-cloud-tail"
+        _in_a_cloud_reading(monkeypatch)
+        _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "Phase 6" in text
+        for owed in (
+            "review loop to zero findings",
+            "end-of-run verification",
+            "tracker sweep",
+            "baton disposition",
+        ):
+            assert owed in text
+
+    def test_a_cloud_reading_terminates_in_continuing_the_run(
+        self, tmp_path, monkeypatch
+    ):
+        session_id = "session-mise-cloud-continue"
+        _in_a_cloud_reading(monkeypatch)
+        _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "commit and checkpoint" in text
+        assert "Continue the run." in text
+
+    def test_the_fleet_key_selects_the_same_terminal_as_the_venue(
+        self, tmp_path, monkeypatch
+    ):
+        """The predicate is the RESOLVED variant, never a venue re-derived
+        here — so an operator who states `informational` fleet-wide gets the
+        same mise terminal a cloud box gets, on a box of any kind."""
+        session_id = "session-mise-fleet-informational"
+        _under_fleet_informational(monkeypatch)
+        _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "Phase 6" in text
+        assert "author the handoff" not in text
+
+    def test_an_attended_box_keeps_the_tail_then_handoff_terminal(
+        self, tmp_path, monkeypatch
+    ):
+        """The other half, and the reason this is a split rather than a
+        replacement: on a durable attended host `/clear` then `/pickup` makes a
+        successor cheap, so the mise run still authors its handoff."""
+        monkeypatch.setattr(
+            "coordinator_core.session.mode_resolution."
+            "_compaction_default_for_environment",
+            lambda env=None: None,
+        )
+        session_id = "session-mise-attended"
+        _under_sentinel(tmp_path, monkeypatch, session_id, mode="mise-en-place")
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "HANDOFF NOW" in text
+        assert "Phase 6" in text
+        assert "then author the handoff" in text
+
+    def test_an_autonomous_sentinel_is_not_a_mise_sentinel_in_either_venue(
+        self, tmp_path, monkeypatch
+    ):
+        """The venue split must not blur the two sentinel modes together: an
+        autonomous run in a cloud reading still gets the plain informational
+        text, with no Phase 6 tail it does not owe."""
+        session_id = "session-autonomous-cloud"
+        _in_a_cloud_reading(monkeypatch)
+        _under_sentinel(tmp_path, monkeypatch, session_id, mode="autonomous")
+        _write_sidecar(session_id, 60)
+        text = _check(session_id)
+        assert "INFORMATIONAL" in text
+        assert "Phase 6" not in text
+
+
+class TestTheCallerEnvReachesTheModeSeam:
+    """`resolve_mode`'s environment rung ends at `env_locality.locality(env)`,
+    whose contract is "`env` IS A PARAMETER, NEVER AN AMBIENT READ". Reading it
+    ambiently is correct on the cold rung and on the warm `isolated=True` leg,
+    and wrong on the warm `isolated=False` leg, where `os.environ` belongs to
+    the daemon rather than to the session that dispatched the hook.
+
+    These pin the THREADING — that whatever env the caller carries is the env
+    the rung resolves against — not a venue answer.
+    """
+
+    def test_an_explicit_caller_env_is_what_the_environment_rung_sees(
+        self, monkeypatch
+    ):
+        seen = []
+
+        def _record(env=None):
+            seen.append(env)
+            return "informational" if (env or {}).get("CLAUDE_CODE_REMOTE") == "true" else None
+
+        monkeypatch.setattr(
+            "coordinator_core.session.mode_resolution."
+            "_compaction_default_for_environment",
+            _record,
+        )
+        session_id = "session-env-threaded"
+        _write_sidecar(session_id, 60)
+        text = pad._check_context_pressure_sync(
+            session_id, "", {"CLAUDE_CODE_REMOTE": "true"}
+        )
+        assert seen and seen[0] == {"CLAUDE_CODE_REMOTE": "true"}
+        assert "INFORMATIONAL" in text
+        assert "HANDOFF NOW" not in text
+
+    def test_a_caller_carrying_no_env_resolves_ambiently_not_by_accident(
+        self, monkeypatch
+    ):
+        """`None` is the standing production case and means "this caller
+        carries none" — the rung still runs, it just has nothing carried to
+        resolve against. It must arrive as `None`, never as an empty mapping
+        that would read as a caller who declared an empty environment."""
+        seen = []
+
+        def _record(env=None):
+            seen.append(env)
+            return None
+
+        monkeypatch.setattr(
+            "coordinator_core.session.mode_resolution."
+            "_compaction_default_for_environment",
+            _record,
+        )
+        session_id = "session-env-absent"
+        _write_sidecar(session_id, 60)
+        assert "HANDOFF NOW" in _check(session_id)
+        assert seen == [None]
+
+    def test_both_mode_reads_carry_the_same_caller_env(self, monkeypatch):
+        """Two keys are read here and both must be told the same thing — a
+        single threaded call site is how the hook stops asking two questions in
+        two different environments."""
+        calls = []
+        real = pad.resolve_mode
+
+        def _spy(key, session_id, env=None):
+            calls.append((key, env))
+            return real(key, session_id, env=env)
+
+        monkeypatch.setattr(pad, "resolve_mode", _spy)
+        session_id = "session-env-both-keys"
+        _write_sidecar(session_id, 60)
+        carried = {"CLAUDE_CODE_REMOTE": "true"}
+        pad._check_context_pressure_sync(session_id, "", carried)
+        assert [key for key, _ in calls] == ["autonomous", "compaction_warnings"]
+        assert all(env is carried for _, env in calls)

@@ -462,13 +462,27 @@ def no_console_passthrough_kwargs() -> dict:
     handles, and the fd is what a redirection (a shell ``>``, a pytest
     ``capfd``) actually moved. A detached process (``pythonw``, a service) or
     a captured-object stream has no fd at all -- there is nothing to pass
-    through, so those degrade to plain inheritance rather than raising.
+    through, so those route through ``subprocess.PIPE`` instead (captured
+    onto the returned ``CompletedProcess``, never silently inherited).
 
     POSIX: the returned mapping is the fds alone (``no_console_creationflags()``
     contributes ``{}`` there), which is what inheritance already does -- so
     this is behaviour-neutral off Windows, by construction rather than by a
     platform branch.
+
+    Fileno-less stream (the in-process warm-server path -- ``sys.stdout``/
+    ``sys.stderr`` swapped for a capture buffer, e.g. under
+    ``contextlib.redirect_stderr``): there is no real fd to hand over, but
+    silently omitting the key is not behaviour-neutral there the way it is
+    for a genuinely detached/console-less launcher -- ``subprocess.run``
+    then defaults that stream to ``None``, which inherits THIS process's
+    real OS-level handle rather than the warm server's redirected stream,
+    so the child's output lands somewhere the warm server never reads and
+    is lost. Route that leg through ``subprocess.PIPE`` instead: the child's
+    output is captured onto the returned ``CompletedProcess`` (observable),
+    never silently inherited past the redirect.
     """
+    import subprocess
     import sys
 
     kwargs: dict = dict(no_console_creationflags())
@@ -476,6 +490,7 @@ def no_console_passthrough_kwargs() -> dict:
         try:
             fd = stream.fileno()
         except (AttributeError, ValueError, OSError):
+            kwargs[key] = subprocess.PIPE
             continue
         if fd >= 0:
             kwargs[key] = fd

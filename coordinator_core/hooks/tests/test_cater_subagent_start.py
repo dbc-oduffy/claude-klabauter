@@ -35,6 +35,7 @@ from coordinator_core.hooks.cater_subagent_start import (
     BLOCKS_COMPANION_MARKER_PREFIX,
     SIDECAR_MISS_MARKER,
     SIDECAR_MISS_NO_FOREIGN_WRITE,
+    SIDECAR_MISS_NOTICE_LEAD,
     SIDECAR_PATH_MARKER_PREFIX,
     _compose_blocks_pointer_text,
     _compose_sidecar_miss_text,
@@ -195,17 +196,51 @@ def test_eligible_type_with_missed_provisioning_emits_miss_marker(
     git_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC5's partial-catering clause: eligible + blocks resolve, but
-    provisioning itself comes back empty (simulated by clearing
-    session_id, which `_provision` requires)."""
+    provisioning itself comes back empty.
+
+    Asserts on `SIDECAR_MISS_NOTICE_LEAD`, not `SIDECAR_MISS_MARKER`: the
+    marker is carried by the NO-PATH miss body alone, and this payload --
+    eligible, no `agent_id` -- now gets a sentinel and therefore the
+    path-bearing body. The lead is the one string every miss body carries
+    and no offer body does, which is the fact this test is about."""
     import coordinator_core.hooks.cater_subagent_start as mod
 
     monkeypatch.setattr(mod, "_provision", lambda *a, **k: None)
     payload = _payload(ELIGIBLE_TYPE, "session-miss-1", str(git_repo), contract_blocks=[SNIPPET_A])
     result = compose_catering(payload, cwd=str(git_repo))
 
-    assert SIDECAR_MISS_MARKER in result
-    assert SIDECAR_PATH_MARKER_PREFIX not in result
+    assert SIDECAR_MISS_NOTICE_LEAD in result
     assert SNIPPET_A_BODY in result  # blocks leg is independent of the sidecar leg
+
+
+def test_eligible_type_with_report_type_map_gets_the_mapped_template(
+    git_repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C6: `compose_catering` never sets payload["type"] itself -- the real
+    SubagentStart hook shape. A reviewer-typed dispatch with a
+    `report_type_map` row must still land its sidecar in the MAPPED
+    template, not the legacy run-report shape, once `_provision` resolves
+    `policy.report_type_map` at this seam."""
+    policy = tmp_path / "subagent-sandbox-policy.yaml"
+    policy.write_text(
+        "report_sidecar:\n"
+        f"  - {ELIGIBLE_TYPE}\n"
+        "report_type_map:\n"
+        f"  {ELIGIBLE_TYPE}: review-findings\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy))
+
+    payload = _payload(ELIGIBLE_TYPE, "session-report-type-map-seam", str(git_repo))
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    marker_line = next(
+        line for line in result.splitlines() if line.startswith(SIDECAR_PATH_MARKER_PREFIX)
+    )
+    rel_path = marker_line[len(SIDECAR_PATH_MARKER_PREFIX):]
+    text = (git_repo / rel_path).read_text(encoding="utf-8")
+    assert "## Findings" in text
+    assert "## Divergence from plan" not in text
 
 
 def test_ineligible_type_stays_silent_on_sidecar_but_still_gets_blocks(git_repo: Path) -> None:
@@ -368,9 +403,14 @@ def test_composed_output_is_wholly_accounted_for_by_the_three_declared_legs(
         expected_sidecar_leg = _compose_sidecar_offer_text(sidecar_rel_path)
         resolved_sidecar_path = sidecar_rel_path
     else:
-        assert SIDECAR_MISS_MARKER in result
-        expected_sidecar_leg = _compose_sidecar_miss_text()
-        resolved_sidecar_path = ""
+        # The miss arm is path-BEARING for this payload (eligible, no
+        # `agent_id`): a sentinel is written and named with the same
+        # `sidecar_path:` marker an offer uses, so the leg is rebuilt from
+        # the sentinel path exactly as the offer arm above rebuilds its own.
+        assert SIDECAR_MISS_NOTICE_LEAD in result
+        sentinel_rel_path = _marker_rel_path(result, SIDECAR_PATH_MARKER_PREFIX)
+        expected_sidecar_leg = _compose_sidecar_miss_text(sentinel_rel_path)
+        resolved_sidecar_path = sentinel_rel_path
 
     assert result.startswith(expected_sidecar_leg), "sidecar leg must lead the composition"
     remainder = result[len(expected_sidecar_leg):]
@@ -1317,6 +1357,159 @@ def test_a_non_receipt_type_gets_a_sentinel_without_a_receipt_block(tmp_path, mo
     assert "review_receipt:" not in doc
 
 
+# ---------------------------------------------------------------------------
+# The no-`agent_id` population: an unnamed dispatch whose payload carries no
+# agent id at all. `state/bug-backlog/2026-09-01-an-integrator-ran-with-no-
+# provisioned-sidecar.yaml` § RECURRENCE.
+# ---------------------------------------------------------------------------
+
+INTEGRATOR_TYPE = "coordinator:review-integrator"
+
+
+@pytest.fixture
+def integrator_policy_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Widen the synthetic policy to the integrator type. The autouse
+    `_policy_env` fixture's roster is code-reviewer only, and the guard
+    branch under test keys on an `integrator_receipt`, which is spliced
+    only for a type the roster admits."""
+    policy = tmp_path / "integrator-policy.yaml"
+    policy.write_text(
+        "report_sidecar:\n"
+        f"  - {ELIGIBLE_TYPE}\n"
+        f"  - {INTEGRATOR_TYPE}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy))
+
+
+def _force_provisioning_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Drive the miss leg without disturbing the payload.
+
+    The older miss tests clear `session_id` to make `_provision` come back
+    empty, which cannot be used here: `_write_miss_sentinel` needs that same
+    `session_id` to resolve a share directory, so clearing it suppresses the
+    sentinel this test exists to assert. Patching `_provision` alone leaves
+    every other input at the shape a live dispatch carries."""
+    monkeypatch.setattr(
+        cater_subagent_start, "_provision", lambda *a, **k: None
+    )
+
+
+def test_dispatch_with_no_agent_id_gets_a_miss_sentinel_on_disk(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An eligible dispatch carrying NO `agent_id` and a provisioning miss
+    leaves a sentinel FILE, not just marker text.
+
+    An absent `agent_id` is the ordinary unnamed-child shape on live
+    harnesses -- `_provision`'s own nonce branch serves it and stamps
+    `agent_id: ''` into the receipt it writes. Before the fourth arm, the
+    miss leg's `if agent_id and ...` gate excluded exactly that population,
+    so an eligible unnamed dispatch whose provisioning missed left the
+    session share directory empty: indistinguishable, to every scanning
+    consumer, from a dispatch that never happened."""
+    _force_provisioning_miss(monkeypatch)
+    payload = _payload(ELIGIBLE_TYPE, "session-no-agent-id-1", str(git_repo))
+    assert "agent_id" not in payload
+
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    assert SIDECAR_PATH_MARKER_PREFIX in result
+    rel_path = _marker_rel_path(result, SIDECAR_PATH_MARKER_PREFIX)
+    sentinel = git_repo / rel_path
+    assert sentinel.is_file()
+    text = sentinel.read_text(encoding="utf-8")
+    assert "\nprovisioning: missed\n" in text
+    assert f"\nagent_type: {ELIGIBLE_TYPE}\n" in text
+
+
+def test_no_agent_id_sentinel_puts_the_kira_guard_on_the_ran_but_unstamped_branch(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch, integrator_policy_env: None
+) -> None:
+    """The branch, end to end -- not the file's existence.
+
+    `stop_dispatch :: _guard_kira_verdict_routed` scans the session share
+    directory and splits on whether any sibling carries an
+    `integrator_receipt`: with one, an integrator demonstrably ran and the
+    guard says do NOT re-dispatch it; with none, it advises `Owed route:
+    review-integrator` and a discharged integration gets redone. An
+    integrator dispatched with no `agent_id` and a provisioning miss used to
+    land on the second branch."""
+    from coordinator_core.hooks import stop_dispatch
+
+    session_id = "session-no-agent-id-guard-1"
+    share_dir = Path(machinery_paths.share_dir(str(git_repo), session_id))
+    share_dir.mkdir(parents=True, exist_ok=True)
+    (share_dir / "coordinator-overengineering-reviewer-kira.md").write_text(
+        "---\n"
+        "agent_type: coordinator:overengineering-reviewer\n"
+        "spawned_at: 2026-09-17T15:37:21.868241+00:00\n"
+        "findings_count: 6\n"
+        "---\n\n## Verdict\n",
+        encoding="utf-8",
+    )
+
+    _force_provisioning_miss(monkeypatch)
+    compose_catering(
+        _payload(INTEGRATOR_TYPE, session_id, str(git_repo)), cwd=str(git_repo)
+    )
+
+    verdict = stop_dispatch._guard_kira_verdict_routed(
+        {"session_id": session_id, "cwd": str(git_repo)}
+    )
+
+    rendered = repr(verdict)
+    assert "do NOT re-dispatch it" in rendered, (
+        "the integrator's sentinel must carry an integrator_receipt the guard "
+        f"can see -- got {rendered}"
+    )
+    assert "Owed route: review-integrator" not in rendered
+
+
+def test_no_agent_id_sentinels_never_collide_across_same_type_dispatches(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two concurrent same-type dispatches share every input the leaf could
+    key on once `agent_id` is gone, so the leaf is nonce-suffixed -- the
+    2026-08-15 concurrent-same-type incident is what a nonce exists to
+    prevent, and an idempotent hit here would silently give the second
+    dispatch the first's file."""
+    _force_provisioning_miss(monkeypatch)
+    session_id = "session-no-agent-id-collide-1"
+
+    first = _marker_rel_path(
+        compose_catering(_payload(ELIGIBLE_TYPE, session_id, str(git_repo)), cwd=str(git_repo)),
+        SIDECAR_PATH_MARKER_PREFIX,
+    )
+    second = _marker_rel_path(
+        compose_catering(_payload(ELIGIBLE_TYPE, session_id, str(git_repo)), cwd=str(git_repo)),
+        SIDECAR_PATH_MARKER_PREFIX,
+    )
+
+    assert first != second
+    assert (git_repo / first).is_file()
+    assert (git_repo / second).is_file()
+
+
+def test_no_agent_id_and_no_resolved_type_still_writes_nothing(git_repo: Path) -> None:
+    """The fourth arm widens ONE gate and no other: a payload that resolves
+    no type at all never reaches it (the nothing-resolved arm returns
+    first), so it still takes the no-path body and litters no directory."""
+    payload = {"agent_type": "", "session_id": "session-no-type-no-id-1", "cwd": str(git_repo)}
+
+    result = compose_catering(payload, cwd=str(git_repo))
+
+    assert SIDECAR_MISS_MARKER in result
+    assert SIDECAR_PATH_MARKER_PREFIX not in result
+    share_root = Path(machinery_paths.share_root(str(git_repo)))
+    assert not share_root.exists() or list(share_root.iterdir()) == []
+
+
+# Merge note: the block below arrives from `work/machine-a/2026-09-06to11`.
+# It collided textually with the no-`agent_id` block above only because both
+# open with the same policy-fixture idiom; they cover unrelated seams (that one
+# the miss leg's fourth arm, this one `report_type_map` resolution), so both
+# are carried whole rather than one chosen over the other.
 # ---------------------------------------------------------------------------
 # C6 (docs/plans/2026-09-07-doctrine-enforcement-surfaces.md § Approach C6,
 # AC10/AC11): policy.report_type_map is resolved at the

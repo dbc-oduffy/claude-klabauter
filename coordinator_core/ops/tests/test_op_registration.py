@@ -526,6 +526,11 @@ import sys
 import coordinator_core.ops
 coordinator_core.ops._eager_import_all()
 from coordinator_core.ipc import _REGISTRY
+poisoned = coordinator_core.ops.get_poisoned_modules()
+assert not poisoned, (
+    "modules poisoned during _eager_import_all() after "
+    "{order_label} import order: " + repr(poisoned)
+)
 assert "deliverable.cascade_retract" in _REGISTRY, (
     "deliverable.cascade_retract missing from _REGISTRY after "
     "{order_label} import order"
@@ -616,6 +621,11 @@ import coordinator_core.pickup_assemble
 import coordinator_core.ops
 coordinator_core.ops._eager_import_all()
 from coordinator_core.ipc import _REGISTRY
+poisoned = coordinator_core.ops.get_poisoned_modules()
+assert not poisoned, (
+    "modules poisoned during _eager_import_all() after "
+    "pickup_assemble-then-ops import order: " + repr(poisoned)
+)
 # deliverable.cascade_terminal was DELETED 2026-08-27 (kill ledger K-104,
 # 200ms sweep). The import-order hazard this probe guards is unchanged and
 # still worth pinning -- cascade_backstop_sweep exercises the same

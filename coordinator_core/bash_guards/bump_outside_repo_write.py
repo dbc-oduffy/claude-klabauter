@@ -217,8 +217,23 @@ LEAST passable, least disarmable guard in the suite, matching C7's
 `CLASS = 'advisory'` choice on the tool-surface guard for cross-surface
 consistency), explicit `advisory_value` (never the `UNCLASSIFIED` default).
 
+ENVIRONMENT STAND-DOWN -- SHARED, NOT OWNED HERE. Where the capability
+`fleet_present` is false (a managed remote container: one session, a closed
+set of repos granted to it together, no peer team, no memo reader), this bump
+declines to object. It prints an after-the-fact advisory to stderr, appends a
+durable audit line, and returns `None` so the rest of the guard chain runs.
+The decision, the notice text, and the audit line all live in
+`_write_bump_stand_down` -- import and call, never re-derive: this mechanism
+was authored in C4 alone and the window in which C5 and C7 lacked it is
+exactly when a `git commit` into a granted sibling was allowed while the
+identical `Edit` was hard-denied. Consulted at the deny site only, AFTER the
+marker and every exemption (see `_stand_down_instead_of_denying`).
+
 Negative-spec:
   - Does NOT add fail-closed behaviour anywhere -- see § Design posture.
+  - Does NOT return an envelope from the stand-down path, and does NOT
+    change any registration attribute to express it: a stand-down is an
+    environment-conditional decline, not a band or class change.
   - Does NOT add unforgeability machinery to the marker -- consumes C3's
     marker exactly as written.
   - Does NOT enumerate evasions -- no adversarial interpreter-indirection
@@ -287,9 +302,57 @@ from coordinator_core.bash_guards._write_bump_sink_shapes import (
     nearest_existing_ancestor as _nearest_existing_ancestor,
     resolve_relative as _resolve_relative,
 )
+from coordinator_core.bash_guards._write_bump_stand_down import (
+    environment_stands_the_bump_down,
+    log_environment_stand_down,
+    stand_down_notice,
+    stand_down_reason,
+)
 from coordinator_core.session import machinery_paths
 from coordinator_core.trusted_root_guard import _settings_home_dir_from_env
 from coordinator_core.write_guards._case_fold_path import casefold_path
+
+#: This surface's stand-down audit token and tracked-sink filename. Named
+#: per-surface, so the three write-confinement bumps leave three
+#: distinguishable records rather than one ambiguous stream.
+_STAND_DOWN_MARKER = "STAND-DOWN-OUTSIDE-REPO-WRITE"
+_STAND_DOWN_SINK = "outside-repo-write.log"
+_STAND_DOWN_LABEL = "outside-repo-write"
+
+
+def _stand_down_instead_of_denying(
+    anchor_git_root: Optional[str],
+    effective_sid: str,
+    target_label: str,
+    stood_down,
+) -> None:
+    """Record and announce that this bump stood down, and return NOTHING.
+
+    Both legs of this guard (bash and PowerShell) reach their deny site with
+    the same four facts, so the stand-down wiring lives here once rather than
+    twice -- the duplicated-predicate failure mode `_write_bump_stand_down`
+    was extracted to end applies just as much within one module.
+
+    Negative-spec: returns `None`, never an envelope. `dispatch`'s chain loop
+    is `if out is not None: return out`, so any non-`None` value would claim
+    the slot and silently skip every guard registered after this one -- the
+    regression `_write_bump_stand_down.stand_down_notice` records. It also
+    does NOT decide whether to stand down; the caller does that, after its
+    marker check and after every exemption.
+    """
+    log_environment_stand_down(
+        anchor_git_root,
+        effective_sid,
+        target_label,
+        stood_down.evidence,
+        marker=_STAND_DOWN_MARKER,
+        sink_basename=_STAND_DOWN_SINK,
+    )
+    stand_down_notice(
+        stand_down_reason(
+            _STAND_DOWN_LABEL, target_label, anchor_git_root or "", stood_down.evidence
+        )
+    )
 
 
 def _deny(reason: str) -> Dict[str, Any]:
@@ -826,9 +889,12 @@ def check_bump_outside_repo_write(
             cwd=cwd,
         )
 
+        target_label = _no_git_repo_target_label(
+            cmd, cwd, candidate_index, target_dir, raw_target
+        )
         message = render_bump_message(
             agent_class=agent_class,
-            target_repo=_no_git_repo_target_label(cmd, cwd, candidate_index, target_dir, raw_target),
+            target_repo=target_label,
             session_repo=anchor_git_root_str,
             gitdir=anchor_gitdir,
             session_id=effective_sid,
@@ -837,6 +903,19 @@ def check_bump_outside_repo_write(
             destination_owner=destination_owner,
             raw_target=raw_target if raw_target != target_dir else "",
         )
+        # Consulted HERE and nowhere earlier: every applicability gate, the
+        # marker, and every exemption above have already resolved that this
+        # command WOULD bump. The question left is whether the rule is
+        # coherent on this host at all -- see `_write_bump_stand_down`.
+        # `anchor_git_root_str`, not `target_dir`: the target resolves under
+        # no git root by this guard's own predicate, so there is no `.git/`
+        # there to hold an audit line.
+        stood_down = environment_stands_the_bump_down(env)
+        if stood_down is not None:
+            _stand_down_instead_of_denying(
+                anchor_git_root_str, effective_sid, target_label, stood_down
+            )
+            return None
         return _deny(message)
 
     return None
@@ -1063,9 +1142,10 @@ def _check_bump_outside_repo_write_powershell(
             cwd=cwd,
         )
 
+        target_label = "no git repo (%s)" % target_dir
         message = render_bump_message(
             agent_class=agent_class,
-            target_repo="no git repo (%s)" % target_dir,
+            target_repo=target_label,
             session_repo=anchor_git_root_str,
             gitdir=anchor_gitdir,
             session_id=effective_sid,
@@ -1074,6 +1154,15 @@ def _check_bump_outside_repo_write_powershell(
             destination_owner=destination_owner,
             raw_target=raw_target if raw_target != target_dir else "",
         )
+        # Same placement as the bash leg above -- after the marker and every
+        # exemption, immediately before the deny is composed. A stand-down
+        # that fired earlier would suppress bumps this host still wants.
+        stood_down = environment_stands_the_bump_down(env)
+        if stood_down is not None:
+            _stand_down_instead_of_denying(
+                anchor_git_root_str, effective_sid, target_label, stood_down
+            )
+            return None
         return _deny(message)
 
     return None

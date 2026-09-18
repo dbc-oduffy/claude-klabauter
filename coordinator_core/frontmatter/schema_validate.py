@@ -1128,18 +1128,22 @@ def _cf_awaiting_gate_needs_dependency(fm: dict) -> ErrorDict | None:
         blocked_by = fm.get('blocked_by')
         has_blocked_by = bool(blocked_by) and len(blocked_by) > 0
 
-        notes = fm.get('blocking_notes')
-        has_notes = bool(notes) and str(notes).strip() != ''
+        # gate_notes is blocking_notes' current name (handoff schema 8.11.0, DR-190 §13);
+        # reading only the deprecated key rejected batons authored the current way.
+        has_notes = any(
+            bool(fm.get(key)) and str(fm.get(key)).strip() != ''
+            for key in ('gate_notes', 'blocking_notes')
+        )
 
         if not (has_dep or has_blocked_by or has_notes):
             return {
                 'field': 'gate_dependency',
                 'error': (
                     'awaiting_gate requires at least one of gate_dependency (deprecated), '
-                    'blocked_by, or blocking_notes'
+                    'blocked_by, or gate_notes'
                 ),
                 'hint': (
-                    'Name the gate: a non-empty blocked_by list, a blocking_notes string '
+                    'Name the gate: a non-empty blocked_by list, a gate_notes string '
                     'describing the condition, or (deprecated) a one-line gate_dependency.'
                 ),
             }
@@ -7565,7 +7569,7 @@ def validate_frontmatter_obj(fm_dict: dict, schema_obj: dict) -> dict:
 _LINT_SIDECAR_RE = re.compile(
     r'\.(prior-art-check|docs-check|coverage-check|plan-coverage-check|'
     r'plan-review-check|schema-migration-audit|review-[^./]+|[^./]*-review|review|'
-    r'phase0|node-map)\b'
+    r'phase0|node-map|execution-record)\b'
 )
 
 

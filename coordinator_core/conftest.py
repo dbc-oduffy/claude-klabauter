@@ -1070,7 +1070,11 @@ def _pin_environment_answered_mode_defaults(monkeypatch):
         monkeypatch.setattr(
             "coordinator_core.session.mode_resolution."
             "_compaction_default_for_environment",
-            lambda: None,
+            # One positional `env`, matching the real signature: the registry
+            # entry calls this with the caller's env, so a zero-arg stub
+            # abstained by raising `TypeError` into the resolver's fail-open
+            # `except` rather than by answering. Same pin, honestly made.
+            lambda env=None: None,
         )
     except (ImportError, AttributeError):  # pragma: no cover - import-order safety
         pass

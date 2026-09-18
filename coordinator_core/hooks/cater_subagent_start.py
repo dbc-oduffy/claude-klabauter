@@ -649,11 +649,47 @@ def _compute_sentinel_leaf(agent_id: str) -> Optional[str]:
     return f"{sanitized}-{digest}"
 
 
+def _compute_unnamed_sentinel_leaf(agent_type: str) -> Optional[str]:
+    """Leaf for the miss-leg sentinel of a dispatch that carries NO
+    `agent_id` at all -- the population `_compute_sentinel_leaf` cannot
+    serve, because its whole key is that id.
+
+    An absent `agent_id` is not a malformed payload. Several live harness
+    shapes spawn an unnamed child with the field empty or missing, and
+    `_provision` already handles that population by name: its
+    `provision_key`/`derived_key` resolution falls through to a random-nonce
+    leaf whenever `agent_id` is falsy, and the sidecars it writes there
+    carry `agent_id: ''` in their receipt block. This function is that same
+    fallback on the miss leg, so the two legs cover the same population
+    rather than one silently covering less than the other.
+
+    Nonce, not digest: with no `agent_id` there is nothing stable to key on,
+    so there is no identity to be idempotent about and a re-fired dispatch
+    is MEANT to open a new doc -- `_provision`'s own nonce branch states the
+    same rationale. The EM-derivability argument that keeps the raw
+    `a<name>-<16hex>` named shape sentinel-less does not reach here: this
+    arm's consumer is `stop_dispatch :: _guard_kira_verdict_routed`, which
+    SCANS the session share directory and classifies on frontmatter, never
+    on a derived path.
+
+    Returns `None` when `agent_type` sanitizes to a degenerate result -- the
+    caller must not write a path-less sentinel.
+    """
+    sanitized = _sanitize_segment(agent_type)
+    if sanitized is None:
+        return None
+    return f"{sanitized}-{secrets.token_hex(4)}"
+
+
 def _write_miss_sentinel(
-    payload: Dict[str, Any], cwd: Optional[str], agent_id: str, agent_type: str
+    payload: Dict[str, Any],
+    cwd: Optional[str],
+    agent_id: str,
+    agent_type: str,
+    leaf: Optional[str] = None,
 ) -> str:
     """Write (or idempotently reuse) the miss-leg sentinel scaffold for a
-    named dispatch that lost its report sidecar to the provisioning race
+    dispatch that lost its report sidecar to the provisioning race
     (`docs/plans/2026-08-25-a-missed-sidecar-leaves-a-file-the-em-ca.md`
     AC1/AC4/AC5/AC7). Returns the sentinel's repo-relative path, or `""` on
     any failure or when no sentinel is derivable.
@@ -689,7 +725,10 @@ def _write_miss_sentinel(
     actually wrote bytes, never on an idempotent hit.
     """
     try:
-        leaf = _compute_sentinel_leaf(agent_id)
+        # `leaf` pre-resolved by the caller is the no-`agent_id` population
+        # (`_compute_unnamed_sentinel_leaf`); everything else keys on the id.
+        if leaf is None:
+            leaf = _compute_sentinel_leaf(agent_id)
         if leaf is None:
             return ""
 
@@ -839,9 +878,14 @@ def _resolve_sidecar_leg(
         never catered a sidecar at all.
       - an eligible type whose `_provision` came back empty also emits the
         miss notice (unchanged) -- an eligible dispatch is told, never
-        left to read silence as ineligibility. Same canonical-shape gate
-        as above applies: a sentinel is written and named only when
-        `agent_id` is in the EM-derivable canonical shape.
+        left to read silence as ineligibility. A sentinel is written and
+        named for every such dispatch EXCEPT the raw `a<name>-<16hex>`
+        named-teammate shape, whose consumer is the polling EM and whose
+        hex no EM can derive. A dispatch carrying no `agent_id` at all is
+        served too, on a leaf minted the way `_provision` mints its own --
+        that population is unnamed, not malformed, and excluding it left
+        the scanning guard blind to exactly the dispatches this leg exists
+        to make legible.
 
     `agent_id`/`agent_type`/`subagent_type` arrive pre-resolved from the
     caller (`compose_catering`) rather than re-derived here --
@@ -952,16 +996,36 @@ def _resolve_sidecar_leg(
     # underivable and its consumer IS the polling EM), pinned by
     # `test_raw_fallback_shape_gets_no_sentinel`. An unnamed id carries no
     # `@` and matches neither named shape, so this arm cannot reach it.
+    #
+    # FOURTH ARM -- a dispatch carrying NO `agent_id` gets one too, and the
+    # third arm above could not reach it. `if agent_id and ...` reads as a
+    # malformed-payload guard and is not one: an absent id is the ordinary
+    # shape for an unnamed child on several live harnesses, and it is the
+    # shape `_provision` itself already serves -- its nonce branch fires on
+    # exactly `agent_id` falsy, and the sidecars it writes there carry
+    # `agent_id: ''`. So the OFFER leg covered this population and the MISS
+    # leg did not: an eligible unnamed dispatch whose provisioning came back
+    # empty left nothing on disk at all, which is the guard-blinding state
+    # the third arm exists to prevent, still reachable through the one
+    # population that arm's gate excluded. The leaf cannot key on the id
+    # (there is none), so it is minted the same way `_provision` mints its
+    # own -- `_compute_unnamed_sentinel_leaf`.
+    stamped_type = _receipt_agent_type(
+        agent_type or "", subagent_type or "", policy.report_sidecar
+    )
     sentinel_path = ""
-    if agent_id and (
-        _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id)
-        or not _is_named_teammate_agent_id(agent_id)
-    ):
+    if agent_id:
+        if _NAMED_TEAMMATE_CANONICAL_SHAPE_RE.fullmatch(agent_id) or not (
+            _is_named_teammate_agent_id(agent_id)
+        ):
+            sentinel_path = _write_miss_sentinel(payload, cwd, agent_id, stamped_type)
+    else:
         sentinel_path = _write_miss_sentinel(
             payload,
             cwd,
-            agent_id,
-            _receipt_agent_type(agent_type or "", subagent_type or "", policy.report_sidecar),
+            "",
+            stamped_type,
+            leaf=_compute_unnamed_sentinel_leaf(stamped_type),
         )
     return sentinel_path, _compose_sidecar_miss_text(
         sentinel_path, is_named=bool(agent_id and _is_named_teammate_agent_id(agent_id))

@@ -234,6 +234,17 @@ def _assert_invoke_success(result: subprocess.CompletedProcess, op: str) -> dict
 class TestChangelogAppendDayInvoke:
     """Smoke: changelog.append_day via the real invoke path exits 0 and writes the artifact."""
 
+    @pytest.mark.skip(
+        reason=(
+            "Attributed by state/handoffs/2026-08-23_125733_"
+            "2026-08-21_180813_engine-half-of-the-roadmap-sprint-spine-split.md: "
+            "dispatch refused with 'engine root has no build stamp -- not a "
+            "published engine'. Environmental to this source tree (claude-klabauter), not "
+            "the published klabauter engine mirror the real dispatch path runs "
+            "against; disposed of here per docs/plans/"
+            "2026-09-06-engine-half-roadmap-verification-debt.md C4/AC5."
+        )
+    )
     def test_invoke_exit_0_and_writes_changelog_file(self, tmp_path: Path) -> None:
         """changelog.append_day invoke: exit 0, valid JSON-RPC result, artifact on disk."""
         repo = _make_git_repo(tmp_path / "repo")
@@ -292,6 +303,17 @@ class TestChangelogBackfillGapsInvoke:
     — asserting the artifact is best-effort; the hard invariant is exit 0 + valid JSON.
     """
 
+    @pytest.mark.skip(
+        reason=(
+            "Attributed by state/handoffs/2026-08-23_125733_"
+            "2026-08-21_180813_engine-half-of-the-roadmap-sprint-spine-split.md: "
+            "dispatch refused with 'engine root has no build stamp -- not a "
+            "published engine'. Environmental to this source tree (claude-klabauter), not "
+            "the published klabauter engine mirror the real dispatch path runs "
+            "against; disposed of here per docs/plans/"
+            "2026-09-06-engine-half-roadmap-verification-debt.md C4/AC5."
+        )
+    )
     def test_invoke_exit_0_and_valid_result(self, tmp_path: Path) -> None:
         """changelog.backfill_gaps invoke: exit 0, valid JSON-RPC result, artifact on disk
         (if commits exist in today's UTC window — expected for a freshly-committed test repo)."""
@@ -350,6 +372,17 @@ class TestChangelogBackfillGapsInvoke:
 class TestCompletionReconcileCommitsInvoke:
     """Smoke: completion.reconcile_commits via the real invoke path exits 0 and mutates plan."""
 
+    @pytest.mark.skip(
+        reason=(
+            "Attributed by state/handoffs/2026-08-23_125733_"
+            "2026-08-21_180813_engine-half-of-the-roadmap-sprint-spine-split.md: "
+            "dispatch refused with 'engine root has no build stamp -- not a "
+            "published engine'. Environmental to this source tree (claude-klabauter), not "
+            "the published klabauter engine mirror the real dispatch path runs "
+            "against; disposed of here per docs/plans/"
+            "2026-09-06-engine-half-roadmap-verification-debt.md C4/AC5."
+        )
+    )
     def test_invoke_exit_0_and_folds_shas_into_plan(self, tmp_path: Path) -> None:
         """completion.reconcile_commits invoke: exit 0, valid result, plan file mutated."""
         repo = _make_git_repo(tmp_path / "repo")
@@ -405,6 +438,17 @@ class TestCompletionReconcileCommitsInvoke:
 class TestPlanAppendSessionInvoke:
     """Smoke: plan.append_session via the real invoke path exits 0 and appends session entry."""
 
+    @pytest.mark.skip(
+        reason=(
+            "Attributed by state/handoffs/2026-08-23_125733_"
+            "2026-08-21_180813_engine-half-of-the-roadmap-sprint-spine-split.md: "
+            "dispatch refused with 'engine root has no build stamp -- not a "
+            "published engine'. Environmental to this source tree (claude-klabauter), not "
+            "the published klabauter engine mirror the real dispatch path runs "
+            "against; disposed of here per docs/plans/"
+            "2026-09-06-engine-half-roadmap-verification-debt.md C4/AC5."
+        )
+    )
     def test_invoke_exit_0_and_appends_session_entry(self, tmp_path: Path) -> None:
         """plan.append_session invoke: exit 0, valid result, session entry in plan file."""
         repo = _make_git_repo(tmp_path / "repo")
@@ -452,6 +496,17 @@ class TestPlanAppendSessionInvoke:
 class TestReviewTrailWriteInvoke:
     """Smoke: review_trail.write via the real invoke path exits 0 and writes JSON artifact."""
 
+    @pytest.mark.skip(
+        reason=(
+            "Attributed by state/handoffs/2026-08-23_125733_"
+            "2026-08-21_180813_engine-half-of-the-roadmap-sprint-spine-split.md: "
+            "dispatch refused with 'engine root has no build stamp -- not a "
+            "published engine'. Environmental to this source tree (claude-klabauter), not "
+            "the published klabauter engine mirror the real dispatch path runs "
+            "against; disposed of here per docs/plans/"
+            "2026-09-06-engine-half-roadmap-verification-debt.md C4/AC5."
+        )
+    )
     def test_invoke_exit_0_and_writes_json_artifact(self, tmp_path: Path) -> None:
         """review_trail.write invoke: exit 0, valid result, JSON artifact on disk and parseable."""
         repo = _make_git_repo(tmp_path / "repo")

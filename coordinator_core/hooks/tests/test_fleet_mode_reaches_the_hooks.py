@@ -199,10 +199,16 @@ class TestContextPressureCompactionWarningsFleetWins:
         """The whole point of the environment leg: on a box where `/handoff`
         is not an available remedy, the advisory stops recommending it WITHOUT
         anyone having set anything. Nothing to install, nothing to remember."""
+        # ONE POSITIONAL `env`, matching the real signature: the registry
+        # entry calls this with the caller's env, so a zero-arg stub answered
+        # nothing -- it raised `TypeError` into the resolver's fail-open
+        # `except`, and this test asserted against the STATIC default with the
+        # leg it names never run. A stub whose arity does not match the thing
+        # it stands in for pins the fallback, not the seam.
         monkeypatch.setattr(
             "coordinator_core.session.mode_resolution."
             "_compaction_default_for_environment",
-            lambda: "informational",
+            lambda env=None: "informational",
         )
         _write_usage("cp-cloud", 50.0, 1_000_000.0)
         text = postuse_advisory_dispatch._check_context_pressure_sync(
@@ -222,7 +228,7 @@ class TestContextPressureCompactionWarningsFleetWins:
         monkeypatch.setattr(
             "coordinator_core.session.mode_resolution."
             "_compaction_default_for_environment",
-            lambda: "informational",
+            lambda env=None: "informational",
         )
         _write_fleet({"compaction_warnings": "standard"})
         _write_usage("cp-override", 50.0, 1_000_000.0)
@@ -330,7 +336,7 @@ class TestBatonAffordanceIsNamedInBothBands:
         monkeypatch.setattr(
             "coordinator_core.session.mode_resolution."
             "_compaction_default_for_environment",
-            lambda: "informational",
+            lambda env=None: "informational",
         )
         _write_usage("cp-43", 50.0, 1_000_000.0)
         text = postuse_advisory_dispatch._check_context_pressure_sync(

@@ -349,42 +349,72 @@ def test_redir_escape_quote_target_matrix(cmd, expected_fires):
 
 
 # ---------------------------------------------------------------------------
-# C2 (`docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md`,
-# AC5) -- the guard already computes a safe name; on a match it now applies
-# that name as `updatedInput` instead of asking the agent to adopt it. No
-# `permissionDecision` is emitted for a rewrite (shape (f) in
-# `_hook_envelope.py`), so `permissionDecision` is absent, not `"deny"`.
+# C2 (docs/plans/2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md):
+# the guard already computed a sanitized suggestion (`_safe_suggestion`) for
+# the advisory message text and then relied on the agent to apply it by hand.
+# It must instead return that sanitized name directly as `updatedInput`, so
+# the call is corrected in place with no compliance step.
 # ---------------------------------------------------------------------------
 
 
-def test_rewrite_returns_updated_input_with_sanitized_command():
-    out = m.check(_payload('echo x > "bad?name.txt"'))
+def test_illegal_redirect_target_returns_updated_input_with_sanitized_name():
+    out = m.check(_payload('echo x > bad?name.txt'))
     assert out is not None
     hso = out.get("hookSpecificOutput", {})
     assert "permissionDecision" not in hso
-    updated_input = hso.get("updatedInput")
-    assert updated_input is not None
-    new_cmd = updated_input.get("command")
-    assert new_cmd is not None
-    assert "bad?name.txt" not in new_cmd
-    assert "bad-name.txt" in new_cmd
+    updated = hso.get("updatedInput")
+    assert updated is not None
+    assert updated["command"] == 'echo x > bad-name.txt'
 
 
-def test_rewrite_preserves_other_tool_input_keys():
-    payload = _payload('echo x > "bad?name.txt"')
+def test_updated_input_preserves_other_tool_input_keys():
+    payload = _payload('echo x > bad?name.txt')
     payload["tool_input"]["description"] = "keep me"
     out = m.check(payload)
-    updated_input = out["hookSpecificOutput"]["updatedInput"]
-    assert updated_input["description"] == "keep me"
+    updated = out["hookSpecificOutput"]["updatedInput"]
+    assert updated["description"] == "keep me"
 
 
-def test_rewrite_applies_to_mv_destination():
-    out = m.check(_payload("mv a.txt b?.txt"))
-    updated_input = out["hookSpecificOutput"]["updatedInput"]
-    assert "b?.txt" not in updated_input["command"]
-    assert "b-.txt" in updated_input["command"] or "b.txt" in updated_input["command"]
+def test_updated_input_still_carries_advisory_context():
+    # Merge note: this asserted the literal "ADVISORY". The register on
+    # `work/machine-a/2026-09-06to11` dropped that prefix — the message now
+    # states the fact and the correction and stops, per CLAUDE.md § "Agent-facing
+    # message text is a register" (one fact, once; no self-legitimacy). The
+    # claim worth pinning was never the prefix, it was that a rewritten call
+    # still explains ITSELF rather than silently changing under the agent.
+    out = m.check(_payload('echo x > bad?name.txt'))
+    hso = out["hookSpecificOutput"]
+    assert "additionalContext" in hso
+    ctx = hso["additionalContext"]
+    assert "bad?name.txt" in ctx, "the context must name what was wrong"
+    assert "bad-name.txt" in ctx, "the context must name what it was changed to"
 
 
+def test_updated_input_still_never_denies():
+    out = m.check(_payload('echo x > bad?name.txt'))
+    hso = out.get("hookSpecificOutput", {})
+    assert hso.get("permissionDecision") != "deny"
+
+
+def test_mv_dest_illegal_name_returns_updated_input():
+    out = m.check(_payload('mv a.txt b?.txt'))
+    hso = out["hookSpecificOutput"]
+    assert hso["updatedInput"]["command"] == 'mv a.txt b-.txt'
+
+
+def test_quoted_redirect_target_updated_input_preserves_quoting():
+    out = m.check(_payload('echo x > "bad?name.txt"'))
+    hso = out["hookSpecificOutput"]
+    assert hso["updatedInput"]["command"] == 'echo x > "bad-name.txt"'
+
+
+# Merge note: `work/machine-a/2026-09-06to11` grew its own suite for this same
+# AC. Its assertions on the rewrite itself are a looser restatement of the six
+# above (substring rather than exact command), so they are not carried. This
+# one is kept because it covers a distinct claim none of them make: that the
+# context stopped ASKING the agent to apply the fix. A rewrite that corrects
+# the call in place while still saying "Use instead" would pass every test
+# above and defeat the AC's purpose.
 def test_rewrite_context_does_not_ask_agent_to_act():
     out = m.check(_payload('echo x > "bad?name.txt"'))
     ctx = out["hookSpecificOutput"].get("additionalContext", "")

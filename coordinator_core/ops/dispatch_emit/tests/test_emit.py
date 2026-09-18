@@ -17,6 +17,7 @@ from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.emit import (
     MalformedAgentOverrideError,
     MixedAgentTypeRowError,
+    UnroutableWorkKindRowError,
     NoWavesError,
     ReviewRosterFragmentError,
     assert_zero_errors,
@@ -411,6 +412,130 @@ def test_spine_text_agent_type_reaches_emitted_call(tmp_path):
     assert "model: 'opus'" in script
 
 
+def _plan_with_row(tmp_path, row_lines: str):
+    """Minimal one-row spine on disk, for the un-routable-row legs below."""
+    plan_path = tmp_path / "plan.md"
+    plan_path.write_text(
+        "# fixture plan\n\n## Tasks\n\n```yaml plan-tasks\n" + row_lines + "```\n",
+        encoding="utf-8",
+    )
+    return plan_path
+
+
+def test_spine_text_change_kind_reaches_wave_row(tmp_path):
+    """The inert-field leg, asserted BEFORE the refusal legs that depend on it.
+
+    ``WaveRow``'s own docstring records that the two agent-override fields
+    first shipped inert because this module's other tests hand-build a
+    ``WaveRow``, which cannot see a break in ``read_spine`` -> ``build_waves``.
+    ``change_kind`` is threaded for ``_row_agent_type``, so if it silently
+    fails to arrive the refusal below never fires and the defect it closes
+    reopens with every test still green. This asserts the field's arrival
+    directly rather than inferring it from behaviour.
+    """
+    plan_path = _plan_with_row(
+        tmp_path,
+        "- id: C1\n"
+        "  title: verifies something\n"
+        "  change_kind: verification\n"
+        "  surface: dispatch_emit\n"
+        "  writes:\n"
+        "    - coordinator_core/ops/dispatch_emit/spine_read.py\n",
+    )
+
+    rows = read_spine(plan_path)
+    assert rows[0].change_kind == "verification"
+    assert build_waves(rows)[0][0].change_kind == "verification"
+
+
+def test_verification_row_writing_only_a_plan_body_raises_unroutable(tmp_path):
+    """The measured case (wf_71d241c7-e62): execution-tier work whose only
+    declared write is an immutable body. No agentType can serve it -- the
+    executor is the plan-body guard's sole block target, the enricher's
+    charter forbids running things -- so emit refuses instead of dispatching
+    a wave that can only be spent."""
+    plan_path = _plan_with_row(
+        tmp_path,
+        "- id: C1\n"
+        "  title: Run the fast tier and close the plan out\n"
+        "  change_kind: verification\n"
+        "  surface: docs/plans/2026-08-13-example.md\n"
+        "  writes:\n"
+        "    - docs/plans/2026-08-13-example.md\n",
+    )
+
+    with pytest.raises(UnroutableWorkKindRowError) as excinfo:
+        compose_script(
+            build_waves(read_spine(plan_path)), name="wf", description="unroutable"
+        )
+    assert "Split the row" in str(excinfo.value)
+
+
+def test_explicit_agent_type_escapes_the_unroutable_refusal(tmp_path):
+    """The escape hatch is the same one ``MixedAgentTypeRowError`` leaves: an
+    explicit row-level ``agent_type:`` short-circuits derivation ahead of the
+    check, so an author who means to force a type is not walled out."""
+    plan_path = _plan_with_row(
+        tmp_path,
+        "- id: C1\n"
+        "  title: Run the fast tier and close the plan out\n"
+        "  change_kind: verification\n"
+        "  surface: docs/plans/2026-08-13-example.md\n"
+        "  writes:\n"
+        "    - docs/plans/2026-08-13-example.md\n"
+        "  agent_type: coordinator:review-integrator\n"
+        # review-integrator has no `_AGENT_MODELS` row, so the override must
+        # name its model -- unrelated to this leg, but MalformedAgentOverrideError
+        # fires downstream of the check under test and would mask it.
+        "  agent_model: sonnet\n",
+    )
+
+    script = compose_script(
+        build_waves(read_spine(plan_path)), name="wf", description="forced"
+    )
+    assert "agentType: 'coordinator:review-integrator'" in script
+
+
+def test_verification_row_writing_an_ordinary_path_still_routes_executor(tmp_path):
+    """Negative control: ``verification`` is only un-routable in combination
+    with an immutable-body-only write set. On an ordinary path the executor
+    both runs and writes, so nothing is refused."""
+    plan_path = _plan_with_row(
+        tmp_path,
+        "- id: C1\n"
+        "  title: verifies something\n"
+        "  change_kind: verification\n"
+        "  surface: dispatch_emit\n"
+        "  writes:\n"
+        "    - coordinator_core/ops/dispatch_emit/spine_read.py\n",
+    )
+
+    script = compose_script(
+        build_waves(read_spine(plan_path)), name="wf", description="ordinary"
+    )
+    assert "agentType: 'coordinator:executor'" in script
+
+
+def test_doc_edit_row_writing_a_plan_body_still_routes_enricher(tmp_path):
+    """The other negative control, and the one that matters most: the
+    write-path derivation is CORRECT and must be left alone. An edit-shaped
+    ``change_kind`` on an immutable body is ordinary enricher work."""
+    plan_path = _plan_with_row(
+        tmp_path,
+        "- id: C1\n"
+        "  title: folds a finding into the plan body\n"
+        "  change_kind: doc-edit\n"
+        "  surface: docs/plans/2026-08-13-example.md\n"
+        "  writes:\n"
+        "    - docs/plans/2026-08-13-example.md\n",
+    )
+
+    script = compose_script(
+        build_waves(read_spine(plan_path)), name="wf", description="enricher"
+    )
+    assert "agentType: 'coordinator:enricher'" in script
+
+
 def test_spine_text_with_neither_agent_key_emits_byte_identically(tmp_path):
     """A spine declaring neither key must still emit byte-identically to the
     pre-existing hand-built ``WaveRow`` path -- the negative-spec twin of
@@ -531,6 +656,64 @@ def test_preflight_blocked_token_match_is_anchored_not_substring():
     assert re.search(pattern, genuine_blocked, re.MULTILINE) is not None
 
 
+def test_preflight_blocked_reason_may_follow_on_the_next_line():
+    """The shape an agent writing markdown actually produces.
+
+    Requiring the reason on the token's OWN line discarded a correct refusal:
+    a report opening with a bare `PREFLIGHT-BLOCKED`, a blank line, then the
+    prose matched neither leg and fell through to the no-verdict message,
+    telling the operator the preflight "did not run" about one that ran and
+    correctly found three gitignored paths in a row's declared scope.
+    Measured 2026-09-17 on `2026-09-11-decided-against-gate-dependency-ruling`.
+    """
+    import re
+
+    from coordinator_core.ops.dispatch_emit.emit import _preflight_halt_gate
+
+    gate = _preflight_halt_gate("preflightResult", "Preflight: commit claimability")
+    match = re.search(r"if \((/.*/m)\.test\(String\(preflightResult", gate)
+    assert match is not None
+    pattern = match.group(1)[1:-2]
+
+    reason_on_next_line = (
+        "PREFLIGHT-BLOCKED\n\nThe following path cannot be committed:\n"
+        "- `.coordinator-local/memo-outbox/x.md` refused by .gitignore:159"
+    )
+    assert re.search(pattern, reason_on_next_line, re.MULTILINE) is not None
+
+    # A bare token is still a verdict -- terse, but blocked, and the halt
+    # appends the agent's whole report either way.
+    assert re.search(pattern, "PREFLIGHT-BLOCKED", re.MULTILINE) is not None
+    # A colon after the token is the other common markdown shape.
+    assert re.search(pattern, "PREFLIGHT-BLOCKED: ignored path", re.MULTILINE) is not None
+
+    # Widening must not have reached the mid-sentence case the anchor exists
+    # for -- that is what test_preflight_blocked_token_match_is_anchored_not_
+    # substring guards, re-asserted here so this test cannot be the one that
+    # loosens it.
+    assert re.search(
+        pattern,
+        "the instructions said to end with 'PREFLIGHT-BLOCKED <reason>'",
+        re.MULTILINE,
+    ) is None
+
+
+def test_widening_blocked_did_not_loosen_the_clear_arm():
+    """The asymmetry that makes the widening safe. BLOCKED and the no-verdict
+    fallthrough both HALT, so matching BLOCKED too eagerly costs only a
+    better-aimed message. CLEAR is the only arm that lets a wave proceed to
+    writing, so it must still reject the prompt's own placeholder and any
+    non-sha.
+    """
+    import re
+
+    pattern = _clear_gate_pattern()
+    for not_a_verdict in ("PREFLIGHT-CLEAR <sha>", "PREFLIGHT-CLEAR", "PREFLIGHT-CLEAR zzzzzzz", ""):
+        assert re.search(pattern, not_a_verdict, re.MULTILINE) is None, not_a_verdict
+    real = "All 4 paths claimable.\nPREFLIGHT-CLEAR 13052ea82bdd5a6"
+    assert re.search(pattern, real, re.MULTILINE) is not None
+
+
 def _clear_gate_pattern():
     """The CLEAR arm's regex, lifted out of the emitted JS."""
     import re
@@ -636,6 +819,30 @@ def test_provenance_requires_reading_the_diff_not_only_the_reports():
     block = _provenance_block()
     assert "git diff --stat" in block
     assert "Read the diff, not just the reports" in block
+
+
+def test_diff_stat_is_not_the_sole_verification_signal():
+    """`git diff --stat` only diffs tracked content -- a brand-new untracked
+    file an executor just created never shows up in it, so treating it as
+    the sole check would silently miss report/tree divergence for anything
+    newly added."""
+    block = _provenance_block()
+    assert "not the sole verification signal" in block
+    assert "git status --porcelain -- <your pathspec>" in block
+    assert "untracked" in block.lower()
+
+
+def test_untracked_additions_named_by_a_report_are_not_treated_as_divergence():
+    """The added untracked-file leg must apply the same
+    named-in-a-report-vs-named-by-none discriminator the tracked-hunk check
+    already applies -- not a bare string match on 'untracked' appearing
+    somewhere in the block."""
+    block = _provenance_block()
+    untracked_idx = block.index("git status --porcelain -- <your pathspec>")
+    surrounding = block[untracked_idx : untracked_idx + 600]
+    assert "named by a report" in surrounding
+    assert "named by no report" in surrounding
+    assert "STOP" in surrounding
 
 
 def test_the_halt_discriminator_is_a_file_no_report_mentions():
@@ -2179,6 +2386,141 @@ def test_markdown_emphasis_does_not_reopen_the_quoting_fail_open():
         "I would have written **COMMIT-LANDED ca1ccc601968ecc57398a523bf13b24ebca6f98e** "
         "had the guard allowed it.\n"
     )
+
+
+def test_preflight_prompt_carries_the_directory_shaped_write_backstop():
+    """Preflight is where a bare directory in `writes:` has to be caught.
+
+    `pathspec.DirectoryShapedWriteError` is trailing-separator-shape only BY
+    DESIGN (staff-eng Finding 13: spine derivation must not depend on worktree
+    state), and its own docstring names the uncaught case -- a bare
+    `state/memo-outbox/sent` naming a real directory. So the emitter is
+    correct and must stay shape-only; what was missing is the on-disk
+    backstop the design defers downstream, which is this phase, because the
+    preflight agent can actually stat the path.
+
+    Measured 2026-09-17 (wf_3be09aed-437): three rows of
+    `docs/plans/2026-09-06-firstmate-tier1-survivors.md` declared bare
+    `coordinator/tests`, `coordinator/docs/wiki` and
+    `coordinator/hooks/scripts`; the plan emitted with no refusal and the
+    wave's commit agent then could not tell whether a new file under
+    `coordinator/tests` was in scope or a divergence. Uncaught, such a row
+    widens the commit from a named file to a whole tree, which is the exact
+    protection a pathspec exists to provide.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+
+    assert "DIRECTORY-SHAPED WRITE" in script
+    # It must refuse an existing directory and NOT a missing file -- the
+    # chunks that create the declared files have not run at preflight time,
+    # so "nonexistent" is the expected state and refusing it would block
+    # every wave.
+    assert "existing DIRECTORY" in script
+    assert "A nonexistent path is FINE" in script
+
+
+def test_emitter_directory_check_stays_trailing_separator_only(tmp_path):
+    """The negative control for the test above, and the more important half.
+
+    A bare directory path must still EMIT cleanly. Tightening
+    `DirectoryShapedWriteError` to an on-disk `is_dir()` is the obvious
+    "fix" and it is a regression: it makes emit depend on the worktree, so
+    the same spine emits or refuses depending on what happens to exist on
+    the box running it. This pins that the refusal did NOT move upstream
+    when the preflight backstop was added.
+    """
+    plan_path = _plan_with_row(
+        tmp_path,
+        "- id: C1\n"
+        "  title: writes a bare directory path\n"
+        "  change_kind: code-edit\n"
+        "  surface: coordinator_core\n"
+        "  writes:\n"
+        # A real directory in this repo, deliberately: the point is that
+        # existing-on-disk does not change the emitter's answer.
+        "    - coordinator_core/ops\n",
+    )
+
+    script = compose_script(
+        build_waves(read_spine(plan_path)), name="wf", description="bare dir"
+    )
+    assert "coordinator_core/ops" in script
+
+
+def test_commit_gate_accepts_the_void_token_so_a_void_wave_can_finish():
+    """A wave with nothing to commit must have a passable answer that is true.
+
+    Before COMMIT-VOID the gate had one shape, so "nothing to commit" and
+    "the commit failed" were the same event to it -- and the commit prompt's
+    own unchanged-paths rule instructed the agent into the refusal that
+    tripped it. Measured 2026-09-17 (wf_5e633cab-517): C1 ruled C2 out, the
+    plan's void condition then forbade editing C2's five files, the wave
+    refused exactly as specified, and the only way to finish the run was to
+    hand-edit the script and cite an EARLIER wave's sha as this wave's
+    delivery. This asserts the honest answer now passes.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    gate = _emitted_gate(script)
+
+    assert gate.search("COMMIT-VOID 5eb6df2ece10cac6f0af23b6f5ceef820eaad17c\n")
+    # Same markdown tolerance as its sibling -- agents emphasise the line they
+    # were told matters, and that is the measured 22% halt class.
+    assert gate.search("**COMMIT-VOID ca1ccc601968ecc57398a523bf13b24ebca6f98e**")
+    assert gate.search(
+        "C2 was voided by C1's answer; nothing to commit.\n"
+        "COMMIT-VOID 5e4a76ea706dd35cc1045f22708f20d64b0d9a91\n"
+    )
+    # The landed arm is untouched by the alternation.
+    assert gate.search("COMMIT-LANDED 5eb6df2ece10cac6f0af23b6f5ceef820eaad17c\n")
+
+
+def test_void_token_does_not_reopen_the_quoting_fail_open():
+    """The void arm extends WHO may pass, never HOW -- the load-bearing test.
+
+    COMMIT-VOID rides the identical anchoring and hex-sha requirement as its
+    sibling, so the widening cannot be the thing that re-admits a refusal
+    quoting its own instructions. The prompt naming this token carries the
+    literal placeholder ``<sha>``, which is not hex however it is decorated,
+    and a commit agent holds that prompt while it writes. Without this
+    assertion the alternation would be a second, untested doorway into the
+    2026-08-21 failure.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+    gate = _emitted_gate(script)
+
+    assert not gate.search("COMMIT-VOID <sha>")
+    assert not gate.search("**COMMIT-VOID <sha>**")
+    assert not gate.search(
+        "The brief says a void wave ends with 'COMMIT-VOID <sha>', but this "
+        "wave had real work the guard refused, so I am not emitting it.\n"
+    )
+    # A sha mid-sentence is not a token line for this arm either.
+    assert not gate.search(
+        "I considered COMMIT-VOID ca1ccc601968ecc57398a523bf13b24ebca6f98e "
+        "before finding the diff.\n"
+    )
+    # And the token must still be a whole line, not a prefix of a longer word.
+    assert not gate.search("COMMIT-VOIDED 5eb6df2ece10cac6f0af23b6f5ceef820eaad17c\n")
+
+
+def test_commit_prompt_tells_a_void_wave_to_report_rather_than_refuse():
+    """The gate and the prompt have to agree, or the token is unreachable.
+
+    A passable shape nothing instructs the agent to produce is dead code: the
+    defect being fixed was precisely a rule that routed a void wave into a
+    refusal. This pins that the emitted prompt names the token, requires BOTH
+    emptiness checks (``git diff --stat`` is blind to an untracked addition,
+    which is how a "void" wave could strand a brand-new file), and forbids
+    the two dishonest escapes.
+    """
+    script = compose_script(_two_wave_fixture(), name="wf", description="two waves")
+
+    assert "COMMIT-VOID" in script
+    assert "git status --porcelain" in script
+    assert "git diff --stat" in script
+    # The two things a void report must never do.
+    assert "do NOT fabricate an empty or placeholder commit" in script
+    assert "as though it were yours" in script
 
 
 def test_commit_gate_is_not_defeated_by_a_refusal_that_quotes_the_token():

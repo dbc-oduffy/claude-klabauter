@@ -360,9 +360,171 @@ def hash_worktree_blobs_via_spawn(
     return dict(zip(paths, shas))
 
 
-def _identity() -> Tuple[str, str]:
+_CONFIG_IDENTITY_MEMO: "list[Tuple[Optional[str], Optional[str]]]" = []
+
+
+def _user_section_identity(path: Path) -> Tuple[Optional[str], Optional[str]]:
+    """``[user] name``/``email`` read out of one git-config file by hand.
+
+    Deliberately a parser, not a ``git config`` call -- see
+    ``_config_identity``. Handles what a real identity config uses: section
+    headers with optional subsections, ``#``/``;`` comments, whitespace
+    around ``=``, and double-quoted values. Anything it does not understand
+    it skips rather than guessing, answering ``None`` for that field.
+
+    Not supported, and the omission is deliberate rather than an oversight:
+    ``include``/``includeIf`` directives are NOT followed. Following them
+    means implementing git's conditional-include matching (gitdir globs,
+    onbranch, case-insensitivity rules) in a commit hot path, and getting it
+    subtly wrong would stamp a WRONG identity rather than fall through to
+    one. An identity reachable only through an include therefore lands on
+    the synthetic rung, which is visible and correctable, instead of on a
+    plausible-looking guess.
+    """
+    name: Optional[str] = None
+    email: Optional[str] = None
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return (None, None)
+
+    in_user = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line[0] in "#;":
+            continue
+        if line.startswith("["):
+            close = line.find("]")
+            if close == -1:
+                in_user = False
+                continue
+            header = line[1:close].strip()
+            section = header.split(None, 1)[0] if header else ""
+            in_user = section.lower() == "user"
+            continue
+        if not in_user or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip().lower()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+            value = value[1:-1]
+        if not value:
+            continue
+        if key == "name" and name is None:
+            name = value
+        elif key == "email" and email is None:
+            email = value
+    return (name, email)
+
+
+def _config_identity(repo: Union[str, Path, None]) -> Tuple[Optional[str], Optional[str]]:
+    """``user.name``/``user.email`` from git's config files, ZERO spawns.
+
+    WHY A PARSER AND NOT ``git config``. ``commit_paths`` holds a pinned
+    zero-spawn invariant (`tests/test_commit_zero_spawn.py`, `assert spawns
+    == []`) because this whole module writes commit objects by hand for
+    exactly that reason -- process creation is the cost, not the query. A
+    first cut of this function asked ``git config --get-regexp`` and the
+    zero-spawn tests stayed GREEN, because they set ``GIT_COMMITTER_*`` and
+    so never reach this rung at all. Measured 2026-09-17 by spying
+    ``subprocess.Popen`` with those vars cleared -- the shape cloud sessions
+    actually run -- it spawned once per resolve: a spawn added to the commit
+    path in precisely the environment the tests do not model. A
+    ``subprocess.run`` spy saw nothing, because ``run_git`` hand-rolls
+    ``Popen``; the wrong instrument reported zero.
+
+    Precedence is git's own, low to high: global, then repo-local, so a repo
+    that sets its own identity wins over the user's. The global file is
+    ``$GIT_CONFIG_GLOBAL`` if set, else ``$XDG_CONFIG_HOME/git/config`` (or
+    ``~/.config/git/config``), else ``~/.gitconfig``. System-level
+    ``/etc/gitconfig`` is read first and lowest.
+
+    Memoized per process: these strings do not move inside a session, and
+    the memo is what keeps repeated commits from re-reading files. Any
+    failure answers ``None`` for that field -- an unreadable or absent
+    config is never a reason to refuse a commit.
+    """
+    if not _CONFIG_IDENTITY_MEMO:
+        candidates: "list[Path]" = [Path("/etc/gitconfig")]
+
+        global_override = os.environ.get("GIT_CONFIG_GLOBAL")
+        if global_override:
+            candidates.append(Path(global_override))
+        else:
+            xdg = os.environ.get("XDG_CONFIG_HOME")
+            try:
+                home = Path(os.path.expanduser("~"))
+            except Exception:
+                home = None
+            if xdg:
+                candidates.append(Path(xdg) / "git" / "config")
+            elif home is not None:
+                candidates.append(home / ".config" / "git" / "config")
+            if home is not None:
+                candidates.append(home / ".gitconfig")
+
+        if repo:
+            try:
+                candidates.append(Path(repo) / ".git" / "config")
+            except Exception:
+                pass
+
+        name: Optional[str] = None
+        email: Optional[str] = None
+        for candidate in candidates:
+            try:
+                if not candidate.is_file():
+                    continue
+            except OSError:
+                continue
+            found_name, found_email = _user_section_identity(candidate)
+            if found_name:
+                name = found_name
+            if found_email:
+                email = found_email
+
+        _CONFIG_IDENTITY_MEMO.append((name, email))
+    return _CONFIG_IDENTITY_MEMO[0]
+
+
+def _identity(repo: Union[str, Path, None] = None) -> Tuple[str, str]:
+    """The author/committer identity this route stamps, in three rungs.
+
+    GIT CONFIG IS THE RUNG THAT WAS MISSING, and its absence was visible on
+    GitHub rather than in any test. This route writes the commit object
+    itself, so it stamps whatever it resolves here -- it never inherits the
+    identity a plain `git commit` would pick up from `user.name`/`user.email`.
+    Reading only the `GIT_*` env vars meant that in any environment which
+    configures identity the ordinary way (git config, no env vars) EVERY
+    commit this route made was stamped `coordinator <coordinator@local>`,
+    which GitHub renders **Unverified**. Measured 2026-09-17: a dispatched
+    wave's commit landed unverified beside the EM's own verified ones on the
+    same branch, differing only in which route wrote them.
+
+    That is a provenance signal reviewers read, and it degraded silently:
+    the commit succeeds, the sha is real, and nothing local looks wrong.
+
+    Precedence, and it is git's own:
+      1. ``GIT_COMMITTER_*`` / ``GIT_AUTHOR_*`` env -- an explicit override
+         a caller set on purpose, so it outranks config exactly as it does
+         for git itself.
+      2. ``user.name`` / ``user.email`` from git config.
+      3. ``coordinator`` / ``coordinator@local`` -- a last-resort synthetic
+         so a repo with no identity at all still commits rather than
+         refusing. Reaching this rung now means identity is genuinely
+         absent, not merely configured somewhere this function did not look.
+
+    The two fields resolve INDEPENDENTLY: a config carrying only
+    ``user.email`` contributes that and leaves the name to fall through,
+    rather than being discarded because its partner was missing.
+    """
     name = os.environ.get("GIT_COMMITTER_NAME") or os.environ.get("GIT_AUTHOR_NAME")
     email = os.environ.get("GIT_COMMITTER_EMAIL") or os.environ.get("GIT_AUTHOR_EMAIL")
+    if not name or not email:
+        config_name, config_email = _config_identity(repo)
+        name = name or config_name
+        email = email or config_email
     return name or "coordinator", email or "coordinator@local"
 
 
@@ -798,7 +960,7 @@ def commit_paths(
             "deliberate marker commit."
         )
 
-    name, email = _identity()
+    name, email = _identity(repo)
     who = f"{name} <{email}> {_stamp()}"
     body = f"tree {root_tree}\n"
     if old_head:

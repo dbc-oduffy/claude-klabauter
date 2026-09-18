@@ -795,6 +795,13 @@ class TestDeploymentStateGates:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'gate_dependency' for e in errors)
 
+    def test_awaiting_gate_with_gate_notes_ok(self):
+        """gate_notes is blocking_notes' current name (handoff schema 8.11.0); a baton
+        authored with it names its gate and must validate."""
+        fm = _valid_handoff(deployment_state='awaiting_gate', gate_notes='waiting on pcore-01')
+        errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
+        assert not any(e['field'] == 'gate_dependency' for e in errors)
+
     def test_awaiting_gate_with_none_of_the_three_fails(self):
         """C3: an awaiting_gate baton with none of gate_dependency, blocked_by, or
         blocking_notes still fails -- the whole point of the rule surviving relaxation."""
@@ -6879,6 +6886,20 @@ class TestLintSidecarRePlanReviewCheck:
 
     def test_plan_review_check_sidecar_is_exempt(self):
         assert _lint_is_sidecar_file('state/plan-sidecars/foo.plan-review-check.md') is True
+
+
+class TestLintSidecarReExecutionRecord:
+    """A plan's `<plan>.execution-record.md` is a run-verification record
+    beside the plan, not a plan: routing it to `plan` reports every required
+    plan field missing, and the only way to clear that would be plan
+    frontmatter falsely declaring it one.
+    """
+
+    def test_execution_record_is_exempt(self):
+        assert _lint_is_sidecar_file('docs/plans/2026-09-10-foo.execution-record.md') is True
+
+    def test_plain_plan_is_not_exempt(self):
+        assert _lint_is_sidecar_file('docs/plans/2026-09-10-execution-record-cleanup.md') is False
 
 
 class TestCfAwaitingGateNotPickupReady:

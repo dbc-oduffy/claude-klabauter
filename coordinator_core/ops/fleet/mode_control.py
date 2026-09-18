@@ -254,7 +254,16 @@ def _unset_variant(key: str, enum_values: tuple) -> tuple:
 
         env_default = MODE_KEYS[key].environment_default
         if env_default is not None:
-            value = env_default()
+            # `environment_default` takes the caller's env as a POSITIONAL
+            # parameter (`ModeKey.environment_default`'s own contract). `show`
+            # has no caller env to carry -- it runs in the reader's own
+            # process -- so it passes `None` explicitly, which is the ambient
+            # rung. Calling it with no argument raised `TypeError` into the
+            # fail-open `except` below, so every `show` rendered the STATIC
+            # default and the environment rung could never be reported at all:
+            # the silent misreport this function's docstring calls worse than
+            # no `show`.
+            value = env_default(None)
             if value in enum_values:
                 return value, "environment (no fleet value set)"
     except Exception:

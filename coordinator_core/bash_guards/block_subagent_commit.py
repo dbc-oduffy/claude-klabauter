@@ -1243,6 +1243,24 @@ def _import_assert_paths_in_session_scope():
         return None
     return assert_paths_in_session_scope
 
+
+# Companion importer for the SAME module, kept separate from the one above
+# because the two answer different questions and one of them is censused.
+# `denial_is_wholly_indeterminate` is `scope_report`'s own predicate for "did
+# this refusal rest on evidence?" -- its docstring names THIS module as the
+# consumer, and for the whole window between that predicate landing and this
+# importer existing it had none, so the contract it declares was unenforced.
+# Fails to `None` on any import error, and the caller then keeps the deny it
+# already computed: an absent predicate must not become an implicit allow.
+def _import_denial_is_wholly_indeterminate():
+    try:
+        from coordinator_core.ops.session.scope_report import (
+            denial_is_wholly_indeterminate,
+        )
+    except Exception:
+        return None
+    return denial_is_wholly_indeterminate
+
 CLASS = "hard-deny"
 # Widened 2026-08-19 (subagent-boundary MATCHERS parity): a dispatched
 # subagent choosing the PowerShell tool instead of Bash previously bypassed
@@ -6148,15 +6166,17 @@ def _git_commit_agent_may_commit(
         compound-command leg was told to re-check a pathspec that was
         already correct, so it re-checked the pathspec forever);
       - ``""`` -- ALLOW (nothing to report), or an early leg with nothing
-        agent-actionable to say (git_root unresolvable, the helper not
-        importable, the helper raising).
+        agent-actionable to say (the helper not importable, the helper
+        raising).
 
     Fails CLOSED (returns ``(False, ...)``, meaning "fall through to the
     ordinary deny path") on every one of:
       - `git_root` unresolvable -- LEG 3's sweeping-pathspec check has
         nothing to resolve a candidate path against, and LEG 1 (agent_type)
         is satisfiable with no repo at all, so this is reachable with
-        `git_root is None`.
+        `git_root is None`. Reported at `_LEG_UNRESOLVABLE_GIT_ROOT`, not as
+        the ``""`` slot: see that sentinel's own comment for the dispatch
+        loop an unnamed cause produced here.
       - `cmd` does not resolve to exactly ONE non-empty command segment
         (`_command_is_single_segment`, Finding-1 fix, 2026-08-03 P0) -- a
         `;`/`&`/`|`-chained command can smuggle a second, unvalidated
@@ -6187,7 +6207,7 @@ def _git_commit_agent_may_commit(
         closed-on-exception behaviour is byte-for-byte unchanged).
     """
     if not git_root:
-        return False, ""
+        return False, _LEG_UNRESOLVABLE_GIT_ROOT
     if not _command_is_single_segment(cmd):
         return False, _LEG_COMPOUND_COMMAND
     assert_paths_in_session_scope = _import_assert_paths_in_session_scope()
@@ -6302,6 +6322,13 @@ def _git_commit_agent_pathspec_permitted(
 
     Returns `(allowed, deny_reason)` -- see `_git_commit_agent_may_commit`'s
     own docstring for the full accounting of what `deny_reason` can hold.
+
+    THE OWNERSHIP LEG'S DENIAL IS NOT AUTOMATICALLY THIS FUNCTION'S DENIAL.
+    `_ownership_denial_stands_down` is consulted on every scope refusal:
+    where the refusal named no holder and rested on an absence rather than a
+    verdict, it is stood down and recorded. `_ownership_leg_stand_down`
+    carries the whole rule, including what never stands down (a named holder,
+    a shape sentinel, an `include_orphans` ask, an already-clean path).
     """
     allowed, reason = _pathspec_shape_permitted(paths, include_orphans, git_root)
     if not allowed:
@@ -6321,7 +6348,40 @@ def _git_commit_agent_pathspec_permitted(
     except Exception:
         return False, ""
     allowed = bool(allowed)
-    return allowed, ("" if allowed else (reason or ""))
+    if allowed:
+        return True, ""
+    reason = reason or ""
+    # The ownership leg refused. Whether that refusal rested on EVIDENCE is a
+    # separate question from whether it refused, and it is the question
+    # `_ownership_leg_stand_down` answers -- see that module for the two
+    # absences it stands down on, the holder check that wins over both, and
+    # why `include_orphans`/shape sentinels cannot reach it. Fail-closed by
+    # construction: an unimportable stand-down keeps this deny.
+    if _ownership_denial_stands_down(reason, git_root, session_id):
+        return True, ""
+    return False, reason
+
+
+def _ownership_denial_stands_down(
+    reason: str, git_root: str, session_id: str
+) -> bool:
+    """Lazy seam onto `_ownership_leg_stand_down.ownership_denial_stands_down`,
+    for the reason `_import_assert_paths_in_session_scope` is lazy: the
+    stand-down reads `coordinator_core.ops` vocabulary and the capability
+    layer, neither of which belongs in this guard's import closure.
+
+    Returns False on ANY import or runtime failure -- a stand-down that could
+    not be evaluated is not a stand-down, and this module's `CLASS =
+    "hard-deny"` posture keeps the denial the caller already computed.
+    """
+    try:
+        from coordinator_core.bash_guards._ownership_leg_stand_down import (
+            ownership_denial_stands_down,
+        )
+
+        return bool(ownership_denial_stands_down(reason, git_root, session_id))
+    except Exception:
+        return False
 
 
 #: AC16's specialized deny message, for `effective_type ==
@@ -6353,8 +6413,8 @@ _GIT_COMMIT_AGENT_DENY_REASON = (
     "`coordinator-invoke ceremony.commit_v2 "
     "'{\"paths\":[\"a.py\"],\"message\":\"subj\"}'` or "
     "`git commit -m <subj> -- <path>...`, naming each path "
-    "(no `.`, `-A`, globs, ancestors). Used one already? "
-    "Check scope, not argv."
+    "(no `.`, `-A`, globs, ancestors). Argv is not the cause; path scope "
+    "is. Nothing is counted."
 )
 
 #: 2026-08-30: this message used to name `ceremony.commit_v2` as the route to
@@ -6458,6 +6518,28 @@ _LEG_SWEEPING_PATHSPEC = "leg:sweeping-pathspec"
 _LEG_AGENT_ORPHAN_ADOPTION = "leg:agent-orphan-adoption"
 _LEG_ABSOLUTE_OUT_OF_REPO = "leg:absolute-out-of-repo"
 
+#: The leg that denies when `resolve_git_root(payload["cwd"])` answers
+#: nothing. It carried `""` -- the "nothing agent-actionable to say" slot --
+#: until the same-cause correction the 2026-08-04 incident note above
+#: records: an empty reason selects `_GIT_COMMIT_AGENT_DENY_REASON`, whose
+#: whole body re-spells the two sanctioned commit shapes and closes with
+#: "Check scope, not argv". Neither half is reachable advice here. The
+#: pathspec was never read, the scope check never ran, and the agent cannot
+#: relocate the cwd its own Bash call was handed -- so the message described
+#: a fix the reader could not perform and the dispatch re-issued the same
+#: correct command until the wave died.
+#:
+#: This is the shape a rootless session produces: on a managed remote
+#: container a session anchored outside every repo it holds (no launch
+#: anchor, cwd a plain parent directory) resolves NO toplevel, so this leg
+#: fires on every commit attempt regardless of the pathspec. Naming it is
+#: what lets the reader escalate instead of iterate. VERDICT UNCHANGED --
+#: this leg still denies, and deliberately: `_pathspec_shape_permitted`'s
+#: sweeping-element test resolves candidates AGAINST the root
+#: (`_pathspec_element_is_sweeping` returns the fail-closed True without
+#: one), so there is no root-free path that still enforces it.
+_LEG_UNRESOLVABLE_GIT_ROOT = "leg:unresolvable-git-root"
+
 #: Per-leg deny prose. Each names its OWN cause and the single edit that
 #: fixes it; none sends the reader to the pathspec-scope check unless the
 #: pathspec-scope check is what denied. Prose stays inside
@@ -6487,6 +6569,12 @@ _GIT_COMMIT_AGENT_LEG_MESSAGES = {
         "BLOCKED: git-commit-agent got an ABSOLUTE pathspec element that "
         "resolves outside this repo -- no scope check can clear one. Name "
         "each file relative to the repo root; path scope was never checked."
+    ),
+    _LEG_UNRESOLVABLE_GIT_ROOT: (
+        "BLOCKED: git-commit-agent resolved no repo root from this call's "
+        "cwd, so no pathspec can be checked. Pathspec never read -- do not "
+        "re-check or re-issue. Report upward: this session is anchored "
+        "outside its repos."
     ),
     _LEG_AGENT_ORPHAN_ADOPTION: (
         "BLOCKED: orphan adoption is an operator's answer, not an agent's. "
@@ -6600,8 +6688,9 @@ def _deny_reason(
     was observed sending dispatched agents to re-verify a correct pathspec.
     ``_GIT_COMMIT_AGENT_DENY_REASON`` still fires, unchanged, whenever
     ``ownership_reason`` is empty (a leg with nothing agent-actionable to
-    say: an unresolvable git root, an unimportable helper, the helper
-    raising). This is a MESSAGE-SELECTION change only;
+    say: an unimportable helper, or the helper raising). An unresolvable git
+    root left that slot too until it earned
+    ``_LEG_UNRESOLVABLE_GIT_ROOT``. This is a MESSAGE-SELECTION change only;
     ``check()``'s own allow/deny verdict is computed before this function is
     ever called and is untouched by which branch below fires.
 

@@ -133,11 +133,19 @@ class WaveRow(NamedTuple):
     ``EmitterRow`` carries through, both defaulting to ``None`` so a spine
     declaring neither key maps exactly as before either field existed.
 
+    ``change_kind`` is carried for ``emit._row_agent_type``, which needs a
+    row's WORK class to refuse one no agent type can serve — a
+    ``verification`` row writing only an immutable plan body. The write path
+    alone cannot answer that question, so without this field the
+    contradiction is invisible until the dispatched agent refuses on charter.
+
     Note the end-to-end coverage lives in ``tests/test_emit.py`` (spine YAML
     -> ``read_spine`` -> ``build_waves`` -> ``compose_script``), NOT here:
     this module's own tests construct ``WaveRow`` directly and so cannot see
-    a break in the parsing seam above it, which is exactly how these two
-    fields first shipped inert.
+    a break in the parsing seam above it, which is exactly how the two
+    agent-override fields first shipped inert. ``change_kind`` was threaded
+    with that history in hand — a test that hand-builds a ``WaveRow`` proves
+    nothing about whether ``read_spine`` ever populates it.
     """
 
     id: str
@@ -151,6 +159,7 @@ class WaveRow(NamedTuple):
     body: str = ""
     writes_under: tuple = ()
     verification_runs: Optional[bool] = None
+    change_kind: Optional[str] = None
 
 
 class WaveCycleError(ValueError):
@@ -636,6 +645,7 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
                 agent_model=row.agent_model,
                 body=row.body,
                 verification_runs=getattr(row, "verification_runs", None),
+                change_kind=row.change_kind,
             )
             for row in wave
         ]

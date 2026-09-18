@@ -218,10 +218,50 @@ class TestShowReportsTheVariantThatActuallyFires:
         monkeypatch.setattr(
             "coordinator_core.session.mode_resolution."
             "_compaction_default_for_environment",
-            lambda: "informational",
+            # One positional `env`, matching the real
+            # `_compaction_default_for_environment` signature -- a zero-arg
+            # stub passed this test while production raised `TypeError` on
+            # every call, which is the defect that hid here.
+            lambda env: "informational",
         )
         entry = next(e for e in MC.show_fleet_mode()["keys"]
                      if e["key"] == "compaction_warnings")
+        assert entry["variant_that_fires"] == "informational"
+        assert "environment" in entry["variant_source"]
+
+    def test_the_environment_rung_is_called_with_the_arity_it_declares(
+        self, monkeypatch
+    ):
+        """The registry stores `environment_default` as a ONE-POSITIONAL-ARG
+        callable (`ModeKey.environment_default`: it takes the caller's env).
+        `show` called it with no argument, so every real render raised
+        `TypeError` into the fail-open `except` and reported the STATIC
+        default — a `show` that misreports, which this module's own docstring
+        calls worse than no `show`, and it was invisible because the test
+        beside this one stubbed a zero-arg callable.
+
+        The stub here accepts ONLY the declared shape, so a regression to a
+        no-argument call fails rather than silently falling through.
+        """
+        from coordinator_core.ops.fleet import mode_control as MC
+
+        monkeypatch.setattr(MC, "read_fleet_mode", lambda: {})
+        seen = []
+
+        def _environment_rung(env):
+            seen.append(env)
+            return "informational"
+
+        monkeypatch.setattr(
+            "coordinator_core.session.mode_resolution."
+            "_compaction_default_for_environment",
+            _environment_rung,
+        )
+        entry = _entry(MC.show_fleet_mode(), "compaction_warnings")
+        assert seen == [None], (
+            "`show` runs in the reader's own process and carries no caller "
+            "env, so it must pass `None` explicitly — not omit the argument"
+        )
         assert entry["variant_that_fires"] == "informational"
         assert "environment" in entry["variant_source"]
 

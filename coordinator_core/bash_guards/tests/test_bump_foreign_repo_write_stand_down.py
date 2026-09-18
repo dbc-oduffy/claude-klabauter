@@ -25,7 +25,16 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core import environment
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
+from coordinator_core.bash_guards.tests.test_bump_foreign_repo_write import (
+    _posix,
+    _set_anchor,
+    repos,  # noqa: F401 -- reused fixture: anchor repo + foreign sibling repo.
+)
+from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
+    _clean_bump_env,  # noqa: F401 -- reused fixture, the isolation both guards' suites need.
+)
 
 
 @pytest.fixture()
@@ -132,3 +141,93 @@ def test_a_broken_capability_layer_leaves_the_guard_untouched(cloud_container, m
 
     monkeypatch.setattr(builtins, "__import__", exploding_import)
     assert guard._environment_stands_the_bump_down() is None
+
+
+# ---------------------------------------------------------------------------
+# END-TO-END, THROUGH `check_bump_foreign_repo_write` ITSELF.
+#
+# Everything above tests the stand-down PREDICATE and its audit line in
+# isolation. That was the whole of this file while the mechanism lived here
+# as four private functions; once it moved to the shared
+# `_write_bump_stand_down` module, predicate-level coverage stopped proving
+# anything about THIS guard -- a rewiring that dropped the call site
+# entirely, or consulted it before the marker check, would leave every test
+# above green. These three run the real entry point instead, and are the
+# same three properties the two ported surfaces now pin for themselves.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def exploding_capability(monkeypatch):
+    """The capability layer itself unhappy. Patched at
+    `coordinator_core.environment.capability`, the attribute
+    `_write_bump_stand_down` imports inside its own function body, so the
+    raise lands where the guard actually consults it."""
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("capability layer unavailable")
+
+    monkeypatch.setattr(environment, "capability", boom)
+
+
+def _foreign_commit_cmd(repos) -> str:
+    return "git -C %s commit --allow-empty -m x" % _posix(repos["foreign"])
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_guard_stands_down_end_to_end_on_a_host_with_no_fleet(
+    repos, monkeypatch, capsys, _clean_bump_env
+):
+    """The `git commit` into a granted sibling that this guard has allowed on
+    a cloud container since 2026-09-05 -- pinned through the entry point, not
+    the predicate."""
+    _set_anchor(monkeypatch, repos, "sess-c4-sd-cloud")
+    monkeypatch.delenv("COORDINATOR_CAP_FLEET_PRESENT", raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "remote")
+
+    result = guard.check_bump_foreign_repo_write(
+        _foreign_commit_cmd(repos), "sess-c4-sd-cloud", str(repos["anchor"]), {}
+    )
+
+    assert result is None
+    assert "STOOD DOWN" in capsys.readouterr().err
+    logs = list(repos["anchor"].rglob("overrides.log"))
+    assert logs and any(
+        "STAND-DOWN-FOREIGN-REPO-WRITE" in p.read_text(encoding="utf-8") for p in logs
+    ), "this surface's audit token must survive the move to the shared module"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_guard_still_denies_end_to_end_where_the_premise_holds(
+    repos, monkeypatch, _clean_bump_env
+):
+    """Property 3 of this file's header, through the entry point: on a fleet
+    machine the stand-down must be invisible."""
+    _set_anchor(monkeypatch, repos, "sess-c4-sd-fleet")
+
+    result = guard.check_bump_foreign_repo_write(
+        _foreign_commit_cmd(repos), "sess-c4-sd-fleet", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_guard_denies_end_to_end_when_the_capability_layer_raises(
+    repos, monkeypatch, cloud_container, exploding_capability, _clean_bump_env
+):
+    """Fail open toward TODAY'S behaviour: venue markers say "stand down",
+    the capability layer cannot answer, the guard denies as it did before the
+    mechanism existed."""
+    _set_anchor(monkeypatch, repos, "sess-c4-sd-broken-cap")
+
+    result = guard.check_bump_foreign_repo_write(
+        _foreign_commit_cmd(repos), "sess-c4-sd-broken-cap", str(repos["anchor"]), {}
+    )
+
+    assert result is not None
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"

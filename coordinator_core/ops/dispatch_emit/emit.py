@@ -396,6 +396,18 @@ _DISPATCH_REPORT_DIR = ".coordinator-local/subagent-share/dispatch-reports"
 
 _EXECUTOR_AGENT_TYPE = "coordinator:executor"
 _ENRICHER_AGENT_TYPE = "coordinator:enricher"
+
+#: ``change_kind`` values whose work is RUNNING something rather than writing
+#: it — the classes an enricher cannot perform whatever it is allowed to
+#: write. Deliberately just ``verification``, the one value in
+#: ``plan-tasks.schema.json``'s enum that names an act rather than an edit
+#: target: every sibling (``doc-edit``, ``code-edit``, ``test-edit``,
+#: ``config-edit``, ``wiki-new``, ``doctrine-edit``, ...) describes what is
+#: edited, and an enricher writing an immutable body is exactly right for
+#: those. Widening this set would refuse rows that route correctly today, so
+#: a new member needs the same argument ``verification`` has: the work cannot
+#: be done by the only agent permitted to write the row's paths.
+_EXECUTION_TIER_CHANGE_KINDS = frozenset({"verification"})
 _COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 _TEST_AGENT_TYPE = "coordinator:test-runner"
 
@@ -508,6 +520,44 @@ class MalformedAgentOverrideError(ValueError):
     malformed override — silently dropping it and falling back to the
     write-target derivation would let a typo'd row silently dispatch under
     an agent the author never asked for.
+    """
+
+
+class UnroutableWorkKindRowError(ValueError):
+    """Raised when one row pairs execution-tier WORK with writes that are all
+    immutable body paths (``docs/plans/*.md`` / ``docs/problems/*.md``).
+
+    The sibling of ``MixedAgentTypeRowError``, reached from the other side.
+    There the row's WRITES span two classes; here the writes are uniform and
+    it is the row's ``change_kind`` that contradicts them. Both are the same
+    defect — a row no single ``agentType`` can serve — and both are refused
+    rather than guessed.
+
+    ``change_kind: verification`` means running things: tests, measurements,
+    close-outs. A row whose only declared write is an immutable body gets
+    ``coordinator:enricher`` from the write-path derivation below, and that
+    is the correct derivation rather than the bug —
+    ``write_guards.block_subagent_plan_body_write`` names
+    ``coordinator:executor`` its sole block target for those paths, so the
+    enricher is the only agent permitted to write them. But the enricher's
+    charter forbids execution-tier work, so it refuses on charter; and
+    re-routing to the executor trades that clean refusal for a hard-deny.
+    Neither half can be satisfied, which is why this raises instead of
+    picking a loser.
+
+    Measured 2026-09-17 (wf_71d241c7-e62): a "Run the fast tier, record the
+    budget measurement, close the plan out" row reached dispatch, the
+    enricher reported "requires execution-tier work ... outside the Enricher
+    charter", and the wave was spent for nothing. A scan of all 1429 spine
+    rows then in ``docs/plans/*.md`` found four rows of this shape and only
+    one still ``open``, so this refusal is narrow by measurement rather than
+    by hope.
+
+    The split it asks for: one executor row that runs and records its
+    measurement to an ordinary path, one enricher row that folds the result
+    into the body. An explicit row-level ``agent_type:`` short-circuits the
+    derivation ahead of this check, so an author who means to force a type
+    keeps that escape hatch.
     """
 
 
@@ -803,6 +853,16 @@ def _row_agent_type(row: WaveRow) -> str:
     if row.writes is UNDECLARED:
         return _EXECUTOR_AGENT_TYPE
     if immutable_body:
+        if row.change_kind in _EXECUTION_TIER_CHANGE_KINDS:
+            raise UnroutableWorkKindRowError(
+                f"row {row.id!r} declares change_kind {row.change_kind!r} — "
+                "execution-tier work — but writes only an immutable "
+                "docs/plans/*.md or docs/problems/*.md body, which only "
+                "coordinator:enricher may write and which its charter "
+                "forbids it to earn by running anything. Split the row: an "
+                "executor row that runs and records to an ordinary path, an "
+                "enricher row that folds the result into the body"
+            )
         if _row_verification_runs(row):
             raise UnverifiableEnricherRowError(
                 f"row {row.id!r} writes under docs/plans/ or docs/problems/, so "
@@ -1686,6 +1746,37 @@ _COMMIT_LANDED_TOKEN = "COMMIT-LANDED"
 #: chance to ever be committed by this run.
 _COMMIT_PARTIAL_TOKEN = "COMMIT-PARTIAL"
 
+#: Success token for a wave that legitimately commits NOTHING, passed by the
+#: same halt gate that accepts ``_COMMIT_LANDED_TOKEN``. Defined here rather
+#: than beside its sibling below because ``_PROVENANCE_HEADING`` interpolates
+#: it, and a module-level string cannot read a name bound later in the file.
+#:
+#: Why it exists: a wave whose chunk is voided by an earlier chunk's answer
+#: has nothing to commit, and the gate previously had one passable shape --
+#: ``COMMIT-LANDED <sha>``. So "nothing to commit" and "the commit failed"
+#: were the same event to it, and the commit prompt's own unchanged-paths rule
+#: INSTRUCTED the agent into the refusal that tripped it. Measured 2026-09-17
+#: (wf_5e633cab-517): the only way past it was to hand-edit the script and
+#: have the resumed agent cite an EARLIER wave's sha as this wave's delivery.
+#: A gate whose sole passable answer is a misrepresentation teaches its
+#: readers to produce one.
+#:
+#: Why it does not reopen the 2026-08-21 fail-open: identical anchoring to its
+#: sibling -- line-anchored, and a real 7-40 hex sha after the token. The
+#: instruction text every commit agent holds while writing carries the literal
+#: placeholder ``<sha>``, which is not hex however it is decorated, so
+#: quoting the prompt back cannot satisfy this arm either.
+#:
+#: What it does extend: the gate now takes an agent's word that its pathspec
+#: is clean, which no generated script can verify (the script cannot run git).
+#: Bounded deliberately -- the halt exists to stop the NEXT wave overwriting
+#: uncommitted work, and a genuinely void wave has none, so a true void is
+#: harmless by construction. The residual risk is a MISTAKEN void on a dirty
+#: pathspec, which is why the prompt requires both `git diff --stat` and
+#: `git status --porcelain` (the first is blind to untracked additions) and
+#: why the reported sha makes the claim auditable after the fact.
+_COMMIT_VOID_TOKEN = "COMMIT-VOID"
+
 _PROVENANCE_HEADING = (
     "Pathspec provenance: the pathspec above is this wave's declared "
     "`writes:` scope. The executor report(s) below are, direct from the "
@@ -1733,6 +1824,15 @@ _PROVENANCE_HEADING = (
     "re-itemise. Never revert, stash, or check out a hunk to \"clean\" the path "
     "-- the correct move is to stop and report, because the hunks are someone "
     "else's and this run cannot tell you what they were mid-way through."
+    "\n\n`git diff --stat` is one leg, not the sole verification signal: it "
+    "diffs TRACKED content only, so a brand-new file an executor just created "
+    "is untracked and will not appear in it at all -- checking `git diff "
+    "--stat` alone would silently miss report/tree divergence for anything "
+    "newly added. Also run `git status --porcelain -- <your pathspec>` and "
+    "apply the SAME discriminator to any untracked addition it shows: named "
+    "by a report, it is that executor's own new file and yours to commit; "
+    "named by no report, it is unaccounted-for and you must STOP the same as "
+    "an unaccounted tracked hunk."
     "\n\nRead the diff, not just the reports. A report is what an agent says "
     "it wrote; the diff is what is actually there, and only the second one is "
     "what you are about to commit. This holds even when a claim is "
@@ -1755,7 +1855,9 @@ _PROVENANCE_HEADING = (
     "\n\nPASTE THE `git diff --stat` OUTPUT VERBATIM into your report, above "
     "your token line, under the heading `DIFF OBSERVED:`. Not a summary of it, "
     "not a table you built from it -- the raw lines, with their real path names "
-    "and real counts."
+    "and real counts. If `git status --porcelain -- <your pathspec>` showed any "
+    "untracked addition, paste those lines too, under the same heading -- "
+    "`git diff --stat` cannot supply them."
     "\n\nWhy this is required rather than encouraged. Commit agents split "
     "2-2 across two measured runs on whether they ran any tool at all, and "
     "BOTH non-verifying agents reached correct conclusions from honest "
@@ -1817,7 +1919,7 @@ _PROVENANCE_HEADING = (
     "executor legitimately did not change (reported as examined-but-unchanged) "
     "must be DROPPED from the pathspec and the remainder committed. A chunk "
     "whose diagnosis did not license an edit to one of its declared write "
-    "targets is an ordinary outcome. Refuse only if NO declared path changed."
+    "targets is an ordinary outcome."
     "\n\nA PARTIAL WAVE STILL COMMITS. The pathspec above is the wave's "
     "declared union -- what the wave set out to write, INTENT. The reports "
     "are the CLAIM. A wave whose executors do not all return DONE is the "
@@ -1836,6 +1938,22 @@ _PROVENANCE_HEADING = (
     "Committing the DONE items is not false delivery -- name the dropped "
     "ids and paths in your report, above the token line, and the subject "
     "then registers exactly what landed."
+    "\n\nA WHOLLY VOID WAVE IS NOT A REFUSAL -- report it and let the run "
+    "finish. When NO declared path changed AND the executor report(s) "
+    "corroborate that (a chunk voided by an earlier chunk's answer, a "
+    "diagnosis that licensed no edit at all), there is nothing to commit and "
+    "nothing to strand, so the next wave cannot write over uncommitted work. "
+    "Do NOT commit, do NOT fabricate an empty or placeholder commit, and do "
+    "NOT cite some other wave's sha as though it were yours. Instead verify "
+    "the void yourself -- `git diff --stat` AND `git status --porcelain` over "
+    "your pathspec, BOTH empty, since the first is blind to an untracked "
+    f"addition -- then run `git rev-parse HEAD` and end your report with the "
+    f"line '{_COMMIT_VOID_TOKEN} <sha>' carrying the sha that command "
+    "actually printed, plus one line saying which chunk ids were void and "
+    "why. That token asserts 'the tree is at this sha and this wave adds "
+    "nothing to it', never a delivery, and the sha makes the claim checkable "
+    "afterwards. If either command shows anything, the wave is NOT void: "
+    "fall through to the rules above."
     "\n\nALREADY COMMITTED: a run resumed after an edit re-runs commit phases "
     "that already succeeded. Tracked-and-clean alone is NOT evidence of that "
     "-- it is equally true of a path this run never touched. Before "
@@ -2078,6 +2196,13 @@ def _commit_agent_call(
         f" '{_COMMIT_PARTIAL_TOKEN}' verdict halts the run exactly as a"
         f" tokenless one does -- the halt is the fix; nothing later in this"
         f" run picks a withheld path back up."
+        f" The one other passable answer is a WHOLLY VOID wave — nothing"
+        f" changed and nothing to commit — which ends with"
+        f" '{_COMMIT_VOID_TOKEN} <sha>' instead, carrying the HEAD sha you"
+        f" observed rather than a commit you made. Read the void rule below"
+        f" before using it, and never use it to escape a commit you could"
+        f" have made: it asserts your pathspec is clean, which the run"
+        f" cannot check for you."
         # Review: overengineering-reviewer flagged this sentence as
         # unconditional payload for a reader who cannot act on it —
         # dispositioned "accepted" in the sidecar, but the dispatching EM
@@ -2239,7 +2364,14 @@ def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
     # at the same gate.
     reason = (
         f"{phase_title} did not land a commit -- halting before the next wave "
-        "writes over uncommitted work. RECOVERY IS RESUME, NEVER RE-EMIT: a "
+        "writes over uncommitted work. FIRST, read the agent report below for "
+        "which of two cases this is: a wave that FAILED to commit work it "
+        f"had, or a wave with nothing to commit that did not say so with "
+        f"'{_COMMIT_VOID_TOKEN} <sha>'. The recovery below is for the first. "
+        "For the second, commit nothing -- confirm the pathspec is clean and "
+        "resume with the phase's step edited to report the void, because "
+        "citing another wave's sha as this one's delivery is a "
+        "misrepresentation the run will carry. RECOVERY IS RESUME, NEVER RE-EMIT: a "
         "second emit re-reads the spine, which correctly excludes the chunks "
         "that DID land, so the new script is silently narrower than this one "
         "(tripwire A-SECOND-EMIT-AFTER-A-PARTIAL-RUN-NARROWS-SILENTLY). "
@@ -2296,9 +2428,18 @@ def _commit_halt_gate(commit_var: str, phase_title: str) -> str:
         "the EM resolves the claim (or other cause) named below and then "
         "resumes (see RECOVERY IS RESUME below)."
     )
+
+    # Two passable tokens, one shape. `_COMMIT_VOID_TOKEN` (see its own note
+    # above for why it exists and what it extends) rides the identical
+    # anchoring and hex-sha requirement, so the alternation cannot be
+    # satisfied by quoting the prompt any more than the landed arm can. A
+    # void wave reports the HEAD sha it observed rather than a commit it
+    # made; both mean "the run may proceed", and only one means "work
+    # landed", which is the commit-agent report's job to say in prose.
     return (
         f"  if (!{commit_var} || "
-        f"!/^[*_]{{0,2}}{_COMMIT_LANDED_TOKEN}[*_]{{0,2}} +[*_]{{0,2}}"
+        f"!/^[*_]{{0,2}}({_COMMIT_LANDED_TOKEN}|{_COMMIT_VOID_TOKEN})"
+        f"[*_]{{0,2}} +[*_]{{0,2}}"
         f"[0-9a-f]{{7,40}}[*_]{{0,2}} *$/m.test(String({commit_var}))) {{\n"
         f"    const partialMatch = {commit_var} ? "
         f"String({commit_var}).match(/^[*_]{{0,2}}{_COMMIT_PARTIAL_TOKEN}"
@@ -2375,11 +2516,24 @@ def _preflight_agent_call(
         "EXPECTED to be unchanged or nonexistent right now: the chunks that write "
         "them have not run yet, so 'no diff' is the correct state and is NOT a "
         "refusal. Report BLOCKED only if a path would be refused by a claim "
-        "conflict, an ignore rule, or a guard. Verify that "
+        "conflict, an ignore rule, or a guard, or if it is a DIRECTORY (see "
+        "below). Verify that "
         f"every path in [{', '.join(pathspec)}] is currently claimable and "
         "committable by you."
         + prefix_clause
-        + " If any path would be refused, report BLOCKED "
+        + "\n\nDIRECTORY-SHAPED WRITE -- you are the on-disk backstop for this, "
+        "and nothing upstream catches it. Run a stat/`test -d` over every path "
+        "above and report BLOCKED naming any that is an existing DIRECTORY "
+        "rather than a file. The emitter's own shape check is trailing-"
+        "separator-only BY DESIGN (spine derivation must not depend on "
+        "worktree state), so a bare `coordinator/tests` naming a real "
+        "directory passes emit untouched and arrives here unexamined. Left "
+        "uncaught it widens the wave's commit scope from a named file to a "
+        "whole tree: every unrelated dirty file under it lands in this wave's "
+        "commit, under this wave's chunk ids, and the per-file protection the "
+        "pathspec exists to give is gone. A nonexistent path is FINE and is "
+        "not this check -- the chunks that create those files have not run "
+        "yet. Only an existing directory is the refusal. If any path would be refused, report BLOCKED "
         "immediately, naming the refused paths and the denial reason, "
         "before any further phase runs -- and end your report with the line "
         f"'{_PREFLIGHT_BLOCKED_TOKEN} <reason>'. If every path is claimable, "
@@ -2424,11 +2578,38 @@ def _preflight_halt_gate(preflight_var: str, phase_title: str) -> str:
     or quotes its own instructions back would satisfy a substring test
     without ever having found a refused path.
 
-    The match requires the token at the start of a line, followed by a real
-    reason (one or more non-newline characters) -- the prompt's own
-    placeholder text is the literal string ``<reason>``, but the anchor is
-    line-start plus the token, not the placeholder shape, so this does not
-    depend on the agent avoiding that literal string.
+    The match requires the token at the start of a line, optionally followed
+    by a same-line reason -- the prompt's own placeholder text is the literal
+    string ``<reason>``, but the anchor is line-start plus the token, not the
+    placeholder shape, so this does not depend on the agent avoiding that
+    literal string.
+
+    THE REASON MAY FOLLOW ON THE NEXT LINE, and requiring it on the same one
+    was a measured defect. The BLOCKED leg used to demand `` +\\S.*$`` after
+    the token, so a report opening
+
+        PREFLIGHT-BLOCKED
+        <blank>
+        The following path cannot be committed: ...
+
+    -- the shape an agent writing markdown naturally produces -- matched
+    neither leg and fell through to ``no_verdict``, which told the operator
+    the preflight "did not run" about a preflight that ran and correctly
+    refused. That is worse than a missed match: it discards a right answer and
+    misattributes it to the agent. Measured 2026-09-17 on
+    `2026-09-11-decided-against-gate-dependency-ruling`, whose preflight found
+    three gitignored `.coordinator-local/memo-outbox/` paths in a row's
+    declared scope and said so.
+
+    WIDENING THIS LEG CANNOT FAIL OPEN, which is what separates it from the
+    CLEAR leg above it. Both the BLOCKED branch and the no-verdict fallthrough
+    HALT; only the message differs, and the agent's full report is appended to
+    either one. So the worst case for a token this leg matches too eagerly --
+    an agent echoing its own instructions at line start -- is a halt with a
+    better-aimed message than the halt it would otherwise get. The CLEAR leg
+    is the only one that lets a wave proceed to writing, and it stays strict:
+    line-anchored, and requiring a 7-40 char hex sha the prompt's own
+    ``<sha>`` placeholder cannot satisfy.
     """
     reason = (
         f"{phase_title} reported a claimability blocker -- halting before "
@@ -2443,7 +2624,7 @@ def _preflight_halt_gate(preflight_var: str, phase_title: str) -> str:
     )
     blocked = (
         f"  if (/^[*_]{{0,2}}{_PREFLIGHT_BLOCKED_TOKEN}[*_]{{0,2}}"
-        f" +\\S.*$/m.test(String({preflight_var} ?? \"\"))) {{\n"
+        f" *:? *(?: +\\S.*)?$/m.test(String({preflight_var} ?? \"\"))) {{\n"
         f"    return {{ halted: {_js_string_literal(reason)} + "
         f'" Agent report: " + String({preflight_var} ?? "agent returned null") }};\n'
         "  }"

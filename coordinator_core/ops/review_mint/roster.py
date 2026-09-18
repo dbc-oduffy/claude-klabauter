@@ -15,7 +15,7 @@ mapping)::
 
     {
       "schema": "review-roster-fragment",
-      "schema_version": 3,
+      "schema_version": 4,
       "blocking_verdicts": {
         "coordinator:prior-art-checker": "BLOCKED-SURFACE-TO-PM",
         "coordinator:docs-checker": null,
@@ -24,13 +24,19 @@ mapping)::
       "tiers": {
         "standard": {
           "stages": [
-            {"gate": true, "agents": ["coordinator:prior-art-checker"]},
-            {"agents": ["coordinator:code-reviewer", "coordinator:staff-eng"]},
+            {"gate": true, "agents": ["coordinator:prior-art-checker"],
+             "accepts_signals": "preflight"},
+            {"agents": ["coordinator:code-reviewer", "coordinator:staff-eng"],
+             "accepts_signals": "named"},
             {"agents": ["coordinator:review-integrator"]}
           ]
         }
       }
     }
+
+``accepts_signals`` (schema_version >= 4) marks the stage that absorbs
+signal-selected agents sharing its label (``"preflight"`` or ``"named"``) —
+see ``parse_stages``'s ``signals`` parameter and § tier cap below.
 
 ``blocking_verdicts`` is top-level, keyed by ``agentType``, valued in that
 agent's OWN charter vocabulary (or ``null`` for an agent that contributes no
@@ -51,7 +57,34 @@ the composer (C2), not this parser.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import Dict, List, Optional
+
+
+# Persona-band (Opus-model) agentTypes, mirrored from DoE's
+# `coordinator/agent-effort-registry.yaml` `band: persona` rows. The fragment
+# itself carries no model-tier field (DoE-owned shape, never authored here),
+# so the tier cap below has no other data-driven source to read this from;
+# this list is the deliberate, narrow exception to "never hardcode agent
+# names" in this module — it classifies cost, not blocking-verdict routing.
+_PERSONA_AGENT_TYPES = frozenset(
+    {
+        "coordinator:staff-eng",
+        "coordinator:staff-data-sci",
+        "coordinator:senior-front-end",
+        "coordinator:staff-ux",
+        "coordinator:eng-director",
+        "coordinator:vp-product",
+        "coordinator:apm",
+    }
+)
+
+# PM ruling (state/cross-repo/inbox/2026-09-01-example-game-repo-em-review-roster-
+# signal-selection-uncapped-by-size.md): "three Opus reviewers shouldn't
+# happen on a plan unless it is XL or XXL in size." XL/XXL is the `full`
+# tier (see DoE's review-roster-fragment.md § "Why these names"); every
+# other tier caps below three.
+_PERSONA_CAP_BY_TIER = {"full": 3}
+_DEFAULT_PERSONA_CAP = 2
 
 
 class RosterFragmentError(ValueError):
@@ -73,22 +106,30 @@ class Stage:
     the composer (C2) decides which, never a flag read off the fragment.
     ``gate`` is True only for a stage that can abort the run; a gated stage
     is guaranteed (by ``parse_stages``) to contain at least one agent whose
-    ``blocking_verdicts`` entry is non-null.
+    ``blocking_verdicts`` entry is non-null. ``accepts_signals`` (schema_
+    version >= 4) is the stage label (``"preflight"`` or ``"named"``) that
+    signal-selected agents merge into, or ``None`` for a stage that accepts
+    none — see ``parse_stages``'s ``signals`` parameter.
     """
 
     agents: List[str]
     gate: bool
+    accepts_signals: Optional[str] = None
 
 
-def parse_stages(fragment: dict, tier: str) -> List[Stage]:
+def parse_stages(
+    fragment: dict,
+    tier: str,
+    signals: Optional[Dict[str, List[str]]] = None,
+) -> List[Stage]:
     """Parse ``fragment``'s ``tier`` entry into an ordered list of ``Stage``.
 
     ``fragment`` is the already-parsed, top-level review-roster-fragment
     dict (``schema``, optionally ``blocking_verdicts``, and ``tiers``) — the
     same dict shape ``dispatch_emit._reviewers_for_tier`` took, generalised
     to the staged (schema_version >= 2) shape and the top-level
-    ``blocking_verdicts`` map v3 adds. No file I/O, no cross-repo pointer
-    resolution: see module docstring.
+    ``blocking_verdicts`` map v3 adds and ``accepts_signals`` v4 adds. No
+    file I/O, no cross-repo pointer resolution: see module docstring.
 
     Each tier's value in ``fragment["tiers"]`` is either:
 
@@ -96,8 +137,29 @@ def parse_stages(fragment: dict, tier: str) -> List[Stage]:
       single ``Stage(agents=..., gate=False)``, preserving today's flat
       behaviour exactly;
     - a ``{"stages": [...]}`` mapping (schema_version >= 2) — each entry is
-      a dict with a non-empty ``agents`` list and an optional ``gate``
-      (defaults False), read in order into one ``Stage`` apiece.
+      a dict with a non-empty ``agents`` list, an optional ``gate``
+      (defaults False), and an optional ``accepts_signals`` (schema_version
+      >= 4; one of ``"preflight"``/``"named"``), read in order into one
+      ``Stage`` apiece.
+
+    ``signals`` (schema_version >= 4 callers only; ``None``/omitted is a
+    no-op, preserving pre-v4 behaviour exactly) maps a stage label
+    (``"preflight"``/``"named"``) to the ``agentType`` strings signal
+    selection resolved for that label (DoE's ``review-signals.json``
+    ``selects``/``stage`` pair, resolved by the caller — this module does no
+    signal-name lookup). Each stage whose own ``accepts_signals`` matches a
+    key present in ``signals`` gets that key's agents appended (skipping any
+    already present), in order.
+
+    **Tier cap.** Signal selection does not bypass the PM's size ruling
+    (state/cross-repo/inbox/2026-09-01-example-game-repo-em-review-roster-signal-
+    selection-uncapped-by-size.md): "three Opus reviewers shouldn't happen
+    on a plan unless it is XL or XXL in size." Persona-band (Opus) agents —
+    see ``_PERSONA_AGENT_TYPES`` — merging in from ``signals`` are dropped,
+    in order, once the tier's persona total (rostered + already-merged)
+    would reach its cap: 3 for ``full`` (XL/XXL), 2 for every other tier.
+    Already-rostered personas are never dropped — only signal-selected
+    additions route around the cap, never through it.
 
     Raises ``RosterFragmentError``, naming what is missing, on:
 
@@ -186,6 +248,48 @@ def parse_stages(fragment: dict, tier: str) -> List[Stage]:
                     "is gate: true but contains no agent that can block "
                     "(check 'blocking_verdicts')"
                 )
-        stages.append(Stage(agents=list(agents), gate=gate))
+        accepts_signals = raw_stage.get("accepts_signals")
+        if not isinstance(accepts_signals, str):
+            accepts_signals = None
+        stages.append(
+            Stage(agents=list(agents), gate=gate, accepts_signals=accepts_signals)
+        )
+
+    _merge_signals(stages, tier, signals)
 
     return stages
+
+
+def _merge_signals(
+    stages: List[Stage],
+    tier: str,
+    signals: Optional[Dict[str, List[str]]],
+) -> None:
+    """Merge ``signals`` into ``stages`` in place, honoring the tier's
+    persona (Opus) cap. See ``parse_stages``'s docstring § "Tier cap".
+    """
+    if not signals:
+        return
+
+    persona_count = sum(
+        1
+        for stage in stages
+        for agent in stage.agents
+        if agent in _PERSONA_AGENT_TYPES
+    )
+    cap = _PERSONA_CAP_BY_TIER.get(tier, _DEFAULT_PERSONA_CAP)
+
+    for stage in stages:
+        if stage.accepts_signals is None:
+            continue
+        selected = signals.get(stage.accepts_signals)
+        if not selected:
+            continue
+        for agent in selected:
+            if agent in stage.agents:
+                continue
+            if agent in _PERSONA_AGENT_TYPES:
+                if persona_count >= cap:
+                    continue
+                persona_count += 1
+            stage.agents.append(agent)

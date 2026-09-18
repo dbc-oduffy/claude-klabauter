@@ -402,3 +402,72 @@ def test_percolate_mirror_denies_fast_on_contended_repo_root(tmp_path, monkeypat
     err = capsys.readouterr().err
     assert "X:/claude-klabauter" in err
     assert "pid=4242" in err
+
+
+# ---------------------------------------------------------------------------
+# Engine-root axis. A publish tool binds the LOCATOR answer, never the DISPATCH
+# one -- the chicken-and-egg this closes.
+# ---------------------------------------------------------------------------
+
+
+def test_the_engine_binds_from_source_even_when_dispatch_names_the_mirror(
+    monkeypatch, tmp_path
+):
+    """The defect, stated as a property: with `COORDINATOR_ENGINE_ROOT` naming a
+    published mirror -- the conformant shape on every cloud box -- this module
+    must still resolve the SOURCE checkout it lives in.
+
+    Binding a publish tool to the dispatch root made the mirror its own
+    prerequisite: the mirror carries no `coordinator_core/percolate`, so the
+    only tool that can refresh the mirror could not run, and the staler the
+    mirror got the more certainly it could not be updated.
+    """
+    mirror = tmp_path / "published-mirror"
+    (mirror / "coordinator_core").mkdir(parents=True)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(mirror))
+    monkeypatch.delenv("COORDINATOR_ENGINE_SOURCE_ROOT", raising=False)
+
+    fresh = _load_module()
+    fresh._bootstrap_engine()
+
+    import coordinator_core.percolate  # noqa: F401 -- binding it IS the assertion
+
+    assert fresh._round is not None
+
+
+def test_a_root_without_the_percolate_package_is_refused_by_name(tmp_path):
+    """Resolvable-but-wrong must not die three frames later on a module name: a
+    published engine mirror imports `coordinator_core` cleanly and then fails on
+    `percolate.targets`, naming a module rather than the root that is wrong."""
+    mirror = tmp_path / "published-mirror"
+    (mirror / "coordinator_core").mkdir(parents=True)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        _mod._require_percolate_engine(str(mirror))
+
+    message = str(excinfo.value)
+    assert "PUBLISHED ENGINE MIRROR" in message
+    assert "COORDINATOR_ENGINE_SOURCE_ROOT" in message
+
+
+def test_a_source_checkout_passes_the_percolate_engine_probe(tmp_path):
+    source = tmp_path / "source"
+    (source / "coordinator_core" / "percolate").mkdir(parents=True)
+    _mod._require_percolate_engine(str(source))
+
+
+def test_a_resolution_abort_is_not_reported_as_an_empty_target_set(monkeypatch, capsys):
+    """`None` (resolution aborted, cause already printed) and `{}` (genuinely no
+    targets) mean opposite things. Collapsing them printed "no registered
+    publish targets" over a named, fixable registry failure, sending the
+    operator to look for a missing topology file."""
+    monkeypatch.setattr(_mod, "_mirror_groups", lambda root: None)
+    monkeypatch.setattr(_mod._round, "_resolve_percolate_root", lambda override: "/p")
+    monkeypatch.setattr(_mod.publish_lane, "declare_lane", lambda: None)
+
+    rc = _mod.main(["claude-klabauter", "--list"])
+
+    captured = capsys.readouterr()
+    assert rc == _mod._round._EXIT_USAGE
+    assert "no registered publish targets" not in captured.err
+    assert "resolution failed" in captured.err

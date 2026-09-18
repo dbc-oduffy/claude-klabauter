@@ -9270,12 +9270,14 @@ def check_cat_heredoc_write_advise(
     git_root: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """BX-16 shape 4 -- `cat > FILE <<'EOF' ... EOF` writes a file via a
-    subprocess heredoc. Advisory only: states the fact the agent lacks at
-    the moment it matters -- this write is recorded and will be in the
-    session's commit (DR-258 § Amendment 2026-08-30), a path the command
-    does not name is not. No tool-preference nudge; see
-    `check_heredoc_repo_write_advise`, the sibling this register is modeled
-    on.
+    subprocess heredoc. Advisory only, for the same reason as the sed check
+    above -- but the fact it states is a recording one, not a tool
+    preference: since 2026-08-30 this write is recorded and claimed for the
+    session's commit the same as any other (DR-258 § Amendment 2026-08-30),
+    so the message names what stays true regardless of which tool wrote the
+    file (the redirect target is what's recorded; a path the command does
+    not name is not), mirroring `check_heredoc_repo_write_advise`'s register
+    rather than nudging toward the Write tool.
     """
     if not cmd:
         return None

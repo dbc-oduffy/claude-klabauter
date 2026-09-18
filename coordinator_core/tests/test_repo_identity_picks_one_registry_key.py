@@ -2,12 +2,12 @@
 
 A repo carries its canonical `repos.*` key plus any receive-only alias a
 sibling may address it by — `repos.claude_klabauter` alongside
-`repos.project_example_orchestration_hub`, `repos.example-sim-repo` alongside
+`repos.example_orchestration_hub_repo`, `repos.example-sim-repo` alongside
 `repos.example_sim_repo_md`, four such pairs live on the machine-b box alone. Both
 reverse mappings (path -> EM id) used to take the first key that path-matched,
 so the answer was whatever order the caller happened to enumerate the registry
 in: `coordinator/bin/cross-repo-memo.py` sorts keys alphabetically and sent
-every memo from this repo as `project-example-orchestration-hub-em`, while
+every memo from this repo as `example-orchestration-hub-repo-em`, while
 `resolve_self_em_id` enumerates in file order and answered `claude-klabauter-em`
 for the same repo in the same process. Six memos went out to sibling inboxes
 under the wrong sender before this was caught by hand.
@@ -40,7 +40,7 @@ except Exception:  # noqa: BLE001 — no DoE checkout is a skip, never a suite e
     _DOE_ROOT = None
 
 _CANONICAL_KEY = "repos.claude_klabauter"
-_ALIAS_KEY = "repos.project_example_orchestration_hub"
+_ALIAS_KEY = "repos.example_orchestration_hub_repo"
 
 
 def _registry(tmp_path: Path, declared: tuple[str, ...], live: dict[str, Path]) -> Path:
@@ -161,7 +161,7 @@ def test_alias_still_resolves_as_a_receiver(collided_registry):
 
     importlib.reload(_memo_resolver)
     inbox, repo_path, _ = _memo_resolver.resolve_receiver_inbox(
-        "project-example-orchestration-hub-em"
+        "example-orchestration-hub-repo-em"
     )
     assert repo_path is not None
     assert os.path.samefile(str(repo_path), str(collided_registry))

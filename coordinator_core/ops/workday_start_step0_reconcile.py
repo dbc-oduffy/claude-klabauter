@@ -19,14 +19,14 @@ Branch Reconciliation Decision.
 Exit codes (parity-critical, preserved from the bash oracle):
     0 — already-includes (`ALREADY-CURRENT`) / fast-forward
         (`RECONCILED-FF`) / non-ff merge succeeded (`RECONCILED-MERGE`).
-    3 — a failed `--no-ff` merge, discriminated (MERGE_HEAD-first, spawn-
-        free) into one of three outcome strings: `RECONCILE-CONFLICT`
-        (genuine content conflict; merge aborted, PM resolves first),
-        `RECONCILE-MERGE-COMMIT-REFUSED` (the merge applied and reached the
-        commit step but was refused there, e.g. by a commit hook), or
-        `RECONCILE-MERGE-NOT-STARTED` (the merge never began — dirty
-        worktree, unrelated histories, bad ref). None of the three is the
-        A/B/C Branch Reconciliation Decision except `RECONCILE-CONFLICT`.
+    3 — a failed `--no-ff` merge, discriminated by `_classify_failed_merge`
+        into one of three outcome strings: a genuine content conflict
+        (`RECONCILE-CONFLICT`, PM resolves first via the A/B/C Branch
+        Reconciliation Decision), the merge applying but its commit being
+        refused (`RECONCILE-MERGE-COMMIT-REFUSED`, commonly a commit hook —
+        not an A/B/C decision), or the merge never starting at all
+        (`RECONCILE-MERGE-NOT-STARTED` — dirty worktree, unrelated
+        histories, or a bad ref; also not an A/B/C decision).
     1 — unexpected error (git not a repo, fetch failure, etc. — the bash
         oracle's `set -euo pipefail` propagates the failing git command's
         own exit code; this port does the same).
@@ -84,43 +84,55 @@ def _echo_to_stderr(proc: subprocess.CompletedProcess) -> None:
 
 
 def _merge_in_progress(repo_root: Path) -> bool:
-    """Whether `MERGE_HEAD` is present in this worktree's private gitdir —
-    read via `resolve_git_dir` (spawn-free by its own docstring), never via
-    a `git rev-parse --git-path` spawn. Matches
-    `push_failure_verdict::_merge_head_present`'s resolution shape."""
-    try:
-        return (resolve_git_dir(repo_root) / "MERGE_HEAD").exists()
-    except (OSError, ValueError):
-        # `resolve_git_dir` reads the `.git` pointer file as UTF-8; a
-        # non-UTF-8 pointer file raises `UnicodeDecodeError` (a `ValueError`
-        # subclass), not `OSError` — caught here too.
-        return False
+    """Whether MERGE_HEAD exists in THIS worktree's private gitdir.
+
+    Resolved via `resolve_git_dir` (worktree-private gitdir, spawn-free per
+    its own docstring), matching the precedent this plan cites
+    (`push_failure_verdict :: _merge_head_present(repo_root)`). A named
+    module-level callable, not an inline expression, so AC8's monkeypatch
+    has a name in this module's namespace to bind to.
+    """
+    return (resolve_git_dir(repo_root) / "MERGE_HEAD").exists()
 
 
 def _index_readable(repo_root: Path) -> bool:
-    """Whether `.git/index` parses cleanly — one `read_index(fresh=True)`
-    call, zero spawns. `fresh=True` because the index was mutated by the
-    merge subprocess microseconds earlier; a cached read would be stale.
-    Any `IndexParseError`, for any of its reasons, reads as *not readable*
-    — deliberately conservative (see module Design table / docstring)."""
+    """Whether the index can be parsed cleanly right now (no unmerged
+    entries, no other parse failure).
+
+    `fresh=True` because the index was mutated by the merge subprocess
+    microseconds earlier and a cached read would be stale. Only
+    `IndexParseError` is caught -- covers both an unmerged (conflicted)
+    index and any other unparseable index (e.g. a split index) alike, by
+    that exception's own contract; the message is never inspected, since
+    message-sniffing is not a discriminant.
+    """
     try:
         read_index(repo_root, fresh=True)
-        return True
     except IndexParseError:
         return False
+    return True
 
 
 def _classify_failed_merge(merge_in_progress: bool, index_readable: bool) -> str:
-    """Three-way discrimination of a failed `--no-ff` merge, MERGE_HEAD-first:
+    """Discriminate a failed `--no-ff` merge into one of three outcome
+    strings, per the Design table
+    (docs/plans/2026-09-06-engine-publish-lag-hook-gen-forwarder-regen.md).
+
+    Pure, no I/O -- both probes are resolved by the caller and passed in,
+    which is what makes this function's fast, zero-spawn unit test
+    possible.
 
     | merge_in_progress | index_readable | outcome |
     |---|---|---|
-    | True  | False (raised) | RECONCILE-CONFLICT (unchanged, today's arm) |
-    | True  | True           | RECONCILE-MERGE-COMMIT-REFUSED |
-    | False | either         | RECONCILE-MERGE-NOT-STARTED |
+    | True  | False (raised) | `RECONCILE-CONFLICT` (unchanged, today's meaning) |
+    | True  | True           | `RECONCILE-MERGE-COMMIT-REFUSED` |
+    | False | either         | `RECONCILE-MERGE-NOT-STARTED` |
 
-    Pure, no I/O — the two probes above do the I/O and pass their booleans
-    in."""
+    None of the three strings names a cause -- `RECONCILE-MERGE-COMMIT-
+    REFUSED` claims only that the merge applied and reached the commit step
+    with no unmerged entry in the index; a hook abort is the known cause and
+    may be named in the caller's stderr hint, never here.
+    """
     if not merge_in_progress:
         return "RECONCILE-MERGE-NOT-STARTED"
     if index_readable:
@@ -199,27 +211,23 @@ def main(argv: list[str]) -> int:
             "Reconciliation Decision.",
             file=sys.stderr,
         )
-        if not index_readable:
-            # The conservative arm: `.git/index` could not be parsed, so this
-            # outcome also covers "genuinely unparseable for a non-conflict
-            # reason" (e.g. a core.splitIndex box, where this arm fires on
-            # every failed merge). Named explicitly rather than silently
-            # folded into "conflict" so the degradation is visible.
-            print(
-                "The index could not be read to confirm this is a genuine "
-                "content conflict; treated conservatively as one.",
-                file=sys.stderr,
-            )
-    elif outcome == "RECONCILE-MERGE-COMMIT-REFUSED":
         print(
-            "Reconcile with origin/main applied but was refused at the commit "
-            "step (commonly a commit hook) — this is NOT the A/B/C Branch "
-            "Reconciliation Decision.",
+            "The index could not be confirmed readable when this was "
+            "classified — on a core.splitIndex box this arm fires for "
+            "every failed merge, not only a genuine conflict.",
             file=sys.stderr,
         )
-    else:  # RECONCILE-MERGE-NOT-STARTED
+    elif outcome == "RECONCILE-MERGE-COMMIT-REFUSED":
         print(
-            "Reconcile with origin/main's merge never started — this is NOT "
+            "Reconcile with origin/main applied but the merge commit was "
+            "refused (commonly a commit hook) — this is not the A/B/C "
+            "Branch Reconciliation Decision.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            "Reconcile with origin/main's merge never started (dirty "
+            "worktree, unrelated histories, or a bad ref) — this is not "
             "the A/B/C Branch Reconciliation Decision.",
             file=sys.stderr,
         )

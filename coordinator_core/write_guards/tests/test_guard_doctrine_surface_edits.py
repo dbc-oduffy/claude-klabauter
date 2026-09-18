@@ -454,3 +454,123 @@ def test_advisory_log_never_creates_a_session_dir(tmp_path, monkeypatch):
         "the advisory logger minted a session directory for a session that has "
         "none -- live_session_ids will enumerate it as a phantom session"
     )
+
+
+# ---------------------------------------------------------------------------
+# Cross-repo mis-anchor: the two DoE-only surfaces must follow the DoE root,
+# not the session's cwd. Measured 2026-09-17 from a session whose cwd was
+# claude-klabauter: both resolved to nonexistent claude-klabauter paths while the
+# real DoE files edited clean.
+# ---------------------------------------------------------------------------
+
+_DOE_ONLY_RELATIVES = [
+    ("coordinator", "snippets", "em-operating-doctrine.md"),
+    ("global-doctrine", "CLAUDE.md"),
+]
+
+
+@pytest.fixture
+def two_roots(tmp_path, monkeypatch):
+    """A DoE root and an unrelated session repo, with the pointer resolved to
+    the former and `_git_root()` to the latter -- the shape the mis-anchor
+    needed to be visible at all. Clears the module's per-process DoE-root
+    memo both before and after, so ordering against any other test that has
+    already resolved it cannot decide this one.
+    """
+    doe = tmp_path / "DoE-claude"
+    (doe / "coordinator" / "snippets").mkdir(parents=True)
+    (doe / "global-doctrine").mkdir(parents=True)
+    session_repo = tmp_path / "project-peer"
+    session_repo.mkdir()
+
+    guard._doe_root_memo.clear()
+    monkeypatch.setattr(guard, "read_doe_root_pointer", lambda: str(doe))
+    monkeypatch.setattr(guard, "_git_root", lambda: str(session_repo))
+    yield doe, session_repo
+    guard._doe_root_memo.clear()
+
+
+def _verdict(target) -> str:
+    result = guard.check(
+        {"tool_name": "Edit", "session_id": "t", "tool_input": {"file_path": str(target)}}
+    )
+    return "allow" if result is None else "deny"
+
+
+@pytest.mark.parametrize("relative", _DOE_ONLY_RELATIVES)
+def test_doe_only_surfaces_are_protected_from_a_foreign_session(two_roots, relative):
+    doe, _session_repo = two_roots
+    assert _verdict(doe.joinpath(*relative)) == "deny"
+
+
+@pytest.mark.parametrize("relative", _DOE_ONLY_RELATIVES)
+def test_doe_only_surface_approval_is_read_at_the_doe_root(two_roots, relative):
+    """The sentinel follows the OWNING repo. An approval in the editing
+    session's own repo must not authorize an edit to DoE's doctrine --
+    otherwise any repo on the box approves fleet-wide doctrine changes.
+    """
+    doe, session_repo = two_roots
+    target = doe.joinpath(*relative)
+
+    _fresh(session_repo / _SENTINEL_NAME)
+    assert _verdict(target) == "deny", (
+        "an approval created in the editing session's repo authorized an edit "
+        "to another repo's doctrine surface"
+    )
+
+    _fresh(doe / _SENTINEL_NAME)
+    assert _verdict(target) == "allow"
+
+
+def test_unresolvable_doe_pointer_lands_on_the_pre_fix_protected_set(
+    two_roots, monkeypatch
+):
+    """Fail-quiet, not fail-error. The DoE-anchored entries are ADDITIVE, so
+    an unresolvable pointer must simply drop them and leave every path the
+    guard already protected still protected.
+    """
+    doe, session_repo = two_roots
+    guard._doe_root_memo.clear()
+    monkeypatch.setattr(guard, "read_doe_root_pointer", lambda: "")
+
+    paths = [path for path, _ in guard._protected_entries(str(session_repo))]
+    assert guard._norm(str(doe.joinpath(*_DOE_ONLY_RELATIVES[0]))) not in paths
+    assert guard._norm(str(session_repo / "CLAUDE.md")) in paths
+    assert guard._norm(str(session_repo / "coordinator.local.md")) in paths
+    assert guard._home_claude_md() in paths
+
+
+@pytest.mark.parametrize("name", ["CLAUDE.md", "coordinator.local.md"])
+def test_per_repo_surfaces_still_anchor_on_the_session_repo(two_roots, name):
+    """The per-repo family is NOT the mis-anchor and must not move: every
+    repo carries its own copy, each governing that repo's own sessions.
+    """
+    _doe, session_repo = two_roots
+    assert _verdict(session_repo / name) == "deny"
+    entry_roots = {
+        owning
+        for path, owning in guard._protected_entries(str(session_repo))
+        if path == guard._norm(str(session_repo / name))
+    }
+    assert entry_roots == {None}, (
+        f"{name} gained a hard-coded owning root -- it must keep reading the "
+        "session's own repo root"
+    )
+
+
+def test_doe_root_is_resolved_once_per_process(two_roots, monkeypatch):
+    """The resolver runs on the PreToolUse path for every Write/Edit. The memo
+    is what keeps a registry read plus two file reads off that path per call.
+    """
+    doe, session_repo = two_roots
+    guard._doe_root_memo.clear()
+    calls = []
+
+    def _counted():
+        calls.append(1)
+        return str(doe)
+
+    monkeypatch.setattr(guard, "read_doe_root_pointer", _counted)
+    for _ in range(4):
+        guard._protected_entries(str(session_repo))
+    assert len(calls) == 1

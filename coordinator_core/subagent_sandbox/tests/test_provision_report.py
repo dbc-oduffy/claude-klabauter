@@ -1497,6 +1497,91 @@ def test_unknown_type_falls_back_to_run_report_template(
 
 
 # ---------------------------------------------------------------------------
+# C6: policy.report_type_map resolution at the cater_subagent_start ->
+# _provision seam (no payload["type"] key at all -- the ordinary SubagentStart
+# hook shape, distinct from provision-sidecar.py's CLI --type default and
+# fan-out-dispatch.py's own explicit type).
+# ---------------------------------------------------------------------------
+
+def test_report_type_map_resolves_template_for_a_no_type_payload(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    """A reviewer-typed dispatch reaching `_provision` with no `type` key at
+    all (the real cater_subagent_start.compose_catering shape) must resolve
+    its template from `policy.report_type_map`, not fall through to the
+    legacy run-report shape -- mirroring provision-sidecar.py's own
+    resolution order (explicit type > report_type_map hit > no type key)."""
+    policy = {
+        "confined": [],
+        "exempt": [],
+        "sanctioned_dirs": [],
+        "report_sidecar": [REPORT_SIDECAR_TYPE],
+        "report_type_map": {REPORT_SIDECAR_TYPE: "review-findings"},
+    }
+    policy_path = tmp_path / "subagent-sandbox-policy.yaml"
+    policy_path.write_text(yaml.safe_dump(policy), encoding="utf-8")
+
+    session_id = "sess-report-type-map"
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id=session_id
+    )
+    report_sidecar = _provision(payload, str(policy_path), str(git_repo))
+    assert report_sidecar is not None
+
+    text = (git_repo / report_sidecar).read_text(encoding="utf-8")
+    assert "## Findings" in text
+    assert "## Divergence from plan" not in text  # not the run-report shape
+
+
+def test_explicit_payload_type_wins_over_report_type_map(
+    git_repo: Path, tmp_path: Path
+) -> None:
+    """An explicit payload["type"] still wins over a report_type_map hit --
+    resolution order is explicit type first, matching provision-sidecar.py."""
+    policy = {
+        "confined": [],
+        "exempt": [],
+        "sanctioned_dirs": [],
+        "report_sidecar": [REPORT_SIDECAR_TYPE],
+        "report_type_map": {REPORT_SIDECAR_TYPE: "review-findings"},
+    }
+    policy_path = tmp_path / "subagent-sandbox-policy.yaml"
+    policy_path.write_text(yaml.safe_dump(policy), encoding="utf-8")
+
+    session_id = "sess-report-type-map-explicit-wins"
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID,
+        agent_type=REPORT_SIDECAR_TYPE,
+        session_id=session_id,
+        doc_type="assessment",
+    )
+    report_sidecar = _provision(payload, str(policy_path), str(git_repo))
+    assert report_sidecar is not None
+
+    text = (git_repo / report_sidecar).read_text(encoding="utf-8")
+    assert "## Questions" in text
+    assert "## Findings" not in text
+
+
+def test_report_type_map_miss_still_resolves_to_legacy_shape(
+    git_repo: Path, policy_path: Path
+) -> None:
+    """`policy_path` fixture carries no `report_type_map` key at all (empty
+    mapping) -- a lookup-miss RESOLVES to the existing no-type behavior
+    (the frozen legacy run-report shape), it never declines the dispatch."""
+    session_id = "sess-report-type-map-miss"
+    payload = _payload(
+        agent_id=BARE_HEX_AGENT_ID, agent_type=REPORT_SIDECAR_TYPE, session_id=session_id
+    )
+    report_sidecar = _provision(payload, str(policy_path), str(git_repo))
+    assert report_sidecar is not None
+
+    text = (git_repo / report_sidecar).read_text(encoding="utf-8")
+    assert "## Run notes" in text
+    assert "## Findings" not in text
+
+
+# ---------------------------------------------------------------------------
 # Plan-derivable report_sidecar for the five plan-scoped-durable emitters
 # (canonical spec § 2.7)
 # ---------------------------------------------------------------------------

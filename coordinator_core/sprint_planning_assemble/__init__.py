@@ -51,7 +51,15 @@ reference shape this module copies verbatim: module-scope imports are
 `typing`/`__future__` only, `json`/`sys` deferred into the CLI entry
 (`main()`), no `register_op`, no `OP_CLASSIFICATION`/`_EAGER_OP_MODULES`/
 `OP_MODULE_MAP` entry. Target: sizing-assemble's measured shape
-(120.3ms / 2.0 procs per call through its real CLI), budget ceiling
+(120.3ms / 2.0 procs per call through its real CLI) — a COPIED BUILD-TIME
+REFERENCE TARGET, not a live `sizing_assemble` measurement (2026-09-06
+engine-half-roadmap-verification-debt plan, C3): a fresh in-tree
+`getrusage(RUSAGE_CHILDREN)` measurement of `sizing_assemble.route()`
+through its real CLI on 2026-09-17 (k=20, fresh process per sample) read
+~56.8ms process time — under this 120.3ms figure and far under the
+428.1ms regression a 2026-08-23 handoff attributed to this same module,
+which its own Session Ledger later refuted as measured against the
+klabauter mirror's build rather than this tree. Budget ceiling remains
 ≤200ms / ≤2.0 procs/call (DR-344 §7's single-process bar).
 
 READ-ONLY, by construction: `brief()` only reads its arguments — it never

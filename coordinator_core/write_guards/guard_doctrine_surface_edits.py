@@ -152,6 +152,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from coordinator_core.bash_guards._helpers import resolve_override_keys_doc_display
+from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate
 from coordinator_core.session.identity import resolves_em_audience
 from coordinator_core.write_guards._repo_root import resolve_repo_root
@@ -209,26 +210,111 @@ def _home_claude_md() -> "str | None":
         return None
 
 
-def _protected_paths(repo_root: "str | None") -> "list[str]":
-    paths: "list[str]" = []
+_DOE_ONLY_SURFACES: "tuple[tuple[str, ...], ...]" = (
+    ("global-doctrine", "CLAUDE.md"),
+    ("coordinator", "snippets", "em-operating-doctrine.md"),
+)
+
+_PER_REPO_SURFACES: "tuple[tuple[str, ...], ...]" = (
+    ("CLAUDE.md",),
+    ("coordinator.local.md",),
+)
+
+_doe_root_memo: "list[str | None]" = []
+
+
+def _doe_root() -> "str | None":
+    """The DoE-claude repo root, resolved independently of the session's cwd.
+
+    Delegates to `coordinator_core.doe_root_pointer.read_doe_root_pointer`
+    (registry `repos.doe_claude`, then the durable and legacy `.doe-root`
+    pointer files). Memoized per process: this runs on the PreToolUse path
+    for every `Write`/`Edit`, and the resolver is a registry read plus up to
+    two file reads with no spawn -- cheap, but not free, and the pointer does
+    not move inside a session.
+
+    Returns None on an unresolvable pointer, which the caller treats as
+    "protect nothing extra" rather than as an error: the two surfaces this
+    anchors are additive (see `_protected_entries`), so failing to resolve
+    can only ever leave protection where it already was.
+    """
+    if not _doe_root_memo:
+        try:
+            resolved = read_doe_root_pointer() or None
+        except Exception:
+            resolved = None
+        _doe_root_memo.append(_norm(resolved) if resolved else None)
+    return _doe_root_memo[0]
+
+
+def _protected_entries(repo_root: "str | None") -> "list[tuple[str, str | None]]":
+    """Protected paths paired with the root whose sentinel approves each.
+
+    TWO SURFACE FAMILIES, AND THEY ANCHOR DIFFERENTLY. Composing all four
+    repo-relative surfaces against the session's own repo root was a
+    cross-repo MIS-ANCHOR for two of them, measured 2026-09-17 from a
+    session whose cwd was `claude-klabauter`: `global-doctrine/CLAUDE.md` and
+    `coordinator/snippets/em-operating-doctrine.md` exist ONLY in
+    DoE-claude, so they resolved to two nonexistent `claude-klabauter/...`
+    paths while the real DoE files sat outside the protected set entirely
+    and edited clean. The guard was fail-closed on its own resolution
+    failures and wide open on this one, because a path that resolves
+    successfully to the wrong repo is not a resolution failure.
+
+      - DoE-ONLY surfaces anchor on `_doe_root()`, never on the session's
+        repo. One clone of DoE-claude serves the whole box.
+      - PER-REPO surfaces (`CLAUDE.md`, `coordinator.local.md`) stay
+        anchored on the session's own repo root, which is correct and
+        unchanged: every repo has its own copy, each governing that repo's
+        sessions, and DoE's are additionally covered as that repo's
+        per-repo pair whenever a session runs there.
+
+    THE SENTINEL FOLLOWS THE OWNING REPO, not the session. An approval to
+    edit DoE's doctrine belongs at DoE's repo root; accepting one created in
+    whatever repo the editing session happens to sit in would let any repo
+    on the box authorize edits to the fleet's doctrine. `None` as the owning
+    root means "approved by the session's repo root", preserving today's
+    behaviour for the HOME surface exactly.
+
+    ADDITIVE BY CONSTRUCTION. Every entry this returns is one `check()` will
+    deny without an approval; nothing is removed relative to the previous
+    composition, so no allow path widens -- the direction a hard-deny guard
+    is allowed to move without a ruling. An unresolvable `.doe-root` pointer
+    drops the DoE-anchored entries and lands exactly on the pre-fix
+    protected set rather than on an error.
+    """
+    entries: "list[tuple[str, str | None]]" = []
+    seen: "set[str]" = set()
+
+    def _add(path: str, owning_root: "str | None") -> None:
+        if path not in seen:
+            seen.add(path)
+            entries.append((path, owning_root))
+
     home_claude_md = _home_claude_md()
     if home_claude_md:
-        paths.append(home_claude_md)
+        _add(home_claude_md, None)
+
+    doe_root = _doe_root()
+    if doe_root:
+        for parts in _DOE_ONLY_SURFACES:
+            try:
+                _add(_norm(os.path.join(doe_root, *parts)), doe_root)
+            except Exception:
+                pass
+
     if repo_root:
-        try:
-            paths.append(_norm(os.path.join(repo_root, "global-doctrine", "CLAUDE.md")))
-            paths.append(
-                _norm(
-                    os.path.join(
-                        repo_root, "coordinator", "snippets", "em-operating-doctrine.md"
-                    )
-                )
-            )
-            paths.append(_norm(os.path.join(repo_root, "CLAUDE.md")))
-            paths.append(_norm(os.path.join(repo_root, "coordinator.local.md")))
-        except Exception:
-            pass
-    return paths
+        for parts in _DOE_ONLY_SURFACES + _PER_REPO_SURFACES:
+            try:
+                _add(_norm(os.path.join(repo_root, *parts)), None)
+            except Exception:
+                pass
+
+    return entries
+
+
+def _protected_paths(repo_root: "str | None") -> "list[str]":
+    return [path for path, _ in _protected_entries(repo_root)]
 
 
 def _sentinel_state(repo_root: "str | None") -> str:
@@ -442,11 +528,21 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if denial is not None:
         return denial
 
-    protected = _protected_paths(repo_root)
-    if target not in protected:
+    owning_root: "str | None" = None
+    matched = False
+    for path, entry_root in _protected_entries(repo_root):
+        if target == path:
+            matched = True
+            owning_root = entry_root
+            break
+    if not matched:
         return None
 
-    state = _sentinel_state(repo_root)
+    # The approval is read at the root that OWNS the matched surface, falling
+    # back to the session's repo root -- see `_protected_entries`. An entry
+    # carrying its own root is one whose file lives in another repo, and an
+    # approval sitting in this session's repo says nothing about it.
+    state = _sentinel_state(owning_root or repo_root)
     if state == "allow":
         return None
 

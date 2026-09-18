@@ -18,7 +18,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from percolate.dest_refresh import refresh_dest_from_origin  # noqa: E402
+from percolate.dest_refresh import (  # noqa: E402
+    default_remote_branch,
+    refresh_dest_from_origin,
+)
 
 #: Real git spawns, admitted by the spawn ratchet
 #: (`coordinator_core/tests/test_no_new_spawning_tests.py`); `cadence` because
@@ -153,15 +156,65 @@ def test_ahead_only_clone_passes(origin_and_clone):
     assert result.behind == 0
 
 
-def test_untracked_landing_branch_is_refused(origin_and_clone):
+def test_untracked_landing_branch_is_measured_against_the_remote_default(origin_and_clone):
+    """A fresh branch with no upstream PROCEEDS, measured against origin's
+    default branch.
+
+    This asserts the reversal of an earlier refusal, deliberately: a fresh clone
+    on a new local branch is the ordinary cloud shape, and refusing it made the
+    normal case the broken one. Nothing this module protects is given up -- the
+    branch is still measured against the tip a peer would have landed on, it is
+    still fast-forwarded when behind, and it is still refused when it has
+    diverged (below).
+    """
     clone = origin_and_clone[1]
     _git(clone, "checkout", "-b", "no-upstream")
 
     out, err = _capture()
     result = refresh_dest_from_origin(clone, out=out, err=err)
 
+    assert result.ok
+    assert result.branch == "no-upstream"
+    assert result.upstream in ("origin/main", "origin/candidate")
+    assert "no upstream; measuring against" in out.getvalue()
+
+
+def test_untracked_branch_behind_the_default_is_fast_forwarded(origin_and_clone):
+    origin, clone = origin_and_clone
+    _git(clone, "checkout", "-b", "no-upstream")
+    # Advance whatever branch this clone resolves as origin's default -- the
+    # fixture's `origin/HEAD` is a property of how it was cloned, not something
+    # this behaviour depends on.
+    base = default_remote_branch(clone)
+    assert base is not None
+    _git(origin, "checkout", base.split("/", 1)[1])
+    _commit(origin, "peer-on-default")
+    _git(origin, "checkout", "parked")
+
+    out, err = _capture()
+    result = refresh_dest_from_origin(clone, out=out, err=err)
+
+    assert result.ok, result.reason
+    assert result.fast_forwarded is True
+    assert (clone / "peer-on-default").exists()
+
+
+def test_untracked_branch_with_no_remote_branch_at_all_is_refused_with_the_fix(tmp_path):
+    """The one no-upstream case that stays a refusal: nothing to measure
+    against. It names the command that fixes it rather than the state."""
+    solo = tmp_path / "solo"
+    solo.mkdir()
+    _git(solo, "init", "-b", "work")
+    _git(solo, "config", "user.email", "t@example.invalid")
+    _git(solo, "config", "user.name", "t")
+    _commit(solo, "seed")
+
+    out, err = _capture()
+    result = refresh_dest_from_origin(solo, out=out, err=err)
+
     assert not result.ok
-    assert "no upstream tracking ref" in result.reason
+    assert "no remote default branch" in result.reason
+    assert "remote set-head origin --auto" in result.reason
 
 
 def test_detached_head_is_refused_with_its_own_reason(origin_and_clone):

@@ -289,9 +289,9 @@ def _carried_holder_name(repo_root: str, holder_session_id: str) -> Optional[str
 def stamp(
     repo_root: str,
     holder_session_id: str,
-    declinations: list,
+    declinations: Optional[list],
     interval_seconds: float,
-    subscribed_peers: int = 1,
+    subscribed_peers: Optional[int] = None,
     now_epoch: Optional[float] = None,
     tick_source: str = TICK_SOURCE,
     holder_name: Optional[str] = None,
@@ -303,6 +303,18 @@ def stamp(
     reason}` -- never an accumulating history: that is what lets a reader tell
     "looked, nothing to do" apart from "did not look". A tick that emitted and
     declined nothing passes `[]`.
+
+    UNCOMPUTED-ZERO VS COMPUTED-ZERO. `subscribed_peers` and `declinations`
+    each default/accept `None`, and `None` is carried into the payload
+    VERBATIM -- never coerced to `0`/`[]`. `None` means the caller never
+    computed the figure this tick; `0`/`[]` means it did, and the answer was
+    zero. Collapsing those (the old `subscribed_peers: int = 1` default, and
+    `list(declinations or [])`) made "a watch that covered nobody this tick"
+    indistinguishable from "a watch that never measured coverage at all" --
+    exactly the ambiguity a reader of `stamp()`'s payload cannot resolve from
+    the record alone. A caller that HAS computed a real zero passes `0`/`[]`
+    explicitly, same as before; only an omitted argument now reads back as
+    `None` instead of a fabricated `1`.
 
     NO LOCK SPANS READ-DECIDE-WRITE, AND THIS IS A KNOWN, UNCLOSED GAP.
     `write_atomic` makes the WRITE atomic; it does not make the sequence
@@ -331,6 +343,13 @@ def stamp(
     ticks needs the un-added history this record deliberately does not keep
     (see "never an accumulating history", above); this trace answers "what
     was destroyed", never "what changed".
+
+    `writer_session_id` IS REQUIRED DESPITE THE `Optional[str] = None` DEFAULT --
+    the body below raises `ValueError` if it is falsy. The signature documents
+    itself as optional; the contract actually enforced is mandatory. Left
+    standing rather than resolved here: whether the doc-only mismatch is
+    deliberate, or the kwarg should become positional/required, is an open
+    question for whoever next owns this module's call sites.
     """
     if tick_source not in TICK_SOURCES:
         raise ValueError(
@@ -366,7 +385,7 @@ def stamp(
         "tick_source": tick_source,
         "next_expected_by": next_expected_by(now_epoch, interval_seconds),
         "subscribed_peers": subscribed_peers,
-        "declinations": list(declinations or []),
+        "declinations": list(declinations) if declinations is not None else None,
         "writer_session_id": writer_session_id,
     }
 

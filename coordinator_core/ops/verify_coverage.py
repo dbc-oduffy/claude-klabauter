@@ -574,6 +574,10 @@ REF_ALLOWLIST: Set[str] = {
     # rather than teaching the sweep to recognize an inline-code-span-in-prose
     # context (broader parser change, not worth it for one project-local ref).
     "example-retrieval-repo-context-builder",  # documented failure-mode text, not a dispatch site (2026-08-06)
+    # Python type token, not an agent: the generated .claude/repomap.md renders
+    # signatures such as `agent_type: str`, which the subagent regex reads as a
+    # dispatch of an agent named `str`.
+    "str",  # type annotation in generated repomap signatures, not a dispatch site (2026-09-13)
 }
 
 

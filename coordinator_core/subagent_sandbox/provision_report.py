@@ -1495,25 +1495,29 @@ def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optiona
     # so an adopting spawn leaves no stray empty session dir behind.
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    # SUBSUME: --type axis. `type` is read straight off the payload first --
-    # the direct-call caller (fan-out-dispatch.py) never sets it, and main()
-    # injects a "run-report"-default type into the payload before reaching
-    # here, so CLI invocations always resolve to the (enhanced) registry
-    # entry via this leg alone.
+    # SUBSUME: --type axis. `type` is read straight off the payload -- the
+    # direct-call caller (fan-out-dispatch.py) never sets it, so `.get`
+    # returns None and _build_doc_text falls back to the frozen legacy
+    # run-report shape (see _build_doc_text's docstring). main() injects a
+    # "run-report"-default type into the payload before reaching here, so
+    # CLI invocations always resolve to the (enhanced) registry entry.
     #
-    # C6 (docs/plans/2026-09-07-doctrine-enforcement-surfaces.md § Approach
-    # C6, AC10/AC11): when the payload carries NO `type` (the
-    # `cater_subagent_start.compose_catering` -> `_provision` seam this
-    # module docstring's "Additive second seam" section names -- that caller
-    # never sets `payload["type"]`), consult `policy.report_type_map` for
-    # `effective_label` -- a lookup against a mapping already parsed and in
-    # hand (`policy` was already loaded above for the eligibility check), not
-    # a second policy read. RESOLVE, never decline: a type absent from the
-    # map, or a map that is empty because the policy did not resolve
-    # (`load_policy`'s own fail-open `_empty_policy()`), falls through to the
-    # same `None` this leg has always produced on a payload with no `type` --
-    # `_build_doc_text` then falls back to the frozen legacy run-report shape,
-    # exactly as before this change. No hard-decline leg is added.
+    # C6: the `cater_subagent_start.compose_catering -> _provision` seam is a
+    # THIRD caller alongside those two, and it never sets payload["type"]
+    # either -- so a reviewer-typed dispatch reaching here through the ordinary
+    # SubagentStart hook path fell all the way to the legacy run-report shape,
+    # never `policy.report_type_map`'s intended template. Mirror
+    # `provision-sidecar.py`'s own `--type` resolution order (explicit type >
+    # report_type_map hit > no type key) here, once, so every caller of this
+    # function gets it rather than requiring each to duplicate the lookup.
+    # Keyed on `effective_label`, the SAME label that just decided
+    # `report_sidecar` eligibility above -- `report_type_map` is additive on
+    # `report_sidecar` per `engine.load_policy`'s docstring, not a parallel
+    # key space. A lookup-miss (empty/unresolved report_type_map: non-DoE
+    # consumer, OSS install, cloud container, unset CLAUDE_PLUGIN_ROOT)
+    # RESOLVES to the existing no-type behavior -- this never declines a
+    # dispatch, matching `_provision`'s and `cater_subagent_start`'s
+    # documented fail-open contracts and DR-277's advisory default.
     doc_type = payload.get("type") or policy.report_type_map.get(effective_label) or None
 
     spawned_at = datetime.now(timezone.utc).isoformat()

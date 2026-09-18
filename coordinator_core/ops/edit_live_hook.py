@@ -14,7 +14,7 @@ syntactically broken, the very next Bash call from ANY concurrent session
 fails at the PreToolUse gate. This module implements the safe pattern: copy
 the live hook to a scratch path, let the operator or agent edit the scratch
 copy freely (none of those edits touch the live path), then validate the
-FINAL scratch state with `bash -n` and land it via a single atomic
+FINAL scratch state with `sh -n` and land it via a single atomic
 same-filesystem replace — there is no window where the live path is a
 partially-written file.
 

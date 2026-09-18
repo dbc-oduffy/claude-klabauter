@@ -67,6 +67,7 @@ import dataclasses
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import time
@@ -125,6 +126,83 @@ MACHINE_LOCAL_REPO_KEYS: dict[str, str] = {
 #: anything installed; this file is.
 INSTALL_REPORT_PATH = Path("/root/cloud-setup-report.json")
 
+#: Binaries whose absence from a SESSION's PATH silently disables a whole plane:
+#: `python3` carries every coordinator hook registration, the two language
+#: servers carry the LSP plugins. Resolved here, pre-boot, so the value the
+#: cloud dialog's env-var box needs is determined off the image rather than
+#: re-derived by hand against a session that has already booted wrong.
+SESSION_PATH_BINARIES = ("python3", "pyright-langserver", "typescript-language-server")
+
+#: Basenames of the two session-facing surfaces. `<claude_home>/rules/*.md` is
+#: loaded into session context by the harness itself, with no interpreter and no
+#: hook — which is the property these files are chosen for, not a convenience.
+#:
+#: They are separate because they mean opposite things. The VERDICT file reports
+#: that something is wrong, so its presence is the signal and a clean run leaves
+#: none. ORIENTATION states the ordinary shape of a cloud container — several
+#: repos mounted, no single work target — which is not a fault and must never be
+#: filed next to failures, where a reader infers one.
+SESSION_VERDICT_RULE = "cloud-preboot-verdict.md"
+SESSION_ORIENTATION_RULE = "cloud-session-orientation.md"
+
+#: The variable a session sets to declare which mounted repo is the SUBJECT of its
+#: work, the rest being present to hold the system up. Named in example-retrieval-repo's
+#: namespace because example-retrieval-repo owns the resolution semantics and consumers read
+#: them, never the reverse.
+#:
+#: Stated, never read, by this script: the cloud dialog's env-var box does not
+#: reach this process, so whether a session declares a target is unknowable here.
+#: The orientation surface therefore describes the contract and lets the session,
+#: which can see its own environment, resolve it.
+SESSION_FOCUS_ENV = "EXAMPLE_RETRIEVAL_REPO_FOCUS_REPO"
+
+#: The platform's own record of where each installed plugin lives.
+#: `<claude_home>/plugins/installed_plugins.json` is what every `claude`
+#: process reads to expand `${CLAUDE_PLUGIN_ROOT}` in a plugin's `hooks.json`.
+#: An `installPath` naming a directory that does not exist expands that
+#: variable to EMPTY, which disables the whole hook plane while every other
+#: surface — `settings.json`, the marketplace record, the plugin listing —
+#: still reports healthy.
+PLUGIN_RECORD_REL = ("plugins", "installed_plugins.json")
+
+#: Marker a resolvable plugin root must carry. Presence of the directory alone
+#: is not enough: a plugin root without its own manifest is not one.
+PLUGIN_MANIFEST_REL = (".claude-plugin", "plugin.json")
+
+#: The marketplace manifest, read for the marketplace's declared name. Both
+#: halves of the record's `<plugin>@<marketplace>` key are READ from the clone,
+#: never spelled here — a literal survives exactly until either is renamed and
+#: then registers a key nothing resolves while reporting success.
+MARKETPLACE_MANIFEST_REL = (".claude-plugin", "marketplace.json")
+
+#: The auto-compact window this script pins for a cloud container, in tokens.
+#:
+#: Compaction, not the handoff, is the continuity primitive in cloud: an
+#: unattended session has no next turn to hand to, so the only thing that
+#: keeps a long run alive is the context being folded down in place. Left
+#: unset, the window resolves from the model default — up to 1,000,000 — and
+#: the first compaction lands correspondingly late, which is the expensive
+#: behaviour this value exists to prevent.
+#:
+#: The runner injects `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=80`, which does not set
+#: the window: it only LOWERS the firing threshold within whatever window is in
+#: force. So the two stack, and the effective cut is ~0.8 x this value, i.e.
+#: ~400k tokens — an earlier cut than a desktop session wants, deliberately,
+#: because a desktop operator can compact by hand and a cloud container cannot.
+#:
+#: The binary's own bounds are 100,000..1,000,000 and it clamps to the model
+#: window, so this value must stay inside that range.
+CLOUD_AUTO_COMPACT_WINDOW_TOKENS = 500_000
+
+#: The env var and the settings key the binary resolves the window from, in
+#: that order of precedence (`env` outranks `settings`). BOTH are written, from
+#: the one constant above so they cannot drift: the env rung is the one no
+#: later `settings`-rung resolution can outrank, and the settings key is what
+#: `/autocompact` and the context UI read back — leaving it unset would make
+#: the UI misreport a window that is actually in force.
+AUTO_COMPACT_WINDOW_ENV = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+AUTO_COMPACT_WINDOW_SETTING = "autoCompactWindow"
+
 NETWORK_MAX_ATTEMPTS = 3
 #: Ceiling for the retrieval installer subprocess, sized to sit just ABOVE that
 #: installer's own internal pip ceiling so a wedged pip is reported by the layer
@@ -180,6 +258,22 @@ class Report:
     #: project root could not be chosen without guessing. Empty is the ordinary
     #: case; a populated list means the fallback root was used deliberately.
     rag_project_root_ambiguity: list = field(default_factory=list)
+    #: Where the session-critical binaries actually are on this image, and the
+    #: PATH value the cloud dialog's env-var box must therefore carry. A
+    #: determination, never an observation of the running session: the box does
+    #: not reach this process, so what the session got is unknowable from here.
+    session_path: dict | None = None
+    #: Whether this run left a verdict surface for the session to read, and where.
+    session_verdict: dict | None = None
+    #: The platform's installed-plugin record as this run left it, and whether
+    #: the path it names actually resolves. Separate from `plugin_settings`
+    #: because they are different files answering different questions: that one
+    #: says the plugin is ENABLED, this one says where its code IS.
+    plugin_install_path: dict | None = None
+    #: The auto-compact window this run pinned, and through which rungs. A
+    #: determination recorded the same way `session_path.env_box_value` is, so
+    #: an operator reads the chosen window off an artifact rather than off code.
+    auto_compact: dict | None = None
     #: The MCP entry this run wrote, independently of the clone steps.
     mcp_entry_written: dict | None = None
     machine_local_keys: dict = field(default_factory=dict)
@@ -531,6 +625,16 @@ def register_plugin_settings() -> None:
     the forwarder's own deny text prescribes, applied at provision time so no
     session has to.
 
+    ALSO PINS THE AUTO-COMPACT WINDOW, through both rungs the binary resolves
+    it from. See `CLOUD_AUTO_COMPACT_WINDOW_TOKENS` for the value and why cloud
+    wants an earlier cut than a desktop does. Both writes derive from that one
+    constant: `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW` (the highest-precedence
+    rung, which nothing resolved later can outrank) and the top-level
+    `autoCompactWindow` setting (what `/autocompact` and the context UI read
+    back). Writing it HERE rather than into the cloud dialog's env-var box is
+    the point: the box is an operator must-remember, and discharging those is
+    what this script is for.
+
     Merge, never clobber: an existing `settings.json` is read and patched.
     Unparseable existing JSON is a recorded step FAILURE (raised so `run_step`
     catches it), never a reason to overwrite the file.
@@ -552,7 +656,13 @@ def register_plugin_settings() -> None:
         "source": {"source": "directory", "path": marketplace_path}
     }
     settings.setdefault("enabledPlugins", {})["coordinator@coordinator-claude"] = True
-    settings.setdefault("env", {})["COORDINATOR_PROBE_CANARY"] = "1"
+    env_block = settings.setdefault("env", {})
+    env_block["COORDINATOR_PROBE_CANARY"] = "1"
+    # Assigned, not defaulted: a stale value from an earlier run (or from an
+    # image that seeded a different one) must be brought to the value this
+    # script determined, or a re-run would report a window it is not pinning.
+    env_block[AUTO_COMPACT_WINDOW_ENV] = str(CLOUD_AUTO_COMPACT_WINDOW_TOKENS)
+    settings[AUTO_COMPACT_WINDOW_SETTING] = CLOUD_AUTO_COMPACT_WINDOW_TOKENS
 
     tmp_path = settings_path.with_suffix(settings_path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(settings, indent=2))
@@ -573,6 +683,8 @@ def verify_plugin_settings(report: Report) -> None:
         "marketplace_path": None,
         "plugin_enabled": False,
         "probe_canary_seeded": False,
+        "auto_compact_window_env": None,
+        "auto_compact_window_setting": None,
     }
     try:
         settings = json.loads(settings_path.read_text())
@@ -586,7 +698,196 @@ def verify_plugin_settings(report: Report) -> None:
     result["marketplace_path"] = marketplace_path
     result["plugin_enabled"] = bool(settings.get("enabledPlugins", {}).get("coordinator@coordinator-claude"))
     result["probe_canary_seeded"] = bool(settings.get("env", {}).get("COORDINATOR_PROBE_CANARY"))
+    result["auto_compact_window_env"] = settings.get("env", {}).get(AUTO_COMPACT_WINDOW_ENV)
+    result["auto_compact_window_setting"] = settings.get(AUTO_COMPACT_WINDOW_SETTING)
     report.plugin_settings = result
+    # Recorded as its own top-level fact, not only as two settings-file
+    # readings: the window is a determination this run made, and an operator
+    # asking "what will this container compact at?" should not have to know
+    # which rungs it was written through to find the answer.
+    report.auto_compact = {
+        "window_tokens": CLOUD_AUTO_COMPACT_WINDOW_TOKENS,
+        "env_var": AUTO_COMPACT_WINDOW_ENV,
+        "settings_key": AUTO_COMPACT_WINDOW_SETTING,
+        "env_rung_on_disk": result["auto_compact_window_env"],
+        "settings_rung_on_disk": result["auto_compact_window_setting"],
+        # The runner injects CLAUDE_AUTOCOMPACT_PCT_OVERRIDE into the session's
+        # environment, which this process cannot read (fact 2). The stacking is
+        # stated, not measured: at the 80 the runner currently injects, the cut
+        # lands at ~0.8 x the window.
+        "pct_override_note": (
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE lowers the firing threshold within "
+            "this window; it does not set the window. At 80 the cut is ~0.8x."
+        ),
+    }
+
+
+def _plugin_record_key(plugin_root: Path) -> str:
+    """``<plugin>@<marketplace>``, both halves READ from the clone.
+
+    Neither half is spelled as a literal here. The record's key is what the
+    platform matches an enabled plugin against, and a hardcoded pair survives
+    exactly until either the plugin or the marketplace is renamed — after which
+    this writes a record keyed to a name nothing looks up, while every step
+    still reports OK. That is the same failure this whole pair of functions
+    exists to make loud, so it must not be reintroduced by the fix.
+    """
+    manifest = plugin_root.joinpath(*PLUGIN_MANIFEST_REL)
+    marketplace = plugin_root.joinpath(*MARKETPLACE_MANIFEST_REL)
+    plugin_name = json.loads(manifest.read_text(encoding="utf-8")).get("name")
+    marketplace_name = json.loads(marketplace.read_text(encoding="utf-8")).get("name")
+    if not isinstance(plugin_name, str) or not plugin_name:
+        raise ValueError(f"{manifest} declares no usable plugin name")
+    if not isinstance(marketplace_name, str) or not marketplace_name:
+        raise ValueError(f"{marketplace} declares no usable marketplace name")
+    return f"{plugin_name}@{marketplace_name}"
+
+
+def register_live_plugin_record() -> None:
+    """Seed `<claude_home>/plugins/installed_plugins.json` with a record whose
+    ``installPath`` IS the coordinator clone.
+
+    WHY THIS EXISTS, measured on a real cloud container (2026-09-17): a box
+    whose only registration was `settings.json`'s marketplace + `enabledPlugins`
+    came up with an installed record naming
+    ``<claude_home>/plugins/cache/<marketplace>/<plugin>/<version>`` and a
+    pinned ``gitCommitSha`` — a path that had never been created, under a
+    ``plugins/cache`` tree that did not exist at all. `${CLAUDE_PLUGIN_ROOT}`
+    therefore expanded to empty in every `hooks.json` entry and every
+    coordinator hook died on a missing bootstrap, while `settings.json`, the
+    marketplace record and this script's own verdicts all read healthy. The
+    plugin's content was present and complete the whole time.
+
+    The SHAPE is not invented here. `coordinator_core/install/live_plugin_
+    registration.py` already established it for the desktop path — installPath
+    at the clone, no ``gitCommitSha``, so nothing is copied and nothing can go
+    stale — and this box's `example-retrieval-repo@example-retrieval-repo` record has exactly that
+    shape and resolved correctly through the same launch that invented the
+    broken coordinator one. What that module CANNOT do is help here: it repairs
+    an existing record and reports ``absent`` when there is none, and at
+    pre-boot there is none — the platform writes it later, at launch. So the
+    correct move for the cloud entrypoint is to write the record FIRST, which
+    is what this does.
+
+    Re-implemented rather than imported, for `_claude_home`'s reason: this
+    module is dependency-free by design and must not import `coordinator_core`.
+    If that module's record shape changes, change it here too.
+
+    Idempotent: an existing record already naming the clone with no pinned SHA
+    is left alone; any other record for this key is repointed rather than
+    appended beside, because two records for one key is how a stale path
+    survives a fix. Other plugins' records are never touched.
+    """
+    plugin_root = Path(CLONES["coordinator-claude"]["dest"])
+    key = _plugin_record_key(plugin_root)
+    record_path = _claude_home().joinpath(*PLUGIN_RECORD_REL)
+
+    data: dict = {}
+    if record_path.exists():
+        try:
+            loaded = json.loads(record_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            raise ValueError(f"existing installed_plugins.json is not valid JSON: {e}") from e
+        if isinstance(loaded, dict):
+            data = loaded
+    data.setdefault("version", 2)
+    plugins = data.get("plugins")
+    if not isinstance(plugins, dict):
+        plugins = {}
+    data["plugins"] = plugins
+
+    live = str(plugin_root)
+    existing = plugins.get(key)
+    records = [r for r in existing if isinstance(r, dict)] if isinstance(existing, list) else []
+    if not records:
+        records = [{"scope": "user"}]
+    for record in records:
+        record["installPath"] = live
+        # Dropped, never rewritten: a SHA pins the record to a commit the
+        # session is not running, which is a manifest that is a false witness.
+        record.pop("gitCommitSha", None)
+    plugins[key] = records
+
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = record_path.with_name(record_path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(record_path)
+    print(f"[cloud_setup] plugin record: {key} -> {live}")
+
+
+def verify_plugin_install_path(report: Report) -> None:
+    """Read the installed-plugin record back OFF DISK and check that the path it
+    names actually resolves to a plugin root.
+
+    THIS IS THE STEP THE LESSON IS IN, and it is worth more than the write above.
+    A plugin whose install path does not resolve disables the ENTIRE hook plane,
+    and it does so silently: hooks fail open, so their absence produces no
+    output at all, and nothing that runs inside a session can report it —
+    a hook cannot report that hooks are broken. So the check runs here, pre-boot,
+    and its failure lands on `<claude_home>/rules/`, which the harness reads with
+    no interpreter and which survives a dead hook plane (see
+    `write_session_verdict`).
+
+    Never raises: a miss is a RECORDED verdict. Presence of the directory is not
+    accepted on its own — the plugin manifest must be readable under it, because
+    an empty directory at the right path resolves and serves nothing.
+    """
+    record_path = _claude_home().joinpath(*PLUGIN_RECORD_REL)
+    result: dict = {
+        "record_path": str(record_path),
+        "expected_root": CLONES["coordinator-claude"]["dest"],
+        "entries": [],
+        "resolves": False,
+    }
+    try:
+        data = json.loads(record_path.read_text(encoding="utf-8"))
+    except Exception as e:  # noqa: BLE001 - an absent/unreadable record is a recorded miss
+        result["read_error"] = f"{type(e).__name__}: {e}"
+        report.plugin_install_path = result
+        return
+
+    plugins = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(plugins, dict):
+        result["read_error"] = "record carries no 'plugins' object"
+        report.plugin_install_path = result
+        return
+
+    for key, records in plugins.items():
+        if not isinstance(records, list):
+            continue
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            path = record.get("installPath")
+            entry = {
+                "key": key,
+                "install_path": path,
+                "path_exists": False,
+                "manifest_readable": False,
+                "pinned_sha": record.get("gitCommitSha"),
+            }
+            if isinstance(path, str) and path:
+                root = Path(path)
+                entry["path_exists"] = root.is_dir()
+                try:
+                    root.joinpath(*PLUGIN_MANIFEST_REL).read_bytes()
+                    entry["manifest_readable"] = True
+                except OSError:
+                    pass
+            result["entries"].append(entry)
+
+    result["unresolvable"] = [
+        entry["key"]
+        for entry in result["entries"]
+        if not (entry["path_exists"] and entry["manifest_readable"])
+    ]
+    result["resolves"] = bool(result["entries"]) and not result["unresolvable"]
+    report.plugin_install_path = result
+    verdict = "OK" if result["resolves"] else "UNRESOLVABLE"
+    _safe_print(
+        f"[cloud_setup] plugin install paths: {verdict} "
+        f"({len(result['entries'])} record(s), unresolvable: {result['unresolvable']})"
+    )
 
 
 def _find_doctrine_source() -> tuple[Path | None, list[str]]:
@@ -910,6 +1211,73 @@ def register_machine_local_repo_keys(report: Report) -> None:
         raise RuntimeError("machine-local registry writes failed: " + ", ".join(failures))
 
 
+
+#: Publish mirrors this script seeds, as `{repo slug: machine-local key}`.
+#: A publish mirror is a SEPARATE clone from the engine root: `repos.
+#: claude_klabauter` names the deployed engine (`/root/klabauter`, checked out
+#: on `main` with a live push remote), and pointing a publish target at it makes
+#: a round commit and push straight onto the published mirror's default branch.
+#: The two keys are deliberately different keys for that reason, and this step
+#: refuses to write the engine root into the publish one.
+PUBLISH_MIRROR_KEYS: dict[str, str] = {
+    "claude-klabauter": "publish.mirrors.claude_klabauter.path",
+}
+
+
+def register_publish_mirror_keys(report: Report) -> None:
+    """Point `publish.mirrors.*` at a mirror checkout when this container has a
+    SEPARATE one, and record why when it does not.
+
+    Cloud is the environment where the percolate/publish path breaks first,
+    because nothing here seeds these keys: a container gets `repos.
+    claude_klabauter` (the engine clone this script makes) and nothing else, so
+    the first publish dies on an unset key with no checkout in sight. Where the
+    environment ALSO mounted the publish repo — the ordinary shape when an
+    operator selects it for the session — that checkout is the right value and
+    is registered here, pre-boot, instead of being set by hand in the session
+    that hits the failure.
+
+    NEVER the engine clone. `locate_existing_checkout` returns this script's own
+    `CLONES` destination first for a name it clones, which for `claude-klabauter`
+    IS `/root/klabauter`; writing that into a publish key is the live trap this
+    key split exists to prevent, so a candidate equal to the engine clone is
+    rejected with a recorded reason rather than registered.
+
+    Additive and non-fatal: a key that cannot be resolved or written is recorded
+    on the report and the step returns. Nothing else in the boot depends on it,
+    and failing the run over an absent publish mirror would break every container
+    that has no reason to publish.
+    """
+    argv = _machine_local_argv()
+    for slug, key in PUBLISH_MIRROR_KEYS.items():
+        engine_clone = Path(CLONES[slug]["dest"]).resolve() if slug in CLONES else None
+        candidate = None
+        for root in retrieval_search_roots():
+            cand = root / slug
+            if cand.is_dir() and (cand / ".git").exists() and cand.resolve() != engine_clone:
+                candidate = cand
+                break
+        if candidate is None:
+            report.machine_local_keys[key] = (
+                "skipped: no publish checkout of {0} separate from the engine clone "
+                "at {1}".format(slug, engine_clone)
+            )
+            continue
+        result = subprocess.run(
+            [*argv, "set", key, str(candidate)],
+            capture_output=True,
+            text=True,
+            timeout=MACHINE_LOCAL_TIMEOUT_S,
+            stdin=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        report.machine_local_keys[key] = (
+            str(candidate)
+            if result.returncode == 0
+            else "failed (exit {0}): {1}".format(result.returncode, result.stderr.strip())
+        )
+
+
 def _resolve_rag_project_root(report: Report) -> str:
     """Which project the pre-boot daemon is installed against.
 
@@ -1174,6 +1542,257 @@ def verify_mcp_registration(report: Report) -> None:
     )
 
 
+def _image_default_path() -> str:
+    """The PATH a shell on this image is given, read off `/etc/environment`.
+
+    Needed because the cloud dialog's env-var box REPLACES PATH rather than
+    extending it: a value composed for that box must carry the image's own
+    default explicitly, since nothing survives underneath it.
+    """
+    fallback = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    try:
+        for line in Path("/etc/environment").read_text(encoding="utf-8").splitlines():
+            if line.startswith("PATH="):
+                value = line[len("PATH=") :].strip().strip('"').strip("'")
+                # Review: coordinator:code-reviewer F3 -- /etc/environment is not a
+                # shell and performs no expansion, so a value written with
+                # shell-expansion syntax (e.g. PATH="$PATH:/opt/foo") is unusable
+                # verbatim: it puts a literal "$PATH" into the env-var box, which
+                # is precisely the failure mode this function exists to prevent.
+                if "$" in value:
+                    return fallback
+                return value or fallback
+    except OSError:
+        pass
+    return fallback
+
+
+#: Literal candidate dirs for the session-critical binaries, beyond this
+#: process' own PATH and `/etc/environment`. An image commonly puts a toolchain
+#: on PATH through `/etc/profile.d`, which only a login shell reads — and this
+#: script is not one — so `shutil.which` against the inherited PATH can miss a
+#: binary that is plainly installed. Named literally rather than harvested from
+#: shell fragments: a fragment parser matches any `/`-prefixed token on any line
+#: containing `PATH=`, so a comment or an `unset PATH` guard would contribute a
+#: directory that was never actually added. `unresolved` below already exists to
+#: report a miss as a named gap, so a candidate dir this list doesn't carry
+#: degrades honestly rather than being guessed at.
+_IMAGE_TOOLCHAIN_DIRS = ("/opt/node22/bin",)
+
+
+def _image_search_path(default_entries: list[str]) -> str:
+    """Where to look for the session-critical binaries, beyond this process' PATH.
+
+    Search order only. What the env-var box must carry is composed separately in
+    `resolve_session_path`, which keeps `/etc/environment`'s default as the base.
+    `default_entries` is the caller's already-computed `_image_default_path()`
+    split, passed in rather than re-derived here.
+    """
+    # Review: coordinator:code-reviewer F4 -- this process' own PATH used to be
+    # searched AHEAD of the image default, so a transient directory carried
+    # only by whatever bootstrap wrapper launched this script (a venv, a shim
+    # dir) could win `shutil.which` and get baked into the durable
+    # `env_box_value`. The named toolchain dirs still lead (they are literal,
+    # not process-derived, and never transient); the image default comes next
+    # so a real installed binary wins over an inherited PATH entry; this
+    # process' own PATH is searched LAST, as a fallback for a binary the image
+    # itself doesn't carry rather than a preference over what it does.
+    own_entries = [p for p in os.environ.get("PATH", "").split(":") if p]
+    ordered: list[str] = []
+    for candidate in list(_IMAGE_TOOLCHAIN_DIRS) + default_entries + own_entries:
+        if candidate not in ordered:
+            ordered.append(candidate)
+    return ":".join(ordered)
+
+
+def resolve_session_path(report: Report) -> None:
+    """Determine the PATH value the cloud dialog's env-var box must carry.
+
+    That box replaces PATH outright, expands nothing, and strips surrounding
+    quotes. A value written as `<npm global bin dir>:$PATH` is therefore stored
+    verbatim, leaving no real directory on PATH: `python3` stops resolving and
+    every coordinator hook fails open, while the session still boots, still
+    loads its plugin and still reads its `CLAUDE.md`, so the only symptom is
+    hook output that never appears.
+
+    This resolves the binaries off the image and composes the exact value,
+    because the alternative is an operator deriving it by hand from a session
+    that has already booted wrong — and `npm prefix -g`, the obvious hand
+    derivation, points at whichever node install npm was configured against and
+    may carry neither language server.
+
+    NOT a check of the running session's PATH, which is structurally
+    unobservable from here: the env-var box does not reach this process.
+    """
+    found: dict[str, str | None] = {}
+    leading: list[str] = []
+    default_entries = _image_default_path().split(":")
+    search_path = _image_search_path(default_entries)
+    for binary in SESSION_PATH_BINARIES:
+        resolved = shutil.which(binary, path=search_path)
+        found[binary] = resolved
+        if resolved is None:
+            continue
+        parent = str(Path(resolved).parent)
+        if parent not in default_entries and parent not in leading:
+            leading.append(parent)
+    report.session_path = {
+        "binaries": found,
+        "unresolved": [name for name, path in found.items() if path is None],
+        "env_box_value": ":".join(leading + default_entries),
+    }
+
+
+def _verdict_body(report: Report) -> str | None:
+    """Render the session-facing verdict, or None when there is nothing to say.
+
+    Terse by contract: a session reads this as context on every turn, so it
+    carries the fact and the one move that follows from it, never the reasoning
+    that produced it. The JSON report holds the detail.
+    """
+    sections: list[str] = []
+
+    failed = [step for step in report.steps if not step.ok]
+    if failed:
+        # Review: coordinator:code-reviewer F2 -- "".splitlines() is [], so an
+        # empty detail (StepResult.detail's own default) raised IndexError here,
+        # which _record_session_surfaces_best_effort then swallowed, losing the
+        # whole verdict surface for a `list index out of range` line instead of
+        # the actual failures.
+        lines = [
+            f"- `{step.name}`: {((step.detail or '').strip().splitlines() or [''])[0][:200]}"
+            for step in failed
+        ]
+        sections.append(
+            "## Pre-boot steps that failed\n\n"
+            + "\n".join(lines)
+            + "\n\nThe setup script exits 0 whatever its verdicts, so this did not stop the "
+            "container from starting. Treat the affected surface as absent, not working."
+        )
+
+    if report.global_doctrine is not None and report.global_doctrine.get("source") is None:
+        sections.append(
+            "## No global doctrine\n\n"
+            "No doctrine source was found at pre-boot. This session runs doctrine-blind: "
+            "absent standing rules are absent, not satisfied."
+        )
+
+    install_paths = report.plugin_install_path or {}
+    if install_paths and not install_paths.get("resolves"):
+        if install_paths.get("read_error"):
+            detail = f"the record could not be read: {install_paths['read_error']}"
+        else:
+            named = ", ".join(
+                f"`{entry['key']}` -> `{entry['install_path']}`"
+                for entry in install_paths.get("entries", [])
+                if not (entry.get("path_exists") and entry.get("manifest_readable"))
+            ) or "no plugin is recorded as installed at all"
+            detail = f"registered but not resolvable: {named}"
+        sections.append(
+            "## A plugin's install path does not resolve\n\n"
+            f"`{install_paths.get('record_path')}` — {detail}.\n\n"
+            "`${CLAUDE_PLUGIN_ROOT}` expands to EMPTY for that plugin, so every hook it "
+            "registers fails open and produces no output. Hooks cannot report this: treat "
+            "the whole hook plane as absent, not working, and do not read a silent hook as "
+            "a passing one."
+        )
+
+    unresolved = (report.session_path or {}).get("unresolved") or []
+    if unresolved:
+        missing = ", ".join(f"`{name}`" for name in unresolved)
+        sections.append(
+            "## Missing binaries on the image\n\n"
+            f"Not resolvable at pre-boot: {missing}. Anything depending on them is inert; "
+            "`python3` in that list means the coordinator hook plane cannot run at all."
+        )
+
+    if not sections:
+        return None
+    return (
+        "# Cloud pre-boot verdict\n\n"
+        "Written by `cloud_setup.py` before this session started. Full detail: "
+        f"`{INSTALL_REPORT_PATH}`.\n\n" + "\n\n".join(sections) + "\n"
+    )
+
+
+def _orientation_body(report: Report) -> str | None:
+    """Render the container's ordinary shape, or None when there is nothing to state.
+
+    Deliberately NOT a verdict. A cloud container carries several checkouts by
+    construction — the coordinator and engine repos have to be present for the
+    system to run at all — so a session whose working directory sits above them
+    all is the normal case, not a degraded one. What follows from it is that no
+    single work target is implied, which is a fact to state plainly and once.
+    """
+    if not report.rag_project_root_ambiguity:
+        return None
+    mounted = ", ".join(f"`{name}`" for name in sorted(report.rag_project_root_ambiguity))
+    keys = [key for key, value in (report.machine_local_keys or {}).items() if "/" in str(value)]
+    known = ", ".join(f"`{key}`" for key in sorted(keys)) if keys else "none registered"
+    return (
+        "# Cloud session orientation\n\n"
+        "Written by `cloud_setup.py` before this session started.\n\n"
+        "## Several repos are mounted\n\n"
+        f"Checkouts mounted: {mounted}. This is the ordinary shape of a cloud container — the "
+        "coordinator and engine repos are present because the system needs them to run — and the "
+        "session's working directory is above all of them rather than inside one.\n\n"
+        "## Which one the work is in\n\n"
+        f"`{SESSION_FOCUS_ENV}` declares it. Read it from this session's environment:\n\n"
+        f"- **Set** — that repo is the subject of the work, and the others are here to hold the "
+        "system up. Retrieval answers for it without being asked each time.\n"
+        f"- **Unset** — the work target is **unspecified**. That is a normal state, not a "
+        "shortfall: every index that exists is intact and queryable, and a call answers as soon "
+        "as it names the repo it means.\n\n"
+        f"Addressable keys: {known}. Pass one as `repo=\"repos.<key>\"` on a call, or set "
+        f"`{SESSION_FOCUS_ENV}` to one for the whole session.\n"
+    )
+
+
+def _write_rule_surface(basename: str, body: str | None) -> bool:
+    """Land (or clear) one `<claude_home>/rules/*.md` surface.
+
+    Shared write mechanic for `write_session_orientation` and
+    `write_session_verdict`: render → unlink-if-None → mkdir → write. Each
+    caller keeps its own renderer and its own report bookkeeping; only the
+    mechanics are shared. Returns whether a file was written.
+    """
+    rule_path = _claude_home() / "rules" / basename
+    if body is None:
+        rule_path.unlink(missing_ok=True)
+        return False
+    rule_path.parent.mkdir(parents=True, exist_ok=True)
+    rule_path.write_text(body, encoding="utf-8")
+    return True
+
+
+def write_session_orientation(report: Report) -> None:
+    """Land the container's ordinary shape where a session reads it.
+
+    Kept apart from `write_session_verdict` on purpose: filing "several repos are
+    mounted" beside a list of failures teaches a reader to treat the normal cloud
+    shape as breakage, which is the opposite of what it means.
+    """
+    _write_rule_surface(SESSION_ORIENTATION_RULE, _orientation_body(report))
+
+
+def write_session_verdict(report: Report) -> None:
+    """Land the pre-boot verdict where a session reads it without running anything.
+
+    `<claude_home>/rules/*.md` is pulled into session context by the harness
+    directly. That is the entire reason this surface is chosen over a
+    SessionStart hook: the failure most worth reporting — a PATH that resolves
+    nothing — is precisely the one that silences every hook, so a hook cannot be
+    the thing that reports it. The JSON report is the operator's artifact and is
+    read into no session at all.
+
+    Written only when there is something to say; a clean run leaves no file and
+    clears a stale one, so the surface's presence is itself the signal.
+    """
+    rule_path = _claude_home() / "rules" / SESSION_VERDICT_RULE
+    written = _write_rule_surface(SESSION_VERDICT_RULE, _verdict_body(report))
+    report.session_verdict = {"written": written, "path": str(rule_path) if written else None}
+
+
 def write_report(report: Report) -> None:
     INSTALL_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     INSTALL_REPORT_PATH.write_text(json.dumps(report.to_dict(), indent=2))
@@ -1221,6 +1840,49 @@ def _print_summary(report: Report) -> None:
         "Structural and lexical retrieval work now; semantic retrieval reports a typed "
         "not-hydrated verdict rather than an empty result list."
     )
+    if report.auto_compact:
+        _safe_print(
+            "[cloud_setup] auto-compact window pinned: "
+            f"{report.auto_compact['window_tokens']} tokens "
+            f"(env {report.auto_compact['env_var']}="
+            f"{report.auto_compact['env_rung_on_disk']!r}, settings "
+            f"{report.auto_compact['settings_key']}="
+            f"{report.auto_compact['settings_rung_on_disk']!r}). "
+            "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE lowers the cut within it; at 80 that is ~0.8x."
+        )
+    # The env-var box is filled by hand before any session exists, so the value it
+    # needs is printed where the operator filling it is already looking.
+    if report.session_path:
+        _safe_print(
+            "[cloud_setup] cloud env-var box needs, verbatim and unquoted:\n"
+            f"  PATH={report.session_path['env_box_value']}"
+        )
+        if report.session_path["unresolved"]:
+            _safe_print(
+                f"[cloud_setup] NOT resolvable on this image: {report.session_path['unresolved']}"
+            )
+
+
+def _record_session_surfaces_best_effort(report: Report) -> None:
+    """Resolve the env-box PATH and land the verdict surface, swallowing failures.
+
+    Both are post-pipeline and therefore outside `run_step`'s net, and neither
+    may break the exit-zero contract the cloud setup script is held to. They are
+    attempted independently: a failure to resolve PATH must not also cost the
+    session its verdict.
+    """
+    try:
+        resolve_session_path(report)
+    except Exception as e:  # noqa: BLE001 - a determination must not break exit-zero
+        _safe_print(f"[cloud_setup] could not resolve the session PATH value: {e}")
+    try:
+        write_session_verdict(report)
+    except Exception as e:  # noqa: BLE001 - nor may the surface that reports it
+        _safe_print(f"[cloud_setup] could not write the session verdict surface: {e}")
+    try:
+        write_session_orientation(report)
+    except Exception as e:  # noqa: BLE001 - nor the one that states the normal shape
+        _safe_print(f"[cloud_setup] could not write the session orientation surface: {e}")
 
 
 def _write_report_best_effort(report: Report) -> None:
@@ -1242,6 +1904,11 @@ def main() -> int:
         print(f"[cloud_setup] refusing: {reason}")
         report = Report()
         report.steps.append(StepResult("host precondition", False, reason))
+        # Review: coordinator:code-reviewer F1 -- the refusal is the single most
+        # severe pre-boot outcome, and by write_session_verdict's own rationale
+        # is exactly when a session most needs cloud-preboot-verdict.md: the
+        # JSON report requires a reader, the rules surface does not.
+        _record_session_surfaces_best_effort(report)
         _write_report_best_effort(report)
         return 0
     print(f"[cloud_setup] {reason}")
@@ -1259,6 +1926,7 @@ def main() -> int:
     run_step("run scripts/setup.py", lambda: run_claude_klabauter_setup(report), report)
     run_step("register plugin settings", register_plugin_settings, report)
     run_step("verify plugin settings", lambda: verify_plugin_settings(report), report)
+    run_step("register live plugin record", register_live_plugin_record, report)
     run_step("install global doctrine", lambda: install_global_doctrine(report), report)
     run_step("verify global doctrine", lambda: verify_global_doctrine(report), report)
 
@@ -1281,8 +1949,20 @@ def main() -> int:
         report,
     )
     run_step("register machine-local repo keys", lambda: register_machine_local_repo_keys(report), report)
+    run_step(
+        "register publish mirror keys",
+        lambda: register_publish_mirror_keys(report),
+        report,
+    )
     run_step(f"{RETRIEVAL_REPO_SLUG} cloud install", lambda: run_example_retrieval_repo_cloud_install(report), report)
     run_step("verify MCP registration", lambda: verify_mcp_registration(report), report)
+    # LAST of the pipeline, deliberately: the retrieval installer and the
+    # coordinator trampoline both touch plugin registration, so a check placed
+    # beside the write above would attest to a record a later step could still
+    # have replaced with an unresolvable one.
+    run_step("verify plugin install paths", lambda: verify_plugin_install_path(report), report)
+
+    _record_session_surfaces_best_effort(report)
 
     _print_summary(report)
 

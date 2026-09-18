@@ -217,6 +217,7 @@ ADVISORY_NAMES = [
     "nudge_unmarked_spawning_test",
     "nudge_windows_subprocess_popup",
     "validate_frontmatter_schema_advisory",
+    "wiki_changelog_prose_advisory",
 ]
 
 _EXPECTED_CLASS_BY_NAME: Dict[str, str] = {

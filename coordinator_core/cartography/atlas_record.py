@@ -59,6 +59,12 @@ from pathlib import Path, PurePosixPath
 from typing import Sequence
 
 ATLAS_UNREADABLE = "atlas_unreadable"
+#: File parsed (readable, `## Directory → system` section found) but the
+#: rule-10 package table scan yielded zero packages because the section
+#: itself was not found — distinct from ATLAS_UNREADABLE (file missing or
+#: unparseable) and from a genuinely-empty-but-valid atlas (section found,
+#: table deliberately empty).
+ATLAS_PARSED_ZERO_RULES = "atlas_parsed_zero_rules"
 
 _FILE_INDEX_RELPATH = "docs/architecture/file-index.md"
 _SYSTEMS_DIR_RELPATH = "docs/architecture/systems"
@@ -133,7 +139,10 @@ class RecordedAtlas:
             `docs/architecture/systems/<system>.md` page's `files:`
             frontmatter key (the fingerprint source of record per
             file-index.md's "Recomputing the fingerprints" section).
-        error: ``None`` on success, else ``ATLAS_UNREADABLE``.
+        error: ``None`` on success, else ``ATLAS_UNREADABLE`` (file missing or
+            unparseable) or ``ATLAS_PARSED_ZERO_RULES`` (file readable but the
+            `## Directory → system` section was not found, so the rule-10
+            package table could not be scanned at all).
         error_detail: human-readable failure reason when ``error`` is set,
             else ``None``.
     """
@@ -164,11 +173,16 @@ def _parse_last_mapped(text: str) -> str | None:
     return match.group(1).strip().strip('"').strip("'")
 
 
-def _parse_package_systems(text: str) -> dict[str, str]:
+def _parse_package_systems(text: str) -> tuple[dict[str, str], bool]:
     """Scan the `## Directory → system` body for `coordinator_core/<pkg>/`
     tokens, attributing each to the enclosing `###` section heading, plus
     the `### The remaining systems` table rows (per EM decision, binding for
     this chunk).
+
+    Returns ``(package_systems, section_found)`` — ``section_found`` is
+    ``False`` when the `## Directory → system` heading itself is absent from
+    the doc (a malformed/rewritten atlas), distinct from the heading being
+    present with a table that is legitimately empty.
     """
     package_systems: dict[str, str] = {}
 
@@ -176,7 +190,7 @@ def _parse_package_systems(text: str) -> dict[str, str]:
         r"^## Directory → system\s*$(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL
     )
     if not section_match:
-        return package_systems
+        return package_systems, False
     body = section_match.group(1)
 
     pkg_token_re = re.compile(r"`coordinator_core/([A-Za-z0-9_]+)/")
@@ -216,7 +230,7 @@ def _parse_package_systems(text: str) -> dict[str, str]:
             for pkg_match in pkg_token_re.finditer(directories_cell):
                 package_systems[pkg_match.group(1)] = system_cell
 
-    return package_systems
+    return package_systems, True
 
 
 def _build_rules(package_systems: dict[str, str]) -> tuple[MappingRule, ...]:
@@ -255,7 +269,7 @@ def load_recorded_atlas(root: str | Path) -> RecordedAtlas:
 
         text = file_index_path.read_text(encoding="utf-8")
         last_mapped = _parse_last_mapped(text)
-        package_systems = _parse_package_systems(text)
+        package_systems, section_found = _parse_package_systems(text)
         rules = _build_rules(package_systems)
 
         systems_dir = root_path / _SYSTEMS_DIR_RELPATH
@@ -267,6 +281,19 @@ def load_recorded_atlas(root: str | Path) -> RecordedAtlas:
                 files_match = re.search(r"^files:\s*(\d+)\s*$", page_text, re.MULTILINE)
                 if system_match and files_match:
                     system_files[system_match.group(1).strip()] = int(files_match.group(1))
+
+        if not section_found:
+            return RecordedAtlas(
+                last_mapped=last_mapped,
+                rules=rules,
+                package_systems=package_systems,
+                system_files=system_files,
+                error=ATLAS_PARSED_ZERO_RULES,
+                error_detail=(
+                    f"{file_index_path} parsed but no '## Directory → system' "
+                    "section was found; zero rule-10 packages extracted"
+                ),
+            )
 
         return RecordedAtlas(
             last_mapped=last_mapped,

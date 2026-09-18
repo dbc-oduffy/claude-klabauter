@@ -189,7 +189,66 @@ COHORT: dict[str, tuple[bool, str]] = {
         "`write_guards.engine.evaluate_payload_json` in the hook's own process. That "
         "engine registers no op. The backlog's 'likely cold-only' guess holds here.",
     ),
+    "coordinator_core/install/forwarder_self_heal.py": (
+        True,
+        "Cold-only: `_record_failure`'s read is reached only via "
+        "`self_heal_forwarders() -> _self_heal_forwarders_inner()`'s own raised "
+        "exception path, and `self_heal_forwarders` has exactly one caller in the "
+        "repo -- `coordinator/bin/sweep-boot.py`, which is itself a SessionStart-hook "
+        "trampoline (no `@register_op`, absent from the ops eager-import sweep, "
+        "confirmed by grep: no other module imports `self_heal_forwarders` or "
+        "`forwarder_self_heal`). A registered-op call graph never reaches this file. "
+        "Triaged 2026-09-06 (docs/plans/2026-09-06-partitioned-close-review-identity-"
+        "triage.md C1, AC2), closing the one genuinely untriaged site of the six the "
+        "2026-08-19 baton's record named.",
+    ),
+    "coordinator_core/ops/session_hierarchy_derive.py": (
+        False,
+        "Warm-reachable: `@register_op(\"session_hierarchy.derive\")` directly -- no "
+        "indirection needed, `warm.client.try_warm_dispatch` applies no method "
+        "allowlist. `_run` stamped `created_by_session` from a raw "
+        "`os.environ.get(\"CS_SESSION_ID\", \"\")` read (a FOURTH identity var name "
+        "this ratchet's `SESSION_ENV_NAMES` does not govern at all -- a literal grep "
+        "for the three governed names could not see this site, which is why AC2b "
+        "names it explicitly rather than leaving enumeration to that grep). The value "
+        "is stamped onto every derived record's `system.created_by_session` field -- "
+        "same field name, same defect/fix shape as `ops/queue_append.py`'s own "
+        "`created_by_session` (D1's applied pattern). Migrated 2026-09-06 (C1, AC2b) "
+        "to `ops.session_context.resolve_current_session_id`, which prefers the bound "
+        "`session_identity_override` ContextVar and falls back to the same env ladder "
+        "cold; negative-spec in "
+        "`ops/tests/test_session_hierarchy_derive_warm_identity.py`.",
+    ),
 }
+
+#: AC2b out-of-scope call. `coordinator_core/bash_guards/guard_inprocess_search.py`
+#: reads `_SESSION_ID_ENV_VAR` (= `CLAUDE_CODE_SESSION_ID`, a governed name -- the
+#: laundering-constant shape `test_warm_reachable_modules_declare_no_session_env_
+#: constant` exists to catch, which is why a literal grep for the three names alone
+#: could not see this site either) inside `_footer()`, to resolve the session-scoped
+#: "already answered" latch marker path. TRIAGED, NOT MIGRATED, 2026-09-06 (C1, AC2b):
+#: `_footer()` IS warm-reachable -- `@register_op("warm_guard.evaluate")`
+#: (`ops/warm_guard_evaluate.py`) calls `bash_guards.dispatch.evaluate_payload_json`,
+#: whose guard chain includes `guard_inprocess_search.check`, which calls `_footer()`
+#: on an answered call. But the module's OWN docstring ("Session latch" section)
+#: pins `_SESSION_ID_ENV_VAR` to `CLAUDE_CODE_SESSION_ID` alone under SC-DR-009 (DoE
+#: `scoped-safety-commits.md`): "the ONLY acceptable session-id source for
+#: session-scoped state" -- a narrower, explicitly-named single-var read, not the
+#: 3-tier `resolve_current_session_id` ladder D1's pattern swaps in. Migrating this
+#: site straight to `resolve_current_session_id` would widen the cold-path source set
+#: past what SC-DR-009 names as the ONLY acceptable one; a correct fix instead needs
+#: either an explicit prefer-carried-else-SC-DR-009-var composition (the
+#: `CARRIED_IDENTITY_PREFERENCE_SITES` shape below, minus the constant-declares-no-
+#: session-env-name ratchet this ANY module-local literal still trips) or a
+#: reconciliation of SC-DR-009 against the carried-identity mechanism -- both a larger
+#: decision than a single-site triage call. The defect is real (a spawner's id can
+#: mis-latch the advisory footer's per-session dedup under warm dispatch: a session
+#: sees the ~45-word paragraph repeat, or is wrongly suppressed, based on a stranger's
+#: latch file) but its consequence is a TOKEN-COST/UX regression on an advisory-only
+#: seam (`CLASS = "advisory"`, this module's own negative-spec: "Does NOT fail
+#: closed"), never an anti-forgery or write-attribution input -- unlike every migrated
+#: COHORT member above. Left OUT of COHORT pending a follow-on plan that resolves the
+#: SC-DR-009 tension; re-triage before widening.
 
 #: Cohort members whose module was DELETED outright, with the commit that did it.
 #: `test_cohort_member_exists` exists because an entry naming a file that is not

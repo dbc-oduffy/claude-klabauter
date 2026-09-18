@@ -30,6 +30,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from coordinator_core.git import commit_delta
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.emit.sections import routine_signals
 from coordinator_core.ops.emit.sections.routine_signals import (
@@ -452,7 +453,17 @@ class TestCommitsSinceLastBatch:
     depth-capped read of HEAD's own ancestry, and the ``_VERY_STALE`` sentinel where a
     marker is absent. The shape this replaced ran two ``git log`` spawns PER pattern —
     four per emit — the second of them a ``--grep`` over every ref's full history,
-    measured at 593.8 ms of process time against 23,402 commits."""
+    measured at 593.8 ms of process time against 23,402 commits.
+
+    Patched and called through ``coordinator_core.git.commit_delta``, the module that owns
+    the primitive, its ``run_git`` seam and its ``_SCAN_DEPTH``/``_VERY_STALE`` constants.
+    Negative-spec: these legs must NOT reach the primitive through
+    ``routine_signals``. That module is a CALLER — it binds
+    ``_commits_since_last_batch`` for its own ``collect()`` and nothing else, so patching
+    ``run_git`` or ``_SCAN_DEPTH`` on it could only work by re-exporting internals it does
+    not own, which would leave the promotion cosmetic and the ownership unreadable.
+    ``collect()``-level legs above deliberately still patch ``routine_signals``'s own
+    binding: what they pin is which function that caller resolves."""
 
     def _repo(self, tmp_path: Path, subjects: list[str]) -> Path:
         """Build a throwaway repo whose commits carry *subjects*, oldest first."""
@@ -472,12 +483,12 @@ class TestCommitsSinceLastBatch:
                                      "bug-sweep pass", "feat: b", "feat: c"])
 
         spawns = []
-        real = routine_signals.run_git
+        real = commit_delta.run_git
         monkeypatch.setattr(
-            routine_signals, "run_git",
+            commit_delta, "run_git",
             lambda args, **kw: (spawns.append(list(args)), real(args, **kw))[1],
         )
-        result = routine_signals._commits_since_last_batch(
+        result = commit_delta._commits_since_last_batch(
             root, {"docs": "update-docs", "bug": "bug-sweep|bug_sweep"}
         )
 
@@ -487,26 +498,26 @@ class TestCommitsSinceLastBatch:
 
     def test_head_itself_matching_counts_zero(self, tmp_path: Path) -> None:
         root = self._repo(tmp_path, ["chore: base", "update-docs run"])
-        assert routine_signals._commits_since_last_batch(root, {"docs": "update-docs"}) == {"docs": 0}
+        assert commit_delta._commits_since_last_batch(root, {"docs": "update-docs"}) == {"docs": 0}
 
     def test_absent_marker_is_the_very_stale_sentinel(self, tmp_path: Path) -> None:
         root = self._repo(tmp_path, ["chore: base", "feat: a"])
-        result = routine_signals._commits_since_last_batch(root, {"docs": "update-docs"})
-        assert result == {"docs": routine_signals._VERY_STALE}
+        result = commit_delta._commits_since_last_batch(root, {"docs": "update-docs"})
+        assert result == {"docs": commit_delta._VERY_STALE}
 
     def test_marker_beyond_the_depth_cap_reads_very_stale(self, tmp_path, monkeypatch) -> None:
         """Past the cap the honest integer and the sentinel say the same thing — both land
         in the same 'stale / overdue' band, which is all `collect()` branches on."""
-        monkeypatch.setattr(routine_signals, "_SCAN_DEPTH", 3)
+        monkeypatch.setattr(commit_delta, "_SCAN_DEPTH", 3)
         root = self._repo(tmp_path, ["update-docs run", "a", "b", "c", "d"])
-        result = routine_signals._commits_since_last_batch(root, {"docs": "update-docs"})
-        assert result == {"docs": routine_signals._VERY_STALE}
+        result = commit_delta._commits_since_last_batch(root, {"docs": "update-docs"})
+        assert result == {"docs": commit_delta._VERY_STALE}
 
     def test_not_a_git_repo_degrades_every_pattern(self, tmp_path: Path) -> None:
-        result = routine_signals._commits_since_last_batch(
+        result = commit_delta._commits_since_last_batch(
             tmp_path, {"docs": "update-docs", "bug": "bug-sweep"}
         )
-        assert result == {"docs": routine_signals._VERY_STALE, "bug": routine_signals._VERY_STALE}
+        assert result == {"docs": commit_delta._VERY_STALE, "bug": commit_delta._VERY_STALE}
 
     def test_never_asks_git_to_do_the_matching(self, tmp_path, monkeypatch) -> None:
         """`--grep` is what made the walk history-scaled. Matching belongs in Python,
@@ -514,17 +525,17 @@ class TestCommitsSinceLastBatch:
         O(repo history) cost this rebuild removed."""
         root = self._repo(tmp_path, ["update-docs run"])
         seen: list[list[str]] = []
-        real = routine_signals.run_git
+        real = commit_delta.run_git
         monkeypatch.setattr(
-            routine_signals, "run_git",
+            commit_delta, "run_git",
             lambda args, **kw: (seen.append(list(args)), real(args, **kw))[1],
         )
-        routine_signals._commits_since_last_batch(root, {"docs": "update-docs"})
+        commit_delta._commits_since_last_batch(root, {"docs": "update-docs"})
 
         argv = seen[0]
         assert not any(a.startswith("--grep") for a in argv), argv
         assert "--all" not in argv, argv
-        assert "-n" in argv and argv[argv.index("-n") + 1] == str(routine_signals._SCAN_DEPTH)
+        assert "-n" in argv and argv[argv.index("-n") + 1] == str(commit_delta._SCAN_DEPTH)
 
 
 class TestLocalDayAndIsoWeek:

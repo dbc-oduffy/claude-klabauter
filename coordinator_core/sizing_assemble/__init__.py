@@ -19,6 +19,17 @@ Registration seam: this module ships no bash veneer and needs none — it is
 consumed directly by the `coordinator/bin/sizing-assemble` trampoline (mirrors
 `coordinator/bin/pickup-assemble`'s direct-import template-variant #1).
 
+Measured process time (2026-09-06 engine-half-roadmap-verification-debt
+plan, C3): a fresh in-tree `getrusage(RUSAGE_CHILDREN)` measurement of
+`route()` through its real CLI on 2026-09-17 (k=20, fresh process per
+sample) read ~56.8ms process time, well under the ≤200ms budget ceiling
+(DR-344 §7) and under the 120.3ms figure `roadmap_planning_assemble` /
+`sprint_planning_assemble` cite as a copied build-time reference target.
+The 428.1ms regression a 2026-08-23 handoff attributed to this module was
+against the klabauter mirror's build, not this tree — its own Session
+Ledger later refuted that attribution as mirror-side, which this
+measurement corroborates: no perf cut is needed here.
+
 READ-ONLY, by construction: `route()` only reads its arguments — it never
 touches disk, never writes a sizing-object, never shells out. The caller
 (the sizing skill / a future scaffolder) is responsible for persisting the

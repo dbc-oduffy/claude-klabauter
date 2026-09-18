@@ -2066,8 +2066,30 @@ def test_ownership_leg_denial_names_peer_claim(monkeypatch):
     assert "claimed by live session" in reason
 
 
-def test_ownership_leg_denial_names_indeterminate_classification(monkeypatch):
-    """Dispatch-brief item 4: on an indeterminate call (agent-race overlap),
+def test_ownership_leg_indeterminate_denial_stands_down(monkeypatch):
+    """REVERSED VERDICT, and the reversal is the fix: an indeterminate call no
+    longer denies here.
+
+    This test previously pinned that the deny MESSAGE threaded the
+    indeterminate classification through, alongside its orphan and
+    peer-claimed siblings. The message was right and the verdict was not.
+    `scope_report`'s `_CLASSIFICATION_INDETERMINATE` reports an ABSENCE OF A
+    VERDICT -- the claim-index walk aborted before answering, routinely with
+    `ABORT_CAUSE_EMPTY_BASE` for a session whose cwd resolves to no repo -- so
+    denying on it denies on absence of evidence, and this guard's own family
+    documents failing OPEN on exactly that uncertainty. The refusal is now
+    stood down and recorded; the classification survives in the audit line
+    rather than in a deny the reader cannot act on.
+
+    The F1 lesson below still holds and is why the real constant is still what
+    drives this test. Its sibling assertions (orphan, peer-claimed) are
+    unchanged and still deny -- see
+    `tests/test_commit_ownership_leg_stand_down.py` for the full verdict
+    matrix and for why the determinate no-claimant case stays a ruling rather
+    than a predicate.
+
+    Original rationale, retained: on an indeterminate call (agent-race
+    overlap),
     `assert_paths_in_session_scope` returns `orphans` empty outright (fail-
     closed, unchanged regardless of `allow_orphans` -- see the module
     docstring's part-11 entry, point 3), and `_classify_denied_path` names
@@ -2092,18 +2114,11 @@ def test_ownership_leg_denial_names_indeterminate_classification(monkeypatch):
         "a.py",
         _scope_report._CLASSIFICATION_INDETERMINATE,
     )
-    result = _gca_denies(
+    _gca_allows(
         monkeypatch,
         'git commit -m "msg" -- a.py',
         scope_result=(False, scope_reason),
     )
-    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "a.py" in reason
-    assert "indeterminate" in reason
-    assert "adoption withheld" in reason
-    # Not the generic argv-shape fallback -- the ownership leg actually ran
-    # and named a reason.
-    assert "Already used that form?" not in reason
 
 
 def test_include_orphans_from_an_agent_denies_before_the_ownership_leg():

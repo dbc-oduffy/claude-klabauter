@@ -54,6 +54,8 @@ import re
 import sys
 import time
 
+from typing import Mapping, Optional
+
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory, post_advisory
 from coordinator_core.hooks._payload import field
@@ -327,7 +329,11 @@ def _runtime_threshold_minutes(model: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
+def _check_context_pressure_sync(
+    session_id: str,
+    transcript_path: str,
+    env: Optional[Mapping[str, str]] = None,
+) -> str:
     """Blocking context-pressure advisory check.
 
     Returns non-empty advisory text when a threshold fires; "" otherwise.
@@ -359,6 +365,19 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
         management comment above _advisory_state_path). Bark-once guards keyed
         by a hash of transcript_path (stable for the life of a session — this
         never opens the transcript).
+
+    `env` is the CALLER's environment, threaded to both `resolve_mode` reads
+    rather than left to an ambient `os.environ` read inside them. `None` means
+    "this caller carries none", which resolves ambiently — correct on the two
+    legs where ambient IS the caller's environment (the cold fresh-process
+    fire; the warm `isolated=True` leg, whose declared env set is mirrored into
+    `os.environ` for the request's life) and the standing gap on the warm
+    `isolated=False` degrade leg, where it is the daemon's. No production
+    caller carries one today: the per-call `payload["env"]` this hook's
+    handler could reach is `warm.hook_http.forwardable_env`'s guard-diet
+    subset, which by construction cannot carry `CLAUDE_CODE_REMOTE` — handing
+    it over would swap a rung-0 certainty for a rung-1 inference and read as a
+    venue answer while being a truncated one.
     """
     if not session_id:
         return ""
@@ -470,15 +489,22 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
 
     # Durable throttle/bark-once state — file-backed (see the module-level
     # comment above _advisory_state_path for why in-memory doesn't work here).
+    #
+    # T15 fix: this used to `return ""` here, BEFORE the 40/43 band
+    # comparisons below ever ran — so a red-band (43+) condition arriving
+    # inside the 5-minute throttle window was suppressed exactly like a
+    # sub-40 reading, even though red is "handoff now" severity and the
+    # throttle exists to rate-limit the ORANGE band's noise, not to sit on a
+    # hard call. The throttle decision is now made AFTER the band
+    # comparisons run (see `throttled` used just above the 40-band check
+    # below) so red always surfaces; only the 40 band is subject to it.
+    # `throttle_last_check` is likewise only persisted once a band check
+    # actually ran against a usable reading (just above the 43 comparison),
+    # never on the unmeasured early-return -- persisting it there would
+    # silently arm the throttle window off a call that never truly checked.
     cp_state = _load_advisory_state(tmpdir, session_id)
     last_check = cp_state.get("throttle_last_check", 0.0)
-    if time.time() - last_check < throttle_seconds:
-        return ""  # fast path — checked recently
-
-    # Update throttle timestamp (even if no advisory fires) and persist now —
-    # this write must land even if we return early below.
-    cp_state["throttle_last_check"] = time.time()
-    _save_advisory_state(tmpdir, session_id, cp_state)
+    throttled = (time.time() - last_check) < throttle_seconds
 
     # --- Bark-once key: a hash of transcript_path, not its contents. This
     # never opens the transcript — transcript_path is stable for the life of
@@ -492,7 +518,16 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
         transcript_hash = session_id
 
     # --- Autonomous run detection (session-wins key via the resolve_mode seam) ---
-    autonomous_run = resolve_mode("autonomous", session_id)
+    # `env` is the CALLER's environment, threaded rather than read ambiently:
+    # `resolve_mode`'s environment rung reaches `env_locality.locality(env)`,
+    # whose own contract is "`env` IS A PARAMETER, NEVER AN AMBIENT READ". On
+    # the cold rung (a fresh process per PostToolUse fire) and on the warm
+    # `isolated=True` leg (the caller's declared env set is mirrored into
+    # `os.environ` for the request's life) the ambient read IS the caller's
+    # environment, so `None` there is correct rather than merely tolerable. On
+    # the warm `isolated=False` degrade leg it is the daemon's, which is the
+    # defect this parameter exists to let a caller close.
+    autonomous_run = resolve_mode("autonomous", session_id, env=env)
 
     # --- compaction_warnings variant selector (fleet-wins key via resolve_mode).
     # SELECTOR ONLY — never an off switch. No value of this key returns "" here
@@ -506,7 +541,7 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     # never-raise/fail-open, 27.6us median / 69.0us p99. See
     # coordinator_core.session.fleet_mode.read_fleet_mode's docstring for the
     # budget this call site draws against.
-    compaction_warnings_variant = resolve_mode("compaction_warnings", session_id)
+    compaction_warnings_variant = resolve_mode("compaction_warnings", session_id, env=env)
 
     # --- mise-en-place CONTINUANCE detection (content-level, not mere
     # presence). `autonomous_run` above answers "does the sentinel exist",
@@ -560,9 +595,10 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
         or not math.isfinite(used_percentage)
         or used_percentage < 0
     ):
-        # The throttle stamp was already persisted above and nothing has
-        # mutated cp_state since, so this path saves nothing further — it is
-        # the common case for headless sessions and runs once per tool call.
+        # No usable reading -- no band check ran, so the throttle timestamp
+        # is deliberately left untouched (see the T15 comment above
+        # `throttled`). This is the common case for headless sessions and
+        # runs once per tool call.
         return ""
 
     # `round`, not `int`. The statusline renders the same figure with round()
@@ -573,6 +609,11 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
     # Review: code-reviewer (P2).
     display_pct = round(used_percentage)
     age_note = f" (measured {int(reading.age_seconds)}s ago)" if reading is not None else ""
+
+    # A band check is now actually running against a usable reading -- this
+    # is the one place `throttle_last_check` gets persisted (see the T15
+    # comment above `throttled`).
+    cp_state["throttle_last_check"] = time.time()
 
     # --- The two bands, and there are only two (PM-set, 2026-08-18).
     #
@@ -610,6 +651,30 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
             # bare "/handoff" nudge — the latter invites skipping the review
             # loop, verification, and tracker sweep that a mise run still
             # owes before its handoff.
+            #
+            # THE TAIL IS OWED IN BOTH VENUES; ONLY THE TERMINAL DIFFERS.
+            # This branch is evaluated BEFORE the informational one, so before
+            # this split a mise-en-place run in a cloud container took the
+            # handoff recommendation the venue ruling stands down — the
+            # stood-down instruction wearing a different hat. In a venue where
+            # compaction IS the continuation primitive, picking up means a new
+            # container and a fresh clone: the handoff is the expensive path
+            # there, not the safe one, so the run commits, checkpoints and
+            # keeps going. DoE-claude docs/decisions/DR-cloud-is-a-venue-where-
+            # compaction-is-the-continuation-primitive.md.
+            if compaction_warnings_variant == "informational":
+                return (
+                    f"CONTEXT PRESSURE — INFORMATIONAL: ~{display_pct}% of"
+                    f" window used{age_note}, measured from the harness's own"
+                    f" context_window block. Mise-en-place: compaction from"
+                    f" here is involuntary and lossy, so state that is not on"
+                    f" disk is state that is lost. Run the full Phase 6 tail"
+                    f" now (review loop to zero findings, end-of-run"
+                    f" verification, tracker sweep, baton disposition), then"
+                    f" commit and checkpoint."
+                    f"{_baton_affordance_clause(session_id)}"
+                    f" Continue the run."
+                )
             return (
                 f"CONTEXT PRESSURE — HANDOFF NOW: ~{display_pct}% of window"
                 f" used{age_note}, measured from the harness's own"
@@ -653,7 +718,11 @@ def _check_context_pressure_sync(session_id: str, transcript_path: str) -> str:
             f" involuntary and lossy."
         )
 
-    if display_pct >= 40 and transcript_hash not in cp_state.get("advisory_fired", []):
+    if (
+        not throttled
+        and display_pct >= 40
+        and transcript_hash not in cp_state.get("advisory_fired", [])
+    ):
         _mark_advisory_fired(cp_state, transcript_hash, critical=False)
         _save_advisory_state(tmpdir, session_id, cp_state)
         # PM ruling 2026-08-29: 40 is INFORMATIONAL, the red band is STANDARD.

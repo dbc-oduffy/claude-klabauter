@@ -664,8 +664,21 @@ _CLASSIFICATION_ORPHAN = (
     "orphan — no session holds a claim on it" + _REMEDY_WHO_CLAIMS
 )
 
+#: PUBLIC, and a CROSS-MODULE CONTRACT of the same class as
+#: :data:`CLAIMED_BY_PREFIX`: the lead of the one classification below that
+#: reports an ABSENCE OF A VERDICT rather than a verdict. The consumer is
+#: `coordinator_core.bash_guards.block_subagent_commit`, which stands its
+#: commit gate down when a denial is wholly indeterminate (a claim index that
+#: could not answer is not a claim index reporting nobody) and must be able
+#: to tell that apart from every determinate classification in this block.
+#: Tested through :func:`denial_is_wholly_indeterminate`, never by a consumer
+#: re-spelling the literal — the reason string is this module's vocabulary and
+#: a second copy of it in a guard is the drift shape
+#: :data:`CLAIMED_BY_PREFIX`'s own comment records.
+INDETERMINATE_PREFIX = "indeterminate — adoption withheld"
+
 _CLASSIFICATION_INDETERMINATE = (
-    "indeterminate — adoption withheld; this call's claim reads were "
+    INDETERMINATE_PREFIX + "; this call's claim reads were "
     "degraded (an unreadable peer/agent claim, or an unresolved agent-race "
     "window), so this path's own classification is unresolved, not that it "
     "is unrecognized" + _REMEDY_WHO_CLAIMS
@@ -746,6 +759,55 @@ def deny_reason_names_a_holder(deny_reason: str) -> bool:
     if not isinstance(deny_reason, str):
         return False
     return any(sentinel in deny_reason for sentinel in CLAIMED_BY_SENTINELS)
+
+
+#: Every classification in the `_CLASSIFICATION_*` block that is a VERDICT
+#: about a path — a holder was found, or the claim ledger determinately names
+#: nobody, or the path is clean at HEAD. DERIVED from those constants (each
+#: sliced at its appended remedy) rather than re-spelled, for the reason
+#: :data:`CLAIMED_BY_SENTINELS` is derived from :data:`CLAIMED_BY_PREFIX`: a
+#: hand-copied second list of these strings is what drifts when one of them is
+#: reworded. `"not a string"` is `_classify_denied_path`'s non-str arm, which
+#: has no constant of its own.
+_DETERMINATE_CLASSIFICATION_LEADS = CLAIMED_BY_SENTINELS + tuple(
+    classification.split(_REMEDY_WHO_CLAIMS)[0]
+    for classification in (
+        _CLASSIFICATION_ORPHAN,
+        _CLASSIFICATION_UNCLASSIFIED,
+        _CLASSIFICATION_INCLUDE_ORPHANS_IGNORED,
+        _CLASSIFICATION_ALREADY_CLEAN,
+    )
+) + ("not a string",)
+
+
+def denial_is_wholly_indeterminate(deny_reason: str) -> bool:
+    """True iff *deny_reason* denied ONLY for indeterminacy — the claim index
+    could not answer for any denied path — and named no verdict about any of
+    them.
+
+    The question a consumer is asking with this is "did this refusal rest on
+    evidence?". :func:`assert_paths_in_session_scope` already enumerates
+    EVERY denied path with its own classification, so a reason mixing
+    :data:`INDETERMINATE_PREFIX` with any determinate classification carries a
+    real verdict about at least one path and reads False here: a peer's claim
+    this call DID reach is a fact an abort elsewhere in the walk does not
+    undo, and neither is a determinate orphan.
+
+    NEGATIVE SPEC — not a general "was the walk complete?" probe, and never a
+    substitute for `claim_index.OwnershipAnswer.complete`. It reads a rendered
+    refusal string, so it answers only about the paths that refusal denied;
+    a caller holding the answer itself should read `complete`/`abort_cause`
+    there. It also never reports True for the pre-ownership refusals
+    (`"session_id is empty/unresolvable"`, `"paths is empty"`,
+    `"claim_index.classify_paths raised: ..."`) — those carry no
+    classification at all, so a caller that fails open on True cannot fail
+    open on a call where the ownership leg never ran. A non-string, or a
+    string with no classification in it, reads False: the fail-closed answer
+    for a caller deciding whether to stand a refusal down.
+    """
+    if not isinstance(deny_reason, str) or INDETERMINATE_PREFIX not in deny_reason:
+        return False
+    return not any(lead in deny_reason for lead in _DETERMINATE_CLASSIFICATION_LEADS)
 
 
 def _classify_denied_path(
