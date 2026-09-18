@@ -120,6 +120,41 @@ import sys
 from pathlib import Path, PureWindowsPath
 
 
+def _is_console_python_basename(path: str) -> bool:
+    """True if `path`'s basename names a console CPython interpreter.
+
+    Inline mirror of `coordinator/bin/lib/python_interp.py ::
+    is_console_python_basename` -- source of truth there, pinned by C6's
+    parity test. Kept inline (not imported) because this wrapper is
+    installed STANDALONE and cannot import a sibling lib (see
+    `_machine_local_argv`'s docstring, same constraint, same reason).
+    """
+    stem = os.path.splitext(os.path.basename(path))[0].lower()
+    return stem.startswith("python") and not stem.startswith("pythonw")
+
+
+def _resolve_console_python() -> str | None:
+    """Resolve a real CPython interpreter, never a non-python launcher exe.
+
+    Inline mirror of `coordinator/bin/lib/python_interp.py ::
+    resolve_console_python` -- source of truth there, pinned by C6's parity
+    test. Kept inline (not imported) because this wrapper is installed
+    STANDALONE and cannot import a sibling lib (see `_machine_local_argv`'s
+    docstring, same constraint, same reason).
+    """
+    exe = sys.executable or ""
+    if _is_console_python_basename(exe):
+        return exe
+    base = getattr(sys, "_base_executable", None)
+    if base and _is_console_python_basename(base):
+        return base
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
 def _machine_local_argv(ml_bin: str) -> list[str]:
     """Windows-safe invocation argv for the resolved machine-local CLI.
 
@@ -137,7 +172,9 @@ def _machine_local_argv(ml_bin: str) -> list[str]:
     """
     impl = os.path.join(os.path.dirname(os.path.abspath(ml_bin)), "_machine_local.py")
     if os.path.isfile(impl):
-        return [sys.executable, impl]
+        interpreter = _resolve_console_python()
+        if interpreter is not None:
+            return [interpreter, impl]
     return [ml_bin]
 
 
@@ -571,15 +608,19 @@ def _resolve_doe_clone(cli_doe_root: str = "") -> str | None:
     # which runs a python-source file regardless of on-disk name and sidesteps the
     # Windows .cmd/extensionless CreateProcess exec traps (same principle as
     # _machine_local_argv above). Supersedes the stale Review-F7 note that assumed
-    # the resolver's de-bash port had not yet happened.
+    # the resolver's de-bash port had not yet happened. `sys.executable` on its own
+    # is not trustworthy here (a forwarder-shaped launcher exe re-enters its own
+    # argv parsing with the script as an unknown positional and still exits 0) --
+    # go through `_resolve_console_python` (see its docstring) instead.
     home_for_shim = _resolve_home_for_clone_shim()
     fallback = ""
-    if home_for_shim is not None:
+    interpreter = _resolve_console_python()
+    if home_for_shim is not None and interpreter is not None:
         cc_home = Path(home_for_shim) / ".claude"
         resolver = cc_home / "bin" / "resolve-coordinator-clone"
         try:
             result_r3 = subprocess.run(
-                [sys.executable, str(resolver), "--clone-root"],
+                [interpreter, str(resolver), "--clone-root"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,

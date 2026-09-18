@@ -1,0 +1,50 @@
+{
+  "total": 66,
+  "exclude_dir_patterns": [
+    "/tests/",
+    "/test-fixtures/"
+  ],
+  "exclude_basename_prefixes": [
+    "test_",
+    "repro_"
+  ],
+  "per_file": {
+    "coordinator/bin/assert-no-terminal-plans-in-live.py": 1,
+    "coordinator/bin/coordinator-lesson-add.py": 1,
+    "coordinator/bin/emit-goal-from-artifact.py": 1,
+    "coordinator/bin/fan-out-dispatch.py": 1,
+    "coordinator/bin/gen-claude-klabauter-root-pointer.py": 1,
+    "coordinator/bin/handoff-archive-transition.py": 1,
+    "coordinator/bin/lib/cc_invoke.py": 3,
+    "coordinator/bin/lib/coordinator_registry.py": 1,
+    "coordinator/bin/lib/engine_bootstrap.py": 1,
+    "coordinator/bin/merge-recovery-and-tag-cut.py": 1,
+    "coordinator/bin/misc-session-and-guards.py": 3,
+    "coordinator/bin/parallel-review-orthogonality-guard.py": 1,
+    "coordinator/bin/percolate-mirror.py": 5,
+    "coordinator/bin/percolate-push.py": 3,
+    "coordinator/bin/percolate-round.py": 2,
+    "coordinator/bin/publish.py": 1,
+    "coordinator/bin/red-set-report.py": 2,
+    "coordinator/bin/refresh-plugin-live-install.py": 6,
+    "coordinator/bin/regen-cockpit-schema.py": 2,
+    "coordinator/bin/regenerate-known-red-registry.py": 1,
+    "coordinator/bin/standup.py": 1,
+    "coordinator/bin/whats-next.py": 1,
+    "coordinator/bin/workday-complete-args-and-validate.py": 1,
+    "coordinator/bin/workday-complete-close.py": 3,
+    "coordinator/bin/workday-complete-reconcile.py": 2,
+    "coordinator/bin/workday-complete-step3-consolidate.py": 2,
+    "coordinator/bin/workday-complete-step9-append-changelog.py": 1,
+    "coordinator/bin/workday-start-day-branch-resolve.py": 1,
+    "coordinator/bin/workday-start-health-probes.py": 2,
+    "coordinator/bin/workday-start-step0.py": 2,
+    "coordinator/bin/workweek-complete-close.py": 1,
+    "coordinator/bin/workweek-complete-drift-guards.py": 6,
+    "coordinator/bin/wsc-coverage-gate-runner.py": 1,
+    "coordinator/bin/wsc-session-disposition.py": 1,
+    "coordinator/lib/coordinator_session.py": 1,
+    "coordinator/lib/register-coordinator-mirror.py": 1,
+    "coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py": 1
+  }
+}

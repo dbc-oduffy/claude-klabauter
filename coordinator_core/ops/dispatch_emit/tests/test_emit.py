@@ -3078,3 +3078,56 @@ def test_the_stop_rule_pattern_matches_a_declaration_and_not_a_bare_mention():
         f"I read the instruction about {emit._STOP_RULE_TOKEN}: and no rule fired"
     )
     assert not rx.search(f"{emit._STOP_RULE_TOKEN}:")
+
+
+# ---------------------------------------------------------------------------
+# A solitary verdict wave emits, without a commit phase
+# ---------------------------------------------------------------------------
+
+
+def test_a_solitary_writes_empty_wave_emits_with_no_commit_phase_of_its_own():
+    """A `change_kind: verification` row alone in a wave used to fail the
+    whole emit. It now dispatches and simply carries no commit phase: it
+    wrote nothing, so there is nothing for a halt gate to protect."""
+    waves = [
+        [_wave_row("C1", [])],
+        [_wave_row("C2", ["coordinator_core/ops/dispatch_emit/emit.py"])],
+    ]
+    script = compose_script(waves, name="wf", description="verdict then write")
+
+    assert "Wave 1: C1" in script, "the verdict wave must still dispatch"
+    assert "Commit wave 1" not in script, "a wave that wrote nothing got a commit phase"
+    assert "Wave 2: C2" in script
+    assert "Commit wave 2" in script, "the writing wave lost its commit phase"
+
+
+def test_the_verdict_waves_paths_are_absent_from_the_preflight_claim():
+    """The preflight claims what the run will commit. A wave that commits
+    nothing contributes nothing to claim."""
+    waves = [
+        [_wave_row("C1", [])],
+        [_wave_row("C2", ["coordinator_core/ops/dispatch_emit/emit.py"])],
+    ]
+    script = compose_script(waves, name="wf", description="verdict then write")
+    claimed = script.split("Verify that every path in [")[1].split("]")[0]
+    assert claimed == "coordinator_core/ops/dispatch_emit/emit.py", (
+        "the preflight claim is not exactly the writing wave's pathspec"
+    )
+
+
+
+def test_the_commit_prompt_names_the_determinate_orphan_verb():
+    """`who-claims-path` printing nothing is a third answer, not a failed
+    search: a path written through Bash records no claim at all (DR-258), so
+    both release verbs are no-ops and the agent has no route unless the
+    prompt names `include_orphans`. Two runs halted here before it did."""
+    waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/emit.py"])]]
+    script = compose_script(waves, name="wf", description="orphan route")
+
+    assert "include_orphans" in script, "the sanctioned orphan verb is unnamed"
+    assert "DR-258" in script, "the reason a Bash-written path has no claim is unstated"
+    assert "who-claims-path" in script
+    assert "never relaxes a peer-claimed path" in script, (
+        "the bound on the grant is missing -- an unbounded include_orphans "
+        "reads as permission to commit over a live peer"
+    )
