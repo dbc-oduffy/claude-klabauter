@@ -58,9 +58,10 @@ import secrets
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core._settings_home import claude_config_dir, machine_local_dir
+from coordinator_core.data_root import content_root_for
 from coordinator_core.frontmatter.sentinel_blocks import extract_block as _extract_sentinel_block
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_spawn
 from coordinator_core.session import scope as session_scope
@@ -944,8 +945,8 @@ def resolve_plugin_root() -> Optional[str]:
     except OSError:
         doe_root = ""
     if doe_root:
-        candidate = Path(doe_root) / "coordinator"
-        if _has_content(candidate):
+        candidate = content_root_for(doe_root)
+        if candidate is not None and _has_content(candidate):
             return str(candidate)
 
     return None
@@ -1013,18 +1014,33 @@ def _resolve_block_placeholders(text: str, values: Dict[str, str]) -> Optional[s
     return resolved
 
 
-def _assemble_contract_blocks(
+def _assemble_contract_block_parts(
     block_names: Sequence[str],
     *,
     plugin_root: str,
     subagent_type: str,
     sidecar_path: Optional[str],
     doc_type: Optional[str],
-) -> Optional[str]:
-    """Assemble ``block_names`` (registry.toml snippet names, in order) into
-    a single pre-joined ``injected_prompt_blocks`` string, or ``None`` on any
-    assembly failure (canonical spec §2.6.1 -- all-or-nothing, never a
-    partial contract).
+) -> Optional[List[Tuple[str, str]]]:
+    """Assemble ``block_names`` into ``(block_name, resolved_body)`` pairs in
+    emission order, or ``None`` on any assembly failure -- the segmented form
+    of ``_assemble_contract_blocks``, which is a pure join over this.
+
+    Per-block granularity exists because a consumer composing into a
+    size-capped channel has to be able to place SOME blocks inline and
+    displace others; a pre-joined string forces that decision to be
+    all-or-nothing. The pairs are returned in the caller's supplied order and
+    are never reordered here -- emission order is policy-owned (the
+    ``contract_blocks`` list order), and at least three live ordering rules
+    ride on it (``persona-dispatch-contract`` front, ``persona-persisting-
+    findings`` last, ``provisioned-scaffold-precedence`` ahead of the
+    sidecar-family blocks). A consumer may DROP pairs; it must not permute
+    the ones it keeps.
+
+    Negative spec: this function does not know or care about any char cap,
+    carries no notion of a block's importance, and reads nothing per block
+    beyond the one snippet file it already had to read to assemble at all --
+    the segmented return adds no I/O over the joined one.
 
     Bodies are extracted ``header_style``-aware off
     ``<plugin_root>/snippets/<name>.md`` (never off the DoE policy file --
@@ -1056,7 +1072,7 @@ def _assemble_contract_blocks(
         "subagent_type": subagent_type or "",
     }
 
-    assembled_parts: list[str] = []
+    assembled_parts: List[Tuple[str, str]] = []
     for name in block_names:
         snippet_path = snippets_dir / f"{name}.md"
         try:
@@ -1106,9 +1122,35 @@ def _assemble_contract_blocks(
             )
             return None
 
-        assembled_parts.append(resolved)
+        assembled_parts.append((name, resolved))
 
-    return "\n\n".join(assembled_parts)
+    return assembled_parts
+
+
+def _assemble_contract_blocks(
+    block_names: Sequence[str],
+    *,
+    plugin_root: str,
+    subagent_type: str,
+    sidecar_path: Optional[str],
+    doc_type: Optional[str],
+) -> Optional[str]:
+    """Pre-joined ``injected_prompt_blocks`` string for ``block_names``, or
+    ``None`` on any assembly failure (canonical spec §2.6.1 --
+    all-or-nothing, never a partial contract). A pure ``"\\n\\n"`` join over
+    ``_assemble_contract_block_parts``; no wrapper/header/delimiter text is
+    added around individual blocks.
+    """
+    parts = _assemble_contract_block_parts(
+        block_names,
+        plugin_root=plugin_root,
+        subagent_type=subagent_type,
+        sidecar_path=sidecar_path,
+        doc_type=doc_type,
+    )
+    if parts is None:
+        return None
+    return "\n\n".join(body for _name, body in parts)
 
 
 def assemble_contract_blocks_for_payload(
@@ -1117,9 +1159,32 @@ def assemble_contract_blocks_for_payload(
     cwd: Optional[str],
     report_sidecar_path: Optional[str],
 ) -> Optional[str]:
+    """Pre-joined ``injected_prompt_blocks`` string for ``payload``, or
+    ``None`` when there is nothing to assemble or assembly failed. A pure
+    ``"\\n\\n"`` join over ``assemble_contract_block_parts_for_payload``;
+    return shape and every fail-open arm are unchanged from when this was
+    the only entry point, which is what off-repo callers hold.
+    """
+    parts = assemble_contract_block_parts_for_payload(
+        payload, cwd=cwd, report_sidecar_path=report_sidecar_path
+    )
+    if parts is None:
+        return None
+    return "\n\n".join(body for _name, body in parts)
+
+
+def assemble_contract_block_parts_for_payload(
+    payload: Dict[str, Any],
+    *,
+    cwd: Optional[str],
+    report_sidecar_path: Optional[str],
+) -> Optional[List[Tuple[str, str]]]:
     """Independent second leg of spawn-time provisioning (canonical spec
-    §2.3/§2.6.2): resolve + assemble ``payload["contract_blocks"]`` into an
-    ``injected_prompt_blocks`` string.
+    §2.3/§2.6.2): resolve + assemble ``payload["contract_blocks"]`` into
+    ``(block_name, resolved_body)`` pairs in emission order -- the segmented
+    form the size-capped composers need, joined for the
+    ``injected_prompt_blocks`` string by
+    ``assemble_contract_blocks_for_payload``.
 
     Deliberately does NOT call ``_provision`` or gate on
     ``report_sidecar_path`` being non-``None`` -- contract-assembly failure
@@ -1172,7 +1237,7 @@ def assemble_contract_blocks_for_payload(
     _agent_id, _agent_type, subagent_type = resolve_effective_types(payload, git_root)
     doc_type = payload.get("type") or None
 
-    return _assemble_contract_blocks(
+    return _assemble_contract_block_parts(
         block_names,
         plugin_root=plugin_root,
         subagent_type=subagent_type,

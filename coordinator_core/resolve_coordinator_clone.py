@@ -454,7 +454,9 @@ def resolve_content_root() -> str:
       2. COORDINATOR_ROOT (must exist, else fail loud)
       3. registry live_path (dev-loop clone wins over cache)
       4. newest versioned cache
-      5. `.doe-root` pointer -> `<root>/coordinator`, gated on that dir existing
+      5. `.doe-root` pointer -> the coordinator content root inside it, either
+         layout (`<root>/coordinator`, else `<root>` itself when it carries the
+         `.claude-plugin/plugin.json` manifest marker)
       6. flat layout, gated on `.claude-plugin/plugin.json` manifest marker
       7. Fail loud
     """
@@ -503,8 +505,16 @@ def resolve_content_root() -> str:
         return newest
 
     doe_root = _read_doe_root_pointer()
-    if doe_root and os.path.isdir(os.path.join(doe_root, "coordinator")):
-        return os.path.join(doe_root, "coordinator")
+    if doe_root:
+        if os.path.isdir(os.path.join(doe_root, "coordinator")):
+            return os.path.join(doe_root, "coordinator")
+        # A container that registers the published FLAT mirror as its DoE root
+        # has its content at the root itself; without this arm the pointer rung
+        # produced `<mirror>/coordinator`, which cannot exist, and content
+        # resolution fell through to a marketplace path that was not there
+        # either. Same manifest marker the flat rung below gates on.
+        if os.path.isfile(os.path.join(doe_root, ".claude-plugin", "plugin.json")):
+            return doe_root
 
     if flat and os.path.isfile(os.path.join(flat, ".claude-plugin", "plugin.json")):
         return flat

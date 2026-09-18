@@ -153,6 +153,7 @@ import yaml
 
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.dag import check_lineage_reachability as _check_lineage_reachability
+from coordinator_core.data_root import content_root_for
 from coordinator_core.frontmatter.baton_class import (
     _PRE_RENAME_ALIASES as _HANDOFF_KIND_PRE_RENAME_ALIASES,
     canonical_kind as _canonical_kind,
@@ -425,8 +426,9 @@ def _load_context(_forensics: Optional[Dict[str, Any]] = None) -> Optional[_Cont
         _forensics["schemas_dir"] = str(schemas_dir)
 
     manifest: Optional[Dict[str, Any]] = None
-    if doe_root:
-        manifest_path = Path(doe_root) / "coordinator" / "schemas" / "coordinator-registry.manifest.json"
+    content_root = content_root_for(doe_root)
+    if content_root is not None:
+        manifest_path = content_root / "schemas" / "coordinator-registry.manifest.json"
         manifest_retry_record: Dict[str, Any] = {}
         try:
             manifest = _retry_on_transient_read_failure(

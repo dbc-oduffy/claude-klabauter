@@ -150,6 +150,34 @@ def test_dispatch_emit_round_trip_writes_and_returns_verdict(tmp_path):
     assert isinstance(result["warn_count"], int)
 
 
+def test_dispatch_emit_degrades_agent_type_for_a_bare_host_caller(tmp_path, monkeypatch):
+    """Review: code-reviewer, Finding 1 -- `_dispatch_emit` must resolve
+    `agent_type_host` from the CALLER's own env (`COORDINATOR_AGENT_TYPE_HOST`/
+    `CLAUDE_PLUGIN_ROOT`) and thread it into `emit_script`, or host agent-type
+    degradation (S1-C5/S1-C6) never fires from the one production entry point
+    that matters. A bare host caller -- neither env var set -- must emit
+    `general-purpose` agentType literals and the degradation narration."""
+    monkeypatch.delenv("COORDINATOR_AGENT_TYPE_HOST", raising=False)
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+
+    plan_path = _write_fixture_plan(tmp_path)
+    output_path = tmp_path / "out" / "emitted.mjs"
+    output_path.parent.mkdir()
+
+    result = _dispatch_emit(
+        {
+            "plan_path": str(plan_path),
+            "output_path": str(output_path),
+        }
+    )
+
+    assert result["ok"] is True
+    written = output_path.read_text(encoding="utf-8")
+    assert "general-purpose" in written
+    assert "Agent-type host degradation" in written
+    assert "coordinator:executor" not in written
+
+
 def test_dispatch_emit_defaults_target_root_to_output_path_parent(tmp_path):
     plan_path = _write_fixture_plan(tmp_path)
     output_path = tmp_path / "emitted.mjs"
@@ -389,3 +417,16 @@ def test_dispatch_emit_force_overwrites_a_different_emission(tmp_path):
 
     assert result["ok"] is True
     assert "a peer's emission" not in output_path.read_text(encoding="utf-8")
+
+
+def test_dispatch_emit_accepts_plan_and_out_path_spellings(tmp_path):
+    """The prep ops upstream spell it `plan`; `out_path` is the guess a reader
+    makes from `plan_path`."""
+    plan_path = _write_fixture_plan(tmp_path)
+    output_path = tmp_path / "out" / "emitted.mjs"
+    output_path.parent.mkdir()
+
+    result = _dispatch_emit({"plan": str(plan_path), "out_path": str(output_path)})
+
+    assert result["path"] == str(output_path.resolve())
+    assert output_path.is_file()

@@ -181,7 +181,12 @@ def test_resolve_plugin_dir_unmocked_against_real_resolver():
     except fire.PluginDirResolutionError:
         pytest.skip("no coordinator plugin install resolves on this machine")
     assert Path(resolved).is_dir()
-    assert Path(resolved).name == "coordinator"
+    # Either content layout is a correct answer here: the private authoring
+    # tree's `coordinator/` subdir, or a published flat mirror's own root.
+    assert (
+        Path(resolved).name == "coordinator"
+        or (Path(resolved) / ".claude-plugin" / "plugin.json").is_file()
+    )
 
 
 def test_resolve_plugin_dir_falls_back_to_shim_when_native_fails(monkeypatch):
@@ -799,3 +804,39 @@ def test_write_record_returns_exactly_what_landed_on_disk(repo, script, monkeypa
     registry_path = fire._record_path(fire._registry_dir(str(repo)), record["fire_id"])
 
     assert json.loads(registry_path.read_text(encoding="utf-8")) == record
+
+
+# ---------------------------------------------------------------------------
+# `_native_plugin_dir` resolves BOTH content layouts. A container registers the
+# published flat mirror as its DoE root, where `<root>/coordinator` cannot
+# exist -- the private-only join left every fired child with no plugin dir.
+# ---------------------------------------------------------------------------
+
+
+def _patch_doe_root(monkeypatch, root):
+    monkeypatch.setattr(
+        "coordinator_core.ops.coordinator_doe_root.coordinator_doe_root",
+        lambda: str(root),
+    )
+
+
+def test_native_plugin_dir_resolves_the_private_authoring_tree(tmp_path, monkeypatch):
+    root = tmp_path / "DoE-claude"
+    (root / "coordinator").mkdir(parents=True)
+    _patch_doe_root(monkeypatch, root)
+    assert fire._native_plugin_dir() == str(root / "coordinator")
+
+
+def test_native_plugin_dir_resolves_the_published_flat_mirror(tmp_path, monkeypatch):
+    root = tmp_path / "coordinator-claude"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    _patch_doe_root(monkeypatch, root)
+    assert fire._native_plugin_dir() == str(root)
+
+
+def test_native_plugin_dir_still_rejects_a_bare_directory(tmp_path, monkeypatch):
+    root = tmp_path / "bare"
+    root.mkdir()
+    _patch_doe_root(monkeypatch, root)
+    assert fire._native_plugin_dir() is None

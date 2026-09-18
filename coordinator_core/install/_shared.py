@@ -188,20 +188,35 @@ def _strip_trailing_sep(path: str) -> str:
 
 def _repo_to_coordinator_content_root(repo_root: str) -> str:
     """Map a resolved ``repos.doe_claude``-shaped repo root onto its
-    coordinator-claude CONTENT root, deciding nested-vs-flat by marker
+    coordinator-claude CONTENT root, deciding nested-vs-flat by PLUGIN MARKER
     (``coordinator_root._resolve_plugin_root_for_machine_local``), never by
-    path shape.
+    path shape alone.
 
     A dev clone nests the plugin payload under ``<repo>/coordinator``; the
     published OSS/marketplace tree (``dbc-oduffy/coordinator-claude``) is
     flat, payload directly at ``<repo>``. Guessing "always append
     ``coordinator``" (the prior behavior at every rung below) resolves a
     flat clone to a directory that does not exist and fails every downstream
-    consumer closed (claude-klabauter#6 / DoE F7). Falls back to the legacy
-    ``<repo>/coordinator`` join when NEITHER shape's marker is present, so an
-    unrecognized layout still fails the same way it always did (fail loud
-    downstream, not fail loud here) rather than silently resolving to the
-    repo root itself.
+    consumer closed (claude-klabauter#6 / DoE F7).
+
+    Deliberately does NOT route through ``coordinator_core.data_root.
+    content_root_for`` (the primitive most of its ~45 other call sites now
+    use for the same join): that primitive accepts a nested
+    ``<repo>/coordinator`` candidate by ``isdir`` alone, with no plugin-marker
+    probe. ``gen_doe_root_pointer.py`` already treats bare ``isdir`` as
+    insufficient for this exact question — it fails CLOSED unless the
+    resolved root carries one of the plugin markers
+    (``coordinator/templates/bin/_machine_local.py``,
+    ``templates/bin/_machine_local.py``, or ``.claude-plugin/plugin.json``) —
+    and every caller of this helper (``resolve_coordinator_root``, in turn the
+    settings-hook identity strip and the uninstall legs) feeds that same
+    machine-local/plugin-dir resolution, so it holds to the same, stricter
+    bar rather than the primitive's looser one.
+
+    Falls back to the legacy ``<repo>/coordinator`` join when NEITHER shape's
+    marker is present, so an unrecognized layout still fails the same way it
+    always did (fail loud downstream, not fail loud here) rather than
+    silently resolving to the repo root itself.
     """
     resolved = _resolve_plugin_root_for_machine_local(Path(repo_root))
     if resolved is not None:

@@ -629,6 +629,35 @@ def _resolve_session_floor(session_id: str) -> Optional[str]:
     return f"{earliest}^"
 
 
+def _untrailered_shas_in_range(range_: str, cwd: Optional[str] = None) -> Optional[List[str]]:
+    """Non-merge commits in `range_` whose message carries no `Session-Id:`
+    line, in ONE spawn (`--invert-grep`) rather than the two-spawn
+    total-minus-trailered diff `_count_untrailered_commits` used before this
+    was split out. Shared with `workstream_complete`'s own attribution-gap
+    census (review finding: the two were duplicate predicates); that caller
+    passes its own repo root as `cwd`.
+
+    `None` on any git failure (missing binary, non-zero rc): a transport
+    failure is not evidence of a gap. Callers map `None` differently —
+    `_count_untrailered_commits` below folds it to 0 (report complete
+    coverage, its own fail-safe contract); `workstream_complete`'s caller
+    withholds the attribution census entirely rather than assume
+    completeness. The two contracts differ, which is why this helper stays
+    neutral and lets each caller do its own mapping.
+
+    NEGATIVE-SPEC: never narrow this to "untrailered commits that look like
+    this session's". An untrailered commit has no owner on disk; that is the
+    whole defect, and any heuristic picking an owner for it recreates the
+    confident-wrong answer this census exists to refuse."""
+    out, rc = _run_git(
+        ["log", "--no-merges", "--invert-grep", "--grep=^Session-Id: ", "--pretty=%H", range_],
+        cwd,
+    )
+    if rc != 0:
+        return None
+    return [line.strip() for line in out.splitlines() if line.strip()]
+
+
 def _count_untrailered_commits(range_: str) -> int:
     """How many non-merge commits in `range_` carry no `Session-Id:` trailer.
 
@@ -647,19 +676,8 @@ def _count_untrailered_commits(range_: str) -> int:
     behaviour of the caller instead of flipping honest closes to
     `indeterminate` on an unrelated git error.
     """
-    all_out, rc = _run_git(["log", "--no-merges", "--pretty=%H", range_])
-    if rc != 0:
-        return 0
-    total = len([ln for ln in all_out.splitlines() if ln.strip()])
-
-    trailered_out, rc2 = _run_git(
-        ["log", "--no-merges", "--pretty=%H", "--grep=^Session-Id: ", range_]
-    )
-    if rc2 != 0:
-        return 0
-    trailered = len([ln for ln in trailered_out.splitlines() if ln.strip()])
-
-    return max(0, total - trailered)
+    shas = _untrailered_shas_in_range(range_)
+    return 0 if shas is None else len(shas)
 
 
 def _session_scoped(range_: str, session_id: str) -> int:

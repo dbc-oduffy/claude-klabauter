@@ -127,6 +127,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -135,8 +136,10 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._workflow_contract import Severity, run_checks
-from coordinator_core.ops.dispatch_emit.emit import emit_script
+from coordinator_core.ops.dispatch_emit.emit import emit_script, resolve_agent_type_host
+from coordinator_core.ops.dispatch_emit.inventory_mint import mint_spine
 from coordinator_core.session.core import resolve_session_id
+from coordinator_core.ops._param_alias import aliased_param, spellings
 
 
 # Generator-provenance: writes the emitted script to a caller-supplied,
@@ -146,6 +149,18 @@ GENERATES = []
 
 class PathEscapeError(ValueError):
     """Raised when ``output_path`` resolves outside ``target_root``."""
+
+
+class InventoryPathConflictError(ValueError):
+    """Raised when a caller passes both ``plan_path`` and ``inventory_path``.
+
+    Mutually exclusive: ``plan_path`` names a hand-authored plan-tasks
+    spine to emit directly; ``inventory_path`` names a mise-inventory
+    record this op mints a spine FROM first
+    (``inventory_mint.mint_spine``), then emits. Accepting both would leave
+    one of the two silently ignored -- see
+    ``docs/plans/2026-09-18-doe-holds-no-scripts.md`` § S1-C4.
+    """
 
 
 class ForeignEmissionError(ValueError):
@@ -350,12 +365,116 @@ def _write_emission_receipt(
     return str(receipt_path)
 
 
+class ForeignSessionRestampError(ValueError):
+    """Raised when ``restamp`` is asked to re-stamp a receipt naming a DIFFERENT
+    session as the emitter.
+
+    A restamp re-stamps THIS session's own deliberate edit, never a peer's
+    emission -- restamping theirs would run their wave map under this
+    session's handle with the one guard that notices switched off.
+    """
+
+
+class NoReceiptToRestampError(ValueError):
+    """Raised when ``restamp`` is asked to re-stamp a script with no receipt
+    beside it -- nothing to restamp, and a receiptless script is not gated
+    by the foreign-emission check at all.
+    """
+
+
+class RestampScriptNotFoundError(NoReceiptToRestampError):
+    """Raised when ``restamp``'s ``script_path`` itself does not exist.
+
+    Review: code-reviewer -- distinct from the base class's "script exists
+    but has no receipt beside it" case (typo'd path vs. a genuinely
+    un-emitted script); a subclass so an existing ``except
+    NoReceiptToRestampError`` still catches this, while a caller that cares
+    about the distinction can catch this subclass first.
+    """
+
+
+def restamp(script_path: Path, session_id: str) -> dict:
+    """Re-stamp an emission receipt's ``sha256`` over a script THIS session
+    deliberately edited after emission.
+
+    Mirrors DoE-claude's wrapper CLI ``emit-dispatch-workflow.py :: restamp``
+    (the other producer of this same receipt shape, § The receipt is a
+    property of emitting, not of one repo's wrapper, above) -- same refusal
+    shape, same serialisation. The published surface documents
+    ``--restamp <script>`` in three places; this is the engine-owned function
+    that surface delegates to once it becomes a thin door-served CLI (S1-C7).
+
+    Refuses unless the existing receipt already names ``session_id`` as the
+    emitter -- a peer's emission cannot be laundered through it, and this is
+    an explicit operator act naming the script, never something the fire
+    path invokes on its own. What it drops is only the guarantee that the
+    bytes are the emitter's verbatim output, which is exactly what the edit
+    that necessitated the restamp already gave up.
+
+    Returns the receipt dict as written to disk.
+
+    Negative-spec:
+      - Does NOT accept a raw, unguarded path. The caller (the future
+        registered op wiring this up) is responsible for path-guarding
+        ``script_path`` the same way ``_dispatch_emit`` guards
+        ``output_path`` -- this function trusts the path it is given, same
+        as ``emission_receipt_path``.
+      - Does NOT resolve session identity itself. The caller supplies
+        ``session_id`` (typically via ``_receipt_session_id``/
+        ``resolve_session_id``), so this stays a pure refuse-or-rewrite
+        function over an already-resolved identity -- no second private
+        session-resolution ladder.
+      - Does NOT re-derive or widen the receipt's key set. Only ``sha256``
+        changes; every other key (``session_id``, ``emitted_at``, ``plan``)
+        is carried over verbatim from the existing receipt.
+    """
+    if not script_path.is_file():
+        raise RestampScriptNotFoundError(f"script not found: {script_path}")
+
+    receipt_path = emission_receipt_path(script_path)
+    if not receipt_path.is_file():
+        raise NoReceiptToRestampError(
+            f"no emission receipt beside {script_path.name} -- nothing to "
+            "restamp. A script with no receipt is not gated by the "
+            "foreign-emission check at all (it fails open on an absent "
+            "receipt), so if a fire is being refused, something else is "
+            "refusing it."
+        )
+
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    recorded = receipt.get("session_id")
+    if not session_id or recorded != session_id:
+        raise ForeignSessionRestampError(
+            f"{receipt_path.name} names session {str(recorded)[:8]} as the "
+            f"emitter; this session is {str(session_id)[:8]} -- refusing to "
+            "restamp. This route re-stamps YOUR OWN deliberate edit, never a "
+            "peer's emission: restamping theirs would run their wave map "
+            "under your handle with the one guard that notices switched "
+            "off. Coordinate with that session instead."
+        )
+
+    receipt["sha256"] = _script_sha256(script_path)
+    receipt_path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return receipt
+
+
 @register_op("dispatch.emit")
 def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.emit" handler.
 
     Args (via params):
-        plan_path (str): plan file to read the task spine from.
+        plan_path (str): plan file to read the task spine from. Mutually
+            exclusive with ``inventory_path`` (see
+            ``InventoryPathConflictError``).
+        inventory_path (str, optional): a mise-inventory record to mint a
+            spine FROM first (``inventory_mint.mint_spine``), written to
+            ``<run-id>.spine.md`` beside the record, then emitted exactly
+            as a hand-authored ``plan_path`` would be. Mutually exclusive
+            with ``plan_path``.
         output_path (str): path to write the emitted ``.mjs`` script to.
         target_root (str, optional): explicit containment root; defaults to
             ``repo_root`` when the request carries one, else to
@@ -393,13 +512,34 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         ForeignEmissionError — if ``output_path`` already holds a different
         emission and ``force`` is not set.
     """
-    plan_path = params.get("plan_path")
-    if not plan_path:
-        raise ValueError("dispatch.emit requires param: plan_path")
+    plan_path = aliased_param(params, "plan_path", "plan")
+    inventory_path = params.get("inventory_path")
 
-    output_path = params.get("output_path")
+    if plan_path and inventory_path:
+        raise InventoryPathConflictError(
+            "dispatch.emit accepts either plan_path or inventory_path, not both "
+            f"(got plan_path={plan_path!r}, inventory_path={inventory_path!r})"
+        )
+
+    if inventory_path:
+        spine_text, spine_path = mint_spine(inventory_path)
+        guarded_spine_path = contained_path(
+            spine_path, [Path(inventory_path).resolve().parent]
+        )
+        if guarded_spine_path is None:
+            raise PathEscapeError(
+                f"minted spine path escapes its inventory record's directory: "
+                f"{spine_path!r} not under {Path(inventory_path).resolve().parent!r}"
+            )
+        guarded_spine_path.write_text(spine_text, encoding="utf-8")
+        plan_path = str(guarded_spine_path)
+
+    if not plan_path:
+        raise ValueError(f"dispatch.emit requires param: {spellings('plan_path', 'plan')}")
+
+    output_path = aliased_param(params, "output_path", "out_path")
     if not output_path:
-        raise ValueError("dispatch.emit requires param: output_path")
+        raise ValueError(f"dispatch.emit requires param: {spellings('output_path', 'out_path')}")
 
     target_root = (
         params.get("target_root")
@@ -413,11 +553,32 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"output_path escapes target_root: {output_path!r} not under {target_root!r}"
         )
 
+    # Resolved ONCE and shared by both the commit-phase prompt and the
+    # emission receipt below.
+    emitting_session_id = _receipt_session_id(params)
+    params = {**params, "session_id": emitting_session_id}
+
+    # S1-C5/S1-C6 (docs/plans/2026-09-18-doe-holds-no-scripts.md): resolve the
+    # host agent-type-host ladder from the CALLER's own env, not the warm
+    # server's. `os.environ` here reads the CALLER's carried
+    # `COORDINATOR_AGENT_TYPE_HOST`/`CLAUDE_PLUGIN_ROOT` for an isolated warm
+    # dispatch -- `warm.entry_seam._environ_identity_borrow` mirrors the
+    # caller-declared `CALLER`-mode env set into `os.environ` for the life of
+    # this call and restores it after (see that module's docstring) -- and
+    # the caller's own real env on a cold spawn. `resolve_agent_type_host`
+    # itself reads nothing from the environment; this is the one read.
+    agent_type_host = resolve_agent_type_host(
+        coordinator_agent_type_host=os.environ.get("COORDINATOR_AGENT_TYPE_HOST"),
+        claude_plugin_root=os.environ.get("CLAUDE_PLUGIN_ROOT"),
+    )
+
     script = emit_script(
         plan_path,
         name=params.get("name"),
         description=params.get("description"),
         repo_root=repo_root or _repo_root_for_plan(plan_path),
+        session_id=emitting_session_id,
+        agent_type_host=agent_type_host,
     )
 
     findings = run_checks(script)

@@ -127,6 +127,7 @@ from coordinator_core.roadmap.prep_gate import (
     gate_plan,
     read_stamp,
 )
+from coordinator_core.ops._param_alias import aliased_param, spellings
 
 # Generator-provenance: writes only the caller-named plan path, in place. The
 # `MUTATES` declaration above names the shape rather than a fixed file because
@@ -215,9 +216,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if repo_root is None:
         raise ValueError("plan.stamp_prepped requires a resolved repo_root")
 
-    raw_plan = params.get("plan")
+    raw_plan = aliased_param(params, "plan", "plan_path")
     if not isinstance(raw_plan, str) or not raw_plan.strip():
-        raise ValueError("plan must be a non-empty string naming one plan file")
+        raise ValueError(
+            f"{spellings('plan', 'plan_path')} must be a non-empty string naming one plan file"
+        )
     by = params.get("by")
     if by is not None and (not isinstance(by, str) or not by.strip()):
         raise ValueError("by must be a non-empty string when supplied")

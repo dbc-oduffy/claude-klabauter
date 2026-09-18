@@ -117,6 +117,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 from coordinator_core._settings_home import normalize_native_path, settings_home
+from coordinator_core.data_root import content_root_for
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core.install import check_install_singularity
 from coordinator_core.install._shared import require_home
@@ -207,6 +208,12 @@ def _doe_coordinator_root() -> Optional[Path]:
     root = coordinator_doe_root()
     if not root:
         return None
+    # Either content layout — the published flat mirror IS its own content root,
+    # with no "coordinator" segment to join (data_root.content_root_for owns that
+    # join; private layout is probed first, so an authoring clone is unchanged).
+    content = content_root_for(normalize_native_path(root))
+    if content is not None:
+        return content
     return normalize_native_path(root) / "coordinator"
 
 
@@ -1319,8 +1326,12 @@ def _doe_payload_root(
     try:
         doe = coordinator_doe_root()
         if doe:
-            candidate = normalize_native_path(str(doe)) / "coordinator"
-            if (candidate / marker).exists():
+            # Either content layout — a container that registered the published
+            # FLAT mirror has its content at the root itself, so the bare
+            # "coordinator" join could never carry `marker` there and this rung
+            # fell through to the marketplace path it was added to replace.
+            candidate = content_root_for(normalize_native_path(str(doe)))
+            if candidate is not None and (candidate / marker).exists():
                 return candidate
     except Exception:
         # Never raise from a probe's root resolution — fall through to the

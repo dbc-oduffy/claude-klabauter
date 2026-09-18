@@ -73,6 +73,54 @@ def test_empty_env_value_is_not_treated_as_a_redirect(monkeypatch):
     assert queue_append._output_root_override() is None
 
 
+# --- Swept-tmp-root refusal (2026-09-18) ------------------------------------
+#
+# Sibling hazard to the warm-server leak above: even on the genuine
+# IN_PROCESS route, `QUEUE_APPEND_OUTPUT_ROOT` can name a temp-dir path a
+# completed pytest run already tore down (a warm engine daemon started
+# mid test-run bakes its spawner's env in forever). Honouring a swept root
+# used to "succeed" anyway, because `os.makedirs(..., exist_ok=True)`
+# silently recreated it — the entry landed in a directory nothing durable
+# ever named, and was reported as written. `_output_root_override` must
+# refuse this shape outright, not fall through to routing it as a real
+# override.
+#
+# Bug: state/bug-backlog/2026-09-18-coordinator-queue-append-writes-into-a-swept-tmp-root.yaml
+
+
+def test_swept_temp_root_refuses_even_in_process(monkeypatch, tmp_path):
+    """A temp-dir override that no longer exists on disk must raise, not be
+    honoured — the exact shape a torn-down pytest tmp_path leaves behind."""
+    swept = tmp_path / "already-gone"
+    monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(swept))
+    monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
+    assert op_latency.execution_route() == op_latency.IN_PROCESS
+    assert not swept.exists()
+    with pytest.raises(queue_append._StaleIsolationRoot):
+        queue_append._output_root_override()
+
+
+def test_live_temp_root_is_still_honoured(monkeypatch, tmp_path):
+    """The negative case: a temp-dir override that DOES exist on disk (a
+    live pytest tmp_path, mid-test) is the ordinary case this env var exists
+    for, and must not be refused."""
+    monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(tmp_path))
+    monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
+    assert queue_append._output_root_override() == str(tmp_path)
+
+
+def test_is_swept_tmp_root_predicate(tmp_path):
+    live = tmp_path / "still-here"
+    live.mkdir()
+    swept = tmp_path / "already-gone"
+    assert queue_append._is_swept_tmp_root(str(swept)) is True
+    assert queue_append._is_swept_tmp_root(str(live)) is False
+    # A non-temp path that is simply absent (e.g. a normal repo state dir
+    # queue-append is about to os.makedirs) is not "swept" — it was never a
+    # test-isolation root in the first place.
+    assert queue_append._is_swept_tmp_root("/no/such/repo/state/debt-backlog") is False
+
+
 # --- Published-mirror refusal (2026-08-21) ---------------------------------
 #
 # Sibling hazard to this module's subject. `QUEUE_APPEND_OUTPUT_ROOT` sends a

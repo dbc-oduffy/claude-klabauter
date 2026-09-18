@@ -28,6 +28,7 @@ from coordinator_core.ops.fleet._memo_resolver import (
     RegistryReadError,
     canonical_receiver_id,
     convention_repo_key,
+    read_doe_identity,
     read_publish_mirrors,
     read_registry_repos,
     receiver_em_to_repo_key,
@@ -623,3 +624,45 @@ class TestSameRepoPath:
         a = tmp_path / "not-yet-cloned"
         assert same_repo_path(a, Path(str(a))) is True
         assert same_repo_path(a, tmp_path / "different-not-cloned") is False
+
+
+def _install_flat_mirror_manifest(claude_home: Path, doe_root: Path, manifest: dict) -> None:
+    """`_install_doe_manifest`'s flat-mirror twin: the published mirror carries
+    schemas/ at its own root, gated by `.claude-plugin/plugin.json`."""
+    (doe_root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    (doe_root / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
+    schemas_dir = doe_root / "schemas"
+    schemas_dir.mkdir(parents=True, exist_ok=True)
+    (schemas_dir / "coordinator-registry.manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
+    machine_local.mkdir(parents=True, exist_ok=True)
+    (machine_local / ".doe-root").write_text(str(doe_root), encoding="utf-8")
+
+
+class TestDoeIdentityContentLayouts:
+    def test_flat_mirror_manifest_is_read(self, tmp_path, monkeypatch):
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": tmp_path / "flat-mirror"})
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        _install_flat_mirror_manifest(
+            claude_home,
+            tmp_path / "flat-mirror",
+            {"identity": {"centralReceiverIds": ["central-em"], "repoAliases": []}},
+        )
+
+        assert read_doe_identity() == {
+            "centralReceiverIds": ["central-em"],
+            "repoAliases": [],
+        }
+
+    def test_bare_directory_warns_and_returns_empty(self, tmp_path, monkeypatch, caplog):
+        claude_home = _make_claude_home(tmp_path, {"doe_claude": tmp_path / "bare"})
+        (tmp_path / "bare").mkdir()
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+        machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
+        (machine_local / ".doe-root").write_text(str(tmp_path / "bare"), encoding="utf-8")
+
+        with caplog.at_level("WARNING"):
+            assert read_doe_identity() == {}
+        assert str(tmp_path / "bare") in caplog.text

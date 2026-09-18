@@ -405,3 +405,38 @@ def test_guardless_sessions_silent_on_empty_observations(monkeypatch):
     )
 
     assert evaluate_guardless_sessions() == ""
+
+
+def test_is_inline_install_true_on_flat_published_mirror(tmp_path):
+    """A container registers the flat mirror: its repo root IS the content root,
+    gated by `.claude-plugin/plugin.json`, with no `coordinator/` segment."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    mirror = tmp_path / "coordinator-claude"
+    (mirror / ".claude-plugin").mkdir(parents=True)
+    (mirror / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
+    (config_dir / ".doe-root").write_text(str(mirror), encoding="utf-8")
+
+    assert _gsi.is_inline_install(config_dir) is True
+
+
+def test_is_inline_install_false_on_bare_directory(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    (config_dir / ".doe-root").write_text(str(bare), encoding="utf-8")
+
+    assert _gsi.is_inline_install(config_dir) is False
+
+
+def test_flat_mirror_install_is_silent_even_with_unreachable_key(tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    mirror = tmp_path / "coordinator-claude"
+    (mirror / ".claude-plugin").mkdir(parents=True)
+    (mirror / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
+    (config_dir / ".doe-root").write_text(str(mirror), encoding="utf-8")
+    _write_settings(config_dir, {"coordinator-claude@local": True})
+
+    assert evaluate_settings_integrity(config_dir) == ""

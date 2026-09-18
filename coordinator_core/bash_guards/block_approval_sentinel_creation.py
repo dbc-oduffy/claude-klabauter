@@ -256,7 +256,8 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
 
       - `rm` -- removal is always sanctioned; it only re-locks the boundary.
       - Read-only inspection: `cat`, `ls`, `stat`, `test`, `head`, `tail`,
-        `wc`, `file`, `grep`.
+        `wc`, `file`, `grep`, plus `echo` (writes only to stdout, never a
+        named file -- see `_SAFE_ARGV0`).
       - Read-only `git` subcommands: `status`, `diff`, `log`, `show`,
         `ls-files`, `rev-parse`, `describe`, `check-ignore`, `check-attr`.
         Any other `git` subcommand (`checkout`, `restore`, `stash` (`pop`
@@ -332,9 +333,11 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
     #: Commands that can never create/modify the sentinel through their own
     #: normal operation (absent a redirect, which is checked separately and
     #: first -- see class docstring). Removal is always sanctioned; the rest
-    #: are pure reads.
+    #: are pure reads, plus `echo`, which writes only to stdout and so cannot
+    #: reach the sentinel without the redirect the check above catches first.
+    #: This set is also the `xargs <verb>` allowlist.
     _SAFE_ARGV0 = frozenset(
-        {"rm", "cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep"}
+        {"rm", "cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep", "echo"}
     )
 
     #: `git` subcommands that only read repo state. Anything else under
@@ -649,7 +652,7 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
         "BLOCKED: creates/modifies the PM-approval sentinel for doctrine "
         "edits; agents cannot self-approve. Ask the PM to create it.\n\n"
         "Use instead: `cat`, `ls`, `stat`, `test`, `head`, `tail`, `wc`, "
-        "`file`, `grep`, `rm`, `git status`, `git diff`, `git log`, "
+        "`file`, `grep`, `echo`, `rm`, `git status`, `git diff`, `git log`, "
         "`git show`, `git ls-files`, `git rev-parse`, `git describe`, "
         "`git check-ignore`, `git check-attr`. Removal re-locks the boundary."
     )

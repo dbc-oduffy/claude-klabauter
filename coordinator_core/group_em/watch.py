@@ -174,6 +174,24 @@ NEGATIVE SPEC -- what this module deliberately does not do:
   to guard rather than a guard that was skipped. A spawn/NEW line added here
   inherits the empty-snapshot problem in the opposite sign and must set the
   same refusals `_current_agents` sets.
+
+FOLDED FROM DoE-claude, NOT PORTED AS A SEPARATE MODULE (W2-C1,
+`docs/plans/2026-09-18-doe-holds-no-scripts.md`): `coordinator/hooks/scripts/_watch_module.py`
+resolved `watch_heartbeat` by `sys.path`-inserted file path (its own docstring: "not an importable
+package name ... resolved by file path") because the DoE-plane skills directory it lived beside
+carries a hyphen. That whole resolution workaround has no reason to exist here -- `watch_heartbeat`
+is already an ordinary importable sibling in this package. Its verdict-rendering surface
+(`resolve_watch_module`, `vacant_verdict`, `age_phrase`, `render_verdict_line`, `render_watch_line`)
+duplicates, wholesale, what `watch_heartbeat.read_liveness` + `watch_heartbeat.human_verdict`
+already compute in-process in this repo -- including the four-verdict ladder (armed/stale/absent,
+plus `vacant`'s DoE-only case, which this repo's `read_liveness` deliberately dropped for lack of a
+caller; see that function's own docstring) and the age-phrase rendering (`timestamps.age_phrase`).
+Porting a second renderer that reimplements an already-present one is the duplication this module's
+own fold instruction names, not a gap to fill: there is nothing left in `_watch_module.py` that
+this repo does not already have, so no `_watch_module.py` file is created here. A future caller
+needing the DoE-plane hook's exact fail-open `render_watch_line(repo_root) -> Optional[str]` shape
+should call `watch_heartbeat.read_liveness` + `watch_heartbeat.human_verdict` directly rather than
+reintroducing the by-path resolver this note retires.
 """
 
 from __future__ import annotations

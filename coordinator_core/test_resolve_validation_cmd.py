@@ -119,6 +119,34 @@ def test_resolve_python_interp_none_when_neither_present(monkeypatch):
     assert resolve_python_interp() is None
 
 
+def test_shared_console_python_returns_none_on_import_error(monkeypatch):
+    """`_shared_console_python` resolves `coordinator/bin/lib/python_interp.py`
+    -- but `coordinator_core` and `coordinator/bin` publish to klabauter as
+    TWO INDEPENDENT mirror rows (setup/publish-targets.portable:
+    `claude-klabauter` for coordinator_core, `claude-klabauter-coordinator-bin`
+    for coordinator/bin including its lib/ child), with no shared transaction
+    between them. A stale or partial sync can leave this module present
+    without its sibling `coordinator/bin/lib` directory ever landing. This
+    pins the degrade path: `ImportError` is caught and None returned --the
+    same signal a fully-absent Windows ladder already produces -- rather than
+    letting `ModuleNotFoundError` propagate out of `_resolve_python_interp`.
+    """
+    import builtins
+
+    from coordinator_core.resolve_validation_cmd import _shared_console_python
+
+    real_import = builtins.__import__
+
+    def _fake_import(name, *args, **kwargs):
+        if name == "python_interp":
+            raise ImportError("simulated missing coordinator/bin/lib")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    assert _shared_console_python() is None
+
+
 def test_normalize_python_token_bare_python_no_args(monkeypatch):
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd.resolve_python_interp",

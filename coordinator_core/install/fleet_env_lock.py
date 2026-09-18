@@ -127,6 +127,20 @@ _UV_LOCK_TIMEOUT_SECS = DEPENDENCY_LOCK_SECS
 # expiry; a floor is a permanent requirement).
 FIRST_CLASS_FLOORS: Tuple[str, ...] = ("huggingface_hub>=1.0",)
 
+# Fleet-wide permanent ban list — a package here MUST NOT appear in either
+# the emitted requirements input or the resolved lock, regardless of which
+# source declared it or whether it would otherwise resolve cleanly. Keyed by
+# lowercase PyPI-style name; the value is the reason, kept short and citable
+# (a CVE id and/or the decision record that retired it) rather than prose.
+# `chromadb` is banned outright (unfixed pre-auth RCE, CVE-2026-45829; see
+# docs/decisions/DR-L3-chromadb-exit-to-lancedb.md) — it is gone from every
+# contributing source's own manifest as of this ban (example-retrieval-repo 28ba934ad,
+# example-retrieval-repo-ue-addon c2beb6f92), and this check is what stops it from
+# silently returning if a future source manifest re-adds it.
+BANNED_PACKAGES: Dict[str, str] = {
+    "chromadb": "CVE-2026-45829, example-retrieval-repo DR-L3",
+}
+
 # First-party sibling packages whose PyPI-style name does NOT equal a
 # contributing repo key turned dashes (the case `_first_party_sibling_names`
 # already covers). Enumerated, not heuristic — a substring/prefix guess
@@ -291,6 +305,54 @@ def _resolve_repo_root(repo_key: str) -> str:
     return root
 
 
+def _check_banned_packages(names: Sequence[str], where: str) -> None:
+    """Fail loud if any name in ``names`` (case-insensitive) is a member of
+    ``BANNED_PACKAGES`` — called once against the collected requirements-input
+    specs (``run()``) and once against the resolved lock's package list
+    (``generate_lock()``), so a ban holds regardless of which side would have
+    reintroduced it."""
+    hits = sorted({name for name in names if name.lower() in BANNED_PACKAGES})
+    if hits:
+        details = "; ".join(f"{hit} ({BANNED_PACKAGES[hit.lower()]})" for hit in hits)
+        raise FleetEnvLockError(
+            f"fleet_env_lock: banned package(s) present in {where}: {details} "
+            "— permanently banned fleet-wide (see BANNED_PACKAGES); remove the "
+            "declaring source's dependency, never add an override to route "
+            "around this check."
+        )
+
+
+def _tagged_lines_for_provenance(
+    requirements_in_path: Path, provenance: str
+) -> List[Tuple[str, str]]:
+    """Every ``(spec, provenance)`` pair from an already-generated
+    ``fleet-env-requirements.in`` whose trailing ``# <provenance>`` comment
+    matches exactly — the tagged-line lookup carry-forward reuses verbatim.
+    Returns an empty list (never raises) if the source has no lines in the
+    current file; a source that contributed zero specs is a legitimate,
+    if unusual, state."""
+    if not requirements_in_path.is_file():
+        raise FleetEnvLockError(
+            f"fleet_env_lock: --carry-forward-unresolvable needs an existing "
+            f"{requirements_in_path} to carry lines forward from, and none "
+            "exists yet — run once without the flag against a machine where "
+            "every source resolves, commit that output, then carry forward "
+            "from it on a machine missing a repo."
+        )
+    marker = f"# {provenance}"
+    pairs: List[Tuple[str, str]] = []
+    for raw_line in requirements_in_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if not line.endswith(marker):
+            continue
+        spec = _strip_provenance_comment(raw_line)
+        if spec:
+            pairs.append((spec, provenance))
+    return pairs
+
+
 def _flatten_dependency_group(
     groups: Dict[str, list], group_name: str, _seen: Tuple[str, ...] = ()
 ) -> List[str]:
@@ -418,22 +480,62 @@ def _spec_name(spec: str) -> str:
     return match.group(0).lower() if match else ""
 
 
-def collect_specs(sources_path: Path = _SOURCES_PATH) -> List[Tuple[str, str]]:
+def collect_specs(
+    sources_path: Path = _SOURCES_PATH,
+    *,
+    carry_forward_unresolvable: bool = False,
+    existing_requirements_in_path: Path = _REQUIREMENTS_IN_PATH,
+) -> List[Tuple[str, str]]:
     """Return (spec, provenance) pairs for every declared source row, where
     provenance is ``"<repo>:<manifest>"`` — carried into the emitted
     ``.in`` file as a per-line trailing comment so a reader can trace a
     pin back to the manifest that declared it. Drops any spec that is a
     bare self-reference to one of the fleet's own contributing repos (see
-    ``_first_party_sibling_names``)."""
+    ``_first_party_sibling_names``).
+
+    Default behavior (``carry_forward_unresolvable=False``, the strict path)
+    is unchanged: a source row whose repo is absent from the machine-local
+    registry raises ``FleetEnvLockError`` immediately, same as before this
+    parameter existed.
+
+    When ``carry_forward_unresolvable=True``, a source row whose repo is
+    unresolvable on this machine does NOT fail generation. Instead its
+    existing tagged lines (``# <repo>:<manifest>``) are read back verbatim
+    from ``existing_requirements_in_path`` — the currently-committed
+    ``fleet-env-requirements.in`` — and carried into the result unchanged.
+    This machine is never treated as authoritative for that source: nothing
+    on this box re-reads the unresolvable repo's manifest, so a stale
+    carried-forward pin only clears once some machine that CAN resolve the
+    repo regenerates the file. A loud, named notice is printed to stderr
+    for every carried source — never a silent drop, never a silent carry."""
     rows = _load_sources(sources_path)
     first_party = _first_party_sibling_names(rows)
     pairs: List[Tuple[str, str]] = []
     for row in rows:
         repo_key = row["repo"]
         manifest_rel = row["manifest"]
-        repo_root = _resolve_repo_root(repo_key)
-        specs = _parse_manifest(repo_root, manifest_rel)
         provenance = f"{repo_key}:{manifest_rel}"
+        root = registry_get(f"repos.{repo_key}")
+        if not root:
+            if not carry_forward_unresolvable:
+                raise FleetEnvLockError(
+                    f"fleet_env_lock: repos.{repo_key} is not set in the "
+                    "machine-local registry — cannot resolve this "
+                    "contributing repo's root. Set it: machine-local set "
+                    f"repos.{repo_key} /path/to/repo, or pass "
+                    "--carry-forward-unresolvable to reuse its existing "
+                    "tagged lines from the committed .in instead."
+                )
+            print(
+                "fleet_env_lock: carried forward from the committed .in, "
+                f"not re-read: {provenance}",
+                file=sys.stderr,
+            )
+            pairs.extend(
+                _tagged_lines_for_provenance(existing_requirements_in_path, provenance)
+            )
+            continue
+        specs = _parse_manifest(root, manifest_rel)
         for spec in specs:
             if _spec_name(spec) in first_party:
                 continue
@@ -595,12 +697,28 @@ def check_parity_lockstep(
 def run(
     sources_path: Path = _SOURCES_PATH,
     requirements_in_path: Path = _REQUIREMENTS_IN_PATH,
+    *,
+    carry_forward_unresolvable: bool = False,
 ) -> Path:
     """Regenerate ``fleet-env-requirements.in`` from ``sources_path`` —
     always a full overwrite, never an append/merge. That full-overwrite
     shape is what makes removing a contributing repo a one-row-delete-plus-
-    one-rerun operation rather than a hand-applied diff."""
-    pairs = collect_specs(sources_path)
+    one-rerun operation rather than a hand-applied diff.
+
+    ``carry_forward_unresolvable=False`` (default) is the original, unchanged
+    strict behavior — an unresolvable source row raises. Passing ``True``
+    (``--carry-forward-unresolvable`` on the CLI) reuses that source's
+    existing tagged lines from the file at ``requirements_in_path`` (read
+    BEFORE it is overwritten below) instead of failing; see
+    ``collect_specs``'s docstring for the exact contract."""
+    pairs = collect_specs(
+        sources_path,
+        carry_forward_unresolvable=carry_forward_unresolvable,
+        existing_requirements_in_path=requirements_in_path,
+    )
+    _check_banned_packages(
+        [_spec_name(spec) for spec, _ in pairs], "fleet-env-requirements.in"
+    )
     content = render_requirements_in(pairs)
     requirements_in_path.write_text(content, encoding="utf-8", newline="\n")
     return requirements_in_path
@@ -808,6 +926,9 @@ def generate_lock(
             lock_data = tomllib.load(fh)
 
     packages = lock_data.get("package", [])
+    _check_banned_packages(
+        [pkg.get("name", "") for pkg in packages], "the resolved fleet-env.lock"
+    )
     lock_path.write_text(lock_text, encoding="utf-8", newline="\n")
     return {
         "lock_path": lock_path,
@@ -832,10 +953,25 @@ def main(argv: Sequence[str] = ()) -> int:
         ),
     )
     parser.add_argument("--lock-out", type=Path, default=_LOCK_PATH)
+    parser.add_argument(
+        "--carry-forward-unresolvable",
+        action="store_true",
+        help=(
+            "Instead of failing on a source row whose repo is not resolvable "
+            "on this machine (absent from the machine-local registry), reuse "
+            "that source's existing tagged lines from the current --out file "
+            "verbatim and print a loud notice naming it. Default: strict — "
+            "any unresolvable source row still fails generation, unchanged."
+        ),
+    )
     args = parser.parse_args(list(argv))
     try:
         validate_overrides(args.overrides)
-        out_path = run(sources_path=args.sources, requirements_in_path=args.out)
+        out_path = run(
+            sources_path=args.sources,
+            requirements_in_path=args.out,
+            carry_forward_unresolvable=args.carry_forward_unresolvable,
+        )
         lock_result: Dict[str, object] = {}
         if args.emit_lock:
             lock_result = generate_lock(

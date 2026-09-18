@@ -69,6 +69,7 @@ from typing import List, Optional
 from coordinator_core import launchable
 from coordinator_core.ops import learn_lessons_roots as _learn_lessons_roots_mod
 from coordinator_core.state_root import coordinator_state_root_central
+from coordinator_core.data_root import content_root_for
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.win_portability import no_console_creationflags
@@ -107,7 +108,8 @@ def _resolve_doe_content_root(claude_home: str) -> str:
     sourcing of resolve-coordinator-clone.sh, plus its own unconditional final
     fallback when COORDINATOR_CONTENT_ROOT comes back empty):
       1. COORDINATOR_ROOT / CLAUDE_PLUGIN_ROOT env override.
-      2. `~/.claude/.doe-root` pointer file → `<doe-root>/coordinator`.
+      2. `~/.claude/.doe-root` pointer file → the content root inside it (either
+         layout: `<doe-root>/coordinator`, or a flat published mirror root).
       3. machine-local registry `plugin.mirrors.coordinator-claude.live_path`.
       4. `<claude_home>/plugins/coordinator-claude/coordinator` (unconditional
          fallback — used as-is even if it does not exist, matching the oracle).
@@ -118,9 +120,9 @@ def _resolve_doe_content_root(claude_home: str) -> str:
 
     doe_root = read_doe_root_pointer_file(os.path.expanduser("~"))
     if doe_root:
-        candidate = os.path.join(doe_root, "coordinator")
-        if os.path.isdir(candidate):
-            return candidate
+        content_root = content_root_for(doe_root)
+        if content_root is not None:
+            return str(content_root)
 
     # Zero-spawn: `registry_get` reads the same registry.local.toml over
     # registry.toml chain the `machine-local get` CLI would, in-process --

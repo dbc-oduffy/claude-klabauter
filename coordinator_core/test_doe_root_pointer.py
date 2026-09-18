@@ -27,6 +27,7 @@ DR-071: docs/decisions/DR-071-durable-coordinator-root-anchor-settings-home-regi
 from __future__ import annotations
 
 import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -249,11 +250,22 @@ def test_userprofile_only_reaches_legacy_rung_via_shared_helper(monkeypatch, tmp
     helper's internally-recomputed home use the identical
     ``CLAUDE_HOME or HOME or USERPROFILE or ""`` expression, so a
     USERPROFILE-only environment must resolve through the delegate exactly
-    like a CLAUDE_HOME/HOME-set one does."""
+    like a CLAUDE_HOME/HOME-set one does.
+
+    `Path.home()` is stubbed to `tmp_path` too: `read_doe_root_pointer()`
+    also reaches `_settings_home.machine_local_dir()` (the registry rung),
+    which on POSIX resolves via `Path.home()` -- NOT `USERPROFILE`, which is
+    a Windows-only `expanduser` rung stdlib never applies here. Left
+    unstubbed, that call falls through to the real passwd-db home on this
+    dev box, a genuine quarantine bypass `RealSettingsHomeLeakError` now
+    catches. Windows is where `USERPROFILE`-only actually drives `Path.home()`
+    on its own; this stub keeps the assertion platform-independent without
+    relying on that native behavior."""
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("HOME", raising=False)
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     (tmp_path / ".claude").mkdir(parents=True)
     (tmp_path / ".claude" / ".doe-root").write_text("/tmp/from-userprofile\n")
     assert drp.read_doe_root_pointer() == "/tmp/from-userprofile"

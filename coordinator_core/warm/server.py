@@ -873,6 +873,34 @@ def _declare_execution_route() -> None:
     os.environ[op_latency.ROUTE_ENV] = op_latency.WARM_SERVER
 
 
+#: Test-isolation overrides an op honours only in a CALLING process
+#: (`op_latency.execution_route() == IN_PROCESS`), never in a long-lived
+#: server that inherited them from whoever spawned it. Defense in depth
+#: alongside each op's own route check (`queue_append._output_root_override`,
+#: `queue_promote._outbox_root_override`) -- dropped here so a future op that
+#: forgets its own route check still cannot read a stale one. Enumerated by
+#: grepping `PYTEST_CURRENT_TEST` across `coordinator_core/ops`.
+_TEST_HARNESS_ENV_KEYS = (
+    "PYTEST_CURRENT_TEST",
+    "QUEUE_APPEND_OUTPUT_ROOT",
+    "LESSON_PROMOTE_OUTBOX_ROOT",
+)
+
+
+def _scrub_test_harness_env() -> None:
+    """Drop test-harness-only env vars from this process's own `os.environ`.
+
+    Boot-time only (called once from `main()`, before the accept loop) --
+    not on the dispatch hot path, so it costs nothing against the warm
+    budget. 2026-09-18 incident: a server spawned from inside a pytest run
+    carried `PYTEST_CURRENT_TEST` and `QUEUE_APPEND_OUTPUT_ROOT` for its
+    entire life, resolving the latter for every unrelated request it served
+    afterward.
+    """
+    for key in _TEST_HARNESS_ENV_KEYS:
+        os.environ.pop(key, None)
+
+
 def _suppress_pool_worker_consoles() -> None:
     """Point multiprocessing's Windows spawn at `pythonw.exe` so pool workers
     open no console window.
@@ -2489,6 +2517,7 @@ def _run_guarded() -> int:
         print(f"[warm-server] failed to write breadcrumb: {exc!r}", file=sys.stderr)
 
     _declare_execution_route()
+    _scrub_test_harness_env()
 
     _suppress_pool_worker_consoles()
 

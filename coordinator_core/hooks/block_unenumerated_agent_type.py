@@ -146,8 +146,9 @@ from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 import yaml
 
-from coordinator_core._hook_envelope import deny
+from coordinator_core._hook_envelope import deny, no_advisory
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.ipc import register_op
 
 CLASS = "hard-deny"
 MATCHERS = ("Agent",)
@@ -933,6 +934,30 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "PreToolUse",
         _unenumerated_deny_reason(subagent_type, tool_input.get("name")),
     )
+
+
+@register_op("hooks.block_unenumerated_agent_type")
+async def _handler(params: dict, repo_root=None) -> dict:
+    """PreToolUse(Agent) op door onto `check()` above (W4-C8 arrival,
+    docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C8). Same contract as
+    every other single-guard `hooks.*` op in this package: `params` is the
+    flat PreToolUse payload dict; returns the nested deny/advisory envelope
+    `check()` built, or `no_advisory()` when it returns `None`.
+
+    `check()`'s own FAIL-CLOSED-on-peer-repo-roster-failure contract
+    (module docstring, "FAIL CLOSED") is preserved verbatim — this wrapper
+    adds no additional try/except around the call, since `check()` never
+    raises by its own documented contract (every roster-load failure and
+    every downstream `enforce_agent_model_pin`/`block_ungranted_opus_
+    subagent` composition already resolves to a returned envelope or
+    `None`, not an exception).
+    """
+    if not isinstance(params, dict):
+        return no_advisory()
+    result = check(params)
+    if result is None:
+        return no_advisory()
+    return result
 
 
 def main() -> int:

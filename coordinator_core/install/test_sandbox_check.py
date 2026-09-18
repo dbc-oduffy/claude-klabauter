@@ -270,6 +270,16 @@ def fake_doe_clone(tmp_path: Path) -> Path:
     (clone / "coordinator" / "lib").mkdir(parents=True)
     (clone / "coordinator" / "hooks").mkdir(parents=True)
     (clone / "coordinator" / "hooks" / "hooks.json").write_text('{"hooks": {}}', encoding="utf-8")
+    # Plugin-root marker a real dev clone always carries (nested under
+    # coordinator/) -- coordinator_root._resolve_plugin_root_for_machine_local
+    # probes for exactly this file to decide the DoE-side content root is
+    # coordinator/, not the clone root itself. Without it the resolved
+    # repos.doe_claude root matches neither shape and gen_doe_root_pointer
+    # fails closed before ever reaching this fixture's other stand-ins.
+    (clone / "coordinator" / "templates" / "bin").mkdir(parents=True)
+    (clone / "coordinator" / "templates" / "bin" / "_machine_local.py").write_text(
+        "# stand-in for the real machine-local registry reader\n", encoding="utf-8"
+    )
     (clone / "coordinator" / "templates" / "shell").mkdir(parents=True)
     (clone / "coordinator" / "templates" / "shell" / "claude-doe-shim.sh.tmpl").write_text(
         # Minimal stand-in for the real DoE template, in its DR-087 shape:

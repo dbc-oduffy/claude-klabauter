@@ -27,6 +27,8 @@ from coordinator_core.ops.dispatch_emit.emit import (
 )
 from coordinator_core.ops.dispatch_emit.pathspec import NoWritesDeclaredError, commit_pathspec
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
+
+from ._shared_expand import expand_shared
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, build_waves
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
@@ -124,7 +126,7 @@ def test_first_statement_after_meta_block_is_a_phase_call():
     script = compose_script(waves, name="wf", description="two waves")
 
     meta_end = script.index("};\n") + len("};\n")
-    remainder = script[meta_end:].lstrip()
+    remainder = expand_shared(script[meta_end:]).lstrip()
     decls = "const _incompleteChunks = [];\n\n  const _unansweredBriefs = [];"
     assert remainder.startswith(decls)
     after_decl = remainder[len(decls) :].lstrip()
@@ -3005,7 +3007,7 @@ def test_row_prompt_return_contract_is_escaped_via_js_string_literal_not_templat
         "docs/plans/example.md",
     )
     literal = _js_string_literal(row_prompt)
-    assert literal in script
+    assert literal in expand_shared(script)
     # Never spliced as a backtick template literal at the wave-agent-call
     # splice point.
     assert f"`{row_prompt}`" not in script
@@ -3117,18 +3119,43 @@ def test_the_verdict_waves_paths_are_absent_from_the_preflight_claim():
 
 
 
-def test_the_commit_prompt_names_the_determinate_orphan_verb():
+def test_the_commit_prompt_hands_a_determinate_orphan_to_the_em():
     """`who-claims-path` printing nothing is a third answer, not a failed
-    search: a path written through Bash records no claim at all (DR-258), so
-    both release verbs are no-ops and the agent has no route unless the
-    prompt names `include_orphans`. Two runs halted here before it did."""
+    search: a path written through Bash records no claim at all (DR-258), and
+    `block_subagent_commit` refuses `include_orphans` from every dispatched
+    committer (SC-DR-022). A brief naming that flag as the route sent every
+    such agent into a retry the guard always denies; the route is a
+    COMMIT-PARTIAL the EM discharges."""
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/emit.py"])]]
     script = compose_script(waves, name="wf", description="orphan route")
 
-    assert "include_orphans" in script, "the sanctioned orphan verb is unnamed"
     assert "DR-258" in script, "the reason a Bash-written path has no claim is unstated"
+    assert "SC-DR-022" in script, "the reason a committer cannot adopt is unstated"
+    assert "do not retry with it" in script
     assert "who-claims-path" in script
-    assert "never relaxes a peer-claimed path" in script, (
-        "the bound on the grant is missing -- an unbounded include_orphans "
-        "reads as permission to commit over a live peer"
-    )
+    assert "never relaxes a peer-claimed path" in script
+    assert "Re-issue the SAME `ceremony.commit_v2` call" not in script
+
+
+def test_a_done_with_concerns_reply_answers_its_brief():
+    """An executor ending `DONE_WITH_CONCERNS: <path>` in backticks did its
+    work; reading it as an unanswered brief halted a run as a dispatch defect."""
+    import json
+    import re
+
+    pattern = emit._ANY_STATUS_JS_RE[1:-1].replace("\\/", "/")
+    reply = json.dumps("Work landed.\n`DONE_WITH_CONCERNS: .coordinator-local/r.md`")
+    assert re.search(pattern, reply)
+
+
+def test_a_done_with_concerns_reply_with_closed_backtick_answers_its_brief():
+    """Review: code-reviewer -- the more common markdown convention closes the
+    inline-code span right before the colon (`` `DONE_WITH_CONCERNS`: <path> ``);
+    the trailing class must admit a backtick too, or this reproduces the exact
+    defect the open-backtick case above was fixed for."""
+    import json
+    import re
+
+    pattern = emit._ANY_STATUS_JS_RE[1:-1].replace("\\/", "/")
+    reply = json.dumps("Work landed.\n`DONE_WITH_CONCERNS`: .coordinator-local/r.md")
+    assert re.search(pattern, reply)

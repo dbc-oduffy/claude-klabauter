@@ -78,6 +78,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional
 
+from coordinator_core.data_root import content_root_for
 from coordinator_core.session.declared_writes import declare_write
 
 _HOOK_SEAM_MARKER = "COORDINATOR HOOK SEAM"
@@ -229,9 +230,15 @@ def _extract_script_path(argv: List[str]) -> Optional[str]:
 
 
 def _resolve_plugin_root_token(path: str, doe_root: Optional[str]) -> str:
-    if _PLUGIN_ROOT_TOKEN in path and doe_root:
-        return path.replace(_PLUGIN_ROOT_TOKEN, f"{doe_root}/coordinator")
-    return path
+    if _PLUGIN_ROOT_TOKEN not in path or not doe_root:
+        return path
+    # On a published flat mirror the plugin root IS the DoE root; expanding to
+    # `<doe_root>/coordinator` there made every registered script read as
+    # missing on disk. The old join stays as the fallback so a root that holds
+    # neither layout still reports the same path it always did.
+    content_root = content_root_for(doe_root)
+    expansion = str(content_root) if content_root is not None else f"{doe_root}/coordinator"
+    return path.replace(_PLUGIN_ROOT_TOKEN, expansion)
 
 
 def _iter_hook_commands(hooks_doc: Any):
@@ -321,16 +328,25 @@ def _check_sibling_resolution() -> Layer:
                 "'.doe-root' pointer under the settings-home machine-local dir.",
             )
         )
-    elif not os.path.isfile(os.path.join(doe_root, "coordinator", "hooks", "hooks.json")):
-        status = "broken"
-        # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 3)
-        findings.append(
-            Finding(
-                "broken",
-                f"resolved DoE-claude root '{doe_root}' has no "
-                "coordinator/hooks/hooks.json — wrong path or partial checkout.",
+    else:
+        content_root = content_root_for(doe_root)
+        hooks_json = None if content_root is None else content_root / "hooks" / "hooks.json"
+        if hooks_json is None or not hooks_json.is_file():
+            status = "broken"
+            detail = (
+                "holds neither coordinator content layout (no coordinator/ directory, "
+                "no .claude-plugin/plugin.json)"
+                if hooks_json is None
+                else f"has no hooks/hooks.json at {hooks_json}"
             )
-        )
+            # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 3)
+            findings.append(
+                Finding(
+                    "broken",
+                    f"resolved DoE-claude root '{doe_root}' {detail} — "
+                    "wrong path or partial checkout.",
+                )
+            )
 
     return Layer("Sibling repo resolution (claude-klabauter + DoE-claude)", status, findings)
 
@@ -465,8 +481,9 @@ def _check_hook_registration() -> Layer:
     findings: List[Finding] = []
     statuses: List[str] = []
 
-    if doe_root:
-        hooks_json = Path(doe_root) / "coordinator" / "hooks" / "hooks.json"
+    content_root = content_root_for(doe_root)
+    if content_root is not None:
+        hooks_json = content_root / "hooks" / "hooks.json"
         status, doc_findings, present = _check_one_hooks_doc(hooks_json, doe_root, "hooks.json")
         if present:
             statuses.append(status)
@@ -474,7 +491,9 @@ def _check_hook_registration() -> Layer:
     else:
         statuses.append("unknown")
         # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 1/whole-file basis)
-        findings.append(Finding("broken", "hooks.json: cannot check — DoE-claude root unresolved."))
+        findings.append(
+            Finding("broken", "hooks.json: cannot check — DoE-claude content root unresolved.")
+        )
 
     settings_path = _config_dir() / "settings.json"
     status, doc_findings, present = _check_one_hooks_doc(
@@ -566,18 +585,18 @@ def _fix_bare_hook_commands(fix_report: List[str]) -> None:
     synced and out of scope for auto-repair (see module docstring)."""
     from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 
-    doe_root = coordinator_doe_root()
-    if not doe_root:
+    content_root = content_root_for(coordinator_doe_root())
+    if content_root is None:
         # foreign-identity: NOT-REACHABLE — doctor op, never invoked by a example-retrieval-repo EM (audit row 1/whole-file basis)
-        fix_report.append("--fix: skipped hooks.json wrap — DoE-claude root unresolved.")
+        fix_report.append("--fix: skipped hooks.json wrap — DoE-claude content root unresolved.")
         return
 
-    hooks_json_path = Path(doe_root) / "coordinator" / "hooks" / "hooks.json"
+    hooks_json_path = content_root / "hooks" / "hooks.json"
     if not hooks_json_path.is_file():
         fix_report.append(f"--fix: skipped hooks.json wrap — not found at {hooks_json_path}.")
         return
 
-    hooks_lib_dir = str(Path(doe_root) / "coordinator" / "hooks")
+    hooks_lib_dir = str(content_root / "hooks")
     _sys_path_push(hooks_lib_dir)
     try:
         import fail_open_launcher

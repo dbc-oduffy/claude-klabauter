@@ -134,7 +134,7 @@ def test_absent_repo_root_refuses_rather_than_falling_back_to_cwd(tmp_path):
 @pytest.mark.parametrize("bad", [None, "", "   ", 7, ["a"]])
 def test_plan_must_name_one_plan(tmp_path, bad):
     common = _repo(tmp_path)
-    with pytest.raises(ValueError, match="plan must be a non-empty string"):
+    with pytest.raises(ValueError, match=r"plan \(or plan_path\) must be a non-empty string"):
         _gate({"plan": bad}, common)
 
 
@@ -255,3 +255,17 @@ def test_the_build_is_the_engines_own_not_the_gated_repos(tmp_path):
     engine_version._BUILD_MEMO = None
     report = _gate({"plan": rel}, common)
     assert report["engine_build"]["engine_sha"] == engine_version.engine_build()["engine_sha"]
+
+
+def test_plan_path_is_accepted_as_the_plan_spelling(tmp_path):
+    """`dispatch.emit`, the next op in the chain, spells it `plan_path`."""
+    common = _repo(tmp_path)
+    rel = _plan(tmp_path)
+    assert _gate({"plan_path": rel}, common)["plan"] == rel
+
+
+def test_disagreeing_plan_spellings_are_refused(tmp_path):
+    common = _repo(tmp_path)
+    rel = _plan(tmp_path)
+    with pytest.raises(ValueError, match="plan and plan_path"):
+        _gate({"plan": rel, "plan_path": "docs/plans/other.md"}, common)

@@ -134,6 +134,12 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
     # not the session that dispatched the op. Without this entry an
     # engine-side read returns the daemon's environment, not the session's.
     _entry(COORDINATOR_JOB_MODE, CALLER),
+    # Agent-type host ladder. The documented Phase 5 invocation sets
+    # COORDINATOR_AGENT_TYPE_HOST=coordinator; a warm-served CLI reads
+    # os.environ inside the server, which belongs to whoever spawned it, not
+    # the session that dispatched the op -- same reasoning as
+    # CLAUDE_CODE_REMOTE and COORDINATOR_JOB_MODE above.
+    _entry("COORDINATOR_AGENT_TYPE_HOST", CALLER),
 )
 
 

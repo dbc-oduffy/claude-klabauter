@@ -83,6 +83,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core._settings_home import resolve_machine_local_cli
+from coordinator_core.data_root import content_root_for
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
@@ -203,11 +204,15 @@ def _co_located_render_tree() -> Optional[str]:
 
 
 def _find_render_tree(doe_root: str) -> Optional[str]:
-    """Locate render-template-tree.py: co-located first, then the DoE root."""
+    """Locate render-template-tree.py: co-located first, then the DoE root
+    (either content layout — private authoring tree or flat published mirror)."""
     co_located = _co_located_render_tree()
     if co_located is not None:
         return co_located
-    candidate = os.path.join(doe_root.rstrip("/"), "coordinator", "bin", "render-template-tree.py")
+    content_root = content_root_for(doe_root)
+    if content_root is None:
+        return None
+    candidate = str(content_root / "bin" / "render-template-tree.py")
     if os.path.isfile(candidate) and (os.name == "nt" or is_executable(candidate)):
         return candidate
     return None
@@ -461,7 +466,15 @@ def main(argv: List[str]) -> int:
         if doe_root is None:
             return doe_rc
 
-        template_src = os.path.join(doe_root.rstrip("/"), "coordinator", "skills", "new-project", "templates", "next-app")
+        content_root = content_root_for(doe_root)
+        if content_root is None:
+            print(
+                f"ERROR: no coordinator content root under the resolved DoE root: {doe_root}",
+                file=sys.stderr,
+            )
+            return 1
+
+        template_src = str(content_root / "skills" / "new-project" / "templates" / "next-app")
         if not os.path.isdir(template_src):
             print(f"ERROR: next-app template not found at: {template_src}", file=sys.stderr)
             return 1

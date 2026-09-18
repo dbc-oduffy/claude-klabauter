@@ -696,6 +696,26 @@ _EXEMPT_SITES: set[tuple[str, str, str]] = {
     # give the legs a uniform argument surface and ONE oracle covers them -- not a bespoke
     # oracle per leg.
     ('coordinator_core/ops/install_health_run.py', '_run_legs', 'call'),
+    # 2026-09-18 -- # class: measurement-is-the-loop. `stable-suite-run.py::_triage_isolation`
+    # re-runs each already-FAILED node id alone, in its own process, to decide GENUINE
+    # (fails alone too) vs. ORDER-DEPENDENT (passes alone). The per-node process boundary IS
+    # the measurement: order-dependence means a failure exists only in the presence of other
+    # tests sharing the SAME process (a shared temp marker, registry, or cwd), and batching two
+    # nodes into one process re-admits that exact coupling into the very re-run meant to
+    # isolate it -- the triage would then be unable to tell "fails alone" from "fails alongside
+    # the other batched node". No batch primitive can substitute: this is `pytest`, not `git`,
+    # and there is no cross-node "run each in its own process but report together" form.
+    ('coordinator/bin/stable-suite-run.py', '_triage_isolation', 'run'),
+    # 2026-09-18 -- # class: structural-floor. `mise-census-revalidate.py::run_entry` runs
+    # each `census[]` entry's own INDEPENDENTLY AUTHORED shell `command` -- one row of a
+    # plan's frontmatter, recorded when the plan's premises were mise-prepped, with its own
+    # `--timeout` and its own recorded/observed diff. There is no shared executable or argv
+    # across entries to fold into one spawn (each is arbitrary shell text drawn from a
+    # different plan author, run through a named POSIX shell -- never shell=True/cmd.exe),
+    # the same "N distinct EXECUTABLES, no batch target to measure" shape already frozen at
+    # `install_health_run.py::_run_legs -> call` above. Relocating the call only moves the
+    # flag.
+    ('coordinator/bin/mise-census-revalidate.py', 'revalidate', 'run_entry'),
     # RETIRED 2026-08-19 -- `_common.py::archive_and_commit::create_subprocess_exec` and
     # `updatedocs_gates.py::_gate_queue_prune_sweep::_run` stood here under the same
     # `structural-floor` block. Both are now `_ORACLE_CLAIMS` entries: the first's "M + C" floor

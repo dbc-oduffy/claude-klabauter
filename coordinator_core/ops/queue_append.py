@@ -196,7 +196,40 @@ def _output_root_override() -> "str | None":
         return None
     if op_latency.execution_route() != op_latency.IN_PROCESS:
         return None
+    if _is_swept_tmp_root(override):
+        # A live tmp_path fixture always exists on disk; one that is gone is a
+        # snapshot a long-lived warm process inherited from a torn-down test.
+        raise _StaleIsolationRoot(
+            f"queue.append: {_QUEUE_APPEND_OUTPUT_ROOT_ENV}={override!r} resolves "
+            f"under the system temp directory and no longer exists -- refusing a "
+            f"write that would silently recreate and then abandon it."
+        )
     return override
+
+
+def _is_swept_tmp_root(path: str) -> bool:
+    """True if `path` resolves under the OS temp directory and no longer
+    exists on disk. Mirrors `cli_shared._is_swept_tmp_root` (bin/lib) --
+    duplicated rather than imported, matching this module's existing
+    parity-by-duplication convention with the bash-era CLI (see e.g.
+    `_emit_yaml_field`'s own "Parity note").
+    """
+    try:
+        real = os.path.realpath(path)
+        tmp = os.path.realpath(tempfile.gettempdir())
+    except OSError:
+        return False
+    under_tmp = real == tmp or real.startswith(tmp + os.sep)
+    return under_tmp and not os.path.isdir(path)
+
+
+class _StaleIsolationRoot(RuntimeError):
+    """Raised when QUEUE_APPEND_OUTPUT_ROOT names a swept temp-dir override
+    (see `_output_root_override`). Never caught for graceful degradation --
+    unlike `_ClaudeKlabauterUnresolvable`, a stale isolation root is not a normal
+    "engine unregistered" state; it means this process's environment cannot
+    be trusted for THIS write, and the caller must fail loud.
+    """
 
 
 class _ClaudeKlabauterUnresolvable(RuntimeError):

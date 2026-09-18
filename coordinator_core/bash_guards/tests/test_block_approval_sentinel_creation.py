@@ -455,6 +455,24 @@ class TestIndirectionWrapperShapesDeny:
     def test_xargs_read_only_head_inside_sh_dash_c_allows(self):
         assert guard.check(_payload("sh -c 'ls | xargs grep x'")) is None
 
+    def test_xargs_echo_verb_allows(self):
+        # coordinator-claude#51 repro: `echo` was absent from the read-only
+        # verb set, so this denied outright before the fix.
+        assert guard.check(_payload('echo "a b c" | xargs -n1 echo')) is None
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "echo hello | xargs sh -c 'echo x'",
+            "echo hello | xargs rm",
+            "echo hello | xargs -I{} {} x",
+            "echo hello | xargs env touch x",
+            "echo hello | xargs",
+        ],
+    )
+    def test_xargs_bypass_shapes_still_denied(self, cmd):
+        _reason(guard.check(_payload(cmd)))
+
     def test_python_dash_m_allows(self):
         assert guard.check(_payload("python3 -m pytest")) is None
 

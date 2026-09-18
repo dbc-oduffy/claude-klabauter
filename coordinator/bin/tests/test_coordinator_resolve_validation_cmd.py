@@ -21,6 +21,8 @@ import shlex
 import shutil
 import sys
 
+import coordinator_core.resolve_validation_cmd as core_rvc
+
 _TARGET = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "coordinator-resolve-validation-cmd.py"
 )
@@ -428,34 +430,55 @@ def test_missing_interpreter_fails_loud(monkeypatch):
 
 # ---------------------------------------------------------------------------
 # Tests 14-18: _resolve_python_interp — independent pin on its documented
-# contract (docstring: venv-first, then Windows prefers sys.executable over
-# probing PATH, POSIX prefers python3 on PATH, else python, else None).
-# _EXP_INTERP above is a tautology w.r.t. this function — these tests pin the
-# literal expected OUTPUT for each leg via monkeypatch, not by recomputation,
-# so a regression in the resolver itself is caught rather than mirrored.
-# Both platform legs are pinned regardless of host OS (monkeypatch os.name),
-# per the resolver's own documented cross-platform contract.
+# contract (docstring: venv-first, then Windows consults the shared ladder
+# `_shared_console_python()` (`python_interp.resolve_console_python`) rather
+# than trusting raw `sys.executable`, POSIX prefers python3 on PATH, else
+# python, else None). _EXP_INTERP above is a tautology w.r.t. this function
+# — these tests pin the literal expected OUTPUT for each leg via monkeypatch,
+# not by recomputation, so a regression in the resolver itself is caught
+# rather than mirrored. Both platform legs are pinned regardless of host OS
+# (monkeypatch os.name), per the resolver's own documented cross-platform
+# contract.
+#
+# Negative spec pinned by both Windows tests below: raw `sys.executable` is
+# NEVER returned. Under an installed forwarder, `sys.executable` names the
+# forwarder exe (see `_resolve_python_interp`'s own docstring) — each test
+# sets `sys.executable` to an opaque forwarder-shaped path and asserts the
+# function's return value is never that path, only what
+# `_shared_console_python` (mocked) or the PATH fallback produced.
 # ---------------------------------------------------------------------------
 
-def test_resolve_python_interp_windows_prefers_sys_executable(monkeypatch):
+def test_resolve_python_interp_windows_prefers_shared_ladder(monkeypatch):
     monkeypatch.setattr(rvc.os, "name", "nt")
     # abs-path-ok: opaque fixture literal for sys.executable, not a real filesystem reference
-    monkeypatch.setattr(rvc.sys, "executable", "C:\\Python312\\python.exe")
-    # Even if python3 is also on PATH, Windows must prefer sys.executable
-    # (Store App Execution Alias hazard) — not probe PATH at all.
+    monkeypatch.setattr(rvc.sys, "executable", "C:\\Forwarder\\coordinator.exe")
+    monkeypatch.setattr(
+        core_rvc, "_shared_console_python", lambda: "C:\\Console\\python.exe"
+    )
+    # Even if python3 is also on PATH, Windows must consult the shared
+    # ladder first and use its result — not probe PATH at all, and never
+    # fall back to raw sys.executable.
     monkeypatch.setattr(rvc.shutil, "which", lambda name: f"C:\\fake\\{name}.exe")
 
-    assert rvc._resolve_python_interp(None) == "C:\\Python312\\python.exe"
+    result = rvc._resolve_python_interp(None)
+
+    assert result == "C:\\Console\\python.exe"
+    assert result != "C:\\Forwarder\\coordinator.exe"
 
 
-def test_resolve_python_interp_windows_falls_back_when_no_sys_executable(monkeypatch):
+def test_resolve_python_interp_windows_falls_back_when_ladder_returns_none(monkeypatch):
     monkeypatch.setattr(rvc.os, "name", "nt")
-    monkeypatch.setattr(rvc.sys, "executable", "")
+    # abs-path-ok: opaque fixture literal for sys.executable, not a real filesystem reference
+    monkeypatch.setattr(rvc.sys, "executable", "C:\\Forwarder\\coordinator.exe")
+    monkeypatch.setattr(core_rvc, "_shared_console_python", lambda: None)
     monkeypatch.setattr(
         rvc.shutil, "which", lambda name: "/fake/python3" if name == "python3" else None
     )
 
-    assert rvc._resolve_python_interp(None) == "python3"
+    result = rvc._resolve_python_interp(None)
+
+    assert result == "python3"
+    assert result != "C:\\Forwarder\\coordinator.exe"
 
 
 def test_resolve_python_interp_posix_prefers_python3_on_path(monkeypatch):

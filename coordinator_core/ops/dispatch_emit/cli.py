@@ -1,0 +1,195 @@
+"""coordinator_core.ops.dispatch_emit.cli — the CLI half of
+`emit-dispatch-workflow.py`.
+
+Purpose: argument parsing, exit-code mapping, and the thin dispatch to the
+op-registered `dispatch.emit` handler plus the engine-owned `restamp`
+function — the door-served CLI leg `coordinator/bin/emit-dispatch-workflow.py`
+delegates to (S1-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md).
+
+Every real computation lives one layer down:
+  - emission (plan or inventory path) is
+    `coordinator_core.ops.dispatch_emit.op :: _dispatch_emit`, the SAME
+    function the registered `dispatch.emit` op calls — this module invokes
+    it in-process, never through a second JSON-RPC round trip, so a CLI
+    emission and an op-driven emission of the same plan produce byte-
+    identical output by construction (they run the identical call).
+  - a re-stamp (`--restamp`) is `op.py :: restamp`, mirroring DoE-claude's
+    prior `emit-dispatch-workflow.py :: restamp` wrapper (same refusal
+    shape, same serialisation — see that function's own docstring).
+  - firing (`--fire`) is `coordinator_core.ops.workflow_fire.fire ::
+    fire_workflow` — the ONE spawn this CLI ever makes, and only on the
+    `--fire` path; `--plan`, `--inventory`, and `--restamp` alone spawn
+    nothing (S1-C7 AC).
+
+This module owns nothing but argv parsing and the exit-code mapping over
+those three functions' own return/raise contracts. It does NOT derive
+waves, pathspecs, script text, or receipt shape itself.
+
+Negative-spec:
+  - Does NOT re-implement `_dispatch_emit`'s InventoryPathConflictError,
+    ForeignEmissionError, or PathEscapeError refusals — those raise from
+    the op function unchanged; this module only maps the exception class
+    to an exit code and a stderr line.
+  - Does NOT resolve relative `--plan`/`--inventory`/`--out`/`--restamp`
+    paths against `--repo-root`. A relative path resolves against the
+    caller's cwd (the door carries it, per the S1-C7 plan row) exactly as
+    a bare `Path(...)` does — `--repo-root` feeds ONLY the op's
+    `target_root`/prompt-anchoring `repo_root` parameter, a narrower and
+    deliberately separate use (`op.py :: _repo_root_for_plan`,
+    `contained_path`).
+  - Does NOT invent a second session-identity resolution. `--restamp`
+    resolves via `coordinator_core.session.core.resolve_session_id`, the
+    same fleet-canonical ladder `op.py :: _receipt_session_id` reads —
+    never a private env-var read.
+
+Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk S1-C7.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Optional
+
+from coordinator_core.ops.dispatch_emit.op import (
+    ForeignEmissionError,
+    ForeignSessionRestampError,
+    InventoryPathConflictError,
+    NoReceiptToRestampError,
+    PathEscapeError,
+    _dispatch_emit,
+    restamp,
+)
+from coordinator_core.session.core import resolve_session_id
+
+#: Exit codes. 0 emission/restamp/fire succeeded; 1 a data/refusal error
+#: (mutually-exclusive params, foreign emission, foreign restamp session,
+#: no-receipt-to-restamp, a non-zero-ERROR emit verdict); 2 usage error
+#: (missing required flag, unresolvable combination).
+EXIT_OK = 0
+EXIT_DATA_ERROR = 1
+EXIT_USAGE = 2
+
+# Exceptions `_dispatch_emit` and `restamp` raise as data/refusal errors —
+# mapped to EXIT_DATA_ERROR, never re-derived here.
+_DATA_ERRORS = (
+    InventoryPathConflictError,
+    PathEscapeError,
+    ForeignEmissionError,
+    NoReceiptToRestampError,
+    ForeignSessionRestampError,
+    ValueError,
+)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="emit-dispatch-workflow",
+        description=(
+            "Emit one plan's task-spine as a fireable Workflow script, or "
+            "re-stamp / fire an already-emitted one. Thin CLI over "
+            "dispatch.emit."
+        ),
+    )
+    parser.add_argument("--plan", default=None, help="plan file to read the task spine from")
+    parser.add_argument(
+        "--inventory",
+        default=None,
+        help="mise-inventory record to mint a spine FROM first, then emit",
+    )
+    parser.add_argument(
+        "--restamp",
+        default=None,
+        metavar="SCRIPT",
+        help="re-stamp an emission receipt's sha256 over SCRIPT after a deliberate edit",
+    )
+    parser.add_argument("--out", dest="out_path", default=None, help="path to write the emitted .mjs script to")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite an --out path already holding a different session's emission",
+    )
+    parser.add_argument(
+        "--fire",
+        action="store_true",
+        help="fire the emitted script via workflow.fire after a successful emit",
+    )
+    parser.add_argument(
+        "--repo-root",
+        default=None,
+        help="repo root anchoring the op's containment/prompt resolution (default: none)",
+    )
+    return parser
+
+
+def _do_restamp(script_arg: str) -> int:
+    session_id = resolve_session_id() or ""
+    try:
+        receipt = restamp(Path(script_arg), session_id)
+    except (NoReceiptToRestampError, ForeignSessionRestampError) as exc:
+        print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
+        return EXIT_DATA_ERROR
+    print(json.dumps(receipt, indent=2, sort_keys=True))
+    return EXIT_OK
+
+
+def main(argv: "Optional[list[str]]" = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+
+    if args.restamp:
+        if args.plan or args.inventory or args.out_path or args.fire:
+            print(
+                "emit-dispatch-workflow: ERROR — --restamp is exclusive of "
+                "--plan/--inventory/--out/--fire",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        return _do_restamp(args.restamp)
+
+    if not args.plan and not args.inventory:
+        print(
+            "emit-dispatch-workflow: ERROR — one of --plan, --inventory, or "
+            "--restamp is required",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    if not args.out_path:
+        print("emit-dispatch-workflow: ERROR — --out is required", file=sys.stderr)
+        return EXIT_USAGE
+
+    repo_root = Path(args.repo_root).resolve() if args.repo_root else None
+
+    params: dict = {"force": args.force, "output_path": args.out_path}
+    if args.plan:
+        params["plan_path"] = args.plan
+    if args.inventory:
+        params["inventory_path"] = args.inventory
+
+    try:
+        result = _dispatch_emit(params, repo_root=repo_root)
+    except _DATA_ERRORS as exc:
+        print(f"emit-dispatch-workflow: ERROR — {exc}", file=sys.stderr)
+        return EXIT_DATA_ERROR
+
+    print(json.dumps(result, indent=2, sort_keys=True))
+
+    if not result["ok"]:
+        return EXIT_DATA_ERROR
+
+    if args.fire:
+        from coordinator_core.ops.workflow_fire.fire import fire_workflow
+
+        fire_record = fire_workflow(
+            result["path"], cwd=str(repo_root) if repo_root else None
+        )
+        print(json.dumps(fire_record, indent=2, sort_keys=True))
+
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())

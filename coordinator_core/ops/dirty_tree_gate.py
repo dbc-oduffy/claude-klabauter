@@ -113,6 +113,7 @@ from coordinator_core.ops.extract_scope_paths import (
 from coordinator_core.claim_state import resolve_claim_state
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.data_root import content_root_for
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core.state_root import (
     CrossCuttingStateRoot,
@@ -134,11 +135,12 @@ def _resolve_plugin_root() -> Tuple[Optional[str], Optional[str]]:
         return plugin_root, None
 
     doe_root = read_doe_root_pointer_file()
+    content_root = content_root_for(doe_root)
 
-    if not doe_root or not os.path.isdir(os.path.join(doe_root, "coordinator")):
+    if content_root is None:
         return None, "ERROR: .doe-root missing/invalid — re-run coordinator:install"
 
-    return os.path.join(doe_root, "coordinator"), None
+    return str(content_root), None
 
 
 def _resolve_handoffs_dir(plugin_root: str, repo_root: str) -> str:

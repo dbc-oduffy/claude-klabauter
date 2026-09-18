@@ -477,3 +477,9 @@ def test_the_write_path_never_spawns_a_subprocess(tmp_path, monkeypatch):
     path = tmp_path / REL
     path.write_text(path.read_text(encoding="utf-8") + "\nMore body.\n", encoding="utf-8")
     assert _stamp({"plan": REL, "by": BY}, common)["stamped"] is True
+
+
+def test_plan_path_spelling_reaches_the_same_refusal_as_plan(tmp_path):
+    common = _repo(tmp_path)
+    with pytest.raises(ValueError, match="no such plan|escapes"):
+        _stamp({"plan_path": "../outside.md", "by": "s"}, common)

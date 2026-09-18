@@ -51,6 +51,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+from coordinator_core.data_root import content_root_for
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
 from coordinator_core.trusted_root_guard import is_trusted as _is_trusted_root
 
@@ -115,7 +116,12 @@ def _resolve_root(root_arg: str) -> str:
 
 
 def _resolve_cc_root() -> str:
-    """CLAUDE_PLUGIN_ROOT env -> ~/.claude/.doe-root pointer + /coordinator."""
+    """CLAUDE_PLUGIN_ROOT env -> ~/.claude/.doe-root pointer + content root.
+
+    The content root is resolved for EITHER layout (private authoring tree or
+    published flat mirror); "" still means unresolved, and the caller's
+    existing empty-string branch is what handles it.
+    """
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
     if env_root:
         return env_root
@@ -125,9 +131,10 @@ def _resolve_cc_root() -> str:
         doe_root = doe_root_pointer.read_text(encoding="utf-8").strip()
     except OSError:
         doe_root = ""
-    if not doe_root:
+    content_root = content_root_for(doe_root)
+    if content_root is None:
         return ""
-    return str(Path(doe_root) / "coordinator")
+    return str(content_root)
 
 
 #: Caller label recorded in the shared housekeeping-failures log on a self-commit

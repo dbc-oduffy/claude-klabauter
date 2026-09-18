@@ -302,26 +302,19 @@ def _spine(plan_path: Path, text: str) -> Dict[str, Any]:
 def _unroutable_rows(waves: Sequence[Sequence[Any]]) -> "tuple[List[str], Optional[Exception]]":
     """The rows the emitter would refuse to route, judged by the emitter itself.
 
-    ``emit._row_agent_type`` is where dispatch raises MixedAgentTypeRowError,
-    UnroutableWorkKindRowError, UnverifiableEnricherRowError and
-    MalformedAgentOverrideError -- all static spine facts. Calling it here means
-    a plan the gate certifies is one the emitter will route (DoE-claude#75).
+    ``emit._row_agent_type`` raises one of ``emit.ROW_ROUTING_ERRORS`` on a
+    static spine fact. Calling it here means a plan the gate certifies is one
+    the emitter will route (DoE-claude#75).
     """
     from coordinator_core.ops.dispatch_emit import emit
 
-    refusals = (
-        emit.MixedAgentTypeRowError,
-        emit.UnroutableWorkKindRowError,
-        emit.UnverifiableEnricherRowError,
-        emit.MalformedAgentOverrideError,
-    )
     ids: List[str] = []
     first: Optional[Exception] = None
     for wave in waves:
         for row in wave:
             try:
                 emit._row_agent_type(row)
-            except refusals as exc:
+            except emit.ROW_ROUTING_ERRORS as exc:
                 ids.append(row.id)
                 first = first or exc
     return ids, first

@@ -71,8 +71,10 @@ import pytest
 
 from coordinator_core.hooks.cater_subagent_start import (
     ADDITIONAL_CONTEXT_CHAR_CAP,
+    BLOCKS_COMPANION_MARKER_PREFIX,
     compose_catering,
 )
+from coordinator_core.session import machinery_paths
 from coordinator_core.testing.doe_root import doe_root_and_present
 
 _MODULE_PATH = Path(__file__).resolve().parents[1] / "cater_subagent_start.py"
@@ -360,7 +362,11 @@ def test_compose_catering_process_time_companion_write_widest_type(
 
     monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy_file))
     session_id = "budget-companion-write-widest"
-    session_dir = Path(DOE_ROOT) / "state" / "subagent-share" / session_id
+    # `machinery_paths.share_dir`, never a hand-built path: production moved
+    # the share root to `.coordinator-local/subagent-share/`, so a literal
+    # `state/subagent-share/<session>` cleaned a directory that is never
+    # created and left the real one behind in a PEER's checkout.
+    session_dir = Path(machinery_paths.share_dir(DOE_ROOT, session_id))
     payload = {
         "agent_type": WIDEST_TYPE,
         "session_id": session_id,
@@ -438,13 +444,13 @@ def test_every_catered_type_composes_under_the_char_cap(
     # `session_id`, one per type, and cleaning a root that is never created
     # leaves the real ones behind.
     session_dirs: list[Path] = []
-    share_root = Path(DOE_ROOT) / "state" / "subagent-share"
+    # Same stale-root correction as the sibling test above.
     monkeypatch.setenv("SUBAGENT_SANDBOX_POLICY", str(policy_file))
     try:
         over_cap: list[tuple[str, int]] = []
         for agent_type, block_names in catered_types.items():
             session_id = f"budget-cap-invariant-{_sanitize(agent_type)}"
-            session_dirs.append(share_root / session_id)
+            session_dirs.append(Path(machinery_paths.share_dir(DOE_ROOT, session_id)))
             payload = {
                 "agent_type": agent_type,
                 "session_id": session_id,
@@ -474,3 +480,157 @@ def _sanitize(agent_type: str) -> str:
     path is stable either way -- but do not read this helper as a mirror of
     production, because it is not one."""
     return agent_type.replace(":", "-")
+
+
+# ---------------------------------------------------------------------------
+# DELIVERY INVARIANT -- a small block's TEXT survives an over-cap composition
+# ---------------------------------------------------------------------------
+
+#: A small block whose entire value is verbatim arrival: a subagent never
+#: sees CLAUDE.md, so a rule governing a delegate has to be IN its prompt.
+#: Pointer delivery converts that mechanism into compliance -- whether the
+#: child opens the companion file is disposition, not guarantee.
+_SMALL_BLOCK = "delivery-canary-small"
+_SMALL_BLOCK_BODY = "DELIVERY-CANARY-SMALL: this sentence must arrive verbatim."
+
+#: A second small block, so the test also pins that surviving inline is not
+#: a one-block accident.
+_SECOND_SMALL_BLOCK = "delivery-canary-second"
+_SECOND_SMALL_BLOCK_BODY = "DELIVERY-CANARY-SECOND: this sentence must arrive verbatim too."
+
+#: The block that blows the cap on its own. Sized off the real corpus's
+#: widest injected blocks (`plan-coverage-check-consumption` 6,371 chars,
+#: `prior-art-check-consumption` 6,362, `run-report-citizenship` 6,279),
+#: rounded up so a single one of them exceeds the cap unaided -- the shape
+#: that used to displace every block beside it.
+_HUGE_BLOCK = "delivery-canary-huge"
+_HUGE_BLOCK_BODY = "DELIVERY-CANARY-HUGE " + ("x" * (ADDITIONAL_CONTEXT_CHAR_CAP + 2_000))
+
+
+@pytest.fixture
+def delivery_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A synthetic three-block corpus whose composition is over the REAL
+    `ADDITIONAL_CONTEXT_CHAR_CAP` -- the cap is never monkeypatched here,
+    because the cap is not what this test is about. One block exceeds the
+    cap alone; the other two are small. Self-contained in `tmp_path`: this
+    test writes no sidecar, companion file or share directory into any
+    checkout, its own or a sibling's.
+    """
+    # Root resolution on this path is `git.repo_root.show_toplevel`, which
+    # WALKS for a `.git` entry and never spawns (the C2 repoint) -- so a bare
+    # `.git` directory is the whole requirement, and `git init` would be a
+    # spawn bought for nothing.
+    (tmp_path / ".git").mkdir()
+    snippets = tmp_path / "coordinator" / "snippets"
+    snippets.mkdir(parents=True)
+    # `resolve_plugin_root()`'s documented harness-injected override rung --
+    # the intended seam for a test supplying its own plugin content, same
+    # use `test_cater_subagent_start.py`'s `git_repo` fixture makes of it.
+    monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path / "coordinator"))
+    registry_lines = ["schema_version = 1", ""]
+    for name, body in (
+        (_SMALL_BLOCK, _SMALL_BLOCK_BODY),
+        (_HUGE_BLOCK, _HUGE_BLOCK_BODY),
+        (_SECOND_SMALL_BLOCK, _SECOND_SMALL_BLOCK_BODY),
+    ):
+        registry_lines += [
+            f"[snippet.{name}]",
+            f'sentinel_begin = "<!-- BEGIN {name} -->"',
+            f'sentinel_end = "<!-- END {name} -->"',
+            "consumers = []",
+            "",
+        ]
+        (snippets / f"{name}.md").write_text(
+            f"<!-- BEGIN {name} -->\n{body}\n<!-- END {name} -->\n", encoding="utf-8"
+        )
+    (snippets / "registry.toml").write_text("\n".join(registry_lines), encoding="utf-8")
+    return tmp_path
+
+
+def test_over_cap_composition_still_delivers_small_blocks_verbatim(
+    delivery_repo: Path,
+) -> None:
+    """The cap invariant above measures SIZE; this one measures DELIVERY,
+    and nothing else in the suite did. An over-cap composition must still
+    carry every block that fits -- text, in the prompt -- and displace only
+    what it must, largest first.
+
+    Fails before the largest-first spill lands: the whole blocks leg went
+    to the companion file the moment the total crossed the cap, so both
+    canary bodies were replaced by a ~149-char path and neither survived
+    this assertion. A 717-char safety block was being displaced by the
+    presence of an unrelated 30KB one.
+    """
+    payload = {
+        "agent_type": ELIGIBLE_TYPE,
+        "session_id": "session-delivery-invariant",
+        "cwd": str(delivery_repo),
+        "contract_blocks": [_SMALL_BLOCK, _HUGE_BLOCK, _SECOND_SMALL_BLOCK],
+    }
+    result = compose_catering(payload, cwd=str(delivery_repo))
+
+    assert len(result) <= ADDITIONAL_CONTEXT_CHAR_CAP, (
+        f"composed total {len(result)} still over the cap"
+    )
+    assert _SMALL_BLOCK_BODY in result, (
+        "a small block's TEXT must reach an over-cap child's prompt verbatim, "
+        "not as a companion-file pointer"
+    )
+    assert _SECOND_SMALL_BLOCK_BODY in result
+    assert _HUGE_BLOCK_BODY not in result, "the oversized block is the one displaced"
+
+    # Order is policy order, never permuted by the spill selection.
+    assert result.index(_SMALL_BLOCK_BODY) < result.index(_SECOND_SMALL_BLOCK_BODY)
+
+    # The displaced block is named, and delivered, rather than dropped.
+    assert BLOCKS_COMPANION_MARKER_PREFIX in result
+    assert _HUGE_BLOCK in result
+    marker_line = next(
+        line for line in result.splitlines() if line.startswith(BLOCKS_COMPANION_MARKER_PREFIX)
+    )
+    companion = delivery_repo / marker_line[len(BLOCKS_COMPANION_MARKER_PREFIX):]
+    assert companion.is_file()
+    companion_text = companion.read_text(encoding="utf-8")
+    assert _HUGE_BLOCK_BODY in companion_text
+    assert _SMALL_BLOCK_BODY not in companion_text, (
+        "a block delivered inline must not also be spilled -- the companion "
+        "file carries exactly what the pointer names"
+    )
+
+
+def test_spill_planning_does_no_per_block_io(
+    delivery_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Brightline guard for the selection pass: `_plan_blocks_spill` walks
+    the already-assembled bodies as strings and opens nothing. It is
+    iterated once per candidate cut, so an `open()` inside it would be
+    O(blocks^2) file reads on the dispatch hot path every subagent start
+    pays for. Counted, not reasoned about: exactly ONE `open()` happens
+    across the whole over-cap composition -- the companion-file write.
+    """
+    import builtins
+
+    real_open = builtins.open
+    opened: list[str] = []
+
+    def _counting_open(file, *a, **k):  # noqa: ANN001
+        mode = k.get("mode", a[0] if a else "r")
+        if "w" in str(mode) or "a" in str(mode):
+            opened.append(str(file))
+        return real_open(file, *a, **k)
+
+    payload = {
+        "agent_type": ELIGIBLE_TYPE,
+        "session_id": "session-delivery-io",
+        "cwd": str(delivery_repo),
+        "contract_blocks": [_SMALL_BLOCK, _HUGE_BLOCK, _SECOND_SMALL_BLOCK],
+    }
+    monkeypatch.setattr(builtins, "open", _counting_open)
+    result = compose_catering(payload, cwd=str(delivery_repo))
+    monkeypatch.undo()
+
+    assert _SMALL_BLOCK_BODY in result
+    blocks_writes = [path for path in opened if path.endswith(".blocks.md")]
+    assert len(blocks_writes) == 1, (
+        f"expected exactly one companion-file write, got {blocks_writes!r}"
+    )

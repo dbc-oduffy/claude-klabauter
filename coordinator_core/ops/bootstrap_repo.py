@@ -105,6 +105,7 @@ from coordinator_core.install.scaffold_structure import (
     scaffold_canonical_structure,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.data_root import content_root_for
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
 from coordinator_core import launchable
 from coordinator_core.git_lock_retry import run_with_lock_retry
@@ -213,9 +214,9 @@ def _content_root_rungs_2_to_4(claude_home: str) -> str:
     manifest lookup)."""
     doe_root = read_doe_root_pointer_file(os.path.expanduser("~"))
     if doe_root:
-        candidate = os.path.join(doe_root, "coordinator")
-        if os.path.isdir(candidate):
-            return candidate
+        content_root = content_root_for(doe_root)
+        if content_root is not None:
+            return str(content_root)
 
     # Zero-spawn: `registry_get` reads the same registry.local.toml over
     # registry.toml chain the `machine-local get` CLI would, in-process --

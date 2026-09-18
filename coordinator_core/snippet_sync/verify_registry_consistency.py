@@ -25,12 +25,25 @@ entrypoints, not here. What remains meaningful here is registry.toml's own
 internal consistency: it parses, declares a supported schema_version, and
 enrolls all 4 known snippet names as `[snippet.<name>]` tables.
 
-This module intentionally does NOT reuse `snippet_sync.registry.load_registry`
-for the top-level TOML read — that reader performs stricter per-snippet
-field validation (`sentinel_begin`/`sentinel_end` presence, `consumers`
-element-typing) than this verifier needs. Parses via `tomllib`/`tomli`
-directly (the same underlying library `registry.py` uses, not a re-derived
-regex parser).
+`snippet_sync.registry` is THE schema authority this module reads through.
+Every per-row rule — supported `schema_version` set, required fields
+(including `delivery` from v3 onward), `consumers` element-typing,
+`conditional_consumer` shape, the v4 `excluded_consumer` / `eligible_glob`
+pair, and the enumerated-axis values — is validated by `registry.load_registry`
+and `registry.get_snippet_meta`, with the filesystem completeness check by
+`registry.eligible_glob_gaps`. Nothing here re-derives a rule.
+
+NEGATIVE SPEC — do not reintroduce a local schema gate. This module once
+carried its own `schema_version in ("1", "2")` test while `registry.py`
+already read 1-4. DoE's registry went to v4 on 2026-08-03 and this verifier
+refused every run (rc=3) for six weeks, checking nothing. Two readers of one
+schema is the defect; a widened local tuple would only make the dead guard
+silent instead of loud. The version set, and every field rule behind it,
+comes from `registry.py` or from nowhere.
+
+The top-level file-exists / parse / missing-`schema_version` handling stays
+local because those three carry this CLI's own exit codes (2), which differ
+from `registry.RegistryError`'s.
 
 Negative-spec (faithful oracle bug, kept intentionally): the retired bash
 oracle's own header docs a 3-way exit-code table where schema_version
@@ -59,6 +72,9 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+from coordinator_core.snippet_sync import registry as _registry
 
 # Ordered list for deterministic output — byte-parity with the bash SNIPPET_NAMES array.
 SNIPPET_NAMES: list[str] = [
@@ -82,7 +98,8 @@ class ConsistencyError(Exception):
     """Raised on a top-level (pre-loop) failure: missing registry.toml or
     parse failure. `exit_code` mirrors the bash CLI's contract (2 — missing
     file/parse-error [see module negative-spec for the missing-schema_version
-    quirk]; 3 — unsupported schema_version value).
+    quirk]; 1 — malformed row, surfaced from `registry.RegistryError`;
+    3 — schema_version value outside `registry._SUPPORTED_SCHEMA_VERSIONS`).
     """
 
     def __init__(self, message: str, exit_code: int) -> None:
@@ -115,9 +132,18 @@ def _load_toml(registry_path: Path) -> dict:
         ) from exc
 
 
-def _read_registry(registry_toml: Path) -> set[str]:
-    """Parse registry.toml, enforce the schema_version gate, and return the
-    set of enrolled `[snippet.<name>]` table names."""
+#: Rendered version set for the `--list` / usage text. Derived, never restated.
+_SUPPORTED_VERSIONS_TEXT = ",".join(str(v) for v in _registry._SUPPORTED_SCHEMA_VERSIONS)
+
+
+def _read_registry(registry_toml: Path) -> dict[str, Any]:
+    """Parse + fully validate registry.toml, returning the raw registry dict.
+
+    The three locally-owned failures (absent file, unparseable TOML, absent
+    `schema_version`) carry this CLI's exit 2. Everything else — the supported
+    version set and every per-row field rule — is `registry.load_registry`'s
+    call, surfaced with its own `exit_code`.
+    """
     if not registry_toml.is_file():
         raise ConsistencyError(f"registry.toml not found at {registry_toml}", exit_code=2)
 
@@ -130,19 +156,59 @@ def _read_registry(registry_toml: Path) -> set[str]:
         # generic early-exit-2 block BEFORE the dedicated exit-3 check below
         # ever runs. Exit 2, not 3.
         raise ConsistencyError("schema_version field missing from registry.toml", exit_code=2)
-    if str(schema_version) not in ("1", "2"):
+    if schema_version not in _registry._SUPPORTED_SCHEMA_VERSIONS:
         raise ConsistencyError(
-            f"unknown schema_version (supports up to 2, got {schema_version!r})", exit_code=3
+            f"unknown schema_version (supports {_SUPPORTED_VERSIONS_TEXT}, "
+            f"got {schema_version!r})",
+            exit_code=3,
         )
 
-    return set(data.get("snippet", {}).keys())
+    try:
+        return _registry.load_registry(registry_toml)
+    except _registry.RegistryError as exc:
+        # load_registry's exit 3 is unreachable — the version gate above already
+        # passed against the same tuple. Its exit 1 is a malformed row.
+        raise ConsistencyError(str(exc), exit_code=exc.exit_code) from exc
+
+
+def _check_rows(data: dict[str, Any], plugin_root: Path) -> list[str]:
+    """FAIL lines for the per-row checks `load_registry` does not itself make:
+    enumerated-axis VALUES (`registry.get_snippet_meta`) and the v4
+    `eligible_glob` completeness check (`registry.eligible_glob_gaps`, which
+    touches the filesystem and is therefore a separate call by design).
+
+    Reported rather than raised: a value or completeness defect is drift this
+    verifier exists to enumerate, and one bad row must not hide the next.
+    """
+    fails: list[str] = []
+    for name in _registry.list_snippets(data):
+        try:
+            _registry.get_snippet_meta(data, name)
+        except _registry.RegistryError as exc:
+            fails.append(f"FAIL [fields] {name}: {exc}")
+            continue
+        for gap in _registry.eligible_glob_gaps(data, name, plugin_root):
+            fails.append(
+                f"FAIL [eligible_glob] {name}: '{gap}' matches the row's eligible_glob but "
+                f"appears in neither 'consumers' nor an excluded_consumer entry"
+            )
+    return fails
 
 
 def list_checks() -> list[str]:
     """`--list` mode: one line per check, in execution order."""
     out = [
-        "check:schema_version — registry.toml schema_version ∈ {1,2} (exit 3 on unknown/higher version)",
+        f"check:schema_version — registry.toml schema_version ∈ {{{_SUPPORTED_VERSIONS_TEXT}}} "
+        f"(exit 3 on unknown/higher version)",
         "check:registry_exists — registry.toml exists on disk",
+        "check:row_fields — per row: required fields (delivery REQUIRED from schema_version 3), "
+        "consumers typing, conditional_consumer shape, and the schema_version-4 "
+        "excluded_consumer / eligible_glob pair (both FORBIDDEN on a consumer_source=\"scan\" row, "
+        "both rejected below v4)",
+        "check:row_axis_values — per row: delivery/header_style/consumer_source/search_scope "
+        "against their enumerated values",
+        "check:eligible_glob_complete — per row declaring eligible_glob: every glob member lands "
+        "in consumers or excluded_consumer",
     ]
     for name in SNIPPET_NAMES:
         out.append(f"check:enrollment[{name}] — snippet enrolled as [snippet.{name}] in registry.toml")
@@ -154,7 +220,8 @@ def run(plugin_root: Path) -> ConsistencyOutcome:
     — the directory containing `snippets/`)."""
     registry_toml = plugin_root / "snippets" / "registry.toml"
 
-    enrolled = _read_registry(registry_toml)
+    data = _read_registry(registry_toml)
+    enrolled = set(data.get("snippet", {}).keys())
 
     overall_exit = 0
     stderr_lines: list[str] = []
@@ -164,10 +231,16 @@ def run(plugin_root: Path) -> ConsistencyOutcome:
             stderr_lines.append(f"FAIL [enrollment] {name}: snippet not enrolled in registry.toml")
             overall_exit = 1
 
+    row_fails = _check_rows(data, plugin_root)
+    stderr_lines.extend(row_fails)
+    if row_fails:
+        overall_exit = 1
+
     lines: list[str] = []
     if overall_exit == 0:
         lines.append(
-            "OK: registry.toml is consistent (schema_version valid; all 4 enrolled snippets present)"
+            f"OK: registry.toml is consistent (schema_version {data['schema_version']}; "
+            f"{len(enrolled)} rows field-checked; all {len(SNIPPET_NAMES)} enrolled snippets present)"
         )
 
     return ConsistencyOutcome(exit_code=overall_exit, lines=lines, stderr_lines=stderr_lines)
@@ -183,7 +256,7 @@ _USAGE = (
     "  1 — consistency violation (printed to stderr)\n"
     "  2 — missing dep or file not found (ALSO: missing schema_version — see\n"
     "      module negative-spec, a faithfully-reproduced oracle quirk)\n"
-    "  3 — schema_version present but unsupported (not 1 or 2)\n"
+    f"  3 — schema_version present but unsupported (not one of {_SUPPORTED_VERSIONS_TEXT})\n"
 )
 
 

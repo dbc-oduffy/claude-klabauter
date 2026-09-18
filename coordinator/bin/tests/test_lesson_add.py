@@ -706,3 +706,85 @@ def test_success_relays_nothing_and_returns_zero():
     rc, emitted, _ = _run_with_stdio({}, b"", 0)
     assert rc == 0
     assert emitted == ""
+
+
+# ---------------------------------------------------------------------------
+# Swept-tmp-root refusal propagation (2026-09-18)
+#
+# Bug: state/bug-backlog/2026-09-18-coordinator-queue-append-writes-into-a-swept-tmp-root.yaml
+# `coordinator-lesson-add --scope project` exited 0, printed nothing, and
+# wrote no file when the delegated `coordinator-queue-append` call hit the
+# swept-tmp-root defect and returned a plausible-looking write that had
+# actually landed in a directory pytest had already swept. Once queue-append
+# was fixed to refuse loudly (nonzero exit, one stderr line) for that shape,
+# this wrapper's own `result.returncode != 0` relay (exercised above by the
+# no-fd-leg tests) must carry that refusal through unchanged. This section
+# pins the refusal's own message specifically, plus this CLI's OWN local
+# swept-root gate in `_isolation_root` (the dedup pre-check must refuse
+# before ever spawning the child, not silently no-op the dedup scan).
+# ---------------------------------------------------------------------------
+
+_SWEPT_ROOT_REFUSAL = (
+    b"error: coordinator-queue-append: refusing to write under "
+    b"QUEUE_APPEND_OUTPUT_ROOT='/tmp/already-gone' \xe2\x80\x94 this "
+    b"test-isolation root resolves under the system temp directory and no "
+    b"longer exists.\n"
+)
+
+
+def test_swept_root_child_refusal_is_relayed_not_swallowed():
+    """The queue-append refusal for a swept QUEUE_APPEND_OUTPUT_ROOT must
+    reach the operator through this wrapper, exit code and message both —
+    never a silent exit 0."""
+    rc, emitted, mock_run = _run_with_stdio({}, _SWEPT_ROOT_REFUSAL, 1)
+
+    assert rc == 1
+    assert "coordinator-queue-append exited 1" in emitted
+    assert "resolves under the system temp directory" in emitted, (
+        "the child's refusal text is the whole point of the relay"
+    )
+
+
+def test_swept_isolation_root_refuses_before_spawning_child():
+    """`_isolation_root`'s OWN swept-root gate (the dedup pre-check's
+    QUEUE_APPEND_OUTPUT_ROOT read) must refuse loudly and never reach
+    `subprocess.run` at all — a silent dedup no-op here previously masked a
+    write that then landed nowhere."""
+    import tempfile
+
+    swept_root = os.path.join(tempfile.gettempdir(), "coordinator-lesson-add-swept-root-gone")
+    if os.path.isdir(swept_root):
+        os.rmdir(swept_root)
+    assert not os.path.isdir(swept_root)
+
+    captured = io.StringIO()
+    with (
+        unittest.mock.patch.dict(
+            os.environ,
+            {
+                "PYTEST_CURRENT_TEST": "swept-root-test",
+                _cli_mod._QUEUE_APPEND_OUTPUT_ROOT_ENV: swept_root,
+            },
+        ),
+        unittest.mock.patch("sys.stderr", captured),
+    ):
+        try:
+            _cli_mod._isolation_root(
+                _cli_mod._QUEUE_APPEND_OUTPUT_ROOT_ENV, "coordinator-lesson-add"
+            )
+            raised = False
+        except SystemExit as exc:
+            raised = True
+            assert exc.code != 0
+
+    assert raised, "a swept isolation root must refuse (SystemExit), not return a value"
+    assert "resolves under the system temp directory" in captured.getvalue()
+
+
+def test_is_swept_tmp_root_predicate(tmp_path):
+    live = tmp_path / "still-here"
+    live.mkdir()
+    swept = tmp_path / "already-gone"
+    assert _cli_mod._is_swept_tmp_root(str(swept)) is True
+    assert _cli_mod._is_swept_tmp_root(str(live)) is False
+    assert _cli_mod._is_swept_tmp_root("/no/such/repo/state/lessons") is False

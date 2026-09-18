@@ -16,6 +16,13 @@ anything — the plan's Anti-scope rules that out, and this module never even
 counts events, only renders them. It never emits a raw journal line — that
 is precisely today's failure.
 
+One journal event shape has no `agentId`: the single terminal line
+`stamp.py` appends once a run ends (`type` one of `stamp.TERMINAL_EVENT_TYPES`,
+`source: "workflow_watch"`). This module renders that line too — it is
+still `journal.jsonl` content — but keys its identity on `"__terminal__"`
+rather than an agent id, and never confuses it with the pre-existing
+per-agent `"failed"` event type (gated on `source`, not `type` alone).
+
 Each journal event becomes at most ONE rendered line, ever, regardless of
 how many times `JournalRenderer.poll()` is called: `TailReader.poll()`
 returns its whole bounded trailing buffer on every call (see tail.py), not
@@ -33,6 +40,7 @@ from __future__ import annotations
 import json
 import os
 
+from coordinator_core.workflow_watch.stamp import TERMINAL_EVENT_TYPES
 from coordinator_core.workflow_watch.tail import TailReader
 
 RESULT_TRUNCATE_BYTES = 2048
@@ -83,6 +91,20 @@ def _truncate(text: str) -> str:
     return encoded[:budget].decode("utf-8", errors="ignore") + _TRUNCATE_MARKER
 
 
+def _is_terminal_stamp(event: dict, event_type) -> bool:
+    """True for a `stamp.py`-written terminal line — the one journal event
+    shape this module renders without an `agentId` (see `stamp_terminal`'s
+    line shape). Gated on `source` as well as `type`, not `type` alone:
+    `"failed"` is also an ordinary per-agent event type, and the two must
+    never be confused with each other.
+    """
+    return (
+        isinstance(event_type, str)
+        and event_type in TERMINAL_EVENT_TYPES
+        and event.get("source") == "workflow_watch"
+    )
+
+
 def _render_event(event: dict, run_dir: str, cache: dict) -> str | None:
     """Render one parsed journal event to a single short line, or `None`
     if the event does not carry a recognised `type`/`agentId` pair (an
@@ -90,6 +112,12 @@ def _render_event(event: dict, run_dir: str, cache: dict) -> str | None:
     fail-safe posture over an undocumented, harness-owned file shape).
     """
     event_type = event.get("type")
+
+    if _is_terminal_stamp(event, event_type):
+        status = event.get("status")
+        status = status if isinstance(status, str) else "unknown"
+        return f"terminal  {event_type} ({status})"
+
     agent_id = event.get("agentId")
     if not isinstance(event_type, str) or not isinstance(agent_id, str):
         return None
@@ -166,10 +194,13 @@ class JournalRenderer:
 
             event_type = event.get("type")
             agent_id = event.get("agentId")
-            if not isinstance(event_type, str) or not isinstance(agent_id, str):
+            is_terminal = _is_terminal_stamp(event, event_type)
+            if not isinstance(event_type, str):
+                continue
+            if not is_terminal and not isinstance(agent_id, str):
                 continue
 
-            identity = (agent_id, event_type)
+            identity = (agent_id if isinstance(agent_id, str) else "__terminal__", event_type)
             if identity in self._seen:
                 continue
 

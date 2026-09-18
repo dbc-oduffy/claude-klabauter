@@ -30,6 +30,8 @@ Public surface (pinned contract — do not change without updating consumers):
     def check_claude_config_divergence() -> None: ...  # raises ClaudeConfigDivergenceError
     class ClaudeConfigDivergenceError(RuntimeError): ...
     def settings_home_child_env(base_env) -> dict: ...
+    FORBID_REAL_SETTINGS_HOME_ENV: str  # test-harness-only seam, see settings_home()
+    class RealSettingsHomeLeakError(RuntimeError): ...
 
 `settings_home_child_env()` (added 2026-08-16, pln-the-machine-local-registry-rea-50be37
 § C5) is the child-env propagation half of AC11: cockpit's finding is that a
@@ -95,6 +97,46 @@ import re
 import shutil
 from pathlib import Path
 from typing import Optional
+
+#: Set by `coordinator_core/conftest.py::_quarantine_real_home` to this
+#: process's REAL (pre-quarantine) settings-home path, for every test NOT
+#: marked `@pytest.mark.real_home`. Never set outside pytest. See
+#: `settings_home()`'s own check below and `RealSettingsHomeLeakError`.
+FORBID_REAL_SETTINGS_HOME_ENV = "_COORDINATOR_TEST_FORBID_REAL_SETTINGS_HOME"
+
+
+class RealSettingsHomeLeakError(RuntimeError):
+    """Raised by `settings_home()` when, under pytest, it is about to return
+    this operator's REAL settings home from a test that never opted into
+    that with `@pytest.mark.real_home`.
+
+    2026-09-18: a pytest run of the install suite wrote 371 launchers into
+    the REAL `~/.coordinator-claude-settings/bin`, and an in-place forwarder
+    write on top of that collapsed every one of them onto a single inode --
+    every CLI on the box exec'd whatever forwarder was written last. The
+    write-side half of that incident is fixed at its source (commit
+    44e3702c84, `_write_agent_forwarder`); this is the read-side backstop --
+    a test that resolves the real settings home without declaring it refuses
+    LOUDLY instead of silently mutating live machine config the next time
+    some other call site gets this wrong.
+    """
+
+
+def _check_not_the_forbidden_real_home(resolved: Path) -> None:
+    forbidden = os.environ.get(FORBID_REAL_SETTINGS_HOME_ENV)
+    if not forbidden:
+        return
+    if str(resolved) != forbidden:
+        return
+    raise RealSettingsHomeLeakError(
+        f"settings_home() resolved to this operator's REAL settings home "
+        f"({resolved}) inside a pytest test not marked @pytest.mark.real_home. "
+        "Refusing rather than risk another live-machine-config leak (see "
+        "RealSettingsHomeLeakError's docstring). Either the test needs "
+        "COORDINATOR_SETTINGS_HOME/HOME pointed at tmp_path, or -- if this is "
+        "a deliberate live oracle -- mark it real_home (and, if it writes, "
+        "real_machine_mutation too)."
+    )
 
 
 def reject_doubled_claude_home(var: str, raw: str) -> None:
@@ -184,11 +226,21 @@ def home_dir() -> Path:
 
 
 def settings_home() -> Path:
-    """Resolve the coordinator settings-home root via pure env/home precedence."""
+    """Resolve the coordinator settings-home root via pure env/home precedence.
+
+    Under pytest, refuses (`RealSettingsHomeLeakError`) rather than return
+    this operator's REAL settings home to a test that never declared it with
+    `@pytest.mark.real_home` -- see that error's docstring and
+    `FORBID_REAL_SETTINGS_HOME_ENV`. A no-op outside pytest: the env var this
+    checks is set by nothing but `conftest.py::_quarantine_real_home`.
+    """
     override = os.environ.get("COORDINATOR_SETTINGS_HOME")
     if override:
-        return _require_rooted("COORDINATOR_SETTINGS_HOME", override)
-    return _home_dir() / ".coordinator-claude-settings"
+        resolved = _require_rooted("COORDINATOR_SETTINGS_HOME", override)
+    else:
+        resolved = _home_dir() / ".coordinator-claude-settings"
+    _check_not_the_forbidden_real_home(resolved)
+    return resolved
 
 
 def settings_home_child_env(base_env: dict) -> dict:

@@ -65,10 +65,6 @@ repo = "example_game_workbench_repo"
 manifest = "gpu_sidecar/requirements.txt"
 
 [[source]]
-repo = "example_league_data_repo"
-manifest = "engine/pyproject.toml"
-
-[[source]]
 repo = "example_market_data_repo"
 manifest = "pyproject.toml"
 

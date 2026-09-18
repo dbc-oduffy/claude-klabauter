@@ -437,7 +437,11 @@ def test_composed_output_is_wholly_accounted_for_by_the_three_declared_legs(
     if blocks_spilled:
         assert BLOCKS_COMPANION_MARKER_PREFIX in blocks_leg
         companion_rel_path = _marker_rel_path(blocks_leg, BLOCKS_COMPANION_MARKER_PREFIX)
-        expected_blocks_leg = "\n\n" + _compose_blocks_pointer_text(companion_rel_path)
+        # Cap forced to 10 above, so no block fits inline and the spill is
+        # total -- the pointer names both fixture snippets, in policy order.
+        expected_blocks_leg = "\n\n" + _compose_blocks_pointer_text(
+            companion_rel_path, [SNIPPET_A, SNIPPET_B]
+        )
         assert (git_repo / companion_rel_path).is_file()
         assert injected_blocks in (git_repo / companion_rel_path).read_text(encoding="utf-8")
     else:
@@ -565,7 +569,7 @@ def test_unhandled_exception_in_blocks_leg_never_propagates(
     def _boom(*a, **k):
         raise RuntimeError("simulated assembly failure")
 
-    monkeypatch.setattr(mod, "assemble_contract_blocks_for_payload", _boom)
+    monkeypatch.setattr(mod, "assemble_contract_block_parts_for_payload", _boom)
     payload = _payload(
         ELIGIBLE_TYPE, "session-boom-2", str(git_repo), contract_blocks=[SNIPPET_A]
     )
@@ -1001,10 +1005,14 @@ def test_real_staff_eng_payload_spills_blocks_to_companion_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC9 amendment: `coordinator:staff-eng` (the widest `contract_blocks`
-    row on disk, measured ~31,913 composed chars) must spill its blocks leg
-    to a companion file rather than blow the `additionalContext` cap --
-    injection-only substring checks, not a semantic presence check
-    (Anti-scope)."""
+    row on disk, measured ~31,913 composed chars) must spill enough of its
+    blocks leg to a companion file to stay under the `additionalContext`
+    cap -- injection-only substring checks, not a semantic presence check
+    (Anti-scope).
+
+    The spill is per-block and largest-first, so this test pins BOTH halves
+    of that: the widest block is displaced to the companion file, the
+    narrowest stays inline, and no block is lost from both."""
     import os
 
     import yaml
@@ -1031,7 +1039,7 @@ def test_real_staff_eng_payload_spills_blocks_to_companion_file(
             snippet_text, header_style, entry["sentinel_begin"], entry["sentinel_end"]
         )
         assert body is not None, f"could not extract real block {name!r}"
-        probes.append(body.strip().splitlines()[0][:40])
+        probes.append((name, len(body), body.strip().splitlines()[0][:40]))
 
     import shutil
 
@@ -1052,18 +1060,55 @@ def test_real_staff_eng_payload_spills_blocks_to_companion_file(
 
         assert len(result) <= ADDITIONAL_CONTEXT_CHAR_CAP
         assert result.count(BLOCKS_COMPANION_MARKER_PREFIX) == 1
-        for probe in probes:
-            assert probe not in result, f"block probe {probe!r} leaked into additionalContext"
 
-        marker_line = next(
-            line for line in result.splitlines() if line.startswith(BLOCKS_COMPANION_MARKER_PREFIX)
+        result_lines = result.splitlines()
+        marker_index = next(
+            i
+            for i, line in enumerate(result_lines)
+            if line.startswith(BLOCKS_COMPANION_MARKER_PREFIX)
         )
+        marker_line = result_lines[marker_index]
         companion_rel_path = marker_line[len(BLOCKS_COMPANION_MARKER_PREFIX):]
         companion_file = Path(DOE_ROOT) / companion_rel_path
+
+        # The pointer's own prose line, not the whole prompt: several block
+        # bodies mention sibling block names in passing, so a prompt-wide
+        # substring search would read those as pointer entries.
+        pointer_prose = result_lines[marker_index - 1]
+        pointer_names = {
+            token.strip()
+            for token in pointer_prose.partition("(")[2].partition(")")[0].split(",")
+            if token.strip()
+        }
+        assert pointer_names, f"pointer prose named no blocks: {pointer_prose!r}"
         assert companion_file.is_file()
         companion_text = companion_file.read_text(encoding="utf-8")
-        for probe in probes:
-            assert probe in companion_text, f"block probe {probe!r} missing from companion file"
+
+        # Nothing is lost from both places: every block is delivered either
+        # inline or in the companion file, and the pointer names exactly the
+        # blocks that moved.
+        for name, _size, probe in probes:
+            assert probe in result or probe in companion_text, (
+                f"block probe {probe!r} ({name}) reached neither the prompt "
+                "nor the companion file"
+            )
+            in_file = probe in companion_text
+            named_in_pointer = name in pointer_names
+            assert in_file == named_in_pointer, (
+                f"block {name!r}: companion-file presence {in_file} disagrees "
+                f"with the pointer naming it {named_in_pointer}"
+            )
+
+        widest = max(probes, key=lambda row: row[1])
+        narrowest = min(probes, key=lambda row: row[1])
+        assert widest[2] in companion_text and widest[2] not in result, (
+            f"widest block {widest[0]!r} ({widest[1]} chars) must be the one "
+            "displaced to the companion file"
+        )
+        assert narrowest[2] in result, (
+            f"narrowest block {narrowest[0]!r} ({narrowest[1]} chars) must "
+            "survive inline -- largest-first spill, not all-or-nothing"
+        )
 
         # Sidecar offer and role framing (if present) keep their canonical
         # relative order around the pointer -- same order as today.

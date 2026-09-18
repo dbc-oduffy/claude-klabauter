@@ -182,6 +182,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from coordinator_core._settings_home import machine_local_dir, normalize_native_path
+from coordinator_core.data_root import content_root_for
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.machine_resolver import canonical_repo_key_for_root
 from coordinator_core.memo_corpus import receiver_inbox_root
@@ -331,9 +332,16 @@ def read_doe_identity() -> dict:
             )
             return {}
         doe_root = normalize_native_path(raw_root.strip())
-        manifest_path = (
-            doe_root / "coordinator" / "schemas" / "coordinator-registry.manifest.json"
-        )
+        content_root = content_root_for(doe_root)
+        if content_root is None:
+            _LOG.warning(
+                "_memo_resolver: no coordinator content root under %s (neither a "
+                "coordinator/ directory nor a flat .claude-plugin/plugin.json) — "
+                "manifest-backed receiver identity resolution disabled",
+                doe_root,
+            )
+            return {}
+        manifest_path = content_root / "schemas" / "coordinator-registry.manifest.json"
         if not manifest_path.exists():
             _LOG.warning(
                 "_memo_resolver: coordinator-registry.manifest.json absent at %s "

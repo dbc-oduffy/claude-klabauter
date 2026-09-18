@@ -108,6 +108,7 @@ from coordinator_core.write_guards.validate_frontmatter_schema_deny import (
     _is_doe_owned_repo as _deny_guard_is_doe_owned_repo,
 )
 from coordinator_core.dag import check_lineage_reachability as _check_lineage_reachability
+from coordinator_core.data_root import content_root_for
 from coordinator_core.frontmatter.baton_class import canonical_kind as _canonical_kind
 from coordinator_core.frontmatter.schema_validate import (
     _apply_cross_field_rules,
@@ -493,8 +494,9 @@ def _load_doe_registry() -> dict:
         doe_root = None
 
     manifest: Optional[dict] = None
-    if doe_root:
-        manifest_path = Path(doe_root) / "coordinator" / "schemas" / "coordinator-registry.manifest.json"
+    content_root = content_root_for(doe_root)
+    if content_root is not None:
+        manifest_path = content_root / "schemas" / "coordinator-registry.manifest.json"
         try:
             manifest = _retry_on_transient_read_failure(
                 lambda: json.loads(manifest_path.read_text(encoding="utf-8")),

@@ -819,7 +819,8 @@ def _improvement_queue_required_args(extra: list[str] | None = None) -> list[str
 
 
 def _seed_symlinked_claude_klabauter_root(fake_root: str) -> None:
-    """Symlink THIS checkout's real coordinator_core package into fake_root.
+    """Build a fake_root/coordinator_core that is genuinely self-located AND
+    genuinely stamped, symlinking in THIS checkout's real package otherwise.
 
     Post de-node-cutover (480ad8f8 / W0.5 Option B+C), schema.describe/schema.validate
     have NO legacy fallback — cc_invoke.route() checks seam presence against the exact
@@ -829,11 +830,30 @@ def _seed_symlinked_claude_klabauter_root(fake_root: str) -> None:
     test targets is ever reached. Symlinking the real coordinator_core in gives the
     schema seam a working native implementation while state/ output under fake_root
     stays a disposable tmpdir, never the real checkout's own state/ tree.
+
+    A whole-directory symlink (the pre-1268f7eab1 shape) broke the moment the
+    dispatch-axis stamp gate armed: `ipc.py`'s own `_DISPATCH_ENGINE_ROOT =
+    Path(__file__).resolve().parent.parent` calls `.resolve()`, which follows a
+    symlinked `coordinator_core` straight through to THIS checkout's real, on-disk
+    location — an unstamped dev tree — no matter what fake_root is, so the gate
+    refused every dispatch regardless of what this fixture built. `ipc.py` is
+    therefore copied (a real file physically under fake_root, nothing left to
+    resolve away) rather than symlinked, and paired with a real, non-empty
+    `_engine_stamp` — the two things `_is_dispatch_engine_stamped()` actually reads.
+    Every other module stays a symlink: none of them gate on their own `__file__`.
     """
-    os.symlink(
-        os.path.join(_REPO_ROOT, "coordinator_core"),
-        os.path.join(fake_root, "coordinator_core"),
-    )
+    coord_dir = os.path.join(fake_root, "coordinator_core")
+    os.makedirs(coord_dir, exist_ok=True)
+    for entry in os.listdir(_REPO_ROOT_COORDINATOR_CORE):
+        if entry in ("ipc.py", "_engine_stamp", "__pycache__"):
+            continue
+        src = os.path.join(_REPO_ROOT_COORDINATOR_CORE, entry)
+        dest = os.path.join(coord_dir, entry)
+        if not os.path.exists(dest):
+            os.symlink(src, dest, target_is_directory=os.path.isdir(src))
+    shutil.copy2(os.path.join(_REPO_ROOT_COORDINATOR_CORE, "ipc.py"), os.path.join(coord_dir, "ipc.py"))
+    with open(os.path.join(coord_dir, "_engine_stamp"), "w", encoding="utf-8") as fh:
+        fh.write("test-fixture-stamp\n")
 
 
 def test_central_scope_writes_to_claude_klabauter_root() -> None:
@@ -1250,16 +1270,28 @@ def test_multiline_body_roundtrip() -> None:
 
     This test FAILS before F2's fix (| clip chomping adds a trailing newline)
     and PASSES after (|- strip chomping preserves exact bytes).
+
+    Driven via --body-file, not inline --body: eb1c6ced00 (C6, C14, C15) added an
+    unconditional `refuse_newline_argv(args.body, ...)` on the inline path -- a
+    raw newline in --body is now refused outright ("pass --body-file instead"),
+    by design (an inline newline used to be silently truncated by cmd.exe's own
+    command-line parse rather than refused). --body-file is the argv-immune
+    transport this test's multi-line value belongs on; the `|-` header and
+    no-trailing-newline assertions below are unchanged.
     """
     name = "Test F7 — multi-line body roundtrip: |- header, no trailing newline"
     body_input = "First line.\nSecond line."
 
     with tempfile.TemporaryDirectory() as tmpdir:
+        body_path = os.path.join(tmpdir, "body.txt")
+        with open(body_path, "w", encoding="utf-8") as fh:
+            fh.write(body_input)
+
         result = _run_cli(
             [
                 "--schema", "debt-backlog",
                 "--title", "Multiline body test entry",
-                "--body", body_input,
+                "--body-file", body_path,
                 "--status", "open",
                 "--source", "daily-review/multiline/2026-06-26",
                 "--risk", "Multi-line bodies with trailing newline break YAML fidelity.",
@@ -1784,15 +1816,43 @@ def _lesson_add_script_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "coordinator-lesson-add.py")
 
 
+def _installed_settings_bin_dir() -> str:
+    """The settings-home `bin/` dir a bare-PATH probe resolves an installed
+    CLI from -- same precedence git_hook_install.py's durable-path constant
+    uses (`COORDINATOR_SETTINGS_HOME`, else `~/.coordinator-claude-settings`).
+    """
+    settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME") or os.path.join(
+        os.path.expanduser("~"), ".coordinator-claude-settings"
+    )
+    return os.path.join(settings_home, "bin")
+
+
 def _run_lesson_add_cli(args: list[str], env: dict[str, str] | None = None, cwd: str | None = None) -> subprocess.CompletedProcess:
     """Invoke coordinator-lesson-add as a subprocess (drives via python <script>).
 
     Inherits the full environment so QUEUE_APPEND_OUTPUT_ROOT propagates transitively
     to the coordinator-queue-append subprocess spawned by the wrapper.
+
+    PATH is scrubbed of the installed settings-home `bin/` dir: `_queue_append_
+    locator.find_cli_cmd`'s probe order tries a bare-PATH `coordinator-queue-append`
+    FIRST, and on a box with a published klabauter build installed that resolves to
+    a compiled native warm-door launcher -- not this checkout's Python source, and
+    not a CLI `COORDINATOR_WARM=0` has any lever over (it dispatches warm by
+    construction, with no cold-path env check to disable). A test measuring that
+    binary measures the wrong code and reaches the box-shared warm server despite
+    the cold-route pin above. Removing the installed dir from PATH makes the bare
+    probe miss, so `find_cli_cmd` falls through to its sibling-path fallback and
+    resolves THIS checkout's `coordinator-queue-append.py`, which does honour
+    `COORDINATOR_WARM=0`.
     """
     effective_env = {**os.environ}
     if env:
         effective_env.update(env)
+    installed_bin_dir = _installed_settings_bin_dir()
+    path_entries = effective_env.get("PATH", "").split(os.pathsep)
+    effective_env["PATH"] = os.pathsep.join(
+        entry for entry in path_entries if os.path.normcase(os.path.normpath(entry or ".")) != os.path.normcase(os.path.normpath(installed_bin_dir))
+    )
     return subprocess.run(
         [_python(), _lesson_add_script_path()] + args,
         env=effective_env,
@@ -2046,6 +2106,45 @@ def test_lesson_add_facet_threading() -> None:
             if got != expected:
                 raise AssertionError(f"{name}: " + (f"field {field!r}: expected {expected!r}, got {got!r}"))
                 return
+
+
+def test_lesson_add_under_pytest_never_hits_warm() -> None:
+    """A test-driven `coordinator-lesson-add` run must never reach the box-shared
+    warm server -- regression guard for the 2026-09-18 leak (module docstring's
+    "test traffic never reaches or spawns the box-shared server" fix).
+
+    Two independent legs, both load-bearing: `COORDINATOR_WARM=0` (pinned by this
+    file's `conftest.py`) disables warmth on the COLD path; scrubbing the installed
+    settings-home `bin/` dir from PATH (`_run_lesson_add_cli`) stops
+    `_queue_append_locator.find_cli_cmd`'s bare-PATH probe from resolving the
+    published klabauter build's compiled warm-door launcher, which dispatches warm
+    unconditionally and has no `COORDINATOR_WARM` lever at all. Either leg alone is
+    insufficient -- this test pins their combination.
+
+    Asserts on absence of "warm hit" in stderr/stdout (`cc_invoke.py`'s own phrase
+    for a served-by-warm response, e.g. "native transport failed ... (op=queue.append,
+    warm hit)") rather than a mock, since the whole point is proving the REAL
+    subprocess never reached the server -- a mock would just assert on itself.
+    """
+    name = "Test — coordinator-lesson-add under pytest never produces a warm hit"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = _run_lesson_add_cli(
+            [
+                "--title", "Warm-hit regression guard test lesson",
+                "--body", "Body for the never-hits-warm regression guard.",
+                "--scope", "project",
+            ],
+            env={"QUEUE_APPEND_OUTPUT_ROOT": tmpdir},
+            cwd=tmpdir,
+        )
+        if result.returncode != 0:
+            raise AssertionError(f"{name}: " + (f"coordinator-lesson-add exited {result.returncode}: {result.stderr!r}"))
+            return
+
+        combined = (result.stdout or "") + (result.stderr or "")
+        if "warm hit" in combined:
+            raise AssertionError(f"{name}: " + (f"test-driven lesson-add reached the shared warm server: {combined!r}"))
+            return
 
 
 
@@ -3040,3 +3139,43 @@ def test_why_and_why_file_are_mutually_exclusive() -> None:
         assert "mutually exclusive" in result.stderr, f"stderr did not name the conflict: {result.stderr!r}"
 
 
+# ---------------------------------------------------------------------------
+# Swept-tmp-root refusal (2026-09-18)
+#
+# Bug: state/bug-backlog/2026-09-18-coordinator-queue-append-writes-into-a-swept-tmp-root.yaml
+# A QUEUE_APPEND_OUTPUT_ROOT naming a temp-dir path a completed pytest run
+# already tore down (e.g. inherited by a long-lived warm engine daemon spawned
+# mid test-run) used to be honoured anyway: os.makedirs(exist_ok=True)
+# silently recreated the missing tree, the write "succeeded" into a directory
+# nothing durable ever named, and the CLI printed a plausible path and exited
+# 0. This process's own PYTEST_CURRENT_TEST (set by pytest for the duration of
+# this test) is inherited by the child CLI subprocess unchanged — exactly the
+# shape a polluted long-lived process carries.
+# ---------------------------------------------------------------------------
+
+
+def test_swept_output_root_refuses_instead_of_writing() -> None:
+    name = "Swept QUEUE_APPEND_OUTPUT_ROOT (under system temp, already gone) refuses instead of writing"
+    swept = tempfile.mkdtemp()
+    shutil.rmtree(swept)
+    if os.path.isdir(swept):
+        raise AssertionError(f"{name}: " + f"setup failed — {swept} still exists")
+
+    result = _run_cli(
+        _debt_backlog_required_args(),
+        env={"QUEUE_APPEND_OUTPUT_ROOT": swept},
+    )
+
+    if result.returncode == 0:
+        raise AssertionError(
+            f"{name}: " + f"expected nonzero exit for a swept output root; got 0. stdout={result.stdout!r}"
+        )
+    if os.path.isdir(swept):
+        raise AssertionError(
+            f"{name}: " + f"CLI recreated the swept root at {swept!r} instead of refusing"
+        )
+    stderr_lower = result.stderr.lower()
+    if "temp" not in stderr_lower and "tmp" not in stderr_lower:
+        raise AssertionError(
+            f"{name}: " + f"expected a one-line stderr message naming the temp-dir refusal; got {result.stderr!r}"
+        )

@@ -75,7 +75,7 @@ from __future__ import annotations
 MUTATES = ["state/review-trail/diffs/*.diff", "state/review-trail/diffs/*.head.sha"]  # slice_id-keyed, data-dependent set
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.git_native import _git
@@ -153,9 +153,12 @@ def freeze_diff(
     plus the freeze-time HEAD sha to
     `<repo_root>/state/review-trail/diffs/<slice_id>.{diff,head.sha}`.
 
-    The ONE implementation of this write — both the `review.freeze_diff`
-    JSON-RPC handler below and `coordinator/bin/freeze-review-diff.py`'s CLI
-    call this function; neither re-derives the git-diff-and-write sequence.
+    A THIN CASE OF `freeze_diffs_batch` (one-element `requests` list) — see that
+    function's docstring for the shared algorithm and the batch/single-path
+    parity guarantee this delegation exists to hold. Both the `review.freeze_diff`
+    JSON-RPC handler below and `coordinator/bin/freeze-review-diff.py`'s CLI call
+    this function; neither re-derives the git-diff-and-write sequence, and this
+    function itself no longer re-derives it either.
 
     Params:
         repo_root — the git worktree root the freeze runs against.
@@ -184,56 +187,261 @@ def freeze_diff(
         On failure: {"diff_path": None, "head_sha_path": None, "head_sha": None,
                      "empty": None, "error": str}
     """
-    if not range_:
-        return _error(
-            "range is required and is never defaulted — the caller owns range "
-            "resolution (e.g. a session-id-scoped range); pass it explicitly."
+    return freeze_diffs_batch(
+        repo_root, [{"slice_id": slice_id, "range": range_, "paths": paths}]
+    )[0]
+
+
+def _range_shape(range_: str) -> Optional[int]:
+    """Number of `git rev-parse` output lines a range of this shape produces:
+    3 for a three-dot symmetric range (`A...B` -> `B`, `A`, `^mergebase`), 2 for
+    a two-dot range (`A..B` -> `B`, `^A`), `None` when `range_` carries neither
+    separator — a bare single ref, which `freeze_diffs_batch` does not support
+    (see that function's docstring). Checked by substring, not regex: `..`/`...`
+    inside a ref name is not a real-world shape this module's callers produce
+    (matches `_zero_commit_range_error`'s own `sep` detection)."""
+    if "..." in range_:
+        return 3
+    if ".." in range_:
+        return 2
+    return None
+
+
+def freeze_diffs_batch(
+    repo_root: Path,
+    requests: List[dict],
+) -> List[dict]:
+    """Freeze many `(slice_id, range[, paths])` requests to the same
+    `state/review-trail/diffs/<slice_id>.{diff,head.sha}` shape `freeze_diff`
+    writes, in a bounded number of git spawns — ONE `git rev-parse` (resolving
+    every request's diff endpoints AND the batch's shared freeze-time HEAD in
+    one call) plus, only when at least one request survives structural
+    validation, ONE `git diff-tree --stdin -p` (producing every surviving
+    request's diff in one call) — regardless of how many requests are given.
+    `freeze_diff` is a thin one-element case of this function (see its own
+    docstring); the two cannot drift because there is only one algorithm.
+
+    Each request is a dict: `{"slice_id": str REQUIRED, "range": str REQUIRED,
+    "paths": Optional[List[str]]}`. Returns a list of result dicts, one per
+    request, SAME ORDER, SAME SHAPE as `freeze_diff`'s return value (a
+    structured `_error(...)` dict on that request's own failure — never an
+    exception for a per-request precondition, matching `freeze_diff`'s own
+    fail-soft-per-call contract).
+
+    Every request must share the SAME `paths` restriction (or all omit it) —
+    `git diff-tree --stdin` applies one pathspec to the whole stdin batch, not
+    per line; a batch mixing different `paths` values across requests raises
+    `ValueError` (a caller-composition bug, not a per-request data problem,
+    so it is not folded into any one request's `_error(...)` result).
+
+    Range shape: EITHER a two-dot (`A..B`) OR three-dot (`A...B`) range (see
+    `_range_shape`) — the two shapes this module's own negative-spec names as
+    examples, and the only shapes any existing caller/test passes. A bare
+    single ref with neither separator is NOT batchable: unlike a commit-vs-
+    commit freeze, `git diff <ref>` diffs that ref against the *working tree*,
+    a different operation `git diff-tree` cannot express — that request's
+    result is a structured `_error(...)`, not a raised exception, since it is
+    a per-request data shape rather than a caller-composition bug.
+
+    Diff endpoints: for a two-dot range, `git rev-parse "A..B"` prints `B`
+    (unprefixed, the diff's "new" side) then `^A` (prefixed, the "old" side)
+    — the pair fed to `diff-tree` is `(A, B)`. For a three-dot range,
+    `git rev-parse "A...B"` prints `B`, then `A`, then `^mergebase(A,B)` — the
+    pair fed to `diff-tree` is `(mergebase, B)`, matching `git diff A...B`'s
+    own documented translation to `git diff $(git merge-base A B) B`. Measured
+    live against this repo's own history (both shapes) before landing this
+    function — see the op's own tests for the fixture proving byte-identical
+    output against the single-range path.
+
+    Zero-commit refusal (mirrors `_zero_commit_range_error`, single-spawn
+    simplification): a request refuses iff its two RESOLVED diff endpoints
+    are the identical commit — the exact shape the caret-eating incident this
+    check guards against produces (see this module's own negative-spec),
+    decided from the same `rev-parse` call with no extra spawn. This is a
+    NARROWER refusal than the single-path original's `git rev-list --count`-
+    based check, which also refuses a two-dot range whose head is a strict
+    ancestor of its base even when the two endpoints are NOT identical — that
+    narrower case now freezes an (empty) diff here instead of refusing it.
+    Every existing caller/test range is either non-empty or the identical-
+    endpoint case, so this narrowing is not observed today; documented rather
+    than silently accepted, per this module's fail-loud-never-silent posture.
+    """
+    if not requests:
+        return []
+
+    normalized: List[dict] = [
+        {
+            "slice_id": req.get("slice_id") or "",
+            "range": req.get("range") or "",
+            "paths": req.get("paths") or None,
+        }
+        for req in requests
+    ]
+
+    paths_values = {
+        tuple(req["paths"]) if req["paths"] else None for req in normalized
+    }
+    if len(paths_values) > 1:
+        raise ValueError(
+            "freeze_diffs_batch: requests carry different 'paths' pathspecs — "
+            "git diff-tree --stdin applies one pathspec to the whole batch, "
+            "never per request; split into separate batch calls per distinct "
+            "pathspec instead"
         )
+    shared_paths = next(iter(paths_values)) if paths_values else None
+    shared_paths_list = list(shared_paths) if shared_paths else None
 
-    slice_err = _validate_slice_id(slice_id)
-    if slice_err is not None:
-        return _error(slice_err)
+    results: List[Optional[dict]] = [None] * len(normalized)
+    shapes: Dict[int, int] = {}
+    for i, req in enumerate(normalized):
+        if not req["range"]:
+            results[i] = _error(
+                "range is required and is never defaulted — the caller owns range "
+                "resolution (e.g. a session-id-scoped range); pass it explicitly."
+            )
+            continue
+        slice_err = _validate_slice_id(req["slice_id"])
+        if slice_err is not None:
+            results[i] = _error(slice_err)
+            continue
+        shape = _range_shape(req["range"])
+        if shape is None:
+            results[i] = _error(
+                f"range {req['range']!r} carries neither '..' nor '...' — a bare "
+                "single ref is not batchable (it diffs against the working tree, "
+                "not another commit, which git diff-tree cannot express)"
+            )
+            continue
+        shapes[i] = shape
 
-    zero_commit_err = _zero_commit_range_error(range_, repo_root)
-    if zero_commit_err is not None:
-        return _error(zero_commit_err)
+    pending_idx = [i for i in range(len(normalized)) if results[i] is None]
+    if not pending_idx:
+        return results  # type: ignore[return-value]
 
-    head_result = _git(["rev-parse", "HEAD"], cwd=repo_root)
-    if not head_result.ok or not head_result.stdout.strip():
-        return _error(f"cannot resolve HEAD sha: {head_result.stderr.strip()}")
-    head_sha = head_result.stdout.strip()
+    rev_parse_args = [normalized[i]["range"] for i in pending_idx] + ["HEAD"]
+    rp = _git(["rev-parse", *rev_parse_args], cwd=repo_root)
+    if not rp.ok:
+        raise ValueError(
+            f"git rev-parse failed while resolving freeze batch endpoints: "
+            f"{rp.stderr.strip()}"
+        )
+    lines = [ln.strip() for ln in rp.stdout.splitlines() if ln.strip()]
 
-    diff_args = ["diff", range_]
-    if paths:
-        diff_args += ["--", *paths]
-    diff_result = _git(diff_args, cwd=repo_root)
-    if not diff_result.ok:
-        return _error(f"git diff {range_} failed:\n{diff_result.stderr}")
+    cursor = 0
+    endpoints: Dict[int, Tuple[str, str]] = {}
+    for i in pending_idx:
+        shape = shapes[i]
+        chunk = lines[cursor : cursor + shape]
+        cursor += shape
+        if len(chunk) != shape:
+            raise ValueError(
+                "git rev-parse produced fewer lines than expected while resolving "
+                "the freeze batch — endpoint resolution and HEAD sha are out of sync"
+            )
+        if shape == 2:
+            b_sha, a_sha = chunk[0], chunk[1].lstrip("^")
+        else:
+            b_sha, a_sha = chunk[0], chunk[2].lstrip("^")
+        endpoints[i] = (a_sha, b_sha)
+    if cursor >= len(lines):
+        raise ValueError(
+            "git rev-parse produced no HEAD line for the freeze batch — endpoint "
+            "resolution and HEAD sha are out of sync"
+        )
+    head_sha = lines[cursor]
+
+    zero_commit_idx = {i for i, (a_sha, b_sha) in endpoints.items() if a_sha == b_sha}
+    diff_pending_idx = [i for i in pending_idx if i not in zero_commit_idx]
+
+    per_pair_diff: Dict[int, str] = {}
+    if diff_pending_idx:
+        stdin_payload = "".join(f"{endpoints[i][0]} {endpoints[i][1]}\n" for i in diff_pending_idx)
+        diff_argv = ["diff-tree", "--stdin", "-p"]
+        if shared_paths_list:
+            diff_argv += ["--", *shared_paths_list]
+        dt = _git(diff_argv, cwd=repo_root, input_data=stdin_payload)
+        if not dt.ok:
+            raise ValueError(
+                f"git diff-tree --stdin failed for the freeze batch: {dt.stderr.strip()}"
+            )
+        diff_texts = _split_diff_tree_stdin_output(
+            dt.stdout, [endpoints[i][0] for i in diff_pending_idx]
+        )
+        per_pair_diff = dict(zip(diff_pending_idx, diff_texts))
 
     diffs_dir = repo_root / "state" / "review-trail" / "diffs"
     diffs_dir.mkdir(parents=True, exist_ok=True)
-    diff_path = diffs_dir / f"{slice_id}.diff"
-    sha_path = diffs_dir / f"{slice_id}.head.sha"
 
-    if diff_path.exists() and diff_path.read_text(encoding="utf-8") != diff_result.stdout:
-        return _error(
-            f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with different "
-            "content — a slice id is a filename, and a generic one collides with whatever peer "
-            "froze it first. Re-freeze under a slice id that names this range."
-        )
+    for i in pending_idx:
+        slice_id = normalized[i]["slice_id"]
+        range_ = normalized[i]["range"]
+        if i in zero_commit_idx:
+            results[i] = _error(
+                f"range {range_!r} resolves to ZERO commits — refusing to freeze a "
+                "diff for a range that names no commits. This is the exact shape a "
+                "caret-eating shell/shim produces from a legitimate per-commit "
+                "'<sha>^..<sha>' request (e.g. a Windows .cmd forwarder collapsing "
+                "it to '<sha>..<sha>'). Verify the range was constructed correctly."
+            )
+            continue
 
-    diff_path.write_text(diff_result.stdout, encoding="utf-8", newline="\n")
-    sha_path.write_text(head_sha + "\n", encoding="utf-8", newline="\n")
-    declare_write(diff_path)
-    declare_write(sha_path)
+        diff_text = per_pair_diff[i]
+        diff_path = diffs_dir / f"{slice_id}.diff"
+        sha_path = diffs_dir / f"{slice_id}.head.sha"
 
-    return {
-        "diff_path": str(diff_path),
-        "head_sha_path": str(sha_path),
-        "head_sha": head_sha,
-        "empty": not diff_result.stdout.strip(),
-        "error": None,
-    }
+        if diff_path.exists() and diff_path.read_text(encoding="utf-8") != diff_text:
+            results[i] = _error(
+                f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with "
+                "different content — a slice id is a filename, and a generic one collides "
+                "with whatever peer froze it first. Re-freeze under a slice id that names "
+                "this range."
+            )
+            continue
+
+        diff_path.write_text(diff_text, encoding="utf-8", newline="\n")
+        sha_path.write_text(head_sha + "\n", encoding="utf-8", newline="\n")
+        declare_write(diff_path)
+        declare_write(sha_path)
+
+        results[i] = {
+            "diff_path": str(diff_path),
+            "head_sha_path": str(sha_path),
+            "head_sha": head_sha,
+            "empty": not diff_text.strip(),
+            "error": None,
+        }
+
+    return results  # type: ignore[return-value]
+
+
+def _split_diff_tree_stdin_output(stdout: str, a_shas: List[str]) -> List[str]:
+    """Split `git diff-tree --stdin -p`'s combined output back into one diff
+    per pair, returned in the same order as `a_shas` (the order the pairs
+    were fed on stdin). `--stdin` fed two explicit tree-ish per line prints a
+    PAIR HEADER line — the first (old/base) tree-ish's own sha, alone on its
+    own line — immediately before that pair's diff, with no blank-line
+    separator between one pair's last diff line and the next pair's header
+    (measured live against this repo's own history before landing this
+    function). The header line itself is stripped — `git diff <range>` never
+    prints one, and this function's whole purpose is byte-identical parity
+    with that output.
+
+    Matches on the KNOWN `a_shas` value for each pair, in order, rather than
+    "any bare 40-hex-char line" — a diff body line is vanishingly unlikely to
+    collide with a caller-supplied sha, but matching the caller's own known
+    values is exact where a generic hex-line pattern would only be probable.
+    """
+    lines = stdout.splitlines(keepends=True)
+    segments: List[List[str]] = [[] for _ in a_shas]
+    current = -1
+    for line in lines:
+        stripped = line.rstrip("\n")
+        if current + 1 < len(a_shas) and stripped == a_shas[current + 1]:
+            current += 1
+            continue
+        if current >= 0:
+            segments[current].append(line)
+    return ["".join(chunk) for chunk in segments]
 
 
 @register_op("review.freeze_diff")

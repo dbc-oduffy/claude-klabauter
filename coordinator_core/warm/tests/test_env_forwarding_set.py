@@ -111,6 +111,9 @@ def test_forwarding_set_is_exactly_the_named_entries():
         "CLAUDE_CODE_REMOTE",
         # Job mode: same per-caller-fact reasoning as CLAUDE_CODE_REMOTE.
         "COORDINATOR_JOB_MODE",
+        # Agent-type host ladder: same per-caller-fact reasoning as
+        # CLAUDE_CODE_REMOTE and COORDINATOR_JOB_MODE.
+        "COORDINATOR_AGENT_TYPE_HOST",
     ]
 
 
@@ -138,6 +141,7 @@ def test_per_caller_facts_are_exactly_the_caller_mode_entries():
         "CLAUDE_PROJECT_DIR",
         "CLAUDE_CODE_REMOTE",
         "COORDINATOR_JOB_MODE",
+        "COORDINATOR_AGENT_TYPE_HOST",
     ]
 
 

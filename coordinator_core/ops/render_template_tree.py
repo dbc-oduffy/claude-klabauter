@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core._settings_home import resolve_machine_local_cli
+from coordinator_core.data_root import content_root_for
 from coordinator_core import launchable
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.machine_resolver import registry_get as _registry_get
@@ -137,7 +138,8 @@ def _co_located_render_single() -> Optional[str]:
 
 
 def _find_render_single() -> Optional[str]:
-    """Locate render-template.py: co-located first, then the DoE root."""
+    """Locate render-template.py: co-located first, then the DoE root (either
+    content layout — private authoring tree or flat published mirror)."""
     co_located = _co_located_render_single()
     if co_located is not None:
         return co_located
@@ -145,7 +147,14 @@ def _find_render_single() -> Optional[str]:
     doe_root, rc = _resolve_doe_root()
     if doe_root is None:
         return None
-    candidate = os.path.join(doe_root.rstrip("/"), "coordinator", "bin", "render-template.py")
+    content_root = content_root_for(doe_root)
+    if content_root is None:
+        print(
+            f"render-template-tree: no coordinator content root under DoE root: {doe_root}",
+            file=sys.stderr,
+        )
+        return None
+    candidate = str(content_root / "bin" / "render-template.py")
     if os.path.isfile(candidate) and is_executable(candidate):
         return candidate
     print(

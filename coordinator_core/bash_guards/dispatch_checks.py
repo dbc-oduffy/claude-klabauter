@@ -7668,6 +7668,7 @@ def check_validate_commit(
     hard_violation = ""
     soft_names = ""
     _claudemd_blobs = _batch_show_index_blobs(claudemd_files, _cwd)
+    over_watermark: List[Tuple[str, int, Any]] = []
     for cf in claudemd_files:
         blob = _claudemd_blobs.get(cf)
         if not blob:
@@ -7696,17 +7697,20 @@ def check_validate_commit(
                 continue
             ok, ratchet_msg = ratchet_check(size, watermark)
             if not ok:
-                # C7c: admit a shrinking edit on a surface already over its
-                # watermark (mirrors DoE-claude's `admission_check_for_
-                # surface`, commit 0f59b1abc) -- refusing it leaves "raise
-                # the watermark" as the only way out. The pre-edit size is
-                # derived the SAME way the post-edit `size` above is (a
-                # `git cat-file --batch` blob read), just against `HEAD`
-                # instead of the staged index -- spawned only on this
-                # already-violating path, never on the common case.
-                head_blob = _batch_show_index_blobs([cf], _cwd, ref="HEAD").get(cf)
-                pre_edit_size = len(head_blob) if head_blob is not None else None
-                ok, ratchet_msg = ratchet_check(size, watermark, pre_edit_size)
+                over_watermark.append((cf, size, watermark))
+
+    # C7c: admit a shrinking edit on a surface already over its watermark
+    # (mirrors DoE-claude's `admission_check_for_surface`, commit 0f59b1abc)
+    # -- refusing it leaves "raise the watermark" as the only way out. The
+    # pre-edit size is read the SAME way the post-edit `size` is (a `git
+    # cat-file --batch` blob read) against `HEAD`, in ONE batch across every
+    # over-watermark surface, and only when one exists.
+    if over_watermark:
+        head_blobs = _batch_show_index_blobs([cf for cf, _, _ in over_watermark], _cwd, ref="HEAD")
+        for cf, size, watermark in over_watermark:
+            head_blob = head_blobs.get(cf)
+            pre_edit_size = len(head_blob) if head_blob is not None else None
+            ok, ratchet_msg = ratchet_check(size, watermark, pre_edit_size)
             if not ok:
                 hard_violation += "\n  %s: %s" % (cf, ratchet_msg)
 

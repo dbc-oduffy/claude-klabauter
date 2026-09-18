@@ -18,7 +18,9 @@ import pytest
 from coordinator_core.testing import symlink_capability
 
 from coordinator_core._settings_home import (
+    FORBID_REAL_SETTINGS_HOME_ENV,
     ClaudeConfigDivergenceError,
+    RealSettingsHomeLeakError,
     SettingsHomeDivergenceError,
     check_claude_config_divergence,
     check_machine_local_divergence,
@@ -59,7 +61,7 @@ def test_settings_home_treats_empty_override_as_unset(monkeypatch):
     assert settings_home() == Path("/tmp/fake-home/.coordinator-claude-settings")
 
 
-def test_settings_home_absolute_with_no_home_or_claude_home_env(monkeypatch):
+def test_settings_home_absolute_with_no_home_or_claude_home_env(tmp_path, monkeypatch):
     """Native-Windows regression: HOME and CLAUDE_HOME both absent.
 
     PowerShell/cmd.exe set USERPROFILE, never HOME. A resolver spelled as a
@@ -67,10 +69,21 @@ def test_settings_home_absolute_with_no_home_or_claude_home_env(monkeypatch):
     `.coordinator-claude-settings` there (the bug fixed in
     coordinator/lib/settings_home.py). This module reaches the platform home via
     `Path.home()` instead; pin that it stays rooted with no home env at all.
+
+    `Path.home()` itself is stubbed to `tmp_path` rather than left to fall
+    through to the real passwd-db home: with every home env var gone, POSIX
+    `Path.home()` reads `pwd.getpwuid(os.getuid())` directly, which is this
+    operator's REAL account home -- a genuine quarantine bypass this test
+    used to commit unnoticed (caught by `RealSettingsHomeLeakError` once that
+    guard existed). This test's own claim is about `settings_home()`'s
+    rootedness under an absent-env resolution, not about what the real
+    passwd db happens to contain, so stubbing `Path.home()` keeps the
+    assertion meaningful without touching the real home at all.
     """
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     resolved = settings_home()
 
@@ -421,3 +434,44 @@ def test_home_dir_rejects_doubled_claude_home(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / ".claude"))
     with pytest.raises(ValueError):
         home_dir()
+
+
+# ---------------------------------------------------------------------------
+# RealSettingsHomeLeakError — the conftest.py::_quarantine_real_home backstop
+# (2026-09-18: a pytest run wrote 371 launchers into the real settings-home
+# bin/, corrupted via a since-fixed in-place forwarder write; this is the
+# read-side guard that refuses the resolution outright the next time some
+# call site bypasses quarantine, instead of silently mutating live config).
+# ---------------------------------------------------------------------------
+
+
+def test_settings_home_refuses_the_forbidden_real_path(tmp_path, monkeypatch):
+    """`conftest.py` sets `FORBID_REAL_SETTINGS_HOME_ENV` to this operator's
+    real settings home for every non-`real_home` test; a resolution that
+    lands on exactly that path must refuse rather than return it."""
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv(FORBID_REAL_SETTINGS_HOME_ENV, str(tmp_path / ".coordinator-claude-settings"))
+    with pytest.raises(RealSettingsHomeLeakError) as excinfo:
+        settings_home()
+    assert str(tmp_path / ".coordinator-claude-settings") in str(excinfo.value)
+
+
+def test_settings_home_allows_a_path_distinct_from_the_forbidden_one(tmp_path, monkeypatch):
+    """The guard compares against the exact forbidden path -- an ordinary
+    tmp_path-quarantined resolution (the common case) must not be refused."""
+    quarantine = tmp_path / "quarantine"
+    quarantine.mkdir()
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.setenv("HOME", str(quarantine))
+    monkeypatch.setenv(FORBID_REAL_SETTINGS_HOME_ENV, str(tmp_path / "real-home" / ".coordinator-claude-settings"))
+    assert settings_home() == quarantine / ".coordinator-claude-settings"
+
+
+def test_settings_home_ignores_an_unset_forbid_env(tmp_path, monkeypatch):
+    """No env var set (the non-pytest / production shape) -- resolver behaves
+    exactly as before, never consulting the guard at all."""
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+    monkeypatch.delenv(FORBID_REAL_SETTINGS_HOME_ENV, raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert settings_home() == tmp_path / ".coordinator-claude-settings"

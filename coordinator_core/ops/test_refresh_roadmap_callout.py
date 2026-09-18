@@ -296,3 +296,33 @@ def test_self_commit_false_default_never_commits(tmp_path, monkeypatch):
     assert _log_subjects(tmp_path) == before  # unchanged -- default preserves the
     # pre-existing extra_stage_paths-coupled behavior for the still-live
     # synchronous ceremony-tail caller.
+
+
+def _seed_doe_pointer(tmp_path, monkeypatch, doe_root: Path) -> None:
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True, exist_ok=True)
+    (home / ".claude" / ".doe-root").write_text(str(doe_root) + "\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_HOME", str(home))
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+
+
+def test_resolve_cc_root_private_layout(tmp_path, monkeypatch):
+    doe_root = tmp_path / "doe-clone"
+    (doe_root / "coordinator").mkdir(parents=True)
+    _seed_doe_pointer(tmp_path, monkeypatch, doe_root)
+    assert refresh_roadmap_callout._resolve_cc_root() == str(doe_root / "coordinator")
+
+
+def test_resolve_cc_root_flat_mirror_layout(tmp_path, monkeypatch):
+    doe_root = tmp_path / "flat-mirror"
+    (doe_root / ".claude-plugin").mkdir(parents=True)
+    (doe_root / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
+    _seed_doe_pointer(tmp_path, monkeypatch, doe_root)
+    assert refresh_roadmap_callout._resolve_cc_root() == str(doe_root)
+
+
+def test_resolve_cc_root_bare_directory_is_unresolved(tmp_path, monkeypatch):
+    doe_root = tmp_path / "bare"
+    doe_root.mkdir()
+    _seed_doe_pointer(tmp_path, monkeypatch, doe_root)
+    assert refresh_roadmap_callout._resolve_cc_root() == ""

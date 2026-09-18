@@ -1,55 +1,49 @@
 """C4 (docs/plans/2026-08-16-registry-read-stops-costing-a-process.md): prove
-the bake (C2) and the family refresh (C0) against a REAL install, not only
-`tmp_path` -- AC1, AC2, AC5, AC6 jointly, live.
+the bake (C2) and the family refresh (C0) against REAL install content, not
+only `tmp_path` -- AC1, AC2, AC5, AC6 jointly, live.
 
 Direct precedent: `state/lessons/2026-08-15-simulating-the-fresh-install-
 condition-h-8bf3476b2152.yaml` -- "a simulation of the condition does not
 discharge [a 'validated live' AC]: clone it for real ... and read the
 resolved VALUES rather than the success flag." `test_bin_family_refresh.py`
 (C0's own coverage) proves the mechanism against `tmp_path`; this module
-proves the SAME `_install_bin_resolvers` call against this operator's real
-`<settings-home>/bin` -- the actual destination the plan's AC1/AC2/AC6
-language names -- and reads observed byte counts, not a boolean.
+reads the REAL observed values off this operator's actual `<settings-home>/
+bin` where a check can do so without writing, and exercises
+`_install_bin_resolvers` against a COPY of that real content where a check
+must actually run the installer -- never against the live destination
+itself.
 
-LIVE-MUTATION SAFETY (negative-spec, required reading before editing this
-file): every test below writes into the REAL `<settings-home>/bin`, shared
-with every other active session on this box (CLAUDE.md § Load norm: 50-70
-concurrent LLMs average). This module adds NO locking, backup, or copy
-mechanism of its own -- safety rests entirely on C0's landed
-`_install_bin_resolvers`, which already wraps its ml/ch/ml_explicit and
-platform-localize write loops in `coordinator_core.locked_write.held_lock`
-on `bin_dst`, and on `_install_one`'s force-overwrite path already routing
-through `atomic_write_bytes` (same-directory mkstemp + `os.replace`, atomic
-on both Windows and POSIX) instead of a bare `shutil.copyfile`. This module
-only EXERCISES that mechanism against the real destination; it never adds a
-second one. Two consequences that follow directly:
+NEVER-WRITES-LIVE SAFETY (negative-spec, required reading before editing
+this file): this module never writes into the REAL `<settings-home>/bin`,
+full stop -- PM ruling 2026-09-18. That directory is shared live with every
+other active session on this box (CLAUDE.md § Load norm: 50-70 concurrent
+LLMs average), and an earlier version of this module was the likely writer
+behind an unexplained settings-home mutation observed at 16:12 on
+2026-09-18. Two consequences follow directly:
 
-  1. A concurrent peer session's OWN install/refresh (e.g. a SessionStart
-     drift sweep, or another operator running `coordinator:install`) is safe
-     to race against these tests for the same reason two racing installs are
-     safe in `test_bin_family_refresh.py`'s
-     `TestConcurrentInstallLeavesTheFamilyByteCompleteAndConsistent` --
-     `held_lock` serialises writers, and every reader (including this
-     module's own post-write verification reads) observes either the old or
-     the fully-written new content, never a torn write.
-  2. AC2's byte-level before/after comparison is ITSELF racy in the small
-     window between the "after first run" snapshot and the "after second
-     run" snapshot: a peer's own refresh landing in that window is a genuine
-     content change this module did not cause and cannot distinguish from a
-     bug in the idempotence property under test. `test_second_run_is_a_
-     byte_level_noop_on_the_static_family` below narrows the snapshot to
-     only the files `_install_bin_resolvers` itself writes (never the full
-     391-entry `bin/` tree, most of which -- the derived agent-helper
-     forwarders and their `.ps1` twins -- this module does not assert
-     no-op-ness over) precisely to shrink that race window and its blast
-     radius; it does not close the race. If a run here observes a file this
-     module wrote change underneath it between snapshots, that is reported
-     as evidence of a live peer race, not silently retried or asserted away.
+  1. Checks that only need to OBSERVE the real install (AC1/AC6's baked-shim
+     token count and `.python-bin` sidecar presence, AC1's `machine-local
+     dump` verb) read whatever the real `<settings-home>/bin` already
+     contains. They never call `_install_bin_resolvers` or any other writer
+     against that real path, and they skip with a named reason when the real
+     install is absent rather than installing one to make the read possible.
+  2. The one check that genuinely needs to RUN the installer twice to prove
+     byte-level idempotence (AC2) does so against a `tmp_path` copy of the
+     real `<settings-home>/bin`, made via `shutil.copytree` before either
+     pass. The INPUT is still real install content -- the same static-family
+     bytes this operator's actual bin directory carries -- but every write
+     `_install_bin_resolvers` performs lands in that copy, never in the real
+     tree. This discharges the AC's actual intent (prove the mechanism
+     against real install content, reading resolved values rather than a
+     success flag) without reintroducing the live-write hazard the AC's
+     literal "write live" language created.
 
 Negative-spec: this module never persists `COORDINATOR_SETTINGS_HOME` --
 Anti-scope. `settings_home()` is read via its normal, unmodified precedence
 (no env override set here), which is exactly what already resolves to this
-operator's real settings home on this box.
+operator's real settings home on this box, and is used ONLY to locate what
+to read (or, for the idempotence check, what to copy) -- never as a write
+destination.
 
 macOS parity (AC5m) is NOT exercised here and cannot be from a Windows
 session -- see § macOS verification in the plan; this module discharges AC5
@@ -60,6 +54,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -90,13 +85,11 @@ pytestmark = [
     pytest.mark.cadence,
     pytest.mark.spawns_process,
     # `real_home` opts out of `conftest.py::_quarantine_real_home` -- its own
-    # docstring says "read-only oracles only" because a quarantined write is
-    # normally the SAFE default. This module is the deliberate, plan-
-    # authorized exception: C4's whole purpose is proving a live write
-    # against the real `<settings-home>/bin`, and the write is safe not
-    # because it is read-only but because C0's `held_lock` + `atomic_write_
-    # bytes` make it safe to race a peer session -- see this module's own
-    # negative-spec above for the full argument.
+    # docstring says "read-only oracles only". This module IS that read-only
+    # oracle: the checks that resolve against the real home only ever read
+    # it (see this module's own negative-spec above); the one check that
+    # writes does so against a `tmp_path` copy, never the real path this
+    # marker hands back.
     pytest.mark.real_home,
 ]
 
@@ -140,8 +133,8 @@ def _static_family_dest_names() -> "list[str]":
 
 
 def _snapshot_static_family(bin_dst: Path) -> "dict[str, tuple[int, str]]":
-    """(size, sha256) per file this module's own live-install call writes --
-    a byte-level snapshot restricted to the static family (see module
+    """(size, sha256) per file this module's own install call writes -- a
+    byte-level snapshot restricted to the static family (see module
     docstring's negative-spec on why the full `bin/` tree is not snapshotted
     here)."""
     snap: "dict[str, tuple[int, str]]" = {}
@@ -166,15 +159,23 @@ def _skip_reason_if_unavailable() -> "str | None":
     return None
 
 
-def _run_real_install_once() -> "tuple[Path, dict]":
-    """One live pass of `_install_bin_resolvers` against this operator's
-    real `<settings-home>/bin`, real DoE templates, and real
-    `coordinator/lib/claude-home` -- the exact call `run()` Step 3 makes.
-    Returns `(bin_dst, observed_counts)` where `observed_counts` records the
-    raw values this chunk's brief asks for, never a pass/fail flag alone."""
+def _skip_reason_if_real_bin_absent(bin_dst: Path) -> "str | None":
+    if not bin_dst.is_dir():
+        return (
+            f"no real install found at {bin_dst} -- this operator has not "
+            "installed the bin family on this box, so there is nothing to "
+            "read -- environment gap, not a test failure"
+        )
+    return None
+
+
+def _run_install_against(bin_dst: Path) -> None:
+    """One `_install_bin_resolvers` pass against `bin_dst`, using real DoE
+    templates and the real `claude-home` family as SOURCE -- never the real
+    `<settings-home>/bin` as destination. Callers choose `bin_dst`; the
+    idempotence check below passes a `tmp_path` copy, never the live path."""
     ml_bin = _resolve_real_doe_bin_templates()
     ch_bin = _resolve_real_ch_bin()
-    bin_dst = settings_home() / "bin"
     python3_cmd_resolved_bin = _resolve_baked_python_bin()
 
     _install_bin_resolvers(
@@ -183,35 +184,28 @@ def _run_real_install_once() -> "tuple[Path, dict]":
         python3_cmd_resolved_bin=python3_cmd_resolved_bin,
     )
 
-    unbaked = 0
-    for name in _FIVE_STATIC_SHIM_NAMES:
-        p = bin_dst / name
-        if p.is_file():
-            unbaked += p.read_bytes().count(b"__PYTHON_BIN__")
-    observed = {
-        "unbaked_shim_token_count": unbaked,
-        "python_bin_sidecar_present": (bin_dst / ".python-bin").is_file(),
-    }
-    return bin_dst, observed
-
 
 class TestLiveBakeAndRefresh:
-    """AC1, AC6: a real install pass against this operator's actual
-    `<settings-home>/bin` bakes all five static shims and writes the durable
-    `.python-bin` sidecar -- read off disk, not asserted as a success flag."""
+    """AC1, AC6: this operator's actual, already-installed `<settings-home>/
+    bin` has all five static shims baked to zero unbaked tokens and carries
+    the durable `.python-bin` sidecar -- read directly off the real disk
+    content, never produced by running the installer as part of this test."""
 
     def test_five_shims_bake_to_zero_unbaked_tokens_and_sidecar_present(self):
-        skip = _skip_reason_if_unavailable()
+        bin_dst = settings_home() / "bin"
+        skip = _skip_reason_if_real_bin_absent(bin_dst)
         if skip:
             pytest.skip(skip)
 
-        bin_dst, observed = _run_real_install_once()
-
         if sys.platform == "win32":
-            assert observed["unbaked_shim_token_count"] == 0, (
+            unbaked = 0
+            for name in _FIVE_STATIC_SHIM_NAMES:
+                p = bin_dst / name
+                if p.is_file():
+                    unbaked += p.read_bytes().count(b"__PYTHON_BIN__")
+            assert unbaked == 0, (
                 f"expected 0 unbaked __PYTHON_BIN__ occurrences across the five "
-                f"static shims after a live install pass, observed "
-                f"{observed['unbaked_shim_token_count']} at {bin_dst}"
+                f"static shims in the real install, observed {unbaked} at {bin_dst}"
             )
         else:
             # § macOS verification item 1: there is no .cmd rung at all on
@@ -223,26 +217,31 @@ class TestLiveBakeAndRefresh:
                 "do not exist here -- AC5m is a separate, POSIX-only pass"
             )
 
-        assert observed["python_bin_sidecar_present"], (
-            f"<settings-home>/bin/.python-bin absent after a live install pass "
-            f"at {bin_dst} -- the durable half of AC6 did not land"
+        assert (bin_dst / ".python-bin").is_file(), (
+            f"<settings-home>/bin/.python-bin absent from the real install "
+            f"at {bin_dst} -- the durable half of AC6 has not landed there"
         )
 
 
 class TestLiveMachineLocalDumpVerbIsAccepted:
     """AC1: `machine-local dump` is an accepted verb on this box's real,
-    freshly-refreshed installed CLI -- invoked for real, output parsed, not
-    merely a nonzero-exit check."""
+    already-installed CLI -- invoked for real, output parsed, not merely a
+    nonzero-exit check. Never runs the installer as part of this test."""
 
     def test_dump_returns_the_registry_as_json(self):
-        skip = _skip_reason_if_unavailable()
+        bin_dst = settings_home() / "bin"
+        skip = _skip_reason_if_real_bin_absent(bin_dst)
         if skip:
             pytest.skip(skip)
 
-        bin_dst, _observed = _run_real_install_once()
         machine_local_bin = bin_dst / "machine-local"
+        if not machine_local_bin.exists():
+            pytest.skip(
+                f"{machine_local_bin} absent from the real install -- "
+                "environment gap, not a test failure"
+            )
         assert is_executable(machine_local_bin), (
-            f"{machine_local_bin} not executable after a live install pass"
+            f"{machine_local_bin} not executable in the real install"
         )
 
         argv = [*resolve_launchable(str(machine_local_bin)), "dump"]
@@ -259,29 +258,35 @@ class TestLiveMachineLocalDumpVerbIsAccepted:
 
 
 class TestSecondConsecutiveRunIsAByteLevelNoopOnTheStaticFamily:
-    """AC2: idempotence, proven live -- a second consecutive
-    `_install_bin_resolvers` pass over the same real destination, with no
-    intervening template change, writes nothing to the static family this
-    module snapshots. See module docstring's negative-spec for why this is
-    scoped to the static family rather than the full `bin/` tree, and for
-    the residual race this narrowing does not close."""
+    """AC2: idempotence, proven against a `tmp_path` copy of real install
+    content -- a second consecutive `_install_bin_resolvers` pass over that
+    copy, with no intervening template change, writes nothing to the static
+    family this module snapshots. The copy's starting content is the real
+    `<settings-home>/bin`; only the writes land in `tmp_path`, never the
+    real destination. See module docstring's negative-spec for why this is
+    scoped to the static family rather than the full `bin/` tree."""
 
-    def test_static_family_byte_identical_across_a_second_pass(self):
+    def test_static_family_byte_identical_across_a_second_pass(self, tmp_path):
         skip = _skip_reason_if_unavailable()
         if skip:
             pytest.skip(skip)
 
-        bin_dst, _observed = _run_real_install_once()
-        after_first = _snapshot_static_family(bin_dst)
+        real_bin_dst = settings_home() / "bin"
+        skip = _skip_reason_if_real_bin_absent(real_bin_dst)
+        if skip:
+            pytest.skip(skip)
 
-        _run_real_install_once()
-        after_second = _snapshot_static_family(bin_dst)
+        copy_bin_dst = tmp_path / "bin"
+        shutil.copytree(real_bin_dst, copy_bin_dst)
+
+        _run_install_against(copy_bin_dst)
+        after_first = _snapshot_static_family(copy_bin_dst)
+
+        _run_install_against(copy_bin_dst)
+        after_second = _snapshot_static_family(copy_bin_dst)
 
         assert after_first == after_second, (
-            "static bin family changed across a second consecutive live "
-            "install pass with no intervening template edit -- either a "
-            "genuine idempotence regression, or (see this module's "
-            "negative-spec) a concurrent peer session's own refresh landed "
-            "in the snapshot window; re-run in isolation to distinguish "
-            "the two before treating this as a defect"
+            "static bin family changed across a second consecutive install "
+            "pass against a tmp_path copy of the real install, with no "
+            "intervening template edit -- a genuine idempotence regression"
         )

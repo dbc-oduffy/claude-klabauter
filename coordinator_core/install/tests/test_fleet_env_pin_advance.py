@@ -553,7 +553,6 @@ def test_pin_advance_report_covers_every_contributing_repo():
         "example_retrieval_repo",
         "claude_klabauter",
         "example_game_workbench_repo",
-        "example_league_data_repo",
         "example_market_data_repo",
         "experiments",
         "example_retrieval_repo_ue_addon",
@@ -561,15 +560,37 @@ def test_pin_advance_report_covers_every_contributing_repo():
     assert expected_repos <= repos
 
 
-def test_huggingface_hub_flagged_as_major_advance_against_example_game_repo():
+def test_huggingface_hub_flagged_as_major_advance_against_example_game_repo(tmp_path):
     """The one advance the C7 dispatch brief names explicitly as already
-    known and contested: example-game-repo's `gpu_sidecar/requirements.txt` caps
-    `huggingface_hub` at `<1.0`; the PM-ruled fleet floor
-    (the `FIRST_CLASS_FLOORS` entry flooring ``huggingface_hub`` at 1.0) is
-        forced past that
-    cap via C3's `override-dependencies`. AC12 requires this surfaced as a
-    major-version advance against example-game-repo, not silently assumed."""
-    entries = build_pin_advance_report()
+    known and contested: example-game-repo's `gpu_sidecar/requirements.txt` used to
+    cap `huggingface_hub` at `<1.0`; the PM-ruled fleet floor (the
+    `FIRST_CLASS_FLOORS` entry flooring ``huggingface_hub`` at 1.0) is
+    forced past that cap via C3's `override-dependencies`. AC12 requires
+    this surfaced as a major-version advance against example-game-repo, not
+    silently assumed.
+
+    Pinned against a synthetic fixture, not the live
+    ``fleet-env-requirements.in``/example-game-repo manifest: example-game-repo has since
+    dropped the `<1.0` cap from its own requirements file, so reading the
+    live declaration here would make this regression test drift with an
+    unrelated sibling repo's edits rather than proving the classifier's
+    behaviour for the once-real, still-representative capped-declaration
+    case."""
+    req_in = tmp_path / "fleet-env-requirements.in"
+    req_in.write_text(
+        "huggingface_hub>=0.23,<1.0  # example_game_workbench_repo:gpu_sidecar/requirements.txt\n",
+        encoding="utf-8",
+    )
+    lock = tmp_path / "fleet-env.lock"
+    lock.write_text(
+        '[[package]]\nname = "huggingface-hub"\nversion = "1.2.0"\n',
+        encoding="utf-8",
+    )
+    entries = build_pin_advance_report(
+        requirements_in_path=req_in,
+        lock_path=lock,
+        installed_versions={("example_game_workbench_repo", "huggingface-hub"): "0.36.2"},
+    )
     matches = [
         e
         for e in entries

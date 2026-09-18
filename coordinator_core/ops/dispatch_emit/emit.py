@@ -334,6 +334,7 @@ from typing import NamedTuple, Optional
 import yaml
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+from coordinator_core.git.commit_trailers import _UUID_RE
 from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit.pathspec import (
@@ -598,6 +599,16 @@ class UnverifiableEnricherRowError(ValueError):
     Raised on the DERIVED path only. An explicit ``agent_type`` is the
     author's own decision and the escape from a false positive here.
     """
+
+
+#: Every refusal ``_row_agent_type`` can raise -- one list, read by
+#: ``roadmap.prep_gate`` so the gate certifies exactly what this emitter routes.
+ROW_ROUTING_ERRORS = (
+    MalformedAgentOverrideError,
+    UnroutableWorkKindRowError,
+    MixedAgentTypeRowError,
+    UnverifiableEnricherRowError,
+)
 
 
 #: A verification clause's own label, then its text to end of line. Spines
@@ -876,6 +887,116 @@ def _row_agent_type(row: WaveRow) -> str:
     return _EXECUTOR_AGENT_TYPE
 
 
+#: Sentinel `agent_type_host` value meaning "this session cannot resolve
+#: `coordinator:*` agentType values" (S1-C5, docs/plans/2026-09-18-doe-
+#: holds-no-scripts.md). The complementary, non-degraded value is
+#: `_AGENT_TYPE_HOST_COORDINATOR` -- any other truthy string a caller passes
+#: (e.g. a literal `COORDINATOR_AGENT_TYPE_HOST=coordinator`) is treated the
+#: same as the coordinator rung: only the exact sentinel below degrades.
+_AGENT_TYPE_HOST_DEGRADED = "host"
+_AGENT_TYPE_HOST_COORDINATOR = "coordinator"
+
+#: The one named roster `_degrade_agent_type` substitutes through on
+#: `agent_type_host == _AGENT_TYPE_HOST_DEGRADED`. `general-purpose` is the
+#: harness's own universal built-in (see `archive/specs/2026-08/2026-08-10-
+#: deny-unenumerated-agent-types-at-dispatch.md` AC3) -- the one agentType
+#: every host, coordinator-catered or not, can always resolve. Every
+#: `coordinator:*` type this module ever emits has a row here; a type absent
+#: from the roster (an explicit spine-row `agent_type:` override this module
+#: does not own, e.g. `coordinator:workflow-maker`) is left UNCHANGED rather
+#: than guessed -- see `_degrade_agent_type`.
+_HOST_NATIVE_AGENT_TYPE_ROSTER: dict[str, str] = {
+    _EXECUTOR_AGENT_TYPE: "general-purpose",
+    _ENRICHER_AGENT_TYPE: "general-purpose",
+    _COMMIT_AGENT_TYPE: "general-purpose",
+    _TEST_AGENT_TYPE: "general-purpose",
+}
+
+
+def resolve_agent_type_host(
+    *,
+    coordinator_agent_type_host: Optional[str] = None,
+    claude_plugin_root: Optional[str] = None,
+    coordinator_hook_state: bool = False,
+) -> str:
+    """Resolve the agent-type-host ladder to one of ``_AGENT_TYPE_HOST_
+    COORDINATOR`` / ``_AGENT_TYPE_HOST_DEGRADED`` (S1-C5).
+
+    A PURE function: it reads nothing from ``os.environ`` itself. The
+    caller resolves each rung from ITS OWN context (the CALLING session's
+    ``COORDINATOR_AGENT_TYPE_HOST``/``CLAUDE_PLUGIN_ROOT`` env vars, and
+    whatever this session's coordinator-hook state already told it) and
+    passes the already-resolved values in -- ``emit_script`` runs
+    warm-served, where ``os.environ`` belongs to whoever spawned the
+    server, not to the dispatching session (see module docstring's env-
+    forwarding precedent, ``coordinator_core.warm.env_forwarding``).
+
+    Three rungs, tried in order, first truthy one wins:
+      1. ``coordinator_agent_type_host`` -- the caller's own read of
+         ``COORDINATOR_AGENT_TYPE_HOST`` (the documented Phase 5 invocation
+         sets it to ``"coordinator"``). Passed through UNCHANGED, whatever
+         its value -- an explicit env var always outranks inference.
+      2. ``claude_plugin_root`` -- a non-empty ``CLAUDE_PLUGIN_ROOT`` means
+         the coordinator plugin is installed in this session, so
+         ``coordinator:*`` types resolve.
+      3. ``coordinator_hook_state`` -- True when this session's own
+         coordinator-hook state (catering) is already known live.
+
+    Absent all three (the default-degrade), returns
+    ``_AGENT_TYPE_HOST_DEGRADED`` -- a bare host session with no plugin and
+    no hook state cannot resolve a ``coordinator:*`` agentType, and
+    guessing coordinator anyway would silently mis-dispatch every row.
+    """
+    if coordinator_agent_type_host:
+        return coordinator_agent_type_host
+    if claude_plugin_root:
+        return _AGENT_TYPE_HOST_COORDINATOR
+    if coordinator_hook_state:
+        return _AGENT_TYPE_HOST_COORDINATOR
+    return _AGENT_TYPE_HOST_DEGRADED
+
+
+def _degrade_agent_type(agent_type: str, agent_type_host: Optional[str]) -> str:
+    """The ``agentType`` LITERAL to emit for ``agent_type`` given
+    ``agent_type_host`` -- never the ``model:`` literal, which callers must
+    keep resolving from the ORIGINAL ``agent_type`` (see ``_model_opt``
+    call sites below): a host-native substitution changes who runs the
+    row, never which charter tier's model it bills.
+
+    Unchanged unless ``agent_type_host`` is exactly
+    ``_AGENT_TYPE_HOST_DEGRADED``. On degrade, looks ``agent_type`` up in
+    ``_HOST_NATIVE_AGENT_TYPE_ROSTER``; a type absent from that roster (an
+    explicit row-level override this module does not own a host-native
+    mapping for) is returned UNCHANGED rather than guessed -- the run then
+    surfaces whatever refusal a real coordinator:-only type gets on a bare
+    host, which is honest; silently substituting an unregistered type would
+    not be.
+    """
+    if agent_type_host != _AGENT_TYPE_HOST_DEGRADED:
+        return agent_type
+    return _HOST_NATIVE_AGENT_TYPE_ROSTER.get(agent_type, agent_type)
+
+
+#: The narration line ``compose_script`` inserts ONCE, before any wave/
+#: commit/test phase, when it is composing under
+#: ``_AGENT_TYPE_HOST_DEGRADED``. A `log()` call, never a comment: an
+#: emitted script running host-degraded must read differently, to an
+#: operator watching the run, from one dispatching every phase's real
+#: coordinator:* charter -- see the identical "narrate the loss" posture at
+#: `_gitignore_degraded_narration`/`_no_test_scope_narration` elsewhere in
+#: this module. Never touches a `model:` literal -- see `_degrade_agent_
+#: type`.
+def _agent_type_host_degraded_narration() -> str:
+    message = (
+        "Agent-type host degradation: this run's agent_type_host resolved to "
+        f"{_AGENT_TYPE_HOST_DEGRADED!r}, so every coordinator:* agentType this "
+        "script would otherwise dispatch is substituted through the "
+        "host-native roster (general-purpose) instead -- this session cannot "
+        "resolve a coordinator:* agentType. model: literals are unaffected."
+    )
+    return f"  log({_js_string_literal(message)});"
+
+
 def _wave_phase_title(index: int, wave: list[WaveRow]) -> str:
     ids = ", ".join(row.id for row in wave)
     return f"Wave {index + 1}: {ids}"
@@ -959,6 +1080,31 @@ _REPO_ANCHOR_LINE = (
     "read and write only under it. A path that resolves under some other repo "
     "with the same relative name is the wrong file, not a divergence to report."
 )
+
+#: The commit-phase-only line naming the session that emitted this script
+#: (coordinator-claude#52b). ``ceremony.commit_v2`` reads a ``session_id``
+#: kwarg to attribute a ``Session-Id`` trailer to the DISPATCHING session
+#: rather than the commit agent's own process, which resolves nothing on
+#: this path -- a dispatched ``coordinator:git-commit-agent`` runs in its own
+#: process, where the env ladder ``session.core.resolve_session_id`` reads
+#: is unpopulated. The exact spelling is contract, byte for byte; the DoE
+#: agent contract reads this line out of its brief.
+_DISPATCHING_SESSION_ID_LINE = "Dispatching Session-Id: {session_id}"
+
+
+def _dispatching_session_id_paragraph(session_id: Optional[str]) -> str:
+    """The commit-phase-only ``Dispatching Session-Id:`` paragraph, or ``""``.
+
+    Omitted entirely -- not emitted empty -- when ``session_id`` is falsy or
+    is not UUID-shaped (``commit_trailers._UUID_RE``, the same grammar
+    ``commit_v2`` itself validates a ``session_id`` kwarg against): a
+    malformed or absent id is worth saying nothing about rather than
+    splicing a value the commit route would itself refuse.
+    """
+    if not session_id or not _UUID_RE.fullmatch(session_id):
+        return ""
+    return f"\n\n{_DISPATCHING_SESSION_ID_LINE.format(session_id=session_id)}"
+
 
 #: Leads every agent prompt this module emits. The harness may relay the
 #: driving session's live chat turn into a dispatched agent alongside its
@@ -1622,6 +1768,8 @@ def _wave_agent_calls(
     plan_path: Optional[str] = None,
     results_var: Optional[str] = None,
     plan_context: Optional[PlanContext] = None,
+    shared: Optional[SharedBlocks] = None,
+    agent_type_host: Optional[str] = None,
 ) -> str:
     """Compose the ``phase()`` + agent-dispatch call(s) for one executor wave.
 
@@ -1644,16 +1792,27 @@ def _wave_agent_calls(
     phase_call = f"  phase({_js_string_literal(phase_title)});"
     binder = f"const {results_var} = " if results_var else ""
 
+    def _prompt_literal(row: WaveRow) -> str:
+        prompt = _row_prompt(row, plan_path, plan_context)
+        if shared is None:
+            return _js_string_literal(prompt)
+        head = f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
+        if plan_context is not None:
+            head += f"{_plan_context_preamble(plan_context)}\n\n"
+        if not prompt.startswith(head):
+            return _js_string_literal(prompt)
+        return f"{shared.expr(head)} + {_js_string_literal(prompt[len(head):])}"
+
     if len(wave) == 1:
         row = wave[0]
         row_agent_type = _row_agent_type(row)
         call = (
             f"  {binder}await agent("
-            f"{_js_string_literal(_row_prompt(row, plan_path, plan_context))}, "
+            f"{_prompt_literal(row)}, "
             "{ "
             f"label: {_js_string_literal(f'work:{row.id}')}, "
             f"phase: {_js_string_literal(phase_title)}, "
-            f"agentType: {_js_string_literal(row_agent_type)}, "
+            f"agentType: {_js_string_literal(_degrade_agent_type(row_agent_type, agent_type_host))}, "
             f"{_model_opt(row_agent_type, row.agent_model)} "
             "});"
         )
@@ -1663,11 +1822,11 @@ def _wave_agent_calls(
         row_agent_type = _row_agent_type(row)
         return (
             "    () => agent("
-            f"{_js_string_literal(_row_prompt(row, plan_path, plan_context))}, "
+            f"{_prompt_literal(row)}, "
             "{ "
             f"label: {_js_string_literal(f'work:{row.id}')}, "
             f"phase: {_js_string_literal(phase_title)}, "
-            f"agentType: {_js_string_literal(row_agent_type)}, "
+            f"agentType: {_js_string_literal(_degrade_agent_type(row_agent_type, agent_type_host))}, "
             f"{_model_opt(row_agent_type, row.agent_model)} "
             "})"
         )
@@ -1699,6 +1858,46 @@ def _escape_for_js_template_literal(text: str) -> str:
         .replace("`", "\\`")
         .replace("${", "\\${")
     )
+
+
+_SHARED_VAR = "_shared"
+
+
+class SharedBlocks:
+    """Prompt text every agent in one emitted script repeats, declared once.
+
+    A plan's commit phases each carry ~17KB of identical commit doctrine, and
+    its executor briefs each carry the same plan preamble; inlined per agent a
+    52-row plan emitted 764KB, past the Workflow tool's 512KB script cap, and
+    could not be fired at all. ``ref`` registers a block and returns the
+    template-literal interpolation that reads it back, so every prompt still
+    resolves at runtime to byte-identical text: the resume cache, which keys on
+    the resolved prompt, cannot tell the difference.
+
+    Negative spec: never hoist text that reads a runtime binding (the
+    preflight sha) -- the declaration is evaluated before that binding exists.
+    """
+
+    def __init__(self) -> None:
+        self._texts: list[str] = []
+        self._index: dict[str, int] = {}
+
+    def expr(self, text: str) -> str:
+        """The JS expression reading ``text`` back: ``_shared[i]``."""
+        if text not in self._index:
+            self._index[text] = len(self._texts)
+            self._texts.append(text)
+        return "%s[%d]" % (_SHARED_VAR, self._index[text])
+
+    def ref(self, text: str) -> str:
+        """``expr`` as a template-literal interpolation."""
+        return "${%s}" % self.expr(text)
+
+    def declaration(self) -> Optional[str]:
+        if not self._texts:
+            return None
+        items = ",\n".join(f"    `{_escape_for_js_template_literal(t)}`" for t in self._texts)
+        return f"  const {_SHARED_VAR} = [\n{items}\n  ];"
 
 
 #: Dispatch-layer bookkeeping surfaces an executor may legitimately write
@@ -1947,17 +2146,17 @@ _PROVENANCE_HEADING = (
     "withheld path up."
     "\n- Denial reads `orphan -- no session holds a claim` and "
     "`who-claims-path` prints NOTHING -> A DETERMINATE ORPHAN "
-    "IS A THIRD ANSWER WITH ITS OWN VERB, not a claim you failed to find. "
+    "IS A THIRD ANSWER, not a claim you failed to find. "
     "`hooks/track_touched_files` records a claim only for the "
     "Write/Edit/MultiEdit/NotebookEdit matcher (DR-258), so a path your "
-    "executor wrote through Bash records none and is classified a dirty "
-    "orphan; `clear-claim-if-dead` and `release-artifact` are both no-ops "
-    "there. Re-issue the SAME `ceremony.commit_v2` call with "
-    "`\"include_orphans\": true` in its params -- the guard mirrors that flag "
-    "(`block_subagent_commit` reads it from the same text it scans for your "
-    "pathspec). Use it ONLY when all three hold: `who-claims-path` returned "
-    "nothing for the path, the path is in your handed pathspec, and an "
-    "executor report corroborates it. It never relaxes a peer-claimed path."
+    "executor wrote through Bash records none; `clear-claim-if-dead` and "
+    "`release-artifact` are both no-ops there. A dispatched committer cannot "
+    "adopt it: `block_subagent_commit` refuses `include_orphans` from every "
+    "dispatched committer (SC-DR-022: adoption needs the writer's own provenance), so "
+    "do not retry with it. Commit the rest of the pathspec and end with "
+    f"'{_COMMIT_PARTIAL_TOKEN} <sha> withheld: <path1>, <path2>' naming each "
+    "orphan, so the EM, who holds the executor report, commits it. This "
+    "never relaxes a peer-claimed path."
     "\n\nTHE CALL RETURNS THE SHA: "
     "`coordinator_core.git.commit.commit_paths(repo, paths, message, *, "
     "deleted_paths=(), ...)` returns a `CommitOutcome` whose `.sha` IS the "
@@ -2024,6 +2223,9 @@ def _commit_agent_call(
     deliverable_id: Optional[str] = None,
     repo_root: Optional[str] = None,
     prefixes: list[tuple[str, tuple[str, ...]]] | None = None,
+    shared: Optional[SharedBlocks] = None,
+    session_id: Optional[str] = None,
+    agent_type_host: Optional[str] = None,
 ) -> str:
     """Emit the wave's commit-agent call, plus the gate that halts the run
     when that commit did not land its FULL handed pathspec -- including a
@@ -2117,11 +2319,16 @@ def _commit_agent_call(
     )
     prefix_rule = _prefix_commit_rule(prefixes) if prefixes else ""
     anchor = f"{_REPO_ANCHOR_LINE.format(root=repo_root)}\n\n" if repo_root else ""
-    static_prompt = (
-        f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
-        + anchor
-        + f"Commit wave {index + 1}'s work. Pathspec: [{', '.join(pathspec)}]."
-        f"{prefix_rule}{subject_rule}{deliverable_rule}"
+    session_paragraph = _dispatching_session_id_paragraph(session_id)
+    lead = f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n" + anchor
+    if session_paragraph:
+        lead += session_paragraph.lstrip("\n") + "\n\n"
+    wave_part = (
+        f"Commit wave {index + 1}'s work. Pathspec: [{', '.join(pathspec)}]."
+        f"{prefix_rule}{subject_rule}"
+    )
+    doctrine = (
+        f"{deliverable_rule}"
         f" If `CommitOutcome.no_delta` comes back non-empty, list those paths"
         f" first and say they contributed nothing to this commit -- they are"
         f" paths you declared that were already at HEAD, and reporting only"
@@ -2200,8 +2407,8 @@ def _commit_agent_call(
     # preflight is the FIRST call in every emitted script, so busting its cache
     # busts the longest-unchanged-prefix for everything downstream and makes
     # `resumeFromRunId` a full re-run of an already-landed plan.
-    static_prompt = (
-        f"{static_prompt}\n\nSTALENESS CHECK, before you stage anything. The "
+    staleness = (
+        f"\n\nSTALENESS CHECK, before you stage anything. The "
         f"commit-claimability preflight reported observing HEAD at "
         f"{_PREFLIGHT_SHA_PLACEHOLDER}. Run `git rev-parse "
         f"HEAD`. If it MATCHES, proceed normally and say nothing about it. If it "
@@ -2212,12 +2419,22 @@ def _commit_agent_call(
         f"proceed or report BLOCKED on what you actually find. Never treat the "
         f"preflight's verdict as covering a tree it did not see."
     )
+    static_prompt = f"{lead}{wave_part}{doctrine}{staleness}"
 
     if results_var:
-        static_prompt = f"{static_prompt}\n\n{_PROVENANCE_HEADING}\n\nExecutor report(s):"
-        escaped_static = _interpolate_preflight_sha(
-            _escape_for_js_template_literal(static_prompt)
-        )
+        provenance = f"\n\n{_PROVENANCE_HEADING}\n\nExecutor report(s):"
+        if shared is None:
+            escaped_static = _interpolate_preflight_sha(
+                _escape_for_js_template_literal(static_prompt + provenance)
+            )
+        else:
+            escaped_static = (
+                shared.ref(lead)
+                + _escape_for_js_template_literal(wave_part)
+                + shared.ref(doctrine)
+                + _interpolate_preflight_sha(_escape_for_js_template_literal(staleness))
+                + shared.ref(provenance)
+            )
         prompt_literal = (
             f"`{escaped_static}\\n${{JSON.stringify({results_var}, null, 2)}}`"
         )
@@ -2237,7 +2454,7 @@ def _commit_agent_call(
         "{ "
         f"label: {_js_string_literal(f'commit:wave-{index + 1}')}, "
         f"phase: {_js_string_literal(phase_title)}, "
-        f"agentType: {_js_string_literal(_COMMIT_AGENT_TYPE)}, "
+        f"agentType: {_js_string_literal(_degrade_agent_type(_COMMIT_AGENT_TYPE, agent_type_host))}, "
         f"{_model_opt(_COMMIT_AGENT_TYPE)} "
         "});"
     )
@@ -2459,6 +2676,7 @@ def _preflight_agent_call(
     phase_title: str,
     repo_root: Optional[str] = None,
     prefixes: list[str] | None = None,
+    agent_type_host: Optional[str] = None,
 ) -> str:
     """Compose the preflight phase's ``phase()`` + ``agent()`` call (AC14).
 
@@ -2528,7 +2746,7 @@ def _preflight_agent_call(
         "{ "
         f"label: {_js_string_literal('preflight:commit-claimability')}, "
         f"phase: {_js_string_literal(phase_title)}, "
-        f"agentType: {_js_string_literal(_COMMIT_AGENT_TYPE)}, "
+        f"agentType: {_js_string_literal(_degrade_agent_type(_COMMIT_AGENT_TYPE, agent_type_host))}, "
         f"{_model_opt(_COMMIT_AGENT_TYPE)} "
         "});"
     )
@@ -2618,7 +2836,9 @@ def _preflight_halt_gate(preflight_var: str, phase_title: str) -> str:
     return f"{blocked}\n{clear}"
 
 
-def _test_agent_call(scope: list[str], phase_title: str) -> str:
+def _test_agent_call(
+    scope: list[str], phase_title: str, agent_type_host: Optional[str] = None
+) -> str:
     phase_call = f"  phase({_js_string_literal(phase_title)});"
     prompt = (
         f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
@@ -2630,7 +2850,7 @@ def _test_agent_call(scope: list[str], phase_title: str) -> str:
         "{ "
         f"label: {_js_string_literal('test:terminal')}, "
         f"phase: {_js_string_literal(phase_title)}, "
-        f"agentType: {_js_string_literal(_TEST_AGENT_TYPE)}, "
+        f"agentType: {_js_string_literal(_degrade_agent_type(_TEST_AGENT_TYPE, agent_type_host))}, "
         f"{_model_opt(_TEST_AGENT_TYPE)} "
         "});"
     )
@@ -2664,7 +2884,9 @@ def _no_test_scope_narration() -> str:
     return f"  log({_js_string_literal(message)});"
 
 
-def _falsifier_terminal_phase(falsifier: dict, phase_title: str) -> str:
+def _falsifier_terminal_phase(
+    falsifier: dict, phase_title: str, agent_type_host: Optional[str] = None
+) -> str:
     """Rung 2's terminal phase: the plan's own
     ``prime_exit_criterion.falsifier`` run in place of a test suite
     ``pathspec.terminal_test_scope`` could not resolve.
@@ -2702,7 +2924,7 @@ def _falsifier_terminal_phase(falsifier: dict, phase_title: str) -> str:
         "{ "
         f"label: {_js_string_literal('test:terminal-falsifier')}, "
         f"phase: {_js_string_literal(phase_title)}, "
-        f"agentType: {_js_string_literal(_TEST_AGENT_TYPE)}, "
+        f"agentType: {_js_string_literal(_degrade_agent_type(_TEST_AGENT_TYPE, agent_type_host))}, "
         f"{_model_opt(_TEST_AGENT_TYPE)} "
         "});"
     )
@@ -2851,6 +3073,22 @@ def _review_gate_policy(stage: Stage, index: int, results: list[tuple[str, str]]
     return ""
 
 
+#: Heads every emitted script (claude-klabauter#21, part 2). The body below
+#: this module composes runs a top-level `return` (see module docstring §
+#: Top-level body, never a defined-but-uninvoked wrapper), legal only
+#: because the Workflow runner executes this file's body directly rather
+#: than wrapping it in a function -- `node --check` has no way to know that
+#: and reports `SyntaxError: Illegal return statement` for every script this
+#: module emits. That is not a defect in the emitted script; it is `node
+#: --check` applying a rule this runtime does not follow.
+_NODE_CHECK_DOES_NOT_APPLY_COMMENT = (
+    "// This script runs inside the Workflow runner, which executes this\n"
+    "// file's body directly and permits a top-level `return`. `node --check`\n"
+    "// therefore reports `SyntaxError: Illegal return statement` for this\n"
+    "// file -- that is not a defect."
+)
+
+
 def _meta_block(name: str, description: str, phase_titles: list[str]) -> str:
     phases_literal = ", ".join(_js_string_literal(t) for t in phase_titles)
     return (
@@ -2950,6 +3188,8 @@ def compose_script(
     plan_context: Optional[PlanContext] = None,
     deliverable_id: Optional[str] = None,
     falsifier: Optional[dict] = None,
+    session_id: Optional[str] = None,
+    agent_type_host: Optional[str] = None,
 ) -> str:
     """Compose one Workflow ``.mjs`` script text from already-derived ``waves``.
 
@@ -3042,9 +3282,13 @@ def compose_script(
 
     body_blocks: list[str] = []
     phase_titles: list[str] = []
+    shared = SharedBlocks()
 
     if gitignore_filter_degraded:
         body_blocks.append(_gitignore_degraded_narration())
+
+    if agent_type_host == _AGENT_TYPE_HOST_DEGRADED:
+        body_blocks.append(_agent_type_host_degraded_narration())
 
     # Defect fix: a chunk report carrying a non-DONE status (PARTIAL,
     # BLOCKED) must not let the run's terminal record read `completed: true`
@@ -3066,6 +3310,7 @@ def compose_script(
             _PREFLIGHT_PHASE_TITLE,
             repo_root=repo_anchor,
             prefixes=preflight_prefixes,
+            agent_type_host=agent_type_host,
         )
     )
 
@@ -3091,7 +3336,13 @@ def compose_script(
             )
             body_blocks.append(
                 _wave_agent_calls(
-                    batch, wave_title, plan_path, results_var, plan_context
+                    batch,
+                    wave_title,
+                    plan_path,
+                    results_var,
+                    plan_context,
+                    shared,
+                    agent_type_host=agent_type_host,
                 )
             )
             stopped_var = f"_stopped{results_var[0].upper()}{results_var[1:]}"
@@ -3148,6 +3399,9 @@ def compose_script(
                     deliverable_id=deliverable_id,
                     repo_root=repo_anchor,
                     prefixes=commit_prefixes(batch),
+                    shared=shared,
+                    session_id=session_id,
+                    agent_type_host=agent_type_host,
                 )
             )
             body_blocks.append(stop_gate)
@@ -3165,26 +3419,35 @@ def compose_script(
     except NoTestTargetError as exc:
         if falsifier is not None:
             phase_titles.append(_TEST_PHASE_TITLE)
-            body_blocks.append(_falsifier_terminal_phase(falsifier, _TEST_PHASE_TITLE))
+            body_blocks.append(
+                _falsifier_terminal_phase(
+                    falsifier, _TEST_PHASE_TITLE, agent_type_host=agent_type_host
+                )
+            )
         else:
             body_blocks.append(_no_test_target_narration(exc))
     else:
         if scope:
             phase_titles.append(_TEST_PHASE_TITLE)
-            body_blocks.append(_test_agent_call(scope, _TEST_PHASE_TITLE))
+            body_blocks.append(
+                _test_agent_call(scope, _TEST_PHASE_TITLE, agent_type_host=agent_type_host)
+            )
         else:
             body_blocks.append(_no_test_scope_narration())
 
     body_blocks.append(_completion_return(waves, phase_titles))
 
     meta_block = _meta_block(name, description, phase_titles)
+    declaration = shared.declaration() if shared is not None else None
+    if declaration is not None:
+        body_blocks.insert(0, declaration)
     if excluded_rows:
         body_blocks.insert(0, _excluded_rows_narration(excluded_rows))
     body = "\n\n".join(body_blocks)
 
     # Top-level, never `async function run(ctx) { ... }` -- see module
     # docstring § Top-level body, never a defined-but-uninvoked wrapper.
-    return f"{meta_block}\n{body}\n"
+    return f"{_NODE_CHECK_DOES_NOT_APPLY_COMMENT}\n{meta_block}\n{body}\n"
 
 
 #: A non-DONE status in the position the executor return contract puts it:
@@ -3204,7 +3467,11 @@ _NON_DONE_STATUS_JS_RE = (
 #: so an executor that writes prose ahead of its `DONE: <path>` line is not
 #: misread as having skipped the brief.
 _ANY_STATUS_JS_RE = (
-    r'/(?:^"?|\n|\\n)\s*[*_]{0,2}(?:DONE|PARTIAL|BLOCKED)[*_]{0,2}:'
+    # Review: code-reviewer -- the trailing class admitted "*"/"_" but not
+    # "`", so a reply closing its inline-code span before the colon (e.g.
+    # `` `DONE_WITH_CONCERNS`: <path> ``) fell through unmatched even though
+    # the opening class already admits the leading backtick.
+    r'/(?:^"?|\n|\\n)\s*[*_`]{0,2}(?:DONE(?:_WITH_CONCERNS)?|PARTIAL|BLOCKED)[*_`]{0,2}:'
     r'|<exit-status>(?:DONE|PARTIAL|BLOCKED)<\/exit-status>/'
 )
 
@@ -3380,9 +3647,19 @@ def emit_script(
     name: Optional[str] = None,
     description: Optional[str] = None,
     repo_root: Optional[Path] = None,
+    session_id: Optional[str] = None,
     review_roster_fragment: Optional[dict] = None,
+    agent_type_host: Optional[str] = None,
 ) -> str:
     """Read ``plan_path``'s task spine and compose one Workflow script text.
+
+    ``agent_type_host`` (S1-C5, docs/plans/2026-09-18-doe-holds-no-scripts.md)
+    is the CALLER's already-resolved ``resolve_agent_type_host()`` value —
+    this function never reads ``os.environ`` itself (see that function's
+    docstring for why: this path runs warm-served, where ``os.environ``
+    belongs to whoever spawned the server, not to the dispatching session).
+    Threaded straight through to ``compose_script``, which is the sole
+    composer of every emitted ``agentType`` literal.
 
     Composes the full pipeline: ``spine_read.read_spine`` ->
     ``wave_map.build_waves`` -> ``compose_script``. ``name``/``description``
@@ -3481,6 +3758,8 @@ def emit_script(
         plan_context=plan_context,
         deliverable_id=deliverable_id,
         falsifier=falsifier,
+        session_id=session_id,
+        agent_type_host=agent_type_host,
     )
 
 

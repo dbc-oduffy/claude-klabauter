@@ -768,13 +768,31 @@ def _venv_interp(repo_root: Optional[str]) -> Optional[str]:
 
 
 def _shared_console_python() -> Optional[str]:
-    """Resolve via `coordinator/bin/lib/python_interp.py`, the one shared ladder."""
+    """Resolve via `coordinator/bin/lib/python_interp.py`, the one shared ladder.
+
+    Robustness note: `coordinator_core` and `coordinator/bin` publish to
+    klabauter as TWO INDEPENDENT mirror rows
+    (`setup/publish-targets.portable` — `claude-klabauter` for
+    `coordinator_core`, `claude-klabauter-coordinator-bin` for
+    `coordinator/bin`, including its `lib/` child, which the row's own
+    exclude-list does not name). Neither row's sync is transactional with
+    the other, so a partial or stale publish can leave this module present
+    without its sibling `coordinator/bin/lib` directory ever landing (or
+    landing on a later, out-of-sync sweep). Catches `ImportError` and
+    returns None rather than letting a missing ladder raise out of
+    `_resolve_python_interp` — the caller already treats None as "fall
+    through to the PATH-probing legs below", the same degrade path a
+    completely absent Windows ladder was always allowed to take.
+    """
     bin_lib = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "coordinator", "bin", "lib"
     )
     if bin_lib not in sys.path:
         sys.path.insert(0, bin_lib)
-    from python_interp import resolve_console_python
+    try:
+        from python_interp import resolve_console_python
+    except ImportError:
+        return None
 
     return resolve_console_python()
 

@@ -21,9 +21,14 @@ from pathlib import Path
 
 import pytest
 
-import coordinator_core.ops.review_freeze_diff  # noqa: F401 — fires @register_op
+import coordinator_core.ops.review_freeze_diff as review_freeze_diff  # fires @register_op
 from coordinator_core.ipc import _REGISTRY
-from coordinator_core.ops.review_freeze_diff import _handler, _validate_slice_id, freeze_diff
+from coordinator_core.ops.review_freeze_diff import (
+    _handler,
+    _validate_slice_id,
+    freeze_diff,
+    freeze_diffs_batch,
+)
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -264,3 +269,124 @@ def test_handler_paths_must_be_a_list(tmp_path: Path) -> None:
         {"range": "a..b", "slice_id": "x", "paths": "not-a-list"}, repo_root=tmp_path
     )
     assert result["error"] is not None
+
+
+# ---------------------------------------------------------------------------
+# freeze_diffs_batch — batch/single-path parity, one git spawn per phase.
+# ---------------------------------------------------------------------------
+
+
+def test_batch_of_two_ranges_equals_two_single_freezes_via_one_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+    sha3 = _commit(tmp_path, "b.txt", "peer content\n", "add b.txt")
+
+    diff_tree_calls = []
+    real_git = review_freeze_diff._git
+
+    def _counting_git(args, **kwargs):
+        if args and args[0] == "diff-tree":
+            diff_tree_calls.append(args)
+        return real_git(args, **kwargs)
+
+    monkeypatch.setattr(review_freeze_diff, "_git", _counting_git)
+
+    batch_results = freeze_diffs_batch(
+        tmp_path,
+        [
+            {"slice_id": "batch-a", "range": f"{sha1}..{sha2}"},
+            {"slice_id": "batch-b", "range": f"{sha2}..{sha3}"},
+        ],
+    )
+
+    assert len(diff_tree_calls) == 1, (
+        f"expected exactly one git diff-tree spawn for a two-slice batch, got "
+        f"{len(diff_tree_calls)}: {diff_tree_calls!r}"
+    )
+
+    single_a = freeze_diff(tmp_path, f"{sha1}..{sha2}", "single-a")
+    single_b = freeze_diff(tmp_path, f"{sha2}..{sha3}", "single-b")
+
+    assert batch_results[0]["error"] is None
+    assert batch_results[1]["error"] is None
+    assert Path(batch_results[0]["diff_path"]).read_text() == Path(
+        single_a["diff_path"]
+    ).read_text()
+    assert Path(batch_results[1]["diff_path"]).read_text() == Path(
+        single_b["diff_path"]
+    ).read_text()
+    assert batch_results[0]["head_sha"] == single_a["head_sha"]
+    assert batch_results[1]["head_sha"] == single_b["head_sha"]
+    assert batch_results[0]["empty"] == single_a["empty"] is False
+    assert batch_results[1]["empty"] == single_b["empty"] is False
+
+
+def test_batch_shares_one_head_sha_across_requests(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    results = freeze_diffs_batch(
+        tmp_path,
+        [
+            {"slice_id": "shared-1", "range": f"{sha1}..{sha2}"},
+            {"slice_id": "shared-2", "range": f"{sha1}..{sha2}"},
+        ],
+    )
+    assert results[0]["head_sha"] == results[1]["head_sha"] == sha2
+
+
+def test_batch_zero_commit_range_refuses_that_request_only(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    results = freeze_diffs_batch(
+        tmp_path,
+        [
+            {"slice_id": "zero-commit", "range": "HEAD..HEAD"},
+            {"slice_id": "real-diff", "range": f"{sha1}..{sha2}"},
+        ],
+    )
+
+    assert results[0]["error"] is not None
+    assert "ZERO commits" in results[0]["error"]
+    assert results[1]["error"] is None
+    assert Path(results[1]["diff_path"]).is_file()
+
+
+def test_batch_three_dot_range_matches_two_dot_merge_base_equivalent(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    two_dot = freeze_diffs_batch(
+        tmp_path, [{"slice_id": "three-dot-check", "range": f"{sha1}...{sha2}"}]
+    )[0]
+
+    assert two_dot["error"] is None
+    assert Path(two_dot["diff_path"]).read_text() != ""
+
+
+def test_batch_empty_returns_empty_list(tmp_path: Path) -> None:
+    assert freeze_diffs_batch(tmp_path, []) == []
+
+
+def test_batch_mismatched_paths_raises(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    with pytest.raises(ValueError):
+        freeze_diffs_batch(
+            tmp_path,
+            [
+                {"slice_id": "p1", "range": f"{sha1}..{sha2}", "paths": ["a.txt"]},
+                {"slice_id": "p2", "range": f"{sha1}..{sha2}", "paths": ["b.txt"]},
+            ],
+        )

@@ -175,11 +175,15 @@ def _resolved_coordinator_plugin_dir() -> Optional[str]:
     registry) — callers fall back to an approximation in that case."""
     try:
         from coordinator_core.resolution.facade import resolve_operator_config
+        from coordinator_core.data_root import content_root_for
 
         doe_root = resolve_operator_config()["doe_root"]
     except Exception:
         return None
-    return os.path.normcase(os.path.normpath(os.path.join(doe_root, "coordinator")))
+    content_root = content_root_for(doe_root)
+    if content_root is None:
+        return None
+    return os.path.normcase(os.path.normpath(str(content_root)))
 
 
 def _is_guarded(command_line: str) -> bool:

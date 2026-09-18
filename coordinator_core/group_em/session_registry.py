@@ -1,0 +1,193 @@
+"""coordinator_core.group_em.session_registry -- shared reader for the harness session registry
+(``~/.claude/sessions/*.json``).
+
+Ported from DoE-claude `coordinator/bin/lib/session_registry.py` (W2-C1,
+`docs/plans/2026-09-18-doe-holds-no-scripts.md`), which that module's own docstring records was
+consolidated out of `group-em-nomination.py`, `resolve-peer-address.py` and `statusline.py`, each
+of which carried a near-identical copy.
+
+Purpose: every caller that needs to know which sessions are live on this machine -- and whether a
+given `pid` is one of them -- reads the same on-disk shape. Keeping one copy means a schema change
+(e.g. the `sessionId`/`session_id` key drift already observed between callers) is fixed once, not
+N times. `coordinator_core.group_em` already has its own liveness reader
+(`coordinator_core.session.harness_registry`); this module is the ported primitive DoE's own
+holder-record callers (`atomic_record`-based) key against, kept as a DIRECT port -- not folded into
+`harness_registry` -- because the two read different registries by design: this module's
+`registry_dir()` resolves `$CLAUDE_CONFIG_DIR` (or `~/.claude`) `/sessions`, the harness's own
+per-session record directory, which is a different on-disk location and shape question than
+whatever `coordinator_core.session.harness_registry` snapshots for its own callers.
+
+NEGATIVE SPEC:
+
+  - It does NOT cache anything. Every call scans or reads fresh; callers that want a memo (e.g.
+    a long-lived-process's own `_peer_name` cache) build it on top of this module, at the layer
+    that knows its own call frequency.
+  - It does NOT decide liveness policy beyond "is this pid a running process" -- what a dead pid
+    or missing registry row MEANS to a caller (not-live, no-nomination, etc.) is the caller's call.
+
+`find_registry_row` and `is_live` carry DoE's own negative spec unchanged by the move: a record's
+own `pid` field is never a liveness signal -- a pid written by a CLI subprocess is that
+subprocess's own, dead on exit -- so liveness comes ONLY from joining a record's `session_id`
+against THIS registry's own published `pid` for that session, fresh on every call, never cached
+at any layer.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+from typing import NamedTuple, Optional
+
+
+class RegistryRow(NamedTuple):
+    """One harness registry record, normalised."""
+
+    session_id: str
+    name: str
+    pid: int
+    cwd: str
+    status: str
+    path: Optional[Path] = None
+
+
+def registry_dir() -> Path:
+    """Directory holding the per-live-session records."""
+    override = os.environ.get("CLAUDE_CONFIG_DIR")
+    root = Path(override) if override else Path.home() / ".claude"
+    return root / "sessions"
+
+
+def parse_row(path: Path) -> Optional[RegistryRow]:
+    """One registry record from a single file, or None if unreadable/malformed -- the directory
+    is written by concurrent sessions, so a torn record is an expected transient."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    session_id = data.get("sessionId") or data.get("session_id")
+    if not session_id:
+        return None
+    try:
+        pid = int(data.get("pid") or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    return RegistryRow(
+        session_id=str(session_id),
+        name=str(data.get("name") or ""),
+        pid=pid,
+        cwd=str(data.get("cwd") or ""),
+        status=str(data.get("status") or ""),
+        path=path,
+    )
+
+
+def read_rows(directory: Optional[Path] = None) -> list[RegistryRow]:
+    """Every parseable record in the registry, via a full directory scan. Never spawns."""
+    directory = directory or registry_dir()
+    rows: list[RegistryRow] = []
+    try:
+        entries = sorted(directory.glob("*.json"))
+    except OSError:
+        return rows
+    for path in entries:
+        row = parse_row(path)
+        if row is not None:
+            rows.append(row)
+    return rows
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Kernel liveness query on Windows."""
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return False
+    try:
+        code = ctypes.c_ulong()
+        if kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return code.value == STILL_ACTIVE
+        return True
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _pid_alive_posix(pid: int) -> bool:
+    """Signal-0 liveness query. `PermissionError` means the process exists under another user."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def pid_alive(pid: int) -> bool:
+    """True if `pid` names a live process. Never spawns; never raises."""
+    if pid <= 0:
+        return False
+    arm = _pid_alive_windows if os.name == "nt" else _pid_alive_posix
+    return arm(pid)
+
+
+def find_registry_row(
+    session_id: str, directory: Optional[Path] = None
+) -> Optional[RegistryRow]:
+    """The registry row for `session_id`, via a full directory scan on every call -- never
+    cached. The scan is ~2 ms against ~40 ms of interpreter start for the CLI process this
+    typically runs in, and a cached "who holds this" answer that survives a stand-down or a
+    release is worse than no answer -- see the module docstring's negative spec.
+    """
+    for row in read_rows(directory):
+        if row.session_id == session_id:
+            return row
+    return None
+
+
+def is_live(
+    record: dict, registry_dir: Optional[Path] = None
+) -> tuple[bool, Optional[RegistryRow]]:
+    """Liveness is a join, never a stored pid.
+
+    `record` is any dict carrying a `session_id` key. No registry record for that `session_id`
+    => not live (never confused with "the session is gone" being proven -- it simply is not
+    evidence either way beyond "not live now"). Registry record present but its `pid` is dead =>
+    not live, and distinguishable from the no-record case by the returned row being non-None.
+    """
+    session_id = str(record.get("session_id") or "")
+    if not session_id:
+        return False, None
+    row = find_registry_row(session_id, registry_dir)
+    if row is None:
+        return False, None
+    return pid_alive(row.pid), row
+
+
+def liveness_annotation(
+    record: dict, registry_dir: Optional[Path] = None
+) -> tuple[bool, str, str]:
+    """The three-way live/live_reason/human-state ladder shared by every ``who()``-style reader
+    (`group-em-nomination.py`, `navi-singleton.py`) that annotates a holder record fresh, never
+    cached. Built on `is_live`, distinguishing its two not-live causes for the reader: no
+    registry row for this `session_id` at all, versus a row present but its `pid` no longer
+    running.
+
+    Returns ``(live, live_reason, live_state)`` -- ``live_reason`` is one of ``"live"``,
+    ``"no_registry_record"``, ``"pid_not_running"``; ``live_state`` is the human sentence
+    fragment each caller's status message embeds.
+    """
+    live, row = is_live(record, registry_dir)
+    if live:
+        return True, "live", "live"
+    if row is None:
+        return False, "no_registry_record", "not live (no registry record for this session)"
+    return False, "pid_not_running", "not live (registry record present, process not running)"

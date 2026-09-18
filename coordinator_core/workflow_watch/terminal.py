@@ -36,12 +36,14 @@ merely as redundant.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from coordinator_core.workflow_watch.tail import TailReader
 
 _TASK_NOTIFICATION_RE = re.compile(
     r"<task-notification>.*?<task-id>(?P<task_id>[^<]*)</task-id>.*?"
-    r"<status>(?P<status>[^<]*)</status>.*?</task-notification>",
+    r"<status>(?P<status>[^<]*)</status>"
+    r"(?:.*?<result>(?P<result>.*?)</result>)?.*?</task-notification>",
     re.DOTALL,
 )
 
@@ -51,6 +53,45 @@ _TERMINAL_STATUSES = frozenset({"completed", "failed", "killed", "stopped"})
 
 #: Characters a sentence-shaped log line can leave stuck to the end of an id.
 _ID_TRAILING_PUNCT = ".,;:!?)]}\"'"
+
+
+@dataclass(frozen=True)
+class TerminalRecord:
+    """One positively-matched terminal record for a single task id.
+
+    `status` is always one of the harness's own four values
+    (`completed`/`failed`/`killed`/`stopped` — the TaskStop path fills in
+    the literal `"stopped"`, matching `check()`'s existing collapse).
+    `result_text` is the raw `<result>...</result>` payload found beside a
+    `<task-notification>`'s `<status>`, when present — a TaskStop match
+    carries no such payload and leaves it `None`. Consumers that need to
+    tell a script's own `{ halted: ... }` return apart from an ordinary
+    `{ completed: ... }` one (`stamp.py`) read `result_text`; `check()`
+    itself never looks inside it.
+    """
+
+    status: str
+    result_text: str | None = None
+
+
+def _find_terminal_record(text: str, task_id: str) -> TerminalRecord | None:
+    """Match `text` against both terminal shapes for `task_id`, returning
+    the first positive match found — same fail-safe posture as `check()`
+    (see its own docstring): an unrecognised shape or a non-matching task
+    id is `None`, never a guess.
+    """
+    for match in _TASK_NOTIFICATION_RE.finditer(text):
+        if match.group("task_id") != task_id:
+            continue
+        status = match.group("status")
+        if status in _TERMINAL_STATUSES:
+            return TerminalRecord(status=status, result_text=match.group("result"))
+
+    for match in _TASK_STOP_RE.finditer(text):
+        if _clean_task_id(match.group("task_id")) == task_id:
+            return TerminalRecord(status="stopped", result_text=None)
+
+    return None
 
 
 def _clean_task_id(raw: str) -> str:
@@ -71,47 +112,23 @@ class TerminalWatcher:
     one task id, via a shared `TailReader`.
 
     Holds no state beyond the `TailReader` it owns — a caller polls by
-    calling `check()` on its own cadence; this class does not sleep, spawn,
-    or loop on its own (that is C1b's poll loop, over this class).
+    calling `check_record()` on its own cadence; this class does not sleep,
+    spawn, or loop on its own (that is C1b's poll loop, over this class).
     """
 
     def __init__(self, transcript_path: str, task_id: str):
         self._task_id = task_id
         self._reader = TailReader(transcript_path)
 
-    def check(self) -> str | None:
-        """Poll once; return the observed terminal status string, or
-        `None` if no terminal record for this watcher's task id has been
-        seen yet.
-
-        Returned values, on a match:
-            - one of `"completed"`, `"failed"`, `"killed"`, `"stopped"`
-              (from a `<task-notification>` match)
-            - the literal `"stopped"` (from a TaskStop match — a
-              TaskStop carries no distinct status of its own, and
-              "stopped" is already one of the four notification statuses,
-              so callers see one closed vocabulary regardless of which
-              matcher fired)
-
-        Never raises. A read failure inside `TailReader.poll()` is already
-        absorbed there (returns the unchanged buffer); this method further
-        treats any transcript shape it does not recognise as "not yet" —
-        it never guesses and never reports terminal without a positive
-        match against this watcher's own task id.
+    def check_record(self) -> TerminalRecord | None:
+        """Poll once; return the full `TerminalRecord` (status plus, for a
+        `<task-notification>` match, the sibling `<result>` payload) or
+        `None` on no match yet — see `check()` for the fail-safe contract
+        this shares. `stamp.py` is the one caller that needs `result_text`,
+        to tell an ordinary `{ completed: ... }` script return apart from a
+        `{ halted: ... }` one; `check()` itself still never looks inside it.
         """
         text = self._reader.poll()
         if not text:
             return None
-
-        for match in _TASK_NOTIFICATION_RE.finditer(text):
-            if match.group("task_id") != self._task_id:
-                continue
-            status = match.group("status")
-            if status in _TERMINAL_STATUSES:
-                return status
-
-        for match in _TASK_STOP_RE.finditer(text):
-            if _clean_task_id(match.group("task_id")) == self._task_id:
-                return "stopped"
-
-        return None
+        return _find_terminal_record(text, self._task_id)

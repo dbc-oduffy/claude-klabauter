@@ -228,8 +228,10 @@ def _native_plugin_dir() -> Optional[str]:
     """Resolve the coordinator plugin root in-process, no subprocess spawn.
 
     House precedent: ``coordinator_core.bash_guards.commit_tripwires.
-    _resolve_doe_coordinator_root`` (same ``coordinator_doe_root()`` join,
-    same ``os.path.isdir`` existence gate). Primary path here rather than a
+    _resolve_doe_coordinator_root`` (same ``coordinator_doe_root()`` resolve,
+    same ``content_root_for`` layout gate -- both the private authoring tree
+    and the published flat mirror qualify, so a container that registered the
+    flat mirror still resolves a plugin dir). Primary path here rather than a
     fallback -- an in-process resolution is real cost saved under the
     50-70 concurrent-LLM load norm, where a subprocess-per-resolution
     would not be. Returns ``None`` (never raises) on any resolution
@@ -237,16 +239,15 @@ def _native_plugin_dir() -> Optional[str]:
     """
     try:
         from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+        from coordinator_core.data_root import content_root_for
     except Exception:
         return None
     try:
         doe_root = coordinator_doe_root()
     except Exception:
         return None
-    if not doe_root:
-        return None
-    candidate = os.path.join(doe_root, "coordinator")
-    return candidate if os.path.isdir(candidate) else None
+    content_root = content_root_for(doe_root)
+    return str(content_root) if content_root is not None else None
 
 
 def _shim_plugin_dir(shim_bin: str = "claude-doe") -> Optional[str]:

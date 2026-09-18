@@ -66,6 +66,12 @@ Negative-spec (do NOT "fix" while porting):
       this key (``register_claude_klabauter_root()``, DR-261 gives claude-klabauter klabauter publishing), so
       it is claude-klabauter-owned and belongs on the canonical list. This is the one reviewed,
       authorized reconciliation edit; it does not reopen the list to further drift-sync.
+      SECOND EXCEPTION (PM correction to fleet-env re-resolve e765c6d7d2, 2026-09-18):
+      ``repos.example_league_data_repo`` is retired from the canonical list — the repo it named
+      is deleted, so the key can never again be a live, classifiable coordinator-owned
+      entry. Reviewed, authorized reconciliation edit, same footing as the
+      ``claude_klabauter`` addition above; it does not reopen the list to further
+      drift-sync. The list is now 13 keys.
     - Check 1's key match is exact-string, plus two named family-prefix arms (see
       ``_key_matches_regen_entry`` below) — NOT a general glob. The ``plugin.mirrors``
       namespace-prefix match was the original, sole exception (bash oracle code-review F2
@@ -145,7 +151,6 @@ COORDINATOR_OWNED_KEYS: List[str] = [
     "repos.example_game_workbench_repo",
     "repos.example_repo",
     "repos.example_stats_repo",
-    "repos.example_league_data_repo",
     "repos.experiments",
     "repos.example_cockpit_repo",
     "repos.example-os-repo",

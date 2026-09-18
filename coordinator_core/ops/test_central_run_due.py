@@ -278,3 +278,55 @@ class TestUnitHelpers:
     def test_resolve_threshold_invalid_arg_returns_none(self, tmp_path: Path):
         cfg = tmp_path / "does-not-exist.md"
         assert _resolve_threshold(["abc"], str(cfg)) is None
+
+
+# ---------------------------------------------------------------------------
+# `.doe-root` pointer rung: both content layouts. A container registers the
+# published FLAT mirror as its DoE root, where `<root>/coordinator` cannot
+# exist -- the private-only join skipped the rung and the extractor lookup
+# then anchored on a marketplace path that was not there either.
+# ---------------------------------------------------------------------------
+
+
+def _pointer_home(tmp_path: Path, monkeypatch, doe_root: Path) -> str:
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / ".doe-root").write_text(str(doe_root), encoding="utf-8")
+    monkeypatch.setattr(os.path, "expanduser", lambda p: str(home) if p == "~" else p)
+    monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    return str(tmp_path / "claude-home")
+
+
+def test_content_root_pointer_rung_resolves_the_private_authoring_tree(tmp_path, monkeypatch):
+    from coordinator_core.ops.central_run_due import _resolve_doe_content_root
+
+    doe_root = tmp_path / "DoE-claude"
+    (doe_root / "coordinator").mkdir(parents=True)
+    claude_home = _pointer_home(tmp_path, monkeypatch, doe_root)
+
+    assert _resolve_doe_content_root(claude_home) == str(doe_root / "coordinator")
+
+
+def test_content_root_pointer_rung_resolves_the_published_flat_mirror(tmp_path, monkeypatch):
+    from coordinator_core.ops.central_run_due import _resolve_doe_content_root
+
+    doe_root = tmp_path / "coordinator-claude"
+    (doe_root / ".claude-plugin").mkdir(parents=True)
+    (doe_root / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    claude_home = _pointer_home(tmp_path, monkeypatch, doe_root)
+
+    assert _resolve_doe_content_root(claude_home) == str(doe_root)
+
+
+def test_content_root_pointer_rung_skips_a_bare_directory(tmp_path, monkeypatch):
+    from coordinator_core.ops.central_run_due import _resolve_doe_content_root
+
+    doe_root = tmp_path / "bare"
+    doe_root.mkdir()
+    claude_home = _pointer_home(tmp_path, monkeypatch, doe_root)
+    monkeypatch.setattr("coordinator_core.ops.central_run_due._registry_get", lambda key: None)
+
+    assert _resolve_doe_content_root(claude_home) == os.path.join(
+        claude_home, "plugins", "coordinator-claude", "coordinator"
+    )

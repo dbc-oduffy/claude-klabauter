@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import pathlib
+import sys
 
 import pytest
 
@@ -1315,12 +1316,12 @@ def test_a_nameless_peer_still_gets_a_line():
 # --- the root the process stands on ----------------------------------------
 
 
-def test_the_cli_refuses_a_root_that_does_not_exist(capsys):
+def test_the_cli_refuses_a_root_that_does_not_exist(capsys, tmp_path):
     """`peer_count=0` is what a quiet repo and an unreadable one both printed,
     and the run exited 0. A watcher reported `armed and standing by` four times
     across fifty minutes while watching nothing, through nine live peer
     transitions (example-game-repo-em, 2026-09-01)."""
-    rc = watch._cli(["--repo-root", "X:/no-such-repo-anywhere"])
+    rc = watch._cli(["--repo-root", str(tmp_path / "no-such-repo-anywhere")])
     assert rc == 2
     err = capsys.readouterr().err
     assert "not an existing directory" in err
@@ -1340,6 +1341,9 @@ def test_the_cli_refuses_a_drive_relative_root(capsys):
     assert "resolves to" in err
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="a rooted, driveless path is absolute off Windows"
+)
 def test_the_cli_refuses_a_driveless_rooted_posix_style_path(capsys):
     """`ntpath.isabs('/foo/bar')` is True with no drive component -- `abspath`
     then resolves it against the process's CURRENT DRIVE, the same "binds to

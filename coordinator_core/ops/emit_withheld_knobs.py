@@ -58,6 +58,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from coordinator_core.data_root import content_root_for
 from coordinator_core.locked_write import CONTENDED_LOCK_WAIT_ENV
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 from coordinator_core.session.declared_writes import declare_write
@@ -236,6 +237,12 @@ def _out_dir() -> Optional[str]:
     doe_root = coordinator_doe_root()
     if not doe_root:
         return None
+    content_root = content_root_for(doe_root)
+    if content_root is not None:
+        return str(content_root)
+    # The out dir is a write TARGET, not a read: a resolved root whose content
+    # dir does not exist yet still gets the private-layout path, created on
+    # write, exactly as before. Only an unresolvable root refuses.
     return os.path.join(doe_root, "coordinator")
 
 

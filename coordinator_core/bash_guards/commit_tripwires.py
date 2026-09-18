@@ -193,23 +193,24 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: Optional[float
 
 
 def _resolve_doe_coordinator_root() -> Optional[str]:
-    """Resolve the installed coordinator plugin's ``coordinator/`` directory,
-    via the canonical DoE-root resolver. Returns ``None`` on any resolution
+    """Resolve the installed coordinator plugin's content directory, via the
+    canonical DoE-root resolver and ``content_root_for`` (so a flat published
+    mirror resolves as well as the private authoring tree, which is what a
+    container registering the mirror gets). Returns ``None`` on any resolution
     failure (never raises) -- Checks 9/10 fail open on this, matching the
     bash originals' own "not a git repo at PLUGIN_ROOT" -> exit 2 -> no
     warning-appended fail-open shape (see this module's docstring)."""
     try:
         from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
+        from coordinator_core.data_root import content_root_for
     except Exception:
         return None
     try:
         doe_root = coordinator_doe_root()
     except Exception:
         return None
-    if not doe_root:
-        return None
-    candidate = os.path.join(doe_root, "coordinator")
-    return candidate if os.path.isdir(candidate) else None
+    content_root = content_root_for(doe_root)
+    return str(content_root) if content_root is not None else None
 
 
 # ---------------------------------------------------------------------------

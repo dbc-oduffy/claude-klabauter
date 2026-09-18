@@ -190,6 +190,41 @@ except ImportError:  # pragma: no cover - defensive, see NEGATIVE SPEC above
 _REAL_USER_SITE = site.getusersitepackages()
 
 
+def _capture_real_settings_home() -> str:
+    """This operator's REAL `<home>/.coordinator-claude-settings`, resolved
+    from the actual account home -- `pwd.getpwuid(os.getuid()).pw_dir` on
+    POSIX, `USERPROFILE` captured here (at conftest IMPORT time, before any
+    test's `monkeypatch.setenv` can touch it) on Windows. Deliberately NOT
+    `_settings_home.settings_home()` itself: that reads `HOME`/`USERPROFILE`,
+    which per-test quarantine below has already redirected by the time most
+    callers run, and a `COORDINATOR_SETTINGS_HOME` override in the AMBIENT
+    environment would make this the wrong comparison target anyway -- the
+    leak this guards is a test resolving the operator's real ACCOUNT home,
+    not whatever a machine-level override happens to point at.
+
+    Feeds `_settings_home.FORBID_REAL_SETTINGS_HOME_ENV` below (2026-09-18
+    incident: an install test wrote 371 launchers into this exact directory
+    for real). Returns "" if unresolvable (e.g. no passwd entry in a minimal
+    container) -- the guard is then inert rather than fail loud on a box
+    where it cannot even name the path it would refuse.
+    """
+    if os.name == "nt":
+        home = os.environ.get("USERPROFILE", "")
+    else:
+        try:
+            import pwd
+
+            home = pwd.getpwuid(os.getuid()).pw_dir
+        except (KeyError, ImportError, OSError):
+            home = ""
+    if not home:
+        return ""
+    return str(Path(home) / ".coordinator-claude-settings")
+
+
+_REAL_SETTINGS_HOME = _capture_real_settings_home()
+
+
 def _capture_real_doe_root() -> str:
     """Resolve the sibling DoE-claude checkout ONCE, at collection time, under
     the real (un-quarantined) HOME — used ONLY to locate the manifest to copy
@@ -349,6 +384,16 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
 
     if request.node.get_closest_marker("real_home"):
         return None
+
+    # Backstop for `settings_home()` itself (RealSettingsHomeLeakError): a
+    # test that reaches this point declared no intent to touch the real
+    # settings home, so name it as forbidden BEFORE the quarantine below --
+    # if some call site still resolves it (a bypass this fixture did not
+    # anticipate), the resolver refuses loudly instead of writing into it.
+    if _REAL_SETTINGS_HOME:
+        from coordinator_core import _settings_home as _settings_home_mod
+
+        monkeypatch.setenv(_settings_home_mod.FORBID_REAL_SETTINGS_HOME_ENV, _REAL_SETTINGS_HOME)
 
     quarantine = tmp_path_factory.mktemp("home-quarantine")
     monkeypatch.setenv("HOME", str(quarantine))

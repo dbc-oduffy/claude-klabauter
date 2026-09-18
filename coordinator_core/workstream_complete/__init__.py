@@ -261,6 +261,7 @@ from coordinator_core.coverage import (  # 2026-08-12: numstat rename-row resolu
     _resolve_numstat_row_path,
 )
 from coordinator_core.ops.review_brightline_gate import _PLANNING_LOC_WEIGHT  # review finding P2: same de-weight, same constant
+from coordinator_core.ops.review_brightline_gate import _untrailered_shas_in_range as _gate_untrailered_shas_in_range  # review finding: dedup with the gate's own census
 
 from coordinator_core.contract.decision_object.envelope import build_envelope, emit
 from coordinator_core.contract.decision_object.judgment import (
@@ -2405,7 +2406,10 @@ def _compute_review_receipt_gate(
     integrator_receipts: list[str] = []
     reviewer_hit: Optional[str] = None
 
-    for candidate in sorted(sidecar_dir.glob("*.md")):
+    candidates = [
+        candidate for extant_dir in extant_sidecar_dirs for candidate in extant_dir.glob("*.md")
+    ]
+    for candidate in sorted(candidates):
         try:
             text = candidate.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -4284,6 +4288,41 @@ def _expand_untracked(
     return members
 
 
+#: The id `directives_review.build_review_brightline_gate_directive` stamps on
+#: the brightline directive, whose argv carries the range the attribution
+#: census below must share with it.
+_REVIEW_BRIGHTLINE_DIRECTIVE_ID = "d-run-review-brightline-gate"
+
+
+def _untrailered_shas_in_range(root: Path, range_: str) -> Optional[list[str]]:
+    """Non-merge commits in `range_` whose message carries no `Session-Id:`
+    line — thin wrapper over `review_brightline_gate._untrailered_shas_in_range`
+    (the shared one-spawn `--invert-grep` census; review finding: this module
+    used to keep its own copy), adapting `root: Path` to that helper's `cwd`
+    param.
+
+    `None` on any git failure (an absent `origin/main` included): a transport
+    failure is not evidence of a gap, and this census only ever withholds a
+    permissive verdict — the sibling gate degrades the same way."""
+    return _gate_untrailered_shas_in_range(range_, str(root))
+
+
+def _brightline_census_range(directives: list[dict[str, Any]]) -> str:
+    """The range the `review-brightline-gate` directive walks: its trailing
+    `<floor>..<tip>` argv element when one was resolved, else the gate's own
+    default, `merge-base(origin/main, HEAD)..HEAD` — the same commit set as
+    `origin/main..HEAD`, spelled so it costs no `merge-base` spawn, ONLY when
+    `HEAD` is a descendant of `origin/main` (the ordinary EM-branch shape,
+    ff-able with no divergent history). A rebase or divergence makes the two
+    ranges differ."""
+    for directive in directives:
+        if directive.get("id") == _REVIEW_BRIGHTLINE_DIRECTIVE_ID:
+            args = directive.get("args") or []
+            if len(args) == 3:
+                return str(args[2])
+    return "origin/main..HEAD"
+
+
 def _dispatched_chunk_shas_missing_from_slices(
     root: Path,
     governing_plan,
@@ -5333,6 +5372,33 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
         partition_mandatory=bool(review_scale_decision.partition_mandatory),
     )
 
+    # A PERMISSIVE SCALE NEEDS COMPLETE ATTRIBUTION: incomplete attribution
+    # withholds only a permissive verdict, never a mandatory partition, and a
+    # hand-supplied `commit_count` is not second-guessed.
+    review_scale_attribution: Optional[dict[str, Any]] = None
+    if (
+        review_scale_decision.resolved
+        and review_scale_decision.partition_mandatory is False
+        and measured_commit_count is not None
+        and decisions.get("commit_count") is None
+    ):
+        census_range = _brightline_census_range(directives)
+        untrailered = _untrailered_shas_in_range(root, census_range)
+        if untrailered is not None:
+            recovered_shas = {e["sha"] for e in review_scale_attribution_gap["recovered"]}
+            unattributed = [sha for sha in untrailered if sha not in recovered_shas]
+            review_scale_attribution = {
+                "range": census_range,
+                "attributed_commits": len(review_scale_commit_slices),
+                "unattributed_commits": len(unattributed),
+            }
+            if unattributed:
+                review_scale_decision = directives_review._unresolved(
+                    f"{len(unattributed)} commit(s) in {census_range} carry no Session-Id "
+                    f"trailer; {len(review_scale_commit_slices)} were measured. Session "
+                    "attribution is incomplete, so a permissive scale is not issued."
+                )
+
     judgment_points: list[dict[str, Any]] = []
     session_shape_jp = build_session_shape_judgment_point(gate)
     if session_shape_jp:
@@ -5650,6 +5716,20 @@ def brief(decisions: Optional[dict[str, Any]] = None, repo_root: Optional[Path] 
                 "`disposition_ref` points at a peer's commit (fix the row), or the work "
                 "genuinely landed under another session (say so at close) — do not review "
                 "around them silently."
+            )
+    if review_scale_attribution is not None:
+        review_scale_payload["attribution"] = review_scale_attribution
+        if not review_scale_decision.resolved:
+            attribution_remediation = (
+                f"{review_scale_attribution['unattributed_commits']} untrailered commit(s) in "
+                f"{review_scale_attribution['range']} are invisible to this measurement. "
+                "Measure by hand (per owned commit `<sha>~1..<sha>`, code-only) and re-run "
+                "`brief` with `decisions` `code_loc`, `commit_count`, `surface_count` and "
+                "`commit_count_scope`."
+            )
+            existing = review_scale_payload.get("remediation")
+            review_scale_payload["remediation"] = (
+                f"{attribution_remediation} {existing}" if existing else attribution_remediation
             )
 
 

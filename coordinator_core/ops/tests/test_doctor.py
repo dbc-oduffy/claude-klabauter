@@ -548,3 +548,57 @@ def test_reports_rather_than_raises_on_an_unreadable_hooks_document(doe_root: Pa
 
     assert result.returncode == 1, result.stdout
     assert "Traceback" not in result.stderr, "must report, not crash: " + result.stderr
+
+
+def _make_flat_mirror(root: Path) -> None:
+    """The published flat mirror: the repo root IS the coordinator content root,
+    gated by its own plugin manifest, with no `coordinator/` segment anywhere.
+    A container registers this layout, and the doctor reported every layer that
+    reads DoE content BROKEN against it while the content sat plainly on disk."""
+    (root / ".claude-plugin").mkdir(parents=True, exist_ok=True)
+    (root / ".claude-plugin" / "plugin.json").write_text('{"name": "coordinator-claude"}\n')
+    (root / "hooks" / "scripts").mkdir(parents=True, exist_ok=True)
+
+
+def _write_flat_hooks(root: Path, command: str) -> None:
+    (root / "hooks" / "hooks.json").write_text(
+        json.dumps(
+            {"hooks": {"PreToolUse": [{"matcher": "Write", "hooks": [
+                {"type": "command", "command": command}]}]}},
+            indent=2,
+        )
+    )
+
+
+def test_flat_mirror_hooks_json_is_found_and_checked(tmp_path: Path):
+    root = tmp_path / "coordinator-claude"
+    _make_flat_mirror(root)
+    _write_flat_hooks(root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/deleted-by-a-peer.py")
+
+    result = _run_doctor(root)
+
+    assert "deleted-by-a-peer.py" in result.stdout, result.stdout
+    assert "cannot check" not in result.stdout, result.stdout
+
+
+def test_flat_mirror_healthy_registration_is_quiet(tmp_path: Path):
+    root = tmp_path / "coordinator-claude"
+    _make_flat_mirror(root)
+    (root / "hooks" / "scripts" / "real.py").write_text("import sys\nsys.exit(0)\n")
+    _write_flat_hooks(root, "python3 ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/real.py")
+
+    result = _run_doctor(root)
+
+    assert "registered script missing" not in result.stdout, result.stdout
+    assert "partial checkout" not in result.stdout, result.stdout
+
+
+def test_bare_directory_is_still_not_a_content_root(tmp_path: Path):
+    root = tmp_path / "not-a-clone"
+    root.mkdir()
+
+    result = _run_doctor(root)
+
+    assert result.returncode == 1, result.stdout
+    assert "BROKEN" in result.stdout
+    assert "partial checkout" in result.stdout, result.stdout

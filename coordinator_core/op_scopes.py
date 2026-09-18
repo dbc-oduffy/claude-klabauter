@@ -219,6 +219,85 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # session_heartbeat.py shape" note in the module docstring is about the
     # async-bookkeeping/write-side-effect PATTERN, not repo-key scoping).
     "hooks.context_pressure_precompact":     "none",
+    # W4-C16: wave 4's hook bodies (W4-C5..C14). "none" for every handler
+    # whose repo_root parameter goes unused (resolves its own repo root from
+    # params["payload"]["cwd"], same shape as hooks.stop_dispatch above);
+    # "common_dir" for the handlers below that do read repo_root.
+    "hooks.check_claude_md_size":             "none",
+    "hooks.derive_global_doctrine_live_copy": "none",
+    "hooks.derive_setup_copies":              "none",
+    "hooks.guard_doctrine_surface_bash_write": "none",
+    "hooks.guard_doctrine_surface_ratio":     "none",
+    "hooks.guard_doctrine_changelog_prose":   "none",
+    "hooks.preuse_write_dispatch":            "none",
+    "hooks.guard_python_syntax_on_write":     "none",
+    "hooks.guard_posix_invocation_doctrine_write": "none",
+    "hooks.guard_test_tree_git_fixture_spawn": "none",
+    "hooks.guard_handoff_summary_cap_on_write": "none",
+    "hooks.guard_repo_setup_claude_home_refusal": "none",
+    # hooks.guard_review_integrator_sidecar_intake — reads repo_root to
+    # resolve the run-report sidecar tree under the calling repo's common
+    # dir, same class as the session-runtime bookkeeping ops.
+    "hooks.guard_review_integrator_sidecar_intake": "common_dir",
+    "hooks.nudge_plan_test_surface_tier":     "none",
+    "hooks.preuse_agent_dispatch":            "none",
+    "hooks.preuse_skill_dispatch":            "none",
+    "hooks.enforce_agent_dispatch_mode":      "none",
+    "hooks.block_unenumerated_agent_type":    "none",
+    "hooks.guard_named_dispatch_tool_restriction": "none",
+    "hooks.guard_host_subagent_bash_ban":     "none",
+    "hooks.guard_host_subagent_bash_spawn_shapes": "none",
+    # hooks.preuse_bash_dispatch — reads repo_root to resolve the calling
+    # repo's common dir for its composed bash guards.
+    "hooks.preuse_bash_dispatch":             "common_dir",
+    "hooks.block_workflow_foreign_emission":  "none",
+    "hooks.block_workflow_unmodeled_agent":   "none",
+    "hooks.allow_emitted_workflow_fire":      "none",
+    "hooks.nudge_workflow_authoring_trampoline": "none",
+    "hooks.nudge_multiwave_workflow":         "none",
+    "hooks.block_dispatch_suite_invocation":  "none",
+    "hooks.strip_worktree_isolation":         "none",
+    "hooks.block_worktree_tool":              "none",
+    "hooks.sessionstart_dispatch":            "none",
+    "hooks.sessionstart_async_dispatch":      "none",
+    "hooks.assert_em_role":                   "none",
+    "hooks.session_start_watch_presence":     "none",
+    "hooks.sweep_boot":                       "none",
+    "hooks.session_start_announce_job_mode":  "none",
+    "hooks.session_start_register_doe_claude_root": "none",
+    "hooks.session_start_register_published_engine": "none",
+    "hooks.session_start_repair_prepare_commit_msg_hook": "none",
+    "hooks.session_start_write_plugin_root_breadcrumb": "none",
+    "hooks.sessionstart_bin_drift_refresh":   "none",
+    "hooks.sessionstart_ensure_http_forwarder": "none",
+    "hooks.guard_hook_generation_self_probe": "none",
+    "hooks.session_start_guard_plane_check":  "none",
+    "hooks.project_orientation":              "none",
+    "hooks.pickup_autofire":                  "none",
+    "hooks.mise_autofire":                    "none",
+    "hooks.handoff_segment_inject":           "none",
+    "hooks.group_em_autofire":                "none",
+    "hooks.nudge_initiative_goals_ladder":    "none",
+    "hooks.offer_exploration_tier_dispatch":  "none",
+    "hooks.observe_config_change":            "none",
+    "hooks.observe_post_compact":             "none",
+    # hooks.postuse_stop_family_dispatch — reads repo_root to compose its
+    # Stop-family sub-dispatch, same class as hooks.preuse_bash_dispatch.
+    "hooks.postuse_stop_family_dispatch":     "common_dir",
+    "hooks.sessionend_auto_commit":           "none",
+    # hooks.subagent_zero_tool_use_detect — reads repo_root to resolve the
+    # per-session store under the calling repo's common dir, same class as
+    # its sibling hooks.subagent_zero_tool_use above.
+    "hooks.subagent_zero_tool_use_detect":    "common_dir",
+    # hooks.group_em_park_spool — reads repo_root to resolve the group-EM
+    # park-spool store under the calling repo's common dir.
+    "hooks.group_em_park_spool":              "common_dir",
+    # hooks.guard_kira_verdict_routed — reads repo_root to resolve the
+    # review-integrator sidecar tree it cross-checks.
+    "hooks.guard_kira_verdict_routed":        "common_dir",
+    # hooks.guard_manufactured_blocker — reads repo_root to resolve the
+    # blocker-ledger tree it cross-checks.
+    "hooks.guard_manufactured_blocker":       "common_dir",
     # warm_guard.evaluate — MUST be "none": neither hook transport (warm/hook_http.py
     # :: build_request, nor the door caller) sends an _origin_worktree envelope field
     # for this op, so "common_dir"/"show_top" would make ipc.resolve_op_repo_key raise

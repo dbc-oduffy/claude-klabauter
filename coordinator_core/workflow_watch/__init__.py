@@ -10,12 +10,15 @@ exit criterion true: the watcher is bounded by its own enforced cap,
 independent of whatever `timeout_ms` a model retyped into the Monitor call
 that launched it.
 
-This module owns wiring together three already-scoped pieces, not their own
+This module owns wiring together already-scoped pieces, not their own
 logic: `terminal.TerminalWatcher` (has task id T's run ended — see
 `terminal.py`'s own module docstring for the two matchers and the fail-safe
 guarantee), `tail.TailReader` (the bounded incremental reader both `terminal`
-and `render` share), and `render` (C2 — renders `journal.jsonl` into one
-short stdout line per event).
+and `render` share), `render` (C2 — renders `journal.jsonl` into one short
+stdout line per event), and `stamp` (persists the terminal fact the watcher
+already knows to `journal.jsonl`, either inline the moment this poll loop
+observes it, or via the `--reconcile RUN_DIR` CLI path for a run nobody was
+watching — see `stamp.py`'s own module docstring for both).
 
 Negative-spec: this module does not derive a transcript or journal path from
 projects-root/project-slug/session-id — reconstructing
@@ -34,6 +37,8 @@ import sys
 import time
 
 from coordinator_core.workflow_watch.render import JournalRenderer
+from coordinator_core.workflow_watch.stamp import reconcile as _reconcile_run
+from coordinator_core.workflow_watch.stamp import stamp_terminal
 from coordinator_core.workflow_watch.terminal import TerminalWatcher
 
 # The spike's measured basis: 7.8 microseconds/poll, ~14ms of process time
@@ -76,25 +81,39 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--transcript",
-        required=True,
         help=(
             "Absolute path to the launching session transcript, taken "
             "verbatim from the hook's transcript_path — no path is "
-            "reconstructed from parts."
+            "reconstructed from parts. Required unless --reconcile is given."
         ),
     )
     parser.add_argument(
         "--journal",
-        required=True,
         help=(
             "Absolute path to the run's journal.jsonl, derivable from "
-            "transcriptDir+runId in the launch result."
+            "transcriptDir+runId in the launch result. Required unless "
+            "--reconcile is given."
         ),
     )
     parser.add_argument(
         "--task-id",
-        required=True,
-        help="The harness TASK id to match terminal records against (never the wf_ run id).",
+        help=(
+            "The harness TASK id to match terminal records against (never "
+            "the wf_ run id). Required unless --reconcile is given."
+        ),
+    )
+    parser.add_argument(
+        "--reconcile",
+        metavar="RUN_DIR",
+        help=(
+            "Stamp a run nobody was watching, for a run whose watcher never "
+            "ran or already exited: takes a run dir (the wf_* directory) or "
+            "its journal.jsonl path verbatim, locates the launching "
+            "transcript from that path's own location, and stamps the "
+            "terminal record if one can be positively matched. Mutually "
+            "exclusive with --transcript/--journal/--task-id; exits "
+            "non-zero without writing anything on any ambiguity."
+        ),
     )
     parser.add_argument(
         "--poll-interval",
@@ -127,6 +146,13 @@ def _watch(
       distinguishable from a real terminal exit by exit code alone, so a
       Monitor consumer never has to parse stdout to tell "the run ended"
       from "I gave up."
+
+    On the terminal-record path, this also stamps `journal_path` via
+    `stamp.stamp_terminal` (chunk 1: the watcher already knows the run
+    ended and previously never wrote that fact down). The stamp call is
+    wrapped so nothing it does can change this function's exit code or
+    stop it from returning — `stamp_terminal` is documented fail-safe on
+    its own, but the wrap holds even if a future edit there forgets that.
     """
     watcher = TerminalWatcher(transcript_path, task_id)
     renderer = _make_renderer(journal_path)
@@ -138,9 +164,13 @@ def _watch(
                 print(line)
                 sys.stdout.flush()
 
-        status = watcher.check()
-        if status is not None:
-            print(f"terminal: {status}")
+        record = watcher.check_record()
+        if record is not None:
+            try:
+                stamp_terminal(journal_path, task_id, record)
+            except Exception:
+                pass
+            print(f"terminal: {record.status}")
             sys.stdout.flush()
             return 0
 
@@ -156,6 +186,18 @@ def _watch(
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+
+    if args.reconcile is not None:
+        return _reconcile_run(args.reconcile)
+
+    if not (args.transcript and args.journal and args.task_id):
+        print(
+            "--transcript, --journal and --task-id are all required unless "
+            "--reconcile is given",
+            file=sys.stderr,
+        )
+        return 2
+
     return _watch(
         transcript_path=args.transcript,
         journal_path=args.journal,

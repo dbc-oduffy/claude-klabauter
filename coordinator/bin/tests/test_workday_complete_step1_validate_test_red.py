@@ -112,7 +112,7 @@ class EmitTestRedRecordTest(unittest.TestCase):
 
         def _run_main_with_emitter(emitter_side_effect):
             with mock.patch.object(mod.rvc, "resolve_fast_test_cmd", return_value=fake_resolve), \
-                 mock.patch.object(mod, "find_changed_test_files", return_value=[]), \
+                 mock.patch.object(mod, "compute_diff_scoped_paths", return_value=([], True)), \
                  mock.patch.object(
                      mod,
                      "enforce_tier_u_gate",

@@ -162,6 +162,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.data_root import content_root_for
 from coordinator_core.ops.ensure_doe_clone import resolve_doe_clone
 
 _MAX_AGE_DAYS = 14
@@ -447,7 +448,13 @@ def run_gate(doe_root: "str | Path", *, today: Optional[date] = None) -> list[st
     fixture, never the live clone). Returns a flat list of report lines:
     empty == PASS. Raises GateError for any "cannot run" condition."""
     doe_root = Path(doe_root)
-    schemas_dir = doe_root / "coordinator" / "schemas"
+    content_root = content_root_for(doe_root)
+    if content_root is None:
+        raise GateError(
+            f"no coordinator content root under {doe_root} (neither a coordinator/ "
+            "directory nor a flat .claude-plugin/plugin.json) — schemas/ unreachable"
+        )
+    schemas_dir = content_root / "schemas"
 
     contract_path = schemas_dir / "run-report.schema.json"
     resolution_path = schemas_dir / "subagent-catering-resolution.json"

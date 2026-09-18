@@ -183,6 +183,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Set
 
+from coordinator_core.data_root import content_root_for
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
 from coordinator_core.machine_resolver import registry_get
 
@@ -480,7 +481,9 @@ def _doe_demand_tokens(doe_root: Path) -> Set[str]:
         that are not genuinely namespace-qualified (bare `bin/<name>` with
         no `coordinator/`/`templates/`/settings-home-forwarder-seam prefix)."""
     tokens: Set[str] = set()
-    coordinator_dir = doe_root / "coordinator"
+    coordinator_dir = content_root_for(doe_root)
+    if coordinator_dir is None:
+        return tokens
     for subdir in _SWEEP_SUBDIRS:
         root = coordinator_dir / subdir
         if not root.is_dir():

@@ -196,6 +196,7 @@ from __future__ import annotations
 
 import errno
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -951,6 +952,15 @@ def _record_cold_fallback(op: "str | None" = None) -> None:
 
 def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
     if not is_warm_enabled():
+        return None
+
+    # Test traffic -- pytest itself or a CLI subprocess it spawned -- must neither
+    # reach nor (via `_spawn_once` below) spawn the box-shared server: a server
+    # spawned here keeps the test's env for life. A test-isolated runtime base
+    # (a warm-suite test's own server) is exempt.
+    if os.environ.get("PYTEST_CURRENT_TEST") and not os.environ.get(
+        "COORDINATOR_WARM_RUNTIME_BASE"
+    ):
         return None
 
     # P2 (docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md § C3):

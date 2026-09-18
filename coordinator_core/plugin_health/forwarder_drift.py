@@ -222,6 +222,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set
 
 from coordinator_core._settings_home import home_dir, settings_home
+from coordinator_core.data_root import content_root_for
 from coordinator_core.ipc import register_op
 from coordinator_core.engine_root import coordinator_engine_root
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
@@ -400,8 +401,11 @@ def _cited_entrypoint_sites(doe_root: Path) -> Dict[str, List[str]]:
     DoE-claude's five prompt-surface trees (see module docstring). Best-effort
     per file — an unreadable file is skipped, never a hard failure."""
     sites: Dict[str, List[str]] = {}
+    content_root = content_root_for(doe_root)
+    if content_root is None:
+        return sites
     for subdir in _DOE_PROMPT_SURFACE_SUBDIRS:
-        root_dir = doe_root / "coordinator" / subdir
+        root_dir = content_root / subdir
         if not root_dir.is_dir():
             continue
         for path in sorted(root_dir.rglob("*.md")):
@@ -438,8 +442,11 @@ def _cited_shape_w_sites(doe_root: Path) -> Dict[str, List[str]]:
     `` `...\\bin\\workweek-complete-brief.exe`. `` — the regex has no notion
     of sentence boundaries, so the caller strips the artifact instead."""
     sites: Dict[str, List[str]] = {}
+    content_root = content_root_for(doe_root)
+    if content_root is None:
+        return sites
     for subdir in _DOE_PROMPT_SURFACE_SUBDIRS:
-        root_dir = doe_root / "coordinator" / subdir
+        root_dir = content_root / subdir
         if not root_dir.is_dir():
             continue
         for path in sorted(root_dir.rglob("*.md")):

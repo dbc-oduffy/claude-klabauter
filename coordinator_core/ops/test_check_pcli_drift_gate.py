@@ -489,3 +489,36 @@ def test_run_gate_reads_the_newest_capture_when_several_exist(tmp_path):
     lines = gate.run_gate(doe_root, today=date(2026, 8, 20))
     assert any("LEG 1" in line for line in lines)
     assert any("brandNewLiveOption" in line for line in lines)
+
+
+def _flat_mirror_root(tmp_path: Path) -> tuple[Path, Path]:
+    """The published flat mirror: schemas/ sits at the repo root, which is the
+    content root by virtue of its own plugin manifest."""
+    doe_root = tmp_path / "coordinator-claude"
+    (doe_root / ".claude-plugin").mkdir(parents=True)
+    (doe_root / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
+    schemas_dir = doe_root / "schemas"
+    schemas_dir.mkdir(parents=True)
+    return doe_root, schemas_dir
+
+
+def test_run_gate_clean_on_flat_mirror_layout(tmp_path):
+    doe_root, schemas_dir = _flat_mirror_root(tmp_path)
+    _write_contract(schemas_dir)
+    _write_capture(schemas_dir, captured_at="2026-08-05", filename_date="2026-08-05")
+    tracked = doe_root / "tracked.md"
+    tracked.write_text("tracked content", encoding="utf-8")
+    _write_resolution(
+        doe_root,
+        schemas_dir,
+        source_hashes={"tracked.md": hashlib.sha256(b"tracked content").hexdigest()},
+    )
+
+    assert gate.run_gate(doe_root, today=date(2026, 8, 10)) == []
+
+
+def test_run_gate_raises_on_a_bare_directory(tmp_path):
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    with pytest.raises(gate.GateError):
+        gate.run_gate(bare, today=date(2026, 8, 10))

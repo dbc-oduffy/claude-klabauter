@@ -117,6 +117,7 @@ from coordinator_core.resolve_coordinator_clone import (
     resolve_content_root,
 )
 from coordinator_core._settings_home import machine_local_dir, settings_home
+from coordinator_core.data_root import content_root_for
 from coordinator_core.ops.session.hook_delivery_manifest import (
     HookDeliveryManifest,
     RetiredGuard,
@@ -413,7 +414,10 @@ def is_inline_install(config_dir: Path) -> bool:
     doe = first_line.rstrip("\r\n")
     if not doe:
         return False
-    return (Path(doe) / "coordinator").is_dir()
+    # Either content layout counts: on a published flat mirror the content root
+    # IS the pointed-at directory, and probing only `<doe>/coordinator` classified
+    # a live inline install as plugin-only.
+    return content_root_for(Path(doe)) is not None
 
 
 # ---------------------------------------------------------------------------

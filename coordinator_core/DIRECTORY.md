@@ -44,6 +44,7 @@ Each sub-module self-registers its op via `register_op()` at import time.
 |---|---|---|
 | `_fm_util.py` | — | Shared frontmatter scalar extraction primitive |
 | `_path_guard.py` | — | Shared caller-supplied-path containment helpers (generalized from `handoff_lineage_ancestry.py`) |
+| `_param_alias.py` | — | One op parameter accepted under more than one spelling; disagreeing spellings refused |
 | `assert_doctrine_cross_reference_counts.py` | `doctrine.assert_cross_reference_counts` | Read-only doctrine cross-reference count assertion over the caller's skills/wiki doctrine tree |
 | `cartography_stack.py` | `cartography.stack` | Read-only project-stack fingerprint (languages, test frameworks, config files) via pathlib scan |
 | `changelog_ops.py` | — | Family-A changelog write ops (strang-10 C1) |

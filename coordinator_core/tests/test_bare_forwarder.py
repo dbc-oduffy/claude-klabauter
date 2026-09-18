@@ -73,6 +73,15 @@ def test_falls_back_to_legacy_via_userprofile_when_home_absent(tmp_path, monkeyp
     # Path.home() only consults USERPROFILE on a real Windows interpreter;
     # simulate that resolution here so the test proves the delegation shape.
     monkeypatch.setattr(bare_forwarder, "home_dir", lambda: userprofile_home)
+    # `forward()` also probes `settings_home()` (a separate resolver, not
+    # derived from `home_dir()`) before falling to the legacy candidate this
+    # test is pinning -- left unstubbed it falls through to `Path.home()`,
+    # which on POSIX ignores the simulated USERPROFILE and resolves the REAL
+    # operator home, a genuine quarantine bypass RealSettingsHomeLeakError
+    # now catches.
+    monkeypatch.setattr(
+        bare_forwarder, "settings_home", lambda: userprofile_home / ".coordinator-claude-settings"
+    )
 
     monkeypatch.setattr(
         bare_forwarder, "is_executable", lambda path: str(path) == str(legacy)

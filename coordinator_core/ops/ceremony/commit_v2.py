@@ -71,7 +71,7 @@ from coordinator_core.git.commit import (
     commit_paths,
     hash_worktree_blobs_via_spawn,
 )
-from coordinator_core.git.commit_trailers import apply_missing_trailers
+from coordinator_core.git.commit_trailers import _UUID_RE, apply_missing_trailers
 from coordinator_core.git.index_write import IndexStaleAfterCommit
 from coordinator_core.git.eol_declared import (
     find_declared_eol_drift,
@@ -448,6 +448,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                        False -- see the backlog row
                                        `commit-v2-prefers-worktree-over-index`
                                        for why it is not flipped.
+        session_id (str, optional)  -- canonical UUID (8-4-4-4-12 hex,
+                                       case-insensitive) threaded into
+                                       `apply_missing_trailers` as
+                                       `session_id_override`, taking
+                                       precedence over the env-ladder
+                                       resolution for the Session-Id trailer.
+                                       Malformed (present but not UUID-
+                                       shaped) refuses the whole call rather
+                                       than silently falling back to the env
+                                       ladder.
     Returns:
         {"committed": True, "sha": str, "staged_preferred": [str, ...],
          "worktree_over_staged": [str, ...], "warnings": [str, ...],
@@ -500,6 +510,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     raw_prefer_deliberate_stage = params.get("prefer_deliberate_stage", False)
     if not isinstance(raw_prefer_deliberate_stage, bool):
         return _error("params.prefer_deliberate_stage must be a boolean")
+
+    session_id_override = params.get("session_id")
+    if session_id_override is not None:
+        if not isinstance(session_id_override, str) or not _UUID_RE.fullmatch(
+            session_id_override
+        ):
+            return _error("params.session_id must be a canonical UUID string")
 
     worktree_root = main_worktree_root(repo_root)
 
@@ -558,7 +575,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # module docstring). Never blocks: `apply_missing_trailers` degrades to
     # `message` unchanged on any resolution failure.
     message = apply_missing_trailers(
-        message, worktree_root, list(raw_paths) + list(raw_deleted)
+        message,
+        worktree_root,
+        list(raw_paths) + list(raw_deleted),
+        session_id_override=session_id_override,
     )
 
     try:

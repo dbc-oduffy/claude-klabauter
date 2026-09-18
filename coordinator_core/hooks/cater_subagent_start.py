@@ -139,6 +139,17 @@ offer or role framing are added. This is a real finding, not a hypothetical
 one; it is carried up in this chunk's own report rather than silently
 declared "done" against a payload nobody sized. See that report for the
 full breakdown and the plan-level disposition this needs.
+
+The over-cap response is PER-BLOCK and largest-first, never the whole leg:
+`compose_catering` displaces blocks in descending size until the composed
+total fits, keeps every block that still fits inline in policy order, and
+names the displaced ones in the companion-file pointer. Displacing the whole
+leg because one 6K consumption contract blew the cap handed the child a
+~150-char path in place of the small blocks beside it -- and a subagent never
+sees CLAUDE.md, so a rule governing a delegate that does not arrive in its
+prompt verbatim is a mechanism converted into compliance. Size order carries
+that on its own: the verbatim-delivery blocks are the small ones. There is
+deliberately no criticality field to annotate.
 """
 
 from __future__ import annotations
@@ -162,9 +173,10 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from hashlib import blake2b
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from coordinator_core._settings_home import claude_config_dir, machine_local_dir
+from coordinator_core.data_root import content_root_for
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_spawn
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.hooks._payload import field
@@ -204,7 +216,7 @@ from coordinator_core.subagent_sandbox.provision_report import (
     _sanitize_segment,
     _splice_integrator_receipt,
     _splice_review_receipt,
-    assemble_contract_blocks_for_payload,
+    assemble_contract_block_parts_for_payload,
 )
 
 #: Op name the SubagentStart shim relays this leg under (C3). Registered here,
@@ -365,14 +377,25 @@ def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = Fals
     )
 
 
-def _compose_blocks_pointer_text(blocks_rel_path: str) -> str:
+def _compose_blocks_pointer_text(
+    blocks_rel_path: str, spilled_names: Sequence[str] = ()
+) -> str:
     """Short pointer for a spilled-blocks companion file (AC9 amendment) --
     same machine-readable marker shape as `_compose_sidecar_offer_text`, own
     line, newline-preceded. Deliberately terse: the whole point of spilling
-    is a deterministically small `additionalContext`."""
+    is a deterministically small `additionalContext`.
+
+    `spilled_names` names the blocks that are IN the file, because the spill
+    is per-block (largest-first) and not the whole leg: a pointer that named
+    nothing would read as "your contract is elsewhere" to a child whose
+    remaining blocks are inline directly above it.
+    """
+    named = ", ".join(spilled_names)
+    subject = f"These contract blocks ({named})" if named else "These contract blocks"
     return (
-        "These contract blocks are your dispatch contract -- reading the "
-        "file below is expected, not optional.\n"
+        subject
+        + " are part of your dispatch contract and are in the file below "
+        "rather than inline -- reading it is expected, not optional.\n"
         + BLOCKS_COMPANION_MARKER_PREFIX
         + blocks_rel_path
     )
@@ -430,20 +453,78 @@ def _resolve_blocks_companion_path(
 
 
 def _spill_blocks_to_companion(
-    payload: Dict[str, Any], cwd: Optional[str], sidecar_path: str, injected_blocks: str
+    payload: Dict[str, Any],
+    cwd: Optional[str],
+    sidecar_path: str,
+    injected_blocks: str,
+    *,
+    resolved: Optional[Tuple[Path, str]] = None,
 ) -> Optional[str]:
     """Write `injected_blocks` to its companion file and return the
     resulting repo-relative path, or `None` on any failure. Callers wrap
     this in their own try/except (AC9's fail-open contract) -- this
     function itself does not swallow exceptions, so a caller can tell a
-    resolution/write failure apart from "nothing to spill"."""
-    resolved = _resolve_blocks_companion_path(payload, cwd, sidecar_path)
+    resolution/write failure apart from "nothing to spill".
+
+    `resolved` lets a caller that already resolved the companion path hand
+    it back in. That is not an optimisation: the no-sidecar branch of
+    `_resolve_blocks_companion_path` mints a fresh random nonce per call, so
+    a caller that needs the path BEFORE deciding what to write (the pointer
+    text is itself charged against the cap) must not resolve twice or it
+    names one file and writes another.
+    """
+    if resolved is None:
+        resolved = _resolve_blocks_companion_path(payload, cwd, sidecar_path)
     if resolved is None:
         return None
     companion_path, rel_path = resolved
     with open(companion_path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(injected_blocks)
     return rel_path
+
+
+def _plan_blocks_spill(
+    block_parts: Sequence[Tuple[str, str]],
+    overhead_chars: int,
+    blocks_rel_path: str,
+) -> List[int]:
+    """Indices of `block_parts` to move to the companion file, so that the
+    composed total (`overhead_chars` + the blocks leg, pointer included)
+    lands at or under `ADDITIONAL_CONTEXT_CHAR_CAP`.
+
+    LARGEST-FIRST, fewest blocks displaced: blocks are considered for spill
+    in descending body size and the first prefix of that order which brings
+    the total under the cap wins. Size order is the whole policy -- there is
+    no criticality field, no per-row annotation and no judgement about which
+    block matters, and the property that makes it the right rule is that the
+    small blocks are the ones whose whole value is verbatim delivery (a
+    subagent never sees CLAUDE.md, so a rule governing a delegate has to
+    appear in its prompt), while the 6KB consumption contracts that blow the
+    cap are the ones a pointer serves adequately. Ties break toward the
+    earlier index, only so the result is deterministic.
+
+    Never permutes: the kept indices are returned to the caller implicitly,
+    in the caller's own order (this function returns only what to DROP).
+    When even spilling everything does not fit, every index is returned --
+    the pre-existing all-or-nothing outcome, which is the floor here rather
+    than the default.
+    """
+    count = len(block_parts)
+    by_size_desc = sorted(range(count), key=lambda i: (-len(block_parts[i][1]), i))
+
+    for cut in range(1, count + 1):
+        spilled = set(by_size_desc[:cut])
+        segments = [body for i, (_name, body) in enumerate(block_parts) if i not in spilled]
+        segments.append(
+            _compose_blocks_pointer_text(
+                blocks_rel_path,
+                [block_parts[i][0] for i in range(count) if i in spilled],
+            )
+        )
+        if overhead_chars + len("\n\n" + "\n\n".join(segments)) <= ADDITIONAL_CONTEXT_CHAR_CAP:
+            return sorted(spilled)
+
+    return list(range(count))
 
 
 def _resolve_role_append_snippet_path() -> Optional[Path]:
@@ -506,9 +587,11 @@ def _resolve_role_append_snippet_path() -> Optional[Path]:
     except OSError:
         doe_root = ""
     if doe_root:
-        found = _artifact_at(Path(doe_root) / "coordinator")
-        if found is not None:
-            return found
+        content_root = content_root_for(doe_root)
+        if content_root is not None:
+            found = _artifact_at(content_root)
+            if found is not None:
+                return found
 
     return None
 
@@ -1075,19 +1158,20 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
     except Exception:
         sidecar_path, sidecar_text = "", ""
 
-    injected_blocks = ""
+    block_parts: List[Tuple[str, str]] = []
     try:
         resolved_payload = _resolve_contract_blocks_payload(
             payload, agent_type, subagent_type
         )
-        injected_blocks = (
-            assemble_contract_blocks_for_payload(
+        block_parts = list(
+            assemble_contract_block_parts_for_payload(
                 resolved_payload, cwd=cwd, report_sidecar_path=sidecar_path
             )
-            or ""
+            or ()
         )
     except Exception:
-        injected_blocks = ""
+        block_parts = []
+    injected_blocks = "\n\n".join(body for _name, body in block_parts)
 
     role_append = ""
     try:
@@ -1107,20 +1191,49 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
     if role_append:
         parts.append("\n\n" + role_append)
 
-    # AC9 amendment -- threshold, not a switch: measure the composed TOTAL
-    # (all three legs, the shape the harness actually sees) and spill the
-    # blocks leg to a companion file only when that total would exceed the
-    # cap. A type already under the cap keeps its blocks inline, byte-
-    # identical to today (AC1).
+    # AC9 amendment -- per-block, largest-first: measure the composed TOTAL
+    # (all three legs, the shape the harness actually sees) and displace only
+    # as many blocks, biggest first, as it takes to fit. A type already under
+    # the cap keeps its blocks inline, byte-identical to today (AC1); an
+    # over-cap type keeps every block that still fits inline, in policy order,
+    # and the pointer names the ones that moved. Spilling the whole leg for
+    # one oversized block delivered a ~150-char file path in place of the
+    # small verbatim-delivery blocks riding beside it.
     if injected_blocks and sum(len(p) for p in parts) > ADDITIONAL_CONTEXT_CHAR_CAP:
+        blocks_rel_path = None
+        spilled_indices: List[int] = []
+        spilled: set[int] = set()
         try:
-            blocks_rel_path = _spill_blocks_to_companion(
-                payload, cwd, sidecar_path, injected_blocks
+            resolved_companion = _resolve_blocks_companion_path(
+                payload, cwd, sidecar_path
             )
+            if resolved_companion is not None:
+                overhead_chars = sum(
+                    len(p) for i, p in enumerate(parts) if i != blocks_idx
+                )
+                spilled_indices = _plan_blocks_spill(
+                    block_parts, overhead_chars, resolved_companion[1]
+                )
+                spilled = set(spilled_indices)
+                blocks_rel_path = _spill_blocks_to_companion(
+                    payload,
+                    cwd,
+                    sidecar_path,
+                    "\n\n".join(block_parts[i][1] for i in spilled_indices),
+                    resolved=resolved_companion,
+                )
         except Exception:
             blocks_rel_path = None
         if blocks_rel_path:
-            parts[blocks_idx] = "\n\n" + _compose_blocks_pointer_text(blocks_rel_path)
+            segments = [
+                body for i, (_name, body) in enumerate(block_parts) if i not in spilled
+            ]
+            segments.append(
+                _compose_blocks_pointer_text(
+                    blocks_rel_path, [block_parts[i][0] for i in spilled_indices]
+                )
+            )
+            parts[blocks_idx] = "\n\n" + "\n\n".join(segments)
         # A resolution/write failure falls back to the inline blocks leg
         # already sitting in `parts[blocks_idx]` -- today's behaviour, over
         # cap but never worse, never silent, never raised (AC9 fail-open).

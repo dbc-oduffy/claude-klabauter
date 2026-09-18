@@ -113,6 +113,7 @@ import re
 import sys
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
+from coordinator_core.data_root import content_root_for
 from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root
 
 
@@ -208,6 +209,14 @@ def _plugin_root() -> str:
             file=sys.stderr,
         )
         sys.exit(2)
+    # Either content layout — the published flat mirror carries skills/ at its
+    # own root, with no "coordinator" segment to join (data_root.content_root_for
+    # is the one place that join lives; private layout is probed first).
+    content = content_root_for(root)
+    if content is not None:
+        return str(content)
+    # Neither layout present — keep naming the private-shape path so the
+    # downstream skills/ read reports the directory an operator expected.
     return os.path.join(root, "coordinator")
 
 

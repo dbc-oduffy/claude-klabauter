@@ -42,6 +42,7 @@ import os
 import sys
 from typing import Optional, Tuple
 
+from coordinator_core.data_root import content_root_for
 from coordinator_core.trusted_root_guard import is_trusted as _is_trusted_root
 
 _VALID_TOKENS = ("absent", "stale", "fresh")
@@ -81,10 +82,14 @@ def check_rag_state() -> Tuple[str, int]:
     """
     claude_home = _claude_home()
     doe_root = _read_doe_root(claude_home)
-    if not doe_root or not os.path.isdir(os.path.join(doe_root, "coordinator")):
+    # Either content layout counts: a flat published mirror holds the same
+    # content at its own root, and hardcoding the `coordinator/` join made this
+    # precondition unsatisfiable there.
+    content_root = content_root_for(doe_root)
+    if content_root is None:
         return ("", 1)
 
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.join(doe_root, "coordinator")
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(content_root)
 
     if not _is_trusted_root(plugin_root):
         return ("", 1)
@@ -123,7 +128,7 @@ def check_rag_state() -> Tuple[str, int]:
 
 def _doe_root_error(doe_root: str) -> Optional[str]:
     """Return the ERROR line for a missing/invalid DoE root, else None."""
-    if doe_root and os.path.isdir(os.path.join(doe_root, "coordinator")):
+    if content_root_for(doe_root) is not None:
         return None
     return (
         "ERROR: ~/.claude/.doe-root missing/invalid — re-run "
@@ -149,7 +154,7 @@ def main(argv) -> int:  # noqa: ARG001 — takes no arguments, mirrors bash orac
         print(err, file=sys.stderr)
         return 1
 
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or os.path.join(doe_root, "coordinator")
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT") or str(content_root_for(doe_root))
     if not _is_trusted_root(plugin_root):
         print(_trust_error(plugin_root), file=sys.stderr)
         return 1

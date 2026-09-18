@@ -507,6 +507,14 @@ def _resolve_plugin_root(coord_path: str) -> str | None:
     layout's marker is present -- the caller then knows the clone predates
     the coordinator/ cutover (or is not a coordinator-claude clone at all)
     rather than silently guessing a path that does not exist.
+
+    Deliberately does NOT accept a bare `<root>/coordinator` directory by
+    `isdir` alone the way `coordinator_core.data_root.content_root_for` does
+    for its own, looser, ~45-call-site "content root" question — a nested
+    `coordinator/` dir with no plugin payload in it is not a clone this
+    launcher can resolve `--plugin-dir` against, and `gen_doe_root_pointer.py`
+    already fails CLOSED on exactly that shape via the same engine twin this
+    function mirrors (claude-klabauter#6 conflict resolution, 2026-09-18).
     """
     coord = Path(coord_path)
     for candidate in (coord / "coordinator", coord):
@@ -786,7 +794,11 @@ def main(argv: list[str]) -> int:
     resolved_plugin_root = _resolve_plugin_root(doe_clone)
     doe_coordinator = resolved_plugin_root if resolved_plugin_root is not None else os.path.join(doe_clone, "coordinator")
     if not os.path.isdir(doe_coordinator):
-        sys.stderr.write(f'claude-doe: DoE coordinator/ dir not found at "{doe_coordinator}"\n')
+        sys.stderr.write(
+            f'claude-doe: no coordinator content root under "{doe_clone}" — neither '
+            f'"{os.path.join(doe_clone, "coordinator")}" (nested dev-clone payload) nor '
+            f'"{os.path.join(doe_clone, ".claude-plugin", "plugin.json")}" (flat OSS/marketplace marker)\n'
+        )
         if resolved_plugin_root is None:
             # Neither accepted layout's marker is present — the historical
             # cutover case this message was written for.

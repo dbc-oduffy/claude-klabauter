@@ -1748,6 +1748,8 @@ def test_non_session_handoff_kind_regression_still_indeterminate(monkeypatch, tm
     assert leg_a["detail"] == "no ## Acceptance criteria heading"
 
 
+@pytest.mark.real_home  # live-tree oracle: `git show`s the real DoE-claude HEAD, which the
+# quarantine's synthetic (non-git) stub root cannot serve.
 def test_leg_a_terminal_plan_status_covers_every_terminal_member_of_the_schema_enum():
     """AC6 -- presence-only parity, deliberately NOT set-equality and
     deliberately NOT derived from the schema's enum (plan's anti-scope):

@@ -92,8 +92,16 @@ def _coordinator_invoke_binary(real_home: Path) -> Path | None:
 
 
 def _engine_provenance(real_home: Path) -> dict | None:
-    candidate = real_home / "bin" / "coordinator-invoke.exe.provenance.json"
-    if not candidate.is_file():
+    bin_dir = real_home / "bin"
+    candidate = next(
+        (
+            bin_dir / name
+            for name in ("coordinator-invoke.exe.provenance.json", "coordinator-invoke.provenance.json")
+            if (bin_dir / name).is_file()
+        ),
+        None,
+    )
+    if candidate is None:
         return None
     try:
         return json.loads(candidate.read_text(encoding="utf-8"))
@@ -147,14 +155,6 @@ def _mirror_registry_map_text(engine_root: str) -> str | None:
 
 def _fleet_op_present(text: str) -> bool:
     return '"fleet.mode_set"' in text and '"fleet.mode_show"' in text
-
-
-def _atomic_write_bytes(path: Path, data: bytes) -> None:
-    """Write-to-temp-then-``os.replace`` so a peer concurrently reading
-    ``path`` never observes a torn/partial write."""
-    tmp = path.with_name(f"{path.name}.tmp-{uuid.uuid4().hex}")
-    tmp.write_bytes(data)
-    os.replace(tmp, path)
 
 
 def _isolated_settings_home(tmp_path: Path, real_home: Path) -> Path:
@@ -267,35 +267,27 @@ def test_leg1_real_door_write_and_leg3_no_session_traffic(tmp_path, real_home, e
     fleet-mode.json itself, and no session/messaging-shaped directory may
     appear.
 
-    THE WARM-SERVER CAVEAT (empirically confirmed on this machine, not a
-    defect in this test). The compiled ``coordinator-invoke`` door
-    round-trips through a machine-wide warm server keyed on
-    (user, engine-clone, engine-token) -- NOT on ``COORDINATOR_SETTINGS_
-    HOME``. Once that server is alive for this box's engine clone, it
-    resolves ``settings_home()`` against ITS OWN spawn-time environment,
-    not this test's per-call override or ``COORDINATOR_WARM=0`` (verified:
-    a read-only ``fleet.mode_show`` call under an isolated env + COORDINATOR_
+    THE WARM-SERVER CAVEAT, negative-spec (PM ruling 2026-09-18: a test must
+    never write into the operator's REAL settings home -- shared live with
+    every session on the box; see ``coordinator_core/install/tests/
+    test_install_surface_live.py`` for the sibling fix under the same
+    ruling). The compiled ``coordinator-invoke`` door round-trips through a
+    machine-wide warm server keyed on (user, engine-clone, engine-token) --
+    NOT on ``COORDINATOR_SETTINGS_HOME``. Once that server is alive for this
+    box's engine clone, it resolves ``settings_home()`` against ITS OWN
+    spawn-time environment, not this test's per-call override or
+    ``COORDINATOR_WARM=0`` (empirically confirmed on this machine: a
+    read-only ``fleet.mode_show`` call under an isolated env + COORDINATOR_
     WARM=0 still reported this machine's real ``compaction_warnings``
-    value). This test therefore checks BOTH the isolated home and the real
-    one for where the write actually landed, asserts against whichever one
-    changed, and -- in a ``finally``, ONLY WHEN this run's own write actually
-    landed in the real (shared, machine-wide) file rather than the isolated
-    one -- restores it to its exact pre-test bytes (or removes it if it did
-    not exist). The restore is CONDITIONAL, not unconditional: on ~50 live
-    peer sessions, an unconditional restore would rewrite a shared file this
-    test never touched, and blindly restoring stale pre-test bytes risks
-    clobbering a peer's write that lands between this test's snapshot and its
-    restore. So when the real file was the one written to, this test
-    re-reads it immediately before restoring and only restores if its
-    content still matches the exact bytes this test itself wrote -- if a peer
-    mutated it in between, this test leaves the peer's write alone rather
-    than overwrite it with a stale snapshot. The restore write itself is
-    atomic (write-to-temp + ``os.replace``) so a peer reading the file
-    mid-restore never observes a torn write. Only the ``autonomous`` key is
-    ever written here (never ``compaction_warnings``): it is session-wins by
-    design (mode_resolution.py), so a transient fleet value never changes
-    any *other* live session's own behaviour even during the tiny window
-    this test's write is live.
+    value). There is no per-call redirect that survives a live warm server,
+    so this test never attempts one and never writes the real, shared
+    ``fleet-mode.json`` to prove or restore anything -- a restore does not
+    make the live write safe, it only shrinks the window a peer session can
+    observe this test's value. When the isolated home's own ``fleet-mode.
+    json`` never appears -- the signature of the warm server having
+    resolved the real, shared home instead -- this test SKIPS with a named
+    reason rather than falling back to asserting against, or writing into,
+    that real file.
     """
     binary = _coordinator_invoke_binary(real_home)
     if binary is None:
@@ -311,102 +303,55 @@ def test_leg1_real_door_write_and_leg3_no_session_traffic(tmp_path, real_home, e
 
     isolated_fleet_file = home / "fleet-mode.json"
     real_fleet_file = real_home / "fleet-mode.json"
-    real_before = real_fleet_file.read_bytes() if real_fleet_file.is_file() else None
 
     isolated_dirs_before = {p.name for p in home.iterdir() if p.is_dir()}
-    real_dirs_before = (
-        {p.name for p in real_home.iterdir() if p.is_dir()} if real_home.is_dir() else set()
+
+    result = subprocess.run(
+        [str(binary), "fleet.mode_set", json.dumps({"key": "autonomous", "value": "on"})],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        **_NO_CONSOLE,
     )
 
-    # Set only when the warm-server caveat fires and this run's own write
-    # actually lands in the real, shared file -- gates the conditional
-    # restore in `finally` below. `real_after_write` is this test's own
-    # write, captured immediately, so the restore can detect a peer's write
-    # landing in the interim rather than blindly overwriting it.
-    wrote_to_real_home = False
-    real_after_write: bytes | None = None
+    assert result.returncode == 0, (
+        f"real-door write failed against {engine_check['verdict']}; "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    response = json.loads(result.stdout)
+    assert response.get("result", {}).get("autonomous") is True, (
+        f"unexpected real-door response: {result.stdout!r}"
+    )
 
-    try:
-        result = subprocess.run(
-            [str(binary), "fleet.mode_set", json.dumps({"key": "autonomous", "value": "on"})],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            **_NO_CONSOLE,
+    if not isolated_fleet_file.is_file():
+        pytest.skip(
+            "warm-server caveat fired: fleet.mode_set's write resolved the "
+            f"real, shared settings home ({real_fleet_file}) instead of this "
+            f"test's isolated one ({isolated_fleet_file}) -- per PM ruling "
+            "2026-09-18 this test never writes or asserts against the real "
+            "settings home, so leg 1/leg 3 cannot be exercised against a "
+            "live warm server on this box"
         )
 
-        assert result.returncode == 0, (
-            f"real-door write failed against {engine_check['verdict']}; "
-            f"stdout={result.stdout!r} stderr={result.stderr!r}"
-        )
-        response = json.loads(result.stdout)
-        assert response.get("result", {}).get("autonomous") is True, (
-            f"unexpected real-door response: {result.stdout!r}"
-        )
+    record = json.loads(isolated_fleet_file.read_text(encoding="utf-8"))
+    assert record.get("autonomous") is True
 
-        if isolated_fleet_file.is_file():
-            record = json.loads(isolated_fleet_file.read_text(encoding="utf-8"))
-            assert record.get("autonomous") is True
+    after_dirs = {p.name for p in home.iterdir() if p.is_dir()}
+    after_files = {p.name for p in home.iterdir() if p.is_file()}
+    unexpected_dirs = (after_dirs - isolated_dirs_before) & _SESSION_LIKE_DIR_NAMES
+    unexpected_files = after_files - {"fleet-mode.json", "machine-local"}
 
-            after_dirs = {p.name for p in home.iterdir() if p.is_dir()}
-            after_files = {p.name for p in home.iterdir() if p.is_file()}
-            unexpected_dirs = (after_dirs - isolated_dirs_before) & _SESSION_LIKE_DIR_NAMES
-            unexpected_files = after_files - {"fleet-mode.json", "machine-local"}
-        else:
-            # Warm-server caveat fired: the write landed in the REAL home
-            # instead of the isolated one this test tried to redirect it
-            # to -- still the real door, against the real published
-            # engine, still settings_home()'s own resolution for this
-            # call.
-            assert real_fleet_file.is_file(), (
-                "fleet-mode.json appeared at NEITHER the isolated settings home "
-                f"({isolated_fleet_file}) NOR the real one ({real_fleet_file}) "
-                "after a successful fleet.mode_set call"
-            )
-            wrote_to_real_home = True
-            real_after_write = real_fleet_file.read_bytes()
-            record = json.loads(real_after_write.decode("utf-8"))
-            assert record.get("autonomous") is True
-
-            after_dirs = {p.name for p in real_home.iterdir() if p.is_dir()}
-            unexpected_dirs = (after_dirs - real_dirs_before) & _SESSION_LIKE_DIR_NAMES
-            unexpected_files = set()  # real home is shared/busy -- file-level
-            # diffing there is unsafe (concurrent peer writes); the directory-
-            # level denylist check above is leg 3's evidence in this branch.
-
-        assert not unexpected_dirs, (
-            "fleet.mode_set's real-door run created session/messaging-shaped "
-            f"directories: {sorted(unexpected_dirs)} -- no session was enumerated "
-            "or messaged by a write to a single file"
-        )
-        assert not unexpected_files, (
-            "fleet.mode_set's real-door run created file(s) beyond fleet-mode.json: "
-            f"{sorted(unexpected_files)} -- clause 1 forbids any session-registry / "
-            "peer-address / messaging-surface side effect"
-        )
-    finally:
-        # CONDITIONAL restore: only when this run's own write actually
-        # landed in the real, shared file (the warm-server caveat branch).
-        # When the write landed in the isolated home instead -- the common
-        # case -- the real file was never touched by this test and must not
-        # be rewritten at all, atomically or otherwise.
-        if wrote_to_real_home:
-            current = real_fleet_file.read_bytes() if real_fleet_file.is_file() else None
-            if current != real_after_write:
-                # TOCTOU: a peer session mutated the real, shared file
-                # between this test's write and this restore. The pre-test
-                # snapshot (`real_before`) is now stale -- restoring it would
-                # clobber the peer's write with bytes that predate it. Leave
-                # the file exactly as the peer left it.
-                pass
-            elif real_before is None:
-                try:
-                    real_fleet_file.unlink()
-                except FileNotFoundError:
-                    pass
-            else:
-                _atomic_write_bytes(real_fleet_file, real_before)
+    assert not unexpected_dirs, (
+        "fleet.mode_set's real-door run created session/messaging-shaped "
+        f"directories: {sorted(unexpected_dirs)} -- no session was enumerated "
+        "or messaged by a write to a single file"
+    )
+    assert not unexpected_files, (
+        "fleet.mode_set's real-door run created file(s) beyond fleet-mode.json: "
+        f"{sorted(unexpected_files)} -- clause 1 forbids any session-registry / "
+        "peer-address / messaging-surface side effect"
+    )
 
 
 # ---------------------------------------------------------------------------

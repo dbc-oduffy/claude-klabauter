@@ -85,6 +85,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.roadmap.prep_gate import gate_plan, read_stamp
+from coordinator_core.ops._param_alias import aliased_param, spellings
 
 # Generator-provenance: this op writes nothing.
 GENERATES: list = []
@@ -115,9 +116,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if repo_root is None:
         raise ValueError("plan.prep_gate requires a resolved repo_root")
 
-    raw_plan = params.get("plan")
+    raw_plan = aliased_param(params, "plan", "plan_path")
     if not isinstance(raw_plan, str) or not raw_plan.strip():
-        raise ValueError("plan must be a non-empty string naming one plan file")
+        raise ValueError(
+            f"{spellings('plan', 'plan_path')} must be a non-empty string naming one plan file"
+        )
 
     worktree_root = Path(main_worktree_root(repo_root))
     plan_path = _resolve_plan(raw_plan.strip(), worktree_root)

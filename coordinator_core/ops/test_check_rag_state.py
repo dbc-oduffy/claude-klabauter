@@ -144,3 +144,58 @@ def test_trusted_root_opt_out_overrides_untrusted_path(doe_home, monkeypatch):
     monkeypatch.setenv("RAG_STATE", "fresh")
     text, rc = subject.check_rag_state()
     assert (text, rc) == ("fresh", 0)
+
+
+@pytest.fixture
+def flat_mirror_home(tmp_path, monkeypatch):
+    """A CLAUDE_HOME whose .doe-root points at a FLAT published mirror.
+
+    The mirror's repo root IS the coordinator content root, gated by its own
+    `.claude-plugin/plugin.json` — the layout a cloud container registers.
+    """
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    doe_root = tmp_path / "flat-mirror"
+    (doe_root / ".claude-plugin").mkdir(parents=True)
+    (doe_root / ".claude-plugin" / "plugin.json").write_text("{}\n", encoding="utf-8")
+    (home / ".claude" / ".doe-root").write_text(str(doe_root) + "\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_HOME", str(home))
+    monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
+    monkeypatch.delenv("RAG_STATE", raising=False)
+    monkeypatch.delenv("CLAUDE_RAG_STATE_FILE", raising=False)
+    monkeypatch.delenv("COORDINATOR_PLUGIN_ROOT_TRUSTED", raising=False)
+    return home, doe_root
+
+
+def test_flat_mirror_satisfies_doe_root_precondition(flat_mirror_home, monkeypatch):
+    monkeypatch.setenv("RAG_STATE", "fresh")
+    text, rc = subject.check_rag_state()
+    assert (text, rc) == ("fresh", 0)
+
+
+def test_flat_mirror_plugin_root_is_the_mirror_root(flat_mirror_home, monkeypatch):
+    _home, doe_root = flat_mirror_home
+    marker = doe_root / "tasks" / ".rag-state"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("stale\n", encoding="utf-8")
+    text, rc = subject.check_rag_state()
+    assert (text, rc) == ("stale", 0)
+
+
+def test_flat_mirror_main_prints_token(flat_mirror_home, monkeypatch, capsys):
+    monkeypatch.setenv("RAG_STATE", "absent")
+    rc = subject.main([])
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "absent"
+
+
+def test_bare_directory_is_not_a_content_root(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    (home / ".claude" / ".doe-root").write_text(str(bare) + "\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_HOME", str(home))
+    monkeypatch.setenv("RAG_STATE", "fresh")
+    assert subject.check_rag_state() == ("", 1)
+    assert subject.main([]) == 1
