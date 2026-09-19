@@ -134,7 +134,7 @@ stroll through):
 - This rationale does not transfer to non-hook surfaces. If the artifact is not exec'd by git,
   this carve-out does not apply, full stop.
 - Standing reduction target (see `docs/decisions/` C20 git-hook-minimization work): the *number*
-  of local git hooks is itself minimized, preferring GitHub Actions CI/CD; a new local git hook
+  of local git hooks is itself minimized; a new local git hook
   requires PM approval.
 
 Sites:

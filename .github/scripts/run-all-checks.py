@@ -22,9 +22,9 @@ Discovery is convention-based: every ``check-*.py`` and ``validate-*.py`` in
 this directory runs, excluding this file. Adding a check is adding a file.
 Helpers are named with a leading underscore so they are not mistaken for checks.
 
-The test suite is deliberately NOT run from here. Tests are a separate CI job:
-the publish gate must stay fast and must not make a publish decision hinge on a
-multi-thousand-test run. See run-tests.py.
+The test suite is deliberately NOT run from here: the publish gate must stay
+fast and must not make a publish decision hinge on a multi-thousand-test run.
+Run pytest separately, with a capped worker count (see AGENTS.md).
 
 No shell anywhere in this harness — naked Python, shebang-resolved interpreter,
 so it behaves identically on a Windows runner with no bash available.

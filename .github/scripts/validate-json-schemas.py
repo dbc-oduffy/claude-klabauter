@@ -12,7 +12,7 @@ Two tiers:
      meta-validator when that library is importable.
 
 ``jsonschema`` is a declared runtime dependency of this package, so tier 2
-normally runs. If it is absent (a checks-only CI job that skips the install),
+normally runs. If it is absent (a checks-only run that skips the install),
 tier 2 reports itself SKIPPED rather than silently passing — a check that
 cannot distinguish "verified" from "not run" is not a check.
 

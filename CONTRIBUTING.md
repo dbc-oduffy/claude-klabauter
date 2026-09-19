@@ -125,8 +125,8 @@ These are the ones a first PR is most likely to trip over.
 
 - **Maintainer approval required.** Every PR needs an approving review from @dbc-oduffy.
   Approvals are dismissed when new commits are pushed.
-- **CI must pass.** Validation runs automatically on every PR
-  (`python3 .github/scripts/run-all-checks.py` runs the same checks locally).
+- **Run the checks locally.** There is no CI; validate with
+  `python3 .github/scripts/run-all-checks.py` before opening a PR.
 - **No force pushes, no branch deletion, conversations must be resolved.**
 
 For substantial changes, open an issue first to discuss direction. Drive-by typo fixes and
