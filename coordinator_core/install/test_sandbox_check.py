@@ -31,9 +31,15 @@ import pytest
 
 from coordinator_core.install import sandbox_check
 from coordinator_core.install.sandbox_check import (
+    CLONE_LAYOUT_FLAT,
+    CLONE_LAYOUT_MAXIMALIST,
+    CLONE_LAYOUT_UNKNOWN,
     Reporter,
     SandboxCheckTransportError,
+    _cold_bare_path,
+    _host_home,
     _run,
+    clone_layout,
     main,
     resolve_doe_clone,
     run_all,
@@ -414,3 +420,244 @@ def test_tier2_boot_check_names_the_sentinel_a_writer_actually_writes():
     banner = sandbox_check._TIER2_BANNER
     assert _SENTINEL_NAME in banner
     assert ".session-sentinel" not in banner
+
+
+# ---------------------------------------------------------------------------
+# Host-dependence: an assertion whose subject is absent must not report a PASS
+# ---------------------------------------------------------------------------
+
+
+def test_unevaluable_is_counted_apart_from_pass_fail_and_skip():
+    """The channel exists so "not evaluated" can never be read as "passed".
+    A SKIP is pass-equivalent and exits 0; UNEVALUABLE must not be."""
+    r = Reporter()
+    r.ok("a")
+    r.skip("b")
+    r.unevaluable("c")
+    assert (r.pass_count, r.fail_count, r.unevaluable_count) == (1, 0, 1)
+    assert any(line.startswith("UNEVALUABLE: c") for line in r.lines)
+
+
+def test_main_returns_dedicated_code_two_when_nothing_failed_but_something_was_unevaluable(monkeypatch):
+    def _fake_run_all(**_kw):
+        r = Reporter()
+        r.ok("evaluated")
+        r.unevaluable("subject absent on this host")
+        return r, "/nonexistent-sandbox"
+
+    monkeypatch.setattr(sandbox_check, "run_all", _fake_run_all)
+    assert main([]) == 2
+
+
+def test_main_fail_outranks_unevaluable_so_a_real_defect_is_never_masked(monkeypatch):
+    def _fake_run_all(**_kw):
+        r = Reporter()
+        r.bad("real defect")
+        r.unevaluable("subject absent on this host")
+        return r, "/nonexistent-sandbox"
+
+    monkeypatch.setattr(sandbox_check, "run_all", _fake_run_all)
+    assert main([]) == 1
+
+
+# ---------------------------------------------------------------------------
+# clone_layout — the maximalist/flat divergence, classified by positive marker
+# ---------------------------------------------------------------------------
+
+
+def test_clone_layout_classifies_maximalist_flat_and_neither(tmp_path: Path):
+    maximalist = tmp_path / "maximalist"
+    (maximalist / "coordinator").mkdir(parents=True)
+    assert clone_layout(str(maximalist)) == CLONE_LAYOUT_MAXIMALIST
+
+    flat = tmp_path / "flat"
+    (flat / "hooks").mkdir(parents=True)
+    (flat / "skills").mkdir()
+    assert clone_layout(str(flat)) == CLONE_LAYOUT_FLAT
+
+    neither = tmp_path / "neither"
+    neither.mkdir()
+    assert clone_layout(str(neither)) == CLONE_LAYOUT_UNKNOWN
+    assert clone_layout(str(tmp_path / "absent")) == CLONE_LAYOUT_UNKNOWN
+    assert clone_layout("") == CLONE_LAYOUT_UNKNOWN
+
+
+@pytest.fixture
+def flat_mirror_clone(tmp_path: Path) -> Path:
+    """The PUBLISHED FLAT MIRROR shape — what `repos.doe_claude` resolves to on
+    a marketplace-served install (every cloud container). Its surfaces sit at
+    the clone root, so no `<clone>/coordinator/...` path exists by construction.
+    The pre-existing `fake_doe_clone` fixture only ever built the maximalist
+    shape, which is why no test could fail on this divergence."""
+    clone = tmp_path / "flat-published-mirror"
+    (clone / ".git").mkdir(parents=True)
+    (clone / "hooks").mkdir()
+    (clone / "hooks" / "hooks.json").write_text('{"hooks": {}}', encoding="utf-8")
+    (clone / "skills").mkdir()
+    (clone / "templates" / "shell").mkdir(parents=True)
+    (clone / "templates" / "shell" / "claude-doe-shim.sh.tmpl").write_text(
+        "claude() { command claude-doe --doe-root \"$_r\" \"$@\"; }\n", encoding="utf-8"
+    )
+    return clone
+
+
+def test_flat_mirror_clone_reports_unevaluable_not_a_pass_equivalent_skip(
+    flat_mirror_clone: Path, monkeypatch
+):
+    """The coordinator/-absent row used to be a SKIP reading "W4.2 cutover not
+    yet completed" — pass-equivalent, and false on every flat clone. A run that
+    evaluated almost none of its maximalist subject must not exit 0."""
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(flat_mirror_clone))
+
+    r, _sandbox = run_all()
+
+    assert any(
+        line.startswith("UNEVALUABLE") and "clone's coordinator/ dir absent" in line
+        for line in r.lines
+    ), r.lines
+    assert not any("W4.2 cutover not yet completed" in line for line in r.lines)
+    assert r.unevaluable_count > 0
+
+
+def test_flat_mirror_clone_failures_name_the_layout_as_the_cause(
+    flat_mirror_clone: Path, monkeypatch
+):
+    """A FAIL whose expected path form cannot exist on this clone must say so.
+    Verdict is deliberately UNCHANGED (still FAIL) — only the diagnosis is
+    fixed; turning these green on a flat host would be the silent oracle
+    rewrite this check exists to prevent."""
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(flat_mirror_clone))
+
+    r, _sandbox = run_all()
+
+    failures = [line for line in r.lines if line.startswith("FAIL")]
+    assert failures, r.lines
+    assert any("FLAT published-mirror layout" in line for line in failures), failures
+    assert any("--coordinator-root" in line for line in failures), failures
+    # A real FAIL must still drive rc=1, never be softened to the unevaluable code.
+    assert r.fail_count > 0
+
+
+def test_flat_mirror_f8_setup_names_the_missing_oracle_input_not_a_clone_build_failure(
+    flat_mirror_clone: Path, monkeypatch
+):
+    """The F8 fixture seeds itself from `<clone>/coordinator/hooks/hooks.json`.
+    When that input is absent the sandbox builder is not at fault, and the old
+    single FAIL message sent the reader hunting a builder bug."""
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(flat_mirror_clone))
+
+    r, _sandbox = run_all()
+
+    assert any(
+        line.startswith("UNEVALUABLE")
+        and "F8 setup: no hooks.json to seed" in line
+        and "hooks.json" in line
+        for line in r.lines
+    ), r.lines
+    assert not any("publish-repo-shaped sandbox clone build failed" in line for line in r.lines)
+
+
+# ---------------------------------------------------------------------------
+# _host_home — HOME is the POSIX spelling only
+# ---------------------------------------------------------------------------
+
+
+def test_host_home_falls_back_to_userprofile_when_home_is_unset(monkeypatch):
+    """Windows does not set HOME. `os.environ.get("HOME", "")` returned "" there,
+    and the hardcoded-machine-path assertion guarded on that truthiness — a
+    check that could not fail on a first-class platform."""
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setenv("USERPROFILE", r"C:\Users\sandbox-probe")
+    assert _host_home() == r"C:\Users\sandbox-probe"
+
+
+def test_host_home_prefers_home_when_both_spellings_are_present(monkeypatch):
+    monkeypatch.setenv("HOME", "/home/posix-probe")
+    monkeypatch.setenv("USERPROFILE", r"C:\Users\win-probe")
+    assert _host_home() == "/home/posix-probe"
+
+
+def test_hardcoded_home_row_is_unevaluable_when_no_home_resolves(
+    fake_doe_clone: Path, monkeypatch
+):
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
+    monkeypatch.setattr(sandbox_check, "_host_home", lambda: "")
+
+    r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
+
+    assert any(
+        line.startswith("UNEVALUABLE") and "hardcoded-home check" in line for line in r.lines
+    ), r.lines
+    assert not any("no hardcoded machine path" in line and line.startswith("PASS") for line in r.lines)
+
+
+def test_hardcoded_path_pattern_catches_windows_and_unc_shapes_on_every_host(
+    fake_doe_clone: Path, monkeypatch
+):
+    """Host-INDEPENDENT on purpose: a shim generated on Windows can be read on
+    Linux, so every host must catch every shape. The pattern was POSIX-only,
+    so the Windows-shaped hardcoding it exists to catch could not be caught."""
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
+    tmpl = fake_doe_clone / "coordinator" / "templates" / "shell" / "claude-doe-shim.sh.tmpl"
+
+    for hardcoded in (r"C:\Users\alice\.claude", r"\\fileserver\homes\alice\.claude"):
+        tmpl.write_text(
+            "claude() {\n"
+            f'  _r="{hardcoded}/.doe-root"\n'
+            '  command claude-doe --doe-root "$_r" "$@"\n'
+            "}\n",
+            encoding="utf-8",
+        )
+        r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
+        assert any(
+            line.startswith("FAIL") and "hardcoded home-directory path" in line for line in r.lines
+        ), (hardcoded, [line for line in r.lines if "hardcoded" in line])
+
+
+def test_hardcoded_path_pattern_still_passes_a_clean_variable_only_shim(
+    fake_doe_clone: Path, monkeypatch
+):
+    """Negative control: the fix must not start failing a correct shim."""
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
+
+    r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
+
+    assert any(
+        line.startswith("PASS") and "no hardcoded home-directory paths" in line for line in r.lines
+    ), [line for line in r.lines if "hardcoded" in line]
+
+
+# ---------------------------------------------------------------------------
+# _cold_bare_path — a PATH that resolves nothing cannot prove an absence
+# ---------------------------------------------------------------------------
+
+
+def test_cold_bare_path_is_host_shaped_not_posix_only(monkeypatch):
+    """`/usr/bin:/bin` resolves nothing on Windows, so the cold-tier
+    registry-binary absence probe was structurally incapable of finding a
+    binary there — a PASS that asserted nothing on every Windows run."""
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setenv("SystemRoot", r"C:\Windows")
+    nt_path = _cold_bare_path()
+    assert "System32" in nt_path
+    assert "/usr/bin" not in nt_path
+
+    monkeypatch.setattr(os, "name", "posix")
+    posix_path = _cold_bare_path()
+    assert "/usr/bin" in posix_path and "/bin" in posix_path
+    assert "System32" not in posix_path
+
+
+def test_cold_tier_probes_the_binary_the_resolver_actually_spawns(
+    fake_doe_clone: Path, monkeypatch
+):
+    """resolve_coordinator_clone's registry rung spawns `machine-local`, not
+    `claude-home`. Probing only claude-home asserted the absence of a binary
+    this leg never consults."""
+    monkeypatch.setenv("REPO_DOE_CLAUDE", str(fake_doe_clone))
+
+    r, _sandbox = run_all(coordinator_root_override=str(fake_doe_clone / "coordinator"))
+
+    cold_rows = [line for line in r.lines if "cold PATH:" in line]
+    assert cold_rows, r.lines
+    assert all("machine-local" in line for line in cold_rows), cold_rows

@@ -161,9 +161,8 @@ def _deny_reason(subagent_type: str, source_path: str, violations: "list[tuple[s
         for axis, pin_value, passed_value in violations
     ]
     return (
-        "AGENT DISPATCH BLOCKED: " + " ".join(lines) + "\n"
-        "Each pin is a cost-and-role invariant, not a default -- drop the "
-        "corresponding parameter(s) and re-dispatch.\n"
+        "AGENT DISPATCH BLOCKED: " + " ".join(lines) + " Drop the "
+        "parameter(s) and re-dispatch.\n"
         f"<resolved from: {source_path}>"
     )
 

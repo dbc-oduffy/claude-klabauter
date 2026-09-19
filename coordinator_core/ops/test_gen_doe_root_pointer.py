@@ -30,11 +30,16 @@ def _make_doe_root(tmp_path: Path, name: str = "doe-clone") -> Path:
 
 def _make_flat_doe_root(tmp_path: Path, name: str = "flat-doe-clone") -> Path:
     """A flat (published OSS/marketplace-shaped) doe_claude root -- content
-    directly at the repo root (claude-klabauter#6 / DoE F7 repro shape)."""
+    directly at the repo root (claude-klabauter#6 / DoE F7 repro shape).
+
+    Marker is `.claude-plugin/plugin.json`, matching
+    `coordinator_core._content_root_primitive.FLAT_CONTENT_ROOT_MARKER` --
+    the one shape `content_root_for` (this module's own resolver) accepts.
+    """
     root = tmp_path / name
-    machine_local_impl = root / "templates" / "bin" / "_machine_local.py"
-    machine_local_impl.parent.mkdir(parents=True)
-    machine_local_impl.write_text("")
+    manifest_dir = root / ".claude-plugin"
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / "plugin.json").write_text("{}")
     return root
 
 

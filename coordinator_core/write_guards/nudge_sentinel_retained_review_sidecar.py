@@ -176,14 +176,11 @@ def _find_sentinel_retained_sidecar(
 
 def _advisory_text(file_path: str, sidecar_path: str) -> str:
     return (
-        "Consider instead:\n"
-        f"  dispatch coordinator:review-integrator against {sidecar_path} for "
-        f"{file_path} - this sidecar appears to carry real code-reviewer "
-        "findings covering this file.\n\n"
-        "This is a warning, not a block: the sidecar still retains the "
-        "review-findings template's placeholder scaffold comment, so its "
-        "filled/unfilled state is ambiguous, and the hard-deny sibling "
-        "guard deliberately skips a sidecar in that state."
+        f"WARNING (not a block): sidecar for {file_path} may carry real "
+        "code-reviewer findings but retains the template's placeholder "
+        "scaffold comment (ambiguous filled state).\n"
+        "Use instead:\n"
+        f"  dispatch coordinator:review-integrator against {sidecar_path}"
     )
 
 

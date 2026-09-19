@@ -106,6 +106,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § S1-C4
 from __future__ import annotations
 
 import re
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -116,7 +117,25 @@ from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 _CHUNK_TABLE_HEADING_RE = re.compile(r"^## Chunk table\s*$", re.MULTILINE)
 _NEXT_HEADING_RE = re.compile(r"^## \S", re.MULTILINE)
 _BACKTICK_RE = re.compile(r"`([^`]+)`")
+#: An unescaped `|` -- a pipe preceded by a backslash never splits a Chunk
+#: table row (issue coordinator-klabauter#25 class 1). Applied to the row's
+#: already-outer-pipe-trimmed text; each resulting cell has `\|` unescaped
+#: back to a literal `|` before it reaches any downstream parsing.
+_UNESCAPED_PIPE_RE = re.compile(r"(?<!\\)\|")
 _LIVE_DISPOSITION_PREFIXES = ("in_progress", "queued")
+#: A closed disposition starting with this text BLOCKS every row that
+#: depends on it -- see `mint_rows`'s dep-resolution docstring (issue
+#: coordinator-klabauter#25 class 5). Every OTHER closed disposition
+#: (`already-fixed`, `landed`, `pending ...`, `dropped ...`) means the
+#: dependency is SATISFIED: the edge is simply dropped, never treated as
+#: blocking -- conflating the two was the exact trap the issue names
+#: ("routing out a chunk whose only deps were already-fixed").
+_BLOCKING_CLOSED_DISPOSITION_PREFIX = "routed out"
+#: Glob metacharacters `scoped-git-commit`'s preflight refuses in a
+#: pathspec (issue coordinator-klabauter#25 class 3) -- refused HERE, at
+#: mint time, rather than left to fail after the emitted script's work is
+#: already done.
+_GLOB_CHARS = ("*", "?", "[")
 
 _REQUIRED_COLUMNS = (
     "id",
@@ -145,8 +164,27 @@ class ChunkTableMalformedError(InventoryMintError):
 
 
 class FootprintUnreadableError(InventoryMintError):
-    """Raised when a Chunk-table row's `footprint` cell cannot be parsed into
-    a clean, backtick-quoted path list -- see module docstring."""
+    """Raised when a Chunk-table row's `footprint` cell carries no
+    backtick-quoted path at all -- see module docstring. Trailing prose
+    AFTER a backtick-quoted path (`` `a/b.py` (verify only) ``) is tolerated
+    and discarded (issue coordinator-klabauter#25 class 2); this error fires
+    only when a footprint entry has no backtick-quoted span to keep."""
+
+
+class GlobFootprintError(InventoryMintError):
+    """Raised when a footprint entry is a glob pathspec (`*`, `?`, `[`).
+    `scoped-git-commit`'s preflight refuses an unbounded pathspec by design,
+    so a glob entry would emit fine and then strand the wave's work
+    uncommitted at commit time -- refused here instead (issue
+    coordinator-klabauter#25 class 3)."""
+
+
+class DirectoryShapedFootprintError(InventoryMintError):
+    """Raised when a footprint entry is directory-shaped (a trailing `/` or
+    `\\`). `scoped-git-commit` refuses a directory pathspec by design, same
+    rule `dispatch_emit.pathspec.DirectoryShapedWriteError` already
+    enforces at emit time -- refused here instead, at mint time, naming the
+    rule rather than just the entry (issue coordinator-klabauter#25 class 4)."""
 
 
 def _is_live_disposition(raw: str) -> bool:
@@ -180,31 +218,74 @@ def _split_id_list(cell: str) -> List[str]:
     return [piece.strip() for piece in cell.split(",") if piece.strip()]
 
 
+def _refuse_if_glob(row_id: str, path: str, raw_cell: str) -> None:
+    if any(ch in path for ch in _GLOB_CHARS):
+        raise GlobFootprintError(
+            f"chunk table row {row_id!r}: footprint entry {path!r} is a "
+            "glob pathspec (contains '*', '?', or '['); scoped-git-commit's "
+            "commit preflight refuses an unbounded pathspec, so this would "
+            f"only fail after the emitted work is done (raw cell: {raw_cell!r})"
+        )
+
+
+def _refuse_if_directory_shaped(row_id: str, path: str, raw_cell: str) -> None:
+    if path.endswith("/") or path.endswith("\\"):
+        raise DirectoryShapedFootprintError(
+            f"chunk table row {row_id!r}: footprint entry {path!r} is "
+            "directory-shaped (trailing separator); scoped-git-commit "
+            "refuses a directory pathspec by design -- name a concrete "
+            f"file instead (raw cell: {raw_cell!r})"
+        )
+
+
 def _split_footprint(row_id: str, cell: str) -> List[str]:
     """Comma-split a `footprint`-shaped cell into backtick-quoted paths.
 
     `—`/`-`/empty means an empty `writes` list (a row this module never
     lets reach the minted spine live -- see `FootprintUnreadableError`
     below and the module docstring's `surface` note).
+
+    Each backtick-quoted path is extracted directly out of the raw cell
+    (`_BACKTICK_RE.findall`) rather than by a strict comma-split-then-
+    fullmatch -- a comma-split breaks on trailing prose that itself
+    contains a comma (`` `a/b.py` (verify only, no edit) ``), and this
+    module's job is to keep the path and discard the prose, not parse it
+    (issue coordinator-klabauter#25 class 2). A cell with no backtick-quoted
+    path at all still refuses (`FootprintUnreadableError`), naming that the
+    cell must hold backtick-quoted paths.
     """
     cell = cell.strip()
     if cell in ("", "—", "-"):
         return []
+    matches = _BACKTICK_RE.findall(cell)
+    if not matches:
+        raise FootprintUnreadableError(
+            f"chunk table row {row_id!r}: footprint cell holds no "
+            f"backtick-quoted path (raw cell: {cell!r}) -- every footprint "
+            "entry must be a backtick-quoted path; trailing prose after "
+            "the closing backtick is fine and is discarded"
+        )
     paths: List[str] = []
-    for piece in cell.split(","):
-        piece = piece.strip()
-        match = _BACKTICK_RE.fullmatch(piece)
-        if not match:
-            raise FootprintUnreadableError(
-                f"chunk table row {row_id!r}: footprint entry not "
-                f"backtick-quoted: {piece!r} (raw cell: {cell!r})"
-            )
-        paths.append(match.group(1))
+    for path in matches:
+        _refuse_if_glob(row_id, path, cell)
+        _refuse_if_directory_shaped(row_id, path, cell)
+        paths.append(path)
     return paths
 
 
 def _parse_pipe_row(line: str) -> List[str]:
-    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+    """Split one Chunk-table pipe-row into cells, unescape-aware: a
+    Markdown-escaped `\\|` inside a cell is a literal pipe, never a column
+    separator (issue coordinator-klabauter#25 class 1)."""
+    line = line.strip()
+    while line.startswith("|"):
+        line = line[1:]
+    while line.endswith("|") and not line.endswith("\\|"):
+        line = line[:-1]
+    return [
+        cell.strip().replace("\\|", "|")
+        for cell in _UNESCAPED_PIPE_RE.split(line)
+    ]
 
 
 def parse_chunk_table(text: str) -> List[Dict[str, str]]:
@@ -265,16 +346,94 @@ def _row_body(row_id: str, spec_path: str, summary: str, verification: str, comp
     )
 
 
+#: `_resolve_dep_kind`'s three outcomes. `"live"` reaches the minted spine;
+#: `"closed-satisfied"` means the edge naming it is dropped (the dependency
+#: is already done); `"routed-out"` means every row depending on it,
+#: transitively, is excluded from the minted spine too; `"unknown"` means
+#: the id names no row in this table at all -- left as a literal edge, same
+#: as before this fix, so a truly missing id still surfaces as
+#: `read_spine`'s own "depends_on unresolvable chunk" refusal downstream,
+#: which is a different failure than anything this issue's class 5 covers.
+_DEP_KIND_UNKNOWN = "unknown"
+_DEP_KIND_LIVE = "live"
+_DEP_KIND_CLOSED_SATISFIED = "closed-satisfied"
+_DEP_KIND_ROUTED_OUT = "routed-out"
+
+
+def _raw_disposition_kind(raw: str) -> str:
+    if _is_live_disposition(raw):
+        return _DEP_KIND_LIVE
+    if raw.strip().lower().startswith(_BLOCKING_CLOSED_DISPOSITION_PREFIX):
+        return _DEP_KIND_ROUTED_OUT
+    return _DEP_KIND_CLOSED_SATISFIED
+
+
+def _resolve_dep_kinds(chunk_rows: List[Dict[str, str]]) -> Dict[str, str]:
+    """Every row id in `chunk_rows` -> its FINAL kind, after transitively
+    routing out any row whose dep chain reaches a `routed out ...` row
+    (issue coordinator-klabauter#25 class 5).
+
+    A row's own disposition decides its kind UNLESS it is live and depends,
+    directly or transitively, on a `routed-out` row -- that dependency
+    BLOCKS it (the premise it names moved out from under it), so it is
+    routed out too, and a `UserWarning` reports which dependency did it. A
+    dep on any OTHER closed row (`already-fixed`, `landed`, `pending ...`,
+    `dropped ...`) is SATISFIED, never blocking -- see
+    `_BLOCKING_CLOSED_DISPOSITION_PREFIX`'s own docstring for why
+    conflating the two is the exact trap the issue names.
+    """
+    kinds: Dict[str, str] = {}
+    for row in chunk_rows:
+        row_id = _strip_backtick(row["id"])
+        kinds[row_id] = _raw_disposition_kind(row["disposition"])
+
+    rows_by_id = {_strip_backtick(row["id"]): row for row in chunk_rows}
+    resolved: Dict[str, str] = {}
+
+    def resolve(row_id: str, stack: set) -> str:
+        if row_id in resolved:
+            return resolved[row_id]
+        kind = kinds.get(row_id, _DEP_KIND_UNKNOWN)
+        if kind != _DEP_KIND_LIVE or row_id in stack:
+            resolved[row_id] = kind
+            return kind
+        stack = stack | {row_id}
+        for dep_id in _split_id_list(rows_by_id[row_id]["deps"]):
+            if resolve(dep_id, stack) == _DEP_KIND_ROUTED_OUT:
+                warnings.warn(
+                    f"chunk table row {row_id!r} routed out: its dependency "
+                    f"{dep_id!r} was routed out, and a row cannot outlive "
+                    "the premise it depends on",
+                    stacklevel=2,
+                )
+                resolved[row_id] = _DEP_KIND_ROUTED_OUT
+                return _DEP_KIND_ROUTED_OUT
+        resolved[row_id] = _DEP_KIND_LIVE
+        return _DEP_KIND_LIVE
+
+    for row_id in kinds:
+        resolve(row_id, set())
+    return resolved
+
+
 def mint_rows(chunk_rows: List[Dict[str, str]]) -> List[dict]:
     """`## Chunk table` rows (as `parse_chunk_table` returns) -> a list of
     schema-valid plan-tasks row dicts, LIVE rows only. See module docstring's
-    column-mapping table for the full field-by-field rule."""
+    column-mapping table for the full field-by-field rule.
+
+    Dep resolution (issue coordinator-klabauter#25 class 5): see
+    `_resolve_dep_kinds`. A dep naming a `closed-satisfied` row has its edge
+    dropped (the dependency is already discharged); a dep naming a
+    `routed-out` row is never reachable from a LIVE row here, because that
+    row was itself routed out by `_resolve_dep_kinds` first.
+    """
+    dep_kinds = _resolve_dep_kinds(chunk_rows)
     live: List[Tuple[str, Dict[str, str], List[str]]] = []
     writes_by_id: Dict[str, set] = {}
 
     for row in chunk_rows:
         row_id = _strip_backtick(row["id"])
-        if not _is_live_disposition(row["disposition"]):
+        if dep_kinds[row_id] != _DEP_KIND_LIVE:
             continue
         writes = _split_footprint(row_id, row["footprint"])
         if not writes:
@@ -296,6 +455,9 @@ def mint_rows(chunk_rows: List[Dict[str, str]]) -> List[dict]:
 
         depends_on = []
         for dep_id in _split_id_list(row["deps"]):
+            dep_kind = dep_kinds.get(dep_id, _DEP_KIND_UNKNOWN)
+            if dep_kind == _DEP_KIND_CLOSED_SATISFIED:
+                continue  # satisfied -- the dependency is already discharged
             dep_writes = writes_by_id.get(dep_id)
             if dep_writes and writes_by_id[row_id] & dep_writes:
                 continue  # write-overlap edge dropped -- see module docstring

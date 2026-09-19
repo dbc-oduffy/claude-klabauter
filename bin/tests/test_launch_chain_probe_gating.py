@@ -11,8 +11,10 @@ The probe sets `required` PER RESULT, and both halves of that are load-bearing:
   An install that ends by calling itself healthy is the exact failure the probe
   exists to end — it is what happened on 2026-08-14.
 
-- The SKIP path (no DoE clone resolves — the marketplace population, which never
-  has this chain) returns `required=False`. A skipped REQUIRED probe reduces to
+- The SKIP paths (no DoE clone resolves — the marketplace population, which never
+  has this chain; or a cloud/headless box, where the harness launches sessions and
+  no interactive shell exists to carry one, claude-klabauter#29) return
+  `required=False`. A skipped REQUIRED probe reduces to
   DEGRADED in `_local_reduce_overall`, so a blanket `required=True` would degrade
   every marketplace install for lacking something it should not have.
 
@@ -69,7 +71,16 @@ def probe_env(tmp_path, monkeypatch):
     (doe / "coordinator").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     monkeypatch.setenv("REPO_DOE_CLAUDE", str(doe))
+    _pin_locality(monkeypatch, "attended")
     return shell_dir
+
+
+def _pin_locality(monkeypatch, call: str) -> None:
+    """Pin `env_locality.locality()` so a gating arm's verdict does not depend on
+    whether the box running the suite is itself a cloud container."""
+    import coordinator_core.env_locality as el
+
+    monkeypatch.setattr(el, "locality", lambda *a, **k: el.Locality(call, "certain", "test", call))
 
 
 def _shim_path(mod, shell_dir: Path) -> Path:
@@ -142,3 +153,29 @@ def test_no_doe_clone_skips_without_degrading(probe_env, monkeypatch):
         "install that legitimately has no DoE clone"
     )
     assert mod._local_reduce_overall([r]) == mod._INFO
+
+
+def test_cloud_box_skips_without_gating(probe_env, monkeypatch):
+    """claude-klabauter#29: a headless container never has an interactive shim, so
+    its absence must not exit 94 out of setup.py."""
+    mod = _require_module()
+    _shim_path(mod, probe_env).unlink(missing_ok=True)
+    _pin_locality(monkeypatch, "cloud")
+
+    r = mod._run_probe_launch_chain()
+
+    assert r.skipped is True
+    assert r.required is False
+    assert mod._local_reduce_overall([r]) == mod._INFO
+
+
+def test_suspect_locality_still_gates(probe_env, monkeypatch):
+    """An ambiguous box is not rounded to headless — that would silence a desk."""
+    mod = _require_module()
+    _shim_path(mod, probe_env).unlink(missing_ok=True)
+    _pin_locality(monkeypatch, "suspect")
+
+    r = mod._run_probe_launch_chain()
+
+    assert r.required is True
+    assert r.skipped is False

@@ -32,11 +32,20 @@ Negative-spec:
   - Does NOT stamp. This module only reports; ``plan.stamp_prepped`` writes.
   - Does NOT scan a whole corpus in one ``gate_plan`` call — ``--tally`` runs one
     call per target and aggregates the reports, same as the default report mode.
-  - Does NOT skip review/coverage sidecars specially. DoE's script filters compound
-    stems (``<plan>.the Director of Engineering-review.md``) out of a directory expansion; this module's
-    target expansion is a plain ``*.md`` glob with no sidecar filter — a bar leg the
-    ledger did not mark "added" here stays out of this CLI, per the plan row's own
-    instruction that an added leg lands in ``prep_gate.py``, not the CLI.
+  - Does NOT gate a sidecar named explicitly on the command line. ``_is_plan_sidecar``
+    only prunes a DIRECTORY expansion; a caller who types a compound-stem path is
+    still gated for it, the same asymmetry DoE-claude's own script keeps and for the
+    same reason — silently returning nothing for a path the caller typed would be
+    the worse surprise.
+
+Restated from DoE-claude ``coordinator/bin/mise-prep-gate.py :: _is_plan_sidecar``
+(2026-09-18, docs/plans/2026-09-18-doe-holds-no-scripts.md legs 1-3): a review or
+coverage sidecar (``2026-06-24-baz.prior-art-check.md``,
+``2026-06-27-foo.md.plan-coverage-check.md``) is named for the plan it annotates
+plus its own kind, so its stem is compound (contains a ``.``) where a plan's own
+stem — ``coordinator-doc-new --type plan``'s output — never is. Left unfiltered,
+a directory walk reports NOT-PREPPED for hundreds of files that were never plans,
+which is not a defect any author can fix.
 """
 
 from __future__ import annotations
@@ -67,12 +76,33 @@ class GateCLIError(RuntimeError):
     """A fail-loud precondition — ``main()`` prints ``str(exc)`` and exits ``EXIT_USAGE``."""
 
 
+def _is_plan_sidecar(path: Path) -> bool:
+    """Whether ``path`` is a review/coverage sidecar rather than a plan.
+
+    Restated to the letter from DoE-claude ``coordinator/bin/mise-prep-gate.py
+    :: _is_plan_sidecar``. A plan's filename is a SINGLE stem —
+    ``2026-06-27-foo.md`` — because that is what ``coordinator-doc-new --type
+    plan`` emits. A sidecar is named for the plan it annotates plus its own
+    kind, so its stem is compound: ``2026-06-27-foo.md.the Director of Engineering-review.md``,
+    ``2026-07-01-bar.code-review-A-store.md``, ``2026-06-24-baz.prior-art-
+    check.md``.
+
+    Keyed on the compound stem rather than on the base plan still existing,
+    because a sidecar outlives its plan. Only applied when EXPANDING A
+    DIRECTORY — see ``_targets``.
+    """
+    stem = path.name[:-3] if path.name.endswith(".md") else path.name
+    return "." in stem
+
+
 def _targets(args: List[str], repo_root: Path) -> List[Path]:
     """Resolve positional targets to a flat list of plan files.
 
-    A directory expands to its immediate ``*.md`` children, sorted; a file is
-    taken as-is. Every relative argument resolves against ``repo_root``, so a
-    caller running from a subdirectory still names the same file the door names.
+    A directory expands to its immediate ``*.md`` children, sorted, with every
+    review/coverage sidecar pruned (``_is_plan_sidecar``); a file named
+    explicitly is taken as-is, sidecar or not. Every relative argument
+    resolves against ``repo_root``, so a caller running from a subdirectory
+    still names the same file the door names.
     """
     out: List[Path] = []
     for arg in args:
@@ -80,7 +110,9 @@ def _targets(args: List[str], repo_root: Path) -> List[Path]:
         if not path.is_absolute():
             path = repo_root / path
         if path.is_dir():
-            out.extend(sorted(path.glob("*.md")))
+            out.extend(
+                p for p in sorted(path.glob("*.md")) if not _is_plan_sidecar(p)
+            )
         elif path.is_file():
             out.append(path)
         else:

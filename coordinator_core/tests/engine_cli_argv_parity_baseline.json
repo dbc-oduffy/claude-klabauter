@@ -404,6 +404,62 @@
     },
     {
       "module": "coordinator_core/pickup_assemble/__init__.py",
+      "directive_id": "d1",
+      "cli": "session-claim-cli",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/pickup_assemble/__init__.py",
+      "directive_id": "d1",
+      "cli": "session-claim-cli",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/pickup_assemble/__init__.py",
+      "directive_id": "d2",
+      "cli": "archive-stamp-cli",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/pickup_brief.py",
+      "directive_id": "",
+      "cli": "coordinator-tasks-mirror",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/pickup_brief.py",
+      "directive_id": "claim-memo-stamp",
+      "cli": "archive-stamp-cli",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/pickup_brief.py",
+      "directive_id": "d-action-memo",
+      "cli": "archive-stamp-cli",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/pickup_brief.py",
+      "directive_id": "d-gate-recheck",
+      "cli": "archive-stamp-cli",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/pickup_brief.py",
       "directive_id": "d-stamp",
       "cli": "archive-stamp-cli",
       "unresolved": true,
@@ -411,7 +467,7 @@
       "undeclared_required": []
     },
     {
-      "module": "coordinator_core/pickup_assemble/__init__.py",
+      "module": "coordinator_core/pickup_brief.py",
       "directive_id": "d1",
       "cli": "session-claim-cli",
       "unresolved": true,
@@ -419,7 +475,7 @@
       "undeclared_required": []
     },
     {
-      "module": "coordinator_core/pickup_assemble/__init__.py",
+      "module": "coordinator_core/pickup_brief.py",
       "directive_id": "d1",
       "cli": "session-claim-cli",
       "unresolved": true,
@@ -427,7 +483,7 @@
       "undeclared_required": []
     },
     {
-      "module": "coordinator_core/pickup_assemble/__init__.py",
+      "module": "coordinator_core/pickup_brief.py",
       "directive_id": "d2",
       "cli": "archive-stamp-cli",
       "unresolved": true,
@@ -606,6 +662,22 @@
       "module": "coordinator_core/workstream_complete/directives_session_hygiene.py",
       "directive_id": "d-check-machine-local-regeneratability",
       "cli": "check-machine-local-regeneratability",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/workstream_complete/directives_session_hygiene.py",
+      "directive_id": "d-sweep-terminal-handoffs",
+      "cli": "sweep-terminal-handoffs",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/workstream_complete/directives_session_hygiene.py",
+      "directive_id": "d-sweep-terminal-sizings",
+      "cli": "sweep-terminal-sizings",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []

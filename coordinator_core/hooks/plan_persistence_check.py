@@ -269,8 +269,7 @@ def _local_day() -> str:
 def _flatten(prose: str, *, alternative: Optional[str] = None, anchor: Optional[str] = None) -> str:
     parts = [prose]
     if alternative:
-        parts.append("")
-        parts.append("```\n" + alternative.rstrip("\n") + "\n```")
+        parts.append("Run: " + alternative.rstrip("\n"))
     if anchor:
         parts.append("")
         parts.append(f"See {anchor}.")
@@ -298,9 +297,7 @@ def _collision_text(target_display: str) -> str:
 
 def _persisted_text(commit_cmd: str) -> str:
     return _flatten(
-        "PLAN PERSISTED, not staged -- commit it now; a peer sweep can "
-        "delete it until it lands. Route the body through coordinator:sizing "
-        "to close it out. Write review artifacts to disk.",
+        "PLAN PERSISTED, not staged.",
         alternative=commit_cmd,
         anchor=_WIKI_ANCHOR,
     )

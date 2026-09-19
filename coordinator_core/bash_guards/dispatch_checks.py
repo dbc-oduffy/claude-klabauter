@@ -2765,12 +2765,10 @@ def check_destructive_git_orphan(
             # delimiters still in it is shell, where they mean what they say.
             if re.search(r"\$\(.*\)|`.*`", after, re.DOTALL):
                 return _deny(
-                    "BLOCKED: 'git reset %s' with a subshell-resolved " % _reset_mode +
-                    "target ($(...) or backticks) cannot be verified safe — "
-                    "the hook will not execute the subshell to learn what it "
-                    "points at.\n\n"
-                    "Resolve the ref to a literal first and re-check what it "
-                    "would drop:\n  git rev-list --count <resolved-ref>..HEAD"
+                    "BLOCKED: 'git reset %s' with a subshell-resolved target " % _reset_mode +
+                    "($(...)/backticks) cannot be verified safe.\n\n"
+                    "Use instead:\n"
+                    "  git rev-list --count <resolved-ref>..HEAD"
                     + ("\n\n" + _orphan_hint if _orphan_hint else "")
                 )
             if not re.search(r"(^|\s)--(\s|$)", after):
@@ -3623,14 +3621,10 @@ def check_destructive_rm(
 
         if recursive and re.search(r"\$\(|`", after) and not rm_override:
             return _deny(
-                "BLOCKED: 'rm' with a recursive flag and a subshell-resolved "
-                "target ($(...) or backticks) cannot be verified safe — the "
-                "hook will not run the subshell to learn what it would "
-                "delete.\n\n"
-                "Resolve the target to a literal path first and re-check what "
-                "lives there:\n"
-                "  git status --porcelain -- <resolved-path>   # uncommitted/"
-                "untracked work that rm would destroy"
+                "BLOCKED: recursive 'rm' with a subshell-resolved target "
+                "($(...)/backticks) cannot be verified safe.\n\n"
+                "Use instead:\n"
+                "  git status --porcelain -- <resolved-path>"
             )
 
         targets: List[Tuple[str, str]] = []
@@ -5521,9 +5515,6 @@ def _bt_blanket_add_dash_c_cwd(cmd: str) -> str:
     return os.path.normpath(os.path.join(os.getcwd(), dash_c_val))
 
 
-from coordinator_core.bash_guards._write_bump_sink_shapes import (
-    _host_is_windows,
-)
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 
 
@@ -5650,20 +5641,18 @@ def check_blanket_git_add(
             count=1,
         )
         # Quote characters are stripped so a quoted operand reads as its
-        # payload. The BACKSLASH strip that used to ride along here is
-        # Windows-gated now: on `nt` it deleted every separator in a
-        # drive-absolute operand (`X:\repo` -> `X:repo`), which no longer
-        # matches `_ABS_PATHSPEC_RE` and never reaches `_paths_match`, so
-        # `git add <repo root>` in its ordinary Windows spelling passed this
-        # guard while the forward-slash spelling of the same path denied.
+        # payload. The BACKSLASH strip that used to ride along here (host-
+        # gated to POSIX only) is gone entirely: it deleted every separator
+        # in a drive-absolute operand on `nt` (`X:\repo` -> `X:repo`), and
+        # even gated to run only on POSIX it made a backslash-spelled
+        # absolute pathspec disagree with its forward-slash twin on any
+        # non-Windows host (the verdict must not depend on which host is
+        # running the guard, only on which separator the operand used).
         # There is no later seam that can recover a separator once it is
-        # gone. Same host-gating precedent, and the same reasoning, as
-        # `tokenize_full_command(preserve_windows_backslashes=...)` in the
-        # two write-bump guards. On POSIX the strip is retained unchanged:
-        # a backslash there is an escape, not a separator.
+        # gone, so operand text now keeps every backslash it arrived with;
+        # the path-shaped comparisons below (root-anchor, subtree) do their
+        # own separator normalization instead of relying on this strip.
         after = after.replace('"', "").replace("'", "")
-        if not _host_is_windows():
-            after = after.replace("\\", "")
 
         drtoks = after.split()
         past_dd = False
@@ -5745,8 +5734,11 @@ def check_blanket_git_add(
             # deliberately NOT matched here, same "root, not a subtree"
             # asymmetry this file's own `_find_is_root_anchor` documents for
             # `check_runaway_find`.
-            elif (tok.startswith("/") or re.match(r"^[A-Za-z]:[\\/]", tok)) and git_root:
-                norm_tok = os.path.normpath(tok.rstrip("/\\")) or tok
+            elif (
+                tok.startswith("/") or tok.startswith("\\") or re.match(r"^[A-Za-z]:[\\/]", tok)
+            ) and git_root:
+                tok_slashed = tok.replace("\\", "/")
+                norm_tok = os.path.normpath(tok_slashed.rstrip("/")) or tok_slashed
                 if _paths_match(norm_tok, git_root):
                     should_deny = True
                     deny_reason = tok
@@ -5824,10 +5816,11 @@ def _bt_add_resolve_subtree_dir_token(
     single-file `git add path/to/file` case must cost nothing extra)."""
     if tok in (".", "./", ":/", ":/.") or tok.startswith(":"):
         return None
-    if os.path.isabs(tok) or re.match(r"^[A-Za-z]:[\\/]", tok):
-        abs_tok = os.path.normpath(tok.rstrip("/\\")) or tok
+    tok_slashed = tok.replace("\\", "/")
+    if os.path.isabs(tok_slashed) or re.match(r"^[A-Za-z]:[\\/]", tok):
+        abs_tok = os.path.normpath(tok_slashed.rstrip("/")) or tok_slashed
     else:
-        abs_tok = os.path.normpath(os.path.join(cwd or os.getcwd(), tok))
+        abs_tok = os.path.normpath(os.path.join(cwd or os.getcwd(), tok_slashed))
     if _paths_match(abs_tok, git_root):
         return None
     if not os.path.isdir(abs_tok):
@@ -7809,17 +7802,10 @@ def check_validate_commit(
         )
         if not subject_ok:
             warnings.append(
-                "FRONTMATTER-MUTATION: staged files modify load-bearing "
-                "frontmatter (status/deployment_state/consumed_by/"
-                "claimed_by/shipped_in/predecessor/kind) without naming the "
-                "mutation in the commit subject:%s\n  → Commit subject "
-                "should include the changed key (e.g., 'deployment_state:') "
-                "OR a lifecycle verb (pickup/handoff/claim/unclaim/ship/"
-                "closed/continued/abandon/supersede). Without this, git log "
-                "-- <file> loses the "
-                "audit trail. See coordinator/CLAUDE.md § Handoff Lineage. "
-                "(heredoc commit subjects may not parse — confirm your "
-                "subject names the mutation if you used a heredoc form)"
+                "FRONTMATTER-MUTATION: staged files change load-bearing "
+                "frontmatter without naming it in the subject:%s\n"
+                "  → Name the changed key or a lifecycle verb "
+                "(pickup/handoff/claim/ship/closed/abandon)."
                 % (" " + " ".join(frontmatter_mutations))
             )
 
@@ -9029,12 +9015,9 @@ def check_grep_via_bash_rewrite(
         # can safely answer. The python3 rewrite evaluates the pattern with
         # Python's own `re` engine, so behavior is identical on every host.
         (
-            "Auto-rewritten: 'grep' via Bash spawns a child process, and on "
-            "anchored-alternation patterns (`^a|^b`) GNU and BSD grep disagree "
-            "on anchor position, so host grep can silently match a different "
-            "line set on Mac/BSD than on Linux/GNU. The python3 rewrite uses "
-            "Python's own regex engine, giving identical behavior on every "
-            "host."
+            "Auto-rewritten: 'grep' via Bash spawns a process, and GNU/BSD "
+            "grep disagree on anchored-alternation matches. The python3 "
+            "rewrite uses Python's own regex engine, identical on every host."
         )
         + (" %s" % _grep_note if _grep_note else ""),
     )
@@ -10957,9 +10940,8 @@ def check_git_commit_safe_commit_advise(
         _fail_open_reasons = _take_probe_fail_open_reasons()
         _persist_probe_fail_open(_fail_open_reasons, cmd, session_id, git_root)
         _fail_open_note = (
-            "The index was NOT read (%s), so this stayed an advisory because "
-            "the guard could not check the staged set — not because it "
-            "checked and found nothing." % "; ".join(_fail_open_reasons)
+            "The index was NOT read (%s) -- not because it checked and "
+            "found nothing." % "; ".join(_fail_open_reasons)
             if _fail_open_reasons
             else ""
         )
@@ -10968,8 +10950,7 @@ def check_git_commit_safe_commit_advise(
                 "Advisory: " + _body_override
                 if _body_override
                 else (
-                    "Advisory: this 'git commit' names no scope — commits "
-                    "whatever is staged, including a peer's concurrent work.\n\n"
+                    "Advisory: no scope named.\n\n"
                     "Use instead:\n"
                     "  git add -- <paths> && git commit -m %s -- <paths>"
                     % (subject_operand,)
@@ -11354,11 +11335,9 @@ def check_multiprobe_banner_rewrite(
     return _allow_rewrite(
         "%s -c %s" % (_bt_python3_invocation(), shlex.quote(script)),
         (
-            "Auto-rewritten: this multi-probe session-facts banner re-derives "
-            "facts the harness already knows, one process PER PROBE (measured "
-            "session-fact re-derivation rates of 89%%/84%%/71%%/49%%). A single "
-            "python3 process reproduces the same facts, batching every git fact "
-            "into ONE 'git status --porcelain=v2 --branch' call."
+            "Auto-rewritten: this multi-probe banner re-derives known facts, "
+            "one process per probe. One python3 process reproduces them, "
+            "batching every git fact into ONE status call."
         )
         + (" %s" % _multiprobe_note if _multiprobe_note else ""),
     )

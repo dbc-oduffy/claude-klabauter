@@ -160,12 +160,10 @@ def _guarded_roots() -> "list[Path]":
 def _deny_reason(target: str, payload: Optional[Dict[str, Any]] = None) -> str:
     _note = operator_override_note(OVERRIDE_ENV, payload=payload)
     return (
-        f"[oss-mirror-memo] DENY: {target} — publish-only mirror; memo "
-        "unactioned, no EM reads it.\n"
+        f"DENY {target}: publish-only mirror, no EM reads it.\n"
         "Use instead:\n"
-        "  cross-repo-memo draft <slug> --to <real-receiver-em> "
-        '--title "<one line>"\n'
-        "  cross-repo-memo send <slug>"
+        "  cross-repo-memo draft <slug> --to <real-receiver-em> --title "
+        "\"<t>\"; cross-repo-memo send <slug>"
         + ("\n" + _note if _note else "")
     )
 

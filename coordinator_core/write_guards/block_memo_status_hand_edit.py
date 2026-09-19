@@ -508,11 +508,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if _has_live_claim(cwd, disk_path.name):
             _note = operator_override_note(_OVERRIDE_ENV, payload=payload)
             reason = (
-                "Memo status hand-edit blocked: status: is disk-truth, changed "
-                "only via the op — it also skips the collision/validation "
-                "checks the op runs (the 2026-07-26 hand-edit incident this "
-                "closes), and a live session currently holds this memo's "
-                "claim. Use instead:\n"
+                "BLOCKED: status: is disk-truth, a live session holds this "
+                "memo's claim, and a hand-edit skips the op's collision check.\n"
+                "Use instead:\n"
                 "  archive-stamp-cli resolve-memo <memo-path> --actioned-note "
                 "\"...\""
                 + ("\n\n" + _note if _note else "")
@@ -526,11 +524,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             }
 
         advisory = (
-            "Memo status hand-edit: status: is disk-truth, normally changed "
-            "only via the op — it also runs the collision/validation checks "
-            "a hand-edit skips. No live session currently holds this memo's "
-            "claim, so this edit is not blocked, but the op is the safer "
-            "path:\n"
+            "Memo status: disk-truth, normally changed only via the op, "
+            "which also runs the collision check a hand-edit skips.\n"
+            "Use instead:\n"
             "  archive-stamp-cli resolve-memo <memo-path> --actioned-note "
             "\"...\"\n"
         )

@@ -26,7 +26,9 @@ This is the deterministic backbone that lets Haiku stay in the loop for bounded
 routing classification: extraction can't be faked (no model runs it), and routing
 fakery is caught (the cited source must exist).
 
-Source format: state/lessons/<date>-<slug>.yaml (per-entry YAML, one file per lesson).
+Source format: state/lessons/<date>-<slug>.{yaml,md} (one file per lesson; shapes in
+`_read_lesson`). A lesson file that fails to parse fails the run (exit 3) unless
+`--allow-skips` is passed; either way the skipped files are named in the header.
 Spec backlink: docs/plans/2026-06-30-lessons-md-to-queryable-yaml-queue.md § C3a
 
 Negative-spec: Do NOT point this at state/lessons.md — that path has been superseded
@@ -51,18 +53,65 @@ GENERATES = []  # writes only to the caller-supplied -o/--out path (or stdout wh
 _TITLE_OVERLAP_MIN = 25  # min chars of title that must appear verbatim in routing summary
 
 
-def extract(lessons_dir: Path, shortname: str, since: str | None) -> tuple[list[dict], dict]:
-    """Enumerate state/lessons/*.yaml and emit verbatim record dicts.
+_LESSON_SUFFIXES = (".yaml", ".md")
+_FILENAME_DATE = re.compile(r"^(\d{4}-\d{2}-\d{2})-(.+)$")
+_MD_H1 = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 
-    Each YAML file is one lesson entry. Fields are read from YAML frontmatter:
+
+def _split_frontmatter(text: str) -> tuple[str | None, str]:
+    """Split a `---`-fenced frontmatter block off `text`.
+
+    Returns (frontmatter_yaml, remainder). frontmatter_yaml is None when the text
+    does not open with a `---` fence or the fence is never closed — an unclosed
+    leading `---` is a plain YAML document marker, not frontmatter."""
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip() != "---":
+        return None, text
+    for i in range(1, len(lines)):
+        if lines[i].rstrip() == "---":
+            return "".join(lines[1:i]), "".join(lines[i + 1:])
+    return None, text
+
+
+def _read_lesson(path: Path) -> tuple[dict, str]:
+    """Parse one lesson file into (fields, prose_body).
+
+    Accepted shapes, all in circulation across the fleet:
+    - `.yaml` — one YAML mapping; the prose lives in its `body` field.
+    - `---` frontmatter + remainder (either suffix) — fields from the frontmatter,
+      prose is the remainder verbatim (markdown, or YAML-looking free text).
+    - `.md` with no frontmatter — no fields, the whole file is the prose.
+    Raises on anything else; the caller records the file as skipped."""
+    import yaml  # PyYAML — available in coordinator venv
+
+    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+    text = path.read_text(encoding="utf-8")
+    fm_text, rest = _split_frontmatter(text)
+    if fm_text is not None:
+        fm = yaml.load(fm_text, Loader=loader) or {}
+        prose = rest
+    elif path.suffix == ".md":
+        return {}, text
+    else:
+        fm = yaml.load(text, Loader=loader) or {}
+        prose = ""
+    if not isinstance(fm, dict):
+        raise ValueError(f"top level is {type(fm).__name__}, not a mapping")
+    return fm, prose
+
+
+def extract(lessons_dir: Path, shortname: str, since: str | None) -> tuple[list[dict], dict]:
+    """Enumerate state/lessons/*.{yaml,md} and emit verbatim record dicts.
+
+    Each file is one lesson entry (shapes: see `_read_lesson`). Record fields:
     - id: {shortname}-L{N} where N is the 1-based sorted-file-index
-    - source: {yaml_path}:{N}  (N keeps source_line unique per entry)
+    - source: {path}:{N}  (N keeps source_line unique per entry)
     - source_line: N  (unique 1-based index, not a real file line number)
     - tag_universal: True when scope == 'universal'
-    - date: value of `created` field (YYYY-MM-DD string)
-    - undated: True when created is absent
-    - title: value of `title` field
-    - body: value of `body` field
+    - date: `created`, else `date`, else the filename's YYYY-MM-DD prefix
+    - undated: True when none of those yields a date
+    - title: `title`, else the prose's first `# ` heading, else the filename slug
+    - body: `body`, else the prose verbatim
 
     The `{shortname}-L{N}` id convention is preserved for multi-repo shortname-routing
     compatibility (`_shortname_from_id` extracts the `{shortname}` prefix to dispatch
@@ -70,29 +119,37 @@ def extract(lessons_dir: Path, shortname: str, since: str | None) -> tuple[list[
     check, which is now unconditional per the A6 fix (see `verify()`'s docstring).
     N encodes sorted-file-position rather than a line number.
 
-    Negative-spec: do NOT read state/lessons.md — that path has been superseded.
-    """
-    import yaml  # PyYAML — available in coordinator venv
+    Every directory entry is accounted for: a lesson file that fails to parse lands
+    in stats["skipped"], any other entry in stats["not_lessons"]. Nothing is
+    dropped without a name — `main` refuses a run with skips unless told otherwise.
 
-    yaml_files = sorted(lessons_dir.glob("*.yaml"))
+    Negative-spec: do NOT read state/lessons.md — that path has been superseded.
+    Do NOT narrow the glob back to `*.yaml`: 283 `.md` captures were invisible to a
+    `*.yaml`-only extractor fleet-wide (claude-klabauter#31).
+    """
+    entries = sorted(lessons_dir.iterdir(), key=lambda p: p.name)
+    lesson_files = [p for p in entries if p.is_file() and p.suffix in _LESSON_SUFFIXES]
     records: list[dict] = []
-    stats = {
+    stats: dict = {
         "undated_excluded": 0,
         "dated_excluded_pre_window": 0,
-        "total_blocks_seen": len(yaml_files),
+        "total_blocks_seen": len(lesson_files),
+        "skipped": [],
+        "not_lessons": [p.name for p in entries if p not in lesson_files],
     }
 
-    for idx, f in enumerate(yaml_files, start=1):
+    for idx, f in enumerate(lesson_files, start=1):
         try:
-            fm = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            fm, prose = _read_lesson(f)
         except Exception as e:
-            # Malformed YAML — skip with a warning; callers get accurate count
-            print(f"warning: skipping malformed YAML {f.name}: {e}", file=sys.stderr)
+            reason = str(e).splitlines()[0] if str(e) else type(e).__name__
+            stats["skipped"].append(f"{f.name}: {reason}")
             continue
 
-        created = fm.get("created")
+        name_match = _FILENAME_DATE.match(f.stem)
+        created = fm.get("created", fm.get("date"))
         # PyYAML parses `created: 2026-06-30` (unquoted) as a date object; normalise to str.
-        date = str(created) if created is not None else None
+        date = str(created) if created is not None else (name_match.group(1) if name_match else None)
 
         if since:
             if date and date < since:
@@ -104,8 +161,14 @@ def extract(lessons_dir: Path, shortname: str, since: str | None) -> tuple[list[
 
         scope = str(fm.get("scope", "")).strip()
         title = str(fm.get("title", "")).strip()
+        if not title:
+            h1 = _MD_H1.search(prose)
+            if h1:
+                title = h1.group(1)
+            else:
+                title = (name_match.group(2) if name_match else f.stem).replace("-", " ")
         body_val = fm.get("body")
-        body = str(body_val).strip() if body_val is not None else ""
+        body = str(body_val).strip() if body_val is not None else prose.strip()
 
         records.append({
             "id": f"{shortname}-L{idx}",
@@ -481,7 +544,7 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    pe = sub.add_parser("extract", help="enumerate state/lessons/*.yaml into verbatim records")
+    pe = sub.add_parser("extract", help="enumerate state/lessons/*.{yaml,md} into verbatim records")
     pe.add_argument(
         "directory",
         type=Path,
@@ -494,6 +557,8 @@ def main(argv: list[str]) -> int:
                     help="keep only scope=universal entries")
     pe.add_argument("--format", choices=["yaml", "json"], default="yaml")
     pe.add_argument("-o", "--out", type=Path, default=None, help="write here instead of stdout")
+    pe.add_argument("--allow-skips", action="store_true",
+                    help="exit 0 even when lesson files fail to parse (they are still named)")
 
     pv = sub.add_parser(
         "verify",
@@ -567,14 +632,33 @@ def main(argv: list[str]) -> int:
         "undated_excluded_under_since": stats["undated_excluded"],
         "dated_excluded_pre_window": stats["dated_excluded_pre_window"],
         "filtered_by_require_tag": pre_tag_count - len(records),
+        "skipped_unparseable": len(stats["skipped"]),
+        "not_lessons": len(stats["not_lessons"]),
         "extractor": "extract-lessons.py (deterministic — no LLM)",
     }
+    if args.format == "json":
+        meta["skipped"] = stats["skipped"]
+        meta["not_lessons_names"] = stats["not_lessons"]
     text = _emit(records, args.format, meta)
+    if args.format == "yaml":
+        head, sep, tail = text.partition("records:\n")
+        extra = [f"# skipped: {s}" for s in stats["skipped"]]
+        extra += [f"# not_lesson: {n}" for n in stats["not_lessons"]]
+        text = head + "".join(e + "\n" for e in extra) + sep + tail
     if args.out:
         args.out.write_text(text, encoding="utf-8", newline="\n")
         print(f"wrote {len(records)} records to {args.out}")
     else:
         sys.stdout.write(text)
+    if stats["skipped"]:
+        print(f"extract: {len(stats['skipped'])} lesson file(s) failed to parse and are "
+              f"absent from the extraction:", file=sys.stderr)
+        for s in stats["skipped"]:
+            print(f"  {s}", file=sys.stderr)
+        if not args.allow_skips:
+            print("extract: exit 3 — repair the files, or pass --allow-skips for a "
+                  "best-effort extraction.", file=sys.stderr)
+            return 3
     return 0
 
 

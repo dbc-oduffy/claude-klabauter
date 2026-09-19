@@ -3107,6 +3107,34 @@ class TestMintRunIdSelfGating:
         )
 
 
+class TestMintRunIdOutsideGitRepoRaises:
+    """coordinator-klabauter#25: `mint_run_id(cadence, repo_root=None)` must
+    RAISE with the resolved cwd and the reason when `_resolve_state_root()`
+    finds no enclosing git repo -- never return `None`, which
+    `_main_mint_run_id`'s dispatch loop reads as "this reader does not claim
+    `cadence`" and misreports as "no reader claims mint-run-id"."""
+
+    def test_unresolvable_state_root_raises_naming_cwd_and_reason(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            bga.readers_mise_en_place, "_resolve_state_root", lambda: None
+        )
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(RuntimeError) as excinfo:
+            bga.readers_mise_en_place.mint_run_id("mise-en-place")
+        message = str(excinfo.value)
+        assert str(tmp_path) in message or str(tmp_path.resolve()) in message
+        assert "not inside a git repo" in message
+
+    def test_repo_root_kwarg_bypasses_the_raise(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            bga.readers_mise_en_place, "_resolve_state_root", lambda: None
+        )
+        minted = bga.readers_mise_en_place.mint_run_id(
+            "mise-en-place", repo_root=tmp_path
+        )
+        assert minted is not None
+
+
 class TestMintRunIdShapeAC1:
     """AC1: a mint returns the run id plus the `state/mise-inventory/
     <run_id>.md` path it implies -- the same join `_named_run_record` would

@@ -40,6 +40,15 @@ Not a JSON-RPC op — a plain module, NOT @register_op'd, called by direct
 import from the DoE-side polyglot trampoline (template-variant #1, mirrors
 coordinator-auto-push / handoff-gate-aging).
 
+Exit codes — THREE, not two, and a caller reading rc as a boolean conflates
+the last two:
+    0   every schema carrying applies_to: derives a recognised query type.
+    1   drift: at least one does not. The corpus answered, and said no.
+    2   EXIT_CORPUS_CANNOT_ANSWER — the corpus cannot answer at all, because
+        schemas_dir is a published subset that derives its recognised-type
+        set from itself. Nothing was checked; nothing is asserted about
+        drift either way. Not a pass, and not the drift 1 reports.
+
 Negative-spec (hard-won, faithfully reproduced from the .sh/node-spawn
 original except where corrected below):
     - Does NOT compare applies_to glob values — only checks that a --type
@@ -93,10 +102,17 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core.data_root import data_root
+from coordinator_core.frontmatter.schema_corpus import published_subset_reason
 from coordinator_core.frontmatter.schema_validate import (
     _SCHEMA_NAME_TO_QUERY_TYPE,
     build_type_to_glob,
 )
+
+#: `run()`'s exit code for "this root cannot answer the question", and
+#: deliberately NOT 0: see `run()`. It claims no parity with the bin/
+#: trampoline, which returns 1 for every one of its own resolution failures
+#: and passes this code through unchanged.
+EXIT_CORPUS_CANNOT_ANSWER = 2
 
 _DELIBERATE_DIVERGENCES = frozenset(
     {"cross-repo-memo.yaml", "handoff-archived.yaml",
@@ -224,6 +240,31 @@ def run(plugin_root: Path) -> Tuple[int, List[str], List[str]]:
             f"verify-schema-registry-sync: ERROR — schemas dir not found: {schemas_dir}"
         )
         return 1, stdout_lines, stderr_lines
+
+    # This gate derives its recognised-type set from the SAME directory it
+    # then checks against that set, so on a truncated corpus it agrees with
+    # itself and reports OK — measured on a cloud container's published-mirror
+    # root: `OK - all 2 schema applies_to types are recognised`, exit 0, with
+    # 61 of the authoring set's 63 types never looked at. Self-consistency is
+    # the whole check, so no amount of per-type care recovers it; the corpus
+    # has to be classified BEFORE the comparison is trusted.
+    #
+    # Only a published subset stands the gate down, and it is not a degrade: a
+    # published mirror carries the published subset by design (percolation is
+    # one-way), so the honest verdict is "not answerable here", never a pass.
+    # Every other root keeps running unchanged — an authoring checkout is the
+    # case this gate exists for, and an arbitrary or unmarked root, including
+    # every synthesized test fixture, is a caller-directed comparison over a
+    # caller-supplied corpus that the gate has no standing to refuse.
+    published_subset = published_subset_reason(schemas_dir)
+    if published_subset is not None:
+        stderr_lines.append(
+            "verify-schema-registry-sync: CANNOT VERIFY — "
+            f"{published_subset}. This gate derives the recognised-type set from "
+            "the same corpus it checks, so a published subset can only agree "
+            "with itself. Run it against an authoring checkout."
+        )
+        return EXIT_CORPUS_CANNOT_ANSWER, stdout_lines, stderr_lines
 
     type_to_glob = build_type_to_glob(schemas_dir)
 

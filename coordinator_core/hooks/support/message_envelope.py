@@ -45,7 +45,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 #: The cap, defined once. Every future exception-manifest / gate-test module
 #: imports this constant rather than redeclaring it.
@@ -312,7 +312,7 @@ _WIKI_CITATION_RE = re.compile(
 )
 
 
-def _doctrine_root() -> Optional[Path]:
+def _doctrine_root(env: "Optional[Mapping[str, str]]" = None) -> Optional[Path]:
     """The doctrine-plane root this process is actually running under, or
     `None` when it cannot be determined. `CLAUDE_PLUGIN_ROOT` is the
     harness-supplied anchor for the coordinator-claude plugin tree a hook
@@ -320,10 +320,22 @@ def _doctrine_root() -> Optional[Path]:
     only when this module's own file lives inside that tree, which it no
     longer does), it names the right root regardless of where this engine
     checkout sits relative to the doctrine plane. Returns `None` when the
-    env var is absent or does not resolve to a real directory -- callers
-    treat that as "cannot resolve, leave the citation as-is", never as a
-    reason to fall back to a guess."""
-    raw = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    var is absent or does not resolve to a real directory -- callers treat
+    that as "cannot resolve, leave the citation as-is", never as a reason
+    to fall back to a guess.
+
+    `env` is the session-scoped `params["env"]` mapping a PreToolUse op
+    receives (see `nudge_multiwave_workflow.py`'s established convention).
+    This resident engine serves ~50 concurrent sessions; its own process
+    `os.environ` belongs to none of them, so `env` is read exclusively when
+    the caller supplies one. `env=None` (a caller that cannot thread a
+    session env through, e.g. a Stop-channel path with no `params`) falls
+    back to `os.environ` for backward compatibility -- not a silent
+    ambient read reintroduced by default, but the documented degradation
+    for callers with no session payload to read from."""
+    raw = (env or {}).get("CLAUDE_PLUGIN_ROOT") if env is not None else os.environ.get(
+        "CLAUDE_PLUGIN_ROOT"
+    )
     if not raw:
         return None
     try:
@@ -359,21 +371,27 @@ def _render_resolved(path: "Path") -> str:
     return f"~/{relative.as_posix()}" if relative.parts else "~"
 
 
-def resolve_wiki_citation(text: str) -> str:
+def resolve_wiki_citation(
+    text: str, *, env: "Optional[Mapping[str, str]]" = None
+) -> str:
     """Rewrite every `docs/wiki/<page>.md` citation embedded in `text`
     (optionally `coordinator/`-prefixed, per `_WIKI_CITATION_RE`) into an
-    absolute path anchored at `_doctrine_root()`, preserving whatever
+    absolute path anchored at `_doctrine_root(env)`, preserving whatever
     precedes and follows the matched substring (a `#slug` fragment, a
     ` § SECTION` locator, surrounding prose) untouched. When the doctrine
     root cannot be resolved (see `_doctrine_root`), or `text` carries no
     such citation, `text` is returned unchanged -- this module never
     resolves a citation into its OWN (engine) tree.
 
+    `env` is forwarded to `_doctrine_root` -- the session-scoped
+    `params["env"]` mapping, never this process's own `os.environ`, per
+    the established convention (see `_doctrine_root`'s docstring).
+
     Guards against double-mangling an already-resolved or foreign-anchored
     citation: a match is only substituted when it starts at the beginning
     of `text` or immediately follows whitespace/an opening delimiter."""
 
-    root = _doctrine_root()
+    root = _doctrine_root(env)
     if root is None:
         return text
 
@@ -393,21 +411,28 @@ def resolve_wiki_citation(text: str) -> str:
 # --------------------------------------------------------------------------
 
 
-def render(message: Message) -> str:
+def render(message: Message, *, env: "Optional[Mapping[str, str]]" = None) -> str:
     """Flatten `message` to the text a real (non-measurement) channel
     carries: the prose, then the alternative re-fenced in triple backticks
     (if present), then a trailing pointer at the wiki anchor (if present).
     The anchor is resolved via `resolve_wiki_citation()` (see above) so the
     emitted pointer resolves for the reader wherever the doctrine plane is
     running from, and is left as the literal citation text when it cannot
-    be."""
+    be.
+
+    `env` is the session-scoped `params["env"]` mapping the calling op
+    received (never this process's own `os.environ` -- see
+    `_doctrine_root`'s docstring); forwarded to `resolve_wiki_citation`.
+    Omitted, a caller with no `params` to read from (e.g. a bare
+    Stop-channel composition) degrades to the documented `os.environ`
+    fallback rather than losing citation resolution outright."""
     parts = [message.prose]
     if message.alternative:
         parts.append("")
         parts.append("```\n" + message.alternative.rstrip("\n") + "\n```")
     if message.anchor:
         parts.append("")
-        parts.append(f"See {resolve_wiki_citation(message.anchor)}.")
+        parts.append(f"See {resolve_wiki_citation(message.anchor, env=env)}.")
     return "\n".join(parts)
 
 
@@ -443,12 +468,18 @@ def _write_measurement_record(message: Message) -> None:
     sys.stdout.write(line + "\n")
 
 
-def emit(message: Message, channel: str) -> Optional[int]:
+def emit(
+    message: Message, channel: str, *, env: "Optional[Mapping[str, str]]" = None
+) -> Optional[int]:
     """Impure: the one emission seam. Writes `message` to `channel` exactly
     as hooks do today -- UNLESS `COORDINATOR_HOOK_MESSAGE_MEASURE=1` is set,
     in which case it writes the structured measurement record instead of
     the flattened channel output, and returns `None` without touching the
     real channel at all.
+
+    `env` is the session-scoped `params["env"]` mapping, forwarded to
+    `render()` for wiki-citation resolution (see `_doctrine_root`'s
+    docstring) -- never this process's own `os.environ`.
 
     `channel` is one of `CHANNEL_STOP`, `CHANNEL_ADDITIONAL_CONTEXT`,
     `CHANNEL_DENY`:
@@ -472,7 +503,7 @@ def emit(message: Message, channel: str) -> Optional[int]:
         _write_measurement_record(message)
         return None
 
-    text = render(message)
+    text = render(message, env=env)
 
     if channel == CHANNEL_STOP:
         # .buffer.write bypasses Python's Windows text-mode newline

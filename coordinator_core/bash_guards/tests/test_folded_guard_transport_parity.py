@@ -169,6 +169,16 @@ _SEE_CITATION_RE = re.compile(r"\n\nSee:? (?P<anchor>.*)$", re.DOTALL)
 #: text itself is compared verbatim.
 _CITATION_PERIOD_RE = re.compile(r"\.\s*$")
 
+#: Warm-only footer (`guard_unlock_sentinel._augment_deny_with_guard_name`,
+#: commit 0a1c92c0bb "guard denials name the guard"): "\n\nGuard: `<name>`."
+#: appended AFTER the citation line. Cold has no such footer, and it is not
+#: part of the citation -- it is a second, independent axis (guard identity,
+#: not wiki anchor). Stripped off before citation-splitting so it cannot be
+#: swallowed into the anchor capture (`_SEE_CITATION_RE` is DOTALL-to-end-of-
+#: string and would otherwise eat it); never stripped from the cold side,
+#: which never carries it.
+_GUARD_FOOTER_RE = re.compile(r"\n\nGuard: `[^`]+`\.\s*$")
+
 #: NO `_LEADING_BLOCKED_RE` LIVES HERE ANY MORE (REMOVED 2026-08-29). It used
 #: to strip a leading `BLOCKED: ` token from BOTH sides unconditionally,
 #: which hid a real divergence rather than measuring it: two of the four
@@ -230,6 +240,7 @@ def _normalize_warm(text: str, *, case: str) -> "tuple[str, Optional[str]]":
     text = text.replace("\r\n", "\n").strip()
     if text.startswith(COORDINATOR_PROVENANCE_MARKER + " "):
         text = text[len(COORDINATOR_PROVENANCE_MARKER) + 1 :]
+    text = _GUARD_FOOTER_RE.sub("", text).strip()
     text, anchor = _split_citation(text)
     return text.strip(), anchor
 

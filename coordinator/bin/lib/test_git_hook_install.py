@@ -169,7 +169,17 @@ def _normalize_baked_py(body: str) -> str:
     )
 
 
-def test_hook_gen_stamp_bump_is_required_for_shape_changes():
+def test_hook_gen_stamp_bump_is_required_for_shape_changes(monkeypatch):
+    # `_shim_body` bakes in `_resolve_claude_klabauter_bin_sh`/`_resolve_klabauter_bin_sh`
+    # candidates read live off THIS machine's `machine-local` registry / published
+    # engine mirror -- environment state, not body SHAPE. Left ambient, this pin
+    # goes red on any box whose registry resolves `repos.claude_klabauter` or the
+    # published mirror (this container's `/root/klabauter` does), the same class
+    # of platform-naive fixture `install/forwarder_door_census.py::resolve_bare_name`
+    # was fixed for. Pinned absent here, deterministically, so the checksum tests
+    # SHAPE (rung count/order) and nothing about the box running the suite.
+    monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda bin_dir, script_name: None)
+    monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda script_name: None)
     body = _shim_body("/fake/coord/bin", "coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"')
     checksum = hashlib.sha256(_normalize_baked_py(body).encode("utf-8")).hexdigest()
     assert checksum == _EXPECTED_BODY_SHAPE_CHECKSUM, (
@@ -534,9 +544,18 @@ def test_append_block_runs_an_installed_exe_forwarder_directly(tmp_path):
     assert "WARNING" not in result.stderr
 
 
-def test_append_block_emits_no_shell_errors_when_nothing_resolves(tmp_path):
+def test_append_block_emits_no_shell_errors_when_nothing_resolves(tmp_path, monkeypatch):
     """Exhaustion must be the two loud WARNINGs and nothing else — a
     `command not found` here means the block called a helper it never emitted."""
+    # `_append_block` bakes `_resolve_claude_klabauter_bin_sh`/`_resolve_klabauter_bin_sh`
+    # candidates read live off THIS machine's `machine-local` registry / published
+    # engine mirror. On a box with a real claude-klabauter/klabauter checkout registered
+    # (this container has one under /root/klabauter), that candidate is a real,
+    # readable script -- `_have_py` finds it and `$_T` resolves for real, which
+    # is exactly what this test exists to prove CANNOT happen. Pinned absent so
+    # "nothing resolves" is actually nothing, on every box.
+    monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda bin_dir, script_name: None)
+    monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda script_name: None)
     hook = tmp_path / "post-commit"
     hook.write_text(
         _with_unresolvable_interpreter(
@@ -898,6 +917,16 @@ def test_pair_fixture_goes_red_without_the_native_probe(tmp_path, monkeypatch):
         pytest.skip("POSIX-only: the control reproduces the POSIX-half defect")
 
     monkeypatch.setattr(ghi, "_NATIVE_PROBE_DEF", "")
+    # Same environment leak as `test_append_block_emits_no_shell_errors_when_
+    # nothing_resolves`: with the native probe stripped, `_native "$_fwd"`
+    # errors "not found" and the chain falls through past the (now-unguarded)
+    # native image to `SCRIPT`/`_T` resolution. On a box with a real claude-klabauter/
+    # klabauter checkout registered, the engine-repo-bin candidate is a real,
+    # readable python script -- the fallback silently resolves to IT instead
+    # of failing loudly, masking the very incident this control exists to
+    # reproduce. Pinned absent so the control reproduces on every box.
+    monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda bin_dir, script_name: None)
+    monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda script_name: None)
     settings_home, _ = _install_native_image_as_this_platform_does(
         tmp_path, "coordinator-prepare-commit-msg"
     )
@@ -913,3 +942,94 @@ def test_pair_fixture_goes_red_without_the_native_probe(tmp_path, monkeypatch):
         "stripping _NATIVE_PROBE_DEF did NOT break the hook, so the pair test "
         "above proves nothing — the probe is no longer what makes it pass"
     )
+
+
+def _real_clone(tmp_path: Path) -> Path:
+    """A genuine `git clone` of a throwaway bare repo -- NEVER `git init`.
+
+    state/bug-backlog/2026-08-25-hook-emitters-exit-0-having-installed-no-*
+    .yaml: pre-existing coverage for `_ensure_hook`'s "skipped-no-root"
+    branch used a `git init` scratch repo, which the backlog entry names as
+    the reason the defect went uncaught -- a scratch repo and a real clone
+    are not guaranteed to round-trip through the checked resolver's git
+    identity machinery the same way. This helper produces the latter.
+    """
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", str(bare), str(clone)], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(clone), "config", "user.email", "t@example.com"],
+        check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(clone), "config", "user.name", "t"],
+        check=True, capture_output=True,
+    )
+    (clone / "f.txt").write_text("x\n")
+    subprocess.run(["git", "-C", str(clone), "add", "f.txt"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(clone), "commit", "-m", "init"],
+        check=True, capture_output=True,
+    )
+    return clone
+
+
+def test_ensure_hook_skipped_no_root_is_loud_on_stderr(tmp_path, monkeypatch, capsys):
+    """state/bug-backlog/2026-08-25-hook-emitters-exit-0-having-installed-no-
+    *.yaml: `_ensure_hook`'s "skipped-no-root" branch used to return rc 0
+    with EMPTY stderr when the checked resolver came back UNRESOLVED --
+    indistinguishable from a hook that installed successfully. Reproduced
+    against a REAL clone (see `_real_clone`'s own docstring for why a
+    `git init` scratch repo does not exercise the same gap), with the
+    checked resolver's own verdict forced to UNRESOLVED -- exactly the
+    condition `_git_root()` degrades on, per its own docstring.
+
+    Pre-fix: this test fails with an EMPTY captured.err (the exact silent
+    shape the backlog entry reports). Falsified against the unfixed branch
+    before this fix landed.
+    """
+    clone = _real_clone(tmp_path)
+    monkeypatch.chdir(clone)
+
+    import repo_identity
+
+    monkeypatch.setattr(
+        repo_identity,
+        "resolve_checked_repo_root",
+        lambda explicit_root=None: (
+            None,
+            {
+                "verdict": "UNRESOLVED",
+                "session_root": None,
+                "resolved_root": None,
+                "sid": None,
+                "message": "repo-identity (checked resolver): test-forced UNRESOLVED",
+            },
+        ),
+    )
+
+    outcome: list = []
+    rc = ghi._ensure_hook(
+        bin_dir=str(clone),
+        hook_name="prepare-commit-msg",
+        script_name="coordinator-prepare-commit-msg",
+        marker="coordinator-prepare-commit-msg",
+        fresh_body="#!/bin/sh\necho fresh\n",
+        append_block="\n# === test ===\necho appended\n",
+        header="test header",
+        outcome=outcome,
+    )
+
+    assert rc == 0, "installer must never fail loudly enough to block a commit"
+    assert outcome == ["skipped-no-root"]
+    assert not (clone / ".git" / "hooks" / "prepare-commit-msg").exists()
+
+    captured = capsys.readouterr()
+    assert "UNRESOLVED" in captured.err, (
+        "skipped-no-root must reach stderr loudly -- an empty stderr here "
+        "reproduces the exact bug this test guards against"
+    )
+    assert "WARNING" in captured.err

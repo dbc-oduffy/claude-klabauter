@@ -191,10 +191,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         reason = (
-            f"`id: {prospective_id}` is already claimed by {collision.name} in this "
-            f"directory — two decision records cannot share one DR number. Mint a "
-            f"fresh number via the `decision_record.mint_id` op instead of guessing "
-            f"`max + 1`, which is exactly what produced this collision."
+            f"`id: {prospective_id}` already claimed by {collision.name} in this dir.\n"
+            f"Use instead: `decision_record.mint_id` op, not `max + 1`."
         )
         return {
             "hookSpecificOutput": {

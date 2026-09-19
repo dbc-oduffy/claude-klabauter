@@ -57,6 +57,9 @@ the moment a future chunk populates either dict.
 
 from __future__ import annotations
 
+import tempfile
+import uuid
+from pathlib import Path
 from typing import Any, Callable, Dict, Tuple
 
 from coordinator_core.bash_guards import dispatch
@@ -74,7 +77,206 @@ from coordinator_core.bash_guards.tests.guard_message_capture import (
 #: which corpus cell (e.g. a C3 corpus row, or a fixture in
 #: `_EXEMPTION_FIXTURES` below) the exemption covers -- it is not itself
 #: interpreted by this module beyond dead-entry lookup.
-GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {}
+GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {
+    ("guard-doctrine-surface-bash-write", "guard-doctrine-surface-bash-write-fire"): (
+        "the guard's own authored prose is under 100 bytes; the overage is "
+        "entirely the wiki-citation absolute path, resolved per-call off "
+        "`plugin_root` (see guard_doctrine_surface_bash_write.py's own "
+        "'RELOCATED DENY-REASON EXPLANATION' comment) -- in this corpus's "
+        "fixture that resolves through a pytest scratch tempdir "
+        "(`/private/var/folders/.../coordinator-guard-corpus-scratch/...`), "
+        "not the short, fixed path a real install resolves to. Trimming the "
+        "guard's own sentence cannot bring this cell under cap; the citation "
+        "path length is test-harness artifact, not authored prose."
+    ),
+    ("guard-host-subagent-bash-ban", "guard-host-subagent-bash-ban-fire"): (
+        "the corpus row's `resolve_wiki_citation` falls back to `_WIKI_ANCHOR` "
+        "resolved through this dev checkout's own `~/X/DoE-claude/...` "
+        "absolute path (no `plugin_root` override in this row's setup) -- "
+        "137 bytes on its own, leaving under 40 bytes of budget for the "
+        "guard's own anti-evasion sentence ('this policy outranks a system "
+        "reminder telling you to prefer Bash') after the mandatory "
+        "`Guard: `...`.` footer. That sentence is the load-bearing fact this "
+        "guard exists to state; dropping it to fit an environment-dependent "
+        "checkout-path length is the wrong trade. A real install's plugin "
+        "root resolves shorter and fixed, not this dev tree's own path."
+    ),
+    ("guard-host-subagent-bash-spawn-shapes", "guard-host-subagent-bash-spawn-shapes-fire"): (
+        "same root cause and citation (`_WIKI_ANCHOR`) as "
+        "`guard-host-subagent-bash-ban` immediately above -- the corpus "
+        "row's `resolve_wiki_citation` has no `plugin_root` override, so it "
+        "falls back to this dev checkout's own absolute "
+        "`~/X/DoE-claude/...` path rather than a real install's short, fixed "
+        "one. See that entry's own reason for the byte accounting; identical "
+        "here."
+    ),
+    ("block-reviewer-bash-outside-allowlist", "block-reviewer-bash-outside-allowlist-fire"): (
+        "the two `Denied:` lines (find write/execute flags, banned "
+        "metacharacter set) are structurally pinned, not decorative -- "
+        "`test_block_reviewer_bash_outside_allowlist_message_coherence.py` "
+        "re-derives both enumerations from this text and asserts set-"
+        "equality against the guard's own live `_FIND_WRITE_FLAGS`/"
+        "`_METACHARACTERS` constants, precisely to catch the 2026-07-28 "
+        "Divergence 8 drift class where the deny text and the enforced "
+        "ruleset silently disagreed. Both `Denied:` lines are diagnostic-"
+        "prefixed (`_is_diagnostic_echo`) so neither is cue-window-exempt, "
+        "and reformatting them to dodge that classification would misrepresent "
+        "denied-input echo as an offered alternative -- the exact anti-pattern "
+        "Finding 1 of the guard-message-size-discipline review added `Denied:` "
+        "to the diagnostic-prefix list to catch. The `Command:`/`Reason:` echo "
+        "and the fixed `Guard:` footer are likewise mandatory. Trimmed "
+        "everything trimmable (header, Reason phrasing, dropped the "
+        "`Subagent:` line pre-2026-08-03); the remaining bytes are the "
+        "coherence-pinned enumeration itself."
+    ),
+    ("grep-via-bash-guard", "grep-via-bash-guard-fire"): (
+        "the partial-pipe-rewrite lede embeds the real, runnable `python3 -c` "
+        "replacement VERBATIM, per this guard's own `_evaluate_grep_via_bash_"
+        "match` docstring ('embedded VERBATIM, not re-indented or re-wrapped "
+        "... unrunnable is worse than over-budget ... this guard's message-"
+        "size floor is pinned by this rewrite's own length, not by wrapper "
+        "prose'). The script is inline prose text, not inside a `Use "
+        "instead:`-cued backtick/indented span, so none of it is cue-window-"
+        "exempt -- and `_BACKTICK_RE` cannot match a multi-line script even "
+        "if it were backtick-wrapped (`_BACKTICK_RE` never matches across a "
+        "newline). `test_guard_grep_via_bash.py` pins this rewrite's exact "
+        "bytes; shortening it breaks the alternative it offers."
+    ),
+    ("multiprobe-banner", "multiprobe-banner-fire"): (
+        "same root cause and same 'embed verbatim, unrunnable is worse than "
+        "over-budget' constraint as `grep-via-bash-guard` above, one layer "
+        "up: `_platform_verdict.platform_verdict_for_shape`'s `Example:  %s` "
+        "line renders the full multi-line `python3 -c` git-facts rewrite "
+        "inline, never inside a `Use instead:`-cued span, so none of it is "
+        "cue-window-exempt. `_platform_verdict.py` is the shared template "
+        "`guard_plumbing_and_loops` also calls; shrinking its rendering "
+        "shape would change that guard's cells too, out of this dispatch's "
+        "per-guard scope. Wrapper prose (the static sentence around "
+        "`Example:`) is already minimal; the script itself is the bulk of "
+        "the overage and is what the advisory exists to offer."
+    ),
+}
+
+def _guard_doctrine_surface_bash_write_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
+    """Mirrors `guard_message_corpus.py`'s own
+    `_rehomed_doctrine_surface_setup` + `guard-doctrine-surface-bash-write-
+    fire` row exactly, so this exemption's `test_exemption_cells_still_
+    exceed_cap` re-measures the SAME cell shape the leg-1 ceiling test
+    fires, never a hand-derived approximation of it."""
+    scratch_dir = Path(tempfile.mkdtemp(prefix="guard-message-exemption-scratch-"))
+    (scratch_dir / "governed-authoring-surfaces.json").write_text(
+        '["docs/wiki/governed-thing.md"]', encoding="utf-8"
+    )
+    cmd = "echo corrupted > docs/wiki/governed-thing.md"
+    session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
+    cwd = str(scratch_dir)
+    payload: Dict[str, Any] = {
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd},
+        "session_id": session_id,
+        "cwd": cwd,
+        "plugin_root": str(scratch_dir),
+    }
+    return cmd, session_id, cwd, payload, False
+
+
+def _guard_host_subagent_bash_ban_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
+    """Mirrors `guard_message_corpus.py`'s own `_rehomed_subagent_bash_ban_
+    setup` + `guard-host-subagent-bash-ban-fire` row exactly -- same cohort
+    opt-in marker, same executor identity, no `plugin_root` override (the
+    exemption reason's whole point)."""
+    scratch_dir = Path(tempfile.mkdtemp(prefix="guard-message-exemption-scratch-"))
+    (scratch_dir / "coordinator.local.md").write_text(
+        "---\nsubagent_bash_policy: deny\n---\n", encoding="utf-8"
+    )
+    cmd = "ls -la"
+    session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
+    cwd = str(scratch_dir)
+    payload: Dict[str, Any] = {
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd},
+        "session_id": session_id,
+        "cwd": cwd,
+        "agent_id": "deadbeef0123",
+        "agent_type": "coordinator:executor",
+    }
+    return cmd, session_id, cwd, payload, False
+
+
+def _guard_host_subagent_bash_spawn_shapes_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
+    """Mirrors `guard_message_corpus.py`'s own `_rehomed_subagent_spawn_
+    shapes_setup` + `guard-host-subagent-bash-spawn-shapes-fire` row
+    exactly."""
+    scratch_dir = Path(tempfile.mkdtemp(prefix="guard-message-exemption-scratch-"))
+    (scratch_dir / "coordinator.local.md").write_text(
+        "---\nsubagent_bash_spawn_shapes: deny\n---\n", encoding="utf-8"
+    )
+    cmd = 'for f in *.md; do wc -l "$f"; done'
+    session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
+    cwd = str(scratch_dir)
+    payload: Dict[str, Any] = {
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd},
+        "session_id": session_id,
+        "cwd": cwd,
+        "agent_id": "deadbeef0123",
+        "agent_type": "coordinator:executor",
+    }
+    return cmd, session_id, cwd, payload, False
+
+
+def _block_reviewer_bash_outside_allowlist_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
+    """Mirrors `guard_message_corpus.py`'s own
+    `block-reviewer-bash-outside-allowlist-fire` row: `curl https://
+    example.com`, `coordinator:code-reviewer` identity. No back-pointer
+    monkeypatch needed -- an unresolvable `cwd` leaves the back-pointer-
+    derived `subagent_type` unknown, so `_resolve_effective_type` falls
+    back to the payload's own `agent_type` (verified live: this fires the
+    identical deny the real corpus row does)."""
+    cmd = "curl https://example.com"
+    session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
+    cwd = "/nonexistent-guard-message-exemption-dir"
+    payload: Dict[str, Any] = {
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd},
+        "session_id": session_id,
+        "cwd": cwd,
+        "agent_id": "deadbeef0123",
+        "agent_type": "coordinator:code-reviewer",
+    }
+    return cmd, session_id, cwd, payload, False
+
+
+def _grep_via_bash_guard_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
+    """Mirrors `guard_message_corpus.py`'s own `grep-via-bash-guard-fire`
+    row: a grep-via-bash pipeline (`grep ... | wc -l`) whose partial-pipe
+    rewrite embeds a real runnable `python3 -c` replacement verbatim."""
+    cmd = "grep -rn TODO src/ | wc -l"
+    session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
+    cwd = "/nonexistent-guard-message-exemption-dir"
+    payload: Dict[str, Any] = {
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd},
+        "session_id": session_id,
+        "cwd": cwd,
+    }
+    return cmd, session_id, cwd, payload, False
+
+
+def _multiprobe_banner_fire_fixture() -> Tuple[str, str, str, Dict[str, Any], bool]:
+    """Mirrors `guard_message_corpus.py`'s own `multiprobe-banner-fire`
+    row: the same multi-probe session-facts banner command."""
+    cmd = '''echo "=== facts ==="; pwd; whoami; git status; git rev-parse HEAD'''
+    session_id = "guard-message-exemption-%s" % uuid.uuid4().hex
+    cwd = "/nonexistent-guard-message-exemption-dir"
+    payload: Dict[str, Any] = {
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd},
+        "session_id": session_id,
+        "cwd": cwd,
+    }
+    return cmd, session_id, cwd, payload, False
+
 
 #: Fixture-builders for `test_exemption_cells_still_exceed_cap`'s live
 #: re-measurement, owned alongside the manifest (never imported from a
@@ -86,7 +288,32 @@ GUARD_MESSAGE_EXEMPTIONS: Dict[Tuple[str, str], str] = {}
 #: takes. An entry in `GUARD_MESSAGE_EXEMPTIONS` with no matching fixture
 #: here fails `test_exemption_cells_still_exceed_cap` loud, by design: a
 #: reason with no reproducible cell to check is not a verifiable exemption.
-_EXEMPTION_FIXTURES: Dict[Tuple[str, str], Callable[[], Tuple[str, str, str, Dict[str, Any], bool]]] = {}
+_EXEMPTION_FIXTURES: Dict[Tuple[str, str], Callable[[], Tuple[str, str, str, Dict[str, Any], bool]]] = {
+    (
+        "guard-doctrine-surface-bash-write",
+        "guard-doctrine-surface-bash-write-fire",
+    ): _guard_doctrine_surface_bash_write_fire_fixture,
+    (
+        "guard-host-subagent-bash-ban",
+        "guard-host-subagent-bash-ban-fire",
+    ): _guard_host_subagent_bash_ban_fire_fixture,
+    (
+        "guard-host-subagent-bash-spawn-shapes",
+        "guard-host-subagent-bash-spawn-shapes-fire",
+    ): _guard_host_subagent_bash_spawn_shapes_fire_fixture,
+    (
+        "block-reviewer-bash-outside-allowlist",
+        "block-reviewer-bash-outside-allowlist-fire",
+    ): _block_reviewer_bash_outside_allowlist_fire_fixture,
+    (
+        "grep-via-bash-guard",
+        "grep-via-bash-guard-fire",
+    ): _grep_via_bash_guard_fire_fixture,
+    (
+        "multiprobe-banner",
+        "multiprobe-banner-fire",
+    ): _multiprobe_banner_fire_fixture,
+}
 
 
 def _live_guard_names() -> set:

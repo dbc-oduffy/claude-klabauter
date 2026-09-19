@@ -121,6 +121,7 @@ claude-em-rehome-four-bash-guards-onto-the-guard-chain.md
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 from pathlib import Path
@@ -180,6 +181,42 @@ def _resolve_env(payload: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return dict(os.environ)
 
 
+#: A drive-letter (``C:\\``, ``C:/``) or UNC (``\\\\server``) path. Recognized
+#: on EVERY host, not only Windows: the payload and env may carry a
+#: Windows-spelled path while the guard runs on POSIX (the cold/warm parity
+#: oracle, a cross-host fixture), where ``pathlib.Path`` treats ``\\`` as an
+#: ordinary character and a drive-letter path as relative. Ported from
+#: DoE-claude ``guard-repo-setup-claude-home-refusal.py`` at 7e9841cc9.
+_WINDOWS_SPELLED_RE = re.compile(r"^(?:[A-Za-z]:[\\/]|\\\\)")
+
+
+def _is_windows_spelled(path: str) -> bool:
+    return bool(_WINDOWS_SPELLED_RE.match(path))
+
+
+def _join_onto_cwd(raw: str, cwd: Optional[str]) -> str:
+    """``raw`` made absolute against ``cwd`` in ``cwd``'s own path flavour,
+    or ``raw`` unchanged when it is already absolute or there is no cwd."""
+    if _is_windows_spelled(raw) or Path(raw).is_absolute() or not cwd:
+        return raw
+    if _is_windows_spelled(cwd):
+        return ntpath.join(cwd, raw)
+    return str(Path(cwd) / raw)
+
+
+def _canonical(path: str) -> str:
+    """The comparison key for a path. A Windows-spelled path is compared
+    by Windows rules (separators and ``..`` normalized, case folded); off
+    Windows it is never handed to ``Path.resolve()``, which would root it
+    under the process cwd. Everything else is ``Path.resolve()``d. Raises
+    ``OSError`` as ``resolve`` does."""
+    if not (_is_windows_spelled(path) and os.name != "nt"):
+        path = str(Path(path).resolve())
+    if _is_windows_spelled(path):
+        return ntpath.normpath(path).casefold()
+    return path
+
+
 def _resolve_claude_home(env: Dict[str, str]) -> Optional[str]:
     """Canonical, resolved path to Claude Home, or ``None`` if unresolvable.
 
@@ -189,7 +226,7 @@ def _resolve_claude_home(env: Dict[str, str]) -> Optional[str]:
     config_dir = env.get("CLAUDE_CONFIG_DIR")
     if config_dir:
         try:
-            return str(Path(config_dir).resolve())
+            return _canonical(config_dir)
         except OSError:
             pass
     for key in ("HOME", "USERPROFILE"):
@@ -197,7 +234,7 @@ def _resolve_claude_home(env: Dict[str, str]) -> Optional[str]:
         if not val:
             continue
         try:
-            return str((Path(val) / ".claude").resolve())
+            return _canonical(_join_onto_cwd(".claude", val))
         except OSError:
             continue
     return None
@@ -254,10 +291,7 @@ def _leading_cd_target(cmd: str, cwd: Optional[str], env: Dict[str, str]) -> Opt
     if not match:
         return None
     raw = _expand_home_shorthand(match.group(1).strip("'\""), env)
-    candidate = Path(raw)
-    if not candidate.is_absolute() and cwd:
-        candidate = Path(cwd) / candidate
-    return str(candidate)
+    return _join_onto_cwd(raw, cwd)
 
 
 def _extract_candidate_root(cmd: str, cwd: Optional[str], env: Dict[str, str]) -> Optional[str]:
@@ -270,10 +304,7 @@ def _extract_candidate_root(cmd: str, cwd: Optional[str], env: Dict[str, str]) -
     match = _ROOT_FLAG_RE.search(cmd)
     if match:
         raw = _expand_home_shorthand(match.group(1).strip("'\""), env)
-        candidate = Path(raw)
-        if not candidate.is_absolute() and cwd:
-            candidate = Path(cwd) / candidate
-        return str(candidate)
+        return _join_onto_cwd(raw, cwd)
     cd_target = _leading_cd_target(cmd, cwd, env)
     if cd_target is not None:
         return cd_target
@@ -301,7 +332,7 @@ def is_denied_repo_setup_claude_home(
         return False  # no cwd and no explicit flag -- nothing to compare
 
     try:
-        resolved_candidate = str(Path(candidate).resolve())
+        resolved_candidate = _canonical(candidate)
     except OSError:
         return False  # unresolvable candidate path -- fail open
 
@@ -310,9 +341,9 @@ def is_denied_repo_setup_claude_home(
 
 def _deny_reason() -> str:
     return (
-        "BLOCKED: repo-setup's scaffold cannot target ~/.claude -- it is not a "
-        "working tree. Run repo-setup against the project clone you mean to set "
-        "up: /repo-setup --root <path-to-that-clone>."
+        "BLOCKED: repo-setup's scaffold cannot target ~/.claude -- not a "
+        "working tree. Run it against the project clone instead: "
+        "/repo-setup --root <path-to-that-clone>."
     )
 
 

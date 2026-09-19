@@ -21,9 +21,13 @@ other arrival in this row uses for displaced doctrine-plane content. Returns
 None (never spawns) when `CLAUDE_PLUGIN_ROOT` is absent or the forwarder file
 does not resolve under it.
 
-`no_console_creationflags()` (this engine's own Windows console-subprocess
-helper) replaces the source script's sibling `_win_portability` import — same
-job, same-repo import instead of a DoE-sibling one.
+Liveness/identity confirmation for an already-bound forwarder is spawn-free
+(`_pid_is_a_forwarder`, POSIX `os.kill(pid, 0)` + `/proc` cmdline, Windows
+`ctypes` `OpenProcess`/`QueryFullProcessImageNameW`) — no `ps`/`powershell.exe`
+child process, no console flash, no `no_console_creationflags()` need on this
+leg. Spawning the forwarder ITSELF (`_spawn_forwarder_detached`) still uses
+`subprocess.Popen` with its own inline no-console/detached flags, since
+starting the forwarder is the op's actual job.
 
 Op contract: `params` is unused. Fails open on every path: probe-bind
 success, probe-bind loss (already running), spawn failure, or an unexpected
@@ -62,7 +66,6 @@ from typing import Optional
 
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.ipc import register_op
-from coordinator_core.win_portability import no_console_creationflags
 
 #: Mirrors `http_hook_forwarder.FIXED_PORT` by value, not by import -- this
 #: module must not import the forwarder module itself (it only launches it as
@@ -152,32 +155,71 @@ _FORWARDER_ARGV_RE = re.compile(r"""(?:^|[\s"'/\\])http_hook_forwarder\.py(?:["'
 
 
 def _pid_is_a_forwarder(pid: int) -> "Optional[bool]":
-    """Confirm `pid` against the OS process table before it is ever killed.
-    Returns True/False when the table answered, None when it could not be
-    read (caller treats None as do-not-kill)."""
+    """Confirm `pid` against the OS process table before it is ever killed --
+    spawn-free (overengineering-reviewer, 2026-09-18: the prior `ps`/
+    `powershell.exe Get-CimInstance` spawn ran on every SessionStart where the
+    resident forwarder's fingerprint had gone stale; a PowerShell spawn alone
+    costs more than this engine's 200ms single-process bar). POSIX confirms
+    liveness via `os.kill(pid, 0)` (signal 0: existence-only, never delivered)
+    and cross-checks the command line via `/proc/<pid>/cmdline` where present
+    (Linux; a no-op elsewhere). Windows confirms via `ctypes`
+    `OpenProcess`/`QueryFullProcessImageNameW` against `kernel32`, no shell.
+
+    Returns True/False when identity could be confirmed, None when it could
+    not be (caller treats None as do-not-kill)."""
     if os.name == "nt":
-        argv = [
-            "powershell.exe",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            '(Get-CimInstance Win32_Process -Filter "ProcessId={0}").CommandLine'.format(int(pid)),
-        ]
-    else:
-        argv = ["ps", "-p", str(int(pid)), "-o", "args="]
+        return _pid_is_a_forwarder_windows(pid)
+    return _pid_is_a_forwarder_posix(pid)
+
+
+def _pid_is_a_forwarder_posix(pid: int) -> "Optional[bool]":
     try:
-        completed = subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            **no_console_creationflags(),
-        )
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Alive, owned by another user -- exists, but we cannot read its
+        # cmdline to confirm identity.
+        return None
     except Exception:
         return None
-    if completed.returncode != 0 and not (completed.stdout or "").strip():
-        return False
-    return bool(_FORWARDER_ARGV_RE.search(completed.stdout or ""))
+
+    cmdline_path = Path("/proc") / str(pid) / "cmdline"
+    try:
+        raw = cmdline_path.read_bytes()
+    except Exception:
+        # No /proc (e.g. macOS) -- liveness confirmed, identity not; treat as
+        # do-not-kill rather than assume.
+        return None
+    argv_text = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+    return bool(_FORWARDER_ARGV_RE.search(argv_text))
+
+
+def _pid_is_a_forwarder_windows(pid: int) -> "Optional[bool]":
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid)
+        )
+        if not handle:
+            return False
+        try:
+            buf = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(len(buf))
+            ok = kernel32.QueryFullProcessImageNameW(
+                handle, 0, buf, ctypes.byref(size)
+            )
+            if not ok:
+                return None
+            return bool(_FORWARDER_ARGV_RE.search(buf.value))
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:
+        return None
 
 
 _BIND_CONFIRM_ATTEMPTS = 10

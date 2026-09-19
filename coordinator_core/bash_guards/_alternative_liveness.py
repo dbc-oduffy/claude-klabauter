@@ -1081,24 +1081,6 @@ class GuardFireResult:
 _SESSION_SCOPED_ENV_VAR = "CLAUDE_CODE_SESSION_ID"
 
 
-def _cleanup_inprocess_search_latch(sid: str) -> None:
-    """Best-effort removal of the on-disk marker tree ``guard_inprocess_
-    search``'s session latch may have written for the isolated ``sid`` this
-    probe minted. Not required for correctness (a fresh, never-reused uuid4
-    is never observed as "seen" regardless of whether its marker file is
-    ever cleaned up), but left uncleaned it accumulates one throwaway
-    directory under the real repo's ``.git/coordinator-sessions/`` per gate
-    run forever. Swallows every failure -- this is tidiness, not the
-    isolation guarantee itself, and must never turn a passing probe into a
-    crashing one."""
-    try:
-        latch_path = guard_inprocess_search._latch_path(os.getcwd(), sid)
-        if latch_path is not None:
-            shutil.rmtree(latch_path.parent, ignore_errors=True)
-    except Exception:  # noqa: BLE001 -- cleanup-only, never allowed to fail the probe
-        pass
-
-
 @contextlib.contextmanager
 def _isolated_session_scope():
     """Pin ``CLAUDE_CODE_SESSION_ID`` to a fresh, never-before-seen uuid4 for
@@ -1122,18 +1104,30 @@ def _isolated_session_scope():
     emission its pinned alternatives actually describe. Guard-agnostic by
     construction: any OTHER guard a future session gives the same kind of
     session-scoped latch is isolated by the same wrap, with zero new code
-    needed here."""
+    needed here.
+
+    The latch marker lands in a private temp directory, never the real
+    repo's `.git/coordinator-sessions/`: a phantom `altlive-probe-<hex>`
+    directory there, however briefly, reads as a live peer session to every
+    real session's liveness scan and to a concurrent xdist worker's hub-litter
+    check -- cleanup after the fact cannot win that race."""
     prior = os.environ.get(_SESSION_SCOPED_ENV_VAR)
     fresh_sid = "altlive-probe-" + uuid.uuid4().hex
+    latch_root = Path(tempfile.mkdtemp(prefix="altlive-latch-"))
+    real_latch_path = guard_inprocess_search._latch_path
     os.environ[_SESSION_SCOPED_ENV_VAR] = fresh_sid
+    guard_inprocess_search._latch_path = (
+        lambda _cwd, sid: latch_root / sid / guard_inprocess_search._LATCH_MARKER_NAME
+    )
     try:
         yield
     finally:
+        guard_inprocess_search._latch_path = real_latch_path
         if prior is None:
             os.environ.pop(_SESSION_SCOPED_ENV_VAR, None)
         else:
             os.environ[_SESSION_SCOPED_ENV_VAR] = prior
-        _cleanup_inprocess_search_latch(fresh_sid)
+        shutil.rmtree(latch_root, ignore_errors=True)
 
 
 def _call_trigger_isolated(trigger: Callable[[], Optional[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:

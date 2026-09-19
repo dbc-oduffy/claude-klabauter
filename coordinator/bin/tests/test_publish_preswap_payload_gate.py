@@ -291,6 +291,23 @@ class TestDispatchPreswapFunctionGate:
         ok = publish.dispatch_preswap_function_gate(_EngineCtxStub(), target, staging_dir)
         assert ok is True
 
+    def test_absolute_self_import_resolves_against_the_staged_package(self, tmp_path):
+        """`data_root.py` imports `coordinator_core._content_root_primitive` by
+        absolute name; the staging dir is named `.coordinator_core.publish-
+        staging-*`, so only binding it AS `coordinator_core` makes that resolve."""
+        repo_root = tmp_path / "dest-repo"
+        staging_dir = tmp_path / ".coordinator_core.publish-staging-x"
+        staging_dir.mkdir()
+        (staging_dir / "__init__.py").write_text("", encoding="utf-8")
+        (staging_dir / "_content_root_primitive.py").write_text("MARKER = 1\n", encoding="utf-8")
+        (staging_dir / "data_root.py").write_text(
+            "from coordinator_core._content_root_primitive import MARKER\n", encoding="utf-8"
+        )
+        target = _make_target("claude-klabauter", repo_root, "coordinator_core")
+
+        ok = publish.dispatch_preswap_function_gate(_EngineCtxStub(), target, staging_dir)
+        assert ok is True
+
     def test_broken_coordinator_core_row_fails_hermetically(self, tmp_path, capsys):
         repo_root = tmp_path / "dest-repo"
         staging_dir = tmp_path / "staging"

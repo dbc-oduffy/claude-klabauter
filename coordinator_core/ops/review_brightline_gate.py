@@ -691,7 +691,24 @@ def _session_scoped(range_: str, session_id: str) -> int:
     prints `VERDICT=indeterminate` (2026-08-08 fix), never
     `single-reviewer-ok` and never `PARTITION-MANDATORY` — the gate
     examined zero commits, so it has no basis to claim either a small diff
-    or a mandatory partition. Per the PM constraint
+    or a mandatory partition.
+
+    MERGE COMMITS ARE EXCLUDED (`--no-merges` on both the initial and the
+    floor-retry `git log --grep` scan) even when they carry this session's
+    own `Session-Id` trailer (the prepare-commit-msg hook stamps a merge the
+    session performs same as any other commit it authors). A merge's own
+    diff is `git show`'s ordinary two-parent-collapsed numstat against its
+    first parent — i.e. everything the OTHER (merged-in) branch touched,
+    none of it this session's authored work. Measured specimen: a 6-commit
+    session set whose 5th commit was a `git merge origin/main` reported
+    `loc=6969 commits=6` counting that merge's 5624 code-loc as the
+    session's own (its full raw diff was ~10684 gross LOC before noise/
+    prose filtering) against a per-owned-commit hand-sum of `loc=1345
+    commits=5` excluding it — see the workstream-complete skill's per-
+    owned-commit summation method, which never lets a range span peer work.
+    A merge is the purest case of that named failure mode: it "touches"
+    every file the merged branch touched while authoring none of it. Per
+    the PM constraint
     (docs/plans/2026-08-08-the-gate-says-ok-when-it-could-not-look.md), the
     vacuous case must not resolve to a forced partition either; it hands
     the "I could not look" fact to the consumer instead of manufacturing a
@@ -699,7 +716,7 @@ def _session_scoped(range_: str, session_id: str) -> int:
     outcome, not the die-silent infra-failure case below (which prints
     nothing and returns 1)."""
     shas_out, _rc = _run_git(
-        ["log", "--pretty=%H", f"--grep=^Session-Id: {session_id}$", range_]
+        ["log", "--no-merges", "--pretty=%H", f"--grep=^Session-Id: {session_id}$", range_]
     )
     filtered_shas = [line for line in shas_out.splitlines() if line.strip()]
     filtered_count = len(filtered_shas)
@@ -709,7 +726,7 @@ def _session_scoped(range_: str, session_id: str) -> int:
         if floor is not None:
             retry_range = f"{floor}..HEAD"
             retry_shas_out, _rc2 = _run_git(
-                ["log", "--pretty=%H", f"--grep=^Session-Id: {session_id}$", retry_range]
+                ["log", "--no-merges", "--pretty=%H", f"--grep=^Session-Id: {session_id}$", retry_range]
             )
             retry_shas = [line for line in retry_shas_out.splitlines() if line.strip()]
             if retry_shas:

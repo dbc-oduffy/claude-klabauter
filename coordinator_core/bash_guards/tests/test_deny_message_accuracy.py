@@ -859,7 +859,7 @@ class TestMultiprobeBannerRewriteMessageAccuracy:
         rewrite_cmd = hso["updatedInput"]["command"]
         # The rewrite must use the resolved interpreter, not a bare literal.
         assert rewrite_cmd.startswith(dispatch_checks._bt_python3_invocation())
-        assert "ONE 'git status --porcelain=v2 --branch' call" in hso["additionalContext"]
+        assert "batching every git fact into ONE status call" in hso["additionalContext"]
 
     def test_unrecognized_probe_emits_nothing_not_a_generic_advisory(self):
         # C4 (2026-08-01): a probe segment with no concrete rewrite makes

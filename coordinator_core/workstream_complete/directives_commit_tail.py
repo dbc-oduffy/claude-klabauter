@@ -729,10 +729,18 @@ def _committed_paths_for_sids(
     # did, over the SAME already-in-hand `trailer_map`, for one more sid
     # (`this_session_id`) that is never itself a member of `sid_to_start`
     # (peers only -- see this function's own peer-only contract). Reversed
-    # to oldest-first to mirror `_session_owned_shas_from_map`'s own
-    # contract, though ordering here is cosmetic: `own_session_numstat_out`
-    # below is built by iterating `own_shas` directly, not by reading back
-    # `blocks`' own (union-order) key order.
+    # to oldest-first to match every other session-sha list in this codebase
+    # (`ops.session_commits.resolve_session_commits`'s own return contract),
+    # though ordering here is cosmetic: `own_session_numstat_out` below is
+    # built by iterating `own_shas` directly, not by reading back `blocks`'
+    # own (union-order) key order.
+    #
+    # NOT a fast path for a measurement caller. `workstream_complete ::
+    # _session_owned_shas` deliberately carries no trailer-map leg -- this
+    # map's window is bounded by peer start times and it includes merges by
+    # contract, both of which that function's negative spec names as
+    # disqualifying. This scan serves THIS function's attribution/numstat
+    # purpose only.
     own_shas: "list[str]" = []
     if this_session_id:
         own_shas = [sha for sha, trailer in trailer_map.items() if trailer == this_session_id]

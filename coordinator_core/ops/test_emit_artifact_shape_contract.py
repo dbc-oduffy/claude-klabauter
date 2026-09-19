@@ -31,6 +31,7 @@ from coordinator_core.ops.emit_artifact_shape_contract import (
     main,
     schema_to_json_schema,
 )
+from coordinator_core.frontmatter.schema_corpus import published_subset_reason
 from coordinator_core.ops.records_query import liveness as _records_liveness
 from coordinator_core.testing.doe_root import resolve_doe_root
 
@@ -583,3 +584,140 @@ class TestRealTreeParity:
             "transcript_summary",
         ]
         assert all_of[1]["then"]["properties"]["ref"] == {"type": "null"}
+
+
+# ---------------------------------------------------------------------------
+# Published-subset refusal (falsification of the count-blind guard)
+# ---------------------------------------------------------------------------
+# The only corpus-size guard in `_emit` used to be `len(schema_names) == 0`. A
+# PUBLISHED MIRROR carries a deliberate subset of the authoring corpus (measured:
+# 2 schema files on a flat mirror against 78 in the authoring tree), so a subset
+# is not empty and emitted a structurally valid bundle that silently omitted most
+# types — and the consumer of that bundle is another repo, which cannot tell
+# truncation from a contract that legitimately shrank. These tests pin the
+# refusal AND, by neutralising the published-subset signal where `_emit` resolves
+# it, pin that the guard is what refuses — code without it emits instead.
+# Deliberately NOT by loading an older revision of this module from git: a leg
+# whose subject is "the revision before the fix" invalidates itself the moment
+# the fix is committed, and a pinned sha makes the test a history artifact. The
+# proposition is about the guard, so the guard is what the leg removes.
+# Classification is by DISK MARKERS
+# (`coordinator_core.frontmatter.schema_corpus.published_subset_reason`), never
+# by count.
+
+from coordinator_core.ops import emit_artifact_shape_contract as _emit_module  # noqa: E402
+
+_CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _write_two_schema_corpus(schemas_dir: Path) -> None:
+    schemas_dir.mkdir(parents=True, exist_ok=True)
+    (schemas_dir / "goal.yaml").write_text("schema: goal\nrequired:\n  id: string\n", encoding="utf-8")
+    (schemas_dir / "spike-result.yaml").write_text(
+        "schema: spike-result\nrequired:\n  id: string\n", encoding="utf-8"
+    )
+
+
+def _published_mirror_root(tmp_path: Path) -> Path:
+    """A flat PUBLISHED content root: `.claude-plugin/plugin.json` present, no
+    `.coordinator-dev-repo` sentinel anywhere above the schemas dir."""
+    root = tmp_path / "published-mirror"
+    (root / ".claude-plugin").mkdir(parents=True)
+    (root / ".claude-plugin" / "plugin.json").write_text('{"name": "coordinator-claude"}\n', encoding="utf-8")
+    _write_two_schema_corpus(root / "schemas")
+    return root
+
+
+def _neutralise_subset_guard(monkeypatch) -> None:
+    """Remove the published-subset signal as `_emit` resolves it — the name is
+    imported into the op's own namespace, so patching it there is exactly the
+    code path the guard reads. Test-local and monkeypatch-scoped: the working-tree
+    module is never edited."""
+    monkeypatch.setattr(_emit_module, "published_subset_reason", lambda _schemas_dir: None)
+
+
+def _authoring_coordinator_root() -> Path | None:
+    """A DoE-claude AUTHORING coordinator root (`<repo>/coordinator` carrying
+    `schemas/`, sentinel at `<repo>`), or None. Never a hardcoded path: tries the
+    ratified resolver first, then scans this checkout's sibling directories for
+    the fleet-wide `.coordinator-dev-repo` sentinel — the flat mirror the resolver
+    lands on in a consumer container never carries it."""
+    candidates = []
+    resolved = resolve_doe_root()
+    if resolved:
+        candidates.append(Path(resolved) / "coordinator")
+    try:
+        siblings = sorted(_CLAUDE_KLABAUTER_ROOT.parent.iterdir())
+    except OSError:
+        siblings = []
+    candidates.extend(sib / "coordinator" for sib in siblings if (sib / ".coordinator-dev-repo").exists())
+    for cand in candidates:
+        if (cand / "schemas").is_dir() and published_subset_reason(cand / "schemas") is None:
+            return cand
+    return None
+
+
+def test_published_subset_corpus_is_refused(tmp_path, monkeypatch, capsys):
+    root = _published_mirror_root(tmp_path)
+    out_dir = tmp_path / "out"
+    monkeypatch.setenv("EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT", str(root))
+    monkeypatch.setenv("ARTIFACT_CONTRACT_OUT_DIR", str(out_dir))
+
+    assert main([]) == 2
+    assert not (out_dir / "artifact-shape-contract.schema.json").exists()
+    err = capsys.readouterr().err
+    assert "published subset" in err
+    assert ".coordinator-dev-repo" in err
+
+
+def test_published_subset_emits_truncated_when_the_signal_is_neutralised(tmp_path, monkeypatch):
+    """Falsification leg for the refusal above: with the published-subset signal
+    answering None, the SAME corpus the guard refuses emits a structurally valid
+    but truncated 2-schema bundle at rc=0. Without this, the refusal test could be
+    asserting a behaviour that was never absent."""
+    root = _published_mirror_root(tmp_path)
+    out_dir = tmp_path / "out-neutralised"
+    monkeypatch.setenv("EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT", str(root))
+    monkeypatch.setenv("ARTIFACT_CONTRACT_OUT_DIR", str(out_dir))
+    _neutralise_subset_guard(monkeypatch)
+
+    assert main([]) == 0
+    emitted = json.loads((out_dir / "artifact-shape-contract.schema.json").read_text(encoding="utf-8"))
+    assert emitted["schema_count"] == 2
+
+
+def test_dev_repo_sentinel_beside_the_published_marker_still_emits(tmp_path, monkeypatch):
+    """The authoring claim wins: a checkout carrying BOTH markers is the tree the
+    mirror is published FROM. Pins the sentinel-probed-BEFORE-the-mirror-marker
+    ordering that `published_subset_reason` contracts for."""
+    root = _published_mirror_root(tmp_path)
+    (root / ".coordinator-dev-repo").write_text("dev\n", encoding="utf-8")
+    out_dir = tmp_path / "out-authoring"
+    monkeypatch.setenv("EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT", str(root))
+    monkeypatch.setenv("ARTIFACT_CONTRACT_OUT_DIR", str(out_dir))
+
+    assert main([]) == 0
+    emitted = json.loads((out_dir / "artifact-shape-contract.schema.json").read_text(encoding="utf-8"))
+    assert emitted["schema_count"] == 2
+
+
+def test_authoring_corpus_emits_byte_identical_with_and_without_the_guard(tmp_path, monkeypatch):
+    """This module is the SOLE regeneration path for another repo's frozen
+    schema, so the refusal must be byte-inert on the authoring corpus: emit the
+    real authoring tree with the guard active and with its signal neutralised and
+    compare bytes, no normalization either side."""
+    coordinator_root = _authoring_coordinator_root()
+    if coordinator_root is None:
+        pytest.skip("no DoE-claude authoring checkout available (only a published mirror)")
+
+    monkeypatch.setenv("EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT", str(coordinator_root))
+    monkeypatch.setenv("ARTIFACT_CONTRACT_OUT_DIR", str(tmp_path / "guarded"))
+    assert main([]) == 0
+
+    monkeypatch.setenv("ARTIFACT_CONTRACT_OUT_DIR", str(tmp_path / "unguarded"))
+    _neutralise_subset_guard(monkeypatch)
+    assert main([]) == 0
+
+    guarded_bytes = (tmp_path / "guarded" / "artifact-shape-contract.schema.json").read_bytes()
+    unguarded_bytes = (tmp_path / "unguarded" / "artifact-shape-contract.schema.json").read_bytes()
+    assert guarded_bytes == unguarded_bytes

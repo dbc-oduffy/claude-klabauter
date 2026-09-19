@@ -18,25 +18,37 @@ question):
       Documented KNOWN over-match: `git log --grep` scans every line of the
       FULL commit message, so a body line quoting another session's trailer
       verbatim also matches. Documented as the SAFE direction on purpose.
-    - `ops/review_brightline_gate.py :: _compute_session_oracle_single`
-      (removed 2026-08-19, state/kill-ledger.md K-007)
-      greps `^Session-Id: <sid>$` (anchored at BOTH ends). Verified live
-      (workstream_complete's own docstring) to silently DROP a commit whose
-      `Session-Id` line is not the message's final line — e.g. one followed
-      by `Co-Authored-By`/`Commit-Token`, a shape this history actually
-      contains. That is an UNDER-count: it quietly shrinks whatever the
-      caller is measuring (a review scale, an attribution set, ...).
+    - `ops/review_brightline_gate.py` greps `^Session-Id: <sid>$` (anchored
+      at BOTH ends).
 
-    This op takes `_session_owned_shas`'s form: `^Session-Id: <sid>`,
-    unanchored at the end. An under-count is the wrong failure mode for a
-    primitive other ops build attribution and audit trails on top of — a
-    missing commit silently vanishes evidence, where an occasional
-    over-matched body-line quote is a false positive a caller can filter
-    (and duplicate-sha collapse below already guards the case where the
-    SAME commit tags this session's own sid in its own trailer, which is
-    not a body-line quote at all). A same-prefix collision is not a real
-    risk against fixed-length UUID session ids (same acceptance the
-    unanchored form already carries on disk).
+    THE TWO FORMS COUNT THE SAME COMMITS, and the under-count this docstring
+    once attributed to the anchored form does not exist. MEASURED, not
+    reasoned about: `git log --grep` applies its regex LINE-WISE, so the `$`
+    anchors end-of-LINE, never end-of-message. Against git 2.43.0 on this
+    history, `2d98d7b7` — whose `Session-Id` line is followed by a
+    `Deliverable-Id` line — matches under BOTH forms, and repo-wide the two
+    return identical counts (132 non-merge commits each; 26 each for one
+    session sampled). A trailer followed by `Co-Authored-By`/`Commit-Token`/
+    `Deliverable-Id` is therefore NOT dropped. Pinned by
+    `test_anchored_and_unanchored_trailer_greps_agree`.
+
+    So the choice between them is not under-count-vs-over-count. Each is
+    unsafe in one direction, per line rather than per message: the unanchored
+    form also matches `Session-Id: <sid><more>` on one line, which the
+    anchored form rejects; the anchored form rejects a trailer carrying
+    trailing whitespace, which the unanchored form accepts. Both forms match
+    a body line QUOTING another session's trailer verbatim, since `--grep`
+    scans every line of the full message either way — that over-match belongs
+    to neither form and is the one a caller must filter. Duplicate-sha
+    collapse below guards the case where the SAME commit tags this session's
+    own sid in its own trailer, which is not a body-line quote at all. A
+    same-prefix collision is not a real risk against fixed-length UUID
+    session ids.
+
+    This op takes `_session_owned_shas`'s unanchored form, for consistency
+    with that primitive rather than for a counting difference there is none
+    of. Do not "fix" the gate's `$` citing an under-count: the measurement
+    above is why that reads as a defect and is not one.
 
 Multi-Session-Id commits are real in this history (a fold can tag a commit
 with more than one session's trailer) — `--grep` matches the commit once
@@ -121,6 +133,7 @@ def resolve_session_commits(
     commit_range: Optional[str] = None,
     *,
     sha_only: bool = False,
+    no_merges: bool = False,
 ) -> List[Dict[str, Any]]:
     """Return this session's attributed commits, oldest-first, from ONE git
     invocation.
@@ -144,6 +157,34 @@ def resolve_session_commits(
                         previously threw the whole parsed diff payload away.
                         When False (default), behavior is byte-identical to
                         before this parameter existed — see AC2.
+        no_merges:     ADDITIVE, default False (byte-identical prior
+                        behavior for every existing caller). When True, adds
+                        `--no-merges` to the `git log` invocation, dropping
+                        a merge commit from the result even when it carries
+                        this session's own `Session-Id` trailer (the
+                        prepare-commit-msg hook stamps a merge the session
+                        performs same as any other commit it authors). A
+                        merge's `--numstat`/`--raw` rows collapse against its
+                        FIRST PARENT only — i.e. every file the OTHER
+                        (merged-in) branch touched, none of it this
+                        session's authored work — so a caller that sums
+                        `added`/`deleted` or counts commits/files for a
+                        REVIEW-SCALE or LOC measurement must pass
+                        `no_merges=True` (see
+                        `workstream_complete._session_owned_shas`, its sole
+                        caller as of this parameter's introduction) or it
+                        double-counts peer work as this session's own —
+                        the same failure `review_brightline_gate.
+                        _session_scoped` was fixed for. A caller doing
+                        ATTRIBUTION instead (is this commit mine, what did
+                        I touch) must NOT set this — dropping a
+                        session-performed merge from an attribution walk
+                        would make it wrongly look untouched/unauthored;
+                        every existing caller of this primitive
+                        (`handoff_close_origin_stub`, `branch_resolution`,
+                        `quick_wrap_assemble`, `baton_assemble`) is
+                        attribution-shaped and leaves this at its False
+                        default.
 
     Returns:
         A list of, oldest-first:
@@ -196,6 +237,8 @@ def resolve_session_commits(
         )
 
     args = ["log", "--reverse", f"--grep=^Session-Id: {sid}"]
+    if no_merges:
+        args.append("--no-merges")
     if not sha_only:
         args.extend(["--raw", "--numstat"])
     args.append(f"--format={_HEADER_SENTINEL}%H{_FIELD_SEP}%ct{_FIELD_SEP}%s")

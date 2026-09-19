@@ -2093,7 +2093,26 @@ _AGENT_HELPER_RESERVED_NAMES = frozenset(
 # Non-CLI data/doc file extensions that can appear alongside real CLIs in
 # coordinator/bin/ (schema/manifest/baseline files) — never a forwarder
 # candidate regardless of exec bit.
-_AGENT_HELPER_DATA_SUFFIXES = frozenset({".md", ".toml", ".yaml", ".yml", ".txt"})
+#
+# `.json` IS ON THIS LIST, and its absence was a real defect, not tidiness.
+# `coordinator/bin/published-name-map.json` exists only in the PUBLISHED tree
+# (publish emits it there; see `percolate.rewrite_basename.
+# PUBLISHED_NAME_MAP_BASENAME`), so a claude-klabauter-tree scan never sees it and the
+# omission was invisible here — but an install off a published engine root
+# derived `published-name-map.json` as an installed CLI NAME, wrote a native
+# door image over that slot in the settings home, and recorded the name in
+# `_native-forwarder-manifest.json`. Measured live before the fix: the door
+# binary carried 386 hardlinks and the manifest 386 names, one of which was a
+# data file. `.json` is a data suffix everywhere in this tree; no
+# `coordinator/bin/` CLI is invoked as `<name>.json`, and both door censuses
+# already accept only `<name>.py`/extensionless as a CLI-name shape
+# (`door_serving_census._generator_bin_names`), so the derivation was the one
+# surface disagreeing.
+#
+# Negative-spec: `.js` is NOT a data suffix — `lint-frontmatter.js` IS its
+# bareword installed identity (see `_derive_agent_helper_target_map`'s
+# stem-dedup rules). Only `.json` was added.
+_AGENT_HELPER_DATA_SUFFIXES = frozenset({".md", ".toml", ".yaml", ".yml", ".txt", ".json"})
 
 # BYTE-COPIED BIN MEMBERS -- installed name -> claude-klabauter-live-root-relative source
 # path components, for the entries whose installed body is the SOURCE FILE'S

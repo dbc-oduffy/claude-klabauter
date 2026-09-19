@@ -187,63 +187,22 @@ def data_root(dir_name: str) -> Path:
         f"{flat_candidate} (OSS-flat layout, not found)."
     )
 
-#: The marker that makes a FLAT directory a coordinator content root. A flat
-#: clone without its own plugin manifest is not one, and must keep failing —
-#: the same gate `resolve_coordinator_clone` uses for its flat-layout rung, not
-#: a second spelling of the concept.
-FLAT_CONTENT_ROOT_MARKER = (".claude-plugin", "plugin.json")
-
-
-def content_root_for(doe_root) -> Path | None:
-    """The coordinator CONTENT root inside a resolved DoE root, either layout.
-
-    THE ONE PLACE THIS JOIN BELONGS. Two live layouts hold coordinator content,
-    and a caller that knows only one is broken on the other:
-
-      <doe_root>/coordinator/     the private authoring tree
-      <doe_root>/ (flat)          the published mirror
-
-    Returns the content root, or None when `doe_root` is empty or holds neither
-    layout. Never raises and never returns a path that does not exist — so a
-    predicate call site reads `content_root_for(root) is not None`, and a path
-    call site joins onto the result after a None check.
-
-    WHY A SHARED PRIMITIVE AND NOT ANOTHER INLINE JOIN: the identical
-    `Path(doe_root) / "coordinator" / ...` hardcode was fixed pointwise in
-    `data_root()` in August (see the F2 note there) and left standing at ~45
-    other call sites. Every one of them resolves correctly against a private
-    tree and produces a path that cannot exist against a published mirror,
-    which is how a cloud container reached "coordinator will NOT load in any
-    interactive session" with all of its content plainly on disk. Fixing those
-    sites one at a time is what made this systemic; route call sites here.
-
-    Private layout is probed FIRST, so a private-tree root resolves exactly as
-    it always did — this widens nothing for an existing caller.
-
-    Must stay behaviourally identical to its twin in the other tree — same
-    two-candidate order, same marker — for the same reason `data_root()`
-    carries that constraint (AC4).
-    """
-    if not doe_root:
-        return None
-    base = doe_root if isinstance(doe_root, Path) else Path(str(doe_root).rstrip("/\\"))
-    private = base / "coordinator"
-    if private.is_dir():
-        return private
-    if base.joinpath(*FLAT_CONTENT_ROOT_MARKER).is_file():
-        return base
-    return None
-
-
-def resolved_content_root() -> Path | None:
-    """`content_root_for` against the DoE root this process resolves.
-
-    The no-argument form most call sites want: they resolved a DoE root only to
-    join `coordinator/` onto it. Returns None when the DoE root does not resolve
-    at all, so a caller's existing "unresolved" branch stays reachable.
-    """
-    try:
-        doe = _resolve_doe_root()
-    except Exception:  # noqa: BLE001 - an unresolvable root is None, never a raise
-        return None
-    return content_root_for(doe)
+# Review: overengineering-reviewer Q1 — `content_root_for` and its marker are
+# PURE, no-intra-package-import primitives, moved to a leaf module so any
+# `coordinator_core` module can import them at module level without risking
+# the cycle that used to force `resolve_coordinator_clone.py` and
+# `coordinator_core/ops/coordinator_doe_root.py` to hand-expand the join
+# instead (findings 4, 8). Re-exported here so every existing
+# `from coordinator_core.data_root import content_root_for` (and
+# `FLAT_CONTENT_ROOT_MARKER`) keeps working unchanged. See
+# `coordinator_core/_content_root_primitive.py` for the implementation and the
+# full rationale.
+#
+# Review: overengineering-reviewer finding 1 — `resolved_content_root()` (the
+# no-arg convenience wrapper around this) is deleted: it had zero call sites
+# anywhere in the diff that introduced it, in either twin.
+from coordinator_core._content_root_primitive import (  # noqa: E402,F401
+    FLAT_CONTENT_ROOT_MARKER,
+    content_root_for,
+    content_root_or_private,
+)

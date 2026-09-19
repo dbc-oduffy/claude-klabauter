@@ -1159,7 +1159,7 @@ class TestFencePairingSurvivesAnUnterminatedFence:
             + real_block
             + "\n## Narrative\n\nprose.\n"
         )
-        findings = mod._find_json_findings_block(doc)
+        findings, _spans, _candidates = mod._findings_index_space(doc)
         assert findings == [{"finding": "real one"}]
         shape, is_empty = mod._detect_findings_shape(doc)
         assert shape == mod._SHAPE_STAFF_ENG_REVIEW
@@ -1180,7 +1180,7 @@ class TestFencePairingSurvivesAnUnterminatedFence:
             + "```\n"
             + "an unterminated snippet after, no closing fence\n"
         )
-        findings = mod._find_json_findings_block(doc)
+        findings, _spans, _candidates = mod._findings_index_space(doc)
         assert findings == [{"finding": "real one"}]
 
     def test_unterminated_fence_before_full_append_dispositions_round_trip(self, tmp_path):
@@ -1754,3 +1754,171 @@ class TestPartitionAuditEndToEnd:
         assert code == 0
         assert "WARNING" in captured.err
         assert "do not cover" in captured.err
+
+
+class TestMultiPassEnvelopeSidecar:
+    """A reviewer that ran two passes over one branch emits TWO envelopes into
+    one sidecar. The audit read only the first, so the second pass's findings
+    were unbucketable: bucketing them by file order reported
+    `out_of_range`, and remapping them onto 1..N would have attested the
+    second pass's dispositions against the FIRST pass's findings — a false
+    close the tool made the cheapest available move.
+
+    Live artifact this is derived from:
+    `state/subagent-share/session_01JLEDRBXHfhCyotHoiEUdGX/overengineering-reviewer.md`
+    (8 findings under `## Envelope`, 4 under `## Envelope (pass 2)`).
+    """
+
+    @staticmethod
+    def _envelope(n: int, *, verdict: str = "REQUIRES_CHANGES", start: int = 0) -> str:
+        import json as _json
+
+        payload = {
+            "reviewer": "overengineering-reviewer",
+            "verdict": verdict,
+            "summary": "s",
+            "findings": [{"finding": f"f{start + i}"} for i in range(n)],
+        }
+        return "```json\n" + _json.dumps(payload) + "\n```\n"
+
+    @staticmethod
+    def _bare(n: int) -> str:
+        import json as _json
+
+        return "```json\n" + _json.dumps({"findings": [{"t": i} for i in range(n)]}) + "\n```\n"
+
+    def _sidecar(self, tmp_path, body, *, frontmatter=None) -> "tuple[Path, Path]":
+        share = tmp_path / "state" / "subagent-share" / "sess"
+        share.mkdir(parents=True)
+        target = share / "overengineering-reviewer.md"
+        fm = frontmatter or "---\nagent_type: coordinator:overengineering-reviewer\n---\n\n"
+        target.write_text(fm + body, encoding="utf-8")
+        return tmp_path, target
+
+    def test_the_index_space_spans_every_envelope(self, tmp_path):
+        body = "## Envelope\n\n" + self._envelope(8) + "\n## Envelope (pass 2)\n\n" + self._envelope(4, start=8)
+        findings, spans, candidates = mod._findings_index_space(
+            (tmp_path / "x").parent and body
+        )
+        assert len(findings) == 12
+        assert spans == [(1, 8), (9, 12)]
+        assert candidates == 1
+
+    def test_the_second_passs_ids_are_in_range_by_file_order(self, tmp_path):
+        body = "## Envelope\n\n" + self._envelope(8) + "\n## Envelope (pass 2)\n\n" + self._envelope(4, start=8)
+        root, sc = self._sidecar(tmp_path, body)
+        result = mod.append_dispositions(
+            sc,
+            {"applied": ["finding-9", "finding-10", "finding-11"], "verified-no-action": ["finding-12"]},
+            git_root=root,
+        )
+        audit = result["partition_audit"]
+        assert audit is not None
+        # 1..8 are pass one's, dispositioned on their own block; nothing is
+        # out of range and nothing is ambiguous any more.
+        assert "out_of_range" not in audit
+        assert "ambiguous_block" not in audit
+        assert audit["unbucketed"] == [str(i) for i in range(1, 9)]
+
+    def test_remapping_the_second_pass_onto_one_through_four_is_never_clean(self, tmp_path):
+        # The structural point: no id spelling maps pass two's findings onto
+        # pass one's positions and audits clean. 1..4 now leaves 5..12
+        # unbucketed, so a false close cannot present itself as a complete one.
+        body = "## Envelope\n\n" + self._envelope(8) + "\n## Envelope (pass 2)\n\n" + self._envelope(4, start=8)
+        root, sc = self._sidecar(tmp_path, body)
+        result = mod.append_dispositions(
+            sc, {"applied": ["1", "2", "3"], "verified-no-action": ["4"]}, git_root=root
+        )
+        assert result["partition_audit"]["unbucketed"] == [str(i) for i in range(5, 13)]
+
+    def test_the_block_records_which_numbering_the_ids_were_read_in(self, tmp_path):
+        import yaml
+
+        body = "## Envelope\n\n" + self._envelope(8) + "\n## Envelope (pass 2)\n\n" + self._envelope(4, start=8)
+        root, sc = self._sidecar(tmp_path, body)
+        mod.append_dispositions(
+            sc,
+            {"applied": [str(i) for i in range(1, 12)], "deferred": ["12"]},
+            git_root=root,
+        )
+        fence = sc.read_text(encoding="utf-8").split("```yaml", 1)[1].split("```", 1)[0]
+        parsed = yaml.safe_load(fence)
+        assert parsed["envelope_spans"] == ["1-8", "9-12"]
+
+    def test_a_single_envelope_block_is_byte_identical_to_before(self, tmp_path):
+        root, sc = self._sidecar(tmp_path, "## Envelope\n\n" + self._envelope(2))
+        mod.append_dispositions(sc, {"applied": ["1", "2"]}, git_root=root)
+        text = sc.read_text(encoding="utf-8")
+        assert "envelope_spans" not in text
+        assert "partition_audit" not in text
+
+    def test_a_quoted_bare_findings_shape_is_still_ambiguous_not_a_second_pass(self, tmp_path):
+        # A finding whose own evidence quotes this module's shape carries no
+        # reviewer/verdict identity, so it is not promoted to an envelope and
+        # the pre-existing ambiguity report stands.
+        body = self._bare(2) + "\n### Finding 1\n\nThe op mis-reads this shape:\n\n" + self._bare(9)
+        root, sc = self._sidecar(tmp_path, body)
+        result = mod.append_dispositions(sc, {"applied": ["1", "2"]}, git_root=root)
+        assert result["partition_audit"] == {"ambiguous_block": ["true"]}
+
+    def test_a_bare_block_coexisting_with_a_real_envelope_is_still_ambiguous(self, tmp_path):
+        # Review: S8 reviewer F1 -- the union-of-envelopes branch used to
+        # hardcode candidate_blocks=1 whenever any real envelope existed,
+        # silently dropping a co-existing bare (unidentified) block instead
+        # of tripping `ambiguous_block`. This is the missing arm: one real
+        # envelope PLUS one bare quoted block in the same document.
+        body = "## Envelope\n\n" + self._envelope(2) + "\n" + self._bare(3)
+        root, sc = self._sidecar(tmp_path, body)
+        result = mod.append_dispositions(sc, {"applied": ["1", "2"]}, git_root=root)
+        assert result["partition_audit"] == {"ambiguous_block": ["true"]}
+
+    def test_two_real_envelopes_alone_stay_unambiguous(self, tmp_path):
+        # Multiple real envelopes with NO co-existing bare block must remain
+        # safe to union -- this is the pre-existing multi-pass case the
+        # union branch exists for, and the F1 fix must not regress it.
+        body = "## Envelope\n\n" + self._envelope(8) + "\n## Envelope (pass 2)\n\n" + self._envelope(4, start=8)
+        root, sc = self._sidecar(tmp_path, body)
+        result = mod.append_dispositions(
+            sc, {"applied": [str(i) for i in range(1, 13)]}, git_root=root
+        )
+        assert result["partition_audit"] is None
+
+    def test_a_declared_count_larger_than_the_envelopes_is_reported(self, tmp_path):
+        # The one hazard spans alone cannot see: an envelope that failed to
+        # parse leaves a NARROWER window, in which the wrong ids audit clean.
+        fm = (
+            "---\nagent_type: coordinator:overengineering-reviewer\n"
+            "findings_count: 12\n---\n\n"
+        )
+        root, sc = self._sidecar(tmp_path, "## Envelope\n\n" + self._envelope(4), frontmatter=fm)
+        result = mod.append_dispositions(sc, {"applied": ["1", "2", "3", "4"]}, git_root=root)
+        assert result["partition_audit"] == {"declared_count_mismatch": ["declared=12", "parsed=4"]}
+
+    def test_a_declared_count_matching_the_union_reports_nothing(self, tmp_path):
+        fm = (
+            "---\nagent_type: coordinator:overengineering-reviewer\n"
+            "findings_count: 12\n---\n\n"
+        )
+        body = "## Envelope\n\n" + self._envelope(8) + "\n## Envelope (pass 2)\n\n" + self._envelope(4, start=8)
+        root, sc = self._sidecar(tmp_path, body, frontmatter=fm)
+        result = mod.append_dispositions(
+            sc, {"applied": [str(i) for i in range(1, 13)]}, git_root=root
+        )
+        assert result["partition_audit"] is None
+
+    def test_the_live_two_envelope_artifact_parses_as_twelve(self):
+        live = (
+            Path(__file__).resolve().parents[3]
+            / "state"
+            / "subagent-share"
+            / "session_01JLEDRBXHfhCyotHoiEUdGX"
+            / "overengineering-reviewer.md"
+        )
+        if not live.is_file():
+            pytest.skip("live artifact not present in this checkout")
+        findings, spans, candidates = mod._findings_index_space(
+            live.read_text(encoding="utf-8")
+        )
+        assert len(findings) == 12
+        assert spans == [(1, 8), (9, 12)]
+        assert candidates == 1

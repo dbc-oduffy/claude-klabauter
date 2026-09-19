@@ -173,7 +173,9 @@ def _classify_precision(text: str, cwd: Optional[str]) -> "list[Any]":
         return []
 
 
-def _precision_deny_envelope(text: str, cwd: Optional[str]) -> Optional[dict]:
+def _precision_deny_envelope(
+    text: str, cwd: Optional[str], env: object = None
+) -> Optional[dict]:
     try:
         precision_matches = _classify_precision(text, cwd)
         imperative = [
@@ -194,18 +196,20 @@ def _precision_deny_envelope(text: str, cwd: Optional[str]) -> Optional[dict]:
             "ids, or use the documented per-dispatch override.",
             anchor=_WIKI_ANCHOR,
         )
-        return deny("PreToolUse", render(message))
+        return deny("PreToolUse", render(message, env=env))
     except Exception:
         return None
 
 
-def _compose_precision_deny_reason(tool_name: str, detected: str, tier: str) -> str:
+def _compose_precision_deny_reason(
+    tool_name: str, detected: str, tier: str, env: object = None
+) -> str:
     message = compose(
         f"{tool_name}: Tier-{tier} suite command ({detected}) -- overridable "
         "for this one dispatch; see the doc for how.",
         anchor=_WIKI_ANCHOR,
     )
-    return render(message)
+    return render(message, env=env)
 
 
 @register_op("hooks.block_dispatch_suite_invocation")
@@ -246,7 +250,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         else []
     )
     if not imperative:
-        envelope = _precision_deny_envelope(text, cwd)
+        envelope = _precision_deny_envelope(text, cwd, env)
         if envelope is None:
             return no_advisory()
         return envelope
@@ -255,5 +259,5 @@ async def _handler(params: dict, repo_root=None) -> dict:
     detected = getattr(hit, "detected", "a test-suite command")
     tier = getattr(hit, "tier", "U")
 
-    reason = _compose_precision_deny_reason(tool_name, detected, tier)
+    reason = _compose_precision_deny_reason(tool_name, detected, tier, env)
     return deny("PreToolUse", reason)

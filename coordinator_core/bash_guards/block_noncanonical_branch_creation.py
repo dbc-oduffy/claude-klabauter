@@ -352,20 +352,17 @@ def _canonical_example(today: str) -> str:
 
 
 def _advisory_reason(cmd: str, name: str) -> str:
-    cmd_safe = cmd if len(cmd) <= 200 else cmd[:200] + "..."
+    del cmd  # no longer echoed -- see message-size trim below
     today = local_day()
     canonical = _canonical_example(today)
     return (
-        "Advisory: `%s` is not a canonical branch name -- daily-branch "
-        "discipline on this repo requires `work/{machine}/{date}` (or a "
-        "sanctioned longlived prefix: `migration/`, `release/`, "
-        "`feature/`).\n\n"
-        "  Command:  %s\n\n"
-        "Use instead: create or switch to your canonical daily branch: "
-        "`git checkout -b %s`, or use a sanctioned longlived prefix if this "
-        "is genuinely longlived work. A differently-shaped name is a "
-        "PM/EM call."
-    ) % (name, cmd_safe, canonical)
+        "Advisory: `%s` is not canonical -- daily-branch discipline "
+        "requires `work/{machine}/{date}` (or a longlived prefix: "
+        "`migration/`, `release/`, `feature/`).\n\n"
+        "Use instead:\n"
+        "  `git checkout -b %s`\n"
+        "  a sanctioned longlived prefix, if genuinely longlived (PM/EM call)"
+    ) % (name, canonical)
 
 
 @declares_safe_direction(

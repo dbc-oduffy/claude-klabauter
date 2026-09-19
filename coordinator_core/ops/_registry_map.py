@@ -139,7 +139,6 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.sessionstart_dispatch":            "coordinator_core.hooks",
     "hooks.sessionstart_async_dispatch":      "coordinator_core.hooks",
     "hooks.assert_em_role":                   "coordinator_core.hooks",
-    "hooks.session_start_watch_presence":     "coordinator_core.hooks",
     "hooks.sweep_boot":                       "coordinator_core.hooks",
     "hooks.session_start_announce_job_mode":  "coordinator_core.hooks",
     "hooks.session_start_register_doe_claude_root": "coordinator_core.hooks",

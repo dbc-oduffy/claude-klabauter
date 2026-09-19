@@ -2605,3 +2605,42 @@ def test_is_redirect_token_classification(tok, expected):
     """`v2>x` is the negative that matters: the match is anchored, so a token
     merely CONTAINING a redirect operator is still an argument."""
     assert guard._is_redirect_token(tok) is expected
+
+
+# ---------------------------------------------------------------------------
+# Interpreter-payload parity with bump_outside_repo_write (2026-09-19, DoE
+# memo foreign-write-guard-misses-interpreter-payload): a Python write target
+# living only in a `-c` payload or a heredoc body still bumps.
+# ---------------------------------------------------------------------------
+
+
+def test_interpreter_payload_dash_c_open_write_to_foreign_repo_bumps(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-ip-dashc")
+    dest = _posix(repos["foreign"] / "x")
+    cmd = f"python3 -c \"open('{dest}','w').write('x')\""
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-ip-dashc", str(repos["anchor"]), {})
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_interpreter_payload_heredoc_open_write_to_foreign_repo_bumps(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-ip-heredoc")
+    dest = _posix(repos["foreign"] / "x")
+    cmd = f"python3 - <<'EOF'\nopen('{dest}','w').write('x')\nEOF\n"
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-ip-heredoc", str(repos["anchor"]), {})
+
+    assert result is not None
+    assert "hookSpecificOutput" in result
+
+
+def test_interpreter_payload_write_into_own_repo_does_not_bump(repos, monkeypatch):
+    _set_anchor(monkeypatch, repos, "sess-ip-own")
+    dest = _posix(repos["anchor"] / "x")
+    cmd = f"python3 -c \"open('{dest}','w').write('x')\""
+
+    result = guard.check_bump_foreign_repo_write(cmd, "sess-ip-own", str(repos["anchor"]), {})
+
+    assert result is None

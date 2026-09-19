@@ -76,6 +76,7 @@ from coordinator_core.install.door_install import (
     name_is_warm_servable,
 )
 from coordinator_core.warm.door import build as door_build
+from coordinator_core.install.engine_root_for_install import resolve_engine_root_for_install
 from coordinator_core.install.substrate import (
     _AGENT_FORWARDER_MARKER,
     _read_native_forwarder_manifest,
@@ -229,6 +230,14 @@ class SettingsHomeReport:
     forwarder_door_owned: list[str] = field(default_factory=list)
     forwarder_byte_copied: list[str] = field(default_factory=list)
     forwarder_derivation_error: str | None = None
+    #: Names `expected_forwarders` derived but `launcher_is_installable`
+    #: (checked against the resolved engine root) says the installer
+    #: correctly never installs -- the publish chain and PM-ruled
+    #: publish-excluded/renamed set (door_install.launcher_is_installable
+    #: docstring, PM ruling 2026-08-29). Excluded from `forwarder_expected`
+    #: and never counted `forwarder_missing`; kept here so a genuinely
+    #: missing name is never silently folded into this bucket by mistake.
+    forwarder_excluded: list[str] = field(default_factory=list)
     #: Names whose native door image is present but is NOT the build this
     #: tree ships -- see `check_settings_home`'s currency paragraph.
     door_image_stale: list[str] = field(default_factory=list)
@@ -508,6 +517,30 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
         report.forwarder_derivation_error = str(exc)
         return report
 
+    # A name `_derive_agent_helper_target_map` reports is not necessarily a
+    # name the installer ever gives a launcher -- `launcher_is_installable`
+    # is `_write_native_door_forwarder`'s own second refusal predicate (the
+    # publish chain and the publish-excluded/renamed set, PM-ruled
+    # 2026-08-29). Filtering the EXPECTED set by the writer's own predicate,
+    # not a hand-list, keeps this in lockstep with the writer the same way
+    # `_names_the_installer_gives_an_image` already does for the currency
+    # audit below -- see that function's docstring for why a hand-kept list
+    # or the door-eligible allowlist both misclassify in both directions.
+    # An unresolved engine root drops this filter entirely rather than
+    # excluding everything: `resolve_engine_root_for_install` returning no
+    # root means the question is unanswerable here, not that nothing
+    # qualifies.
+    resolved_engine_root = resolve_engine_root_for_install()
+    if resolved_engine_root.root is not None:
+        excluded = sorted(
+            name
+            for name in expected
+            if not launcher_is_installable(resolved_engine_root.root, name)
+        )
+        if excluded:
+            report.forwarder_excluded = excluded
+            expected = {n: t for n, t in expected.items() if n not in excluded}
+
     report.forwarder_expected = len(expected)
     bin_dir = settings_home_path / "bin"
 
@@ -597,6 +630,15 @@ def format_report_lines(report: SettingsHomeReport) -> list[str]:
             preview = ", ".join(names[:10])
             more = "" if len(names) <= 10 else f" (+{len(names) - 10} more)"
             lines.append(f"    {label}: {preview}{more}")
+
+        if report.forwarder_excluded:
+            names = report.forwarder_excluded
+            preview = ", ".join(names[:10])
+            more = "" if len(names) <= 10 else f" (+{len(names) - 10} more)"
+            lines.append(
+                f"    excluded (installer never gives these a launcher): "
+                f"{preview}{more}"
+            )
 
     if report.door_image_audit_error is not None:
         lines.append(

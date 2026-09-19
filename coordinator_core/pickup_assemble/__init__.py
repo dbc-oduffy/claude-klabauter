@@ -859,20 +859,51 @@ def _commit_touches_path(common_dir: Path, sha: str, commit: dict[str, Any], pat
     the corresponding blob sha in every parent (or the path's mere
     presence/absence differs) — approximates `git log -- path` without
     replicating git's full merge-history simplification (negative-spec,
-    module docstring)."""
+    module docstring).
+
+    Shallow-clone boundary: a commit's raw object can still list a parent
+    sha whose object was never fetched (the shallow cutoff records a
+    `.git/shallow` entry but does not strip the parent line from the
+    commit body). Real `git`, told by `.git/shallow` that this commit has
+    no *available* parents, treats it exactly like a root commit for this
+    purpose. Silently skipping an unresolvable parent (the old behavior)
+    fell through to `return False` whenever every parent was unfetched,
+    undercounting a real touch and breaking the module's own "safe
+    superset, never missing a real hit" invariant (negative-spec above).
+    So when EVERY parent is unresolvable, this degrades to the same
+    root-commit rule as `not parents`, rather than silently reporting no
+    touch.
+
+    Mixed case: a merge with one parent resolved (and clean) and another
+    parent unresolved is not the same as "every parent unresolved" — the
+    unresolved parent could still be the one that introduced the change
+    (e.g. a shallow-clone merge where only one side of the merge was
+    fetched). An unresolved parent contributes no information either way,
+    so it can never be used to prove "no touch"; only resolved parents
+    that all agree on "no diff" can do that. Any unresolved parent
+    therefore degrades this commit to the safe superset (report touched)
+    unless every OTHER (resolved) parent already proved a real diff (in
+    which case we already returned True above)."""
     current = _blob_sha_at_tree_path(common_dir, commit["tree"], path)
     parents = commit["parents"]
     if not parents:
         return current is not None
+    saw_unresolvable_parent = False
     for parent_sha in parents:
         parent_commit = _commit_meta(common_dir, parent_sha)
         if parent_commit is None:
+            saw_unresolvable_parent = True
             continue
         if parent_commit["tree"] == commit["tree"]:
             continue  # identical tree as this commit's -> path cannot differ, no descent needed
         parent_blob = _blob_sha_at_tree_path(common_dir, parent_commit["tree"], path)
         if parent_blob != current:
             return True
+    if saw_unresolvable_parent:
+        # Shallow boundary: at least one parent object was not fetched, so
+        # this parent could not be checked. Never rely on it to prove "no
+        # touch" -- degrade to the safe superset, same as a root commit.
+        return current is not None
     return False
 
 

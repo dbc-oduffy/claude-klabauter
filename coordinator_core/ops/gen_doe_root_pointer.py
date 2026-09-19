@@ -61,7 +61,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core._settings_home import (
@@ -69,7 +68,7 @@ from coordinator_core._settings_home import (
     native_path_form,
     resolve_machine_local_cli,
 )
-from coordinator_core.coordinator_root import _resolve_plugin_root_for_machine_local
+from coordinator_core.data_root import content_root_for
 from coordinator_core.machine_resolver import registry_get as _registry_get
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import no_console_creationflags
@@ -389,7 +388,12 @@ def main(argv: List[str]) -> int:
         print("doe_root_pointer: failed (see stderr for gen-doe-root-pointer.py output)")
         return 1
 
-    if _resolve_plugin_root_for_machine_local(Path(doe_root)) is None:
+    # Two live layouts (overengineering-reviewer finding 3 — was a fourth
+    # hand-expanded copy of content_root_for; the pointer write itself is the
+    # only genuinely local fact here):
+    #   <doe_root>/coordinator/                   private authoring tree
+    #   <doe_root>/.claude-plugin/plugin.json      published flat mirror
+    if content_root_for(doe_root) is None:
         print(
             f'{_PROG}: no coordinator-claude content found under "{doe_root}" '
             f'(neither "{doe_root}/coordinator" nor "{doe_root}" itself carries the '

@@ -326,8 +326,11 @@ Exit codes (parity-critical):
       SUB_SHAPES key collides with a registered schema name. Mirrors the JS oracle's
       two `process.exit(1)` call sites (schema.js lines 573-574, 606-608).
   2 — DEDICATED transport/config-failure code (coordinator root not resolvable via the
-      EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT env var, or the schemas directory is
-      missing). The JS oracle has no equivalent state (it always resolves its own
+      EMIT_ARTIFACT_SHAPE_CONTRACT_COORDINATOR_ROOT env var, the schemas directory is
+      missing, or that directory is a PUBLISHED SUBSET rather than the authoring corpus —
+      the root points at the one-way publish mirror, a fault in WHERE it points, not in
+      the corpus's own content, which is what rc=1 reports).
+      The JS oracle has no equivalent state (it always resolves its own
       __dirname-relative COORDINATOR constant) — this rc is new surface introduced by
       the cross-repo split (this module runs claude-klabauter-side, schemas live DoE-side) and is
       deliberately a code the business logic never returns (porter-brief addendum § 3b).
@@ -341,6 +344,7 @@ import sys
 from pathlib import Path
 from typing import Any, List
 
+from coordinator_core.frontmatter.schema_corpus import published_subset_reason
 from coordinator_core.frontmatter.schema_validate import load_schemas
 from coordinator_core.lifecycle_constants import (
     HANDOFF_TERMINAL_DEPLOYMENT,
@@ -1035,6 +1039,23 @@ def _emit(coordinator_root: str) -> int:
     if not os.path.isdir(schemas_dir):
         print(
             f"emit-artifact-shape-contract: schemas directory not found: {schemas_dir}",
+            file=sys.stderr,
+        )
+        return 2  # dedicated transport/config-failure code — see module docstring
+
+    # A published mirror carries a deliberate SUBSET of the authoring corpus, and
+    # the only guard below is `len(schema_names) == 0`. A 2-schema subset is not
+    # empty, so it emits a structurally valid bundle that silently omits most
+    # types — and this bundle is consumed by another repo, which has no way to
+    # tell truncation from a contract that shrank. Pointing at the wrong tree is
+    # a configuration fault, so it answers on the same code as an unresolved
+    # coordinator root rather than on the refusal code, which reports a defect in
+    # the corpus itself.
+    subset_reason = published_subset_reason(schemas_dir)
+    if subset_reason is not None:
+        print(
+            f"emit-artifact-shape-contract: refusing to emit from a published subset — "
+            f"{subset_reason}. Point {COORDINATOR_ROOT_ENV} at the authoring checkout.",
             file=sys.stderr,
         )
         return 2  # dedicated transport/config-failure code — see module docstring

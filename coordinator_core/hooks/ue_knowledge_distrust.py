@@ -283,13 +283,9 @@ def run(cwd: str, plugin_root: str) -> DistrustResult:
     # elif chain falling through with no branch firing).
 
     banner = (
-        "UE PROJECT DETECTED (%s): LLM training data about Unreal "
-        "Engine is broadly untrustworthy. Function names, parameter signatures, "
-        "class hierarchies, default behaviors, deprecation status — any of it "
-        "may be wrong, stale, or hallucinated. You have 333K+ indexed doc "
-        "chunks and 73K verified API declarations available via MCP. Treat "
-        "MCP tools as ground truth and training knowledge as unverified "
-        "hypothesis. Use quick_ue_lookup before asserting any UE API usage.\n"
+        "UE PROJECT DETECTED (%s): UE training data is untrustworthy -- "
+        "names/signatures/behaviors may be stale/hallucinated. MCP (333K+ "
+        "docs, 73K APIs) is ground truth. Use quick_ue_lookup first.\n"
     ) % project_name
 
     return DistrustResult(banner=banner, stderr_lines=stderr_lines)

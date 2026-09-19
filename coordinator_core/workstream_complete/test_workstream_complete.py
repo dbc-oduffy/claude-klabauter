@@ -1468,21 +1468,60 @@ def _leg_a_non_terminal_schema_statuses() -> list[str] | None:
     doe_repo = Path(doe_root)
     if not doe_repo.exists():
         return None
-    result = subprocess.run(
-        ["git", "-C", str(doe_repo), "show", "HEAD:coordinator/schemas/plan.schema.json"],
+    # Review: coordinator:code-reviewer -- a git-show error against a
+    # *present* DoE checkout still fails hard; "no DoE repo" AND "this root
+    # publishes no authoring schema" both collapse to None/skip.
+    doe_plan_schema = _doe_head_plan_schema(doe_repo)
+    if doe_plan_schema is None:
+        return None
+    schema_enum = set(doe_plan_schema["properties"]["status"]["enum"])
+    return sorted(schema_enum - wsc._LEG_A_TERMINAL_PLAN_STATUS)
+
+
+#: The DoE authoring artifact both schema-enum arms below read out of HEAD.
+_DOE_PLAN_SCHEMA_PATH = "coordinator/schemas/plan.schema.json"
+
+
+def _doe_head_plan_schema(doe_repo: Path):
+    """The DoE `plan.schema.json` parsed out of HEAD, or `None` when THIS root
+    does not publish it.
+
+    Three states, not two. `resolve_doe_root` documents that it "does NOT
+    validate the resolved root looks like a real DoE-claude checkout --
+    callers apply their own site-specific existence gate", and this is that
+    gate. A root can be PRESENT and still not be an authoring tree: a cloud
+    container registers the flat published OSS mirror as `repos.doe_claude`,
+    and that mirror deliberately carries no DoE-internal authoring artifact
+    (it publishes a flat `schemas/` dir, but not this file) per the one-way
+    percolation boundary. Treating present-but-not-authoring as a broken
+    checkout turned that into a COLLECTION-TIME hard error that took the
+    whole module down in cloud rather than skipping two arms.
+
+    A genuinely broken checkout still fails loud, which is the distinction the
+    original reviewer note asks for: `cat-file -e` separates "this root does
+    not carry the path at all" (-> None, skip) from any other git failure
+    (-> assert, a real defect).
+    """
+    probe = subprocess.run(
+        ["git", "-C", str(doe_repo), "cat-file", "-e", f"HEAD:{_DOE_PLAN_SCHEMA_PATH}"],
         capture_output=True,
         text=True,
         encoding="utf-8",
         timeout=30,
         **no_console_creationflags(),
     )
-    # Review: coordinator:code-reviewer -- mirror the terminal-arm test's
-    # hard failure on a git-show error against a *present* DoE checkout;
-    # only "no DoE repo" collapses to None/skip, not a broken checkout.
+    if probe.returncode != 0:
+        return None
+    result = subprocess.run(
+        ["git", "-C", str(doe_repo), "show", f"HEAD:{_DOE_PLAN_SCHEMA_PATH}"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=30,
+        **no_console_creationflags(),
+    )
     assert result.returncode == 0, f"Cannot read DoE HEAD plan.schema.json: {result.stderr.strip()}"
-    doe_plan_schema = json.loads(result.stdout)
-    schema_enum = set(doe_plan_schema["properties"]["status"]["enum"])
-    return sorted(schema_enum - wsc._LEG_A_TERMINAL_PLAN_STATUS)
+    return json.loads(result.stdout)
 
 
 def pytest_generate_tests(metafunc):
@@ -1769,16 +1808,9 @@ def test_leg_a_terminal_plan_status_covers_every_terminal_member_of_the_schema_e
     if not doe_repo.exists():
         pytest.skip(f"DoE repo not found at {doe_repo}")
 
-    result = subprocess.run(
-        ["git", "-C", str(doe_repo), "show", "HEAD:coordinator/schemas/plan.schema.json"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=30,
-        **no_console_creationflags(),
-    )
-    assert result.returncode == 0, f"Cannot read DoE HEAD plan.schema.json: {result.stderr.strip()}"
-    doe_plan_schema = json.loads(result.stdout)
+    doe_plan_schema = _doe_head_plan_schema(doe_repo)
+    if doe_plan_schema is None:
+        pytest.skip(f"{doe_repo} publishes no {_DOE_PLAN_SCHEMA_PATH} (not an authoring tree)")
     schema_enum = set(doe_plan_schema["properties"]["status"]["enum"])
 
     # Hand-authored, not schema-derived: which members of the enum this
@@ -5456,70 +5488,145 @@ def test_review_trail_guard_foreign_flag_implies_excluded_from_commits_arm(tmp_p
         )
 
 
-def test_session_owned_shas_from_map_returns_none_when_map_absent_or_empty():
-    """(C2, docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-
-    four.md § C2) Absence of evidence is not evidence of no commits: a
-    `None`/empty `trailer_map`, or one with no entry for `session_id`,
-    must fall through to the spawning path (`None`) rather than being read
-    as "this session owns zero commits"."""
-    sid = "11111111-1111-1111-1111-111111111111"
-    assert wsc._session_owned_shas_from_map(None, sid) is None
-    assert wsc._session_owned_shas_from_map({}, sid) is None
-    assert wsc._session_owned_shas_from_map({"deadbeef": "other-sid"}, sid) is None
-    assert wsc._session_owned_shas_from_map({"deadbeef": sid}, "") is None
+def test_session_owned_shas_excludes_merge_commit_even_with_own_trailer(tmp_path):
+    """A merge commit stamped with THIS session's `Session-Id` trailer (the
+    prepare-commit-msg hook stamps a merge the session performs same as any
+    other commit it authors) must not appear in `_session_owned_shas`'s
+    result. `git show --numstat` on a non-fast-forward merge collapses
+    against its first parent only -- every file the OTHER (merged-in)
+    branch touched, none of it this session's authored work -- so counting
+    the merge sha as session-owned is the same inflation
+    `review_brightline_gate._session_scoped` was fixed for
+    (commit a1751f39), reproduced here against `workstream_complete`'s own
+    independent measurement path.
 
-
-def test_session_owned_shas_from_map_sorts_oldest_first():
-    """`bulk_trailer_session_map`'s producer (`git log`, no `--reverse`)
-    walks newest-first and a Python dict preserves insertion order, so a
-    map-derived answer must be reversed before returning -- `_session_
-    owned_shas_from_map` docstring's own ordering paragraph, and the same
-    contract `resolve_session_commits`'s oldest-first return promises
-    (`handoff_close_origin_stub._session_derived_sha` scans in reverse to
-    take the most recent toucher; an order regression here would silently
-    pick the wrong shipping commit)."""
-    sid = "11111111-1111-1111-1111-111111111111"
-    other = "22222222-2222-2222-2222-222222222222"
-    # Insertion order mirrors `git log`'s newest-first walk.
-    trailer_map = {"newest": sid, "middle-peer": other, "middle": sid, "oldest": sid}
-    assert wsc._session_owned_shas_from_map(trailer_map, sid) == [
-        "oldest",
-        "middle",
-        "newest",
-    ]
-
-
-def test_session_owned_shas_map_path_agrees_with_spawn_path(tmp_path):
-    """AC3 (this chunk's identity requirement): `_session_owned_shas`'s new
-    map-fed path and its pre-existing `resolve_session_commits` spawn path
-    must agree, byte-for-byte, oldest-first, for the SAME session over the
-    SAME window -- a caller must never see a different answer depending on
-    which of the two mechanisms happened to resolve it."""
-    from coordinator_core import session_attribution
-
-    own_sid = "11111111-1111-1111-1111-111111111111"
-    peer_sid = "22222222-2222-2222-2222-222222222222"
+    Real `--no-ff` merge of a divergent branch, per that fix's own test
+    shape (`test_session_id_merge_commit_does_not_count_merged_in_work`)."""
+    own_sid = "33333333-3333-3333-3333-333333333333"
     _init_git_repo(tmp_path)
-    _commit_with_session_trailer(tmp_path, "own-1.md", own_sid)
-    _commit_with_session_trailer(tmp_path, "peer-1.md", peer_sid)
-    _commit_with_session_trailer(tmp_path, "own-2.md", own_sid)
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
 
-    spawn_path = wsc._session_owned_shas(tmp_path, own_sid)
-    assert spawn_path is not None and len(spawn_path) == 2
+    subprocess.run(["git", "checkout", "-q", "-b", "other", base_sha], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    (tmp_path / "other1.py").write_text("o1 = 1\no1b = 2\n", encoding="utf-8")
+    (tmp_path / "other2.py").write_text("o2 = 1\no2b = 2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "other1.py", "other2.py"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    subprocess.run(["git", "commit", "-q", "-m", "unrelated peer work (no trailer)"], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    other_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
 
-    def _run(argv: list[str], cwd: str | None) -> tuple[int, str, str]:
-        result = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, **no_console_creationflags())
-        return result.returncode, result.stdout, result.stderr
-
-    trailer_map = session_attribution.bulk_trailer_session_map(
-        "HEAD", str(tmp_path), _run, include_merges=True
+    subprocess.run(["git", "checkout", "-q", "-b", "session-branch", base_sha], cwd=tmp_path, check=True, **no_console_passthrough_kwargs())
+    _commit_with_session_trailer(tmp_path, "mine.py", own_sid)
+    subprocess.run(
+        ["git", "merge", "-q", "--no-ff", "-m", f"Merge other\n\nSession-Id: {own_sid}", other_sha],
+        cwd=tmp_path, check=True, **no_console_passthrough_kwargs(),
     )
-    map_path = wsc._session_owned_shas(tmp_path, own_sid, trailer_map=trailer_map)
 
-    assert map_path == spawn_path, (
-        "the trailer-map-derived path and the spawn path disagree on this "
-        "session's own oldest-first sha list -- AC3 violated"
+    owned_shas = wsc._session_owned_shas(tmp_path, own_sid)
+    assert owned_shas is not None and len(owned_shas) == 1, (
+        f"expected only the non-merge own commit, got {owned_shas} -- the merge "
+        "carries this session's own trailer and must still be excluded"
     )
+
+    gross_loc, code_loc, commit_count, surface_count = wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time=None, session_id=own_sid, uncommitted_paths=[]
+    )
+    assert commit_count == 1, f"merge inflated commit_count to {commit_count}"
+    assert code_loc == 1, f"merge's merged-in LOC leaked into code_loc: {code_loc}"
+
+    slices: list[dict[str, Any]] = []
+    wsc._measure_session_review_scale_inputs(
+        tmp_path, session_start_time=None, session_id=own_sid, uncommitted_paths=[],
+        commit_slices_out=slices,
+    )
+    assert len(slices) == 1, f"expected exactly one non-merge commit_slice, got {slices}"
+    assert slices[0]["diff_loc"] == 1
+
+    # Attribution must still see the merge: this is the crux this fix must
+    # not collapse. The shared `resolve_session_commits` primitive's
+    # attribution-shaped callers keep `no_merges=False` (their default), so
+    # the merge sha is still resolvable/attributable via a plain (non-
+    # measurement) walk over the same range.
+    from coordinator_core.ops.session_commits import resolve_session_commits
+
+    all_attributed = resolve_session_commits(tmp_path, own_sid)
+    attributed_shas = {c["sha"] for c in all_attributed}
+    merge_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True, stdout=subprocess.PIPE, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+    assert merge_sha not in owned_shas
+    assert merge_sha in attributed_shas, (
+        "the merge must still be attributable to this session via the "
+        "shared primitive's default (attribution) behaviour -- this fix "
+        "must not make a session-performed merge look untouched"
+    )
+
+
+def test_no_trailer_map_fast_path_on_the_review_scale_path():
+    """The trailer-map fast path is DELETED, not merely unwired, and this
+    pins its absence at the API surface.
+
+    `_session_owned_shas_from_map` read this session's shas off
+    `directives_commit_tail.resolve_known_concurrent_paths`'s
+    `trailer_map_out` to save one `git log` spawn. It was never reached by a
+    production caller, and could not be, for two independent reasons kept in
+    `_session_owned_shas`'s own negative spec: that map's window is bounded
+    by PEER start times (so it truncates silently -- measured on session
+    8bb305c5, 6 owned commits, 3 reported, the 3 dropped carrying the code),
+    and it is built `include_merges=True` because
+    `ops.session_commits :: _batch_session_id_trailers` requires that, while
+    a `{sha: trailer}` map carries no parent information and so cannot
+    reproduce `no_merges=True` without the spawn it was meant to save.
+
+    Asserted as absence of the helper AND of the parameter, because either
+    one surviving is an invitation to re-wire it."""
+    import inspect
+
+    assert not hasattr(wsc, "_session_owned_shas_from_map"), (
+        "the trailer-map fast path is back -- see `_session_owned_shas`'s "
+        "negative spec for the two reasons its answer cannot be trusted for "
+        "a review-scale measurement"
+    )
+    params = inspect.signature(wsc._session_owned_shas).parameters
+    assert list(params) == ["root", "session_id"], (
+        "`_session_owned_shas` grew a parameter: if it is a trailer map "
+        f"again, the truncation and merge defects come with it ({list(params)})"
+    )
+
+
+def test_session_owned_shas_confirmed_zero_is_not_none(tmp_path):
+    """`_session_owned_shas`'s own docstring: a CONFIRMED zero-match (the
+    full-history trailer walk ran and matched nothing) is `[]`, distinct
+    from the UNRESOLVABLE case (`None`) -- a caller must branch on `is
+    None`, never truthiness. This pins the distinction directly rather
+    than only via callers that already happen to check `is None` first
+    (`_measure_session_review_scale_inputs`'s own `if shas is None: return
+    None, None, None, None` a few hundred lines up)."""
+    unmatched_sid = "99999999-9999-9999-9999-999999999999"
+    committed_sid = "11111111-1111-1111-1111-111111111111"
+    _init_git_repo(tmp_path)
+    _commit_with_session_trailer(tmp_path, "own-1.md", committed_sid)
+
+    confirmed_zero = wsc._session_owned_shas(tmp_path, unmatched_sid)
+    assert confirmed_zero == [], (
+        "a real repo with commits, none carrying this session's trailer, "
+        "is a CONFIRMED zero -- must be [], never None"
+    )
+    assert confirmed_zero is not None
+
+    unresolvable = wsc._session_owned_shas(tmp_path / "does-not-exist", committed_sid)
+    assert unresolvable is None, (
+        "a git failure (no such worktree) must be None, never [] -- "
+        "conflating the two is exactly the defect this contract forbids"
+    )
+
+    no_session_id = wsc._session_owned_shas(tmp_path, "")
+    assert no_session_id is None
 
 
 def test_commit_count_override_wins_unconditionally_and_records_supplied_scope(monkeypatch, tmp_path):
@@ -6093,32 +6200,6 @@ def test_session_shape_disposition_from_decisions_direct():
         {"jp-session-shape": {"disposition": "bogus"}}
     ) is None
     assert wsc._session_shape_disposition_from_decisions({"jp-session-shape": "not-a-dict"}) is None
-
-
-def test_session_owned_shas_from_map_cannot_prove_it_saw_every_commit():
-    """The hazard the review-scope caller must not inherit (2026-08-26).
-
-    `_session_owned_shas_from_map` guards ABSENCE (no entry for this sid ->
-    `None` -> spawning fallback) but cannot guard PARTIALITY. Its input is
-    built over `--since=<earliest LIVE PEER start>` -- a window bounded by
-    other sessions' start times, unrelated to when this session first
-    committed -- so a session whose commits straddle that boundary gets an
-    answer that is truthful about what the window held and silent about what
-    it did not. The fallback never fires, because the map did answer.
-
-    Pinned as a PROPERTY OF THE HELPER, not a bug in it: this is the correct
-    behaviour for peer attribution, which is what the map exists for. It is
-    only wrong where completeness is load-bearing, which is why the review-
-    scope caller takes the authoritative walk instead (see the test below).
-    """
-    sid = "11111111-1111-1111-1111-111111111111"
-    # A window that happened to catch only this session's most recent commit.
-    windowed = {"newest": sid, "peer": "22222222-2222-2222-2222-222222222222"}
-    assert wsc._session_owned_shas_from_map(windowed, sid) == ["newest"], (
-        "the helper answers from the window it was given -- if this ever "
-        "returns None for a partial map, the review-scope caller below may "
-        "safely take the fast path again"
-    )
 
 
 def test_review_scope_resolution_does_not_take_the_trailer_map_fast_path():

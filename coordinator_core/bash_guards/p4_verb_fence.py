@@ -465,9 +465,8 @@ def _deny_reason(deny_kind: str) -> str:
         # reachable from here is the shelf and the EM.
         return (
             "BLOCKED: p4 submit -- agents do not submit. This repo mirrors "
-            "Perforce for commit and shelve only; the shelved changelist "
-            "(see `p4.session_state`) is the deliverable. Report to the EM "
-            "that dispatched you if a submit is genuinely owed."
+            "Perforce for commit/shelve only; the shelved changelist is "
+            "the deliverable. Report to your EM."
         )
     return (
         "BLOCKED: %s is outside this repo's p4 verb fence -- this repo "

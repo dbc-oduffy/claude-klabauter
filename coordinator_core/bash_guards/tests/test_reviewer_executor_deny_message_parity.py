@@ -113,7 +113,7 @@ _EXPECTED_REVIEWER_DENY_MESSAGE = (
     "BLOCKED: confined findings-agent Bash outside allowlist.\n"
     "\n"
     "Command: rm -rf /\n"
-    "Reason: first command token is not coordinator-doc-new (got: rm)\n"
+    "Reason: not coordinator-doc-new (got: rm)\n"
     "\n"
     "Use instead:\n"
     "  `git show`\n"

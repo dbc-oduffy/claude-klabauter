@@ -135,9 +135,16 @@ Negative-spec:
   - Does NOT add fail-closed behaviour anywhere -- see § Design posture.
   - Does NOT add unforgeability machinery to the marker -- consumes C3's
     marker exactly as written, no creation guard, no identity gating.
-  - Does NOT enumerate evasions -- no `-c`-payload recursion (that is C5's
-    AC4, not this guard's), no brace-expansion handling, no adversarial
-    interpreter-indirection unwrapping.
+  - Does NOT enumerate evasions -- no `-c`-payload shell-token recursion
+    (that is C5's AC4, not this guard's), no brace-expansion handling, no
+    adversarial interpreter-indirection unwrapping. The one interpreter
+    shape this guard DOES read is the accidental one the 2026-08-14
+    PM-ratified reversal covers for C5 -- a Python write target living only
+    in a heredoc body or a `python`/`python3 -c` payload -- via the same
+    shared `extract_interpreter_payload_write_sink_targets`, for parity
+    with the sibling guard (2026-09-19, DoE memo
+    foreign-write-guard-misses-interpreter-payload). base64, `exec`,
+    assembled paths and other interpreters stay out.
   - Does NOT compose a gitdir path -- every gitdir this module touches comes
     from `_write_bump_marker.resolve_gitdir` (`git rev-parse --git-dir`,
     resolved not composed).
@@ -210,6 +217,7 @@ from coordinator_core.bash_guards._write_bump_message import (
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
     PS_SET_LOCATION_ALIASES,
     _host_is_windows,
+    extract_interpreter_payload_write_sink_targets,
     extract_set_location_target_powershell,
     extract_write_sink_targets_for_segment,
     extract_write_sink_targets_powershell,
@@ -1428,8 +1436,15 @@ def _iter_write_sink_candidates(
 
     Only depth-0 segments are inspected -- a segment recovered from inside
     a `$( )`/backtick substitution or an interpreter `-c` payload (depth>0)
-    is skipped, matching this chunk's own scope (`-c`-payload write-sink
+    is skipped, matching this chunk's own scope (`-c`-payload shell-token
     classification is C5's AC4, not C4's).
+
+    ALSO yields every candidate `extract_interpreter_payload_write_sink_
+    targets` finds in `cmd`'s heredoc bodies and `python`/`python3 -c`
+    payloads, labelled `interpreter-payload` and resolved against the
+    starting cwd, never a `cd`-tracked one -- identical to
+    `bump_outside_repo_write._iter_write_sink_candidates`, whose docstring
+    carries the rationale.
 
     Negative-spec: `preserve_windows_backslashes` makes this guard rule on
     the TYPED path, not the EXECUTED one -- deliberate. Modelling execution
@@ -1460,6 +1475,7 @@ def _iter_write_sink_candidates(
         return
 
     effective_cwd = cwd or os.getcwd()
+    payload_base_cwd = effective_cwd
     for rc in resolved_segments:
         if rc.depth != 0:
             continue
@@ -1491,6 +1507,12 @@ def _iter_write_sink_candidates(
             if resolved_target is None:
                 continue
             yield (resolved_target, head_base, raw_target)
+
+    for raw_target in extract_interpreter_payload_write_sink_targets(cmd):
+        resolved_target = _resolve_relative(payload_base_cwd, raw_target)
+        if resolved_target is None:
+            continue
+        yield (resolved_target, "interpreter-payload", raw_target)
 
 
 # ---------------------------------------------------------------------------

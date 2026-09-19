@@ -565,7 +565,7 @@ def _env_value(env: object, key: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
-def _compose_zero_modeled_deny_reason(agent_n: int) -> str:
+def _compose_zero_modeled_deny_reason(agent_n: int, env: object = None) -> str:
     message = compose(
         f"{agent_n} agent() call(s) have no model: -- inherits Opus this "
         "session (~4x cost). Add model: 'sonnet', or a defined agentType:, "
@@ -573,10 +573,12 @@ def _compose_zero_modeled_deny_reason(agent_n: int) -> str:
         alternative=f"touch {_OVERRIDE_SENTINEL_NAME}",
         anchor=_WIKI_ANCHOR,
     )
-    return render(message)
+    return render(message, env=env)
 
 
-def _compose_unrostered_opus_deny_reason(agent_types: "list[Optional[str]]") -> str:
+def _compose_unrostered_opus_deny_reason(
+    agent_types: "list[Optional[str]]", env: object = None
+) -> str:
     named = ", ".join(sorted({a for a in agent_types if a})[:3]) or "an agentType"
     message = compose(
         f"{named} resolves to Opus and is not on the review roster -- Opus in "
@@ -584,16 +586,18 @@ def _compose_unrostered_opus_deny_reason(agent_types: "list[Optional[str]]") -> 
         "model: 'sonnet'.",
         anchor=_WIKI_ANCHOR,
     )
-    return render(message)
+    return render(message, env=env)
 
 
-def _compose_partial_modeled_context(agent_n: int, modeled_n: int) -> str:
+def _compose_partial_modeled_context(
+    agent_n: int, modeled_n: int, env: object = None
+) -> str:
     message = compose(
         f"{agent_n} agent() calls, only {modeled_n} set model: -- rest may "
         "inherit Opus (~4x cost) unless intended, with PM approval.",
         anchor=_WIKI_ANCHOR,
     )
-    return render(message)
+    return render(message, env=env)
 
 
 @register_op("hooks.block_workflow_unmodeled_agent")
@@ -658,14 +662,15 @@ async def _handler(params: dict, repo_root=None) -> dict:
                     agent_type
                     for tier, agent_type in zip(tiers, agent_types)
                     if tier == "opus" and agent_type not in _rostered_agent_types()
-                ]
+                ],
+                env,
             )
             return deny("PreToolUse", reason)
-        reason = _compose_zero_modeled_deny_reason(agent_n)
+        reason = _compose_zero_modeled_deny_reason(agent_n, env)
         return deny("PreToolUse", reason)
 
     if modeled_n < agent_n:
-        msg = _compose_partial_modeled_context(agent_n, modeled_n)
+        msg = _compose_partial_modeled_context(agent_n, modeled_n, env)
         return context_only("PreToolUse", msg)
 
     return no_advisory()

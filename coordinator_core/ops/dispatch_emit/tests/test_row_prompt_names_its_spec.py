@@ -338,3 +338,28 @@ def test_row_prompt_carries_the_criterion_to_the_executor():
     prompt = _row_prompt(_ROW, _PLAN, ctx)
     assert "Exit criterion: Every executor prompt emitted" in prompt
     assert prompt.index("Exit criterion:") < prompt.index("Your spec is the row")
+
+
+# ---------------------------------------------------------------------------
+# Write-tool-only rule (klabauter#24): a Bash write leaves no session claim,
+# so `track_touched_files` never records it and the dispatched commit agent
+# refuses the path as an orphan. Executor rows only -- never the commit
+# prompt, which does not write repo files at all.
+# ---------------------------------------------------------------------------
+
+
+def test_row_prompt_forbids_bash_writes():
+    prompt = _row_prompt(_ROW, _PLAN)
+    assert "never through Bash" in prompt
+    assert "Write, Edit, MultiEdit or NotebookEdit" in prompt
+
+
+def test_commit_prompt_does_not_carry_the_write_tool_rule():
+    from coordinator_core.ops.dispatch_emit.emit import _commit_agent_call
+
+    call = _commit_agent_call(
+        pathspec=["a.py"],
+        phase_title="Commit",
+        index=0,
+    )
+    assert "never through Bash" not in call

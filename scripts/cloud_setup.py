@@ -67,9 +67,11 @@ import dataclasses
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -135,6 +137,24 @@ TRUST_ANCHOR_KEYS: dict[str, str] = {
     "klabauter": "repos.claude_klabauter",
 }
 
+#: The SERVED plugin tree's own key, written for the coordinator clone in every
+#: shape. `repos.doe_claude` and this key mean two different things that coincide
+#: on a workstation and diverge here: the former names the DoE-claude AUTHORING
+#: checkout (the fleet sibling-map entry, and what `coordinator_doe_root` resolves
+#: for anything reading schemas, wikis or doctrine records), the latter names the
+#: tree a session actually RUNS. This container serves the flat published mirror,
+#: which carries no `coordinator/schemas/`, no `docs/wiki/` and no decision
+#: records — so registering it under the authoring key makes every doctrine read
+#: resolve against a tree that does not carry the content, silently.
+#: Same key-split reasoning as `PUBLISH_MIRROR_KEYS` below, for the same reason.
+PLUGIN_MIRROR_LIVE_PATH_KEY = "plugin.mirrors.coordinator-claude.live_path"
+
+#: The fleet-wide dev-vs-OSS discriminant, per DoE-claude's own `CLAUDE.md`. Its
+#: presence at a checkout's ROOT is what makes that checkout the authoring tree;
+#: a repository NAME is not the test (a name is also the one thing the publish
+#: scrub rewrites, so a literal here would be dead on the public mirror).
+DEV_REPO_SENTINEL = ".coordinator-dev-repo"
+
 #: Where this run's own verdicts land. A process exiting 0 is not evidence that
 #: anything installed; this file is.
 INSTALL_REPORT_PATH = Path("/root/cloud-setup-report.json")
@@ -182,6 +202,16 @@ PLUGIN_RECORD_REL = ("plugins", "installed_plugins.json")
 #: is not enough: a plugin root without its own manifest is not one.
 PLUGIN_MANIFEST_REL = (".claude-plugin", "plugin.json")
 
+#: The plugin's own hook manifest, relative to its install root. Where plugin-side
+#: hook delivery lives — and, on a healthy install, the ONLY place hooks are
+#: registered (see `assert_hook_plane_armed`).
+PLUGIN_HOOKS_REL = ("hooks", "hooks.json")
+
+#: A script path inside a hook command or argument — the engine's own
+#: `guard_settings_integrity._SCRIPT_TOKEN_RE`, re-stated because this module
+#: must not import `coordinator_core`.
+_SCRIPT_TOKEN_RE = re.compile(r"(\S*\.(?:py|sh|mjs|js))\b")
+
 #: The marketplace manifest, read for the marketplace's declared name. Both
 #: halves of the record's `<plugin>@<marketplace>` key are READ from the clone,
 #: never spelled here — a literal survives exactly until either is renamed and
@@ -225,6 +255,20 @@ MACHINE_LOCAL_TIMEOUT_S = 60
 
 RETRIEVAL_ROOT_ENV = "COORDINATOR_RETRIEVAL_ROOT"
 
+#: `pytest-of-*` basename prefix under the system temp dir. pytest's own
+#: retention keeps the last 3 base directories PER caller, which is unbounded
+#: in practice across many concurrent test waves (claude-klabauter#27):
+#: observed trees up to ~21G each, filling the container volume and failing
+#: every subsequent Bash/Write/Edit with ENOSPC — including the harness's own
+#: subprocess-output capture, which destroys in-flight executor work with no
+#: diagnosable error at the point it is lost.
+STALE_PYTEST_TREE_PREFIX = "pytest-of-"
+
+#: Age floor, in seconds, below which a `pytest-of-*` tree is left alone. A
+#: concurrent run may still own a tree younger than this — mtime updates on
+#: every write beneath it — so only a tree this old is presumed abandoned.
+STALE_PYTEST_TREE_AGE_S = 6 * 60 * 60
+
 
 def retrieval_search_roots() -> "list[Path]":
     override = (os.environ.get(RETRIEVAL_ROOT_ENV) or "").strip()
@@ -258,6 +302,15 @@ class Report:
     container_optin_requested: bool | None = None
     setup_exit_code: int | None = None
     plugin_settings: dict | None = None
+    #: The DoE-claude authoring checkout this container mounted, if any, and what
+    #: was done about it. None means a pure-consumer container — a supported shape.
+    doe_authoring_tree: str | None = None
+    #: Whether the cloned engine's guard trusts a registry anchor's own root, and
+    #: so whether the install orchestrator can accept the flat served mirror at
+    #: all. Recorded because the refusal it causes names no empty anchor, which
+    #: reads as a misconfiguration this script could fix rather than the engine
+    #: version skew it is. `None` means the probe did not run.
+    engine_guard_anchor_root_trust: str | None = None
     doctrine_candidates_tried: list[str] = field(default_factory=list)
     global_doctrine: dict | None = None
     #: Sum of every recorded step's elapsed time — the pre-boot phase's own cost,
@@ -282,11 +335,15 @@ class Report:
     #: and the value pinned. Kept OFF `session_path` on purpose: that field is
     #: re-derived post-pipeline and would wipe a key written here.
     session_path_pin: dict | None = None
-    #: The post-boot assertion that the hook plane is actually armed: a
-    #: non-empty `hooks` in `settings.json` and a resolvable `.doe-root` at each
+    #: The post-boot assertion that the hook plane is actually armed: hooks
+    #: registered by `settings.json` or by the coordinator plugin's own manifest,
+    #: and a resolvable `.doe-root` at each
     #: location the no-launcher fences read. The one check that converts "wired
     #: nothing" from byte-identical-to-healthy into a named failure.
     hook_plane: dict | None = None
+    #: `settings.json` hooks removed because the coordinator plugin already
+    #: delivers them on the same event (`drop_double_fired_settings_hooks`).
+    hook_dedupe: dict | None = None
     #: The platform's installed-plugin record as this run left it, and whether
     #: the path it names actually resolves. Separate from `plugin_settings`
     #: because they are different files answering different questions: that one
@@ -299,8 +356,17 @@ class Report:
     #: The MCP entry this run wrote, independently of the clone steps.
     mcp_entry_written: dict | None = None
     machine_local_keys: dict = field(default_factory=dict)
+    #: Verdict of the git-hook-fleet install step: whether
+    #: `coordinator-ensure-hooks-fleet` was invoked, and — asserted against
+    #: disk, never trusted off its rc — which registered repos actually ended
+    #: up with a `prepare-commit-msg` hook file. See `install_hooks_fleet`.
+    hooks_fleet: dict | None = None
     rag_install: dict | None = None
     mcp_registration: dict | None = None
+    #: Verdict of the stale-pytest-tree reaper (claude-klabauter#27): which
+    #: `pytest-of-*` trees under the system temp dir were removed vs. left
+    #: alone as too young, and the bytes freed.
+    pytest_tree_reap: dict | None = None
     #: The engine corpus is never fetched here: it is the lazy tier, and nothing
     #: about launching a session needs it. Declared as a constant on the report
     #: rather than produced by a pipeline step — a step that assigns a literal
@@ -542,6 +608,28 @@ def seed_trust_anchor_keys(report: Report) -> None:
     diagnostics say so), while this makes the anchor correct. A container that
     later re-resolves either root reads the same value a session would.
 
+    TWO KEYS, NOT ONE, for the coordinator clone. `repos.doe_claude` names the
+    DoE-claude AUTHORING checkout — the fleet sibling-map entry, and what
+    `coordinator_core.ops.coordinator_doe_root` resolves for anything reading
+    schemas, wikis or decision records. `plugin.mirrors.coordinator-claude.live_path`
+    names the tree a session RUNS. On a workstation those are one directory and the
+    distinction never surfaces; here they diverge, because what runs is the flat
+    published mirror and the mirror publishes none of the authoring content. Writing
+    the mirror path into the authoring key made every doctrine read resolve against a
+    tree that does not carry it — silently, since an absent doctrine file under a
+    mirror is the documented normal case and therefore reads as nothing being wrong.
+
+    So the mirror is registered under the mirror key ALWAYS (that is the trust anchor
+    the orchestrator needs, and the anchor `trusted_root_guard` resolves for it), and
+    `repos.doe_claude` is pointed at a mounted authoring tree when one is present,
+    detected by the `.coordinator-dev-repo` sentinel. With no authoring tree mounted
+    — the pure-consumer container, a supported shape — `repos.doe_claude` keeps
+    naming the mirror exactly as before: a demoted-but-present anchor beats an empty
+    one, and the mirror is the only coordinator content that box has.
+
+    Nothing here changes what the session RUNS. The marketplace registration in
+    `settings.json` names the mirror path literally and is not read from either key.
+
     Every key is attempted; per-key verdicts land on `report.machine_local_keys`
     beside the retrieval half's. The step RAISES when a key the orchestrator
     needs did not land, because a silent skip here is exactly the failure this
@@ -549,14 +637,10 @@ def seed_trust_anchor_keys(report: Report) -> None:
     """
     argv = _machine_local_argv()
     failures: list[str] = []
-    for clone_name, key in TRUST_ANCHOR_KEYS.items():
-        root = CLONES[clone_name]["dest"]
-        if not Path(root).is_dir():
-            report.machine_local_keys[key] = f"skipped: {clone_name} clone absent at {root}"
-            failures.append(f"{key} ({clone_name} clone absent)")
-            continue
+
+    def _write(key: str, value: str, *, fatal: bool) -> None:
         result = subprocess.run(
-            [*argv, "set", key, root],
+            [*argv, "set", key, value],
             capture_output=True,
             text=True,
             timeout=MACHINE_LOCAL_TIMEOUT_S,
@@ -564,12 +648,57 @@ def seed_trust_anchor_keys(report: Report) -> None:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if result.returncode == 0:
-            report.machine_local_keys[key] = root
-        else:
-            report.machine_local_keys[key] = (
-                f"failed (exit {result.returncode}): {result.stderr.strip()}"
-            )
+            report.machine_local_keys[key] = value
+            return
+        report.machine_local_keys[key] = (
+            f"failed (exit {result.returncode}): {result.stderr.strip()}"
+        )
+        if fatal:
             failures.append(f"{key} (exit {result.returncode})")
+
+    targets: dict[str, tuple[str, bool]] = {}
+    for clone_name, key in TRUST_ANCHOR_KEYS.items():
+        root = CLONES[clone_name]["dest"]
+        if not Path(root).is_dir():
+            report.machine_local_keys[key] = f"skipped: {clone_name} clone absent at {root}"
+            failures.append(f"{key} ({clone_name} clone absent)")
+            continue
+        targets[key] = (root, True)
+
+    mirror_root = CLONES["coordinator-claude"]["dest"]
+    if Path(mirror_root).is_dir():
+        targets[PLUGIN_MIRROR_LIVE_PATH_KEY] = (mirror_root, True)
+
+    # Recorded before the keys are written, because no arrangement of them can
+    # substitute for the capability: a guard matching strict descendants only
+    # refuses the flat mirror whichever key names it.
+    if engine_guard_trusts_anchor_root_itself():
+        report.engine_guard_anchor_root_trust = "honoured"
+    else:
+        report.engine_guard_anchor_root_trust = (
+            "ABSENT: this container's engine clone matches registry trust anchors by "
+            "strict descendant only, so the install orchestrator will refuse the flat "
+            f"served mirror at {mirror_root} even though repos.doe_claude names it "
+            "exactly. Not fixable by any key this script writes — the engine needs a "
+            "guard carrying the anchor-root equality arm published to it."
+        )
+
+    authoring = locate_doe_authoring_tree()
+    if authoring is None:
+        report.doe_authoring_tree = None
+    elif not engine_guard_honours_plugin_mirror_anchor():
+        report.doe_authoring_tree = (
+            f"{authoring} (found, NOT registered: this container's engine clone has no "
+            f"{PLUGIN_MIRROR_LIVE_PATH_KEY} trust anchor, so repos.doe_claude is left "
+            "naming the served mirror — the mirror's last anchor on that engine)"
+        )
+    elif "repos.doe_claude" in targets:
+        report.doe_authoring_tree = str(authoring)
+        targets["repos.doe_claude"] = (str(authoring), True)
+
+    for key, (value, fatal) in targets.items():
+        _write(key, value, fatal=fatal)
+
     if failures:
         raise RuntimeError(
             "trust anchor keys not registered: "
@@ -652,10 +781,20 @@ def assert_hook_plane_armed(report: Report) -> None:
     up until an agent notices a ceremony running with no engine-minted run-id.
     Nothing gated on that. This does.
 
-    Two facts, both read off disk:
+    Three facts, all read off disk:
 
-    - `settings.json`'s `hooks` is non-empty. That block is what registers every
-      coordinator hook; `{}` means the hook plane is absent, not quiet.
+    - At least one hook-delivery surface the runtime consults registers hooks:
+      `settings.json`'s own `hooks` block, OR the coordinator plugin's
+      `hooks/hooks.json` (see `_plugin_hook_delivery`). The plugin surface is
+      not a fallback, it is the NORMAL case: the engine's
+      `gen_settings_hooks.generate` deliberately leaves `settings.json`'s
+      `hooks` unwritten whenever plugin-side delivery is live, because writing
+      both fires every hook twice. Reading `settings.json` alone therefore
+      reported a perfectly installed container as unarmed (claude-klabauter#28)
+      — and told its sessions to disbelieve guards that were firing.
+    - No hook is delivered by BOTH surfaces. `drop_double_fired_settings_hooks`
+      runs first and removes such entries, so a hit here means that repair
+      did not land.
     - `.doe-root` resolves through at least one rung the no-launcher fences read.
       At least one, deliberately NOT all: `<settings-home>/machine-local/.doe-root`
       is the canonical target and `~/.claude/.doe-root` is a legacy fallback that
@@ -668,15 +807,26 @@ def assert_hook_plane_armed(report: Report) -> None:
     plane the orchestrator did not wire; being loud is the whole remit.
     """
     settings_path = _claude_home() / "settings.json"
-    hooks_present = False
+    settings: dict = {}
     hook_event_count = 0
     read_error = None
     try:
-        hooks = json.loads(settings_path.read_text()).get("hooks") or {}
+        loaded = json.loads(settings_path.read_text())
+        settings = loaded if isinstance(loaded, dict) else {}
+        hooks = settings.get("hooks") or {}
         hook_event_count = len(hooks) if isinstance(hooks, (dict, list)) else 0
-        hooks_present = hook_event_count > 0
     except Exception as e:  # noqa: BLE001 - an unreadable settings file is a verdict
         read_error = f"{type(e).__name__}: {e}"
+    plugin, delivered = _plugin_hook_delivery(settings)
+    double_fired = _double_fired_hooks(settings, delivered) if plugin["armed"] else []
+    settings_armed = hook_event_count > 0
+    delivery = {
+        (True, True): "both",
+        (True, False): "settings",
+        (False, True): "plugin",
+        (False, False): "none",
+    }[(settings_armed, plugin["armed"])]
+    hooks_present = delivery != "none"
 
     settings_home = os.environ.get("COORDINATOR_SETTINGS_HOME") or ""
     rungs: dict[str, str | None] = {}
@@ -697,8 +847,11 @@ def assert_hook_plane_armed(report: Report) -> None:
     report.hook_plane = {
         "settings_path": str(settings_path),
         "hooks_registered": hooks_present,
+        "hook_delivery": delivery,
         "hook_event_count": hook_event_count,
         "settings_read_error": read_error,
+        "plugin_hooks": plugin,
+        "double_fired": double_fired,
         "doe_root_resolves": doe_root_resolves,
         "doe_root_rungs": rungs,
     }
@@ -708,11 +861,194 @@ def assert_hook_plane_armed(report: Report) -> None:
         problems.append(
             f"`hooks` in {settings_path} is empty"
             + (f" ({read_error})" if read_error else "")
+            + f" and the coordinator plugin delivers none ({plugin['reason']})"
+        )
+    if double_fired:
+        problems.append(
+            f"{len(double_fired)} hook(s) registered by both {settings_path} and the "
+            f"coordinator plugin fire twice per event, e.g. {double_fired[0]}"
         )
     if not doe_root_resolves:
         problems.append("`.doe-root` resolves through no rung the no-launcher fences read")
     if problems:
         raise RuntimeError("; ".join(problems))
+
+
+def _plugin_hook_delivery(settings: dict) -> tuple[dict, dict[str, set[str]]]:
+    """Whether the coordinator plugin's own hook manifest will deliver hooks to a
+    session launched here, read off disk the way the runtime reads it.
+
+    Three links, each one the runtime actually walks: the plugin is ENABLED in
+    `settings.json`'s `enabledPlugins`; `installed_plugins.json` records an
+    `installPath` for it (what `${CLAUDE_PLUGIN_ROOT}` expands to); and
+    `<installPath>/hooks/hooks.json` registers at least one event, with every
+    `${CLAUDE_PLUGIN_ROOT}`-relative file it names present. That last check is
+    what separates delivered from merely declared: each entry's bootstrap
+    fails OPEN on a missing script, so a manifest pointing at absent files is
+    exactly as silent as no manifest.
+
+    Re-implemented rather than importing the engine's
+    `detect_hook_delivery_duplication`, for `_claude_home`'s reason: this module
+    is dependency-free by design and must not import `coordinator_core`.
+
+    Never raises: every broken link is a recorded `reason`, `armed` False.
+    Also returns, per event, the `_hook_identities` the manifest delivers —
+    what `_double_fired_hooks` compares `settings.json` against. Kept off
+    `result` because `result` lands in the JSON report and sets do not.
+    """
+    result: dict = {"armed": False, "event_count": 0, "missing_files": [], "reason": ""}
+    delivered: dict[str, set[str]] = {}
+    try:
+        key = _plugin_record_key(Path(CLONES["coordinator-claude"]["dest"]))
+    except Exception as e:  # noqa: BLE001 - an unreadable clone manifest is a recorded miss
+        result["reason"] = f"plugin key unreadable: {type(e).__name__}: {e}"
+        return result, delivered
+    result["key"] = key
+    enabled = settings.get("enabledPlugins")
+    if not (isinstance(enabled, dict) and enabled.get(key) is True):
+        result["reason"] = f"{key} is not enabled in settings.json"
+        return result, delivered
+    try:
+        records = json.loads(
+            _claude_home().joinpath(*PLUGIN_RECORD_REL).read_text(encoding="utf-8")
+        )["plugins"][key]
+        install_path = next(
+            r["installPath"] for r in records if isinstance(r, dict) and r.get("installPath")
+        )
+    except Exception as e:  # noqa: BLE001 - an absent record is a recorded miss
+        result["reason"] = f"no installed-plugin record names an installPath for {key} ({type(e).__name__})"
+        return result, delivered
+    result["install_path"] = install_path
+    manifest = Path(install_path).joinpath(*PLUGIN_HOOKS_REL)
+    try:
+        hooks = json.loads(manifest.read_text(encoding="utf-8")).get("hooks")
+    except Exception as e:  # noqa: BLE001 - an unreadable manifest is a recorded miss
+        result["reason"] = f"{manifest} unreadable: {type(e).__name__}"
+        return result, delivered
+    if not isinstance(hooks, dict) or not hooks:
+        result["reason"] = f"{manifest} registers no hook event"
+        return result, delivered
+    result["event_count"] = len(hooks)
+    referenced: set[str] = set()
+    for event, groups in hooks.items():
+        for group in groups if isinstance(groups, list) else []:
+            for hook in group.get("hooks", []) if isinstance(group, dict) else []:
+                if not isinstance(hook, dict):
+                    continue
+                delivered.setdefault(event, set()).update(_hook_identities(hook))
+                args = hook.get("args") if isinstance(hook.get("args"), list) else []
+                for token in [hook.get("command"), *args]:
+                    if isinstance(token, str) and token.startswith("${CLAUDE_PLUGIN_ROOT}/"):
+                        referenced.add(token[len("${CLAUDE_PLUGIN_ROOT}/"):])
+    missing = sorted(rel for rel in referenced if not Path(install_path, rel).is_file())
+    result["missing_files"] = missing
+    if missing:
+        result["reason"] = f"{manifest} names {len(missing)} absent file(s), e.g. {missing[0]}"
+        return result, delivered
+    result["armed"] = True
+    result["reason"] = f"{key} delivers {len(hooks)} hook event(s) from {manifest}"
+    return result, delivered
+
+
+def _hook_identities(hook: dict) -> set[str]:
+    """What a hook entry actually runs, independent of which surface registers it:
+    `url:<url>` for an http hook, else the `<dir>/<file>` tail of every script it
+    names. The tail, not the full path, because the two surfaces spell the root
+    differently — `${CLAUDE_PLUGIN_ROOT}` in the manifest, an env-var expression
+    or a baked path in `settings.json` — the same reason the engine's
+    `guard_settings_integrity._tail_key` compares tails.
+    """
+    if hook.get("type") == "http":
+        url = hook.get("url")
+        return {f"url:{url}"} if isinstance(url, str) and url else set()
+    args = hook.get("args") if isinstance(hook.get("args"), list) else []
+    identities: set[str] = set()
+    for token in [hook.get("command"), *args]:
+        if not isinstance(token, str):
+            continue
+        for script in _SCRIPT_TOKEN_RE.findall(token.replace("\\", "/")):
+            tail = "/".join(script.strip("'\"").split("/")[-2:])
+            if tail:
+                identities.add(tail)
+    return identities
+
+
+def _double_fired_hooks(settings: dict, delivered: dict[str, set[str]]) -> list[str]:
+    """`<event>: <identities>` for every `settings.json` hook the plugin already
+    delivers on the same event. A hook counts only when EVERYTHING it runs is
+    plugin-delivered on that event: one that also runs something the plugin
+    does not is not a duplicate, and removing it would lose that something."""
+    found: list[str] = []
+    hooks = settings.get("hooks")
+    for event, groups in (hooks.items() if isinstance(hooks, dict) else []):
+        for group in groups if isinstance(groups, list) else []:
+            for hook in group.get("hooks", []) if isinstance(group, dict) else []:
+                ids = _hook_identities(hook) if isinstance(hook, dict) else set()
+                if ids and ids <= delivered.get(event, set()):
+                    found.append(f"{event}: {', '.join(sorted(ids))}")
+    return found
+
+
+def drop_double_fired_settings_hooks(report: Report) -> None:
+    """Remove from `settings.json` every hook the coordinator plugin already
+    delivers on the same event, so no hook fires twice.
+
+    How a container gets here: the engine's `gen_settings_hooks.generate` writes
+    `settings.json` hooks only when plugin-side delivery is NOT verified live at
+    the moment it runs, and never removes a block it wrote earlier. Plugin
+    delivery can become live after that — `register_live_plugin_record` runs
+    after the orchestrator — and the stale block then doubles every hook it
+    names: two guard verdicts, two SessionStart injections, two writes of every
+    side effect.
+
+    Removes only when the plugin is verified armed (`_plugin_hook_delivery`),
+    so a removed entry is always still delivered — never the last copy. Only
+    exact duplicates go (`_double_fired_hooks`); every other entry, group field
+    and event is kept, and a `hooks` block emptied by the removal is dropped.
+    Runs after every writer and before `assert_hook_plane_armed`, which reports
+    anything this left behind.
+    """
+    settings_path = _claude_home() / "settings.json"
+    try:
+        settings = json.loads(settings_path.read_text())
+    except FileNotFoundError:
+        report.hook_dedupe = {"settings_path": str(settings_path), "removed": []}
+        return
+    if not isinstance(settings, dict):
+        raise ValueError(f"{settings_path} is not a JSON object")
+    plugin, delivered = _plugin_hook_delivery(settings)
+    removed = _double_fired_hooks(settings, delivered) if plugin["armed"] else []
+    report.hook_dedupe = {"settings_path": str(settings_path), "removed": removed}
+    if not removed:
+        return
+    kept_events: dict = {}
+    for event, groups in settings["hooks"].items():
+        kept_groups = []
+        for group in groups if isinstance(groups, list) else []:
+            if not isinstance(group, dict):
+                kept_groups.append(group)
+                continue
+            kept_hooks = [
+                hook
+                for hook in group.get("hooks", [])
+                if not (
+                    isinstance(hook, dict)
+                    and (ids := _hook_identities(hook))
+                    and ids <= delivered.get(event, set())
+                )
+            ]
+            if kept_hooks:
+                kept_groups.append({**group, "hooks": kept_hooks})
+        if kept_groups:
+            kept_events[event] = kept_groups
+    if kept_events:
+        settings["hooks"] = kept_events
+    else:
+        del settings["hooks"]
+    tmp = settings_path.with_suffix(settings_path.suffix + ".tmp")
+    tmp.write_text(json.dumps(settings, indent=2))
+    tmp.replace(settings_path)
+    _safe_print(f"[cloud_setup] removed {len(removed)} double-fired hook(s) from {settings_path}")
 
 
 def _registry_value_or_none(machine_local_dir: Path, key: str) -> str | None:
@@ -819,26 +1155,19 @@ def run_claude_klabauter_setup(report: Report) -> None:
     print(result.stdout, end="")
     report.setup_exit_code = result.returncode
     if result.returncode != 0:
+        # Review: overengineering-reviewer finding 6 — inlined the former
+        # `_output_tail` helper (single call site). The report stores
+        # `step.detail` untruncated, but a whole install log per failed step
+        # would bury the verdict it exists to deliver, so the raise carries
+        # only the last 40 lines, marked when truncated.
+        all_lines = (result.stdout or "").rstrip().splitlines()
+        tail_lines = all_lines if len(all_lines) <= 40 else ["... (earlier output omitted)", *all_lines[-40:]]
         raise RuntimeError(
             f"scripts/setup.py exited {result.returncode}"
             + _hard_probe_failure_summary(result.stdout)
             + "\n--- combined output (tail) ---\n"
-            + _output_tail(result.stdout)
+            + "\n".join(tail_lines)
         )
-
-
-#: How much of a failed subprocess's combined output the raise carries into the
-#: JSON report. The report stores `step.detail` untruncated, but a whole install
-#: log per failed step would bury the verdict it exists to deliver; the tail is
-#: where a health probe's own per-probe lines land.
-_OUTPUT_TAIL_LINES = 40
-
-
-def _output_tail(output: str) -> str:
-    lines = (output or "").rstrip().splitlines()
-    if len(lines) <= _OUTPUT_TAIL_LINES:
-        return "\n".join(lines)
-    return "\n".join(["... (earlier output omitted)", *lines[-_OUTPUT_TAIL_LINES:]])
 
 
 def _hard_probe_failure_summary(output: str) -> str:
@@ -1158,6 +1487,29 @@ def register_live_plugin_record() -> None:
     print(f"[cloud_setup] plugin record: {key} -> {live}")
 
 
+def _resolve_marketplace_plugin_source(marketplace_path: Path, plugin_name: str) -> str | None:
+    """The relative `source` string a directory marketplace's `plugin.json`-less
+    root declares for `plugin_name`, or None when the marketplace manifest is
+    unreadable, names no such plugin, or names it via a non-relative `source`
+    (a `github`/`url` object — not this process's to resolve).
+
+    `marketplace.json`'s plugin list entries carry `name` and `source`; only a
+    plain relative-path `source` (e.g. ``"./plugin"``) is ever returned here.
+    """
+    try:
+        data = json.loads(marketplace_path.read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    entries = data.get("plugins") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return None
+    for candidate in entries:
+        if isinstance(candidate, dict) and candidate.get("name") == plugin_name:
+            source = candidate.get("source")
+            return source if isinstance(source, str) and source else None
+    return None
+
+
 def verify_plugin_install_path(report: Report) -> None:
     """Read the installed-plugin record back OFF DISK and check that the path it
     names actually resolves to a plugin root.
@@ -1174,6 +1526,27 @@ def verify_plugin_install_path(report: Report) -> None:
     Never raises: a miss is a RECORDED verdict. Presence of the directory is not
     accepted on its own — the plugin manifest must be readable under it, because
     an empty directory at the right path resolves and serves nothing.
+
+    Each unresolvable entry carries a `reason` naming WHICH of the two probes
+    failed and on WHAT path — `installPath` itself missing/not-a-directory, or
+    `installPath` present but its `.claude-plugin/plugin.json` (`manifest_path`)
+    missing or unreadable — rather than a bare "not resolvable" that a reader
+    cannot act on when the registered path visibly exists on disk
+    (claude-klabauter#26 (2)).
+
+    ROOT CAUSE, confirmed against the real `example-retrieval-repo` checkout: `installPath`
+    can name a directory MARKETPLACE, not a plugin root directly — it carries
+    `.claude-plugin/marketplace.json` but no `.claude-plugin/plugin.json` of its
+    own. `example-retrieval-repo`'s marketplace entry for the `example-retrieval-repo` plugin has
+    `"source": "./plugin"`, and the real manifest sits at
+    `<installPath>/plugin/.claude-plugin/plugin.json`. When the direct-root
+    manifest probe misses AND `installPath` carries a marketplace manifest,
+    `_resolve_marketplace_plugin_source` looks up the plugin (the part of `key`
+    before `@`) in that marketplace's plugin list and re-probes the manifest
+    under its relative `source`. A `source` that is not a plain relative string
+    (a `github`/`url` object) is left alone — that shape names no local path
+    this process can resolve, so it falls through to the ordinary
+    manifest-missing reason.
     """
     record_path = _claude_home().joinpath(*PLUGIN_RECORD_REL)
     result: dict = {
@@ -1211,12 +1584,50 @@ def verify_plugin_install_path(report: Report) -> None:
             }
             if isinstance(path, str) and path:
                 root = Path(path)
+                manifest_path = root.joinpath(*PLUGIN_MANIFEST_REL)
+                entry["manifest_path"] = str(manifest_path)
                 entry["path_exists"] = root.is_dir()
                 try:
-                    root.joinpath(*PLUGIN_MANIFEST_REL).read_bytes()
+                    manifest_path.read_bytes()
                     entry["manifest_readable"] = True
                 except OSError:
                     pass
+
+                if entry["path_exists"] and not entry["manifest_readable"]:
+                    marketplace_path = root.joinpath(*MARKETPLACE_MANIFEST_REL)
+                    plugin_name = key.split("@", 1)[0]
+                    source = (
+                        _resolve_marketplace_plugin_source(marketplace_path, plugin_name)
+                        if marketplace_path.is_file()
+                        else None
+                    )
+                    if source:
+                        sub_manifest = root.joinpath(source, *PLUGIN_MANIFEST_REL)
+                        entry["marketplace_source"] = source
+                        entry["manifest_path"] = str(sub_manifest)
+                        try:
+                            sub_manifest.read_bytes()
+                            entry["manifest_readable"] = True
+                        except OSError:
+                            pass
+                        manifest_path = sub_manifest
+
+                if not entry["path_exists"]:
+                    entry["reason"] = f"installPath {path!r} is not a directory (or does not exist)"
+                elif not entry["manifest_readable"]:
+                    if entry.get("marketplace_source"):
+                        entry["reason"] = (
+                            f"installPath {path!r} is a directory marketplace; its plugin "
+                            f"{plugin_name!r} names source {entry['marketplace_source']!r}, but "
+                            f"no manifest is readable at {manifest_path}"
+                        )
+                    else:
+                        entry["reason"] = (
+                            f"installPath {path!r} exists, but its plugin manifest is missing or "
+                            f"unreadable at {manifest_path}"
+                        )
+            else:
+                entry["reason"] = "no installPath was recorded for this entry"
             result["entries"].append(entry)
 
     result["unresolvable"] = [
@@ -1414,6 +1825,95 @@ def locate_existing_checkout(name: str) -> Path | None:
     return None
 
 
+def locate_doe_authoring_tree() -> Path | None:
+    """The mounted DoE-claude AUTHORING checkout, or None.
+
+    Detected by the `.coordinator-dev-repo` sentinel at a checkout's root — the
+    discriminant DoE-claude's `CLAUDE.md` names as fleet-wide — never by a
+    repository name and never by a hardcoded path. A pure consumer container has
+    no such tree, which is a SUPPORTED shape and returns None rather than a
+    failure.
+
+    This script's own coordinator clone is excluded explicitly: it is the flat
+    published mirror, the thing an authoring tree is being distinguished FROM,
+    and it will never carry the sentinel.
+    """
+    own_clones = {Path(c["dest"]).as_posix() for c in CLONES.values()}
+    for root in retrieval_search_roots():
+        try:
+            children = sorted(root.iterdir())
+        except OSError:
+            continue
+        for cand in children:
+            if cand.as_posix() in own_clones:
+                continue
+            if not cand.is_dir():
+                continue
+            if (cand / DEV_REPO_SENTINEL).exists() and (cand / ".git").exists():
+                return cand
+    return None
+
+
+def _engine_guard_source() -> str:
+    """The cloned engine's `trusted_root_guard.py` source text, or "" if unreadable.
+
+    Both capability probes below read the SOURCE rather than importing and calling
+    `is_trusted`: the answer is a property of the engine version this container
+    happened to clone, and importing a sibling repo's module into this process to
+    ask about its own trust boundary is a wider coupling than a substring read
+    needs to be.
+    """
+    guard = Path(CLONES["klabauter"]["dest"]) / "coordinator_core" / "trusted_root_guard.py"
+    try:
+        return guard.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def engine_guard_honours_plugin_mirror_anchor() -> bool:
+    """Whether THIS container's engine clone trusts a root by the served-mirror
+    key, rather than only by `repos.doe_claude`.
+
+    An older engine has only the authoring key as its coordinator anchor, so
+    moving `repos.doe_claude` off the mirror there strips the mirror of its last
+    anchor. The key split is therefore gated on this capability.
+
+    Negative-spec — this is NOT the capability that decides whether the
+    orchestrator accepts the served mirror, and gating on it does not make the
+    pre-split arrangement work. That is
+    `engine_guard_trusts_anchor_root_itself`: the mirror is a FLAT checkout whose
+    plugin root IS the anchor path, and an engine matching strict descendants only
+    refuses it however the keys are arranged. A reader who takes the gated
+    fallback for a working shape re-derives exactly the abort this module
+    documents.
+    """
+    return PLUGIN_MIRROR_LIVE_PATH_KEY in _engine_guard_source()
+
+
+def engine_guard_trusts_anchor_root_itself() -> bool:
+    """Whether THIS container's engine clone trusts a registry anchor's OWN root,
+    not merely its strict descendants.
+
+    This is the capability the install orchestrator's Phase-3 trusted-prefix gate
+    actually turns on, and the reason it is probed separately from the mirror
+    anchor. The served mirror is flat: its plugin root is the anchor path itself,
+    spelled identically. An engine whose guard matches `<anchor>/...` only
+    false-rejects the very clone the operator registered — no anchor is empty and
+    the refusal names none, which is what makes the abort read as a
+    misconfiguration rather than an engine version skew.
+
+    Detected by the presence of the guard's `_at_or_under` helper, which is the
+    named seam carrying the equality arm. Absence is not remediable from this
+    script: every lever here is a path spelling or a registry value, and none of
+    them can add an equality arm to a guard that has none. Widening trust to the
+    mirror's PARENT, or setting `COORDINATOR_PLUGIN_ROOT_TRUSTED=1`, would both
+    clear the gate while masking any genuinely-empty anchor on the next box —
+    trading an abort that reports itself for a silence that does not. So this is
+    recorded as a verdict and left to a publish, deliberately.
+    """
+    return "_at_or_under" in _engine_guard_source()
+
+
 def locate_or_clone_repo(name: str, report: Report) -> None:
     """Resolve a rag-half checkout — locate first, clone only if absent.
 
@@ -1570,7 +2070,84 @@ def register_machine_local_repo_keys(report: Report) -> None:
             "[cloud_setup] registry keys: "
             f"{len(landed)} landed, unresolved: {', '.join(failures)}"
         )
+def install_hooks_fleet(report: Report) -> None:
+    """Install the Session-Id-stamping git hooks into every repo this script
+    just registered, and ASSERT the install landed — never trust the
+    installer's own rc.
 
+    Vehicle: `<klabauter clone>/coordinator/bin/coordinator-ensure-hooks-fleet`.
+    That path is a LITERAL join, not routed through a content-root resolver —
+    the published mirror carries both `coordinator/bin` and a flat `bin/` as
+    two distinct percolate namespaces and has no `.claude-plugin/plugin.json`,
+    so a content-root probe would resolve wrong there; `engine_root.py` owns
+    that plane and this join deliberately bypasses it.
+
+    Placement matters: this runs AFTER `register_machine_local_repo_keys`
+    (called from `main`, not enforced here) because the fleet installer
+    enumerates `repos.*` registry keys — running it before registration
+    heals nothing, the exact silent-no-op shape this function exists to
+    catch.
+
+    `coordinator-ensure-hooks-fleet` "always exits 0" by contract (its own
+    docstring) and its underlying `ensure_hooks_fleet` returns 0 on every
+    path including "no registered repos found" — so rc alone cannot
+    distinguish an install from a no-op. That is precisely the failure mode
+    `state/bug-backlog/2026-08-25-hook-emitters-exit-0-having-installed-no-*.yaml`
+    records for the single-repo emitters this fleet script wraps, reproduced
+    against a shallow clone under a sandboxed HOME — exactly this container's
+    shape. So this step STATs `.git/hooks/prepare-commit-msg` in each repo
+    this process itself registered (`TRUST_ANCHOR_KEYS`' destinations) after
+    the call, and raises naming which repo/hook is missing, rather than
+    reporting the subprocess's own exit code as the verdict.
+
+    Dependency-free by design (module docstring): the vehicle script is
+    invoked as a subprocess, its own `git_hook_install` machinery is never
+    imported here.
+    """
+    engine_root = Path(CLONES["klabauter"]["dest"])
+    vehicle = engine_root / "coordinator" / "bin" / "coordinator-ensure-hooks-fleet"
+    if not vehicle.is_file():
+        raise FileNotFoundError(
+            f"hooks-fleet vehicle not found at {vehicle} — the klabauter clone "
+            "is absent or its layout changed"
+        )
+
+    result = subprocess.run(
+        ["python3", str(vehicle)],
+        capture_output=True,
+        text=True,
+        timeout=MACHINE_LOCAL_TIMEOUT_S,
+        stdin=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+
+    checked: dict[str, bool] = {}
+    missing: list[str] = []
+    for clone_name in TRUST_ANCHOR_KEYS:
+        repo_root = Path(CLONES[clone_name]["dest"])
+        hook_path = repo_root / ".git" / "hooks" / "prepare-commit-msg"
+        # Review: code-reviewer (finding 1) — presence alone (`is_file()`) is
+        # satisfied by a stale, zero-byte, or hand-authored non-executable
+        # hook surviving an earlier aborted run; require it be executable too,
+        # since git silently skips a non-executable hook at commit time.
+        landed = hook_path.is_file() and os.access(hook_path, os.X_OK)
+        checked[str(hook_path)] = landed
+        if not landed:
+            missing.append(f"{clone_name}: {hook_path}")
+
+    report.hooks_fleet = {
+        "vehicle": str(vehicle),
+        "exit_code": result.returncode,
+        "hooks_checked": checked,
+    }
+    if missing:
+        raise RuntimeError(
+            "prepare-commit-msg hook missing after coordinator-ensure-hooks-fleet "
+            f"(exit {result.returncode}): " + ", ".join(missing)
+        )
 
 
 #: Publish mirrors this script seeds, as `{repo slug: machine-local key}`.
@@ -2004,8 +2581,34 @@ def resolve_session_path(report: Report) -> None:
     }
 
 
-def _verdict_body(report: Report) -> str | None:
-    """Render the session-facing verdict, or None when there is nothing to say.
+def _hook_plane_status_line(report: Report) -> str:
+    """`HOOK PLANE: ARMED|UNARMED (delivery: <surface>)` — the literal FIRST line
+    of the verdict surface, on every run, healthy or not.
+
+    Read straight off `report.hook_plane` (claude-klabauter#26 (3)): a session
+    must be able to see whether the hook plane is armed without going looking,
+    and a clean run writing no verdict at all made silence indistinguishable
+    from health — the exact failure mode this line exists to end. ARMED means
+    everything `assert_hook_plane_armed` requires: at least one delivery
+    surface registers hooks, none of them fire twice, and `.doe-root`
+    resolves. `hook_plane` absent (the probe never ran) reports UNARMED with
+    an `unknown` delivery surface rather than silently omitting the line.
+    """
+    hook_plane = report.hook_plane or {}
+    delivery = hook_plane.get("hook_delivery", "unknown")
+    armed = bool(
+        report.hook_plane
+        and hook_plane.get("hooks_registered")
+        and hook_plane.get("doe_root_resolves")
+        and not hook_plane.get("double_fired")
+    )
+    return f"HOOK PLANE: {'ARMED' if armed else 'UNARMED'} (delivery: {delivery})"
+
+
+def _verdict_body(report: Report) -> str:
+    """Render the session-facing verdict. Never None: the hook-plane status
+    line (`_hook_plane_status_line`) is written on EVERY run, healthy or not,
+    so a session never has to infer health from the surface's absence.
 
     Terse by contract: a session reads this as context on every turn, so it
     carries the fact and the one move that follows from it, never the reasoning
@@ -2044,7 +2647,8 @@ def _verdict_body(report: Report) -> str | None:
             detail = f"the record could not be read: {install_paths['read_error']}"
         else:
             named = ", ".join(
-                f"`{entry['key']}` -> `{entry['install_path']}`"
+                f"`{entry['key']}` -> `{entry['install_path']}` "
+                f"({entry.get('reason', 'unresolvable')})"
                 for entry in install_paths.get("entries", [])
                 if not (entry.get("path_exists") and entry.get("manifest_readable"))
             ) or "no plugin is recorded as installed at all"
@@ -2059,12 +2663,22 @@ def _verdict_body(report: Report) -> str | None:
         )
 
     hook_plane = report.hook_plane or {}
+    if hook_plane.get("double_fired"):
+        sections.append(
+            "## Some hooks fire TWICE\n\n"
+            f"`{hook_plane.get('settings_path')}` and the coordinator plugin both register:\n\n"
+            + "\n".join(f"- `{entry}`" for entry in hook_plane["double_fired"])
+            + "\n\nEach of these runs twice per event: expect duplicated guard verdicts and "
+            "duplicated SessionStart context. Remedy: delete those entries from "
+            "`settings.json`'s `hooks` block — the plugin still delivers them."
+        )
     if hook_plane and not (hook_plane.get("hooks_registered") and hook_plane.get("doe_root_resolves")):
         broken = []
         if not hook_plane.get("hooks_registered"):
             broken.append(
-                f"`hooks` in `{hook_plane.get('settings_path')}` is empty — no coordinator "
-                "hook is registered, so every autofire hook produces nothing"
+                f"`hooks` in `{hook_plane.get('settings_path')}` is empty and the coordinator "
+                f"plugin delivers none ({(hook_plane.get('plugin_hooks') or {}).get('reason')}) — "
+                "no coordinator hook is registered, so every autofire hook produces nothing"
             )
         if not hook_plane.get("doe_root_resolves"):
             broken.append(
@@ -2092,9 +2706,17 @@ def _verdict_body(report: Report) -> str | None:
             "`python3` in that list means the coordinator hook plane cannot run at all."
         )
 
+    status_line = _hook_plane_status_line(report)
     if not sections:
-        return None
+        return (
+            f"{status_line}\n\n"
+            "# Cloud pre-boot verdict\n\n"
+            "Written by `cloud_setup.py` before this session started; every other pre-boot "
+            "check passed. Full detail: "
+            f"`{INSTALL_REPORT_PATH}`.\n"
+        )
     return (
+        f"{status_line}\n\n"
         "# Cloud pre-boot verdict\n\n"
         "Written by `cloud_setup.py` before this session started. Full detail: "
         f"`{INSTALL_REPORT_PATH}`.\n\n" + "\n\n".join(sections) + "\n"
@@ -2171,8 +2793,12 @@ def write_session_verdict(report: Report) -> None:
     the thing that reports it. The JSON report is the operator's artifact and is
     read into no session at all.
 
-    Written only when there is something to say; a clean run leaves no file and
-    clears a stale one, so the surface's presence is itself the signal.
+    Written on EVERY run, healthy or not (claude-klabauter#26 (3)): its first
+    line always states the hook-plane status plainly (ARMED/UNARMED plus the
+    delivery surface), so a session can read that off the file's presence AND
+    its content, and silence never stands for health. A clean run's body still
+    differs from a broken one's — no `##` failure sections follow the status
+    line — but the file itself is never absent.
     """
     rule_path = _claude_home() / "rules" / SESSION_VERDICT_RULE
     written = _write_rule_surface(SESSION_VERDICT_RULE, _verdict_body(report))
@@ -2249,6 +2875,97 @@ def _print_summary(report: Report) -> None:
             )
 
 
+def _dir_size_bytes(path: Path) -> int:
+    """Recursive directory size via `os.scandir`, one call per level — never a
+    `du` subprocess, and never `Path.rglob`'s slower stat-per-match walk."""
+    total = 0
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        total += _dir_size_bytes(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        total += entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+    except OSError:
+        return total
+    return total
+
+
+def reap_stale_pytest_trees(report: Report) -> None:
+    """Remove `pytest-of-*` trees under the system temp dir whose own mtime is
+    older than `STALE_PYTEST_TREE_AGE_S`, and report the bytes freed.
+
+    claude-klabauter#27: pytest's own retention keeps the last 3 base
+    directories per caller, unbounded in practice across many concurrent test
+    waves — trees observed up to ~21G each. Once the container volume fills,
+    every Bash/Write/Edit call fails ENOSPC, including the harness's own
+    subprocess-output capture, so in-flight executor work is lost with no
+    diagnosable error at the point of loss.
+
+    Bounded and cheap by construction: no subprocess (spawning `du`/`find`
+    would itself add the cost this reaper exists to cut), one `os.scandir`
+    per directory level (`_dir_size_bytes`, this function's own top-level
+    scan), and a strict age floor. A tree younger than the floor may still be
+    owned by a concurrent run — its mtime keeps advancing while it writes —
+    so it is left alone and recorded as skipped, never removed on a guess.
+
+    Never raises: an unreadable temp root, or one tree's `rmtree` failing, is
+    a recorded verdict, not a broken pipeline step.
+    """
+    tmp_root = Path(tempfile.gettempdir())
+    removed: list[str] = []
+    skipped: list[str] = []
+    freed_bytes = 0
+    now = time.time()
+    try:
+        entries = list(os.scandir(tmp_root))
+    except OSError as e:
+        report.pytest_tree_reap = {
+            "tmp_root": str(tmp_root),
+            "removed": removed,
+            "skipped": skipped,
+            "bytes_freed": 0,
+            "error": f"{type(e).__name__}: {e}",
+        }
+        return
+
+    for entry in entries:
+        if not entry.name.startswith(STALE_PYTEST_TREE_PREFIX):
+            continue
+        try:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            age_s = now - entry.stat(follow_symlinks=False).st_mtime
+        except OSError as e:
+            skipped.append(f"{entry.name} (stat failed: {type(e).__name__}: {e})")
+            continue
+        if age_s < STALE_PYTEST_TREE_AGE_S:
+            skipped.append(f"{entry.name} (age {int(age_s)}s < floor {STALE_PYTEST_TREE_AGE_S}s)")
+            continue
+        size = _dir_size_bytes(Path(entry.path))
+        try:
+            shutil.rmtree(entry.path)
+        except OSError as e:
+            skipped.append(f"{entry.name} (rmtree failed: {type(e).__name__}: {e})")
+            continue
+        removed.append(entry.name)
+        freed_bytes += size
+
+    report.pytest_tree_reap = {
+        "tmp_root": str(tmp_root),
+        "removed": removed,
+        "skipped": skipped,
+        "bytes_freed": freed_bytes,
+    }
+    _safe_print(
+        f"[cloud_setup] pytest tree reaper: removed {len(removed)}, "
+        f"freed {freed_bytes} byte(s), skipped {len(skipped)}"
+    )
+
+
 def _record_session_surfaces_best_effort(report: Report) -> None:
     """Resolve the env-box PATH and land the verdict surface, swallowing failures.
 
@@ -2301,6 +3018,10 @@ def main() -> int:
 
     report = Report()
 
+    # FIRST, cheap disk hygiene ahead of every clone/install step below: a
+    # volume already filled by a prior wave's leaked pytest trees fails those
+    # steps with ENOSPC before this reaper ever gets a turn.
+    run_step("reap stale pytest trees", lambda: reap_stale_pytest_trees(report), report)
     run_step("clone coordinator-claude", lambda: clone_repo("coordinator-claude"), report)
     run_step("clone klabauter", lambda: clone_repo("klabauter"), report)
     run_step("set engine env", lambda: set_engine_env(report), report)
@@ -2341,6 +3062,9 @@ def main() -> int:
         report,
     )
     run_step("register machine-local repo keys", lambda: register_machine_local_repo_keys(report), report)
+    # AFTER repo-key registration, not before: the fleet installer enumerates
+    # registered `repos.*` keys, so running it earlier heals nothing.
+    run_step("install git hooks fleet", lambda: install_hooks_fleet(report), report)
     run_step(
         "register publish mirror keys",
         lambda: register_publish_mirror_keys(report),
@@ -2356,6 +3080,11 @@ def main() -> int:
     # AFTER every writer, because it attests to the composed result rather than
     # to any one step's return. It is the only step that can tell a container
     # that wired nothing from one that wired everything.
+    run_step(
+        "drop double-fired settings hooks",
+        lambda: drop_double_fired_settings_hooks(report),
+        report,
+    )
     run_step("assert hook plane armed", lambda: assert_hook_plane_armed(report), report)
 
     _record_session_surfaces_best_effort(report)

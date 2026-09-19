@@ -287,8 +287,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     reason = (
-        f"Advisory: {file_path} would be {size} bytes{_token_note(new_content)}, "
-        f"over the {HARD_LIMIT_BYTES}-byte cap. Trim content or split the edit."
+        f"{file_path}: {size}b{_token_note(new_content)}, over "
+        f"{HARD_LIMIT_BYTES}b cap.\nUse instead:\n  trim content or split the edit"
     )
     return {
         "hookSpecificOutput": {

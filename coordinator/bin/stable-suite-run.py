@@ -56,20 +56,17 @@ def _git(*args: str) -> str | None:
     result would produce. `_corpus_fingerprint` folding "git could not be asked" into
     "git said nothing" is exactly the false-confidence failure mode this whole tool
     exists to prevent.
+
+    # Review: coordinator:overengineering-reviewer (finding 3) -- routes through
+    # coordinator_core.ops.ceremony.git_native._git instead of hand-rolling a
+    # second subprocess.run wrapper with its own creationflags/failure mapping.
     """
-    try:
-        proc = subprocess.run(
-            ["git", *args],
-            capture_output=True,
-            text=True,
-            check=False,
-            creationflags=_NO_WINDOW,
-        )
-    except OSError:
+    from coordinator_core.ops.ceremony.git_native import _git as _git_native
+
+    result = _git_native(list(args), cwd=".")
+    if not result.ok:
         return None
-    if proc.returncode != 0:
-        return None
-    return proc.stdout.strip()
+    return result.stdout.strip()
 
 
 def _corpus_fingerprint() -> tuple[str | None, str | None]:
@@ -81,8 +78,27 @@ def _corpus_fingerprint() -> tuple[str | None, str | None]:
 
     Either element being None means "could not fingerprint," never "empty." The caller
     must treat that as UNSTABLE, not as a trivially-equal pair of successful reads.
+
+    Review: coordinator:overengineering-reviewer (finding 4) -- one
+    `git status --porcelain=v2 --branch --untracked-files=no` call returns both
+    the HEAD oid (the `# branch.oid` header line) and the tracked-file dirty set
+    (the entry lines) in a single spawn, replacing the prior `rev-parse` +
+    `diff --name-only` pair. Untracked paths are excluded via
+    `--untracked-files=no`, preserving the original's scratch-output exclusion.
     """
-    return _git("rev-parse", "HEAD"), _git("diff", "--name-only", "HEAD")
+    raw = _git("--no-optional-locks", "status", "--porcelain=v2", "--branch", "--untracked-files=no")
+    if raw is None:
+        return None, None
+    head_sha: str | None = None
+    dirty_lines: list[str] = []
+    for line in raw.splitlines():
+        if line.startswith("# branch.oid "):
+            head_sha = line[len("# branch.oid ") :].strip()
+        elif line and not line.startswith("#"):
+            dirty_lines.append(line)
+    if head_sha is None or head_sha == "(initial)":
+        return None, None
+    return head_sha, "\n".join(dirty_lines)
 
 
 def _failing_node_ids(command: list[str]) -> list[str]:

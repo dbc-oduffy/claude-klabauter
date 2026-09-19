@@ -185,8 +185,7 @@ def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> st
     file_path_safe = _sanitize_file_path_for_reason(file_path)
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
-        f"BLOCKED {file_path_safe}: this agent's writes are confined to its "
-        "own sandbox.\n"
+        f"BLOCKED {file_path_safe}: writes confined to own sandbox.\n"
         "Use instead: fill your provisioned sidecar."
         + ("\n\n" + _note if _note else "")
     )

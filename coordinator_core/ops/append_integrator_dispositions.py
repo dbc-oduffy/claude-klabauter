@@ -51,7 +51,8 @@ Concretely, `append_dispositions` refuses (raises `DispositionsError`) unless:
     the unfilled-scaffold placeholder; or the `staff-eng-review` shape (a
     fenced ```json code block with a non-empty top-level `findings` array —
     the shape every Opus reviewer persona actually emits, distinct from the
-    heading-scaffold above). A target matching NEITHER shape is refused,
+    heading-scaffold above; one such block per review PASS, unioned into one
+    index space by `_findings_index_space`). A target matching NEITHER shape is refused,
     naming both. Scoped to the section/block on purpose: the placeholder
     sentinel or a quoted mention surviving elsewhere in the document must
     never trip either check. Neither check parses or counts individual
@@ -68,8 +69,14 @@ Negative-spec:
     carries a fenced ```json `findings` array, `_partition_audit` compares the
     supplied ids against it and records `partition_audit:` in the appended
     block, naming the unbucketed, duplicated, out-of-range and unrecognized
-    ids. WARN, not refuse: see the comment at the write site for why a
-    refusal here would brick every file the reviewer cited.
+    ids, plus any disagreement with the reviewer's own declared
+    `findings_count:`. Ids are read against EVERY envelope in the sidecar, not
+    the first: a multi-pass reviewer emits one envelope per pass, and the
+    narrow window left the later pass's findings undispositionable except by a
+    spelling that attested them against the earlier pass's findings
+    (`_findings_index_space`). The block records the per-envelope spans the
+    ids were read in. WARN, not refuse: see the comment at the write site for
+    why a refusal here would brick every file the reviewer cited.
     Where the sidecar carries only the `review-findings` shape there is
     nothing to check against — the template (DR-091) has no structured
     per-finding id field (the same absence
@@ -249,7 +256,7 @@ _EXIT_INTERVIEW_HEADING = "## Exit interview"
 #: the one constant across observed real sidecars (H1 wording varies:
 #: "# Staff review", "# Staff-eng review", "# Review", "# Re-review", ...)
 #: is a fenced ```json code block carrying a top-level `findings` array. See
-#: `_find_json_findings_block` for why detection is content-addressed
+#: `_iter_json_findings_payloads` for why detection is content-addressed
 #: (the JSON payload) rather than heading-anchored (the H1 text).
 _SHAPE_REVIEW_FINDINGS = "review-findings"
 _SHAPE_STAFF_ENG_REVIEW = "staff-eng-review"
@@ -422,24 +429,34 @@ def _iter_fenced_blocks(text: str):
         yield body
 
 
-def _find_json_findings_block(text: str) -> Optional[List[Any]]:
-    """Return the `findings` list off the first fenced code block whose body
-    parses as a JSON object carrying a top-level `findings` array, or
-    ``None`` if no such block exists.
+#: What promotes a fenced ```json block from "an object that happens to carry
+#: a `findings` list" to a reviewer ENVELOPE. Every real persona envelope on
+#: disk carries its own identity and its own verdict alongside the array; a
+#: block quoted INSIDE a finding to illustrate this module's shape carries
+#: neither, because the quoting agent is describing a mechanism rather than
+#: signing a verdict. That asymmetry is the whole discriminator, and it is why
+#: a second envelope can be unioned while a second bare block still reports
+#: `ambiguous_block` -- the two look alike only if you count blocks instead of
+#: reading them.
+_ENVELOPE_IDENTITY_KEYS = ("reviewer", "verdict")
+
+
+def _iter_json_findings_payloads(text: str):
+    """Yield every fenced block that parses as an object carrying a top-level
+    `findings` list, in document order, as `(payload, findings)`.
 
     Deliberately content-addressed, not heading-anchored: real persona
-    sidecars observed on disk use inconsistent H1 wording (see
-    `_SHAPE_STAFF_ENG_REVIEW`'s comment), so pinning a literal heading
-    string here would only re-create the review-findings extractor's own
-    former fragility under a different label. A fenced block is only ever
-    treated as a match if `json.loads` succeeds AND the parsed value is a
-    dict with a list-typed `findings` key -- prose that quotes the shape
-    (a finding's own text describing the JSON mechanism, a fenced snippet
-    that isn't itself valid JSON) fails one of those two conditions and is
-    correctly not detected, which is this function's share of the same
-    prose-quoting negative-spec `_find_heading` documents. See
-    `_iter_fenced_blocks` for why candidate bodies come from consecutive
-    delimiter pairs rather than a single whole-block regex.
+    sidecars observed on disk use inconsistent H1 and section wording (see
+    `_SHAPE_STAFF_ENG_REVIEW`'s comment), so pinning a literal heading string
+    here would only re-create the review-findings extractor's own former
+    fragility under a different label -- and the multi-pass shape this must
+    read spells its second section `## Envelope (pass 2)`, which no literal
+    would have matched either. A block counts only if `json.loads` succeeds
+    AND the parsed value is a dict with a list-typed `findings` key: prose
+    that quotes the shape (a finding's own text describing this mechanism, a
+    fenced snippet that isn't valid JSON) fails one of those and is correctly
+    not detected. See `_iter_fenced_blocks` for why candidate bodies come
+    from consecutive delimiter pairs rather than a single whole-block regex.
     """
     for body in _iter_fenced_blocks(text):
         try:
@@ -447,33 +464,94 @@ def _find_json_findings_block(text: str) -> Optional[List[Any]]:
         except (json.JSONDecodeError, ValueError):
             continue
         if isinstance(parsed, dict) and isinstance(parsed.get("findings"), list):
-            return parsed["findings"]
-    return None
+            yield parsed, parsed["findings"]
 
 
-def _count_json_findings_blocks(text: str) -> int:
-    """How many fenced blocks parse as an object carrying a `findings` list.
+def _findings_index_space(
+    text: str,
+) -> "tuple[Optional[List[Any]], List[Tuple[int, int]], int]":
+    """The one index space every finding id in this sidecar is read against.
 
-    `_find_json_findings_block` returns the FIRST and has always been enough
-    for a presence check. `_partition_audit` is its first consumer to treat
-    that array as ground truth for an exact COUNT, and the two questions come
-    apart the moment a sidecar carries more than one candidate -- a finding
-    whose own evidence quotes this very shape (entirely plausible in a review
-    OF this module) would be audited against instead, producing a bogus
-    `partition_audit:` on a correct call or masking a real miscount.
+    Returns `(findings, spans, candidate_blocks)`. `findings` is the
+    document-order CONCATENATION of every reviewer envelope's array, `spans`
+    the inclusive 1-based `(first, last)` range each envelope occupies in it,
+    and `candidate_blocks` how many blocks could not be told apart (>1 means
+    the audit reports `ambiguous_block` rather than trusting any of them).
 
-    Rather than guess which block is authoritative, the audit reports the
-    ambiguity and lets a reader adjudicate. (code-reviewer, P2 on f776d9c779.)
+    WHY THE UNION AND NOT THE FIRST ARRAY. A reviewer that runs a second pass
+    over later commits appends a SECOND envelope to the same sidecar -- the
+    live case is 8 findings under `## Envelope` and 4 under
+    `## Envelope (pass 2)`. Reading only the first array makes the second
+    pass's findings undispositionable: bucketing them at their file positions
+    reports `out_of_range`, and the only spelling the narrow window accepts is
+    1..4, which attests the second pass's dispositions against the FIRST
+    pass's findings. That is a false close, and it was the CHEAPEST move the
+    tool offered. Unioning is what removes it: pass two's findings are 9..12
+    and nothing else, so no id spelling exists that maps them onto pass one's
+    positions and still audits clean. The fix is a wider window, never a more
+    trusting reader of caller-supplied ids -- ids stay unvalidated against
+    finding CONTENT, exactly as before.
+
+    Envelope-keyed, never block-count-keyed: see `_ENVELOPE_IDENTITY_KEYS`.
+    Where no envelope carries an identity at all the behaviour is unchanged --
+    the first array, and the pre-existing ambiguity report.
+
+    A bare (unidentified) block co-existing with a real envelope still
+    counts toward `candidate_blocks`, so it trips `ambiguous_block` rather
+    than being silently dropped by the union; multiple real envelopes alone
+    (no bare block) stay safe to union and report `candidate_blocks=1`.
     """
-    count = 0
-    for body in _iter_fenced_blocks(text):
-        try:
-            parsed = json.loads(body)
-        except (json.JSONDecodeError, ValueError):
-            continue
-        if isinstance(parsed, dict) and isinstance(parsed.get("findings"), list):
-            count += 1
-    return count
+    envelopes: List[List[Any]] = []
+    bare: List[List[Any]] = []
+    for payload, findings in _iter_json_findings_payloads(text):
+        if all(key in payload for key in _ENVELOPE_IDENTITY_KEYS):
+            envelopes.append(findings)
+        else:
+            bare.append(findings)
+
+    if envelopes:
+        union: List[Any] = []
+        spans: List[Tuple[int, int]] = []
+        for findings in envelopes:
+            start = len(union) + 1
+            union.extend(findings)
+            spans.append((start, len(union)))
+        # Review: S8 reviewer F1 -- a co-existing bare (unidentified) block
+        # must still count toward ambiguity even when real envelopes are
+        # present; hardcoding 1 here silently dropped it instead of tripping
+        # `ambiguous_block`. Envelopes themselves stay safe to union (any
+        # count of them still reports 1 when no bare block coexists) --
+        # only a co-existing bare block should push the count past 1.
+        return union, spans, 1 + len(bare)
+
+    if bare:
+        return bare[0], [(1, len(bare[0]))], len(bare)
+
+    return None, [], 0
+
+
+_DECLARED_COUNT_RE = re.compile(r"^findings_count\s*:\s*(\d+)\s*$", re.MULTILINE)
+
+
+def _declared_findings_count(text: str) -> Optional[int]:
+    """The `findings_count:` the reviewer stamped in its own frontmatter, or
+    ``None`` when it stamped none (31 of the 42 sidecars in this corpus).
+
+    The one hazard `_findings_index_space`'s union cannot see by itself is a
+    window that is too NARROW for a reason other than a missed envelope -- an
+    envelope whose JSON does not parse, or one a reviewer never fenced. In
+    that window the wrong ids audit clean, which is the exact false close the
+    union exists to remove. The reviewer's own declared count is the only
+    independent number on disk to reconcile against, so it is read and
+    compared; it is never used to derive the index space, because a count
+    cannot say which findings it counted.
+    """
+    bounds = _frontmatter_bounds(text)
+    if bounds is None:
+        return None
+    start, end = bounds
+    match = _DECLARED_COUNT_RE.search(text[start:end])
+    return int(match.group(1)) if match else None
 
 
 def _detect_findings_shape(text: str) -> "tuple[Optional[str], bool]":
@@ -499,7 +577,11 @@ def _detect_findings_shape(text: str) -> "tuple[Optional[str], bool]":
     depend on that continuing to be true.
     """
     section = _extract_findings_section(text)
-    findings_list = _find_json_findings_block(text)
+    # The UNION, not the first array: a reviewer whose first envelope is empty
+    # and whose second carries the pass it actually wrote has findings to
+    # disposition, and refusing it on the first array's emptiness is the same
+    # narrow-window defect `_findings_index_space` documents.
+    findings_list, _spans, _candidates = _findings_index_space(text)
     if section is not None and not _findings_section_is_empty(section):
         return _SHAPE_REVIEW_FINDINGS, False
     if findings_list is not None:
@@ -777,6 +859,7 @@ def _partition_audit(
     buckets: Dict[str, List[str]],
     *,
     candidate_blocks: int = 1,
+    declared_count: Optional[int] = None,
 ) -> Optional[Dict[str, List[str]]]:
     """Compare the supplied bucket map against the reviewer's own findings
     array, returning the discrepancies or ``None`` when there is nothing to
@@ -800,7 +883,10 @@ def _partition_audit(
     nowhere), `duplicated` (an index in more than one bucket, which makes the
     record self-contradicting), `out_of_range` (an index past the end of the
     array), and `unrecognized` (an id naming no index, which this function
-    will not guess at).
+    will not guess at). A fifth, `declared_count_mismatch`, fires when the
+    reviewer's own `findings_count:` disagrees with the number of findings
+    parsed out of its envelopes — the one way a too-narrow index space can
+    still let a wrong id set audit clean (`_declared_findings_count`).
 
     NEGATIVE SPEC: does NOT check that a finding landed in the RIGHT bucket.
     Nothing in the sidecar records what the correct disposition was, so a
@@ -850,6 +936,11 @@ def _partition_audit(
         "duplicated": [str(i) for i in duplicated],
         "out_of_range": [str(i) for i in out_of_range],
         "unrecognized": unrecognized,
+        "declared_count_mismatch": (
+            [f"declared={declared_count}", f"parsed={count}"]
+            if declared_count is not None and declared_count != count
+            else []
+        ),
     }
     if not any(report.values()):
         return None
@@ -863,6 +954,7 @@ def _build_block(
     no_findings: bool = False,
     prior_blocks: int = 0,
     partition_audit: Optional[Dict[str, List[str]]] = None,
+    envelope_spans: Optional[List[Tuple[int, int]]] = None,
 ) -> str:
     """Render the canonical `## Integrator Dispositions` block, matching
     `agents/review-integrator.md`'s own example byte-for-byte in structure
@@ -887,6 +979,14 @@ def _build_block(
     its own coverage silently "reads as authoritative" (example-retrieval-repo-em,
     2026-09-12). Same render-only-when-it-applies discipline as the two
     fields above, so a clean call is byte-identical to a pre-audit block.
+
+    `envelope_spans` renders `envelope_spans: [1-8, 9-12]` when the sidecar
+    carries MORE THAN ONE reviewer envelope, and nothing when it carries one.
+    It is not a discrepancy report — it renders on a perfectly clean call —
+    because on a multi-pass sidecar the ids alone do not say which pass they
+    name, and a record that leaves that to be re-derived from the file is
+    indistinguishable by eye from one that got it wrong. Spans name the
+    numbering the ids were audited in; a reader needs no second look.
     """
     lines: List[str] = []
     lines.append("")
@@ -913,6 +1013,9 @@ def _build_block(
         lines.append(f"{_BUCKET_YAML_KEY[bucket]}: {rendered}")
     if no_findings:
         lines.append("no_findings: true")
+    if envelope_spans and len(envelope_spans) > 1:
+        rendered = ", ".join(f"{first}-{last}" for first, last in envelope_spans)
+        lines.append(f"envelope_spans: [{rendered}]")
     if partition_audit:
         lines.append("partition_audit:")
         for key in (
@@ -921,6 +1024,7 @@ def _build_block(
             "duplicated",
             "out_of_range",
             "unrecognized",
+            "declared_count_mismatch",
         ):
             values = partition_audit.get(key)
             if values:
@@ -1077,13 +1181,15 @@ def append_dispositions(
     # arithmetic slip in the record of work that is already done -- strictly
     # worse than the miscount. The mismatch is recorded instead, in the block,
     # and a second call with the right map supersedes it cleanly.
+    findings, envelope_spans, candidate_blocks = _findings_index_space(text)
     audit = (
         None
         if no_findings
         else _partition_audit(
-            _find_json_findings_block(text),
+            findings,
             buckets,
-            candidate_blocks=_count_json_findings_blocks(text),
+            candidate_blocks=candidate_blocks,
+            declared_count=_declared_findings_count(text),
         )
     )
 
@@ -1093,6 +1199,7 @@ def append_dispositions(
         no_findings=no_findings,
         prior_blocks=prior_blocks,
         partition_audit=audit,
+        envelope_spans=envelope_spans,
     )
     with sidecar_path.open("a", encoding="utf-8") as handle:
         handle.write(block)
@@ -1106,6 +1213,7 @@ def append_dispositions(
         "already_dispositioned": bool(prior_blocks),
         "prior_blocks": prior_blocks,
         "partition_audit": audit,
+        "envelope_spans": envelope_spans,
     }
 
 
@@ -1301,6 +1409,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     else:
         print(f"append-integrator-dispositions: OK — appended dispositions block to {result['path']}.")
+
+    spans = result.get("envelope_spans") or []
+    if len(spans) > 1:
+        rendered = ", ".join(f"{first}-{last}" for first, last in spans)
+        print(
+            f"append-integrator-dispositions: this sidecar carries {len(spans)} "
+            f"reviewer envelopes; ids were read against the whole set in file "
+            f"order ({rendered}), recorded in the block as `envelope_spans:`."
+        )
 
     audit = result.get("partition_audit")
     if audit:

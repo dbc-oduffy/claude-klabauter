@@ -321,19 +321,9 @@ def _deny_reason(cmd: str, deny_kind: str) -> str:
     """
     del deny_kind, cmd
     return (
-        "BLOCKED: acquiring a CLAUDE.md write grant is an EM action, not a "
-        "dispatched agent's.\n\n"
-        "This is not a judgment on the work behind this call -- a "
-        "dispatched agent cannot see, from where it stands, whether its "
-        "dispatch carries a PM ratification; it only hears what its EM "
-        "tells it. Confirming that is the EM's call, not something to "
-        "resolve from here. Report BLOCKED to your EM with:\n"
-        "  Reason: grant acquisition is EM-only; a subagent's write "
-        "should inherit the EM's own grant via shared-session-id "
-        "resolution, not mint one of its own.\n"
-        "  Unblock: the EM obtains PM ratification, then acquires the "
-        "grant itself in the session that will dispatch the write, before "
-        "dispatching the write."
+        "BLOCKED: CLAUDE.md write-grant acquisition is EM-only. Report "
+        "BLOCKED to your EM: inherit its grant via shared-session-id; EM "
+        "ratifies with PM, then acquires before dispatch."
     )
 
 

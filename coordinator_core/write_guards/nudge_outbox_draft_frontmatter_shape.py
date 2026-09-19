@@ -180,9 +180,9 @@ def _compute_post_content(
     return None
 
 
-_ADVISORY_TEMPLATE = """Outbox draft frontmatter shape: this draft won't pass `cross-repo-memo send`'s validation as written.
+_ADVISORY_TEMPLATE = """Outbox draft won't pass `cross-repo-memo send` validation:
 {problems}
-Fix with `cross-repo-memo compose <topic>` (or hand-edit the fields directly), then `cross-repo-memo send <topic>`. Correct shape: `status: draft` (send promotes it to `open` — never author `open` yourself, even though that's the shape every *received* memo in cross-repo/inbox/ carries)."""
+Use instead: `cross-repo-memo compose <topic>` then `send <topic>`. `status: draft`, not `open` -- send promotes it."""
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

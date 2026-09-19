@@ -23,7 +23,6 @@ from coordinator_core.hooks.support import (
     guard_runner,
     guard_runner_contract,
     message_envelope,
-    registry_write,
     sentinel_write_guard,
     session_hub,
     skill_invocation,
@@ -492,54 +491,6 @@ class TestForwarderResolve:
         native.write_bytes(b"\xcf\xfa\xed\xfe" + b"\x00" * 16)
         argv = forwarder_resolve.forwarder_argv(native)
         assert argv == [str(native)]
-
-
-# ---------------------------------------------------------------------------
-# registry_write
-# ---------------------------------------------------------------------------
-
-
-class TestRegistryWrite:
-    def test_machine_local_set_noop_when_cli_unresolvable(self, monkeypatch):
-        monkeypatch.setattr(
-            registry_write, "resolve_machine_local_cli", lambda plugin_root: None
-        )
-        # Must not raise even though no CLI resolved.
-        assert registry_write.machine_local_set("k", "v") is None
-
-    def test_machine_local_set_invokes_resolved_cli(self, monkeypatch):
-        calls = {}
-
-        def _fake_run(argv, **kwargs):
-            calls["argv"] = argv
-            return subprocess.CompletedProcess(argv, 0)
-
-        monkeypatch.setattr(
-            registry_write, "resolve_machine_local_cli", lambda plugin_root: ["machine-local"]
-        )
-        monkeypatch.setattr(registry_write.subprocess, "run", _fake_run)
-        registry_write.machine_local_set("mykey", "myvalue")
-        assert calls["argv"] == ["machine-local", "set", "mykey", "myvalue"]
-
-    def test_machine_local_set_swallows_oserror(self, monkeypatch):
-        def _fake_run(argv, **kwargs):
-            raise OSError("spawn failed")
-
-        monkeypatch.setattr(
-            registry_write, "resolve_machine_local_cli", lambda plugin_root: ["machine-local"]
-        )
-        monkeypatch.setattr(registry_write.subprocess, "run", _fake_run)
-        assert registry_write.machine_local_set("k", "v") is None
-
-    def test_machine_local_set_swallows_timeout(self, monkeypatch):
-        def _fake_run(argv, **kwargs):
-            raise subprocess.TimeoutExpired(cmd=argv, timeout=6)
-
-        monkeypatch.setattr(
-            registry_write, "resolve_machine_local_cli", lambda plugin_root: ["machine-local"]
-        )
-        monkeypatch.setattr(registry_write.subprocess, "run", _fake_run)
-        assert registry_write.machine_local_set("k", "v") is None
 
 
 # ---------------------------------------------------------------------------

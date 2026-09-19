@@ -3057,21 +3057,10 @@ def _build_reason(
             "this guard. Fix forward, or surface a genuine need to the EM."
         )
     return (
-        "BLOCKED: destructive git/rm/chmod-chown -R is blocked at the shell surface\n"
-        "for subagents.\n\n"
+        "BLOCKED: destructive git/rm/chmod -R blocked for subagents.\n\n"
         f"  Denied: {deny_kind}\n"
         f"  Cmd:    {cmd_safe}\n\n"
-        "This is a deliberate speed bump on shell-invoked git, not a capability\n"
-        "boundary -- no shell-token matcher can constrain an interpreter, and a\n"
-        "subagent that can run Python (or any other interpreter) can still reach\n"
-        "git directly, unseen by this guard. It exists to make the destructive\n"
-        "path cost conscious effort instead of a reflexive shell command, not to\n"
-        "claim the action is unreachable.\n\n"
-        "Fix forward, or surface it to the EM to run -- the main-loop is never\n"
-        "blocked by this guard. This guard has no subagent-reachable override\n"
-        "flag; routing around it via another interpreter is not defeating a\n"
-        "real gate, so treat a genuine need for this exact operation as a\n"
-        "signal to ask, not a puzzle to solve."
+        "Speed bump, not a boundary. Fix forward or ask the EM."
     )
 
 

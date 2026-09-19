@@ -534,3 +534,170 @@ def test_fail_open_never_raises():
     # untrusted, security-relevant root.
     result = coordinator_trusted_root_guard(mode="fail-open", root="/tmp/evil", env=env)
     assert result is False
+
+
+# --- staff-eng review F4: arms the widening's own suite did not cover ---------
+
+
+def test_an_empty_anchor_never_trusts_anything(tmp_path):
+    """The bypass the widening's other arms do NOT catch.
+
+    `_at_or_under`'s equality arm makes an EMPTY anchor catastrophic: `root_cmp
+    == ""` is true for an empty root, and `startswith("" + "/")` trusts every
+    absolute path on the box. The only thing standing between that and the
+    predicate is the `if doe_root and` / `if claude_klabauter_root and` guard in
+    `is_trusted`. Verified by mutation: dropping the `doe_root and` conjunct
+    turns 16 arms in this module red, this one among them. So the conjunct is
+    not solely pinned here — what this arm adds is a DIRECT statement of the
+    property, in the degenerate shape (`""`, `"/"`, an arbitrary absolute path)
+    that the incidental 13 do not name. A reader triaging those 16 failures
+    should not have to infer "the empty anchor trusts everything" from a
+    marketplace-cache fixture that failed for an unrelated reason.
+    """
+    env = {"HOME": str(tmp_path / "home")}
+
+    assert not is_trusted("", env=env)
+    assert not is_trusted("/tmp/evil", env=env)
+    assert not is_trusted("/", env=env)
+
+
+def test_a_root_only_registry_value_does_not_trust_the_whole_filesystem(tmp_path):
+    """`/` as an anchor is the degenerate case of the above, reached through a
+    real surface rather than an absent one: `_doe_root` strips exactly one
+    trailing slash, collapsing `"/"` to `""`, which the emptiness guard then
+    catches. That collapse is load-bearing and was previously unpinned."""
+    settings_home_dir = tmp_path / "settings-home"
+    (settings_home_dir / "machine-local").mkdir(parents=True)
+    (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
+        "\"repos.doe_claude\" = '/'\n"
+    )
+    env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
+
+    assert not is_trusted("/tmp/evil", env=env)
+    assert not is_trusted("/", env=env)
+
+
+def test_the_engine_anchor_has_the_same_negative_boundary_as_the_doe_anchor(tmp_path):
+    """Anchor 3 carried a positive arm only. The widening is symmetric across
+    anchors 2 and 3, so its NEGATIVE boundary must be too — otherwise a
+    regression on the engine anchor alone would pass."""
+    settings_home_dir = tmp_path / "settings-home"
+    (settings_home_dir / "machine-local").mkdir(parents=True)
+    engine = tmp_path / "clones" / "claude-klabauter"
+    (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{engine}'\n"
+    )
+    env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
+
+    assert is_trusted(str(engine), env=env)
+    assert not is_trusted(str(tmp_path / "clones"), env=env)
+    assert not is_trusted(str(tmp_path / "clones" / "claude-klabauter-evil"), env=env)
+    assert not is_trusted(str(tmp_path), env=env)
+
+
+def test_a_traversal_under_a_widened_anchor_is_still_refused(tmp_path):
+    """The traversal reset is global and runs AFTER both anchor arms. Pinned
+    under a WIDENED anchor specifically: the equality arm is new, and a reader
+    could reasonably wonder whether it short-circuits the reset."""
+    settings_home_dir = tmp_path / "settings-home"
+    (settings_home_dir / "machine-local").mkdir(parents=True)
+    engine = tmp_path / "clones" / "claude-klabauter"
+    (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{engine}'\n"
+    )
+    env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
+
+    assert not is_trusted(f"{engine}/..", env=env)
+    assert not is_trusted(f"{engine}/../../tmp/evil", env=env)
+
+
+# --- anchor 4: the served plugin mirror, a key of its own -------------------
+
+
+def _write_plugin_mirror_registry(tmp_path, mirror_root, *, doe_root=None):
+    """A settings-home registry naming the SERVED mirror, and optionally a
+    DIFFERENT authoring tree — the cloud shape, where the two diverge."""
+    settings_home_dir = tmp_path / "settings-home"
+    (settings_home_dir / "machine-local").mkdir(parents=True, exist_ok=True)
+    lines = [f"\"plugin.mirrors.coordinator-claude.live_path\" = '{mirror_root}'"]
+    if doe_root is not None:
+        lines.append(f"\"repos.doe_claude\" = '{doe_root}'")
+    (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
+        "\n".join(lines) + "\n"
+    )
+    return settings_home_dir
+
+
+def test_the_served_plugin_mirror_is_a_trust_anchor_of_its_own(tmp_path):
+    """A cloud container serves a flat published mirror while `repos.doe_claude`
+    names the authoring tree that carries the doctrine corpus the mirror does not
+    publish. Without this anchor the mirror — the thing every session in that
+    container RUNS — is untrusted the moment the authoring key stops naming it."""
+    mirror = tmp_path / "coordinator-claude-mirror"
+    authoring = tmp_path / "authoring-tree"
+    settings_home_dir = _write_plugin_mirror_registry(tmp_path, mirror, doe_root=authoring)
+    env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
+
+    assert is_trusted(str(mirror), env=env)
+    assert is_trusted(str(mirror / "coordinator"), env=env)
+    # The authoring anchor still stands on its own, unchanged.
+    assert is_trusted(str(authoring), env=env)
+
+
+def test_the_mirror_anchor_has_the_same_negative_boundary_as_the_others(tmp_path):
+    mirror = tmp_path / "coordinator-claude-mirror"
+    settings_home_dir = _write_plugin_mirror_registry(tmp_path, mirror)
+    env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
+
+    assert not is_trusted(str(tmp_path), env=env), "never the anchor's parent"
+    assert not is_trusted(str(mirror) + "-evil", env=env), "never a name-prefix sibling"
+    assert not is_trusted(str(mirror / ".." / ".." / "tmp" / "evil"), env=env)
+
+
+def test_a_slash_dotdot_poisoned_anchor_value_is_neutralized_by_the_global_reset(tmp_path):
+    """Review: reviewer-S3, Finding 2. A registry anchor VALUE containing a
+    literal "/.." (operator error or attacker-controlled) is never scrubbed at
+    resolution -- `_plugin_mirror_root` is purely textual per DR-148. It is
+    inert only because any root that would MATCH such a poisoned anchor
+    necessarily itself contains "/..", which trips the global reset in
+    `is_trusted` unconditionally. Pinned so a future reader does not
+    "simplify" that reset away believing it only guards anchor 1."""
+    mirror = tmp_path / "legit" / ".." / "evil-mirror"
+    settings_home_dir = _write_plugin_mirror_registry(tmp_path, mirror)
+    env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
+
+    poisoned_anchor = str(mirror)
+    assert "/.." in poisoned_anchor.replace(os.sep, "/")
+    # Even the anchor value itself, which would otherwise self-match via
+    # `_at_or_under`, is refused -- the reset applies unconditionally.
+    assert not is_trusted(poisoned_anchor, env=env)
+    assert not is_trusted(str(mirror / "coordinator"), env=env)
+
+
+def test_an_absent_mirror_key_contributes_nothing_and_never_raises(tmp_path):
+    settings_home_dir = tmp_path / "settings-home"
+    (settings_home_dir / "machine-local").mkdir(parents=True)
+    (settings_home_dir / "machine-local" / "registry.local.toml").write_text("")
+    env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
+
+    assert not is_trusted(str(tmp_path / "coordinator-claude-mirror"), env=env)
+
+
+def test_diagnostics_name_the_mirror_anchor_without_calling_its_absence_the_defect(
+    capsys, tmp_path
+):
+    """The key is absent on every machine where the served and authoring trees are
+    one directory, which is most of them. It must be VISIBLE in a rejection, and
+    must not be listed among the empty anchors that are "very likely the actual
+    defect" — that sends a maintainer hunting a key their box correctly lacks."""
+    settings_home_dir = _write_plugin_mirror_registry(
+        tmp_path, tmp_path / "mirror", doe_root=tmp_path / "authoring"
+    )
+    env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
+
+    with pytest.raises(UntrustedRootError):
+        coordinator_trusted_root_guard(mode="fail-loud", root="/tmp/evil", env=env)
+
+    err = capsys.readouterr().err
+    assert "plugin.mirrors.coordinator-claude.live_path" in err
+    assert "plugin mirror anchor" in err

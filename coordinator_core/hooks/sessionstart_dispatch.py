@@ -15,24 +15,24 @@ identical shape `stop_dispatch.py` (a prior arrival) already established for
 this engine's own SessionStart/Stop fan-ins. There is no subprocess
 boundary left to fold across, so none of the byte-capture machinery applies.
 
-COMPOSED HERE, all three within THIS row's own `writes:` footprint:
+COMPOSED HERE:
   - `sessionstart_bin_drift_refresh` (source `sources`: `{"startup"}`)
   - `session_start_announce_job_mode` (source `sources`: `{"startup"}`)
   - `guard_hook_generation_self_probe` (source `sources`:
     `{"startup", "clear", "compact"}`)
+  - `hooks.project_orientation` — W4-C11 has landed
+    (`coordinator_core/hooks/project_orientation.py`), so the deferral this
+    docstring previously carried no longer holds
+    (overengineering-reviewer, 2026-09-18). Composed via direct handler
+    import, same shape as the other legs.
+  - `session.guard_settings_integrity` / `session.guard_hooks_kill_switch_detail`
+    — DoE classifies both "retire": DoE shims over an engine body that
+    ALREADY EXISTS as these two already-registered `session.*` IPC ops.
+    Composed by calling those handlers directly — no `hooks.*` wrapper
+    needed or added. Each returns `{"text": str}`, not the `hookSpecificOutput`
+    envelope the other legs use; `_extract_context` accounts for both shapes.
 
-DEFERRED — NOT COMPOSED, each for a stated reason, not an oversight:
-  - `project_orientation` — DoE's own `REGISTRY` folds it here too, but its
-    arrival is W4-C11, a SIBLING chunk in this same wave with no ordering
-    dependency on this one; composing an op this row does not own would be
-    reaching outside this chunk's `writes:`. A future edit adds it once
-    landed.
-  - `guard_settings_integrity` / `guard_foreign_platform_paths` — DoE
-    classifies both "retire": DoE shims over an engine body that ALREADY
-    EXISTS (`session.guard_settings_integrity` /
-    `session.guard_hooks_kill_switch_detail`, already-registered IPC ops,
-    not `hooks.*`-namespaced SessionStart ops). Composing them here would
-    require a `hooks.*` wrapper this row's `writes:` does not authorize.
+DEFERRED — NOT COMPOSED, for a stated reason, not an oversight:
   - `day_branch_assert` — `coordinator_core/hooks/day_branch_assert.py`
     exists on disk (a prior, unrelated arrival) but carries no
     `@register_op` — it is not yet a callable op this fan-in can compose
@@ -55,11 +55,15 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C10
 
 from __future__ import annotations
 
+import inspect
 from typing import Mapping, Optional
 
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.hooks.guard_hook_generation_self_probe import (
     _handler as _guard_hook_generation_self_probe_handler,
+)
+from coordinator_core.hooks.project_orientation import (
+    _handler as _project_orientation_handler,
 )
 from coordinator_core.hooks.session_start_announce_job_mode import (
     _handler as _session_start_announce_job_mode_handler,
@@ -68,11 +72,23 @@ from coordinator_core.hooks.sessionstart_bin_drift_refresh import (
     _handler as _sessionstart_bin_drift_refresh_handler,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.session.guard_settings_integrity import (
+    _handler as _guard_settings_integrity_handler,
+    _handler_kill_switch_detail as _guard_hooks_kill_switch_detail_handler,
+)
 
 
 def _extract_context(result) -> "Optional[str]":
+    """Accepts either envelope shape a composed leg may return: the
+    `hookSpecificOutput.additionalContext` shape (`context_only`/
+    `no_advisory`) every `hooks.*` leg uses, or the `{"text": str}` shape
+    the `session.*` IPC ops (`guard_settings_integrity`,
+    `guard_hooks_kill_switch_detail`) use."""
     if not isinstance(result, dict):
         return None
+    text = result.get("text")
+    if isinstance(text, str) and text:
+        return text
     hso = result.get("hookSpecificOutput")
     if not isinstance(hso, dict):
         return None
@@ -88,14 +104,23 @@ async def _handler(params: dict, repo_root=None) -> dict:
     payload = dict(payload)
     leg_params = {"payload": payload}
 
+    # Review: coordinator:code-reviewer — align with postuse_stop_family_
+    # dispatch.py::_call_leg's inspect.isawaitable handling instead of
+    # hand-picking bare-await vs. _run_sync per leg; a future sync->async
+    # flip on any leg's handler no longer needs a matching edit here.
     texts: "list[str]" = []
     for leg_call in (
         lambda: _sessionstart_bin_drift_refresh_handler(leg_params),
         lambda: _session_start_announce_job_mode_handler(leg_params),
         lambda: _guard_hook_generation_self_probe_handler(leg_params),
+        lambda: _project_orientation_handler(leg_params),
+        lambda: _guard_settings_integrity_handler(payload),
+        lambda: _guard_hooks_kill_switch_detail_handler(payload),
     ):
         try:
-            result = await leg_call()
+            result = leg_call()
+            if inspect.isawaitable(result):
+                result = await result
         except Exception:
             continue
         text = _extract_context(result)

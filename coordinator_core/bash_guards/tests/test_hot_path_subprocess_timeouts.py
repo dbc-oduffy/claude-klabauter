@@ -78,6 +78,20 @@ _EXEMPT: Dict[Tuple[str, str], str] = {
         "hot-path caller is ever added, it must pass timeout= explicitly and "
         "this entry must be re-examined rather than inherited."
     ),
+    ("coordinator_core.git.run", "run_git"): (
+        "`subprocess.Popen` has no `timeout=` constructor parameter -- unlike "
+        "`subprocess.run`, the bound is enforced on the immediately-following "
+        "`proc.communicate(input=fed_input, timeout=wall)` call, with `wall` "
+        "resolved by `_wall_bound(timeout, remote)` (the same "
+        "budget-plus-`_SPAWN_SCHEDULING_HEADROOM_SECS` convention this "
+        "module's own docstring names). `git.run.py`'s own extensive comment "
+        "immediately above this call explains why `Popen` replaced `run` here "
+        "at all: `run`'s own `timeout=` does not reliably bound on Windows "
+        "(state/bug-backlog/2026-08-31-subprocess-run-s-timeout-does-not-"
+        "bound-466bceff0ba5.yaml) -- passing `timeout=` to `Popen` itself "
+        "would raise `TypeError` (no such parameter exists), so an "
+        "on-the-call keyword is structurally impossible here, not omitted."
+    ),
 }
 
 

@@ -525,11 +525,59 @@ def to_json(verdicts: "list[ForwarderVerdict]") -> str:
     return json.dumps(payload, indent=2, sort_keys=False) + "\n"
 
 
-def resolve_bare_name(stem: str, path_dirs: Sequence[str], pathext: str) -> "list[Path]":
-    """Every file `stem` resolves to across `path_dirs`, in the order Windows
-    would try them: PATH directories outermost, and within each directory
-    PowerShell's `.ps1` first, then PATHEXT's own order, then the extensionless
-    file (which cmd tries only after PATHEXT).
+# Review: overengineering-reviewer (Kira, pass 2, finding N2) -- `resolve_bare_name`
+# carried two independently-settable booleans (`require_exec`, `powershell_first`)
+# where the one live caller derived both from a single bit. Four combinations
+# existed, two were production-reachable. One named model per platform, extended
+# here rather than by a third and fourth boolean.
+_PLATFORM_RULES: "dict[str, dict[str, bool]]" = {
+    # Windows: `.ps1` outranks PATHEXT (verified trace on `_POWERSHELL_FIRST_EXT`),
+    # and the mode of an `.exe` says nothing about whether `CreateProcess` will
+    # run it, so POSIX permission bits are not consulted.
+    "windows": {"powershell_first": True, "require_exec": False},
+    # POSIX: no shell executes a `.ps1`, and a mode-0644 file is skipped rather
+    # than returned as the winner.
+    "posix": {"powershell_first": False, "require_exec": True},
+}
+
+
+def resolve_bare_name(
+    stem: str,
+    path_dirs: Sequence[str],
+    pathext: str,
+    *,
+    rules: str = "windows",
+) -> "list[Path]":
+    """Every file `stem` resolves to across `path_dirs`, in the order the
+    requested platform's rules would try them: PATH directories outermost, and
+    within each directory PowerShell's `.ps1` first, then PATHEXT's own order,
+    then the extensionless file (which cmd tries only after PATHEXT).
+
+    `rules` IS THE PLATFORM, and it is a keyword precisely so the function stays
+    pure -- a `sys.platform` read in here would defeat the tests that hand it a
+    Windows PATHEXT on POSIX, which is most of them. It defaults to the
+    `"windows"` model this resolver was written for; `bare_name_door_report`, the
+    impure caller, is the one that knows which host it is on.
+
+    ONE NAMED MODEL, NOT A SET OF FLAGS. The two behaviours the models differ on
+    are read off `_PLATFORM_RULES` inside, so they cannot be set independently:
+    the live requirement is one bit (which platform), and a signature carrying
+    two booleans offered four combinations of which only two were reachable. A
+    third platform rule extends the model's entry; it does not widen the
+    signature.
+
+    Under `"posix"` the `.ps1` arm is dropped. PATHEXT is empty on POSIX, so
+    leaving it in makes `.ps1` outrank the real image: measured, a directory
+    holding only `coordinator-invoke.ps1` is returned as the WINNER on Linux,
+    which the report then prints as a BREAK-CLASS interpreter start for a file no
+    POSIX shell would ever execute.
+
+    Under `"posix"` a candidate must also pass `os.access(..., X_OK)`. A
+    mode-0644 `coordinator-invoke` is not a door -- a real POSIX shell skips it
+    and keeps searching PATH, where the Windows model reports it as the winner.
+    That check is NOT part of the Windows model: the mode of a Windows `.exe`
+    says nothing about whether `CreateProcess` will run it, and the pure Windows
+    model must not start consulting POSIX permission bits.
 
     PURE over its arguments -- takes PATH and PATHEXT rather than reading the
     environment -- so the ordering logic is testable on a machine that has no
@@ -543,7 +591,16 @@ def resolve_bare_name(stem: str, path_dirs: Sequence[str], pathext: str) -> "lis
 
     The `.ps1`-first claim is verified, not assumed -- see `_POWERSHELL_FIRST_EXT`'s
     comment for the captured `Get-Command`/PATHEXT trace."""
-    exts = [_POWERSHELL_FIRST_EXT]
+    try:
+        model = _PLATFORM_RULES[rules]
+    except KeyError:
+        raise ValueError(
+            f"unknown rules model {rules!r}; known: {sorted(_PLATFORM_RULES)}"
+        ) from None
+    powershell_first = model["powershell_first"]
+    require_exec = model["require_exec"]
+
+    exts = [_POWERSHELL_FIRST_EXT] if powershell_first else []
     # `;` by literal, never `os.pathsep`. The separator is a property of the
     # PATHEXT VARIABLE, not of the host reading it: this function is pure over
     # its arguments and is routinely handed a Windows PATHEXT on POSIX, where
@@ -557,22 +614,78 @@ def resolve_bare_name(stem: str, path_dirs: Sequence[str], pathext: str) -> "lis
     for raw_dir in path_dirs:
         if not raw_dir:
             continue
+        # Windows resolves PATHEXT case-insensitively (NTFS and APFS both
+        # fold case), so an UPPERCASE PATHEXT entry like `.EXE` must still
+        # match a lowercase `coordinator-invoke.exe` on disk. Building the
+        # candidate path and calling `.is_file()` on it depends on the HOST
+        # filesystem's own case-folding -- correct on Windows/macOS, silently
+        # empty on a case-sensitive POSIX filesystem (ext4, most CI/cloud
+        # containers), which broke this "PURE" function's host-independence.
+        # One directory listing keyed by folded name makes the model behave
+        # identically everywhere.
+        #
+        # An EXACT-case match wins its own folded bucket: a case-sensitive
+        # filesystem can hold both `zz.exe` and `zz.EXE`, where a folded map
+        # that keeps one arbitrary entry answers with whichever `scandir`
+        # yielded last. `is_file()` is called on the single matched candidate,
+        # never on every entry of every PATH directory -- the latter costs
+        # 12.5ms per call against 1.9ms here, measured over a real PATH.
+        try:
+            with os.scandir(raw_dir) as it:
+                by_folded: "dict[str, list[str]]" = {}
+                for entry in it:
+                    by_folded.setdefault(entry.name.lower(), []).append(entry.name)
+        except OSError:
+            # Review: code-reviewer S12/F3 -- an unreadable PATH directory is
+            # SKIPPED, which is what a real shell does, so this is the right
+            # resolution behaviour and stays. What it cannot do is tell a
+            # caller apart: an EACCES directory holding the door and a
+            # directory holding nothing both contribute zero hits. A census
+            # reading "resolves to nothing" as "not installed" is therefore
+            # reading past a case this function does not distinguish.
+            continue
+        dir_path = Path(raw_dir)
         for ext in exts:
-            candidate = Path(raw_dir) / f"{stem}{ext}"
-            if candidate.is_file() and candidate not in hits:
-                hits.append(candidate)
+            wanted = f"{stem}{ext}"
+            found = by_folded.get(wanted.lower())
+            if not found:
+                continue
+            # Review: reviewer (S6, finding 1) -- committing to ONE spelling
+            # before checking `is_file()` let an exact-case DIRECTORY (e.g.
+            # `zz.exe/`) shadow a real file of differing case (`zz.EXE`) in
+            # the same folded bucket: the exact-case spelling won the bucket,
+            # failed `is_file()`, and `continue` skipped the extension arm
+            # entirely instead of falling through to the sibling spelling
+            # still sitting in `found`. Try candidates in preference order
+            # (exact match, then the sorted remainder) and accept the first
+            # that is actually a file -- same folded-bucket lookup, same
+            # no-stat-storm cost (still at most len(found) stats per
+            # extension, never a scan of every PATH directory).
+            ordered = ([wanted] if wanted in found else []) + sorted(
+                s for s in found if s != wanted
+            )
+            for spelling in ordered:
+                candidate = dir_path / spelling
+                if not candidate.is_file():
+                    continue
+                if require_exec and not os.access(candidate, os.X_OK):
+                    continue
+                if candidate not in hits:
+                    hits.append(candidate)
+                break
     return hits
 
 
 def _is_same_file(a: Path, b: Path) -> bool:
     """True when two paths name the same file on disk.
 
-    Never `==`. `resolve_bare_name` builds its candidates by joining PATHEXT's
-    OWN casing onto the stem, so a `.EXE` entry in PATHEXT matches a lowercase
-    `.exe` on disk (NTFS and APFS are both case-insensitive) and comes back
-    spelled `.EXE`. Compared by equality against a lowercase
-    `DOOR_INSTALLED_NAME`, that reports a correctly installed door as BROKEN on
-    casing alone -- on Windows, the platform this report exists to serve.
+    Never `==`. The two sides reach here from different producers -- a
+    `resolve_bare_name` hit carries the on-disk spelling of a PATH directory
+    entry, `DOOR_INSTALLED_NAME` carries the installer's literal -- and on a
+    case-insensitive filesystem (NTFS, APFS) the same file can be spelled two
+    ways. Compared by equality, that reports a correctly installed door as
+    BROKEN on casing alone -- on Windows, the platform this report exists to
+    serve.
 
     Negative spec: do NOT "fix" this by lowercasing either side. The stem can
     carry any casing, the filesystem may be case-SENSITIVE, and identity is the
@@ -629,12 +742,28 @@ def bare_name_door_report() -> "list[str]":
     just-installed environment) or a `doctor`-style probe run on a cadence
     outside pytest's quarantine would close this; neither exists yet. Until one
     does, this module documents the hazard on request -- it does not guard it."""
-    door = _settings_home_root() / "bin" / f"{_DOOR_STEM}.exe"
+    # The installed door name is platform-resolved -- extensionless on POSIX
+    # (`door_install.DOOR_INSTALLED_NAME`, the single source of truth for it).
+    # A hardcoded `.exe` here misses on every POSIX host and the early return
+    # below then suppresses every finding this function exists to make.
+    # Review: reviewer (S6, finding 4) -- the prior wording cited `run_census`'s
+    # local import of `substrate._derive_agent_helper_target_map` as precedent,
+    # but that import serves a different function's cost tradeoff; it isn't
+    # close analogy for this one. Function-local import here on its own
+    # merits: `door_install` costs ~35ms to import and nothing else in this
+    # module needs it, and this function is not on the hot `build_census`/
+    # `run_census` path.
+    from coordinator_core.install.door_install import DOOR_INSTALLED_NAME
+
+    door = _settings_home_root() / "bin" / DOOR_INSTALLED_NAME
     path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+    # This is the impure caller that owns the platform: `resolve_bare_name`
+    # itself stays pure and Windows-modelled by default (see its `rules`).
     hits = resolve_bare_name(
         _DOOR_STEM,
         path_dirs,
         os.environ.get("PATHEXT", ""),
+        rules="windows" if sys.platform == "win32" else "posix",
     )
 
     lines = ["", "## Bare-name resolution", ""]
@@ -673,8 +802,12 @@ def bare_name_door_report() -> "list[str]":
         lines += [f"- `{h}`" for h in shadowed]
 
     sibling = door.with_suffix(_POWERSHELL_FIRST_EXT)
+    # `_is_same_file`, never `==`: a PATH entry reaching the door's bin through
+    # a symlink (`~/bin -> ...` on Linux, `/System/Volumes/Data/...` on macOS)
+    # compares unequal while naming the same directory, which silently
+    # suppresses the BROKEN finding below.
     door_bin_on_path = any(
-        raw_dir and Path(raw_dir) == door.parent for raw_dir in path_dirs
+        raw_dir and _is_same_file(Path(raw_dir), door.parent) for raw_dir in path_dirs
     )
     if sibling.is_file() and door_bin_on_path and sibling not in hits:
         lines.append("")

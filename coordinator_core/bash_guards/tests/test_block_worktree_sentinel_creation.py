@@ -368,11 +368,16 @@ class TestIndirectionWrapperShapesDeny:
     def test_unrelated_bash_dash_c_allows(self):
         assert guard.check(_payload('bash -c "echo hello"')) is None
 
-    def test_unrelated_xargs_still_denied_outright(self):
-        # xargs is denied OUTRIGHT for any payload (content not present in
-        # the command text) -- same over-block posture as the sibling
-        # destructive-action guard's xargs handling.
-        _reason(guard.check(_payload("echo hello | xargs cat")))
+    def test_xargs_read_only_head_allows(self):
+        # A read-only head cannot create a file whatever stdin assembles --
+        # the false positive that denied `git diff --name-only | xargs wc -l`.
+        assert guard.check(_payload("echo hello | xargs cat")) is None
+        assert guard.check(_payload("git diff --name-only a b | xargs wc -l")) is None
+
+    def test_xargs_writing_or_wrapper_head_still_denied(self):
+        _reason(guard.check(_payload("echo hello | xargs cp x")))
+        _reason(guard.check(_payload("ls | xargs sh -c 'echo'")))
+        _reason(guard.check(_payload("ls | xargs --unknown-flag cat")))
 
     def test_python_dash_m_allows(self):
         assert guard.check(_payload("python3 -m pytest")) is None

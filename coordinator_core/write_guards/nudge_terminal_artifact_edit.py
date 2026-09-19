@@ -501,12 +501,12 @@ def _edit_text_for_classification(tool_name: str, payload: Dict[str, Any], disk_
     return disk_text
 
 
-_REASON_TEMPLATE = """OFFER: {file_path_norm} reads as delivered ({status_desc}) -- this edit reads as an INSTRUCTION (forward-binding), not correspondence. Nobody is coming back to read a "must"/"next session" clause in a delivered plan (happened: commit 257448d7; also docs/plans/2026-08-03-scope-guard-peer-claim-release.md).
+_REASON_TEMPLATE = """{file_path_norm} reads as delivered ({status_desc}); this edit reads as a forward-binding instruction, not correspondence.
 
 Use instead:
 {alternatives}
 
-If this write is CORRESPONDENCE (a dated note, "refuted by X", a status/history addendum) rather than an instruction, ignore this -- nothing is blocked and the write already happened."""
+Correspondence, not an instruction? Ignore this."""
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

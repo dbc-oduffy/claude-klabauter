@@ -134,8 +134,10 @@ stroll through):
 - This rationale does not transfer to non-hook surfaces. If the artifact is not exec'd by git,
   this carve-out does not apply, full stop.
 - Standing reduction target (see `docs/decisions/` C20 git-hook-minimization work): the *number*
-  of local git hooks is itself minimized; a new local git hook
-  requires PM approval.
+  of local git hooks is itself minimized; a new local git hook requires PM approval. **(Amended
+  2026-09-19 — PM ruling: GitHub Actions retired fleet-wide.** The prior text preferred migrating
+  hooks to GitHub Actions CI/CD; that destination is gone. A check earning removal from local
+  hooks moves to a local gate — pytest / `coordinator:validate` — never to CI.)
 
 Sites:
 - `coordinator_core/ops/install_meta_repo_precommit_hook.py` `main()` (~:190, fresh-install `#!/bin/sh` shim-body generation)

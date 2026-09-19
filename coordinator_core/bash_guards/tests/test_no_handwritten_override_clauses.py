@@ -1223,17 +1223,29 @@ class TestEvasionFormsCaughtThroughTheRealGate:
     asserted to catch something is not a gate SEEN to catch it. Every
     class above proves the detector against a synthetic `tmp_path` file --
     this class instead plants each evasion form as a real, throwaway `.py`
-    file directly inside the LIVE `coordinator_core/bash_guards/` directory
-    (the one `--plugin-dir` resolves for every session on this machine),
-    runs the exact same discovery + scan `test_bash_guards_package_carries_
-    no_handwritten_override_clause` runs, confirms it is caught, and
-    deletes the file -- proving reachability through the real directory
-    listing, not only through a hand-picked file list handed to the scan
-    function directly.
+    file and runs the exact same discovery + scan `test_bash_guards_
+    package_carries_no_handwritten_override_clause` runs, confirming it is
+    caught through genuine directory-listing discovery rather than a
+    hand-picked file list handed to the scan function directly.
+
+    `_BASH_GUARDS_DIR` is monkeypatched at a `tmp_path` root (same seam,
+    same pattern as `TestDiscoveryCatchesANewFile` above) rather than
+    writing directly into the LIVE `coordinator_core/bash_guards/`
+    directory: a concurrent xdist worker's OWN discovery run (this same
+    module's `test_bash_guards_package_carries_no_handwritten_override_
+    clause`, or any other test walking that directory) could enumerate this
+    test's throwaway file mid-write or mid-delete and hit a
+    `FileNotFoundError` racing the `finally` cleanup -- a source-tree write
+    is never safe to share with a peer worker's own directory walk, no
+    matter how quickly it is undone. `_discover_guard_files()` still does a
+    REAL `Path.glob` directory listing (never a mocked file list) -- only
+    the directory it lists is a private, per-test one now, matching
+    `TestDiscoveryCatchesANewFile`'s own already-established discovery
+    seam precisely.
 
     The throwaway file is removed in a `finally` block so a failing
     assertion still cleans up rather than leaving evasion-shaped source
-    sitting in the live guard package."""
+    behind."""
 
     _EVASION_FORMS = {
         "fstring_interp": (
@@ -1301,9 +1313,21 @@ class TestEvasionFormsCaughtThroughTheRealGate:
     }
 
     @pytest.mark.parametrize("form_name", sorted(_EVASION_FORMS))
-    def test_evasion_form_planted_in_the_real_package_is_caught_then_removed(self, form_name):
+    def test_evasion_form_planted_in_the_real_package_is_caught_then_removed(
+        self, form_name, tmp_path, monkeypatch
+    ):
         body, expected_matched = self._EVASION_FORMS[form_name]
-        throwaway = _BASH_GUARDS_DIR / ("_throwaway_h3_evasion_probe_%s.py" % form_name)
+        other_root = tmp_path / "_other_root_unused"
+        other_root.mkdir()
+        monkeypatch.setattr(
+            "coordinator_core.bash_guards.tests.test_no_handwritten_override_clauses._BASH_GUARDS_DIR",
+            tmp_path,
+        )
+        monkeypatch.setattr(
+            "coordinator_core.bash_guards.tests.test_no_handwritten_override_clauses._WRITE_GUARDS_DIR",
+            other_root,
+        )
+        throwaway = tmp_path / ("_throwaway_h3_evasion_probe_%s.py" % form_name)
         assert not throwaway.exists(), (
             "a stale throwaway probe from a prior failed run is still on disk -- "
             "remove %s before re-running" % throwaway

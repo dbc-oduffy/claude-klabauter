@@ -285,6 +285,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
         return no_advisory()
 
     message, channel = result
+    env = params.get("env")
     if channel == _CHANNEL_DENY:
-        return deny("PreToolUse", render(message))
-    return allow_advisory("PreToolUse", render(message))
+        return deny("PreToolUse", render(message, env=env))
+    return allow_advisory("PreToolUse", render(message, env=env))

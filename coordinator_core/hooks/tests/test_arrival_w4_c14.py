@@ -253,3 +253,15 @@ def test_stop_dispatch_reexports_guard_kira_verdict_routed():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_day_branch_assert_loads_the_engines_own_session_ensure_branch():
+    """The loader resolves against the engine tree, never the asserted repo
+    (which carries no coordinator/lib), and the loaded module's dataclasses
+    import cleanly."""
+    from coordinator_core.hooks import day_branch_assert
+
+    day_branch_assert._session_ensure_branch = None
+    fn = day_branch_assert._load_session_ensure_branch()
+    assert callable(fn)
+    assert day_branch_assert._load_session_ensure_branch() is fn

@@ -274,14 +274,11 @@ def _deny_reason(
 ) -> str:
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
+        f"BLOCKED {file_path}: unaddressed code-reviewer finding.\n"
         "Use instead:\n"
-        f"  dispatch coordinator:review-integrator against {sidecar_path} for "
-        f"{file_path} - an unaddressed code-reviewer finding on this file must "
-        "be applied via the integrator, not hand-edited\n\n"
-        "If the integrator is genuinely unavailable, re-dispatch once; if "
-        "still unavailable and not break-class, park with an owner instead "
-        "of hand-editing; if break-class, hand-apply after your own "
-        "fresh-disk re-check and record the deviation in the commit"
+        f"  dispatch coordinator:review-integrator against {sidecar_path}; "
+        "if unavailable, re-dispatch once, then park with an owner, or "
+        "hand-apply after a fresh-disk re-check if break-class"
         + ("\n\n" + _note if _note else "")
     )
 

@@ -107,6 +107,13 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+# Module-level, not function-local: `_content_root_primitive` is a leaf whose
+# only imports are `os` and `pathlib`, so it cannot participate in a
+# `coordinator_core` cycle. The deferral this replaces was the workaround that
+# leaf module exists to retire.
+# Review: Kira (overengineering, F4) — the workaround survived at the one site
+# that motivated the fix.
+from coordinator_core._content_root_primitive import content_root_for as _content_root_for
 from coordinator_core.doe_root_pointer import read_doe_root_pointer as _read_doe_root_pointer
 from coordinator_core.machine_resolver import registry_get
 
@@ -506,15 +513,16 @@ def resolve_content_root() -> str:
 
     doe_root = _read_doe_root_pointer()
     if doe_root:
-        if os.path.isdir(os.path.join(doe_root, "coordinator")):
-            return os.path.join(doe_root, "coordinator")
         # A container that registers the published FLAT mirror as its DoE root
         # has its content at the root itself; without this arm the pointer rung
         # produced `<mirror>/coordinator`, which cannot exist, and content
         # resolution fell through to a marketplace path that was not there
-        # either. Same manifest marker the flat rung below gates on.
-        if os.path.isfile(os.path.join(doe_root, ".claude-plugin", "plugin.json")):
-            return doe_root
+        # either. Same marker _content_root_for gates on — this module IS the
+        # marker's stated owner (overengineering-reviewer finding 4), so it
+        # calls the primitive rather than hand-expanding it a second time.
+        found = _content_root_for(doe_root)
+        if found is not None:
+            return str(found)
 
     if flat and os.path.isfile(os.path.join(flat, ".claude-plugin", "plugin.json")):
         return flat

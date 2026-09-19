@@ -74,7 +74,7 @@ import sys
 import pytest
 
 from coordinator_core.bash_guards import guard_plumbing_and_loops as guard
-from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC
+from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY as OVERRIDE_KEYS_DOC
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]

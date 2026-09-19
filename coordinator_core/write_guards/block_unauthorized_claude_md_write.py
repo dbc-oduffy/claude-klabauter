@@ -481,8 +481,8 @@ def _deny_reason(agent_id: str, file_path: str) -> str:
     """
     file_path_safe = _sanitize_file_path_for_reason(file_path)
     return (
-        "BLOCKED: CLAUDE.md needs a session grant for dispatched writes. "
-        "Check the discharge hierarchy (mechanize/reroute/wiki) first.\n\n"
+        "BLOCKED: needs a session grant -- check the discharge hierarchy "
+        "(mechanize/reroute/wiki) first.\n"
         "Report BLOCKED to your EM instead:\n"
         f"  Target: `{file_path_safe}`\n"
         "  Reason: needs a live CLAUDE.md write grant for this session.\n"

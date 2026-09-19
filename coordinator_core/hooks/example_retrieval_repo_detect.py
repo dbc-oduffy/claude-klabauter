@@ -113,8 +113,8 @@ def detect_banner(cwd: str) -> str:
 
     if not os.path.isfile(db_path):
         return (
-            f"example-retrieval-repo: UNINITIALIZED — marker found at {manifest_path} but "
-            "no graph.db; run the example-retrieval-repo indexer before querying"
+            "example-retrieval-repo: UNINITIALIZED -- marker found, no graph.db; run "
+            "the example-retrieval-repo indexer before querying."
         )
 
     try:

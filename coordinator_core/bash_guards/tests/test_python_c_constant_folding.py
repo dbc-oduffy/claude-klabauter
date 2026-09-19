@@ -213,12 +213,32 @@ def test_unparseable_payload_folds_to_nothing_and_claims_nothing():
 
 
 def _recursion_bomb_payload():
-    """A ``+`` chain long enough that `ast.parse` blows CPython's recursion
-    limit on THIS interpreter -- derived from the live limit rather than
-    pinned at a term count, so a raised limit cannot quietly turn the test
-    below into a no-op.
+    """A unary-minus chain, grown empirically until `ast.parse` actually
+    blows its depth guard on THIS interpreter -- probed at runtime rather
+    than pinned to a fixed term count or a fixed exception type, so neither
+    a raised recursion limit NOR a parser-implementation change (CPython
+    3.14's PEG parser replaced a pure recursion trip with a growable,
+    bounded stack that raises `MemoryError` instead of `RecursionError` for
+    the identical "too deep to parse safely" shape) can quietly turn the
+    test below into a no-op. A left-associative ``+`` chain (the prior
+    shape) no longer nests at all under 3.14's parser and never raises
+    anything at any practical length -- unary chains still recurse one
+    frame per level, which is what this needs.
     """
-    return "import os; os.system(%s)" % "+".join(["'a'"] * (sys.getrecursionlimit() * 4))
+    n = max(sys.getrecursionlimit() * 4, 2000)
+    for _ in range(24):
+        payload = "import os; os.system(%s1)" % ("-" * n)
+        try:
+            ast.parse(payload)
+        except (RecursionError, MemoryError):
+            return payload
+        except SyntaxError:
+            pass
+        n *= 2
+    raise AssertionError(
+        "could not construct a payload that blows ast.parse's depth bound "
+        "on this interpreter -- _recursion_bomb_payload needs a new shape"
+    )
 
 
 def test_recursion_bomb_is_a_bound_hit_not_an_unparseable_payload():
@@ -229,7 +249,7 @@ def test_recursion_bomb_is_a_bound_hit_not_an_unparseable_payload():
     which mechanism 2 denies on.
     """
     payload = _recursion_bomb_payload()
-    with pytest.raises(RecursionError):
+    with pytest.raises((RecursionError, MemoryError)):
         ast.parse(payload)
 
     guard._fold_python_c_payload.cache_clear()

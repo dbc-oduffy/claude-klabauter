@@ -43,8 +43,8 @@ import asyncio
 
 import pytest
 
+from coordinator_core.ops.session import emit_effective_delivery
 from coordinator_core.hooks import (
-    emit_effective_delivery,
     fanin_registries,
     guard_handoff_summary_cap_on_write,
     guard_phantom_staged_deletion_precommit,
@@ -445,8 +445,6 @@ def test_emit_effective_delivery_provenance_keys_shape():
         "generated_from_sha",
         "generated_at",
         "generated_from_dirty_tree",
-        "doe_source_sha",
-        "doe_source_dirty_tree",
     )
 
 
@@ -555,16 +553,17 @@ def _build_block_against_synthetic_root(tmp_path, monkeypatch):
         "_resolve_manifest_paths",
         lambda: (hooks_json_path, manifest_path),
     )
-    # `_emission_provenance`'s DoE-side git reads need a real repo -- this
-    # synthetic content root is a bare tmp_path, no `.git` anywhere in its
-    # ancestry, so `_doe_source_provenance` would fail closed on a
-    # `git rev-parse` it cannot run. Stubbed to isolate this test to the
-    # `hooks.json`-parsing/carrier-building logic under test, which is what
-    # exercising a synthetic root is for.
+    # `_emission_provenance` reads git in the DoE repo -- this synthetic
+    # content root is a bare tmp_path with no `.git`, so it is stubbed to
+    # isolate this test to the `hooks.json`-parsing/carrier-building logic.
     monkeypatch.setattr(
         emit_effective_delivery,
-        "_doe_source_provenance",
-        lambda doe_repo_root: {"doe_source_sha": "f" * 40, "doe_source_dirty_tree": False},
+        "_emission_provenance",
+        lambda hooks_json_path: {
+            "generated_from_sha": "f" * 40,
+            "generated_at": "2026-09-19T00:00:00Z",
+            "generated_from_dirty_tree": False,
+        },
     )
     return emit_effective_delivery.build_block()
 

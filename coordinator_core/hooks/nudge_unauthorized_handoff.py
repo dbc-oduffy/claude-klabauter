@@ -62,13 +62,11 @@ _INSTALL_CHAIN_ORDER_RE = re.compile(r"^install_chain_order:\s*[0-9]", re.MULTIL
 # Nudge message template (mirrors nudge-unauthorized-handoff.sh).
 # ---------------------------------------------------------------------------
 
-_NUDGE_MSG_TEMPLATE = """\
-[nudge] File written under {parent_dir}/, no /handoff, /workstream-complete, or /spinoff
-[nudge] active. Nudge, not a block — proceed if deliberate.
-[nudge] "Done"? /workstream-complete (or commit+stop) — /handoff is IN-FLIGHT only.
-[nudge] Another repo's EM? Use cross-repo-memo.
-[nudge] Genuine handoff/fork? /handoff or /spinoff (PM-gated).
-[nudge] Correct as-is (recovery, /pickup, review)? Ignore this."""
+_NUDGE_MSG_TEMPLATE = (
+    "[nudge] {parent_dir}/: no /handoff|/workstream-complete|/spinoff active. "
+    "Done: /workstream-complete. Fork: /handoff|/spinoff (PM-gated). "
+    "Cross-repo: cross-repo-memo. Recovery/pickup: ignore."
+)
 
 # ---------------------------------------------------------------------------
 # Blocking helpers (called via asyncio.to_thread)

@@ -146,6 +146,61 @@ def test_forwarder_present_when_landed(tmp_path: Path, claude_klabauter_root: Pa
     assert report.complete
 
 
+def test_publish_excluded_name_is_never_missing(
+    tmp_path: Path, claude_klabauter_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A name `launcher_is_installable` says the installer correctly never
+    gives a launcher (the publish chain, PM-ruled 2026-08-29) must not
+    render as `forwarder_missing` when its bin/ file is absent -- the
+    exact false FAIL this test guards against: `expected_forwarders()`
+    over-reports because it has no engine-root-aware filter of its own,
+    and a prior version of this check counted the exclusion as a defect.
+
+    A fake engine root -- carrying every expected name's `.py` EXCEPT
+    `coordinator-publish` -- makes `launcher_is_installable` return False
+    for exactly that one name, deterministically, without depending on
+    this box's actual registered engine root.
+    """
+    from coordinator_core.install.engine_root_for_install import InstallEngineRoot
+
+    sh = _populate_full_settings_home(tmp_path)
+    excluded_name = "coordinator-publish"
+    expected = expected_forwarders(claude_klabauter_root)
+    assert excluded_name in expected, "fixture assumption: repo still ships this CLI"
+
+    fake_engine_root = tmp_path / "fake-engine-root"
+    fake_bin = fake_engine_root / "coordinator" / "bin"
+    fake_bin.mkdir(parents=True)
+    for name in expected:
+        if name == excluded_name:
+            continue
+        (fake_bin / f"{name}.py").write_text("x")
+
+    monkeypatch.setattr(
+        "coordinator_core.install.settings_home_report.resolve_engine_root_for_install",
+        lambda: InstallEngineRoot(kind="published", root=fake_engine_root, remediation=None),
+    )
+
+    # Land every forwarder except the excluded one, so a genuine miss would
+    # still be distinguishable from an exclusion if the filter were wrong.
+    for installed_name, target in expected.items():
+        if installed_name == excluded_name:
+            continue
+        (sh / "bin" / installed_name).write_text(
+            f"{_AGENT_FORWARDER_MARKER}\n\nexec_cli(\"{target}\")\n"
+        )
+
+    report = check_settings_home(sh, claude_klabauter_root)
+
+    assert excluded_name not in report.forwarder_missing
+    assert excluded_name in report.forwarder_excluded
+    assert report.forwarder_expected == len(expected) - 1
+    assert report.forwarder_present == len(expected) - 1
+    assert report.complete
+    lines = format_report_lines(report)
+    assert any(excluded_name in line and "excluded" in line for line in lines)
+
+
 def test_format_report_lines_flags_incomplete(tmp_path: Path, claude_klabauter_root: Path) -> None:
     sh = _populate_full_settings_home(tmp_path)
     (sh / "settings-manifest.md").unlink()

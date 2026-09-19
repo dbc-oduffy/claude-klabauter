@@ -211,7 +211,6 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.sessionstart_dispatch",  # registers "hooks.sessionstart_dispatch"
     "coordinator_core.hooks.sessionstart_async_dispatch",  # registers "hooks.sessionstart_async_dispatch"
     "coordinator_core.hooks.assert_em_role",  # registers "hooks.assert_em_role"
-    "coordinator_core.hooks.session_start_watch_presence",  # registers "hooks.session_start_watch_presence"
     "coordinator_core.hooks.sweep_boot",  # registers "hooks.sweep_boot"
     "coordinator_core.hooks.session_start_announce_job_mode",  # registers "hooks.session_start_announce_job_mode"
     "coordinator_core.hooks.session_start_register_doe_claude_root",  # registers "hooks.session_start_register_doe_claude_root"

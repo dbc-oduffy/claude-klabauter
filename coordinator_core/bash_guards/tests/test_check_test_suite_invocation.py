@@ -131,8 +131,8 @@ def held_mutex(monkeypatch):
 def test_subagent_suite_shaped_denied(repo, free_mutex, command):
     out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
     reason = _reason(out)
-    assert reason.startswith("Run the tests you actually touched:")
-    assert "reshaped so the command text parses differently" in reason
+    assert reason.startswith("Full-suite subagent runs are denied")
+    assert "Reshaping the command text does not bypass" in reason
 
 
 @pytest.mark.parametrize(
@@ -175,7 +175,7 @@ def test_subagent_scoped_allowed(repo, free_mutex, command):
 def test_subagent_powershell_spelled_suite_shaped_denied_same_as_bash(repo, free_mutex, command):
     out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
     reason = _reason(out)
-    assert reason.startswith("Run the tests you actually touched:")
+    assert reason.startswith("Full-suite subagent runs are denied")
 
 
 def test_subagent_powershell_tool_unscoped_suite_denied(repo, free_mutex):
@@ -186,7 +186,7 @@ def test_subagent_powershell_tool_unscoped_suite_denied(repo, free_mutex):
     payload = _payload("pytest", repo, agent_id=_AGENT_ID)
     payload["tool_name"] = "PowerShell"
     reason = _reason(guard.check(payload))
-    assert reason.startswith("Run the tests you actually touched:")
+    assert reason.startswith("Full-suite subagent runs are denied")
 
 
 def test_top_level_em_powershell_tool_unscoped_suite_denied_without_grant(grant_repo, free_mutex):
@@ -234,7 +234,7 @@ def test_subagent_start_process_argumentlist_suite_shaped_denied(repo, free_mute
     payload = _payload(command, repo, agent_id=_AGENT_ID)
     payload["tool_name"] = "PowerShell"
     reason = _reason(guard.check(payload))
-    assert reason.startswith("Run the tests you actually touched:")
+    assert reason.startswith("Full-suite subagent runs are denied")
 
 
 def test_top_level_em_start_process_argumentlist_unscoped_denied_without_grant(grant_repo, free_mutex):
@@ -292,7 +292,7 @@ def test_start_process_unresolvable_target_does_not_crash(repo, free_mutex):
 def test_subagent_testpaths_root_is_not_a_scope(repo, free_mutex):
     """`pytest coordinator_core/` looks scoped and is the entire suite."""
     reason = _reason(guard.check(_payload("pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
-    assert "no test file, directory, or node-id scope" in reason
+    assert "Detected:" in reason
 
 
 @pytest.mark.parametrize("command", ["pytest coordinator/", "pytest .", "pytest coordinator_core"])
@@ -319,7 +319,7 @@ def test_testpaths_root_positional_with_scoping_flag_is_not_laundered(repo, free
     not launder the invocation to Tier T -- this repo's own configured
     `testpaths` root (`coordinator_core/`) is the regression shape."""
     reason = _reason(guard.check(_payload(command, repo, agent_id=_AGENT_ID)))
-    assert "no test file, directory, or node-id scope" in reason
+    assert "Detected:" in reason
 
 
 def test_bare_dash_k_with_no_positional_stays_tier_t(repo, free_mutex):
@@ -607,7 +607,7 @@ def test_subagent_tox_nox_denied(repo, free_mutex, command):
     skipped this guard entirely -- no classification, no identity deny."""
     out = guard.check(_payload(command, repo, agent_id=_AGENT_ID))
     reason = _reason(out)
-    assert reason.startswith("Run the tests you actually touched:")
+    assert reason.startswith("Full-suite subagent runs are denied")
 
 
 @pytest.mark.parametrize("command", ["tox", "nox"])
@@ -764,7 +764,7 @@ def test_wrapper_leg_never_fires_for_a_subagent(grant_repo, free_mutex):
     suite anyway."""
     out = guard.check(_payload("pytest", grant_repo, agent_id=_AGENT_ID))
     reason = _reason(out)
-    assert reason.startswith("Run the tests you actually touched:")
+    assert reason.startswith("Full-suite subagent runs are denied")
     assert "with-suite-mutex" not in reason
 
 
@@ -1434,7 +1434,7 @@ class TestGrantLeg:
         )
         out = guard.check(_payload("pytest", grant_repo, agent_id=_AGENT_ID))
         reason = _reason(out)
-        assert reason.startswith("Run the tests you actually touched:")
+        assert reason.startswith("Full-suite subagent runs are denied")
 
     def test_grant_leg_fails_open_only_on_import_error(self, grant_repo, free_mutex, monkeypatch):
         """AC-6: an ImportError (the module genuinely absent) degrades to
@@ -1670,7 +1670,7 @@ class TestR6DeclaredUnscopedFastTier:
         )
         out = guard.check(_payload(_CLAUDE_KLABAUTER_FAST_TEST_CMD, grant_repo, agent_id=_AGENT_ID))
         reason = _reason(out)
-        assert reason.startswith("Run the tests you actually touched:")
+        assert reason.startswith("Full-suite subagent runs are denied")
 
     def test_declaration_never_covers_full_test_cmd(
         self, grant_repo, free_mutex, monkeypatch
@@ -2009,7 +2009,7 @@ class TestConfiguredCmdReachability:
         leg."""
         out = guard.check(_payload("pytest", bare_runner_repo, agent_id=_AGENT_ID))
         reason = _reason(out)
-        assert "no test file, directory, or node-id scope" in reason
+        assert "Detected:" in reason
 
 
 class TestRunnerRecognizedNonPythonFamilies:
@@ -2079,7 +2079,7 @@ class TestRunnerRecognizedNonPythonFamilies:
         fires and is not accidentally allowed as an ungated Tier-F run."""
         reason = _reason(guard.check(
             _payload("cargo watch -x test", cargo_repo, agent_id=_AGENT_ID)))
-        assert "no test file, directory, or node-id scope" in reason
+        assert "Detected:" in reason
 
     def test_cargo_watch_needs_a_tier_u_grant_for_the_em_through_real_check(
         self, cargo_repo, free_mutex, monkeypatch
@@ -2334,7 +2334,7 @@ def test_r9_is_additive_suite_shaped_still_gets_the_identity_diagnosis(repo, fre
     not suite-shaped, so it can only ever deny what was previously allowed --
     never restate a deny another leg owns with a worse diagnosis."""
     reason = _reason(guard.check(_payload("pytest coordinator_core/", repo, agent_id=_AGENT_ID)))
-    assert reason.startswith("Run the tests you actually touched:")
+    assert reason.startswith("Full-suite subagent runs are denied")
     assert "Directory arg" not in reason
 
 
