@@ -157,5 +157,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if not hits:
         return no_advisory()
 
-    context = render(compose(_advisory_reason(target_raw, hits), anchor=_RULE_ANCHOR))
+    context = render(
+        compose(_advisory_reason(target_raw, hits), anchor=_RULE_ANCHOR),
+        env=params.get("env"),
+    )
     return allow_advisory("PreToolUse", context)

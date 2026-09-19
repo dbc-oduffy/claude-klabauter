@@ -245,9 +245,10 @@ def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> st
     )
     _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
     return (
-        f"BLOCKED: not the authoring source — {target} (not `{file_path}`); "
-        "a re-derivation hook leaves edits made here silently overwritten, "
-        "with no error and no signal at the moment of loss."
+        "BLOCKED: not the authoring source — a re-derivation hook leaves "
+        "edits here silently overwritten, with no error.\n"
+        "Use instead:\n"
+        f"  {target}, not {file_path}"
         + ("\n\n" + _note if _note else "")
     )
 

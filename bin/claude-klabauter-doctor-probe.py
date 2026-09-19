@@ -1992,7 +1992,7 @@ def _launch_chain_claude_home() -> Path:
 
 
 def _run_probe_launch_chain() -> _ProbeResult:
-    """Probe claude-klabauter.launch.shim_chain — OPTIONAL (required=False); never gating.
+    """Probe claude-klabauter.launch.shim_chain — gating per RESULT (see `required` below).
 
     Answers "will bare `claude` load the coordinator plugin in a NEW shell?".
 
@@ -2017,7 +2017,13 @@ def _run_probe_launch_chain() -> _ProbeResult:
 
     Shape-conditioned, per this file's own precedent (`_run_probe_vendored_schema_drift`):
     SKIPs when no DoE clone resolves, i.e. the marketplace population that never has
-    this chain.
+    this chain, and SKIPs on a cloud/headless box (`env_locality.locality()` calls it
+    `cloud`). There the harness launches the session and loads the plugin from
+    `settings.json`'s `enabledPlugins`; no human types bare `claude` into a shell that
+    dot-sources a profile, so "shim absent" is the healthy state, not a degradation.
+    Gating on it made `scripts/setup.py` exit 94 on every cloud container
+    (claude-klabauter#29). A `suspect` locality still gates — rounding an ambiguous
+    box to "headless" would silence the probe on a desk.
 
     `required` is set PER RESULT, not per probe, which is what lets this gate without
     punishing anyone else. The SKIP path returns `required=False` — a skipped REQUIRED
@@ -2034,6 +2040,27 @@ def _run_probe_launch_chain() -> _ProbeResult:
     is_windows = os.name == "nt"
     shim = shell_dir / ("claude-doe-shim.ps1" if is_windows else "claude-doe-shim.sh")
     data: dict[str, Any] = {"shim_path": str(shim), "platform": os.name}
+
+    try:
+        from coordinator_core.env_locality import locality
+
+        where = locality()
+    except Exception:
+        where = None
+    if where is not None and where.call == "cloud":
+        data["locality"] = where.basis
+        return _ProbeResult(
+            probe=_LAUNCH_CHAIN_PROBE,
+            status=_INFO,
+            detail=(
+                f"cloud/headless box ({where.basis}) — the harness launches sessions, "
+                "no interactive shell carries this chain"
+            ),
+            remediation="—",
+            required=False,
+            skipped=True,
+            data=data,
+        )
 
     try:
         from coordinator_core.ops.coordinator_doe_root import coordinator_doe_root

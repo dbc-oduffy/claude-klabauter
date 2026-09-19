@@ -354,12 +354,10 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
     return (
         "BLOCKED: creates/modifies the fleet-delegation grant record; "
-        "agents cannot self-grant delegation. Ask the PM to run "
+        "agents cannot self-grant. Ask the PM to run "
         "`coordinator-delegation grant ...`.\n\n"
-        "Use instead: `cat`, `ls`, `stat`, `test`, `head`, `tail`, `wc`, "
-        "`file`, `grep`, `rm`, `git status`, `git diff`, `git log`, "
-        "`git show`, `git ls-files`, `git rev-parse`, `git describe`, "
-        "`git check-ignore`, `git check-attr`. Removal re-locks the boundary."
+        "Use instead:\n"
+        "  `cat`, `ls`, `stat`, `rm`, `git status`, `git log`"
     )
 
 

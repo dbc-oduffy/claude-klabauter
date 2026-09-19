@@ -2918,6 +2918,26 @@ def _wg_session_display_name_as_identifier_fire(
     }
 
 
+def _wg_wiki_changelog_prose_advisory_fire(
+    scratch_dir: Path, mp: pytest.MonkeyPatch
+) -> Dict[str, Any]:
+    """Fires `wiki_changelog_prose_advisory.check`: a ruling-date detector
+    hit inside a write to the scratch repo's own `docs/wiki/` (scope-root
+    discrimination -- `resolve_repo_root` patched to the scratch dir, same
+    shape every sibling `resolve_repo_root`-consuming row in this module
+    uses, per the guard's own module docstring)."""
+    from coordinator_core.write_guards import wiki_changelog_prose_advisory as guard_mod
+
+    (scratch_dir / "docs" / "wiki").mkdir(parents=True, exist_ok=True)
+    mp.setattr(guard_mod, "resolve_repo_root", lambda cwd: str(scratch_dir))
+    wiki_path = str(scratch_dir / "docs" / "wiki" / "some-doctrine.md")
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": wiki_path, "content": "Ruled 2026-08-01 that X."},
+        "cwd": str(scratch_dir),
+    }
+
+
 def _wg_p4_checkout_before_edit_fire(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, Any]:
@@ -3218,6 +3238,13 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow(
         "p4_checkout_before_edit", "control", False, _wg_p4_checkout_before_edit_control
     ),
+    WriteGuardRow(
+        "wiki_changelog_prose_advisory",
+        "fire",
+        True,
+        _wg_wiki_changelog_prose_advisory_fire,
+    ),
+    WriteGuardRow("wiki_changelog_prose_advisory", "control", False, _wg_benign),
 ]
 
 
@@ -3405,6 +3432,7 @@ from coordinator_core.hooks import cater_subagent_start as _hook_cater_subagent_
 from coordinator_core.hooks import nudge_autonomous_askuserquestion as _hook_nudge_autonomous_askuserquestion
 from coordinator_core.hooks import plan_persistence_check as _hook_plan_persistence_check
 from coordinator_core.hooks import watchdog_undischarged_next_move as _hook_watchdog_undischarged_next_move
+from coordinator_core.session import machinery_paths
 from coordinator_core.hooks import coordinator_reminder as _hook_coordinator_reminder
 from coordinator_core.hooks import enforce_agent_model_pin as _hook_enforce_agent_model_pin
 from coordinator_core.hooks import nudge_em_code_dispatch as _hook_nudge_em_code_dispatch
@@ -3513,6 +3541,18 @@ def _fire_nudge_autonomous_askuserquestion() -> Optional[Dict[str, Any]]:
     return {"hookSpecificOutput": {"additionalContext": text}}
 
 
+def _fire_nudge_autonomous_askuserquestion_control() -> Optional[Dict[str, Any]]:
+    """Non-firing control: `agent_id` present suppresses leg 1 (a delegated
+    worker's ask is not the EM's own halting decision) -- `no_advisory()`
+    before any posture/sentinel resolution, same lighter direct-`_handler`
+    path as the fire row above."""
+    return _to_envelope_or_none(
+        _hook_nudge_autonomous_askuserquestion._handler(
+            {"payload": {"agent_id": "corpus-control-agent"}}
+        )
+    )
+
+
 def _fire_plan_persistence_check_persisted() -> Optional[Dict[str, Any]]:
     """`_persisted_text` is pure -- it renders the post-persist advisory from a
     prefilled commit command, no I/O. Called directly, the lighter path, and
@@ -3528,6 +3568,15 @@ def _fire_plan_persistence_check_persisted() -> Optional[Dict[str, Any]]:
     return {"hookSpecificOutput": {"additionalContext": text}}
 
 
+def _fire_plan_persistence_check_control() -> Optional[Dict[str, Any]]:
+    """Non-firing control: `tool_name != "ExitPlanMode"` suppresses at the
+    first activation-predicate leg -- `no_advisory()` before any repo
+    resolution or I/O, same lighter direct-`_handler` path."""
+    return _to_envelope_or_none(
+        _hook_plan_persistence_check._handler({"payload": {"tool_name": "Write"}})
+    )
+
+
 def _fire_watchdog_undischarged_next_move_stop() -> Optional[Dict[str, Any]]:
     """The Stop leg, fired end-to-end against a throwaway repo root.
 
@@ -3541,8 +3590,14 @@ def _fire_watchdog_undischarged_next_move_stop() -> Optional[Dict[str, Any]]:
     with tempfile.TemporaryDirectory(dir=_neutral_scratch_parent()) as tmp:
         os.makedirs(os.path.join(tmp, ".git"), exist_ok=True)
         session_id = "corpus-watchdog-session"
-        share = os.path.join(tmp, "state", "subagent-share", session_id)
-        os.makedirs(share, exist_ok=True)
+        # Ledger location is `machinery_paths.ledger_path` --
+        # `.coordinator-local/subagent-share/<session_id>/next-move-ledger.jsonl`,
+        # repo-root relative (session/machinery_paths.py module docstring's
+        # "WHY IT EXISTS" -- 21 sites were each spelling this join
+        # themselves before that consolidation; a `state/subagent-share/`
+        # spelling here predates it and the guard silently reads nothing).
+        ledger_path = machinery_paths.ledger_path(tmp, session_id)
+        os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
         record = {
             "obligation_id": "corpus-obligation-1",
             "seam": "corpus-seam",
@@ -3550,8 +3605,26 @@ def _fire_watchdog_undischarged_next_move_stop() -> Optional[Dict[str, Any]]:
             "discharged": False,
             "fired": False,
         }
-        with open(os.path.join(share, "next-move-ledger.jsonl"), "w", encoding="utf-8") as handle:
+        with open(ledger_path, "w", encoding="utf-8") as handle:
             handle.write(_json.dumps(record) + "\n")
+        return _to_envelope_or_none(
+            _hook_watchdog_undischarged_next_move._handle_stop(
+                {
+                    "session_id": session_id,
+                    "cwd": tmp,
+                    "transcript_path": os.path.join(tmp, "transcript.jsonl"),
+                }
+            )
+        )
+
+
+def _fire_watchdog_undischarged_next_move_control() -> Optional[Dict[str, Any]]:
+    """Non-firing control: same scratch repo root, no ledger file written at
+    all -- `_find_undischarged_unfired` reads an empty record list and
+    `_handle_stop` returns `no_advisory()` before composing any text."""
+    with tempfile.TemporaryDirectory(dir=_neutral_scratch_parent()) as tmp:
+        os.makedirs(os.path.join(tmp, ".git"), exist_ok=True)
+        session_id = "corpus-watchdog-control-session"
         return _to_envelope_or_none(
             _hook_watchdog_undischarged_next_move._handle_stop(
                 {
@@ -4051,16 +4124,34 @@ HOOK_ROWS: List[HookRow] = [
         _fire_plan_persistence_check_persisted,
     ),
     HookRow(
+        "plan_persistence_check",
+        "control",
+        False,
+        _fire_plan_persistence_check_control,
+    ),
+    HookRow(
         "nudge_autonomous_askuserquestion",
         "fire-advisory",
         True,
         _fire_nudge_autonomous_askuserquestion,
     ),
     HookRow(
+        "nudge_autonomous_askuserquestion",
+        "control",
+        False,
+        _fire_nudge_autonomous_askuserquestion_control,
+    ),
+    HookRow(
         "watchdog_undischarged_next_move",
         "fire-stop-undischarged",
         True,
         _fire_watchdog_undischarged_next_move_stop,
+    ),
+    HookRow(
+        "watchdog_undischarged_next_move",
+        "control",
+        False,
+        _fire_watchdog_undischarged_next_move_control,
     ),
     HookRow(
         "block_unenumerated_agent_type",

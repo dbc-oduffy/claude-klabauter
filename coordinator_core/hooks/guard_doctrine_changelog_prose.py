@@ -186,11 +186,12 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if not new:
         return no_advisory()
 
+    env = params.get("env")
     if is_config:
-        reason = render(_deny_message(target_raw, new))
+        reason = render(_deny_message(target_raw, new), env=env)
         return deny("PreToolUse", reason)
 
-    context = render(_advisory_message(target_raw, new))
+    context = render(_advisory_message(target_raw, new), env=env)
     return allow_advisory("PreToolUse", context)
 
 

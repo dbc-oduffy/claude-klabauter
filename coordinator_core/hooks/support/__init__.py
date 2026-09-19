@@ -22,8 +22,11 @@ because a helper that lived beside its callers in a doctrine-plane
      module directly — the boundary crossing this repo's own
      `docs/reference/boundary-and-data-planes.md` describes no longer
      exists once both sides are the same package. See `sentinel_write_guard`
-     (`reconstruct_after`), `forwarder_resolve` (`is_native_image`), and
-     `registry_write` (`ml_set`) for the three sites.
+     (`reconstruct_after`) and `forwarder_resolve` (`is_native_image`) for
+     the two sites. (`registry_write`, a third, was deleted at close review:
+     its callers write the registry in process via
+     `coordinator_core.machine_resolver.registry_set`, never a spawned
+     `machine-local set`.)
   2. A helper whose enrolment registry named SIBLING hook-body files by
      hyphenated filename (`guard_runner.REAL_GUARD_REGISTRY`,
      `stop_family_runner.REAL_STOP_FAMILY_REGISTRY`) lands with that

@@ -58,26 +58,23 @@ def _deep_research_plugin_dir() -> str | None:
 
 # Advisory text when the deep-research plugin is installed.
 _MSG_WITH_PLUGIN = (
-    "DELEGATION REQUIRED: web research as Opus. EM orchestrates, researchers execute:\n"
-    "- Internet → /coordinator:research --mode=web <topic>\n"
-    "- Codebase/repo → /coordinator:research --mode=repo <path> [--deepest]\n"
-    "- Structured batch → /coordinator:research --mode=structured <spec-path>\n"
-    "- Quick exploration → Agent subagent_type='Explore'\n"
-    "- Spec enrichment → Agent subagent_type='coordinator:enricher'\n"
-    "- YouTube/podcast/audio → /notebooklm-research\n"
-    "Direct web calls only for a specific URL or a single mid-conversation fact.\n"
-    "Do NOT spin up a generic Agent(prompt='go search for...') — discards guardrails."
+    "DELEGATION REQUIRED: web research as Opus. Use instead:\n"
+    "  /coordinator:research --mode=web <topic>\n"
+    "  /coordinator:research --mode=repo <path> [--deepest]\n"
+    "  /coordinator:research --mode=structured <spec-path>\n"
+    "  Agent subagent_type='Explore'\n"
+    "  Agent subagent_type='coordinator:enricher'\n"
+    "  /notebooklm-research\n\n"
+    "Direct web calls: single URL/fact only, never a generic search Agent."
 )
 
 # Advisory text when the deep-research plugin is NOT installed.
 _MSG_WITHOUT_PLUGIN = (
-    "DELEGATION REQUIRED: web research as Opus. EM orchestrates, researchers execute:\n"
-    "- Any research → install the deep-research plugin, then "
-    "/coordinator:research --mode={web,repo,structured}\n"
-    "- Quick exploration → Agent subagent_type='Explore'\n"
-    "- Spec enrichment → Agent subagent_type='coordinator:enricher'\n"
-    "Direct web calls only for a specific URL (one fetch) or a single mid-conversation fact.\n"
-    "Do NOT spin up a generic Agent(prompt='go search for...') — discards tested guardrails."
+    "DELEGATION REQUIRED: web research as Opus. Use instead:\n"
+    "  install deep-research plugin, then /coordinator:research --mode=...\n"
+    "  Agent subagent_type='Explore'\n"
+    "  Agent subagent_type='coordinator:enricher'\n\n"
+    "Direct web calls: single URL/fact only, never a generic search Agent."
 )
 
 

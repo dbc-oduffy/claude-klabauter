@@ -118,6 +118,14 @@ Unit decomposition (per porter brief):
 Exit-code contract (addendum rule 3b — fail-loud VALIDATOR class):
     0  all assertions passed (or gracefully skipped — SKIP is not a failure)
     1  one or more assertions FAILed (business outcome — matches bash oracle)
+    2  no FAIL, but one or more assertions were UNEVALUABLE on this host — the
+       validator could not form a verdict for them (their SUBJECT is absent,
+       e.g. the resolved clone is the published FLAT mirror while every
+       `<clone>/coordinator/...` assertion here is about the maximalist
+       authoring layout). Flagged widening, not silent: these rows used to be
+       pass-equivalent SKIPs, so a run that evaluated almost nothing exited 0
+       and read as clean. 1 still outranks 2 — a real FAIL is never masked by
+       an unevaluable row.
     3  TRANSPORT/ORCHESTRATION failure — the harness itself could not run
        (sandbox tempdir creation failed, an unhandled exception escaped a
        tier function) OR a CLI usage/argument-parsing error (unknown flag,
@@ -202,6 +210,7 @@ class Reporter:
     def __init__(self) -> None:
         self.pass_count = 0
         self.fail_count = 0
+        self.unevaluable_count = 0
         self.lines: List[str] = []
 
     def _emit(self, line: str) -> None:
@@ -219,6 +228,19 @@ class Reporter:
 
     def skip(self, msg: str) -> None:
         self._emit(f"SKIP: {msg}")
+
+    def unevaluable(self, msg: str) -> None:
+        """An assertion whose SUBJECT is absent on this host, so neither PASS
+        nor FAIL is true of it.
+
+        Distinct from :meth:`skip` on purpose. A SKIP is pass-equivalent and
+        exits 0; an UNEVALUABLE row is the validator saying it could not form
+        a verdict, and it carries its own exit code (2) so no caller can read
+        a not-evaluated run as a clean one. An oracle that reports a pass for
+        an assertion it never evaluated is the one failure mode this module
+        must not have."""
+        self.unevaluable_count += 1
+        self._emit(f"UNEVALUABLE: {msg}")
 
     def info(self, msg: str) -> None:
         self._emit(f"INFO: {msg}")
@@ -288,6 +310,97 @@ def _paths_equal(a: str, b: str) -> bool:
 def _path_mentioned(needle: str, haystack: str) -> bool:
     """True if *haystack* text references the *needle* path in either form."""
     return _sep_norm(needle) in _sep_norm(haystack)
+
+
+#: The clone layouts ``repos.doe_claude`` can legitimately resolve to. This
+#: validator's subject is the MAXIMALIST one (`<clone>/coordinator/...`); the
+#: FLAT one is the published mirror, whose surfaces sit at the clone root and
+#: which a marketplace-served install (every cloud container) registers
+#: directly. The distinction is not cosmetic: on a flat clone every
+#: `<clone>/coordinator/...` path this module asserts is absent by CONSTRUCTION,
+#: so a bare FAIL there reports an install defect where the truth is "this
+#: validator's subject is not what the pointer resolves to on this host."
+CLONE_LAYOUT_MAXIMALIST = "maximalist"
+CLONE_LAYOUT_FLAT = "flat"
+CLONE_LAYOUT_UNKNOWN = "unknown"
+
+
+def clone_layout(clone: str) -> str:
+    """Classify a resolved clone root as maximalist, flat, or unknown.
+
+    Positive markers only, never a negation: `coordinator/` present means
+    maximalist; `hooks/` AND `skills/` at the root with no `coordinator/`
+    means the published flat mirror. Anything else is UNKNOWN and is reported
+    as such rather than defaulted to either shape — guessing here would put a
+    wrong verdict into the oracle, which is worse than declining one."""
+    if not clone or not os.path.isdir(clone):
+        return CLONE_LAYOUT_UNKNOWN
+    if os.path.isdir(os.path.join(clone, "coordinator")):
+        return CLONE_LAYOUT_MAXIMALIST
+    if os.path.isdir(os.path.join(clone, "hooks")) and os.path.isdir(os.path.join(clone, "skills")):
+        return CLONE_LAYOUT_FLAT
+    return CLONE_LAYOUT_UNKNOWN
+
+
+def _layout_note(clone: str) -> str:
+    """Suffix naming a non-maximalist clone layout as the cause, for FAIL rows
+    whose expected path form is `<clone>/coordinator/...`.
+
+    Empty for a maximalist clone, so a genuine defect's message is unchanged."""
+    layout = clone_layout(clone)
+    if layout == CLONE_LAYOUT_FLAT:
+        return (
+            " [cause: the resolved clone is a FLAT published-mirror layout — its surfaces sit at "
+            "the clone root, so the maximalist <clone>/coordinator/... form this assertion expects "
+            "cannot exist here. Point REPO_DOE_CLAUDE at the maximalist authoring clone, or pass "
+            "--coordinator-root <clone-root>.]"
+        )
+    if layout == CLONE_LAYOUT_UNKNOWN:
+        return (
+            " [cause: the resolved clone matches NEITHER the maximalist nor the flat published-mirror "
+            "layout — this assertion's expected path form may not apply to it at all.]"
+        )
+    return ""
+
+
+def _host_home() -> str:
+    """This host's home directory.
+
+    ``HOME`` is the POSIX spelling and is routinely UNSET on Windows, where the
+    spelling is ``USERPROFILE``. A bare ``os.environ.get("HOME", "")`` therefore
+    yields an empty string on a whole first-class platform, and any assertion
+    guarded by that truthiness becomes a check that cannot fail there — see
+    :func:`_tier1b_pointer_and_shim`'s hardcoded-machine-path row. Returns ""
+    only when no spelling and no ``Path.home()`` answer, which callers must
+    report as UNEVALUABLE rather than pass."""
+    for spelling in ("HOME", "USERPROFILE"):
+        value = os.environ.get(spelling, "")
+        if value:
+            return value
+    try:
+        return str(Path.home())
+    except (RuntimeError, OSError):
+        return ""
+
+
+def _cold_bare_path() -> str:
+    """A deliberately minimal PATH for the cold-tier probes: the host's system
+    binary directories and nothing else.
+
+    Host-shaped, not POSIX-shaped. The former hardcoded ``/usr/bin:/bin``
+    resolves NOTHING on Windows, which made the ``claude-home``/``machine-local``
+    absence probe below structurally incapable of finding a binary there — a
+    PASS that asserted nothing on every Windows run, the same shape as an
+    ``.exe``-gated census that cannot report on POSIX."""
+    if os.name == "nt":
+        system_root = os.environ.get("SystemRoot") or os.environ.get("windir") or "C:" + BACKSLASH + "Windows"
+        parts = [os.path.join(system_root, "System32"), system_root]
+        return os.pathsep.join(parts)
+    parts = ["/usr/bin", "/bin"]
+    for extra in ("/opt/homebrew/bin", "/usr/local/bin"):
+        if os.path.isdir(extra):
+            parts.append(extra)
+    return os.pathsep.join(parts)
 
 
 def _claude_doe_wrapper_src() -> str:
@@ -401,6 +514,8 @@ def _usage_text() -> str:
         "Exit codes:\n"
         "  0  all assertions passed (or gracefully skipped)\n"
         "  1  one or more assertions FAILed\n"
+        "  2  no FAIL, but one or more assertions were UNEVALUABLE on this host\n"
+        "     (their subject is absent here — the run formed no verdict for them)\n"
         "  3  transport/orchestration failure (harness itself could not run)\n"
     )
 
@@ -437,8 +552,25 @@ def _tier1_filesystem_shape(
             r.ok(f"clone's coordinator/ dir present: {os.path.join(doe_clone, 'coordinator')}")
             doe_coordinator_present = True
         else:
-            r.skip("clone's coordinator/ dir absent — W4.2 cutover not yet completed (expected pre-cutover)")
-            r.info("  coordinator/ will be populated after the W4.2 source-relocation cutover.")
+            # Was a flat SKIP reading "W4.2 cutover not yet completed", which is
+            # both stale and wrong on every marketplace-served install: there the
+            # pointer resolves to the PUBLISHED FLAT MIRROR, whose surfaces are at
+            # the clone root by design and never under coordinator/. A SKIP is
+            # pass-equivalent, so that reading let the whole maximalist tier go
+            # un-evaluated behind a clean-looking row.
+            layout = clone_layout(doe_clone)
+            if layout == CLONE_LAYOUT_MAXIMALIST:  # pragma: no cover - unreachable by construction
+                r.bad("clone's coordinator/ dir absent though the clone classifies as maximalist")
+            else:
+                r.unevaluable(
+                    f"clone's coordinator/ dir absent — resolved clone layout is {layout!r}, not the "
+                    f"maximalist authoring layout this validator asserts. Every <clone>/coordinator/... "
+                    f"assertion below is UNEVALUABLE against this clone, not passing."
+                )
+                r.info(
+                    "  Remediation: point REPO_DOE_CLAUDE (or repos.doe_claude) at the maximalist "
+                    "authoring clone, or pass --coordinator-root <clone-root> for a flat mirror."
+                )
     else:
         r.skip("clone checks (clone path not resolved)")
 
@@ -477,8 +609,10 @@ def _tier1_filesystem_shape(
     r.section("--- Step 3.5c: settings.json hook block seed ---")
     if not doe_coordinator_present:
         r.ok("gen_settings_hooks module available (in-process call, no bash subprocess)")
-        r.skip("gen-settings-hooks live seed (clone's coordinator/ absent pre-W4.2 — will run post-cutover)")
-        r.info(f"  Seeding will succeed after W4.2 populates {doe_clone}/coordinator/")
+        r.unevaluable(
+            f"gen-settings-hooks live seed: no {doe_clone}/coordinator/ to seed against "
+            f"(clone layout {clone_layout(doe_clone)!r}, not maximalist)"
+        )
     else:
         _assert_gen_settings_hooks_interface(r)
 
@@ -597,7 +731,10 @@ def _tier1_filesystem_shape(
     elif not doe_clone_resolved:
         r.skip("claude-doe --dry-run (clone path not resolved)")
     else:
-        r.skip("claude-doe --dry-run (clone's coordinator/ dir absent pre-W4.2 — runs post-cutover)")
+        r.unevaluable(
+            f"claude-doe --dry-run: the exec line it asserts names {doe_clone}/coordinator, which does "
+            f"not exist (clone layout {clone_layout(doe_clone)!r}, not maximalist)"
+        )
 
     # 7b. F5 regression: standalone-copy
     r.section("--- F5 regression: claude-doe standalone-copy --dry-run (siblings absent) ---")
@@ -639,7 +776,11 @@ def _tier1_filesystem_shape(
     elif not wrapper_src_present:
         r.skip(f"F5 regression: standalone-copy claude-doe --dry-run (wrapper source absent: {wrapper_src})")
     else:
-        r.skip("F5 regression: standalone-copy claude-doe --dry-run (clone's coordinator/ dir absent pre-W4.2 — runs post-cutover)")
+        r.unevaluable(
+            f"F5 regression: standalone-copy claude-doe --dry-run — the exec line it asserts names "
+            f"{doe_clone}/coordinator, which does not exist (clone layout {clone_layout(doe_clone)!r}, "
+            f"not maximalist)"
+        )
 
     return doe_coordinator_present
 
@@ -897,7 +1038,7 @@ def _tier1b_pointer_and_shim(
         "=== Tier 1b: Maximalist install shape (pointer/shim/resolver — native in-process) ==="
     )
 
-    home = os.environ.get("HOME", str(Path.home()))
+    home = _host_home()
     live_doe_root = os.path.join(
         os.environ.get("COORDINATOR_SETTINGS_HOME")
         or os.path.join(home, ".coordinator-claude-settings"),
@@ -999,7 +1140,7 @@ def _tier1b_pointer_and_shim(
     _assert_gen_claude_doe_shim_interface(r)
 
     if not os.path.isfile(shim_tmpl):
-        r.bad(f"claude-doe-shim.sh.tmpl not found at: {shim_tmpl} (template missing — expected RED pre-cutover)")
+        r.bad(f"claude-doe-shim.sh.tmpl not found at: {shim_tmpl}{_layout_note(doe_clone)}")
     else:
         r.ok(f"claude-doe-shim.sh.tmpl present: {shim_tmpl}")
 
@@ -1032,19 +1173,53 @@ def _tier1b_pointer_and_shim(
             else:
                 r.bad("claude-doe-shim.sh does not reference .doe-root (pointer-read missing)")
 
-            home_literal = os.environ.get("HOME", "")
-            if home_literal and home_literal in shim_body:
-                r.bad(f"claude-doe-shim.sh contains hardcoded machine path (literal $HOME='{home_literal}' found in body)")
+            # `os.environ["HOME"]` alone is the POSIX spelling only: unset on
+            # Windows, where the empty string short-circuited the `and` and this
+            # row PASSed without ever comparing anything. Resolve the host's home
+            # by either spelling (plus Path.home()), compare in separator-normal
+            # form so a backslash home still matches a forward-slash shim body,
+            # and report UNEVALUABLE rather than PASS if no home resolves at all.
+            home_literal = _host_home()
+            if not home_literal:
+                r.unevaluable(
+                    "claude-doe-shim.sh hardcoded-home check: this host's home directory does not "
+                    "resolve (no HOME, no USERPROFILE, no Path.home()) — there is no literal to "
+                    "search the shim body for"
+                )
+            elif _path_mentioned(home_literal, shim_body):
+                r.bad(f"claude-doe-shim.sh contains hardcoded machine path (literal home '{home_literal}' found in body)")
             else:
-                r.ok("claude-doe-shim.sh: no hardcoded machine path ($HOME literal absent from body)")
+                r.ok(f"claude-doe-shim.sh: no hardcoded machine path (literal home '{home_literal}' absent from body)")
 
-            import re
-
-            hardcoded_pattern = re.compile(r"^[^#].*(/Users/[a-zA-Z_]|/home/[a-zA-Z_])", re.MULTILINE)
+            # Windows home shapes (`C:\Users\alice`, `\\host\share\alice`) were
+            # outside this pattern entirely, so the hardcoded-path class it exists
+            # to catch could not be caught on a first-class platform. The pattern is
+            # host-INDEPENDENT by design: every host checks every shape, because a
+            # shim generated on one host can be read on another.
+            #
+            # Review: code-reviewer S7 asked whether the UNC arm over-matches a
+            # non-path `\\` escape sequence in a shell body. It does not, and
+            # the arm stays as written: the arm demands `\\`, a host token, a
+            # SINGLE `\`, a share token, another single `\`, then a letter, and
+            # a doubled escape like `printf '\\n\\t\\x41'` fails it -- after the
+            # host token the next character is a backslash, which the share
+            # token's class excludes, with no backtracking that recovers. A
+            # narrower anchor was NOT adopted because no concrete over-matching
+            # body was produced, and narrowing risks missing the Windows shape
+            # this arm exists to catch.
+            hardcoded_pattern = re.compile(
+                r"^[^#].*("
+                r"/Users/[a-zA-Z_]"
+                r"|/home/[a-zA-Z_]"
+                r"|[A-Za-z]:[\\/](?:Users|home)[\\/][a-zA-Z_]"
+                r"|[\\]{2}[A-Za-z0-9._-]+[\\][A-Za-z0-9._$-]+[\\][a-zA-Z_]"
+                r")",
+                re.MULTILINE,
+            )
             if hardcoded_pattern.search(shim_body):
-                r.bad("claude-doe-shim.sh contains hardcoded /Users/ or /home/ path on non-comment line")
+                r.bad("claude-doe-shim.sh contains a hardcoded home-directory path (POSIX /Users//home/, Windows drive, or UNC share) on a non-comment line")
             else:
-                r.ok("claude-doe-shim.sh: no hardcoded /Users/ or /home/ paths on non-comment lines")
+                r.ok("claude-doe-shim.sh: no hardcoded home-directory paths (POSIX, Windows-drive or UNC shape) on non-comment lines")
         else:
             r.bad(f"claude-doe-shim.sh not created in sandbox (expected at: {sandbox_shim})")
 
@@ -1114,7 +1289,7 @@ def _tier1b_mirror_and_cold_tier(
     live_doe_root_bak: str,
     live_shim_bak: str,
 ) -> None:
-    home = os.environ.get("HOME", str(Path.home()))
+    home = _host_home()
     live_doe_root = os.path.join(
         os.environ.get("COORDINATOR_SETTINGS_HOME")
         or os.path.join(home, ".coordinator-claude-settings"),
@@ -1136,7 +1311,7 @@ def _tier1b_mirror_and_cold_tier(
         elif mirror_out and os.path.isdir(mirror_out):
             r.bad(f"AC5: resolve_coordinator_clone.resolve_content_root(): returned '{mirror_out}', expected '{expected_mirror}'")
         else:
-            r.bad(f"AC5: resolve_coordinator_clone.resolve_content_root(): returned empty or non-existent path (error: {mirror_out_or_err})")
+            r.bad(f"AC5: resolve_coordinator_clone.resolve_content_root(): returned empty or non-existent path (error: {mirror_out_or_err}){_layout_note(doe_clone)}")
     else:
         r.skip("mirror verification (clone path not resolved)")
 
@@ -1166,24 +1341,30 @@ def _tier1b_mirror_and_cold_tier(
         if os.path.isdir(os.path.join(doe_clone, "coordinator")):
             r.ok("clone has coordinator/ subdir (content pointer-tier pre-condition met)")
         else:
-            r.bad("clone missing coordinator/ subdir — --for-content pointer tier cannot satisfy -d gate")
+            r.bad(f"clone missing coordinator/ subdir — --for-content pointer tier cannot satisfy -d gate{_layout_note(doe_clone)}")
 
-        cold_bare_path = "/usr/bin:/bin"
-        if os.path.isdir("/opt/homebrew/bin"):
-            cold_bare_path += ":/opt/homebrew/bin"
-        if os.path.isdir("/usr/local/bin"):
-            cold_bare_path += ":/usr/local/bin"
+        cold_bare_path = _cold_bare_path()
 
         # Mirrors bash `PATH="$_cold_bare_path" command -v claude-home` — MUST
         # search within the restricted cold_bare_path, not the process's own
         # (unrestricted) PATH, or this check is vacuously true on any machine
         # (found the real bug during byte-parity verification against the
         # bash oracle: an earlier draft called shutil.which() unfiltered).
-        cold_has_claude_home = shutil.which("claude-home", path=cold_bare_path)
-        if not cold_has_claude_home:
-            r.ok("cold PATH: claude-home absent (registry read correctly blocked for cold-tier test)")
+        #
+        # `machine-local` is probed alongside `claude-home` because it, not
+        # `claude-home`, is the binary resolve_coordinator_clone actually spawns
+        # for its registry rung (`_machine_local_get`). Probing only claude-home
+        # asserted the absence of a binary this leg never consults, so the row
+        # could pass while the registry tier was wide open.
+        cold_registry_bins = {
+            name: shutil.which(name, path=cold_bare_path)
+            for name in ("machine-local", "claude-home")
+        }
+        reachable = {n: h for n, h in cold_registry_bins.items() if h}
+        if not reachable:
+            r.ok(f"cold PATH: machine-local/claude-home both absent from {cold_bare_path!r} (registry read correctly blocked for cold-tier test)")
         else:
-            r.info(f"cold PATH: claude-home still reachable at '{cold_has_claude_home}' — cold-tier test may hit registry tier instead of pointer tier (expected on machines where claude-home is in brew PATH)")
+            r.info(f"cold PATH: registry binaries still reachable ({reachable}) — cold-tier test may hit the registry tier instead of the pointer tier (expected where these sit in a system PATH dir)")
 
         cold_env_vars = {
             k: v for k, v in os.environ.items() if k not in ("CLAUDE_PLUGIN_ROOT", "COORDINATOR_ROOT", "COORDINATOR_CLONE")
@@ -1199,7 +1380,7 @@ def _tier1b_mirror_and_cold_tier(
         elif not cold_content_out:
             r.bad(f"AC6(a): resolve_content_root() cold: returned empty (error: {cold_content_out_or_err})")
         else:
-            r.bad(f"AC6(a): resolve_content_root() cold: got '{cold_content_out}', expected '{expected_cold_content}'")
+            r.bad(f"AC6(a): resolve_content_root() cold: got '{cold_content_out}', expected '{expected_cold_content}'{_layout_note(doe_clone)}")
 
         rc_gitops, cold_gitops_out_or_err = _call_resolve_coordinator_clone("clone", cold_env_vars)
         cold_gitops_out = cold_gitops_out_or_err if rc_gitops == 0 else ""
@@ -1211,7 +1392,7 @@ def _tier1b_mirror_and_cold_tier(
         elif _paths_equal(cold_gitops_out, os.path.join(doe_clone, "coordinator")):
             r.bad("AC6(b): resolve_clone_root() cold: returned coordinator/ subdir — coordinator/.git absent under maximalist; mode-split violated")
         else:
-            r.bad(f"AC6(b): resolve_clone_root() cold: got '{cold_gitops_out}', expected '{expected_cold_gitops}'")
+            r.bad(f"AC6(b): resolve_clone_root() cold: got '{cold_gitops_out}', expected '{expected_cold_gitops}'{_layout_note(doe_clone)}")
     else:
         r.skip("resolver cold-tier tests (clone path not resolved)")
 
@@ -1226,46 +1407,57 @@ def _tier1b_mirror_and_cold_tier(
         # defect on every Windows run. Not applicable is not a failure.
         r.skip("AC2 cold-shell (POSIX login-shell seam; not applicable on Windows)")
     elif shim_section_ran and os.path.isfile(sandbox_shim_path):
-        cold_path = "/usr/bin:/bin"
-        for extra in ("/usr/local/bin", "/opt/homebrew/bin", "/usr/local/opt/bash/bin"):
-            if os.path.isdir(extra):
-                cold_path += f":{extra}"
+        cold_path = _cold_bare_path()
+        if os.path.isdir("/usr/local/opt/bash/bin"):
+            cold_path += f"{os.pathsep}/usr/local/opt/bash/bin"
 
         stub_bin = _write_claude_doe_argv_stub(sandbox)
         cold_env_vars = {"PATH": f"{stub_bin}{os.pathsep}{cold_path}", "CLAUDE_HOME": sandbox, "HOME": home}
-        cp = _run(
-            ["bash", "-c", f"source '{sandbox_shim_path}' 2>/dev/null; claude {_AC2_PROBE_ARG}"],
-            env=cold_env_vars,
-        )
-        argv, stub_saw_env = _parse_claude_doe_argv_stub(cp.stdout)
-
-        if not argv:
-            r.bad(
-                f"AC2 cold-shell: claude() did not reach claude-doe under cold PATH "
-                f"(stub output: {cp.stdout.strip()!r})"
-            )
-        elif argv[0] != "--doe-root":
-            r.bad(
-                f"AC2 cold-shell: claude() invoked claude-doe with {argv!r}; DR-087 requires "
-                f"the explicit `--doe-root <pointer-value>` argv seam as the leading arguments"
-            )
-        elif len(argv) < 2 or not _paths_equal(argv[1], doe_clone):
-            r.bad(
-                f"AC2 cold-shell: --doe-root carried '{argv[1] if len(argv) > 1 else ''}', "
-                f"expected the pointer value '{doe_clone}'"
-            )
-        elif _AC2_PROBE_ARG not in argv[2:]:
-            r.bad(f"AC2 cold-shell: claude() dropped the caller's own arguments; got {argv!r}")
+        # This leg is POSIX-only (the `nt` branch above SKIPs it), so HOME is the
+        # right spelling here — but `home` must still be a resolved value rather
+        # than an empty string, or the sourced shim's `${CLAUDE_HOME:-$HOME}`
+        # fallback would expand to a bare path and the probe would measure the
+        # sandbox's own layout instead of the shim's pointer read.
+        if not home:
+            # Review: code-reviewer (S7 finding 1, P1) — unevaluable() is a
+            # terminal verdict for this subject; without this guard the probe
+            # still ran with HOME="" and could still record r.ok()/r.bad() for
+            # the same AC2 assertion the line above just declared unevaluable.
+            r.unevaluable("AC2 cold-shell: this host's home directory does not resolve, so the shim's ${CLAUDE_HOME:-$HOME} seam cannot be exercised")
         else:
-            r.ok(f"AC2 cold-shell: claude-doe --doe-root resolved from pointer alone: {doe_clone}")
-
-        if argv and stub_saw_env:
-            r.bad(
-                f"AC2 cold-shell: shim exported REPO_DOE_CLAUDE='{stub_saw_env}' — DR-087 demoted the "
-                f"pointer mirror out of rung-1 authority; the root travels as --doe-root only"
+            cp = _run(
+                ["bash", "-c", f"source '{sandbox_shim_path}' 2>/dev/null; claude {_AC2_PROBE_ARG}"],
+                env=cold_env_vars,
             )
-        elif argv:
-            r.ok("AC2 cold-shell: shim left REPO_DOE_CLAUDE unset (DR-087 mirror-promotion stays retired)")
+            argv, stub_saw_env = _parse_claude_doe_argv_stub(cp.stdout)
+
+            if not argv:
+                r.bad(
+                    f"AC2 cold-shell: claude() did not reach claude-doe under cold PATH "
+                    f"(stub output: {cp.stdout.strip()!r})"
+                )
+            elif argv[0] != "--doe-root":
+                r.bad(
+                    f"AC2 cold-shell: claude() invoked claude-doe with {argv!r}; DR-087 requires "
+                    f"the explicit `--doe-root <pointer-value>` argv seam as the leading arguments"
+                )
+            elif len(argv) < 2 or not _paths_equal(argv[1], doe_clone):
+                r.bad(
+                    f"AC2 cold-shell: --doe-root carried '{argv[1] if len(argv) > 1 else ''}', "
+                    f"expected the pointer value '{doe_clone}'"
+                )
+            elif _AC2_PROBE_ARG not in argv[2:]:
+                r.bad(f"AC2 cold-shell: claude() dropped the caller's own arguments; got {argv!r}")
+            else:
+                r.ok(f"AC2 cold-shell: claude-doe --doe-root resolved from pointer alone: {doe_clone}")
+
+            if argv and stub_saw_env:
+                r.bad(
+                    f"AC2 cold-shell: shim exported REPO_DOE_CLAUDE='{stub_saw_env}' — DR-087 demoted the "
+                    f"pointer mirror out of rung-1 authority; the root travels as --doe-root only"
+                )
+            elif argv:
+                r.ok("AC2 cold-shell: shim left REPO_DOE_CLAUDE unset (DR-087 mirror-promotion stays retired)")
     elif not shim_section_ran:
         r.bad("AC2 cold-shell: skipped — gen_claude_doe_shim.main() did not produce a sandbox shim")
     else:
@@ -1317,10 +1509,23 @@ def _tier1c_publish_repo_parity(
     if os.path.isfile(oracle_hooks_json):
         shutil.copy2(oracle_hooks_json, pub_hooks_json)
 
-    if os.path.isdir(os.path.join(pub_clone, ".git")) and os.path.isfile(pub_hooks_json):
-        r.ok(f"F8 setup: publish-repo-shaped sandbox clone built at {pub_clone} (distinct from $RESOLVED_CLONE={doe_clone})")
+    # Two distinct conditions used to share one FAIL message: the sandbox build
+    # itself failing (a real defect here) and the ORACLE INPUT this fixture
+    # copies from — <clone>/coordinator/hooks/hooks.json — not existing on this
+    # host at all, which is what happens on every flat published-mirror clone
+    # (its hooks.json is at <clone>/hooks/hooks.json). Reporting the second as
+    # "clone build failed" sent the reader looking for a bug in the sandbox
+    # builder for a condition the builder never touched.
+    if not os.path.isdir(os.path.join(pub_clone, ".git")):
+        r.bad(f"F8 setup: publish-repo-shaped sandbox clone build failed — .git not created at {pub_clone}")
+    elif not os.path.isfile(pub_hooks_json):
+        r.unevaluable(
+            f"F8 setup: no hooks.json to seed the publish-repo fixture with — the oracle input "
+            f"{oracle_hooks_json} does not exist on this host.{_layout_note(doe_clone)} The F8 "
+            f"hook-command rooting assertions below have no content to inspect."
+        )
     else:
-        r.bad(f"F8 setup: publish-repo-shaped sandbox clone build failed at {pub_clone}")
+        r.ok(f"F8 setup: publish-repo-shaped sandbox clone built at {pub_clone} (distinct from $RESOLVED_CLONE={doe_clone})")
 
     # ---- 14. Pointer generator rooted at publish clone ----
     r.section("--- F8: .doe-root pointer rooted at publish clone ---")
@@ -1521,7 +1726,10 @@ def run_all(
         else:
             r.info(f"Sandbox preserved at: {sandbox}")
 
-    r.section(f"\n=== Tier 1 summary: {r.pass_count} passed, {r.fail_count} failed ===")
+    r.section(
+        f"\n=== Tier 1 summary: {r.pass_count} passed, {r.fail_count} failed, "
+        f"{r.unevaluable_count} unevaluable on this host ==="
+    )
     print(_TIER2_BANNER)
 
     return r, sandbox
@@ -1564,7 +1772,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 3
 
-    return 1 if r.fail_count > 0 else 0
+    if r.fail_count > 0:
+        return 1
+    if r.unevaluable_count > 0:
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

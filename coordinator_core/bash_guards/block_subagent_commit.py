@@ -5264,7 +5264,14 @@ def _fold_python_c_payload(payload: str) -> _FoldedPayload:
     """
     try:
         tree = ast.parse(payload)
-    except RecursionError:
+    except (RecursionError, MemoryError):
+        # CPython 3.14's PEG parser replaced its pure recursion-limit trip
+        # with a growable, bounded stack that raises `MemoryError` (not
+        # `RecursionError`) for the same "too deep to parse safely" shape
+        # this bound exists to catch -- same bound, different exception
+        # type depending on interpreter version. Both are reported
+        # identically: a bound hit, not unparseable source (see the
+        # constant's own docstring below for why that distinction matters).
         return _FOLD_RECURSION_BOMB
     except Exception:
         return _FOLD_EMPTY

@@ -111,22 +111,12 @@ _SIDECAR_RE = re.compile(r"sidecar|subagent-share", re.I)
 _SENDMESSAGE_RE = re.compile(r"sendmessage", re.I)
 _MAIN_TARGET_RE = re.compile(r"\bmain\b", re.I)
 
-_ADVISORY = """\
-NAMED DISPATCH — this agent's final text will NOT reach you (advisory; proceeding anyway).
-
-`name` makes this a TEAMMATE (agentId `{name}@session-<short>`) — only `SendMessage` to
-`"main"` reaches you. "Report back: ..." yields an `idle_notification`, report undelivered.
-
-  (a) No mid-flight contact -> DROP `name`.
-  (b) Mid-flight contact -> KEEP `name`, brief: SendMessage "main" with a POINTER ONLY
-      (sidecar path + one-line verdict, not the report restated).
-
-A sidecar left at its scaffold is not a delivered report: `review-integrator`
-refuses an empty-scaffold intake, so the findings cannot be applied or
-recorded. The pointer is the message; the file is the report.
-
-Either is fine.\
-"""
+_ADVISORY = (
+    "NAMED DISPATCH ({name}): final text won't reach you; only "
+    "SendMessage \"main\" does. No contact needed? Drop `name`. "
+    "Needed? Keep `name`, brief SendMessage \"main\" a pointer "
+    "(sidecar+verdict). Either is fine."
+)
 
 
 @register_op("hooks.nudge_named_agent_report_delivery")

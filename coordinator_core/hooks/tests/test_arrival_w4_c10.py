@@ -1,6 +1,10 @@
 """coordinator_core/hooks/tests/test_arrival_w4_c10.py — the W4-C10 arrival
-gate for the SessionStart family: fourteen hook ops ported from DoE-claude
+gate for the SessionStart family: thirteen hook ops ported from DoE-claude
 per docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C10.
+(Originally fourteen; `hooks.session_start_watch_presence` was deleted --
+overengineering-reviewer, 2026-09-18 -- as dead code that returned
+`no_advisory()` unconditionally with no landed watch_heartbeat/uhura-mode
+wiring to activate it.)
 
 Each op is exercised for its registration, its fail-open contract on a
 missing/malformed payload, and at least one real-computation assertion drawn
@@ -26,7 +30,6 @@ from coordinator_core.hooks import (
     session_start_register_doe_claude_root,
     session_start_register_published_engine,
     session_start_repair_prepare_commit_msg_hook,
-    session_start_watch_presence,
     session_start_write_plugin_root_breadcrumb,
     sessionstart_async_dispatch,
     sessionstart_bin_drift_refresh,
@@ -56,7 +59,6 @@ _EXPECTED_OP_NAMES = (
     "hooks.sessionstart_bin_drift_refresh",
     "hooks.sessionstart_ensure_http_forwarder",
     "hooks.sweep_boot",
-    "hooks.session_start_watch_presence",
     "hooks.assert_em_role",
     "hooks.sessionstart_dispatch",
     "hooks.sessionstart_async_dispatch",
@@ -351,26 +353,6 @@ def test_sweep_boot_handler_never_raises(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# session_start_watch_presence
-# ---------------------------------------------------------------------------
-
-
-def test_watch_presence_render_presence_line_none_when_no_holder():
-    assert session_start_watch_presence.render_presence_line(None) is None
-    assert session_start_watch_presence.render_presence_line({}) is None
-
-
-def test_watch_presence_render_presence_line_named_holder():
-    line = session_start_watch_presence.render_presence_line({"holder_name": "Riker"})
-    assert "Riker" in line
-
-
-def test_watch_presence_handler_no_op_today(monkeypatch):
-    result = _run(session_start_watch_presence._handler({}))
-    assert result == {}  # no_advisory() -- no watch_heartbeat/uhura-mode module yet
-
-
-# ---------------------------------------------------------------------------
 # assert_em_role
 # ---------------------------------------------------------------------------
 
@@ -444,6 +426,74 @@ def test_sessionstart_dispatch_one_leg_failure_does_not_drop_others(monkeypatch)
     monkeypatch.setenv("COORDINATOR_JOB_MODE", "blitz")
     result = _run(sessionstart_dispatch._handler({"payload": {}}))
     assert "blitz" in result["hookSpecificOutput"]["additionalContext"]
+
+
+# Review: coordinator:code-reviewer — the sync-wrapped/bare-session.* legs
+# (project_orientation, guard_settings_integrity,
+# guard_hooks_kill_switch_detail) previously went untested by this suite;
+# a mismatched sync/async wrapping on any of them would silently no-op
+# through _handler's broad except-continue. Cover all six legs landing in
+# the concatenated output, including these three.
+def test_sessionstart_dispatch_all_six_legs_land_in_output(monkeypatch):
+    monkeypatch.setenv("COORDINATOR_JOB_MODE", "cron")
+
+    def _sync_text(text):
+        return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}
+
+    async def _async_text(text):
+        return {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": text}}
+
+    monkeypatch.setattr(
+        sessionstart_dispatch,
+        "_sessionstart_bin_drift_refresh_handler",
+        lambda params: _async_text("leg-bin-drift"),
+    )
+    monkeypatch.setattr(
+        sessionstart_dispatch,
+        "_guard_hook_generation_self_probe_handler",
+        lambda params: _async_text("leg-self-probe"),
+    )
+    monkeypatch.setattr(
+        sessionstart_dispatch,
+        "_project_orientation_handler",
+        lambda params: _sync_text("leg-project-orientation"),
+    )
+    monkeypatch.setattr(
+        sessionstart_dispatch,
+        "_guard_settings_integrity_handler",
+        lambda payload: {"text": "leg-settings-integrity"},
+    )
+    monkeypatch.setattr(
+        sessionstart_dispatch,
+        "_guard_hooks_kill_switch_detail_handler",
+        lambda payload: {"text": "leg-kill-switch"},
+    )
+    result = _run(sessionstart_dispatch._handler({"payload": {"session_id": "s1"}}))
+    context = result["hookSpecificOutput"]["additionalContext"]
+    assert "cron" in context
+    assert "leg-project-orientation" in context
+    assert "leg-settings-integrity" in context
+    assert "leg-kill-switch" in context
+
+
+def test_sessionstart_dispatch_sync_leg_wrapping_mismatch_is_isolated(monkeypatch):
+    # A leg handler that is sync (not awaitable) must not raise through
+    # _handler's inspect.isawaitable gate -- exercises the exact wiring
+    # class the P3 finding flagged (project_orientation is `def`, not
+    # `async def`).
+    monkeypatch.setattr(
+        sessionstart_dispatch,
+        "_project_orientation_handler",
+        lambda params: {
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": "sync-leg-ok",
+            }
+        },
+    )
+    monkeypatch.setenv("COORDINATOR_JOB_MODE", "cron")
+    result = _run(sessionstart_dispatch._handler({"payload": {}}))
+    assert "sync-leg-ok" in result["hookSpecificOutput"]["additionalContext"]
 
 
 def test_sessionstart_async_dispatch_never_raises(tmp_path, monkeypatch):

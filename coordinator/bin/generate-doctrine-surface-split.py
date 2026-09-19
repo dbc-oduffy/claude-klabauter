@@ -69,7 +69,9 @@ from __future__ import annotations
 
 import difflib
 import re
-import subprocess
+import subprocess  # noqa: F401 -- test_arrival_generate_doctrine_surface_split.py monkeypatches
+# generator.subprocess.run to fake git calls (git_native's own subprocess.run call is the same
+# stdlib module object, so the patch still reaches it); no direct call site in this module anymore.
 import sys
 from pathlib import Path, PurePosixPath
 
@@ -530,23 +532,20 @@ def dirty_bodies(split_dir: Path) -> list[tuple[str, str]]:
     Fails OPEN: no git, not a repository, or any git error returns empty. This is an
     ergonomic guard over a shared tree, not a correctness gate, and a consumer outside a
     checkout must still be able to regenerate.
+
+    Review: coordinator:overengineering-reviewer (finding 3) -- routes through
+    `coordinator_core.ops.ceremony.git_native._git` instead of a hand-rolled
+    `subprocess.run` with its own creationflags handling.
     """
-    try:
-        proc = subprocess.run(
-            ["git", "status", "--porcelain", "--", str(split_dir)],
-            capture_output=True,
-            text=True,
-            cwd=str(split_dir),
-            timeout=15,
-            **_no_console_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
+    from coordinator_core.ops.ceremony.git_native import _git as _git_native
+
+    result = _git_native(["status", "--porcelain", "--", str(split_dir)], cwd=split_dir, timeout=15)
+    if not result.ok:
         return []
-    if proc.returncode != 0:
-        return []
+    proc_stdout = result.stdout
 
     dirty: list[tuple[str, str]] = []
-    for line in proc.stdout.splitlines():
+    for line in proc_stdout.splitlines():
         if len(line) < 4:
             continue
         code, path = line[:2], line[3:].strip().strip(chr(34))

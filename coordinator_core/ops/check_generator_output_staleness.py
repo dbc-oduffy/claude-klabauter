@@ -300,7 +300,9 @@ class VendoredPair:
 VENDORED_PAIRS: tuple[VendoredPair, ...] = (
     VendoredPair(
         artifact="coordinator/hooks/effective-delivery.json",
-        sources=("coordinator/hooks/scripts",),
+        # Its generator (`coordinator_core.ops.session.emit_effective_delivery`)
+        # now lives in the engine; the DoE-side input it reads is hooks.json.
+        sources=("coordinator/hooks/hooks.json",),
         stamp_block="x-effective-delivery",
     ),
 )

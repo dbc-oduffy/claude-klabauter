@@ -476,9 +476,9 @@ def _evaluate_powershell(cmd: str) -> Optional[str]:
 
 def _deny_reason(deny_kind: str) -> str:
     return (
-        "BLOCKED: %s banned fleet-wide -- breaks on Windows, does not "
-        "scale across concurrent agents in one tree. Work here instead; "
-        "branch isolation needs PM/EM sign-off.\n\n"
+        "BLOCKED: %s banned fleet-wide -- breaks Windows, doesn't scale "
+        "across concurrent agents in one tree. Work here; branch isolation "
+        "needs PM/EM sign-off.\n\n"
         "Use instead:\n"
         "  `git worktree list` / `git worktree remove` / `git worktree prune`"
     ) % deny_kind

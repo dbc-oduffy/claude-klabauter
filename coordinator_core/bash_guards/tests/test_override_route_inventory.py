@@ -116,11 +116,18 @@ _SUBAGENT_IDENTITY: Dict[str, str] = {
 #: PURPOSE, not a leak. "CLI invocation" here is scoped to the one shape
 #: an override/bypass CLI invocation actually takes: naming a bypass/
 #: override/disarm subcommand explicitly.
+#:
+#: `.coordinator-local/subagent-share/` is exempt from the dotfile pattern:
+#: it is the sanctioned subagent write surface a deny routes TO, not a grant
+#: that lifts the deny. Hiding it would leave a blocked subagent with no
+#: named place to write.
 _LEAK_PATTERNS: Dict[str, Pattern[str]] = {
     "override-key(s) phrase": re.compile(r"override key", re.IGNORECASE),
     "guard-override-keys.md doc pointer": re.compile(r"guard-override-keys\.md"),
     "bare unlock statement": re.compile(r"\bunlock\b", re.IGNORECASE),
-    "sentinel/marker dotfile path": re.compile(r"\.coordinator-[a-z][a-z0-9-]*"),
+    "sentinel/marker dotfile path": re.compile(
+        r"\.coordinator-(?!local/subagent-share/)[a-z][a-z0-9-]*"
+    ),
     "touch/export/rm recipe": re.compile(r"\b(?:touch|export|rm)\s+\S"),
     "override env-var name": re.compile(r"\bCOORDINATOR_[A-Z_]+\b"),
     "bypass/override/disarm CLI invocation": re.compile(

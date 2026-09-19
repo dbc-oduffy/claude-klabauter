@@ -189,13 +189,11 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         for pattern, label in _DETECTORS:
             if pattern.search(delta):
                 reason = (
-                    f"{filename} reads changelog-shaped ({label}) rather than "
-                    "doctrine-shaped. This project's own convention "
-                    '("Doctrine is not changelog") states the rule as it stands, '
-                    "present tense -- history belongs in commits, decisions, "
-                    "plans, not a wiki page. If this page's subject matter IS a "
-                    "changelog by design, name it so in the filename "
-                    f"(contains {_EXEMPT_FILENAME_SUBSTRING!r})."
+                    f"{filename} reads changelog-shaped ({label}), not "
+                    "doctrine-shaped.\n"
+                    "Use instead:\n"
+                    f"  if a changelog by design, name it so (contains "
+                    f"{_EXEMPT_FILENAME_SUBSTRING!r})"
                 )
                 return {
                     "hookSpecificOutput": {

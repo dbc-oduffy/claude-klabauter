@@ -72,7 +72,7 @@ _SENTINEL_NAME = "workflow-authoring-trampoline-nudged"
 _TARGET_SKILL_NAMES = {"workflow-authoring", "coordinator:workflow-authoring"}
 
 
-def _compose_skill_offer() -> str:
+def _compose_skill_offer(env: object = None) -> str:
     prose = (
         "[workflow-authoring trampoline] if this is plan dispatch, the script "
         "already exists -- run `emit-dispatch-workflow.py --plan <plan>` and "
@@ -80,10 +80,10 @@ def _compose_skill_offer() -> str:
         "hand-authoring one here. If this is a fan-out the emitter cannot "
         "produce (review, research), carry on and author it."
     )
-    return render(compose(prose, anchor=_WIKI_ANCHOR))
+    return render(compose(prose, anchor=_WIKI_ANCHOR), env=env)
 
 
-def _compose_inline_offer() -> str:
+def _compose_inline_offer(env: object = None) -> str:
     prose = (
         "[workflow-authoring trampoline] this inline `script:` is by "
         "construction hand-authored -- if this is plan dispatch, run "
@@ -92,7 +92,7 @@ def _compose_inline_offer() -> str:
         "for roughly a quarter of the token cost. If this is a fan-out the "
         "emitter cannot produce (review, research), carry on."
     )
-    return render(compose(prose, anchor=_WIKI_ANCHOR))
+    return render(compose(prose, anchor=_WIKI_ANCHOR), env=env)
 
 
 def _extract_skill_name(tool_input: object) -> Optional[str]:
@@ -165,7 +165,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     except Exception:
         return no_advisory()
 
-    message = compose_fn()
+    message = compose_fn(params.get("env"))
 
     try:
         ensure_session_dir(session_dir, session_id)

@@ -62,9 +62,12 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path
 
 from coordinator_core._hook_envelope import deny, no_advisory
+from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
+    _canonical,
+    _join_onto_cwd,
+)
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import register_op
 
@@ -104,7 +107,7 @@ def _resolve_claude_home(env: "dict[str, str]") -> "str | None":
     config_dir = env.get("CLAUDE_CONFIG_DIR")
     if config_dir:
         try:
-            return str(Path(config_dir).resolve())
+            return _canonical(config_dir)
         except OSError:
             pass
     for key in ("HOME", "USERPROFILE"):
@@ -112,7 +115,7 @@ def _resolve_claude_home(env: "dict[str, str]") -> "str | None":
         if not val:
             continue
         try:
-            return str((Path(val) / ".claude").resolve())
+            return _canonical(_join_onto_cwd(".claude", val))
         except OSError:
             continue
     return None
@@ -160,10 +163,7 @@ def _leading_cd_target(cmd: str, cwd: "str | None", env: "dict[str, str]") -> "s
     if not match:
         return None
     raw = _expand_home_shorthand(match.group(1).strip("'\""), env)
-    candidate = Path(raw)
-    if not candidate.is_absolute() and cwd:
-        candidate = Path(cwd) / candidate
-    return str(candidate)
+    return _join_onto_cwd(raw, cwd)
 
 
 def _extract_candidate_root(cmd: str, cwd: "str | None", env: "dict[str, str]") -> "str | None":
@@ -174,10 +174,7 @@ def _extract_candidate_root(cmd: str, cwd: "str | None", env: "dict[str, str]") 
     match = _ROOT_FLAG_RE.search(cmd)
     if match:
         raw = _expand_home_shorthand(match.group(1).strip("'\""), env)
-        candidate = Path(raw)
-        if not candidate.is_absolute() and cwd:
-            candidate = Path(cwd) / candidate
-        return str(candidate)
+        return _join_onto_cwd(raw, cwd)
     cd_target = _leading_cd_target(cmd, cwd, env)
     if cd_target is not None:
         return cd_target
@@ -206,7 +203,7 @@ def is_denied_repo_setup_claude_home(
         return False  # no cwd and no explicit flag -- nothing to compare
 
     try:
-        resolved_candidate = str(Path(candidate).resolve())
+        resolved_candidate = _canonical(candidate)
     except OSError:
         return False  # unresolvable candidate path -- fail open
 

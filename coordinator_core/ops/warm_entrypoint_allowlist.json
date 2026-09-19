@@ -422,7 +422,8 @@
     "baton-chain-closure",
     "check-citation-integrity",
     "block-discharge",
-    "mise-prep-entry"
+    "mise-prep-entry",
+    "emit-effective-delivery"
   ],
   "door_eligible_entrypoints": [
     "_hook_cost_probe",
@@ -845,6 +846,7 @@
     "baton-chain-closure",
     "check-citation-integrity",
     "block-discharge",
-    "mise-prep-entry"
+    "mise-prep-entry",
+    "emit-effective-delivery"
   ]
 }

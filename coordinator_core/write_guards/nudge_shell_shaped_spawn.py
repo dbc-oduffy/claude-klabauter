@@ -117,8 +117,9 @@ def _reason_for(kind: SpawnKind, file_path: str, site_count: int) -> str:
     alternative = _ALTERNATIVE_BY_KIND[kind]
     plural = "site" if site_count == 1 else "sites"
     return (
-        f"OFFER: {alternative}.\n"
-        f"Genuinely sanctioned? Extend {_CARVE_OUT_DOC} (PM ruling only) instead.\n"
+        "Use instead:\n"
+        f"  {alternative}; if genuinely sanctioned, extend "
+        f"{_CARVE_OUT_DOC} (PM ruling only).\n"
         f"Found {site_count} shell-shaped spawn {plural} in {file_path}."
     )
 

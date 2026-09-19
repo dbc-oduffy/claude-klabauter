@@ -1677,9 +1677,10 @@ def test_c1_ac4_foreign_repo_guard_corpus_undrifted_by_the_interpreter_extractor
     `check_bump_foreign_repo_write`, must verdict exactly as C4's own test
     suite (`test_bump_foreign_repo_write.py`) already documents: bump on a
     plain-bash write-sink or a `git -C`/`cd&&git` write targeting the
-    foreign repo, never bump on a read or a same-repo write -- including a
-    heredoc/`-c` Python payload shape this plan newly classifies for C5,
-    which must NOT newly bump here (the shared-table no-drift proof)."""
+    foreign repo, never bump on a read or a same-repo write. A `-c` Python
+    payload targeting the foreign repo DOES bump: C4 adopted the same
+    interpreter-payload extractor for parity on 2026-09-19 (DoE memo
+    foreign-write-guard-misses-interpreter-payload)."""
     from coordinator_core.bash_guards import bump_foreign_repo_write as foreign_guard
     from coordinator_core.bash_guards import _write_bump_session_start as foreign_session_start
 
@@ -1698,13 +1699,9 @@ def test_c1_ac4_foreign_repo_guard_corpus_undrifted_by_the_interpreter_extractor
         (f"cp {_posix(src)} {_posix(foreign / 'dest.txt')}", True),
         (f"git -C {_posix(foreign)} status", False),
         (f"cp {_posix(src)} {_posix(anchor / 'dest.txt')}", False),
-        # The new C5-only Python-payload shape -- C4 has no opinion on it at
-        # all (it never calls `extract_interpreter_payload_write_sink_
-        # targets`), so this must verdict identically to before this plan:
-        # no bump, since C4's own candidate extraction finds nothing here.
         (
             "python3 -c \"open('%s','w').write('x')\"" % _posix(foreign / "inline.patch"),
-            False,
+            True,
         ),
     ]
 
@@ -1884,4 +1881,31 @@ def test_c1_ac9_plain_comment_then_real_write_still_bumps(env, monkeypatch):
     result = guard.check_bump_outside_repo_write(
         cmd, "sess-c1-plain-comment-write", str(env["anchor"]), {}
     )
+    assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# sed's edit script is not a write target: `/pattern/d` starts with `/` and
+# used to resolve as an absolute outside-repo path.
+# ---------------------------------------------------------------------------
+
+
+def test_sed_inplace_slash_script_on_own_repo_file_does_not_bump(env, monkeypatch):
+    _set_anchor(monkeypatch, env, "sess-sed-script")
+    target = env["anchor"] / "mod.py"
+    target.write_text("import os\n", encoding="utf-8")
+    cmd = f"sed -i '' '/^import os$/d' {_posix(target)}"
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-sed-script", str(env["anchor"]), {})
+
+    assert result is None
+
+
+def test_sed_inplace_on_outside_repo_file_still_bumps(env, monkeypatch):
+    _set_anchor(monkeypatch, env, "sess-sed-outside")
+    dest = env["outside"] / "notes.txt"
+    cmd = f"sed -i 's/a/b/' {_posix(dest)}"
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-sed-outside", str(env["anchor"]), {})
+
     assert result is not None

@@ -199,6 +199,7 @@ from coordinator_core.bash_guards._helpers import (
 from coordinator_core.frontmatter.primitives import read_fm_field, split_frontmatter
 from coordinator_core.git.git_dir import resolve_git_dir
 from coordinator_core.session import machinery_paths
+from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.bash_guards._override_log_path import (
     NO_SESSION_BUCKET,
@@ -435,7 +436,25 @@ def _write_hook_emit_log(cwd: Optional[str], emit: str) -> None:
         git_dir = _resolve_git_dir(cwd)
         if not git_dir:
             return
-        session_id = os.environ.get("CLAUDE_SESSION_ID", NO_SESSION_BUCKET)
+        session_id = next(
+            (
+                value
+                for value in (
+                    os.environ.get(name, "").strip() for name in SESSION_ENV_PRECEDENCE
+                )
+                if value
+            ),
+            NO_SESSION_BUCKET,
+        )
+        # The full canonical ladder, NOT `CLAUDE_SESSION_ID` alone. Reading one
+        # spelling is the break-class defect `SESSION_ENV_PRECEDENCE`'s own
+        # docstring records (slice D, F1): a guard that walks a subset of the
+        # chain the op it routes to walks disagrees with that op, and a real
+        # session carrying only `CLAUDE_CODE_SESSION_ID` was told "Not your
+        # claim." Cloud sessions set exactly that spelling and leave
+        # `CLAUDE_SESSION_ID` unset, so the single-spelling read sent every
+        # cloud emit to the `no-session` bucket -- losing the attribution this
+        # log exists to carry, on the one platform that cannot be re-run.
         # Same rule as `_write_block_log` above: a diagnostic emit log never
         # mints `<hub>/<sid>` -- `ensure_session` is the one constructor, and a
         # record-less child of that hub reads as a phantom SESSION to
@@ -530,19 +549,18 @@ def _advisory_reason(file_path: str, subagent_type: str = _EXECUTOR_TYPE) -> str
     file_path_safe = _sanitize_file_path_for_reason(file_path)
     if subagent_type != _EXECUTOR_TYPE:
         return (
-            f"Note: {file_path_safe} is a plan/problem-set body, and the "
-            f"dispatched subagent_type {subagent_type!r} is not on coordinator's "
-            "enumerated agent roster. Unenumerated kinds are treated as untrusted "
-            "for plan-body writes rather than waved through — if this type is "
-            "legitimate, it belongs on the roster; if editing THIS file is your "
-            "stated deliverable, confirm scope with the EM."
+            f"Note: {file_path_safe} is a plan/problem-set body; "
+            f"subagent_type {subagent_type!r} is not on coordinator's "
+            "enumerated agent roster.\n"
+            "Use instead:\n"
+            "  add the type to the roster, or confirm scope with the EM if "
+            "editing this file is your deliverable"
         )
     return (
         f"Note: {file_path_safe} is a plan/problem-set body outside the plan "
-        "you are currently executing. coordinator:executor dispatches "
-        "normally edit only their own dispatch's plan body via the EM — if "
-        "editing THIS file is your stated deliverable, confirm scope with "
-        "the EM; if not, this is worth a second look before proceeding."
+        "you're executing.\n"
+        "Use instead:\n"
+        "  if this is your stated deliverable, confirm scope with the EM"
     )
 
 
@@ -596,11 +614,12 @@ def _deny_reason_executor(
             + ("\n\n" + _note if _note else "")
         )
     return (
+        "BLOCKED: coordinator:executor may not write plan/problem-set bodies "
+        "directly.\n"
         "Use instead:\n"
-        f"  {file_path_safe}: coordinator:executor may not write this plan/problem-set "
-        "body directly. Stamping status? Use the run-report sidecar "
-        "<machinery_root>/subagent-share/<provisioned-path>.md instead. Editing the body was your "
-        "deliverable? Ask the EM to route to coordinator:enricher/review-integrator"
+        f"  {file_path_safe}: status goes in the run-report sidecar; a body "
+        "edit deliverable routes via the EM to coordinator:enricher/"
+        "review-integrator"
         + ("\n\n" + _note if _note else "")
     )
 

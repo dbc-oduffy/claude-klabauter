@@ -3695,11 +3695,10 @@ def check(payload: Dict[str, Any], policy_path: Optional[str] = None) -> Optiona
                 suppress_retry_advice = True
             if raw_first_token and raw_first_token != first_token:
                 deny_reason = (
-                    f"command token is not coordinator-doc-new (got: {first_token or 'empty'}, "
-                    f"invoked via {raw_first_token})"
+                    f"not coordinator-doc-new ({first_token or 'empty'}, invoked via {raw_first_token})"
                 )
             else:
-                deny_reason = f"first command token is not coordinator-doc-new (got: {first_token or 'empty'})"
+                deny_reason = f"not coordinator-doc-new (got: {first_token or 'empty'})"
             # (Divergence 18, 2026-08-11) The exact-`python3` tier above
             # declined (tokens[0] != "python3") -- check whether tokens[0]
             # is a python-family MISSPELLING whose `python3`-corrected form

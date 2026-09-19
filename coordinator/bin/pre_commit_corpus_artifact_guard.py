@@ -55,6 +55,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W2-C5.
 
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
@@ -125,6 +126,16 @@ def _max_bytes() -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The warm door hands `main` the caller's argv (including argv[0]); this CLI
+    # takes no flags or positional arguments (bypass/threshold are env-only, per
+    # the module docstring), so argparse's sole job here is to reject anything
+    # unexpected rather than silently ignoring it.
+    parser = argparse.ArgumentParser(
+        prog="pre_commit_corpus_artifact_guard.py",
+        description="Refuse a commit that stages a example-retrieval-repo corpus artifact or an oversized blob.",
+    )
+    parser.parse_args(argv[1:] if argv is not None else None)
+
     if os.environ.get(_BYPASS_ENV) == "1":
         print(f"[corpus-artifact-guard] bypassed via {_BYPASS_ENV}=1", file=sys.stderr)
         return 0

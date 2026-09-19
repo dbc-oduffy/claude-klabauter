@@ -357,3 +357,88 @@ class TestNegativeSpecNeverCountsInstalledFiles:
         _write(tmp_path, "one.py", "def main(argv=None):\n    return 0\n")
         verdicts = fdc.run_census(bin_dir=tmp_path)
         assert len(verdicts) == 1
+
+
+class TestBareNameDoorReportReadsThePlatformsOwnDoor:
+    """`bare_name_door_report` against a CONSTRUCTED settings home, on every
+    platform.
+
+    The module docstring's "why this is a census line and not a test" argument
+    is about the real machine's PATH, which stays untested. The door's installed
+    NAME is not that property: it is `door_install.DOOR_INSTALLED_NAME`, and a
+    report that dials a hardcoded `.exe` returns early on every POSIX host and
+    suppresses every finding it exists to make. That is testable hermetically by
+    injecting both the settings home and PATH, so it is tested.
+    """
+
+    @staticmethod
+    def _install_door(tmp_path, monkeypatch, *, bin_dir=None):
+        from coordinator_core.install.door_install import DOOR_INSTALLED_NAME
+
+        bin_dir = bin_dir or (tmp_path / "settings" / "bin")
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        door = bin_dir / DOOR_INSTALLED_NAME
+        door.write_text("x", encoding="utf-8")
+        door.chmod(0o755)
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(bin_dir.parent))
+        monkeypatch.setenv("PATHEXT", ".EXE")
+        return door
+
+    def test_the_platforms_installed_door_is_found_and_reported_ok(self, tmp_path, monkeypatch):
+        door = self._install_door(tmp_path, monkeypatch)
+        monkeypatch.setenv("PATH", str(door.parent))
+
+        lines = fdc.bare_name_door_report()
+        joined = "\n".join(lines)
+
+        assert "Door not installed" not in joined, (
+            "the door IS installed under this platform's own name -- a report that "
+            "cannot see it returns early and emits none of its findings:\n" + joined
+        )
+        assert "OK -- the bare name reaches the native door." in joined, joined
+
+    def test_a_ps1_beside_the_door_is_reported_through_a_symlinked_path_entry(
+        self, tmp_path, monkeypatch
+    ):
+        """The door's bin reaching PATH through a symlink (`~/bin -> ...` on
+        Linux, `/System/Volumes/Data/...` on macOS) must not suppress the
+        `.ps1`-beside-the-door BROKEN finding. `Path(raw_dir) == door.parent` is
+        False across a symlink where `_is_same_file` is True."""
+        door = self._install_door(tmp_path, monkeypatch)
+        (door.parent / f"{fdc._DOOR_STEM}{fdc._POWERSHELL_FIRST_EXT}").write_text(
+            "x", encoding="utf-8"
+        )
+        link = tmp_path / "linked"
+        try:
+            link.symlink_to(tmp_path / "settings", target_is_directory=True)
+        except (OSError, NotImplementedError):  # pragma: no cover - unprivileged Windows
+            pytest.skip("this host cannot create a directory symlink")
+        monkeypatch.setenv("PATH", str(link / "bin"))
+
+        joined = "\n".join(fdc.bare_name_door_report())
+
+        assert "exists beside the door" in joined, (
+            "a symlinked PATH entry must still satisfy the door-bin-on-PATH test -- "
+            "otherwise the finding this function exists to make is silently "
+            "suppressed:\n" + joined
+        )
+
+    def test_the_windows_arm_still_ranks_a_ps1_ahead_of_the_door(
+        self, tmp_path, monkeypatch
+    ):
+        """Windows is the platform this surface already worked on, so its arm is
+        driven here on every host rather than excused with a skip: `sys.platform`
+        is read at call time, and the report must keep passing
+        `rules="windows"` there. A `.ps1` beside the
+        door then still WINS, which is the whole reason the BROKEN finding
+        exists."""
+        door = self._install_door(tmp_path, monkeypatch)
+        ps1 = door.parent / f"{fdc._DOOR_STEM}{fdc._POWERSHELL_FIRST_EXT}"
+        ps1.write_text("x", encoding="utf-8")
+        monkeypatch.setenv("PATH", str(door.parent))
+        monkeypatch.setattr(fdc.sys, "platform", "win32")
+
+        joined = "\n".join(fdc.bare_name_door_report())
+
+        assert f"Winner: `{ps1}`" in joined, joined
+        assert "**BREAK-CLASS**" in joined, joined

@@ -536,8 +536,35 @@ def _resolve_source_sigil(
     return str(root / sigil)
 
 
-def _refuse_engine_root_as_dest(name: str, key: str, dest_root: str) -> None:
-    """Refuse a publish dest that IS this box's deployed engine mirror.
+def _checked_out_branch(repo_root: str) -> Optional[str]:
+    """Branch name `repo_root`'s HEAD points at, read off disk with no git spawn.
+
+    Follows a `.git` file's `gitdir:` pointer. None on a detached HEAD or any
+    unreadable layout -- the caller treats None as "cannot prove it is safe".
+    """
+    dot_git = Path(repo_root) / ".git"
+    try:
+        if dot_git.is_file():
+            pointer = dot_git.read_text(encoding="utf-8").strip()
+            if not pointer.startswith("gitdir:"):
+                return None
+            git_dir = Path(pointer[len("gitdir:") :].strip())
+            if not git_dir.is_absolute():
+                git_dir = Path(repo_root) / git_dir
+        else:
+            git_dir = dot_git
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    prefix = "ref: refs/heads/"
+    return head[len(prefix) :] if head.startswith(prefix) else None
+
+
+def _refuse_engine_root_as_dest(
+    name: str, key: str, dest_root: str, track_ref: Optional[str] = None
+) -> None:
+    """Refuse a publish dest that IS this box's deployed engine mirror, unless
+    that clone is checked out on the mirror's own non-default `track_ref` branch.
 
     An engine root is a BUILD ARTIFACT that the fleet executes; a publish
     mirror is a WORKTREE a round writes a projection into and pushes. They are
@@ -560,6 +587,13 @@ def _refuse_engine_root_as_dest(name: str, key: str, dest_root: str) -> None:
     that is already set, just set to the wrong thing. `UNSAFE_DEST` rather
     than rc 2 so the driver does not print "malformed row" over a row whose
     every field is well-formed.
+
+    The hazard is the default branch, not the clone. A deployed mirror checked
+    out on its registered `publish.mirrors.<key>.track_ref` branch (e.g.
+    `candidate`) IS the flow's staging branch, so a round committing and
+    pushing there is the percolate -> candidate step itself (PM ruling
+    2026-09-19: publish runs atop the git-tracked engine repo, never a second
+    clone). `main`/`master` stay refused whatever `track_ref` says.
     """
     try:
         from coordinator_core.engine_root import is_published_engine_mirror
@@ -570,13 +604,18 @@ def _refuse_engine_root_as_dest(name: str, key: str, dest_root: str) -> None:
             return
     except Exception:  # noqa: BLE001 -- same fail-open contract as the predicate itself
         return
+    if track_ref:
+        track_branch = track_ref.split("/", 1)[1] if "/" in track_ref else track_ref
+        if track_branch not in ("main", "master") and _checked_out_branch(dest_root) == track_branch:
+            return
     raise ResolveError(
         f"resolve-publish-target: {key} resolves to '{dest_root}', which is this "
         "box's DEPLOYED ENGINE MIRROR (the registered repos.claude_klabauter "
         f"clone), not a publish worktree -- refusing to resolve dest for target "
         f"'{name}'. Publishing there would commit and push onto the published "
-        "mirror's own checked-out branch.\n"
-        f"  Remediation: machine-local set {key} "
+        "mirror's own checked-out branch, which is not its non-default track_ref.\n"
+        f"  Remediation: check that clone out on its track_ref branch (e.g. "
+        f"`git -C {dest_root} switch candidate`), or machine-local set {key} "
         "<absolute-path-to-a-SEPARATE-clone-of-the-publish-repo>",
         UNSAFE_DEST,
     )
@@ -641,7 +680,12 @@ def _resolve_publish_mirror_row(
             1,
         )
 
-    _refuse_engine_root_as_dest(name, f"publish.mirrors.{key}.path", dest_root)
+    _refuse_engine_root_as_dest(
+        name,
+        f"publish.mirrors.{key}.path",
+        dest_root,
+        _machine_local_get(machine_local_bin, f"publish.mirrors.{key}.track_ref"),
+    )
 
     abs_dest = dest_root if not dest_subdir else f"{dest_root}/{dest_subdir}"
 

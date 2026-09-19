@@ -78,7 +78,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional
 
-from coordinator_core.data_root import content_root_for
+from coordinator_core.data_root import content_root_for, content_root_or_private
 from coordinator_core.session.declared_writes import declare_write
 
 _HOOK_SEAM_MARKER = "COORDINATOR HOOK SEAM"
@@ -234,11 +234,10 @@ def _resolve_plugin_root_token(path: str, doe_root: Optional[str]) -> str:
         return path
     # On a published flat mirror the plugin root IS the DoE root; expanding to
     # `<doe_root>/coordinator` there made every registered script read as
-    # missing on disk. The old join stays as the fallback so a root that holds
-    # neither layout still reports the same path it always did.
-    content_root = content_root_for(doe_root)
-    expansion = str(content_root) if content_root is not None else f"{doe_root}/coordinator"
-    return path.replace(_PLUGIN_ROOT_TOKEN, expansion)
+    # missing on disk. content_root_or_private falls back to that same join
+    # so a root that holds neither layout still reports the same path it
+    # always did (overengineering-reviewer finding 2).
+    return path.replace(_PLUGIN_ROOT_TOKEN, content_root_or_private(doe_root))
 
 
 def _iter_hook_commands(hooks_doc: Any):

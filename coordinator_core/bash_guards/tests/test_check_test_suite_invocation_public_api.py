@@ -858,7 +858,7 @@ def test_check_still_denies_unscoped_subagent_command(repo, monkeypatch):
     out = guard.check(_payload("pytest", repo, agent_id="a0123456789abcdef"))
     assert out is not None
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-    assert reason.startswith("Run the tests you actually touched:")
+    assert reason.startswith("Full-suite subagent runs are denied")
 
 
 # ---------------------------------------------------------------------------

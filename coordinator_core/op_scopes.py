@@ -261,7 +261,6 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.sessionstart_dispatch":            "none",
     "hooks.sessionstart_async_dispatch":      "none",
     "hooks.assert_em_role":                   "none",
-    "hooks.session_start_watch_presence":     "none",
     "hooks.sweep_boot":                       "none",
     "hooks.session_start_announce_job_mode":  "none",
     "hooks.session_start_register_doe_claude_root": "none",

@@ -3159,3 +3159,98 @@ def test_a_done_with_concerns_reply_with_closed_backtick_answers_its_brief():
     pattern = emit._ANY_STATUS_JS_RE[1:-1].replace("\\/", "/")
     reply = json.dumps("Work landed.\n`DONE_WITH_CONCERNS`: .coordinator-local/r.md")
     assert re.search(pattern, reply)
+
+
+# ---------------------------------------------------------------------------
+# Check B parity leg (2026-09-18-doe-holds-no-scripts, leg 3): prose asserting
+# a state the row's own fields do not declare. Restated to the letter from
+# DoE-claude emit-dispatch-workflow.py :: guard_against_unschedulable_rows.
+# ---------------------------------------------------------------------------
+
+
+def _plan_with_row_body(body_line: str, *, external_gate: str = "", disposition: str = "") -> str:
+    return (
+        "---\ntitle: fixture\n---\n\n# Fixture\n\n## Tasks\n\n"
+        "```yaml plan-tasks\n"
+        "- id: C1\n"
+        "  title: Do the thing\n"
+        "  change_kind: doc-edit\n"
+        "  surface: docs/reference/some-thing.md\n"
+        "  writes:\n    - docs/reference/some-thing.md\n"
+        "  queue_scope: project\n"
+        f"  disposition: {disposition or 'open'}\n"
+        f"{external_gate}"
+        f"  body: |\n    {body_line}\n"
+        "```\n"
+    )
+
+
+def test_blocked_prose_with_no_gate_raises_dispatch_gate_violation(tmp_path):
+    plan_path = tmp_path / "fixture.md"
+    plan_path.write_text(
+        _plan_with_row_body("Do not start before confirming the directive is live."),
+        encoding="utf-8",
+    )
+    with pytest.raises(emit.DispatchGateViolation) as excinfo:
+        emit.emit_script(plan_path, repo_root=tmp_path)
+    assert "Check B" in str(excinfo.value)
+    assert "C1" in str(excinfo.value)
+
+
+def test_blocked_prose_with_a_gate_does_not_raise(tmp_path):
+    gate = (
+        "  external_gate:\n"
+        "    - owner_repo: DoE-claude\n"
+        "      condition: waiting on the directive\n"
+        "      requires: landed-work\n"
+        "      cleared: true\n"
+    )
+    plan_path = tmp_path / "fixture.md"
+    plan_path.write_text(
+        _plan_with_row_body(
+            "Do not start before confirming the directive is live.", external_gate=gate
+        ),
+        encoding="utf-8",
+    )
+    emit.emit_script(plan_path, repo_root=tmp_path)
+
+
+def test_already_happened_prose_with_open_disposition_raises(tmp_path):
+    plan_path = tmp_path / "fixture.md"
+    plan_path.write_text(
+        _plan_with_row_body("The memo was sent already -- for traceability only."),
+        encoding="utf-8",
+    )
+    with pytest.raises(emit.DispatchGateViolation) as excinfo:
+        emit.emit_script(plan_path, repo_root=tmp_path)
+    assert "Check B" in str(excinfo.value)
+
+
+def test_already_happened_prose_with_coded_disposition_does_not_raise(tmp_path):
+    """A row already marked `disposition: coded` is excluded from
+    `read_spine`'s output before `check_unschedulable_rows` ever sees it, so
+    the plan has zero dispatchable rows and `build_waves` refuses instead --
+    Check B never fires for a row this engine has already excluded."""
+    plan_path = tmp_path / "fixture.md"
+    plan_path.write_text(
+        _plan_with_row_body(
+            "The memo was sent already -- for traceability only.", disposition="coded"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(NoWavesError):
+        emit.emit_script(plan_path, repo_root=tmp_path)
+
+
+def test_ordinary_prose_does_not_raise(tmp_path):
+    """Negative-spec: Check B is deliberately narrow. Ordinary future-
+    conditional executor instruction prose ("report BLOCKED rather than...")
+    must not fire -- the DoE pattern this class was tuned against."""
+    plan_path = tmp_path / "fixture.md"
+    plan_path.write_text(
+        _plan_with_row_body(
+            "If X is genuinely needed, report BLOCKED rather than adding one."
+        ),
+        encoding="utf-8",
+    )
+    emit.emit_script(plan_path, repo_root=tmp_path)

@@ -270,3 +270,38 @@ def test_body_line_quoting_a_trailer_is_a_documented_accepted_over_match(tmp_pat
     result = session_commits.resolve_session_commits(repo, "sid-quoted")
 
     assert [row["sha"] for row in result] == [sha]
+
+
+def test_anchored_and_unanchored_trailer_greps_agree(tmp_path):
+    """The `$`-anchored trailer grep drops nothing the unanchored one keeps.
+
+    `review_brightline_gate` greps `^Session-Id: <sid>$` where this op greps
+    `^Session-Id: <sid>`, and the difference has been read as an under-count on
+    the gate's side -- a commit whose trailer is followed by another trailer
+    line silently vanishing from a review-scale measurement. It does not:
+    `git log --grep` applies its regex LINE-WISE, so `$` is end-of-line, never
+    end-of-message. This pins that, so nobody "fixes" the gate by dropping the
+    anchor, and nobody reintroduces the claim into a docstring.
+    """
+    repo = _init_repo(tmp_path)
+    sid = "863331b0-d278-5ae9-8d0f-9c0ab350de8c"
+    # The live shape: Session-Id is NOT the message's final line.
+    sha = _commit(
+        repo,
+        "a.txt",
+        "1\n",
+        "subject",
+        f"Session-Id: {sid}",
+        "Deliverable-Id: dlv-something-abc123",
+    )
+
+    anchored = _git(
+        ["log", "--no-merges", "--pretty=%H", f"--grep=^Session-Id: {sid}$", "HEAD"],
+        repo,
+    ).split()
+    unanchored = _git(
+        ["log", "--no-merges", "--pretty=%H", f"--grep=^Session-Id: {sid}", "HEAD"],
+        repo,
+    ).split()
+
+    assert anchored == unanchored == [sha]

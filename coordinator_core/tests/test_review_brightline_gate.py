@@ -513,6 +513,62 @@ def test_session_id_filters_to_matching_commits_only(tmp_path, capsys, monkeypat
     assert "VERDICT=indeterminate" in captured.out
 
 
+def test_session_id_merge_commit_does_not_count_merged_in_work(
+    tmp_path, capsys, monkeypatch
+):
+    """A merge commit stamped with THIS session's `Session-Id` trailer (the
+    prepare-commit-msg hook stamps a merge the session performs same as any
+    other commit) must not have the merged-in branch's own work credited as
+    this session's authored LOC/commit. `git show --raw --numstat` on a
+    merge (no `-m`/`--first-parent`) still emits a full two-column diff
+    against the first parent whenever the merge is not a clean fast-forward
+    — everything the OTHER branch touched, none of it this session's work.
+
+    Fixture: a real merge of a divergent `other` branch (10 lines across 2
+    files, no trailer — models an unrelated peer/upstream branch) into the
+    session's own 1-line-changed branch, with the merge commit itself
+    carrying the session's trailer. Unfixed (no `--no-merges`), the merge's
+    ~10-line diff inflates `loc=`/`commits=`/`surfaces=` as if authored by
+    the session; fixed, only the session's own non-merge commit counts.
+
+    VERDICT is `indeterminate`, not `single-reviewer-ok`: the merged-in
+    branch's own commit is untrailered and reachable in `range_`, which the
+    2026-08-30 attribution-coverage check (correctly, and orthogonally to
+    this fix) refuses to clear to a permissive verdict over. The claim this
+    test pins is the pre-verdict metrics — `loc=`/`commits=`/`filtered_to=`
+    — not excluding the merged-in work, which the `note:` stderr text also
+    corroborates by name."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    base_sha = _git(repo, "rev-parse", "HEAD").strip()
+
+    _git(repo, "checkout", "-q", "-b", "other", base_sha)
+    (repo / "other1.py").write_text("o1 = 1\no1b = 2\n", encoding="utf-8")
+    (repo / "other2.py").write_text("o2 = 1\no2b = 2\n", encoding="utf-8")
+    _git(repo, "add", "other1.py", "other2.py")
+    _git(repo, "commit", "-q", "-m", "unrelated peer work (no trailer)")
+    other_sha = _git(repo, "rev-parse", "HEAD").strip()
+
+    _git(repo, "checkout", "-q", "-b", "session-branch", base_sha)
+    _commit_file_with_trailer(
+        repo, "mine.py", "mine = 1\n", "own change", "merge-session"
+    )
+    _git(repo, "merge", "-q", "--no-ff", "-m",
+         "Merge other into session-branch\n\nSession-Id: merge-session", other_sha)
+
+    monkeypatch.chdir(repo)
+
+    rc = main(["--session-id", "merge-session", f"{base_sha}..HEAD"])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "commits=1" in captured.out
+    assert "filtered_to=1" in captured.out
+    assert "loc=1 commits=1" in captured.out
+    assert "VERDICT=indeterminate" in captured.out
+    assert "note: 1 commit(s) in range carry no Session-Id trailer" in captured.err
+
+
 def _write_governed_plan(repo_root: Path, deliverable_id: str) -> Path:
     plans_dir = repo_root / "docs" / "plans"
     plans_dir.mkdir(parents=True, exist_ok=True)

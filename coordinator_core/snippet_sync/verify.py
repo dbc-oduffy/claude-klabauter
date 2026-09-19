@@ -965,18 +965,22 @@ def _insert_block(path: Path, name: str, begin: str, end: str, body: str) -> Non
     path.write_text("".join(out), encoding="utf-8", newline="\n")
 
 
-def _claim_if_session(path: str, *, cs_lib: Optional[Path] = None) -> None:
+def _claim_if_session(path: str) -> None:
     """Best-effort touch-tracking via the native `cs_self_claim` port.
 
     Calls `coordinator_core.session.claims.self_claim` in-process (2026-07-21
     de-bash cutover — see git log; was previously a `bash -c 'source ...;
     cs_self_claim'` subprocess shim to the DoE-side coordinator-session.sh).
-    `cs_lib` is accepted-but-unused for call-site compatibility — the native
-    port needs no lib file to source. Best-effort: `self_claim` itself is
-    fail-open (always returns True; internal errors are swallowed), matching
-    the original scripts' silent-no-op-on-failure contract exactly.
+    Best-effort: `self_claim` itself is fail-open (always returns True;
+    internal errors are swallowed), matching the original scripts'
+    silent-no-op-on-failure contract exactly.
+
+    NEGATIVE SPEC: takes no lib-path parameter. The native port has no shell
+    lib to source, and the file the retired `cs_lib` argument resolved toward
+    (`coordinator/lib/coordinator-session.sh`) no longer exists after the
+    session-family repoint — an accepted-but-unused parameter reads to a
+    caller as a live knob.
     """
-    del cs_lib  # unused: native port needs no lib file to source
     try:
         _self_claim(path)
     except ValueError as exc:
@@ -993,7 +997,6 @@ def run(
     plugin_root: Path,
     content_root: Optional[Path] = None,
     machine_local_bin: Optional[str] = None,
-    cs_lib: Optional[Path] = None,
     registry_data: Optional[dict] = None,
 ) -> SyncOutcome:
     """Verify/--fix/--list a single snippet's sentinel-sync state across its consumers.
@@ -1287,7 +1290,7 @@ def run(
         if effective_mode == "--fix":
             _insert_block(Path(raw), name, begin_sentinel, end_sentinel, snippet_body)
             out_lines.append(f"INSERTED     {raw}")
-            _claim_if_session(raw, cs_lib=cs_lib)
+            _claim_if_session(raw)
         else:
             out_lines.append(f"MISSING      {raw}")
             exit_code = 1
@@ -1311,7 +1314,7 @@ def run(
             )
             if is_fix and updated != text:
                 p.write_text(updated, encoding="utf-8", newline="\n")
-                _claim_if_session(raw, cs_lib=cs_lib)
+                _claim_if_session(raw)
                 text = updated
             missing_end = counts["missing_end"] > 0
             mismatched = counts["mismatched"] > 0
@@ -1338,7 +1341,7 @@ def run(
             elif is_fix:
                 if _rewrite_block(p, begin_sentinel, end_sentinel, snippet_body, fence_aware=fence_aware):
                     fixed = True
-                    _claim_if_session(raw, cs_lib=cs_lib)
+                    _claim_if_session(raw)
                 else:
                     # Review: code-reviewer — the rewrite must not be
                     # reported as FIXED if _rewrite_block silently found the

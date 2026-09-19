@@ -86,6 +86,45 @@ class DayBranchAssertResult(NamedTuple):
     message: str
 
 
+_SESSION_ENSURE_BRANCH_PATH = (
+    Path(__file__).resolve().parents[2] / "coordinator" / "lib" / "session_ensure_branch.py"
+)
+_session_ensure_branch = None
+
+
+def _load_session_ensure_branch():
+    """Load the ENGINE's own `coordinator/lib/session_ensure_branch.py` once
+    per process, by file path.
+
+    Anchored to this module's tree, never to the session's `repo_root`: the
+    asserted repo is whichever one the session runs in and carries no
+    `coordinator/lib` of its own, while the published engine mirror ships
+    this file beside `coordinator_core`. Never a `sys.path` insert — this
+    warm interpreter is shared by every concurrent session, so a
+    process-global import-path mutation races across repos. `coordinator/`
+    has no `__init__.py` and collides by name with the DoE plugin root, so a
+    package import is unavailable; `importlib.util` loads the file without
+    touching `sys.path`. It IS registered in `sys.modules` under a private
+    name, because the file's `@dataclass` definitions resolve their own
+    module through `sys.modules` at class-creation time.
+    """
+    global _session_ensure_branch
+    if _session_ensure_branch is None:
+        import importlib.util
+        import sys
+
+        spec = importlib.util.spec_from_file_location(
+            "_day_branch_assert_session_ensure_branch", _SESSION_ENSURE_BRANCH_PATH
+        )
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load {_SESSION_ENSURE_BRANCH_PATH}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        _session_ensure_branch = module.session_ensure_branch
+    return _session_ensure_branch
+
+
 def assert_day_branch(
     repo_root: str,
     machine: str,
@@ -119,17 +158,7 @@ def assert_day_branch(
 
 
 def _case_a(repo_root, machine, today, *, env, stderr) -> DayBranchAssertResult:
-    # sys.path + flat import, mirroring workday-start-step0.py's own
-    # `sys.path.insert(0, _LIB_DIR); from session_ensure_branch import ...`.
-    # NOT `from coordinator.lib...`: `coordinator/` carries no __init__.py and
-    # the name collides with the DoE-claude plugin root of the same name, so a
-    # package import would resolve to whichever is on sys.path first.
-    import sys
-
-    lib_dir = str(Path(repo_root) / "coordinator" / "lib")
-    if lib_dir not in sys.path:
-        sys.path.insert(0, lib_dir)
-    from session_ensure_branch import session_ensure_branch
+    session_ensure_branch = _load_session_ensure_branch()
 
     result = session_ensure_branch(
         machine,

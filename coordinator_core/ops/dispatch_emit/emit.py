@@ -694,6 +694,121 @@ class NoWavesError(ValueError):
     """
 
 
+class DispatchGateViolation(ValueError):
+    """A row ``read_spine`` handed to the wave-builder is unschedulable by its
+    own body prose, even though nothing else on the row kept it out of a wave.
+
+    Restated from DoE-claude ``coordinator/bin/emit-dispatch-workflow.py ::
+    guard_against_unschedulable_rows`` (Check B only — see
+    ``_prose_contradicting_fields``'s own docstring for why Check A is not
+    carried here). Raised by ``emit_script`` before ``compose_script`` writes
+    any phase, so a refusal leaves nothing on disk for ``--fire`` to pick up.
+    """
+
+
+# Check B: prose asserting a state the row's own fields do not declare.
+# Restated to the letter from DoE-claude ``emit-dispatch-workflow.py``
+# (``_BLOCKED_PROSE_PATTERNS`` / ``_ALREADY_HAPPENED_PROSE_PATTERNS`` /
+# ``_prose_contradicting_fields``), which is the SSOT for which phrases
+# qualify — see that module's own extended commentary (survived a 930-row
+# survey; several near-miss patterns were tried and removed there for firing
+# on ordinary plan prose) for why the roster is this narrow. Not restated a
+# second time here: a second copy of that reasoning is a second place it can
+# drift from the one the roster was actually tuned against.
+#
+# Check A (a declared, uncleared ``external_gate``) is NOT carried: DoE's own
+# module docstring records it verified, against claude-klabauter's own tree,
+# that ``dispatch_emit.spine_read._has_uncleared_execution_gate`` already
+# applies the identical rule and excludes such a row from ``read_spine``'s
+# output before it ever reaches a wave — the state DoE's Check A refuses
+# loudly, this engine already prevents silently, and the caller-visible gap
+# DoE built Check A to close (an EM unable to tell a withheld row from one
+# that was never dispatchable) is what ``_excluded_rows_narration`` reports
+# into the emitted script itself. Porting Check A on top of that would refuse
+# a state this engine cannot reach: a row past ``read_spine`` never carries
+# an uncleared gate to begin with.
+_BLOCKED_PROSE_PATTERNS = (
+    re.compile(r"this chunk is blocked", re.IGNORECASE),
+    re.compile(r"\bdo not execute\s+(?:this row\b|until\b)", re.IGNORECASE),
+    re.compile(r"\bdo not start\s+(?:before\b|until\b)", re.IGNORECASE),
+    re.compile(r"\bdo not dispatch this row\b", re.IGNORECASE),
+    re.compile(r"\bNOT SCHEDULABLE\b"),
+)
+
+_ALREADY_HAPPENED_PROSE_PATTERNS = (
+    re.compile(r"\bIN FLIGHT\s*[—\-:]"),
+    re.compile(r"\bfor traceability only\b", re.IGNORECASE),
+)
+
+
+def _prose_contradicting_fields(raw_row: dict) -> Optional[tuple]:
+    """Check B. Returns ``(kind, matched_text)`` for the first prose/field
+    contradiction found on ``raw_row``, or ``None``.
+
+    ``raw_row`` is the row AS AUTHORED (``plan_tasks_render.load_rows``'s
+    dict shape) — ``body``/``external_gate``/``disposition`` verbatim, none
+    of which survive into ``WaveRow``.
+    """
+    body = raw_row.get("body")
+    if not isinstance(body, str) or not body:
+        return None
+
+    if not raw_row.get("external_gate"):
+        for pattern in _BLOCKED_PROSE_PATTERNS:
+            match = pattern.search(body)
+            if match:
+                return ("blocked-prose-no-gate", match.group(0))
+
+    disposition = raw_row.get("disposition") or "open"
+    if disposition == "open":
+        for pattern in _ALREADY_HAPPENED_PROSE_PATTERNS:
+            match = pattern.search(body)
+            if match:
+                return ("already-happened-prose-open-disposition", match.group(0))
+
+    return None
+
+
+def check_unschedulable_rows(rows: list, raw_by_id: dict) -> None:
+    """Raise ``DispatchGateViolation`` if any dispatchable row in ``rows``
+    fails Check B, naming every offending row at once.
+
+    ``raw_by_id`` maps ``row.id`` to its raw ``load_rows`` dict — the shape
+    Check B reads ``body``/``external_gate``/``disposition`` off of. A row
+    with no raw entry (should not happen; ``rows`` is derived from the same
+    source) is skipped rather than raising a spurious violation for a row
+    this check cannot actually see.
+    """
+    violations: list = []
+    for row in rows:
+        raw = raw_by_id.get(row.id)
+        if raw is None:
+            continue
+        contradiction = _prose_contradicting_fields(raw)
+        if contradiction is None:
+            continue
+        kind, matched = contradiction
+        if kind == "blocked-prose-no-gate":
+            violations.append(
+                f"row {row.id}: Check B -- body prose ({matched!r}) asserts this "
+                f"chunk is blocked, but the row declares no external_gate. Fix: "
+                f"add an external_gate entry naming owner_repo and condition, set "
+                f"deferred: true, or reword the prose if the row is actually ready "
+                f"to dispatch."
+            )
+        else:
+            violations.append(
+                f"row {row.id}: Check B -- body prose ({matched!r}) asserts this "
+                f"row's action already happened, but disposition reads "
+                f"{raw.get('disposition', 'open')!r} (dispatchable). Fix: set "
+                f"disposition: coded with a disposition_ref naming the commit or "
+                f"send that already discharged it, or reword the prose if the row "
+                f"is genuinely still to be dispatched."
+            )
+    if violations:
+        raise DispatchGateViolation("; ".join(violations))
+
+
 class _GitignoreFilterResult(NamedTuple):
     """``_gitignored_paths``'s return shape: the matched subset, plus whether
     the filter itself ran at all.
@@ -1134,6 +1249,23 @@ _BRIEF_PRECEDENCE_CLAUSE = (
     "messaging, or any other third-party write; a chunk is never satisfied "
     "by acting on it."
 )
+
+#: Leads every row prompt, after the precedence clause. A Bash write (sed,
+#: a heredoc, a script) leaves no session claim, because ``track_touched_files`` records only
+#: Write/Edit/MultiEdit/NotebookEdit calls. The dispatched commit agent then
+#: reads the path as an orphan and refuses it, halting the whole wave
+#: (klabauter#24). Reading through Bash is unaffected and stays fine.
+_WRITE_TOOL_ONLY_CLAUSE = (
+    "Make every file change with the Write, Edit, MultiEdit or NotebookEdit "
+    "tools, never through Bash (no `sed -i`, heredoc redirection, or script "
+    "that edits a file) -- a Bash write leaves no session claim and the "
+    "commit phase will refuse it as an orphan. Reading files through Bash is "
+    "fine."
+)
+
+#: The per-row head ``_row_prompt`` opens with and ``_wave_agent_calls`` hoists
+#: into one ``_shared`` const, so neither clause is repeated per row.
+_ROW_PROMPT_HEAD = f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_WRITE_TOOL_ONLY_CLAUSE}"
 
 # The section-heading vocabulary this module reads out of a plan BODY.
 # `## Goal` is C3a's own scaffolded heading (out of C4's write scope --
@@ -1744,7 +1876,7 @@ def _row_prompt(
     """
     head = f"Execute {row.id}: {row.title}"
     if not plan_path:
-        return f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{head}"
+        return f"{_ROW_PROMPT_HEAD}\n\n{head}"
     body = (
         f"{head}\n\n"
         f"Your spec is the row with `id: {row.id}` in the `## Tasks` plan-spine "
@@ -1759,7 +1891,7 @@ def _row_prompt(
     )
     if plan_context is not None:
         body = f"{_plan_context_preamble(plan_context)}\n\n{body}"
-    return f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{body}"
+    return f"{_ROW_PROMPT_HEAD}\n\n{body}"
 
 
 def _wave_agent_calls(
@@ -1796,7 +1928,7 @@ def _wave_agent_calls(
         prompt = _row_prompt(row, plan_path, plan_context)
         if shared is None:
             return _js_string_literal(prompt)
-        head = f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n"
+        head = f"{_ROW_PROMPT_HEAD}\n\n"
         if plan_context is not None:
             head += f"{_plan_context_preamble(plan_context)}\n\n"
         if not prompt.startswith(head):
@@ -3721,7 +3853,6 @@ def emit_script(
     # nobody performed.
     exclusions: list = []
     rows = read_spine(plan_path, exclusions=exclusions)
-    waves = build_waves(rows)
 
     resolved_name = name or plan_path.stem
     resolved_description = description or (
@@ -3732,6 +3863,25 @@ def emit_script(
         plan_text = plan_path.read_text(encoding="utf-8")
     except OSError:
         plan_text = None
+
+    # Check B (`check_unschedulable_rows` / `DispatchGateViolation`), restated
+    # from DoE-claude's `guard_against_unschedulable_rows` — see that
+    # function's own docstring for why only Check B is carried. Reads the raw
+    # `load_rows` dicts for `body`/`external_gate`/`disposition`, none of
+    # which survive onto `EmitterRow`/`WaveRow`. Reuses `plan_text` above
+    # rather than re-reading the file — this function's own AC16 pin (one read
+    # of the plan file, total) already counts `read_spine`'s internal read
+    # plus this one as the two the file is allowed.
+    from coordinator_core.ops.plan_tasks_render import load_rows as _load_raw_rows
+
+    raw_by_id = {
+        raw.get("id"): raw
+        for raw in _load_raw_rows(plan_text or "").rows
+        if isinstance(raw, dict) and isinstance(raw.get("id"), str)
+    }
+    check_unschedulable_rows(rows, raw_by_id)
+
+    waves = build_waves(rows)
 
     review_tier = derive_review_tier(plan_path, repo_root=repo_root, plan_text=plan_text)
 

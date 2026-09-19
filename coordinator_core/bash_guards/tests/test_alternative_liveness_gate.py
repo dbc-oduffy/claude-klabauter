@@ -202,7 +202,7 @@ def _guard_message_text(hso: Dict[str, Any]) -> str:
     return hso.get("permissionDecisionReason") or hso.get("additionalContext") or ""
 
 
-def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch):
+def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch, tmp_path):
     """``fire_guard`` must observe a guaranteed-first call for
     ``guard_inprocess_search``'s session latch, never whatever latch state
     a prior run (real or synthetic) left on disk for the AMBIENT session
@@ -212,38 +212,35 @@ def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch):
     asserts the isolated re-fire still renders the FULL explanatory
     paragraph and leaves the pre-seeded marker untouched."""
     fixed_sid = "altlive-isolation-fixture-session"
-    real_cwd = os.getcwd()
-    marker_path = guard_inprocess_search._latch_path(real_cwd, fixed_sid)
-    assert marker_path is not None, "could not resolve a latch path against the real repo -- test cannot proceed"
+    monkeypatch.setattr(
+        guard_inprocess_search,
+        "_latch_path",
+        lambda _cwd, sid: tmp_path / sid / guard_inprocess_search._LATCH_MARKER_NAME,
+    )
+    marker_path = guard_inprocess_search._latch_path(os.getcwd(), fixed_sid)
+    marker_path.parent.mkdir(parents=True)
+    marker_path.touch()
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", fixed_sid)
 
-    marker_path.parent.mkdir(parents=True, exist_ok=True)
-    marker_path.touch(exist_ok=True)
-    try:
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", fixed_sid)
+    result = altlive.fire_guard("guard_inprocess_search")
 
-        result = altlive.fire_guard("guard_inprocess_search")
-
-        assert result.fired, "guard_inprocess_search's trigger did not fire: %r" % result.error
-        reason = _guard_message_text(result.envelope.get("hookSpecificOutput", {}))
-        # Guard's actual wording is "recognized as a search" -- this phrase
-        # opens `_footer`'s full-paragraph branch and is absent from
-        # `_ANSWERED_MARKER`, so it is a reliable full-vs-short discriminator.
-        assert "recognized as a search" in reason, (
-            "fire_guard observed the pre-seeded latch for the ambient session id instead of "
-            "a guaranteed-first call -- isolation did not hold: %r" % reason[:200]
-        )
-        assert guard_inprocess_search._ANSWERED_MARKER not in reason, (
-            "fire_guard rendered the already-answered short marker, not the full paragraph -- "
-            "the fixed session id's pre-seeded latch leaked into the probe"
-        )
-        assert marker_path.is_file(), (
-            "the pre-seeded marker for the fixed session id was removed or altered -- fire_guard "
-            "must never touch state belonging to a session id it did not mint itself"
-        )
-    finally:
-        import shutil
-
-        shutil.rmtree(marker_path.parent, ignore_errors=True)
+    assert result.fired, "guard_inprocess_search's trigger did not fire: %r" % result.error
+    reason = _guard_message_text(result.envelope.get("hookSpecificOutput", {}))
+    # Guard's actual wording is "recognized as a search" -- this phrase
+    # opens `_footer`'s full-paragraph branch and is absent from
+    # `_ANSWERED_MARKER`, so it is a reliable full-vs-short discriminator.
+    assert "recognized as a search" in reason, (
+        "fire_guard observed the pre-seeded latch for the ambient session id instead of "
+        "a guaranteed-first call -- isolation did not hold: %r" % reason[:200]
+    )
+    assert guard_inprocess_search._ANSWERED_MARKER not in reason, (
+        "fire_guard rendered the already-answered short marker, not the full paragraph -- "
+        "the fixed session id's pre-seeded latch leaked into the probe"
+    )
+    assert marker_path.is_file(), (
+        "the pre-seeded marker for the fixed session id was removed or altered -- fire_guard "
+        "must never touch state belonging to a session id it did not mint itself"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -306,26 +303,19 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     # -m flag), a form `_probe_python_dash_c` does not attempt to run --
     # honestly UNVERIFIABLE rather than guessed at in either direction.
     "block_reviewer_bash_outside_allowlist": 1,
-    # `block_approval_sentinel_creation`'s REASON_DIRECT message (2026-08-03
-    # dead-alternative fix) names `grep` bare and 9 real, resolvable
-    # `git <query-subcommand>` forms (`status`/`diff`/`log`/`show`/
-    # `ls-files`/`rev-parse`/`describe`/`check-ignore`/`check-attr`) -- none
-    # are mutating, so each is EXECUTED for real in `probe_command`'s
-    # throwaway (non-git) tmp dir and fails with "fatal: not a git
-    # repository" / grep's no-pattern usage error: a real command, run
-    # outside the one context (an actual repo/stdin) it needs to succeed in
-    # -- genuinely ambiguous, not dead, per this module's own UNVERIFIABLE
-    # contract.
-    "block_approval_sentinel_creation": 10,
-    # Same message shape, same count, same reason as the row above:
-    # `block_fleet_delegation_creation`'s REASON_DIRECT copy names `grep`
-    # bare plus the identical nine `git <query-subcommand>` forms, each
-    # EXECUTED for real in `probe_command`'s throwaway non-git tmp dir,
-    # where they exit 128 / grep's usage error. Ambiguous, not dead. Entered
-    # this table on 2026-08-30 with the guard's first `LIVE_TRIGGERS` row --
-    # the count was measured, not predicted, and it is a property of the
-    # probe's tmp dir rather than of this host.
-    "block_fleet_delegation_creation": 10,
+    # `block_approval_sentinel_creation`'s REASON_DIRECT message (guard-
+    # message-size discipline, this dispatch) was trimmed to 2 real,
+    # resolvable `git <query-subcommand>` forms (`status`/`log`) to fit
+    # `MESSAGE_PROSE_CAP_BYTES` -- both EXECUTED for real in `probe_command`'s
+    # throwaway (non-git) tmp dir and fail with "fatal: not a git
+    # repository": genuinely ambiguous, not dead, per this module's own
+    # UNVERIFIABLE contract. Was 10 (`grep` bare + 9 `git` forms) before the
+    # message-size trim; shrinking is the honest direction of travel.
+    "block_approval_sentinel_creation": 2,
+    # Same trim, same reason, same new count as the row above:
+    # `block_fleet_delegation_creation`'s REASON_DIRECT copy was also cut to
+    # `git status`/`git log` to fit the prose cap. Was 10 before the trim.
+    "block_fleet_delegation_creation": 2,
     # Same shape as the `guard_grep_via_bash` row above: this guard's decline
     # copy names answering "in-process", which is a real capability
     # (`guard_inprocess_search`'s own genuine zero-fork answer, and the reason
@@ -337,6 +327,24 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     # manifest entry -- a human-reviewed capability record, not a pin bump.
     # Entered with this guard's first LIVE_TRIGGERS row, 2026-08-30.
     "guard_host_subagent_bash_spawn_shapes": 1,
+    # `check_raw_pid_liveness`'s two `session-liveness-cli` COMMAND
+    # alternatives (`session-live`, `claim-holder-live`) resolve the real
+    # binary on PATH and execute for real -- genuinely LIVE outside pytest
+    # (confirmed via a bare, unquarantined invocation). Under THIS suite
+    # they land UNVERIFIABLE instead: `coordinator_core/conftest.py`'s
+    # autouse `HOME`/`USERPROFILE` quarantine (the same one
+    # `_ALTLIVE_HAZARD_CWD`'s own docstring names for `_is_hazard_repo`)
+    # makes `session-liveness-cli` unable to resolve its own
+    # `CLAUDE_KLABAUTER_ROOT`/engine-root registry entry (real HOME's
+    # `machine-local/registry.local.toml` is exactly what quarantine hides),
+    # so it exits 3 with a bootstrap-remedy message -- no dead-marker
+    # string, so `probe_command` correctly grades this ambiguous rather
+    # than DEAD, per this module's own UNVERIFIABLE contract. Environment-
+    # dependent, not a broken alternative; see the paired
+    # `EXPECTED_LIVE_FLOORS` row for why the LIVE floor for this guard
+    # dropped from 2 to 1 (only the `COORDINATOR_OVERRIDE_RAW_PID_LIVENESS`
+    # OVERRIDE alternative is unaffected by the quarantine).
+    "check_raw_pid_liveness": 2,
 }
 
 #: the Director of Engineering's review (finding 6, "UNVERIFIABLE is an ungated sink"): pin a
@@ -384,7 +392,13 @@ EXPECTED_LIVE_FLOORS: Dict[str, int] = {
     "check_multiprobe_banner_rewrite": 2,
     "check_no_verify": 1,
     "check_offer_git_c": 2,
-    "check_raw_pid_liveness": 2,
+    # Dropped 2 -> 1 (not a ratchet relaxation of a REAL degrade): the two
+    # `session-liveness-cli` COMMAND alternatives now grade UNVERIFIABLE
+    # under this suite's HOME quarantine (see the paired row in
+    # `EXPECTED_UNVERIFIABLE_COUNTS` for the measured cause), leaving only
+    # the `COORDINATOR_OVERRIDE_RAW_PID_LIVENESS` OVERRIDE alternative
+    # reliably LIVE here.
+    "check_raw_pid_liveness": 1,
     "check_sed_range_read_advise": 1,
     "guard_grep_via_bash": 1,
     # 1 (pre-existing, unrelated to the capability manifest) + 2 ("in-process" +

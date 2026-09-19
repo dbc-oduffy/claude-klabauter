@@ -333,6 +333,27 @@ _DAILY_SUMMARY_SHAPED_RE = re.compile(
 )
 
 
+def refuses_path(value: str) -> bool:
+    """Public predicate: would this guard refuse a write to ``value``?
+
+    Evaluates only the path-shape leg (archive/ membership minus the three
+    file-shaped carve-outs) -- the same classifier ``check()`` below uses for
+    its own path gate, and the one ``prep_gate.py``'s
+    ``_archive_writes_refused_in_wave`` calls instead of reaching into this
+    module's underscore-prefixed regexes/normalizer directly (code-reviewer
+    finding, coordinator-code-reviewer.ab762fd13d9fc6b25.md #1). Does NOT
+    evaluate the ``agent_id``/``review-integrator`` allow-conditions --
+    those require a PreToolUse payload and back-pointer lookup this
+    predicate has no access to; callers evaluating a *would-be* subagent
+    write (no live payload) only ever want the path-shape leg anyway.
+    """
+    normalized = _normalize_path(value)
+    return bool(_ARCHIVE_RE.search(normalized)) and not any(
+        carve_out.search(normalized)
+        for carve_out in (_DAILY_SUMMARY_RE, _COMPLETED_RE, _WEEK_CHANGELOG_RE)
+    )
+
+
 def _deny_reason(
     agent_id: str,
     file_path: str,
@@ -427,20 +448,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     normalized = _normalize_path(file_path)
 
-    # Fast exit: path not under archive/ -> allow.
-    if not _ARCHIVE_RE.search(normalized):
-        return None
-
-    # Daily-summaries carve-out.
-    if _DAILY_SUMMARY_RE.search(normalized):
-        return None
-
-    # Per-entry completion fallback carve-out.
-    if _COMPLETED_RE.search(normalized):
-        return None
-
-    # Week-changelogs carve-out (2026-08-06 widening).
-    if _WEEK_CHANGELOG_RE.search(normalized):
+    # Path-shape leg (archive/ membership minus the three file-shaped
+    # carve-outs) -- shared classifier, see refuses_path().
+    if not refuses_path(file_path):
         return None
 
     git_root = _resolve_git_root(payload.get("cwd"))

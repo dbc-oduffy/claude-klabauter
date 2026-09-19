@@ -752,13 +752,17 @@ def op(payload: dict) -> dict | None:
 
     artifact_note = "" if ambiguous or multiple_code_files else " Artifact written."
 
-    sentinel_suffix = "." if has_true_session_id else " (this OS pid only — session_id absent)."
+    sentinel_suffix = "" if has_true_session_id else " (this OS pid only — session_id absent)"
+
+    indented_brief = "\n".join(
+        "  " + line for line in dispatch_brief_text.splitlines() if line.strip()
+    )
 
     nudge_message = (
-        f"EM, not typist. Code write: {file_path}. Dispatch an executor instead "
-        "(agent-dispatch-economics.md). "
-        f"Suppress: write {nudge_ok_sentinel}{sentinel_suffix}\n\n{dispatch_brief_text}"
-        f"{artifact_note}"
+        f"EM, not typist. Code write: {file_path}.\n\n"
+        f"Dispatch instead:\n{indented_brief}"
+        f"{artifact_note}\n\n"
+        f"Suppress{sentinel_suffix}:\n  {nudge_ok_sentinel}"
     )
 
     return context_only("PreToolUse", f"[em-code-dispatch nudge] {nudge_message}")

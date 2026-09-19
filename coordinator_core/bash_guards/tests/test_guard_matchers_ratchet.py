@@ -182,6 +182,11 @@ EXPECTED: Dict[str, _Expected] = {
     "guard-doctrine-surface-bash-write": _Expected(("Bash", "PowerShell")),
     "guard-repo-setup-claude-home-refusal": _Expected(("Bash", "PowerShell")),
     "guard-host-subagent-bash-spawn-shapes": _Expected(("Bash", "PowerShell")),
+    # p4-verb-fence: full-universe (`MATCHERS = COMMAND_TOOL_NAMES`) and
+    # dialect-reading -- resolves its dialect via `_dialect.dialect_from_
+    # tool_name`/`resolve_segments_for_dialect` (per docs/reference/guard-
+    # tool-name-membership.md § 3), never inferred from command text alone.
+    "p4-verb-fence": _Expected(("Bash", "PowerShell")),
     # -- Bash-only by construction, never a conversion candidate (11) --
     # docs/reference/guard-tool-name-membership.md § 8's Bucket C table.
     "guard-host-subagent-bash-ban": _Expected(
@@ -437,7 +442,7 @@ def _compare(
 
 def test_discovery_found_the_expected_scope():
     """Guards the guard: pins the module-level-`MATCHERS`-declaring
-    population this module's docstring derives -- 28 modules (26 full +
+    population this module's docstring derives -- 29 modules (27 full +
     2 Bash-only) -- not the plan's own unverified 19/5 estimate. This is a
     documentation fact about module declarations, distinct from (and
     smaller than) the 54-entry population `_actual_matchers()` enforces
@@ -446,9 +451,13 @@ def test_discovery_found_the_expected_scope():
     Both counts rose by one on 2026-08-30 with
     `block_fleet_delegation_creation`, which had been live in
     `guard_roster()` and in this scan while classified in neither pin --
-    the drift this pin exists to make loud, working as intended."""
+    the drift this pin exists to make loud, working as intended.
+
+    Rose by one again with `p4_verb_fence` (full-universe, dialect-reading;
+    docs/reference/guard-tool-name-membership.md § 3), discovered in the
+    roster with no corpus/ratchet classification."""
     stems = _scoped_module_stems()
-    assert len(stems) == 28, sorted(stems)
+    assert len(stems) == 29, sorted(stems)
     assert "block_stash_destruction" in stems
     assert "guard_powershell_via_bash" in stems
     assert "block_dev_repo_sentinel_removal" not in stems

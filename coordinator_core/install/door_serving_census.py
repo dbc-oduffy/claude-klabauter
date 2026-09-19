@@ -82,6 +82,7 @@ Spec backlink: docs/plans/2026-08-30-twenty-one-bin-names-reach-the-door-or-are-
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -153,6 +154,12 @@ def _generator_bin_names(generator_bin_dir: Path) -> "set[str]":
             continue
         if entry.name.startswith(".") or entry.name.startswith("_"):
             continue
+        # `coordinator/bin/` also holds this tree's own pytest modules
+        # (57 `test_*.py` plus `conftest.py`). None is a door image basename;
+        # left in, they inflate the population by ~13% and 51 of them report as
+        # PENDING_CUTOVER gaps.
+        if entry.name == "conftest.py" or entry.name.startswith("test_"):
+            continue
         if entry.suffix == ".py":
             names.add(entry.stem)
         elif entry.suffix == "":
@@ -189,12 +196,53 @@ def _static_family_bare_names() -> "set[str]":
 
 
 def _installed_image_names(settings_home_bin: Path) -> "set[str]":
+    """Names carrying a NATIVE door image in the settings home.
+
+    Platform-split because the image's on-disk spelling is
+    (`door_install.named_forwarder_path`): `<name>.exe` on Windows, the
+    extensionless `<name>` on POSIX. A `.exe`-only read returns the empty set on
+    every POSIX host, which makes SERVES and DEFECT structurally unreachable
+    there -- the check cannot fail on the defect it exists to detect.
+
+    On POSIX the extensionless slot is shared with the Python/shell shims
+    (`named_forwarder_path`'s docstring: installing there intentionally
+    overwrites the Python forwarder), so a bare suffix test cannot tell a door
+    image from a static-family shim -- measured: it invents 3 DEFECT rows for
+    `machine-local` and kin. The producer's own `_native-forwarder-manifest.json`
+    is the only record that distinguishes them without parsing image headers
+    (`plugin_health/forwarder_drift._NATIVE_FORWARDER_MANIFEST`), and it is
+    intersected with on-disk presence so a manifest naming a slot nothing
+    occupies never reports an image. An absent or unparsable manifest yields the
+    empty set -- the same degradation as today.
+
+    Review: reviewer (S6, finding 2/3) -- this is manifest-INTEGRITY-bound, not
+    a general safeguard against a bad manifest entry: it only ever answers
+    "absent/unparsable manifest -> never a false SERVES", not "any manifest ->
+    never a false SERVES". A present-but-wrong manifest entry (a name recorded
+    as a door image that is really something else, e.g. a hardlinked-over data
+    file the on-disk-presence check cannot distinguish) still yields SERVES here
+    -- exactly the failure 2d98d7b7 found and fixed at the PRODUCER
+    (`_AGENT_HELPER_DATA_SUFFIXES`), not at this consumer. This function has no
+    independent way to tell "a real door image" from "any file recorded at that
+    name" and does not attempt to.
+    """
     names: "set[str]" = set()
     if not settings_home_bin.is_dir():
         return names
-    for entry in settings_home_bin.iterdir():
-        if entry.is_file() and entry.suffix == ".exe":
-            names.add(entry.stem)
+    if sys.platform == "win32":
+        for entry in settings_home_bin.iterdir():
+            if entry.is_file() and entry.suffix == ".exe":
+                names.add(entry.stem)
+        return names
+    try:
+        manifest = json.loads(
+            (settings_home_bin / "_native-forwarder-manifest.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return names
+    for name in manifest.get("names", ()) if isinstance(manifest, dict) else ():
+        if isinstance(name, str) and (settings_home_bin / name).is_file():
+            names.add(name)
     return names
 
 
@@ -307,7 +355,10 @@ def _probe(name: str, settings_home_bin: Optional[Path] = None) -> int:
     module has. Runs the installed image with `--help` and prints its
     stdout/stderr/exit code verbatim; never called by `build_census`."""
     settings_home_bin = settings_home_bin or (_settings_home_root() / "bin")
-    image = settings_home_bin / f"{name}.exe"
+    # `named_forwarder_path`, not a hardcoded `.exe`: the installed spelling is
+    # platform-resolved, and a literal here answers "no installed image at ..."
+    # for every name on POSIX.
+    image = door_install.named_forwarder_path(settings_home_bin, name)
     if not image.is_file():
         print(f"door-serving-census: no installed image at {image}", file=sys.stderr)
         return 1

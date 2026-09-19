@@ -4150,6 +4150,7 @@ def _mutate_sizing_reverse_edge(
     # disk and be discovered by a later reader.
     import yaml as _yaml  # noqa: PLC0415
     from pathlib import Path as _ValidatePath  # noqa: PLC0415
+    import coordinator_core.frontmatter as _frontmatter_pkg  # noqa: PLC0415
     from coordinator_core.frontmatter.schema_validate import (  # noqa: PLC0415
         format_validation_errors as _format_validation_errors,
         validate_frontmatter as _validate_frontmatter,
@@ -4159,9 +4160,11 @@ def _mutate_sizing_reverse_edge(
         _parsed = _yaml.safe_load(new_text) or {}
     except Exception as _exc:  # noqa: BLE001
         raise _MutateAbort(f"sizing reverse edge: post-mutation YAML parse failed: {_exc}") from _exc
+    # Located off the imported package, never off `__file__`: this CLI is published
+    # one directory shallower than it is authored (claude-klabauter#30).
     _schema_path = (
-        _ValidatePath(__file__).resolve().parent.parent.parent
-        / "coordinator_core" / "frontmatter" / "schemas" / "sizing-object.schema.json"
+        _ValidatePath(_frontmatter_pkg.__file__).resolve().parent
+        / "schemas" / "sizing-object.schema.json"
     )
     _errors = _validate_frontmatter(_parsed, _schema_path)
     if _errors:

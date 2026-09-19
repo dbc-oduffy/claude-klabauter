@@ -2388,11 +2388,15 @@ def _compute_review_receipt_gate(
     # by a pre-relocation session must not read as "no receipt" and block a
     # close.
     sidecar_dirs = [Path(d) / sid for d in _share_roots(str(root))]
-    sidecar_dir = sidecar_dirs[0]
+    # Review: code-reviewer (S10 finding 2) — the gate now globs every extant
+    # root (see AC2b note below), so the detail text must name all of them
+    # rather than only sidecar_dirs[0]; naming just the first root misled a
+    # human reading the block when the actual receipt (or the actual block
+    # reason) lived under a different root.
     no_receipt_detail = (
-        f"no counting review receipt for session {sid!r} under "
-        f"{sidecar_dir.as_posix()} (missing, blank, wrong agent type, or "
-        "outside the claim window) — dispatch a reviewer "
+        f"no counting review receipt for session {sid!r} under any of "
+        f"{[d.as_posix() for d in sidecar_dirs]} (missing, blank, wrong agent "
+        "type, or outside the claim window) — dispatch a reviewer "
         "(coordinator_core.reviewer_vocabulary.CLOSE_RECEIPT_REVIEWERS) and let it "
         f"finish before reaching status: {target_status!r}"
     )
@@ -2400,16 +2404,30 @@ def _compute_review_receipt_gate(
     if not extant_sidecar_dirs:
         return ReviewReceiptGate(applies=True, blocks=True, detail=no_receipt_detail)
 
+    # AC2b/reader-side parity: a receipt written under the legacy share root
+    # (`<repo_root>/state/subagent-share`) must count identically to one
+    # under the current machinery root (`<repo_root>/.coordinator-local/
+    # subagent-share`) -- see `share_roots`'s own docstring on why a reader
+    # consults both. Globbing only `sidecar_dirs[0]` here made a
+    # legacy-root receipt invisible to this gate even though
+    # `extant_sidecar_dirs` had already found it.
+
     window_start = _parse_review_receipt_timestamp(claimed_at)
     now = datetime.now(timezone.utc)
 
     integrator_receipts: list[str] = []
     reviewer_hit: Optional[str] = None
 
+    # Review: code-reviewer (S10 finding 3) — sort within each root, then
+    # concatenate, matching this fix's own rationale comment above (legacy
+    # root considered after current-root) rather than a single sort across
+    # both roots' candidates together.
     candidates = [
-        candidate for extant_dir in extant_sidecar_dirs for candidate in extant_dir.glob("*.md")
+        candidate
+        for extant_dir in extant_sidecar_dirs
+        for candidate in sorted(extant_dir.glob("*.md"))
     ]
-    for candidate in sorted(candidates):
+    for candidate in candidates:
         try:
             text = candidate.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -3807,52 +3825,77 @@ def _map_window_covers_session(
     return started >= opened
 
 
-def _session_owned_shas_from_map(
-    trailer_map: "Optional[dict[str, str]]", session_id: str
-) -> Optional[list[str]]:
-    """C2 (docs/plans/2026-08-26-the-gate-paths-six-spawns-collapse-to-four.md
-    § C2): reads this session's own attributed shas out of a RAW
-    `{sha: trailer-value}` map already in hand (`directives_commit_tail.
-    resolve_known_concurrent_paths`'s `trailer_map_out`) instead of paying a
-    second trailer-walk spawn for exactly the same window (`_session_owned_
-    shas`'s own `resolve_session_commits` call).
-
-    Returns `None` -- never `[]` -- whenever the map cannot be trusted to
-    answer "this session owns zero commits": an absent/empty `trailer_map`
-    (the producer never built one, or built one covering no sessions at
-    all), OR a map that simply has no entry for `session_id`. The latter is
-    deliberately NOT read as "confirmed zero" (absence of evidence is not
-    evidence of no commits, per this chunk's brief): the map's window is
-    `--since=<earliest LIVE PEER start>`, which is not guaranteed to reach
-    back to THIS session's own first commit. A caller seeing `None` here
-    must fall back to `_session_owned_shas`'s own spawning path.
-
-    Oldest-first, matching `resolve_session_commits`'s own contract
-    (`handoff_close_origin_stub._session_derived_sha` scans the result in
-    reverse to take the most recent toucher -- an order regression here
-    would silently pick the wrong shipping commit). `trailer_map` itself
-    carries no ordering guarantee a caller should rely on directly, but its
-    producer (`bulk_trailer_session_map`, via a plain `git log`, no
-    `--reverse`) walks newest-first and Python dicts preserve insertion
-    order, so the matched shas come out newest-first here and are reversed
-    before returning.
-    """
-    if not trailer_map or not session_id:
-        return None
-    shas = [sha for sha, sid in trailer_map.items() if sid == session_id]
-    if not shas:
-        return None
-    shas.reverse()
-    return shas
-
-
-def _session_owned_shas(
-    root: Path, session_id: str, trailer_map: "Optional[dict[str, str]]" = None
-) -> Optional[list[str]]:
+def _session_owned_shas(root: Path, session_id: str) -> Optional[list[str]]:
     """This session's OWN commits, oldest-first, selected by `Session-Id`
-    commit trailer rather than by time window. `None` on any git failure or
-    an absent `session_id` — never `[]`, which a caller would read as a
-    truthful "this session committed nothing".
+    commit trailer rather than by time window.
+
+    MERGE COMMITS ARE EXCLUDED (`no_merges=True` on the spawning `resolve_
+    session_commits` call) even when a merge carries this session's own
+    `Session-Id` trailer (the prepare-commit-msg hook stamps a merge the
+    session performs same as any other commit it authors). This function's
+    ONLY two callers, both in `_measure_session_review_scale_inputs`'s own
+    call chain, sum `added`/`deleted`/commit-count/surfaces over the
+    returned shas for a REVIEW-SCALE measurement — a `git show --numstat`
+    of a non-fast-forward merge collapses against its first parent only,
+    i.e. every file the OTHER (merged-in) branch touched, none of it this
+    session's authored work. Measured specimen: a 10-commit session set
+    whose merge of origin/main alone contributed 5624 of a reported 7884
+    code_loc, one of 10 `commit_slices` sending a reviewer at 5624 lines of
+    already-merged peer work. This is exclusively a MEASUREMENT selector —
+    `resolve_session_commits`'s `no_merges` default (`False`) is what every
+    ATTRIBUTION caller of that shared primitive (`handoff_close_origin_
+    stub`, `branch_resolution`, `quick_wrap_assemble`, `baton_assemble`)
+    keeps unchanged, since dropping a session-performed merge from an
+    attribution walk would make it wrongly look untouched. See that
+    primitive's own `no_merges` param docstring for the full split.
+
+    NEGATIVE SPEC -- THERE IS NO TRAILER-MAP FAST PATH HERE, AND ONE MUST NOT
+    BE ADDED. This function once took an optional `trailer_map`
+    (`directives_commit_tail.resolve_known_concurrent_paths`'s
+    `trailer_map_out`) and read its answer off that already-in-hand map to
+    save one `git log` spawn. Both the helper and the parameter are gone; the
+    saving was never collectable, for two independent reasons:
+
+      - COMPLETENESS. That map is built over `--since=<earliest LIVE PEER
+        start>` -- a window bounded by OTHER sessions' start times, unrelated
+        to when this session first committed. It can answer truthfully about
+        the window and silently about everything before it, and because it
+        did answer, no fallback fires. Measured live on session 8bb305c5: 6
+        owned commits, the map reported the 3 most recent, and the 3 it
+        dropped carried the code. `commit_slices` IS the review scope, so a
+        truncated sha list does not surface as a smaller number -- it
+        surfaces as a partitioned review that claims full coverage while the
+        dropped commits go unreviewed and unnamed.
+      - MERGES. That map is built `include_merges=True` for its own
+        attribution purpose, which `ops.session_commits ::
+        _batch_session_id_trailers` REQUIRES (a merge missing from the
+        trailer map reclassifies a peer-owned merge from `conflicting` to
+        `recovered`) -- so the producer cannot be narrowed. A `{sha:
+        trailer}` map carries no parent information, so a measurement caller
+        cannot reproduce this function's own `no_merges=True` off it without
+        the very spawn the fast path existed to avoid.
+
+    Both properties are pinned: `test_no_trailer_map_fast_path_on_the_review_
+    scale_path` asserts the helper and the parameter are both absent, and
+    `test_review_scope_resolution_does_not_take_the_trailer_map_fast_path`
+    reads this module's source at the `precomputed_session_shas` call site.
+
+    Return contract, stated precisely because the two zero-shaped outcomes
+    here are NOT the same fact and a caller must not conflate them:
+      - `None` — UNRESOLVABLE: any git failure (`resolve_session_commits`
+        raising `ValueError`/`RuntimeError`) or an absent `session_id`. The
+        measurement did not run to completion; nothing is known.
+      - `[]` — a CONFIRMED zero: the full-history trailer walk ran to
+        completion and matched no commits. This is a real, trustworthy
+        answer (not a window-bounded guess — see the `trailer_map` leg's
+        own docstring for the ONE path that legitimately cannot make this
+        distinction and returns `None` instead of `[]` for that reason),
+        and every caller below already branches on `is None` before ever
+        reading the list, so a confirmed `[]` is never misread as failure.
+    Never returns `[]` for the UNRESOLVABLE case -- that is the one
+    conflation this contract forbids, and the reason a caller must check
+    `is None`, never truthiness, before trusting an empty result as "this
+    session committed nothing".
 
     Trailer attribution, not `--since`, is the only sound selector on a
     shared branch: this repo's load norm puts a dozen-plus concurrent EMs on
@@ -3890,28 +3933,14 @@ def _session_owned_shas(
     `review_brightline_gate._compute_session_oracle_single`, which reads
     this same primitive.
 
-    `trailer_map` (C2, docs/plans/2026-08-26-the-gate-paths-six-spawns-
-    collapse-to-four.md § C2): optional, additive. When supplied and it
-    covers `session_id` (see `_session_owned_shas_from_map`'s own
-    docstring for exactly what "covers" means), this session's own shas
-    are read off that already-in-hand map instead of spawning this
-    function's own `resolve_session_commits` trailer walk -- a second walk
-    of the SAME window `directives_commit_tail.resolve_known_concurrent_
-    paths` already spawned (via its `trailer_map_out`) for peer
-    attribution. Absent, empty, or non-covering `trailer_map` falls
-    through to the spawning path unchanged -- byte-identical to this
-    function's pre-C2 behaviour. The four callers with no map in hand
-    (`quick_wrap_assemble`, `baton_assemble`, `handoff_close_origin_stub`,
-    `branch_resolution`) are unaffected; they never pass `trailer_map` and
-    always take the spawning path."""
+    Every caller (`quick_wrap_assemble`, `baton_assemble`,
+    `handoff_close_origin_stub`, `branch_resolution`, and the review-scale
+    path in this module) takes this one authoritative walk."""
     if not session_id:
         return None
-    from_map = _session_owned_shas_from_map(trailer_map, session_id)
-    if from_map is not None:
-        return from_map
     try:
         commits = _resolve_session_commits_primitive(
-            root, session_id, sha_only=True
+            root, session_id, sha_only=True, no_merges=True
         )
     except (ValueError, RuntimeError):
         return None

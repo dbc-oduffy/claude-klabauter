@@ -128,12 +128,8 @@ def _compose_advisory(posture: str) -> str:
     no verdict on the question at hand and blocks nothing. Verbatim port of the
     source script's `_compose_advisory`."""
     return (
-        f"[first-officer posture: engagement_posture={posture}]\n"
-        "Approach, structure, naming, sequencing, and break-class fixes are yours to\n"
-        "decide and report, not to ask. Direction-class asks -- scope, product\n"
-        "direction, prioritization, an irreversible or external action -- are\n"
-        "correct to ask.\n"
-        "This advisory renders no verdict on THIS question and blocks nothing.\n\n"
+        f"posture={posture}: break-class (approach/naming) decide+report; "
+        "direction-class (scope/priority) ask; renders no verdict. "
         f"See {_NUDGE_ANCHOR}."
     )
 

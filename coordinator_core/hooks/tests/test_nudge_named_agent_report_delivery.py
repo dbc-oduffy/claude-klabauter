@@ -87,8 +87,8 @@ def test_named_dispatch_without_delivery_instruction_advises() -> None:
     assert '"main"' in text
     # Design-as-offers: both working shapes present, so the EM is redirected rather
     # than merely told off.
-    assert "DROP `name`" in text
-    assert "KEEP `name`" in text
+    assert "Drop `name`" in text
+    assert "Keep `name`" in text
 
 
 def test_advisory_does_not_argue_against_naming() -> None:
@@ -221,11 +221,17 @@ def test_a_correct_non_sidecar_brief_is_still_suppressed() -> None:
 
 
 def test_the_advisory_names_what_an_unfilled_scaffold_costs() -> None:
+    """The full review-integrator/empty-scaffold rationale (state/audits/
+    2026-08-10-doe-claude-em-named-teammate-advisory-suppression-inversion.md)
+    was trimmed from the rendered advisory under the 220-prose-byte cap
+    (coordinator_core/bash_guards/_message_size.py) -- the sidecar/pointer
+    guidance below is what the message now carries; the "why" lives in the
+    module docstring and the audit, not the agent-facing text."""
     result = _run({
         "tool_name": "Agent",
         "tool_input": {"name": "code-reviewer", "prompt": "review it"},
     })
 
     text = _advisory_text(result)
-    assert "review-integrator" in text
-    assert "scaffold" in text
+    assert "sidecar" in text
+    assert "pointer" in text

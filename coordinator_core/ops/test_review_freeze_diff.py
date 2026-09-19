@@ -390,3 +390,28 @@ def test_batch_mismatched_paths_raises(tmp_path: Path) -> None:
                 {"slice_id": "p2", "range": f"{sha1}..{sha2}", "paths": ["b.txt"]},
             ],
         )
+
+
+def test_frozen_diff_is_byte_identical_to_git_diff_of_the_range(tmp_path: Path) -> None:
+    """Direction pin: the freeze must equal `git diff A B`, not its inverse.
+    `diff-tree --stdin` reads `<commit> <parent>`, so feeding the pair in
+    range order printed every addition as a deletion -- and the batch/single
+    parity tests above could not see it, because both paths share it."""
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    _commit(tmp_path, "b.txt", "new file\n", "add b.txt")
+    sha3 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+
+    results = freeze_diffs_batch(
+        tmp_path,
+        [
+            {"slice_id": "dir-1", "range": f"{sha1}..{sha3}", "paths": None},
+            {"slice_id": "dir-2", "range": f"{sha1}...{sha3}", "paths": None},
+        ],
+    )
+
+    expected = _git(["diff", sha1, sha3], cwd=tmp_path).stdout
+    assert "+line two" in expected and "+new file" in expected
+    for result in results:
+        assert result["error"] is None
+        assert Path(result["diff_path"]).read_text() == expected

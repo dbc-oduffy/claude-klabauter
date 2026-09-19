@@ -359,19 +359,19 @@ async def test_bdsi_no_advisory_on_non_dispatch_tool():
     assert result == {}
 
 
+#: A dispatch prompt the suite classifier DOES deny -- the override tests
+#: below must use it too, or they pass whether the override works or not.
+_BDSI_FIRING_PROMPT = "Run the full test suite: python3 -m pytest"
+
+
 @pytest.mark.asyncio
 async def test_bdsi_denies_imperative_suite_command():
     result = await bdsi._handler(
-        {
-            "tool_name": "Agent",
-            "tool_input": {"prompt": "Run `pytest coordinator_core/tests` now."},
-        }
+        {"tool_name": "Agent", "tool_input": {"prompt": _BDSI_FIRING_PROMPT}}
     )
-    hso = result.get("hookSpecificOutput", {})
-    # Fails open silently if the sibling classifier's grammar doesn't match
-    # this exact prose; assert only the shape when it DOES fire.
-    if hso.get("permissionDecision") == "deny":
-        assert "Tier-" in hso["permissionDecisionReason"]
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+    assert "Tier-" in hso["permissionDecisionReason"]
 
 
 @pytest.mark.asyncio
@@ -382,7 +382,7 @@ async def test_bdsi_override_marker_suppresses():
             "tool_input": {
                 "prompt": (
                     "COORDINATOR-OVERRIDE-DISPATCH-SUITE-GUARD: verifying breadth\n"
-                    "Run `pytest coordinator_core/tests` now."
+                    + _BDSI_FIRING_PROMPT
                 )
             },
         }
@@ -395,7 +395,7 @@ async def test_bdsi_env_override_suppresses():
     result = await bdsi._handler(
         {
             "tool_name": "Agent",
-            "tool_input": {"prompt": "Run `pytest coordinator_core/tests` now."},
+            "tool_input": {"prompt": _BDSI_FIRING_PROMPT},
             "env": {"COORDINATOR_OVERRIDE_DISPATCH_SUITE_GUARD": "1"},
         }
     )

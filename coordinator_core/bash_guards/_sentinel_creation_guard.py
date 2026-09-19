@@ -535,7 +535,84 @@ class SentinelCreationDetector:
                 return verdict
         return None
 
+    #: Heads `xargs` may run without denying: pure reads (plus `echo`, which
+    #: writes only to stdout). None of them can create a file whatever
+    #: arguments stdin assembles, and the segment's own redirects are checked
+    #: before this pass. Shared by every sentinel guard on this detector --
+    #: it lived only on the approval guard's subclass until 2026-09-19, when
+    #: the worktree guard denied a read-only `git diff | xargs wc -l`.
+    _XARGS_READ_ONLY_HEADS = frozenset(
+        {"cat", "ls", "stat", "test", "head", "tail", "wc", "file", "grep", "echo"}
+    )
+
+    #: `xargs` options that consume the NEXT token as their operand. An
+    #: option outside this set and `_XARGS_BARE_OPTIONS` fails closed.
+    _XARGS_OPERAND_OPTIONS = frozenset(
+        {
+            "-a", "--arg-file", "-d", "--delimiter", "-E", "-I", "-L",
+            "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars",
+            "--process-slot-var",
+        }
+    )
+    _XARGS_BARE_OPTIONS = frozenset(
+        {
+            "-0", "--null", "-r", "--no-run-if-empty", "-t", "--verbose",
+            "-p", "--interactive", "-x", "--exit", "-o", "--open-tty",
+        }
+    )
+
+    def _xargs_runs_read_only_head(self, seg_tokens: List[str]) -> bool:
+        """True when this segment is `xargs [options] <head> ...` and
+        `<head>` is in `_XARGS_READ_ONLY_HEADS`.
+
+        Negative-spec: this is NOT a general `xargs` unwrap -- the command
+        stdin assembles is still never seen, so only a head that cannot
+        write under ANY argument list is admitted. An unrecognised option,
+        a missing head, or a head that is itself a wrapper (`sh`, `env`,
+        `xargs`) returns False and the parent's outright deny stands."""
+        argv0_idx = self._env_skip_index(seg_tokens)
+        working = seg_tokens[argv0_idx:]
+        if working and working[0] == "env":
+            working = _strip_env_prefix(working)
+        if not working or _normalize_executable_basename(working[0]) != "xargs":
+            return False
+        i = 1
+        while i < len(working):
+            tok = working[i]
+            if tok == "--":
+                i += 1
+                break
+            if not tok.startswith("-"):
+                break
+            if tok in self._XARGS_OPERAND_OPTIONS:
+                i += 2
+                continue
+            if tok in self._XARGS_BARE_OPTIONS:
+                i += 1
+                continue
+            if tok.startswith("--") and "=" in tok:
+                if tok.split("=", 1)[0] in self._XARGS_OPERAND_OPTIONS:
+                    i += 1
+                    continue
+                return False
+            if tok[:2] in {"-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s", "-e", "-i", "-l"}:
+                i += 1
+                continue
+            return False
+        if i >= len(working):
+            return False
+        return _normalize_executable_basename(working[i]) in self._XARGS_READ_ONLY_HEADS
+
     def _evaluate_segment_indirection(
+        self, seg_tokens: List[str], pipe_before: bool, depth: int
+    ):
+        """Admit `xargs <read-only head>` (see `_xargs_runs_read_only_head`);
+        every other shape takes the indirection walk."""
+        if self._xargs_runs_read_only_head(seg_tokens):
+            return None
+        return self._evaluate_segment_indirection_walk(seg_tokens, pipe_before, depth)
+
+    def _evaluate_segment_indirection_walk(
         self, seg_tokens: List[str], pipe_before: bool, depth: int
     ) -> Optional[str]:
         """Detect an interpreter/env/xargs indirection shape at THIS

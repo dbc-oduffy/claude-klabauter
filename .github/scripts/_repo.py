@@ -1,4 +1,4 @@
-"""Shared repo-walking helpers for the mirror CI checks.
+"""Shared repo-walking helpers for the mirror validation checks.
 
 Deliberately named with a leading underscore so `run-all-checks.py`'s
 convention-based discovery (`check-*.py`, `validate-*.py`) does not pick it up

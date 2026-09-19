@@ -971,3 +971,57 @@ def test_a_date_typed_created_is_not_a_schema_defect(tmp_path):
         },
     }
     assert pg._schema(fm, pg._pass("declared"))["status"] == "PASS"
+
+
+# ---------------------------------------------------------------------------
+# Parity leg: writes-archive-refused-in-wave (DoE-claude mise-prep-gate.py)
+# ---------------------------------------------------------------------------
+
+
+def test_a_row_writing_under_archive_is_refused_in_wave(tmp_path):
+    """DoE-claude ``mise-prep-gate.py``'s ``writes-archive-refused-in-wave``
+    leg, restated here (2026-09-18-doe-holds-no-scripts, leg 1). A row writing
+    under ``archive/`` outside the guard's own carve-outs is BLOCKED at
+    dispatch time by `block_subagent_archive_write`; the bar must catch it at
+    authoring time instead of certifying a plan whose row cannot land.
+    """
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    spine = _CLEAN_SPINE.replace(
+        "  writes: [coordinator_core/roadmap/prep_gate.py]\n",
+        "  writes: [archive/specs/fixture-spec.md]\n",
+    ).replace(
+        "  surface: coordinator_core/roadmap/prep_gate.py\n",
+        "  surface: archive/specs/fixture-spec.md\n",
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["verdict"] == pg.NOT_PREPPED
+    assert report["classes"]["SPINE"]["kind"] == "writes-archive-refused-in-wave"
+    assert "C1 (archive/specs/fixture-spec.md)" in report["classes"]["SPINE"]["detail"]
+
+
+def test_a_row_writing_a_carve_out_shaped_archive_path_passes(tmp_path):
+    """The guard's carve-outs (daily summary / completed / week-changelog) are
+    file-shaped and this leg calls them, never restates them — a row writing
+    one of those exact shapes is not refused."""
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    spine = _CLEAN_SPINE.replace(
+        "  writes: [coordinator_core/roadmap/prep_gate.py]\n",
+        "  writes: [archive/daily-summaries/2026-09-18.md]\n",
+    ).replace(
+        "  surface: coordinator_core/roadmap/prep_gate.py\n",
+        "  surface: archive/daily-summaries/2026-09-18.md\n",
+    )
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["classes"]["SPINE"]["kind"] != "writes-archive-refused-in-wave"
+
+
+def test_a_row_writing_under_archive_via_writes_under_is_refused_in_wave(tmp_path):
+    """`writes_under:` names a PREFIX (names chosen at run time), and the
+    guard's file-shaped carve-outs cannot be checked against a prefix — so
+    ANY archive-shaped prefix refuses, concretize-into-writes being the fix."""
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    spine = _CLEAN_SPINE.rstrip("\n") + "\n  writes_under: [archive/memos/]\n"
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
+    assert report["verdict"] == pg.NOT_PREPPED
+    assert report["classes"]["SPINE"]["kind"] == "writes-archive-refused-in-wave"
+    assert "writes_under" in report["classes"]["SPINE"]["detail"]

@@ -561,7 +561,7 @@ def render_unknown_message(
     if defect is not None:
         return defect
     return (
-        "Coordinator guard — instead: caller identity did not resolve for "
+        "Coordinator guard — instead: the caller could not be resolved for "
         f"writing into {_target_phrase(target_repo, raw_target)} (not `{session_repo}`) — "
         "your own session, check with your PM; dispatched, report to your EM."
     )

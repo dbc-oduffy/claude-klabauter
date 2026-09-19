@@ -234,7 +234,7 @@ async def _handle(params: dict) -> dict:
     initiative_id = base[: -len(".yaml")] if base.endswith(".yaml") else base
 
     message = _compose_nudge_message(initiative_id, candidate_ids, candidate_ids_str)
-    return post_advisory(render(message))
+    return post_advisory(render(message, env=params.get("env")))
 
 
 @register_op("hooks.nudge_initiative_goals_ladder")

@@ -2226,16 +2226,14 @@ def _deny_reason_subagent(
     _override_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload, git_root=git_root)
     _override_line = "  " + _override_note + "\n" if _override_note else ""
     return (
-        "Run the tests you actually touched: full-suite subagent runs are "
-        "denied (concurrency degrades the machine) -- use these instead:\n"
-        "  python3 -m pytest path/to/your/test_file.py\n"
-        "  python3 -m pytest path/to/your/test_file.py::test_the_case_you_changed\n"
-        "  python3 -m pytest -k the_behaviour_you_changed\n"
+        "Full-suite subagent runs are denied (concurrency). Use instead:\n"
+        "  python3 -m pytest path/to/test_file.py\n"
+        "  python3 -m pytest path/to/test_file.py::test_case\n"
+        "  python3 -m pytest -k behaviour_changed\n"
         + _override_line
-        + "  Detected: %s -- no test file, directory, or node-id scope\n"
+        + "  Detected: %s\n"
         "  Command:  %s\n\n"
-        "A retry reshaped so the command text parses differently is still "
-        "denied.%s"
+        "Reshaping the command text does not bypass this.%s"
     ) % (detected, cmd_safe, package_script_note)
 
 

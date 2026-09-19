@@ -242,6 +242,7 @@ def _count_universals(extract_script: str, lessons_path: str, cutoff: str) -> in
                 cutoff,
                 "--require-tag",
                 "universal",
+                "--allow-skips",
             ],
             capture_output=True,
             text=True,

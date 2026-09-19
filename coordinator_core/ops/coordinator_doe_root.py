@@ -132,6 +132,7 @@ from typing import List, Optional
 
 from coordinator_core import machine_resolver as _machine_resolver
 from coordinator_core import resolve_coordinator_clone as _resolve_coordinator_clone
+from coordinator_core._content_root_primitive import FLAT_CONTENT_ROOT_MARKER
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file as _cf_read_doe_root_pointer_file
 
 # Published-manifest relpath (OSS flat layout). The private DoE-repo layout
@@ -311,18 +312,20 @@ def _cf_flat_layout_probe() -> Optional[str]:
     marker — same marker `resolve_coordinator_clone._resolve_source_mode`
     gates its OSS-install check on.
 
-    Duplicated inline (matching C1's shape, `git show 067da377c1b0`) rather
-    than delegating into `resolve_coordinator_clone` for this specific probe:
-    that module exposes only the full `resolve_clone_root()` /
-    `resolve_content_root()` verbs (raise-on-failure, `.git`-gated /
-    plugin-manifest-marker-gated for their own different purposes), not a
-    standalone flat-marker check to import and reuse here.
+    Marker gate now shares `_content_root_primitive.FLAT_CONTENT_ROOT_MARKER`
+    (overengineering-reviewer finding 8) rather than a second hand-spelled
+    `.claude-plugin/plugin.json` tuple — that leaf module's stated precondition
+    for this duplicate ("no standalone flat-marker check to import") is what
+    the leaf-module move (finding 4/Q1) satisfies. Still not a delegation into
+    `resolve_coordinator_clone`: that module exposes only the full
+    `resolve_clone_root()` / `resolve_content_root()` verbs, not a standalone
+    probe of an arbitrary candidate directory.
     """
     home = os.environ.get("CLAUDE_HOME") or os.environ.get("HOME") or os.environ.get("USERPROFILE") or ""
     if not home:
         return None
     candidate = os.path.join(home, ".claude", "plugins", "coordinator-claude")
-    marker = os.path.join(candidate, ".claude-plugin", "plugin.json")
+    marker = os.path.join(candidate, *FLAT_CONTENT_ROOT_MARKER)
     return candidate if os.path.isfile(marker) else None
 
 

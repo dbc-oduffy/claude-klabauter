@@ -246,7 +246,7 @@ SIDECAR_MISS_MARKER = "sidecar_provisioning: missed"
 #: "you have a sidecar" from "provisioning missed, here is a sentinel".
 #: This lead is the one string every miss body carries and no offer body
 #: does.
-SIDECAR_MISS_NOTICE_LEAD = "Sidecar provisioning did not complete for this dispatch"
+SIDECAR_MISS_NOTICE_LEAD = "Sidecar provisioning missed"
 
 #: The one act a sidecar-less agent must not take, stated because omitting it
 #: was not neutral. Observed 2026-08-31: of two `review-integrator` dispatches
@@ -263,10 +263,8 @@ SIDECAR_MISS_NOTICE_LEAD = "Sidecar provisioning did not complete for this dispa
 #: substitute for one.
 #: `state/bug-backlog/2026-08-31-missing-sidecar-provisioning-sends-an-integrator-receipt-into-a-siblings-file.yaml`
 SIDECAR_MISS_NO_FOREIGN_WRITE = (
-    " Write to no other agent's sidecar: with no file of your own, do not "
-    "write to one that exists for another dispatch, including any receipt "
-    "or stamp your role would normally write -- say in your report that "
-    "you skipped it."
+    " Never write into another agent's sidecar -- report in your reply "
+    "that you skipped it."
 )
 
 #: Same machine-readable "key: value" shape as `SIDECAR_PATH_MARKER_PREFIX`
@@ -368,9 +366,8 @@ def _compose_sidecar_miss_text(sentinel_path: str = "", *, is_named: bool = Fals
     return (
         "\n\n"
         + SIDECAR_MISS_NOTICE_LEAD
-        + " -- no "
-        "scaffold exists on disk. Report your findings inline in your "
-        "reply and say in them that provisioning missed."
+        + " -- no scaffold. Report inline in your reply; say provisioning "
+        "missed."
         + SIDECAR_MISS_NO_FOREIGN_WRITE
         + "\n"
         + SIDECAR_MISS_MARKER

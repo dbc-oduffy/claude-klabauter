@@ -59,8 +59,14 @@ Scope — deliberately narrow:
     genuinely being CREATED by this Write, not overwritten) — mirrors
     ``validate_frontmatter_schema_deny.py::_scaffold_offer_step``'s own
     ``not os.path.exists(abs_file_path)`` new-file gate.
-  - Fires ONLY when the prospective content carries NO non-empty
-    ``agent_type:`` frontmatter field. A hand-authored file that DOES stamp
+  - Two independent deny arms over that one gate: the session-key arm
+    (``_unjoinable_key_denial`` — the sidecar is being created under a
+    session key that is not the dispatching session's, so nothing can join
+    it to the dispatch) and the frontmatter arm below. The key arm runs
+    first and fires whatever the frontmatter says, because a perfectly
+    shaped sidecar under the wrong key is the harder failure to see.
+  - The frontmatter arm fires ONLY when the prospective content carries NO
+    non-empty ``agent_type:`` frontmatter field. A hand-authored file that DOES stamp
     a real ``agent_type:`` (e.g. an agent copying an existing sidecar's
     shape by hand) is, for this guard's purposes, interchangeable with a
     provisioned one — AC's other permitted arm — and is let through.
@@ -76,7 +82,10 @@ Negative-spec:
     dispatch (the "five agents already provisioned" duplicate-file half of
     the incident) — the engine has no persisted manifest of "which sidecar
     was already provisioned for this session" that a stateless PreToolUse
-    guard could check against without a new tracking surface; the AC this
+    guard could check against without a new tracking surface. The
+    session-key arm needs no such manifest and is not this case: it compares
+    the key the write is landing under against the key the dispatch runs
+    under, both of which are on the payload. The AC this
     guard discharges is satisfied by the loud-refusal arm alone (see
     state/handoffs/2026-08-16-sidecar-provisioning-is-the-engines-job.md's
     own AC wording: "or the engine refuses the hand-created one loudly").
@@ -138,6 +147,82 @@ def _leaf_match(normalized_path: str):
     return match
 
 
+def _repo_root_from_share_path(resolved_path: str, root_segment: str) -> str:
+    """The repo root a share path hangs off, cut from the path itself.
+
+    No git spawn: the share bucket's own segment is the anchor, and the
+    resolved path already carries everything to the left of it. A guard runs
+    on every Write and process creation is the cost the brightline measures
+    (`DR-344`), so the root is read off the string rather than resolved.
+    """
+    marker = "/%s/%s/" % (root_segment, machinery_paths.SHARE_LEAF)
+    index = resolved_path.rfind(marker)
+    return resolved_path[:index] if index > 0 else ""
+
+
+def _unjoinable_key_denial(
+    payload: Dict[str, Any], resolved_path: str, match
+) -> Optional[str]:
+    """The deny reason when this sidecar is being created under a session key
+    that is not the dispatch's own, or ``None`` when it is not.
+
+    WHY THIS IS A WRITE-TIME DENY. A sidecar's directory IS its join to the
+    dispatch that owns it: every reader resolves a verdict by the session key
+    it sits under. A subagent's prompt surface carries the harness transcript
+    id and not the coordinator session id, so a subagent that scaffolds its
+    own sidecar — which it does whenever provisioning fails and that failure
+    is not fatal to the dispatch — keys it on the only id it was handed, and
+    the result is a correct verdict that reads as no verdict. By eye it is
+    indistinguishable from a provisioned one.
+
+    The id the subagent could not know IS on this payload: inside a dispatched
+    subagent's own PreToolUse hook, `session_id` is the DISPATCHING session's
+    id (`block_foreign_family_sidecar_write`'s leg-2 note documents that
+    inheritance, and the back-pointer chain is keyed on it). So the correction
+    hands it over, spelled as the full path to write instead — the fix is at
+    the write, where the fact is available, not at the read. NEGATIVE SPEC:
+    this is deliberately NOT a wider read union on the reader side. A reader
+    that consults more roots makes a mis-keyed sidecar findable; it does not
+    stop one being born, and every root added makes two sidecars for one
+    dispatch harder to tell apart.
+
+    The named path always spells the CURRENT share root, never the retired
+    `state/` one the refused write may have used — `machinery_paths`' own
+    accessors mark the legacy root READ ONLY, so a compliant retry must not
+    be pointed back at it.
+
+    Silent, never a deny, when the dispatch's key is unavailable or unsafe to
+    join into a path: an absent `session_id` is the EM main-loop and
+    repair-write population, which this arm has nothing to say about.
+    """
+    session_id = payload.get("session_id") or ""
+    if not machinery_paths.safe_session_id(session_id):
+        return None
+    if match.group("session") == session_id:
+        return None
+
+    repo_root = _repo_root_from_share_path(resolved_path, match.group("root"))
+    if not repo_root:
+        return None
+
+    joinable = _normalize(
+        os.path.join(
+            machinery_paths.share_dir(repo_root, session_id), match.group("leaf")
+        )
+    )
+    return (
+        "%s is keyed on %r, not this dispatch's session %r. A sidecar under "
+        "another key cannot be joined to the dispatch: the verdict in it reads "
+        "as no verdict.\nWrite instead: %s"
+        % (
+            match.group(0).lstrip("/\\"),
+            match.group("session"),
+            session_id,
+            joinable,
+        )
+    )
+
+
 def _normalize(file_path: str) -> str:
     normalized = file_path.replace("\\", "/")
     while "//" in normalized:
@@ -183,7 +268,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         normalized = _normalize(file_path)
-        if not _leaf_match(normalized):
+        if _leaf_match(normalized) is None:
             return None
 
         # New-file gate: an overwrite of an already-provisioned sidecar is a
@@ -194,6 +279,24 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if os.path.exists(resolved_path):
             return None
 
+        # Re-matched on the RESOLVED path: the session key and the root are
+        # read off the path the write actually lands on, which a relative
+        # `file_path` does not carry.
+        resolved_match = _leaf_match(resolved_path)
+        if resolved_match is not None:
+            unjoinable = _unjoinable_key_denial(payload, resolved_path, resolved_match)
+            if unjoinable is not None:
+                _key_note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            unjoinable + ("\n\n" + _key_note if _key_note else "")
+                        ),
+                    }
+                }
+
         content = tool_input.get("content") or ""
         split = split_frontmatter(content)
         agent_type = read_fm_field(split.fm_text, "agent_type") if split is not None else None
@@ -203,8 +306,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
         _note = operator_override_note(_OVERRIDE_ENV_VAR, payload=payload)
         reason = (
-            f"{file_path} has no agent_type: frontmatter, so "
-            "append-integrator-dispositions.py will refuse to write to it.\n"
+            "BLOCKED: no agent_type: frontmatter — refused by "
+            "append-integrator-dispositions.py.\n"
             "Use instead: coordinator-doc-new --type run-report"
             + ("\n\n" + _note if _note else "")
         )

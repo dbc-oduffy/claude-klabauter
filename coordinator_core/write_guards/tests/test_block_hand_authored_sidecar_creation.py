@@ -201,3 +201,101 @@ def test_uppercase_md_leaf_is_not_a_way_past_the_gate(tmp_path):
     result = guard.check(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def _keyed_payload(tmp_path, *, written_sid, session_id, root=".coordinator-local",
+                   content=_PROVISIONED_SHAPE):
+    sidecar_dir = tmp_path / root / "subagent-share" / written_sid
+    sidecar_dir.mkdir(parents=True, exist_ok=True)
+    target = sidecar_dir / "coordinatoroverengineering-reviewer-876b3694.md"
+    payload = {
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target), "content": content},
+        "cwd": str(tmp_path),
+    }
+    if session_id is not None:
+        payload["session_id"] = session_id
+    return payload
+
+
+class TestSelfScaffoldedSidecarLandsUnderTheDispatchsOwnKey:
+    """A sidecar created under a session key that is not this dispatch's is
+    unjoinable: a correct verdict in that directory reads as no verdict.
+
+    Incident: `provision-sidecar` was inert in a container, its refusal was
+    not fatal to the dispatch, and the subagent self-scaffolded under the
+    only identifier its prompt carried — the harness transcript id, never the
+    coordinator session id. `machinery_paths.subagent_share_id_pattern`'s own
+    docstring already forbids a WRITE resolved against anything but
+    `share_root`; nothing enforced it at the write.
+
+    The correction hands over the one fact the subagent could not know: the
+    session-keyed directory the engine would have provisioned into.
+    """
+
+    def test_a_foreign_session_key_is_denied_even_with_valid_frontmatter(self, tmp_path):
+        payload = _keyed_payload(
+            tmp_path,
+            written_sid="session_01JLEDRBXHfhCyotHoiEUdGX",
+            session_id="863331b0-d278-5ae9-8d0f-9c0ab350de8c",
+        )
+        result = guard.check(payload)
+        assert result is not None
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    def test_the_denial_names_the_joinable_path(self, tmp_path):
+        payload = _keyed_payload(
+            tmp_path,
+            written_sid="session_01JLEDRBXHfhCyotHoiEUdGX",
+            session_id="863331b0-d278-5ae9-8d0f-9c0ab350de8c",
+        )
+        reason = guard.check(payload)["hookSpecificOutput"]["permissionDecisionReason"]
+        expected = (
+            str(tmp_path / ".coordinator-local" / "subagent-share"
+                / "863331b0-d278-5ae9-8d0f-9c0ab350de8c"
+                / "coordinatoroverengineering-reviewer-876b3694.md").replace("\\", "/")
+        )
+        assert expected in reason.replace("\\", "/")
+
+    def test_the_retired_root_is_never_named_back_to_the_caller(self, tmp_path):
+        # A compliant retry must land under the CURRENT root even when the
+        # refused write named the retired one: `state/subagent-share` is
+        # read-only (machinery_paths.legacy_share_dir).
+        payload = _keyed_payload(
+            tmp_path,
+            written_sid="session_01JLEDRBXHfhCyotHoiEUdGX",
+            session_id="sess-live",
+            root="state",
+        )
+        reason = guard.check(payload)["hookSpecificOutput"]["permissionDecisionReason"]
+        tail = reason.replace("\\", "/").split("Write instead:", 1)[1]
+        assert "/state/subagent-share/" not in tail
+        assert "/.coordinator-local/subagent-share/sess-live/" in tail
+
+    @pytest.mark.parametrize("root", ["state", ".coordinator-local"])
+    def test_this_sessions_own_key_is_untouched(self, tmp_path, root):
+        payload = _keyed_payload(
+            tmp_path, written_sid="sess-live", session_id="sess-live", root=root
+        )
+        assert guard.check(payload) is None
+
+    def test_no_session_id_on_the_payload_changes_nothing(self, tmp_path):
+        # The EM repair case and every pre-existing caller: this arm needs the
+        # dispatch's own key to say anything, and says nothing without it.
+        payload = _keyed_payload(
+            tmp_path, written_sid="session_01JLEDRBXHfhCyotHoiEUdGX", session_id=None
+        )
+        assert guard.check(payload) is None
+
+    def test_an_unsafe_session_id_is_never_joined_into_a_path(self, tmp_path):
+        payload = _keyed_payload(
+            tmp_path, written_sid="session_01JLE", session_id="../../etc"
+        )
+        assert guard.check(payload) is None
+
+    def test_the_override_still_bypasses_this_arm(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(_OVERRIDE_ENV, "1")
+        payload = _keyed_payload(
+            tmp_path, written_sid="session_01JLE", session_id="sess-live"
+        )
+        assert guard.check(payload) is None

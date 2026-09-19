@@ -120,13 +120,13 @@ def _read_int_lines(path: Path) -> "list[int]":
     return out
 
 
-def _compose_workflow_offer(in_window_count: int) -> str:
+def _compose_workflow_offer(in_window_count: int, env: object = None) -> str:
     prose = (
         f"[workflow offer] {in_window_count} hand-dispatched executors in a "
         "row - a Workflow survives compaction, encodes wave gates. Ad-hoc "
         "is fine; your call."
     )
-    return render(compose(prose, anchor=_WIKI_ANCHOR))
+    return render(compose(prose, anchor=_WIKI_ANCHOR), env=env)
 
 
 @register_op("hooks.nudge_multiwave_workflow")
@@ -248,5 +248,5 @@ async def _handler(params: dict, repo_root=None) -> dict:
     except Exception:
         pass
 
-    message = _compose_workflow_offer(in_window_count)
+    message = _compose_workflow_offer(in_window_count, env)
     return allow_advisory("PreToolUse", message)

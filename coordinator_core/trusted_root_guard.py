@@ -1,12 +1,18 @@
 """coordinator_core.trusted_root_guard — shared trusted-prefix guard for every
 site that resolves a coordinator content root via CLAUDE_PLUGIN_ROOT.
 
-Purpose: promotes the byte-identical trust-core (previously duplicated
-inline at ~68 bash call sites) into ONE function, mirrored here so a
-Python caller gets the identical trust decision without shelling out to
-the bash sourced-lib.
+Purpose: promotes the trust-core (previously duplicated inline at ~68 bash
+call sites) into ONE function, so a Python caller decides trust without
+shelling out to the bash sourced-lib.
 
-Trust boundary: a resolved root is trusted iff it sits under one of four
+Parity with that bash leg is NO LONGER byte-identical, deliberately, and only
+for the registry anchors: see ``_at_or_under``. A flat checkout's own root is
+trusted here and would be rejected by an unwidened bash inline check. Any
+surviving bash counterpart needs the same widening — a maintainer reading a
+parity claim would otherwise conclude the two legs cannot disagree, which is
+exactly how the silent hook plane this fixes would come back.
+
+Trust boundary: a resolved root is trusted iff it sits under one of five
 anchors:
   1. the marketplace-cache install (``${CLAUDE_HOME:-$HOME}/.claude/``),
      descendants only — that directory is a container, never a plugin root,
@@ -28,15 +34,25 @@ anchors:
      own; claude-klabauter's own bin scripts (and every consolidated caller in this
      module's docstring) live under this root, so without this anchor every
      one of them false-rejects its own repo as untrusted, or
-  4. an arbitrary ``--plugin-dir`` checkout with the explicit
+  4. the registry-resolved coordinator plugin mirror
+     (``plugin.mirrors.coordinator-claude.live_path``) — the SERVED plugin
+     tree, which is a different thing from the DoE authoring checkout anchor
+     2 names and needs its own anchor wherever the two diverge (a cloud
+     container serves a flat published mirror while ``repos.doe_claude``
+     names an authoring tree that carries the doctrine corpus the mirror does
+     not publish), or
+  5. an arbitrary ``--plugin-dir`` checkout with the explicit
      ``COORDINATOR_PLUGIN_ROOT_TRUSTED=1`` developer opt-out —
-Anchors 2 and 3 match the anchor path ITSELF as well as its descendants
-(``_at_or_under``): each names a clone whose own root is a legitimate plugin
-root in a flat checkout. Anchor 1 stays descendants-only.
 AND does not contain a ``/..`` traversal segment (closes the
 ``$HOME/.claude/../../tmp/evil`` bypass that plain prefix-matching would
 miss; realpath is banned per DR-148, so this is a textual traversal check,
-not a filesystem resolution).
+not a filesystem resolution). That traversal clause is GLOBAL — it applies to
+every anchor and runs after all of them.
+
+Anchors 2, 3 and 4 match the anchor path ITSELF as well as its descendants
+(``_at_or_under``): each names a clone whose own root is a legitimate plugin
+root in a flat checkout. Anchor 1 stays descendants-only — that directory is a
+container of plugin roots, never a plugin root itself.
 
 --mode is REQUIRED and has NO default, mirroring the bash sourced-lib's
 own hard rule: the two modes are NOT interchangeable safety levels — they
@@ -130,28 +146,37 @@ def _home_from_env(env: dict) -> str:
     return env.get("CLAUDE_HOME") or env.get("HOME") or env.get("USERPROFILE") or ""
 
 
-def _registry_doe_claude(settings_home_dir: str) -> Optional[str]:
-    """Direct-tomllib read of the ``repos.doe_claude`` registry key under
-    ``<settings_home_dir>/machine-local/`` — the DR-071 canonical anchor,
-    reset-safe because it never shells out to the ``machine-local`` CLI
-    (whose reader/exec bits live under the canonical ``<settings-home>/bin/``,
+def _registry_key(settings_home_dir: str, key: str) -> Optional[str]:
+    """Direct-tomllib read of one dotted registry key under
+    ``<settings_home_dir>/machine-local/`` — the DR-071 canonical anchor
+    mechanism, reset-safe because it never shells out to the ``machine-local``
+    CLI (whose reader/exec bits live under the canonical ``<settings-home>/bin/``,
     with a resettable ``~/.claude/bin/`` mirror during the settings-home
     migration window).
 
     Takes the settings-home directory as a plain string (already resolved
-    from the guard's injected ``env`` dict by ``_doe_root``) rather than
+    from the guard's injected ``env`` dict by the anchor resolvers) rather than
     calling ``coordinator_core.machine_resolver.registry_get`` directly —
     that helper reads ``os.environ`` internally via
     ``_settings_home.machine_local_dir()``, which would ignore this guard's
     env-injection contract and break its test isolation. Reuses
     ``machine_resolver``'s pure TOML-parsing helpers (``_load_toml``,
     ``_flatten``) instead of hand-rolling a second parser.
+
+    List-valued keys are joined with ``"\n"``. That shape is deliberate and
+    PINNED as a corruption-reject downstream — see
+    ``coordinator_core.resolution.facade``'s corruption-set docstring; a
+    multi-line anchor must stay detectable rather than be silently reflattened
+    here.
+
+    Review: Kira (overengineering, F2) — was three byte-identical copies of
+    this body differing only in the key string.
     """
     reg_dir = Path(settings_home_dir) / "machine-local"
     for fname in ("registry.local.toml", "registry.toml"):
         flat = _flatten(_load_toml(reg_dir / fname))
-        if "repos.doe_claude" in flat:
-            val = flat["repos.doe_claude"]
+        if key in flat:
+            val = flat[key]
             if isinstance(val, list):
                 val = "\n".join(str(i) for i in val)
             s = str(val)
@@ -160,23 +185,38 @@ def _registry_doe_claude(settings_home_dir: str) -> Optional[str]:
     return None
 
 
-def _registry_claude_klabauter(settings_home_dir: str) -> Optional[str]:
-    """Direct-tomllib read of the ``repos.claude_klabauter`` registry key,
-    mirroring ``_registry_doe_claude`` exactly (same file rungs, same
-    env-injection-friendly signature, same reuse of ``machine_resolver``'s
-    pure TOML helpers instead of shelling out to the ``machine-local`` CLI).
+#: Registry keys this guard resolves anchors from. ``repos.doe_claude`` is the
+#: DR-071 canonical coordinator-root anchor; ``repos.claude_klabauter`` is the
+#: same anchor ``coordinator_core.engine_root.coordinator_engine_root()``
+#: resolves for in-process callers.
+DOE_CLAUDE_KEY = "repos.doe_claude"
+CLAUDE_KLABAUTER_KEY = "repos.claude_klabauter"
+
+
+#: The registry key naming the coordinator plugin tree a machine SERVES, as
+#: distinct from `repos.doe_claude`, which names the DoE-claude authoring
+#: checkout. On a workstation both spellings resolve to one tree and the
+#: distinction is invisible; where they diverge, only this key can say which
+#: directory a session's `CLAUDE_PLUGIN_ROOT` legitimately came from.
+PLUGIN_MIRROR_LIVE_PATH_KEY = "plugin.mirrors.coordinator-claude.live_path"
+
+
+def _plugin_mirror_root(env: dict) -> str:
+    """Resolve the served-plugin-mirror anchor: registry key only, trailing
+    slash normalized like the other anchors.
+
+    Registry-only on purpose — there is no pointer file for this key and none
+    should be invented. An absent key degrades to ``""``, i.e. "this anchor
+    contributes nothing"; it never raises and never widens trust on its own.
     """
-    reg_dir = Path(settings_home_dir) / "machine-local"
-    for fname in ("registry.local.toml", "registry.toml"):
-        flat = _flatten(_load_toml(reg_dir / fname))
-        if "repos.claude_klabauter" in flat:
-            val = flat["repos.claude_klabauter"]
-            if isinstance(val, list):
-                val = "\n".join(str(i) for i in val)
-            s = str(val)
-            if s:
-                return s
-    return None
+    settings_home_dir = _settings_home_dir_from_env(env)
+    content = ""
+    if settings_home_dir:
+        content = _registry_key(settings_home_dir, PLUGIN_MIRROR_LIVE_PATH_KEY) or ""
+    content = content.rstrip("\n")
+    if content.endswith("/"):
+        content = content[:-1]
+    return content
 
 
 def _claude_klabauter_root(env: dict) -> str:
@@ -198,7 +238,7 @@ def _claude_klabauter_root(env: dict) -> str:
     settings_home_dir = _settings_home_dir_from_env(env)
 
     if settings_home_dir:
-        registry_value = _registry_claude_klabauter(settings_home_dir)
+        registry_value = _registry_key(settings_home_dir, CLAUDE_KLABAUTER_KEY)
         if registry_value:
             content = registry_value
 
@@ -247,7 +287,7 @@ def _doe_root(env: dict) -> str:
     settings_home_dir = _settings_home_dir_from_env(env)
 
     if settings_home_dir:
-        registry_value = _registry_doe_claude(settings_home_dir)
+        registry_value = _registry_key(settings_home_dir, DOE_CLAUDE_KEY)
         if registry_value:
             content = registry_value
 
@@ -320,7 +360,7 @@ def _doe_root_rungs(env: dict) -> list[tuple[str, str]]:
     rungs: list[tuple[str, str]] = []
 
     if settings_home_dir:
-        rungs.append(("registry repos.doe_claude", _registry_doe_claude(settings_home_dir) or "<absent>"))
+        rungs.append(("registry repos.doe_claude", _registry_key(settings_home_dir, DOE_CLAUDE_KEY) or "<absent>"))
     else:
         rungs.append(("registry repos.doe_claude", "<skipped: settings-home dir resolved empty>"))
 
@@ -355,7 +395,7 @@ def _claude_klabauter_root_rungs(env: dict) -> list[tuple[str, str]]:
     rungs: list[tuple[str, str]] = []
 
     if settings_home_dir:
-        rungs.append(("registry repos.claude_klabauter", _registry_claude_klabauter(settings_home_dir) or "<absent>"))
+        rungs.append(("registry repos.claude_klabauter", _registry_key(settings_home_dir, CLAUDE_KLABAUTER_KEY) or "<absent>"))
     else:
         rungs.append(("registry repos.claude_klabauter", "<skipped: settings-home dir resolved empty>"))
 
@@ -411,6 +451,16 @@ def _diagnose_untrusted(root: str, env: dict) -> str:
     )
     for label, val in _claude_klabauter_root_rungs(env):
         lines.append(f"      - {label}: {val!r}")
+    # NOT included in the empty-anchor NOTE below: this key is absent on every
+    # machine where the served tree and the authoring tree are the same
+    # directory, which is most of them. Flagging its absence as "very likely the
+    # actual defect" would send a maintainer hunting a key their box correctly
+    # does not have.
+    lines.append(f"  plugin mirror anchor:    {_plugin_mirror_root(env)!r}")
+    lines.append(
+        f"      - registry {PLUGIN_MIRROR_LIVE_PATH_KEY}: "
+        f"{(_registry_key(settings_home_dir, PLUGIN_MIRROR_LIVE_PATH_KEY) if settings_home_dir else None) or '<absent>'!r}"
+    )
 
     if not home or not settings_home_dir or not doe_root or not claude_klabauter_root:
         lines.append(
@@ -426,7 +476,8 @@ def _diagnose_untrusted(root: str, env: dict) -> str:
 def _at_or_under(root_cmp: str, anchor: str) -> bool:
     """Whether ``root_cmp`` IS ``anchor`` or sits strictly beneath it.
 
-    The registry-resolved anchors (``repos.doe_claude``, ``repos.claude_klabauter``)
+    The registry-resolved anchors (``repos.doe_claude``, ``repos.claude_klabauter``,
+    ``plugin.mirrors.coordinator-claude.live_path``)
     name a content root that is itself a legitimate ``CLAUDE_PLUGIN_ROOT``, not
     merely the parent of one. A strict-descendant-only match trusted
     ``<clone>/coordinator`` while rejecting ``<clone>`` — which is the exact
@@ -445,13 +496,40 @@ def _at_or_under(root_cmp: str, anchor: str) -> bool:
     Still purely textual and still narrow: equality only, never the anchor's
     PARENT, and a sibling sharing a name prefix (``<clone>-evil``) matches
     neither arm. The traversal reset in ``is_trusted`` applies unchanged.
+    Rejected alternative, recorded so it is not re-proposed as an oversight:
+    compare against ``content_root_for(anchor)`` and keep descendants-only.
+    Strictly narrower, but it puts a filesystem stat inside a predicate whose
+    documented character is purely textual, on the hook hot path. Textual won;
+    the widening is one path spelling, and every descendant of these anchors was
+    already trusted, so trusting the anchor node itself grants no reachable file
+    that was not already reachable.
     """
     return root_cmp == anchor or root_cmp.startswith(anchor + "/")
 
 
+def _norm_anchor(raw: str) -> str:
+    """Normalize one registry/pointer-resolved anchor for TEXTUAL comparison.
+
+    The resolvers strip exactly one trailing "/" from a raw sentinel value. A
+    Windows sentinel ending in a BACKSLASH only becomes a trailing slash after
+    `_norm`, so it survives that strip and would cause a "//" false-reject.
+    Re-strip on Windows only: on POSIX the single-strip behavior is a deliberate
+    bash-oracle parity quirk (see test_doe_root_only_single_trailing_slash_
+    stripped) and must not be broadened.
+
+    Review: Kira (overengineering, F2) — was a third copy of the same
+    `os.name == "nt"` re-strip inline in `is_trusted`.
+    """
+    anchor = _norm(raw)
+    if os.name == "nt" and anchor.endswith("/"):
+        anchor = anchor[:-1]
+    return anchor
+
+
 def is_trusted(root: str, *, env: dict | None = None) -> bool:
-    """Pure trust-core predicate — byte-identical decision to the bash
-    sourced-lib's inline check (§ "shared trust-core" comment block).
+    """Pure trust-core predicate — the bash sourced-lib's inline check
+    (§ "shared trust-core" comment block), widened at the registry anchors
+    only (see ``_at_or_under`` and this module's header).
 
     No side effects (no stderr, no exit) — the mode-specific tail lives
     in ``coordinator_trusted_root_guard`` / ``..._or_exit``.
@@ -462,30 +540,35 @@ def is_trusted(root: str, *, env: dict | None = None) -> bool:
     root_cmp = _norm(root)
 
     trusted = False
-    if root_cmp.startswith(trusted_prefix):
+    # `claude_home and` is load-bearing, not defensive noise: with home fully
+    # unresolved, `trusted_prefix` degrades to the RELATIVE ".claude/" and a
+    # bare "CLAUDE_PLUGIN_ROOT=.claude/x" would be trusted. This repo already
+    # treats that relative-join class as a defect elsewhere
+    # (test_settings_home_never_relative_when_home_fully_absent), and "anchor 1
+    # stays descendants-only" is only as strong as this guard.
+    if claude_home and root_cmp.startswith(trusted_prefix):
         trusted = True
 
-    doe_root = _norm(_doe_root(env))
-    # _doe_root strips exactly one trailing "/" from the raw sentinel. A Windows
-    # sentinel ending in a BACKSLASH only becomes a trailing slash after _norm,
-    # so it survives that strip and would cause a "//" false-reject. Re-strip on
-    # Windows only: on POSIX the single-strip behavior is a deliberate
-    # bash-oracle parity quirk (see test_doe_root_only_single_trailing_slash_
-    # stripped) and must not be broadened here.
-    if os.name == "nt" and doe_root.endswith("/"):
-        doe_root = doe_root[:-1]
-    if doe_root and _at_or_under(root_cmp, doe_root):
-        trusted = True
-
-    claude_klabauter_root = _norm(_claude_klabauter_root(env))
-    # Same single-trailing-slash re-strip quirk as doe_root above — see that
-    # branch's comment; kept symmetric rather than "fixed" for either anchor.
-    if os.name == "nt" and claude_klabauter_root.endswith("/"):
-        claude_klabauter_root = claude_klabauter_root[:-1]
-    if claude_klabauter_root and _at_or_under(root_cmp, claude_klabauter_root):
-        trusted = True
+    # Each anchor: resolve, normalize (see `_norm_anchor` for the Windows
+    # trailing-slash quirk), trust the root if it is at or under it. An anchor
+    # that resolved to "" is skipped, never treated as a match-everything
+    # prefix.
+    for anchor in (_doe_root(env), _claude_klabauter_root(env), _plugin_mirror_root(env)):
+        anchor_cmp = _norm_anchor(anchor)
+        if anchor_cmp and _at_or_under(root_cmp, anchor_cmp):
+            trusted = True
 
     # Checked against the normalized form so Windows "\.." is caught too.
+    # Review: reviewer-S3, Finding 2 -- this reset is the ONLY thing that
+    # neutralizes a "/.."-poisoned registry anchor VALUE (e.g. a
+    # plugin.mirrors.coordinator-claude.live_path of "/legit/../evil"). No
+    # anchor resolver scrubs "/.." out of the value it returns; any root_cmp
+    # that would match such a poisoned anchor via `_at_or_under` necessarily
+    # contains "/.." itself (inherited from the anchor string), so it always
+    # falls through to this same global reset. Do not "simplify" this away as
+    # dead code or move it inside the anchor loop -- it is load-bearing for
+    # every registry anchor, not a leftover guard for anchor 1 alone. See
+    # test_a_slash_dotdot_poisoned_anchor_value_is_neutralized_by_the_global_reset.
     if "/.." in root_cmp:
         trusted = False
 

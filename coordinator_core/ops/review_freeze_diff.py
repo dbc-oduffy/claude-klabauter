@@ -355,7 +355,10 @@ def freeze_diffs_batch(
 
     per_pair_diff: Dict[int, str] = {}
     if diff_pending_idx:
-        stdin_payload = "".join(f"{endpoints[i][0]} {endpoints[i][1]}\n" for i in diff_pending_idx)
+        # `diff-tree --stdin` reads each line as `<commit> <parent>` and diffs
+        # parent -> commit, so the NEW end (B) goes first: `A B` would print
+        # `git diff B A`, the whole range inverted.
+        stdin_payload = "".join(f"{endpoints[i][1]} {endpoints[i][0]}\n" for i in diff_pending_idx)
         diff_argv = ["diff-tree", "--stdin", "-p"]
         if shared_paths_list:
             diff_argv += ["--", *shared_paths_list]
@@ -365,7 +368,7 @@ def freeze_diffs_batch(
                 f"git diff-tree --stdin failed for the freeze batch: {dt.stderr.strip()}"
             )
         diff_texts = _split_diff_tree_stdin_output(
-            dt.stdout, [endpoints[i][0] for i in diff_pending_idx]
+            dt.stdout, [endpoints[i][1] for i in diff_pending_idx]
         )
         per_pair_diff = dict(zip(diff_pending_idx, diff_texts))
 
@@ -414,29 +417,29 @@ def freeze_diffs_batch(
     return results  # type: ignore[return-value]
 
 
-def _split_diff_tree_stdin_output(stdout: str, a_shas: List[str]) -> List[str]:
+def _split_diff_tree_stdin_output(stdout: str, header_shas: List[str]) -> List[str]:
     """Split `git diff-tree --stdin -p`'s combined output back into one diff
-    per pair, returned in the same order as `a_shas` (the order the pairs
+    per pair, returned in the same order as `header_shas` (the order the pairs
     were fed on stdin). `--stdin` fed two explicit tree-ish per line prints a
-    PAIR HEADER line — the first (old/base) tree-ish's own sha, alone on its
-    own line — immediately before that pair's diff, with no blank-line
+    PAIR HEADER line — the FIRST tree-ish on that stdin line (the new end, B),
+    alone on its own line — immediately before that pair's diff, with no blank-line
     separator between one pair's last diff line and the next pair's header
     (measured live against this repo's own history before landing this
     function). The header line itself is stripped — `git diff <range>` never
     prints one, and this function's whole purpose is byte-identical parity
     with that output.
 
-    Matches on the KNOWN `a_shas` value for each pair, in order, rather than
+    Matches on the KNOWN `header_shas` value for each pair, in order, rather than
     "any bare 40-hex-char line" — a diff body line is vanishingly unlikely to
     collide with a caller-supplied sha, but matching the caller's own known
     values is exact where a generic hex-line pattern would only be probable.
     """
     lines = stdout.splitlines(keepends=True)
-    segments: List[List[str]] = [[] for _ in a_shas]
+    segments: List[List[str]] = [[] for _ in header_shas]
     current = -1
     for line in lines:
         stripped = line.rstrip("\n")
-        if current + 1 < len(a_shas) and stripped == a_shas[current + 1]:
+        if current + 1 < len(header_shas) and stripped == header_shas[current + 1]:
             current += 1
             continue
         if current >= 0:

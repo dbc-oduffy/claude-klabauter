@@ -239,3 +239,107 @@ def test_empty_path_entries_are_skipped_not_resolved_against_cwd() -> None:
     the CWD -- resolving there would let any directory a caller happens to sit in
     claim the bare name."""
     assert resolve_bare_name(_STEM, ["", os.sep], _PATHEXT) == []
+
+
+def test_exact_case_wins_its_own_folded_bucket(tmp_path: Path, windows_pathext_semantics) -> None:
+    """A case-sensitive filesystem can hold `<stem>.exe` and `<stem>.EXE` as two
+    distinct files. A folded-name map that keeps one arbitrary entry per bucket
+    answers with whichever `scandir` yielded last -- readdir order, i.e. not
+    deterministic and, measured, the wrong one. The candidate whose spelling
+    matches the requested extension EXACTLY must win its bucket; folding stays
+    the fallback that keeps `.EXE` matching a lowercase `.exe` on NTFS/APFS.
+    """
+    bin_dir = tmp_path / "settings" / "bin"
+    lower = _touch(bin_dir, f"{_STEM}.exe")
+    upper = bin_dir / f"{_STEM}.EXE"
+    if upper.exists():
+        pytest.skip("case-insensitive filesystem: the two spellings are one file here")
+    upper.write_text("x", encoding="utf-8")
+
+    hits = resolve_bare_name(_STEM, [str(bin_dir)], ".EXE")
+    assert hits[0] == upper, (
+        f"an exact-case `.EXE` candidate must win over the folded `.exe`; got {hits}"
+    )
+    assert lower.is_file()
+
+
+def test_exact_case_directory_falls_back_to_the_real_file_in_its_bucket(
+    tmp_path: Path, windows_pathext_semantics
+) -> None:
+    """Regression (S6 review, finding 1): a folded bucket can hold BOTH a
+    DIRECTORY spelled exactly `<stem><ext>` and a FILE of the same stem
+    differing only in case. The prior implementation committed to the
+    exact-case spelling before calling `is_file()`, resolved to the
+    directory, failed `is_file()`, and `continue`d past the whole extension
+    arm instead of trying the sibling file still sitting in the same
+    bucket -- so a directory could shadow a real, differently-cased file.
+    The fix must fall through to the next candidate in preference order.
+    """
+    bin_dir = tmp_path / "settings" / "bin"
+    bin_dir.mkdir(parents=True)
+    directory = bin_dir / f"{_STEM}.exe"
+    directory.mkdir()
+    real_file = bin_dir / f"{_STEM}.EXE"
+    if real_file.exists():
+        pytest.skip("case-insensitive filesystem: the two spellings are one entry here")
+    real_file.write_text("x", encoding="utf-8")
+
+    hits = resolve_bare_name(_STEM, [str(bin_dir)], ".EXE")
+    assert hits == [real_file], (
+        f"a same-bucket directory must not shadow the real file; got {hits}"
+    )
+
+
+def test_posix_rules_ignore_a_powershell_sibling(tmp_path: Path) -> None:
+    """`rules="posix"` drops the `.ps1` arm: no shell there executes a `.ps1`, so
+    ranking it ahead of the real image reports a file no POSIX caller can run as
+    the winner -- and then as a BREAK-CLASS interpreter start."""
+    bin_dir = tmp_path / "settings" / "bin"
+    door = _touch(bin_dir, _STEM)
+    door.chmod(0o755)
+    _touch(bin_dir, f"{_STEM}.ps1")
+
+    hits = resolve_bare_name(_STEM, [str(bin_dir)], "", rules="posix")
+    assert hits == [door], f"the `.ps1` must not rank at all under POSIX rules; got {hits}"
+
+
+def test_posix_rules_skip_a_non_executable_candidate(tmp_path: Path) -> None:
+    """A mode-0644 file is not a door: a real POSIX shell skips it and keeps
+    searching PATH. The POSIX model says so; the Windows model stays mode-blind."""
+    bin_dir = tmp_path / "settings" / "bin"
+    later_dir = tmp_path / "settings" / "bin2"
+    unreadable = _touch(bin_dir, _STEM)
+    unreadable.chmod(0o644)
+    real = _touch(later_dir, _STEM)
+    real.chmod(0o755)
+
+    hits = resolve_bare_name(_STEM, [str(bin_dir), str(later_dir)], "", rules="posix")
+    assert hits == [real], f"a 0644 file is not executable and is not a hit; got {hits}"
+
+    permissive = resolve_bare_name(_STEM, [str(bin_dir), str(later_dir)], "")
+    assert permissive[0] == unreadable, (
+        "the default must stay the Windows model and mode-blind -- the POSIX "
+        "permission check is carried by `rules`, not by the pure default"
+    )
+
+
+def test_the_platform_axis_is_one_named_model_not_a_set_of_flags() -> None:
+    """Review: overengineering-reviewer (Kira, pass 2, finding N2). The seam is
+    ONE bit because that is the whole live requirement -- the impure caller
+    derives `rules` from `sys.platform` alone. Pinning the model names (rather
+    than a pair of independently-settable booleans) is what stops the next
+    platform rule arriving as a third keyword, and an unknown model is a loud
+    ValueError rather than a silent fall-through to the Windows default."""
+    import inspect
+
+    from coordinator_core.install.forwarder_door_census import _PLATFORM_RULES
+
+    params = inspect.signature(resolve_bare_name).parameters
+    assert set(_PLATFORM_RULES) == {"windows", "posix"}
+    assert [p for p in params if params[p].kind is inspect.Parameter.KEYWORD_ONLY] == ["rules"], (
+        f"the platform axis must stay one keyword; got {list(params)}"
+    )
+    assert params["rules"].default == "windows"
+
+    with pytest.raises(ValueError):
+        resolve_bare_name(_STEM, [], "", rules="plan9")

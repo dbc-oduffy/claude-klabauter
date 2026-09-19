@@ -36,8 +36,9 @@ solely inside a heredoc body or a `python`/`python3 -c` payload string, the
 shape two independent EMs hit while holding the scratchpad rule in context,
 not someone routing around this guard on purpose. See
 `extract_interpreter_payload_write_sink_targets` below, a NEW,
-separately-named C5-only extractor -- `extract_write_sink_targets_for_
-segment` above (C4's shared table) is untouched by this reversal, and every
+separately-named extractor (C5 first; C4 adopted it for parity 2026-09-19)
+-- `extract_write_sink_targets_for_segment` above (the shared shell-token
+table) is untouched by this reversal, and every
 other clause of "do not enumerate evasions" (base64, `exec`, assembled
 paths, other interpreters) still stands.
 
@@ -125,6 +126,56 @@ WRITE_SINK_BINARIES = frozenset(
 )
 
 
+_SED_SCRIPT_LONG_FLAGS = ("--expression", "--file")
+
+
+def _sed_inplace_targets(args: List[str]) -> List[str]:
+    """The files an in-place `sed` edits, or `[]` when it is not in-place.
+
+    Only `-i`/`--in-place` makes `sed` write a file; otherwise it writes
+    stdout. The edit script is not a target: it is the value of `-e`/`-f`/
+    `--expression`/`--file` when one is given, else the first operand. BSD's
+    separate-token suffix (`-i ''`, `-i .bak`) is skipped too -- an empty
+    token or a slash-free `.`-prefixed one after a bare `-i`."""
+    if not any(a.startswith("-i") or a.startswith("--in-place") for a in args):
+        return []
+    operands: List[str] = []
+    script_given = False
+    skip_next = False
+    for i, a in enumerate(args):
+        if skip_next:
+            skip_next = False
+            continue
+        if a == "-i":
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if nxt is not None and (nxt == "" or (nxt.startswith(".") and "/" not in nxt)):
+                skip_next = True
+            continue
+        if a in _SED_SCRIPT_LONG_FLAGS:
+            script_given = True
+            skip_next = True
+            continue
+        if a.startswith(tuple(f + "=" for f in _SED_SCRIPT_LONG_FLAGS)):
+            script_given = True
+            continue
+        if a.startswith("--"):
+            continue
+        if a.startswith("-") and len(a) > 1:
+            if a.startswith("-i"):
+                continue
+            flags = a[1:]
+            for j, ch in enumerate(flags):
+                if ch in "ef":
+                    script_given = True
+                    if j == len(flags) - 1:
+                        skip_next = True
+                    break
+            continue
+        if a:
+            operands.append(a)
+    return operands if script_given else operands[1:]
+
+
 def extract_write_sink_targets_for_segment(tokens: List[str], head_base: str) -> List[str]:
     """Raw candidate write-target strings found in ONE already-tokenized,
     already wrapper/env-peeled segment (`tokens`), given `head_base` --
@@ -149,9 +200,10 @@ def extract_write_sink_targets_for_segment(tokens: List[str], head_base: str) ->
     treated as a flag/option and never a candidate target, for every binary
     below -- this is deliberately coarse (it does not know which flags take
     a separate-token value of their own) but never UNDER-includes a real
-    target for the binaries this table names, only occasionally
-    OVER-includes a non-path argument (e.g. `sed`'s own edit script), which
-    the caller's own git-root resolution drops harmlessly.
+    target for the binaries this table names. `sed` is the one binary whose
+    non-path operand is peeled (`_sed_inplace_targets`): its edit script
+    routinely starts with `/` (`/pattern/d`), which resolves as an absolute
+    path outside every repo and would bump rather than drop harmlessly.
     """
     targets: List[str] = []
 
@@ -194,12 +246,7 @@ def extract_write_sink_targets_for_segment(tokens: List[str], head_base: str) ->
         # the two cited incidents, not an exhaustive gate on the flag.
         targets.extend(positional)
     elif head_base == "sed":
-        # Only `-i` (in-place edit, optionally `-iSUFFIX` / `-i SUFFIX`)
-        # turns `sed` into a write sink at all -- without it, `sed` reads
-        # stdin/files and writes to stdout, never touching a target path.
-        has_inplace = any(a == "-i" or a.startswith("-i") for a in args)
-        if has_inplace:
-            targets.extend(positional)
+        targets.extend(_sed_inplace_targets(args))
     elif head_base == "rsync":
         # Last positional argument is the destination, same shape as
         # `cp`/`mv` above.
@@ -1026,9 +1073,9 @@ def extract_interpreter_payload_write_sink_targets(raw_cmd: str) -> List[str]:
     FAILS OPEN: any exception at any step of this function -- heredoc
     scanning, `-c`-payload extraction, or the Python-shape regex scan --
     yields no candidates for that step rather than propagating; this
-    function itself never raises. C5-only, opt-in (see
-    `bump_outside_repo_write._iter_write_sink_candidates`) -- C4
-    (`bump_foreign_repo_write.py`) does not call this function and this
+    function itself never raises. Opt-in per guard: both
+    `bump_outside_repo_write._iter_write_sink_candidates` and
+    `bump_foreign_repo_write._iter_write_sink_candidates` call it; this
     module's own shared bash-shape table above (`extract_write_sink_
     targets_for_segment`) is untouched by its addition."""
     targets: List[str] = []

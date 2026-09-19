@@ -88,7 +88,7 @@ def _corruption_reason(value: str) -> Optional[str]:
     (corruption-checked only, never trust-checked — see module docstring):
 
       - an embedded newline. Pinned edge case: the shipped
-        ``_registry_doe_claude``/``_registry_claude_klabauter`` readers join a
+        ``trusted_root_guard._registry_key`` reader joins a
         list-valued TOML registry key with ``"\\n"`` (``"\\n".join(str(i)
         for i in val)``) — that shape is a corruption REJECT here, single-line
         is a hard requirement, not a value this facade silently re-flattens.

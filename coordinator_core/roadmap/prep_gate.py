@@ -293,10 +293,64 @@ def _spine(plan_path: Path, text: str) -> Dict[str, Any]:
             "(a row's `body:` states the work, not only its title)",
             withheld=no_body,
         )
+    archive_defect = _archive_writes_refused_in_wave(rows)
+    if archive_defect is not None:
+        return archive_defect
     unroutable, first = _unroutable_rows(waves)
     if unroutable:
         return _defect(type(first).__name__, str(first).strip()[:300], withheld=unroutable)
     return _pass(f"{len(rows)} dispatchable row(s) across {len(waves)} wave(s)")
+
+
+def _archive_writes_refused_in_wave(rows: List[Any]) -> Optional[Dict[str, Any]]:
+    """A dispatched row writing under ``archive/`` is BLOCKED in-wave: the
+    engine's ``block_subagent_archive_write`` refuses every subagent write
+    there outside its carve-outs, so the row's executor cannot land it.
+
+    Restated from DoE-claude ``coordinator/bin/mise-prep-gate.py``'s
+    ``writes-archive-refused-in-wave`` leg (2026-09-11, reported by
+    example-store-repo-fb, whose mise run halted on a chunk writing
+    ``archive/specs/...``). The guard's own allow-predicates are CALLED, not
+    restated; operator rows never reach here, since ``read_spine`` excludes
+    them before this function's caller sees ``rows``.
+
+    Checks BOTH ``writes:`` (concrete paths) and ``writes_under:`` (prefixes,
+    for names chosen at run time — what archiving a resolved memo into a
+    dated directory does). The guard's carve-outs are file-shaped
+    (``.../<date>.md$``) and cannot be evaluated against a directory prefix,
+    which is not a gap in this check: a prefix declares the NAMES are chosen
+    later, so nothing here can know whether they will land inside a carve-out,
+    and the guard refuses in-wave whenever they do not.
+    """
+    from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
+    from coordinator_core.write_guards.block_subagent_archive_write import (
+        refuses_path as _guard_refuses,
+    )
+
+    archive_writes = [
+        f"{row.id} ({value})"
+        for row in rows
+        if row.writes is not UNDECLARED
+        for value in row.writes
+        if _guard_refuses(str(value))
+    ]
+    archive_writes += [
+        f"{row.id} ({prefix}, writes_under)"
+        for row in rows
+        for prefix in getattr(row, "writes_under", ()) or ()
+        if _guard_refuses(str(prefix))
+    ]
+    if not archive_writes:
+        return None
+    return _defect(
+        "writes-archive-refused-in-wave",
+        f"rows writing under archive/: {', '.join(archive_writes)[:260]} — "
+        "block_subagent_archive_write refuses these to every dispatched executor. Fix: "
+        "mark the row `execution_mode: operator` so the EM applies it, or move the write "
+        "out of archive/. A value tagged `writes_under` names a PREFIX, so the guard's "
+        "file-shaped carve-outs cannot be checked against it — concretize into `writes:` "
+        "if the row only ever writes carve-out-shaped names.",
+    )
 
 
 def _unroutable_rows(waves: Sequence[Sequence[Any]]) -> "tuple[List[str], Optional[Exception]]":

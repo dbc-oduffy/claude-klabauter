@@ -43,7 +43,16 @@ import sys
 from pathlib import Path
 from typing import Optional, Union
 
-_QUICK_ORIENT = "## Quick Orient (always, before first tool call)\nSilently read `state/orientation_cache.md` if present before responding. Skip `state/lessons.md` at boot (a `/learn-lessons` queue; lessons live in `docs/wiki/`). Vague/strategic -> `/workstream-start`; specific request -> quick orient and go.\n\n## Coordinator Infrastructure\n- /review (plans) or /review-code — reviewers\n- /enrich-and-review — enrich specs\n- Executor dispatch: docs/wiki/delegate-execution.md\nUse when they add value; else just do the work.\n"
+_QUICK_ORIENT = (
+    "## Quick Orient\n"
+    "Read `state/orientation_cache.md` first; skip `state/lessons.md` "
+    "(docs/wiki/ has lessons). Vague -> /workstream-start; specific -> "
+    "orient, go.\n\n"
+    "Use instead:\n"
+    "  /review or /review-code\n"
+    "  /enrich-and-review\n"
+    "  Executor dispatch: docs/wiki/delegate-execution.md\n"
+)
 
 
 def render_reminder(catalog_path: Optional[Union[str, "Path"]] = None) -> str:

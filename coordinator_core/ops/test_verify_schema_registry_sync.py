@@ -27,7 +27,13 @@ from typing import List, Optional
 
 import pytest
 
+from coordinator_core._content_root_primitive import (
+    FLAT_CONTENT_ROOT_MARKER as _FLAT_CONTENT_ROOT_MARKER,
+)
 from coordinator_core.doe_root_pointer import read_doe_root_pointer
+from coordinator_core.frontmatter.schema_corpus import (
+    DEV_REPO_SENTINEL as _DEV_REPO_SENTINEL,
+)
 from coordinator_core.ops import verify_schema_registry_sync as vsrs
 from coordinator_core.testing.golden import assert_matches_golden, is_capturing, load_golden
 
@@ -290,3 +296,73 @@ def test_golden_oracle_parity_against_live_doe_repo():
     # recapture over a silently-narrowed schemas/ dir producing a
     # byte-identical drift-entry golden while covering far fewer schemas.
     assert expected["schemas_checked"] == _EXPECTED_CORPUS_SIZE
+
+
+# ---------------------------------------------------------------------------
+# Corpus-provenance stand-down
+# ---------------------------------------------------------------------------
+#
+# Measured defect: on a cloud container, `data_root("schemas")` resolves to the
+# published coordinator-claude mirror, and this gate reported
+# `OK - all 2 schema applies_to types are recognised`, exit 0, having never
+# looked at 61 of the 63 types an authoring checkout carries. The gate derives
+# its recognised-type set from the same corpus it checks, so a truncated corpus
+# agrees with itself and passes. Fixtures below are REAL directories with REAL
+# schema files and the REAL markers, because the walk from a schemas dir up to
+# its markers is the thing under test.
+
+
+def _published_mirror_root(tmp_path: Path) -> Path:
+    root = tmp_path / "coordinator-claude"
+    _write_schema(root / "schemas", "goal.yaml", "state/goals/*.yaml")
+    marker = root.joinpath(*_FLAT_CONTENT_ROOT_MARKER)
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text('{"name": "coordinator-claude"}', encoding="utf-8")
+    return root
+
+
+def test_published_mirror_root_cannot_verify_and_is_not_a_pass(tmp_path):
+    root = _published_mirror_root(tmp_path)
+    exit_code, stdout_lines, stderr_lines = vsrs.run(root)
+    # The false-green, asserted first and without reference to the new
+    # constant: a published-subset root must not produce an OK line and must
+    # not exit 0. Unfixed, this root printed
+    # "OK - all 1 schema applies_to types are recognised" and exited 0.
+    assert "OK" not in "\n".join(stdout_lines)
+    assert exit_code != 0
+    assert stdout_lines == []
+    assert "CANNOT VERIFY" in stderr_lines[0]
+    assert exit_code == vsrs.EXIT_CORPUS_CANNOT_ANSWER
+
+
+def test_published_mirror_stand_down_names_the_evidence_and_the_remedy(tmp_path):
+    root = _published_mirror_root(tmp_path)
+    _exit_code, _stdout, stderr_lines = vsrs.run(root)
+    joined = "\n".join(stderr_lines)
+    assert _DEV_REPO_SENTINEL in joined
+    assert "authoring checkout" in joined
+
+
+def test_authoring_root_still_runs_the_comparison(tmp_path, monkeypatch):
+    """The stand-down is scoped to a published root. An authoring checkout is
+    the case this gate exists for and must be unaffected."""
+    root = tmp_path / "DoE-claude"
+    _write_schema(root / "schemas", "handoff.yaml", "state/handoffs/*.yaml")
+    (root / _DEV_REPO_SENTINEL).write_text("", encoding="utf-8")
+    monkeypatch.setattr(vsrs, "_type_recognised", lambda *a, **kw: True)
+    exit_code, stdout_lines, stderr_lines = vsrs.run(root)
+    assert exit_code == 0
+    assert stderr_lines == []
+    assert "OK" in stdout_lines[0]
+
+
+def test_unmarked_root_keeps_running_unchanged(tmp_path, monkeypatch):
+    """INDETERMINATE is not a degrade: a caller-supplied root with no marker
+    either way is a caller-directed comparison, and the gate has no standing to
+    refuse it. Pins that the stand-down did not widen into every synthesized
+    fixture."""
+    _write_schema(tmp_path / "schemas", "handoff.yaml", "state/handoffs/*.yaml")
+    monkeypatch.setattr(vsrs, "_type_recognised", lambda *a, **kw: True)
+    exit_code, stdout_lines, _stderr = vsrs.run(tmp_path)
+    assert exit_code == 0
+    assert "OK" in stdout_lines[0]

@@ -1462,9 +1462,19 @@ def mint_run_id(cadence: str, *, repo_root: Optional[Path] = None) -> Optional[M
     `repo_root=None` (the default, and what `__init__.py`'s dispatch uses)
     resolves the root the same way every OTHER read in this module already
     does — `_resolve_state_root()` — never a second root-resolution path.
-    `None` here (an unresolvable root) means `None` out, same as
+    An unresolvable root (`repo_root=None` and `_resolve_state_root()` finds
+    no enclosing git repo) RAISES `RuntimeError` naming the resolved cwd and
+    the reason, rather than returning `None` — unlike
     `_read_backlog_readiness`/`_read_phase_6_review_scale`'s own posture on
-    an unresolvable state root.
+    an unresolvable state root. Those two are `collect()` callees feeding a
+    self-gating brief that already has a loud-judgment-point idiom for an
+    unusable input; this function's `None` return is instead read by
+    `_main_mint_run_id`'s dispatch loop as "this reader does not claim
+    `cadence`", so a `None` here for a real cadence-mismatch reason (git
+    repo unresolvable) would surface as the wrong diagnosis entirely
+    ("no reader claims mint-run-id for cadence 'mise-en-place'") instead of
+    the true one (issue coordinator-klabauter#25). `cadence != CADENCE`
+    still returns `None` — that is a genuine abstention, not an error.
 
     READ-ONLY throughout (AC3): the only disk touch below is `Path.is_file()`
     — a stat, not a write — checked against `state/mise-inventory/` without
@@ -1499,7 +1509,10 @@ def mint_run_id(cadence: str, *, repo_root: Optional[Path] = None) -> Optional[M
     else:
         state_root_str = _resolve_state_root()
         if not state_root_str:
-            return None
+            raise RuntimeError(
+                f"mint_run_id: {Path.cwd()} is not inside a git repo; run "
+                "from inside the repo whose run this is"
+            )
         state_root = Path(state_root_str)
 
     inventory_dir = state_root / _MISE_INVENTORY_DIRNAME

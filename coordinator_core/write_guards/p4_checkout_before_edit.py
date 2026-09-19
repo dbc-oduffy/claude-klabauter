@@ -73,7 +73,7 @@ PRIORITY = 40
 # checkout tool, directly.") named tools outside this repo, so it read as a
 # remedy while naming nothing this caller can reach. The reachable move is to
 # stop and say so -- whoever can take the checkout is not this session.
-_ALTERNATIVE = "Report to the EM that dispatched you: this file needs a checkout this session cannot take."
+_ALTERNATIVE = "Use instead:\n  report to your EM: needs a checkout this session cannot take"
 
 
 def _extract_file_path(payload: Dict[str, Any]) -> str:
@@ -164,7 +164,7 @@ def _deny_refused(abs_path: str, error: "runner.P4Error") -> Dict[str, Any]:
 
 
 def _deny_plain(abs_path: str, detail: str) -> Dict[str, Any]:
-    return _deny(f"BLOCKED: p4 checkout failed for {abs_path} ({detail}).\n{_ALTERNATIVE}")
+    return _deny(f"BLOCKED: p4 checkout failed ({detail}) for {abs_path}.\n{_ALTERNATIVE}")
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:

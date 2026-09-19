@@ -160,11 +160,10 @@ _FIRE_FLAG_TO_OFFER: Dict[str, str] = {
 _SILENT_FLAGS = frozenset({"--show-prefix", "--is-inside-work-tree"})
 
 _OFFER_TEMPLATE = (
-    "OFFER: {symbol} walks the parent directories instead of spawning "
-    "`git rev-parse {flag}` — it never spawns, on any path. See "
-    "coordinator_core/git/repo_root.py "
-    "\"Non-spawning parent-walk vs spawn, honestly per form\".\n"
-    "Found a private `git rev-parse {flag}` call in {file_path}."
+    "Found private `git rev-parse {flag}` call in {file_path}.\n"
+    "Use instead:\n"
+    "  {symbol} -- never spawns, on any path (see "
+    "coordinator_core/git/repo_root.py)"
 )
 
 

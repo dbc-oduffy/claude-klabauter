@@ -1141,4 +1141,4 @@ async def _handler(params: dict, repo_root=None) -> dict:
     message = evaluate(params)
     if message is None:
         return no_advisory()
-    return deny("PreToolUse", render(message))
+    return deny("PreToolUse", render(message, env=params.get("env")))

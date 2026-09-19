@@ -162,11 +162,10 @@ def _guarded_roots() -> "list[Path]":
 
 def _deny_reason(target: str) -> str:
     return (
-        f"[home-dir memo guard] DENY {target}: not a memo receiver, goes "
-        "unseen by /pickup. Use instead:\n"
-        "  cross-repo-memo draft <slug> --to doe-claude-em "
-        '--title "<one line>"\n'
-        "  cross-repo-memo send <slug>"
+        f"DENY {target}: not a memo receiver, unseen by /pickup.\n"
+        "Use instead:\n"
+        "  cross-repo-memo draft <slug> --to doe-claude-em --title \"<t>\"; "
+        "cross-repo-memo send <slug>"
     )
 
 

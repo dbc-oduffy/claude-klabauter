@@ -298,7 +298,11 @@ def _main_mint_run_id(rest: list[str]) -> int:
         minter = getattr(reader, "mint_run_id", None)
         if minter is None:
             continue
-        minted = minter(cadence)
+        try:
+            minted = minter(cadence)
+        except RuntimeError as exc:
+            print(f"backlog-grind-assemble: {exc}", file=sys.stderr)
+            return EXIT_USAGE
         if minted is not None:
             print(
                 json.dumps(

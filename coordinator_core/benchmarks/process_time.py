@@ -64,13 +64,32 @@ harness) -- that module answers a different, already-established question
 contract) and stays wall-clock by design; this module is additive, a second
 instrument for a different unit, not a replacement for the first.
 
-Windows and Darwin only: `batched_process_time_ms` raises `NotImplementedError`
-on every other platform. The getrusage process-time half is POSIX and
-verified there against Linux's own `kernel/exit.c :: wait_task_zombie()`
-rollup; only the spawn-count half (this module's kqueue/EVFILT_PROC
-mechanism, Darwin-specific) is unverified on Linux. A time-measured,
-count-refused route remains available there and is PM-gated, not
-implemented in this chunk. This Windows/Darwin split is THIS MODULE's own
+LINUX (`batched_process_time_ms` only -- `single_invocation_tree_process_time`
+still raises `NotImplementedError` there, unaddressed by this chunk). The
+getrusage process-time half was already POSIX and verified against Linux's
+own `kernel/exit.c :: wait_task_zombie()` rollup; the spawn-count half uses
+`sys.addaudithook` (CPython 3.8+, stdlib, no new dependency) on the
+`os.posix_spawn`/`os.fork`/`subprocess.Popen` events, installed inside a
+freshly forked, single-purpose child (`_linux_run_measured_child`) so the
+count and the `getrusage(RUSAGE_SELF)`+`getrusage(RUSAGE_CHILDREN)` read are
+both scoped to that one child, the same contamination-free structure
+Darwin's `os.wait4()`-keyed read has (trap 4 below).
+
+FIDELITY GAP, STATED PLAINLY: the audit hook counts spawns *this Python
+process* issues, at any call depth (the hook is process-global, not
+call-stack-scoped) -- for a `sys.executable`-rooted `cmd` (the shape every
+caller in this tree actually uses: measuring a Python function's own
+subprocess usage) this has FULL fidelity, equal to Darwin's kqueue path,
+because every spawn the measured code performs is a direct act of the
+hooked interpreter. It does NOT see forking done *inside* a non-Python
+process this child execs or `Popen`s -- that binary's own descendants, if
+it has any, are invisible (no interpreter there to hook). Darwin's
+kqueue/EVFILT_PROC mechanism sees the whole descendant tree regardless of
+language and is NOT made redundant by this addition for that reason: a
+caller measuring an arbitrary external binary's full process tree still
+needs the Darwin path (or an equivalent not built here) rather than this
+one. Windows/Darwin/Linux is a genuine three-way platform split, not a
+two-way one with Linux glossed over. This split is THIS MODULE's own
 implementation boundary, not DR-344's -- DR-344's brightline itself
 contains no Windows or POSIX scoping (checked against the ruling text
 directly); the module previously glossed this split as if the ruling were
@@ -99,9 +118,16 @@ second question has a hole this module cannot close:
     manages to launch OUTSIDE the job (e.g. via `CREATE_BREAKAWAY_FROM_JOB`
     on a job not configured to deny it); this module does not verify job
     breakaway is denied.
-  - Linux: unimplemented (`NotImplementedError` above) -- nothing is
-    measured here at all, which is itself the honest answer for this
-    platform rather than a silent zero.
+  - Linux (`batched_process_time_ms`): a spawn issued by a non-Python
+    process this child execs/`Popen`s is invisible (no interpreter there
+    for `sys.addaudithook` to run in) -- for the `sys.executable`-rooted
+    invocations this tree actually measures, nothing is missed, but a
+    caller pointing this primitive at an arbitrary external binary and
+    expecting tree-wide descendant visibility gets an undercount of
+    anything that binary forks itself. `single_invocation_tree_process_time`
+    remains unimplemented on Linux (`NotImplementedError`), which is
+    itself the honest answer for that function on this platform rather
+    than a silent zero.
 
 A SIXTH TRAP, and the only one that is not a leak: measuring a WARM-ENGINE
 op through the CLI door measures the DOOR, not the op. The door
@@ -135,17 +161,21 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import json
 import math
 import os
+import select
 import signal
 import subprocess
 import sys
 import time
+import traceback
 from ctypes import wintypes
 from typing import Optional, Sequence
 
 IS_WINDOWS = sys.platform == "win32"
 IS_DARWIN = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
 
 if IS_WINDOWS:
     _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -787,6 +817,268 @@ def _darwin_batched_process_time_ms(
     }
 
 
+_LINUX_AUDIT_SPAWN_EVENTS = frozenset({"os.posix_spawn", "os.fork", "subprocess.Popen"})
+"""The three stdlib audit events a spawn can surface through on CPython
+3.8+ (`sys.addaudithook`): `subprocess.Popen` (the common path, fired once
+per `Popen.__init__` regardless of which low-level primitive it uses
+underneath), plus the two lower-level primitives a caller could reach
+directly without going through `subprocess` at all. Verified empirically
+in this container (all three fire on a bare `os.fork`/`os.posix_spawn`/
+`subprocess.run` call respectively).
+
+Review: reviewer (F2) -- this no-double-count guarantee is CONDITIONAL, not
+a general build fact as previously claimed. CPython's `Popen._execute_child`
+only takes the internal `self._posix_spawn(...)` fast path (itself calling
+the audited `os.posix_spawn()`) when `close_fds=False`; with that argument,
+BOTH `subprocess.Popen` and `os.posix_spawn` fire for the same one real
+process (reproduced directly: `subprocess.run(['/bin/true'], close_fds=False)`
+raised both events). Every `close_fds=` call site in this repo today is
+explicitly `True`, so no in-tree caller trips this, but a caller of this
+general-purpose primitive that uses `close_fds=False` is double-counted for
+that spawn. Over-counting is the safe direction for a spawn-count budget
+(never a silent undercount), so this is left unfixed rather than
+special-cased, but the claim is corrected to state its actual scope."""
+
+_LINUX_READ_LOOP_TIMEOUT_S = 30.0
+"""Bound on `_linux_one_invocation`'s pipe-EOF read loop (review finding F1).
+EOF alone is not decidable in bounded time if the measured child forked a
+raw (non-exec) descendant that outlives it and holds `write_fd` open --
+there is no fd-level fix (CLOEXEC only trips at execve(), not fork()), so
+the read loop is bounded instead of trusting EOF unconditionally. Generous
+relative to the 500ms brightline (module docstring) because this measures
+an arbitrary caller-supplied `cmd`, not just brightline-scoped ops."""
+
+
+def _linux_run_measured_child(
+    cmd: Sequence[str], env: Optional[dict], cwd: Optional[str], write_fd: int
+) -> None:
+    """Runs in the freshly forked, not-yet-measured child (the LINUX
+    counterpart of `_darwin_one_invocation`'s `root_pid`). Never returns --
+    always exits via `os._exit`, so no atexit/cleanup from the parent's own
+    process state can run twice.
+
+    FIDELITY, STATED PLAINLY: the audit hook installed here counts every
+    `os.posix_spawn`/`os.fork`/`subprocess.Popen` call *this Python
+    process* issues, directly or from arbitrarily deep inside its own call
+    stack (the hook is process-global, not call-stack-scoped) -- for the
+    dominant real use in this repo, a `sys.executable`-rooted invocation
+    whose own Python code is what's under measurement (e.g. "does
+    `brief()` spawn any git calls"), this has FULL fidelity: every spawn
+    that code issues, at any call depth, is seen. What it does NOT see:
+    a spawn issued by a NON-PYTHON process this child itself execs or
+    subprocess.Popen's (e.g. if `cmd` names an external binary, or if
+    measured Python code shells out to one) -- that binary's OWN internal
+    forking, if any, happens in a separate process with no audit hook and
+    is invisible here. This is narrower than Darwin's kqueue/EVFILT_PROC
+    path, which sees the whole descendant tree regardless of language.
+    Where `cmd` names a `sys.executable` invocation (the shape every
+    zero-spawn-census caller in this tree actually uses), that gap cannot
+    be entered: the count already includes everything the measured Python
+    code itself does.
+    """
+    spawn_count = 0
+
+    def _hook(event: str, args) -> None:
+        nonlocal spawn_count
+        if event in _LINUX_AUDIT_SPAWN_EVENTS:
+            spawn_count += 1
+
+    rc = 0
+    try:
+        if cwd is not None:
+            os.chdir(cwd)
+        if env is not None:
+            os.environ.clear()
+            os.environ.update(env)
+
+        sys.addaudithook(_hook)
+
+        is_python_root = bool(cmd) and cmd[0] == sys.executable
+        if is_python_root and len(cmd) >= 2 and cmd[1] == "-c":
+            code = cmd[2] if len(cmd) >= 3 else ""
+            sys.argv = ["-c", *cmd[3:]]
+            try:
+                exec(compile(code, "<batched_process_time_ms -c>", "exec"), {"__name__": "__main__"})
+            except SystemExit as exc:
+                rc = exc.code if isinstance(exc.code, int) else (1 if exc.code else 0)
+        elif is_python_root and len(cmd) >= 2:
+            import runpy
+
+            sys.argv = list(cmd[1:])
+            try:
+                runpy.run_path(cmd[1], run_name="__main__")
+            except SystemExit as exc:
+                rc = exc.code if isinstance(exc.code, int) else (1 if exc.code else 0)
+        elif is_python_root:
+            # Review: reviewer (F6) -- `cmd == [sys.executable]` (len 1) matched
+            # neither branch above (both require len(cmd) >= 2) and fell through
+            # to the non-Python-root `subprocess.run` branch, launching a bare
+            # interactive REPL that can hang waiting on stdin. Fail loud instead.
+            raise ValueError(
+                f"process_time: malformed cmd {cmd!r} -- a sys.executable-rooted "
+                "cmd must be either ['python', '-c', code, ...] or "
+                "['python', script_path, ...], never sys.executable alone"
+            )
+        else:
+            # Non-Python root: this process's own act of launching `cmd` is
+            # itself one spawn (counted via the `subprocess.Popen` audit
+            # event above). NOTE (Review: reviewer F4): this is NOT the same
+            # figure Darwin reports for the identical invocation -- Darwin's
+            # `_darwin_one_invocation` execs the forked root directly into
+            # `cmd`, so `root_pid` IS the command process and `len(seen) ==
+            # 1`; here this process stays alive as a wrapper around
+            # `subprocess.run`, so the total is 2 (wrapper + command), one
+            # higher than Darwin's for the same invocation. Not "matching."
+            completed = subprocess.run(list(cmd))
+            rc = completed.returncode
+    except BaseException:
+        traceback.print_exc()
+        rc = 1
+    finally:
+        # Review: reviewer (F5) -- os.write can itself raise (e.g.
+        # BrokenPipeError if the parent's read end is already gone), and that
+        # exception was previously unguarded here, skipping os._exit(0) and
+        # letting the forked child fall through into a full unhandled-exception
+        # unwind of the copied parent process. Guard the write/close so this
+        # child always terminates via os._exit no matter what the payload
+        # write does.
+        try:
+            import resource
+
+            ru_self = resource.getrusage(resource.RUSAGE_SELF)
+            ru_children = resource.getrusage(resource.RUSAGE_CHILDREN)
+            process_time_ms = (
+                ru_self.ru_utime + ru_self.ru_stime + ru_children.ru_utime + ru_children.ru_stime
+            ) * 1000.0
+            payload = json.dumps(
+                {"process_time_ms": process_time_ms, "procs": spawn_count + 1, "rc": int(rc)}
+            ).encode("utf-8")
+            os.write(write_fd, payload)
+        except BaseException:
+            traceback.print_exc()
+        finally:
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass
+            os._exit(0)
+
+
+def _linux_one_invocation(cmd: Sequence[str], env: Optional[dict], cwd: Optional[str]) -> dict:
+    """Forks a dedicated, single-purpose child to run `cmd` (or, for a
+    `sys.executable`-rooted `cmd`, runs its code IN that child rather than
+    spawning a further process for it -- see `_linux_run_measured_child`).
+
+    Structurally contamination-free the way Darwin's `os.wait4()`-keyed
+    read is (module docstring, trap 4): this child exists for exactly one
+    invocation and nothing else runs in it concurrently, so
+    `getrusage(RUSAGE_SELF)` + `getrusage(RUSAGE_CHILDREN)` read INSIDE
+    that child cannot be contaminated by an unrelated thread's child
+    reaped elsewhere in this (the caller's) process -- there is no
+    "elsewhere" in a process that only ever does this one thing.
+    """
+    read_fd, write_fd = os.pipe()
+    # Review: reviewer (F3) -- os.fork() itself can raise (EAGAIN under
+    # RLIMIT_NPROC/memory pressure, exactly the condition most likely to make
+    # fork fail, since this runs in a k-iteration loop). Previously both fds
+    # leaked on that path since neither the child branch nor the parent's
+    # os.close(write_fd) below ever ran. Close both before propagating.
+    try:
+        pid = os.fork()
+    except OSError:
+        os.close(read_fd)
+        os.close(write_fd)
+        raise
+    if pid == 0:
+        os.close(read_fd)
+        _linux_run_measured_child(cmd, env, cwd, write_fd)
+        os._exit(1)  # pragma: no cover - _linux_run_measured_child always exits first
+
+    os.close(write_fd)
+    chunks = []
+    # Review: reviewer (F1, P1 -- demonstrated hang) -- relying on EOF alone
+    # hangs indefinitely if the measured child forks a raw (non-exec)
+    # descendant that outlives it: CLOEXEC only trips at execve(), never at
+    # fork(), so the descendant inherits write_fd and keeps the pipe open
+    # long after the root child (and its payload write) is done. Reproduced:
+    # a 3s grandchild sleep hung this loop for the full 3s with no bound.
+    # There is no fd-level fix for a fork-without-exec descendant, so this
+    # bounds the read loop itself rather than trusting EOF unconditionally.
+    deadline = time.monotonic() + _LINUX_READ_LOOP_TIMEOUT_S
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            os.close(read_fd)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+            raise RuntimeError(
+                f"process_time: Linux measured child's read loop exceeded "
+                f"{_LINUX_READ_LOOP_TIMEOUT_S}s without EOF -- likely an "
+                "orphaned descendant (a raw os.fork() without exec) still "
+                "holding the measurement pipe's write end open past the "
+                "root child's own exit"
+            )
+        ready, _, _ = select.select([read_fd], [], [], remaining)
+        if not ready:
+            continue
+        chunk = os.read(read_fd, 65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    os.close(read_fd)
+    _, _status = os.waitpid(pid, 0)
+
+    if not chunks:
+        raise RuntimeError(
+            "process_time: Linux measured child exited without reporting a "
+            "result -- it crashed before its own finally block could run "
+            "(e.g. os.fork()/pipe failure), so no process-time/spawn-count "
+            "figure exists for this invocation"
+        )
+
+    return json.loads(b"".join(chunks).decode("utf-8"))
+
+
+def _linux_batched_process_time_ms(
+    cmd: Sequence[str],
+    k: int,
+    env: Optional[dict],
+    cwd: Optional[str],
+) -> dict:
+    if signal.getsignal(signal.SIGCHLD) == signal.SIG_IGN:
+        raise RuntimeError(
+            "process_time: SIGCHLD is SIG_IGN in this process -- both XNU "
+            "and Linux destroy CPU accounting for auto-reaped children "
+            "under that disposition (module docstring); refusing to "
+            "silently under-report rather than measuring through it"
+        )
+
+    total_process_time_ms = 0.0
+    total_procs = 0
+    rc = 0
+    t0 = time.perf_counter()
+    for _ in range(k):
+        result = _linux_one_invocation(cmd, env, cwd)
+        total_process_time_ms += result["process_time_ms"]
+        total_procs += result["procs"]
+        rc = result["rc"]
+    wall_ms = (time.perf_counter() - t0) * 1000.0 / k
+
+    return {
+        "process_time_ms": round(total_process_time_ms / k, 3),
+        "wall_ms": round(wall_ms, 3),
+        "procs_per_call": round(total_procs / k, 3),
+        "rc": rc,
+        "k": k,
+    }
+
+
 def batched_process_time_ms(
     cmd: Sequence[str],
     k: int = 20,
@@ -839,15 +1131,12 @@ def batched_process_time_ms(
         return _windows_batched_process_time_ms(cmd, k, child_env, cwd)
     if IS_DARWIN:
         return _darwin_batched_process_time_ms(cmd, k, child_env, cwd)
+    if IS_LINUX:
+        return _linux_batched_process_time_ms(cmd, k, child_env, cwd)
 
     raise NotImplementedError(
-        "batched_process_time_ms: no spawn-count primitive for this platform. "
-        "The getrusage process-time half is POSIX and verified here against "
-        "Linux's own kernel/exit.c :: wait_task_zombie() rollup -- only the "
-        "SPAWN-COUNT half (procs_per_call, this module's kqueue/EVFILT_PROC "
-        "mechanism) is Darwin-specific and unverified on Linux. A "
-        "time-measured, count-refused route remains available there and is "
-        "PM-gated, not implemented in this chunk."
+        f"batched_process_time_ms: no primitive implemented for platform "
+        f"{sys.platform!r} (only win32/darwin/linux are)."
     )
 
 
@@ -1097,7 +1386,8 @@ def single_invocation_tree_process_time(
 
     raise NotImplementedError(
         "single_invocation_tree_process_time: no process-tree accounting "
-        "primitive for this platform. Same boundary as "
-        "batched_process_time_ms -- see its docstring for which half is "
-        "missing where."
+        "primitive for this platform. Implemented on win32/darwin only; "
+        "unlike batched_process_time_ms (which now also has a Linux "
+        "primitive via sys.addaudithook, module docstring), this function "
+        "has no Linux implementation in this chunk."
     )

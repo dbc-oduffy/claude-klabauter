@@ -60,10 +60,10 @@ _DENY_PROSE = (
 )
 
 
-def _deny_message() -> str:
+def _deny_message(env: object = None) -> str:
     """Pure composer for the deny message — kept separate from the handler so
     it can be measured/unit-exercised without payload plumbing."""
-    return render(compose(_DENY_PROSE, anchor=_WIKI_ANCHOR))
+    return render(compose(_DENY_PROSE, anchor=_WIKI_ANCHOR), env=env)
 
 
 @register_op("hooks.block_worktree_tool")
@@ -84,4 +84,4 @@ async def _handler(params: dict, repo_root=None) -> dict:
     except Exception:
         pass
 
-    return deny("PreToolUse", _deny_message())
+    return deny("PreToolUse", _deny_message(params.get("env")))

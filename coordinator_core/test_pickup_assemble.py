@@ -1407,6 +1407,90 @@ class TestBlobShaAtTreePathMemoized:
         )
 
 
+class TestCommitTouchesPathShallowDegrade:
+    """Review S12/F1: `_commit_touches_path`'s shallow-clone degrade must
+    restore the safe-superset invariant ("never miss a real hit") in BOTH
+    the all-parents-unresolved case AND the mixed case -- one parent
+    resolved and clean, another unresolved. A commit's own parent line can
+    still name a sha whose object was never fetched (shallow-clone
+    boundary); `_commit_meta` returns `None` for that sha, simulating it
+    here without needing an actual shallow clone."""
+
+    def _merge_fixture(self, tmp_path):
+        """Two divergent branches + one merge commit whose tree differs
+        from `base` only via `side` (the branch we will pretend is
+        unresolved) -- `main`'s own tip is untouched by the merge, so a
+        parent-tree-equality short-circuit alone cannot explain a `True`
+        result; only the degrade logic can."""
+        repo = tmp_path / "repo"
+        _init_isolated_repo(repo)
+        now = datetime.now(timezone.utc)
+
+        (repo / "deliverable.py").write_text("base\n", encoding="utf-8")
+        _git_add_isolated(repo, "deliverable.py")
+        base_sha = _commit_backdated_isolated(repo, "base", now - timedelta(minutes=10))
+
+        _git(repo, "checkout", "-b", "side")
+        (repo / "deliverable.py").write_text("side-change\n", encoding="utf-8")
+        _git_add_isolated(repo, "deliverable.py")
+        side_sha = _commit_backdated_isolated(repo, "side change", now - timedelta(minutes=8))
+
+        _git(repo, "checkout", "-")  # back to main/master at base_sha, untouched
+        main_branch = _git(repo, "branch", "--show-current").stdout.strip()
+        result = _git(
+            repo, "merge", "--no-ff", "-m", "merge side", side_sha,
+            extra_env={"GIT_AUTHOR_DATE": _epoch_date(now - timedelta(minutes=1)),
+                       "GIT_COMMITTER_DATE": _epoch_date(now - timedelta(minutes=1))},
+        )
+        assert result.returncode == 0, result.stderr
+        merge_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        common_dir = pa._discover_git_dirs(repo)[1].common_dir
+        merge_commit = pa._commit_meta(common_dir, merge_sha)
+        assert set(merge_commit["parents"]) == {base_sha, side_sha}
+        return common_dir, merge_commit, base_sha, side_sha
+
+    def test_mixed_resolved_and_unresolved_parent_degrades_to_touched(self, tmp_path, monkeypatch):
+        common_dir, merge_commit, base_sha, side_sha = self._merge_fixture(tmp_path)
+        original_commit_meta = pa._commit_meta
+
+        def _fake_commit_meta(cd, sha):
+            if sha == side_sha:
+                return None  # simulate: side_sha's object was never fetched
+            return original_commit_meta(cd, sha)
+
+        monkeypatch.setattr(pa, "_commit_meta", _fake_commit_meta)
+
+        touched = pa._commit_touches_path(common_dir, "unused", merge_commit, "deliverable.py")
+
+        assert touched is True, (
+            "mixed case (one resolved-clean parent, one unresolved parent) "
+            "must degrade to the safe superset (report touched) -- the "
+            "unresolved parent could be the one that introduced the change"
+        )
+
+    def test_all_parents_unresolved_still_degrades_to_touched(self, tmp_path, monkeypatch):
+        common_dir, merge_commit, base_sha, side_sha = self._merge_fixture(tmp_path)
+
+        monkeypatch.setattr(pa, "_commit_meta", lambda cd, sha: None)
+
+        touched = pa._commit_touches_path(common_dir, "unused", merge_commit, "deliverable.py")
+
+        assert touched is True, (
+            "all-parents-unresolved must still degrade to the safe "
+            "superset (root-commit rule), as already fixed"
+        )
+
+    def test_all_parents_resolved_and_clean_reports_untouched(self, tmp_path):
+        common_dir, merge_commit, base_sha, side_sha = self._merge_fixture(tmp_path)
+
+        # No unresolved parents here: real degrade code must not fire when
+        # every parent resolves and none shows a diff for an unrelated path.
+        touched = pa._commit_touches_path(common_dir, "unused", merge_commit, "unrelated-file.py")
+
+        assert touched is False
+
+
 # DR-415 group 2 deletion (compute_deliverable_evidence fan-out dedup) —
 # see citation above TestComputeDeliverableEvidence.
 

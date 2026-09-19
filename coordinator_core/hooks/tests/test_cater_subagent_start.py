@@ -1295,7 +1295,7 @@ def test_the_sentinel_puts_the_stop_guard_on_the_do_not_redispatch_branch(tmp_pa
     import subprocess
 
     from coordinator_core.hooks import cater_subagent_start as mod
-    from coordinator_core.hooks import stop_dispatch as sd
+    from coordinator_core.hooks import guard_kira_verdict_routed as kira
 
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     monkeypatch.setattr(mod, "_provision", lambda *a, **k: "")
@@ -1319,7 +1319,7 @@ def test_the_sentinel_puts_the_stop_guard_on_the_do_not_redispatch_branch(tmp_pa
             },
         )
     ]
-    assert sd._kira_unstamped_integrators(in_scope) == [sentinel.name]
+    assert kira._kira_unstamped_integrators(in_scope) == [sentinel.name]
 
 
 def test_named_raw_fallback_shape_still_gets_no_sentinel(tmp_path, monkeypatch):

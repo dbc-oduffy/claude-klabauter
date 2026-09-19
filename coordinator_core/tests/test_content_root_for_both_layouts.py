@@ -1,24 +1,19 @@
-"""The shared `content_root_for` primitive, and twin parity with the bin/ side.
+"""The shared `content_root_for` primitive's own contract.
 
-This is the convergence point for a systemic defect: ~45 call sites joined
-`<resolved doe_root>/coordinator/...` as the ONLY layout, so every one of them
-resolved correctly against the private authoring tree and produced a path that
-cannot exist against a published flat mirror. The same fix was applied pointwise
-in `data_root()` in August and nowhere else, which is what let it keep
-reappearing. These arms pin the primitive's contract so the conversions have
-something to converge on, and pin the two trees' copies against drift.
+See `coordinator_core._content_root_primitive.content_root_for`'s docstring
+for the systemic defect these arms pin against (overengineering-reviewer
+finding 7 — one owning passage, cited here). Twin parity with the bin/ side
+is owned by `coordinator/bin/tests/test_claude_doe_content_root_parity.py`
+(finding 5).
 """
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import pytest
 
-from coordinator_core.data_root import FLAT_CONTENT_ROOT_MARKER, content_root_for
-
-_BIN_LIB = str(Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "lib")
+from coordinator_core.data_root import content_root_for
 
 
 def _private_tree(root: Path) -> Path:
@@ -77,35 +72,26 @@ def test_a_trailing_separator_does_not_defeat_the_probe(tmp_path):
     assert content_root_for(str(root) + os.sep) == root / "coordinator"
 
 
-# --- twin parity -----------------------------------------------------------
+# Review: code-reviewer F1/F2 -- a degenerate all-slash root used to collapse
+# via rstrip("/\\") to "", and Path("") resolves to the process cwd, so this
+# silently probed cwd instead of failing closed on "/" or "//". Pinned here
+# so the fix (fall back to the un-stripped string when stripping empties it)
+# stays load-bearing.
+@pytest.mark.parametrize("degenerate", ["/", "//"])
+def test_a_degenerate_all_slash_root_fails_closed_not_cwd(degenerate):
+    assert content_root_for(degenerate) is None
 
 
-def _bin_twin():
-    if _BIN_LIB not in sys.path:
-        sys.path.insert(0, _BIN_LIB)
-    import coordinator_data_root  # noqa: PLC0415
-
-    return coordinator_data_root
-
-
-def test_the_bin_twin_agrees_on_every_layout(tmp_path):
-    """Both trees must answer identically — the bin/ CLIs cannot import
-    coordinator_core, which is why a twin exists; drift between them is the
-    failure mode that constraint creates."""
-    twin = _bin_twin()
-    cases = [
-        _private_tree(tmp_path / "private"),
-        _flat_mirror(tmp_path / "flat"),
-        _flat_mirror(_private_tree(tmp_path / "both")),
-    ]
-    (tmp_path / "bare").mkdir()
-    cases.append(tmp_path / "bare")
-
-    for root in cases:
-        assert twin.content_root_for(str(root)) == content_root_for(str(root)), root
-    assert twin.content_root_for("") is content_root_for("") is None
+def test_a_symlinked_content_root_still_resolves(tmp_path):
+    real = _private_tree(tmp_path / "real-DoE-claude")
+    link = tmp_path / "linked-DoE-claude"
+    link.symlink_to(real)
+    assert content_root_for(str(link)) == link / "coordinator"
 
 
-def test_both_twins_gate_the_flat_arm_on_the_same_marker():
-    assert _bin_twin().FLAT_CONTENT_ROOT_MARKER == FLAT_CONTENT_ROOT_MARKER
-    assert FLAT_CONTENT_ROOT_MARKER == (".claude-plugin", "plugin.json")
+# Twin parity (bin/ twin, and the third claude-doe.py inline copy) is owned
+# entirely by `coordinator/bin/tests/test_claude_doe_content_root_parity.py`
+# (overengineering-reviewer finding 5): its three-way property is a strict
+# superset of what used to be asserted here two-way, and collapsing to one
+# owner also removes the reason this coordinator_core test reached sideways
+# into `coordinator/bin/lib` via a `sys.path` insert.

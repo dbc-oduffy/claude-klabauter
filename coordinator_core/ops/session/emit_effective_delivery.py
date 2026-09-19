@@ -1,4 +1,4 @@
-"""coordinator_core.hooks.emit_effective_delivery -- the x-effective-delivery
+"""coordinator_core.ops.session.emit_effective_delivery -- the x-effective-delivery
 manifest generator.
 
 Arrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported
@@ -54,22 +54,16 @@ entirely; until that chunk lands, `hooks.json` still carries the shape
 this constant partitions, so it is carried forward verbatim rather than
 guessed at ahead of that chunk's own landing.
 
-WHAT CHANGED -- emission provenance. The source's `PROVENANCE_KEYS` split
-one repo-side triple (DoE, hosting the generator) from one engine-side
-triple (claude-klabauter, cross-plane, read via `_engine_source_provenance()`)
-because the generator and the engine it reported on were two different
-repos. They are now the SAME repo for two of the three engine-side facts
-(`write_guards.engine`, `bash_guards` are same-repo reads), so
-`_engine_source_provenance()` and its three `engine_source_*` keys are
-RETIRED -- `coordinator_core.ops.check_generator_output_staleness` (the
-one documented consumer of this block's provenance keys) reads only
-`generated_from_sha`/`generated_from_dirty_tree`, generically, against
-whichever repo hosts the generator; it has no `engine_source_*`
-call site. What remains genuinely cross-plane is `hooks.json` itself
-(DoE-resident) -- `_doe_source_provenance()` replaces
-`_engine_source_provenance()` for exactly that one fact, renamed to match
-what it now names (the DoE tree `hooks.json` was actually read from, not
-"the engine").
+WHAT CHANGED -- emission provenance. `generated_from_sha` and
+`generated_from_dirty_tree` name the DoE tree `hooks.json` was read from,
+never this engine's HEAD: the one consumer,
+`coordinator_core.ops.check_generator_output_staleness`'s `VENDORED_PAIRS`,
+compares that sha against the PEER (DoE) repo's history for commits
+touching `hooks.json`, so a claude-klabauter sha there would name a commit that repo
+does not have. Both come from one `git status --porcelain=v2 --branch`
+scoped to `hooks.json` (~10ms; an unscoped status walks the whole index,
+140-210ms). The source's `engine_source_*` triple and the port's
+`doe_source_*` pair are retired: nothing reads them.
 
 Negative spec (unchanged from the source): does not seed `tool_names`
 uniformly, does not assert `tool_names` against the live carrier-level
@@ -93,13 +87,12 @@ import subprocess
 import sys
 from collections import namedtuple
 from datetime import datetime, timezone
-from functools import lru_cache
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from coordinator_core.hooks import fanin_registries as _fanin_registries
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 #: The manifest's home is resolved lazily (`_resolve_manifest_paths()`) --
 #: writing into a DoE content root is a cross-repo fact that must fail
@@ -121,8 +114,6 @@ PROVENANCE_KEYS = (
     "generated_from_sha",
     "generated_at",
     "generated_from_dirty_tree",
-    "doe_source_sha",
-    "doe_source_dirty_tree",
 )
 
 _GIT_TIMEOUT_SECONDS = 10
@@ -788,49 +779,34 @@ def _run_git(*args: str, cwd: Any = None) -> str:
     return result.stdout
 
 
-@lru_cache(maxsize=1)
-def _doe_source_provenance(doe_repo_root: Path) -> Dict[str, Any]:
-    """The DoE half of `PROVENANCE_KEYS`: which DoE tree revision
-    `hooks.json` was actually read from -- see module docstring's "WHAT
-    CHANGED -- emission provenance". Fails closed like every other
-    cross-plane read here."""
-    sha = _run_git("rev-parse", "HEAD", cwd=doe_repo_root).strip()
-    if len(sha) != 40 or not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise EmitterError(
-            f"'git rev-parse HEAD' in DoE root did not return a 40-char hex SHA: {sha!r}"
-        )
-    status = _run_git("status", "--porcelain", "--untracked-files=no", cwd=doe_repo_root)
-    return {
-        "doe_source_sha": sha,
-        "doe_source_dirty_tree": bool(status.strip()),
-    }
-
-
 def _emission_provenance(hooks_json_path: Path) -> Dict[str, Any]:
-    """Resolves `PROVENANCE_KEYS` at emission time: this repo's full HEAD
-    SHA, a UTC ISO-8601 second-precision `Z`-suffixed timestamp, whether
-    this repo's tracked working tree is dirty, and the DoE half from
-    `_doe_source_provenance()`."""
-    sha = _run_git("rev-parse", "HEAD").strip()
-    if len(sha) != 40 or not re.fullmatch(r"[0-9a-f]{40}", sha):
-        raise EmitterError(f"'git rev-parse HEAD' did not return a 40-char hex SHA: {sha!r}")
-
-    status = _run_git("status", "--porcelain", "--untracked-files=no")
-    dirty = bool(status.strip())
-
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
+    """Resolves `PROVENANCE_KEYS` at emission time from ONE `git status
+    --porcelain=v2 --branch` in the DoE repo, scoped to `hooks.json`: its
+    `# branch.oid` header is the HEAD SHA, and any entry line means
+    `hooks.json` has uncommitted edits. Plus a UTC second-precision
+    `Z`-suffixed timestamp."""
     # DoE repo root is two levels above the resolved content root under the
     # private-authoring layout (<doe_root>/coordinator/) and the content
     # root itself under the flat published-mirror layout (its own .git).
-    doe_content_root = hooks_json_path.parents[2]
+    doe_content_root = hooks_json_path.parents[1]
     doe_repo_root = doe_content_root if (doe_content_root / ".git").exists() else doe_content_root.parent
-
+    out = _run_git(
+        "status", "--porcelain=v2", "--branch", "--untracked-files=no", "--",
+        str(hooks_json_path), cwd=doe_repo_root,
+    )
+    sha = ""
+    dirty = False
+    for line in out.splitlines():
+        if line.startswith("# branch.oid "):
+            sha = line[len("# branch.oid "):].strip()
+        elif line and not line.startswith("#"):
+            dirty = True
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise EmitterError(f"git status in the DoE root carried no 40-char hex HEAD SHA: {sha!r}")
     return {
         "generated_from_sha": sha,
-        "generated_at": generated_at,
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "generated_from_dirty_tree": dirty,
-        **_doe_source_provenance(doe_repo_root),
     }
 
 

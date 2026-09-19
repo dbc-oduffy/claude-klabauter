@@ -1108,6 +1108,20 @@ class TestDivergingPathsHelper:
         from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_paths
 
         root = _init_repo(tmp_path)
+        # The in-process settle path (C3e) answers a plain stat-mismatch
+        # without ever spawning `git` -- only a genuinely UNDETERMINED
+        # candidate (declined by `content_matches_index_sha`, which this
+        # repo's default `core.autocrlf=false` always declines) falls
+        # through to the `_run_git`-backed fallback this test is pinning.
+        # Mirrors `test_diverging_path_detected`'s stage-then-edit-again
+        # shape so the fallback -- not the zero-spawn fast path -- is what
+        # actually runs.
+        (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
+        _git(root, "add", "shared.txt")
+        _git(root, "commit", "-q", "-m", "seed shared.txt")
+        (tmp_path / "shared.txt").write_text("line1\nMINE\n", encoding="utf-8")
+        _git(root, "add", "shared.txt")
+        (tmp_path / "shared.txt").write_text("line1\nMINE\nPEER\n", encoding="utf-8")
 
         def _boom(args, cwd=None, timeout=2.0):
             return 128, ""
@@ -1118,13 +1132,26 @@ class TestDivergingPathsHelper:
             diverging_paths(["shared.txt"], root, fail_loud=True)
 
     def test_git_diff_failure_on_second_call_fail_loud_true_raises(self, tmp_path, monkeypatch):
-        """The second `git diff` call (plain, non-`--cached`) can fail
-        independently of the first -- must raise there too, not only when
-        the first call fails."""
+        """`_spawn_diverging_subset`'s single `git status --porcelain=v2`
+        fallback call (C3e retired the old sequential `git diff --cached`
+        / `git diff` pair this test's name and docstring described) must
+        still raise when IT fails -- pinned here via a stub that only ever
+        sees the one call shape (no `--cached` flag), so it fails
+        regardless, same effective assertion the two-call era pinned with
+        a `--cached`-conditional stub. See
+        `test_git_diff_failure_fail_loud_true_raises` for why the setup
+        below (stage, then edit again) is required to reach this fallback
+        at all rather than short-circuiting on the C3e zero-spawn path."""
         from coordinator_core.git import divergence
         from coordinator_core.git.divergence import DivergenceCheckFailed, diverging_paths
 
         root = _init_repo(tmp_path)
+        (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
+        _git(root, "add", "shared.txt")
+        _git(root, "commit", "-q", "-m", "seed shared.txt")
+        (tmp_path / "shared.txt").write_text("line1\nMINE\n", encoding="utf-8")
+        _git(root, "add", "shared.txt")
+        (tmp_path / "shared.txt").write_text("line1\nMINE\nPEER\n", encoding="utf-8")
 
         def _fail_second(args, cwd=None, timeout=2.0):
             if "--cached" in args:
