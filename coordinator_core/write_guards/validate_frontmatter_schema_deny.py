@@ -94,6 +94,14 @@ What this leg covers
   `_malformed_frontmatter_detail` for the two false positives it is
   explicitly built not to produce (no block at all; a legal multi-document
   body).
+- A third always-WARN finding, shape=="warn", emitted by this module in
+  both modes (C5, 2026-09-11-vendored-schemas-and-the-work-state-contract.md):
+  a plan write that sets `status` off the loaded plan schema's
+  `properties.status.enum`, or drops it entirely, when that write actually
+  CHANGES the status from what is on disk. Modelled on the grouping-approval
+  finding for the same PM-ruling reason (a reversible, one-token-fixable
+  condition fails the irreversible-harm test), never a deny. See
+  `_evaluate_plan_status_enum`.
 - Every other branch is now always-"advisory" (2026-08-06 ruling): the
   mislocated-memo / free-form-header offer, the routing-mismatch offer, the
   new-file scaffold offer, and a schema-shape validation failure. This
@@ -1123,6 +1131,54 @@ def _plan_tasks_spine_errors(
     return errors
 
 
+def _validate_whole_document_records(parsed: Any, schema: dict) -> Dict[str, Any]:
+    """Validate a `match_mode: "whole-document-records"` document: `parsed`
+    must be a top-level list, each element of which validates against
+    `schema` independently via `_validate_frontmatter_obj`. Shared by both
+    write-guard siblings (defined ONCE here, imported by the advisory
+    module — see C6's plan row) so neither can drift on record-array
+    semantics.
+
+    Returns the same ``{"ok": bool, "errors": [...]}`` shape
+    `_validate_frontmatter_obj` returns, so both call sites can reuse their
+    existing error-extraction path unchanged. Each element's own errors have
+    their `field` re-prefixed `[i].` (element i, 0-based) so a violation
+    message still names which record it came from.
+
+    - A non-dict element is a single error: "record <i> is not an object".
+    - An empty list is valid (``errors: []``).
+    - A `parsed` value that is not a list at all is a single error:
+      "expected an array of records".
+    """
+    if not isinstance(parsed, list):
+        return {
+            "ok": False,
+            "errors": [{
+                "field": "(document)",
+                "error": "expected an array of records",
+            }],
+        }
+
+    errors: "list[dict]" = []
+    for i, element in enumerate(parsed):
+        if not isinstance(element, dict):
+            errors.append({
+                "field": f"[{i}]",
+                "error": f"record {i} is not an object",
+            })
+            continue
+        element_result = _validate_frontmatter_obj(element, schema)
+        if element_result.get("ok"):
+            continue
+        for err in element_result.get("errors", []):
+            errors.append({
+                "field": f"[{i}].{err.get('field')}",
+                "error": err.get("error"),
+                "hint": err.get("hint"),
+            })
+    return {"ok": not errors, "errors": errors}
+
+
 def _evaluate_schema_validation(
     schema_name: str, schema: dict, frontmatter: Optional[dict], prospective_content: str, repo_rel: str,
     schemas: dict,
@@ -1130,7 +1186,7 @@ def _evaluate_schema_validation(
     """Returns a violation MESSAGE string on failure, or None when valid."""
     match_mode = schema.get("match_mode")
 
-    if match_mode == "whole-document-yaml":
+    if match_mode in ("whole-document-yaml", "whole-document-records"):
         try:
             if repo_rel.lower().endswith(".json"):
                 try:
@@ -1145,7 +1201,10 @@ def _evaluate_schema_validation(
                 "error": f"YAML parse error: {err}",
                 "hint": "Ensure the file is valid YAML with no --- frontmatter fences",
             }])
-        validation_result = _validate_frontmatter_obj(parsed, schema)
+        if match_mode == "whole-document-records":
+            validation_result = _validate_whole_document_records(parsed, schema)
+        else:
+            validation_result = _validate_frontmatter_obj(parsed, schema)
     elif match_mode == "no-frontmatter":
         validation_result = {"ok": True}
     else:
@@ -1489,6 +1548,103 @@ def _evaluate_handoff_kind_enum(
     return _handoff_kind_off_enum_message(raw_str, enum_values)
 
 
+_PLAN_STATUS_SCHEMA_NAME = "plan"
+_NO_PRIOR_PLAN_STATUS = object()
+
+
+def _plan_status_enum_values(schema: dict) -> "list[str]":
+    return list((schema.get("properties") or {}).get("status", {}).get("enum") or [])
+
+
+def _plan_status_is_off_enum(frontmatter: dict, enum_values: "list[str]") -> bool:
+    """True when the PROSPECTIVE `status` in `frontmatter` is absent,
+    non-scalar, or outside `enum_values`. Caller guarantees `frontmatter`
+    and `enum_values` are both non-empty/truthy."""
+    status = frontmatter.get("status")
+    if status is None:
+        return True
+    if isinstance(status, (dict, list)):
+        return True
+    return status not in enum_values
+
+
+def _plan_status_from_text(text: Optional[str]):
+    """The on-disk `status` value found in `text`, or the module-private
+    sentinel `_NO_PRIOR_PLAN_STATUS` when `text` is `None` (no prior file --
+    a new file), or the text has no parseable frontmatter block, or that
+    block carries no `status` key. Never raises."""
+    if text is None:
+        return _NO_PRIOR_PLAN_STATUS
+    try:
+        fm = _parse_frontmatter(text).get("frontmatter")
+    except Exception:  # noqa: BLE001 — fail-open, never block on infra
+        return _NO_PRIOR_PLAN_STATUS
+    if not fm:
+        return _NO_PRIOR_PLAN_STATUS
+    return fm.get("status", _NO_PRIOR_PLAN_STATUS)
+
+
+def _plan_status_off_enum_message(status, enum_values: "list[str]") -> str:
+    # Message register (docs/wiki/guard-messaging.md § Register): one fact,
+    # one terse alternative, verbatim per plan C5's body.
+    if status is None:
+        return "Plan frontmatter has no `status:`. Add `status: draft`."
+    joined = ", ".join(str(v) for v in enum_values)
+    return f"`status: {status}` is not a plan status. Use one of: {joined}."
+
+
+def _evaluate_plan_status_enum(
+    schema_name: Optional[str],
+    schema: dict,
+    frontmatter: Optional[dict],
+    tool_name: str,
+    abs_file_path: str,
+    on_disk_content: Optional[str],
+) -> Optional[str]:
+    """Violation MESSAGE when a prospective plan write's `status` is off the
+    loaded plan schema's enum (or absent) AND the write actually CHANGES the
+    status from what is on disk, else `None`.
+
+    Scoped to ``schema_name == "plan"`` only, the same keying
+    `_evaluate_handoff_kind_enum` above uses for its own schema family.
+
+    Divergences from that sibling, named so no executor copies it blind
+    (plan C5's body): this fires on an ABSENT `status` too (D3 never does),
+    and this fires ONLY when the write changes the value away from the
+    on-disk one (D3 fires on every off-enum write, changed or not).
+
+    `prior_status` -- the value on disk BEFORE this write -- reaches here as
+    `on_disk_content` for an Edit/MultiEdit: `check()` already reads
+    `abs_file_path` unconditionally for those two tools to compute
+    `prospective_content`, so that same text is threaded through here rather
+    than re-opened. For a Write, nothing else in the walk reads the file, so
+    this function opens `abs_file_path` itself -- but only AFTER the
+    prospective value has already been found off-enum (points 1 and 2 of the
+    plan's body), so a conformant Write pays no extra I/O.
+    """
+    if schema_name != _PLAN_STATUS_SCHEMA_NAME or not frontmatter:
+        return None
+    enum_values = _plan_status_enum_values(schema)
+    if not enum_values:
+        return None
+    if not _plan_status_is_off_enum(frontmatter, enum_values):
+        return None
+    status = frontmatter.get("status")
+
+    if tool_name == "Write":
+        try:
+            with open(abs_file_path, "r", encoding="utf-8") as fh:
+                prior_text = fh.read()
+        except OSError:
+            prior_text = None  # new file
+    else:
+        prior_text = on_disk_content
+    prior_status = _plan_status_from_text(prior_text)
+    if prior_status is not _NO_PRIOR_PLAN_STATUS and prior_status == status:
+        return None  # write does not change status — somebody else's finding
+    return _plan_status_off_enum_message(status, enum_values)
+
+
 def _reachability_and_schema_step(
     schema_name: str,
     schema: dict,
@@ -1499,6 +1655,8 @@ def _reachability_and_schema_step(
     abs_file_path: str,
     schemas: Dict[str, Any],
     payload: Optional[Dict[str, Any]] = None,
+    tool_name: str = "",
+    on_disk_content: Optional[str] = None,
 ) -> Optional[Tuple[str, str]]:
     # Computed but not yet emitted — mirrors source docstring point 9.
     schema_message = _evaluate_schema_validation(
@@ -1583,6 +1741,17 @@ def _reachability_and_schema_step(
     grouping_message = _evaluate_grouping_approval(prospective_content, repo_rel)
     if grouping_message is not None:
         return ("warn", grouping_message)
+
+    # Third always-WARN finding (this plan's own row, C5) — see module
+    # docstring. Same "warn" shape and same reasoning as grouping-approval
+    # immediately above (reversible, fails the irreversible-harm test), and
+    # the advisory sibling's twin (`_plan_status_off_enum_fires`) stands
+    # down unconditionally for the same reason theirs does.
+    plan_status_message = _evaluate_plan_status_enum(
+        schema_name, schema, frontmatter, tool_name, abs_file_path, on_disk_content
+    )
+    if plan_status_message is not None:
+        return ("warn", plan_status_message)
 
     # Fifth UNCONDITIONAL deny (this plan's own row, C4): an ungranted
     # `status: deferred` on a queue-family record. Computed alongside
@@ -1775,6 +1944,7 @@ def _first_result(
         # hashes `schemas["plan-tasks"]` out of it.
         _forensics["schemas"] = schemas
 
+    current = None  # on-disk text, unset for Write — see `_evaluate_plan_status_enum`
     if tool_name == "Write":
         prospective_content = tool_input.get("content") or ""
     elif tool_name == "Edit":
@@ -1853,7 +2023,7 @@ def _first_result(
 
     return _reachability_and_schema_step(
         schema_name, schema, frontmatter, prospective_content, repo_rel, repo_root, abs_file_path, schemas,
-        payload=payload,
+        payload=payload, tool_name=tool_name, on_disk_content=current,
     )
 
 
@@ -1986,7 +2156,9 @@ def _capture_guard_forensics(
         out_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         out_path = out_dir / f"{_FORENSICS_GUARD_NAME}-{ts}-{os.getpid()}.json"
-        out_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8", newline="\n")
+        from coordinator_core.session.claimed_write import replace_text  # noqa: PLC0415 -- deferred: guard hot path
+
+        replace_text(out_path, json.dumps(record, indent=2, sort_keys=True))
     except Exception:  # noqa: BLE001 — forensics must never raise, never block a write
         pass
 

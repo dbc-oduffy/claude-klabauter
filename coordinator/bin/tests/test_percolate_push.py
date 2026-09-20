@@ -413,6 +413,10 @@ def test_marker_present_but_unparseable_refuses(tmp_path, monkeypatch, capsys):
 # otherwise produce first.
 # ---------------------------------------------------------------------------
 
+@pytest.mark.deliberate_wall_clock(
+    reason="deny-at-once: the lock-busy path must return immediately rather than poll or block, "
+    "a behaviour only wall clock can observe"
+)
 def test_held_dest_denies_at_once_naming_holder_not_dirty_tree_usage(tmp_path, monkeypatch, capsys):
     """Fixture shape matches what the field actually produces: another round
     holds the real advisory lock on `dest` AND has left the dest dirty

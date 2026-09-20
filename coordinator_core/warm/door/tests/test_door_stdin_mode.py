@@ -304,6 +304,11 @@ def test_declared_mode_with_a_piped_payload_surfaces_it_as_params_stdin(
 
 
 @_WINDOWS_ONLY
+@pytest.mark.deliberate_wall_clock(
+    reason="never-reads-stdin: with no mode declared and a writer that never closes, the door "
+    "must fall through promptly rather than block on an inherited stdin pipe -- a behaviour "
+    "only wall clock can observe"
+)
 def test_no_declared_mode_never_reads_stdin_and_returns_promptly(
     tmp_path: Path,
 ) -> None:

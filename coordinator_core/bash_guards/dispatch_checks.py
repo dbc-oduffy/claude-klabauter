@@ -142,7 +142,7 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
 from coordinator_core.bash_guards import commit_tripwires
 from coordinator_core.bash_guards._dialect import (
@@ -2765,10 +2765,12 @@ def check_destructive_git_orphan(
             # delimiters still in it is shell, where they mean what they say.
             if re.search(r"\$\(.*\)|`.*`", after, re.DOTALL):
                 return _deny(
-                    "BLOCKED: 'git reset %s' with a subshell-resolved target " % _reset_mode +
-                    "($(...)/backticks) cannot be verified safe.\n\n"
-                    "Use instead:\n"
-                    "  git rev-list --count <resolved-ref>..HEAD"
+                    (
+                        "BLOCKED: 'git reset %s' targets a subshell-resolved "
+                        "ref -- cannot verify it.\n\n"
+                        "Resolve to a literal first; use instead:\n"
+                        "  git rev-list --count <resolved-ref>..HEAD"
+                    ) % _reset_mode
                     + ("\n\n" + _orphan_hint if _orphan_hint else "")
                 )
             if not re.search(r"(^|\s)--(\s|$)", after):
@@ -3245,6 +3247,276 @@ def _attribute_porcelain(
     return table
 
 
+def _stale_write_shape_candidates(
+    cmd: str, cwd: Optional[str]
+) -> List[Tuple[str, str, bool]]:
+    """C2 (docs/plans/2026-09-02-a-write-that-discards-what-you-never-saw.md):
+    ``(resolved_target, raw_target, whole_file)`` for every depth-0 write-
+    sink candidate this command carries via a bare ``>`` redirect or a bare
+    ``tee`` invocation -- the two WHOLE-FILE shapes C2's own body names
+    (``cat > P``, ``> P``, ``tee P``). ``whole_file`` is always ``True``
+    here; a target reached only through a SURGICAL shape (``sed -i``,
+    ``>>``, ``tee -a``/``--append``) is never yielded at all, never yielded
+    with ``whole_file=False`` -- C2's body: ambiguity resolves toward "not
+    whole-file", so this function under-claims rather than guesses.
+
+    Deliberately narrower than ``bump_outside_repo_write._iter_write_sink_
+    candidates`` (C1's own write-target resolver, consumed by ``write_claim_
+    record.record_write_claims``): that resolver's ``cp``/``mv``/``install``/
+    ``mkdir``/``rsync``/``tar``/interpreter-payload branches are never
+    whole-file shapes in C2's own enumeration and are excluded here
+    entirely, and ``sed`` (any form, including ``-i``) is excluded
+    unconditionally -- C2's body states a surgical write "destroys nothing
+    outside the region it edits" and must never be compared, regardless of
+    whether its target's whole-file fingerprint has diverged. This is not a
+    second write-shape TABLE (NEGATIVE SPEC, ``write_claim_record``'s own
+    module docstring) -- it reuses the same resolve-once tokenizer
+    (``_command_tokenizer.resolve_command_positions``) and the same
+    ``bump_outside_repo_write._resolve_relative`` cwd-join every other
+    write-target resolver in this package already uses, and introduces no
+    new interpreter/binary table of its own.
+
+    Never raises: any tokenizer failure yields ``[]``. No git spawn.
+    """
+    from coordinator_core.bash_guards._command_tokenizer import (
+        ResolutionConfidence,
+        normalize_executable_basename,
+        resolve_command_positions,
+    )
+    from coordinator_core.bash_guards.bump_outside_repo_write import (
+        _resolve_relative,
+    )
+
+    try:
+        segments = resolve_command_positions(
+            cmd, preserve_windows_backslashes=(os.name == "nt")
+        )
+    except Exception:
+        return []
+
+    out: List[Tuple[str, str, bool]] = []
+    effective_cwd = cwd or os.getcwd()
+    for rc in segments:
+        if rc.confidence == ResolutionConfidence.UNRESOLVED or not rc.tokens:
+            continue
+        tokens = rc.tokens
+        head_base = normalize_executable_basename(tokens[0])
+
+        if rc.depth == 0 and head_base == "cd":
+            positional = [t for t in tokens[1:] if not t.startswith("-")]
+            if len(positional) == 1:
+                resolved = _resolve_relative(effective_cwd, positional[0])
+                if resolved is not None:
+                    effective_cwd = resolved
+            continue
+
+        # Bare `>` redirect only -- `>>` is append-shaped and is never a
+        # whole-file write, regardless of `head_base`.
+        for i, tok in enumerate(tokens):
+            if tok == ">" and i + 1 < len(tokens):
+                raw_target = tokens[i + 1]
+                resolved_target = _resolve_relative(effective_cwd, raw_target)
+                if resolved_target is not None:
+                    out.append((resolved_target, raw_target, True))
+
+        # Bare `tee` only -- any `-a`/`--append` on the invocation makes
+        # every one of its targets append-shaped; C2 never asks for a
+        # per-target split within one `tee` call.
+        if head_base == "tee":
+            args = tokens[1:]
+            has_append = any(a in ("-a", "--append") for a in args)
+            if not has_append:
+                for a in args:
+                    if a.startswith("-"):
+                        continue
+                    resolved_target = _resolve_relative(effective_cwd, a)
+                    if resolved_target is not None:
+                        out.append((resolved_target, a, True))
+
+    return out
+
+
+def _stale_write_family_claim(
+    rel_path: str, session_id: str, root: str, cwd: Optional[str]
+) -> bool:
+    """Best-effort: does a dispatched sub-agent of THIS session (an
+    ``.git/coordinator-agents/<agent-id>`` directory whose own
+    ``em-session-id.txt`` back-pointer names ``session_id``) hold the
+    newest LIVE TOUCH claim on ``rel_path``? Consulted ONLY to pick the
+    right WORDING for ``check_stale_write``'s deny message (see that
+    function's own docstring and C2's body) -- NEVER to suppress the
+    deny. Observation and ownership are different questions: a worker's
+    write is this session's own for ATTRIBUTION, but the dispatching
+    session did not read the bytes the worker wrote, so the deny still
+    stands regardless of what this returns.
+
+    Deliberately does NOT use ``session.claim_index.lookup`` -- that
+    index's own per-path claimant list is already keyed by the OWNING
+    session id for both a session's OWN direct claim and a dispatched
+    worker's folded-through claim (``_agent_owner_sid``), so the two are
+    indistinguishable through that seam: ``session_id`` would appear in
+    the claimant list for the parent's own baseline read too, and this
+    function would answer "worker" on every ordinary self-write. Instead
+    it enumerates ``root/.git/coordinator-agents`` directly (the SAME
+    ``em-session-id.txt`` back-pointer shape ``claim_index._agent_owner_
+    sid`` reads, and the SAME agent-claim-dir shape ``session.scope``'s
+    Step 3b already walks for peer sub-agent claims), keeps only the
+    entries whose back-pointer names ``session_id``, and asks
+    ``touch_record.project_live_claims`` (the shared read seam, C3)
+    whether any of THOSE agent sinks alone -- never a bare session sink --
+    hold the live winning TOUCH for ``rel_path``.
+
+    Bounded to one directory scan plus one read seam over that session's
+    own agent dirs only (never every agent dir on disk). Returns ``False``
+    (never raises) on any I/O failure, a missing/unreadable
+    ``coordinator-agents`` directory, an empty ``session_id``, or no
+    matching agent sink -- the generic message is always the safe
+    fallback.
+    """
+    if not session_id or not rel_path or not root:
+        return False
+    try:
+        from coordinator_core.session.touch_record import (
+            project_live_claims,
+            sink_path,
+        )
+
+        agents_root = os.path.join(str(root), ".git", "coordinator-agents")
+        if not os.path.isdir(agents_root):
+            return False
+
+        agent_sinks = []
+        with os.scandir(agents_root) as it:
+            for entry in it:
+                if not entry.is_dir():
+                    continue
+                backptr = os.path.join(entry.path, "em-session-id.txt")
+                try:
+                    with open(backptr, "r", encoding="utf-8") as fh:
+                        owner = fh.readline().strip()
+                except OSError:
+                    continue
+                if owner == session_id:
+                    agent_sinks.append(sink_path(entry.path))
+
+        if not agent_sinks:
+            return False
+
+        proj = project_live_claims(*agent_sinks, cwd=cwd)
+        return rel_path in proj.claims
+    except Exception:
+        return False
+
+
+def check_stale_write(
+    cmd: str,
+    session_id: str = "",
+    cwd: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """C2 (docs/plans/2026-09-02-a-write-that-discards-what-you-never-saw.md):
+    the DENY leg. A pre-verdict check -- unlike ``dispatch.
+    _record_bash_write_claims`` (C1's post-verdict RECORD leg, which "must
+    never influence the verdict already decided" per its own docstring),
+    THIS function's whole job is to produce one -- registered as its own
+    ``GuardEntry`` in the guard chain (``dispatch._build_guard_chain``),
+    never folded into the recorder's seam. See this chunk's own plan body
+    for why recording and denying cannot share one seam.
+
+    For every WHOLE-FILE write-target candidate ``_stale_write_shape_
+    candidates`` resolves (a bare ``>`` redirect or a bare ``tee`` -- see
+    that function's own docstring for the shape boundary and why a
+    surgical write, e.g. ``sed -i``/``>>``/``tee -a``, is never even a
+    candidate here), compares THIS session's own last-recorded fingerprint
+    for that path (``touch_record.last_seen_hash``) against the file's
+    CURRENT disk content (``touch_record.is_stale``). A genuine mismatch --
+    both hashes exist and disagree -- denies before the write reaches disk.
+    Any unprovable state (no recorded hash, an unreadable target) is
+    treated as NOT stale, never promoted to a deny -- ``is_stale``'s own
+    docstring is the whole safety argument here, inherited verbatim.
+
+    The message is a guard message (``docs/wiki/guard-messaging.md`` §
+    Register): one fact, once, plus a terse alternative. It never asserts
+    WHO changed the file -- the guard knows only that the content moved.
+    ``git log --oneline -3 -- <path>`` is the discriminator named, and
+    ``operator_override_note`` is the pointer route. When ``_stale_write_
+    family_claim`` finds a dispatched-worker claimant behind the staleness,
+    the message names that specific, actually-known fact ("a worker this
+    session dispatched changed this file after your last read") rather
+    than a generic staleness line, so a routine dispatch-then-rewrite deny
+    does not read as a bug in the guard -- it never asserts WHICH worker or
+    WHEN, only the fact the family lookup actually has.
+
+    Root is resolved via ``git.repo_root.show_toplevel`` -- a walk, never a
+    spawn (same resolver ``dispatch._record_bash_write_claims`` already
+    uses for the identical reason) -- so this check spends no git process
+    at all on its own hot path. Never raises: any resolver/import failure
+    anywhere in this function returns ``None`` (allow), matching the
+    fail-toward-not-denying posture every comparator here already commits
+    to.
+    """
+    command = _crlf_strip(cmd) if cmd else ""
+    if not command or not session_id:
+        return None
+    if _override("COORDINATOR_OVERRIDE_STALE_WRITE", payload=payload):
+        return None
+
+    try:
+        from coordinator_core.git.repo_root import show_toplevel as _stale_show_toplevel
+    except Exception:
+        return None
+    root = _stale_show_toplevel(cwd or None)
+    if not root:
+        return None
+
+    try:
+        from coordinator_core.session.touch_record import is_stale, last_seen_hash
+    except Exception:
+        return None
+
+    candidates = _stale_write_shape_candidates(command, cwd or None)
+    if not candidates:
+        return None
+
+    for resolved_target, _raw_target, _whole in candidates:
+        if not _is_within(resolved_target, root):
+            continue
+        rel = os.path.relpath(resolved_target, root).replace(os.sep, "/")
+        try:
+            recorded = last_seen_hash(session_id, rel, root)
+        except Exception:
+            recorded = None
+        try:
+            stale = is_stale(recorded, resolved_target)
+        except Exception:
+            stale = False
+        if not stale:
+            continue
+
+        family_worker = _stale_write_family_claim(rel, session_id, root, cwd or None)
+        if family_worker:
+            fact = (
+                "a worker this session dispatched changed this file after "
+                "your last read"
+            )
+        else:
+            fact = "this file changed since your session last read it"
+
+        note = operator_override_note(
+            "COORDINATOR_OVERRIDE_STALE_WRITE", payload=payload, git_root=root
+        )
+        return _deny(
+            (
+                "BLOCKED: %s -- %s. `git log --oneline -3 -- %s` shows what "
+                "changed."
+                % (rel, fact, rel)
+            )
+            + (" %s" % note if note else "")
+        )
+
+    return None
+
+
 def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> None:
     """C9 (2026-08-27, docs/plans/2026-08-27-a-pathspec-is-not-a-scope.md):
     best-effort recording of a plain TOUCH event for every ``paths`` entry
@@ -3434,6 +3706,13 @@ def check_destructive_rm(
     # deliberately NOT module-level.
     _memo_run_git = _new_git_memo()
 
+    # `_rm_peer_claim_of`'s uncommitted-delta gate, shared across every
+    # target this call's loop below checks -- see `_new_dirty_paths_memo`'s
+    # own docstring for why this MUST be built once here and threaded
+    # through, rather than left for that function's own one-shot fallback
+    # (which would spawn `git status` once per rm target).
+    _dirty_paths_lookup = _new_dirty_paths_memo()
+
     # Per-call, per-ROOT batched `git status --porcelain`. One spawn per distinct
     # repo root instead of one per TARGET (`rm a.py b.py c.py` was three).
     #
@@ -3621,9 +3900,10 @@ def check_destructive_rm(
 
         if recursive and re.search(r"\$\(|`", after) and not rm_override:
             return _deny(
-                "BLOCKED: recursive 'rm' with a subshell-resolved target "
-                "($(...)/backticks) cannot be verified safe.\n\n"
-                "Use instead:\n"
+                "BLOCKED: 'rm' has a recursive flag and a subshell-resolved "
+                "target ($(...) or backticks) — cannot verify what it would "
+                "delete.\n\n"
+                "Resolve it to a literal path first; use instead:\n"
                 "  git status --porcelain -- <resolved-path>"
             )
 
@@ -3961,7 +4241,7 @@ def check_destructive_rm(
                     )
                 status = "\n".join(out_st.splitlines()[:9])
                 if status:
-                    peer_sid = _rm_peer_claim_of(tgt_abs, root)
+                    peer_sid = _rm_peer_claim_of(tgt_abs, root, _dirty_paths_lookup)
                     if peer_sid:
                         return _deny(
                             "BLOCKED (not overridable): '%s' holds "
@@ -4031,12 +4311,112 @@ def check_destructive_rm(
 _UNKNOWN_MTIME = object()
 
 
-def _rm_peer_claim_of(tgt_abs: str, root: str) -> str:
+def _dirty_paths_from_porcelain(porcelain_out: str) -> FrozenSet[str]:
+    """Repo-relative paths carrying an uncommitted delta right NOW, parsed
+    from one whole-tree ``git status --porcelain`` (no pathspec) capture --
+    staged, unstaged, AND untracked all fall out of that single call, unlike
+    ``session/scope.py``'s two-call ``diff --name-only HEAD`` +
+    ``ls-files --others`` pair (that split exists there for
+    ``core.quotepath=false`` parity with a pre-existing dialect; no such
+    constraint applies here, so one call answers all three states).
+
+    A rename line's NEW side is the live path with an outstanding delta;
+    the OLD side no longer exists and carries none, so only the post-arrow
+    half is kept. An unparseable short line is skipped, never guessed at --
+    that only NARROWS the returned set, which is the safe direction for a
+    caller using this to decide whether a claim is still contested (see
+    ``_rm_peer_claim_of``): a path this function fails to recognize as dirty
+    falls back to "not proven dirty", never to "proven clean"."""
+    paths: set = set()
+    for line in porcelain_out.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:]
+        if " -> " in path:
+            path = path.rsplit(" -> ", 1)[-1]
+        path = path.strip()
+        if len(path) >= 2 and path[0] == '"' and path[-1] == '"':
+            path = path[1:-1]
+        if path:
+            paths.add(path)
+    return frozenset(paths)
+
+
+def _new_dirty_paths_memo() -> Callable[[str], Optional[FrozenSet[str]]]:
+    """Per-call, per-ROOT memoized ``git status --porcelain`` lookup -- the
+    shared cache every caller looping ``_rm_peer_claim_of`` over several
+    targets/affected-paths sharing one root MUST use, so the ONE whole-tree
+    status spawn this predicate needs is paid once per root, never once per
+    target (the exact per-item amplification shape `_new_git_memo` and
+    `_batched_status_for` already close for their own probes -- see those
+    docstrings). Returns a closure over a FRESH dict on every call,
+    deliberately never module-level -- same soundness argument as
+    `_new_git_memo`: the repo tree cannot mutate mid-dispatch, so exact-key
+    (root) reuse within ONE guard invocation is safe, and a shared cache
+    across dispatches would leak state across unrelated commands.
+
+    The looked-up value is ``None`` on ANY git failure (fail-SAFE signal for
+    ``_rm_peer_claim_of`` to consume -- see that function's own docstring
+    for what it does with a ``None`` here: skip the new filter entirely and
+    fall back to its pre-existing claim-membership-only behavior, never
+    treat an unreadable tree as "nothing is dirty")."""
+    cache: Dict[str, Optional[FrozenSet[str]]] = {}
+
+    def _lookup(root: str) -> Optional[FrozenSet[str]]:
+        if root not in cache:
+            # `--untracked-files=all`: a claim is per-FILE, and plain
+            # `--porcelain` collapses a wholly-untracked directory to one
+            # `?? dir/` row -- every individual file a peer claimed inside
+            # it would then read as "not proven dirty" even while genuinely
+            # untracked, silently un-contesting a live claim. `-uall` reports
+            # each file inside such a directory on its own row instead.
+            rc, out = _run_git(
+                ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all"],
+                root,
+            )
+            cache[root] = _dirty_paths_from_porcelain(out) if rc == 0 else None
+        return cache[root]
+
+    return _lookup
+
+
+def _rm_peer_claim_of(
+    tgt_abs: str,
+    root: str,
+    dirty_paths_lookup: "Optional[Callable[[str], Optional[FrozenSet[str]]]]" = None,
+) -> str:
     """Port of bash's `_rm_peer_claim_of` / `_gr_peer_claim_of` (identical
     trees in both source hooks; this one function serves both
     check_destructive_rm and check_destructive_git_revert, mirroring the
     bash "_gr_ names copied from _rm_ so this hook is self-contained"
     duplication as a single shared implementation instead).
+
+    ``dirty_paths_lookup`` (uncommitted-delta gate, 2026-09-20): a touch
+    record SURVIVES the commit that lands the edit -- ``project_live_claims``
+    below answers "has this session ever touched this path", never "does it
+    still have an uncommitted delta here right now". Left unfiltered, a live
+    session goes on contesting every path it ever touched, including one it
+    already committed cleanly, and a DIRECTORY target compounds this: one
+    dirty file under it is enough to reach the claim scan, whose containment
+    match then treats every OTHER already-committed claimed path under that
+    same directory as still contested too. ``dirty_paths_lookup(root)``
+    (built by ``_new_dirty_paths_memo`` -- ONE whole-tree
+    ``git status --porcelain`` per root, never one per target/candidate; see
+    that factory's own docstring for why a shared closure is required here)
+    resolves the CURRENT dirty set, and a claim match below counts as
+    contested only when the matched path is a member of it. Omitted
+    (``None``, the default) makes this function build and use its own
+    one-shot memo -- correct for a standalone/test call, but a caller inside
+    a per-target loop MUST build one memo with ``_new_dirty_paths_memo()``
+    and pass it into every call, or it pays the per-item git spawn this gate
+    exists to forbid (`test_no_unbatched_per_item_git_spawn.py`).
+
+    FAIL SAFE: ``dirty_paths_lookup`` returning ``None`` (the whole-tree
+    ``git status`` itself failed) disables this filter entirely for that
+    root -- every matched claim stays contested, exactly the pre-existing
+    (unfiltered) behavior. An unreadable working tree must never be read as
+    "nothing outstanding"; only a POSITIVELY confirmed clean path is ever
+    forgiven.
 
     Liveness order (Q24 -- CLOSED, see module docstring "CLOSED PORTING
     GAPS"): for each candidate peer session dir under
@@ -4114,6 +4494,16 @@ def _rm_peer_claim_of(tgt_abs: str, root: str) -> str:
         entries = os.listdir(sess_dir)
     except OSError:
         return ""
+
+    # Uncommitted-delta gate: resolved ONCE per call (never per-sid, never
+    # per-candidate-path) -- see this function's own docstring for why a
+    # shared, caller-supplied memo is required to keep this at one spawn
+    # per root rather than one per target. A caller that omitted
+    # ``dirty_paths_lookup`` gets a private one-shot memo here, correct for
+    # a standalone call but NOT for a per-target loop -- see the docstring.
+    _dirty_lookup = dirty_paths_lookup or _new_dirty_paths_memo()
+    dirty_now = _dirty_lookup(root)
+
     for sid in entries:
         if sid in (".archive", ".agents"):
             continue
@@ -4205,8 +4595,21 @@ def _rm_peer_claim_of(tgt_abs: str, root: str) -> str:
         if new_seam_degraded:
             return sid
         for opath in new_claimed_paths:
-            if opath.startswith(tgt_rel + "/") or tgt_rel.startswith(opath + "/") or opath == tgt_rel:
-                return sid
+            if not (
+                opath.startswith(tgt_rel + "/")
+                or tgt_rel.startswith(opath + "/")
+                or opath == tgt_rel
+            ):
+                continue
+            # Uncommitted-delta gate: a claim on a path with NO outstanding
+            # delta right now is a touch record that outlived the commit
+            # that landed it, not a live contest. ``dirty_now is None``
+            # means the whole-tree status probe itself failed -- fail SAFE,
+            # skip this filter, keep the pre-existing (unfiltered) contested
+            # verdict rather than ever reading an unreadable tree as clean.
+            if dirty_now is not None and opath not in dirty_now:
+                continue
+            return sid
     return ""
 
 
@@ -4851,6 +5254,13 @@ def _check_destructive_git_revert_full(
             _toplevel_cache[cwd] = _run_git(["rev-parse", "--show-toplevel"], cwd=cwd)
         return _toplevel_cache[cwd]
 
+    # `_rm_peer_claim_of`'s uncommitted-delta gate, shared across every
+    # affected path any segment below checks -- see `_new_dirty_paths_memo`'s
+    # own docstring for why this MUST be built once here and threaded
+    # through, rather than left for that function's own one-shot fallback
+    # (which would spawn `git status` once per affected path per segment).
+    _dirty_paths_lookup = _new_dirty_paths_memo()
+
     for seg in _split_segments(cmd):
         if not seg.strip():
             continue
@@ -5074,7 +5484,15 @@ def _check_destructive_git_revert_full(
         deny_paths: List[Tuple[str, str]] = []
         for ap in affected:
             lb = _is_loadbearing(ap)
-            peer_sid = _rm_peer_claim_of(ap if os.path.isabs(ap) else os.path.join(repo_root, ap), repo_root) if repo_root else ""
+            peer_sid = (
+                _rm_peer_claim_of(
+                    ap if os.path.isabs(ap) else os.path.join(repo_root, ap),
+                    repo_root,
+                    _dirty_paths_lookup,
+                )
+                if repo_root
+                else ""
+            )
             if lb and peer_sid:
                 deny_paths.append((ap, "load-bearing, peer-claimed by %s" % peer_sid))
             elif lb:
@@ -7802,10 +8220,15 @@ def check_validate_commit(
         )
         if not subject_ok:
             warnings.append(
-                "FRONTMATTER-MUTATION: staged files change load-bearing "
-                "frontmatter without naming it in the subject:%s\n"
-                "  → Name the changed key or a lifecycle verb "
-                "(pickup/handoff/claim/ship/closed/abandon)."
+                (
+                    "FRONTMATTER-MUTATION: staged file(s)%s edit "
+                    "load-bearing frontmatter with no matching key/verb "
+                    "in the commit subject — git log -- <file> loses the "
+                    "audit trail.\n\n"
+                    "Name it instead:\n"
+                    "  status: / claim / ship / closed / supersede\n"
+                    "  coordinator/CLAUDE.md § Handoff Lineage"
+                )
                 % (" " + " ".join(frontmatter_mutations))
             )
 
@@ -11335,9 +11758,16 @@ def check_multiprobe_banner_rewrite(
     return _allow_rewrite(
         "%s -c %s" % (_bt_python3_invocation(), shlex.quote(script)),
         (
-            "Auto-rewritten: this multi-probe banner re-derives known facts, "
-            "one process per probe. One python3 process reproduces them, "
-            "batching every git fact into ONE status call."
+            # "ONE status call" names the shape the rewrite actually emits
+            # (`git status --porcelain=v2 --branch`); a bare "one call" reads
+            # as one call of some unnamed kind, which is the one thing the
+            # reader needs to know to judge the rewrite. 219 bytes of prose
+            # against the 220 cap -- a further fact belongs somewhere else in
+            # the envelope, not appended here.
+            "Auto-rewritten: this banner re-derives facts the harness already "
+            "knows, one process per probe (89%/84%/71%/49% re-derivation). "
+            "One python3 process reproduces the same facts, batching every "
+            "git fact into ONE status call."
         )
         + (" %s" % _multiprobe_note if _multiprobe_note else ""),
     )

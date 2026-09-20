@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Fold the four guard-enforcement join shards into the single artifact
 `DoE-claude` reads to decide whether a doctrine rule is enforced here.
 
@@ -118,13 +117,14 @@ def check_rows(rows: "list[dict]") -> None:
 
 
 def source_sha() -> str:
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=_REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+    from coordinator_core.git.run import run_git
+
+    result = run_git(["rev-parse", "HEAD"], cwd=_REPO_ROOT)
+    if not result.ok:
+        raise subprocess.CalledProcessError(
+            result.returncode, ["git", "rev-parse", "HEAD"], result.stdout, result.stderr
+        )
+    return result.stdout.strip()
 
 
 def build_document() -> dict:

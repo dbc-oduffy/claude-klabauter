@@ -29,18 +29,19 @@ import pytest
 
 from coordinator_core.testing.registry_sandbox import fail_on_live_registry_write_fixture
 
-# `RealIdentityCheckMixin` (shared fake-`ClaudeKlabauterPercolate` `run_identity_check`
-# stand-in) deliberately does NOT live here: this file is named `conftest.py`,
-# and `coordinator/bin/` carries its own same-named `conftest.py` -- a plain
-# `from conftest import X` resolves through `sys.modules["conftest"]`, which a
-# combined pytest run spanning both directories has already bound to whichever
-# of the two pytest auto-imported first (collection order, not import-site
-# proximity). Verified live: `pytest coordinator/tests/test_percolate_driver_
-# gates.py coordinator/bin/tests/test_percolate_identity_check_gate.py`
-# resolved `from conftest import RealIdentityCheckMixin` against
-# `coordinator/bin/conftest.py` and raised `ImportError`. See
-# `_fake_claude_klabauter_identity.py` (uniquely named, same directory, same import
-# idiom as `_repo_paths.py` already used by these test files) instead.
+# A shared cross-directory fixture deliberately does NOT live here: this file
+# is named `conftest.py`, and `coordinator/bin/` carries its own same-named
+# `conftest.py` -- a plain `from conftest import X` resolves through
+# `sys.modules["conftest"]`, which a combined pytest run spanning both
+# directories has already bound to whichever of the two pytest auto-imported
+# first (collection order, not import-site proximity). Verified live: `pytest
+# coordinator/tests/test_percolate_driver_gates.py coordinator/bin/tests/
+# test_percolate_identity_check_gate.py` resolved `from conftest import
+# RealIdentityCheckMixin` against `coordinator/bin/conftest.py` and raised
+# `ImportError`. The idiom that sidesteps this: give the shared module a
+# tree-unique name, same directory as its importers, and import it by that
+# unique name instead of through `conftest`. See `_repo_paths.py` for the
+# precedent this idiom follows.
 
 # Autouse across this whole tree, and deliberately DETECTION rather than
 # redirection. The obvious prevention — arming ``MACHINE_LOCAL_REGISTRY_DIR``

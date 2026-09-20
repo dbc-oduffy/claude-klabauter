@@ -200,40 +200,28 @@ def test_record_offers_refuses_malformed_id_in_any_position(tmp_path):
 
 
 def test_record_offers_single_write_call(tmp_path, monkeypatch):
-    """The batched entry point emits ONE `write()` of all N lines joined,
-    never one `open(..., 'a')` + `write()` per row."""
+    """The batched entry point emits ONE seam append of all N lines joined,
+    never one seam append per row. Migrated onto session/claimed_write.py::
+    append_claimed_line (C7); asserted here by counting calls to the seam
+    entry point itself, rather than monkeypatching the module's `open` --
+    the raw `open(..., 'a')` + `write()` shape this test originally guarded
+    no longer exists in `record_offers`."""
     repo_root = str(tmp_path)
-    writes: list[str] = []
-    real_open = open
+    calls: list[bytes] = []
+    real_append_claimed_line = send_pass.append_claimed_line
 
-    class _CountingHandle:
-        def __init__(self, handle):
-            self._handle = handle
+    def _counting_append(path, encoded):
+        calls.append(encoded)
+        return real_append_claimed_line(path, encoded)
 
-        def write(self, data):
-            writes.append(data)
-            return self._handle.write(data)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            self._handle.close()
-
-    def fake_open(path, mode="r", encoding=None, errors=None, newline=None):
-        handle = real_open(path, mode, encoding=encoding, errors=errors, newline=newline)
-        if mode == "a":
-            return _CountingHandle(handle)
-        return handle
-
-    monkeypatch.setattr(send_pass, "open", fake_open, raising=False)
+    monkeypatch.setattr(send_pass, "append_claimed_line", _counting_append)
 
     send_pass.record_offers(
         repo_root, "holder-five", ["peer-1", "peer-2", "peer-3"], "nudger-five", now=1000.0
     )
 
-    assert len(writes) == 1
-    assert writes[0].count("offer_key") == 3
+    assert len(calls) == 1
+    assert calls[0].decode("utf-8").count("offer_key") == 3
 
 
 def test_record_offer_row_without_attribution_still_suppresses(tmp_path):

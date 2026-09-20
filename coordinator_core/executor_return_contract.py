@@ -57,7 +57,12 @@ __all__ = [
 FOOTPRINT_CONSTRAINT_TEMPLATE = (
     "You MUST NOT create or modify any file outside this footprint: "
     "[list]. If you discover you need to, STOP and report back via the "
-    "DONE summary with status BLOCKED."
+    "DONE summary with status BLOCKED. Create and edit each of those files "
+    "with Write/Edit, never with a Bash heredoc, sed, tee or redirection: "
+    "only the write tools record a session write claim, and a file produced "
+    "through Bash reaches the committer as an orphan it must refuse. Bash "
+    "stays correct for reading, searching and running tests. If a Bash write "
+    "already happened, name those paths in your report."
 )
 
 

@@ -44,9 +44,11 @@ def test_a_compute_only_op_outside_the_prefixes_is_routable():
 
 def test_the_hook_prefixes_still_route():
     """The widening is additive. A hook op is routable on its prefix alone,
-    without consulting the classifier -- the hot path did not get slower."""
-    assert hook_http.op_for_path(_path("hooks.session_heartbeat")) == (
-        "hooks.session_heartbeat"
+    without consulting the classifier -- the hot path did not get slower.
+    Uses hooks.track_touched_files (substitute for the retired
+    hooks.session_heartbeat example, same hooks.* prefix routing)."""
+    assert hook_http.op_for_path(_path("hooks.track_touched_files")) == (
+        "hooks.track_touched_files"
     )
 
 

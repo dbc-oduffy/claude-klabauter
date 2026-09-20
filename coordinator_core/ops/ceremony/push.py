@@ -14,11 +14,8 @@ bounded, never `--force`), `derive_push_status` / `derive_pushed_tristate`,
 the spinoff's Finding 3, discharged here rather than in a separate chunk
 because the predicate travels with the retry ladder it guards).
 
-`_drain_pending_push_after_sync` (the pending-push record's per-commit
-drain re-host) is GRAVESTONED 2026-08-30
-(docs/plans/2026-08-30-who-pushes-and-when.md C2): it had zero call sites
-and its own delegate, `auto_push.drain_pending_push`, is deleted in the
-same pass -- see that module's docstring for the full trace.
+`_drain_pending_push_after_sync` must not be reintroduced: it has zero call
+sites and its delegate, `auto_push.drain_pending_push`, does not exist.
 
 `commit_pipeline.py` re-imports what it still needs from this module; its
 own callers are unaffected by this file existing.
@@ -41,12 +38,6 @@ _GIT_NOISE_LINE_RE = re.compile(r"^\s*(?:warning|hint):", re.IGNORECASE)
 def condense_git_diagnostic(text: str, *, limit: int = _MAX_DIAGNOSTIC_CHARS) -> str:
     """Reduce a raw git stdout/stderr blob to the part that names the failure.
 
-    2026-08-10 fix (live incident: four consecutive `scoped-git-commit`
-    refusals reported nothing but CRLF line-ending warnings, hiding the
-    then-installed pre-commit gate's own BLOCK that was the actual cause --
-    that gate is deleted 2026-08-25, "the staged rollback gate dies without
-    blocking a commit"; the condensation logic below is generic to ANY
-    pre-commit hook's BLOCKED verdict, not specific to the deleted gate).
     Two properties of git's output defeat a naive head-truncation:
 
       - It leads with per-path advisory noise. `git add` on a batch of N
@@ -62,14 +53,13 @@ def condense_git_diagnostic(text: str, *, limit: int = _MAX_DIAGNOSTIC_CHARS) ->
     empty reason is what the incident produced), then keep the TAIL under
     *limit*, marking the cut so a reader knows output preceded it.
 
-    AC3/AC11 (C3b): this function adds NO block of its own. A `pre-commit`
-    hook refusal is the hook's own verdict, reached before `git commit`
-    ever returns to this pipeline -- this function only reformats stderr/
-    stdout git already produced so the verdict is legible instead of
-    hidden behind advisory noise (the incident above). Nothing here holds,
-    retries, or waits; the outlet for a genuine hook BLOCK is whatever the
-    hook itself grants (fix the flagged condition and re-commit), unowned
-    by this module and out of this audit's scope.
+    This function adds NO block of its own. A `pre-commit` hook refusal is
+    the hook's own verdict, reached before `git commit` ever returns to
+    this pipeline -- this function only reformats stderr/stdout git already
+    produced so the verdict is legible instead of hidden behind advisory
+    noise. Nothing here holds, retries, or waits; the outlet for a genuine
+    hook BLOCK is whatever the hook itself grants (fix the flagged
+    condition and re-commit), unowned by this module.
     """
     stripped = text.strip()
     if not stripped:
@@ -293,8 +283,8 @@ def _ceremony_push_budget(pre_push_elapsed: Optional[float]) -> float:
     overrunning the ceiling, which is the direction that keeps the op inside
     its budget under exactly the load that threatens it.
 
-    `None` (no measurement in hand) falls back to the flat slice -- the
-    pre-2026-08-26 behaviour, and still bounded.
+    `None` (no measurement in hand) falls back to the flat slice, and still
+    bounded.
 
     Never returns <= 0: an op already over its ceiling gets `_CEREMONY_PUSH_
     FLOOR_SECS`, one honest attempt at the remote rather than a zero budget
@@ -310,21 +300,20 @@ def _ceremony_push_budget(pre_push_elapsed: Optional[float]) -> float:
     needs a dispatch-scoped clock this engine does not have; do not read this
     docstring as a claim that one exists.
 
-    # Review: coordinator:code-reviewer (a72f5accd9830c935) P1 -- the raw
-    # `CEREMONY_BUDGET_SECS - pre_push_elapsed` arithmetic, unclamped, HANDS
-    # OUT MORE than the flat slice for any pre_push_elapsed < 0.8s, up to
-    # nearly the whole 2.0s ceiling as pre_push_elapsed -> 0. That eats into
-    # the 0.8s `_CEREMONY_PUSH_HEADROOM_SECS` reserved for the post-push tail
-    # (post_commit_tail.py / consumed_handoff_stamp.py's remaining work after
-    # push_with_retry returns), reintroducing the mid-op overrun this budget
-    # exists to prevent, just from the tail end instead of the push leg. The
-    # tighten-only claim above is TRUE ONLY BECAUSE of the `min(...,
-    # CEREMONY_PUSH_BUDGET_SECS)` clamp below -- it is not an inherent
-    # property of the subtraction, and removing the clamp reopens the P1.
-    # This is the conservative choice for a second, compounding reason: every
-    # caller stamps `pre_push_elapsed` at its own FRAME entry (see the
-    # negative-spec paragraph above), so it is a FLOOR on the op's true
-    # elapsed since dispatch -- meaning the raw `CEREMONY_BUDGET_SECS -
+    # The raw `CEREMONY_BUDGET_SECS - pre_push_elapsed` arithmetic, unclamped,
+    # HANDS OUT MORE than the flat slice for any pre_push_elapsed < 0.8s, up
+    # to nearly the whole 2.0s ceiling as pre_push_elapsed -> 0. That eats
+    # into the 0.8s `_CEREMONY_PUSH_HEADROOM_SECS` reserved for the post-push
+    # tail (post_commit_tail.py / consumed_handoff_stamp.py's remaining work
+    # after push_with_retry returns), reintroducing the mid-op overrun this
+    # budget exists to prevent, just from the tail end instead of the push
+    # leg. The tighten-only claim above is TRUE ONLY BECAUSE of the
+    # `min(..., CEREMONY_PUSH_BUDGET_SECS)` clamp below -- it is not an
+    # inherent property of the subtraction, and removing the clamp reopens
+    # this overrun. This is the conservative choice for a second, compounding
+    # reason: every caller stamps `pre_push_elapsed` at its own FRAME entry
+    # (see the negative-spec paragraph above), so it is a FLOOR on the op's
+    # true elapsed since dispatch -- meaning the raw `CEREMONY_BUDGET_SECS -
     # pre_push_elapsed` systematically OVER-estimates budget remaining. Both
     # errors run in the same direction, so clamping to the flat slice is the
     # correct bound, not merely a convenient one.
@@ -636,11 +625,9 @@ def derive_push_status(push_outcome: Optional[PushOutcome]) -> str:
     """Derive the canonical `push_status` from a `PushOutcome` (or None).
 
     This is the supported way to map a `PushOutcome` onto the canonical
-    `push_status` vocabulary -- promoted from a leading-underscore private
-    (2026-08-08, C7a) once `post_commit_tail.py` and `consumed_handoff_
-    stamp.py` were found importing it across the module boundary despite the
-    underscore; a private name crossing a module boundary is a contract
-    with no name.
+    `push_status` vocabulary. `post_commit_tail.py` and `consumed_handoff_
+    stamp.py` import it directly across the module boundary; a private name
+    crossing a module boundary is a contract with no name.
 
     Rule: `push:branch-policy` or `push:branch-unresolvable` in `skipped` ->
     `declined`; `push:no-remote` in `skipped` -> `no-remote`; `push:ref-
@@ -704,13 +691,11 @@ def _is_push_reject(reason: str, err_class: Optional[str] = None) -> bool:
     non-fast-forward reject -- rather than a bespoke substring test. Only
     `_PUSH_RETRY_CLASSES` (see that constant's own docstring) trigger the
     fetch+rebase+re-push cycle below; a GH013 stderr still contains
-    "failed to push some refs", so a bare-marker test previously misfired
-    here (2026-08-07 fix).
+    "failed to push some refs", which a bare-marker test cannot distinguish
+    from a genuine non-fast-forward reject.
 
     `err_class`, if given, is a pre-classified `classify_error(reason)`
-    result the caller already computed -- reused rather than re-derived
-    (Review: overengineering-reviewer -- classify_error was evaluated twice
-    per loop iteration on the same reason string).
+    result the caller already computed -- reused rather than re-derived.
     """
     if err_class is None:
         err_class = classify_error(reason)
@@ -1100,9 +1085,9 @@ def _emit_push_policy_line(
     0" posture for the equivalent decision.
     """
     if kind == "declined-policy":
-        # Review: coordinator:code-reviewer -- message is documented REQUIRED
-        # for this arm; enforce the precondition instead of letting a future
-        # caller silently print the literal string "None" to stderr.
+        # message is documented REQUIRED for this arm; enforce the
+        # precondition instead of letting a future caller silently print
+        # the literal string "None" to stderr.
         if message is None:
             raise ValueError(
                 "_emit_push_policy_line: kind='declined-policy' requires message"
@@ -1431,10 +1416,10 @@ def _budget_exhausted_reason(
     Returns the reason ALONE, without the `"git push: "` prefix every
     `PushOutcome` message in this module carries -- the two call sites own
     that, because one of them reaches `PushOutcome` through `last_reason` and
-    the shared prefix at the end of the ladder. Embedding it here made the
-    fetch-leg exhaustion read `"git push: git push: stopped after ..."` while
-    the attempt-0 exhaustion read it once: the same event, spelled two ways,
-    depending on which branch produced it (2026-08-26 review, slice 2).
+    the shared prefix at the end of the ladder. Embedding it here would make
+    the fetch-leg exhaustion read `"git push: git push: stopped after ..."`
+    while the attempt-0 exhaustion read it once: the same event must not be
+    spelled two ways depending on which branch produced it.
     """
     budget_part = "budget" if budget_secs is None else f"{float(budget_secs):g}s budget"
     tail = f" (last: {last_reason})" if last_reason else ""
@@ -1504,7 +1489,7 @@ def push_with_retry(
     so the range finally reported on a landed retry names only the commits
     this call itself pushed.
 
-    `budget_secs` (2026-08-26) -- an END-TO-END deadline for this whole
+    `budget_secs` -- an END-TO-END deadline for this whole
     ladder, stamped at entry, with each REMOTE leg (`push`, `fetch`) sized
     from the remainder and the deadline re-checked BETWEEN attempts. The
     local `rebase --onto` between them is deliberately NOT bounded by it:
@@ -1629,10 +1614,9 @@ def push_with_retry(
 
         reason = condense_git_diagnostic(push_result.stderr) or f"exit_code={push_result.returncode}"
         last_reason = reason
-        # Bound once, reused below by the ref-lock arm and `_is_push_reject`
-        # (Review: overengineering-reviewer -- classify_error is an ordered
-        # substring ladder, not free; re-deriving it twice per iteration on
-        # the same `reason` string was a straight redundancy).
+        # Bound once, reused below by the ref-lock arm and `_is_push_reject`:
+        # `classify_error` is an ordered substring ladder, not free, and must
+        # not be re-derived twice per iteration on the same `reason` string.
         err_class = classify_error(reason)
         last_exit_code = push_result.returncode or 1
         # The one place `unconfirmed` can ever become True: this push
@@ -1699,9 +1683,9 @@ def push_with_retry(
             # `PushOutcome`'s own docstring already covers for the
             # policy-decline case; see that docstring for the `exit_code`/
             # `failed`/`unconfirmed` contract this outcome conforms to.
-            # (Review: overengineering-reviewer -- this is the single home
-            # for the ref-lock deferral rationale; `_PUSH_RETRY_CLASSES`
-            # above points here rather than restating it.)
+            # This is the single home for the ref-lock deferral rationale;
+            # `_PUSH_RETRY_CLASSES` above points here rather than restating
+            # it.
             return PushOutcome(exit_code=0, skipped=["push:ref-contended"])
 
         # C2 (docs/plans/2026-08-27-the-merge-gate-gets-a-remote-authority-
@@ -1737,10 +1721,9 @@ def push_with_retry(
         if upstream_info is None:
             # No `git push: ` prefix here: `last_reason` reaches `PushOutcome`
             # through the ladder's final return, which adds it. Embedding one
-            # made this read `"git push: git push: rejected and no upstream
-            # ..."` -- the third producer of the doubling the 2026-08-26 review
-            # (slice 2 Q3) caught on the budget paths, and the one its fix
-            # missed because no test reaches an unresolvable upstream.
+            # would make this read `"git push: git push: rejected and no
+            # upstream ..."` -- the same doubling the budget paths above must
+            # avoid.
             last_reason = f"rejected and no upstream tracking ref resolvable ({reason})"
             break
 

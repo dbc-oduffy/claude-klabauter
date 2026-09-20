@@ -997,7 +997,18 @@ def test_sequential_add_task_calls_both_land_in_final_spine(tmp_path):
 
 
 def _invoke_cli(op: str, params: dict, repo: Path) -> subprocess.CompletedProcess:
-    """Run ``python -m coordinator_core.invoke <op> '<json-params>' --repo <repo>``."""
+    """Run ``python -m coordinator_core.invoke <op> '<json-params>' --repo <repo>``.
+
+    ``--allow-unstamped-dispatch`` is required here for the same reason
+    ``conftest.py``'s ``pytest_configure`` calls ``ipc.allow_unstamped_dispatch()``
+    for the in-process path: this repo IS the dev tree (never the published,
+    stamped klabauter mirror -- see this repo's own CLAUDE.md), so a bare
+    subprocess dispatch against it hits ipc.py's stamp gate before ever
+    reaching plan.tasks.mutate, regardless of host. Without this flag the
+    subprocess leg is testing the stamp gate, not the CLI seam AC8 exists to
+    cover -- exactly the sanctioned "deliberate manual testing" carve-out the
+    gate's own refusal message names.
+    """
     env = {**os.environ}
     return subprocess.run(
         [
@@ -1006,6 +1017,7 @@ def _invoke_cli(op: str, params: dict, repo: Path) -> subprocess.CompletedProces
             op,
             json.dumps(params),
             "--repo", str(repo),
+            "--allow-unstamped-dispatch",
         ],
         capture_output=True,
         text=True,

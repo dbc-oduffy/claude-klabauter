@@ -203,11 +203,9 @@ def _install_peer_action(monkeypatch, attr_name: str, peer_action: Callable[[], 
     monkeypatch.setattr(git_native, attr_name, _wrapped)
 
 
-_WORKTREE_EXCLUDED_TEMPLATE = (
-    "commit_scoped: worktree edits to %s were NOT included -- "
-    "the staged (index) version was committed instead (private-"
-    "index branch; see GitResult.worktree_excluded)"
-)
+# The one full-literal pin lives in git_native.py now (AC3); reuse it
+# rather than holding a second copy here.
+_WORKTREE_EXCLUDED_TEMPLATE = git_native._WORKTREE_EXCLUDED_TEMPLATE
 
 
 # ---------------------------------------------------------------------------

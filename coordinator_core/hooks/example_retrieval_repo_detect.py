@@ -112,10 +112,7 @@ def detect_banner(cwd: str) -> str:
     db_path = os.path.join(example_retrieval_repo_dir, "graph.db")
 
     if not os.path.isfile(db_path):
-        return (
-            "example-retrieval-repo: UNINITIALIZED -- marker found, no graph.db; run "
-            "the example-retrieval-repo indexer before querying."
-        )
+        return "example-retrieval-repo: UNINITIALIZED — no graph.db; run the example-retrieval-repo indexer"
 
     try:
         db_mtime_epoch = Path(db_path).stat().st_mtime

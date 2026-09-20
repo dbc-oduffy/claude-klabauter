@@ -15,7 +15,7 @@ import sys
 import pytest
 
 from coordinator_core import launchable
-from coordinator_core.launchable import resolve_by_shebang, resolve_launchable, which_path_ordered
+from coordinator_core.launchable import resolve_launchable, which_path_ordered
 
 
 @pytest.fixture
@@ -133,117 +133,6 @@ def test_script_is_always_the_last_element(monkeypatch, windows):
 def test_accepts_pathlike(as_posix, tmp_path):
     script = tmp_path / "a.js"
     assert resolve_launchable(script) == [str(script)]
-
-
-# ---------------------------------------------------------------------------
-# resolve_by_shebang -- explicit-interpreter resolution, exec-bit independent
-# ---------------------------------------------------------------------------
-
-
-def test_shebang_env_form_python_resolves_to_sys_executable(as_posix, tmp_path):
-    script = tmp_path / "seed-skill-overrides.sh"
-    script.write_text("#!/usr/bin/env python3\nprint('hi')\n", encoding="utf-8")
-    assert resolve_by_shebang(str(script)) == [sys.executable, str(script)]
-
-
-def test_shebang_env_form_python_bare_resolves_to_sys_executable(as_posix, tmp_path):
-    script = tmp_path / "thing.sh"
-    script.write_text("#!/usr/bin/env python\nprint('hi')\n", encoding="utf-8")
-    assert resolve_by_shebang(str(script)) == [sys.executable, str(script)]
-
-
-def _interpreter_stem(path: str) -> str:
-    """Basename minus any executable extension, lowercased.
-
-    `shutil.which("bash")` answers `bash` on POSIX and a full path ending
-    `bash.EXE` on Windows, so a bare basename comparison is a platform
-    assertion wearing an interpreter assertion's clothes. Splitting the
-    extension keeps the check EXACT — unlike a `startswith("bash")` form,
-    which also accepts a `bashfoo` on PATH.
-    """
-    return os.path.splitext(os.path.basename(path))[0].lower()
-
-
-def test_shebang_direct_form_bash_resolves_through_which(as_posix, tmp_path):
-    script = tmp_path / "thing.sh"
-    script.write_text("#!/bin/bash\necho hi\n", encoding="utf-8")
-    vector = resolve_by_shebang(str(script))
-    assert len(vector) == 2
-    assert _interpreter_stem(vector[0]) == "bash"
-    assert vector[1] == str(script)
-
-
-def test_shebang_direct_form_sh_resolves_through_which(as_posix, tmp_path):
-    script = tmp_path / "thing.sh"
-    script.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
-    vector = resolve_by_shebang(str(script))
-    assert len(vector) == 2
-    assert _interpreter_stem(vector[0]) == "sh"
-    assert vector[1] == str(script)
-
-
-def test_no_shebang_falls_back_to_bash(as_posix, tmp_path):
-    script = tmp_path / "thing.sh"
-    script.write_text("echo hi\n", encoding="utf-8")
-    assert resolve_by_shebang(str(script)) == ["bash", str(script)]
-
-
-def test_empty_file_falls_back_to_bash(as_posix, tmp_path):
-    script = tmp_path / "thing.sh"
-    script.write_text("", encoding="utf-8")
-    assert resolve_by_shebang(str(script)) == ["bash", str(script)]
-
-
-def test_unreadable_binary_first_line_falls_back_to_bash_without_raising(as_posix, tmp_path):
-    script = tmp_path / "thing.sh"
-    script.write_bytes(b"\xff\xfe\x00\x01binary garbage\n")
-    assert resolve_by_shebang(str(script)) == ["bash", str(script)]
-
-
-def test_missing_file_falls_back_to_bash_without_raising(as_posix, tmp_path):
-    script = tmp_path / "does-not-exist.sh"
-    assert resolve_by_shebang(str(script)) == ["bash", str(script)]
-
-
-def test_result_always_ends_with_the_script_path_itself(as_posix, tmp_path):
-    """resolve_by_shebang folds the script into the returned vector,
-    matching resolve_launchable's convention -- no caller-side branching."""
-    script = tmp_path / "thing.sh"
-    script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
-    assert resolve_by_shebang(str(script))[-1] == str(script)
-
-
-def test_nt_prefers_cmd_twin_for_shebang_resolution(as_nt, tmp_path):
-    script = tmp_path / "seed-skill-overrides.sh"
-    script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
-    twin = tmp_path / "seed-skill-overrides.sh.cmd"
-    twin.write_text("@echo off\n", encoding="utf-8")
-    assert resolve_by_shebang(str(script)) == [str(twin)]
-
-
-def test_shebang_env_dash_s_form_resolves_interpreter_not_the_flag(as_posix, tmp_path):
-    """Regression for Finding 2: `env -S python3 -u` must resolve to python,
-    not mis-parse `-S` itself as the interpreter name."""
-    script = tmp_path / "thing.sh"
-    script.write_text("#!/usr/bin/env -S python3 -u\nprint('hi')\n", encoding="utf-8")
-    assert resolve_by_shebang(str(script)) == [sys.executable, str(script)]
-
-
-def test_shebang_env_dash_s_only_flags_falls_back_to_bash(as_posix, tmp_path):
-    """`env` with only flag tokens (no interpreter name at all) has nothing
-    to resolve -- fail closed to the bash fallback rather than mis-picking
-    a flag as the interpreter."""
-    script = tmp_path / "thing.sh"
-    script.write_text("#!/usr/bin/env -S\necho hi\n", encoding="utf-8")
-    assert resolve_by_shebang(str(script)) == ["bash", str(script)]
-
-
-def test_shebang_with_leading_utf8_bom_still_resolves(as_posix, tmp_path):
-    """Regression for Finding 3: a UTF-8 BOM before `#!` must not make the
-    shebang line invisible and silently fall back to bash."""
-    script = tmp_path / "thing.sh"
-    script.write_bytes(b"\xef\xbb\xbf#!/usr/bin/env python3\n" + b"print('hi')\n")
-    assert resolve_by_shebang(str(script)) == [sys.executable, str(script)]
 
 
 # ---------------------------------------------------------------------------

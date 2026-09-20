@@ -81,7 +81,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from coordinator_core.dag import _parse_frontmatter
+# `coordinator_core.dag` is NOT imported at module scope. It is a heavy module
+# (subprocess/hashlib/threading pulled in for its git-history machinery this
+# module never touches) and this file needs exactly three pure-parsing names
+# from it (`_BLOCK_SCALAR_RE`, `_consume_block_scalar`, `_parse_frontmatter`).
+# Each is imported inside the one function that uses it (`_scan_fields`,
+# `_read_frontmatter_head`) — DR-344's brightline cold-path budget, and the
+# same "import inside the predicate that needs it" convention
+# `coordinator_core.roadmap.prep_gate`'s own negative-spec already states for
+# its spine readers. A bare `import coordinator_core.roadmap.plan_gate` (a
+# capability probe, or a CLI's early argument-error exit before any gate ever
+# runs) now pays nothing for `dag`'s git machinery.
 
 # ---------------------------------------------------------------------------
 # Vocabulary
@@ -348,6 +358,49 @@ def _skip_leading_comments(fh) -> Optional[str]:
     return None
 
 
+def _consume_block_scalar_lines(fh, count: int) -> Tuple[str, int, Optional[str]]:
+    """Mirror `dag._consume_block_scalar` over a streaming file handle.
+
+    Consumes the body of a `key: |`/`key: >` block scalar (any chomping
+    indicator — this parser, like `_parse_yaml_mapping_block`, does not
+    distinguish `+`/`-`/bare on the RETURNED text: trailing blank body lines
+    are always dropped) declared at frontmatter top level, where the key
+    line's own indent is always 0 — the only indent this narrow scanner ever
+    sees. Returns `(text, updated line count, first line NOT part of the
+    block)`; the third element is `None` at EOF or once the line budget is
+    exhausted, and otherwise is the already-newline-stripped line the caller
+    must resume its own loop on rather than re-reading from `fh`.
+    """
+    body_lines: List[str] = []
+    last_content_line = -1
+    next_line: Optional[str] = None
+    while True:
+        raw = fh.readline()
+        if raw == "":
+            break
+        count += 1
+        if count > _FRONTMATTER_MAX_LINES:
+            break
+        line = raw.rstrip("\n").rstrip("\r")
+        if line.strip() == "":
+            body_lines.append("")
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= 0:
+            next_line = line
+            break
+        body_lines.append(line)
+        last_content_line = len(body_lines) - 1
+    trimmed = [] if last_content_line == -1 else body_lines[: last_content_line + 1]
+    strip_indent = 0
+    for one_line in trimmed:
+        if one_line.strip() != "":
+            strip_indent = len(one_line) - len(one_line.lstrip())
+            break
+    text = "\n".join("" if l == "" else l[strip_indent:] for l in trimmed)
+    return text, count, next_line
+
+
 def _scan_fields(path: Path, wanted: frozenset) -> Dict[str, Any]:
     """The `wanted` frontmatter keys of `path`. `{}` on any failure or no block.
 
@@ -356,62 +409,90 @@ def _scan_fields(path: Path, wanted: frozenset) -> Dict[str, Any]:
     blocker resolution reports `unresolved`. That asymmetry is deliberate — see
     the module docstring's Negative-spec.
     """
+    from coordinator_core.dag import _BLOCK_SCALAR_RE, _consume_block_scalar
+
     out: Dict[str, Any] = {}
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             first = _skip_leading_comments(fh)
             if first is None or first.strip() != "---":
                 return {}
-            current_key: Optional[str] = None
+            lines: List[str] = []
             for count, raw in enumerate(fh):
                 if count > _FRONTMATTER_MAX_LINES:
                     break
                 line = raw.rstrip("\n").rstrip("\r")
                 if line.strip() == "---":
                     break
-                stripped = line.strip()
-                if not stripped or stripped.startswith("#"):
-                    continue
-                if line[:1] in (" ", "\t", "-"):
-                    # A block-list entry, or an indented continuation of one.
-                    if current_key is not None and stripped.startswith("- "):
-                        out.setdefault(current_key, []).append(_unquote(stripped[2:]))
-                    continue
-                key, sep, value = line.partition(":")
-                if not sep:
-                    current_key = None
-                    continue
-                key = key.strip()
-                if key not in wanted:
-                    if key in _INERT_ON_A_BATON:
-                        # Reserved out-key, never a record field: this scanner's
-                        # contract is that an undeclared key reads as ABSENT, and
-                        # an inert key must stay absent to every reader of `_fm`
-                        # while still being reportable by the gate.
-                        out.setdefault("_inert", []).append(key)
-                    current_key = None
-                    continue
-                # Comment-strip BEFORE the shape decision: an inline list with a
-                # trailing comment no longer ends in `]` and would be read as a
-                # scalar. See `_strip_comment`.
-                value = _strip_comment(value)
-                if value == "":
-                    # A bare `key:` — possibly with a trailing comment — opens a
-                    # block list; the entries follow on subsequent lines.
-                    current_key = key
-                    out.setdefault(key, [])
-                elif value.startswith("[") and value.endswith("]"):
-                    current_key = None
-                    out[key] = [
-                        _unquote(item)
-                        for item in value[1:-1].split(",")
-                        if _unquote(item)
-                    ]
-                else:
-                    current_key = None
-                    out[key] = _unquote(value)
+                lines.append(line)
     except OSError:
         return {}
+
+    current_key: Optional[str] = None
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            i += 1
+            continue
+        if line[:1] in (" ", "\t", "-"):
+            # A block-list entry, or an indented continuation of one.
+            if current_key is not None and stripped.startswith("- "):
+                out.setdefault(current_key, []).append(_unquote(stripped[2:]))
+            i += 1
+            continue
+        key, sep, value = line.partition(":")
+        if not sep:
+            current_key = None
+            i += 1
+            continue
+        key = key.strip()
+        if key not in wanted:
+            if key in _INERT_ON_A_BATON:
+                # Reserved out-key, never a record field: this scanner's
+                # contract is that an undeclared key reads as ABSENT, and
+                # an inert key must stay absent to every reader of `_fm`
+                # while still being reportable by the gate.
+                out.setdefault("_inert", []).append(key)
+            current_key = None
+            i += 1
+            continue
+        # Comment-strip BEFORE the shape decision: an inline list with a
+        # trailing comment no longer ends in `]` and would be read as a
+        # scalar. See `_strip_comment`.
+        value = _strip_comment(value)
+        if _BLOCK_SCALAR_RE.match(value):
+            # A block-scalar INDICATOR (`|` literal or `>` folded, e.g. `>-`),
+            # never a value in itself. Reading it as a plain scalar stored the
+            # two-character indicator itself as the field's value — a held
+            # baton's `plan_blitz_hold_reason: >-` reported literally as ">-"
+            # rather than the folded text on the lines beneath it. Delegate to
+            # the general parser's own consumer
+            # (`coordinator_core.dag._consume_block_scalar`) so this scanner's
+            # reading of a block scalar can never diverge from the oracle
+            # `test_narrow_scan_agrees_with_the_general_parser` checks it
+            # against.
+            current_key = None
+            out[key], i = _consume_block_scalar(lines, i + 1, 0)
+            continue
+        if value == "":
+            # A bare `key:` — possibly with a trailing comment — opens a
+            # block list; the entries follow on subsequent lines.
+            current_key = key
+            out.setdefault(key, [])
+        elif value.startswith("[") and value.endswith("]"):
+            current_key = None
+            out[key] = [
+                _unquote(item)
+                for item in value[1:-1].split(",")
+                if _unquote(item)
+            ]
+        else:
+            current_key = None
+            out[key] = _unquote(value)
+        i += 1
     return out
 
 
@@ -427,6 +508,8 @@ def _read_frontmatter_head(path: Path) -> Dict[str, Any]:
     independent reading of the same bytes, and because a caller debugging a
     disputed gate wants the whole record rather than the declared subset.
     """
+    from coordinator_core.dag import _parse_frontmatter
+
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:

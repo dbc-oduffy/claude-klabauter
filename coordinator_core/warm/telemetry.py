@@ -127,6 +127,10 @@ __all__ = [
     "election_lost_path",
     "record_election_lost",
     "election_lost_samples",
+    "WORKER_POOL_DEPTH_FILENAME",
+    "worker_pool_depth_path",
+    "record_worker_pool_depth",
+    "worker_pool_depth_samples",
     "DEGRADE_FILENAME",
     "KIND_COLD_RUN",
     "KIND_HOOK_TIMEOUT",
@@ -383,6 +387,70 @@ def election_lost_samples(engine_root: Optional[Path] = None) -> list:
     """Every recorded election-lost row, oldest first. Absent file reads as
     an empty list; an unparseable row is skipped, not fatal."""
     path = election_lost_path(engine_root)
+    rows: list = []
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return []
+    return rows
+
+
+WORKER_POOL_DEPTH_FILENAME = "worker-pool-depth.jsonl"
+
+
+def worker_pool_depth_path(engine_root: Optional[Path] = None) -> Path:
+    """`<svc dir>/worker-pool-depth.jsonl` -- one row per idle-watchdog tick
+    that sampled a running server's live `_worker_loop` thread count
+    (`warm/server.py :: _ServerContext.worker_pool_depth`, plan
+    2026-09-06-warm-engine-survival-and-door-measurement.md T1). A depth
+    below `WORKER_POOL_SIZE` (30) is the die-off `_worker_loop`'s own
+    `except Exception` guard exists to close -- this is the only recorder
+    that can ever observe one, since nothing else counts live worker
+    threads."""
+    return svc_dir(engine_root) / WORKER_POOL_DEPTH_FILENAME
+
+
+def record_worker_pool_depth(
+    *,
+    depth: int,
+    pid: int,
+    engine_root: Optional[Path] = None,
+) -> None:
+    """Append one row recording a running server's live worker-thread
+    count, sampled on the idle watchdog's own bounded tick
+    (`_ServerContext._idle_tick`, every `_IDLE_WATCHDOG_POLL_SECS`) --
+    never a new sampling process or loop of its own (CLAUDE.md § Load
+    norm).
+
+    Best-effort: never raises, matching every other recorder here.
+    """
+    record = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "depth": depth,
+        "pid": pid,
+    }
+    path = worker_pool_depth_path(engine_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked_write.held_lock(path, holder_label="warm.telemetry.worker_pool_depth"):
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+def worker_pool_depth_samples(engine_root: Optional[Path] = None) -> list:
+    """Every recorded worker-pool-depth row, oldest first. Absent file
+    reads as an empty list; an unparseable row is skipped, not fatal."""
+    path = worker_pool_depth_path(engine_root)
     rows: list = []
     try:
         with path.open("r", encoding="utf-8") as fh:

@@ -16,6 +16,7 @@ import coordinator_core.resolution.facade as facade_module
 from coordinator_core.resolution.facade import (
     OperatorConfigError,
     guard_plugin_root,
+    probe_engine_reachability,
     resolve_operator_config,
 )
 from coordinator_core.trusted_root_guard import (
@@ -342,3 +343,92 @@ def test_resolve_operator_config_settings_home_nonexistent_is_corrupt(tmp_path):
 
     with pytest.raises(OperatorConfigError, match="settings_home"):
         resolve_operator_config(env=env)
+
+
+# ---------------------------------------------------------------------------
+# probe_engine_reachability — claude-klabauter#31 item 2
+# ---------------------------------------------------------------------------
+
+
+def test_probe_engine_reachability_reachable_via_registry_reports_its_rung(tmp_path):
+    settings_home = tmp_path / "settings-home"
+    (settings_home / "machine-local").mkdir(parents=True)
+    claude_klabauter_root = tmp_path / "claude-klabauter"
+    claude_klabauter_root.mkdir()
+    (settings_home / "machine-local" / "registry.local.toml").write_text(
+        f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
+    )
+    env = {"COORDINATOR_SETTINGS_HOME": str(settings_home), "HOME": str(tmp_path / "home")}
+
+    verdict = probe_engine_reachability(env=env)
+
+    assert verdict.reachable is True
+    assert verdict.rung == "registry repos.claude_klabauter"
+    assert verdict.root == str(claude_klabauter_root)
+    assert verdict.remediation is None
+
+
+def test_probe_engine_reachability_reachable_via_durable_file_reports_its_rung(tmp_path):
+    settings_home = tmp_path / "settings-home"
+    (settings_home / "machine-local").mkdir(parents=True)
+    claude_klabauter_root = tmp_path / "claude-klabauter"
+    claude_klabauter_root.mkdir()
+    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root) + "\n")
+    env = {"COORDINATOR_SETTINGS_HOME": str(settings_home), "HOME": str(tmp_path / "home")}
+
+    verdict = probe_engine_reachability(env=env)
+
+    assert verdict.reachable is True
+    assert verdict.rung == f"file {settings_home / 'machine-local' / '.claude-klabauter-live-root'}"
+    assert verdict.root == str(claude_klabauter_root)
+    assert verdict.remediation is None
+
+
+def test_probe_engine_reachability_unreachable_names_runnable_remediation_script(tmp_path):
+    env = {
+        "COORDINATOR_SETTINGS_HOME": str(tmp_path / "no-such-settings-home"),
+        "HOME": str(tmp_path / "home"),
+    }
+
+    verdict = probe_engine_reachability(env=env)
+
+    assert verdict.reachable is False
+    assert verdict.rung is None
+    assert verdict.root is None
+    assert verdict.remediation is not None
+    assert "scripts/setup.py" in verdict.remediation
+    # Cold-path remediation names a runnable script, never a slash command.
+    assert not verdict.remediation.lstrip().startswith("/")
+    assert "/coordinator:" not in verdict.remediation
+
+
+def test_probe_engine_reachability_stale_pointer_to_missing_dir_is_unreachable(tmp_path):
+    settings_home = tmp_path / "settings-home"
+    (settings_home / "machine-local").mkdir(parents=True)
+    stale_root = tmp_path / "no-longer-on-disk"
+    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(str(stale_root) + "\n")
+    env = {"COORDINATOR_SETTINGS_HOME": str(settings_home), "HOME": str(tmp_path / "home")}
+
+    verdict = probe_engine_reachability(env=env)
+
+    assert verdict.reachable is False
+    assert verdict.remediation is not None
+
+
+def test_probe_engine_reachability_never_calls_trust_guard(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        facade_module,
+        "coordinator_trusted_root_guard",
+        lambda **kwargs: calls.append(kwargs) or True,
+    )
+    claude_klabauter_root = tmp_path / "claude-klabauter"
+    claude_klabauter_root.mkdir()
+    settings_home = tmp_path / "settings-home"
+    (settings_home / "machine-local").mkdir(parents=True)
+    (settings_home / "machine-local" / ".claude-klabauter-live-root").write_text(str(claude_klabauter_root) + "\n")
+    env = {"COORDINATOR_SETTINGS_HOME": str(settings_home), "HOME": str(tmp_path / "home")}
+
+    probe_engine_reachability(env=env)
+
+    assert calls == []

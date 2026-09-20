@@ -42,6 +42,7 @@ from typing import Optional
 
 from coordinator_core.hooks._envelope import allow_advisory, no_advisory
 from coordinator_core.hooks.derive_global_doctrine_live_copy import (
+    _display_path,
     _resolve_doctrine_repo_root,
 )
 from coordinator_core.hooks.support.message_envelope import compose, render
@@ -144,72 +145,58 @@ def _exc_reason(exc: Exception) -> str:
     return getattr(exc, "strerror", None) or str(exc)
 
 
-def _derived_write_advisory(file_path: str, row: ResolvedRow):
+def _derived_write_advisory(file_path: str, row: ResolvedRow, repo_root: Path):
+    canonical = _display_path(row.canonical, repo_root)
     if row.mode == CONTRACT_ONLY:
         if row.parity_test:
             prose = (
-                f"{file_path} is hand-maintained DERIVED copy -- NOT reverted. "
-                f"Keep {row.parity_test} passing; re-author canonical."
+                f"hand-maintained DERIVED copy, not reverted -- keep "
+                f"{row.parity_test} passing; re-author {canonical}."
             )
         else:
-            prose = (
-                f"{file_path} is hand-maintained DERIVED copy -- NOT "
-                "reverted (no parity test yet; divergence is temporary)."
-            )
-        return compose(prose, alternative=str(row.canonical), anchor=_WIKI_ANCHOR)
-    prose = (
-        f"{file_path} is a DERIVED copy -- NOT propagated (lost on next "
-        "canonical write). Re-author canonical."
-    )
-    return compose(prose, alternative=str(row.canonical), anchor=_WIKI_ANCHOR)
-
-
-def _read_failure_message(row: ResolvedRow, exc: Exception):
-    prose = f"FAILED to read canonical -- derived NOT re-derived ({_exc_reason(exc)})."
-    return compose(prose, alternative=str(row.canonical), anchor=_WIKI_ANCHOR)
-
-
-def _contract_only_message(row: ResolvedRow):
-    if row.parity_test:
-        prose = (
-            f"canonical is contract-only -- derived NOT re-derived. Confirm "
-            f"{row.parity_test} passes, or hand-edit derived instead."
-        )
+            prose = f"hand-maintained DERIVED copy, not reverted (no parity test yet); re-author {canonical}."
     else:
-        prose = (
-            "canonical is contract-only -- derived NOT re-derived. No "
-            "parity test yet; divergence is temporary."
-        )
-    return compose(prose, alternative=str(row.derived), anchor=_WIKI_ANCHOR)
+        prose = f"DERIVED copy, not propagated -- lost on next canonical write; re-author {canonical}."
+    return compose(prose, anchor=_WIKI_ANCHOR)
 
 
-def _write_failure_message(row: ResolvedRow, exc: Exception):
-    prose = (
-        f"FAILED to write derived -- canonical read OK, derivation did NOT "
-        f"complete ({_exc_reason(exc)})."
-    )
-    return compose(prose, alternative=str(row.derived), anchor=_WIKI_ANCHOR)
+def _read_failure_message(row: ResolvedRow, exc: Exception, repo_root: Path):
+    prose = f"could not read canonical, derived not re-derived ({_exc_reason(exc)})."
+    return compose(prose, anchor=_WIKI_ANCHOR)
 
 
-def _success_message(row: ResolvedRow, source_bytes: bytes):
-    prose = f"re-derived derived copy from canonical ({len(source_bytes)} bytes)."
-    return compose(prose, alternative=str(row.derived), anchor=_WIKI_ANCHOR)
+def _contract_only_message(row: ResolvedRow, repo_root: Path):
+    if row.parity_test:
+        prose = f"canonical is contract-only, derived not re-derived. Confirm {row.parity_test} passes."
+    else:
+        prose = "canonical is contract-only, derived not re-derived (no parity test yet)."
+    return compose(prose, anchor=_WIKI_ANCHOR)
 
 
-def _handle_canonical_write(row: ResolvedRow):
+def _write_failure_message(row: ResolvedRow, exc: Exception, repo_root: Path):
+    prose = f"could not write derived -- canonical read OK ({_exc_reason(exc)})."
+    return compose(prose, anchor=_WIKI_ANCHOR)
+
+
+def _success_message(row: ResolvedRow, source_bytes: bytes, repo_root: Path):
+    prose = f"re-derived {_display_path(row.derived, repo_root)} ({len(source_bytes)}B)."
+    return compose(prose, anchor=_WIKI_ANCHOR)
+
+
+def _handle_canonical_write(row: ResolvedRow, repo_root: Path):
     try:
         source_bytes = row.canonical.read_bytes()
     except Exception as exc:
-        return _read_failure_message(row, exc)
+        return _read_failure_message(row, exc, repo_root)
 
     try:
         _derive_or_raise(row)
     except ContractOnlyNotOverwritten:
-        return _contract_only_message(row)
+        return _contract_only_message(row, repo_root)
     except Exception as exc:
-        return _write_failure_message(row, exc)
+        return _write_failure_message(row, exc, repo_root)
 
-    return _success_message(row, source_bytes)
+    return _success_message(row, source_bytes, repo_root)
 
 
 def evaluate(payload: dict):
@@ -238,13 +225,15 @@ def evaluate(payload: dict):
 
     rows = _resolved_rows(repo_root)
 
+    resolved_repo_root = _resolve(repo_root)
+
     for row in rows:
         if written == row.derived:
-            return _derived_write_advisory(file_path, row)
+            return _derived_write_advisory(file_path, row, resolved_repo_root)
 
     for row in rows:
         if written == row.canonical:
-            return _handle_canonical_write(row)
+            return _handle_canonical_write(row, resolved_repo_root)
 
     return None
 

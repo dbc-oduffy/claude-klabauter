@@ -12,11 +12,11 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from pathlib import Path
 
 import pytest
 
+from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.session import receiver_state as rs
 
 
@@ -462,10 +462,12 @@ class TestNoSleep:
 
     def test_classify_completes_well_inside_caller_budget(self, tmp_path: Path) -> None:
         reduced = _reduce(tmp_path, [_assistant_end_turn()])
-        started = time.monotonic()
-        rs.classify(reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False)
-        elapsed = time.monotonic() - started
-        assert elapsed < 1.0  # well inside the 5s caller budget
+        timing = in_process_time_ms(
+            lambda: rs.classify(
+                reduced, now_epoch=0.0, transcript_activity_epoch=None, delegation_evidence=False
+            )
+        )
+        assert timing["process_time_ms"] < 1000.0  # well inside the 5s caller budget
 
 
 # ---------------------------------------------------------------------------

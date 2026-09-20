@@ -87,6 +87,16 @@ Verb contracts (mirrored from the JS spec):
       old field name consumed_at is ALSO stripped if present)
     - claimed_by: STRIPPED entirely (remove the key, not blank it; grandfathered
       old field name consumed_by is ALSO stripped if present)
+    - claimed_by_name: STRIPPED entirely and unconditionally (C2, docs/
+      reference/handoff-legal-state-table.md § Q2 sub-ruling) — an advisory
+      SNAPSHOT, never an identity join key; a stale post-release name is
+      the same false-trip shape the field's own docstring already says
+      this mechanism exists to prevent for claimed_by.
+    - release_evidence: <ISO-8601 timestamp of this unclaim> — STAMPED on
+      every call (C2, Q2), replace-if-present/insert-if-absent, never
+      cleared by a later claim/unclaim cycle. The durable fact
+      `archival.claimed_or_shipped` reads to answer "was this ever
+      claimed" for an unclaimed-then-superseded baton.
     - gate_dependency: STRIPPED entirely on the flip to ready_to_fire (remove the
       key, not blank it — the ready_to_fire→gate_dependency-forbidden cross-field
       rule requires absence; mirrors gate-recheck --cleared, matches DoE parity)
@@ -104,7 +114,11 @@ Verb contracts (mirrored from the JS spec):
       lifecycle question). This is the clean inverse of claim — a reparked
       handoff still carries status:claimed + claimed_by, which false-trips
       /pickup's claimed_by-idempotency gate ("already claimed"); unclaim
-      fully returns the node to the shelf.
+      fully returns the node to the shelf. C1-Q1 ruling (docs/reference/
+      handoff-legal-state-table.md § Q1): for a TERMINAL deployment_state
+      specifically, this refusal is correct DIRECTION, not a defect — the
+      refusal message names the ruling and points at the terminal verb's
+      own release path instead of a widened unclaim.
     - Fails loud (exit_code=1, no write) when this handoff's governing plan
       (joined by deliverable_id) is stamped status: implemented — the
       refusal names the plan (C7, docs/plans/2026-08-04-terminal-state-
@@ -261,7 +275,7 @@ import datetime
 import re
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, FrozenSet, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, NamedTuple, Optional, Tuple
 
 import yaml
 
@@ -393,6 +407,16 @@ def _status_is(value: Optional[str], target_new: str) -> bool:
 #: the frontmatter document must not write a retired value back out, even
 #: unchanged — read-on-legacy/write-on-current.
 _STATUS_OLD_TO_NEW = {"active": "open", "consumed": "claimed"}
+
+
+def _now_iso() -> str:
+    """UTC now, formatted `%Y-%m-%dT%H:%M:%SZ` — the same shape claimed_at/
+    park_note/last_gate_recheck already use on this axis (matches the
+    `datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")` idiom
+    already established across the tree, e.g. archive_stamp.py,
+    coordinator_setup_state.py). Used to stamp `_unclaim`'s `release_
+    evidence:` (C2, Q2)."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _canonicalize_legacy_status(fm: str, status: Optional[str]) -> str:
@@ -1246,7 +1270,6 @@ def _close(
     reason: str,
     worktree: Path,
     repo_root: Path,
-    live_children_recheck: Optional[Callable[[], dict]] = None,
 ) -> dict:
     """Apply close transition (deployment_state: <any, except shipped|continued>
     → closed, closed_reason: <reason>).
@@ -1287,28 +1310,13 @@ def _close(
     serialisation. Domain-abort paths raise MutateAbort from inside the
     mutate closure so the lock is released and no write occurs.
 
-    `live_children_recheck` (optional, zero-arg callable returning a dict
-    shaped like `handoff_children._handoff_has_live_children`'s reply —
-    i.e. `{"exit_code": 0|1|2, ...}`) is invoked INSIDE the `locked_rmw`
-    mutate closure, immediately before a real (non-idempotent) write is
-    built, so a caller with its own pre-write live-lineage-edge guard (see
-    `handoff_reconcile_close_terminal._handler`) can re-verify that guard
-    atomically with the write it gates, closing the TOCTOU window between
-    an unlocked pre-check and this function's own lock acquisition.
-    `exit_code != 1` (0 = a live edge now exists, 2 = indeterminate)
-    aborts the write via `MutateAbort` — same fail-closed posture as the
-    caller's own unlocked guard. Absent (None), `_close` behaves exactly
-    as before this recheck was added — no other caller of this function
-    supplies it.
-
-    Warning: `_close` itself is called via `asyncio.to_thread` by its
-    sole production caller, so a `live_children_recheck` that internally
-    calls `asyncio.run` is safe today only because that thread has no
-    running event loop. Any supplied `live_children_recheck` must not
-    assume the absence of a running event loop — a future caller that
-    invokes `_close` from inside an already-running loop would hit
-    `RuntimeError: asyncio.run() cannot be called from a running event
-    loop`.
+    Negative-spec (C2, census row 4): does NOT accept a `live_children_
+    recheck` parameter. That parameter (an optional zero-arg callable
+    re-verifying a live-lineage-edge guard atomically inside this
+    function's `locked_rmw` critical section) was removed here — its sole
+    documented production caller, `handoff_reconcile_close_terminal.py`,
+    is deleted from the tree, and zero other call site passed it. Zero
+    cost is not a reason to keep it.
     """
     if reason not in _CLOSED_REASONS:
         return _err(
@@ -1357,28 +1365,6 @@ def _close(
                 f'close refuses to overwrite deployment_state:"{deployment}" '
                 f"(already a different completed terminal) — {handoff_path}"
             )
-
-        # Live-lineage-edge re-check, INSIDE the locked_rmw critical section
-        # and immediately before the write is built — closes the TOCTOU gap
-        # between a caller's own unlocked pre-check (e.g.
-        # handoff_reconcile_close_terminal._handler's step-0 guard, which
-        # runs before this lock is even acquired) and this function's write.
-        # Only reachable here (past the idempotency no-op above), i.e. only
-        # when a real write is about to happen — the no-op path changes
-        # nothing so no successor edge it could stamp over.
-        if live_children_recheck is not None:
-            recheck = live_children_recheck()
-            recheck_exit = recheck.get("exit_code")
-            if recheck_exit != 1:
-                raise MutateAbort(
-                    f"close: live-lineage-edge re-check inside the lock "
-                    f"returned exit_code={recheck_exit} (0=live edge now "
-                    f"present, 2=indeterminate/fail-closed) for "
-                    f"{handoff_path} — refusing to stamp closed_reason:"
-                    f"{reason!r} over what is now (or may be) a live "
-                    f"successor edge: "
-                    f"{recheck.get('error') or recheck.get('children')}"
-                )
 
         fm = split.fm_text
 
@@ -1749,7 +1735,28 @@ def _unclaim(
         # Fail loud on any deployment_state other than in_flight/ready_to_fire —
         # unclaim is defined ONLY as the "back on the shelf" reset from a
         # claimed state; shipped/continued/closed/awaiting_gate are out of scope.
+        #
+        # C1-Q1 ruling (docs/reference/handoff-legal-state-table.md § Q1):
+        # this refusal is CORRECT, not a bug the routed memo's asks 2/3
+        # should relax — a terminal record already reached its end state
+        # through a different, deliberate verb (ship/supersede/close), and
+        # routing it back through unclaim would silently discard that
+        # verb's own evidence (shipped_in/continued_into/closed_reason)
+        # and re-arm work that is done. The message below says so
+        # explicitly rather than leaving the refusal unexplained.
         if deployment not in ("in_flight", "ready_to_fire"):
+            if (deployment or "").strip().lower() in HANDOFF_TERMINAL_DEPLOYMENT:
+                raise MutateAbort(
+                    f'unclaim refused — deployment_state "{deployment}" is '
+                    f"terminal ({handoff_path}). This is correct, not a bug "
+                    "(handoff-legal-state-table.md § Q1): a terminal record "
+                    "already reached its end state through a different, "
+                    "deliberate verb (ship/supersede/close); routing it "
+                    "back through unclaim would silently discard that "
+                    "verb's own evidence and re-arm finished work. The "
+                    "release path for a terminal record's claim is that "
+                    "verb's own release, not a widened unclaim."
+                )
             raise MutateAbort(
                 "unclaim requires deployment_state in {in_flight, ready_to_fire} "
                 f'(found "{deployment}") — {handoff_path}'
@@ -1811,6 +1818,30 @@ def _unclaim(
         fm = remove_fm_field(fm, "claimed_by")
         fm = remove_fm_field(fm, "consumed_at")
         fm = remove_fm_field(fm, "consumed_by")
+
+        # claimed_by_name — STRIPPED unconditionally (C2, Q2 sub-ruling), not
+        # blanked. It is an ADVISORY SNAPSHOT (schema description), never an
+        # identity join key — unlike claimed_at/claimed_by, it carries no
+        # evidentiary weight release_evidence needs to preserve, so once a
+        # claim is released it is simply stale display text and must go
+        # (the same false-trip shape the field's own docstring already says
+        # this mechanism exists to prevent for claimed_by). A full strip is
+        # cheaper than blanking to ""/null and leaves no false signal.
+        fm = remove_fm_field(fm, "claimed_by_name")
+
+        # release_evidence — the durable release-evidence field C1-Q2 names
+        # (docs/reference/handoff-legal-state-table.md § Q2), stamped on
+        # EVERY unclaim so an unclaimed-then-superseded baton still answers
+        # "was this ever claimed" — the fact `archival.claimed_or_shipped`
+        # (C3) reads as a third claimed-disjunct. Never cleared by a later
+        # claim/unclaim cycle (mirrors reaped_from_session's permanence
+        # discipline); replace-if-present/insert-if-absent, anchored after
+        # deployment_state like reaped_from_session/park_note above.
+        release_ts = _now_iso()
+        if read_fm_field(fm, "release_evidence") is not None:
+            fm = replace_fm_field(fm, "release_evidence", release_ts)
+        else:
+            fm = insert_fm_field(fm, "release_evidence", release_ts, "deployment_state")
 
         # Optional park_note — frontmatter only, never the body.
         if note:

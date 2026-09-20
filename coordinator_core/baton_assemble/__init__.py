@@ -521,7 +521,7 @@ def _compute_fresh_output_path(
     predecessor for handoff; origin_handoff_id/origin_session/etc. for
     spinoff). Nothing in this module's contract requires d1 to write BACK to
     that same path, and `coordinator-doc-new`'s `--out` write is an
-    unconditional overwrite (`open(out_path, "w", ...)`, no existence check)
+    unconditional overwrite (opens out_path for writing, no existence check)
     -- echoing an existing input into `--out` silently destroys it the
     moment d1 fires.
 
@@ -1276,7 +1276,7 @@ def _adopt_prior_attempt_scaffold_path(
     be the ONLY live child currently naming this predecessor satisfied every
     other condition below and was adopted as if it were this run's own
     residue -- and adoption is not idle: `coordinator-doc-new`'s `--out` is
-    an unconditional `open(out_path, "w")` (no existence check), so
+    an unconditional overwrite of out_path (no existence check), so
     misfiring here silently truncates a live peer's in-progress handoff back
     to a pristine scaffold for the entire span between that peer's d1 and
     d6. The harm is that overwrite, not merely an orphaned file.

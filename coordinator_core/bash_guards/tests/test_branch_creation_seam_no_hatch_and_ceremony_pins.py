@@ -1,16 +1,23 @@
-"""Cross-cutting pin tests for the branch-creation-seam guard trio
-(`block_noncanonical_branch_creation` / C1, `guard_branch_set_precedence` /
-C5, `guard_longlived_branch_naming` / C7).
+"""Cross-cutting pin tests for the branch-creation-seam guard
+(`block_noncanonical_branch_creation` / C1).
 
-This file does not exercise any one guard's full substrate table (each
-guard's own `test_*.py` owns that) -- it pins the plan's hardest
-CROSS-GUARD negative guarantees: the retired inline-override hatch stays
-dead (AC3), ceremony-side creation traffic never trips these guards (AC5),
-C1 alone never compares branch DATES to decide a verdict (AC9), rename is
-untouched by all three while `git branch <name>` create is C1-only (AC10/
-AC14), all three gate on `_is_hazard_repo` before any predicate (AC13), and
-C5's recency filter is a genuine `daily_branch` reuse, not a re-derived
-constant (AC16).
+This file does not exercise C1's full substrate table (its own `test_*.py`
+owns that) -- it pins the plan's hardest guarantees for the guard that
+survives this trio: the retired inline-override hatch stays dead (AC3),
+ceremony-side creation traffic never trips this guard (AC5), C1 alone never
+compares branch DATES to decide a verdict (AC9), rename is untouched while
+`git branch <name>` create is advised (AC10/AC14), and the guard gates on
+`_is_hazard_repo` before any predicate (AC13).
+
+Narrowed 2026-09-19 (docs/plans/2026-08-21-the-advisory-band-gets-smaller-
+cheaper-and-honest.md, C6): `guard_branch_set_precedence` (C5) and
+`guard_longlived_branch_naming` (C7) -- the other two members of the
+original trio -- were deleted (zero fires in 14 days, mild/no harm on
+noncompliance). Every assertion that exercised either guard specifically
+(AC16's recency-filter pin, C5's no-enumeration-when-not-hazard pin, and
+every explicit c5/c7 call inline in a shared test) is gone with them;
+`block_noncanonical_branch_creation` is deliberately KEPT (see the plan's
+own C6 body) and every assertion that pins IT survives unchanged.
 
 Spec: docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C6.
 """
@@ -24,11 +31,8 @@ import re
 import pytest
 
 from coordinator_core.bash_guards import block_noncanonical_branch_creation as c1
-from coordinator_core.bash_guards import guard_branch_set_precedence as c5
-from coordinator_core.bash_guards import guard_longlived_branch_naming as c7
-from coordinator_core import daily_branch
 
-_GUARDS = (c1, c5, c7)
+_GUARDS = (c1,)
 
 
 def _payload(command, cwd="/repo", tool_name="Bash"):
@@ -300,19 +304,6 @@ class TestAC3NoHatch:
         c1_ctx = _advisory_ctx(c1.check(_payload("git checkout -b fix/some-topic")))
         assert "COORDINATOR_OVERRIDE_BRANCH" not in c1_ctx
 
-        # C7 advisory (sanctioned longlived prefix).
-        c7_ctx = _advisory_ctx(c7.check(_payload("git checkout -b migration/topic-x")))
-        assert "COORDINATOR_OVERRIDE_BRANCH" not in c7_ctx
-
-        # C5 advisory (deterministic firing via injected provider).
-        monkeypatch.setattr(c5, "_ahead_of_main", lambda branch, cwd=None: 3)
-        monkeypatch.setattr(c5, "should_prompt_rename", lambda *a, **k: False)
-        provider = lambda: [("work/machine-b/2026-08-01", c5._now() - 60)]
-        c5_ctx = _advisory_ctx(
-            c5.check(_payload("git checkout -b work/machine-b/2026-08-03"), branch_set_provider=provider)
-        )
-        assert "COORDINATOR_OVERRIDE_BRANCH" not in c5_ctx
-
 
 # ---------------------------------------------------------------------------
 # AC5 -- ceremony non-regression (unit-level shape checks, not e2e runs).
@@ -320,12 +311,12 @@ class TestAC3NoHatch:
 # Ceremony-side creation (session_ensure_branch.py, workday-start-step0.py,
 # merge-recovery-and-tag-cut.py) mints these exact command shapes via
 # in-process subprocess.run(argv-list) and NEVER as a Bash-tool call -- so
-# the first, load-bearing leg of each case below is that none of these
-# guards even sees a non-Bash-tool invocation. The second leg is defense in
-# depth: even if one of these shapes WERE somehow observed at the Bash seam,
-# the behavior is the one already ratified elsewhere (bare today-branch
-# creation allows; -N collision suffixes are C1's own documented, deliberate
-# incoherence per daily_branch.py's module docstring; rename is untouched).
+# the first, load-bearing leg of each case below is that C1 never even sees
+# a non-Bash-tool invocation. The second leg is defense in depth: even if
+# one of these shapes WERE somehow observed at the Bash seam, the behavior
+# is the one already ratified elsewhere (bare today-branch creation allows;
+# -N collision suffixes are C1's own documented, deliberate incoherence per
+# daily_branch.py's module docstring; rename is untouched).
 # ---------------------------------------------------------------------------
 
 
@@ -445,127 +436,38 @@ class TestAC9NoDateComparisonInC1:
 
 
 # ---------------------------------------------------------------------------
-# AC10/AC14 -- rename untouched by all three; `git branch <name>` create is
-# C1-only.
+# AC10/AC14 -- rename untouched; `git branch <name>` create is advised.
 # ---------------------------------------------------------------------------
 
 
 class TestAC10AC14RenameVsCreate:
     @pytest.mark.parametrize("flag", ["-m", "-M"])
-    def test_branch_rename_untouched_by_all_three(self, flag):
+    def test_branch_rename_untouched(self, flag):
         cmd = "git branch %s old-name new-name" % flag
         for g in _GUARDS:
             assert g.check(_payload(cmd)) is None
 
-    def test_branch_create_advised_by_c1_only(self):
+    def test_branch_create_advised_by_c1(self):
         # C1 fires (advisory, post-2ac049c5b flip -- see TestAC3NoHatch's
-        # class-level note above); C5/C7 do not even inspect `git branch`
-        # -- see each module's own docstring ("WHAT THIS DOES"/"Injection
-        # seam").
+        # class-level note above).
         cmd = "git branch some-noncanonical-name"
         _advisory_ctx(c1.check(_payload(cmd)))
-        assert c5.check(_payload(cmd)) is None
-        assert c7.check(_payload(cmd)) is None
 
 
 # ---------------------------------------------------------------------------
-# AC13 -- all three gate on _is_hazard_repo BEFORE evaluating any predicate.
+# AC13 -- C1 gates on _is_hazard_repo BEFORE evaluating any predicate.
 # ---------------------------------------------------------------------------
 
 
 class TestAC13HazardRepoGateFirst:
-    def test_all_three_pass_silently_when_not_a_hazard_repo(self, monkeypatch):
+    def test_passes_silently_when_not_a_hazard_repo(self, monkeypatch):
         for g in _GUARDS:
             monkeypatch.setattr(g, "_is_hazard_repo", lambda git_root: False)
 
         shapes = [
             "git checkout -b fix/some-topic",  # C1 would otherwise deny
-            "git checkout -b migration/some-topic",  # C7 would otherwise advise
             "git branch fix/some-topic",  # C1 would otherwise deny
         ]
         for cmd in shapes:
             for g in _GUARDS:
                 assert g.check(_payload(cmd)) is None
-
-    def test_c5_passes_silently_and_spends_no_enumeration_when_not_a_hazard_repo(self, monkeypatch):
-        monkeypatch.setattr(c5, "_is_hazard_repo", lambda git_root: False)
-        calls = []
-        monkeypatch.setattr(c5, "_other_canonical_branches", lambda cwd=None: calls.append(1) or [])
-        out = c5.check(_payload("git checkout -b work/machine-b/2026-08-01"))
-        assert out is None
-        assert calls == []
-
-
-# ---------------------------------------------------------------------------
-# AC16 -- C5's recency filter reuses daily_branch.should_prompt_rename and
-# _HOURS_48_SECONDS by IMPORT/CALL, not a re-derived constant.
-# ---------------------------------------------------------------------------
-
-
-class TestAC16RecencyFilterIsRealReuse:
-    def test_identity_reuse_not_a_local_reimplementation(self):
-        assert c5.should_prompt_rename is daily_branch.should_prompt_rename
-        assert c5._HOURS_48_SECONDS == daily_branch._HOURS_48_SECONDS
-        assert c5._HOURS_48_SECONDS is daily_branch._HOURS_48_SECONDS
-
-    def test_real_should_prompt_rename_excludes_day_roll_candidate(self, monkeypatch):
-        """Behavioural, injected epochs, REAL (unmocked) should_prompt_rename:
-        a same-shape candidate whose span does not yet cover "today" and
-        whose last commit is fresh is the day-roll case Step 0's rename
-        path owns -- C5 must not also offer it as a resume target."""
-        fixed_now = 1722700000.0
-        fixed_today = "2026-08-03"
-        monkeypatch.setattr(c5, "resolve_git_root", lambda cwd=None: "/repo")
-        monkeypatch.setattr(c5, "_is_hazard_repo", lambda git_root: True)
-        monkeypatch.setattr(c5, "_now", lambda: fixed_now)
-        monkeypatch.setattr(c5, "_today", lambda: fixed_today)
-        monkeypatch.setattr(c5, "_ahead_of_main", lambda branch, cwd=None: 5)
-
-        recent_epoch = fixed_now - 3600  # 1h old, well within 48h
-        provider = lambda: [("work/machine-b/2026-08-01", recent_epoch)]  # span end != today
-
-        out = c5.check(
-            _payload("git checkout -b work/machine-b/2026-08-03"),
-            branch_set_provider=provider,
-        )
-        assert out is None, "real should_prompt_rename should have excluded this day-roll candidate"
-
-    def test_real_should_prompt_rename_survives_when_span_already_covers_today(self, monkeypatch):
-        """Contrast case: a same-shape candidate whose span END already
-        equals today survives the real should_prompt_rename leg (False --
-        no rename needed), proving the exclusion above is genuinely driven
-        by daily_branch's own logic, not an always-exclude stub."""
-        fixed_now = 1722700000.0
-        fixed_today = "2026-08-03"
-        monkeypatch.setattr(c5, "resolve_git_root", lambda cwd=None: "/repo")
-        monkeypatch.setattr(c5, "_is_hazard_repo", lambda git_root: True)
-        monkeypatch.setattr(c5, "_now", lambda: fixed_now)
-        monkeypatch.setattr(c5, "_today", lambda: fixed_today)
-        monkeypatch.setattr(c5, "_ahead_of_main", lambda branch, cwd=None: 5)
-
-        recent_epoch = fixed_now - 3600
-        provider = lambda: [("work/machine-b/2026-08-03", recent_epoch)]  # span end == today
-
-        out = c5.check(
-            _payload("git checkout -b work/other-machine/2026-08-03"),
-            branch_set_provider=provider,
-        )
-        _advisory_ctx(out)
-
-    def test_real_age_leg_excludes_stale_candidate(self, monkeypatch):
-        fixed_now = 1722700000.0
-        fixed_today = "2026-08-03"
-        monkeypatch.setattr(c5, "resolve_git_root", lambda cwd=None: "/repo")
-        monkeypatch.setattr(c5, "_is_hazard_repo", lambda git_root: True)
-        monkeypatch.setattr(c5, "_now", lambda: fixed_now)
-        monkeypatch.setattr(c5, "_today", lambda: fixed_today)
-        monkeypatch.setattr(c5, "_ahead_of_main", lambda branch, cwd=None: 5)
-
-        stale_epoch = fixed_now - (daily_branch._HOURS_48_SECONDS + 3600)
-        provider = lambda: [("work/machine-b/2026-07-20", stale_epoch)]
-
-        out = c5.check(
-            _payload("git checkout -b work/machine-b/2026-08-03"),
-            branch_set_provider=provider,
-        )
-        assert out is None

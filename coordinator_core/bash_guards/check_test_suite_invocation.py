@@ -2,9 +2,12 @@
 hard-deny guard for **test-breadth invocation authority** (DoE's DR-088, layers
 2, 3, 5 and 6 of the six-layer test-breadth ladder).
 
-Three ordered deny legs over one shared classifier -- identity, THEN
-authority, THEN resource; a caller with no standing to run a suite at all is
-told so before it is ever told to wait for the machine:
+Ordered deny legs over one shared classifier -- identity, THEN authority,
+THEN resource; a caller with no standing to run a suite at all is told so
+before it is ever told to wait for the machine. The resource rung has two
+halves, because the ladder's two tiers have two different bounds: ONE
+suite-shaped run at a time machine-wide (leg 3), and K scoped runs at a time
+machine-wide (leg 0.5):
 
   0. PRECISION leg (layer 3, R9, fail-OPEN without a cwd) -- a NON-suite-shaped
      (Tier T) command issued by a SUBAGENT is denied when it names a DIRECTORY
@@ -22,6 +25,51 @@ told so before it is ever told to wait for the machine:
      ruling.md``); DoE refused a breadth/test-count term in the same ruling
      (R8) -- a rule the classifier cannot evaluate without collecting is not
      a rule.
+
+  0.5. TIER-T CONCURRENCY leg (the resource half of Tier T, fail-OPEN on
+     infra) -- a SCOPED (Tier T) command issued by a SUBAGENT is ALLOWED with
+     an ``updatedInput`` rewrite routing it through ``with-tier-t-slot``, the
+     wrapper that takes one slot of the machine-wide K-slot semaphore in
+     ``coordinator_core.testing.tier_t_slots`` and BLOCKS until one is free. K
+     is per-machine, derived fresh from the same ``derive_worker_cap()``
+     formula that bounds xdist workers. A CHAINED command degrades to an
+     advisory rather than a rewrite (BX-12's single-segment rule -- never
+     substitute a chain this guard did not parse).
+
+     THIS LEG NEVER DENIES, and that is not a stylistic choice. It is the
+     property that keeps it a resource control rather than an authority one.
+     The first implementation DID deny, and turned 29 existing assertions red
+     in one run -- assertions pinning "a subagent's scoped run is allowed",
+     i.e. the carve-out itself. They were right and the leg was wrong: a
+     control that expresses itself as a refusal IS an authority control, no
+     matter what its docstring claims, and narrowing Tier T is another plane's
+     ruling to change (R9), not this repo's. A guard cannot say "wait" -- but
+     it can hand back a command that waits.
+
+     So this does NOT narrow the Tier-T carve-out in the negative spec below,
+     and must never be "simplified" into something that does: file- and
+     node-id-scoped invocations remain permitted for everyone, always. The leg
+     asks only HOW MANY may run at once -- a resource question, not an
+     authority one. The distinction is the whole design: leg 0 bounds what a single
+     dispatched caller may name, the mutex leg (3) bounds concurrency for
+     suite-shaped commands only, and between them Tier T had an authority bound
+     and no resource bound at any N.
+
+     The incident, stated correctly because the obvious reading is wrong: on
+     2026-09-20 a ``/bug-blitz`` over an 876-record backlog took the box to a
+     15-minute load average of 17.83. It was NOT concurrent suites -- the mutex
+     worked, killing the one suite-shaped run at its 2700s ceiling with 33
+     processes live. The damage came from the TRIAGE leg, which had not yet
+     reached its executors, issuing hundreds of scoped runs. Every one was
+     individually cheap (0.18s, ~72MB measured) and every one was correctly
+     allowed. The cost was the PRODUCT, and no artifact in the chain could see
+     a product: the ceremony's evidence bar ("``already-fixed`` needs the
+     failing case run against HEAD") is right, this guard's carve-out is right,
+     and composed over 876 records they multiply into a spawn count neither can
+     observe.
+
+     The EM is deliberately unaffected, matching leg 0's subagent-only scope: a
+     single session cannot fan out, so its scoped runs are already serial.
 
   1. IDENTITY leg (layer 3, fail-CLOSED) -- a *suite-shaped* test command
      issued by a SUBAGENT is denied. Tier T (a path/node-id-scoped invocation
@@ -131,12 +179,18 @@ Negative spec -- what this guard deliberately does NOT do:
   - It does NOT raw-substring-match ``agent_id`` against the stdin JSON. A
     nested ``tool_response.agent_id`` would false-positive on main-loop calls;
     only the TOP-LEVEL dict key is read.
-  - It does NOT deny FILE- or NODE-ID-scoped invocations. ``pytest
-    path/test_x.py``, ``pytest path/test_x.py::test_case`` and the BARE form
-    ``pytest -k expr`` (no positional at all) are Tier T and are allowed for
-    everyone, always -- a node id stays permitted for a subagent regardless
+  - It does NOT deny FILE- or NODE-ID-scoped invocations ON AUTHORITY
+    GROUNDS. ``pytest path/test_x.py``, ``pytest path/test_x.py::test_case``
+    and the BARE form ``pytest -k expr`` (no positional at all) are Tier T and
+    are allowed for everyone, always -- a node id stays permitted for a subagent regardless
     of its touched set, which is what keeps pre-existing-failure verification
     (re-running the one failing test you did not author) legal under leg 0.
+    Leg 0.5 does not change this and is NOT an exception to it: a scoped run
+    from a subagent is still ALLOWED -- it is merely rewritten to route
+    through ``with-tier-t-slot`` so the box can bound how many execute at
+    once, and the wrapper waits rather than refusing. Anyone reading this bullet as "Tier T is
+    unconditionally unmediated" and deleting leg 0.5 on that basis reopens the
+    2026-09-20 incident: the carve-out is about AUTHORITY, and always was.
     ``-k``/``--lf`` alongside a positional that names a ``testpaths`` root
     (``pytest tests/ -k expr`` where ``testpaths = ["tests"]``) is NOT Tier
     T -- see the 2026-08-14 classifier correction below.
@@ -2332,6 +2386,157 @@ def _deny_reason_wrapper_required(detected: str, cmd_safe: str) -> str:
     ) % (cmd_safe, detected, cmd_safe)
 
 
+_WITH_TIER_T_SLOT_BASENAMES = frozenset({
+    "with-tier-t-slot", "with-tier-t-slot.cmd", "with-tier-t-slot.ps1",
+})
+
+
+def _command_wrapped_in_tier_t_slot(
+    cmd: str,
+    dialect: Optional[_Dialect],
+) -> bool:
+    """Does every RUNNER-INVOKING segment of ``cmd`` route through
+    ``with-tier-t-slot``?
+
+    Per-segment by construction, for the same reason
+    ``_command_wrapped_in_suite_mutex`` is: a decoy leg
+    (``with-tier-t-slot -- true && python -m pytest x.py``) would otherwise
+    satisfy a bare token-presence scan while the real run took no slot. The
+    predicate that matters is "the segment that spawns the runner is the
+    segment that is wrapped", never "the wrapper appears somewhere".
+
+    Keyed on ``_runner_recognized`` rather than on suite-shape: this leg's
+    subject is precisely the command that is NOT suite-shaped (a scoped
+    Tier-T run), so the suite classifiers all return nothing for it and only
+    the runner-recognition predicate can see it at all.
+
+    Returns True when no segment invokes a runner — a command with nothing to
+    bound is trivially compliant, and this leg must never deny something it
+    is not the control for.
+    """
+    runner_segments = 0
+    wrapped_runner_segments = 0
+    for raw_argv in _segment_argvs(cmd, dialect):
+        idx = 0
+        n = len(raw_argv)
+        while idx < n and _ENV_ASSIGN_RE.match(raw_argv[idx]):
+            idx += 1
+        wrapped = idx < n and _base(raw_argv[idx]).lower() in _WITH_TIER_T_SLOT_BASENAMES
+        stripped = _strip_command_prefix(raw_argv)
+        if not stripped or not _runner_recognized(stripped):
+            continue
+        runner_segments += 1
+        if wrapped:
+            wrapped_runner_segments += 1
+    return runner_segments == wrapped_runner_segments
+
+
+def _tier_t_slot_verdict(
+    cmd: str,
+    dialect: Optional[_Dialect],
+    segments_argv: Sequence[Sequence[str]],
+) -> Optional[Dict[str, Any]]:
+    """Route a dispatched caller's unwrapped scoped run through the semaphore.
+
+    Returns an ALLOW -- never a deny. That is the whole point of this leg and
+    the reason it can exist without moving DR-088's Tier-T contract: the
+    command still runs, the caller still needs no authorization, and R9 is
+    untouched. What changes is only that the run now takes a slot, and waits
+    when all K are taken.
+
+    The first implementation of this leg DENIED, and was wrong. It turned 29
+    existing assertions red at once, and those assertions were right: they
+    pin "a subagent's scoped run is allowed", which is the carve-out itself.
+    A resource control that expresses itself as a refusal is indistinguishable
+    from an authority control no matter what its docstring claims. A guard
+    cannot say "wait" -- but it can hand back a command that waits, and the
+    wrapper does the waiting where the command's lifetime is actually known.
+
+    Two shapes, following the single-segment rule BX-12 established for
+    ``_allow_rewrite`` in the sibling guard module after a full-command
+    substitution silently dropped the unmatched half of a chain:
+
+      - A LONE runner segment is rewritten whole
+        (``updatedInput.command``), because here the matched segment IS the
+        entire command and the substitution is total.
+      - A CHAINED command degrades to an advisory naming the wrapped form.
+        Rewriting it would mean reconstructing a shell chain this function
+        never parsed for quoting, redirection or precedence -- exactly the
+        "clever, unverified substitution" the sibling docstring warns against.
+        The run proceeds unslotted; an unbounded chained run is a smaller
+        harm than a corrupted one.
+    """
+    if not any(_runner_recognized(list(argv)) for argv in segments_argv):
+        return None
+
+    cmd_safe = _sanitize(cmd)
+    taken, cap = _tier_t_occupancy()
+    wrapped = "with-tier-t-slot -- %s" % cmd.strip()
+
+    note = (
+        "Routed through the Tier-T slot semaphore (%d/%d slots taken). Your "
+        "command is unchanged and still runs; it now takes one of %d slots on "
+        "this box and waits if none is free.\n\n"
+        "Nothing is being refused and there is nothing to ask for. A single "
+        "scoped run is cheap -- it is hundreds at once that took this box down "
+        "on 2026-09-20, without any one of them being wrong."
+    ) % (taken, cap, cap)
+
+    if len(segments_argv) == 1:
+        return _allow_rewrite_tier_t(wrapped, note)
+
+    return _advisory_tier_t(
+        "Run this through the Tier-T slot semaphore so the box can bound how "
+        "many scoped runs execute at once:\n"
+        "  with-tier-t-slot -- <the test segment of your command>\n\n"
+        "Not applied automatically here: your command chains several segments, "
+        "and rewriting it whole would mean reconstructing a chain this guard "
+        "did not parse. Allowed as-is.\n\n"
+        "  Slots:   %d/%d taken\n"
+        "  Command: %s" % (taken, cap, cmd_safe)
+    )
+
+
+def _allow_rewrite_tier_t(new_cmd: str, ctx: str) -> Dict[str, Any]:
+    """ALLOW carrying a replacement command. Mirrors ``dispatch_checks._allow_rewrite``."""
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "updatedInput": {"command": new_cmd},
+            "additionalContext": ctx,
+        }
+    }
+
+
+def _advisory_tier_t(msg: str) -> Dict[str, Any]:
+    """ALLOW carrying only a note. Mirrors ``dispatch_checks._advisory``."""
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "additionalContext": msg,
+        }
+    }
+
+
+def _tier_t_occupancy() -> Tuple[int, int]:
+    """Return ``(taken, cap)`` for the Tier-T semaphore. Never raises.
+
+    Imported lazily and swallowed defensively: this guard must render a deny
+    even on a box where the semaphore's state directory is unreadable, and a
+    resource control whose read path can explode would take down the guard
+    that consults it.
+    """
+    try:
+        from coordinator_core.testing import tier_t_slots
+
+        taken, cap, _ = tier_t_slots.occupancy()
+        return taken, cap
+    except Exception:
+        return 0, 0
+
+
 def _deny_reason_mutex(detected: str, cmd_safe: str, holder: Dict[str, Any]) -> str:
     return (
         "Wait for the in-flight suite run, or scope this to what you touched "
@@ -3206,6 +3411,39 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 payload=payload,
                 git_root=repo_root,
             ))
+
+        # TIER-T CONCURRENCY leg (layer 6's missing half, fail-OPEN on infra)
+        # -- a dispatched caller's SCOPED test run is denied unless it routes
+        # through `with-tier-t-slot`, which takes one slot of the machine-wide
+        # K-slot semaphore and WAITS when all K are taken.
+        #
+        # Sited here, inside the `is_subagent and detected is None` branch and
+        # after the precision leg, because those two conditions are exactly
+        # this leg's subject: a caller with no suite authority running a
+        # command no suite classifier can see. It is strictly additive in the
+        # same sense leg 0 is -- it can only reach commands every other leg
+        # allows -- and it never restates a deny another leg owns with a worse
+        # diagnosis (a suite-shaped subagent command is an identity problem and
+        # the identity leg below says so).
+        #
+        # WHY THIS IS NOT A NARROWING OF THE TIER-T CARVE-OUT, which would be
+        # out of this repo's authority to make: the negative spec above still
+        # holds unchanged -- file- and node-id-scoped invocations remain
+        # permitted for everyone, always, and DoE's R9 ruling that a node id
+        # stays legal for a subagent regardless of its touched set is untouched.
+        # Nothing here asks whether the caller MAY run this. It asks only how
+        # many may run AT ONCE, which is a resource question the ladder had no
+        # answer to at any N: leg 0 gives Tier T an authority bound, the mutex
+        # leg covers only suite-shaped commands, and the gap between them is
+        # where 2026-09-20's incident went through -- hundreds of individually
+        # legal scoped runs from one fan-out, every one of them correctly
+        # allowed, together taking the box to a 15-minute load average of 17.83.
+        # The EM is deliberately unaffected: one session cannot fan out, and its
+        # scoped runs are serial by construction.
+        if _command_wrapped_in_tier_t_slot(cmd, dialect) is False:
+            verdict = _tier_t_slot_verdict(cmd, dialect, segments_argv)
+            if verdict is not None:
+                return verdict
 
     if detected is None:
         return None

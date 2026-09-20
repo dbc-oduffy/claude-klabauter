@@ -74,25 +74,21 @@ _TARGET_SKILL_NAMES = {"workflow-authoring", "coordinator:workflow-authoring"}
 
 def _compose_skill_offer(env: object = None) -> str:
     prose = (
-        "[workflow-authoring trampoline] if this is plan dispatch, the script "
-        "already exists -- run `emit-dispatch-workflow.py --plan <plan>` and "
-        "fire the emitted path via `coordinator:execute-plan` instead of "
-        "hand-authoring one here. If this is a fan-out the emitter cannot "
-        "produce (review, research), carry on and author it."
+        "workflow-authoring trampoline: for plan dispatch, use instead: "
+        "`emit-dispatch-workflow.py --plan <plan>` then fire it via "
+        "`coordinator:execute-plan`. Fan-out (review/research)? Author it."
     )
-    return render(compose(prose, anchor=_WIKI_ANCHOR), env=env)
+    return render(compose(prose), env=env)
 
 
 def _compose_inline_offer(env: object = None) -> str:
     prose = (
-        "[workflow-authoring trampoline] this inline `script:` is by "
-        "construction hand-authored -- if this is plan dispatch, run "
-        "`emit-dispatch-workflow.py --plan <plan>` and fire the emitted path "
-        "via `coordinator:execute-plan` (`Workflow({scriptPath})`) instead, "
-        "for roughly a quarter of the token cost. If this is a fan-out the "
-        "emitter cannot produce (review, research), carry on."
+        "workflow-authoring trampoline: this inline `script:` is "
+        "hand-authored. For plan dispatch, use instead: "
+        "`emit-dispatch-workflow.py --plan <plan>` then `coordinator:"
+        "execute-plan`. Fan-out (review/research)? Author it."
     )
-    return render(compose(prose, anchor=_WIKI_ANCHOR), env=env)
+    return render(compose(prose), env=env)
 
 
 def _extract_skill_name(tool_input: object) -> Optional[str]:

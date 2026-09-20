@@ -3625,3 +3625,101 @@ def test_input_call_sites_catch_runtime_error_not_only_eof(setup_mod):
         "guarded try block — an unguarded prompt exits non-zero on a closed stdin"
     )
     assert guarded, "expected at least one guarded input() call site; found none"
+
+
+# ---------------------------------------------------------------------------
+# install_precompiled_bytecode — the standalone installer's own compileall leg
+#
+# Regression subject: this step lived only in the maximalist chain, so a box
+# whose only install is `scripts/setup.py` (every cloud dispatch container)
+# carried no `__pycache__` and paid compilation on every cold invocation —
+# measured at 3.9x on the same CLI, same box, varying only the bytecode cache.
+# ---------------------------------------------------------------------------
+
+
+def _precompile_args(allow_venv_fallback=False):
+    import types
+
+    return types.SimpleNamespace(allow_venv_fallback=allow_venv_fallback)
+
+
+def test_precompile_runs_compileall_under_each_resolved_interpreter(
+    setup_mod, tmp_path, monkeypatch, capsys
+):
+    (tmp_path / "coordinator_core").mkdir()
+    calls = []
+
+    import coordinator_core.install.maximalist as maximalist
+
+    monkeypatch.setattr(
+        maximalist, "_compileall_interpreters", lambda *_a, **_kw: ["/fake/py-a", "/fake/py-b"]
+    )
+
+    class _Ok:
+        returncode = 0
+        stderr = ""
+
+    monkeypatch.setattr(
+        maximalist,
+        "_run_compileall",
+        lambda interp, pkg_root: calls.append((interp, pkg_root)) or _Ok(),
+    )
+
+    setup_mod.install_precompiled_bytecode(tmp_path, _precompile_args())
+
+    assert [c[0] for c in calls] == ["/fake/py-a", "/fake/py-b"]
+    assert all(c[1] == tmp_path / "coordinator_core" for c in calls)
+    assert "PASS [precompile]" in capsys.readouterr().out
+
+
+def test_precompile_failure_is_advisory_not_fatal(setup_mod, tmp_path, monkeypatch, capsys):
+    """A compile failure must never abort an otherwise working install."""
+    (tmp_path / "coordinator_core").mkdir()
+
+    import coordinator_core.install.maximalist as maximalist
+
+    monkeypatch.setattr(maximalist, "_compileall_interpreters", lambda *_a, **_kw: ["/fake/py"])
+
+    class _Fail:
+        returncode = 1
+        stderr = "boom"
+
+    monkeypatch.setattr(maximalist, "_run_compileall", lambda interp, pkg_root: _Fail())
+
+    setup_mod.install_precompiled_bytecode(tmp_path, _precompile_args())
+
+    captured = capsys.readouterr()
+    assert "[ADVISORY] precompile failed" in captured.err
+    assert "PASS [precompile]" not in captured.out
+
+
+def test_precompile_skips_when_no_interpreter_resolves(setup_mod, tmp_path, monkeypatch, capsys):
+    (tmp_path / "coordinator_core").mkdir()
+
+    import coordinator_core.install.maximalist as maximalist
+
+    monkeypatch.setattr(maximalist, "_compileall_interpreters", lambda *_a, **_kw: [])
+    monkeypatch.setattr(
+        maximalist,
+        "_run_compileall",
+        lambda *_a, **_kw: pytest.fail("compileall must not run with no interpreter"),
+    )
+
+    setup_mod.install_precompiled_bytecode(tmp_path, _precompile_args())
+
+    assert "no interpreter resolved" in capsys.readouterr().err
+
+
+def test_precompile_skips_when_package_root_absent(setup_mod, tmp_path, monkeypatch, capsys):
+    """No `coordinator_core/` under the resolved root — skip, never crash."""
+    import coordinator_core.install.maximalist as maximalist
+
+    monkeypatch.setattr(
+        maximalist,
+        "_run_compileall",
+        lambda *_a, **_kw: pytest.fail("compileall must not run without a package root"),
+    )
+
+    setup_mod.install_precompiled_bytecode(tmp_path, _precompile_args())
+
+    assert "not found — skipping precompile" in capsys.readouterr().err

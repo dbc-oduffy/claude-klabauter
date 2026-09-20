@@ -582,6 +582,10 @@ def test_a_suspended_op_refusal_never_reads_as_a_maybe_completed_mutation(
     assert "may have COMPLETED" not in proc.stdout
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="deadline: the door must terminate at its stated read deadline against a wedged "
+    "server that never answers -- a behaviour only wall clock can observe"
+)
 def test_wedged_server_bounds_the_read_and_refuses_to_re_run(tmp_path: Path, runtime_base: Path) -> None:
     """The server accepts and never answers. The door must stop -- and must
     stop by REFUSING, never by re-running a request it already delivered.

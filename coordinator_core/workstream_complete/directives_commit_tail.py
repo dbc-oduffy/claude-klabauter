@@ -142,6 +142,7 @@ from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Set, Union
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
 from coordinator_core.session import scope as session_scope
+from coordinator_core.session.claimed_write import replace_text
 from coordinator_core.session.machinery_paths import (
     machinery_root as _machinery_root,
     share_roots as _share_roots,
@@ -1628,7 +1629,7 @@ def revert_ship_stamps(
         if original is None:
             continue
         try:
-            (root / relpath).write_text(original, encoding="utf-8", newline="\n")
+            replace_text(root / relpath, original)
         except OSError:
             pass
 
@@ -1905,7 +1906,7 @@ def revert_close_stamps(
         if original is None:
             continue
         try:
-            (root / relpath).write_text(original, encoding="utf-8", newline="\n")
+            replace_text(root / relpath, original)
         except OSError:
             pass
 

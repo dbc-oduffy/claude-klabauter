@@ -946,8 +946,9 @@ def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None
     print(
         "Drop the named path(s) from the pathspec, or coordinate with the "
         "holder(s) first BY NAME -- a session id re-points, a name does not. "
-        "A holder releases a path it no longer needs with "
-        "`session-claim-cli release-artifact artifact <path>`; "
+        "A holder releases it (its own claim only) via Python: "
+        "`coordinator_core.session.scope.release_committed_claims(sid, "
+        "paths, cwd)` -- no CLI wraps this yet. "
         "`session-claim-cli who-claims-path <path>` lists every holder. "
         "A holder shown without a name is live but not addressable from "
         "here: drop that path and commit the rest -- it frees when that "
@@ -2792,6 +2793,9 @@ def do_scoped(
             )
             sys.exit(2)
 
+        if commit_result.stderr.strip():
+            print(commit_result.stderr.strip(), file=sys.stderr)
+
         # Success-path cleanup: remove active-scope.txt so peer sessions do
         # not false-positive on the overlap gate. Runs for both pure
         # default-mode (--include-orphans only) and combined-mode
@@ -3017,6 +3021,9 @@ def do_scope_from(args: "Args", session_id: str, cs_core, cs_liveness, cs_scope,
                 file=sys.stderr,
             )
             sys.exit(2)
+
+        if commit_result.stderr.strip():
+            print(commit_result.stderr.strip(), file=sys.stderr)
 
         # Declared scope is no longer active after a successful commit —
         # without this, peer sessions read stale entries and false-positive

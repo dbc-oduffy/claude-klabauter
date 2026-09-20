@@ -341,9 +341,9 @@ def is_denied_repo_setup_claude_home(
 
 def _deny_reason() -> str:
     return (
-        "BLOCKED: repo-setup's scaffold cannot target ~/.claude -- not a "
-        "working tree. Run it against the project clone instead: "
-        "/repo-setup --root <path-to-that-clone>."
+        "BLOCKED: repo-setup's scaffold cannot target ~/.claude -- it is "
+        "not a working tree. Run repo-setup against the project clone you "
+        "mean to set up: /repo-setup --root <path-to-that-clone>."
     )
 
 

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """plan-spine-check — validate a plan's `## Tasks` spine against plan-tasks.schema.json.
 
 WHY THIS EXISTS. The schema has been the authoring contract for the task spine since 1.4.0, and
@@ -48,11 +47,6 @@ import argparse
 import json
 import sys
 from pathlib import Path
-
-#: Resolved off the imported `coordinator_core.frontmatter` package (see `_schema_path`), never
-#: by walking up from `__file__`: this CLI is published one directory shallower than it is
-#: authored, and a fixed `parents[N]` lands outside the repo there (claude-klabauter#30).
-_SCHEMA_NAME = "plan-tasks.schema.json"
 
 EXIT_OK = 0
 EXIT_INVALID = 1
@@ -112,10 +106,12 @@ def _ensure_engine_on_path() -> None:
 
 
 def _schema_path() -> Path:
+    # Resolved off the imported package, never by walking up from `__file__`: this CLI is
+    # published one directory shallower than it is authored (claude-klabauter#30).
     _ensure_engine_on_path()
     import coordinator_core.frontmatter as frontmatter
 
-    return Path(frontmatter.__file__).resolve().parent / "schemas" / _SCHEMA_NAME
+    return Path(frontmatter.__file__).resolve().parent / "schemas" / "plan-tasks.schema.json"
 
 
 def _locate_spine(text: str):

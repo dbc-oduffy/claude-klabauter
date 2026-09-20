@@ -43,6 +43,34 @@ Contract:
                 there is no second, exit-code-encoded copy of the decision
                 to keep in sync with the body.
 
+`--check-all` verb (batch registration verification, no dispatch of any
+kind): `hook-run --check-all` reads op names from stdin, one per line, or
+from `@<file>` when argv[1] is `@<path>`; blank lines and `#`-prefixed
+comments are ignored. Each name is resolved against the installed engine's
+registry (`coordinator_core.ops._registry_map.resolves`) WITHOUT dispatching
+it — no op body ever runs, no hook fires. This answers "is this name
+registered", not "does this hook work": registration is a necessary
+precondition for a hook to fire at all, but a registered op can still refuse
+at runtime for reasons `--check-all` never probes (a required payload field
+absent, a scope gate, etc.) — resolving is not a claim that every resolved
+op executes cleanly. Exit codes:
+    0 — every name resolves (a summary line on stdout states the count and
+        repeats the registration-is-not-execution boundary).
+    2 — engine resolved, one or more names do not (or a name does not start
+        with "hooks." — also reported as unresolved rather than crashing).
+        A real finding: the caller (DoE's pre-commit gate) blocks on this.
+        Each unresolved name is printed on stdout, one per line.
+    3 — infrastructure failure, not a finding: the engine root itself is
+        unresolvable, the resolved engine is missing the registry-
+        introspection module (a stale/unreachable mirror), or the probe
+        raised for any other reason. The caller warns rather than blocks —
+        collapsing this onto exit 2 would block a commit that is in fact
+        correct over a broken mirror, and the only escape from a gate that
+        cries wolf on its own infrastructure is disabling it, which is worse
+        than not having the gate. Distinct stderr text per cause.
+Both the 2 and 3 paths print the resolved engine root and its sha on
+stderr, so a failure is attributable to a tree.
+
 Dispatch is IN PROCESS via `coordinator_core.ipc.dispatch_from_hook` — never
 `coordinator/bin/lib/cc_invoke.py`'s `cc_invoke`, which spawns a SECOND cold
 interpreter to reach the engine. This file already runs under the resolved
@@ -85,8 +113,109 @@ def _read_event() -> dict:
     return obj if isinstance(obj, dict) else {}
 
 
+def _read_check_all_names(args: "list[str]") -> "tuple[list[str], int]":
+    """Read the batch of op names for `--check-all`: stdin, or `@<file>` when
+    argv[1] names one. Returns `(names, 0)` on success or `([], 3)` on a
+    read failure (infrastructure, not a finding -- an unreadable `@<file>`
+    is treated the same as a probe failure, never as "0 names, all resolve").
+    Blank lines and `#`-prefixed comments are dropped.
+    """
+    if args and args[0].startswith("@"):
+        path = args[0][1:]
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                raw = handle.read()
+        except OSError as exc:
+            sys.stderr.write("hook-run --check-all: could not read %r: %s\n" % (path, exc))
+            return [], 3
+    else:
+        raw = sys.stdin.read()
+
+    names = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        names.append(line)
+    return names, 0
+
+
+def _resolve_engine_identity() -> "tuple[str, str | None]":
+    """Resolve the dispatch engine root and its sha, for attributing a
+    `--check-all` failure to a tree. Import-local: this module's own
+    top-level import block only reaches the engine on a real `hooks.*`
+    dispatch, and `--check-all` must resolve identity even when the engine
+    root itself is the thing that fails to resolve.
+    """
+    import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
+    from cc_invoke import require_dispatch_engine_on_path
+
+    root = require_dispatch_engine_on_path()
+    from coordinator_core.engine_version import resolve_engine_sha
+
+    sha = resolve_engine_sha()
+    return root, sha
+
+
+def _engine_identity_line(root: str, sha: "str | None") -> str:
+    sha_display = sha[:12] if sha else "<unresolved>"
+    return "hook-run --check-all: engine root %s (sha %s)" % (root, sha_display)
+
+
+def _check_all(args: "list[str]") -> int:
+    """`--check-all`: resolve every `hooks.<name>` op name given on stdin or
+    `@<file>` against the installed engine's registry, WITHOUT dispatching
+    any of them -- no op body runs. See the module docstring's `--check-all`
+    section for the exit-code contract and the registration-vs-execution
+    boundary this verb deliberately does not cross.
+    """
+    names, rc = _read_check_all_names(args)
+    if rc:
+        return rc
+
+    try:
+        root, sha = _resolve_engine_identity()
+    except RuntimeError as exc:
+        sys.stderr.write("hook-run --check-all: engine root unresolvable: %s\n" % exc)
+        return 3
+    except ImportError as exc:
+        sys.stderr.write("hook-run --check-all: engine mirror unreachable: %s\n" % exc)
+        return 3
+
+    try:
+        from coordinator_core.ops._registry_map import resolves
+    except ImportError as exc:
+        sys.stderr.write("hook-run --check-all: engine mirror unreachable: %s\n" % exc)
+        sys.stderr.write(_engine_identity_line(root, sha) + "\n")
+        return 3
+
+    unresolved = []
+    try:
+        for name in names:
+            if not name.startswith("hooks.") or not resolves(name):
+                unresolved.append(name)
+    except Exception as exc:  # noqa: BLE001 -- probe failure is infrastructure (exit 3), not a finding
+        sys.stderr.write("hook-run --check-all: probe failed: %s\n" % exc)
+        sys.stderr.write(_engine_identity_line(root, sha) + "\n")
+        return 3
+
+    if unresolved:
+        for name in unresolved:
+            sys.stdout.write(name + "\n")
+        sys.stderr.write(_engine_identity_line(root, sha) + "\n")
+        return 2
+
+    sys.stdout.write(
+        "hook-run --check-all: %d name(s) resolved (registration only -- "
+        "not a proof any op executes cleanly)\n" % len(names)
+    )
+    return 0
+
+
 def main(argv: "list[str] | None" = None) -> int:
     args = sys.argv[1:] if argv is None else argv[1:]
+    if args and args[0] == "--check-all":
+        return _check_all(args[1:])
     if not args or not args[0].startswith("hooks."):
         sys.stderr.write(
             "hook-run: refuses op %r -- only \"hooks.<name>\" ops are servable "

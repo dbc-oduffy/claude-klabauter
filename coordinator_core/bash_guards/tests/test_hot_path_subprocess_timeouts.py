@@ -323,7 +323,6 @@ def test_reachable_modules_includes_every_named_fix_site():
         "coordinator_core.subagent_sandbox.engine",
         "coordinator_core.write_guards.block_subagent_plan_body_write",
         "coordinator_core.bash_guards._write_bump_marker",
-        "coordinator_core.bash_guards._branch_set",
         "coordinator_core.bash_guards.dispatch_checks",
         "coordinator_core.bash_guards.commit_tripwires",
     ):

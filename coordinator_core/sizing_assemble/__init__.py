@@ -237,7 +237,74 @@ Negative-spec:
 """
 from __future__ import annotations
 
+from datetime import date
+from pathlib import Path
 from typing import Any, Optional
+
+from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
+    Flag,
+    build_scaffold_directive,
+)
+
+# C4: the shared constructor's (C1) per-type required-flag computation for
+# this host's one emitted row (coordinator_core/ops/doctype_hosts.py, keyed
+# (type="sizing-object", ceremony="sizing-assemble"), module=this package).
+# `--title` is `sizing-object`'s one caller-facing content field, and it is
+# NOT free text supplied fresh at scaffold time: it is `resolved["intent"]`
+# -- this module's own `intent` param, the PM's ask verbatim, already
+# resolved ceremony state by the time `route()` is called (AC3). Optional
+# here (never `required=True`): `intent` is itself optional on `route()`
+# (echoed, never parsed), and the real CLI's own placeholder-title arm
+# covers the caller who genuinely has none -- but see `route()`'s own
+# `--title` validation, which refuses a placeholder for `--type
+# sizing-object` at write time; that refusal is the EXECUTOR's problem
+# (dispatches the emitted directive), never this compute half's to guess
+# a title in place of.
+_SIZING_OBJECT_FLAG_SPEC: tuple[Flag, ...] = (
+    Flag("--title", "intent", required=False),
+)
+
+
+def _slug(text: str) -> str:
+    """Lowercase-dash slug, mirroring `coordinator-doc-new._slug_from_title`'s
+    observable shape closely enough for a computed (never free-text)
+    `--out` default -- same small helper `roadmap_planning_assemble._slug`
+    duplicates rather than importing (one hierarchy per consumer, no
+    cross-package private-helper dependency)."""
+    out = []
+    prev_dash = False
+    for ch in text.lower():
+        if ch.isalnum():
+            out.append(ch)
+            prev_dash = False
+        elif not prev_dash:
+            out.append("-")
+            prev_dash = True
+    return "".join(out).strip("-") or "untitled"
+
+
+def _sizing_object_scaffold_directive(intent: Optional[str]) -> dict[str, Any]:
+    """C4: emits the `sizing-object` scaffold directive through the shared
+    constructor -- called from every `route()` arm EXCEPT `express_lane`
+    (D3: "no sizing-object litter for trivial asks", AC7's costs-~zero
+    ergonomics). `--out` is computed the same way
+    `coordinator-doc-new._default_output_path` computes it for `--type
+    sizing-object` (`state/sizings/<today>-<slug>.yaml`), never left to the
+    CLI's own default so `already_satisfied` (AC4) can be computed here."""
+    root = Path.cwd()
+    today = date.today().isoformat()
+    slug = _slug(intent) if intent else "untitled"
+    resolved: dict[str, Any] = {
+        "intent": intent,
+        "out": f"state/sizings/{today}-{slug}.yaml",
+    }
+    return build_scaffold_directive(
+        "d-scaffold-sizing-object",
+        "sizing-object",
+        resolved,
+        _SIZING_OBJECT_FLAG_SPEC,
+        root=root,
+    )
 
 # Reuses the loe.tshirt XS-XXL enum + weights verbatim (schema-mandated, D1.2
 # — "do not invent a parallel scale"). See coordinator/schemas/
@@ -795,6 +862,10 @@ def route(
             "stages": stages("dispatch", tshirt),
             "narration": "Express lane: trivial ask, no sizing ceremony.",
             "next_move": "Dispatch directly. No sizing-object persisted (D3).",
+            # C4: D3 never scaffolds -- present and empty, never absent, so
+            # `directives` means the same thing (a checked list) on every
+            # arm of this function.
+            "directives": [],
         }
 
     resized_tshirt, resize_changed, raise_suppressed = _apply_symmetric_resize(
@@ -1191,6 +1262,11 @@ def route(
         "scout_evidence": scout_evidence,
         "narration": narration,
         "next_move": next_move,
+        # C4: every non-express-lane arm persists a sizing object (D1/D2 --
+        # the object is minted regardless of RESOLVED route; only D3's
+        # short-circuit above skips it), so this directive is unconditional
+        # here rather than gated on `resolved_route`.
+        "directives": [_sizing_object_scaffold_directive(intent)],
     }
 
 

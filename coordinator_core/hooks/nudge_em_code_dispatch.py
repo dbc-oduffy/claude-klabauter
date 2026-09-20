@@ -404,17 +404,23 @@ def _build_dispatch_brief(file_path: str, executor_type: str, edit_description: 
     `_describe_edit`) rather than a `[TODO: ...]` placeholder, and the
     acceptance-criteria section is dropped rather than left as a second TODO — the
     hook has no payload-derivable "done condition" to offer in its place.
+
+    TRIMMED (C8c, docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md):
+    dropped the "## Pre-assembled dispatch brief" header, the `commit:` line, the
+    `---` separator and the "Dispatch: fan-out-dispatch.sh or Agent (...)." line —
+    all restated or redundant with the surrounding nudge_message text in `op()`,
+    which already names file_path and the dispatch doc. `file_path` is likewise
+    dropped from the rendered brief for the same reason (`op()`'s own message
+    states it first) — the parameter stays (builder call/signature unchanged
+    per this chunk's own "trim the text, not the builder calls" constraint),
+    unused in the output. Kept: executor-type/task, the two fields no other
+    line in the envelope carries.
     """
+    del file_path
     return "\n".join(
         [
-            "## Pre-assembled dispatch brief",
-            f"file:          {file_path}",
-            f"executor-type: {executor_type}",
-            "commit:        false — EM commits after verification",
-            "---",
-            f"task:          {edit_description}",
-            "",
-            "Dispatch: fan-out-dispatch.sh or Agent (docs/wiki/dispatching-parallel-agents.md).",
+            f"type: {executor_type}",
+            f"task: {edit_description}",
         ]
     )
 
@@ -750,19 +756,30 @@ def op(payload: dict) -> dict | None:
     raw_sid = payload.get("session_id")
     has_true_session_id = isinstance(raw_sid, str) and raw_sid.strip() != ""
 
-    artifact_note = "" if ambiguous or multiple_code_files else " Artifact written."
-
-    sentinel_suffix = "" if has_true_session_id else " (this OS pid only — session_id absent)"
-
-    indented_brief = "\n".join(
-        "  " + line for line in dispatch_brief_text.splitlines() if line.strip()
-    )
+    # TRIMMED (C8c, docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-messages.md):
+    # dropped `artifact_note` ("Artifact written."/"") from the rendered message —
+    # the artifact is a best-effort convenience file (see
+    # `_write_pending_dispatch_artifact`'s own docstring), not something the EM
+    # needs stated in the advisory to act on; `ambiguous`/`multiple_code_files`
+    # still gate whether the artifact is written, only its mention in text is
+    # cut. Also dropped "EM, not typist.", "Code write:" -> "Write:", "Dispatch
+    # an executor instead", and the "agent-dispatch-economics.md" doc-pointer
+    # parenthetical — the brief below already names type/task, and the
+    # sentinel path is the one piece of information this message must carry
+    # that nothing else in the envelope does. Measured after this trim: hooks
+    # 216 / write_guards 171 prose bytes (both <= MESSAGE_PROSE_CAP_BYTES ==
+    # 220) against the corpus rows in guard_message_corpus.py, on this tree —
+    # the sentinel path embeds session_id, so a session_id longer than this
+    # module's own test-fixture uuid-suffixed one could still push a live
+    # firing over cap; that residual is inherent to the sentinel contract
+    # (`dispatch_nudge_sentinel.sentinel_path`), out of this chunk's scope
+    # (constraint per this chunk's body: "Trim the text, not the builder
+    # calls").
+    sentinel_suffix = "." if has_true_session_id else " (this OS pid only — session_id absent)."
 
     nudge_message = (
-        f"EM, not typist. Code write: {file_path}.\n\n"
-        f"Dispatch instead:\n{indented_brief}"
-        f"{artifact_note}\n\n"
-        f"Suppress{sentinel_suffix}:\n  {nudge_ok_sentinel}"
+        f"Write: {file_path}. Suppress: write {nudge_ok_sentinel}{sentinel_suffix}"
+        f"\n\n{dispatch_brief_text}"
     )
 
     return context_only("PreToolUse", f"[em-code-dispatch nudge] {nudge_message}")

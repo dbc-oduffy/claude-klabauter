@@ -174,6 +174,10 @@ def test_backfill_quarantined_set_never_truncated(tmp_path: Path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="chmod-based unreadable-file simulation is POSIX-only")
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root bypasses POSIX permission bits -- chmod 0o000 does not make a file unreadable to root",
+)
 def test_backfill_unreadable_memo_surfaces_read_error_not_silently_dropped(tmp_path: Path):
     # Review: code-reviewer Finding (2026-08-06) — a per-file OSError used to
     # `continue` with only a stderr log; the memo vanished from the corpus

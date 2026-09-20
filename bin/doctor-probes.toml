@@ -607,11 +607,10 @@ remediation = "Re-render the shim: python3 <engine-clone>/coordinator/bin/gen-cl
 # (coordinator_core.ops.check_claude_klabauter_doctor_sentinel) reads
 # state/doctor-last-run.json, and only --triage and full runs write that sentinel.
 #
-# K-006 (state/kill-ledger.md): hooks.session_heartbeat -- the sole discharge of the
-# F0 hazard (a session whose stable_pid capture misses reads DEAD on the Layer-2
-# recency path while still alive, becoming reap-eligible) -- was deregistered
-# 2026-08-16. That was ruled safe ONLY because the stable_pid miss rate is currently
-# 0%; this probe is the regression net for that 0%, previously completely unwatched.
+# K-006 (state/kill-ledger.md): the heartbeat was removed; this probe guards the
+# premise of that removal -- that the stable_pid miss rate is currently 0% (a
+# session whose stable_pid capture misses reads DEAD on the Layer-2 recency path
+# while still alive, becoming reap-eligible), previously completely unwatched.
 # Threshold: ANY single miss alerts (not a rate -- see
 # coordinator_core/session/stable_pid_watch.py module docstring for why). weight =
 # "cheap": one directory listing plus one meta.json read per session dir, no

@@ -90,6 +90,7 @@ from coordinator_core.git.git_objects import (
     write_object,
 )
 from coordinator_core.git.git_state import head_sha, head_tree_sha, read_tree_spine
+from coordinator_core.git import rollback_check
 from coordinator_core.git.tree_spine import (
     _ABSENT,
     _rewrite_head_spine,
@@ -182,6 +183,13 @@ class CommitOutcome(NamedTuple):
     #: and every existing reader key on that tuple, and narrowing it to fix a
     #: message would change refusal behaviour. This is additive.
     declared_absent_from_head: Tuple[str, ...] = ()
+    #: Set ONLY when `commit.gpgsign` is true and signing did not happen --
+    #: the commit landed unsigned anyway (`_sign_commit_tree`'s negative
+    #: spec: signing must never refuse a commit). `None` on every ordinary
+    #: commit (gpgsign unset) and on a commit that signed successfully --
+    #: this field, like `no_delta`, is a REPORT that only exists when there
+    #: is something to report (claude-klabauter#34).
+    sign_warning: Optional[str] = None
 
 
 class NothingToCommit(CommitRefused):
@@ -228,6 +236,30 @@ class FilterUnsupported(CommitRefused):
     pin). Refused rather than guessed: writing the RAW bytes would produce a
     blob sha git disagrees with, and the commit would look fine while the
     path reads permanently modified to every peer."""
+
+
+class StagedRollbackRefused(CommitRefused):
+    """`rollback_check.refusal` fired -- one or more of this call's paths
+    restore an exact-blob version `rollback_check.find_exact_blob_rollbacks`
+    already found on HEAD's first-parent line (Part 2's in-process,
+    zero-spawn replacement for the spawned-`git log` gate DR-359 killed; see
+    `rollback_check`'s module docstring for the mechanism and negative
+    spec). Opt-in only (`detect_rollback=True`) -- the default caller never
+    pays this check's cost and never sees this exception; see the
+    `commit_paths` docstring for who opts in and why.
+
+    Raised AFTER per-path blob resolution (this function already holds every
+    candidate's resolved sha, or `_ABSENT` for a declared deletion) and
+    BEFORE any tree or commit object is written -- nothing is written for a
+    refused call except the loose blob objects resolution itself already
+    wrote (inert, content-addressed, gc-able; not tree/commit objects, which
+    is the invariant this class actually protects
+    <!-- Review: coordinator:staff-eng F1 -->).
+
+    A path named in `declared_reverts` is EXCLUDED from the candidate set
+    entirely -- a caller that means to restore an older version says so, and
+    that path is invisible to `rollback_check` for this call, not merely
+    exempted from refusal."""
 
 
 def _worktree_blob(gitdir: Path, root: Path, rel: str, data: bytes) -> str:
@@ -528,6 +560,171 @@ def _identity(repo: Union[str, Path, None] = None) -> Tuple[str, str]:
     return name or "coordinator", email or "coordinator@local"
 
 
+_GPGSIGN_CACHE: "dict[tuple, bool]" = {}
+_GPGSIGN_CACHE_CAP = 64
+
+_CONFIG_TRUE = {"true", "yes", "on", "1"}
+
+
+def _gpgsign_config_files(repo: Union[str, Path, None]) -> "list[Path]":
+    """System, global, then the repo's COMMON-dir config -- git's precedence
+    order, later files winning. The common dir, not `<repo>/.git`, because a
+    linked worktree's `.git` is a file and its config lives in the common dir."""
+    candidates: "list[Path]" = [Path("/etc/gitconfig")]
+    global_override = os.environ.get("GIT_CONFIG_GLOBAL")
+    if global_override:
+        candidates.append(Path(global_override))
+    else:
+        xdg = os.environ.get("XDG_CONFIG_HOME")
+        try:
+            home: Optional[Path] = Path(os.path.expanduser("~"))
+        except Exception:
+            home = None
+        if xdg:
+            candidates.append(Path(xdg) / "git" / "config")
+        elif home is not None:
+            candidates.append(home / ".config" / "git" / "config")
+        if home is not None:
+            candidates.append(home / ".gitconfig")
+    if repo:
+        try:
+            candidates.append(resolve_git_common_dir(repo) / "config")
+        except Exception:
+            candidates.append(Path(repo) / ".git" / "config")
+    return candidates
+
+
+def _gpgsign_enabled(repo: Union[str, Path, None]) -> bool:
+    """``commit.gpgsign``, ZERO spawns. Defaults False: an operator who never
+    touched ``gpgsign`` gets exactly today's unsigned commit at no added cost
+    (claude-klabauter#34).
+
+    Cached on each candidate file's (path, mtime) rather than memoized per
+    process: the warm engine is one long-lived process committing for every
+    repo on the box, so a per-process answer would carry one repo's local
+    ``gpgsign`` into every other repo and never see a config edit. A stat per
+    candidate is the whole cost of a hit.
+
+    Negative-spec: ``include``/``includeIf`` targets are not followed -- a
+    ``gpgsign`` set only inside an included file reads as unset.
+    """
+    files = _gpgsign_config_files(repo)
+    key_parts = []
+    for candidate in files:
+        try:
+            key_parts.append((str(candidate), candidate.stat().st_mtime_ns))
+        except OSError:
+            key_parts.append((str(candidate), None))
+    key = tuple(key_parts)
+    hit = _GPGSIGN_CACHE.get(key)
+    if hit is not None:
+        return hit
+
+    enabled = False
+    for (_, mtime), candidate in zip(key_parts, files):
+        if mtime is None:
+            continue
+        try:
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        in_commit = False
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line[0] in "#;":
+                continue
+            if line.startswith("["):
+                close = line.find("]")
+                header = line[1:close].strip() if close != -1 else ""
+                section = header.split(None, 1)[0] if header else ""
+                in_commit = section.lower() == "commit"
+                continue
+            if not in_commit:
+                continue
+            key_name, eq, value = line.partition("=")
+            if key_name.strip().lower() != "gpgsign":
+                continue
+            # A bare `gpgsign` with no `=` is git's spelling of true.
+            enabled = (not eq) or value.strip().strip('"').lower() in _CONFIG_TRUE
+
+    if len(_GPGSIGN_CACHE) >= _GPGSIGN_CACHE_CAP:
+        _GPGSIGN_CACHE.clear()
+    _GPGSIGN_CACHE[key] = enabled
+    return enabled
+
+
+def _sign_commit_tree(
+    repo: Union[str, Path],
+    tree_sha: str,
+    parent_sha: Optional[str],
+    name: str,
+    email: str,
+    when: str,
+    message: str,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Produce a SIGNED commit object via ONE spawn of ``git commit-tree
+    -S``, called ONLY when ``_gpgsign_enabled`` already read true -- this
+    module otherwise hand-writes every object with zero spawns, and this is
+    the one place that changes: a real GPG/SSH signature cannot be produced
+    without invoking the signing program, so the choice is a spawn or no
+    signature at all.
+
+    Delegated to ``git commit-tree`` rather than driving ``gpg``/
+    ``ssh-keygen`` directly: ``commit-tree`` already resolves
+    ``gpg.format``, ``gpg.program``, ``gpg.ssh.program`` and
+    ``user.signingkey`` the way ``git commit`` does, so reimplementing that
+    resolution here would duplicate git's own config surface and get it
+    subtly wrong for a shape this module does not control (ssh vs openpgp,
+    a relative signingkey path, an agent socket). The identity and
+    timestamp passed via ``GIT_AUTHOR_*``/``GIT_COMMITTER_*`` env are the
+    SAME values ``_identity``/``_stamp`` already resolved for the unsigned
+    path, so a signed commit is byte-identical to what the hand-rolled path
+    would have written except for the ``gpgsig`` header.
+
+    Returns ``(sha, None)`` on success -- git already wrote the (signed)
+    object into the object store, so the caller does NOT also call
+    ``write_object`` for it. Returns ``(None, warning)`` on ANY failure
+    (missing/unreadable signing key, wrong ``gpg.format``, no agent
+    available, non-zero exit, a timeout) -- NEVER raises: an environment
+    whose signing setup is broken must still be able to commit, or enabling
+    ``commit.gpgsign`` without finishing the signing setup stops every op
+    on this route dead -- the exact shape reported in claude-klabauter#34,
+    where an empty/unreadable ``user.signingkey`` left ``gpgsign=true`` with
+    no way to satisfy it.
+    """
+    from coordinator_core.git.run import run_git
+
+    args = ["commit-tree", "-S", tree_sha]
+    if parent_sha:
+        args += ["-p", parent_sha]
+    env = dict(os.environ)
+    env.update({
+        "GIT_AUTHOR_NAME": name, "GIT_AUTHOR_EMAIL": email, "GIT_AUTHOR_DATE": when,
+        "GIT_COMMITTER_NAME": name, "GIT_COMMITTER_EMAIL": email, "GIT_COMMITTER_DATE": when,
+    })
+    try:
+        result = run_git(
+            args, cwd=str(repo), input=message.encode("utf-8", "surrogateescape"), env=env,
+        )
+    except Exception as exc:  # noqa: BLE001 -- signing must never break a commit
+        return None, (
+            f"commit.gpgsign is set but signing raised {exc!r} -- committed unsigned"
+        )
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or "no stderr captured"
+        return None, (
+            "commit.gpgsign is set but `git commit-tree -S` failed -- "
+            f"committed unsigned instead: {stderr}"
+        )
+    sha = result.stdout.strip()
+    if not sha:
+        return None, (
+            "commit.gpgsign is set but `git commit-tree -S` reported success "
+            "with no sha -- committed unsigned instead"
+        )
+    return sha, None
+
+
 def _stamp() -> str:
     now = int(time.time())
     off = -(time.altzone if time.daylight and time.localtime().tm_isdst else time.timezone)
@@ -578,6 +775,8 @@ def commit_paths(
     prefer_deliberate_stage: bool = False,
     allow_empty: bool = False,
     blob_fallback: Optional[Callable[[Sequence[str]], Mapping[str, str]]] = None,
+    detect_rollback: bool = False,
+    declared_reverts: Sequence[str] = (),
 ) -> CommitOutcome:
     """Commit exactly `paths` (+ remove `deleted_paths`). Zero git spawns.
 
@@ -586,6 +785,16 @@ def commit_paths(
     here rather than defaulted), a directory in `paths`, an unresolvable CAS
     ref, a lost CAS race, or a tree identical to HEAD's (`NothingToCommit`,
     unless `allow_empty=True` -- see that class).
+
+    `detect_rollback` (DEFAULT FALSE): opt in to `rollback_check.
+    find_exact_blob_rollbacks` over this call's resolved candidates, raising
+    `StagedRollbackRefused` on `rollback_check.refusal`. `declared_reverts`
+    names paths this call is deliberately reverting -- they are excluded
+    from the candidate set, never merely exempted from refusal. Off by
+    default for every caller: the two agent routes
+    (`ops/ceremony/commit_v2.py`, `ops/session/safe_commit_offer.py`) opt
+    in; the mirror, publish, and engine-record callers of this function stay
+    default-off (see `StagedRollbackRefused`).
 
     `prefer_deliberate_stage` (DR-379): a caller-declared opt-in, DEFAULT
     FALSE, that turns the already-computed `worktree_over_staged` set from a
@@ -931,6 +1140,35 @@ def commit_paths(
             "allow_empty=True for a deliberate marker commit."
         )
 
+    # STAGED-ROLLBACK CHECK (P2d), opt-in, and it has to sit HERE -- after
+    # every candidate's blob is resolved (this uses `assembled`'s final
+    # values, post `prefer_deliberate_stage` substitution) and BEFORE the
+    # first tree or commit object is written (`_rewrite_head_spine` next).
+    # `deleted_paths` reaches it as `rollback_check.ABSENT`, matching that
+    # module's own sentinel for "this candidate's new value is absence".
+    if detect_rollback and old_head is not None:
+        declared_set = {d.replace("\\", "/") for d in declared_reverts}
+        candidates: Dict[str, object] = {}
+        for p, val in assembled.items():
+            if p in declared_set:
+                continue
+            candidates[p] = rollback_check.ABSENT if val is _ABSENT else val[1]
+        if candidates:
+            findings = rollback_check.find_exact_blob_rollbacks(
+                resolve_git_common_dir(repo), old_head, candidates
+            )
+            if rollback_check.refusal(findings):
+                detail = "; ".join(
+                    f"{f.path} (depth {f.depth}, restores {f.restores_commit})"
+                    for f in findings
+                )
+                raise StagedRollbackRefused(
+                    f"staged rollback detected -- {detail}. Refused before "
+                    "any tree or commit object was written. Pass the "
+                    "reverted path(s) in `declared_reverts` if this is "
+                    "intentional."
+                )
+
     filled = _synthesize_absent_spine_dirs(spine, assembled)
     if filled is not None:
         spine = filled
@@ -961,14 +1199,26 @@ def commit_paths(
         )
 
     name, email = _identity(repo)
-    who = f"{name} <{email}> {_stamp()}"
+    when = _stamp()
+    who = f"{name} <{email}> {when}"
     body = f"tree {root_tree}\n"
     if old_head:
         body += f"parent {old_head}\n"
     body += f"author {who}\ncommitter {who}\n\n{message}"
     if not body.endswith("\n"):
         body += "\n"
-    commit_sha = write_object(gitdir, b"commit", body.encode("utf-8", "surrogateescape"))
+
+    sign_warning: Optional[str] = None
+    commit_sha: Optional[str] = None
+    if _gpgsign_enabled(repo):
+        # The ONE conditional spawn on this route, gated behind a zero-spawn
+        # config read -- `commit.gpgsign` unset (the default) costs nothing
+        # extra, matching claude-klabauter#34's "zero cost when unset".
+        commit_sha, sign_warning = _sign_commit_tree(
+            repo, root_tree, old_head, name, email, when, message,
+        )
+    if commit_sha is None:
+        commit_sha = write_object(gitdir, b"commit", body.encode("utf-8", "surrogateescape"))
 
     target = _cas_target(repo)
     if target is None:
@@ -1015,6 +1265,7 @@ def commit_paths(
         worktree_over_staged=tuple(worktree_over_staged),
         no_delta=tuple(no_delta),
         declared_absent_from_head=tuple(declared_absent_from_head),
+        sign_warning=sign_warning,
     )
     try:
         index_write.splice_index(repo, index_updates)
@@ -1032,6 +1283,7 @@ def commit_paths(
         worktree_over_staged=tuple(worktree_over_staged),
         no_delta=tuple(no_delta),
         declared_absent_from_head=tuple(declared_absent_from_head),
+        sign_warning=sign_warning,
     )
 
 

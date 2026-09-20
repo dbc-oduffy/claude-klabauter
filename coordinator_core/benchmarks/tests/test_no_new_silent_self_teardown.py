@@ -59,7 +59,6 @@ class _Site(NamedTuple):
 # (relpath, function) pairs predating this gate. See FROZEN INVENTORY above.
 _KNOWN_SELF_TEARDOWN: frozenset[tuple[str, str]] = frozenset({
     ("coordinator_core/bash_guards/_alternative_liveness.py", "_scratch_git_repo"),
-    ("coordinator_core/bash_guards/_alternative_liveness.py", "_trigger_guard_branch_set_precedence"),
     ("coordinator_core/bash_guards/_alternative_liveness.py", "probe_command"),
     ("coordinator_core/bash_guards/_firing_shape.py", "_trigger_inprocess_search_still_violates"),
     ("coordinator_core/benchmarks/measure_read_events.py", "measure"),

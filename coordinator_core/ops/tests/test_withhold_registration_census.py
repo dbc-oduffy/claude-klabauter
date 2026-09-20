@@ -197,12 +197,6 @@ _WAIVERS: Dict[Tuple[str, str], str] = {
         "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
     ("coordinator_core/bash_guards/tests/test_guard_grep_via_bash.py", "COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD"):
         "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
-    ("coordinator_core/bash_guards/tests/test_guard_longlived_branch_naming.py", "COORDINATOR_OVERRIDE"):
-        "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
-    ("coordinator_core/bash_guards/tests/test_guard_longlived_branch_naming.py", "COORDINATOR_ALLOW"):
-        "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
-    ("coordinator_core/bash_guards/tests/test_guard_longlived_branch_naming.py", "COORDINATOR_DISABLE"):
-        "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
     ("coordinator_core/bash_guards/tests/test_guard_message_register_lint.py", "COORDINATOR_OVERRIDE_NO_VERIFY"):
         "OVERRIDE-WITHHOLDING family, declined for the registry (sizing em_analysis)",
     ("coordinator_core/bash_guards/tests/test_operator_override_note_no_assignment_form.py", "COORDINATOR_ALLOW_BARE_NAME_CHECK"):

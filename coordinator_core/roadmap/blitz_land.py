@@ -59,6 +59,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from coordinator_core.locked_write import MutateAbort, locked_rmw
 from coordinator_core.artifact_id_slug import id_slug
 from coordinator_core.frontmatter.schema_validate import HANDOFF_PHASE_KINDS
+from coordinator_core.session.claimed_write import create_exclusive
 from coordinator_core.roadmap.plan_gate import (
     BATON_CODED_STATES,
     PLAN_APPROVED_STATUSES,
@@ -587,7 +588,7 @@ def mint_replan_baton(
         f"{brief}\n"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(body, encoding="utf-8")
+    create_exclusive(out, body)
     return {"path": out.relative_to(worktree_root).as_posix(), "handoff_id": handoff_id}
 
 

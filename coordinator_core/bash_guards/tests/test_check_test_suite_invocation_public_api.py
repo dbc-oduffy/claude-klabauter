@@ -846,11 +846,19 @@ def _payload(command, cwd, agent_id=None):
 
 
 def test_check_still_allows_scoped_subagent_command(repo, monkeypatch):
+    """Since the Tier-T CONCURRENCY leg (0.5) this is an ALLOW carrying a
+    slot-wrapper rewrite rather than a bare None. The property under test --
+    a dispatched caller's scoped run is permitted -- is unchanged; only the
+    encoding of "permitted" moved. A deny still fails here."""
     monkeypatch.setattr(guard, "_mutex_holder", lambda: None)
     out = guard.check(_payload(
         "pytest coordinator_core/frontmatter/tests/test_x.py", repo, agent_id="a0123456789abcdef"
     ))
-    assert out is None
+    if out is not None:
+        assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert out["hookSpecificOutput"]["updatedInput"]["command"].startswith(
+            "with-tier-t-slot -- "
+        )
 
 
 def test_check_still_denies_unscoped_subagent_command(repo, monkeypatch):

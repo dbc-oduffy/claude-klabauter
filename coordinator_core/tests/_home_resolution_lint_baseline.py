@@ -205,53 +205,20 @@ FORWARD_SLASH_BASELINE: list[tuple[str, int, str]] = [
 
 # 2026-07-29 update: 13 of the original 18 BARE_OR_BASELINE sites fixed --
 # see cross-repo memo / DoE-claude judgment-half dispatch for the home-
-# resolution defect class (bare_home_or_chain rule). The 4 remaining entries
-# below are CONFIRMED FALSE POSITIVES of this AST rule's +/-3-line
-# "nearby window" Windows-rung detector, not live bugs -- each already
-# delegates to a Windows-safe resolver (`Path.home()`/`os.path.expanduser`,
-# or is unreachable on native Windows because an earlier `if os.name == "nt":
-# return` guards the whole branch) but the delegation site is just outside
-# the window the detector scans. Left in the baseline rather than gamed via
-# a nearby comment mentioning USERPROFILE, because that would make the
-# ledger lie about what was actually fixed. See the dispatch's own report for
-# the file-by-file reasoning:
-#   coordinator_core/install/check_install_singularity.py:550 -- inspects
-#     the raw CLAUDE_HOME env var to detect a Convention-B misconfiguration;
-#     not a home-resolution chain at all (no fallback path constructed).
-#   (2026-08-01: the wsc_commit.py entry was pruned -- that module no longer
-#    reads CLAUDE_HOME at all, so the row matched no live finding.)
-#   coordinator_core/ops/gen_claude_doe_shim.py:145 -- delegates to
-#     `_resolve_home()` (line 140-141), which uses `os.path.expanduser("~")`;
-#     one line outside the window.
-#   coordinator_core/ops/install_health_run.py:222 -- unreachable on Windows:
-#     guarded by an unconditional `if os.name == "nt": return 0` a few lines
-#     above (POSIX always sets HOME).
-#   coordinator_core/write_guards/block_dev_side_mirror_wiki.py:80 --
-#     delegates to `_home()` (line 69-74), which uses
-#     `os.path.expanduser("~")`; same window-distance false positive as the
-#     gen_claude_doe_shim.py case above.
+# resolution defect class (bare_home_or_chain rule).
+#
+# 2026-09-11 (C7, engine_version=2026-09-19.1): the 4 entries that stood
+# here -- check_install_singularity.py:550, gen_claude_doe_shim.py:145,
+# install_health_run.py:222, block_dev_side_mirror_wiki.py:80 -- were the
+# old engine's +/-3-line "nearby window" false positives: each "delegates to
+# expanduser" one line outside the window the old detector scanned. The new
+# engine's window reaches the delegation site directly, so none of these are
+# live findings any more; rows deleted per
+# `test_bare_or_baseline_has_no_stale_entries`, not re-baselined. The
+# "delegates to expanduser" rationale that justified keeping them is stale
+# under the new engine and does not describe any surviving row below.
 BARE_OR_BASELINE: list[tuple[str, int, str]] = [
-    (
-        "coordinator_core/install/check_install_singularity.py",
-        550,
-        'claude_home_env = os.environ.get("CLAUDE_HOME") or None',
-    ),
-    (
-        "coordinator_core/ops/gen_claude_doe_shim.py",
-        145,
-        'return os.environ.get("CLAUDE_HOME") or _resolve_home()',
-    ),
-    (
-        "coordinator_core/ops/install_health_run.py",
-        222,
-        'home = Path(os.environ.get("CLAUDE_HOME") or os.environ.get("HOME", ""))',
-    ),
-    (
-        "coordinator_core/write_guards/block_dev_side_mirror_wiki.py",
-        80,
-        'return os.environ.get("CLAUDE_HOME") or _home()',
-    ),
-    # 2026-08-08 (C8 re-seed, discovery widened per C1/C4): 8 genuine false
+    # 2026-08-08 (C8 re-seed, discovery widened per C1/C4): genuine false
     # positives newly surfaced, two shapes:
     #
     # Shape A -- an OPTIONAL EXTRA root, not a resolution chain: a lone
@@ -261,8 +228,7 @@ BARE_OR_BASELINE: list[tuple[str, int, str]] = [
     # literal string for a containment/suffix check. No fallback path is
     # ever constructed from it -- an unset var means "skip", not "silently
     # resolve to a broken relative path" (the actual defect class this gate
-    # exists to catch). Same class as the already-baselined
-    # check_install_singularity.py:550 entry above.
+    # exists to catch).
     (
         "coordinator_core/ops/check_auto_memory_drained.py",
         180,
@@ -283,68 +249,58 @@ BARE_OR_BASELINE: list[tuple[str, int, str]] = [
         167,
         'claude_home = os.environ.get("CLAUDE_HOME", "")',
     ),
-    # NOTE (review-integration correction): unlike the other Shape-A entries
-    # above, this one DOES feed a fallback chain -- 21 lines later at
-    # probe_onboarding_currency.py:196, `repo_root = f"{claude_home or
-    # os.environ.get('HOME') or os.environ.get('USERPROFILE', '')}/.claude"`
-    # is constructed from this same `claude_home` value. Not a defect: that
-    # chain already carries an explicit USERPROFILE rung, so it is
-    # Windows-safe as written. Baselined because the AST rule's +/-3-line
-    # window doesn't reach line 196 from the `os.environ.get` call at line
-    # 175 either way -- a window-distance false positive, not the "no
-    # fallback path is ever constructed" Shape-A class the entries above
-    # this one actually are.
-    (
-        "coordinator_core/ops/probe_onboarding_currency.py",
-        175,
-        'claude_home = os.environ.get("CLAUDE_HOME", "")',
-    ),
     (
         "coordinator_core/install/sandbox_check.py",
         837,
         'home_literal = os.environ.get("HOME", "")',
     ),
+    # 2026-09-11 (C7, engine_version=2026-09-19.1): the Shape-A row that
+    # stood here, `probe_onboarding_currency.py:175`, no longer matches a
+    # live finding under the new engine's window and was deleted per
+    # `test_bare_or_baseline_has_no_stale_entries` (its own review-
+    # integration note -- that `claude_home` feeds a USERPROFILE-guarded
+    # fallback chain 21 lines later -- is moot now that the new engine's
+    # window reaches that chain directly instead of relying on this note).
     #
     # Shape B -- delegates to a value already resolved Windows-safely one
-    # line above (a local var, or a sibling test asserting the same
-    # already-correct production shape). The rule's own docstring says a
-    # nearby mention no longer exempts anything -- correctly, since a
-    # comment can lie -- but these two delegate to an actual VALUE, not a
-    # comment: `uninstall_legs.py:817`'s `home` is computed at line 816
-    # (`os.environ.get("HOME") or os.environ.get("USERPROFILE") or
-    # resolved_home`, an explicit USERPROFILE rung one line up);
-    # `test_resolvers_resolve_context.py:91` asserts against
-    # `resolvers.py`'s own `resolve_context()`, whose real chain (line 1573,
-    # baselined in RUNG_ORDER_BASELINE) already defaults to `Path.home()`.
-    # (file renamed from `test_envelope_resolve_context.py`, 5321fbb91.)
+    # line above (a local var, not a nearby comment mentioning USERPROFILE,
+    # since the rule's own docstring says a nearby mention no longer exempts
+    # anything -- correctly, since a comment can lie): `uninstall_legs.py:817`'s
+    # `home` is computed at line 816 (`os.environ.get("HOME") or
+    # os.environ.get("USERPROFILE") or resolved_home`, an explicit
+    # USERPROFILE rung one line up).
     (
         "coordinator_core/install/uninstall_legs.py",
         817,
         'claude_home = os.environ.get("CLAUDE_HOME") or home',
     ),
-    (
-        "coordinator_core/ops/emit/tests/test_resolvers_resolve_context.py",
-        91,
-        'claude_home = _P(os.environ.get("CLAUDE_HOME", str(_P.home()))) / ".claude"',
-    ),
-    # Correct construct, not deferred debt. This chain reads HOME at its FIRST
+    # 2026-09-11 (C7, engine_version=2026-09-19.1): the row that stood here,
+    # `test_resolvers_resolve_context.py:91`, no longer matches a live
+    # finding under the new engine and was deleted per
+    # `test_bare_or_baseline_has_no_stale_entries`. Its comment claimed the
+    # chain it asserts against (`resolvers.py`'s `resolve_context()`) was
+    # "baselined in RUNG_ORDER_BASELINE" -- false even at the time it was
+    # written: `RUNG_ORDER_BASELINE` in `test_home_resolution_lint.py` is an
+    # empty tuple, not a home for this or any other site.
+    # 2026-09-11 (C7, engine_version=2026-09-19.1): the row that stood here,
+    # `coordinator/bin/check-machine-path-leak.py:327`, no longer matches a
+    # live finding under the new engine and was deleted per
+    # `test_bare_or_baseline_has_no_stale_entries`. Its "correct construct,
+    # not deferred debt" reasoning -- this chain reads HOME at its FIRST
     # rung, so the two realistic environments both resolve correctly and the
-    # `expanduser` terminal is unreachable in either: under git-bash HOME is set
-    # and wins at rung 1; under stock Windows HOME is unset and `expanduser`
-    # already honours USERPROFILE. Executed both permutations 2026-08-08 --
-    # HOME-unset/USERPROFILE-set resolved to the profile dir, posix-HOME/
-    # USERPROFILE-unset resolved to HOME. `bare_or` flags it on rule contract
-    # (an unguarded `expanduser` rung never exempts a chain), which is a
-    # different claim from "this resolves wrongly", and it does not.
-    (
-        "coordinator/bin/check-machine-path-leak.py",
-        327,
-        'current_home = os.environ.get("HOME") or os.path.expanduser("~")',
-    ),
+    # `expanduser` terminal is unreachable in either: under git-bash HOME is
+    # set and wins at rung 1; under stock Windows HOME is unset and
+    # `expanduser` already honours USERPROFILE (verified both permutations
+    # 2026-08-08) -- still applies; it just no longer needs a baseline row
+    # of its own to say so. The entry directly below,
+    # `check_posix_exec_assumptions.py:1667`, deliberately mirrors this same
+    # shape and is unaffected.
+    #
     # 2026-08-17: `check_posix_exec_assumptions.py::_current_machine_home`
-    # deliberately MIRRORS the check-machine-path-leak.py entry directly
-    # above -- its own docstring says so explicitly ("Deliberately mirrors
-    # -- does not reinvent -- the discrimination
+    # deliberately MIRRORS the shape that stood immediately above as
+    # `coordinator/bin/check-machine-path-leak.py:327` (see the 2026-09-11
+    # note directly above) -- its own docstring says so explicitly
+    # ("Deliberately mirrors -- does not reinvent -- the discrimination
     # coordinator/bin/check-machine-path-leak.py's main() already draws").
     # Same construct, same reasoning, same verified-correct outcome: HOME
     # wins at rung 1 under git-bash, and `expanduser` already honours

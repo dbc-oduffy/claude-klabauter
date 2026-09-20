@@ -1717,6 +1717,16 @@ def _stamp_plan_landed(
             )
             raise MutateAbort(state["error"])
 
+        superseded_by = read_fm_field_unquoted(split.fm_text, "superseded_by")
+        if superseded_by and superseded_by.strip():
+            superseded_by = superseded_by.strip()
+            state["error"] = (
+                f"{plan_path} carries `superseded_by: {superseded_by}`; a superseded plan "
+                "does not land. Run `archive-stamp-cli stamp-plan-superseded "
+                f"{plan_path} --by {superseded_by}`."
+            )
+            raise MutateAbort(state["error"])
+
         state["prior_status"] = status
         fm_text = replace_fm_field(split.fm_text, "status", _LANDED_STATUS)
         return rebuild(split, fm_text)

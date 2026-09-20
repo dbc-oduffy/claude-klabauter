@@ -61,10 +61,22 @@ klabauter mirror's build rather than this tree. Budget ceiling remains
 ≤200ms / ≤2.0 procs/call (DR-344 §7's single-process bar).
 
 READ-ONLY, by construction: `brief()` only reads its arguments — it never
-touches disk, never shells out, never writes a stub/OVERVIEW/spine record.
-Mirrors `sizing_assemble.route()`'s and `pickup_assemble.brief()`'s
-read-only compute-half contract; a future mutating `apply` half (per the
-contract's § The compute/apply split) is out of this chunk's writes list.
+shells out, never writes a stub/OVERVIEW/spine record. Mirrors
+`sizing_assemble.route()`'s and `pickup_assemble.brief()`'s read-only
+compute-half contract; a future mutating `apply` half (per the contract's
+§ The compute/apply split) is out of this chunk's writes list. C3
+(docs/plans/2026-09-11-document-scaffolding-is-emitted-not-remembered.md)
+narrows "never touches disk" to "never WRITES": the shared
+`scaffold_directive.build_scaffold_directive` constructor this module now
+calls for `roadmap-baton`/`roadmap-seed` performs one `Path.is_file()` stat
+per emitted directive to compute `already_satisfied` (AC4) — a read, never
+a write, and no subprocess (git or otherwise) is spawned to get there.
+
+C3's emission is entry-point-gated and additive-only, so it never fires for
+a caller shaped like this module's own pre-C3 tests: `roadmap-baton` needs
+`entry_point == "B"` (i.e. `stub_id` resolved), `roadmap-seed` needs an
+explicit `goals` sequence supplied by the caller (never inferred) — a
+caller that supplies neither gets the pre-C3 directive set, byte-identical.
 
 Entry points (A/B/C/D, per residue/entry-points-b-c-d.md): exactly one of
 `input_corpus_path` (A), `stub_id` (B), `problem_set_path` (C), or
@@ -105,7 +117,9 @@ Negative-spec:
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from datetime import date
+from pathlib import Path
+from typing import Any, Optional, Sequence
 
 from coordinator_core.contract.decision_object.envelope import (
     build_envelope,
@@ -114,6 +128,10 @@ from coordinator_core.contract.decision_object.envelope import (
 from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point as _build_judgment_point,
     build_untrusted_gate_judgment_point as _build_untrusted_gate_judgment_point,
+)
+from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
+    Flag,
+    build_scaffold_directive,
 )
 
 # --- Class A's eight: assembler-internal glue, never a consumed op. -------
@@ -150,6 +168,116 @@ _SPINE_CANDIDATE_OPS: dict[str, str] = {
     "entryC-4-inherit-problem-set-ref": "stamp-problem-set-field",
     "entryD-1-read-sizing-object": "read-sizing-object-fields",
 }
+
+
+# C3: the shared constructor's (C1) per-type required-flag computation for
+# this host's two emitted rows (coordinator_core/ops/doctype_hosts.py --
+# both keyed (type, ceremony="roadmap-planning"), module=this package).
+# `--sizing-object`/`--no-sizing-object` is deliberately NOT modeled as a
+# `MutexFlagPair` here: it is a `store_true`-shaped bare flag on the
+# `--no-sizing-object` leg, and the shared constructor's uniform
+# `--flag=value` emission would render it as the malformed
+# `--no-sizing-object=True` (argparse rejects an explicit argument on a
+# store_true action). It is appended verbatim, same as
+# `baton_assemble._build_directives`'s own `f"--sizing-object={x}" if x else
+# "--no-sizing-object"` ternary (§ Which shape is canonical: two donor
+# shapes, this module is the first host, not a hand-rolled third).
+_ROADMAP_BATON_FLAG_SPEC: tuple[Flag, ...] = (
+    Flag("--roadmap-id", "roadmap_id", required=True),
+    Flag("--stub-id", "stub_id", required=True),
+)
+
+# `--goals` is comma-joined, not repeated: `coordinator-doc-new`'s `--goals`
+# is a single `GOAL_ID[,GOAL_ID...]` string argument (`action="append"` is
+# NOT set for it, unlike `--blocks`/`--deliverable-ids`), so the shared
+# constructor's per-item repeat shape (for a list/tuple resolved value)
+# would emit `--goals=g1 --goals=g2` and the second occurrence would
+# silently win. The join happens at the call site, once, in `resolved`.
+_ROADMAP_SEED_FLAG_SPEC: tuple[Flag, ...] = (
+    Flag("--goals", "goals", required=True),
+)
+
+
+def _slug(text: str) -> str:
+    """Lowercase-dash slug, mirroring `coordinator-doc-new._slug_from_title`'s
+    observable shape closely enough for a computed (never free-text)
+    `--out` default -- collapses any run of non-alphanumeric characters to a
+    single dash and strips leading/trailing dashes."""
+    out = []
+    prev_dash = False
+    for ch in text.lower():
+        if ch.isalnum():
+            out.append(ch)
+            prev_dash = False
+        elif not prev_dash:
+            out.append("-")
+            prev_dash = True
+    return "".join(out).strip("-") or "untitled"
+
+
+def _roadmap_baton_and_seed_directives(
+    entry_point: Optional[str],
+    resolved_run_id: Optional[str],
+    stub_id: Optional[str],
+    problem_set_path: Optional[str],
+    sizing_object_path: Optional[str],
+    goals: Optional[Sequence[str]],
+) -> list[dict[str, Any]]:
+    """C3: emits `roadmap-baton` (entry B) and `roadmap-seed` (explicit
+    `goals`) scaffold directives through the shared constructor. Additive
+    and entry-gated (module docstring's READ-ONLY section) -- a caller that
+    supplies neither `stub_id` (via entry B) nor `goals` gets none of these,
+    so every pre-C3 caller/test is unaffected.
+
+    Negative-spec: does NOT gate `roadmap-seed` on `entry_point == "C"` --
+    the `problem_set_path` a caller supplies there is THIS invocation's own
+    input corpus (a problem-set already ratified upstream), never a signal
+    that a NEW roadmap-seed should be minted; only an explicit `goals`
+    sequence (the ratified-goal FK SKILL.md Step 5a requires) triggers it.
+    """
+    root = Path.cwd()
+    today = date.today().isoformat()
+    directives: list[dict[str, Any]] = []
+
+    if entry_point == "B" and stub_id is not None and resolved_run_id is not None:
+        out_path = f"state/handoffs/{today}_000000_roadmap-{stub_id}.md"
+        resolved = {
+            "roadmap_id": resolved_run_id,
+            "stub_id": stub_id,
+            "out": out_path,
+        }
+        directive = build_scaffold_directive(
+            "d-scaffold-roadmap-baton",
+            "roadmap-baton",
+            resolved,
+            _ROADMAP_BATON_FLAG_SPEC,
+            root=root,
+            depends_on=["d-number-stubs"],
+        )
+        directive["args"].append(
+            f"--sizing-object={sizing_object_path}"
+            if sizing_object_path
+            else "--no-sizing-object"
+        )
+        directives.append(directive)
+
+    if goals:
+        goal_slug_source = problem_set_path or resolved_run_id or "roadmap"
+        out_path = f"state/handoffs/{today}-roadmap-seed-{_slug(goal_slug_source)}.md"
+        resolved = {
+            "goals": ",".join(goals),
+            "out": out_path,
+        }
+        directive = build_scaffold_directive(
+            "d-scaffold-roadmap-seed",
+            "roadmap-seed",
+            resolved,
+            _ROADMAP_SEED_FLAG_SPEC,
+            root=root,
+        )
+        directives.append(directive)
+
+    return directives
 
 
 class RoadmapPlanningAssembleError(ValueError):
@@ -609,17 +737,22 @@ def brief(
     stub_id: Optional[str] = None,
     problem_set_path: Optional[str] = None,
     sizing_object_path: Optional[str] = None,
+    goals: Optional[Sequence[str]] = None,
     decisions: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Computes and returns the roadmap-planning spine's decision object,
-    per DR-047's Decision-Object Schema-of-Record. READ-ONLY: touches no
-    disk, mutates nothing, calls nothing.
+    per DR-047's Decision-Object Schema-of-Record. READ-ONLY: writes
+    nothing, mutates nothing, calls nothing (C3's `already_satisfied`
+    existence stat is a read -- see module docstring).
 
     Exactly one of `input_corpus_path` (Entry Point A), `stub_id` (B),
     `problem_set_path` (C), or `sizing_object_path` (D) is the expected
     caller shape. `run_id` is required unless derivable from `stub_id`
     (Entry Point B: `derive-run-id-from-stub-id`, Class A glue — `run_id :=
-    stub_id` verbatim).
+    stub_id` verbatim). `goals` (C3) is the ratified-goal FK sequence a
+    caller supplies to mint a `roadmap-seed` directive (SKILL.md § Step
+    5a) -- never inferred from any other argument; omitted entirely, no
+    directive emitted, matching every pre-C3 caller.
 
     Returns:
         A dict: {artifact, preflight, gates, directives, judgment_points,
@@ -666,6 +799,16 @@ def brief(
         _class_a_glue_directives(stub_id, problem_set_path, sizing_object_path, entry_point)
     )
     directives.extend(_spine_mechanical_directives(entry_point, resolved_run_id))
+    directives.extend(
+        _roadmap_baton_and_seed_directives(
+            entry_point,
+            resolved_run_id,
+            stub_id,
+            problem_set_path,
+            sizing_object_path,
+            goals,
+        )
+    )
 
     judgment_points = _spine_judgment_points(entry_point, entry_points_supplied)
 
@@ -705,7 +848,7 @@ def _usage(prog: str, stream=None) -> int:
     print(
         f"{prog}: usage: {prog} [--run-id <id>] [--input-corpus <path>] "
         "[--stub-id <id>] [--problem-set <path>] [--sizing-object <path>] "
-        "[--decisions <json>]",
+        "[--goals <goal-id>[,<goal-id>...]] [--decisions <json>]",
         file=stream,
     )
     return EXIT_USAGE
@@ -721,6 +864,7 @@ def main(argv: list[str]) -> int:
     stub_id = None
     problem_set_path = None
     sizing_object_path = None
+    goals: Optional[list[str]] = None
     decisions: dict[str, Any] = {}
 
     i = 0
@@ -744,6 +888,9 @@ def main(argv: list[str]) -> int:
         elif tok == "--sizing-object" and i + 1 < len(argv):
             sizing_object_path = argv[i + 1]
             i += 2
+        elif tok == "--goals" and i + 1 < len(argv):
+            goals = [g for g in argv[i + 1].split(",") if g]
+            i += 2
         elif tok == "--decisions" and i + 1 < len(argv):
             try:
                 decisions = json.loads(argv[i + 1])
@@ -762,6 +909,7 @@ def main(argv: list[str]) -> int:
             stub_id=stub_id,
             problem_set_path=problem_set_path,
             sizing_object_path=sizing_object_path,
+            goals=goals,
             decisions=decisions,
         )
     except RoadmapPlanningAssembleError as exc:

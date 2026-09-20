@@ -168,7 +168,15 @@ def test_undeclared_staged_deletion_refuses_and_head_is_unmoved(tmp_path: Path):
 
 
 def test_declared_staged_deletion_commits(tmp_path: Path):
-    """The same staged deletion, declared in `deleted_paths`, lands."""
+    """The same staged deletion, declared in `deleted_paths`, lands.
+
+    `declared_reverts` rides along because the fixture's file was added one
+    commit ago: P2d's rollback gate counts ABSENT as a version, so deleting a
+    path added inside the window restores an older version at depth >= 2 and is
+    a rollback by that gate's rule. Declaring it is the route the plan names
+    for a legitimate one, and it is orthogonal to what this test asserts --
+    that a deletion named in `deleted_paths` reaches a commit at all.
+    """
     repo = _init_repo(tmp_path)
     other = repo / "other.md"
     other.write_text("other\n", encoding="utf-8")
@@ -180,7 +188,12 @@ def test_declared_staged_deletion_commits(tmp_path: Path):
 
     result = _call(
         repo,
-        {"paths": [], "deleted_paths": ["other.md"], "message": "declared delete\n"},
+        {
+            "paths": [],
+            "deleted_paths": ["other.md"],
+            "declared_reverts": ["other.md"],
+            "message": "declared delete\n",
+        },
     )
 
     assert result["committed"] is True, result
@@ -218,7 +231,16 @@ def test_declared_deletion_fast_path_never_reads_the_index(tmp_path: Path, monke
 
     result = _call(
         repo,
-        {"paths": [], "deleted_paths": ["other.md"], "message": "declared delete\n"},
+        {
+            "paths": [],
+            "deleted_paths": ["other.md"],
+            # Same reason as test_declared_staged_deletion_commits: the fixture's
+            # file was added one commit ago, so P2d's rollback gate sees ABSENT
+            # returning at depth 2. Unrelated to the index-read property asserted
+            # here, but the commit has to reach that code to assert it.
+            "declared_reverts": ["other.md"],
+            "message": "declared delete\n",
+        },
     )
 
     assert calls == [], "declared deletion still hit the index-reading helper"

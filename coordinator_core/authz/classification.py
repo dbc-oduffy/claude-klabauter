@@ -258,10 +258,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #
     # Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § D2, C0.
     "hooks.track_touched_files": OpClass.MUTATING,
-    "hooks.session_heartbeat": OpClass.MUTATING,
     # hooks.receiver_state_sensor — MUTATING: writes the receiver-state sibling file
-    # (.git/coordinator-sessions/<sid>/receiver-state.json), same session-runtime write
-    # class as session_heartbeat immediately above, just a different sibling artifact.
+    # (.git/coordinator-sessions/<sid>/receiver-state.json), a session-runtime write
+    # under .git/coordinator-sessions/, same posture as track_touched_files above.
     # Spec backlink: docs/plans/2026-08-14-receiver-state-sensor.md § C3
     "hooks.receiver_state_sensor": OpClass.MUTATING,
     "hooks.agent_completion_log": OpClass.MUTATING,
@@ -4171,6 +4170,21 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      No subprocess, no network, no cache write -- unlike its
     #      op_census.report sibling, which persists a module index.
     "op_census.breaches": OpClass.COMPUTE_ONLY,
+    # freshness.commit_delta — COMPUTE_ONLY: the workday-start doc/test/bug-sweep
+    # commit-delta producer (ops/freshness_commit_delta.py::freshness_commit_delta).
+    # docs/plans/2026-09-10-cartography-churn-producer-and-staleness-registrations.md
+    # § C3, DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  No.
+    #      Issues one read-only `git log --name-only` (via run_git) and returns a
+    #      computed aggregate over its stdout.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             No.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #      `_derive_deltas` is pure over the parsed git-log records.
+    #   5. Persistent state changes observable across process boundaries?      No.
+    #      One subprocess spawn (the git log read itself), no network, no cache
+    #      write.
+    "freshness.commit_delta": OpClass.COMPUTE_ONLY,
     # hooks.cater_subagent_start — MUTATING: composes the SubagentStart
     # additionalContext catering string and, in doing so, writes to disk.
     # coordinator_core/hooks/cater_subagent_start.py::_resolve_sidecar_leg calls
@@ -4227,7 +4241,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # evaluation (bash_guards/_advisory_dedupe.py :: mark_advised) — a real disk write,
     # even though the op's PRIMARY job is computing a verdict. Same posture as the
     # other hooks.* ops that write session-scoped bookkeeping (e.g.
-    # "hooks.session_heartbeat") rather than the read-only hooks.* entries above.
+    # "hooks.receiver_state_sensor") rather than the read-only hooks.* entries above.
     "warm_guard.evaluate": OpClass.MUTATING,
 
     # merge_assemble.apply — MUTATING: `coordinator_core.merge_assemble.
@@ -4268,6 +4282,29 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # "mutates nothing" (single-shot decision-object computation).
     "baton_assemble.apply": OpClass.MUTATING,
     "baton_assemble.brief": OpClass.COMPUTE_ONLY,
+
+    # learn_lessons_pipeline.apply — MUTATING: `coordinator_core.
+    # learn_lessons_pipeline.ops::_learn_lessons_pipeline_apply` is a thin
+    # adapter over `learn_lessons_pipeline.apply.apply()`, which recomputes
+    # the brief and dispatches its directives[] through a closed CLI/op
+    # table that extracts, verifies, drains the outbox, age-sweeps lessons,
+    # and stamps the run complete — real, persistent mutation.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   Yes.
+    #      Outbox drain, age-sweep archival, run-stamp sentinel write.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              Yes.
+    #      The run-complete sentinel write (`run_stamp.stamp_run_complete`).
+    #   4. Mutates shared mutable state outside its own module?                 Yes.
+    #      The lessons outbox and lessons file are cross-process state.
+    #   5. Persistent state changes observable across process boundaries?       Yes.
+    # learn_lessons_pipeline.brief — read-only: `_learn_lessons_pipeline_brief`
+    # is a thin adapter over `learn_lessons_pipeline.brief()`, whose own
+    # docstring states it never mutates (single-shot decision-object
+    # computation over disk reads only).
+    # Spec: docs/plans/2026-09-11-the-lessons-pipeline-drains-without-a-ha.md § C5
+    "learn_lessons_pipeline.apply": OpClass.MUTATING,
+    "learn_lessons_pipeline.brief": OpClass.COMPUTE_ONLY,
 
     # git.maintenance — MUTATING: `coordinator_core.ops.git_maintenance::run_tier`
     # runs the tier's `git maintenance run` task set (gc/loose-objects/pack-refs/

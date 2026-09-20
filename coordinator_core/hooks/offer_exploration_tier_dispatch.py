@@ -124,7 +124,7 @@ _OFFER_PROSE = (
 
 
 def _compose_offer_message():
-    return compose(_OFFER_PROSE, anchor=_WIKI_ANCHOR)
+    return compose(_OFFER_PROSE)
 
 
 def _is_doctrine_carrying(subagent_type: Any) -> bool:

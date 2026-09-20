@@ -304,7 +304,76 @@ def _str_const(node: ast.AST) -> str | None:
     return None
 
 
-def _write_target_expr(call: ast.Call) -> ast.AST | None:
+#: The claiming seam's four public names (D1,
+#: `coordinator_core/session/claimed_write.py`) -- each takes its write
+#: target as `args[0]`, whether called as a module attribute of
+#: `claimed_write` or imported by name. See `_claimed_write_bindings`.
+_CLAIMED_WRITE_SEAM_NAMES = frozenset(
+    {"replace_text", "replace_bytes", "create_exclusive", "append_claimed_line"}
+)
+
+
+def _claimed_write_bindings(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
+    """Names bound to the `claimed_write` module object, and to each of its
+    seam functions individually, so `_call_is_write`/`_write_target_expr`
+    can match `claimed_write.replace_text(...)` (module-attribute form) or a
+    bare `replace_text(...)` reached via `from ... import replace_text`
+    (from-import form) -- mirroring how `_json_bindings` resolves `json.dump`
+    aliases.
+
+    Module-attribute form is bound by either `from
+    coordinator_core.session import claimed_write` (the real call sites'
+    shape) or `import coordinator_core.session.claimed_write as <alias>`.
+    From-import form is bound by `from
+    coordinator_core.session.claimed_write import <name>[, ...]`. A bare
+    name alone is never enough -- an unrelated local function that merely
+    happens to be called `append_claimed_line` is not bound by either path
+    and so is never recognised as the seam.
+    """
+    module_aliases: set[str] = set()
+    func_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "coordinator_core.session.claimed_write" and alias.asname:
+                    module_aliases.add(alias.asname)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "coordinator_core.session":
+                for alias in node.names:
+                    if alias.name == "claimed_write":
+                        module_aliases.add(alias.asname or alias.name)
+            elif node.module == "coordinator_core.session.claimed_write":
+                for alias in node.names:
+                    if alias.name in _CLAIMED_WRITE_SEAM_NAMES:
+                        func_names.add(alias.asname or alias.name)
+    return frozenset(module_aliases), frozenset(func_names)
+
+
+def _is_claimed_write_call(
+    call: ast.Call,
+    claimed_write_module_aliases: frozenset[str],
+    claimed_write_func_names: frozenset[str],
+) -> bool:
+    """True for a call to one of the seam's four names, reached either as a
+    module attribute of a bound `claimed_write` alias or as a bare name
+    bound by a from-import of that name."""
+    func = call.func
+    if isinstance(func, ast.Attribute):
+        return (
+            func.attr in _CLAIMED_WRITE_SEAM_NAMES
+            and isinstance(func.value, ast.Name)
+            and func.value.id in claimed_write_module_aliases
+        )
+    if isinstance(func, ast.Name):
+        return func.id in claimed_write_func_names
+    return False
+
+
+def _write_target_expr(
+    call: ast.Call,
+    claimed_write_module_aliases: frozenset[str] = frozenset(),
+    claimed_write_func_names: frozenset[str] = frozenset(),
+) -> ast.AST | None:
     """Return the AST expression naming a write call's target, unresolved.
 
     The target's location depends on call shape:
@@ -317,11 +386,18 @@ def _write_target_expr(call: ast.Call) -> ast.AST | None:
         must not be read as a target.
       - `json.dump(obj, <file-ish>)`: no target path argument exists here;
         handled separately by the R1/R2 file-argument checks.
+      - a claiming-seam call (`replace_text`/`replace_bytes`/
+        `create_exclusive`/`append_claimed_line`, module-attribute or
+        from-import form, D5): the target is this call's own args[0],
+        exactly as for builtin `open`.
     Returns None when no target expression is recoverable at all; callers
     treat that as an unresolved (still-counted) write, never as "no write
     occurred".
     """
     func = call.func
+
+    if _is_claimed_write_call(call, claimed_write_module_aliases, claimed_write_func_names):
+        return call.args[0] if call.args else None
 
     if isinstance(func, ast.Attribute):
         if func.attr in ("write_text", "open"):
@@ -375,6 +451,8 @@ def _call_is_write(
     call: ast.Call,
     json_module_aliases: frozenset[str] = frozenset({"json"}),
     json_dump_names: frozenset[str] = frozenset(),
+    claimed_write_module_aliases: frozenset[str] = frozenset(),
+    claimed_write_func_names: frozenset[str] = frozenset(),
 ) -> bool:
     """Detect a write-mode call.
 
@@ -388,7 +466,16 @@ def _call_is_write(
     (e.g. `hooks_json_path.open("w", encoding="utf-8")` in `doctor.py`).
     # Review: coordinator:code-reviewer — P1, confirmed live impact on
     # doctor.py:406, invisible to discover_generators before this fix.
+
+    A claiming-seam call (D5) is checked first: it shares an attribute-form
+    shape (`claimed_write.replace_text(...)`) with the `write_text`/`open`
+    branch below, but must be recognised by seam-membership, not by
+    attribute name alone, so it cannot fall through to those branches'
+    `False` returns.
     """
+    if _is_claimed_write_call(call, claimed_write_module_aliases, claimed_write_func_names):
+        return True
+
     func = call.func
 
     if isinstance(func, ast.Attribute):
@@ -1037,6 +1124,7 @@ def _scan_file_writes(tree: ast.AST) -> FileWrites:
     order over `write_sites` rather than re-deriving it.
     """
     json_module_aliases, json_dump_names = _json_bindings(tree)
+    claimed_write_module_aliases, claimed_write_func_names = _claimed_write_bindings(tree)
     handle_names = _handle_names(tree)
     tmp_bases, mkstemp_names = _tmp_var_info(tree)
     tmp_var_names = mkstemp_names | frozenset(tmp_bases)
@@ -1046,7 +1134,16 @@ def _scan_file_writes(tree: ast.AST) -> FileWrites:
     sites: list[str | None] = []
 
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and _call_is_write(node, json_module_aliases, json_dump_names)):
+        if not (
+            isinstance(node, ast.Call)
+            and _call_is_write(
+                node,
+                json_module_aliases,
+                json_dump_names,
+                claimed_write_module_aliases,
+                claimed_write_func_names,
+            )
+        ):
             continue
 
         func = node.func
@@ -1064,7 +1161,7 @@ def _scan_file_writes(tree: ast.AST) -> FileWrites:
         if _is_fdopen_of_scratch_fd(node, scratch_fds):  # R7 -- excluded
             continue
 
-        expr = _write_target_expr(node)
+        expr = _write_target_expr(node, claimed_write_module_aliases, claimed_write_func_names)
         if expr is None:
             sites.append(None)
             continue

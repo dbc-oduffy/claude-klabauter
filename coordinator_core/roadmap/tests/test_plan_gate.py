@@ -557,6 +557,57 @@ def test_narrow_scan_agrees_with_the_general_parser(subtree):
     )
 
 
+#: Every block-scalar shape `_parse_yaml_mapping_block` and `_scan_fields`
+#: must agree on: folded and literal, with each chomping indicator and with
+#: none (`_consume_block_scalar` does not distinguish `-`/`+`/bare in its
+#: RETURNED text — trailing blank body lines are always dropped — so this
+#: list exists to pin that non-distinction on both readers, not to expect a
+#: different result per form).
+_BLOCK_SCALAR_FORMS = ["|", "|-", "|+", ">", ">-", ">+"]
+
+
+def test_narrow_scan_agrees_on_a_block_scalar_shape_per_scanned_key(tmp_path):
+    """Fixture pin for claude-klabauter#49: `_scan_fields` used to return the
+    bare block-scalar indicator (e.g. `">-"`) itself as the value, so a held
+    baton's `plan_blitz_hold_reason: >-` reported as reason `">-"` — read by
+    plan-blitz doctrine as a hold with no reason, and cleared.
+
+    `test_narrow_scan_agrees_with_the_general_parser` reads this repo's own
+    corpus and cannot catch that: no live record happens to carry a block
+    scalar on a scanned key. This fixture asserts agreement on the SHAPE
+    instead, cycling every scanned key through each block-scalar form.
+    """
+    preset = {"kind", "title", "stub_id", "status", "deployment_state", "baton_role"}
+    lines = [
+        "kind: roadmap-baton",
+        "title: block-scalar-fixture",
+        "stub_id: block-scalar-fixture",
+        "status: open",
+        "deployment_state: ready_to_fire",
+        "baton_role: work",
+    ]
+    scanned = sorted(pg._BATON_FIELDS - preset)
+    for index, key in enumerate(scanned):
+        form = _BLOCK_SCALAR_FORMS[index % len(_BLOCK_SCALAR_FORMS)]
+        lines.append(f"{key}: {form}")
+        lines.append(f"  line one of {key}")
+        lines.append(f"  line two of {key}")
+    path = _write(tmp_path / "state" / "handoffs" / "block-scalar-fixture.md", "\n".join(lines))
+
+    narrow = pg._read_baton_fields(path)
+    general = pg._read_frontmatter_head(path)
+
+    disagreements = [
+        (key, _normalise(narrow.get(key)), _normalise(general.get(key)))
+        for key in scanned
+        if _normalise(narrow.get(key)) != _normalise(general.get(key))
+    ]
+    assert not disagreements, (
+        f"{len(disagreements)} field(s) read differently on a block scalar; "
+        f"first 5: {disagreements[:5]}"
+    )
+
+
 def test_a_trailing_comment_on_an_inline_list_does_not_swallow_the_edges(tmp_path):
     """Regression: `blocked_by: [a-1, b-1]  # why` parsed as a single scalar id,
     so both real edges vanished and the gate reported `unresolved`."""
@@ -1264,6 +1315,39 @@ def test_an_ordinary_baton_carries_held_false(tmp_path):
     report = pg.assemble_plan_gate(tmp_path)
     assert _by_id(report, "plain-1")["held"] is False
     assert report["held"] == []
+
+
+def test_a_block_scalar_hold_reason_renders_as_its_text_not_its_indicator(tmp_path):
+    """klabauter#49 — the narrow scanner used to read a block-scalar value's
+    INDICATOR (`>-`, `|`, …) as the value itself, so a `plan_blitz_hold_reason`
+    authored as a folded block scalar reported the literal two-character
+    string ">-" as the reason a held baton's own text never was.
+    """
+    _write(
+        tmp_path / "state" / "handoffs" / "held-1.md",
+        "kind: roadmap-baton\ntitle: held-1\nstub_id: held-1\nstatus: open\n"
+        "deployment_state: ready_to_fire\nbaton_role: work\n"
+        "plan_blitz_hold_reason: >-\n"
+        "  PM took this personally; DR-2048\n"
+        "  rules it GO but not yet\n"
+        "plan_blitz_hold_cite: DR-2048 §2",
+    )
+
+    report = pg.assemble_plan_gate(tmp_path)
+    assert report["counts"]["held"] == 1
+
+    row = report["held"][0]
+    assert row["baton"] == "held-1"
+    assert ">-" not in row["reason"]
+    assert "PM took this personally; DR-2048" in row["reason"]
+    assert "rules it GO but not yet" in row["reason"]
+
+    fields = pg._read_baton_fields(tmp_path / "state" / "handoffs" / "held-1.md")
+    assert fields["plan_blitz_hold_reason"] == (
+        pg._read_frontmatter_head(tmp_path / "state" / "handoffs" / "held-1.md")[
+            "plan_blitz_hold_reason"
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------

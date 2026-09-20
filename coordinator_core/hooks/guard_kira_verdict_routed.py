@@ -207,6 +207,19 @@ def _kira_find_answers(kira_filename: str, in_scope: list) -> list:
 
 
 def _kira_unstamped_integrators(in_scope: list) -> list:
+    """Sidecars carrying a SPAWN-time `integrator_receipt` with no
+    `integrated_from` of their own.
+
+    This is a "an integrator was born" signal ONLY, never a "this verdict
+    is being handled" one — `_receipt_block`'s splice fires at spawn, before
+    the child has done or reported any work (module docstring of
+    `provision_report.py`), and a receipt directory is shared by every
+    review the session touches, misfiled sidecars included (issue #47).
+    Naming this verdict is the only thing `_kira_find_answers` already
+    checks for via `integrated_from`; a caller MUST NOT read this list as
+    evidence that any one of these sidecars answers a PARTICULAR verdict —
+    see `_guard_kira_verdict_routed`'s own reasons loop, which surfaces this
+    list as an FYI count only, never as a "do not re-dispatch" claim."""
     return [
         f
         for f, m in in_scope
@@ -314,29 +327,32 @@ def _guard_kira_verdict_routed(payload: dict) -> dict:
         answers = _kira_find_answers(kira_file, in_scope)
 
         if findings_count is not None and findings_count > 0 and not answers:
-            ran_but_unstamped = _kira_unstamped_integrators(in_scope)
-            if ran_but_unstamped:
-                named = ", ".join(sorted(ran_but_unstamped))
-                reasons.append(
-                    f"- {kira_file} stamps findings_count={findings_count} with no "
-                    f"sibling sidecar's integrated_from naming it. An integrator "
-                    f"was dispatched ({named} carries an integrator_receipt, "
-                    f"which the engine splices AT SPAWN) — so it is either "
-                    f"still in flight or finished having skipped only the "
-                    f"stamp — do NOT re-dispatch it. If it is still running, "
-                    f"wait; hand-stamping now would attest dispositions that "
-                    f"do not exist yet. Once it has finished, add a top-level "
-                    f"`integrated_from: [{_kira_stem(kira_file)}]` to that "
-                    f"sidecar's frontmatter at column zero, verify its "
-                    f"dispositions are the ones you actually landed, and re-close."
-                )
-            else:
-                reasons.append(
-                    f"- {kira_file} stamps findings_count={findings_count} with no "
-                    f"sibling sidecar's integrated_from naming it. Owed route: "
-                    f"review-integrator, or a refactor executor if the verdict "
-                    f"recommended a rebuild."
-                )
+            # A sidecar carrying an `integrator_receipt` with no
+            # `integrated_from` is evidence an integrator was SPAWNED
+            # somewhere this session, never evidence it claimed THIS
+            # verdict (`_kira_unstamped_integrators`'s own docstring) — a
+            # receipt in a misfiled sidecar (issue #47) satisfies this same
+            # test without ever having seen `kira_file`. Only `answers`
+            # (an `integrated_from` that NAMES this verdict, checked above)
+            # counts as routing; an unstamped receipt is surfaced below as a
+            # count, never as grounds to withhold the owed-route remedy or
+            # to instruct a false `integrated_from` stamp.
+            unstamped_count = len(_kira_unstamped_integrators(in_scope))
+            unstamped_note = (
+                f" ({unstamped_count} integrator sidecar(s) in this session "
+                "carry a spawn-time integrator_receipt with no integrated_from "
+                "naming this verdict — spawned is not evidence of routed; do "
+                "not treat them as already handling it.)"
+                if unstamped_count
+                else ""
+            )
+            reasons.append(
+                f"- {kira_file} stamps findings_count={findings_count} with no "
+                f"sibling sidecar's integrated_from naming it. No integrator "
+                f"has claimed this verdict.{unstamped_note} Owed route: "
+                f"review-integrator, or a refactor executor if the verdict "
+                f"recommended a rebuild."
+            )
 
     if not reasons:
         return no_advisory()

@@ -925,6 +925,10 @@ def test_lock_contention_fails_loud_posix(tmp_path, monkeypatch):
         os.close(holder_fd)
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="no-poll: contention must raise on the first try, not after a backoff loop -- "
+    "a behaviour only wall clock can observe"
+)
 def test_lock_contention_is_immediate_no_polling(tmp_path, monkeypatch):
     """NB-immediate-fail: contention raises on the FIRST try, no backoff loop."""
     plugin_root = _trusted_plugin_root(tmp_path, monkeypatch)

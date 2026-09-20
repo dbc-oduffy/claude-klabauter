@@ -539,21 +539,14 @@ def _resolve_source_sigil(
 def _checked_out_branch(repo_root: str) -> Optional[str]:
     """Branch name `repo_root`'s HEAD points at, read off disk with no git spawn.
 
-    Follows a `.git` file's `gitdir:` pointer. None on a detached HEAD or any
-    unreadable layout -- the caller treats None as "cannot prove it is safe".
+    None on a detached HEAD or an unreadable repo -- the caller treats None as
+    "cannot prove it is safe".
     """
-    dot_git = Path(repo_root) / ".git"
+    from coordinator_core.git.repo_root import git_dir
+
+    resolved = git_dir(repo_root)
     try:
-        if dot_git.is_file():
-            pointer = dot_git.read_text(encoding="utf-8").strip()
-            if not pointer.startswith("gitdir:"):
-                return None
-            git_dir = Path(pointer[len("gitdir:") :].strip())
-            if not git_dir.is_absolute():
-                git_dir = Path(repo_root) / git_dir
-        else:
-            git_dir = dot_git
-        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        head = (Path(resolved) / "HEAD").read_text(encoding="utf-8").strip() if resolved else ""
     except OSError:
         return None
     prefix = "ref: refs/heads/"
@@ -605,8 +598,11 @@ def _refuse_engine_root_as_dest(
     except Exception:  # noqa: BLE001 -- same fail-open contract as the predicate itself
         return
     if track_ref:
-        track_branch = track_ref.split("/", 1)[1] if "/" in track_ref else track_ref
-        if track_branch not in ("main", "master") and _checked_out_branch(dest_root) == track_branch:
+        # Same normalization as publish.py::_expected_local_branch.
+        track_branch = track_ref[len("origin/") :] if track_ref.startswith("origin/") else track_ref
+        tracks_default_branch = track_branch in ("main", "master")
+        on_track_branch = _checked_out_branch(dest_root) == track_branch
+        if on_track_branch and not tracks_default_branch:
             return
     raise ResolveError(
         f"resolve-publish-target: {key} resolves to '{dest_root}', which is this "

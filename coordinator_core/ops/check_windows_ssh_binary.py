@@ -20,10 +20,11 @@ ONLY signal is .git/push-failures.log, which nobody reads.
 Full background, reproduced two-armed control, and the mechanism writeup:
 coordinator/docs/wiki/bash-on-windows-gotchas.md §15 (DoE-claude).
 
-Contract for scripts in bin/install-health/ (see install_health_run's own
-docstring): self-gate on OS, exit 0 silently when the gate fails, be
-idempotent, never exit non-zero — this probe's own fail-safe direction is
-warn-and-continue, not block-install (see main()'s always-0 return).
+Contract for legs declared in install_health_run's `_NATIVE_LEGS` (see that
+module's own docstring): self-gate on OS, exit 0 silently when the gate
+fails, be idempotent, never exit non-zero — this probe's own fail-safe
+direction is warn-and-continue, not block-install (see main()'s always-0
+return).
 
 Known limitation: when GIT_SSH_COMMAND or core.sshCommand is a full command
 line (e.g. `"C:/.../ssh.exe" -F /dev/null`), this probe splits on whitespace

@@ -549,6 +549,13 @@ def _run_cascade(plan_path: str, deliverable_id: Optional[str]) -> int:
         commit_error = result.get("commit_error")
         if commit_error:
             print(f"{_PROG}: cascade commit failed: {commit_error}", file=sys.stderr)
+        # C3: commit_notice carries a landed commit's own non-empty stderr
+        # (e.g. commit_scoped's private-index-branch exclusion notice) --
+        # mutually exclusive with commit_error, printed with a distinct,
+        # non-failure framing word so a notice is never mistaken for an error.
+        commit_notice = result.get("commit_notice")
+        if commit_notice:
+            print(f"{_PROG}: cascade commit note: {commit_notice}", file=sys.stderr)
 
     if any_advanced:
         return 0

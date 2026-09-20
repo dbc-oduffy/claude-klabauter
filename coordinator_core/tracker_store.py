@@ -72,6 +72,7 @@ import time
 from pathlib import Path
 
 from coordinator_core.locked_write import MutateAbort, locked_rmw
+from coordinator_core.session.claimed_write import replace_text
 
 # NOTE: `coordinator_core.ops.emit._slug.machine_slug` is NOT imported at
 # module scope. `coordinator_core.ops.emit` is a submodule of
@@ -699,10 +700,9 @@ def rotate_month(*, repo_root: Path, month: str, machine: str | None = None) -> 
             rotated_dir.mkdir(parents=True, exist_ok=True)
             if existing_text and not existing_text.endswith("\n"):
                 existing_text += "\n"
-            rotated_path.write_text(
+            replace_text(
+                rotated_path,
                 existing_text + "".join(line + "\n" for line in new_lines),
-                encoding="utf-8",
-                newline="\n",
             )
 
         relocated = len(candidates)

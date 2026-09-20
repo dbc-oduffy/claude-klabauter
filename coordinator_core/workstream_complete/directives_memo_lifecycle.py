@@ -306,6 +306,73 @@ def memo_flip_resolves_ids(dispositions: list[dict[str, Any]]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# C1 (docs/plans/2026-09-11-the-memo-lifecycle-closes-its-own-handoffs.md) —
+# the consumed-predecessor ship directive.
+# ---------------------------------------------------------------------------
+
+
+def build_consumed_handoff_ship_directives(consumed_handoff_paths: list[str]) -> list[dict[str, Any]]:
+    """`d-ship-consumed-handoff:<basename>` (C1): one directive per element
+    of `consumed_handoff_paths`, PLURAL to match the plural, per-element
+    consumed-handoff completeness gate this hangs off
+    (`compute_consumed_handoff_completeness_gate`, fed `gate.
+    consumed_handoff_paths`). Basename-suffixed ids for a non-singleton
+    directive family is the in-tree convention this mirrors —
+    `d-claim-memo-stamp:<basename>` / `d-flip-memo-status:<basename>` above
+    do exactly this, for exactly this reason.
+
+    `consumed_handoff_paths` is supplied ALREADY RESOLVED and ALREADY
+    FILTERED by the assembly call site (`__init__.py`): predecessor-consumed
+    disposition, on-disk resolution via the private `_resolve_handoff_path_
+    str`, and non-overlap suppression against `directives_commit_tail.
+    resolve_ship_stamp_candidates` all happen there, not here — see this
+    module's own Negative-spec on why `__init__.py`'s private helper is
+    never imported into this module. An empty input emits nothing.
+
+    Each directive fronts `archive-stamp-cli ship-handoff <path>` with NO
+    `--sha` (`handoff.archive_transition`'s Position A derives it and
+    refuses, non-zero, naming `--sha`, when it cannot — this row does not
+    duplicate that derivation) and NO `--archive` (the git-mv belongs to the
+    already-unconditional `d-sweep-terminal-handoffs` drain) and no
+    `best_effort` key (the default hard-fail path is the whole of AC2).
+    `depends_on=None` here — the gate edge (`jp-consumed-handoff-
+    completeness`) is appended by `__init__.py`'s `_gated_directive_id` loop,
+    matching how every other structural gate in this family divides labour.
+
+    ORDERING: this must be emitted before `d-sweep-terminal-handoffs` — that
+    drain's classifier refuses an `in_flight` record as not-terminal, so a
+    stamp emitted after the sweep is one the sweep cannot act on until the
+    NEXT ceremony. `__init__.py`'s Step 2.65/2.66/2.67 call site (well
+    before the two terminal-sweep appends) satisfies this by construction;
+    `test_close_ships_the_consumed_predecessor.py`'s ordering assertion is
+    the actual enforcement, not this sentence.
+
+    `path` is expected repo-relative and forward-slashed (`PurePosixPath`/
+    `.as_posix()`) already, by the caller's own resolution — this function
+    does not itself normalise a separator, matching `build_memo_disposition_
+    directives`'s own pass-through convention for its own `path` values.
+    """
+    directives: list[dict[str, Any]] = []
+    for path in consumed_handoff_paths:
+        basename = Path(path).name
+        directives.append(
+            _directive(f"d-ship-consumed-handoff:{basename}", "archive-stamp-cli", ["ship-handoff", path])
+        )
+    return directives
+
+
+def consumed_handoff_ship_ids(consumed_handoff_paths: list[str]) -> list[str]:
+    """The `d-ship-consumed-handoff:<basename>` ids `build_consumed_handoff_
+    ship_directives` emits for the same input — delegates to the builder
+    exactly as `memo_flip_resolves_ids` delegates to `build_memo_disposition_
+    directives`, and for the identical reason recorded in that function's
+    docstring: `apply`'s gate matches a `resolves` entry against a directive
+    id EXACTLY, never by prefix, so a hand-written base id leaves the gate
+    permanently shut."""
+    return [d["id"] for d in build_consumed_handoff_ship_directives(consumed_handoff_paths)]
+
+
+# ---------------------------------------------------------------------------
 # Step 2.65 — memo-resolution attribution signals (feeds `judgments.build_
 # memo_resolution_attribution_judgment_point`'s `recommendation`)
 # ---------------------------------------------------------------------------
@@ -580,6 +647,38 @@ def _parse_iso(value: str) -> Optional[datetime]:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def memo_paths_dirty(repo_root: Path) -> bool:
+    """DR-419's CHEAPEN-IN-PLACE ruling
+    (`docs/decisions/DR-419-what-may-run-at-close-time.md` § C1,
+    `directives_memo_lifecycle.py :: _run_git` git-status row) for "are the
+    memo files dirty" -- a `git status --porcelain -- <memo corpus root>`
+    scoped to `memo_corpus_root`'s inbox/archive tree, never the whole
+    worktree. The census attributed 203.1ms to the unscoped `git status
+    --porcelain` this module's `_git_status_porcelain` issues for the
+    UNRELATED Step 2.67 session-authored-file predicate (`classify_
+    session_authored_files`, which genuinely needs every dirty path, not
+    just the memo ones) -- that function is left untouched here per DR-419's
+    own negative-spec ("does not choose a specific path-scoping shape...";
+    narrowing its whole-worktree call would silently break that predicate
+    for every non-memo path). This is instead the narrow, additive "is a
+    memo file dirty" predicate DR-419 describes, built to land under AC4's
+    200ms line on a pathspec-scoped call.
+
+    Returns `False` on git failure (no repo, spawn error, timeout) -- same
+    degrade-to-False posture `_created_this_session` and this module's other
+    `_run_git` callers already use, never raising.
+    """
+    corpus_root = Path(memo_corpus_root(str(repo_root)))
+    try:
+        rel = corpus_root.relative_to(repo_root).as_posix()
+    except ValueError:
+        rel = str(corpus_root)
+    proc = _run_git(repo_root, ["status", "--porcelain", "--", rel])
+    if proc is None or proc.returncode != 0:
+        return False
+    return bool(proc.stdout.strip())
 
 
 def _git_status_porcelain(repo_root: Path) -> list[tuple[str, str]]:

@@ -1475,6 +1475,86 @@ class TestQueuePromoteRoutesViaDoeResolver:
 
         assert result == str(tmp_path / "doe-claude" / "state" / "lessons-outbox")
 
+    def test_outbox_root_explicit_doe_root_param_wins_over_resolver(self, tmp_path, monkeypatch):
+        """claude-klabauter#33: an explicit ``doe_root`` param (the CALLER's own
+        already-resolved root, e.g. via a DOE_ROOT-honouring CLI) must win over
+        this op's own ``coordinator_doe_root()`` resolution — which has no
+        DOE_ROOT rung — so a caller-side ``--target-wiki`` validation and the
+        write it authorizes always agree on the same DoE-claude checkout.
+        """
+        import coordinator_core.ops.queue_promote as _qp_mod
+
+        monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
+        # coordinator_doe_root() resolves to a DIFFERENT root than the explicit
+        # param — if the param were ignored, this test would fail on the wrong path.
+        monkeypatch.setattr(
+            _qp_mod, "coordinator_doe_root", lambda: str(tmp_path / "resolver-doe-claude")
+        )
+        explicit_root = str(tmp_path / "explicit-doe-claude")
+
+        result = _qp_mod._outbox_root(doe_root=explicit_root)
+
+        assert result == os.path.join(explicit_root, "state", "lessons-outbox")
+
+    def test_promote_lesson_writes_under_explicit_doe_root_param(self, tmp_path, monkeypatch):
+        """claude-klabauter#33: ``promote_lesson(doe_root=...)`` writes under the
+        explicit root, never under whatever ``coordinator_doe_root()`` would have
+        resolved on its own."""
+        import coordinator_core.ops.queue_promote as _qp_mod
+
+        monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
+        monkeypatch.setattr(
+            _qp_mod, "coordinator_doe_root", lambda: str(tmp_path / "wrong-doe-claude")
+        )
+        explicit_root = tmp_path / "right-doe-claude"
+
+        result = _qp_mod.promote_lesson(
+            title="Explicit doe_root param test",
+            body="Body text.",
+            change_kind="doctrine-edit",
+            target_wiki="docs/wiki/explicit-doe-root-test.md",
+            from_repo="claude-klabauter-em",
+            doe_root=str(explicit_root),
+        )
+
+        assert result["out_path"].startswith(
+            str(explicit_root / "state" / "lessons-outbox")
+        ), f"expected write under explicit doe_root, got: {result['out_path']}"
+        assert os.path.isfile(result["out_path"])
+        assert not os.path.exists(tmp_path / "wrong-doe-claude"), (
+            "promote_lesson must not touch the resolver's root when an explicit "
+            "doe_root param is supplied"
+        )
+
+    def test_handler_threads_doe_root_param_from_wire_params(self, tmp_path, monkeypatch):
+        """claude-klabauter#33: the JSON-RPC handler reads params['doe_root'] and
+        threads it through to promote_lesson, so a CLI passing its own resolved
+        root as an explicit op param (rather than relying on this process's env)
+        actually reaches the write."""
+        import coordinator_core.ops.queue_promote as _qp_mod
+
+        monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
+        monkeypatch.setattr(
+            _qp_mod, "coordinator_doe_root", lambda: str(tmp_path / "wrong-doe-claude")
+        )
+        explicit_root = tmp_path / "right-doe-claude"
+
+        result = _qp_mod._queue_promote_handler(
+            {
+                "title": "Handler doe_root threading test",
+                "body": "Body text.",
+                "change_kind": "doctrine-edit",
+                "target_wiki": "docs/wiki/handler-doe-root-test.md",
+                "from_repo": "claude-klabauter-em",
+                "doe_root": str(explicit_root),
+            },
+            repo_root=None,
+        )
+
+        assert result["out_path"].startswith(
+            str(explicit_root / "state" / "lessons-outbox")
+        ), f"expected write under explicit doe_root, got: {result['out_path']}"
+
 
 # ---------------------------------------------------------------------------
 # Regression guard: _outbox_root() DOES NOT fall back to claude-klabauter / cwd-relative

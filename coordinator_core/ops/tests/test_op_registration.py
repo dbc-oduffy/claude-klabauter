@@ -94,6 +94,13 @@ _ALL_OPS = _CARTOGRAPHY_OPS + (
     "workflow.scaffold",
     "deferral.detect_orphan_memo",
     "deferral.detect_partial_strangle",
+    # freshness.commit_delta — C4 (docs/plans/2026-09-10-cartography-churn-producer-
+    # and-staleness-registrations.md), the op C3 wired across all five registration
+    # surfaces. Folded into _ALL_OPS so (a) registered, (b) COMPUTE_ONLY, and
+    # (d) budget-manifest checks below cover it for free; its "show_top" scope (not
+    # "none"/"common_dir") gets its own dedicated assertion below, matching the
+    # per-scope-value precedent every other non-"none" op in this file already sets.
+    "freshness.commit_delta",
 )
 
 # Derived from the authoritative wire-registration source (ipc.OP_KEY_SCOPE,
@@ -294,6 +301,25 @@ def test_deferral_detect_partial_strangle_has_common_dir_scope():
         "deferral.detect_partial_strangle's handler resolves main-worktree-"
         "rooted repo state via repo_root — expected scope 'common_dir', got "
         f"{ipc.OP_KEY_SCOPE['deferral.detect_partial_strangle']!r}."
+    )
+
+
+def test_freshness_commit_delta_has_show_top_scope():
+    """freshness.commit_delta's handler resolves HEAD's own ancestry
+    (`commit_delta()` -> `_derive_deltas`'s single `git log HEAD` read) —
+    the same repo-relative-but-not-cwd-dependent shape `op_scopes.py`'s own
+    "show_top" comment names for this op. Absent from ipc.OP_KEY_SCOPE this
+    op silently degrades to central scope
+    (lesson 2026-07-06-compute-only-op-registration-needs-an-op)."""
+    assert "freshness.commit_delta" in ipc.OP_KEY_SCOPE, (
+        "'freshness.commit_delta' is missing from ipc._OP_KEY_SCOPE — an op "
+        "absent from _OP_KEY_SCOPE silently degrades to central scope "
+        "(lesson 2026-07-06-compute-only-op-registration-needs-an-op)."
+    )
+    assert ipc.OP_KEY_SCOPE["freshness.commit_delta"] == "show_top", (
+        "freshness.commit_delta resolves HEAD's own ancestry via a single "
+        f"git log read — expected scope 'show_top', got "
+        f"{ipc.OP_KEY_SCOPE['freshness.commit_delta']!r}."
     )
 
 

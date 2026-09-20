@@ -212,12 +212,20 @@ class TestItem3NudgeDispatchBriefFiringShape:
 
     def test_post_fix_brief_still_names_a_concrete_task_line(self):
         """AC10: the post-fix brief still fires real, payload-derived
-        content -- not merely an absence of the placeholder."""
+        content -- not merely an absence of the placeholder.
+
+        The expected text carries no column padding: C8c (docs/plans/
+        2026-09-11-trim-the-remaining-over-cap-guard-messages.md) dropped the
+        `file:`/`commit:` lines the padding used to align against, so a
+        padded expectation would now pin a shape the builder no longer
+        renders. What AC10 asserts is unchanged -- the task line names the
+        payload-derived edit, not a `[TODO: ...]` placeholder.
+        """
         edit_description = _nudge._describe_edit(
             {"tool_name": "Write", "tool_input": {"content": "..."}}
         )
         text = _nudge._build_dispatch_brief("some/file.py", "generic-executor", edit_description)
-        assert "task:          Write: full-file content write" in text
+        assert "task: Write: full-file content write" in text
 
 
 # ---------------------------------------------------------------------------

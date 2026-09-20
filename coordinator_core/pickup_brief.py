@@ -1310,15 +1310,10 @@ def _spawn_status_subset(root: Path, paths: list[str]) -> Optional[list[str]]:
     spawn failure so the caller can fall all the way back."""
     if not paths:
         return []
-    try:
-        proc = subprocess.run(
-            ["git", "status", "--porcelain", "--"] + paths,
-            cwd=str(root), capture_output=True, text=True, timeout=10,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
+    from coordinator_core.git.run import run_git
+
+    proc = run_git(["status", "--porcelain", "--"] + paths, cwd=str(root))
+    if not proc.ok:
         return None
     return [line[3:].strip() for line in proc.stdout.splitlines() if len(line) > 3]
 
@@ -1433,15 +1428,10 @@ def _scoped_porcelain_dirty(root: Path, paths: list[str]) -> list[str]:
     `.git/index` stat-cache side effect that would cause)."""
     if not paths:
         return []
-    try:
-        proc = subprocess.run(
-            ["git", "status", "--porcelain", "--"] + paths,
-            cwd=str(root), capture_output=True, text=True, timeout=10,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if proc.returncode != 0:
+    from coordinator_core.git.run import run_git
+
+    proc = run_git(["status", "--porcelain", "--"] + paths, cwd=str(root))
+    if not proc.ok:
         return []
     return [line[3:].strip() for line in proc.stdout.splitlines() if len(line) > 3]
 
@@ -1818,15 +1808,10 @@ def _artifact_is_a_plan(artifact_path: str) -> bool:
 
 
 def _read_file_at_revision(repo_root: Path, revision: str, path: str) -> Optional[str]:
-    try:
-        result = subprocess.run(
-            ["git", "show", f"{revision}:{path}"],
-            cwd=str(repo_root), capture_output=True, text=True, timeout=30,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
+    from coordinator_core.git.run import run_git
+
+    result = run_git(["show", f"{revision}:{path}"], cwd=str(repo_root))
+    if not result.ok:
         return None
     return result.stdout
 
@@ -1837,17 +1822,12 @@ def _find_stamp_commit(repo_root: Path, path: str, stamped_sha: str) -> Optional
     occurrence count of the stamped literal in `path`. Real `git` spawn,
     off the zero-spawn hot path — only reached once an
     `execution_authorized_sha`/pointer is already present."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(repo_root), "log", "-1", "--follow", f"-S{stamped_sha}", "--format=%H", "--", path],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
+    from coordinator_core.git.run import run_git
+
+    result = run_git(
+        ["-C", str(repo_root), "log", "-1", "--follow", f"-S{stamped_sha}", "--format=%H", "--", path]
+    )
+    if not result.ok:
         return None
     out = result.stdout.strip()
     return out or None
@@ -1868,15 +1848,10 @@ def _classify_stamp_delta(repo_root: Path, stamp_commit: str, path: str) -> str:
     every changed content line in `stamp_commit..HEAD -- path` must be a
     ratification-line, a `**Status:**` line, or blank to count as
     `bookkeeping`; anything else defaults to `substantive`."""
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(repo_root), "diff", f"{stamp_commit}..HEAD", "--", path],
-            capture_output=True, text=True, timeout=30,
-            **_NO_CONSOLE,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return "substantive"
-    if result.returncode != 0:
+    from coordinator_core.git.run import run_git
+
+    result = run_git(["-C", str(repo_root), "diff", f"{stamp_commit}..HEAD", "--", path])
+    if not result.ok:
         return "substantive"
     saw_change = False
     for line in result.stdout.splitlines():
@@ -2778,23 +2753,69 @@ _KIND_DISPOSITIONS: dict[str, list[dict[str, Any]]] = {
             ),
         },
         {
-            "value": "negotiate",
-            "resolves": ["d-action-memo"],
-            "guidance": (
-                "Neither adopt nor decline outright — counter-propose a modified shape "
-                "and record the counter in `actioned_note` (or reply body) for the "
-                "sender to react to. Actioning this disposition requires `actioned_note` "
-                "(the counter, or a pointer to it): `d-action-memo` resolves via the "
-                "`--actioned-note` path (no `--decision`, since negotiating is not an "
-                "accepted/partial/declined outcome), and `cs_action_memo` fails loud if "
-                "neither `--decision` nor `--actioned-note` is supplied — so state the "
-                "counter, however brief, rather than leaving `actioned_note` empty."
-            ),
-        },
-        {
             "value": "fold-into-plan",
             "resolves": ["d-action-memo"],
             "guidance": _FOLD_INTO_PLAN_GUIDANCE,
+        },
+    ],
+    "bug": [
+        {
+            "value": "fixed",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "The report is real and this repo owns it — land the fix and action "
+                "the memo with its SHA. Same premise-verification and live-claim-holder "
+                "checks as an `ask` accept apply before landing. This disposition maps "
+                "to `--decision accepted`, which requires `realized_by` (the SHA of the "
+                "commit that lands the fix) alongside `decision_note`; `cs_action_memo` "
+                "fails loud without it."
+            ),
+        },
+        {
+            "value": "confirmed-owned",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "The report is real, but the work is already tracked elsewhere — point "
+                "`actioned_note` at the artifact that already owns it (a bug-backlog "
+                "entry path, a plan-chunk pointer, or a named baton id), not merely "
+                "assert that it exists. Actioning this disposition requires "
+                "`actioned_note` (the pointer itself): `d-action-memo` resolves via the "
+                "`--actioned-note` path (no `--decision`, since already-owned-elsewhere "
+                "is not an accepted/partial/declined outcome), and `cs_action_memo` "
+                "fails loud if neither `--decision` nor `--actioned-note` is supplied — "
+                "so state the pointer, however brief, rather than leaving "
+                "`actioned_note` empty."
+            ),
+        },
+        {
+            "value": "not-a-bug",
+            "resolves": ["d-action-memo"],
+            "guidance": (
+                "After checking the report against current disk/git state, the behavior "
+                "described is correct, or the report doesn't reproduce — record what was "
+                "checked and what was found in `actioned_note`, not just the verdict. "
+                "Actioning this disposition requires `actioned_note` (the check "
+                "performed and its result): `d-action-memo` resolves via the "
+                "`--actioned-note` path (no `--decision`, since not-a-bug is not an "
+                "accepted/partial/declined outcome), and `cs_action_memo` fails loud if "
+                "neither `--decision` nor `--actioned-note` is supplied — so state what "
+                "was checked, however brief, rather than leaving `actioned_note` empty."
+            ),
+        },
+        {
+            # Work still owed: the report can't be triaged from the memo
+            # alone, so this stays `resolves: []` — halting at
+            # `d-action-memo` is correct, not a defect. Deliberately narrower
+            # than the other three: a single question back to the reporter,
+            # not a peer disposal path.
+            "value": "needs-info",
+            "resolves": [],
+            "guidance": (
+                "The report can't be triaged without one more fact from the reporter — "
+                "ask that single question and stop there; this is a narrow escape hatch, "
+                "not an equal fourth option to fixed/confirmed-owned/not-a-bug. Do not "
+                "use it to ask the reporter to justify why the report was filed."
+            ),
         },
     ],
     "fyi": [
@@ -2872,8 +2893,22 @@ _MEMO_ACTION_DECISION_MAP: dict[tuple[str, str], str] = {
     ("proposal", "adopt"): "accepted",
     ("proposal", "decline"): "declined",
     ("fyi", "surgical-fix"): "accepted",
+    # `fold-into-plan` is an ACCEPTED outcome on both kinds it is offered on:
+    # the fold is the action, and routing it through `--decision accepted`
+    # is what makes `realized_by` (the fold commit's SHA) required, so the
+    # edit is auditable from the memo record and not only from the plan's
+    # history. Without these two rows the disposition resolves
+    # `d-action-memo` with no decision channel and `cs_action_memo` fails
+    # loud at dispatch.
     ("fyi", "fold-into-plan"): "accepted",
     ("proposal", "fold-into-plan"): "accepted",
+    # `bug`/`fixed` is an ACCEPTED outcome — the fix is the action, and
+    # routing it through `--decision accepted` is what makes `realized_by`
+    # (the fix commit's SHA) required, mirroring `fyi`/`surgical-fix` and
+    # `ask`/`accept-mechanical-direct` above. `bug`/`confirmed-owned` and
+    # `bug`/`not-a-bug` are deliberately absent (see the class comment
+    # above this map).
+    ("bug", "fixed"): "accepted",
 }
 
 #: decision value -> required `--decisions` content keys. Ported verbatim.
@@ -2891,8 +2926,9 @@ _NULL_RECOMMENDATION_REASONS = frozenset({"insufficient-evidence", "recommendati
 _KIND_QUESTIONS: dict[str, str] = {
     "ask": "ask: Accept mechanical-direct / Accept escalate-to-sizing / Decline / Surface-to-PM?",
     "consult": "consult: Reply short (goes in actioned_note) / Reply long (## EM Response heading, actioned_note points at it)?",
-    "proposal": "proposal: Adopt / Decline / Negotiate?",
+    "proposal": "proposal: Adopt / Decline?",
     "fyi": "fyi impact: nil / plan-invalidated / surgical-fix / product-decision / ambiguous?",
+    "bug": "bug: Fixed / Confirmed-owned / Not-a-bug / Needs-info?",
 }
 
 #: The terminal `status` values an archived memo may already carry —

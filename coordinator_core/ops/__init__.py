@@ -370,6 +370,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.cartography_symbols", 'registers "cartography.symbols"'),
     ("coordinator_core.ops.cartography_edges", 'registers "cartography.edges", "cartography.count_references"'),
     ("coordinator_core.ops.cartography_op_edges", 'registers "cartography.op_edges"'),
+    ("coordinator_core.ops.docindex_emit", 'registers "docindex.emit"'),
     ("coordinator_core.ops.memo_triage", 'registers "memo.triage"'),
     ("coordinator_core.ops.distill_scope", 'registers "distill.scope"'),
     ("coordinator_core.ops.distill_workflow_input", 'registers "distill.workflow_input"'),
@@ -607,6 +608,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         "brightline-process-budget-for-claude-klabauter.md)",
     ),
     (
+        "coordinator_core.ops.freshness_commit_delta",
+        'registers "freshness.commit_delta" (workday-start doc/test/bug-sweep '
+        "commit-delta producer — docs/plans/2026-09-10-cartography-churn-producer-"
+        "and-staleness-registrations.md § C3)",
+    ),
+    (
         "coordinator_core.ops.warm_guard_evaluate",
         'registers "warm_guard.evaluate" (the warm-side bash-guard chain — state/'
         "handoffs/2026-08-23-the-warm-guard-op-gets-registered.md)",
@@ -625,6 +632,14 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "baton_assemble.brief", "baton_assemble.apply" — making '
         "baton_assemble reachable through the warm engine (previously served "
         'only via the COLD entry_point_shim "baton-assemble" forwarder).',
+    ),
+    (
+        "coordinator_core.learn_lessons_pipeline.ops",
+        'registers "learn_lessons_pipeline.brief", "learn_lessons_pipeline.apply" '
+        "— C5's outbox-drain/age-sweep/run-stamp pipeline; without this entry the "
+        "module never imports on the warm-engine path, so OP_CLASSIFICATION/"
+        "_OP_KEY_SCOPE/ASSEMBLER_DISPATCHABLE rows for both ops name an op that "
+        "never actually registers.",
     ),
 ]
 

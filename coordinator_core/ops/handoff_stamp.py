@@ -847,10 +847,23 @@ class _DeploymentStateRepairPolicy:
     handoff must resolve under, e.g. ``("archive", "handoffs")``.
     ``carveout`` — ``(existing_state, target_state) -> bool``; True bypasses
     the terminal-lock refusal for that specific transition.
+
+    ``refuses_continued_target`` — True means this door must REFUSE a call
+    targeting ``deployment_state: continued`` outright, regardless of the
+    existing state, rather than write it. See
+    docs/plans/2026-08-18-supersede-stamps-and-archives-atomically.md AC1
+    ("writer 4"): a writer of a terminal ``deployment_state`` must either
+    discharge the archival git-mv in the same operation or refuse to write.
+    The live door has no git-mv path (see module docstring/this handler's
+    own registration note — it is a frontmatter-only repair verb), so it can
+    never satisfy the first half and must always take the second. The
+    archived door's own ``continued`` writes are exempt (the record already
+    lives under archive/handoffs/ — there is nothing left to move).
     """
 
     root_segments: "tuple[str, ...]"
     carveout: Callable[[Optional[str], str], bool]
+    refuses_continued_target: bool = False
 
 
 _ARCHIVED_DEPLOYMENT_STATE_POLICY = _DeploymentStateRepairPolicy(
@@ -861,6 +874,7 @@ _ARCHIVED_DEPLOYMENT_STATE_POLICY = _DeploymentStateRepairPolicy(
 _LIVE_DEPLOYMENT_STATE_POLICY = _DeploymentStateRepairPolicy(
     root_segments=("state", "handoffs"),
     carveout=_live_door_carveout,
+    refuses_continued_target=True,
 )
 
 # Cross-repo continued_into reference shape (e.g. "claude-klabauter:docs/plans/x.md")
@@ -1251,6 +1265,25 @@ async def _repair_deployment_state_impl(
             f"'closed_reason' was supplied but deployment_state is "
             f"{target_state!r}, not 'closed' — rejected rather than silently "
             "written to a state it does not apply to")
+
+    # AC1 ("writer 4"), docs/plans/2026-08-18-supersede-stamps-and-archives-
+    # atomically.md: this door can never discharge the archival git-mv (it is
+    # a frontmatter-only repair verb — see _DeploymentStateRepairPolicy's own
+    # docstring), so it must refuse a `continued` target outright rather than
+    # ever leave state/handoffs/ carrying a terminal, un-archived record.
+    # Checked before repo_root/path resolution — a usage error, not an I/O
+    # one. `handoff.archive_transition` mode="supersede" is the correct door
+    # for this transition: it stamps and archives atomically.
+    if policy.refuses_continued_target and target_state == "continued":
+        return _repair_deployment_state_err(
+            "deployment_state 'continued' is refused on this door — it has "
+            "no git-mv path to discharge the archival in the same operation, "
+            "and a writer that cannot also discharge the archival must "
+            "refuse rather than leave the record resident in state/handoffs/ "
+            "(AC1, docs/plans/2026-08-18-supersede-stamps-and-archives-"
+            "atomically.md) — use handoff.archive_transition mode='supersede' "
+            "instead, which stamps deployment_state:continued and archives "
+            "in one atomic operation")
 
     if repo_root is None:
         # NO DOOR NAME IN THIS MESSAGE, DELIBERATELY. `_repair_deployment_state_impl`

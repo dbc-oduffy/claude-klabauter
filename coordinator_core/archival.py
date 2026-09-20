@@ -166,29 +166,30 @@ def _is_terminal_or_archived_child(path: str) -> bool:
         return False
 
     if normalized_status in ("consumed", "claimed"):
-        # Review: code-reviewer F2 (2026-07-17 reconcile-open-dead-zone review,
-        # bug-backlog state/bug-backlog/2026-07-17-archival-reverse-membership-
-        # ignores-deployment-state.yaml) — a consumed/claimed+in_flight child is
-        # still OPEN/unfinished work under handoff_reconcile.py's widened _is_open
-        # semantics, the exact archive-complement of ops/fleet/archive_handoffs.py's
-        # _is_terminal Branch A2 (deployment_state != "in_flight" hard exclusion for
-        # status==consumed/claimed).  Treating a consumed/claimed+in_flight child
-        # as terminal here would let a parent be archived by
-        # fleet.archive_completed_handoffs' Check 3 (this module's
-        # reverse_membership) while the child still names it as
-        # predecessor/additional_predecessors/forked_from.  This is the interim
-        # forward-compatible subset of the fuller DoE lvv-04/C3 archive-safe
-        # predicate (lifecycle-vocab roadmap) — just the in_flight hard exclusion,
-        # mirroring archive_handoffs.py's Check A2 negative-spec: DR-084 renamed
-        # status consumed->claimed (dual-tolerant read window); if DoE lvv-04/C3
-        # introduces additional non-terminal deployment_state values that can
-        # co-occur with status:consumed/claimed, this exclusion must be extended
-        # in lockstep — or inverted to a terminal-state allowlist — or this
-        # predicate will silently treat them as terminal (live-excluding) again.
-        # Does NOT apply to `superseded`/`abandoned` — those remain terminal
-        # regardless of deployment_state.
+        # Inverted (docs/reference/handoff-legal-state-table.md § "Ruling:
+        # terminality is a deployment_state question, never a status one"):
+        # a claimed/consumed child is terminal ONLY at a deployment_state the
+        # table calls terminal (HANDOFF_TERMINAL_DEPLOYMENT, already tested
+        # by rule 3 above) — never by "anything but in_flight". The old
+        # carve-out here tested `deployment_state == "in_flight"` as the ONLY
+        # non-terminal case, which silently treated a reparked baton
+        # (`claimed` + `ready_to_fire`/`awaiting_gate` — a session flips
+        # deployment_state back without dropping status: claimed) as
+        # terminal: exactly the census-row-1 false-positive the table names
+        # and archive_terminal_handoffs._classify_branch Branch A shared
+        # (reconciled together, C3).
+        #
+        # One exception, preserved on purpose: a record with NO
+        # deployment_state key at all (absent, pre-DR-084 legacy shape) is
+        # not "reparked" — it never carried the field — so status alone
+        # still decides for it, matching this predicate's pre-DR-084
+        # behavior and test_terminal_child_excluded's fixture. Any record
+        # that DOES carry a deployment_state is judged by rule 3's positive
+        # membership test alone: `in_flight`, `ready_to_fire`, and
+        # `awaiting_gate` are all equally non-terminal, never inferred
+        # terminal from not being `in_flight`.
         deployment_state = (meta.get("deployment_state") or "").strip().lower() if meta else ""
-        if deployment_state == "in_flight":
+        if deployment_state:
             return False
 
     return True
@@ -396,7 +397,15 @@ def claimed_or_shipped(fm: str) -> bool:
         as terminal a status as a record can carry (it was, by definition,
         already superseded), OR
       - `claimed_at` / `claimed_by` non-empty (new vocabulary), OR
-      - `consumed_at` / `consumed_by` non-empty (retired vocabulary).
+      - `consumed_at` / `consumed_by` non-empty (retired vocabulary), OR
+      - `release_evidence` non-empty (C2/C3, docs/reference/handoff-legal-
+        state-table.md § Q2) — a durable, never-cleared timestamp
+        `_unclaim` stamps on release, the third claimed-disjunct: it is
+        what makes unclaim-then-supersede reachable at all through this
+        DR-242 gate, since a released baton's `status`/`claimed_at`/
+        `claimed_by` are stripped by `_unclaim` and would otherwise leave
+        no on-disk fact that the record was ever claimed. Additive only —
+        narrows nothing the checks above already refuse.
 
     Shipped — reached a terminal `deployment_state`, or carries `shipped_in`
     (a caller-supplied ship commit implies the baton was, at minimum, resolved):
@@ -423,6 +432,8 @@ def claimed_or_shipped(fm: str) -> bool:
     if _field(fm, "claimed_at") or _field(fm, "claimed_by"):
         return True
     if _field(fm, "consumed_at") or _field(fm, "consumed_by"):
+        return True
+    if _field(fm, "release_evidence"):
         return True
     deployment_state = _field(fm, "deployment_state")
     if deployment_state in HANDOFF_TERMINAL_DEPLOYMENT:

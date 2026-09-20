@@ -54,12 +54,12 @@ from __future__ import annotations
 import ast
 import base64
 import sys
-import time
 
 import pytest
 
 from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.bash_guards.tests import test_block_subagent_commit as base
+from coordinator_core.benchmarks.process_time import in_process_time_ms
 
 HELPER = "coordinator/bin/scoped-git-commit"
 _OP = "ceremony.scoped_git_commit"
@@ -152,10 +152,18 @@ def test_folding_bomb_hits_a_bound_and_does_not_resolve(label, payload):
     on a hook that runs for every Bash call is itself the denial of service.
     """
     guard._fold_python_c_payload.cache_clear()
-    started = time.perf_counter()
-    folded = guard._fold_python_c_payload(payload)
-    elapsed = time.perf_counter() - started
-    assert elapsed < 2.0, (label, elapsed)
+    outcome = {}
+
+    def _call() -> None:
+        # Clears the memoizing cache every invocation -- in_process_time_ms
+        # may call this more than once to reach its measurement window, and
+        # a cache hit on a later call would silently mask a slow first one.
+        guard._fold_python_c_payload.cache_clear()
+        outcome["folded"] = guard._fold_python_c_payload(payload)
+
+    timing = in_process_time_ms(_call)
+    folded = outcome["folded"]
+    assert timing["process_time_ms"] < 2000.0, (label, timing["process_time_ms"])
     assert len(folded.text) <= guard._MAX_FOLDED_TOTAL_LEN
     # The bomb's own value never resolves, so the sink it feeds is opaque --
     # the deny route. Two refusal REASONS are in play and both are correct:

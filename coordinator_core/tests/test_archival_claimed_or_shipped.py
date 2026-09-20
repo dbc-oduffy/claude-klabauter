@@ -264,3 +264,20 @@ def test_claimed_or_shipped_pure_function_unchanged_by_this_chunk():
     assert archival.claimed_or_shipped(fm) is True
     fm_open = "status: open\n"
     assert archival.claimed_or_shipped(fm_open) is False
+
+
+def test_release_evidence_is_a_third_claimed_disjunct(monkeypatch=None):
+    """C3/Q2 (docs/reference/handoff-legal-state-table.md): `release_evidence`
+    — the durable, never-cleared timestamp `_unclaim` stamps on release (C2)
+    — is a THIRD claimed-disjunct, additive alongside status vocabulary and
+    claimed_at/claimed_by. This is what makes unclaim-then-supersede
+    reachable at all through the DR-242 gate: `_unclaim` strips status/
+    claimed_at/claimed_by entirely, so without this disjunct a released baton
+    has no on-disk fact answering "was this ever claimed"."""
+    fm_released = "status: open\ndeployment_state: ready_to_fire\nrelease_evidence: 2026-09-11T00:00:00Z\n"
+    assert archival.claimed_or_shipped(fm_released) is True
+
+    # Narrows nothing: an unclaimed, never-claimed record with no evidence at
+    # all is still False.
+    fm_never_claimed = "status: open\ndeployment_state: ready_to_fire\n"
+    assert archival.claimed_or_shipped(fm_never_claimed) is False

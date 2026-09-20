@@ -84,6 +84,44 @@ it widens where a stem-named test may live, never what counts as a match.
 An uncovered doc still maps to nothing, and a row writing only such paths
 still refuses.
 
+## Repo-supplied test-locator suffixes (AC4/AC5a/AC5b/AC5c/AC6)
+
+The stem-derived ``tests/test_<stem>.py`` convention above is pytest-only
+by construction — it can never resolve a written path whose covering test
+is named by a different repo's own convention (a TS repo's ``*.test.ts``
+sibling convention, e.g. ``foo.ts`` covered by ``foo.test.ts`` beside it).
+``coordinator_core.ops.doc_registry.resolve_test_locator_config`` reads one
+optional, additive ``coordinator.local.md`` key, ``test_locator_suffixes``
+(a flow-style list of patterns, e.g. ``[*.test.ts]``), mirroring
+``resolve_doc_registry_config``'s own resolution pattern. Absent the key,
+resolution is byte-identical to today: ``test_locator_suffixes`` defaults
+to ``()`` and no candidate beyond the ``.py`` ladder above is ever derived.
+
+Each configured pattern extends both ``_candidate_test_targets`` (one more
+sibling candidate, stem-derived the same way as the ``.py`` rung: strip the
+pattern's leading ``*`` and join it to the written path's stem in the same
+directory — never a directory listing) and ``_is_testable_surface`` (a
+written path whose suffix matches a pattern's own source suffix is now a
+surface a test COULD cover, not only a ``.py`` path). Both stay governed by
+this module's negative spec: probing the derived candidate for existence,
+never globbing or scanning a directory for anything matching the pattern.
+
+**Derivation is not runnability (AC5b).** This module derives a candidate
+path; it has no way to confirm that path is a command
+``coordinator:test-runner`` can actually run — that agent definition is a
+DoE-claude-owned surface this plan's Anti-scope forbids touching. A
+non-``.py`` target this module derives should be treated as **inert
+config with a documented consumer-runnability gap** until
+``coordinator:test-runner``'s own definition is confirmed to resolve it to
+a real, runnable command — see the decision record ratifying AC8/AC9 for
+the explicit statement of that gap. This module's own docstring previously
+named the repo-supplied test locator as "the real long-term fix... out of
+scope here" (see ``emit.py``'s § "The terminal phase degrades, it never
+vetoes" for that note's own text); that framing is now stale for the
+derivation half described here, even though the runnability half above
+remains an open, explicitly documented gap rather than a silently claimed
+working feature.
+
 ## The sharp edge AC16 exists for
 
 A doc-only spine (every row's ``writes:`` names only docs) DOES declare
@@ -230,6 +268,7 @@ from typing import cast
 
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+from coordinator_core.ops.doc_registry import resolve_test_locator_config
 
 _logger = logging.getLogger(__name__)
 
@@ -507,6 +546,42 @@ def commit_pathspec(wave: list[WaveRow]) -> list[str]:
     return paths
 
 
+def commit_pathspec_or_none(wave: list[WaveRow]) -> list[str] | None:
+    """``commit_pathspec(wave)``, degraded to ``None`` instead of raising
+    ``NoWritesDeclaredError`` for either of that function's two refusal
+    shapes (klabauter#44/#35).
+
+    ``emit.compose_script`` already has ONE caller-side dodge for this —
+    ``_all_writes_declared_empty`` gates the all-``writes: []`` shape
+    (refusal 2) BEFORE ``commit_pathspec`` is ever called, so that wave
+    gets no commit phase instead of a raise. That dodge cannot reach
+    refusal 1: a wave holding a single UNDECLARED, non-concrete-surface row
+    — the shape a depended-on epistemic-premise row with no writes of its
+    own takes when it lands solo in its own wave (``wave_map._writes_
+    overlap`` forces exactly that) — still calls ``commit_pathspec``
+    directly and still raises, sinking the whole plan's emission on a row
+    that legitimately has nothing to commit. This function is the single
+    primitive a caller reaches for instead of hand-rolling a second
+    pre-check ahead of ``commit_pathspec``, covering both refusal shapes
+    the same way: catch ``NoWritesDeclaredError``, return ``None``.
+
+    ``DirectoryShapedWriteError`` is NOT caught here — a directory-shaped
+    ``writes:`` entry is an authoring defect ``commit_pathspec`` exists to
+    surface loudly (see that error's own docstring), never a legitimate
+    "nothing to commit" shape this function's callers should silently
+    swallow.
+
+    A non-``None`` return is never empty (``commit_pathspec`` itself never
+    returns ``[]``) — callers may treat ``None`` as "no commit phase for
+    this wave" and any other return as a legal pathspec, without a second
+    truthiness check.
+    """
+    try:
+        return commit_pathspec(wave)
+    except NoWritesDeclaredError:
+        return None
+
+
 def commit_prefixes(wave: list[WaveRow]) -> list[tuple[str, tuple[str, ...]]]:
     """``(row id, its writes_under prefixes)`` for every row in ``wave``
     declaring any, in row order.
@@ -534,7 +609,24 @@ def _is_test_file(path: PurePosixPath) -> bool:
     return path.name.startswith("test_") and path.suffix == ".py"
 
 
-def _candidate_test_targets(candidate: PurePosixPath) -> list[PurePosixPath]:
+def _locator_source_suffix(pattern: str) -> str:
+    """The written-file suffix a ``test_locator_suffixes`` pattern covers.
+
+    ``*.test.ts`` names its OWN candidate suffix (``.test.ts``), not the
+    suffix a covered source file carries (``.ts``) — ``PurePosixPath``'s
+    ``.suffix`` already collapses a multi-dot tail to its last segment
+    (``PurePosixPath(".test.ts").suffix == ".ts"``), which is exactly the
+    source suffix this needs, so stripping the pattern's leading ``*`` and
+    reading ``.suffix`` off the remainder gets both jobs from one call.
+    """
+    return PurePosixPath(pattern.lstrip("*")).suffix
+
+
+def _candidate_test_targets(
+    candidate: PurePosixPath,
+    *,
+    test_locator_suffixes: tuple[str, ...] = (),
+) -> list[PurePosixPath]:
     """Every stem-derived candidate for ``candidate``, nearest first.
 
     ``tests/test_<stem>.py`` is probed at each ancestor directory from the
@@ -565,10 +657,16 @@ def _candidate_test_targets(candidate: PurePosixPath) -> list[PurePosixPath]:
         for parent in (candidate.parent, *candidate.parent.parents)
     ]
     targets.append(candidate.parent / test_name)
+    for pattern in test_locator_suffixes:
+        if candidate.suffix != _locator_source_suffix(pattern):
+            continue
+        targets.append(candidate.parent / f"{candidate.stem}{pattern.lstrip('*')}")
     return targets
 
 
-def _is_testable_surface(path: str) -> bool:
+def _is_testable_surface(
+    path: str, *, test_locator_suffixes: tuple[str, ...] = ()
+) -> bool:
     """Whether ``path`` is a surface a runnable test could cover AT ALL.
 
     The discriminator ``terminal_test_scope`` needs to tell two states
@@ -577,9 +675,15 @@ def _is_testable_surface(path: str) -> bool:
     and "this row is prose." Only the first is an authoring omission; the
     second cannot be satisfied by any edit the plan author could make.
 
-    ``.py`` is the sole testable suffix because ``_candidate_test_targets``
-    only ever derives ``tests/test_<stem>.py`` — pytest is the only runner
-    the terminal phase invokes. A non-Python path may still RESOLVE (a data
+    ``.py`` is testable unconditionally because ``_candidate_test_targets``
+    always derives ``tests/test_<stem>.py`` for it — pytest is the runner
+    the terminal phase always invokes. A path whose suffix matches a
+    repo-declared ``test_locator_suffixes`` pattern's own source suffix
+    (AC5a — e.g. a TS repo's ``.ts`` under a ``*.test.ts`` convention) is
+    testable for the same reason: ``_candidate_test_targets`` derives a
+    candidate for it too, once that pattern is configured. Absent any
+    configured pattern this stays exactly today's ``.py``-only behaviour. A
+    non-Python path outside a configured pattern may still RESOLVE (a data
     fixture whose driver test is named for it), and that is unaffected:
     this predicate is consulted only for paths that already mapped to
     nothing, to decide whether the miss is an omission or a fact about the
@@ -587,9 +691,16 @@ def _is_testable_surface(path: str) -> bool:
 
     Negative spec: this is NOT a "is this file important" judgment and must
     never grow a doc/config allowlist. A new suffix belongs here only when
-    ``_candidate_test_targets`` learns to derive a runnable target for it.
+    ``_candidate_test_targets`` learns to derive a runnable target for it —
+    which is exactly what a ``test_locator_suffixes`` entry does, and
+    nothing else does.
     """
-    return PurePosixPath(path).suffix == ".py"
+    suffix = PurePosixPath(path).suffix
+    if suffix == ".py":
+        return True
+    return any(
+        suffix == _locator_source_suffix(pattern) for pattern in test_locator_suffixes
+    )
 
 
 def _map_written_path_to_test_target(
@@ -646,7 +757,20 @@ def _map_written_path_to_test_target(
     if _is_test_file(candidate):
         return candidate.as_posix()
     root = repo_root or _REPO_ROOT
-    for target in _candidate_test_targets(candidate):
+    test_locator_suffixes = tuple(
+        resolve_test_locator_config(str(root)).test_locator_suffixes
+    )
+    if any(
+        path.endswith(pattern.lstrip("*")) for pattern in test_locator_suffixes
+    ):
+        # A written path that already carries a configured suffix pattern's
+        # own tail (``foo.test.ts`` under a ``*.test.ts`` convention) is its
+        # own target, same as the ``.py`` self-test-file case above — a row
+        # whose deliverable IS the test does not need it re-derived.
+        return candidate.as_posix()
+    for target in _candidate_test_targets(
+        candidate, test_locator_suffixes=test_locator_suffixes
+    ):
         posix = target.as_posix()
         if posix in declared or (root / target).is_file():
             return posix
@@ -720,7 +844,16 @@ def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = 
         # A spine whose only writes are `writes_under:` prefixes names no
         # file to map, so its empty scope is a fact about the spine, not an
         # omission: no edit could name a test for files not chosen yet.
-        omissions = [path for path in unmapped if _is_testable_surface(path)]
+        test_locator_suffixes = tuple(
+            resolve_test_locator_config(
+                str(repo_root or _REPO_ROOT)
+            ).test_locator_suffixes
+        )
+        omissions = [
+            path
+            for path in unmapped
+            if _is_testable_surface(path, test_locator_suffixes=test_locator_suffixes)
+        ]
         if omissions or (not unmapped and not any(row.writes_under for row in all_rows)):
             raise NoTestTargetError(
                 "every written path mapped to no runnable test target, "

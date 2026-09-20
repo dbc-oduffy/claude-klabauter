@@ -89,6 +89,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from coordinator_core.distill.log_append import append_rows
+from coordinator_core.session.claimed_write import replace_text
 
 __all__ = [
     "TOMBSTONE_MARKER",
@@ -364,9 +365,7 @@ def migrate_wiki_log(wiki_log_path: Path, canonical_log_path: Path) -> WikiLogMi
     )
 
     tombstone_text = render_tombstone()
-    tmp_path = wiki_log_path.with_name(wiki_log_path.name + ".tmp")
-    tmp_path.write_text(tombstone_text, encoding="utf-8", newline="\n")
-    os.replace(tmp_path, wiki_log_path)
+    replace_text(wiki_log_path, tombstone_text)
 
     return WikiLogMigrateResult(
         canonical_log_path=str(canonical_log_path),

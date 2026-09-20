@@ -16,8 +16,7 @@ spine can be checked against the tree without stamping anything.
 
 Backlog record: state/bug-backlog/2026-08-21-spine-drift-is-invisible-
 between-execute-and-emit-a1c4e7b20d13.yaml
-Sizing object: state/sizings/2026-08-21-a-spine-that-disagrees-with-the-
-tree-sho.yaml
+Sizing object: archive/sizings/2026-08/2026-08-21-a-spine-that-disagrees-with-the-tree-sho.yaml
 
 REUSE, not reimplementation: `_parse_spine_rows`, `_all_spine_ids`,
 `_plan_deliverable_id` and `_row_disposition` are still direct calls into

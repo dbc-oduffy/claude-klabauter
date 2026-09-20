@@ -256,9 +256,19 @@ def test_the_sweep_override_is_registered_in_the_operator_reference():
 
 
 def _reason(cmd: str) -> str:
+    """The operator-facing text, wherever this envelope carries it.
+
+    A deny states itself in `permissionDecisionReason`; an allow-advisory has
+    only ever stated itself in `additionalContext` (`dispatch_checks._deny`
+    vs `_advisory`). Reading one key alone makes every row below assert the
+    severity it was written to leave alone.
+    """
     out = dc.check_git_commit_safe_commit_advise(cmd, "", _payload())
     assert out is not None, cmd
-    return out["hookSpecificOutput"]["permissionDecisionReason"]
+    hook = out["hookSpecificOutput"]
+    text = hook.get("permissionDecisionReason") or hook.get("additionalContext")
+    assert text, cmd
+    return text
 
 
 #: The compound form the earlier suite never exercised. Every row above is a

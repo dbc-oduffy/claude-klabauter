@@ -353,7 +353,12 @@ def _reset_central_root_memo(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     _rollup_mod._reset_central_root_cache()
 
+    # COORDINATOR_ENGINE_ROOT is the live var name (the CLAUDE_KLABAUTER_ROOT -> COORDINATOR_ENGINE_ROOT
+    # dual-read window is closed; coordinator_engine_root_env() answers from the new name only).
+    # Both are cleared so a process-level COORDINATOR_ENGINE_ROOT (e.g. set by this host's own
+    # install/session environment) cannot leak into a test expecting worktree-local fallback.
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setattr(_rollup_mod, "_machine_local_get", lambda key: None)
 
     yield

@@ -1176,6 +1176,63 @@ def _known_receiver_ids() -> list[str]:
     return [_central_canonical_id()] + sibling_ids
 
 
+def _normalize_repo_path_for_compare(path_str: str) -> str:
+    """Fold a repo path to a comparable key: case/separator-insensitive,
+    `.`/`..`-normalized. Mirrors `memo_list._normalize_registry_path`'s own
+    comparison authority (not re-derived independently) so "is this
+    discovered repo the same one already registered" agrees with the
+    receiver/mirror-path-collision check the engine op itself applies.
+    """
+    return os.path.normcase(os.path.normpath(path_str))
+
+
+def _checked_out_unaddressable_repos(receivers: list, mirrors: list) -> list[str]:
+    """Repos checked out on THIS box that have no addressable `--to` key.
+
+    klabauter#40 fix (the second, CLI-local half — registry provisioning
+    itself is out of scope here): `--list-receivers` previously rendered
+    only the registered `repos.*`/`publish.mirrors.*` entries, which reads as
+    the complete fleet even when a checked-out repo has no key at all
+    (claude-klabauter, example-cockpit-repo in the reported case) — the gap was
+    invisible unless the reader already knew what was missing. This adds the
+    third state a reader can act on: present-on-disk, no key.
+
+    Sourced from `coordinator_core.ops.discover_working_repos.
+    discover_repo_paths()` — the SAME three-tier discovery `/setup` Phase 2
+    Step 4 already uses to find working repos, not a second scanner with its
+    own drift. Best-effort like that module's own contract: an unresolvable
+    engine seam or discovery failure degrades to an empty list (no section
+    rendered) rather than turning `--list-receivers` into a hard failure —
+    this is a discovery-only display enrichment, never a gate.
+    """
+    try:
+        import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+        import cc_invoke
+
+        cc_invoke.ensure_engine_on_path(__file__)
+        from coordinator_core.ops.discover_working_repos import discover_repo_paths
+
+        discovered = discover_repo_paths()
+    except Exception:
+        return []
+
+    addressable_keys = {
+        _normalize_repo_path_for_compare(r.get("repo_path"))
+        for r in receivers
+        if r.get("repo_path")
+    }
+    addressable_keys |= {
+        _normalize_repo_path_for_compare(m.get("path"))
+        for m in mirrors
+        if m.get("path")
+    }
+
+    return sorted(
+        p for p in discovered
+        if _normalize_repo_path_for_compare(p) not in addressable_keys
+    )
+
+
 def _render_receiver_listing(candidates: list) -> str:
     """Render `memo.list` enumeration-mode candidates into --list-receivers text.
 
@@ -1260,6 +1317,20 @@ def _render_receiver_listing(candidates: list) -> str:
                 f"    {m.get('em_id')}   → owned by {m.get('owner')}  "
                 f"(OSS distribution mirror — address the owner, not the mirror)"
             )
+
+    unaddressable = _checked_out_unaddressable_repos(receivers, mirrors)
+    if unaddressable:
+        lines.append("")
+        lines.append(
+            "  Checked out on this box, no addressable key "
+            "(not in repos.* or publish.mirrors.*):"
+        )
+        for path in unaddressable:
+            lines.append(f"    {path}")
+        lines.append(
+            "    machine-local set repos.<name> <one-of-the-paths-above> to "
+            "add one."
+        )
 
     # DoE-canonical home/mirror aliases (R1) — sourced from the op's
     # `identity.redirectAliases` enumeration (empty today, not an error, until
@@ -2320,7 +2391,15 @@ _OUTBOX_REQUIRED_FIELDS = ("title", "from", "to", "created", "status", "delivery
 # (validKinds) — the receiver-side cross-field rule. Checked here too so a
 # malformed kind fails loud on the SENDER side, before delivery, instead of
 # jamming the receiver's lifecycle wrappers at stamp time.
-_VALID_KINDS = ("ask", "consult", "fyi", "proposal", "bug")
+#
+# `notice` (klabauter#46/#40, 2026-09-19): added here and in claude-klabauter's own
+# `coordinator_core/ops/fleet/memo_kinds.VALID_KINDS` (this CLI's sender-side
+# gate mirrors that op-level enum, not the other way round — see that
+# module's own docstring). schema.js:2131 is DoE-claude-owned and out of
+# this fix's footprint; until DoE lands the matching enum entry there, a
+# `notice`-kind memo sends cleanly from here but the RECEIVER's own
+# cross-field validation is the one that has the final say on its wire.
+_VALID_KINDS = ("ask", "consult", "fyi", "proposal", "bug", "notice")
 
 # The kinds that assert a premise about the RECEIVER's tree state, and so earn
 # the premise-check advisory. `fyi`/`consult` are deliberately excluded: they
@@ -2496,6 +2575,53 @@ def _print_route_mutation_failure_reasons(exc: BaseException) -> None:
         op_stderr_stripped = op_stderr.strip() if isinstance(op_stderr, str) else ""
         if op_stderr_stripped and op_stderr_stripped not in str(exc):
             print(f"  op stderr: {op_stderr_stripped}", file=sys.stderr)
+    _print_stale_engine_kind_diagnosis(exc)
+
+
+def _print_stale_engine_kind_diagnosis(exc: BaseException) -> None:
+    """Name publish lag when the engine refuses a `kind` this CLI accepts.
+
+    The failure this exists for: `--kind notice` passes argparse here (it is in
+    `_VALID_KINDS`, and `coordinator_core/ops/fleet/memo_kinds.py` carries it
+    too), then the op refuses with "kind 'notice' is not a valid enum value
+    (must be one of: ask, consult, fyi, proposal, bug)". Every source file the
+    author can reach says the kind is legal, so the refusal reads as a bug in
+    the enum rather than what it is.
+
+    What it actually is: this CLI runs from the working tree, but the op it
+    dispatches to is served by the PUBLISHED engine, and the two are different
+    checkouts. A kind added to source but not yet published is accepted here
+    and refused there, with nothing in either message naming the split.
+    `coordinator/bin/tests/test_memo_kind_enum_mirrors.py` cannot catch it --
+    it pins the CLI tuples to the IN-TREE engine, which is exactly the
+    comparison that agrees.
+
+    Negative-spec:
+      - Error path only. Never called on a successful draft/send, so it adds
+        nothing to the happy path -- the engine-root resolution below is the
+        reason it must stay here.
+      - Diagnoses only the enum-disagreement case: a kind this CLI's own tuple
+        accepts and the engine's refusal text omits. Any other refusal prints
+        nothing, because any other refusal is not evidence of publish lag.
+      - Never raises, and never re-classifies the refusal. The op's verdict
+        stands; this only names a likely cause.
+    """
+    text = f"{exc}\n{getattr(exc, 'op_stderr', '') or ''}"
+    m = re.search(r"kind '([^']+)' is not a valid enum value.*?must be one of: ([^)]+)", text, re.S)
+    if not m:
+        return
+    kind, served = m.group(1), {k.strip() for k in m.group(2).split(",")}
+    if kind not in _VALID_KINDS or kind in served:
+        return
+    missing = sorted(set(_VALID_KINDS) - served)
+    print(
+        f"  diagnosis: this CLI accepts {kind!r} but the engine serving the op does not.\n"
+        f"  That is a PUBLISH LAG, not an invalid kind: the CLI runs from this working\n"
+        f"  tree while the op is served by the published engine, and they are different\n"
+        f"  checkouts. Kind(s) present here and absent there: {', '.join(missing)}.\n"
+        f"  Publish the engine, or pick a kind the served engine already carries.",
+        file=sys.stderr,
+    )
 
 
 #: Exit codes for a `draft` that ended indeterminate. Deliberately distinct

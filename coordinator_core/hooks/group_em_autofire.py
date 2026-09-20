@@ -104,21 +104,12 @@ def render_additional_context(payload: dict) -> str:
 
     considered = payload.get("roster_considered")
     if isinstance(considered, int) and not isinstance(considered, bool):
-        roster_line = (
-            f"Roster: {len(roster)} of {considered} peer(s) considered, "
-            f"{candidates} candidate(s)"
-        )
+        roster_line = f"Roster: {len(roster)}/{considered} considered, {candidates} candidate(s)"
     else:
-        roster_line = (
-            f"Roster: {len(roster)} shortlisted, {candidates} candidate(s) — "
-            f"ENUMERATED COUNT UNAVAILABLE (`roster_considered` absent from the payload), so "
-            f"this says nothing about how many peers exist"
-        )
+        roster_line = f"Roster: {len(roster)} short, {candidates} cand (n/a total)"
 
     lines = [
-        "## Group EM entry: ACTIVE",
-        "",
-        f"Group EM: {nomination.get('message') or 'claimed'}",
+        f"Group EM ACTIVE: {nomination.get('message') or 'claimed'}",
         roster_line,
     ]
     if nomination.get("displaced_holder"):
@@ -139,7 +130,7 @@ def render_additional_context(payload: dict) -> str:
     if len(roster) > 10:
         lines.append(f"  ... and {len(roster) - 10} more")
 
-    lines.append(f"Digest: {len(entries)} offerable, {len(suppressed)} suppressed")
+    lines.append(f"Digest: {len(entries)}/{len(suppressed)} offerable/suppressed")
     for entry in entries[:10]:
         lines.append(f"  - {entry.get('session_id')}  {entry.get('trigger')}")
 
@@ -173,16 +164,9 @@ def render_additional_context(payload: dict) -> str:
     if watch_liveness:
         lines.append(f"Watch liveness: {watch_liveness}")
 
-    gate_line = (
-        "GATES UNRESOLVED. `gate1`/`gate2` are unset and nothing here resolves them. "
-        "Declare both in prose per send, and never loop over `entries` sending."
-    )
-    arm_line = (
-        "ARM BOTH CLOCKS, NOW, AS YOUR FIRST ACT: `CronCreate` a ~23-minute recurring "
-        "re-entry (off the :00/:30 marks) AND hold a `Monitor` poller over the session "
-        "registry. Both are session-scoped; no hook arms them for you."
-    )
-    lines += ["", arm_line, "", gate_line]
+    gate_line = "gate1/gate2 UNRESOLVED: declare per send; never loop-send entries."
+    arm_line = "ARM NOW: CronCreate ~23min recur (off :00/:30) + Monitor poller."
+    lines += [arm_line, gate_line]
 
     text = "\n".join(lines)
     if len(text) > _CONTEXT_BUDGET_CHARS:

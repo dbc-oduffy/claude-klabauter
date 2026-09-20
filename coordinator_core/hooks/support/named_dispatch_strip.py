@@ -288,9 +288,9 @@ def _compose_offer_message(subagent_type: str, reason: str) -> str:
         ).format(subagent_type)
     else:
         prose = (
-            "[named-dispatch guard] `name:` stripped from {} -- naming "
-            "Explore/Plan loses read-only + costs ~31k tokens; proceeds "
-            "unnamed. Use a non-plugin subagent_type for teammate messaging."
+            "[named-dispatch] `name:` stripped from {} -- naming loses "
+            "read-only, costs ~31k tokens. Use non-plugin for teammate "
+            "messaging."
         ).format(subagent_type)
     return render(compose(prose, anchor=_WIKI_ANCHOR))
 

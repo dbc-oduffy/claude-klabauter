@@ -87,6 +87,7 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.git_scope import foreign_repo_unusable_reason, scoped_cat_file_batch
 from coordinator_core.machine_resolver import registry_get
+from coordinator_core.warm.engine_root import is_engine_root
 
 # Directory holding claude-klabauter's vendored copies of DoE's canonical schemas.
 VENDORED_SCHEMAS_DIR = Path(__file__).resolve().parent / "schemas"
@@ -746,6 +747,54 @@ def _scan(
     )
     schema_paths = vendored_schema_paths(resolved_dir)
     source_paths = vendored_source_paths(resolved_dir)
+
+    # Decide ONCE whether resolved_dir is a publish-scrubbed vendored copy set
+    # (a published build's own coordinator_core/frontmatter/schemas dir) rather
+    # than a checkout that can be honestly compared against upstream HEAD. A
+    # published mirror's vendored schemas/sources are stripped/rewritten by the
+    # publish transform, so a byte comparison against DoE/cockpit HEAD is invalid
+    # by construction — not evidence of drift, and not evidence of a match either.
+    # `resolved_dir.parents[2]` mirrors `current_engine_clone`'s own anchoring:
+    # resolved_dir is `<root>/coordinator_core/frontmatter/schemas`, so
+    # parents[0]=frontmatter, parents[1]=coordinator_core, parents[2]=<root>.
+    try:
+        is_stamped_build = is_engine_root(resolved_dir.parents[2])
+    except (IndexError, OSError):
+        is_stamped_build = False
+
+    if is_stamped_build:
+        stamped_detail = (
+            f"{resolved_dir} is a published build's own vendored copy set "
+            "(coordinator_core/_engine_stamp present) — these copies are "
+            "publish-scrubbed, so a comparison against upstream HEAD is invalid "
+            "by construction. Register engine.source_root so the engine-source "
+            "rung reads the source copies instead."
+        )
+        indeterminate = [
+            {"schema": p.name, "detail": stamped_detail} for p in schema_paths
+        ] + [
+            {"schema": p.name, "detail": stamped_detail} for p in source_paths
+        ]
+        checked = len(schema_paths) + len(source_paths)
+        status = STATUS_INDETERMINATE
+        summary = (
+            f"INDETERMINATE — could not compare {len(indeterminate)}/{checked} vendored "
+            f"file(s) against upstream HEAD: running from a published build's own "
+            "publish-scrubbed vendored copies. This is NOT a drift finding and NOT a "
+            "clean bill of health; the check did not run."
+        )
+        return {
+            "status": status,
+            "doe_repo_path": str(resolved_doe) if resolved_doe else None,
+            "cockpit_repo_path": str(resolved_cockpit) if resolved_cockpit else None,
+            "checked": checked,
+            "matched": [],
+            "drifted": [],
+            "indeterminate": indeterminate,
+            "schemas_dir_rung": schemas_dir_rung,
+            "schemas_dir_degrade_reason": schemas_dir_degrade_reason,
+            "summary": summary,
+        }
 
     if resolved_doe is None and resolved_cockpit is None:
         return {

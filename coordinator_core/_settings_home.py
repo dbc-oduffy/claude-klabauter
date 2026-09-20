@@ -311,7 +311,23 @@ def resolve_machine_local_cli() -> Optional[str]:
         for name in names:
             candidate = root / name
             try:
-                if candidate.is_file() and os.access(candidate, os.X_OK):
+                # `os.access(candidate, os.X_OK)` lies on Windows -- it
+                # returns True for any readable file regardless of actual
+                # executability -- so gating the bare-name (no-extension)
+                # candidate on it there would wrongly accept a non-exec
+                # `machine-local` file before this loop ever reaches the
+                # `.cmd`/`.exe` names Windows actually installs (same
+                # defect shape as `_alternative_liveness.py`'s
+                # `_resolve_on_path_or_settings_home`). Skip the bare-name
+                # POSIX-exec candidate entirely on Windows so the loop
+                # falls through to the extensioned names instead.
+                if (
+                    os.name != "nt"
+                    and candidate.is_file()
+                    and os.access(candidate, os.X_OK)
+                ):
+                    return str(candidate)
+                if os.name == "nt" and candidate.suffix and candidate.is_file():
                     return str(candidate)
             except OSError:
                 continue

@@ -743,6 +743,291 @@ def test_no_repo_root_marks_nothing(tmp_path: Path) -> None:
     assert marks == []
 
 
+# ---------------------------------------------------------------------------
+# C2 — the COMPLETION leg: `review_completion:` stamped at SubagentStop,
+# keyed (session, agent_id), independent of reviewed_range/handoff/git.
+#
+# Spec backlink: docs/plans/2026-09-11-review-receipt-records-completion-
+# not-dispatch.md § C2.
+# ---------------------------------------------------------------------------
+
+def _receipt_yaml(session_id: str, agent_id: str, agent_type: str,
+                   stamped_at: str = "2026-09-01T00:00:00Z") -> str:
+    """The real ``review_receipt:`` block shape, built through C1's own
+    ``_receipt_block`` rather than hand-rolled, so a fixture never drifts
+    from what dispatch actually stamps."""
+    from coordinator_core.subagent_sandbox.provision_report import _receipt_block
+
+    return _receipt_block("review_receipt", session_id, agent_id, agent_type, stamped_at)
+
+
+def _write_sidecar_with_receipt(
+    worktree: Path, ranges, *,
+    session_id: str = _SESSION_ID,
+    agent_type: str = _AGENT_TYPE,
+    filename: str = _SIDECAR_NAME,
+    receipt_session_id: Optional[str] = None,
+    receipt_agent_id: str = "",
+    receipt_agent_type: Optional[str] = None,
+    with_receipt: bool = True,
+    with_completion: bool = False,
+    body: str = "findings\n",
+) -> Path:
+    """A sidecar carrying both a `reviewed_range` (MARK leg input) and a
+    `review_receipt` (COMPLETION leg input), independently controllable so a
+    test can vary either without disturbing the other."""
+    share = worktree / "state" / "subagent-share" / session_id
+    share.mkdir(parents=True, exist_ok=True)
+    receipt_session_id = session_id if receipt_session_id is None else receipt_session_id
+    receipt_agent_type = agent_type if receipt_agent_type is None else receipt_agent_type
+
+    doc = "---\n"
+    if ranges is not None:
+        doc += "reviewed_range:\n"
+        for r in ranges:
+            doc += f"  - {r}\n"
+    doc += "verdict: OK\n"
+    if with_receipt:
+        doc += _receipt_yaml(receipt_session_id, receipt_agent_id, receipt_agent_type)
+    if with_completion:
+        from coordinator_core.subagent_sandbox.provision_report import _receipt_block
+
+        doc += _receipt_block("review_completion", receipt_session_id, receipt_agent_id,
+                               receipt_agent_type, "2026-08-01T00:00:00Z")
+    doc += "---\n\n" + body
+    path = share / filename
+    path.write_text(doc, encoding="utf-8")
+    return path
+
+
+def _read_fm(path: Path) -> dict:
+    import yaml as _yaml
+
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+
+    split = split_frontmatter(path.read_text(encoding="utf-8"))
+    assert split is not None, "sidecar must still carry parseable frontmatter"
+    return _yaml.safe_load(split.fm_text) or {}
+
+
+def test_completion_leg_stamps_a_filled_reviewer_with_the_payload_agent_id(
+    tmp_path: Path,
+) -> None:
+    """AC: a fixture reviewer with a filled body and a session-matching
+    receipt gains exactly one `review_completion:` block whose `agent_id` is
+    the PAYLOAD's, and its frontmatter still parses."""
+    sidecar = _write_sidecar_with_receipt(tmp_path, ["aaa111..bbb222"])
+    _write_pending_diff_record(tmp_path, "aaa111..bbb222")
+    git = _GitStub({"aaa111..bbb222": ["sha_a"]})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks)
+
+    fm = _read_fm(sidecar)
+    assert fm["review_completion"]["agent_id"] == _AGENT_ID
+    assert fm["review_completion"]["session_id"] == _SESSION_ID
+    assert fm["review_receipt"]["agent_id"] == ""  # untouched
+
+
+def test_completion_leg_stamps_the_pipeline_run_report_and_leaves_the_findings_twin_untouched(
+    tmp_path: Path,
+) -> None:
+    """AC: a pipeline-shaped fixture -- an unfilled SubagentStart run-report
+    named by the transcript marker, beside a filled `agent_id: ''` findings
+    sidecar no marker names -- stamps the run-report and leaves the findings
+    sidecar byte-unchanged. Only the marker-named sidecar is ever resolved
+    (census row 2's twin no marker names is unreachable by construction)."""
+    run_report = _write_sidecar_with_receipt(
+        tmp_path, None, receipt_agent_id="", body="",
+    )
+    findings_twin = _write_sidecar_with_receipt(
+        tmp_path, None, filename="coordinatorcode-reviewer-findings-twin.md",
+        receipt_agent_id="",
+    )
+    findings_bytes_before = findings_twin.read_bytes()
+    git = _GitStub({})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks)
+
+    fm = _read_fm(run_report)
+    assert fm["review_completion"]["agent_id"] == _AGENT_ID
+    assert findings_twin.read_bytes() == findings_bytes_before
+
+
+def test_completion_leg_stamps_the_payload_agent_id_over_an_empty_receipt_agent_id(
+    tmp_path: Path,
+) -> None:
+    """AC: a receipt carrying `agent_id: ''` on the marker-named sidecar is
+    stamped with the payload agent_id."""
+    sidecar = _write_sidecar_with_receipt(tmp_path, None, receipt_agent_id="")
+    git = _GitStub({})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks)
+
+    fm = _read_fm(sidecar)
+    assert fm["review_completion"]["agent_id"] == _AGENT_ID
+
+
+def test_no_receipt_stamps_nothing(tmp_path: Path) -> None:
+    """AC (no-write case): no `review_receipt` at all."""
+    sidecar = _write_sidecar_with_receipt(tmp_path, None, with_receipt=False)
+    before = sidecar.read_bytes()
+    git = _GitStub({})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks)
+
+    assert sidecar.read_bytes() == before
+
+
+def test_a_session_mismatched_receipt_stamps_nothing(tmp_path: Path) -> None:
+    """AC (no-write case): the sidecar's `review_receipt.session_id` does not
+    match the payload's `session_id`."""
+    sidecar = _write_sidecar_with_receipt(
+        tmp_path, None, receipt_session_id="ffffffff-0000-4000-8000-000000000000",
+    )
+    before = sidecar.read_bytes()
+    git = _GitStub({})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks)
+
+    assert sidecar.read_bytes() == before
+
+
+def test_an_existing_completion_block_stamps_nothing(tmp_path: Path) -> None:
+    """AC (no-write case): a `review_completion:` block already present --
+    a SubagentStop re-fire or a resumed agent must not produce a duplicate
+    YAML key."""
+    sidecar = _write_sidecar_with_receipt(tmp_path, None, with_completion=True)
+    before = sidecar.read_bytes()
+    git = _GitStub({})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks)
+
+    assert sidecar.read_bytes() == before
+
+
+def test_an_absent_transcript_stamps_nothing(tmp_path: Path) -> None:
+    """AC (no-write case): an absent/markerless transcript -- the sidecar is
+    never resolved at all."""
+    _write_sidecar_with_receipt(tmp_path, None)
+    git = _GitStub({})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks, transcript=_write_transcript(tmp_path, None))
+
+    # No exception, no crash; nothing to assert on the sidecar since it was
+    # never even opened -- the absence of a raise IS the assertion.
+
+
+def test_a_mis_anchored_doc_stamps_nothing(tmp_path: Path) -> None:
+    """AC (no-write case), covered end to end here per C1(b): the finishing
+    reviewer authored an `---\\n\\n` divider in the BODY, so the first such
+    sequence in the whole doc is not the frontmatter's own closing fence.
+    Census row 3 finds 3 of 922 agent-rewritten sidecars in this shape."""
+    session_id = _SESSION_ID
+    share = tmp_path / "state" / "subagent-share" / session_id
+    share.mkdir(parents=True, exist_ok=True)
+    doc = (
+        "---\n"
+        + _receipt_yaml(session_id, "", _AGENT_TYPE)
+        + "---\n"
+        "Body starts immediately, no blank line after the real fence.\n"
+        "\n---\n\nA rendered divider inside the body.\n"
+    )
+    sidecar = share / _SIDECAR_NAME
+    sidecar.write_text(doc, encoding="utf-8")
+    before = sidecar.read_bytes()
+    git = _GitStub({})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks)
+
+    assert sidecar.read_bytes() == before
+
+
+def test_overengineering_reviewer_is_stamped_but_produces_no_ledger_mark(
+    tmp_path: Path,
+) -> None:
+    """AC: `overengineering-reviewer` is CLOSE-only (census row 8) -- the
+    COMPLETION leg's broader gate stamps it, but the MARK leg's narrower
+    `_is_reviewer` gate still excludes it."""
+    sidecar = _write_sidecar_with_receipt(
+        tmp_path, ["aaa111..bbb222"], agent_type="overengineering-reviewer",
+    )
+    _write_pending_diff_record(tmp_path, "aaa111..bbb222")
+    git = _GitStub({"aaa111..bbb222": ["sha_a"]})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks, agent_type="overengineering-reviewer")
+
+    fm = _read_fm(sidecar)
+    assert fm["review_completion"]["agent_id"] == _AGENT_ID
+    assert marks == []
+
+
+def test_code_reviewer_is_stamped_and_still_marks_exactly_as_before(
+    tmp_path: Path,
+) -> None:
+    """AC: a `code-reviewer` fixture is stamped AND still marks exactly as
+    before -- the two products coexist for a DELEGATE reviewer."""
+    sidecar = _write_sidecar_with_receipt(tmp_path, ["aaa111..bbb222"])
+    _write_pending_diff_record(tmp_path, "aaa111..bbb222")
+    git = _GitStub({"aaa111..bbb222": ["sha_a", "sha_b"]})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks)
+
+    fm = _read_fm(sidecar)
+    assert fm["review_completion"]["agent_id"] == _AGENT_ID
+    assert len(marks) == 1
+    assert sorted(marks[0][0][1]) == ["sha_a", "sha_b"]
+
+
+def test_completion_stamp_lands_when_resolve_owner_handoff_id_returns_none(
+    tmp_path: Path,
+) -> None:
+    """AC: the completion stamp lands even for a standalone session with no
+    held baton -- the leg does not depend on handoff resolution at all."""
+    sidecar = _write_sidecar_with_receipt(tmp_path, ["aaa111..bbb222"])
+    _write_pending_diff_record(tmp_path, "aaa111..bbb222")
+    git = _GitStub({"aaa111..bbb222": ["sha_a"]})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks, handoff_id=None)
+
+    fm = _read_fm(sidecar)
+    assert fm["review_completion"]["agent_id"] == _AGENT_ID
+    assert marks == []
+
+
+def test_completion_stamp_only_fires_for_the_payloads_own_session_id(
+    tmp_path: Path,
+) -> None:
+    """AC (F5): pins which `session_id` the real SubagentStop relay payload
+    carries -- the same key `_invoke` forwards on every other test in this
+    file (`session_id`, `agent_id`, `agent_type`, `agent_transcript_path`,
+    `cwd`), matching DoE's shim (`subagent-zero-tool-use-detect.py`'s own
+    documented SubagentStop payload shape). A mismatch on that value must
+    leave the stamp unwritten even though every other input is valid."""
+    sidecar = _write_sidecar_with_receipt(
+        tmp_path, ["aaa111..bbb222"],
+        receipt_session_id="ffffffff-0000-4000-8000-000000000000",
+    )
+    _write_pending_diff_record(tmp_path, "aaa111..bbb222")
+    git = _GitStub({"aaa111..bbb222": ["sha_a"]})
+    marks: list = []
+
+    _invoke(tmp_path, git, marks)
+
+    fm = _read_fm(sidecar)
+    assert "review_completion" not in fm
+
+
 def test_an_unreadable_review_trail_record_does_not_break_the_bound(tmp_path: Path) -> None:
     """AC7: one corrupt record is skipped; the remaining records still form
     the bound. A single bad file must not silently empty it."""

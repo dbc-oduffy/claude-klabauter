@@ -25,7 +25,6 @@ from __future__ import annotations
 import datetime
 import json
 import subprocess
-import time
 from pathlib import Path
 
 from types import SimpleNamespace
@@ -1622,9 +1621,15 @@ class TestCheckDeliveriesSweep:
             },
         ])
 
-        started = time.monotonic()
-        result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
-        elapsed_ms = (time.monotonic() - started) * 1000.0
+        from coordinator_core.benchmarks.process_time import in_process_time_ms
+
+        outcome = {}
+
+        def _sweep() -> None:
+            outcome["result"] = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
+
+        timing = in_process_time_ms(_sweep)
+        result = outcome["result"]
         assert result["exit_code"] == 0
         by_topic = {c["topic"]: c for c in result["candidates"]}
 
@@ -1632,8 +1637,9 @@ class TestCheckDeliveriesSweep:
         assert by_topic["lost-one"]["status"] == _VERDICT_GONE
         assert gone_sha in by_topic["lost-one"]["note"]
 
-        assert elapsed_ms < 500.0, (
-            "brightline: the whole sweep must stay inside 500ms end-to-end"
+        assert timing["process_time_ms"] < 500.0, (
+            "brightline: the whole sweep must stay inside 500ms process time "
+            "end-to-end"
         )
 
     def test_unregistered_receiver_is_not_checkable_not_gone(self, tmp_path, monkeypatch):

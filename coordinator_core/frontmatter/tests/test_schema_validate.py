@@ -4135,6 +4135,79 @@ class TestInferDriftDirection:
     def test_non_json_unrelated_text_is_both(self) -> None:
         assert _infer_drift_direction("not json alpha", "not json beta") == DIRECTION_BOTH
 
+    def test_doe_only_version_bump_with_additive_extending_changes_is_we_are_behind(self) -> None:
+        # Shaped on the real plan-tasks pair (census 2): DoE-only properties,
+        # version 1.14.0 vs 2.0.0, bump-class changed, bump-note extended.
+        # Baton AC: "a one-sided version bump reports BEHIND, never BOTH".
+        local = json.dumps(
+            {
+                "x-schema-version": "1.14.0",
+                "x-bump-class": "additive",
+                "x-bump-note": "added an optional field",
+                "properties": {"a": {"type": "string"}},
+            }
+        )
+        doe = json.dumps(
+            {
+                "x-schema-version": "2.0.0",
+                "x-bump-class": "major",
+                "x-bump-note": "added an optional field, then extended it further",
+                "properties": {"a": {"type": "string"}, "doe_only": {"type": "string"}},
+            }
+        )
+        assert _infer_drift_direction(local, doe) == DIRECTION_WE_BEHIND
+
+    def test_local_only_version_bump_with_additive_extending_changes_is_we_are_ahead(self) -> None:
+        # Mirror image of the BEHIND fixture above: local bumped, local-only property.
+        local = json.dumps(
+            {
+                "x-schema-version": "2.0.0",
+                "x-bump-class": "major",
+                "x-bump-note": "added an optional field, then extended it further",
+                "properties": {"a": {"type": "string"}, "local_only": {"type": "string"}},
+            }
+        )
+        doe = json.dumps(
+            {
+                "x-schema-version": "1.14.0",
+                "x-bump-class": "additive",
+                "x-bump-note": "added an optional field",
+                "properties": {"a": {"type": "string"}},
+            }
+        )
+        assert _infer_drift_direction(local, doe) == DIRECTION_WE_AHEAD
+
+    def test_version_bump_plus_property_only_on_each_side_is_both(self) -> None:
+        # A true two-sided drift stays BOTH even with a one-sided version bump.
+        local = json.dumps(
+            {
+                "x-schema-version": "2.0.0",
+                "properties": {"a": {"type": "string"}, "local_only": {"type": "string"}},
+            }
+        )
+        doe = json.dumps(
+            {
+                "x-schema-version": "1.14.0",
+                "properties": {"a": {"type": "string"}, "doe_only": {"type": "string"}},
+            }
+        )
+        assert _infer_drift_direction(local, doe) == DIRECTION_BOTH
+
+    def test_equal_versions_with_diverged_content_is_unchanged(self) -> None:
+        local = json.dumps(
+            {
+                "x-schema-version": "1.0.0",
+                "properties": {"a": {"type": "string"}, "local_only": {"type": "string"}},
+            }
+        )
+        doe = json.dumps(
+            {
+                "x-schema-version": "1.0.0",
+                "properties": {"a": {"type": "string"}},
+            }
+        )
+        assert _infer_drift_direction(local, doe) == DIRECTION_WE_AHEAD
+
 
 def _advisory_git(repo: Path, *args: str) -> None:
     subprocess.run(

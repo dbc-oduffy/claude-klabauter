@@ -112,6 +112,12 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
     throttled away, so it is given a real sidecar reading in the red band. An
     unmeasured session is silent now, which is indistinguishable from
     throttled — hence the sidecar rather than an absent one.
+   
+    The reading is a percentage of the 1,000,000-token window named in the
+    sidecar block, and the band it lands in is a token runway back from
+    `window - 33,000`. 95% is 950,000 tokens, inside the red bound of 897,000.
+    `CLAUDE_CODE_AUTO_COMPACT_WINDOW` would move that bound, which is why
+    conftest pins it absent suite-wide.
     """
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     from coordinator_core.session import context_usage_sidecar as sidecar_module
@@ -120,7 +126,7 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
     session_id = "test-session-throttle-cross-invocation"
     sidecar_module.write_usage(
         session_id,
-        {"used_percentage": 48, "context_window_size": 1_000_000},
+        {"used_percentage": 95, "context_window_size": 1_000_000},
         now=time.time(),
     )
 
@@ -142,7 +148,7 @@ def test_throttle_suppresses_second_call_within_window_across_separate_invocatio
 def test_throttle_governs_the_orange_band_only_and_never_sits_on_red(
     tmp_path, monkeypatch
 ):
-    """The throttle rate-limits the 40 band; the red band answers to
+    """The throttle rate-limits the orange band; the red band answers to
     bark-once instead.
 
     Isolates the throttle guard specifically: pre-seed throttle_last_check to
@@ -153,8 +159,8 @@ def test_throttle_governs_the_orange_band_only_and_never_sits_on_red(
     channel on every tool call. The red band is a hard call with runway to act
     on it, and a rate limiter must not be what swallows it -- a red reading
     arriving 30 seconds after an orange one would otherwise be silent for the
-    rest of the 5-minute window, which is most of the runway the 43 band was
-    moved down to preserve. What bounds the red band's noise is `critical_fired`
+    rest of the 5-minute window, which is most of the runway the red band
+    exists to preserve. What bounds the red band's noise is `critical_fired`
     (bark-once, asserted below), not elapsed time: it says its piece once per
     session and then stops.
 
@@ -180,14 +186,14 @@ def test_throttle_governs_the_orange_band_only_and_never_sits_on_red(
         )
 
     orange_session = "test-session-throttle-isolated-orange"
-    _seed(orange_session, 41)
+    _seed(orange_session, 88)
     assert pad._check_context_pressure_sync(orange_session, str(transcript)) == ""
 
     red_session = "test-session-throttle-isolated-red"
-    _seed(red_session, 50)
+    _seed(red_session, 95)
     red = pad._check_context_pressure_sync(red_session, str(transcript))
     assert "CONTEXT PRESSURE" in red
-    assert "~50% of window used" in red
+    assert "~95% of window used" in red
 
     # ...and having surfaced once, it is bark-once that holds it down, on a
     # call whose throttle window has long expired.

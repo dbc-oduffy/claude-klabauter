@@ -37,8 +37,27 @@ def test_footprint_constraint_template_pinned_bytes():
     assert FOOTPRINT_CONSTRAINT_TEMPLATE == (
         "You MUST NOT create or modify any file outside this footprint: "
         "[list]. If you discover you need to, STOP and report back via the "
-        "DONE summary with status BLOCKED."
+        "DONE summary with status BLOCKED. Create and edit each of those files "
+        "with Write/Edit, never with a Bash heredoc, sed, tee or redirection: "
+        "only the write tools record a session write claim, and a file produced "
+        "through Bash reaches the committer as an orphan it must refuse. Bash "
+        "stays correct for reading, searching and running tests. If a Bash write "
+        "already happened, name those paths in your report."
     )
+
+
+def test_footprint_constraint_names_the_write_tools_and_forbids_bash_writes():
+    """A Bash write records no session claim, so the wave's committer sees a
+    determinate orphan and refuses it. Measured 2026-09-19 across four
+    concurrent emitted runs in two repos: every one of them halted at its
+    commit phase on orphan paths its executor had produced through Bash, and
+    each cost a manual EM adoption plus a restamp-and-resume round trip."""
+    text = FOOTPRINT_CONSTRAINT_TEMPLATE
+    assert "Write/Edit" in text
+    assert "never with a Bash heredoc, sed, tee or redirection" in text
+    assert "record a session write claim" in text
+    assert "reaches the committer as an orphan it must refuse" in text
+    assert "Bash stays correct for reading, searching and running tests" in text
 
 
 def test_self_verify_constraint_reproduces_mise_hand_dispatch_bytes():

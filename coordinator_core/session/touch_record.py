@@ -440,6 +440,105 @@ def compute_content_hash(file_path: "Path | str") -> Optional[str]:
     return hashlib.sha256(data).hexdigest()
 
 
+def is_stale(recorded_hash: Optional[str], abs_path: "Path | str") -> bool:
+    """C1: the one comparator both C11's commit-time foreign-hunk arm and
+    this plan's write-time deny (C2) share -- extracted from
+    ``dispatch_checks.check_validate_commit``'s existing inline comparison
+    rather than re-specified, so the two legs compute staleness exactly one
+    way rather than diverging over time.
+
+    True ONLY when ``recorded_hash`` and a freshly-computed disk-now hash
+    for ``abs_path`` BOTH exist and disagree. ``None`` on EITHER side -- no
+    recorded hash (pre-C10 line, a RELEASE, a write channel that never
+    passed one) or an unreadable/vanished ``abs_path`` (deleted between the
+    caller's write and this call, a permission denial, a race) -- returns
+    ``False``, never ``True``. This asymmetry is the whole safety argument:
+    an unprovable state must never be promoted to a denial, only a
+    genuinely DEMONSTRATED disagreement may deny. See
+    ``compute_content_hash``'s own docstring for why its ``None`` means
+    "could not confirm", not "no content" -- this predicate inherits that
+    contract rather than reinterpreting it.
+
+    Applies only to a whole-file write target (see C2's own body) -- a
+    surgical write target (an `Edit`-shaped partial write) is never passed
+    here; whole-file identity is the only thing a single sha256 digest can
+    speak to.
+
+    Never raises: any failure computing the disk-now hash is treated the
+    same as ``compute_content_hash`` returning ``None`` -- unprovable, not
+    stale.
+    """
+    if not recorded_hash:
+        return False
+    try:
+        current = compute_content_hash(abs_path)
+    except Exception:
+        return False
+    if current is None:
+        return False
+    return current != recorded_hash
+
+
+def last_seen_hash(
+    session_id: str, rel_path: str, root: "Path | str"
+) -> Optional[str]:
+    """C1: THIS session's own newest recorded fingerprint for ``rel_path``,
+    or ``None`` when there is none to find -- the one genuinely new lookup
+    this chunk adds (every other C1 surface is an extraction of, or a call
+    into, existing code).
+
+    Reads ONLY this session's own sink family
+    (``discover_family(sink_path(<root>/.git/coordinator-sessions/
+    <session_id>))``, the same sink-directory shape
+    ``append_touch_claims`` already writes through), walked
+    newest-generation-first and newest-line-first within a generation, and
+    returns the first event found whose ``path`` matches ``rel_path`` --
+    including its ``content_hash`` verbatim, even when that newest event
+    itself carries no hash (a pre-C10 line, a RELEASE, or a hash-less
+    TOUCH), because a caller asking "what did THIS session last record"
+    must see that absence rather than have an older hash silently
+    substituted for it.
+
+    Deliberately does NOT consult ``project_live_claims`` -- that
+    projection's ``_merge_across_streams`` is a last-verb-wins projection
+    ACROSS PEERS, and reusing it here would let a peer's own TOUCH supply
+    THIS session's baseline, inverting the guard's meaning (a session must
+    only ever compare against a hash IT ITSELF recorded). This function
+    reads exactly one session's own stream, never a peer's.
+
+    Returns ``None`` (never raises) on a missing session directory, an
+    unreadable or malformed family member, or record rotation having
+    dropped every generation carrying this path -- the same accepted
+    silence source ``compute_content_hash`` and ``is_stale`` already treat
+    as unprovable, not as evidence of an empty baseline.
+    """
+    if not session_id or not rel_path or not root:
+        return None
+    try:
+        sid_dir = os.path.join(str(root), ".git", "coordinator-sessions", session_id)
+        sink = sink_path(sid_dir)
+        family = discover_family(sink)
+        for member in reversed(family):
+            try:
+                raw = member.read_bytes()
+            except OSError:
+                continue
+            try:
+                lines = list(iter_complete_lines(raw))
+            except Exception:
+                continue
+            for line in reversed(lines):
+                try:
+                    event = decode_line(line)
+                except MalformedRecordLine:
+                    continue
+                if event.path == rel_path and event.session_id == session_id:
+                    return event.content_hash
+        return None
+    except Exception:
+        return None
+
+
 def encode_line(
     *,
     session_id: str,
@@ -888,6 +987,8 @@ def append_touch_claims(
     paths: "Iterable[str]",
     session_id: str,
     root: "Path | str",
+    *,
+    content_hashes: "Optional[dict[str, str]]" = None,
 ) -> None:
     """Append one ``VERB_TOUCH`` per repo-relative entry in ``paths`` to
     ``session_id``'s own sink under ``root``. Returns ``None`` always, raises
@@ -909,6 +1010,17 @@ def append_touch_claims(
 
     Entries are repo-relative POSIX paths; relpath conversion belongs to the
     caller, which is the half the two sites legitimately differ on.
+
+    ``content_hashes`` (C4) is an optional ``{path: hash}`` map -- ``paths``
+    is plural, so a single scalar hash cannot cover every entry. Threaded
+    straight through to each ``append_event`` call's own ``content_hash``
+    parameter exactly as that parameter already threads to ``encode_line``;
+    a path absent from the map (or ``content_hashes`` itself being ``None``)
+    passes ``None`` through unchanged, so a caller not computing hashes is
+    unaffected -- not a signature-breaking change for either existing
+    caller. ``check_stale_write`` (C2) is the first caller to pass real
+    hashes, computed per write target via ``compute_content_hash`` before
+    calling here.
     """
     if not session_id or not root:
         return
@@ -925,6 +1037,7 @@ def append_touch_claims(
                     agent_id=None,
                     verb=VERB_TOUCH,
                     path=rel,
+                    content_hash=(content_hashes or {}).get(rel),
                 )
             except Exception:
                 continue

@@ -63,6 +63,14 @@
       },
       "_rationale": "AC8 justified override: whole-repo git ls-files walk + per-tracked-file read for loc count (~600+ tracked files in this repo) legitimately exceeds the 70ms COMPUTE_ONLY default; target set from measured min (~105ms, 2026-07-12 gate run). See PHASE-0-MEASUREMENTS.md 'AC8 cartography overrides' addendum."
     },
+    "freshness.commit_delta": {
+      "target_ms": 70,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "One `git log -n 200 --name-only` spawn over HEAD's ancestry, same _SCAN_DEPTH-capped read commit_delta.py's message-only sibling measures at 15.6ms (docs/plans/2026-09-10-cartography-churn-producer-and-staleness-registrations.md § C3, restating routine_signals.py's promoted primitive). --name-only adds a changed-path line per touched file to the same read rather than a second spawn, so this stays comfortably under the COMPUTE_ONLY default rather than needing an override value above it -- carried here (at the default) only to document the override-shape decision for this op, per this manifest's own convention of recording a rationale alongside every entry rather than leaving an op's budget implicit. Not independently re-measured by C3; C4's spawn-count-1 test is the enforced invariant (test_no_uncounted_spawn_on_budgeted_path.py)."
+    },
     "cartography.file_index": {
       "target_ms": 70,
       "tolerance": {

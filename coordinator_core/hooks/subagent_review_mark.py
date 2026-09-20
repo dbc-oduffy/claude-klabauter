@@ -3,6 +3,19 @@ coordinator_core.hooks.subagent_review_mark — SubagentStop mark-derivation op.
 
 Purpose: derive a commit-ledger review mark (``commit_ledger.store.mark_reviewed``)
 from a FINISHING REVIEWER's own ``reviewed_range`` findings, at ``SubagentStop``.
+This op has a SECOND product (docs/plans/2026-09-11-review-receipt-records-
+completion-not-dispatch.md, C2): a ``review_completion:`` block stamped onto
+the finishing reviewer's OWN transcript-resolved sidecar, keyed by
+``(session_id, agent_id)``, whenever that sidecar carries a session-matching
+``review_receipt``. This COMPLETION leg runs for the broader
+``CLOSE_RECEIPT_REVIEWERS | DELEGATE_REVIEWERS`` vocabulary, ahead of and
+independently from the MARK leg below (which keeps its own narrower
+``DELEGATE_REVIEWERS`` gate and behaviour unchanged) — see
+``_run_review_stop_legs``/``_stamp_review_completion_sync``. The block records
+only that ``SubagentStop`` fired for this reviewer; it says nothing about
+authored content, which is a READER concern (``workstream_complete ::
+_compute_review_receipt_gate``, ``review_trail/receipt_credit ::
+_counting_receipt_stamps``), not this splice's.
 Modelled directly on ``hooks.subagent_zero_tool_use`` (same event, same
 shim→engine→durable-write shape, same fail-quiet posture on a missing/unreadable
 artifact) — that module's docstring is the sanctioned precedent for everything
@@ -123,7 +136,9 @@ Negative-spec:
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import List, Optional
 
@@ -168,6 +183,21 @@ def _is_reviewer(agent_type: str) -> bool:
     from coordinator_core.reviewer_vocabulary import DELEGATE_REVIEWERS
 
     return _bare_type(agent_type) in DELEGATE_REVIEWERS
+
+
+def _is_completion_eligible(agent_type: str) -> bool:
+    """True iff ``agent_type``'s bare form is a member of the COMPLETION
+    leg's broader vocabulary, ``CLOSE_RECEIPT_REVIEWERS | DELEGATE_REVIEWERS``
+    — union required because census row 8 (docs/plans/2026-09-11-review-
+    receipt-records-completion-not-dispatch.md) shows ``overengineering-
+    reviewer`` is a ``CLOSE_RECEIPT_REVIEWERS``-only member, while
+    ``_is_reviewer``'s MARK-leg gate stays the narrower ``DELEGATE_REVIEWERS``
+    check, unchanged."""
+    if not agent_type:
+        return False
+    from coordinator_core.reviewer_vocabulary import CLOSE_RECEIPT_REVIEWERS, DELEGATE_REVIEWERS
+
+    return _bare_type(agent_type) in (CLOSE_RECEIPT_REVIEWERS | DELEGATE_REVIEWERS)
 
 
 #: The injected marker `enforce-agent-dispatch-mode.py::_compose_sidecar_offer_text`
@@ -312,6 +342,72 @@ def _own_pending_diff_ranges(session_id: str, worktree: Path) -> List[str]:
     return ranges
 
 
+def _stamp_review_completion_sync(
+    *,
+    session_id: str,
+    agent_id: str,
+    agent_transcript_path: str,
+    repo_root: str,
+) -> None:
+    """Blocking COMPLETION-leg body: resolve the finishing reviewer's own
+    transcript-resolved sidecar and stamp a ``review_completion:`` block onto
+    it (module docstring, C2). Independent of ``reviewed_range``, handoff
+    resolution, and git — runs even for a standalone session with no held
+    baton. Called exclusively via ``asyncio.to_thread``; never raises out to
+    the caller (fail-quiet on any error, per the dispatch brief's step 5).
+
+    Does NOT test the body for authored content — see module docstring and
+    the dispatch brief body for why (a pipeline reviewer's transcript-
+    resolved sidecar is normally left as a scaffold; the content test is the
+    READERS' job, applied across the agent's receipt sidecars, not here).
+    """
+    try:
+        worktree = Path(repo_root)
+        sidecar_rel = _resolve_sidecar_from_transcript(agent_transcript_path)
+        if sidecar_rel is None:
+            return
+        sidecar_abs = worktree / sidecar_rel
+        raw = sidecar_abs.read_text(encoding="utf-8")
+        doc_text = raw.replace("\r\n", "\n")
+        split = split_frontmatter(doc_text)
+        if split is None:
+            return
+        fm = yaml.safe_load(split.fm_text) or {}
+        if not isinstance(fm, dict):
+            return
+        receipt = fm.get("review_receipt")
+        if not isinstance(receipt, dict):
+            return
+        if receipt.get("session_id") != session_id:
+            return
+        receipt_agent_type = receipt.get("agent_type")
+        if not isinstance(receipt_agent_type, str) or not receipt_agent_type:
+            return
+
+        from coordinator_core.subagent_sandbox.provision_report import _splice_review_completion
+
+        stamped_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        new_doc_text = _splice_review_completion(doc_text, session_id, agent_id, receipt_agent_type, stamped_at)
+        if new_doc_text == doc_text:
+            # C1's wrapper declined (no session-matching receipt anchor, an
+            # existing review_completion key, or a mis-anchored --- fence) --
+            # write nothing.
+            return
+
+        tmp_path = sidecar_abs.with_name(f".{sidecar_abs.name}.review-completion.tmp-{os.getpid()}")
+        with open(tmp_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(new_doc_text)
+        os.replace(tmp_path, sidecar_abs)
+
+        from coordinator_core.session.declared_writes import declare_write
+
+        declare_write(sidecar_abs)
+    except OSError:
+        return
+    except yaml.YAMLError:
+        return
+
+
 def _resolve_and_mark_sync(
     *,
     session_id: str,
@@ -371,23 +467,60 @@ def _resolve_and_mark_sync(
     )
 
 
+def _run_review_stop_legs(
+    *,
+    session_id: str,
+    agent_id: str,
+    agent_type: str,
+    agent_transcript_path: str,
+    cwd: str,
+    repo_root: str,
+) -> None:
+    """Blocking dispatcher run inside ``asyncio.to_thread``: the COMPLETION
+    leg runs FIRST, gated on the broader ``_is_completion_eligible`` vocabulary
+    and independent of ``reviewed_range``/handoff/git (module docstring, C2),
+    then the MARK leg runs exactly as before, gated on the narrower
+    ``_is_reviewer`` (DELEGATE) vocabulary, behaviour unchanged."""
+    if _is_completion_eligible(agent_type):
+        _stamp_review_completion_sync(
+            session_id=session_id,
+            agent_id=agent_id,
+            agent_transcript_path=agent_transcript_path,
+            repo_root=repo_root,
+        )
+
+    if _is_reviewer(agent_type):
+        _resolve_and_mark_sync(
+            session_id=session_id,
+            agent_id=agent_id,
+            agent_type=agent_type,
+            agent_transcript_path=agent_transcript_path,
+            cwd=cwd,
+            repo_root=repo_root,
+        )
+
+
 @register_op("hooks.subagent_review_mark")
 async def _handler(params: dict, repo_root=None) -> dict:
-    """SubagentStop write op: derive + append a commit-ledger review mark
-    from a finishing reviewer's own ``reviewed_range`` findings.
+    """SubagentStop write op with two products: (1) derive + append a
+    commit-ledger review mark from a finishing reviewer's own
+    ``reviewed_range`` findings, and (2) stamp a ``review_completion:`` block
+    onto the finishing reviewer's own transcript-resolved sidecar (C2) —
+    see ``_run_review_stop_legs``.
 
     Inputs (flat scalar, extracted via ``_payload.field()``; ``""`` treated
     as absent): ``session_id``, ``agent_id``, ``agent_type``,
     ``agent_transcript_path``, ``cwd``.
 
-    ``agent_transcript_path`` is REQUIRED for a mark and its absence is a
-    fail-quiet no-op, not an error: a relay that does not forward it (the
+    ``agent_transcript_path`` is REQUIRED for either product and its absence
+    is a fail-quiet no-op, not an error: a relay that does not forward it (the
     ``SubagentStop`` shim forwarded it only to ``hooks.subagent_zero_tool_use``
     until this op needed it) leaves the op inert rather than marking off a
     guessed path.
 
     Always returns ``no_advisory()`` — this op never denies, never advises;
-    its only observable effect is the ledger append (or its absence).
+    its only observable effects are the ledger append and the sidecar stamp
+    (or their absence).
     """
     session_id = field(params, "session_id")
     agent_id = field(params, "agent_id")
@@ -398,11 +531,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
     if not repo_root or not session_id or not agent_id or not agent_type:
         return no_advisory()
 
-    if not _is_reviewer(agent_type):
-        return no_advisory()
-
     await asyncio.to_thread(
-        _resolve_and_mark_sync,
+        _run_review_stop_legs,
         session_id=session_id,
         agent_id=agent_id,
         agent_type=agent_type,

@@ -102,7 +102,11 @@ from coordinator_core.ops.fleet.memo_draft import (
     compose_draft_frontmatter,
     resolve_outbox_draft_path,
 )
-from coordinator_core.ops.fleet._memo_compose import _TOPIC_SLUG_RE, _yaml_quote
+from coordinator_core.ops.fleet._memo_compose import (
+    _TOPIC_SLUG_RE,
+    _yaml_quote,
+    body_opens_frontmatter,
+)
 from coordinator_core.ops.fleet._memo_summary import (
     derive_prose_summary,
     is_placeholder_summary,
@@ -216,6 +220,13 @@ def _validate_compose_params(params: dict):
         return build_setup_error_result(
             _MODE, dry_run,
             "memo.compose: body is required (string; empty string is permitted)",
+        )
+    if body_opens_frontmatter(body):
+        return build_setup_error_result(
+            _MODE, dry_run,
+            "memo.compose: body opens its own frontmatter block — the body "
+            "is a whole memo draft; pass only the text below its closing "
+            "'---', because memo.draft owns the frontmatter.",
         )
 
     summary: Optional[str] = params.get("summary") or None

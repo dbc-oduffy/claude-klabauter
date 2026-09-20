@@ -34,6 +34,13 @@
 #     # already carry it.
 #   release-memo-revert <memo_path>
 #   stamp-plan-implemented <plan_path>
+#   stamp-plan-superseded <plan_path> --by <successor>
+#     (plan_status_transition verb stamp-superseded, via
+#     coordinator_core.archive_stamp.cs_stamp_plan_superseded — the same
+#     native in-process route cs_stamp_plan_implemented takes. --by is
+#     REQUIRED: a missing --by is a usage error at this CLI layer, and the
+#     op's own refusal (an already-terminal-at-a-different-status plan)
+#     remains the authoritative gate.)
 #   gate-recheck-handoff <handoff_path> <at> [--cleared]
 #   close-handoff <handoff_path> --reason <cancelled|displaced|stale>
 #   repark-handoff <handoff_path>
@@ -112,7 +119,7 @@ def _import_module():
 _SUBCOMMANDS = (
     "subcommands: stamp-shipped-in | ship-handoff | claim-handoff | "
     "claim-memo-stamp | action-memo | resolve-memo | release-memo-revert | "
-    "stamp-plan-implemented | gate-recheck-handoff | close-handoff | "
+    "stamp-plan-implemented | stamp-plan-superseded | gate-recheck-handoff | close-handoff | "
     "repark-handoff | unclaim-handoff | chain-archive-handoff | "
     "supersede-archive-handoff | repair-archived-shipped-in | "
     "repair-archived-deployment-state | correct-handoff-body\n"
@@ -198,6 +205,9 @@ _SUBCOMMAND_USAGE = {
     ),
     "release-memo-revert": "archive-stamp-cli release-memo-revert <memo_path>",
     "stamp-plan-implemented": "archive-stamp-cli stamp-plan-implemented <plan_path>",
+    "stamp-plan-superseded": (
+        "archive-stamp-cli stamp-plan-superseded <plan_path> --by <successor>"
+    ),
     "gate-recheck-handoff": (
         "archive-stamp-cli gate-recheck-handoff <handoff_path> <at> [--cleared]"
     ),
@@ -834,6 +844,20 @@ def main(argv: list[str]) -> int:
         if not rest:
             return _usage("archive-stamp-cli stamp-plan-implemented <plan_path>")
         return mod.cs_stamp_plan_implemented(rest[0])
+
+    if subcmd == "stamp-plan-superseded":
+        if not rest:
+            return _usage_line(_SUBCOMMAND_USAGE["stamp-plan-superseded"])
+        plan_path, tail = rest[0], rest[1:]
+        by = _scan_flag_value(tail, "--by")
+        if not by:
+            print(
+                "archive-stamp-cli: stamp-plan-superseded: --by <successor> "
+                "is required",
+                file=sys.stderr,
+            )
+            return 2
+        return mod.cs_stamp_plan_superseded(plan_path, by)
 
     if subcmd == "gate-recheck-handoff":
         if len(rest) < 2:

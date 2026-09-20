@@ -1479,7 +1479,13 @@ class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
     each passes to `build_executor_dispatch_prompt_template_emission` must
     not move by one byte. These strings are the pre-refactor bytes,
     captured directly from the readers before C1/C2 existed -- a literal
-    pin, not a re-derivation through the same builders under test."""
+    pin, not a re-derivation through the same builders under test.
+
+    The footprint field is pinned as a PREFIX, not an equality: the shared
+    constant has since gained a deliberate write-tool clause, and this class
+    guards against silent drift in the refactored text, not against a later
+    documented addition to it. Its first 168 bytes are still the readers'
+    own pre-refactor bytes, unmoved."""
 
     _MISE_FOOTPRINT = (
         "You MUST NOT create or modify any file outside this footprint: "
@@ -1531,14 +1537,14 @@ class TestExecutorDispatchTemplateFieldsUnmovedByC2Refactor:
     def test_mise_fields_unmoved(self):
         result = bga.readers_mise_en_place._read_executor_dispatch_template()
         fields = result.directives[0]["fields"]
-        assert fields["footprint_constraint_template"] == self._MISE_FOOTPRINT
+        assert fields["footprint_constraint_template"].startswith(self._MISE_FOOTPRINT)
         assert fields["self_verify_constraint"] == self._MISE_SELF_VERIFY
         assert fields["done_summary_constraint_template"] == self._MISE_DONE_SUMMARY
 
     def test_blitz_fields_unmoved(self):
         result = bga.readers_bug_blitz._read_executor_dispatch_template()
         fields = result.directives[0]["fields"]
-        assert fields["footprint_constraint_template"] == self._BLITZ_FOOTPRINT
+        assert fields["footprint_constraint_template"].startswith(self._BLITZ_FOOTPRINT)
         assert fields["done_summary_constraint_template"] == self._BLITZ_DONE_SUMMARY
         assert "self_verify_constraint" not in fields, (
             "bug-blitz adopting self-verify is out of scope for this plan"

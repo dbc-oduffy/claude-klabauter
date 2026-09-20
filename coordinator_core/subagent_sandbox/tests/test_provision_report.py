@@ -51,6 +51,7 @@ from coordinator_core.subagent_sandbox.provision_report import _provision
 from coordinator_core.subagent_sandbox.provision_report import main as provision_main
 from coordinator_core.subagent_sandbox.provision_report import _INTEGRATOR_AGENT_TYPE
 from coordinator_core.subagent_sandbox.provision_report import _splice_review_receipt
+from coordinator_core.subagent_sandbox.provision_report import _splice_review_completion
 from coordinator_core.testing.doe_root import doe_root_and_present
 
 # Real git repo is load-bearing: resolve_git_root() is asserted against a
@@ -1317,6 +1318,94 @@ def test_splice_with_no_frontmatter_fence_returns_doc_unspliced_no_raise() -> No
     )
     assert result == doc_text_no_fence
     assert "review_receipt:" not in result
+
+
+def test_splice_review_completion_parses_alongside_review_receipt() -> None:
+    """AC1: the wrapper's output parses via ``parse_frontmatter`` with both
+    ``review_receipt`` and ``review_completion`` as dicts, and the
+    ``review_receipt`` block's bytes are identical before and after."""
+    doc = _splice_review_receipt(
+        "---\nstatus: open\n---\n\n## Findings\n\n", "sid1", "agent1", "coordinator:code-reviewer", "2026-08-27T00:00:00Z"
+    )
+    review_receipt_line = next(line for line in doc.split("\n") if line.strip() == "review_receipt:")
+    before = doc
+
+    result = _splice_review_completion(doc, "sid1", "agent1", "coordinator:code-reviewer", "2026-08-27T01:00:00Z")
+
+    parsed = parse_frontmatter(result)["frontmatter"]
+    assert isinstance(parsed["review_receipt"], dict)
+    assert isinstance(parsed["review_completion"], dict)
+    assert review_receipt_line in result
+    # review_receipt block bytes unchanged: the same five lines survive verbatim.
+    def _receipt_block_text(text: str) -> str:
+        lines = text.split("\n")
+        start = lines.index("review_receipt:")
+        return "\n".join(lines[start : start + 5])
+
+    assert _receipt_block_text(before) == _receipt_block_text(result)
+
+
+def test_splice_review_completion_already_stamped_returns_unchanged() -> None:
+    """Case (a): a doc whose frontmatter already carries a top-level
+    ``review_completion:`` key is returned unchanged (`is`/`==`)."""
+    doc = (
+        "---\n"
+        "status: open\n"
+        "review_completion:\n"
+        "  session_id: 'sid1'\n"
+        "  agent_id: 'agent1'\n"
+        "  agent_type: 'coordinator:code-reviewer'\n"
+        "  stamped_at: '2026-08-27T00:00:00Z'\n"
+        "---\n\n"
+        "## Findings\n\n"
+    )
+    result = _splice_review_completion(doc, "sid1", "agent1", "coordinator:code-reviewer", "2026-08-27T01:00:00Z")
+    assert result is doc
+    assert result == doc
+
+
+def test_splice_review_completion_mis_anchored_fence_returns_unchanged() -> None:
+    """Case (b): the first ``---\\n\\n`` in doc_text is not the frontmatter's
+    closing fence (it lands in the body) -- returned unchanged (`is`/`==`)."""
+    doc = (
+        "---\n"
+        "status: open\n"
+        "review_receipt:\n"
+        "  session_id: 'sid1'\n"
+        "---\n\n"
+        "## Findings\n\n"
+        "a rendered rule follows\n\n"
+        "---\n\n"
+        "more body\n"
+    )
+    # Sanity: this doc's first "---\n\n" IS the real frontmatter close (idx 0
+    # case doesn't apply here) -- craft a doc where the closing fence itself
+    # is NOT immediately followed by a blank line, so the first "---\n\n"
+    # match in the string lands in the body instead.
+    mis_anchored = (
+        "---\n"
+        "status: open\n"
+        "review_receipt:\n"
+        "  session_id: 'sid1'\n"
+        "---\n"
+        "## Findings\n\n"
+        "a body section with its own fence follows\n\n"
+        "---\n\n"
+        "more body\n"
+    )
+    result = _splice_review_completion(mis_anchored, "sid1", "agent1", "coordinator:code-reviewer", "2026-08-27T01:00:00Z")
+    assert result is mis_anchored
+    assert result == mis_anchored
+    assert "review_completion:" not in result
+
+
+def test_splice_review_completion_no_frontmatter_fence_returns_doc_unspliced_no_raise() -> None:
+    doc_text_no_fence = "## Findings\n\nno frontmatter fence in this doc at all\n"
+    result = _splice_review_completion(
+        doc_text_no_fence, "sid1", "agent1", "coordinator:code-reviewer", "2026-08-27T00:00:00Z"
+    )
+    assert result == doc_text_no_fence
+    assert "review_completion:" not in result
 
 
 @pytest.mark.parametrize(

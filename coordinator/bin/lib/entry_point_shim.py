@@ -496,6 +496,61 @@ def _merge_assemble_dispatch(op: str, params: dict, print_fn, result_key: str, *
     return exit_code_int if exit_code_castable else 0
 
 
+def _native_route_entry(name: str, dotted: str) -> Callable[[List[str]], int]:
+    """Warm-routed replacement for `_simple_entry(name, dotted)`, for the
+    three names this campaign carries through `invoke.from_argv`'s
+    `params.entrypoint` (pickup-assemble, baton-assemble,
+    workstream-complete-assemble — plan's C4). Routes through
+    `cc_invoke.route` with `entrypoint=name` set, so the native door runs
+    THIS name's OWN `coordinator/bin/<name>.py :: main(argv)` in-process
+    (`coordinator_core.ops.invoke_from_argv._run_entrypoint`) — never a
+    per-name argv-to-op translation table (DR-347 Ruling 2, and this
+    module's own `_merge_assemble_dispatch` precedent, which routes a real
+    OP name rather than an entrypoint).
+
+    State-1 (seam absent): `route()` itself calls `legacy_fn` — here,
+    `_simple_entry(name, dotted)` unchanged — and passes its `int` return
+    straight through. Byte-identical to the pre-this-row direct-import
+    behaviour: same import target, same error-message text, same exit
+    codes, because nothing about `_simple_entry` changed.
+
+    State-2 (seam present): `route()` calls the native op and returns its
+    `{"stdout", "stderr", "exit_code"}` dict, printed here to this
+    process's real streams and reduced to the `exit_code` int. A State-2
+    transport failure is a HARD raise out of `route()` itself — this
+    function does not catch it and must not: `route`'s own contract
+    ("NEVER fall back to legacy_fn on State-2") is owned entirely by
+    `route`, not re-derived here.
+    """
+    legacy_entry = _simple_entry(name, dotted)
+
+    def _entry(argv: List[str]) -> int:
+        lib_dir = str(BIN_DIR / "lib")
+        if lib_dir not in sys.path:
+            sys.path.insert(0, lib_dir)
+        import cc_invoke  # noqa: PLC0415
+
+        repo_root = _merge_assemble_checked_repo_root()
+        params = {"argv": list(argv), "cwd": str(Path.cwd()), "entrypoint": name}
+
+        result = cc_invoke.route(
+            "invoke.from_argv", params, repo_root, lambda: legacy_entry(list(argv))
+        )
+
+        if isinstance(result, dict):
+            stdout_text = result.get("stdout", "")
+            stderr_text = result.get("stderr", "")
+            if stdout_text:
+                sys.stdout.write(stdout_text)
+            if stderr_text:
+                sys.stderr.write(stderr_text)
+            exit_code = result.get("exit_code")
+            return exit_code if isinstance(exit_code, int) else 1
+        return int(result)
+
+    return _entry
+
+
 #: Pre-C2 behavior, kept as the fallback target for the seam-absent case
 #: where `coordinator_core.merge_assemble.cli` itself cannot be imported
 #: (root unresolvable, or resolved to a root that predates C1's cli split).
@@ -678,18 +733,18 @@ def _workday_complete_assemble_entry(argv: List[str]) -> int:
 # from.
 _ENGINE_ENTRIES: dict[str, Callable[[List[str]], int]] = {
     "backlog-grind-assemble": _backlog_grind_assemble_entry,
-    "baton-assemble": _simple_entry("baton-assemble", "coordinator_core.baton_assemble"),
+    "baton-assemble": _native_route_entry("baton-assemble", "coordinator_core.baton_assemble"),
     "consolidate-assemble": _simple_entry("consolidate-assemble", "coordinator_core.consolidate_assemble"),
     "merge-assemble": _merge_assemble_entry,
     "orient-assemble": _simple_entry("orient-assemble", "coordinator_core.orient_assemble"),
-    "pickup-assemble": _simple_entry("pickup-assemble", "coordinator_core.pickup_brief"),
+    "pickup-assemble": _native_route_entry("pickup-assemble", "coordinator_core.pickup_brief"),
     "plan-assemble": _simple_entry("plan-assemble", "coordinator_core.plan_assemble"),
     "quick-wrap-assemble": _simple_entry("quick-wrap-assemble", "coordinator_core.quick_wrap_assemble"),
     "review-assemble": _simple_entry("review-assemble", "coordinator_core.review_assemble"),
     "sizing-assemble": _simple_entry("sizing-assemble", "coordinator_core.sizing_assemble"),
     "staff-session-assemble": _simple_entry("staff-session-assemble", "coordinator_core.staff_session_assemble"),
     "workday-complete-assemble": _workday_complete_assemble_entry,
-    "workstream-complete-assemble": _simple_entry("workstream-complete-assemble", "coordinator_core.workstream_complete"),
+    "workstream-complete-assemble": _native_route_entry("workstream-complete-assemble", "coordinator_core.workstream_complete"),
 }
 
 

@@ -1,5 +1,21 @@
 """coordinator_core.spawn_policy.marker_check — shared pytest-marker AST checks.
 
+THIRD CONSUMER (C8, docs/plans/2026-09-11-perf-ratchets-measure-process-
+time-not-t.md § C8): `coordinator_core.tests.test_no_wall_clock_ratchets`
+needs to know not just WHETHER a marker is present but what keyword
+arguments it carries -- specifically whether `deliberate_wall_clock(...)`
+was given a non-empty string-literal `reason=`. `decorator_names` and
+`has_marker_decorator` unwrap every `ast.Call` to its dotted name and
+throw the call's keywords away; they cannot answer this and, per this
+module's own NEGATIVE SPEC below, never will -- they stay byte-identical.
+`marker_call_nodes` is the additive sibling: same two input shapes the
+existing functions take (a decorator list, or a statement body carrying a
+`pytestmark` assignment), but it returns the matching `ast.Call` nodes
+themselves, keywords intact, instead of a bool. C8 decides what counts as
+"discharged" (a `reason=` keyword whose value is a non-empty `str`
+Constant) -- this module still only answers "is marker X present here,"
+now with its keywords visible to the caller that needs them.
+
 Lifted (staff-eng F7, docs/plans/2026-08-20-the-spawn-ratchet-stops-
 accumulating-arrears.md § C4) out of
 `coordinator_core/tests/test_no_new_spawning_tests.py`, where this logic
@@ -30,6 +46,10 @@ Negative-spec:
     `_has_module_level_pytestmark`/`_has_spawns_process_marker` they
     replace (`test_no_new_spawning_tests.py`'s own suite continues to pass
     unchanged, proving the lift is behaviour-preserving).
+  - `marker_call_nodes` does NOT decide what a "discharged" marker is (a
+    reasoned `deliberate_wall_clock`, a bare `spawns_process`, or anything
+    else) -- that judgment stays with the caller (C8's own guard). This
+    module only surfaces the matching `ast.Call` nodes, keywords intact.
 
 Spec backlink: docs/plans/2026-08-20-the-spawn-ratchet-stops-accumulating-arrears.md § C4
 """
@@ -43,6 +63,7 @@ __all__ = [
     "decorator_names",
     "has_marker_decorator",
     "has_module_level_pytestmark",
+    "marker_call_nodes",
 ]
 
 #: The marker name every consumer of this module currently cares about, as
@@ -119,3 +140,69 @@ def has_module_level_pytestmark(
             if ".".join(reversed(parts)) == marker:
                 return True
     return False
+
+
+def _dotted_name(node: ast.expr) -> str:
+    """Best-effort dotted-name rendering, unwrapping one `ast.Call`
+    wrapper -- the same unwrap `decorator_names` does, shared here so the
+    two functions agree on what "matches `marker`" means."""
+    target = node.func if isinstance(node, ast.Call) else node
+    parts: list[str] = []
+    while isinstance(target, ast.Attribute):
+        parts.append(target.attr)
+        target = target.value
+    if isinstance(target, ast.Name):
+        parts.append(target.id)
+    return ".".join(reversed(parts))
+
+
+def marker_call_nodes(
+    decorators: list[ast.expr] | None = None,
+    body: list[ast.stmt] | None = None,
+    marker: str = SPAWNS_PROCESS_MARKER,
+) -> list[ast.Call]:
+    """Keyword-aware sibling of `has_marker_decorator` /
+    `has_module_level_pytestmark`: returns the matching `ast.Call` nodes
+    (keywords intact) instead of a bool.
+
+    Takes the same two input shapes those two functions take, so function,
+    class and module levels all go through this one function:
+
+      - `decorators`: a decorator list (`FunctionDef.decorator_list` or
+        `ClassDef.decorator_list`) -- matches over Rule 2 already covers
+        (bare `@pytest.mark.x` and `@pytest.mark.x(...)` alike). A bare
+        `Attribute` match (no call, e.g. `@pytest.mark.spawns_process`
+        with no parens) has no keywords to inspect and is NOT returned --
+        callers that need to know a bare marker is present at all still
+        use `has_marker_decorator`; this function only surfaces the ones
+        whose keywords a caller can actually read.
+      - `body`: a statement body that may carry a `pytestmark = <m>` /
+        `pytestmark = [<m>, ...]` assignment -- `ast.Module.body` for the
+        module level, `ast.ClassDef.body` for the class level (the same
+        body shape `has_module_level_pytestmark` reads off `tree.body`).
+
+    Exactly one of `decorators`/`body` is expected per call; passing both
+    concatenates their matches. Only `ast.Call` candidates whose dotted
+    name equals `marker` are returned -- non-call candidates are dropped
+    for the reason above.
+    """
+    calls: list[ast.Call] = []
+
+    for dec in decorators or []:
+        if isinstance(dec, ast.Call) and _dotted_name(dec) == marker:
+            calls.append(dec)
+
+    for node in body or []:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets
+        ):
+            continue
+        value = node.value
+        candidates = value.elts if isinstance(value, (ast.List, ast.Tuple)) else [value]
+        for candidate in candidates:
+            if isinstance(candidate, ast.Call) and _dotted_name(candidate) == marker:
+                calls.append(candidate)
+
+    return calls

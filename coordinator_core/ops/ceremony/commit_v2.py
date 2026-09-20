@@ -36,11 +36,6 @@ resolve even with the fallback (the fallback itself fails, or returns no sha
 for a path) still propagates as a structured error, unmodified in substance
 -- this handler does not catch, retry, or widen it.
 
-Spec backlinks:
-    docs/plans/2026-08-27-something-must-commit-ceremony-commit-v2.md § C3
-    coordinator_core/git/commit.py :: commit_paths
-    coordinator_core/git/index_write.py :: splice_index (called internally)
-
 Negative-spec (hard-won, restated for this row):
   - Does NOT import `coordinator_core.ops.ceremony.commit_pipeline` or
     `coordinator_core.ops.ceremony.git_native` in any form -- not
@@ -53,7 +48,14 @@ Negative-spec (hard-won, restated for this row):
   - Does NOT catch `CommitRefused`/`FilterUnsupported` and retry, guess, or
     widen scope -- a refusal from `commit_paths` is returned as a structured
     error, unmodified in substance, so the caller sees exactly why nothing
-    was written.
+    was written. There is no signing-shaped carve-out here: DR-308
+    (`docs/decisions/DR-308-signed-commit-enforcement-is-declined-as.md`)
+    declines a mechanism that can ever refuse a commit over a signing
+    failure, so `commit_paths` never raises one -- a broken signing setup
+    lands the commit unsigned and reports it via `CommitOutcome.sign_
+    warning` instead (see the handler body below). klabauter#34's operator
+    remedy text existed only for the refusal shape this decision removed
+    and was deleted with it.
   - Does NOT use `params.repo_root` as the worktree-resolution source (D3:
     socket-authoritative common_dir only).
 """
@@ -98,14 +100,12 @@ import logging
 
 _LOG = logging.getLogger(__name__)
 
-#: Prefix filter for the guard-class-relay step below (C2 of
-#: docs/plans/2026-08-29-a-guard-class-flip-announces-itself.md). ONLY paths
-#: under this directory can carry a `write_guards` CLASS constant -- this
-#: string compare is the zero-cost gate the whole step's budget rests on
-#: (0.156 us / 0 spawns measured, docs/research/spike-verdicts/2026-08-29-
-#: guard-class-relay-commit-seam.md Q4): no path under it means the step
-#: below returns having done no work -- no git call, no object read, no AST
-#: parse, no import beyond what module load already paid.
+#: Prefix filter for the guard-class-relay step below. ONLY paths under this
+#: directory can carry a `write_guards` CLASS constant -- this string compare
+#: is the zero-cost gate the whole step's budget rests on (0.156 us / 0 spawns
+#: measured): no path under it means the step below returns having done no
+#: work -- no git call, no object read, no AST parse, no import beyond what
+#: module load already paid.
 _GUARD_MODULE_DIR = "coordinator_core/write_guards/"
 
 
@@ -252,7 +252,7 @@ def _guard_class_relay_step(
                         f"skip: guard_class_relay memo emission for "
                         f"{path!r}: {emission.get('reason')}"
                     )
-    except Exception as exc:  # noqa: BLE001 -- never raise, C2 negative spec
+    except Exception as exc:  # noqa: BLE001 -- never raise (negative spec)
         skips.append(f"skip: guard_class_relay step: {exc!r}")
 
     return {"transitions": transitions, "skips": skips}
@@ -457,7 +457,25 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                        Malformed (present but not UUID-
                                        shaped) refuses the whole call rather
                                        than silently falling back to the env
-                                       ladder.
+                                       ladder. Absent -- behaviour unchanged
+                                       from before this parameter existed.
+                                       Exists because dispatched git-commit-
+                                       agent commits were landing with no
+                                       Session-Id trailer under the env-
+                                       ladder alone, blinding the review-
+                                       brightline gate (coordinator-claude#52a).
+        declared_reverts (list[str], optional) -- paths this call is
+                                       deliberately reverting to an older
+                                       exact blob. This route always runs
+                                       `commit_paths`'s staged-rollback check
+                                       (`detect_rollback=True`, P2d); a path
+                                       named here is excluded from that
+                                       check's candidate set, not merely
+                                       exempted from refusal. Absent path(s)
+                                       whose new value matches an older
+                                       first-parent version raise
+                                       `StagedRollbackRefused`, returned here
+                                       as a structured refusal.
     Returns:
         {"committed": True, "sha": str, "staged_preferred": [str, ...],
          "worktree_over_staged": [str, ...], "warnings": [str, ...],
@@ -479,6 +497,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     Keying scope: common_dir -- repo_root arg is the .git common dir; the
     caller's worktree is main_worktree_root(repo_root).
     """
+    if "repo" in params:
+        return _error(
+            "params.repo is not a parameter of this op. The target repo is keyed "
+            "from the calling worktree (_OP_KEY_SCOPE \"common_dir\"), never from "
+            "params; `repo_root` is a consistency assertion only. Dispatch from "
+            "the target repo instead. Accepted silently, `repo` committed against "
+            "the caller's own tree while naming another."
+        )
+
     if repo_root is None:
         return _error(
             "ceremony.commit_v2 requires a common_dir-keyed dispatch; "
@@ -518,12 +545,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         ):
             return _error("params.session_id must be a canonical UUID string")
 
+    raw_declared_reverts = params.get("declared_reverts") or []
+    if not isinstance(raw_declared_reverts, list) or not all(
+        isinstance(p, str) for p in raw_declared_reverts
+    ):
+        return _error("params.declared_reverts must be a list of strings")
+
     worktree_root = main_worktree_root(repo_root)
 
     # Filter FIRST, before anything else touching the guard-class-relay step
     # -- no path under `_GUARD_MODULE_DIR` means zero work below: no git
-    # call, no object read, no AST parse (0.156 us / 0 spawns measured,
-    # spike-verdicts/2026-08-29-guard-class-relay-commit-seam.md Q4).
+    # call, no object read, no AST parse (0.156 us / 0 spawns measured).
     guard_paths = _guard_module_paths(raw_paths, raw_deleted)
     pre_commit_guard_sources = (
         _pre_commit_guard_sources(worktree_root, guard_paths) if guard_paths else {}
@@ -550,12 +582,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # A repair-side exception is a worse defect than the drift it looks for
     # (NEGATIVE SPEC, `eol_declared` module docstring) -- neither function is
     # documented to raise, but nothing upstream of this line guarantees it,
-    # so this is wrapped rather than trusted. Review finding 1, 2026-08-30.
+    # so this is wrapped rather than trusted.
     # `prefer_staged` paths are excluded: that parameter exists precisely
     # because the caller wants the INDEX content committed while deliberately
     # leaving the working tree diverged (see `worktree_over_staged` below).
     # Repairing those bytes anyway overrides a deliberate operator choice,
-    # even though it would not change what lands. Review finding 5, 2026-08-30.
+    # even though it would not change what lands.
     try:
         prefer_staged_set = set(raw_prefer_staged)
         eol_candidates = [p for p in raw_paths if p not in prefer_staged_set]
@@ -569,11 +601,20 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     # Attach Session-Id / Deliverable-Id (whichever are resolvable and not
     # already present) via the shared applier -- this route lands via
-    # `commit_paths`' `commit-tree` plumbing, which fires NO git hooks
-    # (`prepare-commit-msg` included), so this call is this route's ONLY
-    # attach point (docs/dispatch-briefs/.../C3.md; commit_trailers.py
+    # `commit_paths`' hand-rolled object-write plumbing, which fires NO git
+    # hooks (`prepare-commit-msg` included), so this call is this route's
+    # ONLY attach point (docs/dispatch-briefs/.../C3.md; commit_trailers.py
     # module docstring). Never blocks: `apply_missing_trailers` degrades to
     # `message` unchanged on any resolution failure.
+    #
+    # SIGNING: `commit_paths` honours `commit.gpgsign` (claude-klabauter#34)
+    # -- when set, it spawns `git commit-tree -S` for the ONE object that
+    # needs a real signature rather than hand-writing it, and hand-writing
+    # resumes for every commit after (or every commit at all, when unset --
+    # zero added cost). A signing failure (empty/unreadable signing key,
+    # missing agent, wrong `gpg.format`) never refuses the commit: it lands
+    # unsigned and `outcome.sign_warning` carries why, surfaced into
+    # `warnings` below rather than silently dropped.
     message = apply_missing_trailers(
         message,
         worktree_root,
@@ -590,6 +631,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             prefer_staged=raw_prefer_staged,
             prefer_deliberate_stage=raw_prefer_deliberate_stage,
             blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
+            detect_rollback=True,
+            declared_reverts=raw_declared_reverts,
         )
     except NothingToCommit as exc:
         # Distinguished from the other refusals in the SAME envelope, not a
@@ -631,14 +674,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     else:
         index_stale_warning = None
 
-    # A FIELD IS NOT A SIGNAL. The other route through this same disagreement
-    # (`commit_scoped`'s private-index branch, via `commit_pipeline`) has
-    # carried a loud message on SUCCESS since the 2026-08-10 bug-backlog row,
-    # on the reasoning that a commit which sets one side aside is a legitimate
-    # success and the operator still needs to see why. This route returned the
-    # equivalent fact as a dict key nobody is obliged to read, so the same
-    # disagreement was loud on one path and silent on the other.
+    # A FIELD IS NOT A SIGNAL. A commit which sets one side aside is a
+    # legitimate success and the operator still needs to see why, not a
+    # fact buried in a dict key nobody is obliged to read.
     warnings = []
+    if outcome.sign_warning is not None:
+        # First-class, not appended after the others: a caller that only
+        # reads the first warning (or greps for "sign") should still see
+        # this one, and it is the only warning here that means "this commit
+        # is not what the branch's protection rules expect it to be."
+        warnings.append(outcome.sign_warning)
     if index_stale_warning is not None:
         # First, because it is the one warning here that changes what the
         # reader should DO: everything else describes which bytes landed; this
@@ -736,11 +781,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # Same post-commit region, same negative spec. This op is one of the only
     # two commit shapes `block_subagent_commit` admits (the other is a plain
     # scoped `git commit`), so a dispatched committer reaches history through
-    # here or not at all -- and until this call existed, neither shape wrote a
-    # ledger row. `apply_base.record_ledger_entry`'s own docstring still names
-    # `ceremony.scoped_git_commit` as the route that carried this; that op went
-    # over the brightline and its module is gone, which is what left every
-    # `dispatch_emit` commit phase unbilled.
+    # here or not at all.
     #
     # Budget: ~15-31ms process time warm, measured against this handler's
     # 500ms end-to-end bar -- `_ledger_kind_and_weight` caches to zero after

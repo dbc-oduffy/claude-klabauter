@@ -198,9 +198,7 @@ MATCHERS = COMMAND_TOOL_NAMES
 PRIORITY = 42
 
 #: Longlived branch prefixes this guard deliberately does NOT deny -- see
-#: module docstring "THE CANONICAL-SHAPE PREDICATE". Exported for
-#: `guard_longlived_branch_naming.py` (a sibling chunk's advisory guard) to
-#: import rather than re-declaring.
+#: module docstring "THE CANONICAL-SHAPE PREDICATE".
 SANCTIONED_LONGLIVED_PREFIXES = ("migration/", "release/", "feature/")
 
 #: Cheap pre-filter -- a candidate creation-shaped invocation must at least

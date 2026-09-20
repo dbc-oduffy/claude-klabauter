@@ -98,6 +98,14 @@ _CONTENT_HASH_DIGEST_SIZE = 16  # 128-bit blake2b -- collision-negligible for a 
 #: store has for a scanner-semantics change, and it is what the version field
 #: is for. Bump it again on the next one.
 #:
+#: 4 -> 5 (2026-09-11, D5): `generator_provenance._call_is_write` and
+#: `_write_target_expr` now recognise the claiming seam's four names
+#: (`replace_text`/`replace_bytes`/`create_exclusive`/`append_claimed_line`,
+#: module-attribute or from-import form) as write sites, with their target
+#: at `args[0]` -- a scanner-semantics change exactly like the 3 -> 4 bump
+#: above, and for the same reason: no swept module's stat moves, so a stale
+#: entry would otherwise be served forever.
+#:
 #: Shared with the content cache (`generator-content-cache.json`) -- both
 #: files hold nothing but `FileWrites` produced by the same scanner, so one
 #: version field governs both stores. Bumping it means: (a) every stat-cache
@@ -111,7 +119,7 @@ _CONTENT_HASH_DIGEST_SIZE = 16  # 128-bit blake2b -- collision-negligible for a 
 #: digest in the old-schema file fails `load_content_cache`'s version check
 #: and every stat-miss falls through to a full AST parse -- correct, never
 #: silently wrong, but back to paying the cost this store exists to avoid).
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 
 def _cache_path(repo_root: Path) -> Path:

@@ -62,6 +62,7 @@ _EXPECTED_GUARD_NAMES = frozenset(
         "guard_doctrine_surface_edits",
         "guard_settings_json_write",
         "nudge_baton_body_bar",
+        "nudge_dangling_sizing_citation",
         "nudge_em_code_dispatch",
         "nudge_handoff_ac_shape",
         "nudge_improvement_queue_write",

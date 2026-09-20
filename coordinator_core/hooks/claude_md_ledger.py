@@ -390,10 +390,8 @@ _LEDGER_PATH_OVERRIDES = {
 #: channel-purpose contract that is the routing authority for where content
 #: should go instead.
 _DEFAULT_DEMOTE_TARGET_HINT = (
-    "Demote target: route non-conduct, reference, or rationale content to "
-    "the wiki/decision-record channel (coordinator/docs/wiki/, channel 5) "
-    "per coordinator/docs/wiki/doctrine-channel-purposes.md, unless it "
-    "genuinely governs every agent's (or the EM's) conduct."
+    "Demote target: non-conduct content -> wiki (coordinator/docs/wiki/, "
+    "channel 5), per doctrine-channel-purposes.md."
 )
 
 
@@ -557,10 +555,9 @@ def admission_check_for_surface(
         new_size = len(new_content.encode("utf-8"))
         if new_size > old_size:
             return False, (
-                f"Refused: {surface} has no classification ledger yet "
-                f"(bootstrap disposition -- expected at {ledger_path}). "
-                f"Growth is blocked until one exists; shrinkage is always "
-                f"permitted. {_DEFAULT_DEMOTE_TARGET_HINT}"
+                f"Refused: {surface} has no ledger yet ({ledger_path}). "
+                f"Growth blocked until one exists; shrinkage always OK. "
+                f"{_DEFAULT_DEMOTE_TARGET_HINT}"
             )
         return True, ""
 

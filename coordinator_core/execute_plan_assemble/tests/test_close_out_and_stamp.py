@@ -1545,6 +1545,90 @@ class TestResolutionModel:
         assert coas._stamp_plan_landed(str(plan)) == 0
         assert _read_status(plan) == "landed"
 
+    def test_stamp_plan_landed_refuses_a_plan_carrying_superseded_by(
+        self, tmp_path
+    ):
+        """C8: `_stamp_plan_landed` must not land a plan that has itself
+        been superseded, even while its `status:` still sits at a
+        flippable value (`superseded_by` is set by C9's own verb ahead of
+        the `status:` flip to `superseded` landing separately) -- see
+        this module's own C8 spec row. The refusal fires between the
+        frozen/already-landed no-ops and the flip itself, names the
+        `archive-stamp-cli stamp-plan-superseded` verb C9 exposes, and
+        leaves the file byte-unchanged."""
+        root = tmp_path
+        _init_repo(root)
+        text = _PLAN_TEMPLATE.format(status="approved", rows=(
+            "- id: C1\n"
+            "  title: Ship the widget\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/widget.py\n"
+            "  deferred: false\n"
+            "  body: |\n"
+            "    Ship the widget end to end.\n"
+        ))
+        text = text.replace(
+            'status: approved\n', 'status: approved\nsuperseded_by: "pln-successor-000002"\n'
+        )
+        dest = root / "superseded-by-plan.md"
+        dest.write_text(text, encoding="utf-8")
+        _run_git(["add", dest.name], root)
+        _run_git(["commit", "-q", "-m", "seed"], root)
+        before = dest.read_text(encoding="utf-8")
+
+        assert coas._stamp_plan_landed(str(dest)) == 1
+        assert dest.read_text(encoding="utf-8") == before
+        assert _read_status(dest) == "approved"
+
+    def test_stamp_plan_landed_without_superseded_by_still_flips(self, tmp_path):
+        """Same plan as the refusal case above, minus `superseded_by` --
+        unchanged behaviour: the flip to `landed` still fires."""
+        root = tmp_path
+        _init_repo(root)
+        rows_yaml = (
+            "- id: C1\n"
+            "  title: Ship the widget\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/widget.py\n"
+            "  deferred: false\n"
+            "  body: |\n"
+            "    Ship the widget end to end.\n"
+        )
+        plan = _seed_disposition_plan(
+            root, rows_yaml, status="approved", dest_name="no-superseded-by-plan.md"
+        )
+        assert coas._stamp_plan_landed(str(plan)) == 0
+        assert _read_status(plan) == "landed"
+
+    def test_stamp_plan_landed_already_superseded_still_no_ops(self, tmp_path):
+        """An already-`superseded` plan still no-ops with rc 0 -- the
+        pre-existing `_FROZEN_STATUSES` no-op branch fires before this
+        row's own `superseded_by` refusal is ever reached, and stays
+        unchanged with this refusal added alongside it."""
+        root = tmp_path
+        _init_repo(root)
+        text = _PLAN_TEMPLATE.format(status="superseded", rows=(
+            "- id: C1\n"
+            "  title: Ship the widget\n"
+            "  change_kind: script-edit\n"
+            "  surface: coordinator/bin/widget.py\n"
+            "  deferred: false\n"
+            "  body: |\n"
+            "    Ship the widget end to end.\n"
+        ))
+        text = text.replace(
+            'status: superseded\n', 'status: superseded\nsuperseded_by: "pln-successor-000002"\n'
+        )
+        dest = root / "already-superseded-plan.md"
+        dest.write_text(text, encoding="utf-8")
+        _run_git(["add", dest.name], root)
+        _run_git(["commit", "-q", "-m", "seed"], root)
+        before = dest.read_text(encoding="utf-8")
+
+        assert coas._stamp_plan_landed(str(dest)) == 0
+        assert dest.read_text(encoding="utf-8") == before
+        assert _read_status(dest) == "superseded"
+
     def test_stamp_preserves_comments_and_block_scalars_verbatim(
         self, tmp_path, monkeypatch
     ):

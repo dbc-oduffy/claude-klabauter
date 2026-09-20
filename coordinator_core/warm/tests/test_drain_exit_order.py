@@ -156,6 +156,10 @@ def test_waits_for_in_flight_to_reach_zero_before_ctx_shutdown():
     assert order == ["ctx_shutdown", "exit_fn"]
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="drain ceiling: a permanently-nonzero in-flight count must not hang the shutdown "
+    "sequence past its ceiling -- a behaviour only wall clock can observe"
+)
 def test_drain_ceiling_is_bounded_not_unlimited():
     """A permanently-nonzero in_flight_count must not hang the sequence --
     the ceiling bounds shutdown latency instead."""

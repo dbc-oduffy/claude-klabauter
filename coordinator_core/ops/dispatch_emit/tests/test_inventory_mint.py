@@ -40,22 +40,22 @@ _LIVE_AND_CLOSED_INVENTORY = textwrap.dedent(
     |---|---|---|---|---|---|---|---|
     | C1 | `docs/plans/fixture.md` | first fixture chunk | `coordinator_core/fixture_a.py` | — | scoped pytest | S | in_progress |
     | C2 | `docs/plans/fixture.md` | second fixture chunk | `coordinator_core/fixture_b.py` | C1 | scoped pytest | S | queued — wave B |
-    | C3 | `docs/plans/fixture.md` | terminal EM row | — | C1, C2 | EM-run | S | pending — empty write set, EM-executed at tail |
+    | C3 | `docs/plans/fixture.md` | terminal EM row | `coordinator_core/fixture_c.py` | C1, C2 | EM-run | S | pending — not yet started |
     | C4 | `docs/plans/fixture.md` | routed-out chunk | `coordinator_core/fixture_d.py` | — | scoped pytest | S | routed out — premise moved |
     """
 )
 
 
-def test_live_dispositions_are_minted_closed_dispositions_are_dropped():
+def test_live_dispositions_including_pending_are_minted_routed_out_is_dropped():
     rows = im.parse_chunk_table(_LIVE_AND_CLOSED_INVENTORY)
     minted = im.mint_rows(rows)
     minted_ids = {row["id"] for row in minted}
 
-    assert minted_ids == {"C1", "C2"}
+    assert minted_ids == {"C1", "C2", "C3"}
 
 
-def test_pending_and_routed_out_are_classified_closed():
-    assert im._is_live_disposition("pending — empty write set") is False
+def test_pending_is_live_routed_out_is_classified_closed():
+    assert im._is_live_disposition("pending — not yet started") is True
     assert im._is_live_disposition("routed out — premise moved") is False
     assert im._is_live_disposition("in_progress") is True
     assert im._is_live_disposition("queued — wave B") is True
@@ -88,10 +88,13 @@ def test_unreadable_footprint_refuses():
 
 def test_empty_footprint_on_a_live_row_refuses():
     rows = im.parse_chunk_table(_LIVE_AND_CLOSED_INVENTORY)
-    # Flip C3 (empty footprint) to LIVE to exercise the empty-writes refusal.
+    # Flip C3 to LIVE with an empty footprint to exercise the empty-writes
+    # refusal -- C3 carries a real footprint in the shared fixture now that
+    # `pending` is itself LIVE, so this test clears it back to empty.
     for row in rows:
         if row["id"] == "C3":
             row["disposition"] = "in_progress"
+            row["footprint"] = "—"
     with pytest.raises(im.FootprintUnreadableError):
         im.mint_rows(rows)
 
@@ -212,6 +215,59 @@ def test_directory_shaped_footprint_refuses_at_mint_naming_the_rule():
         im.DirectoryShapedFootprintError, match="directory pathspec"
     ):
         im.mint_rows(rows)
+
+
+# ---------------------------------------------------------------------------
+# coordinator-klabauter#45's smaller Class B note: the no-trailing-separator
+# spelling of a directory-shaped entry (`cross-repo/outbox`, no `/`) used to
+# pass this same rung and only die later, at the workflow's claimability
+# preflight -- both spellings now refuse here, at mint time.
+# ---------------------------------------------------------------------------
+
+_NO_TRAILING_SEP_EXISTING_DIRECTORY_INVENTORY = textwrap.dedent(
+    """\
+    ---
+    run_id: 20260918T000000-fixture
+    ---
+
+    ## Chunk table
+
+    | id | spec path | summary | footprint | deps | verification | complexity | disposition |
+    |---|---|---|---|---|---|---|---|
+    | C1 | `docs/plans/fixture.md` | existing dir, no trailing sep | `docs/wiki` | — | scoped pytest | S | in_progress |
+    """
+)
+
+
+def test_directory_shaped_footprint_without_trailing_separator_refuses_at_mint():
+    rows = im.parse_chunk_table(_NO_TRAILING_SEP_EXISTING_DIRECTORY_INVENTORY)
+    with pytest.raises(
+        im.DirectoryShapedFootprintError, match="directory pathspec"
+    ):
+        im.mint_rows(rows)
+
+
+_NOT_YET_EXISTING_PATH_INVENTORY = textwrap.dedent(
+    """\
+    ---
+    run_id: 20260918T000000-fixture
+    ---
+
+    ## Chunk table
+
+    | id | spec path | summary | footprint | deps | verification | complexity | disposition |
+    |---|---|---|---|---|---|---|---|
+    | C1 | `docs/plans/fixture.md` | not-yet-existing file | `coordinator_core/ops/dispatch_emit/tests/fixture_does_not_exist_yet.py` | — | scoped pytest | S | in_progress |
+    """
+)
+
+
+def test_not_yet_existing_path_is_not_refused_as_directory_shaped():
+    rows = im.parse_chunk_table(_NOT_YET_EXISTING_PATH_INVENTORY)
+    minted = im.mint_rows(rows)
+    assert minted[0]["surface"] == (
+        "coordinator_core/ops/dispatch_emit/tests/fixture_does_not_exist_yet.py"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +401,7 @@ def test_mint_spine_writes_no_disk_returns_text_and_run_id_path(tmp_path):
     assert "```yaml plan-tasks" in spine_text
     assert "id: C1" in spine_text
     assert "id: C2" in spine_text
-    assert "id: C3" not in spine_text  # closed (empty-write EM row)
+    assert "id: C3" in spine_text  # live (pending is LIVE vocabulary)
     assert "id: C4" not in spine_text  # closed (routed out)
 
 

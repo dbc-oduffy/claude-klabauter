@@ -474,10 +474,17 @@ def test_verification_row_writing_only_a_plan_body_raises_unroutable(tmp_path):
     assert "Split the row" in str(excinfo.value)
 
 
-def test_explicit_agent_type_escapes_the_unroutable_refusal(tmp_path):
-    """The escape hatch is the same one ``MixedAgentTypeRowError`` leaves: an
-    explicit row-level ``agent_type:`` short-circuits derivation ahead of the
-    check, so an author who means to force a type is not walled out."""
+def test_an_explicit_agent_type_does_not_escape_the_unroutable_refusal(tmp_path):
+    """No override reconciles an unroutable row, the same way none reconciles
+    a mixed-writes one: the check sits above the override. An override names
+    WHO runs a coherent row; an execution-tier row writing only an immutable
+    body is incoherent for every possible runner, so honouring the override
+    here only bought a dispatch that could end in a refusal.
+
+    Measured over the corpus before this moved: 7 of 3914 spine rows carry an
+    override, all 7 are this exact shape, and 0 are legitimate -- so the
+    tightening converts no clean emission into a surprise refusal.
+    """
     plan_path = _plan_with_row(
         tmp_path,
         "- id: C1\n"
@@ -487,16 +494,14 @@ def test_explicit_agent_type_escapes_the_unroutable_refusal(tmp_path):
         "  writes:\n"
         "    - docs/plans/2026-08-13-example.md\n"
         "  agent_type: coordinator:review-integrator\n"
-        # review-integrator has no `_AGENT_MODELS` row, so the override must
-        # name its model -- unrelated to this leg, but MalformedAgentOverrideError
-        # fires downstream of the check under test and would mask it.
         "  agent_model: sonnet\n",
     )
 
-    script = compose_script(
-        build_waves(read_spine(plan_path)), name="wf", description="forced"
-    )
-    assert "agentType: 'coordinator:review-integrator'" in script
+    with pytest.raises(UnroutableWorkKindRowError) as excinfo:
+        compose_script(
+            build_waves(read_spine(plan_path)), name="wf", description="forced"
+        )
+    assert "Split the row" in str(excinfo.value)
 
 
 def test_verification_row_writing_an_ordinary_path_still_routes_executor(tmp_path):

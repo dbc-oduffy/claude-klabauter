@@ -94,6 +94,11 @@ def _run_cli(args: list[str], env: dict[str, str | None] | None = None) -> subpr
                 effective_env.pop(key, None)
             else:
                 effective_env[key] = value
+    # cli_shared refuses an isolation root under the temp dir that does not exist
+    # (the swept-tmp_path shape), so a live fixture's root must exist up front.
+    outbox = effective_env.get("LESSON_PROMOTE_OUTBOX_ROOT")
+    if outbox:
+        os.makedirs(outbox, exist_ok=True)
     return subprocess.run(
         [_python(), _script_path()] + args,
         env=effective_env,
@@ -417,9 +422,11 @@ def test_schema_missing_fails_loud() -> None:
         )
     if result.returncode == 0:
         raise AssertionError(f"{name}: " + ("expected non-zero exit when CLAUDE_KLABAUTER_ROOT has no coordinator_core; got 0"))
-    combined = result.stdout + result.stderr
-    if "schema" not in combined.lower():
-        raise AssertionError(f"{name}: " + (f"error output does not mention 'schema'. stderr: {result.stderr!r}"))
+    # The engine-root gate now rejects the bad root before schema.describe runs;
+    # either refusal names the cause.
+    combined = (result.stdout + result.stderr).lower()
+    if "schema" not in combined and "not a valid claude-klabauter checkout" not in combined:
+        raise AssertionError(f"{name}: " + (f"error output names neither the schema nor the engine root. stderr: {result.stderr!r}"))
 
 
 # ---------------------------------------------------------------------------
@@ -804,6 +811,51 @@ def test_doe_unresolvable_at_write_time_exits_three() -> None:
         raise AssertionError(f"{name}: " + (f"stdout claims a write happened despite unresolvable DoE root: {captured_out.getvalue()!r}"))
     if "machine-local set repos.doe_claude" not in captured_err.getvalue():
         raise AssertionError(f"{name}: " + (f"stderr missing remediation text: {captured_err.getvalue()!r}"))
+
+
+def test_native_route_carries_the_validated_doe_root() -> None:
+    """claude-klabauter#33 — the native queue.promote op must write under the DoE
+    root the CLI resolved (DOE_ROOT honoured), the same one --target-wiki was
+    validated against, so the CLI hands it over as the `doe_root` param."""
+    import importlib.machinery
+    import importlib.util as _importlib_util
+    import io as _io
+    import unittest.mock as _mock
+
+    cli_path = _script_path()
+    loader = importlib.machinery.SourceFileLoader("coordinator_lesson_promote_doe_param", cli_path)
+    spec = _importlib_util.spec_from_loader("coordinator_lesson_promote_doe_param", loader)
+    cli_mod = _importlib_util.module_from_spec(spec)  # type: ignore[arg-type]
+    loader.exec_module(cli_mod)
+
+    seen: dict = {}
+
+    def _fake_route(op, params, repo_root, legacy_fn):
+        seen.update(params)
+        return {"out_path": "/doe/from/env/state/lessons-outbox/x.yaml"}
+
+    with (
+        _mock.patch.object(cli_mod, "_cc_route", side_effect=_fake_route),
+        _mock.patch.object(
+            cli_mod, "_describe_schema_node",
+            return_value={"enums": {"change_kind": ["doctrine-edit", "wiki-append", "skill-edit"]}},
+        ),
+        _mock.patch.object(cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        _mock.patch.object(cli_mod, "_current_repo_root", return_value="/fake/repo"),
+        _mock.patch.object(cli_mod, "doe_root", return_value="/doe/from/env", create=True),
+        _mock.patch.dict(os.environ, {}, clear=False) as env,
+        _mock.patch("sys.stdout", _io.StringIO()),
+    ):
+        env.pop("LESSON_PROMOTE_OUTBOX_ROOT", None)
+        rc = cli_mod.main([
+            "--title", "some title",
+            "--body", "some body",
+            "--change-kind", "doctrine-edit",
+            "--target-wiki", "unknown",
+        ])
+
+    assert rc == 0
+    assert seen.get("doe_root") == "/doe/from/env"
 
 
 # ---------------------------------------------------------------------------

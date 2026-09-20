@@ -68,9 +68,9 @@ Documented divergence from the bash oracle (structural, not a scope-drop):
     port time — none of the ten carries real business logic of its own);
     the prior paragraph's "belongs to THEIR repo" rationale never actually
     applied to these ten, only to genuinely-DoE-owned, still-bash siblings
-    (e.g. the ``bin/install-health/*.sh`` drop-ins ``install-health-run``
-    itself still fans out to) that remain subprocess-delegated because they
-    carry logic this repo has no business duplicating.
+    (e.g. legs declared in ``install_health_run._NATIVE_LEGS`` with a
+    declared out-of-process argv) that remain subprocess-delegated because
+    they carry logic this repo has no business duplicating.
     register-coordinator-mirror's own DoE-local "coordinator live path"
     resolution used to shell out to ``resolve-coordinator-clone.sh
     --for-content`` (script-relative bash spawn, with a ``claude-home
@@ -1588,10 +1588,10 @@ def _run_body(
     # Retired the ["bash", install-health-run.sh] spawn (C13): that DoE-side
     # script was only a thin polyglot trampoline back into THIS repo's
     # coordinator_core.ops.install_health_run -- called in-process now. The
-    # orchestrator's own OWN sub-scripts (bin/install-health/*.sh drop-ins)
-    # remain bash and are still subprocess-delegated BY that module -- out of
-    # C13's scope (a genuinely DoE/plugin-owned drop-in surface, not a
-    # trampoline back into this package).
+    # orchestrator's own OWN legs -- declared in install_health_run's
+    # `_NATIVE_LEGS` -- remain bash and are still subprocess-delegated BY
+    # that module -- out of C13's scope (a genuinely DoE/plugin-owned leg
+    # surface, not a trampoline back into this package).
     from coordinator_core.ops.install_health_run import (  # local import: avoid import cost on --help
         main as _install_health_run_main,
     )

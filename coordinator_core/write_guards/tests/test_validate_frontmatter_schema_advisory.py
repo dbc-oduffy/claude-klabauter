@@ -42,6 +42,7 @@ from coordinator_core.bash_guards._override_doc import OVERRIDE_KEYS_DOC_DISPLAY
 from coordinator_core.frontmatter.schema_validate import compute_grouping_digest
 from coordinator_core.testing.doe_root import doe_root_and_present
 from coordinator_core.write_guards import validate_frontmatter_schema_advisory as guard
+from coordinator_core.write_guards import validate_frontmatter_schema_deny as deny_guard
 
 _doe_root, _doe_present = doe_root_and_present()
 
@@ -395,6 +396,103 @@ class TestSchemaValidationWarn:
             _payload("Edit", str(fp), str(tmp_path), old_string="old", new_string="new")
         )
         assert result is None
+
+
+class TestWholeDocumentRecordsMatchMode:
+    """C6 (docs/plans/2026-09-11-vendored-schemas-and-the-work-state-contract.md):
+    `match_mode: "whole-document-records"`, mirrored here on the advisory
+    leg. `_validate_whole_document_records` is defined once in the deny
+    module and imported here -- this class exercises this module's own
+    `_evaluate_schema_validation_advisory` wiring of it directly (a pure
+    function, no DoE sibling / manifest needed), same as the deny sibling's
+    equivalent class.
+    """
+
+    _schema = {
+        "match_mode": "whole-document-records",
+        "type": "object",
+        "required": ["id", "title"],
+        "properties": {
+            "id": {"type": "string"},
+            "title": {"type": "string"},
+        },
+    }
+
+    def test_three_records_one_bad_names_its_index(self):
+        content = (
+            "- id: a\n  title: A\n"
+            "- id: b\n"
+            "- id: c\n  title: C\n"
+        )
+        result = guard._evaluate_schema_validation_advisory(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert result is not None
+        text = _advisory_text(result)
+        assert "[1]." in text
+
+    def test_non_dict_element_reports_not_an_object(self):
+        content = "- id: a\n  title: A\n- just a string\n"
+        result = guard._evaluate_schema_validation_advisory(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert result is not None
+        text = _advisory_text(result)
+        assert "record 1 is not an object" in text
+
+    def test_bare_object_reports_expected_array(self):
+        content = "id: a\ntitle: A\n"
+        result = guard._evaluate_schema_validation_advisory(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert result is not None
+        text = _advisory_text(result)
+        assert "expected an array of records" in text
+
+    def test_empty_list_is_valid(self):
+        # See the deny sibling's identically-named test for why `.json` is
+        # needed to exercise a real top-level empty list through the shared
+        # restricted-YAML parser.
+        result = guard._evaluate_schema_validation_advisory(
+            "fixture-records", self._schema, None, "[]\n", "fixture.json", {},
+        )
+        assert result is None
+
+    def test_all_conformant_records_pass(self):
+        content = "- id: a\n  title: A\n- id: b\n  title: B\n"
+        result = guard._evaluate_schema_validation_advisory(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert result is None
+
+    def test_whole_document_yaml_over_top_level_list_keeps_todays_message(self):
+        yaml_schema = dict(self._schema, match_mode="whole-document-yaml")
+        content = "- id: a\n  title: A\n"
+        result = guard._evaluate_schema_validation_advisory(
+            "fixture-yaml", yaml_schema, None, content, "fixture.yaml", {},
+        )
+        assert result is not None
+        text = _advisory_text(result)
+        assert "[1]." not in text
+        assert "fm_dict must be a dict or None, got list" in text
+
+    def test_mutual_exclusivity_advisory_fires_default_stands_down_strict(self, monkeypatch):
+        content = "- id: a\n  title: A\n- id: b\n"
+        deny_message = deny_guard._evaluate_schema_validation(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert deny_message is not None
+
+        advisory_default = guard._evaluate_schema_validation_advisory(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert advisory_default is not None
+
+        monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
+        advisory_strict = guard._evaluate_schema_validation_advisory(
+            "fixture-records", self._schema, None, content, "fixture.yaml", {},
+        )
+        assert advisory_strict is None
 
 
 class TestMemoOffers:
@@ -841,6 +939,73 @@ class TestPlanTasksSpineWarn:
         text = _advisory_text(result)
         assert "tasks[C0].writes" in text
         assert "tasks[C1]" not in text
+
+
+class TestPlanStatusOffEnumIsDenySiblingTerritory:
+    """C5 (2026-09-11-vendored-schemas-and-the-work-state-contract.md): a
+    plan write that sets `status` off the vendored plan schema's enum, or
+    drops it entirely, is the deny sibling's territory (it warns there, in
+    both modes) — this module stands down unconditionally, mirroring the
+    grouping-approval and handoff-kind stand-downs above.
+    """
+
+    def _plan_dir(self, tmp_path):
+        d = tmp_path / "docs" / "plans"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def test_off_enum_write_to_new_plan_stands_down(self, tmp_path):
+        fp = self._plan_dir(tmp_path) / "2026-09-11-test-plan.md"
+        fp.write_text("", encoding="utf-8")
+        content = (
+            "---\ntitle: Test plan\ncreated: 2026-09-11\nauthor: test\n"
+            "status: bogus\n---\n\n# Plan\n\n## Tasks\n"
+        )
+        payload = _payload("Write", str(fp), str(tmp_path), content=content)
+        assert guard.check(payload) is None
+        assert deny_guard.check(payload) is not None, "the deny sibling must still fire"
+
+    def test_absent_status_on_new_plan_stands_down(self, tmp_path):
+        fp = self._plan_dir(tmp_path) / "2026-09-11-test-plan.md"
+        fp.write_text("", encoding="utf-8")
+        content = "---\ntitle: Test plan\ncreated: 2026-09-11\nauthor: test\n---\n\n# Plan\n\n## Tasks\n"
+        payload = _payload("Write", str(fp), str(tmp_path), content=content)
+        assert guard.check(payload) is None
+
+    def test_edit_that_changes_status_to_off_enum_stands_down(self, tmp_path):
+        fp = self._plan_dir(tmp_path) / "2026-07-29-test-plan.md"
+        old_content = (
+            "---\ntitle: Test plan\ncreated: 2026-07-29\nauthor: test\n"
+            "status: draft\n---\n\n# Plan\n\n## Tasks\n"
+        )
+        fp.write_text(old_content, encoding="utf-8")
+        payload = _payload(
+            "Edit", str(fp), str(tmp_path),
+            old_string="status: draft", new_string="status: bogus",
+        )
+        assert guard.check(payload) is None
+
+    def test_edit_of_unrelated_line_in_legacy_off_enum_plan_does_not_stand_down_for_this(
+        self, tmp_path
+    ):
+        """Legacy off-enum status untouched by the edit is not THIS finding
+        on either side — this module may still warn (e.g. the always-on
+        schema-shape advisory) but never because of the plan-status branch,
+        so it must not be forced silent by the stand-down predicate here."""
+        fp = self._plan_dir(tmp_path) / "2026-07-29-test-plan.md"
+        old_content = (
+            "---\ntitle: Test plan\ncreated: 2026-07-29\nauthor: test\n"
+            "status: bogus-legacy\n---\n\n# Plan\n\nbody\n"
+        )
+        fp.write_text(old_content, encoding="utf-8")
+        payload = _payload(
+            "Edit", str(fp), str(tmp_path), old_string="body", new_string="body edited"
+        )
+        result = guard.check(payload)
+        if result is not None:
+            text = _advisory_text(result)
+            assert "is not a plan status" not in text
+            assert "has no `status:`" not in text
 
 
 class TestReviewedRangeOffer:

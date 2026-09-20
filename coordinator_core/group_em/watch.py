@@ -651,6 +651,35 @@ def _parked_line(
     )
 
 
+def _displacement_line(record: dict, now: datetime) -> str:
+    """One DISPLACED line: a successor took this repo's watch record.
+
+    ITEM 1, the memo's gated ask. `main`'s held loop emits this and exits
+    the moment its own `stamp()` is declined by a record whose HOLDER is no
+    longer this watch's own (`watch_heartbeat.displacement_record`) --
+    never on a same-holder writer or `tick_source` mismatch, which is the
+    same crown's other instrument declining, not a displacement (see that
+    function's own docstring and `is_fresh_and_foreign`'s HOLDER-OR-WRITER
+    note). Before this, the displaced watch's `stamp()` kept declining
+    silently and the loop polled on forever: E2 in the memo's reproduction
+    (`A/A/monitor/4 prior=B`, `B arm+90s REFUSED`) -- the orphan retakes the
+    record once the successor's own lease lapses and refuses the live
+    successor from then on.
+    """
+    holder_name = record.get("holder_name")
+    holder_session_id = record.get("holder_session_id")
+    if holder_name and holder_session_id:
+        who = f"{holder_name} [{holder_session_id}]"
+    else:
+        who = str(holder_session_id or holder_name or "an unknown holder")
+    return (
+        f"DISPLACED now_held_by={who} as_of={watch_heartbeat.iso_instant(now.timestamp())} "
+        "(this watch's record now names a different holder -- a successor entered and "
+        "took over the crown; exiting rather than polling on toward retaking an expired "
+        "lease and refusing the live successor)"
+    )
+
+
 def _gone_line(
     session_id: str,
     watched_repo: str,
@@ -1233,6 +1262,16 @@ def main(
     -- the presence record other sessions read. Arming this watch is
     supposed to REPLACE hand-ticking, and until it stamped, doing the right
     thing made the fleet's watch-presence surface report no watch at all.
+
+    TEARS ITSELF DOWN ON DISPLACEMENT (item 1, the memo's gated ask). When a
+    tick's own `stamp()` is declined because a SUCCESSOR now holds this
+    repo's record (`watch_heartbeat.displacement_record`), this loop emits
+    one `DISPLACED` line and returns -- it does not keep polling toward
+    retaking the record once the successor's own lease lapses, which is the
+    E2 defect the memo reproduces (an orphan stamping every tick while the
+    live successor reads `REFUSED`). A same-holder writer or `tick_source`
+    mismatch is NOT a displacement and stays the pre-existing quiet decline
+    (see `displacement_record`'s own docstring).
     """
     caller_session_id, group_em_session_id = _resolve_caller_and_gem_ids(
         caller_session_id, group_em_session_id
@@ -1336,7 +1375,7 @@ def main(
             # kept because a duplicate GONE next tick is strictly cheaper to
             # read than a silently dropped one, and today's persistence path
             # (`watch_heartbeat.write_atomic`) does not raise in practice.
-            watch_heartbeat.stamp(
+            stamped = watch_heartbeat.stamp(
                 repo_root,
                 holder_session_id=group_em_session_id or "",
                 declinations=declinations,
@@ -1352,6 +1391,20 @@ def main(
                 holder_name=holder_name,
                 writer_session_id=caller_session_id,
             )
+            if not stamped:
+                # ITEM 1 (the memo's gated ask): DISPLACED-WATCH TEARDOWN.
+                # A same-holder writer or `tick_source` mismatch is the same
+                # crown's other instrument declining and stays a quiet
+                # decline (`displacement_record` returns `None` for both) --
+                # this only fires on a HOLDER mismatch, the E1/E2 shape the
+                # memo reproduces: a successor entered and took the record,
+                # and this watch is no longer the one to keep polling it.
+                displaced_by = watch_heartbeat.displacement_record(
+                    repo_root, group_em_session_id or "", caller_session_id
+                )
+                if displaced_by is not None:
+                    emit(_displacement_line(displaced_by, tick_now))
+                    return
             _prune_spool(repo_root)
             prev_parked = cur_parked
             prev_names = peer_notes
@@ -1458,8 +1511,9 @@ def _cli(argv: "list[str] | None" = None) -> int:
         "--status",
         action="store_true",
         help="Answer 'is a watch alive for this repo?' in plain words and exit, watching "
-             "nothing. Exit 0 alive, 1 not running, 2 unknown (no watch ever armed, or an "
-             "unreadable record) -- unknown is never reported as healthy.",
+             "nothing. Exit 0 alive, 1 not running, 2 unknown (no watch ever armed, an "
+             "unreadable record, or a fresh record whose writing process cannot be "
+             "confirmed running) -- unknown is never reported as healthy.",
     )
     parser.add_argument(
         "--once",
@@ -1507,6 +1561,21 @@ def _cli(argv: "list[str] | None" = None) -> int:
         liveness = watch_heartbeat.read_liveness(args.repo_root)
         print(watch_heartbeat.human_verdict(liveness))
         if liveness["verdict"] == watch_heartbeat.VERDICT_ARMED:
+            # ITEM 2 (`--status` false-alive with no process check). A fresh
+            # deadline is STALENESS evidence only -- it says the record's
+            # writer kept its own promise, never that the process behind it
+            # is still there. `process_confirmed_alive` is the single-machine
+            # PID witness (never used for item 1's cross-machine holder
+            # question -- see that function's own docstring); anything short
+            # of a confirmed-alive answer must not report ALIVE on
+            # arithmetic alone.
+            if watch_heartbeat.process_confirmed_alive(liveness) is not True:
+                print(
+                    "  (the record is fresh, but the process that wrote it "
+                    "cannot be confirmed running -- reporting UNKNOWN rather "
+                    "than ALIVE)"
+                )
+                return 2
             return 0
         return 1 if liveness["verdict"] == watch_heartbeat.VERDICT_STALE else 2
 

@@ -682,7 +682,15 @@ def test_external_gate_two_entries_one_cleared_one_uncleared_excludes_row(tmp_pa
     assert ids == set()
 
 
-def test_malformed_external_gate_scalar_does_not_raise(tmp_path):
+def test_malformed_external_gate_scalar_gates_without_raising(tmp_path):
+    """klabauter#43: a present-but-unparseable `external_gate` GATES the row.
+
+    This shape -- the field declared as a bare scalar instead of a list --
+    used to read as "no gate" and dispatch a row the plan had gated, which is
+    fail-open on a gate. It still must not raise (a malformed plan is not a
+    crash), so the no-raise half of this case is unchanged; what changed is
+    that the row no longer comes back dispatchable.
+    """
     body = """\
 - id: C1
   title: external_gate declared as a bare string
@@ -692,10 +700,15 @@ def test_malformed_external_gate_scalar_does_not_raise(tmp_path):
     plan_path = _write_plan(tmp_path, body)
     ids = {row.id for row in read_spine(plan_path)}
 
-    assert ids == {"C1"}
+    assert ids == set()
 
 
-def test_malformed_external_gate_entry_bare_string_does_not_raise(tmp_path):
+def test_malformed_external_gate_entry_bare_string_gates_without_raising(tmp_path):
+    """klabauter#43, second shape: a non-mapping list ENTRY gates the row too.
+
+    Same fail-open class as the bare-scalar case above, and the same
+    resolution: no raise, but the row is not dispatchable.
+    """
     body = """\
 - id: C1
   title: external_gate entry is a bare string, not a mapping
@@ -706,7 +719,7 @@ def test_malformed_external_gate_entry_bare_string_does_not_raise(tmp_path):
     plan_path = _write_plan(tmp_path, body)
     ids = {row.id for row in read_spine(plan_path)}
 
-    assert ids == {"C1"}
+    assert ids == set()
 
 
 def test_bare_string_depends_on_entry_raises_malformed_dependency_edge_error(tmp_path):

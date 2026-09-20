@@ -363,14 +363,6 @@ from coordinator_core.bash_guards.block_noncanonical_branch_creation import (
     check as _check_block_noncanonical_branch_creation,
     MATCHERS as _matchers_noncanonical_branch_creation,
 )
-from coordinator_core.bash_guards.guard_branch_set_precedence import (
-    check as _check_branch_set_precedence,
-    MATCHERS as _matchers_branch_set_precedence,
-)
-from coordinator_core.bash_guards.guard_longlived_branch_naming import (
-    check as _check_longlived_branch_naming,
-    MATCHERS as _matchers_longlived_branch_naming,
-)
 from coordinator_core.bash_guards.bump_foreign_repo_write import (
     check_bump_foreign_repo_write as _check_bump_foreign_repo_write,
 )
@@ -579,13 +571,22 @@ on purpose. **A guard absent from this mapping keeps today's chain-wide deny
 on crash** -- omission is the safe direction, and no guard should be added
 here without reading its early returns and confirming the widening.
 
-The membership test runs against the command AFTER ``_crlf_strip`` and
-``_join_backslash_newlines``, because those are the only normalizations in
-this package that DELETE characters from the middle of the text and can
-therefore *manufacture* a keyword the raw string does not contain
-(``gi\\<newline>t`` -> ``git``). Every other transform on the guards' own
-paths only removes spans wholesale, so it cannot introduce a keyword that was
-not already present.
+The membership test runs against a UNION of normalized variants, not a single
+pipeline -- see ``_crash_probe_variants``. Claiming that only ``_crlf_strip``
+and ``_join_backslash_newlines`` can manufacture a keyword is FALSE and was
+the premise two live crash-path bypasses rested on: ``_strip_ws_quoted_spans``
+merges the text flanking a span it deletes, and
+``_normalize_git_exe_head_to_bare`` rewrites a ``GIT.EXE`` head to bare
+``git``. Each guard normalizes differently, and one of those transforms can
+remove a keyword as well as introduce one, so no single normalized string is
+wider than all of them.
+
+A derivation is only as good as the normalizations it accounts for, and prose
+asserting the derivation was done is not the derivation. What proves each
+entry is the per-guard property test in
+``tests/test_crash_trigger_is_wider_than_its_guard.py``: for every command the
+guard denies, its trigger matches. Do not add an entry here on a reading of
+the guard's early returns alone.
 """
 
 
@@ -661,19 +662,68 @@ def _crash_deny_is_out_of_class(guard_name: str, cmd: str) -> bool:
     skipping it and continuing the chain denies nothing the guard would have
     allowed, while leaving the rest of the chain (and the Bash tool) working.
 
-    Fails toward denial on every uncertain path: an unmapped guard, an empty
-    command, or any exception raised while computing the answer all return
-    ``False``, restoring the chain-wide deny.
+    Fails toward denial on every uncertain path: an unmapped guard, or any
+    exception raised while computing the answer, returns ``False`` and restores
+    the chain-wide deny.
+
+    An EMPTY command is not an uncertain path and is skippable: no token can be
+    present in it, and there is nothing for a guard to have denied. The prose
+    here previously listed it alongside the fail-toward-denial cases, which never
+    matched the code.
     """
     triggers = _CRASH_TRIGGER_SUBSTRINGS.get(guard_name)
     if not triggers:
         return False
     try:
-        probe = _dc._crlf_strip(cmd or "")
-        probe = _dc._join_backslash_newlines(probe)
+        variants = _crash_probe_variants(cmd or "")
     except Exception:  # noqa: BLE001 -- normalization must never widen the deny path
         return False
-    return not any(token in probe for token in triggers)
+    return not any(token in variant for variant in variants for token in triggers)
+
+
+def _crash_probe_variants(cmd: str) -> Tuple[str, ...]:
+    r"""Every text the mapped guards could have run their precondition against.
+
+    The trigger test must be wider than EVERY guard it is keyed for, and each
+    guard normalizes differently before its own first-branch test. Two of those
+    normalizations MANUFACTURE a keyword the raw text lacks, and a third DELETES
+    one that the raw text has, so no single normalized string is a superset of
+    all of them:
+
+      - ``_crlf_strip`` + ``_join_backslash_newlines`` join across a deleted
+        newline (``gi\<newline>t`` -> ``git``).
+      - ``_strip_ws_quoted_spans`` deletes a whitespace-containing quoted span
+        and MERGES the text flanking it, so ``gi"a b"t reset --hard HEAD~3``
+        becomes ``git reset --hard HEAD~3``. ``check_destructive_git_orphan``
+        runs it before its own ``\bgit\b`` test; the raw text carries no
+        ``git``.
+      - ``_normalize_git_exe_head_to_bare`` maps a ``GIT.EXE`` head to bare
+        ``git``. ``check_destructive_git_revert`` runs it before its own
+        ``\bgit\b`` test; a substring test on the un-normalized text is
+        case-sensitive and misses it.
+      - That same span deletion can also REMOVE a keyword, when the keyword
+        lives inside the quoted span it deletes. A guard that does not strip
+        (``check_no_verify`` tests its own flattened text) would still have seen
+        it, so the stripped text alone is narrower than that guard.
+
+    So the answer is the union rather than a pipeline: a token found in ANY
+    variant counts as present, which keeps the probe wider than each guard
+    individually without having to decide which normalization dominates. Adding
+    a variant can only widen the deny, never narrow it.
+    """
+    base = _dc._crlf_strip(cmd)
+    base = _dc._join_backslash_newlines(base)
+    variants = [cmd, base]
+    for transform in (_dc._strip_ws_quoted_spans, _dc._normalize_git_exe_head_to_bare):
+        try:
+            variants.append(transform(base))
+        except Exception:  # noqa: BLE001 -- a transform that raises drops its variant, never the rest
+            continue
+    try:
+        variants.append(_dc._normalize_git_exe_head_to_bare(_dc._strip_ws_quoted_spans(base)))
+    except Exception:  # noqa: BLE001
+        pass
+    return tuple(variants)
 
 
 def _crash_deny(guard_name: str, exc: BaseException, resolution_class: Optional[str] = None) -> Dict[str, Any]:
@@ -1157,8 +1207,6 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_stash_destruction,
             _matchers_subagent_stash_creation,
             _matchers_noncanonical_branch_creation,
-            _matchers_branch_set_precedence,
-            _matchers_longlived_branch_naming,
             _matchers_inprocess_search,
             _matchers_grep_via_bash,
             _matchers_multiprobe_banner,
@@ -1275,8 +1323,72 @@ def _record_bash_write_claims(
         root = _show_toplevel(cwd or None)
         if not root:
             return
-        _record_write_claims(cmd, session_id, root, denied=_is_hard_deny_result(result))
+        _denied = _is_hard_deny_result(result)
+        _record_write_claims(cmd, session_id, root, denied=_denied)
+        _record_bash_read_claims(cmd, session_id, root, denied=_denied)
     except Exception:  # noqa: BLE001 -- recording must never affect the verdict
+        return
+
+
+def _record_bash_read_claims(cmd: str, session_id: str, root: str, denied: bool) -> None:
+    """C2 RECORD leg (docs/plans/2026-09-02-a-write-that-discards-what-
+    you-never-saw.md): best-effort recording of a content-hash fingerprint
+    for every in-repo path ``write_claim_record.resolve_read_targets``
+    finds this Bash call reading (``cat P``/``head P``/``tail P``/``sed -n
+    ... P``/``less P``), appended to THIS session's own touch-record sink
+    as a plain TOUCH -- the baseline ``touch_record.last_seen_hash``
+    later reads for C2's DENY leg (``dispatch_checks.check_stale_write``).
+
+    Fires from the SAME post-verdict seam ``_record_write_claims`` already
+    fires from, immediately alongside it -- never a second post-verdict
+    recording seam of its own (C2's own body: "this plan adds no second
+    recording seam"). Shares that call's own ``denied`` gate: a read this
+    session's own command never actually performed (the call was denied)
+    is not a fact this session observed, and recording a baseline for it
+    would be exactly the lie ``record_write_claims``'s own docstring warns
+    against for the write side.
+
+    Never raises, never influences the verdict: any failure here is
+    swallowed, matching ``_record_bash_write_claims``'s own posture. No
+    git spawn -- ``compute_content_hash`` is a plain file read/hash, never
+    a subprocess.
+    """
+    if denied or not cmd or not cmd.strip() or not session_id or not root:
+        return
+    try:
+        import os
+
+        from coordinator_core.bash_guards.write_claim_record import (
+            resolve_read_targets,
+        )
+        from coordinator_core.session.touch_record import (
+            append_touch_claims,
+            compute_content_hash,
+        )
+
+        rels: List[str] = []
+        hashes: Dict[str, str] = {}
+        for raw_target in resolve_read_targets(cmd):
+            resolved_target = (
+                raw_target
+                if os.path.isabs(raw_target)
+                else os.path.join(root, raw_target)
+            )
+            resolved_target = os.path.normpath(resolved_target)
+            if not _dc._is_within(resolved_target, root):
+                continue
+            rel = os.path.relpath(resolved_target, root).replace(os.sep, "/")
+            rels.append(rel)
+            try:
+                h = compute_content_hash(resolved_target)
+            except Exception:
+                h = None
+            if h is not None:
+                hashes[rel] = h
+
+        if rels:
+            append_touch_claims(rels, session_id, root, content_hashes=hashes or None)
+    except Exception:
         return
 
 
@@ -2111,6 +2223,14 @@ def _build_guard_chain(
         GuardEntry("no-verify", lambda: _dc.check_no_verify(cmd, session_id, resolved=resolved, hook_payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         GuardEntry("destructive-git-orphan", lambda: _dc.check_destructive_git_orphan(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         GuardEntry("destructive-rm", lambda: _dc.check_destructive_rm(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
+        # C2 (docs/plans/2026-09-02-a-write-that-discards-what-you-never-
+        # saw.md): the DENY leg -- a whole-file write (`cat > P`, `> P`,
+        # `tee P`) whose target's disk content has moved since THIS
+        # session's own last recorded read/write is refused before it
+        # lands. See `_dc.check_stale_write`'s own docstring for the
+        # whole-file/surgical shape boundary and the comparator it defers
+        # to (`touch_record.is_stale`).
+        GuardEntry("stale-write", lambda: _dc.check_stale_write(cmd, session_id, cwd, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         GuardEntry("destructive-git-clean", lambda: _dc.check_destructive_git_clean(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         # Hard-deny leg ONLY -- never returns the advisory half (Review:
         # staff-eng, Finding 0: an advisory returned from THIS
@@ -2949,30 +3069,6 @@ def _build_guard_chain(
         # PowerShell tool matches nothing it exists to catch. Reason:
         # docs/reference/guard-tool-name-membership.md §8.
         GuardEntry("powershell-via-bash-guard", lambda: _check_powershell_via_bash(payload), False, GuardBand.ADVISORY_REWRITE, AdvisoryValue.HOST_INDEPENDENT, matchers=tuple(_matchers_powershell_via_bash)),
-        # docs/plans/2026-08-01-branch-creation-seam-guards.md, chunk C5/C7.
-        # Both are advisory-only (never deny -- see each module's own "the
-        # one true never-denies template" posture), registered here in the
-        # ADVISORY_REWRITE band, after every hard-deny above (including
-        # block-noncanonical-branch-creation, C1) and after every rewrite,
-        # ahead of the two remaining PLATFORM_CONDITIONED_DENY guards below
-        # -- required by the band model's own contiguity invariant
-        # (`test_bands_are_contiguous_and_in_fixed_sequence`).
-        GuardEntry(
-            "branch-set-precedence",
-            lambda: _check_branch_set_precedence(payload),
-            False,
-            GuardBand.ADVISORY_REWRITE,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_branch_set_precedence),
-        ),
-        GuardEntry(
-            "longlived-branch-naming",
-            lambda: _check_longlived_branch_naming(payload),
-            False,
-            GuardBand.ADVISORY_REWRITE,
-            AdvisoryValue.NOT_COST_ARGUED,
-            matchers=tuple(_matchers_longlived_branch_naming),
-        ),
         # C13 (docs/plans/2026-08-06-apply-guard-class-census.md) -- four
         # guard-class-census band flips, moved from CONFINEMENT_DENY to
         # ADVISORY_REWRITE (`fail_closed=True` -> `False`, `band=
@@ -3106,9 +3202,23 @@ def _build_guard_chain(
 def main() -> int:
     """Standalone entry point (mirrors the bash dispatcher direct-invocation
     path): read stdin ONCE, evaluate, print the envelope JSON on non-None,
-    always exit 0 (ALLOW/DENY is conveyed via stdout, never exit code)."""
+    always exit 0 (ALLOW/DENY is conveyed via stdout, never exit code).
+
+    Wraps the evaluate call in `cli_entry.recording_declared_writes` (D4,
+    docs/plans/2026-09-11-state-writers-claim-through-one-seam.md § C6) so a
+    to-fix guard's seam-routed write (e.g. `block_subagent_destructive_
+    action._log_fail_open`) lands a claim instead of running with no
+    collection open -- wrapped ONCE at this entry, never per guard site.
+    The recorder import is deferred inside this function so a Bash tool
+    call that hits zero to-fix guards still pays no import cost beyond
+    this module's own; `cli_entry`'s own imports were confirmed at
+    authoring time to add no measurable `-X importtime` delta over this
+    dispatcher's existing baseline."""
+    from coordinator_core.cli_entry import recording_declared_writes  # noqa: PLC0415 -- deferred, see docstring
+
     raw = sys.stdin.read()
-    out = evaluate_payload_json(raw)
+    with recording_declared_writes():
+        out = evaluate_payload_json(raw)
     if out is not None:
         sys.stdout.write(json.dumps(out))
         sys.stdout.write("\n")

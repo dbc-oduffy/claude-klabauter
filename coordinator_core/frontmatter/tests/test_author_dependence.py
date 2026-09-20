@@ -393,7 +393,7 @@ class TestPureLibraryVerdictPath:
         check_artifact(_NO_FRONTMATTER)
 
     def test_per_artifact_time_bound(self):
-        import time
+        from coordinator_core.benchmarks.process_time import in_process_time_ms
 
         fixtures = [
             _CLEAN_HANDOFF,
@@ -403,13 +403,16 @@ class TestPureLibraryVerdictPath:
             _BOTH_FIRE_PLAN,
             _NO_FRONTMATTER,
         ] * 50
-        start = time.perf_counter()
-        for text in fixtures:
-            check_artifact(text)
-        elapsed = time.perf_counter() - start
-        per_artifact_ms = (elapsed / len(fixtures)) * 1000
+
+        def _pass() -> None:
+            for text in fixtures:
+                check_artifact(text)
+
+        timing = in_process_time_ms(_pass)
+        per_artifact_ms = timing["process_time_ms"] / len(fixtures)
         # Measured (95c38a2cb9 survey, C1 brief): 0.093ms/artifact over 675
         # artifacts. A generous ceiling well clear of noise on a loaded box.
         assert per_artifact_ms < 5.0, (
-            f"{per_artifact_ms:.3f}ms/artifact exceeds the brightline-derived bound"
+            f"{per_artifact_ms:.3f}ms/artifact process time exceeds the "
+            "brightline-derived bound"
         )

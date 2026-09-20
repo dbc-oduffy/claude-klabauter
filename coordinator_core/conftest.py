@@ -281,6 +281,40 @@ _STUB_DOE_SEED_RELPATHS = (
 )
 
 
+def _real_doe_seed_source(relpath: str) -> str:
+    """Locate one seed file inside ``_REAL_DOE_ROOT``, tolerant of BOTH DoE
+    layouts, and return its absolute path ("" when absent).
+
+    The private DoE-claude checkout keeps these under ``coordinator/…``; the
+    published `coordinator-claude` mirror ships them FLAT at its repo root,
+    and that mirror is what a cloud container registers as `repos.doe_claude`
+    — so `resolve_doe_root()` legitimately hands back a flat root there.
+    `coordinator/bin/lib/coordinator_registry.py::_mp_candidate_manifest_path`
+    already probes both arms for exactly this reason; hardcoding only the
+    ``coordinator/`` arm here made the stub builder blind to the flat mirror,
+    returned "" from `_build_stub_doe_root`, and left the quarantined HOME
+    with no ``.doe-root`` pointer at all — so every test that loads a
+    `coordinator/bin/` CLI died at import on the registry's install-integrity
+    `FileNotFoundError`, which is the failure this whole seeding path exists
+    to prevent.
+
+    The STUB is always written in the canonical ``coordinator/…`` layout
+    whatever the source layout was: `doe_root()`-anchored readers join that
+    shape, and the registry prober accepts it on both arms.
+    """
+    if not _REAL_DOE_ROOT:
+        return ""
+    candidates = [relpath]
+    head, _, tail = relpath.partition(os.sep)
+    if head == "coordinator" and tail:
+        candidates.append(tail)
+    for candidate in candidates:
+        path = os.path.join(_REAL_DOE_ROOT, candidate)
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
 def _build_stub_doe_root(base_dir: str) -> str:
     """Build a throwaway DoE-claude STUB under ``base_dir`` and return its path.
 
@@ -317,15 +351,15 @@ def _build_stub_doe_root(base_dir: str) -> str:
     """
     if not _REAL_DOE_ROOT:
         return ""
-    if not os.path.isfile(os.path.join(_REAL_DOE_ROOT, _REAL_DOE_MANIFEST_RELPATH)):
+    if not _real_doe_seed_source(_REAL_DOE_MANIFEST_RELPATH):
         return ""
 
     import shutil
 
     stub_root = os.path.join(base_dir, "doe-claude-stub")
     for relpath in _STUB_DOE_SEED_RELPATHS:
-        real_path = os.path.join(_REAL_DOE_ROOT, relpath)
-        if not os.path.isfile(real_path):
+        real_path = _real_doe_seed_source(relpath)
+        if not real_path:
             continue
         stub_path = os.path.join(stub_root, relpath)
         os.makedirs(os.path.dirname(stub_path), exist_ok=True)
@@ -1081,3 +1115,31 @@ def _pin_environment_answered_mode_defaults(monkeypatch):
         )
     except (ImportError, AttributeError):  # pragma: no cover - import-order safety
         pass
+
+
+# ---------------------------------------------------------------------------
+# Auto-compact window — suite-wide quarantine, same class as the two above.
+#
+# `CLAUDE_CODE_AUTO_COMPACT_WINDOW` sets the window Claude Code compacts
+# against, and the context-pressure bands are runway distances back from
+# `window - 33,000`. An operator who sets it fleet-wide (this PM does, to
+# 500,000) therefore moves every band in every test that asserts anything
+# downstream of a reading — a fixture chosen against a 1,000,000-token window
+# lands in a different band, and the test names neither the window nor the
+# variable it moved with.
+#
+# Pinned to ABSENT, so the model window governs and tests reproduce
+# unoverridden behaviour by default. A test exercising the override leg sets
+# it itself and says so in its own name — see
+# `coordinator_core/hooks/tests/test_postuse_context_pressure.py ::
+# test_threshold_matches_the_established_cloud_cut_under_the_env_override`.
+#
+# SCOPE LIMIT, same as above: a `monkeypatch` does not cross a process
+# boundary. A test that spawns the real hook must state the window it wants in
+# the subprocess's own environment.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _pin_auto_compact_window_absent(monkeypatch):
+    monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)

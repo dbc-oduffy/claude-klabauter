@@ -38,6 +38,19 @@ shape table, and no new write-sink enumeration of its own. See
 `_scratchpad_script_write_targets`'s own docstring for the scratchpad-only
 scope, the size cap, and why a repo-committed script is deliberately never
 scanned.
+
+THIRD SPEC BACKLINK (the read-shape extractor, added 2026-09-02):
+docs/plans/2026-09-02-a-write-that-discards-what-you-never-saw.md, chunk
+C1. `resolve_read_targets` is this module's READ-shape twin of its own
+write-shape extractor, living beside it (not in a new module -- see that
+chunk's body) because command-text tokenization on the wrong side of the
+plane boundary is exactly what a new `session/`-level module would put it
+on. It answers a different question than everything else here (which
+paths does `command_text` NAME as a read source, not a write sink) and
+consumes the SAME tokenizer this module already calls
+(`_command_tokenizer.resolve_command_positions`), introducing no second
+dialect. See its own docstring for the bounded shapes it resolves and the
+under-claim-rather-than-guess rule it inherits from this module.
 """
 
 from __future__ import annotations
@@ -78,13 +91,52 @@ from typing import List, Optional
 #: this sound.
 _SED_SCRIPT_RE = re.compile(r"^[sy](.).*\1[a-zA-Z]*$")
 
+#: A `raw_target` carrying an unexpanded shell variable (`$f`, `${RUN}`) or a
+#: command substitution (`` `cmd` ``, handled the same way since both use the
+#: `$`/backtick sigil this extractor never expands). `_iter_write_sink_
+#: candidates` hands back the literal command-text token, never the shell's
+#: own expansion of it -- there is no environment to expand against at this
+#: layer, and claiming the literal token claims a path that was never
+#: written while leaving the path that WAS written unclaimed (dbc-example-operator/
+#: claude-klabauter#50). Rejecting is the only sound answer here: under-
+#: claiming (this token contributes nothing) is safe by this module's own
+#: rule; guessing the expansion is not.
+_UNEXPANDED_TOKEN_RE = re.compile(r"[$`]")
+
+#: A redirection operator that the shared tokenizer left as ONE token
+#: because the command wrote it with no space (`2>&1`, `2>/dev/null`) --
+#: `_write_bump_sink_shapes.extract_write_sink_targets_for_segment`'s own
+#: `_REDIRECT_OP_RE` only recognizes an operator and its target as TWO
+#: separate tokens, so a glued operator+target token never matches that
+#: regex and instead falls through to a binary's own positional-argument
+#: rule (`cp`/`mv`/`mkdir`/`tee`'s "last/every positional is a target"),
+#: which cannot tell a stray redirect from a real operand (issue #50). A
+#: real path never starts with a bare digit-then-`>` or `>` -- rejecting on
+#: that shape costs no legitimate target.
+_LEAKED_REDIRECT_RE = re.compile(r"^\d*>{1,2}")
+
 
 def _is_claimable_target(raw: str, head_base: str, resolved: str) -> bool:
     """True when `raw` (the literal token the command carried) is a real path
     candidate rather than an operand the extractor mis-read as one.
 
-    Three conditions must ALL hold before anything is rejected, and each one
-    is here because the previous shape of this function was wrong without it:
+    Checked for EVERY candidate, regardless of `head_base`, before the
+    `sed`-specific rule below ever runs:
+
+    - `_UNEXPANDED_TOKEN_RE` -- an unexpanded shell variable or command
+      substitution is never a real path; claiming it fabricates a claim for
+      a file this session never touched while leaving the real, expanded
+      target unclaimed.
+    - `_LEAKED_REDIRECT_RE` -- a redirection operator the tokenizer left
+      glued to its own target (`2>&1`, `2>/dev/null`) is an operator, not a
+      file.
+    - `resolved` is not an existing directory -- `mkdir state/some-dir`
+      names a directory, not a file this session wrote content to; a
+      directory claim is junk the same way a redirect operator is.
+
+    Then, unchanged from before, three conditions must ALL hold before a
+    `sed` candidate specifically is rejected, and each one is here because
+    the previous shape of this function was wrong without it:
 
     1. `head_base == "sed"` -- judged against any token, `_SED_SCRIPT_RE`
        rejected `state/e2e-probe-bash-write.txt` and by extension most of
@@ -101,18 +153,30 @@ def _is_claimable_target(raw: str, head_base: str, resolved: str) -> bool:
 
     A dropped claim is invisible: the file simply fails to make the commit,
     which is the exact bug this module exists to fix, so every condition here
-    is written to fail toward CLAIMING rather than toward rejecting.
+    is written to fail toward CLAIMING rather than toward rejecting -- except
+    the three checks above, which exist precisely because the shape they
+    reject is never a real write target under any interpretation.
 
-    The `resolved` stat is existence only -- never mtime, size, or content.
-    It reads no attribution signal and so cannot reintroduce the race
-    DR-258 refused; it is one `os.path.exists` on the `sed` branch alone,
-    never on the common path.
+    The `resolved` stat is existence-and-directory-ness only -- never mtime,
+    size, or content. It reads no attribution signal and so cannot
+    reintroduce the race DR-258 refused; it is `os.path.isdir`/
+    `os.path.exists`, both on `resolved` alone, never a second probe of the
+    filesystem beyond what this function already did.
 
     Containment against the repo root is the CALLER's separate `_is_within`
     check and is deliberately not repeated here.
     """
     if not raw or not raw.strip():
         return False
+    if _UNEXPANDED_TOKEN_RE.search(raw):
+        return False
+    if _LEAKED_REDIRECT_RE.match(raw):
+        return False
+    try:
+        if os.path.isdir(resolved):
+            return False
+    except Exception:
+        pass
     if head_base != "sed":
         return True
     if not (_SED_SCRIPT_RE.match(raw) and len(raw) >= 4 and raw.count(raw[1]) >= 3):
@@ -337,6 +401,139 @@ def _scratchpad_script_write_targets(cmd: str, root: str) -> List[str]:
         return all_targets
     except Exception:
         return []
+
+
+#: Head verbs `resolve_read_targets` recognizes as read shapes -- `cat`,
+#: `head`, `tail`, `sed` (non-`-i` invocation only; an `-i` `sed` is a WRITE
+#: and belongs to `_iter_write_sink_candidates`, never here), `less`. A verb
+#: outside this closed set resolves to nothing rather than being guessed at.
+_READ_HEAD_VERBS = frozenset({"cat", "head", "tail", "sed", "less"})
+
+#: Flags that consume a SEPARATE following token as their value rather than
+#: being a bare switch, keyed PER VERB -- `head -n 5 a.py`/`tail -c 100
+#: a.py` both present a non-file-looking token immediately after the flag
+#: that a bare `startswith("-")` skip would otherwise leave as a stray
+#: positional. Deliberately NOT one set shared across every verb: `sed -n
+#: '1,40p' a.py` is the load-bearing counter-example -- `sed`'s `-n` is a
+#: BARE switch (suppress automatic printing), and `'1,40p'` is the edit
+#: script, an ordinary positional this function already drops via its own
+#: sed-specific rule below, not a flag value to be skipped. A verb absent
+#: from this map (`cat`, `less`, the common case) takes no value-taking
+#: flags at all. Kept to the flags actually documented to take a value; a
+#: flag not covered here is treated as a bare switch, per the
+#: under-claim-rather-than-guess rule this whole extractor follows.
+_READ_VALUE_TAKING_FLAGS_BY_VERB = {
+    "head": frozenset({"-n", "-c"}),
+    "tail": frozenset({"-n", "-c"}),
+    "sed": frozenset({"-e", "-f"}),
+}
+
+
+def _is_literal_read_token(token: str) -> bool:
+    """True when `token` is a bounded literal path candidate rather than a
+    shape this extractor must not resolve -- a variable expansion (`$F`,
+    `${F}`), a command substitution (`` `cmd` ``, `$(cmd)`), a glob (`*.py`,
+    `?.txt`, `[abc]`), or a home-directory expansion (`~`). Under-claiming is
+    correct here exactly as `write_claim_record`'s write-side extractor
+    already documents it (module docstring): returning fewer paths is
+    correct, returning a guessed one is the failure this function exists to
+    avoid."""
+    if not token:
+        return False
+    return not any(ch in token for ch in "$`*?[]~")
+
+
+def resolve_read_targets(command_text: str) -> List[str]:
+    """C1: every literal read-target path `command_text` names, in the
+    bounded shapes `cat P`, `head P`, `tail P`, `sed -n ... P`, `less P` --
+    the read-shape twin of this module's own write-shape extractor
+    (`_iter_write_sink_candidates`), living beside it rather than in a new
+    module (see this chunk's own plan body). Pure by construction: reads
+    only `command_text`, performs no I/O, does no filesystem probe or
+    containment check of its own -- that is the caller's job, exactly as it
+    already is for every candidate `_iter_write_sink_candidates` yields.
+
+    Reuses `_command_tokenizer.resolve_command_positions` -- the package's
+    one resolve-once tokenizer, the same seam `_python_head_script_operands`
+    above already walks -- rather than inventing a second dialect. Only
+    depth-0, RESOLVED segments are consulted; an `UNRESOLVED` segment (an
+    unparseable quote, a construct past `_MAX_RESOLVE_DEPTH`) contributes
+    nothing, the same fail-toward-nothing posture every other extractor in
+    this module already takes.
+
+    A target reached through a variable, a glob, a subshell, or a wrapper
+    script is NOT resolved -- the moment ANY positional token in a segment
+    fails `_is_literal_read_token`, that WHOLE segment contributes nothing,
+    rather than resolving the literal tokens around it and silently
+    dropping just the one that failed: a partial result here would read as
+    "these are all the reads", which is the guessed-target failure this
+    function exists to avoid.
+
+    `sed`'s own shape is asymmetric from the other four verbs: its first
+    positional token is the edit SCRIPT (`'1,40p'`), never a file, and is
+    always dropped; any positional after it is a file operand. An `sed -i`
+    invocation is a WRITE, not a read, and is deliberately never resolved
+    here -- `_iter_write_sink_candidates` already owns that shape, and a
+    path claimed by both extractors would double-claim it.
+
+    Never raises: any tokenizer failure yields `[]`, the same posture as
+    `_python_head_script_operands` immediately above.
+    """
+    from coordinator_core.bash_guards._command_tokenizer import (
+        ResolutionConfidence,
+        normalize_executable_basename,
+        resolve_command_positions,
+    )
+
+    try:
+        segments = resolve_command_positions(
+            command_text, preserve_windows_backslashes=(os.name == "nt")
+        )
+    except Exception:
+        return []
+
+    targets: List[str] = []
+    for seg in segments:
+        if seg.depth != 0 or seg.confidence == ResolutionConfidence.UNRESOLVED:
+            continue
+        tokens = seg.tokens
+        if not tokens:
+            continue
+        head_base = normalize_executable_basename(tokens[0])
+        if head_base not in _READ_HEAD_VERBS:
+            continue
+        args = tokens[1:]
+        if head_base == "sed" and any(a in ("-i", "--in-place") for a in args):
+            continue
+
+        value_taking_flags = _READ_VALUE_TAKING_FLAGS_BY_VERB.get(
+            head_base, frozenset()
+        )
+        positional: List[str] = []
+        skip_next = False
+        literal = True
+        for a in args:
+            if skip_next:
+                skip_next = False
+                continue
+            if a in value_taking_flags:
+                skip_next = True
+                continue
+            if a.startswith("-") and a not in ("-", "--"):
+                continue
+            if not _is_literal_read_token(a):
+                literal = False
+                break
+            positional.append(a)
+        if not literal or not positional:
+            continue
+
+        if head_base == "sed":
+            positional = positional[1:]
+
+        targets.extend(positional)
+
+    return targets
 
 
 def record_write_claims(

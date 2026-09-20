@@ -951,21 +951,16 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         ("_workflow_validate",),
     ),
     #
-    # -- 2026-08-25 widening: 3 more live registry ops MEASURED to have an EMPTY
+    # -- 2026-08-25 widening: 2 more live registry ops MEASURED to have an EMPTY
     # function-granular reachable spawn set (`test_registry_divergence_and_residual_stay_
     # accounted`'s completeness guard), same EM adjudication step 2 as the C2a widening
     # above -- an op reaching no spawn site needs zero legitimization. `handoff.
-    # ship_and_archive` and `hooks.session_heartbeat` were previously carried as
-    # `_STATIC_SPAWN_COUNT_PINS` residual rows and moved here once their reachable set
-    # went empty (their pins are removed in the same change); `memo.reconcile_outbox` is
-    # new to both routes.
+    # ship_and_archive` was previously carried as a `_STATIC_SPAWN_COUNT_PINS` residual
+    # row and moved here once its reachable set went empty (its pin is removed in the
+    # same change); `memo.reconcile_outbox` is new to both routes.
     #
     "handoff.ship_and_archive": (
         "coordinator_core/ops/handoff_ship_archive.py",
-        ("_handler",),
-    ),
-    "hooks.session_heartbeat": (
-        "coordinator_core/hooks/session_heartbeat.py",
         ("_handler",),
     ),
     "memo.reconcile_outbox": (
@@ -6275,6 +6270,16 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # and `hooks.track_touched_files` is in the live registry. Its reachable set is the
     # single `_git_run` site, measured live.
     "hooks.track_touched_files": 1,
+    # Enrolled 2026-09-19 (C4, docs/plans/2026-09-10-cartography-churn-producer-and-
+    # staleness-registrations.md): `freshness.commit_delta` (C3) is a live, newly-
+    # registered op not yet enrolled in `_BUDGETED_ENTRYPOINTS` -- a residual op with
+    # non-empty spawn evidence, per this section's own targeting predicate
+    # (`_live_static_pin_targets`). Its reachable set is the ONE `run_git` site the op
+    # module docstring itself commits to holding at one spawn forever ("adding a field
+    # here must never add a spawn" -- freshness_commit_delta.py's Negative-spec); pinned
+    # at that measured 1, a reachability ceiling, not execution evidence (this section's
+    # own D7 ratchet discipline, same as every other entry here).
+    "freshness.commit_delta": 1,
     # 1 -> 2, 2026-09-06: `clone_sibling_repo._existing_origin_url` (C10
     # clone-origin verification, 1f799341c2) -- a local-config
     # `git remote get-url origin` read, no network, guarding the

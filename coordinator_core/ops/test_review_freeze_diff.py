@@ -196,21 +196,38 @@ def test_pathspec_narrows_output(tmp_path: Path) -> None:
     assert "b.txt" not in diff_text
 
 
-def test_empty_diff_is_valid_outcome(tmp_path: Path) -> None:
-    # An empty diff over a range that DOES name commits stays a valid
-    # outcome. This used to assert it via "HEAD..HEAD", which
-    # `_zero_commit_range_error` now refuses outright (2c510a2857) — a
-    # zero-commit range is a malformed request, not an empty result, and
-    # the two must not be asserted by the same case.
+def test_paths_entry_matching_no_change_refuses(tmp_path: Path) -> None:
+    # P1a reversal: a `--paths` entry that contributed nothing to the diff
+    # used to freeze an empty diff silently (the exact under-coverage K-101
+    # names). It now refuses before either output file is written, and
+    # names the entry — same posture as `_zero_commit_range_error`.
     _init_repo(tmp_path)
     sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
     sha2 = _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
 
     result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "empty-diff", paths=["b.txt"])
 
+    assert result["error"] is not None
+    assert result["uncovered_paths"] == ["b.txt"]
+    assert not (_diffs_dir(tmp_path) / "empty-diff.diff").exists()
+    assert not (_diffs_dir(tmp_path) / "empty-diff.head.sha").exists()
+
+
+def test_unrestricted_net_zero_range_stays_valid(tmp_path: Path) -> None:
+    # The unrestricted (no `--paths`) empty-diff-is-valid outcome is NOT
+    # reversed by P1a — only a restricted entry that matched nothing is.
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "line one\n", "add a.txt")
+    _commit(tmp_path, "a.txt", "line one\nline two\n", "extend a.txt")
+    sha3 = _commit(tmp_path, "a.txt", "line one\n", "revert a.txt")
+
+    result = freeze_diff(tmp_path, f"{sha1}..{sha3}", "net-zero")
+
     assert result["error"] is None
     assert result["empty"] is True
-    assert Path(result["diff_path"]).read_text() == ""
+    assert result["uncovered_paths"] == []
+    assert (_diffs_dir(tmp_path) / "net-zero.diff").is_file()
+    assert (_diffs_dir(tmp_path) / "net-zero.head.sha").is_file()
 
 
 def test_zero_commit_range_refuses(tmp_path: Path) -> None:
@@ -238,6 +255,226 @@ def test_slice_id_traversal_rejected(tmp_path: Path, bad_slice_id: str) -> None:
 
 def test_validate_slice_id_accepts_bare_filename_component() -> None:
     assert _validate_slice_id("weekly-2026-07-26") is None
+
+
+# ---------------------------------------------------------------------------
+# Coverage refusal — AC-P1-1..3.
+# ---------------------------------------------------------------------------
+
+
+def test_uncovered_path_entry_refuses_before_writing(tmp_path: Path) -> None:
+    # AC-P1-1.
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "exists-changed.txt", "v1\n", "add")
+    sha2 = _commit(tmp_path, "exists-changed.txt", "v2\n", "change")
+
+    result = freeze_diff(
+        tmp_path, f"{sha1}..{sha2}", "s", paths=["exists-changed.txt", "no-such.txt"]
+    )
+
+    assert result["error"] is not None
+    assert result["uncovered_paths"] == ["no-such.txt"]
+    assert not (_diffs_dir(tmp_path) / "s.diff").exists()
+    assert not (_diffs_dir(tmp_path) / "s.head.sha").exists()
+
+
+def test_all_paths_covered_returns_empty_uncovered_list(tmp_path: Path) -> None:
+    # AC-P1-2, covered half.
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "v1\n", "add")
+    sha2 = _commit(tmp_path, "a.txt", "v2\n", "change")
+
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "covered", paths=["a.txt"])
+
+    assert result["error"] is None
+    assert result["uncovered_paths"] == []
+
+
+def test_coverage_literal_file_entry(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "v1\n", "add")
+    sha2 = _commit(tmp_path, "a.txt", "v2\n", "change")
+
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "literal", paths=["a.txt"])
+
+    assert result["error"] is None
+    assert result["uncovered_paths"] == []
+
+
+def test_coverage_directory_prefix_entry(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    (tmp_path / "sub" / "dir").mkdir(parents=True)
+    sha1 = _commit(tmp_path, "sub/dir/file.txt", "v1\n", "add")
+    sha2 = _commit(tmp_path, "sub/dir/file.txt", "v2\n", "change")
+
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "dirprefix", paths=["sub/dir"])
+
+    assert result["error"] is None
+    assert result["uncovered_paths"] == []
+
+
+def test_coverage_path_with_space(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "file with space.txt", "v1\n", "add")
+    sha2 = _commit(tmp_path, "file with space.txt", "v2\n", "change")
+
+    result = freeze_diff(
+        tmp_path, f"{sha1}..{sha2}", "space", paths=["file with space.txt"]
+    )
+
+    assert result["error"] is None
+    assert result["uncovered_paths"] == []
+
+
+def test_coverage_c_quoted_non_ascii_path(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "café.txt", "v1\n", "add")
+    sha2 = _commit(tmp_path, "café.txt", "v2\n", "change")
+
+    result = freeze_diff(
+        tmp_path, f"{sha1}..{sha2}", "nonascii", paths=["café.txt"]
+    )
+
+    assert result["error"] is None
+    assert result["uncovered_paths"] == []
+
+
+def test_coverage_rename_either_side_counts(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "old-name.txt", "same content that is long enough\n", "add")
+    _git(["mv", "old-name.txt", "new-name.txt"], cwd=tmp_path)
+    _git(["commit", "-q", "-m", "rename"], cwd=tmp_path)
+    sha2 = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
+    old_side = freeze_diff(
+        tmp_path, f"{sha1}..{sha2}", "rename-old", paths=["old-name.txt"]
+    )
+    new_side = freeze_diff(
+        tmp_path, f"{sha1}..{sha2}", "rename-new", paths=["new-name.txt"]
+    )
+
+    assert old_side["error"] is None
+    assert old_side["uncovered_paths"] == []
+    assert new_side["error"] is None
+    assert new_side["uncovered_paths"] == []
+
+
+def test_coverage_binary_change(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    (tmp_path / "bin.dat").write_bytes(b"\x00\x01\x02")
+    _git(["add", "bin.dat"], cwd=tmp_path)
+    _git(["commit", "-q", "-m", "add binary"], cwd=tmp_path)
+    sha1 = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+    (tmp_path / "bin.dat").write_bytes(b"\x00\x01\x03")
+    _git(["add", "bin.dat"], cwd=tmp_path)
+    _git(["commit", "-q", "-m", "change binary"], cwd=tmp_path)
+    sha2 = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "binary", paths=["bin.dat"])
+
+    assert result["error"] is None
+    assert result["uncovered_paths"] == []
+
+
+def test_coverage_mode_only_change(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "script.sh", "echo hi\n", "add")
+    (tmp_path / "script.sh").chmod(0o755)
+    _git(["add", "script.sh"], cwd=tmp_path)
+    _git(["commit", "-q", "-m", "mode change"], cwd=tmp_path)
+    sha2 = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "modeonly", paths=["script.sh"])
+
+    assert result["error"] is None
+    assert result["uncovered_paths"] == []
+
+
+def test_coverage_deletion(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "gone.txt", "v1\n", "add")
+    (tmp_path / "gone.txt").unlink()
+    _git(["add", "gone.txt"], cwd=tmp_path)
+    _git(["commit", "-q", "-m", "delete"], cwd=tmp_path)
+    sha2 = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "deletion", paths=["gone.txt"])
+
+    assert result["error"] is None
+    assert result["uncovered_paths"] == []
+
+
+def test_coverage_deletion_whose_content_moved_outside_pathspec(tmp_path: Path) -> None:
+    # The moved-file case named in the module negative-spec: with no rename
+    # detection over the unrestricted diff, the deletion of the old path
+    # still counts as covered even though the content landed elsewhere.
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "old-location.txt", "moved content\n", "add")
+    (tmp_path / "old-location.txt").unlink()
+    (tmp_path / "new-location.txt").write_text("moved content\n")
+    _git(["add", "old-location.txt", "new-location.txt"], cwd=tmp_path)
+    _git(["commit", "-q", "-m", "move without rename detection"], cwd=tmp_path)
+    sha2 = _git(["rev-parse", "HEAD"], cwd=tmp_path).stdout.strip()
+
+    result = freeze_diff(
+        tmp_path, f"{sha1}..{sha2}", "moved", paths=["old-location.txt"]
+    )
+
+    assert result["error"] is None
+    assert result["uncovered_paths"] == []
+
+
+def test_coverage_unaffected_by_diff_noprefix_config(tmp_path: Path) -> None:
+    # AC-P1-3: the pinned --src-prefix/--dst-prefix keep the frozen output
+    # byte-identical to the default-config freeze regardless of local
+    # diff.noprefix, and coverage still matches.
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "v1\n", "add")
+    sha2 = _commit(tmp_path, "a.txt", "v2\n", "change")
+
+    baseline = freeze_diff(tmp_path, f"{sha1}..{sha2}", "baseline-noprefix", paths=["a.txt"])
+    baseline_text = Path(baseline["diff_path"]).read_text()
+
+    _git(["config", "diff.noprefix", "true"], cwd=tmp_path)
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "noprefix", paths=["a.txt"])
+
+    assert result["error"] is None
+    assert result["uncovered_paths"] == []
+    assert Path(result["diff_path"]).read_text() == baseline_text
+
+
+def test_coverage_unaffected_by_diff_mnemonic_prefix_config(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "v1\n", "add")
+    sha2 = _commit(tmp_path, "a.txt", "v2\n", "change")
+
+    baseline = freeze_diff(tmp_path, f"{sha1}..{sha2}", "baseline-mnemonic", paths=["a.txt"])
+    baseline_text = Path(baseline["diff_path"]).read_text()
+
+    _git(["config", "diff.mnemonicPrefix", "true"], cwd=tmp_path)
+    result = freeze_diff(tmp_path, f"{sha1}..{sha2}", "mnemonic", paths=["a.txt"])
+
+    assert result["error"] is None
+    assert result["uncovered_paths"] == []
+    assert Path(result["diff_path"]).read_text() == baseline_text
+
+
+def test_glob_and_magic_pathspec_entries_excluded_from_check(tmp_path: Path) -> None:
+    # Named in the negative-spec: a glob-metacharacter or ':'-magic entry is
+    # never reported as uncovered, whether or not it actually matches.
+    _init_repo(tmp_path)
+    sha1 = _commit(tmp_path, "a.txt", "v1\n", "add")
+    sha2 = _commit(tmp_path, "a.txt", "v2\n", "change")
+
+    result = freeze_diff(
+        tmp_path,
+        f"{sha1}..{sha2}",
+        "magic",
+        paths=["*.md", "no-such-file?.txt", "[abc].txt", ":no-such/*"],
+    )
+
+    assert result["error"] is None
+    assert result["uncovered_paths"] == []
 
 
 # ---------------------------------------------------------------------------

@@ -3078,7 +3078,15 @@ _EXECUTOR_CLOSING_STANZA = (
 
 _EXECUTOR_HEADER_LINE = "BLOCKED: confined coordinator:executor Bash invocation outside the allowlist."
 
-_DEFAULT_HEADER_LINE = "BLOCKED: confined findings-agent Bash outside allowlist."
+#: (Message-size discipline, 2026-09-11, docs/plans/2026-09-11-trim-the-
+#: remaining-over-cap-guard-messages.md, C4) "confined findings-agent" is
+#: meta-commentary about the guard's own confinement mechanism, not
+#: something the denied reader needs to self-correct -- the Command/Reason
+#: lines below already say what was denied and why. Trimmed to the bare
+#: verdict. This is the one trim this cell's fixed structure (Command,
+#: Reason, and the Denied: diagnostic lines the coherence suite pins) has
+#: room for -- see that plan's C4 row and C9 for the residual.
+_DEFAULT_HEADER_LINE = "BLOCKED: Bash outside allowlist."
 
 #: Leg-3 headers. `_is_confined_type`'s third leg
 #: (``is_confined_by_roster_absence``) confines by ABSENCE, so it fires for

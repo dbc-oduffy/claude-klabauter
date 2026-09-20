@@ -260,16 +260,8 @@ def _resolve_offer_paths(target_raw: str) -> "tuple[str, Optional[str]]":
 
 
 def _advisory_reason(target: str, subcommand: str, lineno: int, anchor: "Optional[str]") -> str:
-    alternative = (
-        f"{anchor} builds the same state as plain files"
-        if anchor
-        else "plain files build the same state"
-    )
-    return (
-        f"{_TOKEN}: {target}:{lineno} shells \"git {subcommand}\" to build "
-        f"test fixture state -- {alternative}, no spawn; unless real git's "
-        "behaviour is the assertion."
-    )
+    alternative = anchor if anchor else "plain files"
+    return f"{_TOKEN}: line {lineno} shells git {subcommand} to build fixture state. Use instead: `{alternative}`"
 
 
 @register_op("hooks.guard_test_tree_git_fixture_spawn")

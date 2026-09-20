@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Generate AC15's allowlist: every live file still carrying the literal ``CLAUDE_KLABAUTER_ROOT``,
 classified by WHY it survives the rename.
 

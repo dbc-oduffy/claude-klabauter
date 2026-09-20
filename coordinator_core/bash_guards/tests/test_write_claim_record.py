@@ -36,7 +36,6 @@ import os
 import shutil
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 import pytest
@@ -44,7 +43,11 @@ import pytest
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
-from coordinator_core.bash_guards.write_claim_record import record_write_claims
+from coordinator_core.benchmarks.process_time import in_process_time_ms
+from coordinator_core.bash_guards.write_claim_record import (
+    record_write_claims,
+    resolve_read_targets,
+)
 from coordinator_core.session.touch_record import (
     VERB_TOUCH,
     decode_line,
@@ -671,18 +674,75 @@ def _run_ac7_timing(root, monkeypatch):
     # is a coarse tripwire for the other two regression shapes, and it does
     # trip: injecting one directory walk per command costs 546ms measured,
     # 27x the bound. It is not a tight budget and is not meant to be.
-    best_ms = None
-    for _ in range(3):
-        start = time.perf_counter()
+    def _corpus_pass() -> None:
         for i, cmd in enumerate(_AC7_CORPUS):
             record_write_claims(cmd, f"{_SESSION_ID}-{i}", root, denied=False)
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
-        if best_ms is None or elapsed_ms < best_ms:
-            best_ms = elapsed_ms
+
+    timing = in_process_time_ms(_corpus_pass)
 
     assert not spawned, f"record_write_claims must never spawn a subprocess: {spawned}"
-    assert best_ms < 20.0, (
+    assert timing["process_time_ms"] < 20.0, (
         f"recorder cost over a {len(_AC7_CORPUS)}-command corpus was "
-        f"{best_ms:.3f}ms (best of 3), over the 20ms budget "
-        "(reference: 0.639ms/call end-to-end measured on the real repo)"
+        f"{timing['process_time_ms']:.3f}ms process time, over the 20ms "
+        "budget (reference: 0.639ms/call end-to-end measured on the real "
+        "repo)"
     )
+
+
+# --- C1: resolve_read_targets -----------------------------------------------
+# Spec backlink: docs/plans/2026-09-02-a-write-that-discards-what-you-never-
+# saw.md, chunk C1. TEMPLATE table from that chunk's own body, verbatim.
+
+
+@pytest.mark.parametrize(
+    "cmd, expected",
+    [
+        ("sed -n '1,40p' a.py", ["a.py"]),
+        ("head b.py", ["b.py"]),
+        ("cat $F", []),
+        ("for f in *.py; do cat $f; done", []),
+    ],
+)
+def test_c1_resolve_read_targets_template_table(cmd, expected):
+    assert resolve_read_targets(cmd) == expected
+
+
+@pytest.mark.parametrize(
+    "cmd, expected",
+    [
+        ("cat a.py", ["a.py"]),
+        ("tail a.py", ["a.py"]),
+        ("less a.py", ["a.py"]),
+        ("tail -n 20 a.py", ["a.py"]),
+        ("head -c 100 a.py", ["a.py"]),
+    ],
+)
+def test_c1_resolve_read_targets_other_shapes(cmd, expected):
+    assert resolve_read_targets(cmd) == expected
+
+
+def test_c1_resolve_read_targets_sed_inplace_is_not_a_read():
+    """`sed -i` is a WRITE, already owned by `_iter_write_sink_candidates`
+    -- resolving it here too would double-claim the same path."""
+    assert resolve_read_targets("sed -i 's/a/b/' a.py") == []
+
+
+def test_c1_resolve_read_targets_glob_resolves_nothing():
+    assert resolve_read_targets("cat *.py") == []
+
+
+def test_c1_resolve_read_targets_subshell_resolves_nothing():
+    assert resolve_read_targets("cat $(echo a.py)") == []
+
+
+def test_c1_resolve_read_targets_backtick_substitution_resolves_nothing():
+    assert resolve_read_targets("cat `echo a.py`") == []
+
+
+def test_c1_resolve_read_targets_unrecognized_verb_resolves_nothing():
+    assert resolve_read_targets("grep foo a.py") == []
+
+
+def test_c1_resolve_read_targets_never_raises_on_garbage_input():
+    assert resolve_read_targets("") == []
+    assert resolve_read_targets("cat 'unterminated") == []

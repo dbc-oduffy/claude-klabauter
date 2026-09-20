@@ -65,6 +65,7 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.emit.resolvers import resolve_context
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.session.claimed_write import append_claimed_line
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -396,8 +397,8 @@ def append_goal(
     log_file = Path(central_state_root) / _LOG_NAME_TEMPLATE.format(machine=machine)
     Path(central_state_root).mkdir(parents=True, exist_ok=True)
 
-    with log_file.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n")
+    encoded_row = (json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8")
+    append_claimed_line(log_file, encoded_row)
 
     return {
         "log_file": str(log_file),

@@ -39,6 +39,7 @@ tmp_path files.
 
 from __future__ import annotations
 
+import inspect
 import re
 
 import pytest
@@ -74,6 +75,70 @@ def _all_composed_stories():
     stories_by_name = {es.STRICTEST_STORY.name: es.STRICTEST_STORY}
     stories_by_name.update(es._registry)
     return list(stories_by_name.values())
+
+
+# ---------------------------------------------------------------------------
+# The moved package carries no `omission_ledger` import and no `__main__`
+# regeneration block -- the AC this chunk's spec states explicitly.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "coordinator_core.environment_story",
+        "coordinator_core.environment_story.story",
+        "coordinator_core.environment_story.stories",
+        "coordinator_core.environment_story.selection",
+        "coordinator_core.environment_story.guard_enforcement_join",
+    ],
+)
+def test_moved_package_imports_nothing_named_omission_ledger(module):
+    import ast
+    import importlib
+
+    mod = importlib.import_module(module)
+    tree = ast.parse(inspect.getsource(mod))
+    imported_names = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            imported_names.append(node.module or "")
+            imported_names.extend(alias.name for alias in node.names)
+    offending = [name for name in imported_names if "omission_ledger" in name]
+    assert not offending, (
+        f"{module} imports {offending!r} -- that module stays DoE-repo "
+        "tooling and must not be imported from the moved package"
+    )
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "coordinator_core.environment_story.story",
+        "coordinator_core.environment_story.stories",
+        "coordinator_core.environment_story.selection",
+        "coordinator_core.environment_story.guard_enforcement_join",
+    ],
+)
+def test_moved_package_has_no_main_regeneration_block(module):
+    import ast
+    import importlib
+
+    mod = importlib.import_module(module)
+    tree = ast.parse(inspect.getsource(mod))
+    has_main_guard = any(
+        isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == "__name__"
+        for node in ast.walk(tree)
+    )
+    assert not has_main_guard, (
+        f"{module} carries an `if __name__ == '__main__':` block -- "
+        "regeneration stays with the DoE-resident ledger, per this chunk's spec"
+    )
 
 
 # ---------------------------------------------------------------------------

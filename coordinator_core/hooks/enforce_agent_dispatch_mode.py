@@ -109,10 +109,9 @@ def _teammate_name_deny_message(name: str) -> Optional[str]:
         return None
     offending_char = match.group(0)
     prose = (
-        "[named-dispatch guard] denied: `name` contains {char!r}, illegal "
-        "in a path segment -- it becomes the teammate's canonical id and "
-        "sidecar path. Retry using only letters, digits, `.`, `_`, `@`, or "
-        "`-` (e.g. \"feature-auth-review\")."
+        "[named-dispatch guard] denied: `name` contains {char!r} (illegal in "
+        "a path segment -- becomes the sidecar path). Use letters, digits, "
+        "`.`, `_`, `@`, `-` only."
     ).format(char=offending_char)
     return render(compose(prose))
 

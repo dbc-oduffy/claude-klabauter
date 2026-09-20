@@ -20,19 +20,19 @@ from coordinator_core.ops.compute_layer_scaffold import check
 
 
 def test_ac8_baseline_reproduced_exactly() -> None:
-    """The measured baseline this session: closed dispatch 5/5,
-    execute_directives 5/5, build_envelope 4/5 (pickup_assemble the miss),
-    no-local-_emit 3/5 (pickup, baton the misses), extend_exit_codes 0/5,
-    clean-on-all-five 0/5. A run disagreeing with this fails until
-    reconciled (AC8) — this test IS that reconciliation gate."""
+    """The measured baseline: closed dispatch 6/6, execute_directives 6/6,
+    build_envelope 5/6 (pickup_assemble the miss), no-local-_emit 5/6
+    (baton_assemble the miss), extend_exit_codes 0/6, clean-on-all 0/6. A
+    run disagreeing with this fails until reconciled (AC8) — this test IS
+    that reconciliation gate."""
     report = check.score_fleet()
 
-    assert report.clause_tally("closed_cli_dispatch") == (5, 5)
-    assert report.clause_tally("execute_directives") == (5, 5)
-    assert report.clause_tally("build_envelope") == (4, 5)
-    assert report.clause_tally("no_local_emit") == (3, 5)
-    assert report.clause_tally("extend_exit_codes") == (0, 5)
-    assert report.clean_on_all() == (0, 5)
+    assert report.clause_tally("closed_cli_dispatch") == (6, 6)
+    assert report.clause_tally("execute_directives") == (6, 6)
+    assert report.clause_tally("build_envelope") == (5, 6)
+    assert report.clause_tally("no_local_emit") == (5, 6)
+    assert report.clause_tally("extend_exit_codes") == (0, 6)
+    assert report.clean_on_all() == (0, 6)
 
 
 def test_ac8_pickup_assemble_is_the_build_envelope_miss() -> None:
@@ -42,11 +42,21 @@ def test_ac8_pickup_assemble_is_the_build_envelope_miss() -> None:
         assert scores[name].build_envelope is True
 
 
-def test_ac8_pickup_and_baton_are_the_local_emit_misses() -> None:
+def test_ac8_baton_is_the_only_local_emit_miss() -> None:
+    """`baton_assemble` is the one Sub-shape B module still defining its own
+    `_emit`. `pickup_assemble` was the second until `70b4563035` cut
+    `pickup-assemble brief` over to `coordinator_core.pickup_brief` and
+    deleted the monolith's functions, its `_emit` among them — so its miss
+    is discharged, not waived."""
     scores = {s.module: s for s in check.score_fleet().scores}
-    assert scores["pickup_assemble"].no_local_emit is False
     assert scores["baton_assemble"].no_local_emit is False
-    for name in ("backlog_grind_assemble", "merge_assemble", "consolidate_assemble"):
+    for name in (
+        "pickup_assemble",
+        "backlog_grind_assemble",
+        "merge_assemble",
+        "consolidate_assemble",
+        "learn_lessons_pipeline",
+    ):
         assert scores[name].no_local_emit is True
 
 
@@ -56,7 +66,7 @@ def test_ac6_execute_directives_scores_5_of_5_via_module_qualified_reach() -> No
     `apply_base.execute_directives(...)` — the module-qualified reach
     style, not a bare symbol import."""
     passed, total = check.score_fleet().clause_tally("execute_directives")
-    assert (passed, total) == (5, 5)
+    assert (passed, total) == (6, 6)
 
 
 def test_ac6_regression_oracle_symbol_only_matcher_scores_0_of_5() -> None:
@@ -85,7 +95,7 @@ def test_ac6_regression_oracle_symbol_only_matcher_scores_0_of_5() -> None:
     assert naive_hits == 0
 
     correct_passed, correct_total = check.score_fleet().clause_tally("execute_directives")
-    assert (correct_passed, correct_total) == (5, 5)
+    assert (correct_passed, correct_total) == (6, 6)
 
 
 def test_ac7_extend_exit_codes_renders_as_a_distinct_fleet_finding() -> None:
@@ -103,7 +113,7 @@ def test_ac7_extend_exit_codes_renders_as_a_distinct_fleet_finding() -> None:
     assert "extend_exit_codes" not in conformance_section
 
     passed, total = report.clause_tally(check.FLEET_FINDING_CLAUSE)
-    assert (passed, total) == (0, 5)
+    assert (passed, total) == (0, 6)
 
 
 def test_ac9_sub_shape_a_reports_na_never_a_failing_grade() -> None:
@@ -133,10 +143,10 @@ def test_ac9_na_modules_never_widen_a_clause_denominator() -> None:
 
     for clause in check.CLAUSES:
         _, total = report.clause_tally(clause)
-        assert total == 5
+        assert total == 6
 
     clean, total = report.clean_on_all()
-    assert total == 5
+    assert total == 6
     assert clean == 0
 
 

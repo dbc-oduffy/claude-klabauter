@@ -639,6 +639,136 @@ def test_trailerless_header_still_parses_as_a_commit(monkeypatch) -> None:
     assert "1/1" in result.detail
 
 
+# ---------------------------------------------------------------------------
+# Population scoping (C3, docs/plans/2026-09-11-the-merge-gate-proves-
+# receipt-coverage.md, DR-421): a commit joins the population only if at
+# least one of its wanted-and-touched paths is NOT bookkeeping under
+# `coverage._is_bookkeeping_path`. A bookkeeping-only commit is tallied and
+# reported, never silently dropped or silently required.
+# ---------------------------------------------------------------------------
+
+
+def test_review_bookkeeping_only_commit_gives_pass_with_partition_reported(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        gate_dimension_review,
+        "_run_git",
+        lambda args, cwd: _log_z((_SHA_A, "state/handoffs/foo.md")),
+    )
+    monkeypatch.setattr(gate_dimension_review, "read_reviewed_set", lambda repo_root: set())
+    result = gate_dimension_review._review_dimension_check(
+        ["state/handoffs/foo.md"], "abc..HEAD", "/repo"
+    )
+    assert result.verdict is Verdict.PASS
+    assert "0 code commit(s), 1 bookkeeping-only commit(s) not in population" in result.detail
+
+
+def test_review_mixed_bookkeeping_and_code_commit_with_no_credit_gives_fail(
+    monkeypatch,
+) -> None:
+    """A single commit touching both a bookkeeping path and a code path is
+    IN the population (has_code_path is an OR across its touched paths, not
+    an all-paths-must-be-code requirement) -- it still needs review
+    evidence."""
+    out = (
+        f"{_HDR}{_SHA_A}\nstate/handoffs/foo.md\ncoordinator_core/coverage.py\0"
+    )
+    monkeypatch.setattr(gate_dimension_review, "_run_git", lambda args, cwd: (0, out, ""))
+    monkeypatch.setattr(gate_dimension_review, "read_reviewed_set", lambda repo_root: set())
+    result = gate_dimension_review._review_dimension_check(
+        ["state/handoffs/foo.md", "coordinator_core/coverage.py"], "abc..HEAD", "/repo"
+    )
+    assert result.verdict is Verdict.FAIL
+    assert "1 code commit(s), 0 bookkeeping-only commit(s) not in population" in result.detail
+
+
+def test_review_statement_py_is_not_bookkeeping(monkeypatch) -> None:
+    """Trailing-slash hazard: `state.py` / `statement.py` must not match the
+    `state/` bookkeeping prefix via a bare (non-slash-terminated) compare."""
+    monkeypatch.setattr(
+        gate_dimension_review,
+        "_run_git",
+        lambda args, cwd: _log_z((_SHA_A, "statement.py")),
+    )
+    monkeypatch.setattr(gate_dimension_review, "read_reviewed_set", lambda repo_root: set())
+    result = gate_dimension_review._review_dimension_check(
+        ["statement.py"], "abc..HEAD", "/repo"
+    )
+    assert result.verdict is Verdict.FAIL
+    assert "1 code commit(s), 0 bookkeeping-only commit(s) not in population" in result.detail
+
+
+def test_bookkeeping_path_prefixes_pinned_from_merge_gate_side() -> None:
+    """Pins `_BOOKKEEPING_PATH_PREFIXES`'s current value from this (the merge
+    gate's) consuming side, so a future widening for DAG-coverage-gate
+    reasons (that tuple's other consumer) cannot silently change this gate's
+    population without a visible test failure here too."""
+    from coordinator_core.coverage import _BOOKKEEPING_PATH_PREFIXES
+
+    assert _BOOKKEEPING_PATH_PREFIXES == ("state/", "archive/", "tasks/", "cross-repo/")
+
+
+# ---------------------------------------------------------------------------
+# AC7 (docs/plans/2026-09-11-the-merge-gate-proves-receipt-coverage.md § C4):
+# the FAIL detail groups uncovered SHAs under their authoring Session-Id.
+# ---------------------------------------------------------------------------
+
+
+def test_fail_detail_groups_uncovered_shas_by_session(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gate_dimension_review,
+        "_run_git",
+        lambda args, cwd: _log_z_full(
+            (_SHA_A, "2026-08-28T11:00:00+00:00", _SESSION, "a.py"),
+            (_SHA_B, "2026-08-28T12:00:00+00:00", "", "a.py"),
+        ),
+    )
+    monkeypatch.setattr(gate_dimension_review, "read_reviewed_set", lambda repo_root: set())
+    result = gate_dimension_review._review_dimension_check(["a.py"], "abc..HEAD", "/repo")
+    assert result.verdict is Verdict.FAIL
+    assert "uncovered by session:" in result.detail
+    assert f"  {_SESSION}: {_SHA_A[:12]}" in result.detail
+    assert f"  {gate_dimension_review._NO_SESSION_ID_LABEL}: {_SHA_B[:12]}" in result.detail
+
+
+def test_fail_detail_by_session_bounded_to_5_sessions_3_commits(monkeypatch) -> None:
+    """AC7's bound: at most 5 sessions shown, each at most 3 commits, with a
+    `+N more` tail on both axes."""
+    records = []
+    sessions = [f"session-{i}" for i in range(7)]
+    for si, session in enumerate(sessions):
+        for ci in range(4):
+            sha = f"{si:x}{ci:x}" * 20  # 40-hex
+            records.append((sha, "2026-08-28T11:00:00+00:00", session, "a.py"))
+    monkeypatch.setattr(
+        gate_dimension_review, "_run_git", lambda args, cwd: _log_z_full(*records)
+    )
+    monkeypatch.setattr(gate_dimension_review, "read_reviewed_set", lambda repo_root: set())
+    result = gate_dimension_review._review_dimension_check(["a.py"], "abc..HEAD", "/repo")
+    assert result.verdict is Verdict.FAIL
+    shown_session_lines = [
+        line for line in result.detail.splitlines() if line.startswith("  session-")
+    ]
+    assert len(shown_session_lines) == 5
+    for line in shown_session_lines:
+        assert "(+1 more)" in line, line
+    assert "(+2 more session(s))" in result.detail
+
+
+def test_group_uncovered_by_session_preserves_first_appearance_order() -> None:
+    provenance = {
+        _SHA_A: ("", _SESSION),
+        _SHA_B: ("", ""),
+    }
+    grouped = gate_dimension_review._group_uncovered_by_session(
+        [_SHA_A, _SHA_B], provenance
+    )
+    assert list(grouped.keys()) == [_SESSION, gate_dimension_review._NO_SESSION_ID_LABEL]
+    assert grouped[_SESSION] == [_SHA_A]
+    assert grouped[gate_dimension_review._NO_SESSION_ID_LABEL] == [_SHA_B]
+
+
 def test_git_log_format_requests_date_and_session_trailer() -> None:
     """Pins the format string itself. `separator=%x20` is load-bearing:
     without it git terminates each trailer with a newline, the value lands on

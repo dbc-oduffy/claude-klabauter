@@ -20,7 +20,6 @@ only the four shapes enumerated below; it is not a general "don't use settings_h
 from __future__ import annotations
 
 import ast
-import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -319,22 +318,34 @@ def test_no_live_once_bound_settings_home_reader_in_coordinator_core():
         if "settings_home" in text:
             sources.append((path, text))
 
-    examined = 0
-    all_violations: list[str] = []
-    start = time.perf_counter()
-    for path, source in sources:
-        examined += 1
-        try:
-            all_violations.extend(
-                find_violations(source, str(path.relative_to(REPO_ROOT)))
-            )
-        except SyntaxError:
-            continue
-    elapsed_ms = (time.perf_counter() - start) * 1000
+    from coordinator_core.benchmarks.process_time import in_process_time_ms
 
-    # Named, not hidden: measured on this box, ast.parse over the ~119
-    # settings_home-referencing files in coordinator_core/** costs ~850-950ms,
-    # not the 500ms brightline this chunk's brief names as the target. The
+    outcome: dict = {}
+
+    def _walk() -> None:
+        examined = 0
+        violations: list[str] = []
+        for path, source in sources:
+            examined += 1
+            try:
+                violations.extend(
+                    find_violations(source, str(path.relative_to(REPO_ROOT)))
+                )
+            except SyntaxError:
+                continue
+        outcome["examined"] = examined
+        outcome["violations"] = violations
+
+    timing = in_process_time_ms(_walk)
+    examined = outcome["examined"]
+    all_violations = outcome["violations"]
+    elapsed_ms = timing["process_time_ms"]
+
+    # Named, not hidden: measured on this box (wall clock, pre-conversion),
+    # ast.parse over the ~119 settings_home-referencing files in
+    # coordinator_core/** costs ~850-950ms, not the 500ms brightline this
+    # chunk's brief names as the target. Now measured as process time
+    # (`in_process_time_ms`), axis-converted only -- the ceiling is unmoved. The
     # cost is almost entirely one outlier -- ast.parse alone on
     # coordinator_core/pickup_assemble/__init__.py (469KB, ~28.8k AST nodes)
     # measures ~85-120ms in isolation on repeated runs -- not an algorithmic

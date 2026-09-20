@@ -1155,7 +1155,7 @@ def test_c4_disqualifies_claimed_but_in_flight(tmp_path: Path):
 @pytest.mark.parametrize(
     "block",
     [
-        "---\nstatus: claimed\ndeployment_state: active\n---\n\nBody.\n",  # Branch A qualifies
+        "---\nstatus: claimed\ndeployment_state: continued\n---\n\nBody.\n",  # Branch B qualifies (status claimed)
         "---\nstatus: open\ndeployment_state: shipped\n---\n\nBody.\n",  # Branch B qualifies
         "no leading fence at all\n",  # no leading '---' on line 1
         "---\nstatus: open\ndeployment_state: in_progress\n",  # no closing delimiter
@@ -1530,6 +1530,38 @@ def test_terminal_but_retained_gets_its_own_refusal_family_not_the_bulk_one(repo
     assert _family(reason) == _SCAN_REASON_NOT_TERMINAL, (
         f"a genuinely non-terminal record must stay in the bulk family; got {reason!r}"
     )
+
+
+def test_c3_classify_branch_reparked_claimed_not_terminal():
+    """Census-row-1 shape (docs/reference/handoff-legal-state-table.md § the
+    Ruling): Branch A used to qualify `status in (claimed, consumed)` as
+    terminal whenever `deployment_state != "in_flight"` — so a reparked
+    baton (`claimed` + `ready_to_fire`/`awaiting_gate`, a session flipping
+    deployment_state back without dropping `status: claimed`) was wrongly
+    archived-safe. `ready_to_fire`/`awaiting_gate` are exactly as
+    non-terminal as `in_flight`; only positive membership in
+    `_TERMINAL_DEPLOYMENT_STATES` (Branch B) may qualify a claimed record.
+    """
+    from coordinator_core.ops.fleet.archive_terminal_handoffs import (
+        _SCAN_REASON_NOT_TERMINAL,
+        _classify_branch,
+    )
+
+    for deployment_state in ("ready_to_fire", "awaiting_gate", "in_flight"):
+        meta = {"status": "claimed", "deployment_state": deployment_state}
+        qualifies, reason, _label, _b = _classify_branch(meta, {})
+        assert qualifies is False, (
+            f"claimed+{deployment_state} must not qualify as terminal; got "
+            f"qualifies={qualifies!r}, reason={reason!r}"
+        )
+        assert reason.startswith(_SCAN_REASON_NOT_TERMINAL), reason
+
+    # Legacy shape preserved: status: claimed with NO deployment_state key at
+    # all (pre-DR-084) still qualifies via status alone.
+    legacy = {"status": "claimed"}
+    qualifies, _reason, label, _b = _classify_branch(legacy, {})
+    assert qualifies is True, "a legacy claimed record with no deployment_state must still qualify"
+    assert label == "consumed"
 
 
 # ---------------------------------------------------------------------------

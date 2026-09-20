@@ -125,12 +125,17 @@ def test_record_invocation_write_cost_is_far_below_a_rev_parse_spawn(tmp_path):
     see plan's own "no block-sampled benchmarks" caution), just a floor
     check that the write is not accidentally doing something expensive
     (fsync, lock acquisition, a spawn) that would eat the C8/C9 win."""
+    from coordinator_core.benchmarks.process_time import in_process_time_ms
+
     n = 200
-    start = time.perf_counter()
-    for i in range(n):
-        shim_usage_census.record_invocation("baton-assemble", repo_root=tmp_path, now=float(i))
-    elapsed_ms = (time.perf_counter() - start) * 1000.0
-    per_call_ms = elapsed_ms / n
+
+    def _writes() -> None:
+        for i in range(n):
+            shim_usage_census.record_invocation(
+                "baton-assemble", repo_root=tmp_path, now=float(i)
+            )
+
+    per_call_ms = in_process_time_ms(_writes)["process_time_ms"] / n
     assert per_call_ms < 5.0, f"per-invocation census write cost {per_call_ms:.4f}ms too high"
 
 

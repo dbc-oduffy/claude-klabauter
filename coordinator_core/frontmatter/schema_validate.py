@@ -5260,10 +5260,36 @@ def _canonical_schema_text(text: str, *, strip_comments: bool = True) -> str | N
     return json.dumps(node, sort_keys=True, separators=(",", ":"))
 
 
+# Top-level bump-metadata paths (as produced by _flatten_json) that
+# _infer_drift_direction resolves as a unit from the top-level
+# x-schema-version comparison rather than the generic per-leaf walk -- see
+# that function's docstring for the version rule. Nested only: a nested key
+# that happens to be named x-schema-version is an ordinary leaf.
+_VERSION_METADATA_PATHS: frozenset[tuple] = frozenset(
+    {
+        ("x-schema-version",),
+        ("x-bump-class",),
+        ("x-bump-note",),
+    }
+)
+
+
 def _infer_drift_direction(local_content: str, doe_content: str) -> str:
     """Best-effort AHEAD / BEHIND / BOTH read on a byte-diverged schema pair.
 
-    Structural pass (preferred): flatten both sides' parsed JSON to leaf paths.
+    Top-level version pass (preferred, ahead of the generic leaf walk):
+    read `x-schema-version` off each side's already-parsed top-level dict
+    (guarding that each parses to a dict and the value is a string) and parse
+    both with `_parse_semver_tuple`. When both parse and differ, the version
+    leaves record ONE direction (local < doe is behind, local > doe is
+    ahead), and the top-level paths `("x-schema-version",)`,
+    `("x-bump-class",)`, `("x-bump-note",)` are excluded from the generic
+    loop below — those three are bump metadata that moves with the version
+    by construction, and their string containment is noise. When either
+    version is unparseable, or both are equal, those paths stay in the
+    generic loop exactly as for any other leaf.
+
+    Generic structural pass: flatten both sides' parsed JSON to leaf paths.
     A path present only locally is a local addition (AHEAD signal); a path
     present only on DoE's side is a DoE addition we haven't re-vendored
     (BEHIND signal). For a path both sides declare with a differing leaf value
@@ -5281,6 +5307,7 @@ def _infer_drift_direction(local_content: str, doe_content: str) -> str:
     Negative-spec: never raises — a comparison this uncertain by nature must
     degrade to the conservative BOTH reading, never a wrong-but-confident
     AHEAD/BEHIND. Only called when the two texts are already known to differ.
+    Adds no git read: this stays a pure function of the two texts.
     """
     try:
         local_json = json.loads(local_content)
@@ -5295,10 +5322,32 @@ def _infer_drift_direction(local_content: str, doe_content: str) -> str:
     local_flat = _flatten_json(local_json)
     doe_flat = _flatten_json(doe_json)
 
-    ahead = any(path not in doe_flat for path in local_flat)
-    behind = any(path not in local_flat for path in doe_flat)
+    version_ahead = False
+    version_behind = False
+    excluded_paths: frozenset[tuple] = frozenset()
+    if isinstance(local_json, dict) and isinstance(doe_json, dict):
+        local_version_raw = local_json.get("x-schema-version")
+        doe_version_raw = doe_json.get("x-schema-version")
+        if isinstance(local_version_raw, str) and isinstance(doe_version_raw, str):
+            local_semver = _parse_semver_tuple(local_version_raw)
+            doe_semver = _parse_semver_tuple(doe_version_raw)
+            if local_semver is not None and doe_semver is not None and local_semver != doe_semver:
+                if local_semver < doe_semver:
+                    version_behind = True
+                else:
+                    version_ahead = True
+                excluded_paths = _VERSION_METADATA_PATHS
+
+    ahead = version_ahead or any(
+        path not in doe_flat for path in local_flat if path not in excluded_paths
+    )
+    behind = version_behind or any(
+        path not in local_flat for path in doe_flat if path not in excluded_paths
+    )
 
     for path, local_value in local_flat.items():
+        if path in excluded_paths:
+            continue
         if path not in doe_flat:
             continue
         doe_value = doe_flat[path]

@@ -33,11 +33,11 @@ signal to shrink the command, not the bound.
 from __future__ import annotations
 
 import importlib.util
-import time
 
 import pytest
 
 from coordinator_core.bash_guards import _command_tokenizer
+from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.bash_guards._command_tokenizer import (
     ResolutionConfidence,
     resolve_command_positions,
@@ -179,20 +179,25 @@ class TestDosBoundIsActuallyBinding:
 
     def test_multi_megabyte_command_returns_promptly(self) -> None:
         cmd = _pad_to("git commit -m '", "'", 3_200_000)
-        start = time.perf_counter()
-        assert tokenize_full_command(cmd) is None
-        elapsed = time.perf_counter() - start
-        assert elapsed < 0.5, (
-            "3.2 MB command took %.3fs -- the DoS bound is not binding "
-            "(pre-fix this shape took ~105s)" % elapsed
+        outcome = {}
+
+        def _call() -> None:
+            outcome["result"] = tokenize_full_command(cmd)
+
+        timing = in_process_time_ms(_call)
+        assert outcome["result"] is None
+        assert timing["process_time_ms"] < 500.0, (
+            "3.2 MB command took %.3fms process time -- the DoS bound is "
+            "not binding (pre-fix this shape took ~105s)"
+            % timing["process_time_ms"]
         )
 
     def test_multi_megabyte_command_resolves_promptly(self) -> None:
         cmd = _pad_to("git commit -m '", "'", 3_200_000)
-        start = time.perf_counter()
-        resolve_command_positions(cmd)
-        elapsed = time.perf_counter() - start
-        assert elapsed < 0.5, "resolve path took %.3fs" % elapsed
+        timing = in_process_time_ms(lambda: resolve_command_positions(cmd))
+        assert timing["process_time_ms"] < 500.0, (
+            "resolve path took %.3fms process time" % timing["process_time_ms"]
+        )
 
     def test_at_ceiling_worst_case_stays_within_budget(self) -> None:
         """The ceiling was chosen as the largest power-of-two size at which
@@ -200,10 +205,17 @@ class TestDosBoundIsActuallyBinding:
         dispatch under a second. This pins the tokenizer's own share of that
         budget."""
         cmd = _pad_to("git commit -m '", "'", CEILING)
-        start = time.perf_counter()
-        assert tokenize_full_command(cmd) is not None
-        elapsed = time.perf_counter() - start
-        assert elapsed < 0.5, "at-ceiling worst case took %.3fs" % elapsed
+        outcome = {}
+
+        def _call() -> None:
+            outcome["result"] = tokenize_full_command(cmd)
+
+        timing = in_process_time_ms(_call)
+        assert outcome["result"] is not None
+        assert timing["process_time_ms"] < 500.0, (
+            "at-ceiling worst case took %.3fms process time"
+            % timing["process_time_ms"]
+        )
 
 
 class TestBelowCeilingIsUntouched:
@@ -389,13 +401,12 @@ class TestEveryDirectShlexSiteInheritsTheCeiling:
             "tool_input": {"command": cmd},
             "agent_id": "agent-under-test",
         }
-        start = time.perf_counter()
-        cts.check(payload)
-        elapsed = time.perf_counter() - start
-        assert elapsed < 0.5, (
-            "800 KB `bash -c '<no-whitespace payload>'` took %.3fs through "
-            "check() -- the ceiling is not binding on the `sh -c` re-split "
-            "(pre-fix this shape took ~15.4s, and 200 KB took ~0.81s)" % elapsed
+        timing = in_process_time_ms(lambda: cts.check(payload))
+        assert timing["process_time_ms"] < 500.0, (
+            "800 KB `bash -c '<no-whitespace payload>'` took %.3fms process "
+            "time through check() -- the ceiling is not binding on the "
+            "`sh -c` re-split (pre-fix this shape took ~15.4s, and 200 KB "
+            "took ~0.81s)" % timing["process_time_ms"]
         )
 
     def test_shell_c_payload_past_ceiling_keeps_the_runner_visible(self) -> None:
@@ -409,14 +420,20 @@ class TestEveryDirectShlexSiteInheritsTheCeiling:
         from coordinator_core.bash_guards import check_test_suite_invocation as cts
 
         cmd = "bash -c '" + ("A" * (CEILING + 1)) + "/pytest'"
-        start = time.perf_counter()
-        result = cts.check({
-            "tool_name": "Bash",
-            "tool_input": {"command": cmd},
-            "agent_id": "agent-under-test",
-        })
-        elapsed = time.perf_counter() - start
-        assert elapsed < 0.5, "took %.3fs" % elapsed
+        outcome = {}
+
+        def _call() -> None:
+            outcome["result"] = cts.check({
+                "tool_name": "Bash",
+                "tool_input": {"command": cmd},
+                "agent_id": "agent-under-test",
+            })
+
+        timing = in_process_time_ms(_call)
+        assert timing["process_time_ms"] < 500.0, (
+            "took %.3fms process time" % timing["process_time_ms"]
+        )
+        result = outcome["result"]
         assert isinstance(result, dict), "over-ceiling runner basename must still deny"
         assert (
             result["hookSpecificOutput"]["permissionDecision"] == "deny"

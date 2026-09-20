@@ -574,11 +574,19 @@ def _deny_reason(cmd: str, reason_kind: str, reason_class: str) -> str:
             "Removal only re-locks the boundary." % (safe_shape, INDIRECTION_REMEDY)
         )
     del reason_kind  # REASON_DIRECT: message below is fixed, not shape-derived.
+    safe_argv0 = ", ".join(
+        "`%s`" % name for name in sorted(_ApprovalSentinelDetector._SAFE_ARGV0)
+    )
+    safe_git = ", ".join(
+        "`git %s`" % sub
+        for sub in sorted(_ApprovalSentinelDetector._SAFE_GIT_SUBCOMMANDS)
+    )
     return (
         "BLOCKED: creates/modifies the PM-approval sentinel for doctrine "
         "edits; agents cannot self-approve. Ask the PM to create it.\n\n"
         "Use instead:\n"
-        "  `cat`, `ls`, `stat`, `rm`, `git status`, `git log`"
+        "  %s\n"
+        "  %s" % (safe_argv0, safe_git)
     )
 
 

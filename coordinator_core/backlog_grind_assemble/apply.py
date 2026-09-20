@@ -170,6 +170,7 @@ from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
     make_fleet_budget,
 )
+from coordinator_core.session.claimed_write import append_claimed_line
 from coordinator_core.session.grant import write_tier_u_grant
 
 # ---------------------------------------------------------------------------
@@ -390,8 +391,7 @@ _NON_PASS_NOTE_LOG = Path("state/scratch/backlog-grind/non-pass-notes.log")
 def _append_backlog_note(repo_root: Path, note: str) -> None:
     log_path = _assert_in_repo_root(_NON_PASS_NOTE_LOG, repo_root)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(f"{note}\n")
+    append_claimed_line(log_path, f"{note}\n".encode("utf-8"))
 
 
 def _non_pass_checkout(repo_root: Path, paths: list[str], note: str) -> dict[str, Any]:

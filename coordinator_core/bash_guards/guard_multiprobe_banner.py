@@ -461,7 +461,7 @@ def _outlet_from_seam_result(
         rewrite = updated["command"]
         if is_subagent:
             return _subagent_script_outlet(rewrite, script_hint, bypass_note)
-        return ("the rewrite below. %s" % bypass_note, rewrite)
+        return ("this rewrite. %s" % bypass_note, rewrite)
     context = hso.get("additionalContext") or ""
     return ("the alternative below. %s" % bypass_note, context)
 

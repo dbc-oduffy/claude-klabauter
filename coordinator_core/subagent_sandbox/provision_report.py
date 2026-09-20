@@ -619,6 +619,82 @@ def _splice_integrator_receipt(doc_text: str, session_id: str, agent_id: str, ag
     return _splice_receipt_block(doc_text, "integrator_receipt", session_id, agent_id, agent_type, stamped_at)
 
 
+#: Top-level ``review_completion:`` frontmatter key -- anchored at column 0,
+#: mirroring ``_PLAN_FRONTMATTER_RE``'s own discipline, so a body line that
+#: merely mentions the words (a findings entry quoting the block, say) can
+#: never be mistaken for the key itself.
+_REVIEW_COMPLETION_KEY_RE = re.compile(r"^review_completion:[ \t]*$|^review_completion:[ \t]+\S")
+
+
+def _has_review_completion_key(doc_text: str) -> bool:
+    """True iff ``doc_text``'s LEADING frontmatter block already carries a
+    top-level ``review_completion:`` key -- scanned the same way
+    ``_plan_frontmatter_value`` reads ``plan:``, between the opening ``---``
+    and the first closing ``---``, so a body-section mention (a filled-in
+    finding quoting the key name) is never read as the stamp itself."""
+    lines = doc_text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return False
+        if _REVIEW_COMPLETION_KEY_RE.match(line):
+            return True
+    return False
+
+
+def _splice_review_completion(
+    doc_text: str, session_id: str, agent_id: str, agent_type: str, stamped_at: str
+) -> str:
+    """SubagentStop-side counterpart to ``_splice_review_receipt`` --
+    records that THIS agent's SubagentStop fired, keyed by
+    ``(session_id, agent_id)`` where ``agent_id`` is the SubagentStop
+    payload's own value (never the dispatch-time one a resumed/renamed
+    agent might carry).
+
+    This block says NOTHING about whether the agent authored content --
+    that distinction is drawn by the READERS (``workstream_complete ::
+    _compute_review_receipt_gate`` and ``review_trail/receipt_credit ::
+    _counting_receipt_stamps``), never by this splice, which only ever
+    records "the SubagentStop hook fired for this (session, agent_id)".
+
+    Written ONLY at SubagentStop -- never at dispatch time, unlike
+    ``review_receipt``/``integrator_receipt`` above, which this module
+    stamps into a freshly-scaffolded doc before the agent ever runs.
+
+    Delegates to ``_splice_receipt_block`` under the ``review_completion``
+    key, reusing the same four fields and the same ``_yaml_quoted_scalar``
+    quoting -- no new block shape, no new quoting rule.
+
+    Returns ``doc_text`` UNCHANGED, and never raises, in two cases:
+      (a) the frontmatter already carries a top-level ``review_completion:``
+          key -- a SubagentStop re-fire or a resumed agent must not produce
+          a duplicate YAML key.
+      (b) the first ``---\\n\\n`` in ``doc_text`` is not the frontmatter's
+          closing fence, i.e. it is not at
+          ``doc_text.find("\\n---\\n", 4) + 1`` for a doc starting
+          ``---\\n``. Census row 3 (docs/plans/2026-09-11-review-receipt-
+          records-completion-not-dispatch.md) finds 3 of 922
+          agent-rewritten sidecars where the unguarded anchor lands in the
+          body -- an agent-authored ``---\\n\\n`` inside a filled-in section
+          (a rendered rule, a horizontal divider) would otherwise splice
+          the block into the BODY rather than the frontmatter, corrupting
+          both.
+
+    ``_receipt_block``/``_splice_receipt_block`` bytes are unchanged --
+    this wrapper adds a guard IN FRONT of the shared splice primitive, it
+    does not alter what that primitive does for its other two callers."""
+    if _has_review_completion_key(doc_text):
+        return doc_text
+    marker_idx = doc_text.find("---\n\n")
+    if marker_idx == -1:
+        return doc_text
+    frontmatter_close_idx = doc_text.find("\n---\n", 4) + 1
+    if marker_idx != frontmatter_close_idx:
+        return doc_text
+    return _splice_receipt_block(doc_text, "review_completion", session_id, agent_id, agent_type, stamped_at)
+
+
 def _exit_interview_section() -> str:
     """The universal closing section every template inherits (commit
     c50cf8ac) -- do not vary its questions or position by type."""
@@ -1395,7 +1471,24 @@ def _provision_plan_derivable_doc(
 
 
 def _provision(payload: Dict[str, Any], policy_path: Optional[str], cwd: Optional[str]) -> Optional[str]:
-    """Compute + write the report-sidecar doc; return its repo-relative path, or ``None``."""
+    """Compute + write the report-sidecar doc; return its repo-relative path, or ``None``.
+
+    REFUSES OUTRIGHT (returns ``None``, no ``resolve_git_root`` call at all) when ``cwd`` is
+    falsy -- klabauter#47. ``resolve_git_root(None)`` deliberately means "resolve against
+    whatever THIS PROCESS's own ambient cwd is right now" (see that function's own
+    docstring) -- correct for its other callers, which always have a legitimate ambient
+    answer (a human/script standing in the repo they mean, or the PreToolUse(Bash) guard
+    chain fed an explicit per-call payload cwd). A spawn-time provisioning call has no such
+    ambient answer: its ``cwd`` is the target-repo signal the caller (the SubagentStart hook,
+    or any other in-process caller) is handing this seam, and an absent one means the target
+    repo is NOT unambiguously resolvable from here -- guessing via this process's own ambient
+    directory is exactly how a multi-repo plan-blitz item misfiles its receipt into whichever
+    repo this process happens to be sitting in, which is a DURABLE wrong record once
+    written (`hooks/stop_dispatch.py :: _guard_kira_verdict_routed`, DoE-claude, reads it back
+    and reports a false owed-route or a false in-flight verdict off it). Refuse, don't guess.
+    """
+    if not cwd:
+        return None
     git_root = resolve_git_root(cwd)
     policy = load_policy(policy_path)
 
@@ -1700,8 +1793,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--cwd",
         dest="cwd",
         default=None,
-        help="Working directory to resolve the git root from (defaults to "
-        "the process cwd).",
+        help="Working directory to resolve the git root from -- required. Omitting it "
+        "refuses to provision (klabauter#47: no ambient-process-cwd fallback here).",
     )
     parser.add_argument(
         "--type",

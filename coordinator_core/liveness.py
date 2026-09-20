@@ -1,14 +1,13 @@
 """liveness.py — Canonical liveness seam for coordinator_core.
 
-Purpose: Provide the two liveness predicates (+ the heartbeat write) that
-coordinator_core operations depend on. As of the de-bash W2 leg (2026-07-19)
-this module DELEGATES to the in-process native port
-``coordinator_core.session.liveness`` / ``coordinator_core.session.core``
-rather than shelling out to the DoE bash ``coordinator-session.sh`` — the
-Windows critical path can no longer depend on a POSIX shell (PM mandate:
-kill ALL bash on the critical path). The public surface
-(``resolve_live_session_ids`` / ``cs_claim_holder_live`` /
-``update_last_activity``) is UNCHANGED so no caller regresses.
+Purpose: Provide the two liveness predicates that coordinator_core operations
+depend on. As of the de-bash W2 leg (2026-07-19) this module DELEGATES to the
+in-process native port ``coordinator_core.session.liveness`` /
+``coordinator_core.session.core`` rather than shelling out to the DoE bash
+``coordinator-session.sh`` — the Windows critical path can no longer depend on
+a POSIX shell (PM mandate: kill ALL bash on the critical path). The public
+surface (``resolve_live_session_ids`` / ``cs_claim_holder_live``) is UNCHANGED
+so no caller regresses.
 
 ``cs_claim_holder_live`` error contract (2026-07-21 fix, cross-repo memo
 2026-07-14 claude-central-em): this function PROPAGATES exceptions from the
@@ -37,7 +36,6 @@ Spec backlink: pln-pcore-03-beachhead-coordinator-core-fecdbb § D5,
 from __future__ import annotations
 
 import logging
-import os
 import time
 from pathlib import Path
 from typing import FrozenSet, Optional, Tuple
@@ -47,13 +45,12 @@ from coordinator_core.session import core as _session_core
 from coordinator_core.session import liveness as _session_liveness
 
 # Review: code-reviewer (F1) — module-level logger matches every other coordinator_core module;
-# allows debug-level signal on update_last_activity failures instead of silent pass.
+# allows debug-level signal on liveness-read failures instead of silent pass.
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Lib path resolution — RETAINED for its own dedicated coverage in
-# tests/test_liveness.py (test_lib_path_*), for the contract
-# hooks/session_heartbeat.py cites, and for callers that still want the
+# tests/test_liveness.py (test_lib_path_*), and for callers that still want the
 # on-disk successor path (e.g. diagnostics). Production liveness no longer
 # shells to any coordinator-
 # session lib — it delegates to the native session.* port above. The
@@ -177,48 +174,6 @@ def _resolve_live_session_ids_uncached() -> FrozenSet[str]:
         # is diagnosable rather than silently degrading every liveness check.
         logger.debug("coordinator_core.liveness: live_session_ids() failed: %s", exc)
         return frozenset()
-
-
-def update_last_activity(session_dir: str, iso: str) -> None:
-    """Write the last_activity field in a session's meta.json (heartbeat).
-
-    Purpose: Thin seam for the hooks.session_heartbeat bookkeeping op (pcore-08 C2).
-    Delegates to the native ``core.update_meta_field`` (atomic tempfile +
-    os.replace rewrite) — the SAME single-writer implementation every other meta
-    write now routes through, which IS the enforcement of the single-liveness-key
-    invariant (no dual Python/bash writer racing the same file). No bash
-    shell-out.
-
-    On any error (missing meta.json, non-writable dir) the call is a silent
-    no-op — heartbeat is best-effort; a missed write does not warrant raising in
-    the bookkeeping handler.
-
-    Args:
-        session_dir: Absolute path to the session registry dir
-                     (e.g. .git/coordinator-sessions/<sid>/).
-        iso:         ISO-8601 timestamp string to write as last_activity.
-
-    Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § D4, C0
-    """
-    # Review: code-reviewer (F3) — guard against empty or relative session_dir and
-    # empty iso; a relative path would resolve against the process cwd rather than
-    # the session registry, and core.update_meta_field rejects an empty value.
-    if not session_dir or not os.path.isabs(session_dir):
-        return
-    if not iso:
-        return
-    try:
-        ok = _session_core.update_meta_field(session_dir, "last_activity", iso)
-        if not ok:
-            logger.debug(
-                "coordinator_core.liveness: update_last_activity no-op (meta.json "
-                "missing or unwritable) for %s",
-                session_dir,
-            )
-    except Exception as exc:
-        # best-effort; heartbeat miss is non-fatal — but log at debug so systematic
-        # failures are diagnosable.
-        logger.debug("coordinator_core.liveness: update_last_activity error: %s", exc)
 
 
 def cs_claim_holder_live(claim_path: str) -> bool:

@@ -70,6 +70,29 @@ Negative-spec:
     pair deliberately never writes the field, so on the ordinary path this op
     resolves it itself. `_SENT_BY_UNRESOLVED` is the explicit sentinel for a
     resolution FAILURE, never silent omission — and never the ordinary case.
+  - Does NOT silently drop a draft's `cc:` field (klabauter#46) — a present
+    `cc:` (string or list of strings) is stamped onto the delivered content
+    after `to:` (see `_stamp_cc`) so it survives the send; a malformed one
+    (wrong type, empty string/list, non-string list entry) refuses the send
+    loud (see `_validate_cc`) rather than composing without it.
+  - Does NOT stop at stamping `cc:` into the copy already going to `to:`
+    (klabauter#46, second half) — each `cc:` name is resolved via the SAME
+    `_resolve_receiver_inbox` `to:` uses (see `_resolve_cc_targets`) and gets
+    its OWN receiver-side write + commit + anchor (see `_deliver_cc_copy`),
+    in the SAME repo, with the SAME cc-stamped content `to:` receives. An
+    unresolvable cc name refuses the WHOLE send loud, before any write —
+    mirrors `to:`'s own UNKNOWN RECEIVER refusal exactly, so a cc leg is
+    held to the same "resolvable before any byte moves" bar `to:` already
+    was. This is a REGISTRY reuse, not a new guard: a publish-mirror name is
+    excluded from `repos.*` by construction (module docstring's registry
+    note above), so a cc naming one refuses the same UNKNOWN RECEIVER way
+    `to:` naming one always has — no separate mirror check was added, nor
+    was one needed. Once every cc name resolves, a PER-RECEIVER write
+    failure (collision, declined/unverified commit) after `to:` has already
+    landed does NOT undo `to:`'s delivery or fail the whole send — it is
+    reported in the envelope's `failed[]` (DETERMINATE-PARTIAL, exit_code 2)
+    exactly like a downstream sender-receipt failure already is, never
+    dropped silently.
   - Does NOT overwrite an existing receiver-inbox file — refused twice,
     independently: an existence pre-check AND the `O_EXCL` open flag (AC6).
   - Does NOT trust a wire-supplied inbox path — `to` is resolved solely via
@@ -92,6 +115,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import tempfile
 from functools import partial
 from pathlib import Path
@@ -103,8 +127,10 @@ from coordinator_core.session.machinery_paths import (
 )
 from coordinator_core.frontmatter.primitives import (
     insert_fm_field,
+    insert_fm_field_raw,
     rebuild as _rebuild_frontmatter,
     replace_fm_field,
+    serialize_yaml_scalar,
     split_frontmatter,
 )
 from coordinator_core.frontmatter.schema_validate import (
@@ -141,6 +167,8 @@ from coordinator_core.ops.fleet._memo_compose import (
     _TOPIC_SLUG_RE,
     _compose_memo,
     _memo_filename,
+    _normalize_in_reply_to,
+    body_opens_frontmatter,
 )
 from coordinator_core.ops.fleet._memo_resolver import (
     AmbiguousReceiverError,
@@ -468,6 +496,75 @@ def _read_draft(draft_path: Path) -> tuple[Optional[dict], Optional[str], Option
     return fm, parsed.get("body", ""), None
 
 
+#: klabauter#46 — `cc:` used to reach `_compose_memo` nowhere (it declares no
+#: `cc` parameter) and so vanished from the delivered memo with no trace: a
+#: draft hand-authored with `cc: example-cockpit-repo-em` was silently delivered
+#: to `to:` alone, cc-less. `_compose_memo` itself is out of this fix's
+#: footprint (klabauter#46/#40 scope: memo_send.py, memo_kinds.py,
+#: cross-repo-memo.py only) — instead of composing cc INTO `_compose_memo`,
+#: this op stamps it onto the ALREADY-COMPOSED content as a post-processing
+#: frontmatter insert, using the same `insert_fm_field`/`insert_fm_field_raw`
+#: primitives `_stamp_sent_copy` already uses for `sent_at:`/`delivered_to:`.
+def _validate_cc(cc: object) -> tuple[Optional[list], Optional[str]]:
+    """Validate a draft's `cc:` field. Returns (normalized_list, error) —
+    exactly one non-None. `None, None` when `cc` is absent (the ordinary,
+    cc-less case — never an error).
+
+    Negative-spec: NEVER silently drops a present-but-malformed `cc:` —
+    an empty string, an empty list, a non-string list entry, or any type
+    other than str/list refuses loud rather than composing without it
+    (klabauter#46's "prefer a loud refusal over a silently dropped field").
+    """
+    if cc is None:
+        return None, None
+    if isinstance(cc, str):
+        if not cc.strip():
+            return None, "memo.send: draft's 'cc' field is an empty string — remove it or name a receiver"
+        return [cc.strip()], None
+    if isinstance(cc, list):
+        if not cc:
+            return None, "memo.send: draft's 'cc' field is an empty list — remove it or name a receiver"
+        normalized = []
+        for entry in cc:
+            if not isinstance(entry, str) or not entry.strip():
+                return None, (
+                    f"memo.send: draft's 'cc' field carries a non-string or "
+                    f"empty entry ({entry!r}) — every cc: recipient must be a "
+                    f"non-empty string"
+                )
+            normalized.append(entry.strip())
+        return normalized, None
+    return None, (
+        f"memo.send: draft's 'cc' field must be a string or a list of "
+        f"strings, got {type(cc).__name__}"
+    )
+
+
+def _stamp_cc(content: str, cc: list) -> str:
+    """Insert the validated `cc:` list into already-composed delivered
+    content, immediately after `to:` — single-entry as a plain scalar line
+    (matches every other scalar field this composer emits), multi-entry as
+    an inline YAML sequence (mirrors `supersedes:`'s list form in
+    `_memo_compose._render_extra_field`, which this module cannot import
+    without pulling `_compose_memo`'s cc-blind composer back into the seam
+    this fix threads around).
+    """
+    split = split_frontmatter(content)
+    if split is None:
+        # Unreachable in practice (content was just composed by _compose_memo,
+        # which always emits parseable frontmatter) — but never corrupt a
+        # memo silently: return it cc-less rather than raise past the
+        # caller's own validation step.
+        return content
+    fm_text = split.fm_text
+    if len(cc) == 1:
+        fm_text = insert_fm_field(fm_text, "cc", cc[0], after_key="to")
+    else:
+        raw = "[" + ", ".join(serialize_yaml_scalar(entry) for entry in cc) + "]"
+        fm_text = insert_fm_field_raw(fm_text, "cc", raw, after_key="to")
+    return _rebuild_frontmatter(split, fm_text)
+
+
 def _compose_delivered_content(
     *, fm: dict, body: str, today: str, sent_by: str,
 ) -> tuple[Optional[str], Optional[str]]:
@@ -477,6 +574,11 @@ def _compose_delivered_content(
     Required fields on the draft: title, from, to, kind, a body with prose in
     it, and summary (or a derivable prose body when summary is the memo.draft
     placeholder ruler).
+
+    `cc:` (klabauter#46, optional): validated via `_validate_cc` and, when
+    present and valid, stamped onto the composed content via `_stamp_cc` —
+    it survives delivery instead of being silently dropped. A malformed
+    `cc:` refuses loud (see `_validate_cc`) rather than composing without it.
     """
     title = fm.get("title")
     from_id = fm.get("from")
@@ -510,6 +612,10 @@ def _compose_delivered_content(
                 f"compose it via memo.compose before sending."
             )
 
+    cc, cc_error = _validate_cc(fm.get("cc"))
+    if cc_error is not None:
+        return None, cc_error
+
     try:
         content = _compose_memo(
             from_id=from_id,
@@ -528,6 +634,9 @@ def _compose_delivered_content(
         )
     except ValueError as exc:
         return None, f"memo.send: {exc}"
+
+    if cc is not None:
+        content = _stamp_cc(content, cc)
 
     return content, None
 
@@ -637,6 +746,151 @@ def _rollback_unwritten_file(target_file: Path) -> str:
     return " the file this call wrote was removed (tree restored)."
 
 
+def _resolve_cc_targets(cc_list: list) -> tuple[Optional[list], Optional[str]]:
+    """Resolve every `cc:` name to (name, inbox_dir, receiver_repo_path) the
+    same way `to:` is resolved. Returns (targets, error) — exactly one
+    non-None. `targets` is `[]` (never `None`) when `cc_list` is empty/None.
+
+    Runs BEFORE any write (klabauter#46, second half): an unresolvable cc
+    name refuses the WHOLE send loud here, mirroring `to:`'s own UNKNOWN
+    RECEIVER refusal — never a partial send that silently drops one cc leg
+    because it happened not to resolve. A publish-mirror name is already
+    excluded from `repos.*` by `_resolve_receiver_inbox`'s own registry read
+    (module docstring), so it resolves to `(None, None, all_repos)` here
+    exactly as it would for `to:` — no separate mirror check is added.
+    """
+    if not cc_list:
+        return [], None
+    targets = []
+    for name in cc_list:
+        try:
+            inbox_dir, receiver_repo_path, all_repos = _resolve_receiver_inbox(name)
+        except RegistryReadError as exc:
+            return None, (
+                f"memo.send: cc target {name!r} could not be resolved — "
+                f"machine-local registry could not be read: {exc.reason} "
+                f"(no folder-scan fallback — fix the registry file or "
+                f"re-run machine-local setup)."
+            )
+        except AmbiguousReceiverError as exc:
+            return None, f"memo.send: cc target {name!r}: {exc}"
+        if inbox_dir is None:
+            suggestion = _suggest_nearest_receiver(name, all_repos)
+            suggestion_clause = f" Did you mean {suggestion!r}?" if suggestion else ""
+            return None, (
+                f"memo.send: UNKNOWN CC RECEIVER — {name!r} does not resolve "
+                f"to any registered receiver on this machine.{suggestion_clause} "
+                f"Register the receiver repo first (machine-local set "
+                f"repos.<name> <abs-path-to-repo>), fix a typo in the draft's "
+                f"`cc:`, or remove that name from `cc:` before sending."
+            )
+        targets.append((name, inbox_dir, receiver_repo_path))
+    return targets, None
+
+
+def _deliver_cc_copy(
+    *, name: str, inbox_dir: Path, receiver_repo_path: Path, filename: str,
+    content: str, topic: str, from_id: str, sent_by: str,
+) -> dict:
+    """Write+commit+anchor one `cc:` receiver's OWN copy of the already-
+    composed (cc-stamped) delivered content — the second half of
+    klabauter#46: `to:` and every `cc:` name each get a real receiver-side
+    write, not just a `cc:` line inside the one file `to:` receives.
+
+    Same write discipline `_memo_send` uses for `to:` (O_EXCL create, zero-
+    spawn `commit_authored_new_file`, verify the commit object, best-effort
+    anchor) — duplicated rather than shared with the `to:` arm because the
+    `to:` arm is entangled with the dry-run preview / no-clobber / warn-once
+    gates that only ever apply to `to:`; a cc leg is resolved-and-committed
+    only, never previewed or gated on reader-liveness of its own.
+
+    Returns one dict, always carrying `ok: bool`. On failure the O_EXCL
+    write (if it happened) is rolled back via `_rollback_unwritten_file`,
+    same as `to:`'s own AC4/verify-failure arms — a failed cc leg never
+    leaves an uncommitted orphan file behind in that receiver's tree either.
+    """
+    target_file = inbox_dir / filename
+    if target_file.exists():
+        return {
+            "ok": False, "id": str(target_file), "to": name,
+            "reason": (
+                f"collision: {target_file} already exists in cc receiver "
+                f"{name!r}'s inbox — refuse (no clobber)."
+            ),
+        }
+
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(target_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(content)
+    except FileExistsError:
+        return {
+            "ok": False, "id": str(target_file), "to": name,
+            "reason": (
+                f"collision (race): {target_file} appeared between the "
+                f"collision-check and the O_EXCL write in cc receiver "
+                f"{name!r} — refuse (no clobber)."
+            ),
+        }
+    except OSError as exc:
+        return {
+            "ok": False, "id": str(target_file), "to": name,
+            "reason": f"write-failed for cc receiver {name!r}: {exc}",
+        }
+
+    rel_path = os.path.relpath(target_file, receiver_repo_path).replace(os.sep, "/")
+    msg_file = _write_msg_file(
+        _delivery_commit_message(topic, from_id, sent_by)
+    )
+    try:
+        commit_result = git_native.commit_authored_new_file(
+            rel_path, content, msg_file, receiver_repo_path,
+        )
+    finally:
+        try:
+            msg_file.unlink()
+        except OSError:
+            pass
+
+    if not commit_result.ok:
+        rollback_detail = _rollback_unwritten_file(target_file)
+        return {
+            "ok": False, "id": str(target_file), "to": name,
+            "reason": (
+                f"cc receiver {name!r} commit declined: "
+                f"{commit_result.stderr} — not retried, per AC4;"
+                f"{rollback_detail}"
+            ),
+        }
+
+    delivery_commit_sha = commit_result.stdout.strip() or None
+    if delivery_commit_sha is None or not _delivery_commit_is_object(
+        receiver_repo_path, delivery_commit_sha
+    ):
+        rollback_detail = _rollback_unwritten_file(target_file)
+        return {
+            "ok": False, "id": str(target_file), "to": name,
+            "reason": (
+                f"cc receiver {name!r} commit could not be verified: "
+                f"{delivery_commit_sha or ''!r} is not a commit object in "
+                f"the receiver's repository — not sent." + rollback_detail
+            ),
+        }
+
+    common_dir = resolve_git_common_dir(receiver_repo_path)
+    anchored_bytes = target_file.read_bytes()
+    anchor_blob_sha = write_anchor(
+        common_dir, filename, delivery_commit_sha, anchored_bytes
+    )
+    return {
+        "ok": True, "id": str(target_file), "to": name,
+        "written": True, "committed": True,
+        "delivery_commit_sha": delivery_commit_sha,
+        "anchored": anchor_blob_sha is not None,
+    }
+
+
 class _SenderCommit(NamedTuple):
     """The sender-side receipt commit's outcome, in the two fields the
     envelope below reads. `commit_paths` signals failure by raising and
@@ -703,6 +957,85 @@ def _write_msg_file(text: str) -> Path:
         os.unlink(name)
         raise
     return Path(name)
+
+
+# ---------------------------------------------------------------------------
+# C3 — citation lint: warn once where a body cites a docs/state/coordinator/
+# archive/cross-repo path with no repo qualifier — the receiver would
+# resolve it against its own tree, not this sender's.
+# ---------------------------------------------------------------------------
+
+#: A candidate path root, not preceded by a path or URL character — so a
+#: mid-path segment (`blob/main/docs/x.md`) or a URL segment
+#: (`github.com/o/r/docs/x.md`) is never itself a candidate; only a path
+#: that starts a token is. Matches forward-slash paths only (D4: memo bodies
+#: cite paths in that form on every host).
+_CITATION_ROOT_RE = re.compile(
+    r"(?<![\w./:-])(?:docs|state|coordinator|archive|cross-repo)/[\w\-./]*[\w\-]"
+)
+
+#: The qualifier immediately before a candidate — a repo name, allowing one
+#: backtick and whitespace, followed by `:` or a space (D4's `<repo>:<path>`
+#: and `<repo> <path>` forms).
+_CITATION_QUALIFIER_PRE_RE = re.compile(r"([A-Za-z][A-Za-z0-9_-]*)[:\s]\s*`?\Z")
+
+
+def _repo_qualifier_names(all_repos: dict) -> frozenset:
+    """The set of names that qualify a body path citation as repo-scoped:
+    each registry key (lowercased, `_` -> `-`) plus the lowercased basename
+    of each registry path — no new registry read, `all_repos` is the same
+    dict `resolve_receiver_inbox` already returned to the caller.
+    """
+    names = set()
+    for key, path in (all_repos or {}).items():
+        if isinstance(key, str) and key:
+            names.add(key.lower().replace("_", "-"))
+        if isinstance(path, str) and path:
+            names.add(Path(path).name.lower())
+    return frozenset(names)
+
+
+def _unqualified_path_citations(body: str, qualifiers: frozenset) -> list:
+    """The distinct `docs/`, `state/`, `coordinator/`, `archive/` or
+    `cross-repo/`-rooted body paths not immediately preceded (allowing one
+    backtick and whitespace) by a name in `qualifiers` — in first-seen
+    order.
+
+    Negative-spec: never refuses, never reads a file off disk, and never
+    treats a URL segment or a mid-path segment as a candidate (see
+    `_CITATION_ROOT_RE`'s lookbehind).
+    """
+    seen: list = []
+    seen_set: set = set()
+    for match in _CITATION_ROOT_RE.finditer(body):
+        candidate = match.group(0)
+        prefix = body[: match.start()]
+        qualifier_match = _CITATION_QUALIFIER_PRE_RE.search(prefix)
+        if qualifier_match and qualifier_match.group(1).lower() in qualifiers:
+            continue
+        if candidate not in seen_set:
+            seen_set.add(candidate)
+            seen.append(candidate)
+    return seen
+
+
+def _citation_lint_warning(paths: list) -> str:
+    """The one-shot citation-lint warning — register, not an essay: one
+    fact (N body paths are not repo-qualified), the fix, and the way
+    through. Lists at most five paths, because the author needs examples,
+    not an inventory."""
+    shown = paths[:5]
+    remainder = len(paths) - len(shown)
+    listed = "\n".join(f"    {p}" for p in shown)
+    more_clause = f"\n    ...and {remainder} more" if remainder > 0 else ""
+    return (
+        "memo.send: %d body path(s) are not repo-qualified, so the receiver "
+        "will resolve them against its own tree.\n"
+        "%s%s\n"
+        "  Qualify as `<repo> <path>` or `<repo>:<path>`.\n"
+        "  Nothing was written. This warning fires once per topic; the "
+        "next attempt sends." % (len(paths), listed, more_clause)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -796,6 +1129,38 @@ def _no_reader_warning(topic: str, evidence: str) -> str:
     )
 
 
+def _warn_once(
+    sender_worktree: Path, ack_key: str, warning: str,
+    marker_text: str = "warned\n",
+) -> Optional[str]:
+    """The one shared ack protocol every one-shot `memo.send` warning uses.
+
+    `None` when `ack_key` was already warned about, or when the marker
+    cannot be recorded; otherwise writes the marker and returns `warning`
+    verbatim. Callers take no `dry_run` argument here by design — a
+    preview writes nothing, so every caller skips this entirely under
+    `dry_run` rather than pass it through.
+
+    Negative-spec: decides nothing about WHETHER to warn (that judgment is
+    entirely the caller's, made before this is called), and never batches
+    or coalesces multiple warnings — one call is one key.
+
+    Fails OPEN: an `OSError` writing the marker returns `None` (send)
+    rather than stranding the memo on an unwritable ack directory — the
+    retry can't be promised to behave differently, so refusing the first
+    attempt would be permanent.
+    """
+    ack = _send_ack_path(sender_worktree, ack_key)
+    try:
+        if ack.is_file():
+            return None
+        ack.parent.mkdir(parents=True, exist_ok=True)
+        ack.write_text(marker_text, encoding="utf-8")
+    except OSError:
+        return None
+    return warning
+
+
 def _no_reader_gate(
     sender_worktree: Path, topic: str, dry_run: bool, receiver_root=None
 ) -> Optional[str]:
@@ -811,20 +1176,10 @@ def _no_reader_gate(
     if unreachable is None:
         return None
 
-    ack = _send_ack_path(sender_worktree, topic)
-    try:
-        if ack.is_file():
-            return None
-        ack.parent.mkdir(parents=True, exist_ok=True)
-        ack.write_text(
-            "warned: %s\n" % unreachable.evidence, encoding="utf-8"
-        )
-    except OSError:
-        # Cannot record the acknowledgement, so cannot promise the next
-        # attempt behaves differently. Refusing here would strand the memo
-        # permanently; send.
-        return None
-    return _no_reader_warning(topic, unreachable.evidence)
+    return _warn_once(
+        sender_worktree, topic, _no_reader_warning(topic, unreachable.evidence),
+        marker_text="warned: %s\n" % unreachable.evidence,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -882,6 +1237,61 @@ def _iter_ledger_rows(ledger_path: Path):
             continue
         if isinstance(row, dict):
             yield row
+
+
+def _prior_reply_from_another_session(
+    ledger_path: Path, in_reply_to: str, sent_by: str,
+) -> Optional[dict]:
+    """The newest sent-ledger row that already answered `in_reply_to` from
+    a DIFFERENT session than `sent_by` — evidence this send would be a
+    second reply to a memo this repo already answered once.
+
+    Walks `_iter_ledger_rows` (outbox drafts and `sent/` copies are never
+    read — the ledger is the one place a completed send is durably
+    recorded across sessions, and the only one this reads). A row counts
+    as a match when its own `_normalize_in_reply_to` equals this send's,
+    and as a DIFFERENT session whenever either `sent_by` is missing or the
+    `_SENT_BY_UNRESOLVED` sentinel — an unresolved sender cannot be
+    assumed to BE this session, so it must never read as a same-session
+    repeat.
+
+    Negative-spec: never raises. A `ledger_path` that cannot be read
+    yields no rows via `_iter_ledger_rows`, so this returns `None`.
+    """
+    target = _normalize_in_reply_to(in_reply_to)
+    newest = None
+    for row in _iter_ledger_rows(ledger_path):
+        row_in_reply_to = row.get("in_reply_to")
+        if not isinstance(row_in_reply_to, str) or not row_in_reply_to:
+            continue
+        if _normalize_in_reply_to(row_in_reply_to) != target:
+            continue
+        row_sent_by = row.get("sent_by")
+        same_session = (
+            isinstance(row_sent_by, str)
+            and row_sent_by
+            and row_sent_by != _SENT_BY_UNRESOLVED
+            and sent_by != _SENT_BY_UNRESOLVED
+            and row_sent_by == sent_by
+        )
+        if same_session:
+            continue
+        newest = row
+    return newest
+
+
+def _duplicate_reply_warning(prior: dict) -> str:
+    """The one-shot duplicate-reply warning — register, not an essay: one
+    fact (another session of this repo already answered this memo), the
+    check the EM applies, and the way through."""
+    return (
+        "memo.send: another session of this repo already answered that "
+        "memo — topic %r, sent to %r at %s.\n"
+        "  Read that reply before sending a second one.\n"
+        "  Nothing was written. This warning fires once per topic; the "
+        "next attempt sends."
+        % (prior.get("topic"), prior.get("to"), prior.get("sent_at"))
+    )
 
 
 #: Sweep verdicts — four outcomes, never three. A receiver absent from this
@@ -1132,6 +1542,23 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             _MODE, dry_run, "memo.send: draft is missing required field 'to'",
         )
 
+    # klabauter#46 (second half): every cc: name must resolve BEFORE any
+    # write happens, same bar to: is already held to — see
+    # `_resolve_cc_targets`.
+    cc_list, cc_error = _validate_cc(fm.get("cc"))
+    if cc_error is not None:
+        return build_setup_error_result(_MODE, dry_run, cc_error)
+    cc_targets, cc_resolve_error = _resolve_cc_targets(cc_list or [])
+    if cc_resolve_error is not None:
+        return build_setup_error_result(_MODE, dry_run, cc_resolve_error)
+
+    if body_opens_frontmatter(body):
+        return build_setup_error_result(
+            _MODE, dry_run,
+            "memo.send: the staged body opens a second frontmatter block — "
+            "re-run memo.compose with only the body text.",
+        )
+
     # Duplicate-body detector — a byte-identical body under a DIFFERENT
     # topic in the same outbox is almost always a stale duplicate draft, not
     # two intentional sends. Skipped for an empty body: the `--empty-body`
@@ -1212,6 +1639,45 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             f"the receiver repo first (machine-local set repos.<name> "
             f"<abs-path-to-repo>), or check for a typo in the draft's `to:`.",
         )
+
+    # Warn-once where THIS repo already answered `in_reply_to` from a
+    # DIFFERENT session — after the UNKNOWN RECEIVER refusal (an
+    # unresolvable receiver fails first and never uses up an ack) and
+    # before the dry_run preview return (a preview never gates, same
+    # discipline as `_no_reader_gate`).
+    reply_to = fm.get("in_reply_to")
+    if not dry_run and isinstance(reply_to, str) and reply_to.strip():
+        prior_reply = _prior_reply_from_another_session(
+            _sent_ledger_path(sender_worktree), reply_to, sent_by,
+        )
+        if prior_reply is not None:
+            duplicate_warning = _warn_once(
+                sender_worktree, f"duplicate-reply:{topic}",
+                _duplicate_reply_warning(prior_reply),
+            )
+            if duplicate_warning is not None:
+                return build_setup_error_result(_MODE, dry_run, duplicate_warning)
+
+    # Warn-once where the body cites a docs/state/coordinator/archive/
+    # cross-repo path with no repo qualifier — the receiver resolves it
+    # against ITS OWN tree, not this sender's. Skipped entirely when the
+    # receiver resolves to the sender's own worktree (D4) — a self-send
+    # never crosses a tree boundary.
+    self_send = False
+    try:
+        self_send = receiver_repo_path.resolve() == sender_worktree.resolve()
+    except OSError:
+        self_send = False
+    if not dry_run and not self_send:
+        qualifiers = _repo_qualifier_names(all_repos)
+        unqualified = _unqualified_path_citations(body, qualifiers)
+        if unqualified:
+            citation_warning = _warn_once(
+                sender_worktree, f"citation-lint:{topic}",
+                _citation_lint_warning(unqualified),
+            )
+            if citation_warning is not None:
+                return build_setup_error_result(_MODE, dry_run, citation_warning)
 
     target_file = inbox_dir / filename
     # AC6 leg 1 — existence pre-check, independent of the O_EXCL leg below.
@@ -1371,6 +1837,31 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         )
 
     delivered_to = _portable_delivered_to_form(receiver_repo_path, target_file)
+
+    # ── cc: each cc target gets its OWN write+commit+anchor (klabauter#46,
+    # second half) ──────────────────────────────────────────────────────
+    # Every name in cc_targets already resolved before to:'s own write
+    # (see `_resolve_cc_targets`), so a per-receiver failure HERE is a
+    # write/commit-time failure, not an unresolvable-name one — it is
+    # reported below as a partial failure (DETERMINATE-PARTIAL, exit_code
+    # 2), never silently dropped, and never undoes to:'s already-landed
+    # delivery.
+    cc_delivered = []
+    cc_failed = []
+    for cc_name, cc_inbox_dir, cc_receiver_repo_path in (cc_targets or []):
+        cc_result = _deliver_cc_copy(
+            name=cc_name, inbox_dir=cc_inbox_dir,
+            receiver_repo_path=cc_receiver_repo_path, filename=filename,
+            content=content, topic=topic, from_id=from_id, sent_by=sent_by,
+        )
+        if cc_result["ok"]:
+            cc_delivered.append(cc_result)
+        else:
+            cc_failed.append(cc_result)
+            _LOG.warning(
+                "memo_send: cc delivery to %s failed for topic %s: %s",
+                cc_name, topic, cc_result["reason"],
+            )
 
     # ── sender-side receipt: sent/ copy + ledger row + one commit ──────────
     sent_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1595,6 +2086,8 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         # memo, a sizing, and two sessions' investigation.
         "sender_unattributed": sent_by == _SENT_BY_UNRESOLVED,
     }
+    if cc_delivered:
+        acted_item["cc_delivered"] = cc_delivered
     if anchor_warning is not None:
         acted_item["anchor_warning"] = anchor_warning
     if not sender_commit.ok:
@@ -1612,6 +2105,6 @@ def _memo_send(params: dict, repo_root=None) -> dict:
             to, delivery_commit_sha, sender_commit.stderr,
         )
 
-    result = build_act_result(_MODE, [acted_item], [], [])
+    result = build_act_result(_MODE, [acted_item], [], list(cc_failed))
     result["_scope_touch_paths"] = [str(sent_path), str(ledger_path)]
     return result

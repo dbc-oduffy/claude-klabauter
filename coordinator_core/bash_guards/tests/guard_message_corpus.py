@@ -202,6 +202,70 @@ def is_fixture_scratch_path(candidate: str) -> bool:
     return any(candidate.startswith(root) for root in FIXTURE_SCRATCH_ROOTS)
 
 
+#: What a fixture-minted scratch path is rewritten to before a message is
+#: MEASURED (never before it is lint-scanned -- the leak lints must still see
+#: the real rendered text). Length is the point: a plausible checkout root,
+#: short and fixed, standing in for the nested pytest tempdir the fixture
+#: actually handed the guard.
+#: abs-path-ok: a synthetic stand-in, deliberately resembling no host. It is
+#: never opened, resolved or compared against -- only its LENGTH is used, as
+#: a representative checkout root. A `machine-local` lookup here would
+#: reintroduce the host-dependence this constant exists to remove.
+_MEASUREMENT_STANDIN_ROOT = "/Users/dev/repo"
+
+
+def normalize_fixture_scratch_paths(text: str) -> str:
+    """Rewrite every fixture-minted scratch path in `text` down to
+    `_MEASUREMENT_STANDIN_ROOT` plus its final segment.
+
+    WHY THE MEASUREMENT NEEDS THIS AND THE LINTS DO NOT. The prose cap is a
+    budget on what a guard's AUTHOR wrote. A guard that names its target back
+    to the agent renders whatever path it was handed, and this corpus hands
+    it `<tempdir>/coordinator-guard-corpus-scratch/<per-row tempdir>/...` --
+    on this host, 131 bytes before a single authored word, against a 220-byte
+    cap. Three cells were carrying "cannot be trimmed" exemptions that were
+    really "the fixture inflated them": measured 274/336/331 bytes here,
+    172/136/131 against a real checkout root. An exemption recording a false
+    reason is exactly the drift the exemption ratchet exists to catch.
+
+    It also makes the measurement HOST-INDEPENDENT, which it was not: TMPDIR
+    is ~50 bytes on this box and a handful on a Linux CI runner, so the same
+    message measured different sizes depending on where the suite ran, and a
+    cell could pass one box and fail another with no code change between.
+
+    The leak lints (`test_no_machine_absolute_path_in_guard_messages.py`,
+    `guard_message_register_lint.py`) deliberately do NOT use this -- they
+    ask whether a guard LEAKED a real machine path, which is a question about
+    the literal text, and `fixture_scratch_spans` already tells them which
+    spans are this module's own echo rather than a leak.
+    """
+    for start, end in sorted(fixture_scratch_spans(text), reverse=True):
+        original = text[start:end]
+        tail = original.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        text = text[:start] + _MEASUREMENT_STANDIN_ROOT + "/" + tail + text[end:]
+    return text
+
+
+def normalize_envelope_for_measurement(envelope):
+    """`normalize_fixture_scratch_paths` applied to the prose fields of one
+    guard envelope, returned as a shallow copy. The original envelope is
+    never mutated -- the lints downstream still need the real rendered text.
+    """
+    if not isinstance(envelope, dict):
+        return envelope
+    hso = envelope.get("hookSpecificOutput")
+    if not isinstance(hso, dict):
+        return envelope
+    new_hso = dict(hso)
+    for field in ("additionalContext", "permissionDecisionReason"):
+        value = new_hso.get(field)
+        if isinstance(value, str) and value:
+            new_hso[field] = normalize_fixture_scratch_paths(value)
+    new_envelope = dict(envelope)
+    new_envelope["hookSpecificOutput"] = new_hso
+    return new_envelope
+
+
 def fixture_scratch_spans(text: str) -> List[tuple]:
     """Every `(start, end)` in `text` covered by a fixture-minted scratch
     path -- the span a message lint must not report a hit inside.
@@ -394,6 +458,56 @@ def _git_repo_setup(cmd_template: str) -> Callable[[Path, pytest.MonkeyPatch], D
         repo = _build_load_bearing_repo(scratch_dir)
         return {
             _CMD_OVERRIDE_KEY: cmd_template % repo,
+            _CWD_OVERRIDE_KEY: str(repo),
+        }
+
+    return setup
+
+
+def _stale_write_setup(make_stale: bool) -> Callable[[Path, pytest.MonkeyPatch], Dict[str, str]]:
+    """`check_stale_write` denies only when THIS session's own recorded
+    fingerprint for a path and the file's current disk content both exist
+    and disagree. Neither half can be faked from the command string, so
+    both rows of this guard need a real repo plus a real touch record.
+
+    `make_stale` is the only difference between the firing and the
+    non-firing cell: both record a baseline hash, and only the firing one
+    then rewrites the file underneath it. That keeps the control row a
+    genuine control -- it proves the guard stands down on a matching
+    fingerprint, not merely that some precondition was left unbuilt.
+
+    The touch record is written under the SCRATCH repo's own
+    `.git/coordinator-sessions/<sid>`, never the real tree's, so firing
+    this row cannot mint a live-session-hub entry that `conftest._no_new_
+    live_session_hub_entries` then fails an unrelated test for.
+    """
+    from coordinator_core.session import touch_record as _tr
+
+    def setup(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, str]:
+        # `fire_row` sets this before calling us, and the guard reads the
+        # baseline back under the SAME id -- a locally-minted id here would
+        # record a claim the guard never looks at, and the row would grade
+        # as a silent non-fire.
+        session_id = os.environ["CLAUDE_CODE_SESSION_ID"]
+        # mkdtemp hands back `/var/...` on macOS while the guard resolves
+        # its root via `show_toplevel` to `/private/var/...`; resolving here
+        # keeps the recorded repo-relative key and the looked-up one equal.
+        repo = Path(os.path.realpath(_build_load_bearing_repo(scratch_dir)))
+        rel = "state/tracked.md"
+        target = repo / "state" / "tracked.md"
+        _tr.append_touch_claims(
+            [rel],
+            session_id,
+            str(repo),
+            content_hashes={rel: _tr.compute_content_hash(target) or ""},
+        )
+        if make_stale:
+            target.write_text("content this session never read\n", encoding="utf-8")
+        return {
+            # A bare `>` redirect: `_stale_write_shape_candidates` counts
+            # only whole-file writes as candidates, so `>>` or `tee -a`
+            # here would fire nothing regardless of staleness.
+            _CMD_OVERRIDE_KEY: "echo replacement > %s" % rel,
             _CWD_OVERRIDE_KEY: str(repo),
         }
 
@@ -770,6 +884,24 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
         _DENY,
         False,
+    ),
+    CorpusRow(
+        "stale-write",
+        "stale-write-fire",
+        "echo replacement > state/tracked.md",
+        True,
+        _DENY,
+        False,
+        setup=_stale_write_setup(make_stale=True),
+    ),
+    CorpusRow(
+        "stale-write",
+        "stale-write-control",
+        "echo replacement > state/tracked.md",
+        False,
+        _DENY,
+        False,
+        setup=_stale_write_setup(make_stale=False),
     ),
     CorpusRow(
         "destructive-git-clean",
@@ -1266,15 +1398,17 @@ _FLIPPED_TO_ADVISORY_REWRITE = {
 # Live-measured correction (this chunk, 2026-08-03): AC2 requires "every
 # guard reachable from `_build_guard_chain` in these two bands", not a fixed
 # count -- structurally introspecting `_build_guard_chain` (never `.fn()`)
-# finds 16 ADVISORY_REWRITE registrations and 2 PLATFORM_CONDITIONED_DENY
-# registrations, not 13+2=15. The extra three beyond the dispatch brief's
-# 13 are `offer-invoke-params-stdin`, `branch-set-precedence`, and
-# `longlived-branch-naming` -- all three are real, live `dispatch.py`
-# registrations in the ADVISORY_REWRITE band (grep-confirmed against
-# `_build_guard_chain`'s own output, not a docstring count). AC2's own text
-# ("every guard reachable... gets a corpus row") governs over the
-# illustrative arithmetic, so all 18 get rows below, two cells each (one
-# firing, one non-firing), following `CONFINEMENT_ROWS`'s own shape.
+# finds 14 ADVISORY_REWRITE registrations and 2 PLATFORM_CONDITIONED_DENY
+# registrations, not 13+2=15. The extra one beyond the dispatch brief's
+# 13 is `offer-invoke-params-stdin` -- a real, live `dispatch.py`
+# registration in the ADVISORY_REWRITE band (grep-confirmed against
+# `_build_guard_chain`'s own output, not a docstring count). `branch-set-
+# precedence` and `longlived-branch-naming` were deleted (docs/plans/
+# 2026-08-21-the-advisory-band-gets-smaller-cheaper-and-honest.md, C6) --
+# no rows for either below. AC2's own text ("every guard reachable... gets
+# a corpus row") governs over the illustrative arithmetic, so all 16 get
+# rows below, two cells each (one firing, one non-firing), following
+# `CONFINEMENT_ROWS`'s own shape.
 #
 # "Speaks" here follows `guard_message_capture.py`'s own general definition
 # (`envelope is not None`), NOT `CONFINEMENT_ROWS`'s narrower "denies"
@@ -1333,62 +1467,6 @@ def _validate_commit_frontmatter_setup(
     }
 
 
-def _branch_set_precedence_setup(
-    scratch_dir: Path, mp: pytest.MonkeyPatch
-) -> Dict[str, str]:
-    """`branch-set-precedence` never touches a real git subprocess -- every
-    seam (`resolve_git_root`, `_is_hazard_repo`, `_other_canonical_
-    branches`, `_ahead_of_main`, `_now`, `_today`) is monkeypatched on the
-    guard's own module, exactly `test_guard_branch_set_precedence.py`'s own
-    injection convention (module docstring: "monkeypatched on THIS module's
-    own imported attribute"). `dispatch.py`'s registration calls
-    `guard.check(payload)` with no `branch_set_provider` kwarg, so the
-    `_other_canonical_branches` patch (not the kwarg) is the only way to
-    feed a candidate branch through the real registered chain. Fixture
-    values (branch names, 1h-old epoch, 12 commits ahead) are that test
-    file's own `TestAdvisoryFiresWithBranchAndCount.test_advisory_fires_
-    with_real_branch_and_count` literals."""
-    from coordinator_core.bash_guards import guard_branch_set_precedence as guard
-
-    fixed_now = 1722700000.0
-    fixed_today = "2026-08-03"
-    mp.setattr(guard, "resolve_git_root", lambda cwd=None: "/repo")
-    mp.setattr(guard, "_is_hazard_repo", lambda git_root: True)
-    mp.setattr(guard, "_now", lambda: fixed_now)
-    mp.setattr(guard, "_today", lambda: fixed_today)
-    mp.setattr(
-        guard,
-        "_other_canonical_branches",
-        lambda cwd=None: [("work/scoutridge/2026-07-31", fixed_now - 3600)],
-    )
-    mp.setattr(guard, "_ahead_of_main", lambda branch, cwd=None: 12)
-    # This fixture isolates the "fires with real name/count" property, not
-    # the AC16 `should_prompt_rename` leg -- same isolation
-    # `test_guard_branch_set_precedence.py`'s own `test_advisory_fires_
-    # with_real_branch_and_count` applies (that leg has its own dedicated
-    # coverage in that file's `TestRecencyFilter`, not re-derived here).
-    mp.setattr(guard, "should_prompt_rename", lambda *a, **k: False)
-    return {
-        _CMD_OVERRIDE_KEY: "git checkout -b work/scoutridge/2026-08-03",
-        _CWD_OVERRIDE_KEY: "/repo",
-    }
-
-
-def _longlived_branch_naming_hazard_setup(
-    scratch_dir: Path, mp: pytest.MonkeyPatch
-) -> Dict[str, str]:
-    """`longlived-branch-naming` needs only the AC13 repo-scoping gate
-    patched open (`resolve_git_root`/`_is_hazard_repo`) -- no branch-set
-    or git-log seam exists on this guard at all
-    (`test_guard_longlived_branch_naming.py`'s own `_hazard_repo_by_default`
-    fixture)."""
-    from coordinator_core.bash_guards import guard_longlived_branch_naming as guard
-
-    mp.setattr(guard, "resolve_git_root", lambda cwd=None: "/repo")
-    mp.setattr(guard, "_is_hazard_repo", lambda git_root: True)
-    return {_CWD_OVERRIDE_KEY: "/repo"}
-
-
 def _heredoc_repo_write_advise_setup(
     scratch_dir: Path, mp: pytest.MonkeyPatch
 ) -> Dict[str, str]:
@@ -1411,10 +1489,9 @@ def _noncanonical_branch_creation_hazard_setup(
     """X2 (2026-08-06, apply-guard-class-census): `block-noncanonical-
     branch-creation`'s own REPO SCOPING gate (module docstring) must resolve
     the fired `cwd` to a hazard repo before its canonical-shape predicate
-    ever runs -- same open-the-gate shape as `_longlived_branch_naming_
-    hazard_setup` immediately above, patched on THIS guard's own imported
-    module attributes (`resolve_git_root`/`_is_hazard_repo`), not a
-    `branch_set_provider` kwarg `dispatch.py`'s registration never passes."""
+    ever runs -- patched on THIS guard's own imported module attributes
+    (`resolve_git_root`/`_is_hazard_repo`), not a `branch_set_provider`
+    kwarg `dispatch.py`'s registration never passes."""
     from coordinator_core.bash_guards import block_noncanonical_branch_creation as guard
 
     mp.setattr(guard, "resolve_git_root", lambda cwd=None: "/repo")
@@ -1793,40 +1870,6 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         "powershell-via-bash-guard",
         "powershell-via-bash-guard-control-single-quoted",
         "pwsh -Command 'Write-Host $HOME'",
-        False,
-        _REWRITE,
-        False,
-    ),
-    CorpusRow(
-        "branch-set-precedence",
-        "branch-set-precedence-fire",
-        "git checkout -b work/scoutridge/2026-08-03",
-        True,
-        _REWRITE,
-        False,
-        setup=_branch_set_precedence_setup,
-    ),
-    CorpusRow(
-        "branch-set-precedence",
-        "branch-set-precedence-control",
-        "git status",
-        False,
-        _REWRITE,
-        False,
-    ),
-    CorpusRow(
-        "longlived-branch-naming",
-        "longlived-branch-naming-fire",
-        "git checkout -b feature/x",
-        True,
-        _REWRITE,
-        False,
-        setup=_longlived_branch_naming_hazard_setup,
-    ),
-    CorpusRow(
-        "longlived-branch-naming",
-        "longlived-branch-naming-control",
-        "git status",
         False,
         _REWRITE,
         False,
@@ -2619,6 +2662,35 @@ def _wg_handoff_ac_shape_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict
     }
 
 
+def _wg_dangling_sizing_citation_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
+    """A `docs/plans/*.md` frontmatter `sizing_object:` naming a path that
+    does not exist under the resolved git root -- the guard's whole fire
+    condition.
+
+    The cited value is shaped like a real sizing path on purpose: the guard
+    matches `^state/sizings/.+\\.yaml$` first and stays deliberately silent
+    on a value that is merely malformed, so a placeholder like `nope` would
+    grade this row a silent non-fire rather than a fire.
+
+    `.git` is created but the file is NOT: the guard's silence condition is
+    the citation resolving on disk, so writing it would make this the
+    control cell instead.
+    """
+    (scratch_dir / ".git").mkdir()
+    content = (
+        "---\n"
+        "kind: plan\n"
+        "sizing_object: state/sizings/2026-09-20-never-written.yaml\n"
+        "---\n"
+        "# A plan citing a sizing object that was never written\n"
+    )
+    return {
+        "tool_name": "Write",
+        "tool_input": {"file_path": "docs/plans/2026-09-20-corpus-row.md", "content": content},
+        "cwd": str(scratch_dir),
+    }
+
+
 def _wg_improvement_queue_write_fire(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, Any]:
     return {
         "tool_name": "Write",
@@ -3142,6 +3214,10 @@ WRITE_GUARD_ROWS: List[WriteGuardRow] = [
     WriteGuardRow("guard_settings_json_write", "control", False, _wg_benign),
     WriteGuardRow("nudge_baton_body_bar", "fire", True, _wg_baton_body_bar_fire),
     WriteGuardRow("nudge_baton_body_bar", "control", False, _wg_benign),
+    WriteGuardRow(
+        "nudge_dangling_sizing_citation", "fire", True, _wg_dangling_sizing_citation_fire
+    ),
+    WriteGuardRow("nudge_dangling_sizing_citation", "control", False, _wg_benign),
     WriteGuardRow("nudge_em_code_dispatch", "fire", True, _wg_em_code_dispatch_fire),
     WriteGuardRow("nudge_em_code_dispatch", "control", False, _wg_benign),
     WriteGuardRow("nudge_handoff_ac_shape", "fire", True, _wg_handoff_ac_shape_fire),
@@ -3448,7 +3524,6 @@ from coordinator_core.hooks import ue_knowledge_distrust as _hook_ue_knowledge_d
 from coordinator_core.hooks import agent_completion_log as _hook_agent_completion_log
 from coordinator_core.hooks import agent_postuse_dispatch as _hook_agent_postuse_dispatch
 from coordinator_core.hooks import context_pressure_precompact as _hook_context_pressure_precompact
-from coordinator_core.hooks import session_heartbeat as _hook_session_heartbeat
 from coordinator_core.hooks import subagent_arrival_check as _hook_subagent_arrival_check
 from coordinator_core.hooks import subagent_fabrication_check as _hook_subagent_fabrication_check
 from coordinator_core.hooks import subagent_review_mark as _hook_subagent_review_mark
@@ -3458,6 +3533,64 @@ from coordinator_core.hooks import subagent_zero_tool_use_surface as _hook_subag
 from coordinator_core.hooks import track_dispatched_agents as _hook_track_dispatched_agents
 from coordinator_core.hooks import track_touched_files as _hook_track_touched_files
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
+
+# ---------------------------------------------------------------------------
+# doe-holds-no-scripts W4 landing wave -- the 72 previously-uncovered
+# `hooks/<module>` rows this pass closes (docs/plans/2026-09-18-doe-holds-
+# no-scripts.md). Same `_hooks_asyncio.run(_hook_<mod>._handler(...))` fire
+# idiom as the C12 section above; each `_fire_*`/`_fire_*_control` pair is
+# self-contained (own scratch dir, own `pytest.MonkeyPatch` where needed).
+# ---------------------------------------------------------------------------
+
+from coordinator_core.hooks import allow_emitted_workflow_fire as _hook_allow_emitted_workflow_fire
+from coordinator_core.hooks import assert_em_role as _hook_assert_em_role
+from coordinator_core.hooks import block_dispatch_suite_invocation as _hook_block_dispatch_suite_invocation
+from coordinator_core.hooks import block_ungranted_opus_subagent as _hook_block_ungranted_opus_subagent
+from coordinator_core.hooks import block_workflow_foreign_emission as _hook_block_workflow_foreign_emission
+from coordinator_core.hooks import block_workflow_unmodeled_agent as _hook_block_workflow_unmodeled_agent
+from coordinator_core.hooks import block_worktree_tool as _hook_block_worktree_tool
+from coordinator_core.hooks import check_claude_md_size as _hook_check_claude_md_size
+from coordinator_core.hooks import derive_global_doctrine_live_copy as _hook_derive_global_doctrine_live_copy
+from coordinator_core.hooks import derive_setup_copies as _hook_derive_setup_copies
+from coordinator_core.hooks import doctrine_changelog_prose as _hook_doctrine_changelog_prose_data
+from coordinator_core.hooks import enforce_agent_dispatch_mode as _hook_enforce_agent_dispatch_mode
+from coordinator_core.hooks import group_em_autofire as _hook_group_em_autofire
+from coordinator_core.hooks import guard_doctrine_changelog_prose as _hook_guard_doctrine_changelog_prose
+from coordinator_core.hooks import guard_doctrine_surface_bash_write as _hook_guard_doctrine_surface_bash_write
+from coordinator_core.hooks import guard_doctrine_surface_ratio as _hook_guard_doctrine_surface_ratio
+from coordinator_core.hooks import guard_handoff_summary_cap_on_write as _hook_guard_handoff_summary_cap_on_write
+from coordinator_core.hooks import guard_hook_generation_self_probe as _hook_guard_hook_generation_self_probe
+from coordinator_core.hooks import guard_host_subagent_bash_ban as _hook_guard_host_subagent_bash_ban
+from coordinator_core.hooks import guard_host_subagent_bash_spawn_shapes as _hook_guard_host_subagent_bash_spawn_shapes
+from coordinator_core.hooks import guard_kira_verdict_routed as _hook_guard_kira_verdict_routed
+from coordinator_core.hooks import guard_manufactured_blocker as _hook_guard_manufactured_blocker
+from coordinator_core.hooks import guard_named_dispatch_tool_restriction as _hook_guard_named_dispatch_tool_restriction
+from coordinator_core.hooks import guard_posix_invocation_doctrine_write as _hook_guard_posix_invocation_doctrine_write
+from coordinator_core.hooks import guard_python_syntax_on_write as _hook_guard_python_syntax_on_write
+from coordinator_core.hooks import guard_repo_setup_claude_home_refusal as _hook_guard_repo_setup_claude_home_refusal
+from coordinator_core.hooks import guard_review_integrator_sidecar_intake as _hook_guard_review_integrator_sidecar_intake
+from coordinator_core.hooks import guard_test_tree_git_fixture_spawn as _hook_guard_test_tree_git_fixture_spawn
+from coordinator_core.hooks import nudge_initiative_goals_ladder as _hook_nudge_initiative_goals_ladder
+from coordinator_core.hooks import nudge_multiwave_workflow as _hook_nudge_multiwave_workflow
+from coordinator_core.hooks import nudge_plan_test_surface_tier as _hook_nudge_plan_test_surface_tier
+from coordinator_core.hooks import nudge_workflow_authoring_trampoline as _hook_nudge_workflow_authoring_trampoline
+from coordinator_core.hooks import offer_exploration_tier_dispatch as _hook_offer_exploration_tier_dispatch
+from coordinator_core.hooks import postuse_stop_family_dispatch as _hook_postuse_stop_family_dispatch
+from coordinator_core.hooks import preuse_agent_dispatch as _hook_preuse_agent_dispatch
+from coordinator_core.hooks import preuse_bash_dispatch as _hook_preuse_bash_dispatch
+from coordinator_core.hooks import preuse_skill_dispatch as _hook_preuse_skill_dispatch
+from coordinator_core.hooks import preuse_write_dispatch as _hook_preuse_write_dispatch
+from coordinator_core.hooks import project_orientation as _hook_project_orientation
+from coordinator_core.hooks import runtime_tripwire_em_check as _hook_runtime_tripwire_em_check
+from coordinator_core.hooks import session_start_announce_job_mode as _hook_session_start_announce_job_mode
+from coordinator_core.hooks import session_start_guard_plane_check as _hook_session_start_guard_plane_check
+from coordinator_core.hooks import sessionstart_async_dispatch as _hook_sessionstart_async_dispatch
+from coordinator_core.hooks import sessionstart_bin_drift_refresh as _hook_sessionstart_bin_drift_refresh
+from coordinator_core.hooks import sessionstart_dispatch as _hook_sessionstart_dispatch
+from coordinator_core.hooks import sessionstart_ensure_http_forwarder as _hook_sessionstart_ensure_http_forwarder
+from coordinator_core.hooks import stop_dispatch as _hook_stop_dispatch
+from coordinator_core.hooks import strip_worktree_isolation as _hook_strip_worktree_isolation
+import coordinator_core.ops.session.guard_hook_generation_self_probe as _ops_guard_hook_generation_self_probe
 
 
 def _to_envelope_or_none(result: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -3896,15 +4029,6 @@ def _fire_example_retrieval_repo_detect_control() -> Optional[Dict[str, Any]]:
         return {"hookSpecificOutput": {"additionalContext": banner}}
 
 
-# --- (13) session_heartbeat -- write-only Pre+PostToolUse bookkeeping op; every
-# branch in `_handler` returns `no_advisory()` (grep-verified). Verified live
-# with params={} (no session_id -> the earliest no_advisory() branch).
-def _fire_session_heartbeat_noop() -> Optional[Dict[str, Any]]:
-    return _to_envelope_or_none(
-        _hooks_asyncio.run(_hook_session_heartbeat._handler({}, repo_root=None))
-    )
-
-
 # --- (14) subagent_arrival_check -- structured JSON-RPC poll result, NOT an
 # advisory envelope: `_handler`'s own docstring, "Returns the pinned {"state",
 # "agent_id", "subagent_transcript_path", "reason"} shape directly (structured
@@ -4089,6 +4213,1026 @@ def _fire_coordinator_reminder() -> Optional[Dict[str, Any]]:
     return {"hookSpecificOutput": {"additionalContext": text}}
 
 
+# ---------------------------------------------------------------------------
+# W4 landing-wave fire/control functions (72-module coverage-gap closure).
+# ---------------------------------------------------------------------------
+
+
+def _fire_allow_emitted_workflow_fire() -> Optional[Dict[str, Any]]:
+    import hashlib
+
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-aewf-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        script = scratch_dir / "run.mjs"
+        script.write_text("console.log(1)")
+        sha = hashlib.sha256(script.read_bytes()).hexdigest()
+        receipt = script.with_name(script.name + ".emitted.json")
+        receipt.write_text(_json.dumps({"sha256": sha, "session_id": "sess-x", "plan": "plan.md"}))
+        payload = {
+            "tool_name": "Workflow",
+            "tool_input": {"scriptPath": str(script)},
+            "cwd": str(scratch_dir),
+            "session_id": "sess-x",
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_allow_emitted_workflow_fire._handler(payload))
+        )
+
+
+def _fire_allow_emitted_workflow_fire_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-aewf-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        script = scratch_dir / "run.mjs"
+        script.write_text("console.log(1)")
+        payload = {"tool_name": "Workflow", "tool_input": {"scriptPath": str(script)}, "cwd": str(scratch_dir)}
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_allow_emitted_workflow_fire._handler(payload))
+        )
+
+
+def _fire_assert_em_role() -> Optional[Dict[str, Any]]:
+    payload = {"payload": {"cwd": "/tmp", "session_id": "sess-aer"}}
+    return _to_envelope_or_none(_hooks_asyncio.run(_hook_assert_em_role._handler(payload)))
+
+
+def _fire_block_dispatch_suite_invocation() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Agent",
+        "tool_input": {"prompt": "Now run the full test suite: pytest coordinator_core/"},
+    }
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_block_dispatch_suite_invocation._handler(payload))
+    )
+
+
+def _fire_block_dispatch_suite_invocation_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {"prompt": "Please implement the feature."}}
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_block_dispatch_suite_invocation._handler(payload))
+    )
+
+
+def _fire_block_ungranted_opus_subagent() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "general-purpose", "model": "opus"}}
+    return _to_envelope_or_none(_hook_block_ungranted_opus_subagent.check(payload))
+
+
+def _fire_block_ungranted_opus_subagent_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "general-purpose", "model": "sonnet"}}
+    return _to_envelope_or_none(_hook_block_ungranted_opus_subagent.check(payload))
+
+
+def _fire_block_workflow_foreign_emission() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-bwfe-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        script = scratch_dir / "run.mjs"
+        script.write_text("console.log(1)")
+        receipt = script.with_name(script.name + ".emitted.json")
+        receipt.write_text(_json.dumps({"sha256": "deadbeef", "session_id": "sess-x"}))
+        payload = {
+            "tool_name": "Workflow",
+            "tool_input": {"scriptPath": str(script)},
+            "cwd": str(scratch_dir),
+            "session_id": "sess-y",
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_block_workflow_foreign_emission._handler(payload))
+        )
+
+
+def _fire_block_workflow_foreign_emission_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-bwfe-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        script = scratch_dir / "run.mjs"
+        script.write_text("console.log(1)")
+        payload = {"tool_name": "Workflow", "tool_input": {"scriptPath": str(script)}, "cwd": str(scratch_dir)}
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_block_workflow_foreign_emission._handler(payload))
+        )
+
+
+def _fire_block_workflow_unmodeled_agent() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-bwua-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        transcript = scratch_dir / "t.jsonl"
+        transcript.write_text(_json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-1"}}) + "\n")
+        payload = {
+            "tool_name": "Workflow",
+            "tool_input": {"script": 'await agent("do the thing")'},
+            "transcript_path": str(transcript),
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_block_workflow_unmodeled_agent._handler(payload))
+        )
+
+
+def _fire_block_workflow_unmodeled_agent_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-bwua-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        transcript = scratch_dir / "t.jsonl"
+        transcript.write_text(_json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-1"}}) + "\n")
+        payload = {
+            "tool_name": "Workflow",
+            "tool_input": {"script": 'await agent("do the thing", {model: "sonnet"})'},
+            "transcript_path": str(transcript),
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_block_workflow_unmodeled_agent._handler(payload))
+        )
+
+
+def _fire_block_worktree_tool() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_block_worktree_tool._handler({"tool_name": "EnterWorktree"}))
+    )
+
+
+def _fire_block_worktree_tool_control() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_block_worktree_tool._handler({"tool_name": "ExitWorktree"}))
+    )
+
+
+def _fire_check_claude_md_size() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ccms-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        target = scratch_dir / "CLAUDE.md"
+        target.write_text("hello")
+        payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "x" * 50000}}
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_check_claude_md_size._handler(payload)))
+
+
+def _fire_check_claude_md_size_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ccms-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        target = scratch_dir / "CLAUDE.md"
+        target.write_text("hello")
+        payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "small"}}
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_check_claude_md_size._handler(payload)))
+
+
+def _fire_derive_global_doctrine_live_copy() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-dgdlc-", dir=_neutral_scratch_parent()) as scratch:
+            scratch_dir = Path(scratch)
+            repo_root = scratch_dir / "coordinator-claude"
+            repo_root.mkdir()
+            (repo_root / ".coordinator-dev-repo").write_text("1")
+            tracked_dir = repo_root / "global-doctrine"
+            tracked_dir.mkdir()
+            tracked = tracked_dir / "CLAUDE.md"
+            tracked.write_text("doctrine content")
+            home_dir = scratch_dir / "home"
+            (home_dir / ".claude").mkdir(parents=True)
+            mp.setenv("CLAUDE_PLUGIN_ROOT", str(repo_root / "coordinator"))
+            mp.setattr(Path, "home", staticmethod(lambda: home_dir))
+            payload = {
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Write",
+                "tool_input": {"file_path": str(tracked)},
+            }
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_derive_global_doctrine_live_copy._handler(payload))
+            )
+
+
+def _fire_derive_global_doctrine_live_copy_control() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-dgdlc-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+            scratch_dir = Path(scratch)
+            repo_root = scratch_dir / "coordinator-claude"
+            repo_root.mkdir()
+            (repo_root / ".coordinator-dev-repo").write_text("1")
+            tracked_dir = repo_root / "global-doctrine"
+            tracked_dir.mkdir()
+            home_dir = scratch_dir / "home"
+            (home_dir / ".claude").mkdir(parents=True)
+            mp.setenv("CLAUDE_PLUGIN_ROOT", str(repo_root / "coordinator"))
+            mp.setattr(Path, "home", staticmethod(lambda: home_dir))
+            payload = {
+                "hook_event_name": "PostToolUse",
+                "tool_name": "Write",
+                "tool_input": {"file_path": str(tracked_dir / "unrelated.md")},
+            }
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_derive_global_doctrine_live_copy._handler(payload))
+            )
+
+
+def _fire_derive_setup_copies() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-dsc-", dir=_neutral_scratch_parent()) as scratch:
+            scratch_dir = Path(scratch)
+            repo_root = scratch_dir / "coordinator-claude"
+            repo_root.mkdir()
+            (repo_root / ".coordinator-dev-repo").write_text("1")
+            canonical_dir = repo_root / "setup" / "percolate-hooks"
+            canonical_dir.mkdir(parents=True)
+            canonical = canonical_dir / "percolate-store.yaml"
+            canonical.write_text("a: 1")
+            mp.setenv("CLAUDE_PLUGIN_ROOT", str(repo_root / "coordinator"))
+            payload = {"tool_name": "Write", "tool_input": {"file_path": str(canonical)}}
+            return _to_envelope_or_none(_hooks_asyncio.run(_hook_derive_setup_copies._handler(payload)))
+
+
+def _fire_derive_setup_copies_control() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-dsc-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+            scratch_dir = Path(scratch)
+            repo_root = scratch_dir / "coordinator-claude"
+            repo_root.mkdir()
+            (repo_root / ".coordinator-dev-repo").write_text("1")
+            canonical_dir = repo_root / "setup" / "percolate-hooks"
+            canonical_dir.mkdir(parents=True)
+            mp.setenv("CLAUDE_PLUGIN_ROOT", str(repo_root / "coordinator"))
+            payload = {"tool_name": "Write", "tool_input": {"file_path": str(canonical_dir / "unrelated.txt")}}
+            return _to_envelope_or_none(_hooks_asyncio.run(_hook_derive_setup_copies._handler(payload)))
+
+
+def _fire_enforce_agent_dispatch_mode() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {"name": "bad/name"}}
+    return _to_envelope_or_none(_hooks_asyncio.run(_hook_enforce_agent_dispatch_mode._handler(payload)))
+
+
+def _fire_enforce_agent_dispatch_mode_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "coordinator:executor"}}
+    return _to_envelope_or_none(_hooks_asyncio.run(_hook_enforce_agent_dispatch_mode._handler(payload)))
+
+
+def _fire_group_em_autofire() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        def _fake_handler(params, repo_root=None):
+            return {"nomination": {"claimed": True, "message": "ok"}, "roster": [], "digest": {}}
+
+        mp.setattr(_hook_group_em_autofire, "get_op_handler", lambda name: _fake_handler)
+        payload = {"command_name": "group-em", "session_id": "sess-1", "cwd": "/tmp"}
+        return _to_envelope_or_none(_hook_group_em_autofire._handler(payload))
+
+
+def _fire_group_em_autofire_control() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(_hook_group_em_autofire._handler({"command_name": "not-group-em"}))
+
+
+def _fire_guard_doctrine_changelog_prose() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gdcp-", dir=_neutral_scratch_parent()) as scratch:
+            skills_dir = Path(scratch) / "skills"
+            skills_dir.mkdir()
+            mp.setattr(_hook_doctrine_changelog_prose_data, "DOCTRINE_MD_DIRS", (skills_dir.resolve(),))
+            target = skills_dir / "foo.md"
+            payload = {
+                "tool_name": "Write",
+                "tool_input": {
+                    "file_path": str(target),
+                    "content": "This rule was retired on 2026-01-01, superseded by DR-047.\n",
+                },
+            }
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_guard_doctrine_changelog_prose._handler(payload))
+            )
+
+
+def _fire_guard_doctrine_changelog_prose_control() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gdcp-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+            skills_dir = Path(scratch) / "skills"
+            skills_dir.mkdir()
+            mp.setattr(_hook_doctrine_changelog_prose_data, "DOCTRINE_MD_DIRS", (skills_dir.resolve(),))
+            target = skills_dir / "foo.md"
+            payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "This rule requires X.\n"}}
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_guard_doctrine_changelog_prose._handler(payload))
+            )
+
+
+def _fire_guard_doctrine_surface_bash_write() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Bash", "tool_input": {"command": 'echo "hello" > CLAUDE.md'}}
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_guard_doctrine_surface_bash_write._handler(payload))
+    )
+
+
+def _fire_guard_doctrine_surface_bash_write_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Bash", "tool_input": {"command": "cat CLAUDE.md"}}
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_guard_doctrine_surface_bash_write._handler(payload))
+    )
+
+
+def _fire_guard_doctrine_surface_ratio() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gdsr-", dir=_neutral_scratch_parent()) as scratch:
+            wiki_dir = Path(scratch) / "wiki"
+            wiki_dir.mkdir()
+            mp.setattr(_hook_doctrine_changelog_prose_data, "DOCTRINE_MD_DIRS", (wiki_dir.resolve(),))
+            mp.setattr(
+                _hook_guard_doctrine_surface_ratio,
+                "tier_boundaries_for",
+                lambda surface: {
+                    "ceiling": 4000,
+                    "tiers": [
+                        {"max": 4000, "ratio": 2, "credit_scope": "surface"},
+                        {"max": 12000, "ratio": 5, "credit_scope": "file"},
+                        {"max": None, "ratio": 10, "credit_scope": "file"},
+                    ],
+                },
+            )
+            target = wiki_dir / "foo.md"
+            target.write_text("a" * 2000)
+            payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "a" * 2000 + "b" * 2000}}
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_guard_doctrine_surface_ratio._handler(payload))
+            )
+
+
+def _fire_guard_doctrine_surface_ratio_control() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gdsr-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+            wiki_dir = Path(scratch) / "wiki"
+            wiki_dir.mkdir()
+            mp.setattr(_hook_doctrine_changelog_prose_data, "DOCTRINE_MD_DIRS", (wiki_dir.resolve(),))
+            mp.setattr(
+                _hook_guard_doctrine_surface_ratio,
+                "tier_boundaries_for",
+                lambda surface: {
+                    "ceiling": 4000,
+                    "tiers": [
+                        {"max": 4000, "ratio": 2, "credit_scope": "surface"},
+                        {"max": 12000, "ratio": 5, "credit_scope": "file"},
+                        {"max": None, "ratio": 10, "credit_scope": "file"},
+                    ],
+                },
+            )
+            target = wiki_dir / "foo.md"
+            target.write_text("a" * 2000)
+            payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "a" * 2001}}
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_guard_doctrine_surface_ratio._handler(payload))
+            )
+
+
+def _fire_guard_handoff_summary_cap_on_write() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ghsc-", dir=_neutral_scratch_parent()) as scratch:
+        target = Path(scratch) / "state" / "handoffs" / "foo.md"
+        target.parent.mkdir(parents=True)
+        content = "---\nsummary: %s\n---\nbody\n" % ("x" * 150)
+        payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": content}}
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_guard_handoff_summary_cap_on_write._handler(payload))
+        )
+
+
+def _fire_guard_handoff_summary_cap_on_write_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ghsc-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        target = Path(scratch) / "state" / "handoffs" / "foo.md"
+        target.parent.mkdir(parents=True)
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(target), "content": "---\nsummary: short\n---\nbody\n"},
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_guard_handoff_summary_cap_on_write._handler(payload))
+        )
+
+
+def _fire_guard_hook_generation_self_probe() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_ops_guard_hook_generation_self_probe, "run_self_probe", lambda config_dir: "self-probe advisory text")
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_guard_hook_generation_self_probe._handler({})))
+
+
+def _fire_guard_hook_generation_self_probe_control() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_ops_guard_hook_generation_self_probe, "run_self_probe", lambda config_dir: "")
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_guard_hook_generation_self_probe._handler({})))
+
+
+def _fire_guard_host_subagent_bash_ban() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ghsb-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        (scratch_dir / "coordinator.local.md").write_text("---\nsubagent_bash_policy: deny\n---\n")
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "cwd": str(scratch_dir),
+            "agent_id": "aexecutor-1234567890abcdef",
+        }
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_guard_host_subagent_bash_ban._handler(payload)))
+
+
+def _fire_guard_host_subagent_bash_ban_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Bash", "tool_input": {"command": "ls"}}
+    return _to_envelope_or_none(_hooks_asyncio.run(_hook_guard_host_subagent_bash_ban._handler(payload)))
+
+
+def _fire_guard_host_subagent_bash_spawn_shapes() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ghsss-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        (scratch_dir / "coordinator.local.md").write_text("---\nsubagent_bash_spawn_shapes: deny\n---\n")
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "cat foo.txt | head -20"},
+            "cwd": str(scratch_dir),
+            "agent_id": "aexecutor-1234567890abcdef",
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_guard_host_subagent_bash_spawn_shapes._handler(payload))
+        )
+
+
+def _fire_guard_host_subagent_bash_spawn_shapes_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Bash", "tool_input": {"command": "npm test"}}
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_guard_host_subagent_bash_spawn_shapes._handler(payload))
+    )
+
+
+def _fire_guard_kira_verdict_routed() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hook_guard_kira_verdict_routed._guard_kira_verdict_routed_handler({"payload": {}})
+    )
+
+
+def _fire_guard_kira_verdict_routed_control() -> Optional[Dict[str, Any]]:
+    payload = {"payload": {"session_id": "sess-x", "cwd": "."}}
+    return _to_envelope_or_none(
+        _hook_guard_kira_verdict_routed._guard_kira_verdict_routed_handler(payload)
+    )
+
+
+def _fire_guard_manufactured_blocker() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gmb-", dir=_neutral_scratch_parent()) as scratch:
+        transcript = Path(scratch) / "t.jsonl"
+        with open(transcript, "w", encoding="utf-8") as fh:
+            fh.write(
+                _json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"content": [{"type": "text", "text": "Proceeding with the next step."}]},
+                    }
+                )
+                + "\n"
+            )
+        payload = {"payload": {"transcript_path": str(transcript), "session_id": "sess-gmb", "cwd": scratch}}
+        return _to_envelope_or_none(_hook_guard_manufactured_blocker._handler(payload))
+
+
+def _fire_guard_manufactured_blocker_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gmb-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        transcript = Path(scratch) / "t.jsonl"
+        with open(transcript, "w", encoding="utf-8") as fh:
+            fh.write(
+                _json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"content": [{"type": "text", "text": "Done. Fixed, verified, closed."}]},
+                    }
+                )
+                + "\n"
+            )
+        payload = {"payload": {"transcript_path": str(transcript), "session_id": "sess-gmb-2", "cwd": scratch}}
+        return _to_envelope_or_none(_hook_guard_manufactured_blocker._handler(payload))
+
+
+def _fire_guard_named_dispatch_tool_restriction() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "Explore", "name": "peer1"}}
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_guard_named_dispatch_tool_restriction._handler(payload))
+    )
+
+
+def _fire_guard_named_dispatch_tool_restriction_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "Explore"}}
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_guard_named_dispatch_tool_restriction._handler(payload))
+    )
+
+
+def _fire_guard_posix_invocation_doctrine_write() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gpid-", dir=_neutral_scratch_parent()) as scratch:
+        target = Path(scratch) / "coordinator" / "skills" / "foo.md"
+        target.parent.mkdir(parents=True)
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": str(target),
+                "content": '${COORDINATOR_HOME:-$HOME/.claude}/bin/some-cli',
+            },
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_guard_posix_invocation_doctrine_write._handler(payload))
+        )
+
+
+def _fire_guard_posix_invocation_doctrine_write_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gpid-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        target = Path(scratch) / "coordinator" / "skills" / "foo.md"
+        target.parent.mkdir(parents=True)
+        payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "plain text"}}
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_guard_posix_invocation_doctrine_write._handler(payload))
+        )
+
+
+def _fire_guard_python_syntax_on_write() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gpsw-", dir=_neutral_scratch_parent()) as scratch:
+        target = Path(scratch) / "coordinator_core" / "hooks" / "fake_mod.py"
+        target.parent.mkdir(parents=True)
+        payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": "def f(:\n    pass"}}
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_guard_python_syntax_on_write._handler(payload)))
+
+
+def _fire_guard_python_syntax_on_write_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gpsw-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        target = Path(scratch) / "coordinator_core" / "hooks" / "fake_mod.py"
+        target.parent.mkdir(parents=True)
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(target), "content": "def f():\n    pass\n"},
+        }
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_guard_python_syntax_on_write._handler(payload)))
+
+
+def _fire_guard_repo_setup_claude_home_refusal() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-grschr-", dir=_neutral_scratch_parent()) as scratch:
+            mp.setenv("CLAUDE_CONFIG_DIR", scratch)
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {"command": "python3 -m coordinator_core.install.scaffold_structure"},
+                "cwd": scratch,
+            }
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_guard_repo_setup_claude_home_refusal._handler(payload))
+            )
+
+
+def _fire_guard_repo_setup_claude_home_refusal_control() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-grschr-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+            mp.setenv("CLAUDE_CONFIG_DIR", scratch)
+            payload = {
+                "tool_name": "Bash",
+                "tool_input": {"command": "python3 -m coordinator_core.install.scaffold_structure --dry-run"},
+                "cwd": scratch,
+            }
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_guard_repo_setup_claude_home_refusal._handler(payload))
+            )
+
+
+def _fire_guard_review_integrator_sidecar_intake() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "review-integrator", "prompt": "do a review"}}
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_guard_review_integrator_sidecar_intake._handler(payload))
+    )
+
+
+def _fire_guard_review_integrator_sidecar_intake_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-grisi-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        sc_dir = Path(scratch) / "state" / "subagent-share" / "sess1"
+        sc_dir.mkdir(parents=True)
+        (sc_dir / "findings.md").write_text("x")
+        payload = {
+            "tool_name": "Agent",
+            "tool_input": {
+                "subagent_type": "review-integrator",
+                "prompt": "see state/subagent-share/sess1/findings.md",
+            },
+            "cwd": scratch,
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(
+                _hook_guard_review_integrator_sidecar_intake._handler(payload, repo_root=scratch)
+            )
+        )
+
+
+def _fire_guard_test_tree_git_fixture_spawn() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gttgfs-", dir=_neutral_scratch_parent()) as scratch:
+        target = Path(scratch) / "tests" / "test_foo.py"
+        target.parent.mkdir(parents=True)
+        content = "import subprocess\nsubprocess.run(['git', 'commit', '-m', 'x'])\n"
+        payload = {"tool_name": "Write", "tool_input": {"file_path": str(target), "content": content}}
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_guard_test_tree_git_fixture_spawn._handler(payload))
+        )
+
+
+def _fire_guard_test_tree_git_fixture_spawn_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-gttgfs-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        target = Path(scratch) / "tests" / "test_foo.py"
+        target.parent.mkdir(parents=True)
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(target), "content": "def test_x():\n    assert True\n"},
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_guard_test_tree_git_fixture_spawn._handler(payload))
+        )
+
+
+def _fire_nudge_initiative_goals_ladder() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-nigl-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        os.makedirs(os.path.join(scratch, ".git"))
+        goals_dir = scratch_dir / "state" / "goals"
+        goals_dir.mkdir(parents=True)
+        (goals_dir / "g1.yaml").write_text("goal_id: g1\n")
+        init_dir = scratch_dir / "state" / "initiatives"
+        init_dir.mkdir(parents=True)
+        target = init_dir / "myinit.yaml"
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {"file_path": str(target), "content": "label: Improve caching\n"},
+            "cwd": scratch,
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_nudge_initiative_goals_ladder._handler(payload))
+        )
+
+
+def _fire_nudge_initiative_goals_ladder_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-nigl-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        scratch_dir = Path(scratch)
+        os.makedirs(os.path.join(scratch, ".git"))
+        goals_dir = scratch_dir / "state" / "goals"
+        goals_dir.mkdir(parents=True)
+        (goals_dir / "g1.yaml").write_text("goal_id: g1\n")
+        init_dir = scratch_dir / "state" / "initiatives"
+        init_dir.mkdir(parents=True)
+        target = init_dir / "myinit.yaml"
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": str(target),
+                "content": "label: Improve caching\ngoals:\n  - g1\n",
+            },
+            "cwd": scratch,
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_nudge_initiative_goals_ladder._handler(payload))
+        )
+
+
+def _fire_nudge_multiwave_workflow() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-nmw-", dir=_neutral_scratch_parent()) as scratch:
+            os.makedirs(os.path.join(scratch, ".git"))
+            mp.setattr(_hook_nudge_multiwave_workflow, "show_toplevel", lambda *a, **kw: scratch)
+            session_id = "12345678-1234-4123-8123-%012x" % (uuid.uuid4().int % (16**12))
+            result = None
+            for _ in range(4):
+                payload = {
+                    "tool_name": "Agent",
+                    "tool_input": {"subagent_type": "coordinator:executor"},
+                    "session_id": session_id,
+                }
+                result = _hooks_asyncio.run(_hook_nudge_multiwave_workflow._handler(payload))
+            return _to_envelope_or_none(result)
+
+
+def _fire_nudge_multiwave_workflow_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "Explore"}}
+    return _to_envelope_or_none(_hooks_asyncio.run(_hook_nudge_multiwave_workflow._handler(payload)))
+
+
+def _fire_nudge_plan_test_surface_tier() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-nptst-", dir=_neutral_scratch_parent()) as scratch:
+        target = Path(scratch) / "docs" / "plans" / "foo.md"
+        target.parent.mkdir(parents=True)
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": str(target),
+                "content": "## Test surface\nNow run the full test suite: pytest coordinator_core/\n",
+            },
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_nudge_plan_test_surface_tier._handler(payload))
+        )
+
+
+def _fire_nudge_plan_test_surface_tier_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-nptst-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        target = Path(scratch) / "docs" / "plans" / "foo.md"
+        target.parent.mkdir(parents=True)
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": str(target),
+                "content": "## Test surface\nRun the chunk's own tests: foo/test_bar.py\n",
+            },
+        }
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_nudge_plan_test_surface_tier._handler(payload))
+        )
+
+
+def _fire_nudge_workflow_authoring_trampoline() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-nwat-", dir=_neutral_scratch_parent()) as scratch:
+            os.makedirs(os.path.join(scratch, ".git"))
+            mp.setattr(_hook_nudge_workflow_authoring_trampoline, "show_toplevel", lambda *a, **kw: scratch)
+            payload = {
+                "tool_name": "Skill",
+                "tool_input": {"skill": "workflow-authoring"},
+                "session_id": "12345678-1234-4123-8123-123456789012",
+            }
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_nudge_workflow_authoring_trampoline._handler(payload))
+            )
+
+
+def _fire_nudge_workflow_authoring_trampoline_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Skill", "tool_input": {"skill": "other-skill"}, "session_id": "sess-x"}
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_nudge_workflow_authoring_trampoline._handler(payload))
+    )
+
+
+def _fire_offer_exploration_tier_dispatch() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Agent",
+        "tool_input": {"subagent_type": "coordinator:executor", "prompt": "Find where the config is loaded."},
+        "cwd": "/nonexistent-repo-root-xyz",
+        "session_id": "12345678-1234-4123-8123-123456789012",
+    }
+    return _to_envelope_or_none(_hook_offer_exploration_tier_dispatch._handler(payload))
+
+
+def _fire_offer_exploration_tier_dispatch_control() -> Optional[Dict[str, Any]]:
+    payload = {
+        "tool_name": "Agent",
+        "tool_input": {"subagent_type": "coordinator:executor", "prompt": "Fix the bug in config loading."},
+        "cwd": "/nonexistent-repo-root-xyz",
+        "session_id": "12345678-1234-4123-8123-123456789012",
+    }
+    return _to_envelope_or_none(_hook_offer_exploration_tier_dispatch._handler(payload))
+
+
+def _fire_postuse_stop_family_dispatch() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-psfd-", dir=_neutral_scratch_parent()) as scratch:
+            repo_root = Path(scratch) / "coordinator-claude"
+            repo_root.mkdir()
+            (repo_root / ".coordinator-dev-repo").write_text("1")
+            canonical_dir = repo_root / "setup" / "percolate-hooks"
+            canonical_dir.mkdir(parents=True)
+            canonical = canonical_dir / "percolate-store.yaml"
+            canonical.write_text("a: 1")
+            mp.setenv("CLAUDE_PLUGIN_ROOT", str(repo_root / "coordinator"))
+            payload = {"tool_name": "Write", "tool_input": {"file_path": str(canonical)}}
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_postuse_stop_family_dispatch._handler(payload))
+            )
+
+
+def _fire_postuse_stop_family_dispatch_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Write", "tool_input": {"file_path": "/tmp/nope-not-tracked.txt"}}
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_postuse_stop_family_dispatch._handler(payload))
+    )
+
+
+def _fire_preuse_agent_dispatch() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {"subagent_type": "totally-bogus-nonexistent-role-zz"}}
+    return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_agent_dispatch._handler(payload)))
+
+
+def _fire_preuse_agent_dispatch_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Agent", "tool_input": {}}
+    return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_agent_dispatch._handler(payload)))
+
+
+def _fire_preuse_bash_dispatch() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-pbd-", dir=_neutral_scratch_parent()) as scratch:
+        os.makedirs(os.path.join(scratch, ".git"))
+        (Path(scratch) / "coordinator.local.md").write_text("---\nsubagent_bash_policy: deny\n---\n")
+        payload = {
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "cwd": scratch,
+            "agent_id": "aexecutor-1234567890abcdef",
+            "session_id": "sess-pbd",
+        }
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_bash_dispatch._handler(payload)))
+
+
+def _fire_preuse_bash_dispatch_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Bash", "tool_input": {"command": "true"}}
+    return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_bash_dispatch._handler(payload)))
+
+
+def _fire_preuse_skill_dispatch() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-psd-", dir=_neutral_scratch_parent()) as scratch:
+            os.makedirs(os.path.join(scratch, ".git"))
+            mp.setattr(
+                __import__(
+                    "coordinator_core.hooks.nudge_workflow_authoring_trampoline", fromlist=["show_toplevel"]
+                ),
+                "show_toplevel",
+                lambda *a, **kw: scratch,
+            )
+            payload = {
+                "tool_name": "Skill",
+                "tool_input": {"skill": "workflow-authoring"},
+                "session_id": "12345678-1234-4123-8123-123456789012",
+            }
+            return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_skill_dispatch._handler(payload)))
+
+
+def _fire_preuse_skill_dispatch_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Skill", "tool_input": {"skill": "other"}}
+    return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_skill_dispatch._handler(payload)))
+
+
+def _fire_preuse_write_dispatch() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-pwd-", dir=_neutral_scratch_parent()) as scratch:
+        payload = {
+            "tool_name": "Write",
+            "tool_input": {"file_path": "CLAUDE.md", "content": "x"},
+            "agent_id": "deadbeef0123",
+            "cwd": scratch,
+        }
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_write_dispatch._handler(payload)))
+
+
+def _fire_preuse_write_dispatch_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Write", "tool_input": {"file_path": "/tmp/nope-untracked.txt"}}
+    return _to_envelope_or_none(_hooks_asyncio.run(_hook_preuse_write_dispatch._handler(payload)))
+
+
+def _fire_project_orientation() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(_hook_project_orientation._handler({}))
+
+
+def _fire_runtime_tripwire_em_check() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-rtec-", dir=_neutral_scratch_parent()) as scratch:
+            os.makedirs(os.path.join(scratch, ".git"))
+            mp.setattr(
+                _hook_runtime_tripwire_em_check,
+                "_check_push_failures",
+                lambda git_root, session_id: "push failures detected: 3 in a row",
+            )
+            payload = {"payload": {"cwd": scratch, "session_id": "sess-rtec-probe"}}
+            return _to_envelope_or_none(_hook_runtime_tripwire_em_check._handler(payload))
+
+
+def _fire_runtime_tripwire_em_check_control() -> Optional[Dict[str, Any]]:
+    payload = {
+        "payload": {
+            "cwd": "/tmp",
+            "session_id": "sess-rtec-probe",
+            "agent_id": "aexecutor-1234567890",
+        }
+    }
+    return _to_envelope_or_none(_hook_runtime_tripwire_em_check._handler(payload))
+
+
+def _fire_session_start_announce_job_mode() -> Optional[Dict[str, Any]]:
+    payload = {"payload": {"session_id": "sess-x"}}
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_session_start_announce_job_mode._handler(payload))
+    )
+
+
+def _fire_session_start_guard_plane_check() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-ssgpc-", dir=_neutral_scratch_parent()) as scratch:
+            mp.setenv("CLAUDE_CODE_REMOTE", "true")
+            mp.setenv("CLAUDE_CONFIG_DIR", scratch)
+            mp.delenv("CLAUDE_PROJECT_DIR", raising=False)
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_session_start_guard_plane_check._handler({}))
+            )
+
+
+def _fire_session_start_guard_plane_check_control() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_session_start_guard_plane_check._handler({}))
+    )
+
+
+def _fire_sessionstart_async_dispatch() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_hook_sessionstart_ensure_http_forwarder, "_probe_bind_wins", lambda *a, **kw: None)
+        mp.setenv("CLAUDE_PLUGIN_ROOT", "/nonexistent-plugin-root-xyz")
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_sessionstart_async_dispatch._handler({}))
+        )
+
+
+def _fire_sessionstart_async_dispatch_control() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_sessionstart_async_dispatch._handler({}))
+    )
+
+
+def _fire_sessionstart_bin_drift_refresh() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-sbdr-", dir=_neutral_scratch_parent()) as scratch:
+            scratch_dir = Path(scratch)
+            templates_bin = scratch_dir / "templates_bin"
+            templates_bin.mkdir()
+            (templates_bin / "foo.py").write_text("print('new')\n")
+            bin_dir = scratch_dir / "bin"
+            bin_dir.mkdir()
+            (bin_dir / "foo.py").write_text("print('old')\n")
+            import coordinator_core.hooks.support.bin_impl_drift as _bin_impl_drift
+
+            mp.setattr(_bin_impl_drift, "_templates_bin", lambda: templates_bin)
+            mp.setattr(_hook_sessionstart_bin_drift_refresh, "settings_home", lambda: scratch_dir)
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_sessionstart_bin_drift_refresh._handler({}))
+            )
+
+
+def _fire_sessionstart_bin_drift_refresh_control() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-sbdr-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+            scratch_dir = Path(scratch)
+            (scratch_dir / "bin").mkdir()
+            mp.setattr(_hook_sessionstart_bin_drift_refresh, "settings_home", lambda: scratch_dir)
+            return _to_envelope_or_none(
+                _hooks_asyncio.run(_hook_sessionstart_bin_drift_refresh._handler({}))
+            )
+
+
+def _fire_sessionstart_dispatch() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            _ops_guard_hook_generation_self_probe, "run_self_probe", lambda config_dir: "self-probe advisory text"
+        )
+        # The `guard_settings_integrity`/`guard_hooks_kill_switch_detail` legs
+        # read REAL on-machine state (this operator's own kill-switch marker,
+        # an absolute `~/.claude/...` path) -- neutralized here so this row's
+        # firing text is deterministic and corpus-scratch-only, matching every
+        # other row's own isolation discipline; the `guard_hook_generation_
+        # self_probe` leg above (already independently corpus-covered) is
+        # this row's sole firing signal.
+        mp.setattr(_hook_sessionstart_dispatch, "_guard_settings_integrity_handler", lambda payload: {})
+        mp.setattr(_hook_sessionstart_dispatch, "_guard_hooks_kill_switch_detail_handler", lambda payload: {})
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_sessionstart_dispatch._handler({})))
+
+
+def _fire_sessionstart_ensure_http_forwarder() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_hook_sessionstart_ensure_http_forwarder, "_probe_bind_wins", lambda *a, **kw: None)
+        mp.setenv("CLAUDE_PLUGIN_ROOT", "/nonexistent-plugin-root-xyz")
+        return _to_envelope_or_none(
+            _hooks_asyncio.run(_hook_sessionstart_ensure_http_forwarder._handler({}))
+        )
+
+
+def _fire_sessionstart_ensure_http_forwarder_control() -> Optional[Dict[str, Any]]:
+    return _to_envelope_or_none(
+        _hooks_asyncio.run(_hook_sessionstart_ensure_http_forwarder._handler({}))
+    )
+
+
+def _fire_stop_dispatch() -> Optional[Dict[str, Any]]:
+    with pytest.MonkeyPatch.context() as mp:
+        with tempfile.TemporaryDirectory(prefix="guard-message-corpus-sd-", dir=_neutral_scratch_parent()) as scratch:
+            os.makedirs(os.path.join(scratch, ".git"))
+            mp.setenv("COORDINATOR_EM_REPORT_ALTITUDE_TALLY_DIR", str(Path(scratch) / ".tally"))
+            payload = {
+                "payload": {
+                    "session_id": "sess-%s" % uuid.uuid4().hex,
+                    "cwd": scratch,
+                    "stop_hook_active": False,
+                    "last_assistant_message": "See test.py:42 and foo/bar.py:10 for details.",
+                }
+            }
+            return _to_envelope_or_none(_hooks_asyncio.run(_hook_stop_dispatch._handler(payload)))
+
+
+def _fire_stop_dispatch_control() -> Optional[Dict[str, Any]]:
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-sd-ctrl-", dir=_neutral_scratch_parent()) as scratch:
+        os.makedirs(os.path.join(scratch, ".git"))
+        payload = {
+            "payload": {
+                "session_id": "sess-%s" % uuid.uuid4().hex,
+                "cwd": scratch,
+                "stop_hook_active": False,
+                "last_assistant_message": "Done.",
+            }
+        }
+        return _to_envelope_or_none(_hooks_asyncio.run(_hook_stop_dispatch._handler(payload)))
+
+
+def _fire_strip_worktree_isolation() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Workflow", "tool_input": {"isolation": "worktree"}}
+    return _to_envelope_or_none(_hooks_asyncio.run(_hook_strip_worktree_isolation._handler(payload)))
+
+
+def _fire_strip_worktree_isolation_control() -> Optional[Dict[str, Any]]:
+    payload = {"tool_name": "Workflow", "tool_input": {}}
+    return _to_envelope_or_none(_hooks_asyncio.run(_hook_strip_worktree_isolation._handler(payload)))
+
+
 HOOK_ROWS: List[HookRow] = [
     HookRow("em_report_altitude", "fire-d2", True, _fire_em_report_altitude_d2),
     HookRow("em_report_altitude", "control", False, _fire_em_report_altitude_control),
@@ -4227,7 +5371,6 @@ HOOK_ROWS: List[HookRow] = [
     ),
     HookRow("example_retrieval_repo_detect", "fire-uninitialized", True, _fire_example_retrieval_repo_detect),
     HookRow("example_retrieval_repo_detect", "control-no-marker", False, _fire_example_retrieval_repo_detect_control),
-    HookRow("session_heartbeat", "noop-control", False, _fire_session_heartbeat_noop),
     HookRow(
         "subagent_arrival_check",
         "structured-result-control",
@@ -4278,6 +5421,298 @@ HOOK_ROWS: List[HookRow] = [
     HookRow("ue_knowledge_distrust", "fire-uproject-detected", True, _fire_ue_knowledge_distrust),
     HookRow("ue_knowledge_distrust", "control-no-uproject", False, _fire_ue_knowledge_distrust_control),
     HookRow("coordinator_reminder", "fire-quick-orient", True, _fire_coordinator_reminder),
+    # --- W4 landing-wave additions (docs/plans/2026-09-18-doe-holds-no-scripts.md) ---
+    HookRow("allow_emitted_workflow_fire", "fire-verifying-receipt", True, _fire_allow_emitted_workflow_fire),
+    HookRow("allow_emitted_workflow_fire", "control-no-receipt", False, _fire_allow_emitted_workflow_fire_control),
+    HookRow("assert_em_role", "fire-always", True, _fire_assert_em_role),
+    HookRow("block_dispatch_suite_invocation", "fire-suite-command", True, _fire_block_dispatch_suite_invocation),
+    HookRow(
+        "block_dispatch_suite_invocation",
+        "control-non-suite",
+        False,
+        _fire_block_dispatch_suite_invocation_control,
+    ),
+    HookRow("block_ungranted_opus_subagent", "fire-ungranted-opus", True, _fire_block_ungranted_opus_subagent),
+    HookRow(
+        "block_ungranted_opus_subagent",
+        "control-sonnet",
+        False,
+        _fire_block_ungranted_opus_subagent_control,
+    ),
+    HookRow("block_workflow_foreign_emission", "fire-sha-mismatch", True, _fire_block_workflow_foreign_emission),
+    HookRow(
+        "block_workflow_foreign_emission",
+        "control-no-receipt",
+        False,
+        _fire_block_workflow_foreign_emission_control,
+    ),
+    HookRow("block_workflow_unmodeled_agent", "fire-zero-modeled", True, _fire_block_workflow_unmodeled_agent),
+    HookRow(
+        "block_workflow_unmodeled_agent",
+        "control-modeled",
+        False,
+        _fire_block_workflow_unmodeled_agent_control,
+    ),
+    HookRow("block_worktree_tool", "fire-enter-worktree", True, _fire_block_worktree_tool),
+    HookRow("block_worktree_tool", "control-exit-worktree", False, _fire_block_worktree_tool_control),
+    HookRow("check_claude_md_size", "fire-admission-denied", True, _fire_check_claude_md_size),
+    HookRow("check_claude_md_size", "control-small-write", False, _fire_check_claude_md_size_control),
+    HookRow(
+        "derive_global_doctrine_live_copy", "fire-tracked-write", True, _fire_derive_global_doctrine_live_copy
+    ),
+    HookRow(
+        "derive_global_doctrine_live_copy",
+        "control-unrelated-write",
+        False,
+        _fire_derive_global_doctrine_live_copy_control,
+    ),
+    HookRow("derive_setup_copies", "fire-canonical-write", True, _fire_derive_setup_copies),
+    HookRow("derive_setup_copies", "control-unrelated-write", False, _fire_derive_setup_copies_control),
+    HookRow("enforce_agent_dispatch_mode", "fire-illegal-name", True, _fire_enforce_agent_dispatch_mode),
+    HookRow(
+        "enforce_agent_dispatch_mode", "control-no-concern", False, _fire_enforce_agent_dispatch_mode_control
+    ),
+    HookRow("group_em_autofire", "fire-claimed", True, _fire_group_em_autofire),
+    HookRow("group_em_autofire", "control-not-group-em", False, _fire_group_em_autofire_control),
+    HookRow("guard_doctrine_changelog_prose", "fire-changelog-shaped", True, _fire_guard_doctrine_changelog_prose),
+    HookRow(
+        "guard_doctrine_changelog_prose",
+        "control-present-tense",
+        False,
+        _fire_guard_doctrine_changelog_prose_control,
+    ),
+    HookRow(
+        "guard_doctrine_surface_bash_write", "fire-bash-write", True, _fire_guard_doctrine_surface_bash_write
+    ),
+    HookRow(
+        "guard_doctrine_surface_bash_write",
+        "control-read-only",
+        False,
+        _fire_guard_doctrine_surface_bash_write_control,
+    ),
+    HookRow("guard_doctrine_surface_ratio", "fire-ratio-advisory", True, _fire_guard_doctrine_surface_ratio),
+    HookRow(
+        "guard_doctrine_surface_ratio",
+        "control-under-floor",
+        False,
+        _fire_guard_doctrine_surface_ratio_control,
+    ),
+    HookRow(
+        "guard_handoff_summary_cap_on_write", "fire-over-cap", True, _fire_guard_handoff_summary_cap_on_write
+    ),
+    HookRow(
+        "guard_handoff_summary_cap_on_write",
+        "control-under-cap",
+        False,
+        _fire_guard_handoff_summary_cap_on_write_control,
+    ),
+    HookRow(
+        "guard_hook_generation_self_probe", "fire-probe-text", True, _fire_guard_hook_generation_self_probe
+    ),
+    HookRow(
+        "guard_hook_generation_self_probe",
+        "control-empty-probe",
+        False,
+        _fire_guard_hook_generation_self_probe_control,
+    ),
+    HookRow("guard_host_subagent_bash_ban", "fire-deny-policy", True, _fire_guard_host_subagent_bash_ban),
+    HookRow(
+        "guard_host_subagent_bash_ban",
+        "control-no-policy",
+        False,
+        _fire_guard_host_subagent_bash_ban_control,
+    ),
+    HookRow(
+        "guard_host_subagent_bash_spawn_shapes",
+        "fire-deny-spawn-shape",
+        True,
+        _fire_guard_host_subagent_bash_spawn_shapes,
+    ),
+    HookRow(
+        "guard_host_subagent_bash_spawn_shapes",
+        "control-no-policy",
+        False,
+        _fire_guard_host_subagent_bash_spawn_shapes_control,
+    ),
+    HookRow("guard_kira_verdict_routed", "fire-eval-failure", True, _fire_guard_kira_verdict_routed),
+    HookRow(
+        "guard_kira_verdict_routed", "control-no-verdict", False, _fire_guard_kira_verdict_routed_control
+    ),
+    HookRow("guard_manufactured_blocker", "fire-declarative-stall", True, _fire_guard_manufactured_blocker),
+    HookRow(
+        "guard_manufactured_blocker",
+        "control-real-completion",
+        False,
+        _fire_guard_manufactured_blocker_control,
+    ),
+    HookRow(
+        "guard_named_dispatch_tool_restriction",
+        "fire-named-explore",
+        True,
+        _fire_guard_named_dispatch_tool_restriction,
+    ),
+    HookRow(
+        "guard_named_dispatch_tool_restriction",
+        "control-unnamed-explore",
+        False,
+        _fire_guard_named_dispatch_tool_restriction_control,
+    ),
+    HookRow(
+        "guard_posix_invocation_doctrine_write",
+        "fire-posix-invocation",
+        True,
+        _fire_guard_posix_invocation_doctrine_write,
+    ),
+    HookRow(
+        "guard_posix_invocation_doctrine_write",
+        "control-plain-text",
+        False,
+        _fire_guard_posix_invocation_doctrine_write_control,
+    ),
+    HookRow("guard_python_syntax_on_write", "fire-syntax-error", True, _fire_guard_python_syntax_on_write),
+    HookRow(
+        "guard_python_syntax_on_write",
+        "control-valid-syntax",
+        False,
+        _fire_guard_python_syntax_on_write_control,
+    ),
+    HookRow(
+        "guard_repo_setup_claude_home_refusal",
+        "fire-claude-home-target",
+        True,
+        _fire_guard_repo_setup_claude_home_refusal,
+    ),
+    HookRow(
+        "guard_repo_setup_claude_home_refusal",
+        "control-dry-run",
+        False,
+        _fire_guard_repo_setup_claude_home_refusal_control,
+    ),
+    HookRow(
+        "guard_review_integrator_sidecar_intake",
+        "fire-no-sidecar-named",
+        True,
+        _fire_guard_review_integrator_sidecar_intake,
+    ),
+    HookRow(
+        "guard_review_integrator_sidecar_intake",
+        "control-sidecar-on-disk",
+        False,
+        _fire_guard_review_integrator_sidecar_intake_control,
+    ),
+    HookRow(
+        "guard_test_tree_git_fixture_spawn",
+        "fire-fixture-construction",
+        True,
+        _fire_guard_test_tree_git_fixture_spawn,
+    ),
+    HookRow(
+        "guard_test_tree_git_fixture_spawn",
+        "control-no-git-call",
+        False,
+        _fire_guard_test_tree_git_fixture_spawn_control,
+    ),
+    HookRow("nudge_initiative_goals_ladder", "fire-no-goals", True, _fire_nudge_initiative_goals_ladder),
+    HookRow(
+        "nudge_initiative_goals_ladder",
+        "control-goals-present",
+        False,
+        _fire_nudge_initiative_goals_ladder_control,
+    ),
+    HookRow("nudge_multiwave_workflow", "fire-burst-threshold", True, _fire_nudge_multiwave_workflow),
+    HookRow(
+        "nudge_multiwave_workflow", "control-explore-type", False, _fire_nudge_multiwave_workflow_control
+    ),
+    HookRow("nudge_plan_test_surface_tier", "fire-tier-fu", True, _fire_nudge_plan_test_surface_tier),
+    HookRow(
+        "nudge_plan_test_surface_tier",
+        "control-tier-t",
+        False,
+        _fire_nudge_plan_test_surface_tier_control,
+    ),
+    HookRow(
+        "nudge_workflow_authoring_trampoline",
+        "fire-skill-open",
+        True,
+        _fire_nudge_workflow_authoring_trampoline,
+    ),
+    HookRow(
+        "nudge_workflow_authoring_trampoline",
+        "control-other-skill",
+        False,
+        _fire_nudge_workflow_authoring_trampoline_control,
+    ),
+    HookRow(
+        "offer_exploration_tier_dispatch", "fire-read-only-shaped", True, _fire_offer_exploration_tier_dispatch
+    ),
+    HookRow(
+        "offer_exploration_tier_dispatch",
+        "control-write-shaped",
+        False,
+        _fire_offer_exploration_tier_dispatch_control,
+    ),
+    HookRow(
+        "postuse_stop_family_dispatch", "fire-canonical-write", True, _fire_postuse_stop_family_dispatch
+    ),
+    HookRow(
+        "postuse_stop_family_dispatch",
+        "control-untracked-write",
+        False,
+        _fire_postuse_stop_family_dispatch_control,
+    ),
+    HookRow("preuse_agent_dispatch", "fire-unenumerated-type", True, _fire_preuse_agent_dispatch),
+    HookRow("preuse_agent_dispatch", "control-empty-input", False, _fire_preuse_agent_dispatch_control),
+    HookRow("preuse_bash_dispatch", "fire-host-ban", True, _fire_preuse_bash_dispatch),
+    HookRow("preuse_bash_dispatch", "control-no-chain-hit", False, _fire_preuse_bash_dispatch_control),
+    HookRow("preuse_skill_dispatch", "fire-trampoline-leg", True, _fire_preuse_skill_dispatch),
+    HookRow("preuse_skill_dispatch", "control-unmatched-verb", False, _fire_preuse_skill_dispatch_control),
+    HookRow("preuse_write_dispatch", "fire-claude-md-grant", True, _fire_preuse_write_dispatch),
+    HookRow("preuse_write_dispatch", "control-untracked-write", False, _fire_preuse_write_dispatch_control),
+    HookRow("project_orientation", "fire-always", True, _fire_project_orientation),
+    HookRow("runtime_tripwire_em_check", "fire-push-failures", True, _fire_runtime_tripwire_em_check),
+    HookRow(
+        "runtime_tripwire_em_check", "control-subagent-gate", False, _fire_runtime_tripwire_em_check_control
+    ),
+    HookRow("session_start_announce_job_mode", "fire-always", True, _fire_session_start_announce_job_mode),
+    HookRow(
+        "session_start_guard_plane_check", "fire-remote-no-hooks", True, _fire_session_start_guard_plane_check
+    ),
+    HookRow(
+        "session_start_guard_plane_check",
+        "control-not-remote",
+        False,
+        _fire_session_start_guard_plane_check_control,
+    ),
+    HookRow("sessionstart_async_dispatch", "fire-forwarder-disclosure", True, _fire_sessionstart_async_dispatch),
+    HookRow(
+        "sessionstart_async_dispatch",
+        "control-no-plugin-root",
+        False,
+        _fire_sessionstart_async_dispatch_control,
+    ),
+    HookRow("sessionstart_bin_drift_refresh", "fire-stale-bin", True, _fire_sessionstart_bin_drift_refresh),
+    HookRow(
+        "sessionstart_bin_drift_refresh",
+        "control-no-drift",
+        False,
+        _fire_sessionstart_bin_drift_refresh_control,
+    ),
+    HookRow("sessionstart_dispatch", "fire-composed-legs", True, _fire_sessionstart_dispatch),
+    HookRow(
+        "sessionstart_ensure_http_forwarder", "fire-probe-undetermined", True, _fire_sessionstart_ensure_http_forwarder
+    ),
+    HookRow(
+        "sessionstart_ensure_http_forwarder",
+        "control-no-plugin-root",
+        False,
+        _fire_sessionstart_ensure_http_forwarder_control,
+    ),
+    HookRow("stop_dispatch", "fire-em-report-altitude", True, _fire_stop_dispatch),
+    HookRow("stop_dispatch", "control-no-legs-fire", False, _fire_stop_dispatch_control),
+    HookRow("strip_worktree_isolation", "fire-worktree-isolation", True, _fire_strip_worktree_isolation),
+    HookRow(
+        "strip_worktree_isolation", "control-no-isolation", False, _fire_strip_worktree_isolation_control
+    ),
 ]
 
 
@@ -4321,14 +5756,14 @@ def fire_hook_row(row: HookRow) -> HookCapture:
 #   (2) IPC/`dispatch_from_hook` shape -- an `@register_op`-decorated async
 #       handler, reached via the `coordinator_core.ipc.dispatch_from_hook`
 #       seam DR-116/DR-118 built for exactly this purpose (a JSON-RPC
-#       envelope round-trip, the shim relaying `response["result"]"). 17
+#       envelope round-trip, the shim relaying `response["result"]"). 16
 #       further hooks/ modules carry ONLY this shape (grep for
 #       `register_op(` under coordinator_core/hooks/, minus the four above):
 #       `agent_completion_log`, `context_pressure_precompact`,
 #       `coordinator_reminder`, `nudge_foreground_agent_dispatch`,
 #       `nudge_named_agent_report_delivery`, `nudge_unauthorized_handoff`,
 #       `postuse_advisory_dispatch`, `example_retrieval_repo_detect`,
-#       `session_heartbeat`, `subagent_arrival_check`,
+#       `subagent_arrival_check`,
 #       `subagent_zero_tool_use`, `subagent_zero_tool_use_resolve`,
 #       `subagent_zero_tool_use_surface`, `suggest_sonnet_research`,
 #       `track_dispatched_agents`, `track_touched_files`,
@@ -4344,7 +5779,7 @@ def fire_hook_row(row: HookRow) -> HookCapture:
 #       hooks/ prose-vs-stderr census predicate) -- it does not add corpus
 #       coverage. No chunk in this plan currently builds an async capture
 #       seam. NEEDS_COORDINATOR (for the EM, ahead of C9's memo): this
-#       17-module population is real, uncovered DR-118-shim-relayed prose
+#       16-module population is real, uncovered DR-118-shim-relayed prose
 #       surface -- closing it is new capture-harness work outside this
 #       chunk's declared `change_kind: test-edit` / "C3's schema" framing,
 #       not a same-shaped corpus-row addition. C9's report to DoE should
@@ -4693,12 +6128,38 @@ def test_every_hooks_row_guard_has_a_non_firing_control_row():
     (`isinstance(payload, dict)` false) is unreachable through `_handler`
     without crashing it first (`field(params, ...)` dereferences `params`
     before `compose_catering` ever sees it), so there is no non-firing cell
-    reachable through the real `_handler` entrypoint this row exercises."""
+    reachable through the real `_handler` entrypoint this row exercises.
+
+    W4 landing wave (2026-09-19) adds four more exceptions, each verified
+    live by reading every `return`/branch in the module:
+      - `assert_em_role`: `_handler` always returns `context_only(...)`
+        with a leading `"\\n"` seeded into `parts` before any per-entry
+        logic runs -- no input makes it return `no_advisory()`.
+      - `project_orientation`: `_handler` has no `no_advisory()` return at
+        all (grep-verified) -- both its early-return and fall-through
+        paths return `context_only(...)`, even when every per-banner `try`
+        block above it silently no-ops.
+      - `session_start_announce_job_mode`: fires `context_only(...)` on
+        every path once `resolve_mode` imports cleanly (always true in
+        this tree); the only `no_advisory()` legs are an unresolvable
+        import or a `resolve_mode` exception, neither reachable from a
+        synthetic non-firing payload without breaking the module itself.
+      - `sessionstart_dispatch`: a fan-in whose own composed legs
+        (`project_orientation` above, `guard_settings_integrity`/
+        `guard_hooks_kill_switch_detail`) already speak unconditionally
+        on this corpus's own real-repo-anchored run, so its own
+        CONCATENATE-ALL aggregate has no reachable silent cell here
+        either -- same shape as `cater_subagent_start`'s own fan-in
+        exception above."""
     non_firing = {row.guard for row in HOOK_ROWS if not row.expected_speaker}
     expected = {row.guard for row in HOOK_ROWS} - {
         "nudge_unrouted_sizing",
         "coordinator_reminder",
         "cater_subagent_start",
+        "assert_em_role",
+        "project_orientation",
+        "session_start_announce_job_mode",
+        "sessionstart_dispatch",
     }
     assert non_firing == expected
 

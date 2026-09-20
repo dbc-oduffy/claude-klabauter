@@ -15,7 +15,6 @@ Spec backlink: pln-tri-plane-boundary-claude-klabauter-side-landing-c-b393a7 § 
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
 from typing import Any
 
@@ -271,13 +270,24 @@ class TestAC13MicroBenchmark:
         # Clear cache to ensure no warm-cache advantage
         dag._FRONTMATTER_CACHE.clear()
 
-        start = time.perf_counter()
-        result = dag.walk_forward(
-            tail_path,
-            edge_kinds={"predecessor"},
-            handoff_dir=str(tmp_path),
-        )
-        elapsed = time.perf_counter() - start
+        from coordinator_core.benchmarks.process_time import in_process_time_ms
+
+        outcome = {}
+
+        def _walk() -> None:
+            # Cleared every call, not just before the first -- in_process_time_ms
+            # may call this more than once to reach its measurement window, and
+            # a warm-cache repeat would understate the cost this budget guards.
+            dag._FRONTMATTER_CACHE.clear()
+            outcome["result"] = dag.walk_forward(
+                tail_path,
+                edge_kinds={"predecessor"},
+                handoff_dir=str(tmp_path),
+            )
+
+        timing = in_process_time_ms(_walk)
+        result = outcome["result"]
+        elapsed = timing["process_time_ms"] / 1000.0
 
         # Verify traversal was complete (all nodes visited)
         assert len(result["nodes"]) == n, (

@@ -25,6 +25,7 @@ import textwrap
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus
 from coordinator_core.ops.plan_tasks_render import (
+    dispositions_for_delivered,
     load_rows,
     render_closed_items,
     spine_projection,
@@ -208,3 +209,84 @@ def test_render_closed_items_ends_with_trailing_newline():
     rendered = render_closed_items(rows)
     assert rendered.endswith("\n")
     assert not rendered.endswith("\n\n")
+
+
+# ---------------------------------------------------------------------------
+# dispositions_for_delivered — klabauter#44: the resolve payload that closes
+# delivered rows, which nothing previously computed, so a delivered row kept
+# its `open` default and re-emitted as live forever
+# ---------------------------------------------------------------------------
+
+
+def test_dispositions_for_delivered_closes_only_the_delivered_open_rows():
+    rows = [{"id": "C1"}, {"id": "C2"}, {"id": "C3"}]
+
+    assert dispositions_for_delivered(rows, {"C1", "C3"}) == [
+        {"id": "C1", "disposition": "coded"},
+        {"id": "C3", "disposition": "coded"},
+    ]
+
+
+def test_dispositions_for_delivered_skips_an_already_closed_row():
+    """Idempotency is derived here so a caller can pass the result straight to
+    `resolve` without re-deriving it: a row already resolved to some other
+    disposition is left out."""
+    rows = [{"id": "C1", "disposition": "spun_off"}, {"id": "C2"}]
+
+    assert dispositions_for_delivered(rows, {"C1", "C2"}) == [
+        {"id": "C2", "disposition": "coded"}
+    ]
+
+
+def test_dispositions_for_delivered_treats_a_blank_disposition_as_open():
+    """D1-tolerant, matching `_disposition`: the schema default is `open`, and a
+    blank or non-string value is that default rather than a closed row."""
+    rows = [{"id": "C1", "disposition": ""}, {"id": "C2", "disposition": None}]
+
+    assert dispositions_for_delivered(rows, ["C1", "C2"]) == [
+        {"id": "C1", "disposition": "coded"},
+        {"id": "C2", "disposition": "coded"},
+    ]
+
+
+def test_dispositions_for_delivered_ignores_an_id_naming_no_row():
+    """It derives payload for rows that exist; it does not validate the
+    caller's delivery evidence."""
+    rows = [{"id": "C1"}]
+
+    assert dispositions_for_delivered(rows, {"C1", "C-nonexistent"}) == [
+        {"id": "C1", "disposition": "coded"}
+    ]
+
+
+def test_dispositions_for_delivered_mirrors_rows_order_not_delivered_order():
+    rows = [{"id": "C1"}, {"id": "C2"}]
+
+    assert dispositions_for_delivered(rows, ["C2", "C1"]) == [
+        {"id": "C1", "disposition": "coded"},
+        {"id": "C2", "disposition": "coded"},
+    ]
+
+
+def test_dispositions_for_delivered_applies_ref_uniformly_only_when_supplied():
+    rows = [{"id": "C1"}, {"id": "C2"}]
+
+    without = dispositions_for_delivered(rows, ["C1"])
+    assert "disposition_ref" not in without[0]
+
+    with_ref = dispositions_for_delivered(rows, ["C1", "C2"], disposition_ref="deadbeef")
+    assert all(entry["disposition_ref"] == "deadbeef" for entry in with_ref)
+
+
+def test_dispositions_for_delivered_honours_a_non_default_disposition():
+    rows = [{"id": "C1"}]
+
+    assert dispositions_for_delivered(rows, ["C1"], disposition="wont_do") == [
+        {"id": "C1", "disposition": "wont_do"}
+    ]
+
+
+def test_dispositions_for_delivered_is_empty_when_nothing_was_delivered():
+    rows = [{"id": "C1"}, {"id": "C2"}]
+
+    assert dispositions_for_delivered(rows, []) == []

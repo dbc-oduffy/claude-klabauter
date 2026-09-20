@@ -132,7 +132,10 @@ from __future__ import annotations
 import re
 from typing import NamedTuple, Optional
 
+import yaml
+
 from coordinator_core.frontmatter.body_blocks import LocateStatus
+from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
 from coordinator_core.ops.plan_tasks_render import load_rows
 
@@ -197,10 +200,27 @@ def _is_operator_row(raw: dict) -> bool:
     return raw.get("execution_mode") == "operator"
 
 
-def _has_uncleared_execution_gate(raw: dict) -> bool:
-    """True if `raw`'s ``external_gate`` carries an entry that is both
-    uncleared (no explicit ``cleared: true``) and blocks ``execution`` (the
-    default when ``blocks`` is absent or None).
+def _has_uncleared_execution_gate(raw: dict, extra_gates: tuple = ()) -> bool:
+    """True if `raw`'s row-level ``external_gate`` (plus any ``extra_gates``
+    resolved onto this row from plan frontmatter — see
+    ``_frontmatter_external_gates``) carries an entry that is both uncleared
+    (no explicit ``cleared: true``) and blocks ``execution`` (the default
+    when ``blocks`` is absent or None).
+
+    Two shapes now count, both from claude-klabauter#43 — a gate declared
+    where this reader used to look past it, so the row dispatched as though
+    open:
+
+    - A row-level ``external_gate`` entry that is a plain STRING rather than
+      a mapping (``external_gate: [some-gate-id]``). A string cannot carry
+      ``cleared``/``blocks`` at all, so there is no way for it to declare
+      itself cleared or ac-closure-scoped — it always counts as an uncleared
+      EXECUTION gate, unconditionally.
+    - A frontmatter-level ``external_gate`` entry carrying ``row: <id>``,
+      resolved by ``_frontmatter_external_gates`` and threaded in here as
+      ``extra_gates`` for the one row it names. Once resolved onto the row,
+      it is evaluated exactly like a native row-level mapping entry
+      (``cleared``/``blocks`` read the same way).
 
     ``blocks: ac-closure`` entries never count here — that gate holds only
     a named acceptance criterion open, not the row's execution.
@@ -230,19 +250,47 @@ def _has_uncleared_execution_gate(raw: dict) -> bool:
     ``cleared: false`` has been honoured since that fix, and this bump
     subsumes it: both now fall out of the single ``cleared is True`` check.
 
-    Tolerant of malformed shapes, matching this module's read posture for
-    every field but its four fail-loud ones: a non-list ``external_gate``,
-    or a non-dict entry within it, is skipped rather than raised on. A
-    well-formed uncleared-execution entry elsewhere in the same (partially
-    malformed) list still excludes the row — malformed neighbors never mask
+    NOT tolerant of a malformed ``external_gate`` shape (klabauter#43) —
+    the two common authoring mistakes both dispatch a row its own plan
+    gated if read tolerantly:
+
+      1. ``external_gate`` present but not a list — e.g. a single gate
+         object authored directly instead of wrapped in a one-item list.
+         Reading it as "no gate" and returning ``False`` dispatches the row.
+      2. A list entry that is not a dict — e.g. a bare string gate note.
+         Skipping it and continuing the scan silently drops the one gate
+         that was actually declared; an entry that never resolves to a
+         mapping can neither be checked for ``cleared: true`` nor for
+         ``blocks``, so it can never be shown to be safe.
+
+    Both shapes now GATE the row (return ``True``) rather than being
+    skipped: an unparseable or unrecognized declared gate must never read
+    as proceed — the same class of defect ``UnknownDispositionError``
+    refuses loud on above, a value the reader could not positively confirm
+    was safe being treated as though it had. A well-formed
+    uncleared-execution entry elsewhere in the same (partially malformed)
+    list still excludes the row regardless — malformed neighbors never mask
     a real gate.
+
+    Absence is unaffected: no ``external_gate`` key at all, or an explicit
+    ``external_gate: null``, still means no gate was declared and returns
+    ``False`` — only a PRESENT-but-malformed value gates.
     """
-    external_gate = raw.get("external_gate")
-    if not isinstance(external_gate, list):
+    own_gate = raw.get("external_gate")
+    if own_gate is None and not extra_gates:
         return False
-    for entry in external_gate:
+    entries: list = []
+    if own_gate is not None:
+        if not isinstance(own_gate, list):
+            return True
+        entries.extend(own_gate)
+    entries.extend(extra_gates)
+    for entry in entries:
         if not isinstance(entry, dict):
-            continue
+            # Covers shape (b) too: a plain string in a row-level list has
+            # no way to declare `cleared: true` or `blocks: ac-closure`, so
+            # it falls into this same fail-loud, always-gates branch.
+            return True
         # `cleared: true` is the ONLY clearing path; only the literal True
         # counts, so a malformed or absent value never clears the gate no
         # matter what `closure_evidence` says.
@@ -367,6 +415,24 @@ class FileShapedPrefixError(SpineReadError):
     which belongs in ``writes:``."""
 
 
+class AmbiguousExternalGateError(SpineReadError):
+    """Raised when a plan-frontmatter ``external_gate`` entry cannot be
+    honoured unambiguously (claude-klabauter#43, Shape 1).
+
+    A frontmatter ``external_gate`` entry is legible to this reader only
+    when it is a mapping carrying a ``row:`` key whose value names a real
+    row id in this spine — that is the one shape the issue asks for. Every
+    other frontmatter shape is refused rather than silently ignored, because
+    a gate declared where nothing reads it is the exact failure this error
+    exists to close: a real cross-repo-write authorization gate silently not
+    applying to the row it was written for is worse than a refused emit.
+    Refused shapes: the top-level ``external_gate`` key present but not a
+    list; a list entry that is not a mapping; a mapping entry whose ``row:``
+    value is missing, non-string, or does not match any row id in this
+    spine. Names the offending row (when determinable) and the entry.
+    """
+
+
 class EmitterRow(NamedTuple):
     """One normalized task-spine row for the dispatch-emit pipeline.
 
@@ -419,6 +485,65 @@ class EmitterRow(NamedTuple):
     writes_under: tuple = ()
     verification_runs: Optional[bool] = None
     change_kind: Optional[str] = None
+
+
+def _frontmatter_external_gates(source: str, row_ids: set) -> dict:
+    """Resolve plan-frontmatter ``external_gate`` entries onto the row ids
+    they name via ``row:`` (claude-klabauter#43, Shape 1).
+
+    Returns ``{row_id: [entry, ...]}`` for every entry that resolves. A
+    frontmatter with no ``external_gate`` key at all, no frontmatter, or
+    unparseable frontmatter YAML all return ``{}`` — this reader adds a new
+    thing it looks AT, never a new way for an ordinary plan to fail to read.
+    An entry with no ``row:`` key is out of this function's scope (a
+    plan-wide gate no row-level reader claims) and is skipped, not refused.
+
+    Every other shape is refused via ``AmbiguousExternalGateError`` — see
+    that class's docstring for the exact list — because a gate that names
+    no resolvable row, or a value under ``external_gate`` this reader cannot
+    parse as a gate list at all, is a gate this reader cannot honour, and
+    honouring it silently as "no gate" is the one outcome claude-klabauter#43
+    exists to close.
+    """
+    split = split_frontmatter(source)
+    if split is None:
+        return {}
+    try:
+        doc = yaml.safe_load(split.fm_text)
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(doc, dict):
+        return {}
+    gate_list = doc.get("external_gate")
+    if gate_list is None:
+        return {}
+    if not isinstance(gate_list, list):
+        raise AmbiguousExternalGateError(
+            f"plan frontmatter external_gate is {gate_list!r}, not a list "
+            "of gate entries"
+        )
+    by_row: dict = {}
+    for entry in gate_list:
+        if not isinstance(entry, dict):
+            raise AmbiguousExternalGateError(
+                f"plan frontmatter external_gate entry {entry!r} is not a "
+                "mapping; a frontmatter gate entry must be a mapping "
+                "carrying row: <row id>"
+            )
+        row_id = entry.get("row")
+        if row_id is None:
+            # No row: key -- not claimed by this reader; skip rather than
+            # refuse, since it may be a plan-wide gate no row-level check
+            # applies to.
+            continue
+        if not isinstance(row_id, str) or row_id not in row_ids:
+            raise AmbiguousExternalGateError(
+                f"plan frontmatter external_gate entry {entry.get('id', entry)!r} "
+                f"declares row: {row_id!r}, which does not match any row id "
+                "in this plan's task spine"
+            )
+        by_row.setdefault(row_id, []).append(entry)
+    return by_row
 
 
 def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]:
@@ -527,6 +652,12 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
         seen_ids.add(row_id)
 
     row_ids = seen_ids
+
+    # claude-klabauter#43 Shape 1: resolve frontmatter-declared gates onto
+    # the row ids they name, once, up front -- this raises
+    # AmbiguousExternalGateError before any row is read, matching every
+    # other refusal in this function (fail loud before emitting anything).
+    frontmatter_gates = _frontmatter_external_gates(source, row_ids)
 
     rows: list[EmitterRow] = []
     for raw in raw_rows:
@@ -660,7 +791,7 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
                     "execution_mode: operator — a human must run this row; it "
                     "was NOT dispatched and has NOT been done",
                 )
-            elif _has_uncleared_execution_gate(raw):
+            elif _has_uncleared_execution_gate(raw, tuple(frontmatter_gates.get(raw.get("id"), ()))):
                 _reason = ("external_gate", "uncleared external_gate blocking execution")
             if _reason is not None:
                 exclusions.append(
@@ -673,7 +804,10 @@ def read_spine(plan_path, exclusions: Optional[list] = None) -> list[EmitterRow]
             # (docstring point above) -- its work shipped, so a stale gate
             # on a done row is bookkeeping, not a live blocker.
             satisfied_ids.add(raw.get("id"))
-        elif _has_uncleared_execution_gate(raw) or _is_operator_row(raw):
+        elif (
+            _has_uncleared_execution_gate(raw, tuple(frontmatter_gates.get(raw.get("id"), ())))
+            or _is_operator_row(raw)
+        ):
             blocked_ids.add(raw.get("id"))
 
     # Transitive closure over depends_on: a row depending, directly or

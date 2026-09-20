@@ -4178,6 +4178,76 @@ def ensure_percolate_identity(settings_home_path: Path, repo_root: Path) -> tupl
     return target, "created"
 
 
+def install_precompiled_bytecode(claude_klabauter_root_resolved: Path, args: Args) -> None:
+    """Best-effort install-chain step: byte-compiles `coordinator_core` so the
+    first invocation after install does not pay compilation cost cold.
+
+    Root-cause fix, 2026-09-20 (DR-344 breach on a cloud container). This
+    step existed only in the maximalist chain (`/coordinator:setup`,
+    `coordinator_core.install.maximalist` Step 6b) — never in THIS
+    standalone installer, which is what a cloud dispatch container actually
+    runs. A tree installed that way carries no `__pycache__`, so every cold
+    invocation compiles the whole import graph before doing any work.
+
+    Measured, not assumed: `state/audits/doe-script-arrivals/W2-C9.yaml`
+    recorded `mise-prep-run` at 627ms on a 4-core Linux container against a
+    200ms bar, versus 22.5ms on macOS. Reproduced here by holding everything
+    else equal and varying only the bytecode cache — same CLI, same box:
+    106ms with `__pycache__` present, 415ms with an empty one, a 3.9x factor
+    on 24 cores that comfortably reaches the container's figure on 4. Import
+    weight was the secondary term, not the dominant one.
+
+    Same failure shape as this file's own `install_bin_forwarders` docstring
+    records: a step the maximalist chain has and the standalone installer
+    lacks, so a box whose only "install" is `scripts/setup.py` silently never
+    gets it. Advisory, never fatal — a compile failure must not abort an
+    otherwise working install — and skipped under `--check`/`--register-only`
+    alongside the other post-registration steps.
+    """
+    print()
+    print("--- Install: precompile coordinator_core bytecode ---")
+
+    if str(claude_klabauter_root_resolved) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root_resolved))
+    try:
+        from coordinator_core.install.maximalist import (
+            _compileall_interpreters,
+            _run_compileall,
+        )
+    except ImportError as exc:
+        print(f"[ADVISORY] cannot import the compileall leg — skipping precompile: {exc}", file=sys.stderr)
+        return
+
+    pkg_root = claude_klabauter_root_resolved / "coordinator_core"
+    if not pkg_root.is_dir():
+        print(f"[ADVISORY] {pkg_root} not found — skipping precompile.", file=sys.stderr)
+        return
+
+    try:
+        interpreters = _compileall_interpreters(args.allow_venv_fallback)
+    except (ImportError, OSError) as exc:
+        print(f"[ADVISORY] could not resolve a precompile interpreter: {exc}", file=sys.stderr)
+        return
+    if not interpreters:
+        print("[ADVISORY] no interpreter resolved to precompile under — skipping.", file=sys.stderr)
+        return
+
+    for interp in interpreters:
+        try:
+            proc = _run_compileall(interp, pkg_root)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            print(f"[ADVISORY] precompile failed under {interp} — continuing: {exc}", file=sys.stderr)
+            continue
+        if proc.returncode != 0:
+            print(
+                f"[ADVISORY] precompile failed under {interp} (exit {proc.returncode}) — continuing: "
+                f"{(proc.stderr or '').strip()[:200]}",
+                file=sys.stderr,
+            )
+            continue
+        print(f"PASS [precompile] {pkg_root} byte-compiled under {interp}.")
+
+
 def install_percolate_identity(repo_root: Path, claude_klabauter_root_resolved: Path) -> None:
     """Best-effort install-chain step: generates the settings-home
     `.percolate-identity` publish-audit config on a fresh machine, where it
@@ -4630,6 +4700,7 @@ def main(argv: list[str]) -> int:
         install_precommit_hook(repo_root, engine_py, args.agent_mode)
         install_lfs_pre_push_gate(repo_root, args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
+        install_precompiled_bytecode(claude_klabauter_root_resolved, args)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
         install_fleet_shared_environment(repo_root, claude_klabauter_root_resolved, args)

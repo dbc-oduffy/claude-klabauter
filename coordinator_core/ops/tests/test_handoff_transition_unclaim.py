@@ -248,3 +248,124 @@ def test_ac5_backstop_uses_canonical_kind_for_the_membership_test():
     assert ht.canonical_kind("spinoff") in ht._SPINOFF_KINDS
     # A DIFFERENT kind family (roadmap, not spinoff) must not collide.
     assert ht.canonical_kind("roadmap-baton") not in ht._SPINOFF_KINDS
+
+
+# ---------------------------------------------------------------------------
+# C2 — _unclaim field hygiene per docs/reference/handoff-legal-state-table.md
+# (release_evidence stamp / Q2, claimed_by_name unconditional strip / Q2
+# sub-ruling, terminal-refusal message citing Q1), plus _close's
+# live_children_recheck deletion (census row 4).
+#
+# Spec backlink: docs/plans/2026-09-11-handoff-lifecycle-one-legal-state-
+# table.md, chunk C2.
+# ---------------------------------------------------------------------------
+
+
+def test_c2_unclaim_stamps_release_evidence_timestamp(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    handoff = _seed_handoff(
+        repo, "20260101-release-evidence.md", deliverable_id="dlv-rel-ev-000000"
+    )
+
+    result = _run(_unclaim_params(str(handoff)), repo_root=repo / ".git")
+
+    assert result["exit_code"] == 0, result
+    stamped = _fm_field(handoff, "release_evidence")
+    assert stamped is not None
+    unquoted = stamped.strip("'\"")
+    # ISO-8601 `Z`-suffixed shape, matching claimed_at's existing convention.
+    assert unquoted.endswith("Z")
+    assert "T" in unquoted
+
+
+def test_c2_unclaim_strips_claimed_by_name_unconditionally(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    handoff = _seed_handoff(
+        repo, "20260101-claimed-by-name.md", deliverable_id="dlv-cbn-000000"
+    )
+    # Splice a stale claimed_by_name into the seeded frontmatter directly —
+    # _seed_handoff's helper does not stamp it.
+    text = handoff.read_text(encoding="utf-8")
+    text = text.replace(
+        f'claimed_by: "{_TEST_SID}"\n',
+        f'claimed_by: "{_TEST_SID}"\nclaimed_by_name: "Stale Peer"\n',
+    )
+    handoff.write_text(text, encoding="utf-8")
+    assert _fm_field(handoff, "claimed_by_name") == '"Stale Peer"'
+
+    result = _run(_unclaim_params(str(handoff)), repo_root=repo / ".git")
+
+    assert result["exit_code"] == 0, result
+    assert _fm_field(handoff, "claimed_by_name") is None
+
+
+def test_c2_unclaim_refuses_terminal_deployment_state_citing_q1_ruling(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    handoff = _seed_handoff(
+        repo,
+        "20260101-terminal.md",
+        deliverable_id="dlv-terminal-000000",
+        deployment_state="shipped",
+    )
+
+    result = _run(_unclaim_params(str(handoff)), repo_root=repo / ".git")
+
+    assert result["exit_code"] == 1, result
+    assert "handoff-legal-state-table.md" in result["error"]
+    assert "Q1" in result["error"]
+    # No write occurred.
+    assert _fm_field(handoff, "deployment_state") == "shipped"
+
+
+def test_c2_unclaim_still_refuses_non_terminal_awaiting_gate_without_q1_text(tmp_path):
+    """Regression companion: an out-of-scope but NON-terminal deployment_state
+    (awaiting_gate) still refuses, with the original generic message — the
+    Q1-ruling text is scoped to genuinely terminal states only."""
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    handoff = _seed_handoff(
+        repo,
+        "20260101-awaiting-gate.md",
+        deliverable_id="dlv-awaiting-gate-000000",
+        deployment_state="awaiting_gate",
+    )
+
+    result = _run(_unclaim_params(str(handoff)), repo_root=repo / ".git")
+
+    assert result["exit_code"] == 1, result
+    assert "handoff-legal-state-table.md" not in result["error"]
+    assert "requires deployment_state in" in result["error"]
+
+
+def test_c2_close_no_longer_accepts_live_children_recheck_parameter(tmp_path):
+    """Census row 4: zero production call sites pass it, and its sole
+    documented caller (`handoff_reconcile_close_terminal.py`) is deleted
+    from the tree — the parameter and its consuming branch are gone."""
+    import inspect
+
+    sig = inspect.signature(ht._close)
+    assert "live_children_recheck" not in sig.parameters
+
+
+def test_c2_close_still_works_without_the_removed_parameter(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    handoff = _seed_handoff(
+        repo,
+        "20260101-close.md",
+        deliverable_id="dlv-close-000000",
+        deployment_state="ready_to_fire",
+        status="open",
+    )
+
+    result = _run(
+        {"verb": "close", "handoff_path": str(handoff), "reason": "stale"},
+        repo_root=repo / ".git",
+    )
+
+    assert result["exit_code"] == 0, result
+    assert _fm_field(handoff, "deployment_state") == "closed"
+    assert _fm_field(handoff, "closed_reason") == "stale"

@@ -161,6 +161,7 @@ from coordinator_core.group_em import watch_heartbeat
 from coordinator_core.session import peer_roster
 from coordinator_core.session.receiver_state import parse_iso_timestamp
 from coordinator_core.session import machinery_paths
+from coordinator_core.session.claimed_write import append_claimed_line
 
 #: Corpus-mutator declaration (generator-provenance sweep): `_record_offer`,
 #: `record_offers` and `decline` append to `state/subagent-share/<session-
@@ -368,8 +369,7 @@ def _record_offer(
     )
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8", newline="\n") as handle:
-            handle.write(line + "\n")
+        append_claimed_line(path, (line + "\n").encode("utf-8"))
     except OSError:
         return False
     return True
@@ -401,8 +401,8 @@ def record_offers(
     refuses the whole batch; a malformed peer id is refused per-row, the
     rest of the batch still lands.
 
-    Emits a SINGLE `write()` of all recorded lines joined, not one
-    `open(..., 'a')` + `write()` per row -- free given the entry point is
+    Emits a SINGLE append of all recorded lines joined, not one append call
+    per row -- free given the entry point is
     batched by construction, and it removes the concurrent-writer torn-line
     hazard a per-row append would otherwise reintroduce on a box running a
     machine-wide watcher as a second writer to the same log path.
@@ -439,8 +439,7 @@ def record_offers(
     path = send_log_path(repo_root, holder_session_id)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8", newline="\n") as handle:
-            handle.write("\n".join(lines) + "\n")
+        append_claimed_line(path, ("\n".join(lines) + "\n").encode("utf-8"))
     except OSError:
         return unrecorded + recorded
 
@@ -488,8 +487,7 @@ def decline(
     )
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8", newline="\n") as handle:
-            handle.write(line + "\n")
+        append_claimed_line(path, (line + "\n").encode("utf-8"))
     except OSError:
         return False
     return True

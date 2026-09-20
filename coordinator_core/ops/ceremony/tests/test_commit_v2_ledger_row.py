@@ -116,7 +116,14 @@ def test_ledger_paths_cover_deletions_too(repo, spy):
     (repo / rel_keep).write_text("v2\n", encoding="utf-8")
 
     result = _call(repo, {
-        "paths": [rel_keep], "deleted_paths": [rel_gone], "message": "drop gone",
+        "paths": [rel_keep],
+        "deleted_paths": [rel_gone],
+        # The fixture seeds both files one commit ago, so P2d's rollback gate
+        # sees `gone.md`'s ABSENT returning at depth 2 and refuses without this.
+        # Declaring the revert is the plan's own route for a legitimate one and
+        # does not touch what this test asserts -- which paths the ledger bills.
+        "declared_reverts": [rel_gone],
+        "message": "drop gone",
     })
 
     assert result["committed"] is True

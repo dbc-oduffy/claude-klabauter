@@ -1100,11 +1100,7 @@ def _compose_deny_message(*, commit_shaped: bool = False, quoted_content_shaped:
             "findings-self-persist-sentinel.md."
         )
     else:
-        prose = (
-            "BLOCKED: this Bash command writes a governed doctrine "
-            "surface. If the real target is one of the four files, use "
-            "Write or Edit."
-        )
+        prose = "BLOCKED: writes a governed doctrine surface. If real target is one of the four, use Write/Edit."
     return compose(prose, anchor=_WIKI_ANCHOR)
 
 

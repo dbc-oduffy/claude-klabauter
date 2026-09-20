@@ -97,34 +97,33 @@ _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit")
 _RULE_ANCHOR = 'CLAUDE.md § Conventions ("Doctrine is not changelog")'
 
 
+def _target_name(target: str) -> str:
+    """Basename only -- the full path is a data span, not prose an author
+    chose, and the reader already knows which file they just wrote."""
+    return Path(target).name
+
+
 def _advisory_reason(target: str, violations: list) -> str:
     """The prose diagnosis. High-confidence hits are named directly; an
     ambiguous-only result gets softer language ("worth a second look") since
     a bare-phrase match can't establish a real violation on its own — see
     the detector module docstring's writeup of the two ambiguous classes."""
+    name = _target_name(target)
     high = [v for v in violations if v.confidence == "high"]
     ambiguous = [v for v in violations if v.confidence == "ambiguous"]
 
     if high:
         kinds = sorted({v.kind for v in high})
-        shown = kinds[:2]
-        kinds_text = ", ".join(shown)
-        if len(kinds) > len(shown):
-            kinds_text += f", +{len(kinds) - len(shown)} more"
+        kinds_text = ", ".join(kinds[:2])
         extra = f" (+{len(ambiguous)} ambiguous)" if ambiguous else ""
         return (
-            f"{target} adds {len(high)} changelog-shaped passage(s){extra} "
-            f"({kinds_text}). State the rule in present tense; put history "
-            "in the commit message or a decision record."
+            f"{name}: {len(high)} changelog-shaped passage(s){extra} ({kinds_text}). "
+            "State the rule present-tense; history goes in the commit or a decision record."
         )
 
     kinds = sorted({v.kind for v in ambiguous})
     kinds_text = ", ".join(kinds[:2])
-    return (
-        f"{target} adds {len(ambiguous)} passage(s) worth a second look "
-        f"({kinds_text}) -- may be live-rule provenance, may be reversal "
-        "narration."
-    )
+    return f"{name}: {len(ambiguous)} passage(s) worth a second look ({kinds_text})."
 
 
 def _deny_reason(target: str, violations: list) -> str:
@@ -132,18 +131,14 @@ def _deny_reason(target: str, violations: list) -> str:
     by construction (`doctrine_changelog_prose`'s config scan has no
     ambiguous tier), so this carries no soft-language branch the sibling
     `_advisory_reason` needs."""
+    name = _target_name(target)
     kinds = sorted({v.kind for v in violations})
-    shown = kinds[:2]
-    kinds_text = ", ".join(shown)
-    if len(kinds) > len(shown):
-        kinds_text += f", +{len(kinds) - len(shown)} more"
+    kinds_text = ", ".join(kinds[:2])
     return (
-        f"{target} adds {len(violations)} changelog-shaped config token(s) "
-        f"({kinds_text}). This config file class is a hard deny: drop the "
-        "date, cite a DR by repo-relative path instead of a bare id (the "
-        "number alone matches two decision namespaces), or replace the "
-        "rot-prone pointer with the live fact it names. A genuine retirement "
-        "keeps its date with <!-- doctrine-retirement-exemption: <reason> -->."
+        f"{name}: {len(violations)} changelog-shaped config token(s) ({kinds_text}). "
+        "Drop the date, cite a DR by path (a bare id matches two namespaces), or "
+        "name the live fact instead. Use instead:\n"
+        "  <!-- doctrine-retirement-exemption: <reason> -->"
     )
 
 

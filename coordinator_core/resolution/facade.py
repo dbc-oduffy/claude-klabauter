@@ -58,11 +58,13 @@ Negative-spec:
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from typing import Optional
 
 from coordinator_core.trusted_root_guard import (
     _doe_root,
     _claude_klabauter_root,
+    _claude_klabauter_root_rungs,
     _settings_home_dir_from_env,
     coordinator_trusted_root_guard,
 )
@@ -185,3 +187,83 @@ def guard_plugin_root(
     frontage migration.
     """
     return coordinator_trusted_root_guard(mode=mode, root=root, site=site, env=env)
+
+
+#: Named RUNNABLE SCRIPT for the unreachable verdict — never a slash command
+#: (claude-klabauter#31 item 2; a cold path with no engine can have no session
+#: to run one in). ``scripts/setup.py`` is claude-klabauter's own standalone
+#: installer (see its module docstring, Responsibility 3): it idempotently
+#: writes the ``repos.claude_klabauter`` registry key this probe checks, so
+#: running it from a claude-klabauter checkout is what would flip the verdict.
+_UNREACHABLE_REMEDIATION_SCRIPT = "scripts/setup.py"
+
+
+@dataclass(frozen=True)
+class EngineReachability:
+    """Structured verdict from :func:`probe_engine_reachability`.
+
+    ``reachable`` — whether some resolution rung produced a claude-klabauter root that
+    also exists as a directory on disk right now. Existence only, deliberately
+    NOT the fuller corruption walk ``resolve_operator_config`` performs (no
+    ``/..`` check, no embedded-newline check): those catch a typo'd or stale
+    value on a root this probe has already found, and paying for them here
+    would defeat the point of a CHEAP probe a caller runs before committing to
+    a whole skill invocation.
+
+    ``rung`` — the resolution rung that answered, taken verbatim from
+    ``trusted_root_guard._claude_klabauter_root_rungs`` (e.g. ``"registry
+    repos.claude_klabauter"``). ``None`` when ``reachable`` is ``False``.
+
+    ``root`` — the path the answering rung produced. ``None`` when
+    ``reachable`` is ``False``.
+
+    ``remediation`` — a named RUNNABLE SCRIPT path, never a slash command,
+    for the caller to hand an operator when ``reachable`` is ``False``.
+    ``None`` when ``reachable`` is ``True``.
+    """
+
+    reachable: bool
+    rung: Optional[str]
+    root: Optional[str]
+    remediation: Optional[str]
+
+
+def probe_engine_reachability(*, env: dict | None = None) -> EngineReachability:
+    """Cheap probe: is the claude-klabauter engine reachable AT ALL, before a caller
+    spends a whole skill invocation discovering it is not (claude-klabauter#31
+    item 2 — the concrete engine ask; items 1 and 3 of that issue are PM
+    routing calls, out of scope here).
+
+    Reuses ``trusted_root_guard._claude_klabauter_root``/``._claude_klabauter_root_rungs`` —
+    the same registry-then-durable-file resolution chain
+    ``resolve_operator_config`` walks for ``claude_klabauter_root`` — rather than
+    authoring a second resolution ladder. Never raises: unlike
+    ``resolve_operator_config`` this is a probe, not a corruption gate, so an
+    unreachable engine is a normal, expected verdict rather than an
+    ``OperatorConfigError``.
+
+    Does NOT call ``coordinator_trusted_root_guard`` — that answers a
+    different question (is a HARNESS-SUPPLIED root trustworthy) than this one
+    (does ANY rung resolve an engine root that exists on disk). See the
+    module docstring's provenance discriminator.
+    """
+    env = os.environ if env is None else env
+    root = _claude_klabauter_root(env)
+    if root and os.path.isdir(root):
+        for label, value in _claude_klabauter_root_rungs(env):
+            if value and not value.startswith("<"):
+                return EngineReachability(
+                    reachable=True, rung=label, root=root, remediation=None
+                )
+    return EngineReachability(
+        reachable=False,
+        rung=None,
+        root=None,
+        remediation=(
+            "engine unreachable — no resolution rung (registry "
+            "repos.claude_klabauter, <settings-home>/machine-local/.claude-klabauter-live-root) "
+            "produced a claude-klabauter root that exists on disk. Run "
+            f"'python3 {_UNREACHABLE_REMEDIATION_SCRIPT}' from a claude-klabauter "
+            "checkout to register repos.claude_klabauter."
+        ),
+    )

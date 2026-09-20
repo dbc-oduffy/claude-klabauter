@@ -85,12 +85,18 @@ from coordinator_core.git.divergence import (
     diverging_paths,
 )
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
+from coordinator_core.git.commit_signing import (
+    commit_signing_enabled,
+    sign_flag_args,
+    write_signed_commit_object,
+)
 from coordinator_core.git.git_index import scoped_status as _git_index_scoped_status
 from coordinator_core.git.git_objects import (
     _ref_exists_loose_or_packed,
     cas_ref,
     write_object,
 )
+from coordinator_core.git import rollback_check
 from coordinator_core.git.git_state import (
     IndexEntry,
     IndexParseError,
@@ -583,22 +589,17 @@ def _empty_private_index_refusal(
     `GitResult` the caller returns verbatim through its existing
     git-failure path.
 
-    WHY THIS EXISTS — the incident of 2026-08-18 (`fbfbd061d`), which committed
-    a tree of `4b825dc…` and thereby deleted all 26,264 files in the repo on a
-    shared branch that was already pushed. `git write-tree` against a MISSING
-    `GIT_INDEX_FILE` returns `EMPTY_TREE_SHA` with **exit code 0 and empty
-    stderr** (verified on git 2.55.0.windows.4); a zero-byte index fails loud
-    (rc=128) but an *absent* one fails silent, so every `.ok` check upstream is
-    blind to it by construction — the index can go missing AFTER a successful
-    `read-tree` seed.
+    WHY THIS EXISTS — `git write-tree` against a MISSING `GIT_INDEX_FILE`
+    returns `EMPTY_TREE_SHA` with exit code 0 and empty stderr; a
+    zero-byte index fails loud (rc=128) but an *absent* one fails silent,
+    so every `.ok` check upstream is blind to it by construction — the
+    index can go missing AFTER a successful `read-tree` seed.
 
-    The first guard landed on the fleet seams
-    (`fleet/_common.py :: _empty_private_index_breach`). This module's
-    `commit-tree` seams are the CEREMONY path — reached by every
-    `pickup-assemble apply` on the box, which is where claude-klabauter-7a
-    observed the collapse reproduce. Both are pathspec-less by design: the
-    private index IS the commit scope, so a lost index commits the empty tree
-    rather than committing nothing.
+    `fleet/_common.py :: _empty_private_index_breach` covers the fleet
+    path; this module's `commit-tree` seams are the CEREMONY path. Both
+    are pathspec-less by design: the private index IS the commit scope,
+    so a lost index commits the empty tree rather than committing
+    nothing.
 
     Deliberately trigger-independent — it does not care WHY the index went
     missing (still open as of 2026-08-18), only that a commit is about to
@@ -646,12 +647,12 @@ def status_porcelain(
     paths: this is the only query on the commit hot path whose cost scales
     with the TREE rather than with what is being committed.
 
-    Measured on claude-klabauter at ~40 dirty paths: 1071ms unscoped floor
-    against 884ms scoped. The walk is NOT the main cost and this parameter is
-    not where the ceremony's latency lives — process creation is (DR-344),
-    and both numbers are one spawn. It is taken because it is free and
-    scales with the tree, not because ~190ms closes any gap; the ceremony's
-    budget is made or missed on how many times `git` is spawned at all.
+    The walk is NOT the main cost and this parameter is not where the
+    ceremony's latency lives — process creation is (DR-344), and both
+    unscoped and scoped reads are one spawn either way. It is taken
+    because it is free and scales with the tree, not because it closes
+    any meaningful gap; the ceremony's budget is made or missed on how
+    many times `git` is spawned at all.
 
     Output SHAPE is byte-identical either way — same porcelain v1, same
     C-quoting, same ` -> ` rename separator — deliberately, so a caller that
@@ -699,16 +700,16 @@ def dirty_relpaths_from_porcelain(
     fail-closed — the shared tail of every fleet-family worktree-dirty
     retention gate.
 
-    Extracted (2026-09-03) from `coordinator_core.ops.fleet.
+    Shared by `coordinator_core.ops.fleet.
     archive_terminal_handoffs._dirty_handoff_relpaths` and `coordinator_core.
     ops.fleet.archive_sizings._dirty_sizing_relpaths`, whose porcelain-
-    parsing tails were, before this extraction, a character-for-character
-    copy of one another — same fail-closed warning, same 2-char-status-code
-    skip, same ` -> ` rename-record split, same quote-stripping. Both
-    modules already imported `status_porcelain` from this module, so this is
-    the natural shared home for its parsed-output sibling; it is NOT a fork
-    of either fleet module (neither's own budget/in-process/chunking
-    wrapper moved here — see below).
+    parsing tails are otherwise a character-for-character copy of one
+    another — same fail-closed warning, same 2-char-status-code skip, same
+    ` -> ` rename-record split, same quote-stripping. Both modules already
+    import `status_porcelain` from this module, so this is the natural
+    shared home for its parsed-output sibling; it is NOT a fork of either
+    fleet module (neither's own budget/in-process/chunking wrapper moved
+    here — see below).
 
     NEGATIVE SPEC — deliberately NOT the whole of either caller's rail:
     `archive_terminal_handoffs._dirty_handoff_relpaths` keeps its own argv-
@@ -1082,9 +1083,7 @@ def status_porcelain_v2(
     read, replacing the old `git ls-files --deleted` probe that degraded to
     a permissive "found nothing" guess on failure (see that function's own
     docstring for the incident this closes), and replacing this seam's own
-    earlier pathspec-scoped/chunked shape (2026-08-26 second fix,
-    `docs/research/spike-verdicts/2026-08-26-one-porcelain-v2-read-
-    replaces-the-probe-suite.md`): a pathspec here only filters git's
+    earlier pathspec-scoped/chunked shape: a pathspec here only filters git's
     OUTPUT -- `git status` refreshes the index and walks the whole worktree
     regardless of what pathspec it is given -- so chunking a pathspec to
     dodge the Windows argv cap bought nothing but spawns (measured on this
@@ -1384,8 +1383,8 @@ def _write_pathspec_file(root: Union[str, Path], paths: Sequence[str]) -> Path:
     )
     # NUL-separated, and every caller MUST pass `--pathspec-file-nul`.
     # Newline-delimited is NOT safe: git C-dequotes any pathspec-file line
-    # beginning with a double quote. Measured 2026-08-26, git
-    # 2.55.0.windows.4 -- a line `"plain.txt"` stages `plain.txt`, and
+    # beginning with a double quote -- a line `"plain.txt"` stages
+    # `plain.txt`, and
     # `"pla\151n.txt"` decodes the octal escape and also stages
     # `plain.txt`, both at rc=0. A silent mis-stage at rc=0 is invisible to
     # every downstream check, the residue reconciliation included.
@@ -1421,8 +1420,7 @@ def add_paths_pathspec_file(cwd: Union[str, Path], paths: Sequence[str]) -> GitR
 
 
 #: Env var `coordinator.bin.lib.git_hook_install.ensure_prepare_commit_msg_
-#: hook` wires as ITS OWN `skip_env` (C2, docs/dispatch-briefs/2026-08-25-
-#: the-engine-commits-without-re-entering-itself/C2.md) -- deliberately a
+#: hook` wires as ITS OWN `skip_env` -- deliberately a
 #: DIFFERENT name from `_AUTO_PUSH_SUPPRESS_ENV` (C1's post-commit sentinel):
 #: the two hooks skip on different facts, and folding them into one flag
 #: would be the "skip all hooks" generalization `_shim_body`'s own docstring
@@ -1523,16 +1521,13 @@ def commit_with_message_file_pathspec_scoped(
 #
 # Neither documented commit form is safe alone on a shared working tree:
 #   `git commit -- <paths>` reads the WORKTREE, silently discarding
-#     deliberately-staged partial-hunk content (claude-klabauter 506748a0).
+#     deliberately-staged partial-hunk content.
 #   a bare `git commit` (or one whose pathspec is a DIRECTORY, which matches
 #     whatever lands inside it AT COMMIT TIME) commits THE INDEX, silently
-#     absorbing whatever a peer session staged (DoE-claude 726925b2).
+#     absorbing whatever a peer session staged.
 # `commit_scoped()` is the single entrypoint that computes which mechanism
 # is safe for a given explicit path set from OBSERVED index/worktree state
 # (via `diverging_paths()`), rather than asking the caller to pick.
-#
-# Spec backlink: docs/plans/2026-07-27-computed-commit-mechanism-selection.md
-# chunk C3.
 # ---------------------------------------------------------------------------
 
 
@@ -1730,7 +1725,7 @@ def _apply_trailers(msg_file, trailer_args: Sequence[str], root) -> Optional["Gi
     Returns `None` on success and the failed `GitResult` otherwise, so the
     three call sites keep their existing early-return shape.
 
-    This is C11's third non-write spawn. The peer plan's ratified anti-scope
+    The peer plan's ratified anti-scope
     forbids a hand-written replacement that GUESSES at trailer semantics and
     names a byte-identity corpus as what legitimises one; that corpus is
     `state/audits/2026-08-25-interpret-trailers-byte-identity-corpus.py`, and
@@ -1778,14 +1773,11 @@ class DeliverableIdAssertionConflictError(RuntimeError):
     at all. A sibling class cannot be caught by that typed handler, so
     it can't be routed there by accident.
 
-    2026-08-10 PM ruling ("FAIL LOUD by raising the existing ...
-    DivergentDeliverableIdError") governed the carry-or-mint system this
-    class splits away from; the 2026-08-19 PM ruling (DR-406) supersedes
-    it, naming this split so a commit assertion conflict gets its own
-    class instead of borrowing the carry system's. See `docs/decisions/
-    DR-406` and this plan's chunk C4 authorization.
+    DR-406 names this split so a commit assertion conflict gets its own
+    class instead of borrowing the carry system's -- see `docs/decisions/
+    DR-406`.
 
-    `caller_facing_validation` (DR-406 chunk C7): this class's message
+    `caller_facing_validation` (DR-406): this class's message
     already names both disagreeing ids and what the caller must do, so it
     opts into `ipc.py`'s existing duck-type marker rather than inventing a
     parallel signal -- that module's `CallerFacingValidationError` docstring
@@ -2657,14 +2649,14 @@ def _resolve_content_sources(
     `_SOURCE_WORKTREE` -- as a single total function over the union of
     `diverged`, `non_diverged`, and `supplied_blobs`'s keys, computed once.
 
-    Plan backlink: docs/plans/2026-08-14-the-tool-stages-what-it-commits.md
-    chunk C1. Replaces the prior scheme, where `_commit_scoped_private_index`
-    asked two questions in the right order (is this path in `diverged`? is
-    it in `non_diverged`?) and a caller-supplied blob's precedence over both
-    survived only because `git add -- non_diverged` happened to run BEFORE
-    the cacheinfo loop that would otherwise apply a supplied blob -- nothing
-    stated that ordering as a rule. Here the precedence is the function
-    itself, not a side effect of statement order in the caller.
+    Replaces the prior scheme, where `_commit_scoped_private_index` asked
+    two questions in the right order (is this path in `diverged`? is it
+    in `non_diverged`?) and a caller-supplied blob's precedence over both
+    survived only because `git add -- non_diverged` happened to run
+    BEFORE the cacheinfo loop that would otherwise apply a supplied
+    blob -- nothing stated that ordering as a rule. Here the precedence
+    is the function itself, not a side effect of statement order in the
+    caller.
 
     Precedence (stated, not incidental): `supplied_blobs` wins first -- ANY
     path present in `supplied_blobs` resolves to `_SOURCE_SUPPLIED` and can
@@ -2676,12 +2668,11 @@ def _resolve_content_sources(
     path in `non_diverged` resolves `_SOURCE_WORKTREE` (safe to (re-)stage
     from the worktree).
 
-    `supplied_blobs` has no producer yet -- C2 introduces
-    `stage_from_patch()`, the first real caller. Defaults to `{}`, which
-    makes this function's output IDENTICAL to the prior two-set partition:
-    every path in `diverged` resolves staged-blob, every path in
-    `non_diverged` resolves worktree, nothing ever resolves supplied-blob.
-    Behaviour-preserving by construction, not merely by test coverage.
+    `supplied_blobs` defaults to `{}`, which makes this function's output
+    IDENTICAL to the prior two-set partition: every path in `diverged`
+    resolves staged-blob, every path in `non_diverged` resolves worktree,
+    nothing ever resolves supplied-blob. Behaviour-preserving by
+    construction, not merely by test coverage.
     """
     supplied_blobs = supplied_blobs or {}
     resolution: Dict[str, str] = {}
@@ -2777,7 +2768,7 @@ def _assemble_commit_tree_input(
     commit its removal and gets it resurrected instead, with no spawn count,
     no rc, and no `git fsck` symptom to catch it.
 
-    Live instance (2026-08-27): `commit_pipeline._run_in_plane_archive_sweep`
+    Live instance: `commit_pipeline._run_in_plane_archive_sweep`
     moves terminal handoffs with `os.replace` and touches no index, so the
     archival move committed its destination and kept its source -- the record
     landed at BOTH paths. The alternative fix, staging the removal first,
@@ -3071,6 +3062,17 @@ def _hash_worktree_blobs(
     return GitResult(returncode=0, stdout="\n".join(ordered) + "\n", stderr="")
 
 
+# The one place that pins the FULL exclusion-notice literal for the staged
+# (index) arm -- test_commit_scoped_edges.py imports this rather than
+# holding its own copy, so the literal has a single source of truth (AC3).
+_WORKTREE_EXCLUDED_TEMPLATE = (
+    "commit_scoped: worktree edits to %s were NOT included -- "
+    "the committed content came from the shared index, which records no "
+    "author for staged content (private-index branch; see "
+    "GitResult.worktree_excluded)"
+)
+
+
 def _commit_scoped_private_index(
     diverged: Sequence[str],
     non_diverged: Sequence[str],
@@ -3082,6 +3084,8 @@ def _commit_scoped_private_index(
     attributed_session_id: Optional[str] = None,
     mode_only_paths: Optional[Set[str]] = None,
     worktree_deleted: Optional[Set[str]] = None,
+    detect_rollback: bool = False,
+    declared_reverts: Sequence[str] = (),
 ) -> GitResult:
     """The PRIVATE-INDEX branch of `commit_scoped()` -- see that function's
     docstring for when this runs and why. Builds a commit tree under a
@@ -3106,8 +3110,7 @@ def _commit_scoped_private_index(
     precedence from `diverged`/`non_diverged` set membership at each site
     that needs it.
 
-    `attributed_session_id` (state/bug-backlog/2026-08-18-scoped-git-commit-
-    stamps-a-foreign-session-id-8d21f0c4e7b9.yaml) -- OPTIONAL, passed
+    `attributed_session_id` -- OPTIONAL, passed
     straight through to `compute_missing_trailer_args`'s own
     `session_id_override`. `None` (the default) reproduces the prior blind
     env-var resolution exactly. See `commit_scoped`'s own docstring for the
@@ -3237,6 +3240,49 @@ def _commit_scoped_private_index(
     }
     for path in absent:
         assembled[path] = _ABSENT
+
+    # STAGED-ROLLBACK CHECK (P2e, docs/plans/2026-09-11-close-the-three-
+    # silent-failure-gaps.md) -- opt-in (`detect_rollback=True`), and it has
+    # to sit HERE: `assembled` above is this call's own final per-path
+    # content resolution (`_resolve_content_sources` -> `_assemble_commit_
+    # tree_input`, the SAME "resolved candidates" `commit.commit_paths`'
+    # P2d check reads off its own `assembled`), and nothing below this point
+    # has written a tree or commit object yet (`_commit_via_head_spine`/the
+    # ladder, further down, is the first write). Mirrors `commit.commit_
+    # paths`' own placement and shape exactly -- see `StagedRollbackRefused`
+    # there for the mechanism. Unlike that route, a refusal here returns a
+    # not-ok `GitResult` (this function's own contract; it never raises) --
+    # there is nothing to unstage, since neither `commit_scoped` branch ever
+    # touches the shared index (see this function's own C8b-rewire
+    # paragraph above): the plan row's "unstage exactly what this call
+    # staged" describes commit_scoped's pre-zero-spawn shape and is a no-op
+    # here by construction.
+    if detect_rollback and old_head is not None:
+        declared_set = {d.replace("\\", "/") for d in declared_reverts}
+        candidates: Dict[str, object] = {}
+        for p, val in assembled.items():
+            if p in declared_set:
+                continue
+            candidates[p] = rollback_check.ABSENT if val is _ABSENT else val[1]
+        if candidates:
+            findings = rollback_check.find_exact_blob_rollbacks(
+                resolve_git_common_dir(root), old_head, candidates
+            )
+            if rollback_check.refusal(findings):
+                detail = "; ".join(
+                    f"{f.path} (depth {f.depth}, restores {f.restores_commit})"
+                    for f in findings
+                )
+                return GitResult(
+                    returncode=-1,
+                    stdout="",
+                    stderr=(
+                        f"_commit_scoped_private_index: staged rollback detected -- "
+                        f"{detail}. Refused before any tree or commit object was "
+                        "written. Pass the reverted path(s) via --declared-revert "
+                        "if this is intentional."
+                    ),
+                )
 
     # `commit-tree` is plumbing -- it runs NO git hooks, so the
     # `prepare-commit-msg` hook that stamps Session-Id/Deliverable-Id on
@@ -3460,7 +3506,7 @@ def _commit_scoped_private_index(
             subject_lines = msg_text.splitlines()
             subject = subject_lines[0] if subject_lines else "commit"
 
-            commit_tree_args = ["commit-tree", tree_sha]
+            commit_tree_args = ["commit-tree", *sign_flag_args(root), tree_sha]
             if old_head is not None:
                 commit_tree_args += ["-p", old_head]
             commit_tree_args += ["-F", str(msg_file)]
@@ -3733,12 +3779,23 @@ def _commit_scoped_private_index(
     # the opposite of what happened, and reads as reassurance (P1
     # 69ce1cdfd, item 3).
     substitute = "HEAD" if index_snapshot.stat_identity is None else "staged (index)"
+    # Bounded at five, matching `commit_v2`'s `worktree_over_staged` warning
+    # (AC1, AC5, AC9): a slice plus a truthiness test on `excluded_paths[5:]`,
+    # never a `len()` call.
+    _paths_str = ", ".join(excluded_paths[:5])
+    if excluded_paths[5:]:
+        _paths_str += ", ..."
     exclusion_notice = (
         (
-            "commit_scoped: worktree edits to %s were NOT included -- "
-            "the %s version was committed instead (private-"
-            "index branch; see GitResult.worktree_excluded)"
-            % (", ".join(excluded_paths), substitute)
+            _WORKTREE_EXCLUDED_TEMPLATE % _paths_str
+            if substitute != "HEAD"
+            else (
+                "commit_scoped: worktree edits to %s were NOT included -- "
+                "no index file was present, so the content was taken from "
+                "HEAD instead (private-index branch; see "
+                "GitResult.worktree_excluded)"
+                % _paths_str
+            )
         )
         if excluded_paths
         else ""
@@ -3819,12 +3876,29 @@ def commit_scoped(
     supplied_blobs: Optional[Dict[str, str]] = None,
     suppress_post_commit_auto_push: bool = False,
     attributed_session_id: Optional[str] = None,
+    detect_rollback: bool = False,
+    declared_reverts: Sequence[str] = (),
 ) -> GitResult:
     """Commit exactly `paths`, choosing the safe mechanism from OBSERVED
     index/worktree state -- the computed replacement for hand-picking
     between `git commit -- <paths>` and a bare `git commit` on a shared
     working tree (see the module-section docstring above `commit_scoped`
     for the two incidents this closes).
+
+    `detect_rollback`/`declared_reverts` (P2e, docs/plans/2026-09-11-close-
+    the-three-silent-failure-gaps.md) -- the same opt-in `rollback_check.
+    find_exact_blob_rollbacks` check `commit.commit_paths` runs (P2d,
+    `coordinator_core.git.commit.StagedRollbackRefused`), wired here for
+    this function's own agent route (`coordinator-safe-commit.py`'s
+    `do_scoped`). DEFAULT FALSE -- the default caller pays nothing and never
+    sees a refusal shaped by it. `declared_reverts` names paths this call is
+    deliberately reverting; they are excluded from the candidate set
+    entirely, not merely exempted from refusal. Forwarded straight through
+    to `_commit_scoped_private_index`, which both branches land through --
+    see the STAGED-ROLLBACK CHECK comment there for placement and the
+    "nothing to unstage" correction against the plan row's `reset_paths`
+    language (this function never runs a real `git add`, so there is
+    nothing staged onto the shared index for a refusal to unstage).
 
     `attributed_session_id` (state/bug-backlog/2026-08-18-scoped-git-commit-
     stamps-a-foreign-session-id-8d21f0c4e7b9.yaml) -- OPTIONAL, the
@@ -4169,8 +4243,7 @@ def commit_scoped(
         else:
             # Chunked for the same argv-length reason as the `gap` branch
             # above -- this is the common case (`commit_pipeline.commit()`
-            # no longer passes `known_checked`/`known_diverged` at all, per
-            # `docs/plans/2026-08-07-excise-the-ceremony-lock.md` § C10), so
+            # no longer passes `known_checked`/`known_diverged` at all), so
             # `path_list` here is routinely the full percolate-publish batch
             # (~2000-2700 paths) that blew the raw 32767-char Windows argv
             # cap on one unchunked `git diff --cached --name-only` call
@@ -4298,14 +4371,13 @@ def commit_scoped(
         # on `msg_file` now, a fact this code just established. No spawned
         # `git commit` runs on this branch any more (see below), so no
         # `prepare-commit-msg` hook will ever read this sentinel for THIS
-        # call. Review: coordinator:code-reviewer (P3, 2026-08-30) -- the
-        # prior assign-then-`del` here computed `_trailer_sentinel_env()`
-        # and immediately discarded it, which read as accidental dead code
-        # rather than a deliberate invariant pin; no test in the current
-        # tree consumes a "sentinel-setter fired here" fact (grep confirms
-        # zero references to `_TRAILERS_ALREADY_APPLIED_ENV`/
-        # `_trailer_sentinel_env` outside this module), so the call is
-        # dropped outright rather than kept as a no-op assert.
+        # call. An assign-then-`del` of `_trailer_sentinel_env()` here
+        # would read as accidental dead code rather than a deliberate
+        # invariant pin; no test in the current tree consumes a
+        # "sentinel-setter fired here" fact (grep confirms zero references
+        # to `_TRAILERS_ALREADY_APPLIED_ENV`/`_trailer_sentinel_env`
+        # outside this module), so the call is dropped outright rather
+        # than kept as a no-op assert.
 
         # C3 dispatch (state/dispatch-briefs/2026-08-26-the-commit-becomes-
         # a-warm-served-op/C3.md), spike verdict docs/research/spike-
@@ -4359,6 +4431,8 @@ def commit_scoped(
             supplied_blobs=supplied_blobs,
             attributed_session_id=attributed_session_id,
             worktree_deleted=set(deleted),
+            detect_rollback=detect_rollback,
+            declared_reverts=declared_reverts,
         )
         return result
 
@@ -4369,6 +4443,8 @@ def commit_scoped(
         supplied_blobs=supplied_blobs,
         attributed_session_id=attributed_session_id,
         mode_only_paths=mode_delta_paths,
+        detect_rollback=detect_rollback,
+        declared_reverts=declared_reverts,
     )
     return result
 
@@ -4408,8 +4484,8 @@ def _hash_object_stdin_bytes(
     """`git hash-object -w --path=<rel_path> --stdin`, fed RAW BYTES over a
     bytes-mode subprocess leg -- deliberately NOT routed through `_git()`.
 
-    Two corrections pinned by the spike (DR-272 § 3.3 bound 2, plan C2 body
-    items 1-2), both load-bearing and neither optional:
+    Two corrections pinned by the spike (DR-272 § 3.3 bound 2), both
+    load-bearing and neither optional:
 
     `--path=<rel_path>` is REQUIRED, not cosmetic -- `--stdin` implies
     `--no-filters` unless `--path` is given, so without it a path under a
@@ -4480,9 +4556,8 @@ def _drop_trailer_arg(trailer_args: List[str], trailer_name: str) -> List[str]:
 
 
 #: The tree algebra proper (`_ABSENT`, `_write_tree_level`,
-#: `_rewrite_head_spine`, `_synthesize_absent_spine_dirs`) was relocated
-#: (2026-08-26, C1 of docs/plans/2026-08-26-the-archival-commit-helper-
-#: computes-its-own-tree.md) to `coordinator_core.git.tree_spine` --
+#: `_rewrite_head_spine`, `_synthesize_absent_spine_dirs`) lives in
+#: `coordinator_core.git.tree_spine` --
 #: `_commit_via_head_spine` below stays here (it drags commit policy: CAS
 #: landing, identity resolution, trailer handling). Re-exported here under
 #: their original names so every existing caller -- including
@@ -4812,10 +4887,28 @@ def _commit_via_head_spine(
 
     stamp = _author_stamp()
     who = f"{name} <{email}> {stamp}"
-    header = f"tree {new_tree_sha}\nparent {old_head}\nauthor {who}\ncommitter {who}\n\n".encode(
-        "utf-8"
-    )
-    new_commit_sha = write_object(common_dir, b"commit", header + msg_bytes)
+    new_commit_sha: Optional[str] = None
+    if commit_signing_enabled(root):
+        new_commit_sha, sign_warning = write_signed_commit_object(
+            root,
+            new_tree_sha,
+            old_head,
+            msg_bytes,
+            name,
+            email,
+            stamp,
+        )
+        if sign_warning is not None:
+            # DR-308: signing stays, enforcement does not -- a broken
+            # signing setup must never block this commit from landing.
+            # Fall through to the SAME zero-spawn unsigned write the
+            # `else` branch below already uses.
+            _LOG.warning(sign_warning)
+    if new_commit_sha is None:
+        header = f"tree {new_tree_sha}\nparent {old_head}\nauthor {who}\ncommitter {who}\n\n".encode(
+            "utf-8"
+        )
+        new_commit_sha = write_object(common_dir, b"commit", header + msg_bytes)
 
     landed = cas_ref(
         ref_gitdir,
@@ -4946,8 +5039,7 @@ def commit_authored_content(
     File mode is preserved from `HEAD`'s existing tree entry for `path` --
     this entrypoint never changes a file's executable bit; only its content.
 
-    `attributed_session_id` (state/bug-backlog/2026-08-18-scoped-git-commit-
-    stamps-a-foreign-session-id-8d21f0c4e7b9.yaml) -- OPTIONAL, passed
+    `attributed_session_id` -- OPTIONAL, passed
     straight through to `compute_missing_trailer_args`'s own
     `session_id_override`, same contract `commit_scoped`/
     `_commit_scoped_private_index` already carry (see their own docstrings).
@@ -5006,8 +5098,7 @@ def commit_authored_content(
             stderr=f"commit_authored_content: {directory_pathspec_diagnostic(normalized)}",
         )
 
-    # C3 (docs/plans/2026-08-21-the-commit-path-reads-git-state-without-
-    # spawning-git.md): `git rev-parse HEAD` replaced by a direct `.git/HEAD`
+    # `git rev-parse HEAD` is replaced by a direct `.git/HEAD`
     # file read -- zero spawns, not a subprocess swap. `old_head` still
     # serves both roles the single prior read served (commit-tree's `-p`
     # parent AND `update-ref`'s CAS old-value argument below); the atomicity
@@ -5137,7 +5228,10 @@ def commit_authored_content(
             subject = subject_lines[0] if subject_lines else "commit"
 
             commit_tree_result = _git(
-                ["commit-tree", tree_sha, "-p", old_head, "-F", str(msg_file)],
+                [
+                    "commit-tree", *sign_flag_args(root),
+                    tree_sha, "-p", old_head, "-F", str(msg_file),
+                ],
                 cwd=root,
                 env=private_env,
             )
@@ -5181,9 +5275,8 @@ def commit_authored_content(
         cwd=root,
     )
 
-    # Bound 5 -- post-commit auto-push replay deleted (C6 of docs/plans/
-    # 2026-08-30-who-pushes-and-when.md): no per-commit push replay through
-    # this entrypoint any more; publish is the caller's own concern.
+    # Bound 5 -- no per-commit push replay through this entrypoint;
+    # publish is the caller's own concern.
 
     # C11 (state/lessons/2026-08-18-a-ruling-applied-at-one-door-leaves-
     # the-siblings-unswept-7c3e1f9a4d22.yaml): this entrypoint is one of
@@ -5626,16 +5719,14 @@ def rebase_onto(
 ) -> GitResult:
     """`git rebase --onto <upstream_ref> <merge_base> [<branch>]` — push-retry rebase step.
 
-    Latent-bug fix (C3b, 2026-08-08): the literal `"HEAD"` default used to be
-    passed through as git's own `<branch>` positional argument. Per git's own
-    semantics that argument, when supplied, is checked out BEFORE the rebase
-    runs -- and `git checkout HEAD` detaches, since `HEAD` resolves to a
-    commit, not a branch name. Every genuine reject-triggered retry
-    (`push_with_retry`'s fetch+rebase+re-push cycle) therefore left the
-    worktree in detached-HEAD state after a successful rebase, and the
-    re-push that follows failed outright ("You are not currently on a
-    branch") -- silently corrupting the one path C3b's pushed-range retry
-    logic exists to cover. `branch == "HEAD"` (the sentinel every existing
+    Per git's own semantics, a `<branch>` positional argument, when
+    supplied, is checked out BEFORE the rebase runs -- and `git checkout
+    HEAD` detaches, since `HEAD` resolves to a commit, not a branch name.
+    Passing the literal `"HEAD"` default straight through as that
+    positional argument would therefore leave the worktree in
+    detached-HEAD state after a successful rebase, and the re-push that
+    follows would fail outright ("You are not currently on a branch").
+    `branch == "HEAD"` (the sentinel every existing
     caller passes) now omits the positional argument, which is git's own
     2-argument `--onto` form and operates on the current branch WITHOUT
     checking anything out -- the behaviour every caller already assumed.

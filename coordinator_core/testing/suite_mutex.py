@@ -17,17 +17,23 @@ liveness verdict to the session registry, neither of which is meaningful for
 a machine-wide, repo-agnostic lock whose holder is a bare test-runner
 process):
 
-  - Lock directory: ``<settings-home>/claude-klabauter/test-suite-mutex.lock/``.
+  - Lock directory: ``<settings-home>/test-suite-mutex.lock/``, directly at
+    the settings-home root rather than under a plane-named subdirectory. The
+    lock is machine-wide across every repo AND every engine plane (the
+    source-tree checkout and the published ``claude-klabauter`` mirror), and
+    a plane-named segment is exactly the kind of literal publish rewrites per
+    plane — the source plane read ``claude-klabauter`` while the mirror plane
+    read ``claude-klabauter``, so the two planes took different "machine-wide"
+    locks and ran concurrently
+    (``docs/plans/2026-09-11-boundary-identifiers-survive-publish.md``).
+    Follows the ``<settings-home>/.coordinator-venv.lock`` precedent in
+    ``coordinator_core/install/ensure_venv.py``: an out-of-repo,
+    plane-independent path with no rewritable segment.
     ``os.mkdir`` is atomic on POSIX and on Windows — exactly one racing
     process observes success, every other observes ``FileExistsError``. Never
     check-then-write.
   - Holder metadata (``meta.json``) is written INSIDE the lock dir after the
     winning mkdir, atomically via a temp file + ``os.replace``.
-  - Placement follows claude-klabauter's C11 durable-data-plane convention (CLAUDE.md
-    § Durable-data plane): out-of-repo durable data lives under
-    ``$(coordinator-settings-home)/claude-klabauter/``, never an ad-hoc ``~/``
-    path and never inside a repo tree — a per-repo lock would not serialize
-    the cross-repo case that causes the incident.
 
 PID-LIVENESS (load-bearing distinction): the repo lesson
 ``claim-lock-pid-is-not-liveness`` says a lock's recorded PID is often the
@@ -57,7 +63,20 @@ Negative-spec — what this lock is NOT:
     - NOT a general-purpose task lock. Do not reuse it to serialize
       ceremonies, commits, pipeline writes, or embedding jobs — a
       long-running unrelated holder would block the very test runs this
-      exists to admit one-at-a-time. The commit pipeline no longer holds a
+      exists to admit one-at-a-time.
+
+PATH PARAMETER (``holder``/``acquire``/``release``/``held`` take a keyword-only
+``path=``): every public entry point defaults to ``lock_path()`` and is
+unchanged for every existing caller. The parameter exists so
+``coordinator_core.testing.tier_t_slots`` can build a K-SLOT semaphore out of K
+independent lock dirs without reimplementing this module's liveness, TTL-split,
+grace-window and reclaim logic — all of which were bought with incidents and
+must not be forked. What is shared is the single-slot PRIMITIVE; what is NOT
+shared is the policy above. A caller passing ``path=`` is taking one slot of a
+different lock and inherits this module's staleness semantics, not its
+one-at-a-time-machine-wide meaning. Do not read a non-default ``path=`` holder
+as "the suite mutex is held".
+ The commit pipeline no longer holds a
       ceremony-wide mutex (``ceremony_lock.py`` was removed as a live
       mechanism, PM ruling 2026-08-07); single-file RMW uses
       ``coordinator_core/locked_write.py``.
@@ -181,7 +200,7 @@ def lock_path() -> Path:
     Resolved fresh on every call (never cached at import time) so a test or a
     caller that repoints ``COORDINATOR_SETTINGS_HOME`` is honoured.
     """
-    return settings_home() / "claude-klabauter" / _LOCK_DIRNAME
+    return settings_home() / _LOCK_DIRNAME
 
 
 def _now_iso() -> str:
@@ -341,7 +360,7 @@ def _iter_stray_tmp(path: Path):
         return []
 
 
-def holder() -> Optional[dict]:
+def holder(*, path: Optional[Path] = None) -> Optional[dict]:
     """Return the current holder, or None when the mutex is free.
 
     The returned dict is ``{"pid": int, "owner": str, "started_at": str
@@ -356,7 +375,7 @@ def holder() -> Optional[dict]:
     that polls ``holder()`` sees the truth rather than a ghost.
     """
     try:
-        path = lock_path()
+        path = lock_path() if path is None else path
         if not path.is_dir():
             return None
 
@@ -402,7 +421,8 @@ def _try_mkdir(path: Path) -> bool:
     return True
 
 
-def acquire(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = None) -> bool:
+def acquire(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = None,
+            path: Optional[Path] = None) -> bool:
     """Acquire the machine-wide suite mutex for ``owner``. True iff held on return.
 
     ``timeout=0`` (the default) is non-blocking: one attempt, then False.
@@ -422,7 +442,7 @@ def acquire(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = 
     the moment it exits — see the module docstring's PID-LIVENESS section.
     """
     effective_pid = os.getpid() if pid is None else int(pid)
-    path = lock_path()
+    path = lock_path() if path is None else path
     deadline = time.monotonic() + max(0.0, timeout)
     interval = _POLL_INITIAL_SECS
     reclaim_retries = 0
@@ -442,7 +462,7 @@ def acquire(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = 
                 return False
             return True
 
-        current = holder()
+        current = holder(path=path)
         if current is None:
             # The dir existed but resolved to no holder — it was just freed or
             # reclaimed, so retry the mkdir immediately. Bounded, because a lock
@@ -468,7 +488,7 @@ def acquire(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = 
         interval = min(interval * _POLL_BACKOFF, _POLL_MAX_SECS)
 
 
-def release(owner: str) -> None:
+def release(owner: str, *, path: Optional[Path] = None) -> None:
     """Release the mutex if ``owner`` holds it; otherwise log and do nothing.
 
     A release by a non-owner — a stale caller whose lock was already reclaimed
@@ -477,7 +497,7 @@ def release(owner: str) -> None:
     session's live lock, and a spurious release must not crash the releaser
     mid-teardown.
     """
-    path = lock_path()
+    path = lock_path() if path is None else path
     if not path.is_dir():
         return
 
@@ -508,7 +528,8 @@ def release(owner: str) -> None:
 
 
 @contextmanager
-def held(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = None) -> Iterator[bool]:
+def held(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = None,
+         path: Optional[Path] = None) -> Iterator[bool]:
     """Context manager holding the mutex for the block; yields whether it was acquired.
 
     ``with held(owner, cmd) as got:`` yields True when the mutex was acquired
@@ -518,9 +539,9 @@ def held(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = Non
     alike, and only when this call actually acquired: a False yield releases
     nothing, so a failed acquire can never tear down the real holder's lock.
     """
-    acquired = acquire(owner, cmd, timeout, pid=pid)
+    acquired = acquire(owner, cmd, timeout, pid=pid, path=path)
     try:
         yield acquired
     finally:
         if acquired:
-            release(owner)
+            release(owner, path=path)

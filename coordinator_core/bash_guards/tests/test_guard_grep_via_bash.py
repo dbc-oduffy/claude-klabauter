@@ -199,6 +199,31 @@ class TestPartialRewriteStillAdvises:
 # ---------------------------------------------------------------------------
 
 
+class TestPartialRewriteMessageSizeFloorC3:
+    """C3 (docs/plans/2026-09-11-trim-the-remaining-over-cap-guard-
+    messages.md): pins the finding that this cell cannot reach
+    `MESSAGE_PROSE_CAP_BYTES` (220) without losing its route -- see
+    `_composed_advisory`'s "Not exemptable either" docstring paragraph.
+    Regression check only: a future change that pushes the floor higher,
+    or that lowers it back under cap, should touch this number
+    deliberately rather than let it drift unnoticed either way."""
+
+    def test_partial_rewrite_cell_stays_over_cap_at_a_bounded_floor(self):
+        from coordinator_core.bash_guards._message_size import measure_envelope
+
+        out = _envelope("grep -rn TODO src/ | wc -l", host_is_windows=True)
+        measurement = measure_envelope({"hookSpecificOutput": out}, band="advisory-rewrite")
+        assert measurement.is_speaker
+        assert measurement.over_cap
+        # Measured 380 at C3 authoring; headroomed ceiling, not a precision
+        # pin -- see the module docstring's floor note for the derivation.
+        assert measurement.prose_bytes <= 450, (
+            "prose bytes grew past the C3-measured floor headroom (%d) -- "
+            "investigate before assuming this is still the same floor"
+            % measurement.prose_bytes
+        )
+
+
 class TestNoActionableAlternativeIsSilent:
     def test_piped_in_composed_is_silent(self):
         assert _result("cat file.txt | grep TODO", host_is_windows=True) is None

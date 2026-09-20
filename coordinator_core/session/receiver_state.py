@@ -154,9 +154,9 @@ process been", not "is this process alive".
 
 Negative-spec:
     - Do NOT write to ``meta.json`` — its single-writer invariant is guarded by prose
-      only (``session_heartbeat.py``'s negative-spec); a second producer buys clobber
-      risk on the liveness-critical file for no gain. This module owns exactly one
-      artifact: ``receiver-state.json``, a NEW sibling file.
+      only; a second producer buys clobber risk on the liveness-critical file for no
+      gain. This module owns exactly one artifact: ``receiver-state.json``, a NEW
+      sibling file.
     - Do NOT write to ``state/`` — session-runtime/liveness layer only
       (``.git/coordinator-sessions/``), same confinement as every bookkeeping op in
       ``ipc.py``'s inventory.

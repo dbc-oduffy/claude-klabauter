@@ -1719,6 +1719,14 @@ class _ServerContext:
         # never pays for real OS process spawns it does not exercise.
         self._dispatch_pool: Optional["concurrent.futures.ProcessPoolExecutor"] = None
         self._dispatch_pool_lock = threading.Lock()
+        # T1 (docs/plans/2026-09-06-warm-engine-survival-and-door-
+        # measurement.md): the pool bookkeeping `_start_worker_pool` keeps
+        # so `worker_pool_depth()` has something to count. Written once, at
+        # boot, by `_start_worker_pool` alone -- never appended to or
+        # mutated from any other thread -- so `worker_pool_depth()` reading
+        # it from the idle-watchdog thread needs no lock; each `Thread`
+        # object's own `is_alive()` is what varies, not this list.
+        self._worker_threads: "list[threading.Thread]" = []
 
     def close_listener(self) -> None:
         """STOPS ACCEPTING; DOES NOT CLOSE THE ENDPOINT. Flips one
@@ -1975,6 +1983,13 @@ class _ServerContext:
         # `lifecycle.set_final_sweep_hook`) are deliberately two disjoint
         # code paths, never double-invoked for the same tick.
         push_cadence.on_idle_tick(served_repos=self.served_repos)
+        # T1: record this tick's live worker count through the existing
+        # `record_server_boot`/`server_boot_samples` append-log pattern --
+        # a read of live state on this already-bounded tick, never a new
+        # sampling process or loop (CLAUDE.md § Load norm).
+        telemetry.record_worker_pool_depth(
+            depth=self.worker_pool_depth(), pid=os.getpid(), engine_root=self.engine_root
+        )
 
     def _final_sweep(self) -> None:
         """The mandatory final sweep (`warm.push_cadence` module docstring,
@@ -2148,9 +2163,31 @@ class _ServerContext:
         the same isolated-exercise reason `_start_pending_listener_pool`
         is: a boot-time step that should be drivable in a test without also
         blocking on `self._stopped.wait()`.
+
+        Each started `Thread` is appended to `self._worker_threads` -- T1's
+        pool bookkeeping, read back by `worker_pool_depth()`. A second call
+        (no production caller does this today) would grow the list past
+        `pool_size`, which is correct: it reflects a real second pool
+        having been started, not a bug in the count.
         """
         for _ in range(pool_size):
-            threading.Thread(target=self._worker_loop, daemon=True).start()
+            thread = threading.Thread(target=self._worker_loop, daemon=True)
+            thread.start()
+            self._worker_threads.append(thread)
+
+    def worker_pool_depth(self) -> int:
+        """Live `_worker_loop` thread count for this running server -- AC1's
+        instrument (T1). Counts only threads still alive right now
+        (`Thread.is_alive()`), so a worker that died past `_worker_loop`'s
+        own `except Exception` guard (a `BaseException`/`SystemExit` escape,
+        or any death route that bypasses that guard) is reflected here as a
+        drop, without this method ever touching the guard itself. A freshly
+        booted pool reads `WORKER_POOL_SIZE` (30); this method returns 0,
+        never an error, on a context whose pool was never started (`self.
+        _worker_threads` empty), matching every other best-effort read in
+        this module.
+        """
+        return sum(1 for thread in self._worker_threads if thread.is_alive())
 
     def _worker_loop(self) -> None:
         """One bounded dispatch worker's whole life: block on the shared

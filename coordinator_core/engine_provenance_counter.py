@@ -88,6 +88,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.session.claimed_write import append_claimed_line
 from coordinator_core.subagent_sandbox import resolve_git_root_cheap
 
 _COUNTS_FILENAME = "engine-provenance-counts.jsonl"
@@ -174,5 +175,4 @@ def record_engine_provenance(
         "engine_root": engine_root,
         "at": datetime.now(timezone.utc).isoformat(),
     }
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
+    append_claimed_line(path, (json.dumps(record) + "\n").encode("utf-8"))

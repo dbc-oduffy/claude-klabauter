@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import calendar
 import json
+import os
 import time
 
 from coordinator_core.group_em import watch_heartbeat
@@ -40,6 +41,13 @@ _READER_KEYS = {
     "subscribed_peers",
     "declinations",
     "writer_session_id",
+    # Added for item 2 (`--status` false-alive with no process check,
+    # 2026-09-19 memo): self-captured writer process identity, read back by
+    # `process_confirmed_alive`. The DoE reader takes keys by name and
+    # ignores these two; per this pin's own docstring, adding them is still
+    # a decision recorded here rather than a silent shape drift.
+    "pid",
+    "pid_start_epoch",
 }
 
 _READER_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -654,3 +662,131 @@ def test_no_advertised_rearm_instruction_in_these_three_files_omits_the_holder_i
     # the settings-home launcher form -- pinned to still carry the flag.
     assert "group-em-watch --repo-root <root>" in bin_src
     assert "--group-em-session-id <sid>" in bin_src
+
+
+# --- Item 2 (2026-09-19 memo): `--status` false-alive with no process check.
+# `process_confirmed_alive` is the single-machine PID witness -- distinct
+# from item 1's cross-machine holder-identity question, which stays
+# deliberately never PID-keyed (`is_fresh_and_foreign`'s own docstring).
+
+
+def test_process_confirmed_alive_true_for_this_very_process(tmp_path):
+    """`stamp` self-captures pid+epoch when neither is passed; the process
+    stamping IS the test process, which is genuinely alive right now."""
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, writer_session_id="w1",
+    )
+    liveness = watch_heartbeat.read_liveness(str(tmp_path))
+    assert watch_heartbeat.process_confirmed_alive(liveness) is True
+
+
+def test_process_confirmed_alive_false_for_a_recycled_or_dead_pid():
+    """A pid that does not match its own recorded birth instant reads
+    confirmed-DEAD, not merely unknown -- `stable_pid_alive`'s own
+    recycled-pid guard."""
+    liveness = {"pid": 99999, "pid_start_epoch": 1}
+    assert watch_heartbeat.process_confirmed_alive(liveness) is False
+
+
+def test_process_confirmed_alive_none_without_a_pid():
+    """No `pid` at all (a pre-this-fix record) cannot be confirmed either
+    way -- `None`, never promoted to `True`."""
+    assert watch_heartbeat.process_confirmed_alive({}) is None
+    assert watch_heartbeat.process_confirmed_alive({"pid": None}) is None
+
+
+def test_process_confirmed_alive_none_with_a_pid_but_no_birth_epoch():
+    """A bare pid with no `pid_start_epoch` must NOT be handed to
+    `stable_pid_alive` -- its own legacy fallback reads a missing epoch AND
+    lstart as unconditionally dead, which would misreport a genuinely alive
+    process as confirmed-gone. Degrade to `None` instead."""
+    liveness = {"pid": os.getpid(), "pid_start_epoch": None}
+    assert watch_heartbeat.process_confirmed_alive(liveness) is None
+
+
+# --- Item 3 (2026-09-19 memo): `human_verdict` prints the holder's bare
+# name, and two live sessions can share one.
+
+
+def test_human_verdict_names_both_the_holder_and_its_session_id(tmp_path):
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="session-a", declinations=[],
+        interval_seconds=30.0, holder_name="claude-klabauter-em",
+        writer_session_id="w1",
+    )
+    liveness = watch_heartbeat.read_liveness(str(tmp_path))
+    text = watch_heartbeat.human_verdict(liveness)
+    assert "claude-klabauter-em" in text
+    assert "session-a" in text
+
+
+def test_human_verdict_disambiguates_two_holders_sharing_one_name(tmp_path):
+    """Two live sessions can carry the same display name -- the record's
+    `holder_session_id` is what tells them apart, so it must be on the
+    line whenever a name is too. Two separate repo roots stand in for two
+    separate crowns' records (a single record can only ever name one
+    holder at a time) -- what is under test is the RENDERING, not a
+    takeover sequence."""
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+
+    watch_heartbeat.stamp(
+        str(repo_a), holder_session_id="session-a", declinations=[],
+        interval_seconds=30.0, holder_name="claude-klabauter-em",
+        writer_session_id="w1",
+    )
+    watch_heartbeat.stamp(
+        str(repo_b), holder_session_id="session-b", declinations=[],
+        interval_seconds=30.0, holder_name="claude-klabauter-em",
+        writer_session_id="w2",
+    )
+
+    text_a = watch_heartbeat.human_verdict(watch_heartbeat.read_liveness(str(repo_a)))
+    text_b = watch_heartbeat.human_verdict(watch_heartbeat.read_liveness(str(repo_b)))
+
+    assert text_a != text_b
+    assert "session-a" in text_a
+    assert "session-b" in text_b
+
+
+# --- Item 4 (2026-09-19 memo): `read_liveness` drops `next_expected_by` /
+# `seconds_overdue` from its payload, so the entry sequence's `watch_liveness`
+# leg (`ops/group_em_enter.py::_run_watch_liveness`, which forwards this dict
+# verbatim) reads green with no deadline information.
+
+
+def test_read_liveness_carries_next_expected_by_when_armed(tmp_path):
+    now = time.time()
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, now_epoch=now, writer_session_id="w1",
+    )
+    liveness = watch_heartbeat.read_liveness(str(tmp_path), now_epoch=now + 1)
+    assert liveness["verdict"] == watch_heartbeat.VERDICT_ARMED
+    assert liveness["next_expected_by"] == watch_heartbeat.next_expected_by(now, 30.0)
+    assert liveness["seconds_overdue"] is None
+
+
+def test_read_liveness_carries_next_expected_by_when_stale(tmp_path):
+    now = time.time()
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, now_epoch=now - 3600, writer_session_id="w1",
+    )
+    liveness = watch_heartbeat.read_liveness(str(tmp_path), now_epoch=now)
+    assert liveness["verdict"] == watch_heartbeat.VERDICT_STALE
+    assert liveness["next_expected_by"] is not None
+    assert isinstance(liveness["seconds_overdue"], (int, float))
+
+
+def test_read_liveness_carries_pid_fields_forward(tmp_path):
+    watch_heartbeat.stamp(
+        str(tmp_path), holder_session_id="group-em-1", declinations=[],
+        interval_seconds=30.0, writer_session_id="w1",
+    )
+    liveness = watch_heartbeat.read_liveness(str(tmp_path))
+    assert liveness["pid"] == os.getpid()
+    assert liveness["pid_start_epoch"] is not None

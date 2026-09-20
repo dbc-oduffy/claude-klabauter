@@ -758,6 +758,43 @@ def test_append_touch_claims_batch_survives_writer_name_resolution_failure(tmp_p
     assert all(decode_line(line).name is None for line in lines)
 
 
+def test_append_touch_claims_threads_content_hashes_per_path(tmp_path, monkeypatch):
+    """C4: `content_hashes` is keyed by path (`paths` is plural), threaded
+    straight through to each event's own `content_hash` -- a path present
+    in the map gets its hash, a path absent from it gets `None`, exactly
+    like `append_event`'s own `content_hash` passthrough."""
+    monkeypatch.setattr(
+        hr, "self_record", lambda: ("sid-1", _registry_record("claude-klabauter-a9"))
+    )
+
+    touch_record.append_touch_claims(
+        ["a.py", "b.py"],
+        "sid-1",
+        str(tmp_path),
+        content_hashes={"a.py": "deadbeef"},
+    )
+
+    sink = tmp_path / ".git" / "coordinator-sessions" / "sid-1" / touch_record.RECORD_FILENAME
+    lines = touch_record.iter_complete_lines(sink.read_bytes())
+    events = {decode_line(line).path: decode_line(line) for line in lines}
+    assert events["a.py"].content_hash == "deadbeef"
+    assert events["b.py"].content_hash is None
+
+
+def test_append_touch_claims_with_no_content_hashes_is_unchanged(tmp_path, monkeypatch):
+    """Existing callers passing no `content_hashes` (or `None`) keep the
+    prior hashless behavior -- not a signature-breaking change."""
+    monkeypatch.setattr(
+        hr, "self_record", lambda: ("sid-1", _registry_record("claude-klabauter-a9"))
+    )
+
+    touch_record.append_touch_claims(["a.py"], "sid-1", str(tmp_path))
+
+    sink = tmp_path / ".git" / "coordinator-sessions" / "sid-1" / touch_record.RECORD_FILENAME
+    lines = touch_record.iter_complete_lines(sink.read_bytes())
+    assert decode_line(lines[0]).content_hash is None
+
+
 def test_explicit_name_argument_overrides_the_default(tmp_path, monkeypatch):
     monkeypatch.setattr(
         hr, "self_record", lambda: ("sid-1", _registry_record("claude-klabauter-a9"))
@@ -864,3 +901,69 @@ def test_memo_re_resolves_when_claude_pid_env_rebinds_mid_process(tmp_path, monk
 
     before = degrade_counts().get("writer_name_resolution", 0)
     assert degrade_counts().get("writer_name_resolution", 0) == before
+
+
+# --- C1: is_stale / last_seen_hash -----------------------------------------
+# Spec backlink: docs/plans/2026-09-02-a-write-that-discards-what-you-never-
+# saw.md, chunk C1.
+
+
+def test_is_stale_true_only_when_both_hashes_exist_and_differ(tmp_path):
+    target = tmp_path / "a.py"
+    target.write_bytes(b"hello")
+    current_hash = touch_record.compute_content_hash(target)
+
+    assert touch_record.is_stale("some-other-hash", target) is True
+    assert touch_record.is_stale(current_hash, target) is False
+
+
+def test_is_stale_false_when_recorded_hash_is_none(tmp_path):
+    target = tmp_path / "a.py"
+    target.write_bytes(b"hello")
+    assert touch_record.is_stale(None, target) is False
+
+
+def test_is_stale_false_when_disk_read_fails(tmp_path):
+    missing = tmp_path / "does-not-exist.py"
+    assert touch_record.is_stale("deadbeef", missing) is False
+
+
+def test_last_seen_hash_returns_newest_recorded_hash_for_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        hr, "self_record", lambda: ("sid-1", _registry_record("claude-klabauter-a9"))
+    )
+    touch_record.append_touch_claims(
+        ["a.py"], "sid-1", str(tmp_path), content_hashes={"a.py": "hash-1"}
+    )
+    touch_record.append_touch_claims(
+        ["a.py"], "sid-1", str(tmp_path), content_hashes={"a.py": "hash-2"}
+    )
+
+    assert touch_record.last_seen_hash("sid-1", "a.py", str(tmp_path)) == "hash-2"
+
+
+def test_last_seen_hash_none_on_unrecorded_path(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        hr, "self_record", lambda: ("sid-1", _registry_record("claude-klabauter-a9"))
+    )
+    touch_record.append_touch_claims(["a.py"], "sid-1", str(tmp_path))
+
+    assert touch_record.last_seen_hash("sid-1", "never-touched.py", str(tmp_path)) is None
+
+
+def test_last_seen_hash_never_reads_a_peer_sessions_claim(tmp_path, monkeypatch):
+    """The one negative spec this lookup carries: it must not fall back to
+    `project_live_claims`'s cross-peer last-verb-wins projection -- a peer's
+    own TOUCH for this path must never supply THIS session's baseline."""
+    monkeypatch.setattr(
+        hr, "self_record", lambda: ("sid-peer", _registry_record("claude-klabauter-a9"))
+    )
+    touch_record.append_touch_claims(
+        ["a.py"], "sid-peer", str(tmp_path), content_hashes={"a.py": "peer-hash"}
+    )
+
+    assert touch_record.last_seen_hash("sid-mine", "a.py", str(tmp_path)) is None
+
+
+def test_last_seen_hash_none_when_session_dir_absent(tmp_path):
+    assert touch_record.last_seen_hash("no-such-sid", "a.py", str(tmp_path)) is None

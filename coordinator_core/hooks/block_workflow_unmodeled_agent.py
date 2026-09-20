@@ -567,10 +567,8 @@ def _env_value(env: object, key: str) -> Optional[str]:
 
 def _compose_zero_modeled_deny_reason(agent_n: int, env: object = None) -> str:
     message = compose(
-        f"{agent_n} agent() call(s) have no model: -- inherits Opus this "
-        "session (~4x cost). Add model: 'sonnet', or a defined agentType:, "
-        "to each.",
-        alternative=f"touch {_OVERRIDE_SENTINEL_NAME}",
+        f"{agent_n} agent() call(s), no model: -- inherits Opus (~4x cost). "
+        "Add model: 'sonnet', or override.",
         anchor=_WIKI_ANCHOR,
     )
     return render(message, env=env)

@@ -1731,6 +1731,7 @@ async def _commit_group(
             deleted_paths=deleted_paths,
             prefer_deliberate_stage=True,
             blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
+            detect_rollback=True,
         )
     except (CommitRefused, FilterUnsupported) as exc:
         return {

@@ -64,10 +64,12 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core import launchable
 from coordinator_core.ops import learn_lessons_roots as _learn_lessons_roots_mod
+from coordinator_core.ops.learn_lessons_cutoff import _claude_home, derive_cutoff
 from coordinator_core.state_root import coordinator_state_root_central
 from coordinator_core.data_root import content_root_for
 from coordinator_core.doe_root_pointer import read_doe_root_pointer_file
@@ -84,21 +86,6 @@ _coordinator_state_root_central = coordinator_state_root_central
 _DEFAULT_THRESHOLD = 150
 _CUTOFF_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _SUBPROCESS_TIMEOUT_SECS = 15
-
-
-def _claude_home() -> str:
-    """Mirror the bash oracle's `CLAUDE_HOME="${CLAUDE_HOME:-$HOME}/.claude"`.
-
-    Note the oracle's own naming: the env var CLAUDE_HOME, when set, overrides
-    $HOME (not the full .claude path) — reproduced verbatim, not "fixed".
-    """
-    base = (
-        os.environ.get("CLAUDE_HOME")
-        or os.environ.get("HOME")
-        or os.environ.get("USERPROFILE")
-        or os.path.expanduser("~")
-    )
-    return os.path.join(base, ".claude")
 
 
 def _resolve_doe_content_root(claude_home: str) -> str:
@@ -191,23 +178,19 @@ def _resolve_threshold(argv: List[str], config_path: str) -> Optional[int]:
 
 
 def _find_cutoff(claude_home: str) -> str:
-    """Last COMPLETE central run (dirs sort lexically == chronologically for YYYY-MM-DD)."""
-    tasks_dir = os.path.join(claude_home, "tasks")
-    cutoff = ""
-    try:
-        entries = sorted(os.listdir(tasks_dir))
-    except OSError:
-        print(f"skip: _find_cutoff: entries = sorted(os.listdir(tasks_dir)) failed: {sys.exc_info()[1]}", file=sys.stderr)
+    """Delegates to the shared `learn_lessons_cutoff.derive_cutoff` oracle.
+
+    This module's own fail-open posture (unreadable tasks dir -> skip line,
+    return "") is unchanged and is contract: `derive_cutoff` returns None
+    rather than raise on a missing/unreadable dir, and the adapter below
+    folds that to "" (this function's own return type stays `str`, never
+    `None`).
+    """
+    tasks_dir = Path(claude_home) / "tasks"
+    if not tasks_dir.is_dir():
+        print(f"skip: _find_cutoff: tasks_dir {tasks_dir} is not a directory", file=sys.stderr)
         return ""
-    for name in entries:
-        if not name.startswith("learn-lessons-20"):
-            continue
-        d = os.path.join(tasks_dir, name)
-        if not os.path.isdir(d):
-            continue
-        if os.path.isfile(os.path.join(d, "COMPLETE")):
-            cutoff = name[len("learn-lessons-"):]
-    return cutoff
+    return derive_cutoff(tasks_dir) or ""
 
 
 def _learn_lessons_roots() -> List[str]:

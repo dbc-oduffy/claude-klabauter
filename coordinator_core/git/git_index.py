@@ -2,19 +2,12 @@
 "is this handful of paths modified/deleted/clean" question a commit-path
 caller asks before it decides whether to spawn anything at all.
 
-Why this exists: the census behind
-`docs/plans/2026-08-16-one-engine-for-the-whole-box.md` found
-`ceremony.scoped_git_commit` spawning THREE shapes of `git status
---porcelain` per commit (`v1`, `v2`, `--untracked-files=all`) to answer a
-question about its OWN pathspec, typically a handful of paths. `git status`
-is O(worktree) no matter how narrow the pathspec -- it refreshes the whole
-index and walks every tracked directory before filtering output down. The
-op never needs that: it needs a stat per path plus an index lookup, which
-is exactly what git's own `ce_match_stat` fast path does before it
-considers hashing a candidate. Measured in
-`state/audits/2026-08-23-in-process-scoped-status-spike.py` against this
-repo's own worktree; see `state/dispatch-briefs/2026-08-23-the-scoped-commit-rebuilt-from-first-principles/C2.md`
-for the promotion brief.
+`git status --porcelain` is O(worktree) no matter how narrow the pathspec --
+it refreshes the whole index and walks every tracked directory before
+filtering output down, to answer a question about the caller's OWN
+pathspec, typically a handful of paths. The op never needs that: it needs a
+stat per path plus an index lookup, which is exactly what git's own
+`ce_match_stat` fast path does before it considers hashing a candidate.
 
 REFUSES index v4 explicitly. `coordinator_core.git.git_index` is a
 SEPARATE, NARROWER parser from `coordinator_core.git.git_state` (which
@@ -29,8 +22,7 @@ RAISES `IndexV4Unsupported` rather than attempting the varint-prefix walk;
 a caller hitting it falls back to its spawn, same as any other
 `IndexParseError` from the sibling module.
 
-`diff_index_name_status` (C3, `state/dispatch-briefs/2026-08-23-the-scoped-
-commit-rebuilt-from-first-principles/C3.md`) is the exception to the
+`diff_index_name_status` is the exception to the
 "narrower than git_state, no sha" framing above: a HEAD-vs-index
 add/modified/deleted verdict needs sha identity, not a stat, so it goes
 through `git_state.read_index` (full v2/v3/v4 parse) and `git_state.
@@ -159,16 +151,13 @@ def parse_index_identity(
     clean/modified axes need per path -- `(mode, sha, size, mtime,
     mtime_nsec)`.
 
-    Why this exists, measured rather than assumed. A caller asking both
-    "does the worktree match the index" (stat, then a content hash on a
-    mismatch) and "does the index match HEAD" (sha identity) used to pay
-    TWO full walks of the same file, because neither existing reader
-    returns the union: `git_state.IndexEntry` is `(mode, sha, stage)` and
-    discards the stat fields it just read past, while this module's
-    `IndexStatusEntry` carries the stat fields and no sha. On this repo's
-    37,334-entry index that was ~53ms + ~41ms to answer a question about
-    THREE paths -- more process time than the `git status --porcelain`
-    spawn the whole exercise existed to remove.
+    Neither existing reader returns the union this function needs:
+    `git_state.IndexEntry` is `(mode, sha, stage)` and discards the stat
+    fields it just read past, while this module's `IndexStatusEntry`
+    carries the stat fields and no sha. A caller needing both axes -- "does
+    the worktree match the index" (stat, then a content hash on a mismatch)
+    and "does the index match HEAD" (sha identity) -- gets both from one
+    walk here instead of two.
 
     `wanted`, when given, is a containment-tested set of repo-relative
     paths: entries outside it are stepped over unpacking ONLY the two bytes
@@ -179,20 +168,11 @@ def parse_index_identity(
     THE EARLY EXIT IS GOVERNED BY SORT ORDER, NOT BY HOW FEW PATHS YOU ASK
     FOR. The index is sorted by path bytes, so the walk can only return once
     the LAST-SORTING wanted path has been passed: one late-sorting path
-    forfeits the exit for every other path in the same call. Measured by
-    claude-klabauter-8f on a 37,336-entry index, k=7, against a 54.72ms full
-    walk:
-
-        wanted=[FIRST-sorting]    1.12ms   41.6x
-        wanted=[MID-sorting]     13.48ms    3.5x
-        wanted=[LAST-sorting]    24.32ms    1.9x
-        wanted=[FIRST, LAST]     24.25ms    1.9x  -- same as LAST alone
-
-    So a scoped call is between ~2x and ~40x cheaper depending on where the
-    caller's paths happen to sort, and it remains O(index) in the worst
-    case. Do NOT quote a scoped figure as if `wanted`'s SIZE produced it --
-    an earlier version of this docstring cited "flat from 3 to 60 paths",
-    which is flat in the axis that does not govern.
+    forfeits the exit for every other path in the same call, so a scoped
+    call is cheaper only in proportion to where the caller's paths happen to
+    sort, and it remains O(index) in the worst case. Do NOT quote a scoped
+    figure as if `wanted`'s SIZE alone produced it -- the sort position is
+    the axis that governs.
 
     NO BINARY SEARCH IS AVAILABLE, and it is worth recording why so it is
     not re-proposed: entries are variable-length (the name is NUL-terminated

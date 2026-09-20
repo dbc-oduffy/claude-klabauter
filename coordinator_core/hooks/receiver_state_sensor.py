@@ -7,7 +7,7 @@ detection half of the receiver-state sensor DoE and this repo split at the trans
 boundary (DoE owns hook registration + the stderr/exit-2 Stop-hook contract; this repo
 owns detection). All ladder logic, the CPU cursor, and the sibling-file writer live in
 `coordinator_core.session.receiver_state` — this module holds NO detection logic of its
-own, matching `session_heartbeat.py`'s own "thin op over the library module" shape.
+own, matching `track_touched_files.py`'s own "thin op over the library module" shape.
 
 Write target: `.git/coordinator-sessions/<session_id>/receiver-state.json` — a NEW
 per-session sibling file (module docstring of `session.receiver_state`; never
@@ -30,7 +30,7 @@ synthetic self-write is gone.
 Input (flat scalar, via `hooks/_payload.py::field()`; "" treated as absent):
     session_id       — the coordinator session identifier whose OWN transcript/state
                         this invocation evaluates. Required; a missing session_id is a
-                        silent no-op (mirrors session_heartbeat.py's own "no session_id
+                        silent no-op (mirrors track_touched_files.py's own "no session_id
                         — nothing to stamp" branch).
     transcript_path   — this session's OWN transcript path. Required; without it there
                          is nothing to tail-read and the op writes an UNKNOWN verdict
@@ -54,7 +54,7 @@ Input (flat scalar, via `hooks/_payload.py::field()`; "" treated as absent):
                          is enough to enable the override (fail toward PRODUCING).
 
 Always returns `no_advisory()` — the product is the on-disk write side-effect, exactly
-as `session_heartbeat.py` does. Never blocks a tool call; never raises into its caller
+as `track_touched_files.py` does. Never blocks a tool call; never raises into its caller
 (fail-soft, matching `holder_evidence.py`'s own contract, per AC12).
 
 All blocking I/O (the transcript tail read, the CPU-time read, the sibling-file

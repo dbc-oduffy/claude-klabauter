@@ -126,6 +126,109 @@ def test_native_from_repo_explicit_in_params():
     )
 
 
+def test_native_doe_root_explicit_in_params():
+    """claude-klabauter#33: the CLI's own resolved doe_root() is passed explicitly
+    in params so the native queue.promote op's write lands under the SAME
+    DoE-claude root --target-wiki validation already checked, instead of the op
+    re-resolving on its own (which has no DOE_ROOT rung — see
+    coordinator_core.ops.coordinator_doe_root's docstring)."""
+    fake_result = {"out_path": "/fake/path.yaml"}
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
+        unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
+        unittest.mock.patch.object(_cli_mod, "doe_root", return_value="/fake/resolved-doe-root"),
+        unittest.mock.patch("sys.stdout", io.StringIO()),
+    ):
+        _cli_mod.main(_MINIMAL_ARGV)
+
+    params = mock_route.call_args[0][1]
+    assert params.get("doe_root") == "/fake/resolved-doe-root", (
+        "the CLI-resolved doe_root() value must be threaded into queue.promote's params"
+    )
+
+
+def test_native_doe_root_omitted_from_params_when_unresolvable():
+    """claude-klabauter#33: when the CLI's own doe_root() is unresolvable, the
+    'doe_root' key is omitted from params entirely (never a garbage/None value)
+    — the native op falls back to its own resolution, which then reports the
+    skip through the existing {skipped: True, reason} contract."""
+    fake_result = {"out_path": "/fake/path.yaml"}
+
+    def _raise_unresolvable():
+        raise _cli_mod._DoeUnresolvable("no route to doctrine repo")
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result) as mock_route,
+        unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
+        unittest.mock.patch.object(_cli_mod, "doe_root", side_effect=_raise_unresolvable),
+        unittest.mock.patch("sys.stdout", io.StringIO()),
+    ):
+        _cli_mod.main(_MINIMAL_ARGV)
+
+    params = mock_route.call_args[0][1]
+    assert "doe_root" not in params, (
+        "doe_root must be OMITTED (not set to None/garbage) when unresolvable"
+    )
+
+
+def test_native_success_echoes_write_destination():
+    """claude-klabauter#33: on native success, stdout echoes the write
+    destination labelled ('Lesson outbox entry written: <path>'), not just a
+    bare path — the cheap self-evidence check the issue asked for."""
+    fake_result = {
+        "out_path": "/fake/doe/state/lessons-outbox/2026-09-19T00-00-00Z-x.yaml",
+        "entry_id": "fake-id",
+        "from_repo": "doe-claude",
+        "change_kind": "doctrine-edit",
+        "target_wiki": "docs/wiki/test-wiki.md",
+    }
+    captured_out = io.StringIO()
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=fake_result),
+        unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
+        unittest.mock.patch("sys.stdout", captured_out),
+    ):
+        rc = _cli_mod.main(_MINIMAL_ARGV)
+
+    assert rc == 0
+    out = captured_out.getvalue()
+    assert "Lesson outbox entry written: " + fake_result["out_path"] in out, (
+        f"success stdout must label the write destination; got: {out!r}"
+    )
+
+
+def test_native_skip_remediation_names_doe_root_and_machine_local():
+    """claude-klabauter#33: a native skipped:true result must print a
+    Remediation block naming both levers (machine-local + DOE_ROOT), matching
+    the legacy_fn / --target-wiki validation skip messages — previously this
+    branch printed only a bare warn line with no remediation guidance at all."""
+    skipped_result = {"skipped": True, "reason": "doe root unresolvable"}
+    captured_err = io.StringIO()
+
+    with (
+        unittest.mock.patch.object(_cli_mod, "_cc_route", return_value=skipped_result),
+        unittest.mock.patch.object(_cli_mod, "_describe_schema_node", return_value=_FAKE_SCHEMA_OUTPUT),
+        unittest.mock.patch.object(_cli_mod, "_resolve_from_repo", return_value="doe-claude"),
+        unittest.mock.patch.object(_cli_mod, "_current_repo_root", return_value="/fake/repo"),
+        unittest.mock.patch("sys.stderr", captured_err),
+    ):
+        rc = _cli_mod.main(_MINIMAL_ARGV)
+
+    assert rc == _cli_mod._EXIT_DOE_UNRESOLVABLE
+    err = captured_err.getvalue()
+    assert "Remediation:" in err, "native skip must print a Remediation block"
+    assert "machine-local set repos.doe_claude" in err
+    assert "DOE_ROOT=" in err
+
+
 def test_native_params_contain_required_fields():
     """AC4: queue.promote params contain all required lesson fields.
 

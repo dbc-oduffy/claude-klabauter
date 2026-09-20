@@ -597,3 +597,21 @@ def sweep_sprint_planning_assemble() -> PhantomSweepResult:
     # what this sweep reads.
     decision_object = spa.brief(run_id="phantom-sweep", sprint_id="1")
     return _collect(decision_object["directives"], decision_object["judgment_points"])
+
+
+# ---------------------------------------------------------------------------
+# learn_lessons_pipeline -- `brief(repo_root, roots=)` is read-only (a
+# COMPLETE-sentinel disk scan via `ops.learn_lessons_cutoff.derive_cutoff`,
+# empty-safe when no completed central run is reachable) and needs no
+# fixture beyond a plain `Path`; `roots=[]` skips the peer-repo registry
+# read entirely, matching this bucket's "real but read-only, empty-safe"
+# siblings (`backlog_grind_assemble`, `orient_assemble`) rather than the
+# fully-pure `workday_complete`/`merge_assemble` bucket.
+# ---------------------------------------------------------------------------
+
+
+def sweep_learn_lessons_pipeline() -> PhantomSweepResult:
+    from coordinator_core import learn_lessons_pipeline as llp
+
+    envelope = llp.brief(Path("repo"), roots=[])
+    return _collect(envelope["directives"], envelope["judgment_points"])

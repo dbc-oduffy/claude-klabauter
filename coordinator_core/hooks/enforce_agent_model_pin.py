@@ -157,12 +157,13 @@ def _axis_verdict(pin_value: str, passed_value: str, order: Dict[str, int]) -> s
 
 def _deny_reason(subagent_type: str, source_path: str, violations: "list[tuple[str, str, str]]") -> str:
     lines = [
-        f"{subagent_type} pins {axis}: {pin_value} — this dispatch passed {axis}: {passed_value}."
+        f"{subagent_type} pins {axis}={pin_value}, passed {passed_value}."
         for axis, pin_value, passed_value in violations
     ]
     return (
-        "AGENT DISPATCH BLOCKED: " + " ".join(lines) + " Drop the "
-        "parameter(s) and re-dispatch.\n"
+        "DENY: " + " ".join(lines) + " Each pin is a "
+        "cost-and-role invariant, not a default: drop the parameter(s) and "
+        "re-dispatch.\n"
         f"<resolved from: {source_path}>"
     )
 

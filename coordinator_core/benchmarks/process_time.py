@@ -64,6 +64,19 @@ harness) -- that module answers a different, already-established question
 contract) and stays wall-clock by design; this module is additive, a second
 instrument for a different unit, not a replacement for the first.
 
+`in_process_time_ms` is the IN-PROCESS SIBLING of the three subprocess
+primitives above (`batched_process_time_ms`, `batched_process_time_quantiles`,
+`single_invocation_tree_process_time`), not a fourth accounting mechanism: it
+measures the CALLING process's own CPU via stdlib `time.process_time` only,
+never a subprocess tree, and carries no platform branch. It replaces three
+per-test copies of the same batch-and-divide shape
+(`test_read_shape_serve_process_time.py :: _min_process_time_ms`,
+`test_named_dispatch_catering_resolves.py :: _min_process_time`,
+`test_receipt_path_absolute_budgets.py :: _median_process_time_ms`), two of
+which take per-call samples and read 0.0 on Windows for any call below the
+~15.6ms scheduler tick -- a vacuous pass this primitive refuses (RAISE, NEVER
+0.0, below).
+
 LINUX (`batched_process_time_ms` only -- `single_invocation_tree_process_time`
 still raises `NotImplementedError` there, unaddressed by this chunk). The
 getrusage process-time half was already POSIX and verified against Linux's
@@ -1390,4 +1403,182 @@ def single_invocation_tree_process_time(
         "unlike batched_process_time_ms (which now also has a Linux "
         "primitive via sys.addaudithook, module docstring), this function "
         "has no Linux implementation in this chunk."
+    )
+
+
+# Quantisation is +/-1 tick per window, so MIN_WINDOW_TICKS=10 bounds the
+# per-call error at 10%, where a 1-tick window can be off by up to 100%.
+MIN_WINDOW_TICKS = 10
+
+# The adaptive ramp in `in_process_time_ms` doubles k until the window spans
+# MIN_WINDOW_TICKS -- a callable that genuinely never advances the process
+# clock (it is waiting on I/O or a lock, not doing CPU work) would otherwise
+# double forever. 1 << 20 (1,048,576) is far past any k a real CPU-bearing
+# in-process callable should need to clear a 10-tick window, so hitting this
+# cap is itself the signal: the callable belongs on
+# `pytest.mark.deliberate_wall_clock`, not this primitive.
+MAX_K = 1 << 20
+
+_observed_tick_cache_s: Optional[float] = None
+
+
+def _real_observed_process_time_tick(clock) -> float:
+    """Measures the real process-time clock granularity by spinning `clock()`
+    until it advances, rather than trusting
+    `time.get_clock_info('process_time').resolution` -- that reports `1e-07`
+    on Windows against a real ~15.6ms `GetProcessTimes()` tick (module
+    docstring, trap 2), so a caller using the reported resolution as the real
+    tick would under-estimate it by five orders of magnitude.
+
+    Cached module-globally, but ONLY for the real stdlib clock
+    (`time.process_time`) -- a caller-supplied clock (the keyword-only test
+    hook on `in_process_time_ms`) is a fresh fake per test and must never
+    read a tick cached from a previous test's fake, or from the real clock.
+    """
+    global _observed_tick_cache_s
+    if clock is time.process_time and _observed_tick_cache_s is not None:
+        return _observed_tick_cache_s
+
+    start = clock()
+    while True:
+        now = clock()
+        if now != start:
+            tick_s = now - start
+            break
+
+    if clock is time.process_time:
+        _observed_tick_cache_s = tick_s
+    return tick_s
+
+
+# Indirected through a module-level name (rather than calling
+# `_real_observed_process_time_tick` directly from `in_process_time_ms`) so a
+# test can monkeypatch this one name to pin the tick for a fake, non-spinnable
+# clock without touching the real detection loop above.
+_observed_process_time_tick = _real_observed_process_time_tick
+
+
+def in_process_time_ms(
+    fn,
+    *,
+    k: Optional[int] = None,
+    warmup: int = 1,
+    _clock=time.process_time,
+) -> dict:
+    """Batch-amortised IN-PROCESS CPU time for a zero-argument callable,
+    above the real (spun, not reported) process-time clock tick -- the
+    in-process sibling to `batched_process_time_ms`/
+    `single_invocation_tree_process_time` (module NEGATIVE SPEC), not a
+    fourth accounting mechanism.
+
+    THE SUB-TICK TRAP this exists to close: `time.process_time()` is
+    tick-quantised on Windows (~15.6ms, module docstring trap 2). A probe
+    that takes PER-CALL samples of a cheap in-process callable reads 0.0 for
+    every sample below the tick and passes any upper-bound assertion
+    vacuously -- exactly the flaw
+    `test_named_dispatch_catering_resolves.py :: _min_process_time` already
+    worked around by batching, and the two sibling copies
+    (`_min_process_time_ms`, `_median_process_time_ms`) did not. This
+    primitive generalises that batch-and-divide shape with an ADAPTIVE
+    window instead of a fixed one: a fixed batch still reads 0.0 once the
+    callable is cheap enough, and the real tick cannot be read off
+    `get_clock_info` (immediately above).
+
+    THE CHILDREN TRAP: this measures only the CALLING process's own CPU via
+    `time.process_time()`. If `fn` itself spawns a subprocess, that
+    subprocess's CPU is invisible here -- `time.process_time()` excludes
+    children on every platform, unlike a job-object or getrusage(CHILDREN)
+    read. A caller measuring code that spawns has the wrong primitive: use
+    `batched_process_time_ms` (repeatable) or
+    `single_invocation_tree_process_time` (once-only) instead, which measure
+    a spawned tree by construction.
+
+    Args:
+        fn: zero-argument callable, called `warmup` times untimed then `k`
+            (or an adaptively grown k) times timed.
+        k: explicit window size. `None` (default) grows k from 1, doubling,
+            until one timed window spans at least `MIN_WINDOW_TICKS` observed
+            ticks, and reports that window divided by k. An explicit `k`
+            times exactly one window of that size and RAISES rather than
+            reporting a quantised figure if that window is too small (below).
+        warmup: untimed calls run before the timed window(s); not counted in
+            `k` or in either returned figure.
+
+    Returns:
+        {
+            "process_time_ms": float,  # per-call CPU time, amortised over k
+            "wall_ms": float,          # context only -- never gate on this
+            "k": int,                  # the window size actually used
+            "window_ticks": float,     # observed ticks the timed window spanned
+        }
+
+    RAISE, NEVER 0.0. An explicit `k` times exactly one window; if that
+    window spans fewer than `MIN_WINDOW_TICKS` observed clock ticks, this
+    raises `ValueError` naming the window and the tick rather than returning
+    a quantised (and possibly exactly-0.0) figure. The adaptive loop (`k is
+    None`) raises past `MAX_K` for the same reason: a callable whose window
+    never reaches `MIN_WINDOW_TICKS` no matter how large k grows is not doing
+    measurable CPU work -- it is WAITING, not working (blocked on I/O, a
+    lock, or a sleep), and belongs on
+    `pytest.mark.deliberate_wall_clock(reason=...)`, not this primitive.
+
+    COST: the adaptive ramp at most doubles the final window (each failed
+    attempt at most halves the true k needed), so on Windows one reading
+    costs roughly `2 * MIN_WINDOW_TICKS * 15.6ms` of CPU in the worst case --
+    about 312ms. That is the price of a figure that is never a vacuous 0.0.
+
+    Raises `ValueError` if `k` (when given) is `< 1`, if a fixed window is
+    sub-tick, or if the adaptive loop exceeds `MAX_K`. Never returns 0.0 and
+    never silently degrades to a wrong unit.
+    """
+    if k is not None and k < 1:
+        raise ValueError(f"in_process_time_ms: k must be >= 1, got {k!r}")
+
+    tick_s = _observed_process_time_tick(_clock)
+
+    for _ in range(warmup):
+        fn()
+
+    def _one_window(window_k: int) -> dict:
+        t0_wall = time.perf_counter()
+        t0_proc = _clock()
+        for _ in range(window_k):
+            fn()
+        elapsed_proc_s = _clock() - t0_proc
+        elapsed_wall_s = time.perf_counter() - t0_wall
+        window_ticks = elapsed_proc_s / tick_s
+        return {
+            "process_time_ms": round(elapsed_proc_s * 1000.0 / window_k, 3),
+            "wall_ms": round(elapsed_wall_s * 1000.0 / window_k, 3),
+            "k": window_k,
+            "window_ticks": round(window_ticks, 3),
+        }
+
+    if k is not None:
+        result = _one_window(k)
+        if result["window_ticks"] < MIN_WINDOW_TICKS:
+            raise ValueError(
+                f"in_process_time_ms: fixed k={k} window spans only "
+                f"{result['window_ticks']} ticks (tick={tick_s * 1000.0:.4f}ms) "
+                f"-- below MIN_WINDOW_TICKS={MIN_WINDOW_TICKS}. Pass k=None for "
+                "the adaptive window, or if this callable genuinely does no "
+                "measurable CPU work, use "
+                "pytest.mark.deliberate_wall_clock(reason=...) instead of "
+                "measuring it here."
+            )
+        return result
+
+    window_k = 1
+    while window_k <= MAX_K:
+        result = _one_window(window_k)
+        if result["window_ticks"] >= MIN_WINDOW_TICKS:
+            return result
+        window_k *= 2
+
+    raise ValueError(
+        f"in_process_time_ms: adaptive window exceeded MAX_K={MAX_K} without "
+        f"spanning MIN_WINDOW_TICKS={MIN_WINDOW_TICKS} observed ticks -- this "
+        "callable never advances the process clock (it is waiting, not "
+        "working); measure it with pytest.mark.deliberate_wall_clock"
+        "(reason=...) instead."
     )

@@ -1056,7 +1056,12 @@ def build_review_partition_freeze_directives(range_: str, slices: Iterable[Revie
     diff scope resolved by `resolve_mid_chain_review_scope` below) —
     never a naive `origin/main...HEAD`, per the SKILL's own explicit
     warning against re-pulling concurrent EMs' already-reviewed commits.
-    Caller owns range resolution; this function only wires it in."""
+    Caller owns range resolution; this function only wires it in. A slice
+    whose `paths` contain an entry with no change in `range_` fails its
+    directive by design (K-101's returns-when) — `freeze-review-diff.py`
+    refuses the whole freeze (exit 4) rather than writing a partial diff.
+    A slice whose `paths` contain an entry with no change in `range_` fails
+    its directive by design — this is K-101's returns-when."""
     return [
         _directive(
             f"d-freeze-and-dispatch-review-partition-{s.slice_id}",

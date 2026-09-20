@@ -1165,16 +1165,22 @@ def test_consumed_handoff_completeness_leg_a_open_blocks(monkeypatch, tmp_path):
         "override-known-in-flight",
         "stop-and-handoff",
     ]
+    # C1 (docs/plans/2026-09-11-the-memo-lifecycle-closes-its-own-handoffs.md)
+    # unions the per-run `d-ship-consumed-handoff:<basename>` id into BOTH
+    # clearing arms on top of the static four -- this fixture consumes one
+    # baton (`state/handoffs/x.md`), so one ship id is expected. An arm that
+    # omits it leaves an EM reaching the gate that way unable to ship.
     for disposition in jp["dispositions"][:2]:
         assert disposition["resolves"] == [
             "d-claim-plan-execution-lock",
             "d-stamp-plan-implemented",
             "d-harvest-deferrals-1",
             "d-complete-entry",
+            "d-ship-consumed-handoff:x.md",
         ]
     assert jp["dispositions"][-1]["resolves"] == []
     # Every arm carries `guidance`: the two clearing arms resolve the SAME
-    # four directives, so without it the record is the only thing telling
+    # directives, so without it the record is the only thing telling
     # them apart and the EM has nothing to pick on.
     assert all(d.get("guidance") for d in jp["dispositions"])
     assert jp["recommendation"] is None

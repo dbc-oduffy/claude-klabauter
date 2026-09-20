@@ -423,10 +423,9 @@ def test_act_phase_wired_path_commits_via_archive_and_commit(tmp_path):
     """AC-1/AC-2: exercise the ACTUALLY-WIRED act path (`_handler` ->
     `_handle_act` -> `_common.archive_and_commit`) end-to-end in an isolated
     tmp repo — never `apply_sweep` directly, which the wired handler never
-    calls. Also measures the real spawn count/process time for the
-    corrected docstring claim.
+    calls. Also measures the real spawn count for the corrected docstring
+    claim.
     """
-    import time
     from unittest.mock import patch
 
     from coordinator_core.ops.fleet.archive_actioned_memos import _handler
@@ -448,13 +447,11 @@ def test_act_phase_wired_path_commits_via_archive_and_commit(tmp_path):
         spawn_count[0] += 1
         return orig_run(*args, **kwargs)
 
-    t0 = time.perf_counter()
     with patch("subprocess.run", side_effect=_spy_run):
         result = _handler(
             {"mode": "already-terminal", "dry_run": False, "cap": 150, "candidate_ids": ids},
             repo_root=common_dir,
         )
-    elapsed_ms = (time.perf_counter() - t0) * 1000
 
     assert result["exit_code"] == 0
     assert result["failed"] == []
@@ -465,9 +462,16 @@ def test_act_phase_wired_path_commits_via_archive_and_commit(tmp_path):
         assert (repo / "cross-repo" / "archive" / Path(cid).name).is_file()
 
     # Corrected perf claim: a handful of BATCHED spawns, never one per
-    # candidate, and comfortably inside the 500ms brightline.
+    # candidate -- the honest claim on this path (DR-344: process time and
+    # spawn count, never wall clock) IS a spawn-count fact, not a
+    # millisecond one. A prior `elapsed_ms < 2000` wall-clock assertion
+    # here measured peer load on the box, not this code's own cost, and is
+    # deleted rather than converted -- per this file's own
+    # docs/plans/2026-09-11-perf-ratchets-measure-process-time-not-t.md C4
+    # chunk body ("restated on spawn count ... or measured as a subprocess
+    # tree; else deleted with the reason in the census"); the census entry
+    # itself is outside this dispatch's file footprint.
     assert spawn_count[0] < n
-    assert elapsed_ms < 2000  # generous local-disk ceiling; see module docstring for the real figure
 
 
 def test_act_phase_second_fire_is_idempotent(tmp_path):

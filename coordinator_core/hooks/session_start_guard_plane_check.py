@@ -129,11 +129,10 @@ def build_report() -> "str | None":
         )
 
     return (
-        "Coordinator guard plane: NO registered coordinator hook in this remote "
-        "session. Guards are absent here, not passing -- a write this repo's "
-        "doctrine says is gated will not be gated, and nothing will say so. "
-        f"Settings files scanned: {len(scanned)}, present: {len(present)}. "
-        f"To provision one: {_REMEDIATION}."
+        "Coordinator guard plane: no hook registered this remote session -- "
+        "gated writes are ungated here, silently. Provision instead: "
+        "`coordinator/templates/cloud-env/setup.sh` in claude.ai/code's "
+        "Setup script box."
     )
 
 

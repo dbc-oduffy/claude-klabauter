@@ -943,14 +943,29 @@ SUSPENDED_OPS: Dict[str, Dict[str, object]] = {
             "verdict": "unadjudicated",
             "outcome": "re-affirmed",
         },
-        "measured": {"max_ms": 2462.0, "p50_ms": 2462.0, "n": 1, "unit": "WALL_CLOCK"},
-        "note": "n=1. One sample, wall clock, no process instrumentation.",
+        "measured": {
+            "max_ms": 4697.3,
+            "p50_ms": 4377.7,
+            "n": 30,
+            "unit": "process_ms",
+        },
+        "note": (
+            "n=30, end-to-end process time (3 git spawns + compute_emergent_set), "
+            "p50 4377.7ms / range 4046.1-4697.3ms, measured against this repo's "
+            "HEAD e4460533. See docs/research/2026-09-10-cartography-churn-git-"
+            "derivation-cost.md."
+        ),
         "disposition": (
             "gravestone -- job was 'report which parts of the codebase are "
-            "churning most'. One call, ever. No implementation and no "
-            "caller survive, and nothing ever consumed the answer. Comes "
-            "back only if a consumer of a churn report is named first -- "
-            "not by rebuilding the report on spec."
+            "churning most'. The named consumer is DoE-claude "
+            "coordinator/bin/survey-consume-gate.py :: _run_churn, called from "
+            "/architecture-survey --refresh's Phase 0 step 7; C1's re-measure "
+            "puts a rebuilt producer at p50 4377.7ms end-to-end (n=30), over the "
+            "500ms DR-344 brightline, so the rebuild that consumer would need "
+            "cannot be built as a synchronous hot-path op at this repo's current "
+            "commit density. Comes back only on a re-measure under the bar with "
+            "n>=30 -- the consumer-named condition this row used to wait on is "
+            "now discharged, and that re-measure is the sole remaining blocker."
         ),
         "spinoff": None,
     },

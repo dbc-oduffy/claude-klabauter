@@ -494,12 +494,13 @@ def test_keying_missing_origin_worktree_for_common_dir_op():
     """A common_dir-scoped op with no _origin_worktree → INVALID_PARAMS (-32602).
 
     AC-1c: fail-loud when a key is required but _origin_worktree is absent.
-    hooks.session_heartbeat is "common_dir"-scoped in _OP_KEY_SCOPE.
+    hooks.track_touched_files is "common_dir"-scoped in _OP_KEY_SCOPE (substitute
+    for the retired hooks.session_heartbeat example, same scope/routing).
     """
     msg = {
         "jsonrpc": "2.0",
         "id": 20,
-        "method": "hooks.session_heartbeat",
+        "method": "hooks.track_touched_files",
         "params": {},
         # deliberately no "_origin_worktree"
     }
@@ -507,7 +508,7 @@ def test_keying_missing_origin_worktree_for_common_dir_op():
     def _stub(params, ctx=None, repo_root=None):
         return {"ok": True}  # should not be reached
 
-    with _RegistryScope({"hooks.session_heartbeat": _stub}):
+    with _RegistryScope({"hooks.track_touched_files": _stub}):
         d = _run(dispatch_message(msg))
 
     assert "error" in d, f"Expected error, got result: {d.get('result')}"
@@ -612,7 +613,8 @@ def test_keying_unresolvable_key_fail_loud(tmp_path):
     fails (non-git path), dispatch_message returns INVALID_PARAMS (-32602) rather
     than silently picking a default repo or propagating INTERNAL_ERROR.
 
-    Uses hooks.session_heartbeat (common_dir scope) with a real but non-git tmp dir.
+    Uses hooks.track_touched_files (common_dir scope, substitute for the retired
+    hooks.session_heartbeat example) with a real but non-git tmp dir.
     """
     # tmp_path exists but is not inside any git repository — git_common_dir will fail
     non_git_dir = tmp_path / "not-a-git-repo"
@@ -620,7 +622,7 @@ def test_keying_unresolvable_key_fail_loud(tmp_path):
     msg = {
         "jsonrpc": "2.0",
         "id": 25,
-        "method": "hooks.session_heartbeat",
+        "method": "hooks.track_touched_files",
         "params": {},
         _ORIGIN_WORKTREE_FIELD: str(non_git_dir),
     }
@@ -628,7 +630,7 @@ def test_keying_unresolvable_key_fail_loud(tmp_path):
     def _stub(params, ctx=None, repo_root=None):
         return {"ok": True}  # must not be reached
 
-    with _RegistryScope({"hooks.session_heartbeat": _stub}):
+    with _RegistryScope({"hooks.track_touched_files": _stub}):
         d = _run(dispatch_message(msg))
 
     assert "error" in d, (
@@ -682,7 +684,7 @@ def test_resolve_op_repo_key_show_top_returns_request_repo(tmp_path):
 def test_resolve_op_repo_key_common_dir_missing_raises():
     """resolve_op_repo_key raises ValueError for common_dir-scoped ops with None request_repo."""
     try:
-        resolve_op_repo_key("hooks.session_heartbeat", None)
+        resolve_op_repo_key("hooks.track_touched_files", None)
     except ValueError as exc:
         assert "_origin_worktree" in str(exc) or "requires" in str(exc), (
             f"ValueError message must reference _origin_worktree or 'requires'; got {exc!r}"

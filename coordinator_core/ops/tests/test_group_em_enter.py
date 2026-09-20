@@ -999,3 +999,48 @@ def test_one_shared_build_roster_call_per_invocation(tmp_path, monkeypatch):
     gee._group_em_enter({"repo_root": str(tmp_path)})
 
     assert call_count["n"] == 1
+
+
+def test_classify_peer_runs_exactly_once_per_peer_per_invocation(tmp_path, monkeypatch):
+    """AC 7a, module docstring's `_run_roster_and_excluded` note: `roster` and
+    `roster_excluded` are derived from ONE shared `build_roster` call, so the
+    real per-peer unit of work -- `read_pass.classify_peer` -- must run exactly
+    once per enumerated peer, never once for `roster` and again for
+    `roster_excluded`. Monkeypatches a counter on `classify_peer` itself
+    (through the real, unmocked `build_roster`) rather than asserting on a
+    comment."""
+    monkeypatch.setattr(gee.group_em_read_pass, "caller_session_id", lambda: "caller-sid-rx5")
+    agents = [
+        {"sessionId": "peer-a", "cwd": str(tmp_path), "status": "busy", "name": "a"},
+        {"sessionId": "peer-b", "cwd": str(tmp_path), "status": "busy", "name": "b"},
+        {"sessionId": "peer-c", "cwd": str(tmp_path), "status": "busy", "name": "c"},
+    ]
+    monkeypatch.setattr(gee.group_em_read_pass, "fetch_live_agents", lambda *a, **k: agents)
+
+    calls: list = []
+    real_classify_peer = gee.group_em_read_pass.classify_peer
+
+    def _counting_classify_peer(*args, **kwargs):
+        calls.append(args[1].get("sessionId") if len(args) > 1 else kwargs.get("peer", {}).get("sessionId"))
+        return real_classify_peer(*args, **kwargs)
+
+    monkeypatch.setattr(gee.group_em_read_pass, "classify_peer", _counting_classify_peer)
+    monkeypatch.setattr(
+        gee.group_em_send_pass,
+        "build_send_digest",
+        lambda *a, **k: {"entries": [], "gate_declaration_required": True},
+    )
+    monkeypatch.setattr(
+        gee.group_em_nomination,
+        "claim",
+        lambda *a, **k: {"claimed": True, "holder": "caller-sid-rx5", "superseded_incumbent": None},
+    )
+    monkeypatch.setattr(
+        gee.group_em_baseline,
+        "diff_and_persist",
+        lambda *a, **k: {"spawned": [], "exited": [], "changed": [], "first_tick": True},
+    )
+
+    gee._group_em_enter({"repo_root": str(tmp_path)})
+
+    assert sorted(calls) == ["peer-a", "peer-b", "peer-c"]

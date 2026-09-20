@@ -134,16 +134,12 @@ def _ledger_error_message(exc: BaseException):
 
 
 def _admission_denied_message(target: str, size: int, token_note: str, refusal_message: str):
-    return compose(
-        f"this edit to {target} costs {size} bytes{token_note}. {refusal_message}",
-        anchor=_RULE_ANCHOR,
-    )
+    return compose(refusal_message, anchor=_RULE_ANCHOR)
 
 
 def _soft_warn_message(target: str, size: int, token_note: str, soft: int, hard: int):
     return compose(
-        f"{target} would be {size} bytes{token_note} (soft {soft}; hard-block at "
-        f"{hard}). Approaching 40KB perf threshold.",
+        f"{size}b (soft {soft}, hard {hard}) -- approaching perf threshold.",
         anchor=_RULE_ANCHOR,
     )
 

@@ -149,6 +149,10 @@ def test_retry_exhausted_raises_named_remediation_and_mutates_nothing(
     assert not any(name.startswith("fleet-env.gen-") for name in siblings)
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="deadline: the retry loop must give up within its stated wall-clock budget, not "
+    "loop past it looking for a lucky window -- a behaviour only wall clock can observe"
+)
 def test_retry_gives_up_within_the_stated_budget(tmp_path, monkeypatch: pytest.MonkeyPatch):
     """Must not loop past the budget looking for a lucky window."""
     env_root = tmp_path / "fleet-env"

@@ -169,6 +169,7 @@ from coordinator_core.frontmatter.primitives import (
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+from coordinator_core.git.commit_signing import sign_flag_args
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 from coordinator_core.win_portability import no_console_creationflags
@@ -516,7 +517,10 @@ def _commit_delivery(
     )
 
     commit_tree_result = subprocess.run(
-        ["git", "commit-tree", tree_sha, "-p", old_head, "-F", "-"],
+        [
+            "git", "commit-tree", *sign_flag_args(Path(worktree)),
+            tree_sha, "-p", old_head, "-F", "-",
+        ],
         cwd=str(worktree),
         input=message,
         capture_output=True,

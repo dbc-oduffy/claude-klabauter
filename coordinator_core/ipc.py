@@ -49,10 +49,8 @@ Negative-spec (hard-won):
           invariant (OpClass in coordinator_core/authz/classification.py; DR-208), and any
           disk write from an advisory hook handler is a violation.
 
-      BOOKKEEPING ops (4, pcore-08 + receiver-state-sensor) — MAY write under
+      BOOKKEEPING ops (3, pcore-08 + receiver-state-sensor) — MAY write under
       .git/coordinator-sessions/ only:
-        - session_heartbeat:       writes last_activity field in
-                                   .git/coordinator-sessions/<sid>/meta.json
         - agent_completion_log:    appends to .git/coordinator-sessions/logs/agent-audit.jsonl
         - track_dispatched_agents: writes .git/coordinator-sessions/<sid>/dispatched-agents.txt
                                    and .git/coordinator-sessions/.agents/<aid>/em-session-id.txt
@@ -2095,6 +2093,55 @@ def _lazy_import_and_lookup(method: str, msg: Any = None) -> Optional[Callable]:
 # Shared dispatch core — steps 2-7 on a pre-parsed message dict
 # ---------------------------------------------------------------------------
 
+class _EscapedBaseException(Exception):
+    """Carrier for a non-``Exception`` ``BaseException`` raised by an op handler.
+
+    ``asyncio`` treats ``SystemExit`` and ``KeyboardInterrupt`` specially inside a
+    Task: ``Task.__step`` re-raises them into the event loop instead of handing them
+    to the awaiter, so the ``await`` in ``asyncio.wait_for`` sees a bare
+    ``CancelledError`` and the ``except BaseException`` arm at the dispatch site
+    never runs. The exception then leaves the process-level dispatch chokepoint and
+    terminates the engine, which is exactly what that arm exists to prevent.
+    Converting at the handler boundary, before the Task machinery sees it, keeps it
+    an ordinary exception the whole way up.
+    """
+
+    def __init__(self, wrapped: BaseException):
+        super().__init__("%s: %s" % (type(wrapped).__name__, wrapped))
+        self.wrapped = wrapped
+
+
+def _run_handler_absorbing_base(handler, params, repo_root):
+    """Call a sync op handler, re-raising a bare BaseException as a carrier.
+
+    ``asyncio`` is imported in-function, not at module scope: this module is held
+    to a module-count ceiling on the engine's cold-start path
+    (``benchmarks/import-budget-manifest.json``), which is also why the dispatch
+    site imports it lazily. By the time this runs the dispatcher has already
+    imported it, so the statement is a ``sys.modules`` dict lookup.
+    """
+    import asyncio
+
+    try:
+        return handler(params, repo_root=repo_root)
+    except (Exception, asyncio.CancelledError):
+        raise
+    except BaseException as exc:
+        raise _EscapedBaseException(exc) from exc
+
+
+async def _await_handler_absorbing_base(awaitable):
+    """Await an async op handler, re-raising a bare BaseException as a carrier."""
+    import asyncio
+
+    try:
+        return await awaitable
+    except (Exception, asyncio.CancelledError):
+        raise
+    except BaseException as exc:
+        raise _EscapedBaseException(exc) from exc
+
+
 def _handler_exception_error(exc: BaseException) -> dict:
     """Build the JSON-RPC error object for an exception that escaped an op handler.
 
@@ -2380,7 +2427,9 @@ async def _dispatch_message_impl(msg: dict) -> dict:
             # at the handler's call site (AC-3 Gap-3 — enforced by CI grep gate).
             try:
                 result = await asyncio.wait_for(
-                    handler(params, repo_root=op_repo_key),
+                    _await_handler_absorbing_base(
+                        handler(params, repo_root=op_repo_key)
+                    ),
                     timeout=op_timeout,
                 )
             except asyncio.TimeoutError:
@@ -2400,6 +2449,8 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
                     exc_info=True,
                 )
+                if isinstance(exc, _EscapedBaseException):
+                    exc = exc.wrapped
                 return {
                     "jsonrpc": "2.0",
                     "id": id_,
@@ -2410,7 +2461,9 @@ async def _dispatch_message_impl(msg: dict) -> dict:
             # stalled while the sync work runs; makes the per-invocation timeout effective.
             try:
                 result = await asyncio.wait_for(
-                    asyncio.to_thread(handler, params, repo_root=op_repo_key),
+                    asyncio.to_thread(
+                        _run_handler_absorbing_base, handler, params, op_repo_key
+                    ),
                     timeout=op_timeout,
                 )
             except asyncio.TimeoutError:
@@ -2430,6 +2483,8 @@ async def _dispatch_message_impl(msg: dict) -> dict:
                     "coordinator_core.ipc: op %r raised %s: %s", method, type(exc).__name__, exc,
                     exc_info=True,
                 )
+                if isinstance(exc, _EscapedBaseException):
+                    exc = exc.wrapped
                 return {
                     "jsonrpc": "2.0",
                     "id": id_,

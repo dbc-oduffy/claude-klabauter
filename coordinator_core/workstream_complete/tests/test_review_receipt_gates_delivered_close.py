@@ -767,3 +767,187 @@ def test_naive_timestamp_is_normalized_to_utc_aware(monkeypatch, tmp_path):
     for raw in ("2026-08-31", "2026-08-30T22:34:29Z", "2026-08-31T09:05:12.022931+00:00"):
         parsed = wsc._parse_review_receipt_timestamp(raw)
         assert isinstance(parsed > datetime.now(timezone.utc), bool)
+
+
+# ---------------------------------------------------------------------------
+# C4 (docs/plans/2026-09-11-review-receipt-records-completion-not-dispatch.md):
+# the gate reads `review_trail.receipt_credit`'s completion-writer-aware
+# predicate for the `review_receipt` leg, over EVERY extant share root, and
+# names the "dispatched, never completed" case with its own detail text.
+# ---------------------------------------------------------------------------
+
+
+def _splice_completion(doc_text: str, session_id: str) -> str:
+    """Insert a `review_completion:` block the same way SubagentStop's own
+    writer does -- before the closing frontmatter fence, same shape
+    `review_trail.receipt_credit._has_own_completion` reads (a dict with a
+    matching `session_id`)."""
+    marker = "---\n\n"
+    idx = doc_text.find(marker)
+    if idx == -1:
+        return doc_text
+    block = f"review_completion:\n  session_id: '{session_id}'\n"
+    return doc_text[:idx] + block + doc_text[idx:]
+
+
+def _write_completed_sidecar(
+    tmp_path: Path,
+    sid: str,
+    agent_type: str = _REVIEWER_TYPE,
+    body: str = "## Findings\n\nReal review content here.\n",
+    stamped_at: str = "2026-08-27T13:00:00+00:00",
+) -> Path:
+    """A sidecar carrying BOTH a `review_receipt` block and its own
+    session-matching `review_completion` block -- the shape a reviewer
+    leaves behind when it actually stops, not merely gets dispatched."""
+    sidecar_dir = tmp_path / "state" / "subagent-share" / sid
+    sidecar_dir.mkdir(parents=True, exist_ok=True)
+    sidecar_path = sidecar_dir / f"{agent_type.replace(':', '')}.deadbeef03.md"
+    doc = (
+        f"---\nstatus: complete\nagent_type: {agent_type}\nlead_session_id: {sid}\n"
+        "commits: []\n---\n\n" + body
+    )
+    doc = provision_report._splice_review_receipt(doc, sid, "deadbeef03", agent_type, stamped_at)
+    doc = _splice_completion(doc, sid)
+    sidecar_path.write_text(doc, encoding="utf-8")
+    return sidecar_path
+
+
+def _write_twin_sidecar(
+    tmp_path: Path,
+    sid: str,
+    agent_type: str = _REVIEWER_TYPE,
+    body: str = "## Findings\n\nReal review content here.\n",
+    stamped_at: str = "2026-08-27T13:00:00+00:00",
+    name: str = "coordinatorcode-reviewer-run-report.deadbeef04.md",
+) -> Path:
+    """The `provision-sidecar.py` twin shape: a filled, `agent_id: ''`,
+    completion-less findings sidecar for the same session + receipt
+    `agent_type`."""
+    sidecar_dir = tmp_path / "state" / "subagent-share" / sid
+    sidecar_dir.mkdir(parents=True, exist_ok=True)
+    sidecar_path = sidecar_dir / name
+    doc = (
+        f"---\nstatus: complete\nagent_type: {agent_type}\nlead_session_id: {sid}\n"
+        "commits: []\n---\n\n" + body
+    )
+    doc = provision_report._splice_review_receipt(doc, sid, "", agent_type, stamped_at)
+    sidecar_path.write_text(doc, encoding="utf-8")
+    return sidecar_path
+
+
+def test_completion_stamped_filled_reviewer_passes(monkeypatch, tmp_path):
+    _patch_gate(monkeypatch, _gate())
+    _write_clean_plan(tmp_path, "completed-reviewer-plan")
+    _write_completed_sidecar(tmp_path, _SID)
+
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "completed-reviewer-plan", "subject": "x"},
+        repo_root=tmp_path,
+    )
+
+    review_receipt_gate = decision_object["gates"]["review_receipt"]
+    assert review_receipt_gate["blocks"] is False
+
+
+def test_completion_stamped_unfilled_run_report_with_filled_twin_passes(monkeypatch, tmp_path):
+    """The pipeline twin shape: a completion-stamped but UNFILLED run-report
+    (the receipt holder) beside a filled, completion-less, `agent_id: ''`
+    findings twin of the same session + receipt `agent_type` -- content
+    authored under this session's own completion writer, just on the twin
+    file rather than the run-report itself."""
+    _patch_gate(monkeypatch, _gate())
+    _write_clean_plan(tmp_path, "twin-shape-plan")
+    _write_completed_sidecar(tmp_path, _SID, body="")
+    _write_twin_sidecar(tmp_path, _SID)
+
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "twin-shape-plan", "subject": "x"}, repo_root=tmp_path
+    )
+
+    review_receipt_gate = decision_object["gates"]["review_receipt"]
+    assert review_receipt_gate["blocks"] is False
+
+
+def test_twin_shape_run_report_not_completed_blocks_dispatched_never_completed(
+    monkeypatch, tmp_path
+):
+    """The run-report never gained its OWN completion block -- the session's
+    completion writer is nonetheless live (another sidecar in the same
+    session carries one). This must block, and its detail must name
+    "dispatched, never completed", naming this receipt's own path."""
+    _patch_gate(monkeypatch, _gate())
+    _write_clean_plan(tmp_path, "twin-shape-no-completion-plan")
+    # The run-report holds the review_receipt but no completion of its own.
+    sidecar_dir = tmp_path / "state" / "subagent-share" / _SID
+    sidecar_dir.mkdir(parents=True, exist_ok=True)
+    run_report_path = sidecar_dir / f"{_REVIEWER_TYPE.replace(':', '')}.deadbeef05.md"
+    doc = (
+        f"---\nstatus: complete\nagent_type: {_REVIEWER_TYPE}\nlead_session_id: {_SID}\n"
+        "commits: []\n---\n\n"
+    )
+    doc = provision_report._splice_review_receipt(
+        doc, _SID, "deadbeef05", _REVIEWER_TYPE, "2026-08-27T13:00:00+00:00"
+    )
+    run_report_path.write_text(doc, encoding="utf-8")
+    # A second, unrelated sidecar makes the session's completion writer live.
+    _write_completed_sidecar(
+        tmp_path, _SID, agent_type=_INTEGRATOR_TYPE, body="## Findings\n\napplied.\n"
+    )
+
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "twin-shape-no-completion-plan", "subject": "x"},
+        repo_root=tmp_path,
+    )
+
+    review_receipt_gate = decision_object["gates"]["review_receipt"]
+    assert review_receipt_gate["blocks"] is True
+    assert "dispatched, never completed" in review_receipt_gate["detail"]
+    assert str(run_report_path.as_posix()) in review_receipt_gate["detail"]
+
+
+def test_filled_reviewer_no_completion_next_to_completion_stamped_non_reviewer_blocks(
+    monkeypatch, tmp_path
+):
+    """The session flag is key-driven, not vocabulary-driven: a
+    completion-stamped sidecar of a NON-reviewer-vocabulary `agent_type`
+    still flips `session_has_completion`, and the session's only reviewer
+    (filled body, no completion block) still must block with the same
+    "dispatched, never completed" detail."""
+    _patch_gate(monkeypatch, _gate())
+    _write_clean_plan(tmp_path, "vocab-blind-plan")
+    _write_sidecar(tmp_path, _SID, body="## Findings\n\nReal review content here.\n")
+    _write_completed_sidecar(
+        tmp_path,
+        _SID,
+        agent_type="coordinator:some-other-persona",
+        body="## Notes\n\nnot a reviewer.\n",
+    )
+
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "vocab-blind-plan", "subject": "x"}, repo_root=tmp_path
+    )
+
+    review_receipt_gate = decision_object["gates"]["review_receipt"]
+    assert review_receipt_gate["blocks"] is True
+    assert "dispatched, never completed" in review_receipt_gate["detail"]
+
+
+def test_receipt_under_second_share_root_only_still_counts(monkeypatch, tmp_path):
+    """Substrate finding 3: `_write_sidecar` writes under the LEGACY root
+    (`state/subagent-share`), the second entry in `share_roots` -- the
+    current (`.coordinator-local/subagent-share`) root never exists in this
+    fixture at all. The widened loop (step 1) must still find it."""
+    _patch_gate(monkeypatch, _gate())
+    _write_clean_plan(tmp_path, "second-root-plan")
+    _write_sidecar(tmp_path, _SID, body="## Findings\n\nReal review content here.\n")
+    from coordinator_core.session.machinery_paths import share_root as _current_share_root
+
+    assert not Path(_current_share_root(str(tmp_path))).is_dir()
+
+    decision_object = wsc.brief(
+        decisions={"governing_plan_slug": "second-root-plan", "subject": "x"}, repo_root=tmp_path
+    )
+
+    review_receipt_gate = decision_object["gates"]["review_receipt"]
+    assert review_receipt_gate["blocks"] is False

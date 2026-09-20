@@ -56,6 +56,7 @@ import time
 from typing import Any, Optional
 
 from coordinator_core import timestamps
+from coordinator_core.session import core as session_core
 
 _WATCH_RELATIVE_PATH = os.path.join("state", "group-em-watch.json")
 
@@ -286,6 +287,74 @@ def _carried_holder_name(repo_root: str, holder_session_id: str) -> Optional[str
     return carried if isinstance(carried, str) and carried else None
 
 
+def _self_process_identity() -> tuple[int, Optional[int]]:
+    """`(os.getpid(), create_time_epoch)` for THIS process, best-effort.
+
+    `create_time_epoch` is `None` when `psutil` is unavailable or its query
+    raises -- never invented. Reused verbatim as `stable_pid_alive`'s witness
+    at read time (`process_confirmed_alive`, item 2), the same primitive
+    `session.core` already uses for every other process-identity compare in
+    this repo (`core.stable_pid_alive`'s own docstring) -- no second
+    liveness mechanism invented here. In-process only: no subprocess spawn,
+    no `ps`/`kill -0` shell-out (DR-344).
+    """
+    pid = os.getpid()
+    psutil_mod = session_core._psutil()
+    if psutil_mod is None:
+        return pid, None
+    try:
+        return pid, int(psutil_mod.Process(pid).create_time())
+    except Exception:
+        return pid, None
+
+
+def process_confirmed_alive(liveness: dict) -> Optional[bool]:
+    """Is the process that wrote this record's last tick CONFIRMED running?
+
+    Single-machine process liveness, `stamp`'s own writer describing itself
+    (`pid`/`pid_start_epoch`, self-captured every tick by
+    `_self_process_identity`) -- NOT the cross-machine holder-identity
+    question item 1's `is_fresh_and_foreign`/displacement teardown answers
+    (that predicate is deliberately never PID-keyed; see its own docstring
+    and the rejected-alternatives note in the memo this function answers).
+    A PID is a fair liveness input on the SAME box a `--status` caller runs
+    on, which is exactly this question -- never used to decide whose
+    record wins a write.
+
+    Returns:
+      - `True`  -- the recorded pid is confirmed alive (and, when a birth
+        epoch was captured, still the SAME process -- `stable_pid_alive`'s
+        own recycled-pid guard).
+      - `False` -- the recorded pid is confirmed gone.
+      - `None`  -- cannot be confirmed either way (no `pid` in this record --
+        e.g. a pre-this-fix stamp, or `psutil` raising something other than
+        a clean dead/alive answer). `None` is never promoted to `True`: a
+        `--status` caller that cannot confirm the process must not report
+        ALIVE on staleness arithmetic alone (the defect this function
+        exists to close).
+
+    No subprocess spawn -- `core.stable_pid_alive` is `psutil`-only,
+    in-process (DR-344).
+    """
+    pid = liveness.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    start_epoch = liveness.get("pid_start_epoch")
+    if not isinstance(start_epoch, (int, float)):
+        # NO BIRTH-INSTANT WITNESS, NO CONFIRMATION -- `stable_pid_alive`
+        # with an empty `stored_start_epoch` AND an empty `stored_lstart`
+        # returns `False` unconditionally (its own "legacy fallback" arm,
+        # `if not stored_lstart: return False`), which would read a
+        # genuinely alive process as confirmed-dead. A bare pid with no
+        # epoch is therefore NOT a fair input here -- degrade to "cannot
+        # confirm" rather than call through to a predicate that would lie.
+        return None
+    try:
+        return session_core.stable_pid_alive(pid, "", str(int(start_epoch)))
+    except Exception:
+        return None
+
+
 def stamp(
     repo_root: str,
     holder_session_id: str,
@@ -296,6 +365,8 @@ def stamp(
     tick_source: str = TICK_SOURCE,
     holder_name: Optional[str] = None,
     writer_session_id: Optional[str] = None,
+    pid: Optional[int] = None,
+    pid_start_epoch: Optional[int] = None,
 ) -> bool:
     """Rewrite the heartbeat for one tick. Whole-file replace, never a fold.
 
@@ -363,6 +434,12 @@ def stamp(
     now_epoch = time.time() if now_epoch is None else now_epoch
     if holder_name is None:
         holder_name = _carried_holder_name(repo_root, holder_session_id)
+    if pid is None and pid_start_epoch is None:
+        # SELF-DESCRIPTION, captured every tick -- item 2's `--status` process
+        # check reads this back via `process_confirmed_alive`. Never invented
+        # for a caller that passed its own `pid` explicitly (a future writer
+        # stamping on behalf of a teammate process, should one exist).
+        pid, pid_start_epoch = _self_process_identity()
 
     watch_file = watch_path(repo_root)
     prior_record = _read_record(watch_file)
@@ -387,6 +464,17 @@ def stamp(
         "subscribed_peers": subscribed_peers,
         "declinations": list(declinations) if declinations is not None else None,
         "writer_session_id": writer_session_id,
+        # ITEM 2 (`--status` false-alive with no process check). Additive
+        # keys the DoE reader never asked for and ignores by name -- see
+        # this module's own `_READER_KEYS` pin docstring on the reader's
+        # by-name-not-by-shape contract. `pid_start_epoch` is `None` when
+        # `psutil` could not be consulted -- `process_confirmed_alive`
+        # reads a bare `pid` with no epoch as UNCONFIRMED, never as a
+        # weaker-but-usable witness (see that function's own docstring for
+        # why: `stable_pid_alive` reads a missing epoch AND lstart as
+        # unconditionally dead).
+        "pid": pid,
+        "pid_start_epoch": pid_start_epoch,
     }
 
     # PRIOR-HOLDER TRACE (C1). Whenever the record about to be replaced was
@@ -424,6 +512,51 @@ def stamp(
         )
 
     return write_atomic(watch_file, payload)
+
+
+def displacement_record(
+    repo_root: str,
+    holder_session_id: str,
+    writer_session_id: Optional[str] = None,
+    now_epoch: Optional[float] = None,
+) -> Optional[dict]:
+    """The foreign record that just declined a `stamp()` call for these
+    identifiers, IFF that decline was a HOLDER mismatch -- the signal
+    `group_em.watch`'s held loop tears itself down on (item 1, the memo's
+    gated ask). `None` for every other shape: no decline at all (the record
+    is not fresh-and-foreign), or a decline whose holder is unchanged -- a
+    same-holder writer or `tick_source` mismatch is the same crown's OTHER
+    instrument declining (see `is_fresh_and_foreign`'s own HOLDER-OR-WRITER
+    note), never a displacement, and must stay a quiet decline exactly as
+    before this function existed.
+
+    CALLER CONTRACT: call this ONLY immediately after `stamp()` has already
+    returned `False` for the SAME `(repo_root, holder_session_id,
+    writer_session_id)`. A decline never mutates the record on disk
+    (`test_a_fresh_foreign_record_is_declined_and_survives_unchanged`), so
+    this re-read sees what `stamp()` just saw, absent a THIRD writer racing
+    in between the two reads -- an accepted, documented residual, the same
+    class `stamp`'s own "NO LOCK SPANS READ-DECIDE-WRITE" note already
+    carries for the write side. Never called from `stamp()` itself: two
+    reads of one record for one decline is a cost only the caller that
+    needs the extra fact should pay.
+
+    Shares `is_fresh_and_foreign` with `stamp`'s own decline test and the
+    arm-time refusal (`group_em.watch._refuse_if_already_armed`) -- one
+    predicate, three call sites now, never a second opinion invented here
+    about whose record wins.
+    """
+    now_epoch = time.time() if now_epoch is None else now_epoch
+    record = _read_record(watch_path(repo_root))
+    if not is_fresh_and_foreign(
+        record, now_epoch, holder_session_id, writer_session_id
+    ):
+        return None
+    if not isinstance(record, dict):
+        return None
+    if record.get("holder_session_id") == holder_session_id:
+        return None
+    return record
 
 
 VERDICT_ABSENT = "absent"
@@ -533,7 +666,10 @@ def read_liveness(
             "holder_name": None,
             "last_tick_at": None,
             "tick_source": None,
+            "next_expected_by": None,
             "seconds_overdue": None,
+            "pid": None,
+            "pid_start_epoch": None,
             "remedy": REARM_COMMAND,
         }
 
@@ -544,13 +680,29 @@ def read_liveness(
     # matters (the holder re-pointed or exited) that sid is exactly the one
     # that no longer resolves, so "re-resolve from it" reads like a check and
     # performs like a ritual, failing where a reader needs it most.
+    #
+    # ITEM 4 (`read_liveness` drops `next_expected_by`/`pid`* from its
+    # payload). `next_expected_by` is the raw deadline string this tick
+    # promised the next one by -- carried here EVEN WHEN ARMED, not only on
+    # the STALE branches below that already compute `seconds_overdue`
+    # against it. `ops/group_em_enter.py::_run_watch_liveness` forwards this
+    # dict verbatim into the entry sequence's `watch_liveness` leg; before
+    # this fix an ARMED tick's deadline was computed internally and then
+    # discarded, so that leg read green with no deadline a caller could act
+    # on. `pid`/`pid_start_epoch` are carried for the same reason -- they
+    # are item 2's own inputs (`process_confirmed_alive`), and a caller of
+    # `read_liveness` other than `--status` (the entry leg above) gets the
+    # same evidence rather than having to re-open the record itself.
     base = {
         "holder_session_id": holder_session_id,
         "holder_name": record.get("holder_name"),
         "last_tick_at": record.get("last_tick_at"),
         "tick_source": record.get("tick_source"),
+        "next_expected_by": record.get("next_expected_by"),
         "subscribed_peers": record.get("subscribed_peers"),
         "declinations": record.get("declinations"),
+        "pid": record.get("pid"),
+        "pid_start_epoch": record.get("pid_start_epoch"),
     }
 
     deadline = record.get("next_expected_by")
@@ -599,7 +751,22 @@ def human_verdict(liveness: dict, now_epoch: Optional[float] = None) -> str:
     """
     now_epoch = time.time() if now_epoch is None else now_epoch
     verdict = liveness.get("verdict")
-    holder = liveness.get("holder_name") or liveness.get("holder_session_id") or "unknown holder"
+    # ITEM 3 (`human_verdict` prints the holder's bare name). A bare name is
+    # ambiguous the moment two live sessions share one -- this repo's own
+    # display names are operator-chosen, not unique by construction. The
+    # session id is the one field that IS unique, so it always goes on
+    # alongside the name when both are known; the id alone (name absent, an
+    # older or nameless record) is still unambiguous on its own.
+    holder_name = liveness.get("holder_name")
+    holder_session_id = liveness.get("holder_session_id")
+    if holder_name and holder_session_id:
+        holder = f"{holder_name} [{holder_session_id}]"
+    elif holder_name:
+        holder = holder_name
+    elif holder_session_id:
+        holder = holder_session_id
+    else:
+        holder = "unknown holder"
     remedy = liveness.get("remedy") or REARM_COMMAND
     age = timestamps.age_seconds(liveness.get("last_tick_at"), now_epoch)
 

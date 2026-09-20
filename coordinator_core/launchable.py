@@ -26,10 +26,9 @@ Launchable-extension-map precedent (bash/sh branch, keep-not-port):
     conventions already blesses for ``.js`` -> ``node``: "a capability, not
     a dependency." Nothing on claude-klabauter's own build/install/test critical path
     REQUIRES bash to complete -- this module offers to correctly LAUNCH a
-    ``.sh`` file some caller already resolved (a user-supplied
-    install-health drop-in, or a sibling repo's own script resolved
-    defensively across a repo boundary), exactly as it offers to launch a
-    ``.js`` via ``node`` when a caller resolves one of those instead. The
+    ``.sh`` file some caller already resolved (a sibling repo's own script
+    resolved defensively across a repo boundary), exactly as it offers to
+    launch a ``.js`` via ``node`` when a caller resolves one of those instead. The
     bash entries are therefore a keep, not migration debt: contingent
     irreducibility (CLAUDE.md § Runtime conventions) does not apply here
     because nothing about claude-klabauter's OWN work depends on the target actually
@@ -88,7 +87,7 @@ import shutil
 import sys
 from typing import List, Optional
 
-__all__ = ["resolve_launchable", "resolve_by_shebang", "which_path_ordered"]
+__all__ = ["resolve_launchable", "which_path_ordered"]
 
 # Extension -> interpreter *name* (resolved through PATH at call time). Keyed on the
 # lowercased suffix; extension-less scripts intentionally have no entry and fall
@@ -278,162 +277,3 @@ def resolve_launchable(script_path: str) -> List[str]:
 
     prefix = _interpreter_for(os.path.splitext(script_path)[1].lower())
     return [*prefix, script_path]
-
-
-def _interpreter_name_from_shebang(first_line: str) -> Optional[str]:
-    """Extract the bare interpreter *name* from a shebang line, or ``None``.
-
-    Handles both the direct form (``#!/bin/bash``) and the ``env`` indirection
-    form (``#!/usr/bin/env python3``) -- for the ``env`` form the interpreter
-    is the first non-flag token *after* ``env``, not ``env`` itself and not
-    one of ``env``'s own flags (e.g. ``-S`` in the ``env -S python3 -u``
-    split-string idiom -- GNU coreutils, increasingly common as a portable
-    way to pass an interpreter flag through a shebang). Returns ``None`` for
-    anything that isn't a well-formed ``#!`` line (no shebang, empty
-    interpreter path, an ``env`` line with only flag tokens, etc.) so callers
-    can fall through to a default.
-
-    Review: code-reviewer (Finding 2) -- the previous unconditional
-    ``tokens[1]`` read mis-resolved ``env -S python3 -u`` to the interpreter
-    name ``"-S"``, which does not exist on PATH and would crash the caller's
-    ``subprocess.call`` (Finding 1). Trailing interpreter flags themselves
-    (e.g. ``-u``) are still not propagated into the resolved argv -- this
-    function resolves an interpreter *name*, not a full shebang-argument
-    reproduction (see Finding 8 caveat below).
-    """
-    if not first_line.startswith("#!"):
-        return None
-    rest = first_line[2:].strip()
-    if not rest:
-        return None
-    tokens = rest.split()
-    if not tokens:
-        return None
-    name = os.path.basename(tokens[0])
-    if name == "env":
-        for token in tokens[1:]:
-            if token.startswith("-"):
-                continue
-            name = os.path.basename(token)
-            break
-        else:
-            return None
-    return name or None
-
-
-def _is_python_interpreter_name(name: str) -> bool:
-    """``python``, ``python3``, ``python3.11`` -- anything shaped like a CPython
-    binary name. Deliberately conservative (prefix match on ``python``) so a
-    shebang naming a wrapper like ``pythonw`` still routes onto this branch.
-
-    Caveat: the match is on a prefix, not a runnable-binary check, so a
-    shebang naming a non-interpreter tool that happens to start with
-    ``python`` (e.g. ``python-config``, ``pythonic-lint``) would also match
-    and get redirected to ``sys.executable``, which is wrong for that name
-    specifically. Low practical risk for install-health drop-ins, whose
-    shebangs are hand-authored."""
-    return name.lower().startswith("python")
-
-
-def resolve_by_shebang(script_path: str) -> List[str]:
-    """Return the COMPLETE argv that launches ``script_path`` via an EXPLICIT
-    interpreter resolved from its own ``#!`` shebang line -- never a bare
-    path.
-
-    This is the seam for drop-in-script orchestrators (e.g.
-    ``coordinator_core.ops.install_health_run``) that iterate a directory of
-    ``*.sh``-suffixed scripts whose actual interpreter may not be bash: the
-    ``.sh`` suffix is sometimes kept purely so a directory glob still finds
-    the drop-in (see ``DoE-claude/coordinator/bin/install-health/
-    seed-skill-overrides.sh``, which is pure Python under a ``.sh`` name).
-    Running such a script as ``bash <script>`` dies immediately on its first
-    non-bash line; this function reads the shebang instead of assuming it.
-
-    Resolution order:
-        1. (Windows only) ``<script>.cmd`` twin, if present -- same tier-1
-           rationale as ``resolve_launchable``.
-        2. Parse the first line for a ``#!`` shebang (direct or ``env``
-           form). A Python interpreter name (``python``, ``python3``,
-           ``pythonX.Y``, ...) resolves to ``sys.executable`` -- NOT a PATH
-           probe -- for the same reason ``_interpreter_for`` pins ``.py`` to
-           ``sys.executable``: a Python parent spawning a Python child must
-           stay on the interpreter it is already running under (venv/
-           import-path correct by construction), because these drop-ins are
-           trampolines back INTO ``coordinator_core``. Any other interpreter
-           name resolves through PATH via ``shutil.which(name) or name``.
-        3. No shebang, unreadable file, or an unparseable first line ->
-           ``["bash"]``, preserving today's behaviour for legacy drop-ins
-           that never declared a shebang.
-
-    The returned list always ends with a path/name for the thing being
-    launched, matching sibling ``resolve_launchable``'s convention: the
-    script is folded into the returned vector unconditionally, so
-    ``resolve_by_shebang(script_path)`` is always the complete, ready-to-run
-    argv and callers need no branching. In the Windows ``.cmd``-twin tier the
-    twin path itself is the complete, self-sufficient launch target and is
-    returned alone (the original ``script_path`` is NOT also appended --
-    passing it as a trailing argument to the twin would be wrong); in every
-    other tier the resolved interpreter is followed by ``script_path``.
-
-    Review: code-reviewer (Finding 4) -- previously this function returned an
-    argv *prefix* (script excluded) in the normal case but a *complete* argv
-    (script included) in the Windows-twin case, and the sole caller
-    discriminated the two shapes with a fragile string-equality check
-    (``launch_prefix[-1] == script + ".cmd"``). Folding the script in
-    unconditionally matches ``resolve_launchable`` and removes that
-    caller-side branch entirely.
-
-    Negative-spec:
-        - **Never a bare-path result for the script itself.** Unlike
-          ``resolve_launchable``'s deliberate POSIX bare-path tier, this
-          function must NOT rely on the OS exec loader honouring the exec
-          bit + shebang, because the install-health drop-in contract
-          (``coordinator_core.ops.install_health_run`` module docstring)
-          explicitly promises the execute bit is NOT required for pickup --
-          a drop-in script may ship mode ``0o644`` with no exec bit set.
-          Passing the script as an *argument* to an
-          explicit interpreter is what keeps that guarantee true regardless
-          of exec bit.
-        - Does not validate that the resolved interpreter exists on PATH,
-          only that a name was found; ``shutil.which(name) or name`` mirrors
-          ``_interpreter_for``'s own fallback idiom so a PATH populated only
-          in the child process still works.
-        - A binary/undecodable first line does not raise -- it is treated
-          identically to "no shebang" and falls through to ``["bash"]``.
-        - ``env``-form shebangs resolve only the interpreter *name*; trailing
-          interpreter flags (e.g. the ``-u`` in ``env python3 -u``, or
-          ``#!/bin/bash -x``) are intentionally not propagated into the
-          resolved argv -- this is a best-effort interpreter-*name* resolver,
-          not a full shebang-argument reproduction.
-
-    Spec backlink: ``cross-repo/inbox/2026-07-21-claude-central-em-dr079-doe-dispositions-and-install-health-defect.md``
-    """
-    script_path = os.fspath(script_path)
-
-    if _is_windows():
-        cmd_twin = script_path + ".cmd"
-        if os.path.isfile(cmd_twin):
-            return [cmd_twin]
-
-    try:
-        with open(script_path, "rb") as fh:
-            first_line_bytes = fh.readline()
-        # Review: code-reviewer (Finding 3) -- strip a leading UTF-8 BOM
-        # before decoding. Some Windows-side editors default to UTF-8-with-BOM
-        # on save; an unstripped BOM makes the decoded line start with
-        # "﻿#!...", which fails the startswith("#!") check below and
-        # silently falls back to bash even for a Python-shebang script.
-        if first_line_bytes.startswith(b"\xef\xbb\xbf"):
-            first_line_bytes = first_line_bytes[3:]
-        first_line = first_line_bytes.decode("utf-8", errors="strict").rstrip("\r\n")
-    except (OSError, UnicodeDecodeError):
-        return ["bash", script_path]
-
-    name = _interpreter_name_from_shebang(first_line)
-    if not name:
-        return ["bash", script_path]
-
-    if _is_python_interpreter_name(name):
-        return [sys.executable, script_path]
-
-    return [shutil.which(name) or name, script_path]

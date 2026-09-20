@@ -28,7 +28,6 @@
         "coordinator_core/hooks/nudge_named_agent_report_delivery.py",
         "coordinator_core/hooks/nudge_unauthorized_handoff.py",
         "coordinator_core/hooks/postuse_advisory_dispatch.py",
-        "coordinator_core/hooks/session_heartbeat.py",
         "coordinator_core/hooks/subagent_arrival_check.py",
         "coordinator_core/hooks/subagent_zero_tool_use.py",
         "coordinator_core/hooks/subagent_zero_tool_use_resolve.py",

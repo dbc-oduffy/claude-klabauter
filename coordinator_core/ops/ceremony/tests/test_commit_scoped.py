@@ -1474,6 +1474,62 @@ def _seed_many_deletions(repo: Path, count: int) -> list[str]:
     return rels
 
 
+def test_diverged_six_paths_exclusion_notice_names_first_five_and_elides_sixth(tmp_path):
+    """C4 (docs/plans/2026-09-11-commit-scoped-refuses-a-foreign-staged-
+    hunk.md): the shared-index provenance half of the exclusion notice
+    (`_WORKTREE_EXCLUDED_TEMPLATE`) is bounded at five named paths, matching
+    `commit_v2`'s `worktree_over_staged` warning -- a sixth diverged path in
+    one pathspec is elided behind a trailing `', ...'`, never spelled out.
+    """
+    repo = real_git_repo(tmp_path)
+    rels = [f"file{i}.txt" for i in range(6)]
+    for rel in rels:
+        make_diverged_path(
+            repo, rel, staged_content=f"STAGED-{rel}\n", worktree_content=f"WORKTREE-{rel}\n"
+        )
+    msg_file = _write_msg(tmp_path)
+
+    result = git_native.commit_scoped(rels, msg_file, repo)
+
+    assert result.ok, result.stderr
+    assert (
+        "the committed content came from the shared index, which records no "
+        "author for staged content"
+    ) in result.stderr
+    for rel in rels[:5]:
+        assert rel in result.stderr
+    named = ", ".join(rels[:5]) + ", ..."
+    assert named in result.stderr
+    assert rels[5] not in result.stderr
+
+
+def test_diverged_path_absent_index_notice_states_head_provenance_only(tmp_path, monkeypatch):
+    """C4 (same plan): with `.git/index` absent between the divergence read
+    and `_commit_scoped_private_index`'s own `read_index()` call, the
+    exclusion notice's substitute-content half must name HEAD -- never the
+    staged/shared-index half, which would state the opposite of what
+    happened (P1 69ce1cdfd, item 3, cited in `_commit_scoped_private_index`'s
+    own docstring).
+    """
+    from coordinator_core.git.git_state import IndexSnapshot
+
+    repo = real_git_repo(tmp_path)
+    (repo / "file.txt").write_text("HEAD content\n", encoding="utf-8")
+    _git(["add", "--", "file.txt"], repo)
+    _git(["commit", "-q", "-m", "seed file.txt"], repo)
+    make_diverged_path(repo, "file.txt", staged_content="STAGED\n", worktree_content="WORKTREE\n")
+    msg_file = _write_msg(tmp_path)
+
+    monkeypatch.setattr(git_native, "read_index", lambda *a, **k: IndexSnapshot({}, None))
+
+    result = git_native._commit_scoped_private_index(["file.txt"], [], msg_file, repo)
+
+    assert result.ok, result.stderr
+    assert "no index file was present, so the content was taken from HEAD instead" in result.stderr
+    assert "staged (index)" not in result.stderr
+    assert "shared index" not in result.stderr
+
+
 def test_private_index_untracks_an_absent_set_too_large_for_one_argv(tmp_path):
     """Regression, 2026-08-26: the private-index branch un-staged its
     `absent` set with `git rm --cached -- <paths>`, every path on argv.

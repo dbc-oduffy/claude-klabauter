@@ -180,7 +180,8 @@ def parse_porcelain_paths(status_out: str) -> List[Tuple[str, str]]:
     should ever attribute to). Shared by this module's own `main()` classifier
     and `coordinator_core.baton_assemble`'s dirty-tree attribution probe — the
     porcelain-parsing loop exists exactly ONCE, here; a second copy anywhere
-    else is a bug, not a shortcut.
+    else is a bug, not a shortcut. Enforced by
+    `coordinator_core/ops/test_dirty_tree_gate_single_parser.py`.
     """
     pairs: List[Tuple[str, str]] = []
     for line in status_out.splitlines():

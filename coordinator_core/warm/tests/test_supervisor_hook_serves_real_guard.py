@@ -224,15 +224,17 @@ def _echoing_dispatch(msg, *, caller=None, isolated=False):
 
 def test_the_url_chooses_the_op_end_to_end(tmp_path: Path):
     """Two registrations on the SAME event must reach two different ops. This is the
-    property `hooks.json` forces: three SessionStart entries, one event name."""
+    property `hooks.json` forces: three SessionStart entries, one event name.
+    Uses hooks.track_touched_files (substitute for the retired
+    hooks.session_heartbeat example, same hooks.* routing)."""
     httpd, port = _bind_handler(tmp_path, dispatch=_echoing_dispatch)
     try:
         _, boot = _post(port, {"hook_event_name": "SessionStart", "source": "startup"}, path="/hook/session.boot_sweep")
-        _, track = _post(port, {"hook_event_name": "SessionStart", "source": "startup"}, path="/hook/hooks.session_heartbeat")
+        _, track = _post(port, {"hook_event_name": "SessionStart", "source": "startup"}, path="/hook/hooks.track_touched_files")
     finally:
         httpd.shutdown()
     assert boot["hookSpecificOutput"]["additionalContext"] == "routed to session.boot_sweep"
-    assert track["hookSpecificOutput"]["additionalContext"] == "routed to hooks.session_heartbeat"
+    assert track["hookSpecificOutput"]["additionalContext"] == "routed to hooks.track_touched_files"
 
 
 def test_an_injecting_hook_injects_over_the_transport(tmp_path: Path):

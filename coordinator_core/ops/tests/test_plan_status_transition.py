@@ -1851,6 +1851,72 @@ def test_stamp_implemented_foreign_claim_skip_is_reported_not_silent(tmp_path, c
     assert "claim" in err.lower()
 
 
+# ---------------------------------------------------------------------------
+# C3 (docs/plans/2026-09-11-commit-scoped-refuses-a-foreign-staged-hunk.md):
+# `_run_cascade` prints `commit_notice` beside `commit_error`, distinct
+# framing (AC7).
+# ---------------------------------------------------------------------------
+
+
+def test_run_cascade_prints_commit_notice_with_distinct_framing(tmp_path, monkeypatch, capsys):
+    """AC7: a diverged-path cascade -- one whose follow-up commit landed but
+    carried a non-empty `commit_notice` -- prints that text to stderr framed
+    as `cascade commit note`, a distinct, non-failure word from the
+    `cascade commit failed` framing `commit_error` uses. No `commit_error`
+    key is present on this result, so `cascade commit failed` never prints.
+    """
+    import asyncio
+
+    from coordinator_core.ops import deliverable_cascade as cascade_mod
+    from coordinator_core.ops import plan_status_transition as pst
+
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    p = _write(tmp_path, "docs/plans/2026-09-11-notice-test.md", "---\ntitle: T\nstatus: executing\n---\n\nBody.\n")
+
+    async def _fake_handler(params, repo_root=None):
+        return {
+            "exit_code": 0,
+            "advanced": [{"path": "state/handoffs/x.md", "handoff_path": "state/handoffs/x.md"}],
+            "refused": [],
+            "commit_notice": "worktree edits to feature.txt were NOT included",
+        }
+
+    monkeypatch.setattr(cascade_mod, "_handler", _fake_handler)
+
+    rc = pst._run_cascade(str(p), "dlv-c3-cli-print-000")
+    err = capsys.readouterr().err
+
+    assert rc == 0
+    assert "cascade commit note: worktree edits to feature.txt were NOT included" in err
+    assert "cascade commit failed" not in err
+
+
+def test_run_cascade_no_commit_notice_key_prints_nothing(tmp_path, monkeypatch, capsys):
+    """Absence: a result carrying no `commit_notice` key prints no
+    `cascade commit note` line -- mirrors the pre-existing `commit_error`
+    absence contract."""
+    from coordinator_core.ops import deliverable_cascade as cascade_mod
+    from coordinator_core.ops import plan_status_transition as pst
+
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    p = _write(tmp_path, "docs/plans/2026-09-11-no-notice-test.md", "---\ntitle: T\nstatus: executing\n---\n\nBody.\n")
+
+    async def _fake_handler(params, repo_root=None):
+        return {
+            "exit_code": 0,
+            "advanced": [{"path": "state/handoffs/x.md", "handoff_path": "state/handoffs/x.md"}],
+            "refused": [],
+        }
+
+    monkeypatch.setattr(cascade_mod, "_handler", _fake_handler)
+
+    rc = pst._run_cascade(str(p), "dlv-c3-cli-print-001")
+    err = capsys.readouterr().err
+
+    assert rc == 0
+    assert "cascade commit note" not in err
+
+
 def test_stamp_superseded_archives_plan_on_terminal_stamp(tmp_path, capsys):
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     p = _write(

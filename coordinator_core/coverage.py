@@ -460,6 +460,17 @@ def _narrow_foreign_session_scope(
     admission path that briefly qualified that (K-007, state/kill-ledger.md)
     admitted nothing in ~761 records and is gone — do not reintroduce a
     per-record exemption parameter here without a producer that populates it.
+
+    C3 verification (same plan): the two-read-path asymmetry this chunk
+    existed to close — `wsc-coverage-gate-runner._resolve_vouched_shas`
+    unioning three waiver sources against this function's two — is now moot
+    rather than fixed-by-subtraction: `_resolve_vouched_shas` and the whole
+    `coverage-gate` subcommand that called it were deleted outright by
+    state/kill-ledger.md K-005 (2026-08-16, predating this plan), so there is
+    only one live read path left. Confirmed no other divergence survives:
+    `coordinator_core.ops.gate_dimension_review` (the remaining coverage
+    consumer) reads the already-folded reviewed-set store and consults no
+    waiver source of its own either — see that module's docstring.
     """
     try:
         foreign = session_attribution.trailer_foreign_shas(

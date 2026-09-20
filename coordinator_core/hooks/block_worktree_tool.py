@@ -55,8 +55,7 @@ _WIKI_ANCHOR = "coordinator/docs/wiki/guard-message-concision.md#worktree-ban-ra
 
 _DENY_PROSE = (
     "Worktrees banned (break Windows, don't scale to concurrent dispatch). "
-    "Use scoped, disjoint paths here; escalate to the EM (PM-approved) for "
-    "branch isolation."
+    "Use scoped, disjoint paths; escalate to the EM for branch isolation."
 )
 
 

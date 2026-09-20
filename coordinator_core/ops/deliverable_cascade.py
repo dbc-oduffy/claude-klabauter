@@ -993,7 +993,7 @@ def _compose_cascade_commit_message(deliverable_id: str, mutated_paths: List[str
 
 def _commit_mutated_paths(
     mutated_paths: List[str], worktree_root: Path, deliverable_id: str
-) -> Optional[str]:
+) -> "tuple[Optional[str], Optional[str]]":
     """Commit exactly `mutated_paths` via `git_native.commit_scoped` -- the
     substitute committer this op's own negative-spec never named (see module
     docstring "Negative-spec" and
@@ -1005,11 +1005,16 @@ def _commit_mutated_paths(
     `consumed_handoff_stamp`), and it fails loud on an empty or
     directory-shaped pathspec rather than silently widening it.
 
-    Returns None on a landed commit, or a human-readable error string on a
-    commit failure -- the caller folds a non-None return into the result's
+    Returns `(commit_error, commit_notice)`. `commit_error` is None on a
+    landed commit, or a human-readable error string on a commit failure --
+    the caller folds a non-None `commit_error` into the result's
     `commit_error` field (AC8: a commit failure must surface, never be
     swallowed) without touching `exit_code`, which stays keyed off `advanced`
-    alone per this chunk's own hard constraint.
+    alone per this chunk's own hard constraint. `commit_notice` carries a
+    landed commit's own non-empty `stderr` (e.g. `commit_scoped`'s
+    private-index-branch exclusion notice) -- present only when the commit
+    landed ok AND that stderr is non-empty; None otherwise, including on a
+    commit failure (that case's text lives in `commit_error` instead).
     """
     message = _compose_cascade_commit_message(deliverable_id, mutated_paths)
     with tempfile.NamedTemporaryFile(
@@ -1025,8 +1030,8 @@ def _commit_mutated_paths(
         except OSError:
             pass
     if not commit_result.ok:
-        return f"deliverable.cascade_terminal: commit failed: {commit_result.stderr}"
-    return None
+        return f"deliverable.cascade_terminal: commit failed: {commit_result.stderr}", None
+    return None, (commit_result.stderr or None)
 
 
 # ---------------------------------------------------------------------------
@@ -1103,6 +1108,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                            exit_code (AC8: a commit failure surfaces without being
                            swallowed, but does not override the advanced-artifact
                            success signal).>,
+          "commit_notice": <str, present iff the follow-up commit landed ok AND
+                            carried non-empty stderr (C3) -- e.g. commit_scoped's
+                            private-index-branch exclusion notice. Never present
+                            alongside commit_error (mutually exclusive: a failed
+                            commit's text lives in commit_error, a landed commit's
+                            non-empty stderr lives here).>,
         }
 
     Commit (C2, 2026-08-14): every path this run itself mutated -- every `advanced`
@@ -1404,8 +1415,9 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         mutated_paths.append(rel)
 
     commit_error: Optional[str] = None
+    commit_notice: Optional[str] = None
     if mutated_paths:
-        commit_error = await asyncio.to_thread(
+        commit_error, commit_notice = await asyncio.to_thread(
             _commit_mutated_paths, mutated_paths, worktree_root, deliverable_id
         )
 
@@ -1423,6 +1435,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     }
     if commit_error:
         result["commit_error"] = commit_error
+    if commit_notice:
+        result["commit_notice"] = commit_notice
     if not advanced:
         if not candidates:
             # Review: staff-eng — Finding 7: this message was hardcoded to

@@ -18,7 +18,6 @@ imports from module scope into the functions that use them, in
 `coordinator_core.hooks.agent_completion_log`,
 `coordinator_core.hooks.nudge_unauthorized_handoff`,
 `coordinator_core.hooks.postuse_advisory_dispatch`,
-`coordinator_core.hooks.session_heartbeat`,
 `coordinator_core.hooks.track_dispatched_agents`,
 `coordinator_core.hooks.track_touched_files`,
 `coordinator_core.ops.fleet.archive_plans`, `coordinator_core.ops.fleet.archive_handoffs`)

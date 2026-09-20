@@ -32,4 +32,11 @@ from __future__ import annotations
 
 #: Legal `kind:` values for a cross-repo memo, in the order every refusal
 #: message renders them.
-VALID_KINDS = ("ask", "consult", "fyi", "proposal", "bug")
+#:
+#: `notice` (klabauter#46/#40, 2026-09-19): a durable-record memo that, unlike
+#: `fyi`, asserts nothing the receiver might act on or refute — no premise
+#: check applies to it (mirrors `fyi`'s exclusion from
+#: `_PREMISE_BEARING_KINDS` in `coordinator/bin/cross-repo-memo.py`). Distinct
+#: from `fyi` in intent only: `fyi` invites optional follow-up, `notice` is a
+#: one-way stamp for the record (e.g. "this landed", "this is now true").
+VALID_KINDS = ("ask", "consult", "fyi", "proposal", "bug", "notice")

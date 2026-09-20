@@ -70,7 +70,6 @@ Advisory hook ops ported from ~/.claude advisory/nudge command hooks (pcore-04, 
 
 Bookkeeping hook ops (pcore-08, D1) — write .git/coordinator-sessions/ session-runtime:
     track_touched_files      — dedup-append to touched.txt (session + agent); MUTATING
-    session_heartbeat        — update last_activity in meta.json via liveness.py; MUTATING
     agent_completion_log     — jsonl append to logs/agent-audit.jsonl; MUTATING
     track_dispatched_agents  — tab-delimited dedup + collision rewrite; MUTATING
 
@@ -155,7 +154,6 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.nudge_unauthorized_handoff",  # registers "hooks.nudge_unauthorized_handoff"
     "coordinator_core.hooks.postuse_advisory_dispatch",  # registers "hooks.postuse_advisory_dispatch"
     "coordinator_core.hooks.track_touched_files",  # registers "hooks.track_touched_files"
-    "coordinator_core.hooks.session_heartbeat",  # registers "hooks.session_heartbeat"
     "coordinator_core.hooks.agent_completion_log",  # registers "hooks.agent_completion_log"
     "coordinator_core.hooks.track_dispatched_agents",  # registers "hooks.track_dispatched_agents"
     "coordinator_core.hooks.agent_postuse_dispatch",  # registers "hooks.agent_postuse_dispatch"

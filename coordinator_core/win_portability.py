@@ -494,6 +494,16 @@ def no_console_passthrough_kwargs() -> dict:
             continue
         if fd >= 0:
             kwargs[key] = fd
+        else:
+            # A fileno-less stream (the in-process warm-server path) can
+            # return a negative fd from a *successful* fileno() call rather
+            # than raising -- omitting the kwarg here left subprocess.run
+            # default the stream to None, which silently inherits THIS
+            # process's real OS-level handle instead of the warm server's
+            # redirected stream. Route it through PIPE instead, same as the
+            # raising branch above, so the child's output is captured onto
+            # the returned CompletedProcess rather than lost.
+            kwargs[key] = subprocess.PIPE
     return kwargs
 
 

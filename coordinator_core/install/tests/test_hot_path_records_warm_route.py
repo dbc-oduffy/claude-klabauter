@@ -219,6 +219,188 @@ def test_hot_path_invocation_records_warm_server_route():
     assert result.entry is not None
 
 
+#: Template for the stubbed door image (chunk C3, E4/staff-eng's settlement):
+#: a minimal executable forwarder, NOT a real built door -- it never routes
+#: through `door_install_posix_build.build_or_advise`, so a box with no
+#: prebuilt image and no toolchain is not permanently red on a module
+#: contractually forbidden to skip. The ROUTE STAMP stays real: this script
+#: forwards the op through `coordinator_core.warm.client.try_warm_dispatch`
+#: against the SAME resolved engine root the real listener was brought up
+#: against (`_REAL_ENGINE_ROOT`), so the resident server itself stamps the
+#: sink row via `warm.server._declare_execution_route` -- nothing here
+#: fabricates a route value. The shebang pins `sys.executable` (this
+#: process's own interpreter) rather than `#!/usr/bin/env python3`, so the
+#: stub cannot land on a system interpreter lacking this checkout's
+#: `coordinator_core` package on its path.
+#:
+#: `_caller_cwd` is stamped into the request envelope deliberately -- the
+#: real native door adds this (`door_core.c`), and `op_latency._write_entry`
+#: resolves the sink it writes to from the envelope's `_origin_worktree`,
+#: else `ipc.resolve_caller_cwd`'s `_caller_cwd`, else -- silently -- the
+#: EXECUTING (server) process's own cwd (`door_route_signal`'s module
+#: docstring, REPO-SCOPING section). Omitting it here would not make the
+#: route stamp fake -- it would make this test read a real row at the
+#: WRONG repo_root (the resident server's own cwd, not `_REPO_ROOT`), which
+#: is indistinguishable from `UNRESOLVED` to a caller scoped to `_REPO_ROOT`.
+_STUB_DOOR_IMAGE_TEMPLATE = """#!{python_executable}
+import os
+import sys
+
+# The stubbed door image is invoked as a SUBPROCESS of this pytest run, so it
+# inherits `PYTEST_CURRENT_TEST` (pytest stamps it for the duration of every
+# test). `coordinator_core.warm.client._try_warm_dispatch_inner` gates on
+# exactly that pair -- `PYTEST_CURRENT_TEST` set AND
+# `COORDINATOR_WARM_RUNTIME_BASE` unset means "this looks like a test
+# process, refuse to touch the real warm plane" -- and returns `None`
+# silently (Backstop 2's "never raise" contract), before ever reaching
+# `_open_pipe`. That guard exists to stop an ORDINARY test from accidentally
+# hammering a real resident server; THIS module's whole premise (module
+# docstring) is the opposite -- a deliberate, real invocation against the
+# real listener `_ensure_warm_listener` already brought up. The stub is not
+# itself a pytest test process; dropping the inherited stamp here is what
+# lets it present as the ordinary installed-door caller it is standing in
+# for, not what disables an unrelated safety rail.
+os.environ.pop("PYTEST_CURRENT_TEST", None)
+
+sys.path.insert(0, {engine_root!r})
+
+from coordinator_core.warm.client import try_warm_dispatch
+
+_op = sys.argv[1] if len(sys.argv) > 1 else "ping"
+try_warm_dispatch(
+    {{
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": _op,
+        "params": {{}},
+        "_caller_cwd": {repo_root!r},
+    }}
+)
+"""
+
+
+def _write_stub_door_image(bin_dst: Path) -> Path:
+    """Write and install a stubbed door image at `bin_dst / <door name>` --
+    the temp `bin_dst` case E4 settled on (module test's own docstring
+    citation). Never a real build: no call to
+    `door_install_posix_build.build_or_advise` anywhere in this path."""
+    import sys
+
+    door_path = bin_dst / door_install.DOOR_INSTALLED_NAME
+    door_path.write_text(
+        _STUB_DOOR_IMAGE_TEMPLATE.format(
+            python_executable=sys.executable,
+            engine_root=str(_REAL_ENGINE_ROOT.root) if _REAL_ENGINE_ROOT is not None else "",
+            repo_root=str(_REPO_ROOT),
+        ),
+        encoding="utf-8",
+    )
+    door_path.chmod(0o755)
+    return door_path
+
+
+def _assert_stub_door_image_is_executable(door_path: Path) -> None:
+    """A direct executability probe, ahead of the real invocation below --
+    `read_door_route` itself SWALLOWS an `OSError`/`PermissionError` from a
+    door subprocess that could not even start (its own docstring: "never
+    raises on the door's own failure to run"), so a noexec temp dir and a
+    genuine routing regression would otherwise both read back as the same
+    `UNRESOLVED` result. This probe exists only to tell them apart, and
+    fails with the cause NAMED VERBATIM (module docstring's IMAGE SOURCE
+    AND TIER section) -- a named environment failure, never a routing
+    verdict.
+    """
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    try:
+        subprocess.run(
+            [str(door_path), "--self-check"],
+            capture_output=True,
+            timeout=5,
+            check=False,
+            **no_console_creationflags(),
+        )
+    except (OSError, PermissionError) as exc:
+        pytest.fail(
+            f"stubbed door image at {door_path} could not be executed at all: "
+            f"{exc!r} -- this reads as a noexec temp dir (or similar exec "
+            "restriction), a named environment failure, not a routing verdict "
+            "(module docstring's IMAGE SOURCE AND TIER note)."
+        )
+
+
+@pytest.mark.cadence
+@pytest.mark.warm_tier
+@pytest.mark.spawns_process
+def test_post_install_ordering_stubbed_door_image_records_warm_route(tmp_path):
+    """The regression fixture F-022 actually asks for (chunk C3): the
+    POST-INSTALL ordering case -- a warm listener resident FIRST, door
+    images installed against a temp `bin_dst` SECOND, then a door
+    invocation must record `WARM_SERVER`.
+
+    Goes red on `IN_PROCESS` -- the actual symptom F-022's memo reported
+    (a warm listener resident from before a rebuild, door images replaced
+    under it, forwarders dispatching name-blind) -- not on the absence of
+    a call the fix just added. `run_cold_control_invocation` is the
+    `DISCRIMINATOR_UNAVAILABLE` control, so an inert op-latency sink can
+    never read back as a pass here.
+    """
+    # Ordering, load-bearing: listener resident FIRST.
+    _ensure_warm_listener()
+
+    # Door images installed against a temp `bin_dst` SECOND.
+    bin_dst = tmp_path / "bin"
+    bin_dst.mkdir()
+    door_path = _write_stub_door_image(bin_dst)
+    _assert_stub_door_image_is_executable(door_path)
+
+    # A bounded retry, same tolerance `_ensure_warm_listener` above already
+    # grants a fresh listener: this box's own load norm (50-70 active peers,
+    # module CLAUDE.md) makes a single contended pipe connect ("go cold,
+    # never spawn" -- `warm.client`'s own anti-storm table) indistinguishable,
+    # on ONE attempt, from the real IN_PROCESS regression this test exists to
+    # catch. Retrying a non-mutating `ping` a bounded number of times is safe
+    # (the op is idempotent) and never raises the regression bar: any attempt
+    # that reads back `WARM_SERVER` still passes, and the failure path below
+    # still runs -- and still never skips -- once every attempt is spent.
+    result = door_route_signal.DoorRouteResult(door_route_signal.UNRESOLVED, None)
+    for _ in range(_LISTENER_WAIT_ATTEMPTS):
+        result = door_route_signal.read_door_route(door_path, _OP, repo_root=_REPO_ROOT)
+        if result.route == door_route_signal.WARM_SERVER:
+            break
+        time.sleep(_LISTENER_WAIT_INTERVAL_SECS)
+
+    if result.route == door_route_signal.UNRESOLVED:
+        control = door_route_signal.run_cold_control_invocation(_OP, repo_root=_REPO_ROOT)
+        if control.route == door_route_signal.UNRESOLVED:
+            pytest.fail(
+                "DISCRIMINATOR_UNAVAILABLE -- the op-latency sink is inert on "
+                "this box (kill switch, unresolvable git common dir, or an "
+                "unwritable sink); an UNRESOLVED result from the stubbed-door "
+                "invocation cannot be trusted as a fall-through here, and this "
+                "is not the routing regression this test exists to catch."
+            )
+        pytest.fail(
+            f"the stubbed-door invocation read back UNRESOLVED, but the known-"
+            f"cold control invocation recorded route={control.route!r} -- the "
+            "sink IS live, so the stubbed door's own invocation never wrote a "
+            "matching row at all (the forwarder never reached the resident "
+            "listener). Not the DISCRIMINATOR_UNAVAILABLE case."
+        )
+
+    assert result.route == door_route_signal.WARM_SERVER, (
+        f"expected a post-install door invocation, against a listener already "
+        f"resident before the door image was installed, to record "
+        f"route={door_route_signal.WARM_SERVER!r}, got {result.route!r} "
+        f"(entry={result.entry!r}) -- exactly the F-022 symptom (a warm "
+        "listener resident from before a rebuild, door images replaced under "
+        "it, forwarders dispatching name-blind), not an environment problem."
+    )
+    assert result.entry is not None
+
+
 def test_door_route_signal_recorded_route_value_set_is_pinned():
     """Companion pin (chunk C3): asserts `door_route_signal`'s recorded-route
     value set and `read_door_route`'s return contract directly, so an edit

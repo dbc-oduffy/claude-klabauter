@@ -193,14 +193,10 @@ _DECLARATIVE_STALL_PATTERNS = [
 ]
 
 _DECLARATIVE_STALL_CORRECTION_TEXT = (
-    "[guard] This turn ends on an announcement of the next action rather than "
-    "the action. Announcing and stopping is a wait wearing the costume of "
-    "momentum: the work resumes only when the PM speaks, and the PM is "
-    "charged a turn for a result they did not receive. If the action was "
-    "available, take it and report what happened; if it was genuinely "
-    "blocked, name the blocker and your recommendation. "
-    "'Phase/wave/chunk boundaries are not stop boundaries' "
-    "(coordinator/snippets/em-operating-doctrine.md).\n"
+    "[guard] This turn announces the next action instead of taking it. If "
+    "available, take it and report what happened; if blocked, name the "
+    "blocker and recommendation. See "
+    "coordinator/snippets/em-operating-doctrine.md.\n"
 )
 
 _BULLET_CONTINUATION_LINE_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")

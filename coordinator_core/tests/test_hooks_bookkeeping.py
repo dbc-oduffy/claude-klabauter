@@ -1,11 +1,10 @@
 """
-coordinator_core.tests.test_hooks_bookkeeping — Round-trip contract tests for the 4
+coordinator_core.tests.test_hooks_bookkeeping — Round-trip contract tests for the 3
 bookkeeping hook ops (pcore-08 C5).
 
 Tests assert:
   - On-disk write side-effects (path + byte format) under a tmp .git/coordinator-sessions/ fixture.
   - Dedup idempotency: C1 (touched.txt) and C4 (dispatched-agents.txt).
-  - 60-second mtime throttle no-op: C2 (session_heartbeat).
   - Single-line compact jsonl with no embedded newline: C3 (agent_completion_log).
   - Collision→AMBIGUOUS rewrite: C4 (track_dispatched_agents).
   - C4 branch matrix: 2 agent-id op-level shapes (bare hex, teammate canonical — the 3-pass
@@ -16,7 +15,7 @@ Tests assert:
   - Concurrent invocation safety (asyncio.gather) for C1 and C4 (D6 write-atomicity).
   - Golden-snapshot normalizer self-test (two captures → byte-identical normalized output);
     path normalizer covers BOTH POSIX and Windows .git/coordinator-sessions/ shapes.
-  - Source-level grep: no bare blocking I/O sits unwrapped in the 4 async handler bodies.
+  - Source-level grep: no bare blocking I/O sits unwrapped in the 3 async handler bodies.
 
 All handlers are async; we use asyncio.run() in sync test functions — no pytest-asyncio.
 
@@ -39,13 +38,6 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.win_portability import no_console_passthrough_kwargs
-
-# Declared, not excused: a subset of this file's tests (the defect-A heartbeat
-# self-heal path) spawn real git via `_git_init` because the property under test is
-# the hook's own session-hub RESOLUTION against a real committed repo, which no mock
-# stands in for. `_git_init` is called per-test, not hoisted, because those tests also
-# mutate the fixture's `.git/coordinator-sessions/` tree under test.
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -68,17 +60,6 @@ class _FakeCtx:
 def _cs_dir(repo_root: Path) -> Path:
     """Return the .git/coordinator-sessions/ directory under repo_root."""
     return repo_root / ".git" / "coordinator-sessions"
-
-
-def _git_init(repo: Path) -> None:
-    """Initialise a minimal committed git repo at repo (for tests needing a real
-    session-hub resolution, e.g. the defect-A heartbeat self-heal)."""
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True, **no_console_passthrough_kwargs())
-    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, **no_console_passthrough_kwargs())
-    (repo / "README.md").write_text("x")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True, **no_console_passthrough_kwargs())
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
 
 def _make_session(
@@ -601,119 +582,6 @@ class TestTrackTouchedFiles:
         agent_sink = agent_dir / "touch-record.jsonl"
         events = _decoded_touch_events(agent_sink)
         assert any(e.path == "coordinator_core/hooks/boom.py" for e in events)
-
-
-# ---------------------------------------------------------------------------
-# C2 — hooks.session_heartbeat
-# ---------------------------------------------------------------------------
-
-class TestSessionHeartbeat:
-    """Round-trip and throttle tests for hooks.session_heartbeat."""
-
-    def test_absent_meta_json_no_last_activity_write(self, tmp_path: Path) -> None:
-        """meta.json absent → mtime returns -1 → the last_activity write is
-        skipped (update_last_activity NOT called). In this non-git fixture the
-        defect-A bootstrap (core.init) also degrades to a no-op — core.init
-        returns False when it cannot resolve a git session hub — so nothing is
-        written; the real-git bootstrap path is covered by
-        test_absent_meta_with_existing_dir_bootstraps below."""
-        from coordinator_core.hooks.session_heartbeat import _handler
-        import coordinator_core.hooks.session_heartbeat as hb_mod
-        sid = "heartbeat0000001"
-        _make_session(tmp_path, sid, create_meta=False)
-        ctx = _FakeCtx(str(tmp_path / ".git"))
-        # Review: code-reviewer F4 — verify update_last_activity is NOT called;
-        # result == {} alone does not catch a missing absent-file guard.
-        with mock.patch.object(hb_mod, "update_last_activity") as mock_ula:
-            result = _run(_handler({"session_id": sid}, repo_root=ctx.repo_root))
-        assert result == {}
-        mock_ula.assert_not_called()
-
-    def test_absent_meta_with_existing_dir_bootstraps(self, tmp_path: Path) -> None:
-        """Regression (defect A, 2026-07-24): when the session dir EXISTS but
-        meta.json is absent (another writer won the create race), the heartbeat
-        self-heals by bootstrapping meta.json via core.init — the earliest-firing
-        heal, since Bash precedes most edits. Real git repo so core.init resolves
-        the session hub."""
-        from coordinator_core.hooks.session_heartbeat import _handler
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _git_init(repo)
-        sid = "heartbeat0000005"
-        sdir = _cs_dir(repo) / sid
-        sdir.mkdir(parents=True, exist_ok=True)  # dir present, meta.json absent
-        assert not (sdir / "meta.json").exists(), "precondition: poisoned"
-        result = _run(_handler({"session_id": sid}, repo_root=str(repo)))
-        assert result == {}
-        assert (sdir / "meta.json").is_file(), "heartbeat must backfill meta.json"
-        assert json.loads((sdir / "meta.json").read_text())["session_id"] == sid
-
-    def test_absent_meta_and_absent_dir_does_not_resurrect(self, tmp_path: Path) -> None:
-        """A session dir that does NOT exist (archived/reaped or never created)
-        must NOT be resurrected by the heartbeat — only an existing-dir poisoned
-        state is healed."""
-        from coordinator_core.hooks.session_heartbeat import _handler
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        _git_init(repo)
-        sid = "heartbeat0000006"
-        sdir = _cs_dir(repo) / sid
-        assert not sdir.exists()
-        result = _run(_handler({"session_id": sid}, repo_root=str(repo)))
-        assert result == {}
-        assert not sdir.exists(), "absent session dir must not be resurrected"
-
-    def test_throttle_no_op_within_60s(self, tmp_path: Path) -> None:
-        """meta.json mtime within 60 s → throttle fires → update_last_activity NOT called."""
-        from coordinator_core.hooks.session_heartbeat import _handler
-        import coordinator_core.hooks.session_heartbeat as hb_mod
-        sid = "heartbeat0000002"
-        # mtime_offset=0 → now → within 60 s throttle
-        _make_session(tmp_path, sid, create_meta=True, meta_mtime_offset=0.0)
-        ctx = _FakeCtx(str(tmp_path / ".git"))
-        with mock.patch.object(hb_mod, "update_last_activity") as mock_ula:
-            result = _run(_handler({"session_id": sid}, repo_root=ctx.repo_root))
-        assert result == {}
-        mock_ula.assert_not_called()
-
-    def test_write_fires_after_60s(self, tmp_path: Path) -> None:
-        """meta.json mtime > 60 s ago → throttle cold → update_last_activity IS called."""
-        from coordinator_core.hooks.session_heartbeat import _handler
-        import coordinator_core.hooks.session_heartbeat as hb_mod
-        sid = "heartbeat0000003"
-        # mtime 61 s in the past → stale → write fires
-        _make_session(tmp_path, sid, create_meta=True, meta_mtime_offset=-61.0)
-        ctx = _FakeCtx(str(tmp_path / ".git"))
-        captured_args: list = []
-        def _capture_ula(session_dir: str, iso: str) -> None:
-            captured_args.append((session_dir, iso))
-        with mock.patch.object(hb_mod, "update_last_activity", side_effect=_capture_ula):
-            result = _run(_handler({"session_id": sid}, repo_root=ctx.repo_root))
-        assert result == {}
-        assert len(captured_args) == 1, "update_last_activity must be called exactly once"
-        called_session_dir, called_iso = captured_args[0]
-        assert sid in called_session_dir, "session_dir arg must contain session_id"
-        assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", called_iso), (
-            f"iso arg must be ISO-8601 UTC: {called_iso!r}"
-        )
-
-    def test_missing_session_id_returns_no_advisory(self, tmp_path: Path) -> None:
-        """session_id absent → returns {} immediately (nothing to stamp)."""
-        from coordinator_core.hooks.session_heartbeat import _handler
-        ctx = _FakeCtx(str(tmp_path / ".git"))
-        result = _run(_handler({}, repo_root=ctx.repo_root))
-        assert result == {}
-
-    def test_always_returns_no_advisory(self, tmp_path: Path) -> None:
-        """Handler always returns {} regardless of throttle path taken."""
-        from coordinator_core.hooks.session_heartbeat import _handler
-        import coordinator_core.hooks.session_heartbeat as hb_mod
-        sid = "heartbeat0000004"
-        _make_session(tmp_path, sid, create_meta=True, meta_mtime_offset=-61.0)
-        ctx = _FakeCtx(str(tmp_path / ".git"))
-        with mock.patch.object(hb_mod, "update_last_activity"):
-            result = _run(_handler({"session_id": sid}, repo_root=ctx.repo_root))
-        assert result == {}
 
 
 # ---------------------------------------------------------------------------
@@ -1868,14 +1736,14 @@ asyncio.run(_handler(
 
 
 # ---------------------------------------------------------------------------
-# REGISTRY — 4 new bookkeeping ops registered
+# REGISTRY — 3 bookkeeping ops registered
 # ---------------------------------------------------------------------------
 
 class TestRegistryBookkeepingOps:
-    """All 4 bookkeeping ops must be present in the IPC registry after import."""
+    """All 3 bookkeeping ops must be present in the IPC registry after import."""
 
-    def test_all_four_bookkeeping_ops_registered(self) -> None:
-        """All 4 hooks.* bookkeeping ops are dispatchable.
+    def test_all_three_bookkeeping_ops_registered(self) -> None:
+        """All 3 hooks.* bookkeeping ops are dispatchable.
 
         Was: import coordinator_core.ops, then assert each key is in _REGISTRY.
         That proved "registered right now", which depended on package-init having
@@ -1889,7 +1757,6 @@ class TestRegistryBookkeepingOps:
 
         expected = {
             "hooks.track_touched_files",
-            "hooks.session_heartbeat",
             "hooks.agent_completion_log",
             "hooks.track_dispatched_agents",
         }
@@ -1906,7 +1773,6 @@ class TestRegistryBookkeepingOps:
 
 _HANDLER_FILES = [
     "coordinator_core/hooks/track_touched_files.py",
-    "coordinator_core/hooks/session_heartbeat.py",
     "coordinator_core/hooks/agent_completion_log.py",
     "coordinator_core/hooks/track_dispatched_agents.py",
 ]
@@ -1956,7 +1822,7 @@ def _extract_async_handler_body(source: str) -> str:
 class TestAsyncHandlerNoBareIO:
     """Source-level grep: no bare blocking I/O inside the async def _handler bodies.
 
-    All blocking I/O in the 4 handlers must be dispatched via asyncio.to_thread().
+    All blocking I/O in the 3 handlers must be dispatched via asyncio.to_thread().
     The sync helpers (open, os.stat, subprocess, etc.) live in module-level sync
     functions, NOT in the async handler body itself (mcp-async-handler-discipline).
     """
@@ -1994,12 +1860,6 @@ class TestAsyncHandlerNoBareIO:
                 f"Bare blocking I/O ({pat.pattern!r}) in {handler_name} async handler:\n"
                 + "\n".join(hits)
             )
-
-    def test_session_heartbeat_no_bare_io(self) -> None:
-        """session_heartbeat.py async handler body contains no bare blocking I/O calls."""
-        body = self._get_handler_body("coordinator_core/hooks/session_heartbeat.py")
-        assert body
-        self._assert_no_bare_io(body, "session_heartbeat")
 
     def test_agent_completion_log_no_bare_io(self) -> None:
         """agent_completion_log.py async handler body contains no bare blocking I/O calls."""

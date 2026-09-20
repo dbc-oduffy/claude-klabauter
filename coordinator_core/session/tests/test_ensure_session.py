@@ -110,10 +110,9 @@ class TestDirectoryAndRecordTogether:
 class TestIdempotenceAndConcurrency:
     def test_a_concurrent_writers_goal_survives_a_repeat_call(self, repo):
         """`init` is an idempotent CREATE here, never a read-modify-write of
-        `goal` — the bounded exception `hooks/session_heartbeat._bootstrap_
-        meta` already relies on. Peers race on this hub constantly; a
-        constructor that clobbered `goal` would break the exact field the
-        constructor exists to make readable."""
+        `goal`. Peers race on this hub constantly; a constructor that
+        clobbered `goal` would break the exact field the constructor exists
+        to make readable."""
         sid = "sess-idempotent"
         core.ensure_session(sid, str(repo))
         sdir = _hub(repo) / sid

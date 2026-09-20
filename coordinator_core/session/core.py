@@ -539,10 +539,9 @@ def ensure_session(
     Negative-spec:
         - Does NOT lock. ``init`` is an idempotent CREATE here, never a
           read-modify-write, so it cannot clobber a concurrent writer's
-          ``last_activity`` stamp -- the same bounded exception
-          ``hooks/session_heartbeat._bootstrap_meta`` already relies on. Do not
-          add a locking scheme on this path; it is on the hook hot path and the
-          race it would close does not exist.
+          ``last_activity`` stamp. Do not add a locking scheme on this path;
+          it is on the hook hot path and the race it would close does not
+          exist.
         - Does NOT repair an existing ``meta.json`` that is unreadable,
           non-JSON, or not a dict. ``update_meta_field`` still returns False for
           those cases and the caller still handles it.

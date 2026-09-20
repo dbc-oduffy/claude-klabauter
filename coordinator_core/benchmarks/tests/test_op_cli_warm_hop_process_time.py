@@ -281,6 +281,10 @@ def test_stamped_engine_root_python_direct_reaches_near_zero_spawns() -> None:
     assert result["process_time_ms"] <= 150.0, result
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="warm-down fail-fast: a dead pipe must return near-instantly rather than block near "
+    "READ_DEADLINE_SECS -- a behaviour only wall clock can observe"
+)
 def test_stub_root_warm_down_fails_fast(tmp_path: Path) -> None:
     """AC9's own "distinct from warm-down" contrast case: an isolated,
     uniquely-stamped engine root with NO pipe ever created. `try_warm_
@@ -319,6 +323,10 @@ def test_stub_root_warm_down_fails_fast(tmp_path: Path) -> None:
     assert elapsed < 0.5, f"warm-down should fail fast, not near READ_DEADLINE_SECS: {elapsed}s"
 
 
+@pytest.mark.deliberate_wall_clock(
+    reason="a blocked readline() on a daemon thread burns no CPU, so the READ_DEADLINE_SECS "
+    "wait it manufactures is observable only on wall clock, never process time"
+)
 def test_warm_wedged_additive_cost_accept_against_brightline() -> None:
     """AC9: warm server up but not answering. `_open_pipe` monkeypatched to
     a fake pipe whose `readline()` blocks past `READ_DEADLINE_SECS` --
