@@ -218,6 +218,7 @@ def test_engine_output_passes_its_own_verifier(tmp_path):
         audits_lines=["- `state/audits/` — existing investigation records"],
         hook_cancellation_line="",
         warm_engine_line="",
+        route_unreachable_line="",
         budget_breach_line="",
         expired_grant_lines="",
         abandoned_claim_lines="",

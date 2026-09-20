@@ -206,6 +206,7 @@ from coordinator_core.git.repo_root import is_inside_work_tree, show_toplevel
 from coordinator_core.ipc import register_op
 from coordinator_core.orientation.hook_cancellation_signal import emit_hook_cancellation_rate
 from coordinator_core.orientation.warm_health_signal import emit_warm_engine_health
+from coordinator_core.orientation.route_unreachable_signal import emit_route_unreachable
 from coordinator_core.orientation.budget_breach_signal import emit_budget_breaches
 from coordinator_core.orientation.expired_grant_signal import emit_expired_grants
 from coordinator_core.orientation.abandoned_claim_signal import emit_abandoned_claims
@@ -230,17 +231,34 @@ from coordinator_core.resolve_validation_cmd import (
 )
 
 # Generator-provenance declaration (C2, generator_provenance.py's AST reader
-# — see that module for the discovery/coverage mechanism this feeds). `sources`
-# names this module's own path: unlike the bin/ CLI trampolines that delegate
-# derivation elsewhere, this module IS the whole derive-and-render
-# implementation (build_cache/_render_cache/write_cache all live here), so
-# its own movement is what actually changes state/orientation_cache.md's
-# content -- there is no deeper locus to point at.
+# — see that module for the discovery/coverage mechanism this feeds). This
+# module holds the derive-and-render implementation (build_cache/_render_cache/
+# write_cache all live here), so its own movement changes
+# state/orientation_cache.md's content.
+#
+# The per-signal `emit_*` modules are sources too, and were missing. Each one
+# renders a section of the artifact, so any of them moving changes the emitted
+# bytes exactly as this file does -- a declaration naming only this path leaves
+# the staleness sweep watching the wrong set, which is the identical defect
+# `emit_memo_schema.GENERATES` carried (it omitted the two constant modules
+# whose values land in its output, so a change to `memo_kinds.VALID_KINDS`
+# moved the emission and moved nothing the sweep looked at). Found while adding
+# `route_unreachable_signal`; fixed for the whole set rather than for the new
+# one alone, since a declaration that is right about one import and wrong about
+# five is harder to trust than one that is wrong about all six.
 GENERATES = [
     {
         "artifact": "state/orientation_cache.md",
         "stamp_key": "generated_at",
-        "sources": ["coordinator_core/orientation/regenerate_cache.py"],
+        "sources": [
+            "coordinator_core/orientation/regenerate_cache.py",
+            "coordinator_core/orientation/abandoned_claim_signal.py",
+            "coordinator_core/orientation/budget_breach_signal.py",
+            "coordinator_core/orientation/expired_grant_signal.py",
+            "coordinator_core/orientation/hook_cancellation_signal.py",
+            "coordinator_core/orientation/route_unreachable_signal.py",
+            "coordinator_core/orientation/warm_health_signal.py",
+        ],
     },
 ]
 
@@ -1308,6 +1326,7 @@ def _render_cache(
     audits_lines: List[str],
     hook_cancellation_line: str,
     warm_engine_line: str,
+    route_unreachable_line: str,
     budget_breach_line: str,
     expired_grant_lines: str,
     abandoned_claim_lines: str,
@@ -1358,6 +1377,9 @@ def _render_cache(
 
     if warm_engine_line:
         parts.append("\n## Warm engine\n" + warm_engine_line + "\n")
+
+    if route_unreachable_line:
+        parts.append("\n## Sanctioned routes\n" + route_unreachable_line + "\n")
 
     if budget_breach_line:
         parts.append("\n## Budget breaches\n" + budget_breach_line + "\n")
@@ -1450,6 +1472,7 @@ def build_cache(
     audits_lines = emit_audits_index(state_root)
     hook_cancellation_line = emit_hook_cancellation_rate(repo_root)
     warm_engine_line = emit_warm_engine_health()
+    route_unreachable_line = emit_route_unreachable(repo_root)
     budget_breach_line = emit_budget_breaches(repo_root)
     expired_grant_lines = emit_expired_grants(repo_root)
     abandoned_claim_lines = emit_abandoned_claims(repo_root)
@@ -1480,6 +1503,7 @@ def build_cache(
         audits_lines=audits_lines,
         hook_cancellation_line=hook_cancellation_line,
         warm_engine_line=warm_engine_line,
+        route_unreachable_line=route_unreachable_line,
         budget_breach_line=budget_breach_line,
         expired_grant_lines=expired_grant_lines,
         abandoned_claim_lines=abandoned_claim_lines,

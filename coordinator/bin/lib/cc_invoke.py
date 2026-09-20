@@ -184,6 +184,94 @@ class WarmDispatchIndeterminate(RuntimeError):
         self.op = op
 
 
+#: Repo-relative home for the route-unreachable ledger. Written into the
+#: REGISTERED claude-klabauter checkout, never the checkout `cc_invoke.py` happens to be
+#: running from: the point of the ledger is a per-box aggregate across every
+#: session and every CLI, and a session running out of the published mirror
+#: would otherwise append somewhere nothing commits. Same resolution the
+#: `raw-cmdline-transport-ledger.jsonl` precedent uses.
+_ROUTE_UNREACHABLE_LEDGER = ("state", "sanctioned-route-unreachable.jsonl")
+
+
+def _route_unreachable_ledger_path() -> str:
+    """Absolute path to the ledger. Its own function so a test can redirect the
+    write without monkeypatching the recorder itself -- a test that exercises
+    the raise path must not append to the live `state/` tree, and the raise path
+    is already covered by `test_cc_invoke_indeterminate.py`."""
+    root = _machine_local_get_in_process("repos.claude_klabauter")
+    if not root:
+        root = str(Path(__file__).resolve().parents[3])
+    return os.path.join(root, *_ROUTE_UNREACHABLE_LEDGER)
+
+
+def _record_route_unreachable(op: str, arrival: str) -> None:
+    """Append one row recording that a sanctioned CLI route was unreachable.
+
+    WHY THIS EXISTS, since a ledger nobody reads is waste: on 2026-09-20 the
+    warm door degraded and three sessions independently hand-wrote the artifact
+    their CLI would have produced. Every one of them reconciled first, produced
+    a valid record, and kept working -- the correct behaviour, and not the
+    defect. The defect was that each logged it as a local inconvenience and
+    nothing logged that the gate had stopped being reachable, so the pattern
+    only surfaced because three sessions compared notes by hand and a fourth
+    noticed the comparison was worth making. Alone, any one of them would have
+    left no trace at all. This gives that aggregate a home
+    (`state/improvement-queue/2026-09-20-the-gates-get-routed-around-exactly-
+    when-the-system-is-under-stress.yaml`, proposed_action 1).
+
+    NEGATIVE SPEC -- THIS RECORDS, IT NEVER REFUSES. The queue row's own
+    negative_spec forbids resolving that finding by blocking hand-written
+    artifacts: a rule against them converts working sessions into stalled ones
+    and changes nothing about the degradation underneath. Nothing here inspects
+    what the caller does next, and the caller's exit code is untouched.
+
+    Rows carry the op name, the entrypoint, and which arrival raised -- shape,
+    never payload. `state/` is shared append-space across ~50 concurrent
+    sessions (docs/wiki/machine-load-norm.md) and every one of them can read
+    this file, so params never land here; the question the ledger answers is
+    "which routes went unreachable, to how many sessions, over what window",
+    which needs no argument values. Same discipline, and the same single
+    `os.open(O_APPEND|O_CREAT)` + one `os.write` untorn-row idiom, as
+    `cross-repo-memo.py :: _record_unsound_raw_cmdline_transport`.
+
+    Cost: error path only. Both call sites are about to raise, so no successful
+    dispatch pays for this -- the brightline budget is untouched by
+    construction, not by being fast.
+
+    Never raises. A ledger write failure must not convert an honest
+    indeterminate into a second, unrelated error on the way out.
+    """
+    try:
+        ledger_path = _route_unreachable_ledger_path()
+        row = {
+            "arrival": arrival,
+            "entrypoint": os.path.basename(sys.argv[0] or "?"),
+            "op": op or "?",
+            "session": os.environ.get("CLAUDE_SESSION_ID")
+            or os.environ.get("COORDINATOR_SESSION_ID")
+            or "",
+            "ts": _utc_now_iso_seconds(),
+        }
+        os.makedirs(os.path.dirname(ledger_path), exist_ok=True)
+        line = (json.dumps(row, sort_keys=True) + "\n").encode("utf-8")
+        fd = os.open(ledger_path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+        try:
+            os.write(fd, line)
+        finally:
+            os.close(fd)
+    except Exception:  # noqa: BLE001 -- see docstring; best-effort by contract
+        pass
+
+
+def _utc_now_iso_seconds() -> str:
+    """UTC timestamp, second resolution. Local helper so the recorder above
+    needs no module-scope `datetime` import on a file whose import cost every
+    coordinator CLI on the box pays."""
+    import datetime
+
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
 # ---------------------------------------------------------------------------
 # Lazy op registration is unconditional as of 2026-08-22 (the
 # import-path-costs-nothing sprint): coordinator_core.ops never eagerly
@@ -1775,6 +1863,7 @@ def _raise_on_process_failure(
                 "request was delivered and never answered; the op MAY have "
                 "completed. Reconcile against real state before re-running."
             )
+            _record_route_unreachable(op, "cold-spawn")
             raise WarmDispatchIndeterminate(
                 f"{message}\n{detail}" if detail else message, op=op
             )
@@ -2235,6 +2324,7 @@ def _apply_warm_envelope(
             WARM_DISPATCH_INDETERMINATE = None
         if WARM_DISPATCH_INDETERMINATE is not None and code == WARM_DISPATCH_INDETERMINATE:
             # (1a) delivered-but-unanswered mutation -- refuse, never spawn.
+            _record_route_unreachable(op, "warm-hit")
             raise WarmDispatchIndeterminate(
                 f"cc_invoke: warm dispatch indeterminate (op={op}): {message}",
                 op=op,

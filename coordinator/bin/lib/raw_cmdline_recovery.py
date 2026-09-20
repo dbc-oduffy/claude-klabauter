@@ -149,9 +149,10 @@ def _find_switch_end(raw: str) -> int | None:
     Anchors structurally, not lexically — does NOT search for the literal
     substring ``cmd.exe /c``, since ``/d``, ``/s``, an overridden
     ``COMSPEC``, or a quoted comspec token all vary the text ahead of the
-    switch (e.g. ``cmd.exe /d /s /c "..."`` or ``"C:\\...\\cmd.exe" /c
-    "..."`` — neither contains that substring). Skips a quoted comspec
-    token, if present, and any unrecognised unquoted leading token.
+    switch (e.g. ``cmd.exe /d /s /c "..."`` or
+    ``"<drive>:\\...\\cmd.exe" /c "..."`` — neither contains that substring).
+    Skips a quoted comspec token, if present, and any unrecognised unquoted
+    leading token.
 
     This deliberately scans past ANY leading token, not only a `/`-prefixed
     one -- the plan body's prose ("scan the leading tokens for a
