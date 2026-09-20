@@ -1363,6 +1363,7 @@ def _record_bash_read_claims(cmd: str, session_id: str, root: str, denied: bool)
             resolve_read_targets,
         )
         from coordinator_core.session.touch_record import (
+            KIND_READ,
             append_touch_claims,
             compute_content_hash,
         )
@@ -1388,7 +1389,14 @@ def _record_bash_read_claims(cmd: str, session_id: str, root: str, denied: bool)
                 hashes[rel] = h
 
         if rels:
-            append_touch_claims(rels, session_id, root, content_hashes=hashes or None)
+            # KIND_READ: this channel is `resolve_read_targets` by construction --
+            # `cat`/`head`/`tail`/`sed -n`/`less`. It is the ONLY channel that can
+            # say "observed, not mutated", and until it did, a session tracing a
+            # bug was recorded as holding every file it opened and refused a
+            # peer's commit on all of them.
+            append_touch_claims(
+                rels, session_id, root, content_hashes=hashes or None, kind=KIND_READ
+            )
     except Exception:
         return
 

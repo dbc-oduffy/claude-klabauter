@@ -587,7 +587,7 @@ def record_write_claims(
         from coordinator_core.bash_guards.bump_outside_repo_write import (
             _iter_write_sink_candidates,
         )
-        from coordinator_core.session.touch_record import append_touch_claims
+        from coordinator_core.session.touch_record import KIND_WRITE, append_touch_claims
 
         rels = []
         for resolved_target, head_base, raw_target in _iter_write_sink_candidates(
@@ -607,6 +607,8 @@ def record_write_claims(
             if rel is not None:
                 rels.append(rel)
 
-        append_touch_claims(rels, session_id, root)
+        # KIND_WRITE: every target reaching here came from a write-shaped
+        # command. This is the claim that SHOULD refuse a peer's commit.
+        append_touch_claims(rels, session_id, root, kind=KIND_WRITE)
     except Exception:
         return

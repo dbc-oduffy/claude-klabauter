@@ -233,6 +233,39 @@ VERB_TOUCH = "T"
 VERB_RELEASE = "R"
 _VALID_VERBS = (VERB_TOUCH, VERB_RELEASE)
 
+#: A THIRD AXIS, NOT A THIRD VERB. A TOUCH says a session has this path; the
+#: kind says what it did with it. They are orthogonal, and collapsing them
+#: into the verb would make every consumer that only cares about "held or
+#: released" re-learn a two-dimensional vocabulary.
+#:
+#: The defect this closes (`state/bug-queue/2026-09-20-the-touch-record-cannot-
+#: distinguish-a-read-touch-from-a-write-touch.yaml`): every touch was a `T`,
+#: so a session that opened a file to trace a bug was indistinguishable from
+#: the session editing it, and `coordinator-safe-commit`'s precondition
+#: refused a third party's commit naming BOTH as holders. Only one had written
+#: anything. The correct responses are opposite -- a write-claim SHOULD block a
+#: peer's commit, which is the mechanism working; a read-claim endangers
+#: nothing and must not block -- and the guard could not tell them apart, so it
+#: was simultaneously too strict and unable to say which kind it had hit. It
+#: degrades with peer count, too: reads are the common case at ~50 concurrent
+#: sessions (tracing, orientation and review all read broadly and write
+#: narrowly), so false holds scale while true write-conflicts do not.
+KIND_WRITE = "w"
+KIND_READ = "r"
+_VALID_KINDS = (KIND_WRITE, KIND_READ)
+
+#: ABSENCE IS "UNPROVABLE", NEVER "FALSE" -- the same posture `content_hash`
+#: and `name` already carry in this dataclass. A pre-existing line has no kind
+#: and must not be guessed one: a wrong kind on an old line is worse than an
+#: honest unknown, because the unknown is visible and the guess is not.
+#:
+#: Consumers therefore treat unknown as BLOCKING (`kind_blocks_a_peer_commit`),
+#: which makes the migration monotonic: nothing that blocks today stops
+#: blocking until something positively establishes it was a read. Defaulting
+#: unknown to non-blocking would silently ignore every pre-migration claim and
+#: turn a too-strict guard into an unsound one.
+KIND_UNKNOWN = None
+
 # AC12: a hard cap on one encoded line's length. Chosen generously above any
 # realistic repo-relative path plus its fixed-shape metadata (well over an
 # 8KB Windows MAX_PATH-class figure with room to spare), while still bounding
@@ -352,7 +385,16 @@ class TouchEvent:
     ``legacy_touch_corpus_migrate``) must never carry it. ``None`` for any
     event where the writer could not be resolved, was resolving a foreign
     session's event, or predates this field -- absence is never a degrade
-    signal here, same posture as ``content_hash``."""
+    signal here, same posture as ``content_hash``.
+
+    ``kind`` (`KIND_WRITE` / `KIND_READ`, or ``None`` for unknown) says
+    whether the writing session MUTATED this path or merely observed it.
+    ``None`` on every historical line and on any channel that cannot tell --
+    absence is "unprovable", never "this was a read", and is deliberately
+    never backfilled. See ``KIND_WRITE``'s own comment for the defect this
+    axis closes and ``kind_blocks_a_peer_commit`` for why unknown blocks.
+
+    A RELEASE carries no kind: it ends a hold rather than describing one."""
 
     schema_version: int
     verb: str
@@ -362,6 +404,7 @@ class TouchEvent:
     path: str
     content_hash: Optional[str] = None
     name: Optional[str] = None
+    kind: Optional[str] = None
 
 
 def record_carries_content(record_path: "Path | str") -> bool:
@@ -548,6 +591,7 @@ def encode_line(
     timestamp: Optional[float] = None,
     content_hash: Optional[str] = None,
     name: Optional[str] = None,
+    kind: Optional[str] = None,
 ) -> bytes:
     """Encode one event as a self-describing, newline-terminated line.
 
@@ -568,7 +612,15 @@ def encode_line(
     NOT bumped; ``decode_line`` treats an absent ``"name"`` key like any
     other unknown/absent optional field).
 
-    Raises ``ValueError`` for an invalid verb, ``LineTooLong`` if the
+    ``kind`` follows the same omit-when-``None`` rule: a kind-less line stays
+    byte-identical to what this module already wrote, so no schema bump and no
+    historical line changes meaning. A value outside ``_VALID_KINDS`` raises
+    ``ValueError`` rather than being stored -- an unrecognised kind read back
+    later would be indistinguishable from a kind this module had not learned
+    yet, and the consumer's unknown-blocks rule would then quietly hide a
+    typo as a conservative default.
+
+    Raises ``ValueError`` for an invalid verb or kind, ``LineTooLong`` if the
     encoded form would meet or exceed ``MAX_ENCODED_LINE_LEN`` -- rejected
     outright, never truncated (AC12) -- and ``OutOfWorktreePath`` (AC23) if
     ``path``, after normalization, is still absolute. The containment check
@@ -579,6 +631,8 @@ def encode_line(
     """
     if verb not in _VALID_VERBS:
         raise ValueError(f"invalid verb {verb!r}; must be one of {_VALID_VERBS}")
+    if kind is not None and kind not in _VALID_KINDS:
+        raise ValueError(f"invalid kind {kind!r}; must be one of {_VALID_KINDS} or None")
 
     normalized_path = canonicalize_relative_path(path)
     if _is_out_of_worktree(normalized_path):
@@ -600,6 +654,8 @@ def encode_line(
         record["hash"] = content_hash
     if name is not None:
         record["name"] = name
+    if kind is not None:
+        record["kind"] = kind
     encoded = (json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8")
     if len(encoded) >= MAX_ENCODED_LINE_LEN:
         raise LineTooLong(
@@ -662,6 +718,16 @@ def decode_line(line: "bytes | str") -> TouchEvent:
     if name is not None and not isinstance(name, str):
         raise MalformedRecordLine(f"invalid name {name!r}")
 
+    # The third axis. Absent on every pre-2026-09-20 line and on any channel
+    # that cannot tell -- never malformed, and never inferred (see
+    # ``KIND_UNKNOWN``). An unrecognised STRING is malformed, though: it is a
+    # writer this reader does not understand, and silently folding it into
+    # "unknown" would let a typo inherit unknown's conservative blocking
+    # behaviour and never be noticed.
+    kind = record.get("kind")
+    if kind is not None and kind not in _VALID_KINDS:
+        raise MalformedRecordLine(f"invalid kind {kind!r}")
+
     if verb not in _VALID_VERBS:
         raise MalformedRecordLine(f"invalid verb {verb!r}")
     if not isinstance(session_id, str) or not session_id:
@@ -680,7 +746,29 @@ def decode_line(line: "bytes | str") -> TouchEvent:
         path=path,
         content_hash=content_hash,
         name=name,
+        kind=kind,
     )
+
+
+def kind_blocks_a_peer_commit(kind: Optional[str]) -> bool:
+    """Whether a live hold of this kind should refuse a PEER's commit.
+
+    The one place that rule is spelled, because getting it wrong in either
+    direction is a different outage. A WRITE hold must block -- that is the
+    mechanism working, and the reason the gate exists: committing a path a
+    peer has uncommitted work in lands their work under your message. A READ
+    hold must not -- nothing is at risk from a concurrent reader, and reads
+    are the common case at this repo's stated ~50-session load norm, so a
+    blocking reader makes the false-hold rate scale with peer count while
+    true conflicts stay flat.
+
+    UNKNOWN BLOCKS. Every line written before the kind axis existed has no
+    kind, and treating those as reads would retire a real guard for the whole
+    existing corpus in one edit -- too strict becomes unsound. Blocking on
+    unknown makes the migration monotonic instead: a claim stops blocking only
+    once a writer has positively said it was a read.
+    """
+    return kind != KIND_READ
 
 
 def iter_complete_lines(raw: bytes) -> list[bytes]:
@@ -913,6 +1001,7 @@ def append_event(
     timestamp: Optional[float] = None,
     content_hash: Optional[str] = None,
     name: "Optional[str] | object" = _UNSET,
+    kind: Optional[str] = None,
 ) -> None:
     """Encode one event and append it to ``sink`` through
     ``atomic_append.append_line`` -- the only append mechanism this module
@@ -937,6 +1026,12 @@ def append_event(
     extra argument required. A caller passing an explicit string (or
     ``None``) always wins over the default.
 
+    ``kind`` threads straight through to ``encode_line``. It defaults to
+    ``None`` -- UNKNOWN -- and is deliberately not inferred here: this
+    function cannot see whether its caller wrote or read, and a default of
+    "write" would fabricate the very distinction the axis exists to make
+    honest. Only a channel that KNOWS passes it.
+
     Encoding happens before the growth check so a rejected (too-long) line
     never triggers a rotation for a write that will not land.
     """
@@ -949,6 +1044,7 @@ def append_event(
         timestamp=timestamp,
         content_hash=content_hash,
         name=resolved_name,
+        kind=kind,
     )
     sink_path = Path(sink)
     # Judged, not overlooked: ``sink`` is caller-supplied and serves BOTH
@@ -989,6 +1085,7 @@ def append_touch_claims(
     root: "Path | str",
     *,
     content_hashes: "Optional[dict[str, str]]" = None,
+    kind: Optional[str] = None,
 ) -> None:
     """Append one ``VERB_TOUCH`` per repo-relative entry in ``paths`` to
     ``session_id``'s own sink under ``root``. Returns ``None`` always, raises
@@ -1021,6 +1118,13 @@ def append_touch_claims(
     caller. ``check_stale_write`` (C2) is the first caller to pass real
     hashes, computed per write target via ``compute_content_hash`` before
     calling here.
+
+    ``kind`` applies to EVERY path in one call, unlike ``content_hashes``,
+    and that asymmetry is real rather than an oversight: each caller of this
+    function is a single channel that either wrote or read, never a mixture,
+    so a per-path map would be a shape no caller can fill differently. It
+    defaults to ``None`` (unknown), so a caller that has not been taught the
+    axis records exactly what it recorded before.
     """
     if not session_id or not root:
         return
@@ -1038,6 +1142,7 @@ def append_touch_claims(
                     verb=VERB_TOUCH,
                     path=rel,
                     content_hash=(content_hashes or {}).get(rel),
+                    kind=kind,
                 )
             except Exception:
                 continue
@@ -1341,6 +1446,12 @@ def reconcile_untouched_bash_writes(
             path=candidate,
             timestamp=timestamp,
             content_hash=content_hash,
+            # KIND_WRITE: this reconciler's entire premise is that the session
+            # WROTE this file -- it attributes a staged path whose on-disk mtime
+            # falls inside the session's own window, closing over a Bash write
+            # the Write/Edit hook never saw. An observation could not satisfy
+            # either condition.
+            kind=KIND_WRITE,
         )
         attributed.append(candidate)
     return attributed

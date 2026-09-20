@@ -343,12 +343,21 @@ class _LookupResult(dict):
     name is and is not: a name claimed at write time, never a live address,
     and never re-resolved by this module. A consumer that never reads it
     (every consumer before C2) observes no behavior change.
+
+    ``recorded_kind`` is the same shape and the same passthrough for
+    ``TouchEvent.kind`` -- whether the claimant WROTE the path or merely
+    READ it. Deliberately mirrors ``recorded_name`` rather than inventing a
+    second convention: same keying, same populate-on-TOUCH/pop-on-RELEASE
+    lifecycle, same "absent means unprovable, never false" posture. A
+    claimant whose line predates the kind axis is simply absent from this
+    mapping.
     """
 
     complete: bool = True
     abort_cause: Optional[str] = None
     edit_ts: Dict[str, Dict[str, datetime]] = None  # type: ignore[assignment]
     recorded_name: Dict[str, Dict[str, str]] = None  # type: ignore[assignment]
+    recorded_kind: Dict[str, Dict[str, str]] = None  # type: ignore[assignment]
 
 
 @dataclasses.dataclass
@@ -427,6 +436,17 @@ class _IndexState:
     abort_cause: Optional[str] = None
     edit_ts: Dict[str, Dict[str, datetime]] = dataclasses.field(default_factory=dict)
     recorded_name: Dict[str, Dict[str, str]] = dataclasses.field(default_factory=dict)
+
+    #: path -> {claimant_sid: kind}, populated on TOUCH and popped on RELEASE
+    #: exactly as ``recorded_name`` above. The value is ``TouchEvent.kind``
+    #: (``touch_record.KIND_WRITE`` / ``KIND_READ``); a claimant whose line
+    #: carries no kind -- every line written before 2026-09-20, and any channel
+    #: that cannot tell -- is ABSENT here rather than defaulted, because a
+    #: guessed kind is worse than a visible unknown. Consumers deciding whether
+    #: a hold blocks must route through ``touch_record.kind_blocks_a_peer_commit``
+    #: rather than comparing to ``KIND_READ`` themselves, so absent keeps
+    #: meaning "blocks" in exactly one place.
+    recorded_kind: Dict[str, Dict[str, str]] = dataclasses.field(default_factory=dict)
     agent_claims: Dict[str, Dict[str, List[Optional[str]]]] = dataclasses.field(
         default_factory=dict
     )
@@ -591,6 +611,7 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
     claims: Dict[str, set] = {}
     edit_ts: Dict[str, Dict[str, datetime]] = {}
     recorded_name: Dict[str, Dict[str, str]] = {}
+    recorded_kind: Dict[str, Dict[str, str]] = {}
     agent_claims: Dict[str, Dict[str, Set[Optional[str]]]] = {}
     touched_pairs, complete = _enumerate_claim_sinks(base)
     abort_cause: Optional[str] = None if complete else ABORT_CAUSE_IO_ERROR
@@ -633,6 +654,10 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
                 # ``edit_ts`` above -- never a degrade signal.
                 if event.name:
                     recorded_name.setdefault(path, {})[claimant_sid] = event.name
+                # Same convention one line up: present only when the record
+                # states it, absent for every pre-axis line. Never defaulted.
+                if event.kind:
+                    recorded_kind.setdefault(path, {})[claimant_sid] = event.kind
             else:  # RELEASE — a release only ever removes the claimant from
                 # the aggregate bucket. A same-file re-claim after a release
                 # can't reach this branch: this per-file scan already
@@ -641,6 +666,7 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
                 claims.get(path, set()).discard(claimant_sid)
                 edit_ts.get(path, {}).pop(claimant_sid, None)
                 recorded_name.get(path, {}).pop(claimant_sid, None)
+                recorded_kind.get(path, {}).pop(claimant_sid, None)
                 # C2: drop exactly THIS file's source attribution, not the
                 # whole sid -- a peer agent's own live claim is untouched.
                 sid_sources = agent_claims.get(path, {}).get(claimant_sid)
@@ -653,6 +679,9 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
     }
     result_recorded_name = {
         path: dict(sids_names) for path, sids_names in recorded_name.items() if sids_names
+    }
+    result_recorded_kind = {
+        path: dict(sids_kinds) for path, sids_kinds in recorded_kind.items() if sids_kinds
     }
     result_agent_claims: Dict[str, Dict[str, List[Optional[str]]]] = {}
     for path, sid_sources in agent_claims.items():
@@ -669,6 +698,7 @@ def rebuild(sessions_dir: Optional[str] = None, cwd: Optional[str] = None) -> _I
         abort_cause=abort_cause,
         edit_ts=result_edit_ts,
         recorded_name=result_recorded_name,
+        recorded_kind=result_recorded_kind,
         agent_claims=result_agent_claims,
     )
 
@@ -719,6 +749,7 @@ def lookup(
         result.abort_cause = ABORT_CAUSE_EMPTY_BASE
         result.edit_ts = {}
         result.recorded_name = {}
+        result.recorded_kind = {}
         return result
 
     state = rebuild(sessions_dir=base)
@@ -726,6 +757,7 @@ def lookup(
     result = _LookupResult()
     result_edit_ts: Dict[str, Dict[str, datetime]] = {}
     result_recorded_name: Dict[str, Dict[str, str]] = {}
+    result_recorded_kind: Dict[str, Dict[str, str]] = {}
     for path in paths:
         normalized = _normalize_key(path)
         claimants = state.claims.get(normalized)
@@ -741,10 +773,14 @@ def lookup(
         path_recorded_name = state.recorded_name.get(normalized)
         if path_recorded_name:
             result_recorded_name[path] = dict(path_recorded_name)
+        path_recorded_kind = state.recorded_kind.get(normalized)
+        if path_recorded_kind:
+            result_recorded_kind[path] = dict(path_recorded_kind)
     result.complete = state.complete
     result.abort_cause = state.abort_cause
     result.edit_ts = result_edit_ts
     result.recorded_name = result_recorded_name
+    result.recorded_kind = result_recorded_kind
 
     return result
 

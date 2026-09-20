@@ -301,6 +301,13 @@ def _append_touch_record(
             verb=touch_record.VERB_TOUCH,
             path=path,
             content_hash=content_hash,
+            # KIND_WRITE unconditionally: this hook is PostToolUse on
+            # Edit/Write/MultiEdit/NotebookEdit and fires on nothing else (see
+            # the module docstring's input contract), so every event it records
+            # is a mutation by construction. No branch is needed and none should
+            # be added -- a `kind` that varied here would mean the hook had
+            # started firing on a tool it does not own.
+            kind=touch_record.KIND_WRITE,
         )
     except (touch_record.LineTooLong, touch_record.OutOfWorktreePath):
         pass

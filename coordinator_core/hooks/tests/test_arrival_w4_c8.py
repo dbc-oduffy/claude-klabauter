@@ -80,6 +80,77 @@ def test_preuse_bash_dispatch_fails_open_when_chain_raises(monkeypatch):
     assert out == {}
 
 
+#: A command the chain denies from its own rule table, with no plugin-root
+#: manifest behind it. `git add -A` would read better but degrades to fail-open
+#: whenever the manifest does not resolve -- true under pytest -- which would
+#: make these tests pass or fail on ambient env rather than on the handler.
+_BANNED = "git worktree add /tmp/x"
+
+
+def _wire_params(tmp_path, command):
+    """The params dict BOTH doors actually send — `{"payload": <event>}`, with
+    the payload built by the same function the transport uses.
+
+    Every other test in this block hands `_handler` a flat payload it hand-rolls,
+    which is why none of them saw the fail-open: the flat shape is the one shape
+    no caller sends.
+    """
+    from coordinator_core.warm.hook_http import payload_from_event
+
+    return {
+        "payload": payload_from_event(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+                "cwd": str(tmp_path),
+                "session_id": "s",
+            }
+        )
+    }
+
+
+def _decision(out):
+    return (out.get("hookSpecificOutput") or {}).get("permissionDecision")
+
+
+def test_preuse_bash_dispatch_denies_through_the_envelope_the_doors_send(tmp_path):
+    """The load-bearing one: a denied command must deny when the payload
+    arrives WRAPPED, which is how `hook_http.build_request` and
+    `coordinator/bin/hook-run.py` both send it.
+
+    The handler used to serialise the envelope itself, so the guard chain found
+    no `tool_input`, matched nothing, and allowed every command through both
+    doors — deny and allow returning byte-identical output on the one surface
+    whose job is to tell them apart.
+    """
+    from coordinator_core.hooks.preuse_bash_dispatch import _handler
+
+    assert _decision(_run(_handler(_wire_params(tmp_path, _BANNED)))) == "deny"
+
+
+def test_preuse_bash_dispatch_deny_and_allow_are_distinguishable(tmp_path):
+    """A verdict surface that answers the same for both is worse than one that
+    errors: it reads as a clean pass. Pinning the DIFFERENCE catches the whole
+    class, including a future fail-open that keeps the deny leg working."""
+    from coordinator_core.hooks.preuse_bash_dispatch import _handler
+
+    denied = _run(_handler(_wire_params(tmp_path, _BANNED)))
+    allowed = _run(_handler(_wire_params(tmp_path, "echo hi")))
+    assert denied != allowed
+    assert _decision(allowed) != "deny"
+
+
+def test_preuse_bash_dispatch_still_reads_a_flat_payload(tmp_path):
+    """A real PreToolUse payload carries no `payload` key, so the two shapes are
+    unambiguous and the flat one stays readable. Refusing it would convert a
+    caller mismatch into a second fail-open rather than a verdict."""
+    from coordinator_core.hooks.preuse_bash_dispatch import _handler
+
+    flat = _wire_params(tmp_path, _BANNED)["payload"]
+    assert _decision(_run(_handler(flat))) == "deny"
+
+
 # ---------------------------------------------------------------------------
 # hooks.guard_host_subagent_bash_ban / hooks.guard_host_subagent_bash_spawn_shapes
 # ---------------------------------------------------------------------------

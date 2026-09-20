@@ -13,7 +13,7 @@ Branches covered:
   1. Happy path     — ping '{}' → exit 0, stdout JSON "ok": true, stderr empty.
   2. Invalid JSON   — ping 'not json' → _fatal_stderr → exit 1, error JSON on
                       STDERR, stdout empty.  (Also covers branch 7 — stream check.)
-  3. _origin_worktree injection — worktree-scoped op (_WORKTREE_SCOPED_PROBE) run
+  3. _origin_worktree injection — worktree-scoped op (a test-owned probe) run
                       inside the claude-klabauter repo succeeds in dispatching (proves injection fires).
   4. C2 regression  — none-scoped op (ping) run from a non-git temp dir exits 0,
                       proving _resolve_repo_root is NOT called for none-scoped ops.
@@ -99,13 +99,10 @@ _NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # that does not exist: the handler resolves it RELATIVE to the injected repo root
 # and reports it back, so the resulting error string is itself the witness that
 # repo_root arrived.
-_WORKTREE_SCOPED_PROBE = (
-    "handoff.has_live_children",
-    '{"candidate": "state/handoffs/does-not-exist-invoke-main-test.md"}',
-)
-_PROBE_EXPECTED_ERROR = (
-    "candidate not found on disk: state/handoffs/does-not-exist-invoke-main-test.md"
-)
+# `_WORKTREE_SCOPED_PROBE` / `_PROBE_EXPECTED_ERROR` lived here: a production op
+# borrowed as a worktree-scope vehicle, plus the error string that stood in for a
+# witness. Both cases that used them now drive `_WORKTREE_SCOPED_PROBE_SCRIPT`,
+# which owns its op and reports the root directly.
 
 
 def _make_env(**overrides: str) -> dict[str, str]:
@@ -121,9 +118,47 @@ def _make_env(**overrides: str) -> dict[str, str]:
     return env
 
 
+#: Breadcrumbs the engine emits on stderr that are CONFIGURATION notices, not the log
+#: noise the "stderr must be empty" assertions exist to catch. Each is a once-per-process
+#: line stating a deliberate operator setting, and whether it appears depends on the box
+#: rather than on the code under test -- so asserting a literally empty stderr made those
+#: cases pass or fail on where they ran. `[warm-settings]` fires on any machine with
+#: warmth disabled, which is a supported configuration and turns every dispatching case
+#: in this module red for a reason none of them is about.
+#:
+#: Deliberately a prefix ALLOWLIST, not a regex over the whole stream: an unrecognised
+#: line is still a failure, which is the property these assertions are for.
+_BENIGN_STDERR_PREFIXES = ("[warm-settings]",)
+
+
+def _stderr_noise(result: subprocess.CompletedProcess) -> str:
+    """`result.stderr` with the benign configuration breadcrumbs removed."""
+    return "\n".join(
+        line
+        for line in result.stderr.splitlines()
+        if line.strip() and not line.startswith(_BENIGN_STDERR_PREFIXES)
+    ).strip()
+
+
 def _invoke(*args: str, cwd: str | Path | None = None, env: dict | None = None,
             timeout: int = 30) -> subprocess.CompletedProcess:
     """Spawn coordinator_core.invoke as a subprocess and return the CompletedProcess.
+
+    ``--allow-unstamped-dispatch`` is appended to every DISPATCHING call, for the
+    same reason ``conftest.py``'s ``pytest_configure`` calls
+    ``ipc.allow_unstamped_dispatch()`` for the in-process path and
+    ``test_plan_tasks_mutate::_invoke_cli`` passes it for its own subprocess leg:
+    this repo IS the dev tree, never the published stamped mirror, so a bare
+    subprocess dispatch hits ipc.py's stamp gate before reaching any handler. The
+    gate landed after this module was written and every dispatching case here has
+    been red against it since -- asserting the stamp gate rather than the
+    entrypoint behaviour each case exists to cover. This is the sanctioned
+    "deliberate manual testing" carve-out the gate's own refusal message names.
+
+    NOT appended to a flag-only call (``--dump-op-timeouts``, or the no-argument
+    case): those never reach dispatch, several of them assert stderr is empty, and
+    one asserts that omitting an op still fails. Passing an irrelevant flag there
+    would be testing argparse, not the surface.
 
     Args:
         *args:   Arguments after ``python -m coordinator_core.invoke``.
@@ -131,7 +166,10 @@ def _invoke(*args: str, cwd: str | Path | None = None, env: dict | None = None,
         env:     Environment dict (default: _make_env()).
         timeout: subprocess.run timeout in seconds (default: 30).
     """
+    dispatching = bool(args) and not args[0].startswith("-")
     cmd = [sys.executable, "-m", "coordinator_core.invoke", *args]
+    if dispatching and "--allow-unstamped-dispatch" not in args:
+        cmd.append("--allow-unstamped-dispatch")
     return subprocess.run(
         cmd,
         capture_output=True,
@@ -168,7 +206,7 @@ def test_happy_path_ping_exits_zero():
     )
     assert "error" not in parsed, f"No 'error' key on success; got: {parsed}"
 
-    assert result.stderr.strip() == "", (
+    assert _stderr_noise(result) == "", (
         f"stderr must be empty on success; got {result.stderr!r}"
     )
 
@@ -196,7 +234,7 @@ def test_bare_flag_prints_only_result_object():
     assert "result" not in parsed, f"--bare must omit the 'result' nesting key; got {parsed}"
     assert parsed.get("ok") is True, f"--bare result must be the ping payload directly; got {parsed}"
 
-    assert result.stderr.strip() == "", (
+    assert _stderr_noise(result) == "", (
         f"stderr must be empty on --bare success; got {result.stderr!r}"
     )
 
@@ -316,33 +354,33 @@ def test_worktree_scoped_op_dispatches_inside_repo():
     (which runs git rev-parse from cwd) and injects _origin_worktree into the
     JSON-RPC envelope.  dispatch_message then receives a valid repo_root.
 
-    Behavioral assertion: the op returns a JSON-RPC response on stdout (not
-    a fatal pre-dispatch error on stderr), and its own error string is the
-    candidate-not-found one — which is only reachable AFTER repo_root resolved
-    (the handler's own `_ORIGIN_WORKTREE_MISSING_ERROR` branch fires first when
-    it did not), so this is a positive witness that injection worked, not just
-    that something got dispatched.
+    Behavioral assertion: the op returns a JSON-RPC response on stdout (not a
+    fatal pre-dispatch error on stderr) carrying the repo_root the handler was
+    actually handed. That is a direct witness that resolution and injection both
+    happened, rather than the indirect one the borrowed vehicles allowed (an
+    error string reachable only after a root resolved).
 
-    Vehicle note: this used to drive `coverage.gate`, which was a poor choice —
-    that op's cost scales with the repo's review-trail corpus (measured 48s on
-    this tree, past both the engine's own 30s dispatch timeout and this test's
-    subprocess timeout), so the test measured an unrelated subsystem's runtime
-    rather than invoke's argument plumbing. `handoff.has_live_children` is
-    worktree-scoped the same way (`op_scopes._OP_KEY_SCOPE`, common_dir class,
-    hence in WORKTREE_SCOPED_OPS) and returns in ~0.1s. Do NOT restore a
-    history-walking op here; the scope class is the only property this test
-    needs from its vehicle.
+    Vehicle note, and the reason there is no longer a production op named here.
+    This drove `coverage.gate` until that op's cost scaled with the review-trail
+    corpus (48s, past the engine's own dispatch timeout); it was repointed at
+    `handoff.has_live_children`, which has since been KILLED for a budget breach
+    (`-32006`), leaving this case asserting a suspension notice. Twice the test
+    reported on its vehicle rather than on `invoke`.
+
+    The scope class was always the only property it needed, so the vehicle is now
+    test-owned: `_WORKTREE_SCOPED_PROBE_SCRIPT` registers a handler, enters
+    `WORKTREE_SCOPED_OPS` by rebinding that name in `ipc` before `main()` reads
+    it, and echoes back the `repo_root` it received. Do NOT repoint this at a
+    production op again -- the borrowed-vehicle failure has a two-for-two record.
 
     Contrast with test_none_scoped_outside_git_tree: a none-scoped op never calls
     _resolve_repo_root(), so running OUTSIDE a git tree still exits 0.
     """
     # Run from the claude-klabauter repo root — git rev-parse will succeed here.
-    result = _invoke(*_WORKTREE_SCOPED_PROBE, cwd=_PROJECT_ROOT)
+    result = _worktree_scope_probe()
 
-    # returncode 0 = success result; returncode 1 = JSON-RPC error result.
-    # Either means dispatch completed.
-    assert result.returncode in (0, 1), (
-        f"{_WORKTREE_SCOPED_PROBE[0]} must exit 0 or 1; got {result.returncode}.\n"
+    assert result.returncode == 0, (
+        f"the worktree-scope probe must exit 0; got {result.returncode}.\n"
         f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
     )
 
@@ -358,13 +396,12 @@ def test_worktree_scoped_op_dispatches_inside_repo():
     assert "result" in parsed or "error" in parsed, (
         f"Response must have 'result' or 'error'; got {parsed}"
     )
-    assert parsed["result"]["error"] == _PROBE_EXPECTED_ERROR, (
-        f"handler must have seen a resolved repo_root (its own missing-worktree "
-        f"branch would have fired instead); got {parsed}"
+    assert parsed["result"]["repo_root"] == str(_PROJECT_ROOT), (
+        f"the handler must have been handed the resolved repo root; got {parsed}"
     )
 
     # stderr must be empty — no fatal pre-dispatch error.
-    assert result.stderr.strip() == "", (
+    assert _stderr_noise(result) == "", (
         f"stderr must be empty when dispatch succeeds; got {result.stderr!r}"
     )
 
@@ -414,7 +451,7 @@ def test_none_scoped_outside_git_tree():
         assert parsed["result"].get("ok") is True, (
             f"ping result must be ok=true; got {parsed['result']!r}"
         )
-        assert result.stderr.strip() == "", (
+        assert _stderr_noise(result) == "", (
             f"stderr must be empty; got {result.stderr!r}"
         )
     finally:
@@ -439,18 +476,27 @@ def test_explicit_repo_flag_honored():
     The empty-stderr assertion here is what the old `coverage.gate` vehicle could
     not satisfy at all: a dispatch that outruns the engine's 30s timeout prints a
     timeout line to stderr, so the assertion was hostage to that op's runtime.
-    """
-    result = _invoke(*_WORKTREE_SCOPED_PROBE, "--repo", _PROJECT_ROOT)
 
-    assert result.returncode in (0, 1), (
-        f"{_WORKTREE_SCOPED_PROBE[0]} with --repo must exit 0 or 1; got {result.returncode}.\n"
+    It also accepted `returncode in (0, 1)` and asserted only that the envelope was
+    JSON, which is a green this case could reach WITHOUT `--repo` doing anything —
+    and did: it passed against the killed vehicle's `-32006` suspension envelope.
+    The owned probe reports the root it was handed, so `--repo` is now actually
+    under test.
+    """
+    result = _worktree_scope_probe("--repo", str(_PROJECT_ROOT))
+
+    assert result.returncode == 0, (
+        f"the worktree-scope probe with --repo must exit 0; got {result.returncode}.\n"
         f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
     )
 
     assert result.stdout.strip(), "stdout must be non-empty (JSON-RPC response)"
     parsed = json.loads(result.stdout.strip())
     assert parsed.get("jsonrpc") == "2.0"
-    assert result.stderr.strip() == "", (
+    assert parsed["result"]["repo_root"] == str(_PROJECT_ROOT), (
+        f"--repo must be the root the handler receives; got {parsed}"
+    )
+    assert _stderr_noise(result) == "", (
         f"stderr must be empty with a valid --repo; got {result.stderr!r}"
     )
 
@@ -471,12 +517,27 @@ def test_no_hang_under_handler_timeout():
       indefinitely.  os._exit() below terminates the process without that join.
 
     Test mechanics:
-      - Set COORDINATOR_DISPATCH_TIMEOUT_SECS=0.001 so the internal wait_for
-        fires almost immediately (coverage.gate does real git work > 1ms).
+      - A test-owned handler that `asyncio.to_thread`s a `time.sleep`, under
+        COORDINATOR_DISPATCH_TIMEOUT_SECS=0.001, so the internal wait_for fires
+        while a real executor thread is still live — which is the precondition
+        the regression is about, not merely a slow op.
       - subprocess.run(..., timeout=15) — if the process hangs, TimeoutExpired
         is raised and the test fails.
       - Assert result.returncode is not None (process exited, not killed by us).
       - Assert stdout is a JSON-RPC response with the expected timeout error.
+
+    VEHICLE OWNED, NOT BORROWED, and that is the fix this case had been waiting
+    for. It drove `coverage.gate` until K-001 deleted that op, after which it
+    asserted "timed out" against `Method not found` and went red — the second
+    time a borrowed vehicle took this module down (see
+    `test_worktree_scoped_op_dispatches_inside_repo`, whose own replacement op
+    has since been killed for a budget breach). The reviewer nit recorded here
+    called for exactly this and deferred it "to avoid coupling this test to
+    test-only op registration infrastructure"; that infrastructure is now used
+    three times over in this same module, so the coupling cost is already paid
+    and the deferral only bought two outages. It also removes the probabilistic
+    arm the nit named: the sleep cannot finish inside 1ms, so the timeout branch
+    is asserted unconditionally rather than "if by fluke".
 
     Negative-spec: if asyncio.run() were used instead of the manual loop, this
     test would raise subprocess.TimeoutExpired because shutdown_default_executor()
@@ -485,23 +546,9 @@ def test_no_hang_under_handler_timeout():
     """
     env = _make_env(COORDINATOR_DISPATCH_TIMEOUT_SECS="0.001")
 
-    # coverage.gate does real git work (git log + coverage state reads) that
-    # easily exceeds 1ms — the internal wait_for timeout will fire reliably.
-    #
-    # Review: code-reviewer (nit) — this test is probabilistic: on very fast hardware or a
-    # hot git cache, coverage.gate MIGHT complete in < 1ms and the timeout path is never
-    # exercised. The test would then pass on the success path (which was always fine), not
-    # the executor-drain + os._exit timeout path (the actual AC4 regression target). To make
-    # it deterministic, replace coverage.gate with a test-only handler that sleeps (e.g., a
-    # conftest-registered time.sleep(1) op under a 0.001s timeout) and assert unconditionally
-    # that "timed out" appears in the error response. That work is deferred to avoid coupling
-    # this test to test-only op registration infrastructure. The current test DOES guard the
-    # primary regression: the process exits promptly (within 15s) rather than hanging forever.
     try:
-        result = _invoke(
-            "coverage.gate", "{}", "--repo", _PROJECT_ROOT,
-            env=env,
-            timeout=15,  # outer guard — process must exit well within 15s
+        result = _run_probe_script(
+            _SLOW_OP_SCRIPT, env=env, timeout=15  # outer guard — must exit well within 15s
         )
     except subprocess.TimeoutExpired:  # pragma: no cover
         raise AssertionError(
@@ -513,10 +560,10 @@ def test_no_hang_under_handler_timeout():
     # Process exited — returncode must be set (not None).
     assert result.returncode is not None, "returncode must be set after normal exit"
 
-    # With a 0.001s timeout, coverage.gate almost certainly times out → exit 1.
-    # If by fluke the op completes in < 1ms, exit 0 is also acceptable.
-    assert result.returncode in (0, 1), (
-        f"Expected exit 0 or 1 after timeout; got {result.returncode}.\n"
+    # The handler sleeps far past 1ms, so the timeout branch is the only reachable
+    # one — no "if by fluke it completed" arm, which is what made this probabilistic.
+    assert result.returncode == 1, (
+        f"Expected exit 1 after the dispatch timeout; got {result.returncode}.\n"
         f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
     )
 
@@ -524,12 +571,10 @@ def test_no_hang_under_handler_timeout():
     assert result.stdout.strip(), "stdout must contain the JSON-RPC response"
     parsed = json.loads(result.stdout.strip())
     assert parsed.get("jsonrpc") == "2.0"
-
-    # If the op timed out, the error message must say so.
-    if "error" in parsed:
-        assert "timed out" in parsed["error"]["message"], (
-            f"Expected 'timed out' in error message; got {parsed['error']['message']!r}"
-        )
+    assert "error" in parsed, f"the op must have timed out, not succeeded; got {parsed}"
+    assert "timed out" in parsed["error"]["message"], (
+        f"Expected 'timed out' in error message; got {parsed['error']['message']!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -568,7 +613,7 @@ def test_params_file_reads_large_payload(tmp_path):
     assert parsed["result"].get("ok") is True, (
         f"ping result must contain ok=true; got {parsed['result']!r}"
     )
-    assert result.stderr.strip() == "", (
+    assert _stderr_noise(result) == "", (
         f"stderr must be empty on success; got {result.stderr!r}"
     )
 
@@ -596,7 +641,7 @@ def test_params_file_dash_reads_stdin():
     }
     result = subprocess.run(
         [sys.executable, "-m", "coordinator_core.invoke", "ping",
-         "--params-file", "-", "--bare"],
+         "--params-file", "-", "--bare", "--allow-unstamped-dispatch"],
         input=json.dumps(payload),
         capture_output=True,
         text=True,
@@ -680,7 +725,7 @@ def test_params_file_dash_reads_non_ascii_stdin_as_utf8():
     child_env = _make_env(LC_ALL="C", LANG="C")
     result = subprocess.run(
         [sys.executable, "-m", "coordinator_core.invoke", "ping",
-         "--params-file", "-", "--bare"],
+         "--params-file", "-", "--bare", "--allow-unstamped-dispatch"],
         input=json.dumps(payload).encode("utf-8"),
         capture_output=True,
         text=False,
@@ -746,11 +791,21 @@ def test_dump_op_timeouts_emits_valid_json_with_default_and_overrides():
     "__default__" must be present. DEC-2 (docs/plans/2026-07-22-wsc-tail-sub-2s-invoke-budget.md,
     commit 827cb8c8) retired the three ceremony.wsc_* per-op 120.0 overrides that this test
     used to assert -- _OP_TIMEOUT_OVERRIDES in coordinator_core/ipc.py is now an intentionally
-    empty table, so every op (including the three former overrides) falls to the single global
-    runaway guard. Assert the dump surface reflects exactly that retirement: the table is empty
-    (no per-op keys beyond the reserved "__default__"), proving the dump surface reads the SAME
-    source of truth _timeout_for() reads, not a hand-maintained duplicate that could drift stale
-    in either direction.
+    empty table, so every op that is not otherwise projected falls to the single global
+    runaway guard.
+
+    THE OVERRIDE TABLE IS NOT THE WHOLE DUMP, and asserting it was is how this test spent
+    three surface changes red. It read `parsed == {"__default__": ...}` -- exact equality
+    against an empty override table -- so the ceremony projection, `__ceremony_budget__`, and
+    the transport-deadline rows each made it fail without any of them being wrong. A red that
+    fires on every correct change stops being read, and this one guards a payload two sibling
+    repos size their kill ceilings from.
+
+    What it asserts now is the property the equality was reaching for: every per-op row present
+    is one the engine PROJECTED on purpose, and the retired overrides did not come back. The
+    reserved rows are checked by name; the projected ceremony rows must equal the ceremony
+    budget; nothing else may appear. `test_dump_op_timeouts_projects_the_transport_deadline`
+    covers the `__ceremony__<op>` rows' own semantics.
     """
     result = _invoke("--dump-op-timeouts")
 
@@ -758,7 +813,7 @@ def test_dump_op_timeouts_emits_valid_json_with_default_and_overrides():
         f"--dump-op-timeouts must exit 0; got {result.returncode}.\n"
         f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
     )
-    assert result.stderr.strip() == "", (
+    assert _stderr_noise(result) == "", (
         f"stderr must be empty on --dump-op-timeouts success; got {result.stderr!r}"
     )
 
@@ -769,29 +824,114 @@ def test_dump_op_timeouts_emits_valid_json_with_default_and_overrides():
         f"__default__ must be a float; got {parsed['__default__']!r} ({type(parsed['__default__']).__name__})"
     )
 
-    assert parsed == {"__default__": parsed["__default__"]}, (
-        "_OP_TIMEOUT_OVERRIDES is retired-empty (DEC-2) -- the dump must carry no per-op "
-        f"override keys, only the reserved '__default__'; got {parsed}"
+    from coordinator_core.ipc import CEREMONY_BUDGET_SECS, is_ceremony_method
+
+    reserved = {"__default__", "__ceremony_budget__", "__ceremony_mutation_read_deadline__"}
+    for key, value in parsed.items():
+        if key in reserved or key.startswith("__ceremony__"):
+            continue
+        assert is_ceremony_method(key), (
+            "_OP_TIMEOUT_OVERRIDES is retired-empty (DEC-2), so the only per-op rows the dump "
+            f"may carry are the ceremony projection; {key!r} is neither reserved nor a ceremony "
+            f"op. Full payload: {parsed}"
+        )
+        assert value == CEREMONY_BUDGET_SECS, (
+            f"projected ceremony op {key!r} must carry the ceremony budget, not {value!r}"
+        )
+
+    assert parsed["__ceremony_budget__"] == CEREMONY_BUDGET_SECS
+    assert set(parsed) >= reserved, f"missing reserved rows; got {sorted(parsed)}"
+
+
+def test_dump_op_timeouts_projects_the_transport_deadline():
+    """The `__ceremony__<op>` rows: the engine ASSERTING ceremony membership, and
+    carrying the deadline a delivered mutation is read for.
+
+    Two things are wrong without them, both measured 2026-09-20. An external caller
+    sizes its subprocess kill ceiling off this dump (`cc_invoke::_op_timeout_ceiling`),
+    while the engine's own warm client keeps reading the answer to a mutation it has
+    already put on the wire for `ipc.mutation_read_deadline_for(op)` -- deliberately
+    NOT ceremony-clamped, because abandoning a delivered commit turns a slowness report
+    into an unknown-whether-it-committed. Publishing only the 2s performance budget gave
+    the parent a 4s ceiling over a child waiting 30s, so `WARM_DISPATCH_INDETERMINATE`
+    was unreachable on exactly the ops that commit.
+
+    And membership cannot be re-derived client-side. `is_ceremony_method` is a union of
+    prefix, alias table, and owning module; `cc_invoke` may not import `ipc` (asyncio on
+    the thin client's cold path) and its prefix test misses `commit.exec_bit_change` and
+    `review.snapshot_diff_and_head` -- one of which commits. The row's PRESENCE is the
+    answer to membership, its VALUE the answer to the deadline.
+    """
+    from coordinator_core.ipc import (
+        CEREMONY_BUDGET_SECS,
+        is_ceremony_method,
+        mutation_read_deadline_for,
     )
+
+    result = _invoke("--dump-op-timeouts")
+    assert result.returncode == 0
+    parsed = json.loads(result.stdout)
+
+    projected = [k for k in parsed if is_ceremony_method(k)]
+    assert projected, "the dump projects no ceremony ops at all -- the loop is dead"
+
+    for op in projected:
+        row = f"__ceremony__{op}"
+        assert row in parsed, (
+            f"{op!r} is projected at the ceremony budget but carries no {row!r} row, so a "
+            "caller reading this dump cannot tell it is a ceremony op OR how long its own "
+            "child will wait"
+        )
+        assert parsed[row] == mutation_read_deadline_for(op)
+        assert parsed[row] > parsed[op], (
+            "the transport deadline must exceed the performance budget -- equal is the "
+            "collapse this projection exists to prevent"
+        )
+
+    # The two ops whose membership a prefix test cannot see. Their presence here is the
+    # whole reason membership is published rather than mirrored.
+    for alias in ("commit.exec_bit_change", "review.snapshot_diff_and_head"):
+        assert not alias.startswith("ceremony.")
+        assert f"__ceremony__{alias}" in parsed, (
+            f"{alias!r} is a ceremony op by alias, and the only signal a prefix-matching "
+            "client has for it is this row"
+        )
+
+    assert parsed["__ceremony_mutation_read_deadline__"] > CEREMONY_BUDGET_SECS
 
 
 def test_dump_op_timeouts_default_reflects_live_env_override():
     """--dump-op-timeouts __default__ must live-resolve COORDINATOR_DISPATCH_TIMEOUT_SECS,
     not a hardcoded 30.0 -- proving live resolution rather than a baked-in constant.
-    """
-    env = _make_env(COORDINATOR_DISPATCH_TIMEOUT_SECS="77")
 
-    result = _invoke("--dump-op-timeouts", env=env)
+    NARROWING, and only narrowing. This case asserted 77 until 2026-09-20 and had been
+    red ever since `_resolve_dispatch_timeout_secs` became the sole env seam and clamped
+    it `min(requested, DISPATCH_TIMEOUT_SECS)`: 77 is a WIDENING, so it resolves to 30
+    by design, and the test was demanding the one outcome the clamp exists to forbid. A
+    red that can only be cleared by reintroducing the defect proves nothing about live
+    resolution, so both directions are asserted here instead -- the narrowing value must
+    land, and the widening one must be inert.
+    """
+    result = _invoke("--dump-op-timeouts", env=_make_env(COORDINATOR_DISPATCH_TIMEOUT_SECS="0.5"))
 
     assert result.returncode == 0, (
         f"--dump-op-timeouts with an overridden env must exit 0; got {result.returncode}.\n"
         f"stdout: {result.stdout!r}\nstderr: {result.stderr!r}"
     )
     parsed = json.loads(result.stdout)
-    assert parsed["__default__"] == 77.0, (
-        f"__default__ must reflect the live COORDINATOR_DISPATCH_TIMEOUT_SECS=77 env override; "
-        f"got {parsed['__default__']!r}. If this is 30.0, the surface hardcoded the default "
-        f"instead of re-reading DISPATCH_TIMEOUT_SECS at call time."
+    assert parsed["__default__"] == 0.5, (
+        f"__default__ must reflect a live NARROWING COORDINATOR_DISPATCH_TIMEOUT_SECS=0.5; "
+        f"got {parsed['__default__']!r}. If this is 30.0, the surface dumped the "
+        f"DISPATCH_TIMEOUT_SECS constant instead of calling the resolver, and every caller "
+        f"reading this dump is sizing its ceiling 60x above what the engine will allow."
+    )
+
+    widened = _invoke("--dump-op-timeouts", env=_make_env(COORDINATOR_DISPATCH_TIMEOUT_SECS="77"))
+    assert widened.returncode == 0
+    assert json.loads(widened.stdout)["__default__"] == 30.0, (
+        "a widening override must be inert -- `_resolve_dispatch_timeout_secs` clamps "
+        "`min(requested, DISPATCH_TIMEOUT_SECS)`, and live resolution must not become a "
+        "route around that"
     )
 
 
@@ -895,7 +1035,7 @@ async def _noisy(params, repo_root=None):
 
 ipc.register_op("test.stdout_hardening_probe", _noisy)
 
-sys.argv = ["coordinator_core.invoke", "test.stdout_hardening_probe", "{}"]
+sys.argv = ["coordinator_core.invoke", "test.stdout_hardening_probe", "{}", "--allow-unstamped-dispatch"]
 from coordinator_core.invoke.__main__ import main
 main()
 """
@@ -910,21 +1050,97 @@ async def _boom(params, repo_root=None):
 
 ipc.register_op("test.stdout_hardening_raise_probe", _boom)
 
-sys.argv = ["coordinator_core.invoke", "test.stdout_hardening_raise_probe", "{}"]
+sys.argv = ["coordinator_core.invoke", "test.stdout_hardening_raise_probe", "{}", "--allow-unstamped-dispatch"]
 from coordinator_core.invoke.__main__ import main
 main()
 """
 
 
-def _run_probe_script(script: str) -> subprocess.CompletedProcess:
+#: The worktree-scope vehicle, OWNED. `WORKTREE_SCOPED_OPS` is a frozenset computed
+#: from `_OP_KEY_SCOPE` at import, and `main()` reads it from `ipc` at call time, so a
+#: probe can enter the class by rebinding that name before calling `main()` -- without
+#: touching the production table or depending on any production op continuing to exist.
+#:
+#: The handler REPORTS the `repo_root` it was handed, which is a direct witness that
+#: resolution and `_origin_worktree` injection both happened. The borrowed-op versions
+#: could only infer it: they asserted a specific handler error string that was merely
+#: unreachable without a resolved root, and each died with its vehicle.
+_WORKTREE_SCOPED_PROBE_SCRIPT = """
+import sys
+from coordinator_core import ipc
+
+_OP = "test.worktree_scope_probe"
+
+async def _echo_repo_root(params, repo_root=None):
+    return {"repo_root": str(repo_root) if repo_root is not None else None}
+
+ipc.register_op(_OP, _echo_repo_root)
+
+# Two tables, because they answer different halves. `main()` reads
+# WORKTREE_SCOPED_OPS to decide whether to resolve a root and inject
+# `_origin_worktree`; `ipc.resolve_op_repo_key` reads the PRIVATE `_OP_KEY_SCOPE`
+# (not the public re-export) to decide what repo_root the HANDLER is handed.
+# Patching only the first injects a field nothing reads back.
+#
+# "show_top" rather than "common_dir" so the handler receives the worktree path
+# itself; common_dir would hand it `<root>/.git` and the assertion would be about
+# git's layout rather than about resolution.
+from coordinator_core import op_scopes
+
+ipc._OP_KEY_SCOPE = {**ipc._OP_KEY_SCOPE, _OP: "show_top"}
+ipc.WORKTREE_SCOPED_OPS = frozenset(op_scopes.WORKTREE_SCOPED_OPS) | {_OP}
+
+sys.argv = ["coordinator_core.invoke", _OP, "{}", "--allow-unstamped-dispatch"] + EXTRA_ARGV
+from coordinator_core.invoke.__main__ import main
+main()
+"""
+
+
+def _worktree_scope_probe(*extra_argv: str) -> subprocess.CompletedProcess:
+    """The worktree-scope probe, optionally with extra argv (e.g. ``--repo``)."""
+    argv = "EXTRA_ARGV = " + repr(list(extra_argv)) + "\n"
+    return _run_probe_script(argv + _WORKTREE_SCOPED_PROBE_SCRIPT)
+
+
+#: Sleeps on a real executor thread, which is the precondition the C3 regression is
+#: about: `asyncio.to_thread` work still live when the internal `wait_for` gives up.
+#: A handler that merely `await asyncio.sleep`s would be cancelled cleanly and would
+#: never exercise the omitted `shutdown_default_executor()` this test guards.
+_SLOW_OP_SCRIPT = """
+import asyncio
+import sys
+import time
+from coordinator_core import ipc
+
+async def _slow(params, repo_root=None):
+    await asyncio.to_thread(time.sleep, 2)
+    return {"ok": True}
+
+ipc.register_op("test.dispatch_timeout_probe", _slow)
+
+sys.argv = ["coordinator_core.invoke", "test.dispatch_timeout_probe", "{}", "--allow-unstamped-dispatch"]
+from coordinator_core.invoke.__main__ import main
+main()
+"""
+
+
+def _run_probe_script(
+    script: str, env: dict | None = None, timeout: int = 30
+) -> subprocess.CompletedProcess:
+    """Run a probe script that registers its own op and then calls `main()`.
+
+    A test-OWNED vehicle. Cases here that borrowed a production op as a vehicle
+    have gone red twice when that op was deleted or killed, each time asserting
+    something about the borrowed op rather than about `invoke`.
+    """
     cmd = [sys.executable, "-c", script]
     return subprocess.run(
         cmd,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=timeout,
         cwd=_PROJECT_ROOT,
-        env=_make_env(),
+        env=env if env is not None else _make_env(),
         creationflags=_NO_CONSOLE,
     )
 
@@ -988,7 +1204,7 @@ class _BrokenStderr:
 
 sys.stderr = _BrokenStderr()
 
-sys.argv = ["coordinator_core.invoke", "test.stdout_hardening_broken_stderr_probe", "{}"]
+sys.argv = ["coordinator_core.invoke", "test.stdout_hardening_broken_stderr_probe", "{}", "--allow-unstamped-dispatch"]
 from coordinator_core.invoke.__main__ import main
 main()
 """

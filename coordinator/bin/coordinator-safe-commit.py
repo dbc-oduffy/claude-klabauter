@@ -402,7 +402,15 @@ def parse_args(argv: Sequence[str]) -> Args:
             # with the `-- <paths>` form, where the subject is the token
             # immediately before the separator rather than the last token
             # overall -- a variadic sweep consumes it as a path.
-            if i + 1 >= n:
+            #
+            # The value is rejected when it is `--` or flag-shaped rather than
+            # consumed blindly. An omitted path (`--declared-revert -- a.py
+            # "subject"`) would otherwise take `--` as the value and advance
+            # past the real separator, so the pathspec branch never fires and
+            # the paths are misread as positionals -- a wrong-scope commit or a
+            # baffling positional-count error, in place of the one-line usage
+            # message the operator needed.
+            if i + 1 >= n or argv[i + 1] == "--" or argv[i + 1].startswith("-"):
                 raise UsageError("--declared-revert requires a path argument.")
             args.declared_reverts.append(argv[i + 1])
             i += 2
@@ -916,6 +924,16 @@ def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None
     hunk already sitting in a file this session then edits is invisible to
     it. Live-peer CLAIMS are the signal that was available and unread.
 
+    READ claims never reach this refusal. `contested_by_live_peers` drops
+    them (see its own docstring for the incident: this gate named two
+    holders for one file when only one had written it, and sent the
+    operator to coordinate with a session that had never touched the
+    bytes). What remains is a WRITE claim or a claim predating the
+    read/write axis, which block identically and take the same remedy --
+    which is why the per-holder kind is not threaded down here: it would
+    cost a second sink read or a return-shape change to print a word that
+    changes nothing the reader should do.
+
     REFUSES rather than warning: a warning on stderr competes with
     `ceremony.commit_v2`'s own warnings beside a `committed sha=` line for a
     commit that has already landed, and what has landed on a shared branch
@@ -977,17 +995,20 @@ def _refuse_contested_pathspec(paths: Sequence[str], worktree_root: str) -> None
             for o in contested[path]
         )
         print(
-            f"BLOCKED: {path} is also held by live session(s) {owners} -- "
-            "committing it lands their uncommitted work under your message.",
+            f"BLOCKED: {path} is held by live session(s) {owners} under a WRITE "
+            "or pre-2026-09-20 claim -- committing it lands their uncommitted "
+            "work under your message.",
             file=sys.stderr,
         )
     print(
         "Drop the named path(s) from the pathspec, or coordinate with the "
-        "holder(s) first BY NAME -- a session id re-points, a name does not. "
-        "A holder releases it (its own claim only) via Python: "
-        "`coordinator_core.session.scope.release_committed_claims(sid, "
-        "paths, cwd)` -- no CLI wraps this yet. "
-        "`session-claim-cli who-claims-path <path>` lists every holder. "
+        "holder(s) BY NAME -- a session id re-points, a name does not. "
+        "READ claims are not listed here and never block. "
+        "A holder releases its own claim with `session-claim-cli "
+        "release-artifact artifact <path>` -- landed or still in flight, "
+        "its own claims only, never a peer's. "
+        "`session-claim-cli who-claims-path <path>` lists every holder and "
+        "each one's kind. "
         "A holder shown without a name is live but not addressable from "
         "here: drop that path and commit the rest -- it frees when that "
         "session commits or releases.",
@@ -1304,35 +1325,28 @@ def _reconcile_after_indeterminate(
 #: client-side timeout, and how often. The engine may still be writing when the
 #: client gives up, so a single probe reads a race as a determinate negative.
 #:
-#: NOT DERIVED FROM `CEREMONY_BUDGET_SECS`, and must not be re-derived from it.
-#: This was 3.0s, documented as "sized above the 2.0s ceremony ceiling" -- which
-#: treats that constant as a bound on how long the ENGINE takes. It bounds how
-#: long the CLIENT waits. `ipc.py` states the difference directly above
-#: `DISPATCH_TIMEOUT_SECS`: these ops' commits "can and do land AFTER the client
-#: already treated the call" as failed. The engine does not stop when the client
-#: stops waiting -- that is the premise of the whole indeterminate hazard, so a
-#: window sized off the client's patience is sized off the wrong quantity.
+#: NOT derived from `CEREMONY_BUDGET_SECS`, and must not be re-derived from it.
+#: That constant is a PERFORMANCE bar; this is a TRANSPORT window. How long the
+#: client waits for an answer at all is `ipc.mutation_read_deadline_for`, and
+#: that is where a too-short wait gets fixed -- not here.
 #:
-#: Measured 2026-09-20 on a loaded box, two samples: the client returns at
-#: 5.53s (2.0s warm deadline + 3.0s settle + overhead) and the commit becomes
-#: observable at 5.76s and 5.89s -- missing by 0.23s and 0.36s. Five
-#: indeterminate commits that session, five landings, zero observed. The
-#: reconcile reported UNKNOWN every time in exactly the case it exists to
-#: resolve. Sized here at ~2.5x the measured shortfall (~3.9s of engine work
-#: past the client's deadline). See
-#: state/audits/2026-09-20-the-reconcile-window-is-sized-to-a-budget-not-to-
-#: the-box.md.
+#: 3.0 AND NOT WIDER, on purpose. This was briefly 10.0, sized against samples
+#: of a client that gave up after `2.0s + settle`. That 2.0s term no longer
+#: exists: the ceremony clamp on the mutation read deadline WAS the defect, and
+#: with it gone a merely-slow commit is answered on the wire instead of arriving
+#: here. The widening was a workaround for a cause since fixed, and its
+#: measurements do not reproduce against the current transport.
 #:
-#: The cost of widening is paid only on a path where the commit has ALREADY
-#: failed or is already late, never on a healthy commit -- the loop exits the
-#: moment the Attempt-Id appears. The cost of leaving it short is paid on every
-#: commit, as an operator hand-verifying with `git log`.
+#: The mechanism is NOT dead -- do not delete it. A genuine non-answer past the
+#: read deadline, a broken pipe after delivery, and a refusal that never reaches
+#: the client all still land here. The window is small because what reaches it
+#: is no longer "a commit that is merely slow".
 #:
-#: Negative spec: widening this does NOT weaken the absence rule below. Absence
-#: after the window is still UNKNOWN and still never reads as "safe to
-#: re-run" -- a longer look makes the reconcile reach a determinate answer more
-#: often, and cannot turn an absence into a permission.
-_RECONCILE_SETTLE_SECS = 10.0
+#: Negative spec: the width does NOT weaken the absence rule below. Absence
+#: after the window is still UNKNOWN and still never reads as "safe to re-run";
+#: a longer look could only make the reconcile determinate more often, never
+#: turn an absence into a permission.
+_RECONCILE_SETTLE_SECS = 3.0
 _RECONCILE_POLL_SECS = 0.25
 
 

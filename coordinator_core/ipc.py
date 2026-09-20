@@ -1166,6 +1166,19 @@ def _resolve_dispatch_timeout_secs() -> float:
     return min(requested, DISPATCH_TIMEOUT_SECS)
 
 
+def _dispatch_timeout_unclamped(method: str, msg: Any = None) -> float:
+    """Per-op timeout resolution WITHOUT the ceremony clamp -- the shared body
+    of `_timeout_for` and `mutation_read_deadline_for`, which differ only in
+    whether that clamp is then applied. Kept in one place so a change to the
+    resolution order cannot land in one and miss the other."""
+    lane_budget = publish_lane.budget_for(method, msg)
+    if lane_budget is not None:
+        return lane_budget
+    if method in _OP_TIMEOUT_OVERRIDES:
+        return _OP_TIMEOUT_OVERRIDES[method]
+    return _resolve_dispatch_timeout_secs()
+
+
 def _timeout_for(method: str, msg: Any = None) -> float:
     """Per-op dispatch timeout, with the ceremony budget applied as a hard ceiling.
 
@@ -1210,13 +1223,7 @@ def _timeout_for(method: str, msg: Any = None) -> float:
     revoked 2026-08-21 by the budget). It is kept as a live table so a genuinely
     justified NON-ceremony widening has somewhere to land.
     """
-    lane_budget = publish_lane.budget_for(method, msg)
-    if lane_budget is not None:
-        return lane_budget
-    if method in _OP_TIMEOUT_OVERRIDES:
-        resolved = _OP_TIMEOUT_OVERRIDES[method]
-    else:
-        resolved = _resolve_dispatch_timeout_secs()
+    resolved = _dispatch_timeout_unclamped(method, msg)
     if is_ceremony_method(method):
         return min(resolved, CEREMONY_BUDGET_SECS)
     return resolved
@@ -1224,48 +1231,30 @@ def _timeout_for(method: str, msg: Any = None) -> float:
 
 def mutation_read_deadline_for(method: str, msg: Any = None) -> float:
     """How long a client may wait to READ the answer to a mutation it has
-    already put on the wire. `_timeout_for` WITHOUT the ceremony clamp.
+    already put on the wire. `_timeout_for` without the ceremony clamp.
 
-    THE TWO NUMBERS ARE NOT THE SAME KIND OF THING, which is the whole reason
-    this function exists separately. `CEREMONY_BUDGET_SECS` is a PERFORMANCE
-    bar: an op that exceeds it is a defect, and DR-344 says so in the
-    strongest terms. A read deadline is a TRANSPORT question: how long before
-    this client concludes it will never hear an answer. Using the performance
-    bar as the transport deadline means that the moment an op misses its
-    performance target, the client destroys its own ability to learn whether
-    the mutation happened -- converting a slowness report into an integrity
-    unknown, exactly when the op is slow.
+    THE TWO ARE NOT THE SAME KIND OF NUMBER, which is why this has its own
+    name. `CEREMONY_BUDGET_SECS` is a PERFORMANCE bar: an op over it is a
+    defect (DR-344). This is a TRANSPORT deadline: how long before a client
+    concludes it will never hear back. Using the performance bar as the
+    transport deadline means that the moment an op misses its target, the
+    client destroys its own ability to learn whether the mutation happened --
+    a slowness report becomes an integrity unknown, exactly when the op is
+    slow. `warm/client.py::_mutation_deadline_for` is the caller, and its own
+    comment records what that cost in practice.
 
-    `warm/client.py` applied the clamped value here, and the effect was total:
-    its mutation extension waits `mutation_deadline - READ_DEADLINE_SECS`, and
-    both terms were 2.0 for every `ceremony.*` op, so the extension waited
-    `max(0.0, 0.0)` -- ZERO additional seconds. The mechanism whose entire
-    purpose is to not abandon a delivered mutation was inert for precisely the
-    ops that commit, while a non-ceremony mutation got the intended 28s.
-    Measured 2026-09-20: `ceremony.commit_v2` answers in 354ms of process time
-    with one spawn, but takes 5.8-12.5s of WALL clock on a box at its stated
-    50-70 session load norm -- so every commit reported
-    `WARM_DISPATCH_INDETERMINATE` and then landed seconds later.
+    NOT A BUDGET WIDENING: `CEREMONY_BUDGET_SECS` and `_timeout_for` are
+    untouched, and every ceremony op is still held to the bar and still
+    reported when it misses. Only the reading of the answer is longer, and a
+    longer read is never a resend, so it cannot double-execute.
 
-    NOT A BUDGET WIDENING, and it must not be read as one. Nothing here
-    changes what any op is allowed to cost, what the dispatch path enforces,
-    or what `_timeout_for` returns; `CEREMONY_BUDGET_SECS` is untouched and
-    every ceremony op is still held to it and still reported when it misses.
-    What changes is that missing it is reported as SLOW rather than as
-    UNKNOWN-WHETHER-IT-COMMITTED.
-
-    Negative spec: not a general-purpose timeout. Callers that ask "how long
-    may this op take" still call `_timeout_for` and still get the clamp. This
-    is only for a client that has already delivered a mutating request and is
-    deciding how long to keep reading the same response -- never a resend, so
-    a longer wait cannot double-execute anything.
+    Negative spec: not a general-purpose timeout. "How long may this op take"
+    is `_timeout_for`, clamp included. This is only for a client that has
+    already delivered a mutating request and is deciding how long to keep
+    reading the same response.
     """
-    lane_budget = publish_lane.budget_for(method, msg)
-    if lane_budget is not None:
-        return lane_budget
-    if method in _OP_TIMEOUT_OVERRIDES:
-        return _OP_TIMEOUT_OVERRIDES[method]
-    return _resolve_dispatch_timeout_secs()
+    return _dispatch_timeout_unclamped(method, msg)
+
 
 
 # ---------------------------------------------------------------------------

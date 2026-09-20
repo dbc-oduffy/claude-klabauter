@@ -262,14 +262,24 @@ READ_DEADLINE_SECS = 2.0
 #: this deadline exists to guarantee, silently absent everywhere it was not the
 #: incident's own op (WARN, coordinator-code-reviewer sidecar dcf219af, SLICE
 #: 1). `_mutation_deadline_for` below derives the real wait per-op from
-#: `ipc._timeout_for` -- the same source of truth the caller's own ceiling is
-#: derived from -- so the wait stays inside that ceiling for every op, not just
-#: the one this incident concerned. Deriving from that shared source of truth is
-#: also why this client needed no change of its own when the ceremony budget
-#: landed: `_mutation_deadline_for` inherits the 2s clamp automatically. This
-#: constant is now only the fail-safe floor: 30.0 mirrors `ipc`'s own
-#: `DISPATCH_TIMEOUT_SECS` default, so it can never itself outlive an
-#: un-derivable op's caller ceiling.
+#: `ipc.mutation_read_deadline_for`, and THE CEILING IS HELD FROM THE OTHER
+#: SIDE: the same dump the caller sizes that ceiling from
+#: (`invoke/__main__.py::_dump_op_timeouts`) publishes this transport deadline
+#: as `__ceremony_mutation_read_deadline__`, and `cc_invoke::
+#: _op_timeout_ceiling` takes the max of it and the op's budget.
+#:
+#: BOTH HALVES ARE LOAD-BEARING, and each alone reproduces the incident. This
+#: client once derived from `ipc._timeout_for` instead, which inherits the 2s
+#: `ceremony.*` clamp -- the same value as `READ_DEADLINE_SECS` -- so the
+#: extension computed `max(0.0, 2.0 - 2.0)` and waited ZERO seconds on exactly
+#: the ops that commit (fixed 2026-09-20). Dropping that clamp without also
+#: publishing the transport row put the 30s wait back outside a 2+2=4s caller
+#: ceiling, which is dcf219af's finding again by a different route. A change to
+#: either side that is not matched on the other silently restores it.
+#:
+#: This constant is now only the fail-safe floor: 30.0 mirrors `ipc`'s own
+#: `DISPATCH_TIMEOUT_SECS` default, which is what an un-derivable op's ceiling
+#: resolves from too.
 MUTATION_READ_DEADLINE_SECS = 30.0
 
 #: Frozen at import time, never reassigned -- the yardstick

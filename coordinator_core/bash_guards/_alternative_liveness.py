@@ -488,6 +488,11 @@ def _trigger_stale_write() -> Optional[Dict[str, Any]]:
             "altlive-stale-probe",
             repo,
             content_hashes={rel: _tr.compute_content_hash(target) or ""},
+            # The fixture stands in for the READ channel (`_record_bash_read_
+            # claims`), which is what records the baseline `check_stale_write`
+            # compares against. Stamped so the probe keeps matching what
+            # production writes rather than drifting to an unknown-kind line.
+            kind=_tr.KIND_READ,
         )
         with open(target, "w", encoding="utf-8", newline="\n") as fh:
             fh.write("the different content now on disk\n")

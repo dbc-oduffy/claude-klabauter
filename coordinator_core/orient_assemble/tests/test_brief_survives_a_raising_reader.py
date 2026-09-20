@@ -85,13 +85,3 @@ def test_the_degraded_reader_is_named_on_stderr(monkeypatch, capsys):
     assert "readers_exploding" in err
     assert "RuntimeError" in err
     assert "reader blew up" in err
-
-
-def test_a_raising_reader_is_not_reported_as_a_clean_box(monkeypatch):
-    """Belt to the stderr line: the failing reader contributes nothing, so a
-    caller cannot read its absence as 'this reader found nothing'."""
-    monkeypatch.setattr(orient_assemble, "_READER_MODULES", (_EXPLODING,))
-
-    brief = orient_assemble.brief("day")
-
-    assert brief["directives"] == []

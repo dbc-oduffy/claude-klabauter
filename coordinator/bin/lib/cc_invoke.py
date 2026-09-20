@@ -184,24 +184,52 @@ class WarmDispatchIndeterminate(RuntimeError):
         self.op = op
 
 
-#: Repo-relative home for the route-unreachable ledger. Written into the
-#: REGISTERED claude-klabauter checkout, never the checkout `cc_invoke.py` happens to be
-#: running from: the point of the ledger is a per-box aggregate across every
-#: session and every CLI, and a session running out of the published mirror
-#: would otherwise append somewhere nothing commits. Same resolution the
-#: `raw-cmdline-transport-ledger.jsonl` precedent uses.
-_ROUTE_UNREACHABLE_LEDGER = ("state", "sanctioned-route-unreachable.jsonl")
+#: The ledger lives under the user-local runtime base, NOT inside any repo.
+#:
+#: It was repo-relative for its first hours and that was wrong in a way worth
+#: recording, because the failure renders as silence. The path resolved through
+#: the registry key `repos.claude_klabauter`, on the reasoning that every session
+#: should append to one registered checkout. The publish transform REWRITES
+#: that key when mirroring source to twin -- the published copy in
+#: `claude-klabauter` asks for `repos.claude_klabauter` and gets it -- so the
+#: mirror wrote its own `state/` file. Since this box resolves its hooks to the
+#: published engine, that was most of the traffic: 8.4KB in the mirror against
+#: five rows in the source, and a reader looking only at the source rendered
+#: nothing. Silence here is indistinguishable from health, which is the exact
+#: failure `test_the_writer_and_reader_agree_on_the_path` exists to catch --
+#: and it could not, because both halves agreed on a relative tuple that two
+#: clones resolved differently.
+#:
+#: A per-box location has no source/mirror to disagree about. Same three-
+#: candidate ladder as `warm.breadcrumb._runtime_base` (env override, then
+#: `%LOCALAPPDATA%`, then `~/.cache`) -- recomputed rather than imported
+#: because this module deliberately carries no `coordinator_core` dependency,
+#: and pinned against the reader's copy by full resolved path, not by relpath.
+_ROUTE_UNREACHABLE_LEDGER = ("coordinator", "sanctioned-route-unreachable.jsonl")
+
+#: Test-isolation seam, shared with `warm.breadcrumb.RUNTIME_BASE_ENV` by name
+#: so one `monkeypatch.setenv` moves warm runtime state and this ledger
+#: together. Read at call time, never cached. Not an operator knob.
+_ROUTE_UNREACHABLE_BASE_ENV = "COORDINATOR_WARM_RUNTIME_BASE"
+
+
+def _route_unreachable_runtime_base() -> str:
+    """User-local, non-synced base — clone-independent by construction."""
+    override = os.environ.get(_ROUTE_UNREACHABLE_BASE_ENV, "").strip()
+    if override:
+        return override
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return local
+    return os.path.join(os.path.expanduser("~"), ".cache")
 
 
 def _route_unreachable_ledger_path() -> str:
     """Absolute path to the ledger. Its own function so a test can redirect the
     write without monkeypatching the recorder itself -- a test that exercises
-    the raise path must not append to the live `state/` tree, and the raise path
-    is already covered by `test_cc_invoke_indeterminate.py`."""
-    root = _machine_local_get_in_process("repos.claude_klabauter")
-    if not root:
-        root = str(Path(__file__).resolve().parents[3])
-    return os.path.join(root, *_ROUTE_UNREACHABLE_LEDGER)
+    the raise path must not append to a live ledger, and the raise path is
+    already covered by `test_cc_invoke_indeterminate.py`."""
+    return os.path.join(_route_unreachable_runtime_base(), *_ROUTE_UNREACHABLE_LEDGER)
 
 
 def _record_route_unreachable(op: str, arrival: str) -> None:
@@ -2011,21 +2039,55 @@ def _op_timeout_ceiling(op: str, claude_klabauter_root: str, env: dict[str, str]
     `max`, which is exactly how the retired FLOOR grew. An op that needs a wider wait
     needs a wider ENGINE budget, declared server-side where a ratchet can see it.
 
-    Ceremony ops need no special case HERE and deliberately do not get one: their 2s
-    engine budget arrives through the ordinary `--dump-op-timeouts` read (the engine
-    projects every `ceremony.*` op explicitly for exactly this reason), so the formula
-    yields 2 + 2 = 4 without knowing anything about ceremonies. The margin still applies
-    because it bounds the CLIENT's wait -- cold python startup is the client's problem,
-    not the engine's budget -- and collapsing the client wait onto the engine budget
-    would kill legitimate cold dispatches. What ceremony ops do get is a different REMEDY
-    text; see `_timeout_exceeded_message`.
+    THE ENGINE PUBLISHES TWO NUMBERS FOR A CEREMONY OP, and this ceiling must clear the
+    larger. `engine_budget(op)` is a PERFORMANCE bar (2s, a ratchet); the engine's warm
+    client separately keeps reading the answer to a mutation it has already put on the
+    wire for a TRANSPORT deadline that is deliberately not ceremony-clamped
+    (`ipc.mutation_read_deadline_for`, 30s), because abandoning a delivered commit
+    converts a slowness report into an unknown-whether-it-committed. Sizing this ceiling
+    off the performance bar alone killed the child at 2 + 2 = 4s, so the
+    `WARM_DISPATCH_INDETERMINATE` envelope -- the one signal that tells an operator a
+    commit may have landed -- could never be returned on the ops that commit. Taking the
+    max of the engine's two published numbers is what keeps the client's wait inside its
+    own parent's ceiling, which is the invariant this whole derivation exists for.
+
+    STILL NOT A WIDENING KNOB. Both terms are the ENGINE's, read live from
+    `--dump-op-timeouts`, and no environment read re-enters here (see the negative-spec
+    above). The op is still held to its 2s budget and still reported when it misses; what
+    changes is that the client survives long enough to say so. An older engine that does
+    not publish the transport row degrades to the budget alone, exactly as before.
+
+    Ceremony ops need no special case for the MARGIN and deliberately do not get one: it
+    bounds the CLIENT's wait -- cold python startup is the client's problem, not the
+    engine's budget -- and collapsing the client wait onto the engine budget would kill
+    legitimate cold dispatches. What ceremony ops do get is a different REMEDY text; see
+    `_timeout_exceeded_message`.
     """
     global _OP_TIMEOUTS_BREADCRUMB_SHOWN
 
     _resolve_op_timeouts(claude_klabauter_root, env, _DUMP_PROBE_TIMEOUT_SECS)
 
     if _OP_TIMEOUTS_STATE == "ok":
-        budget = _OP_TIMEOUTS_MAP.get(op, _OP_TIMEOUTS_MAP["__default__"])
+        is_ceremony = _is_ceremony_op(op)
+        if op in _OP_TIMEOUTS_MAP:
+            budget = _OP_TIMEOUTS_MAP[op]
+        elif is_ceremony:
+            # The dump's projection is driven by the engine's op-keying table, while
+            # its dispatcher prefix-matches; a `ceremony.*` op the table omits is
+            # still clamped server-side, so "__default__" would overstate it by 15x.
+            # This is the bound "__ceremony_budget__" is published FOR.
+            budget = _OP_TIMEOUTS_MAP.get(
+                "__ceremony_budget__", _OP_TIMEOUTS_MAP["__default__"]
+            )
+        else:
+            budget = _OP_TIMEOUTS_MAP["__default__"]
+
+        read_deadline = _OP_TIMEOUTS_MAP.get(f"__ceremony__{op}")
+        if read_deadline is None and is_ceremony:
+            read_deadline = _OP_TIMEOUTS_MAP.get("__ceremony_mutation_read_deadline__")
+        if read_deadline is not None:
+            budget = max(budget, read_deadline)
+
         budget_int = int(budget)  # integer-truncate a float budget (e.g. 30.0 -> 30)
         return budget_int + _CLIENT_START_MARGIN_SECS
 
@@ -2063,16 +2125,29 @@ def is_timeout_error(exc: BaseException) -> bool:
 def _is_ceremony_op(op: str) -> bool:
     """Client-side mirror of `coordinator_core.ipc.is_ceremony_method`.
 
-    Deliberately a prefix test re-spelled here rather than an import: this module is
-    the thin client that runs BEFORE and INSTEAD OF loading the engine — importing
-    `coordinator_core.ipc` (which pulls asyncio) to answer a string question would put
-    an engine import on the client's own cold path, which is the cost this whole file
-    exists to avoid. The duplication is safe because the prefix is the contract: the
-    engine budgets by name, so a client that matches by name cannot disagree with it
-    about membership, only about the number — and the number is read from the engine's
-    own `--dump-op-timeouts`, never guessed here.
+    Not an import, and it may not become one: this module is the thin client that runs
+    BEFORE and INSTEAD OF loading the engine, so importing `coordinator_core.ipc`
+    (which pulls asyncio) to answer a string question would put an engine import on the
+    client's own cold path — the cost this whole file exists to avoid.
+
+    THE PREFIX IS NOT THE CONTRACT, and this function used to say it was. The engine's
+    membership is a UNION of three signals — the `ceremony.` prefix,
+    `ipc._CEREMONY_PACKAGE_ALIASES`, and the owning module — so `commit.exec_bit_change`
+    and `review.snapshot_diff_and_head` are ceremony ops with no prefix to match. A bare
+    prefix test called them ordinary: they got the wrong remedy text, and their ceilings
+    were sized as if the client's own warm read deadline did not apply to them, which is
+    a 4s parent against a 30s child on an op that commits.
+
+    So membership is READ, not re-derived. `--dump-op-timeouts` publishes a
+    `__ceremony__<op>` row for every op the engine itself classes as ceremony, and this
+    function trusts that assertion. The prefix survives as the arm that needs no dump:
+    it is true for a `ceremony.*` op the dump does not list, and it is the only answer
+    available at all on the degraded branches (an older engine, a failed probe), where
+    the remedy text still has to choose.
     """
-    return op.startswith("ceremony.")
+    if op.startswith("ceremony."):
+        return True
+    return f"__ceremony__{op}" in _OP_TIMEOUTS_MAP
 
 
 def _timeout_exceeded_message(op: str, timeout: int) -> str:

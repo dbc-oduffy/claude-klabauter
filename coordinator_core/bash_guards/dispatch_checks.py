@@ -3635,7 +3635,7 @@ def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> N
     if not paths or not session_id or not root:
         return
     try:
-        from coordinator_core.session.touch_record import append_touch_claims
+        from coordinator_core.session.touch_record import KIND_WRITE, append_touch_claims
 
         rels = []
         for tgt_abs in paths:
@@ -3648,7 +3648,8 @@ def _rm_flush_touch(paths: List[str], session_id: str, root: Optional[str]) -> N
                 # site and was deleted rather than kept as belt-and-braces.
                 continue
             rels.append(os.path.relpath(tgt_abs, root).replace(os.sep, "/"))
-        append_touch_claims(rels, session_id, root)
+        # KIND_WRITE: a deletion is the most mutating thing on this record.
+        append_touch_claims(rels, session_id, root, kind=KIND_WRITE)
     except Exception:
         return
 

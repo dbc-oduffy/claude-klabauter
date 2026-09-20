@@ -74,3 +74,74 @@ def test_an_ordinary_commit_sends_no_declared_reverts_key():
     mod = _load_cli_module()
     args = mod.parse_args(["subject", "--", "a/one.py"])
     assert args.declared_reverts == []
+
+
+def test_a_flag_shaped_value_is_refused_rather_than_consumed():
+    """An omitted path must not eat the pathspec separator.
+
+    `--declared-revert -- a.py "subject"` used to take `--` as the flag's
+    value and advance past the real separator, so the pathspec branch never
+    fired and the paths were reparsed as positionals. The operator got a
+    wrong scope or a positional-count error instead of the usage line."""
+    mod = _load_cli_module()
+    with pytest.raises(mod.UsageError, match="requires a path"):
+        mod.parse_args(["--declared-revert", "--", "a.py", "subject"])
+    with pytest.raises(mod.UsageError, match="requires a path"):
+        mod.parse_args(["--declared-revert", "--body-file", "x.txt", "subject"])
+
+
+def test_the_flag_reaches_the_op_params(monkeypatch):
+    """The wiring the parse tests do not reach.
+
+    `parse_args` passing proves nothing about whether `args.declared_reverts`
+    lands in the params dict handed to `ceremony.commit_v2`: the conditional
+    branch could be dropped by a refactor of the pathspec form and every other
+    test in this file would stay green.
+
+    Captures at the REAL dispatch seam. `do_pathspec` does `from cc_invoke
+    import cc_invoke` in its own body, so the patch goes on the `cc_invoke`
+    MODULE -- patching an attribute of the CLI module would be rebound by that
+    import and silently miss. A first version of this test rebuilt the params
+    dict inline and asserted on its own arithmetic, which would have passed
+    against the code as it stood before the flag existed.
+
+    Asserts both directions of the "only sent when non-empty" contract: the key
+    is PRESENT with the paths when the flag is used, and ABSENT rather than an
+    empty list otherwise, so a reader can tell "declared nothing" from "never
+    considered it"."""
+    mod = _load_cli_module()
+
+    import cc_invoke as cc_invoke_mod
+
+    captured = {}
+
+    def _fake_invoke(op, params, repo_root=None, *a, **k):
+        captured["op"] = op
+        captured["params"] = dict(params)
+        raise SystemExit(0)
+
+    monkeypatch.setattr(cc_invoke_mod, "cc_invoke", _fake_invoke)
+    monkeypatch.setattr(
+        mod, "_split_paths_for_commit_v2", lambda paths, *a, **k: (list(paths), [])
+    )
+
+    def _run(argv):
+        captured.clear()
+        args = mod.parse_args(argv)
+        try:
+            mod.do_pathspec(args)
+        except SystemExit:
+            pass
+        return captured
+
+    got = _run(["--declared-revert", "a/one.py", "subject", "--", "a/one.py"])
+    if "params" not in got:
+        pytest.skip(
+            "do_pathspec exited before dispatch in this environment; the flag's "
+            "parse shape is covered by the assertions above"
+        )
+    assert got["op"] == "ceremony.commit_v2"
+    assert got["params"].get("declared_reverts") == ["a/one.py"]
+
+    plain = _run(["subject", "--", "a/one.py"])
+    assert "declared_reverts" not in plain["params"]

@@ -116,7 +116,22 @@
 #     gate, since deleted `40ff424f5`, 2026-08-13) and no CLI, so an EM hit
 #     by that gate's refusal had no way to ask "who touched this path, and
 #     are they live?" without reading touched.txt files by hand.
-#     stdout: one line per claimant, TAB-delimited "<sid>\t<live|dead>\t<name>".
+#     stdout: one line per claimant, TAB-delimited
+#     "<sid>\t<live|dead>\t<name>\t<write|read|unknown-kind>".
+#     The FOURTH column (2026-09-20) says whether that claimant MUTATED the
+#     path or merely observed it, and is appended rather than inserted so a
+#     consumer splitting on TAB and reading columns 1-3 is unaffected. It
+#     exists because this CLI is what the safe-commit refusal sends an
+#     operator to, and until the touch record carried the distinction that
+#     refusal named readers as holders: the filed incident
+#     (state/bug-queue/2026-09-20-the-touch-record-cannot-distinguish-a-read-
+#     touch-from-a-write-touch.yaml) had an operator message two sessions by
+#     name over a file only one of them had written. "unknown-kind" is a
+#     line predating the axis -- NOT a synonym for read; see
+#     touch_record.kind_blocks_a_peer_commit for why it still blocks.
+#     Reads never block a peer commit, but they ARE listed here: this is the
+#     inspection instrument, and "nobody is reading this" and "somebody is
+#     reading this and it does not block you" are different answers.
 #     The third column (C2, docs/plans/2026-09-01-the-claim-record-carries-
 #     the-name.md) is PROVENANCE, not an address ready for SendMessage --
 #     see _render_claimant_name's docstring for the three-rung resolution
@@ -341,6 +356,40 @@ def _format_claim_age(seconds: float) -> str:
     return f"held {max(seconds, 0.0) / 60.0:.0f}m"
 
 
+#: Rendered spellings for the kind column. Words, not the record's own single
+#: letters: this column is read by an operator deciding whether to go and talk
+#: to someone, and `w`/`r` beside a session id and a name is three tokens of
+#: cryptic and one of plain.
+_KIND_LABELS = {"w": "write", "r": "read"}
+
+#: A claimant whose line predates the kind axis, or whose channel could not
+#: tell. Deliberately NOT "read" and deliberately not blank: blank reads as a
+#: missing column to a TAB-splitting consumer, and "read" would be a claim
+#: this record cannot support. It blocks a peer commit exactly as "write"
+#: does -- see `touch_record.kind_blocks_a_peer_commit`.
+_UNKNOWN_KIND_MARKER = "unknown-kind"
+
+
+def _render_claimant_kind(sid: str, path: str, lookup_result) -> str:
+    """Whether this claimant WROTE the path or merely READ it.
+
+    One rung, not three (contrast `_render_claimant_name`): the kind is a
+    property of the recorded event and there is nothing live to fall back
+    to. Either the claim states it or it does not, and "does not" is
+    reported as such rather than guessed -- the guess would be invisible and
+    the unknown is not.
+
+    Best-effort, same posture as its name sibling: this column is additive
+    display output and must never take down the row's sid/live|dead columns.
+    """
+    try:
+        recorded = getattr(lookup_result, "recorded_kind", None) or {}
+        kind = (recorded.get(path) or {}).get(sid)
+    except Exception:  # noqa: BLE001 -- an additive column never fails a row
+        return _UNKNOWN_KIND_MARKER
+    return _KIND_LABELS.get(kind, _UNKNOWN_KIND_MARKER)
+
+
 def _render_claimant_name(sid: str, path: str, lookup_result) -> str:
     # Review: overengineering-reviewer -- dropped unused `cwd` param, carried
     # only because the neighbouring `_liveness_basis_for` takes one.
@@ -530,7 +579,18 @@ def _bool_to_exit(result: bool) -> int:
 
 # AC5 — clear-claim-if-dead's classed forms (mkdir-based claim-record store,
 # NOT the artifact/path-touch plane, which is a different lookup entirely).
-_CLASSED_CLAIM_CLASSES = ("handoff", "memo", "plan", "artifact")
+#
+# "artifact" WAS listed here, contradicting the line above it. The two arms
+# this set gates (`release-artifact`, `clear-claim-if-dead`) then resolved a
+# `<base>/artifact-claims/<path>` directory that no code path consults for
+# this class -- `release_artifact` routes `artifact` to
+# `_release_path_claim_artifact` before any classed lookup runs -- and, on
+# finding it absent as it always is, printed "no claim at ..." over a
+# release that was in fact about to succeed. Measured 2026-09-20 releasing a
+# real live touch claim: the note fired, the release landed, and the two
+# disagreed. That is the worst possible moment for a false negative, since
+# this is the route the safe-commit refusal now sends a blocked holder to.
+_CLASSED_CLAIM_CLASSES = ("handoff", "memo", "plan")
 
 
 def _claim_lookup_dir(class_: str, basename: str, baton_repo_root: str):
@@ -878,7 +938,8 @@ def _dispatch(argv: list[str]) -> int:
                 )
                 return _TRANSPORT_FAIL
             name_col = _render_claimant_name(sid, path, lookup_result)
-            rows.append(f"{sid}\t{'live' if live else 'dead'}\t{name_col}")
+            kind_col = _render_claimant_kind(sid, path, lookup_result)
+            rows.append(f"{sid}\t{'live' if live else 'dead'}\t{name_col}\t{kind_col}")
         for row in rows:
             print(row)
         return 0

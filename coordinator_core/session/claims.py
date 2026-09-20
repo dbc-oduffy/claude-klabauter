@@ -1989,9 +1989,24 @@ def _release_path_claim_artifact(
     plane), mirroring ``release_artifact``'s existing identity-checked
     contract for the three classed forms: releases only what THIS session
     (or its own dispatched-agent fan-out) holds, never a peer's claim,
-    liveness never enters into it. Unlike ``release_committed_claims`` this
-    is NOT gated on the path being git-clean -- this is an explicit release
-    of one named path, not a post-commit sweep.
+    liveness never enters into it. Neither this nor
+    ``scope.release_own_path_claims`` is gated on the path being git-clean
+    (that term was deleted by PM ruling 2026-08-26); the difference is
+    scope, not condition -- one named path here, a caller-supplied set
+    there.
+
+    THIS IS THE OPERATOR ROUTE OUT OF A STALE HOLD, in flight or landed,
+    and it is reachable as ``session-claim-cli release-artifact artifact
+    <repo-relative-path>``. It has been reachable the whole time and was
+    twice read as absent: once from the verb list (see ``_SUBCOMMANDS``'s
+    own note in that CLI) and once from ``coordinator-safe-commit``'s
+    refusal text, which used to send a holder at
+    ``release_committed_claims`` and then warn that the name meant what it
+    said. A session sitting on a stale READ claim declined to call a
+    committed-path API against a peer's uncommitted file, correctly, and
+    the peer stayed blocked
+    (``state/bug-queue/2026-09-20-the-touch-record-cannot-distinguish-a-
+    read-touch-from-a-write-touch.yaml``).
 
     Always returns True (mirrors ``release_artifact``'s own "no-op paths are
     successes, not errors" contract): a bad baton root, unresolvable

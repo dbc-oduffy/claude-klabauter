@@ -1472,7 +1472,7 @@ def build_cache(
     audits_lines = emit_audits_index(state_root)
     hook_cancellation_line = emit_hook_cancellation_rate(repo_root)
     warm_engine_line = emit_warm_engine_health()
-    route_unreachable_line = emit_route_unreachable(repo_root)
+    route_unreachable_line = emit_route_unreachable()
     budget_breach_line = emit_budget_breaches(repo_root)
     expired_grant_lines = emit_expired_grants(repo_root)
     abandoned_claim_lines = emit_abandoned_claims(repo_root)

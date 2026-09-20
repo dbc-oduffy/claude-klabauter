@@ -231,6 +231,8 @@ def main(argv: "list[str] | None" = None) -> int:
 
         require_dispatch_engine_on_path()
         from coordinator_core.ipc import HookDispatchError, dispatch_from_hook
+        from coordinator_core.op_scopes import WORKTREE_SCOPED_OPS
+        from coordinator_core.git.repo_root import show_toplevel
         from coordinator_core.warm.hook_http import (
             is_blocking_event,
             payload_from_event,
@@ -244,8 +246,37 @@ def main(argv: "list[str] | None" = None) -> int:
     event_name = event.get("hook_event_name")
     params = {"payload": payload_from_event(event)}
 
+    # A worktree-scoped op REQUIRES `_origin_worktree` and refuses (-32602)
+    # without it. `coordinator_core/invoke/__main__.py` injects it for the cold
+    # path; this door did not, so every `scope='common_dir'`/`'show_top'` op
+    # registered through here refused instead of running -- and refused at
+    # exit 0 behind `unreachable_response`, which is a FAIL-OPEN with output
+    # byte-identical for a command that must be denied and one that must be
+    # allowed. Measured by `doe-claude-79` against
+    # `hooks.preuse_bash_dispatch`: the cold path returned
+    # `permissionDecision: "deny"` with real guard text while this door
+    # returned an inert envelope for the same payload
+    # (DoE-claude `state/audits/2026-09-20-preuse-bash-door-flip-control-leg.md`).
+    #
+    # `show_toplevel` WALKS ONLY and never spawns, on any path -- see its own
+    # docstring, and note that a spawn here would be break-class on a
+    # PreToolUse hot path regardless of correctness. The event's own `cwd` is
+    # the caller's, never this process's: served through the door, those are
+    # different processes.
+    #
+    # Injected ONLY for ops in `WORKTREE_SCOPED_OPS`, per that set's
+    # parity-check contract clause (1) -- never stamp a central/none-scoped op.
+    # An unresolvable worktree passes None, which `dispatch_from_hook` omits
+    # rather than carrying as "": the op then refuses exactly as it does today,
+    # which is the honest outcome when there is no worktree to name.
+    origin_worktree = None
+    if op_name in WORKTREE_SCOPED_OPS:
+        event_cwd = event.get("cwd")
+        if isinstance(event_cwd, str) and event_cwd:
+            origin_worktree = show_toplevel(event_cwd)
+
     try:
-        result = dispatch_from_hook(op_name, params)
+        result = dispatch_from_hook(op_name, params, origin_worktree=origin_worktree)
     except HookDispatchError as exc:
         # Same obligation `hook_http.py` itself carries for its own transport:
         # a guard that could not run must never read as one that passed.

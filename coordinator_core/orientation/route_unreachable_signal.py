@@ -55,14 +55,24 @@ import datetime
 import json
 import os
 
-#: Repo-relative ledger path. Must stay byte-identical to
-#: `cc_invoke._ROUTE_UNREACHABLE_LEDGER` — writer and reader are in different
-#: planes (a `coordinator/bin/lib` CLI transport and an engine orientation
-#: module) with no shared constant to import without giving the transport a
-#: `coordinator_core` dependency it deliberately does not carry.
-#: `test_route_unreachable_signal.py` pins the two spellings against each other
-#: so the pair cannot drift silently into a reader that watches nothing.
-LEDGER_RELPATH = ("state", "sanctioned-route-unreachable.jsonl")
+#: Ledger path under the user-local runtime base. Must resolve byte-identically
+#: to `cc_invoke._route_unreachable_ledger_path()` — writer and reader are in
+#: different planes (a `coordinator/bin/lib` CLI transport and an engine
+#: orientation module) with no shared constant to import without giving the
+#: transport a `coordinator_core` dependency it deliberately does not carry.
+#:
+#: NOT repo-relative, and the first version's being so is the reason this
+#: comment is long. A relative tuple both halves agreed on still resolved to two
+#: different files, because the publish transform rewrites the registry key that
+#: anchored it (`repos.claude_klabauter` -> `repos.claude_klabauter` in the
+#: mirror), and this box runs its hooks from the mirror. Most events landed in
+#: the published twin while the reader watched the source and rendered nothing.
+#: A per-box base has no source/mirror to disagree about, and the pin test now
+#: compares FULL RESOLVED PATHS rather than the relpath that hid this.
+LEDGER_RELPATH = ("coordinator", "sanctioned-route-unreachable.jsonl")
+
+#: Test-isolation seam, shared by name with `warm.breadcrumb.RUNTIME_BASE_ENV`.
+RUNTIME_BASE_ENV = "COORDINATOR_WARM_RUNTIME_BASE"
 
 #: Only events inside this window render. A route that was unreachable last
 #: week is history, and history belongs in the ledger, not in a section every
@@ -93,8 +103,20 @@ _TAIL_SCAN_BYTES = 256 * 1024
 _MAX_NAMED = 4
 
 
-def _ledger_path(repo_root: str) -> str:
-    return os.path.join(repo_root, *LEDGER_RELPATH)
+def _runtime_base() -> str:
+    """Mirror of `cc_invoke._route_unreachable_runtime_base` — same three
+    candidates, in the same order. Pinned against it by resolved path."""
+    override = os.environ.get(RUNTIME_BASE_ENV, "").strip()
+    if override:
+        return override
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        return local
+    return os.path.join(os.path.expanduser("~"), ".cache")
+
+
+def ledger_path() -> str:
+    return os.path.join(_runtime_base(), *LEDGER_RELPATH)
 
 
 def _parse_ts(value: object) -> "datetime.datetime | None":
@@ -109,7 +131,7 @@ def _parse_ts(value: object) -> "datetime.datetime | None":
     return parsed
 
 
-def read_recent_events(repo_root: str, now: "datetime.datetime | None" = None) -> list[dict]:
+def read_recent_events(now: "datetime.datetime | None" = None) -> list[dict]:
     """Ledger rows inside `WINDOW_HOURS`, oldest first. Never raises.
 
     Only the last `_TAIL_SCAN_BYTES` are scanned — see that constant for why a
@@ -124,7 +146,7 @@ def read_recent_events(repo_root: str, now: "datetime.datetime | None" = None) -
     cutoff = now - datetime.timedelta(hours=WINDOW_HOURS)
     events: list[dict] = []
     try:
-        with open(_ledger_path(repo_root), "rb") as raw:
+        with open(ledger_path(), "rb") as raw:
             raw.seek(0, os.SEEK_END)
             size = raw.tell()
             start = max(0, size - _TAIL_SCAN_BYTES)
@@ -156,7 +178,7 @@ def read_recent_events(repo_root: str, now: "datetime.datetime | None" = None) -
     return events
 
 
-def emit_route_unreachable(repo_root: str, now: "datetime.datetime | None" = None) -> str:
+def emit_route_unreachable(now: "datetime.datetime | None" = None) -> str:
     """Render the ``## Sanctioned routes`` body line, or ``""`` to omit it.
 
     Omits when the ledger is absent, unreadable, or holds nothing inside the
@@ -165,7 +187,7 @@ def emit_route_unreachable(repo_root: str, now: "datetime.datetime | None" = Non
     here.
     """
     try:
-        events = read_recent_events(repo_root, now=now)
+        events = read_recent_events(now=now)
     except Exception:  # noqa: BLE001 -- fail-open, see module docstring
         return ""
     if not events:

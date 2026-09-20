@@ -34,6 +34,7 @@ from coordinator_core._hook_envelope import (
     context_only,
     deny,
     no_advisory,
+    payload_of,
     post_advisory,
     rewrite_input,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "context_only",
     "deny",
     "no_advisory",
+    "payload_of",
     "post_advisory",
     "rewrite_input",
 ]

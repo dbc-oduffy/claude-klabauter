@@ -1552,6 +1552,28 @@ def contested_by_live_peers(
     into a refusal would wedge the fleet on a bookkeeping outage.
     ``project_live_claims`` already drops a RELEASE and a dead session's
     TOUCH, so liveness needs no second gate here.
+
+    A READ-KIND HOLD IS NOT A CONTEST, and filtering it out is this
+    function's job rather than the record's. ``project_live_claims`` keeps
+    read touches deliberately -- they are load-bearing elsewhere (the hash
+    churn on a read is what makes interleaved-writer detection work, and it
+    is what identified the true author in the incident below), so the
+    record must not drop them. What was wrong was CONFLATING them here:
+    every touch was a bare `T`, so a session that opened a file to trace a
+    bug was indistinguishable from the session editing it.
+
+    Measured 2026-09-20 (`state/bug-queue/2026-09-20-the-touch-record-cannot-
+    distinguish-a-read-touch-from-a-write-touch.yaml`): `coordinator-safe-
+    commit` refused `coordinator/bin/lib/cc_invoke.py` naming TWO holders,
+    only one of which had written anything. The reader's 7 rows were all
+    observations -- provably, because the recorded `content_hash` changed
+    under it between its own reads, which a writer's own hash does not do.
+    The operator then messaged both holders by name and told the reader the
+    work was "yours to time"; it had never written a byte of that file.
+
+    Unknown-kind holds still contest (``touch_record.
+    kind_blocks_a_peer_commit``), so no claim that blocks today stops
+    blocking until a writer positively says it was a read.
     """
     wanted = {p for p in paths if p}
     if not wanted or not sid:
@@ -1590,7 +1612,9 @@ def contested_by_live_peers(
     except Exception:
         return {}
     if not any(
-        path in wanted and event.session_id != sid
+        path in wanted
+        and event.session_id != sid
+        and touch_record.kind_blocks_a_peer_commit(event.kind)
         for path, event in merged.claims.items()
     ):
         return {}
@@ -1602,7 +1626,11 @@ def contested_by_live_peers(
         except Exception:
             continue
         for path, event in projection.claims.items():
-            if path in wanted and event.session_id != sid:
+            if (
+                path in wanted
+                and event.session_id != sid
+                and touch_record.kind_blocks_a_peer_commit(event.kind)
+            ):
                 contested.setdefault(path, []).append(event.session_id)
     return {path: sorted(set(owners)) for path, owners in contested.items()}
 
@@ -2829,14 +2857,38 @@ the former ``_release_from_touched_file``, for BOTH release planes.
             continue  # fail-safe RETAIN for this one path only
 
 
-def release_committed_claims(
+def release_own_path_claims(
     sid: str, paths: List[str], cwd: Optional[str] = None
 ) -> None:
-    """Append an ``R`` (release) event for each of *paths* the caller
-    reports as committed, to THIS session's OWN ``touched.txt`` and to
+    """Append an ``R`` (release) event for each of *paths* this session
+    itself claims, to THIS session's OWN ``touched.txt`` and to
     every ``.agents/<aid>/touched.txt`` back-pointed at *this* ``sid`` —
-    the claim-release counterpart to :func:`touch`, called post-commit once
-    a pathspec has actually landed.
+    the claim-release counterpart to :func:`touch`.
+
+    NAMED FOR WHAT IT DOES, which is not what its post-commit alias
+    :func:`release_committed_claims` is named for. There is no
+    committedness term in this function and there has not been one since
+    the cleanliness check was deleted (PM ruling 2026-08-26, recorded in
+    full below): the release condition is exactly "the caller named the
+    path" AND "this session's own record still carries a ``T`` for it".
+    A holder whose claim is still IN FLIGHT can therefore release it
+    through this name without asserting anything false about the path
+    having landed.
+
+    This is the operator route out of a stale hold. It exists because the
+    only name on offer said ``committed``, and a session holding a stale
+    READ claim on a peer's uncommitted file correctly refused to call a
+    committed-path API against it — so the claim stayed, and the peer
+    stayed blocked, with the remedy sitting right there behind a name that
+    misdescribed it (`state/bug-queue/2026-09-20-the-touch-record-cannot-
+    distinguish-a-read-touch-from-a-write-touch.yaml`). Reachable from a
+    terminal as ``session-claim-cli release-my-path-claim <path>...``.
+
+    It is ALSO the whole of the pre-axis corpus migration. A kind-less
+    ``T`` blocks by design and is never backfilled, so the only way one
+    stops blocking is that its own author positively retires it; a dead
+    author's claims already stop blocking through liveness, and a live
+    author now has a name for it.
 
     Structurally incapable of releasing a PEER's claim: this function
     never accepts a peer session id and never iterates the sessions
@@ -3073,6 +3125,26 @@ def release_committed_claims(
             _normalize_agent_touched_entry,
             agent_id=agent_dir.name,
         )
+
+
+def release_committed_claims(
+    sid: str, paths: List[str], cwd: Optional[str] = None
+) -> None:
+    """Post-commit-named alias of :func:`release_own_path_claims`.
+
+    Kept as its own name rather than folded away: the eight production
+    commit routes call it by this name, and
+    ``ops/ceremony/tests/test_commit_route_release_tripwire.py`` requires
+    every eligible route to name it. At a commit site the name is accurate
+    and says something the general name does not — the paths just landed.
+
+    NEGATIVE SPEC: this alias adds no committedness check and never has.
+    A reader who infers one from the name and then declines to call it
+    against an in-flight path is reading the name, not the contract; that
+    inference is the defect the general name exists to close. Nothing new
+    should be built against this name.
+    """
+    release_own_path_claims(sid, paths, cwd=cwd)
 
 
 #: Prefix that forces a git pathspec to be matched byte-literally, so a

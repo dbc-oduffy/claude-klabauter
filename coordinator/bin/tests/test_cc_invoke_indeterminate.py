@@ -62,7 +62,7 @@ def _ledger_in_tmp(tmp_path, monkeypatch):
     rather than opt-in: a future test that exercises the raise path must not
     have to remember.
     """
-    ledger = tmp_path / "state" / "sanctioned-route-unreachable.jsonl"
+    ledger = tmp_path / "coordinator" / "sanctioned-route-unreachable.jsonl"
     monkeypatch.setattr(_mod, "_route_unreachable_ledger_path", lambda: str(ledger))
     return ledger
 
