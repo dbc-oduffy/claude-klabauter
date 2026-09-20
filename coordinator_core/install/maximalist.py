@@ -244,6 +244,33 @@ already-idempotent sub-script; nothing here clobbers live registry/config files.
 """
 
 
+def _scaffold_root_is_claude_home(scaffold_root: str, env: Dict[str, str]) -> bool:
+    """True iff `scaffold_root` (Step 7's canonical-structure scaffold
+    target) resolves to Claude Home.
+
+    `guard_repo_setup_claude_home_refusal` denies exactly this comparison
+    for a Bash-invoked scaffold -- but Step 7 calls
+    `scaffold_canonical_structure` natively, in-process, so that PreToolUse
+    guard never runs on this path (state/bug-backlog/2026-08-28-step-7-
+    scaffolds-claude-home-around-a-guard-that-would-refuse-it.yaml). This
+    reuses that guard's own primitives so both refusals stay one
+    definition rather than two that can drift.
+    """
+    from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
+        _canonical as _guard_canonical,
+        _resolve_claude_home as _guard_resolve_claude_home,
+    )
+
+    claude_home = _guard_resolve_claude_home(env)
+    if claude_home is None:
+        return False
+    try:
+        resolved_scaffold_root = _guard_canonical(scaffold_root)
+    except OSError:
+        return False
+    return resolved_scaffold_root == claude_home
+
+
 class _UsageError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
@@ -1932,23 +1959,32 @@ def _run_body(
 
     try:
         _scaffold_root = os.path.join(claude_home_dir, ".claude")
-        _scaffold_result = scaffold_canonical_structure(
-            _scaffold_root, Path(coord_root), dry_run=check_only,
-        )
-        print(
-            f"scaffold-canonical-structure: {_scaffold_result.created_dirs} dir(s), "
-            f"{_scaffold_result.created_readmes} README(s), {_scaffold_result.created_gitkeeps} "
-            f".gitkeep(s), {_scaffold_result.created_files} file(s) "
-            f"{'would be ' if check_only else ''}created; {_scaffold_result.skipped} skipped; "
-            f"{len(_scaffold_result.dropped_entries)} declared-eager entries dropped "
-            "(manifest/parser disagreement); "
-            f"{len(_scaffold_result.satisfied_elsewhere)} declared-eager entries satisfied "
-            "elsewhere (produced_by)"
-        )
-        # Review: code-reviewer -- Step 7 previously hand-rolled a summary
-        # that never read dropped_entries/satisfied_elsewhere, defeating the
-        # docstring's claim that this live path surfaces a genuine orphan
-        # (manifest/parser disagreement); now folded into the summary line.
+        if _scaffold_root_is_claude_home(_scaffold_root, dict(os.environ)):
+            orch.skip_note(
+                f"{_scaffold_desc} -- refusing: target root ({_scaffold_root}) "
+                "resolves to Claude Home (~/.claude), which carries no "
+                "coordinator working data (docs/wiki/doe-altitude-and-shared-"
+                "infra.md). Point repo-setup at the project clone you mean to "
+                "set up instead."
+            )
+        else:
+            _scaffold_result = scaffold_canonical_structure(
+                _scaffold_root, Path(coord_root), dry_run=check_only,
+            )
+            print(
+                f"scaffold-canonical-structure: {_scaffold_result.created_dirs} dir(s), "
+                f"{_scaffold_result.created_readmes} README(s), {_scaffold_result.created_gitkeeps} "
+                f".gitkeep(s), {_scaffold_result.created_files} file(s) "
+                f"{'would be ' if check_only else ''}created; {_scaffold_result.skipped} skipped; "
+                f"{len(_scaffold_result.dropped_entries)} declared-eager entries dropped "
+                "(manifest/parser disagreement); "
+                f"{len(_scaffold_result.satisfied_elsewhere)} declared-eager entries satisfied "
+                "elsewhere (produced_by)"
+            )
+            # Review: code-reviewer -- Step 7 previously hand-rolled a summary
+            # that never read dropped_entries/satisfied_elsewhere, defeating the
+            # docstring's claim that this live path surfaces a genuine orphan
+            # (manifest/parser disagreement); now folded into the summary line.
     except Exception as exc:
         # Review: code-reviewer -- widened from `except ScaffoldError` to catch
         # unwrapped OSError/PermissionError from scaffold_structure's raw fs

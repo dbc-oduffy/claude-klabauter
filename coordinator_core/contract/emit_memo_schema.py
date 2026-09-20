@@ -71,12 +71,32 @@ MEMO_SCHEMA_VERSION = "1.8.0"
 
 #: Generator-provenance declaration: emit_schemas() writes both of these
 #: fixed tracked artifacts to this module's own directory by default.
+#:
+#: `sources` must name every file whose change moves the emitted bytes, or the
+#: staleness sweep watches the wrong set. It previously named only this module
+#: and `memo_send.py`, omitting the two constant modules this one imports —
+#: so commit 9937e9a959 added `notice` to `memo_kinds.VALID_KINDS`, changed
+#: what the next emission would produce, and moved nothing the sweep was
+#: looking at. `memo_send.py` stays: it writes no byte here, but the `kind`
+#: and `summary` descriptions both cite its DEC-1 send-time gate by name, so
+#: a change to that gate makes this module's prose wrong.
+#:
+#: KNOWN GAP, not closed here: `stamp_key` is `x-schema-version`, whose value
+#: is a semver. `check_generator_output_staleness` needs a commit-ish or a
+#: timestamp to open a range, so both pairs resolve INDETERMINATE
+#: ("since_point is neither a resolvable commit-ish nor a parseable
+#: timestamp: '1.8.0'") and this declaration cannot actually fire today.
+#: Closing it means emitting a provenance stamp carrying the source commit,
+#: which changes bytes two repos vendor and re-diffs on every emit — a
+#: contract tradeoff, not a mechanical fix, so it is named rather than taken.
 GENERATES = [
     {
         "artifact": "coordinator_core/contract/cross-repo-memo.schema.json",
         "stamp_key": "x-schema-version",
         "sources": [
             "coordinator_core/contract/emit_memo_schema.py",
+            "coordinator_core/ops/fleet/memo_kinds.py",
+            "coordinator_core/ops/fleet/_memo_summary.py",
             "coordinator_core/ops/fleet/memo_send.py",
         ],
     },
@@ -85,6 +105,8 @@ GENERATES = [
         "stamp_key": "x-schema-version",
         "sources": [
             "coordinator_core/contract/emit_memo_schema.py",
+            "coordinator_core/ops/fleet/memo_kinds.py",
+            "coordinator_core/ops/fleet/_memo_summary.py",
             "coordinator_core/ops/fleet/memo_send.py",
         ],
     },

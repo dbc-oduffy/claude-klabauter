@@ -980,6 +980,24 @@ def _parse_cli_args(argv: Sequence[str]) -> Optional[tuple]:
     Purpose: reproduces the bash original's argv shape byte-for-byte --
     a bare `--` with zero trailing paths is equivalent to omitting it
     (whole-index mode), matching the original's header comment.
+
+    Pathspec separator normalisation (2026-08-26 bug-backlog, P2+P3) lives
+    HERE, not at any one caller -- `gate_scope` in `deletion_block_gate` is
+    an exact-string set built from `git diff --cached --name-status`
+    output, which always spells paths with forward slashes; any pathspec
+    producer that hands over a Windows-separated path would otherwise drop
+    silently out of scope. Normalising in this one shared parse point
+    covers every caller by construction (a directive builder, a hand
+    invocation, a future sibling ceremony) rather than depending on each
+    one replicating the same `.replace` call.
+
+    PLATFORM-CONDITIONAL (`os.name == "nt"`), not a blanket strip: a
+    backslash is always a path separator on Windows and never legal in a
+    filename there, but on POSIX it is a legal filename character. An
+    unconditional strip would rewrite a genuine POSIX filename containing
+    a backslash into a path that matches nothing, silently dropping it out
+    of the gate's scope -- the same silent narrowing this normalisation
+    exists to prevent, in the other direction.
     """
     if len(argv) < 1:
         return None
@@ -988,6 +1006,8 @@ def _parse_cli_args(argv: Sequence[str]) -> Optional[tuple]:
     pathspec: List[str] = []
     if rest and rest[0] == "--":
         pathspec = rest[1:]
+    if os.name == "nt":
+        pathspec = [p.replace("\\", "/") for p in pathspec]
     return (msg_file, pathspec)
 
 

@@ -67,6 +67,41 @@ from coordinator_core.win_portability import no_console_creationflags
 
 log = logging.getLogger(__name__)
 
+#: Standard 8-4-4-4-12 hex UUID shape. Local to this module by deliberate
+#: choice (see module docstring's "Explicitly OUT of scope" block) — NOT a
+#: reach into archive_stamp.py's `_SESSION_ID_UUID_RE`, which is looser and
+#: serves a different accessor's own contract. A trailer value that fails
+#: this shape check is not itself proof of corruption (a caller could inject
+#: a non-UUID own_session_id in a test fixture), but a well-formed Session-Id
+#: trailer produced by this repo's own tooling is always a UUID — a mismatch
+#: is a data-integrity signal worth a log line even when the classifier's
+#: existing over-refuse-not-over-credit posture is otherwise left unchanged
+#: (bug-backlog 2026-08-07-corrupted-session-id-trailer-reads-as-a-session-
+#: that-never-existed.yaml, proposed_action (1)).
+_SESSION_ID_UUID_SHAPE_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _warn_if_not_uuid_shaped(sha: str, trailer: str) -> None:
+    """Log a data-integrity warning when a captured Session-Id trailer value
+    does not match the standard UUID shape — see `_SESSION_ID_UUID_SHAPE_RE`.
+
+    Detection only: does not change which set/map the caller places `sha`
+    into. A non-UUID-shaped trailer still names an impossible session (a
+    text-encoding mangle at the authoring seam, not a session that ever
+    existed), and the existing exclusion-based/foreign-by-default posture
+    already fails in the SAFE direction (over-refuse, never over-credit) —
+    see each caller's own docstring. This only makes that failure visible.
+    """
+    if not _SESSION_ID_UUID_SHAPE_RE.match(trailer):
+        log.warning(
+            "session_attribution: commit %s carries a Session-Id trailer "
+            "%r that is not UUID-shaped — likely a text-encoding mangle at "
+            "the authoring seam, naming a session that never existed",
+            sha, trailer,
+        )
+
 #: Signature of a "never raises, returns (returncode, stdout, stderr)" git
 #: runner — the contract coverage.py's own `_run` helper makes, and the one
 #: `trailer_foreign_shas` requires from its caller (dependency-injected
@@ -181,6 +216,7 @@ def trailer_foreign_shas(
         sha = sha.strip()
         trailer = trailer.strip()
         if sha and trailer and trailer != own_session_id:
+            _warn_if_not_uuid_shaped(sha, trailer)
             foreign.add(sha)
     result_set: FrozenSet[str] = frozenset(foreign)
     cache[key] = result_set
@@ -253,6 +289,7 @@ def bulk_trailer_session_map(
         sha = sha.strip()
         trailer = trailer.strip()
         if sha and trailer:
+            _warn_if_not_uuid_shaped(sha, trailer)
             result[sha] = trailer
     return result
 
@@ -389,6 +426,7 @@ def detect_foreign_commits(
         m = trailer_re.search(body)
         if m:
             if m.group(1) != sid:
+                _warn_if_not_uuid_shaped(sha, m.group(1))
                 foreign_shas.append(sha)
             continue
 

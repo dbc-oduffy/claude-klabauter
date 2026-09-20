@@ -22,7 +22,8 @@ from coordinator_core.ops import reap_in_flight_claims as mod
 
 
 def _write_handoff(handoffs_dir, name, *, status, deployment_state, consumed_by=None,
-                    kind=None, deliverable_id=None, handoff_id=None, holder_field="claimed_by"):
+                    kind=None, deliverable_id=None, handoff_id=None, holder_field="claimed_by",
+                    continued_into=None):
     """`holder_field` defaults to the LIVE corpus spelling, `claimed_by`.
 
     It is a parameter rather than a constant because the original suite hard-wrote
@@ -41,6 +42,8 @@ def _write_handoff(handoffs_dir, name, *, status, deployment_state, consumed_by=
         lines.append(f"deliverable_id: {deliverable_id}")
     if handoff_id is not None:
         lines.append(f"handoff_id: {handoff_id}")
+    if continued_into is not None:
+        lines.append(f"continued_into: {continued_into}")
     lines.append("---")
     lines.append("body")
     path = Path(handoffs_dir) / name
@@ -270,6 +273,34 @@ def test_survey_indeterminate_live_children_fails_closed_to_skip(tmp_path, monke
     assert "indeterminate" in result.dispositions[0].detail
 
 
+def test_survey_continued_into_skips_release(tmp_path, monkeypatch):
+    """2026-09-11 backlog (`the-in-flight-reaper-releases-a-baton-th`): a
+    baton that already carries `continued_into` names a successor, so
+    releasing it back to the ready pool double-lists the deliverable. This
+    must be caught before the live-children/governed-plan machinery even
+    runs -- `has_live_children_many` is never called for it."""
+    handoffs_dir = tmp_path / "state" / "handoffs"
+    handoffs_dir.mkdir(parents=True)
+    _write_handoff(
+        handoffs_dir, "a.md", status="consumed", deployment_state="in_flight",
+        consumed_by="dead1", continued_into="successor.md",
+    )
+
+    monkeypatch.setattr(mod, "session_live", lambda sid, cwd=None: False)
+
+    def _boom(*a, **kw):
+        raise AssertionError("has_live_children_many must not run for a continued claim")
+
+    monkeypatch.setattr(mod, "has_live_children_many", _boom)
+
+    result = mod.survey(tmp_path)
+    assert result.would_release == 0
+    assert result.would_reclaim == 0
+    assert len(result.dispositions) == 1
+    assert result.dispositions[0].verdict == mod._VERDICT_SKIP_CONTINUED
+    assert "successor.md" in result.dispositions[0].detail
+
+
 def test_survey_governed_plan_skips_release(tmp_path, monkeypatch):
     handoffs_dir = tmp_path / "state" / "handoffs"
     handoffs_dir.mkdir(parents=True)
@@ -416,6 +447,31 @@ def test_survey_dropped_candidate_sha_falls_through_to_release(tmp_path, monkeyp
     result = mod.survey(tmp_path)
     assert result.would_release == 1
     assert result.would_reclaim == 0
+
+
+def test_survey_release_disposition_records_deciding_liveness_arm(tmp_path, monkeypatch):
+    """2026-08-22 backlog: a release carried only a bare park_note naming the
+    (wrongly) dead holder, with no record of WHICH liveness arm decided dead
+    -- so the false-dead diagnosis had to be reconstructed after the fact
+    from a reaping process that was already gone. The release `Disposition`
+    must name the deciding arm (`session_verdict`'s basis string), not just
+    that a dead-holder verdict was reached."""
+    handoffs_dir = tmp_path / "state" / "handoffs"
+    handoffs_dir.mkdir(parents=True)
+    _write_handoff(handoffs_dir, "a.md", status="consumed", deployment_state="in_flight", consumed_by="dead1")
+
+    monkeypatch.setattr(mod, "session_live", lambda sid, cwd=None: False)
+    monkeypatch.setattr(mod, "session_verdict", lambda sid, cwd=None: (False, "recency-window", 9999))
+    monkeypatch.setattr(mod, "git_common_dir", lambda repo_root: repo_root / ".git")
+    monkeypatch.setattr(mod, "has_live_children_many", _async_return({str((handoffs_dir / "a.md").resolve()): 1}))
+    monkeypatch.setattr(mod, "_build_implemented_plan_index", lambda repo_root: {})
+    monkeypatch.setattr(mod, "_build_completion_index", lambda repo_root: {})
+
+    result = mod.survey(tmp_path)
+    assert result.would_release == 1
+    release = [d for d in result.dispositions if d.verdict == mod._VERDICT_RELEASE]
+    assert len(release) == 1
+    assert "recency-window" in release[0].detail
 
 
 def test_survey_batches_across_multiple_orphans_in_one_git_log_call(tmp_path, monkeypatch):

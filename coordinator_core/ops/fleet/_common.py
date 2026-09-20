@@ -360,6 +360,7 @@ async def _empty_private_index_breach(
         env=env,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **no_console_creationflags(),
     )
     out, stderr = await proc.communicate()
     if proc.returncode != 0:
@@ -2750,6 +2751,7 @@ async def rm_and_commit(
             env=base_env,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **no_console_creationflags(),
         )
         _out, stderr = await proc.communicate()
         if proc.returncode != 0:
@@ -2795,6 +2797,7 @@ async def rm_and_commit(
                 env=base_env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **no_console_creationflags(),
             )
             _out, stderr = await proc.communicate()
 
@@ -2926,6 +2929,7 @@ async def rm_and_commit(
                     env=main_env_for_restore,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    **no_console_creationflags(),
                 )
                 _out, restore_stderr = await proc.communicate()
                 if proc.returncode != 0:

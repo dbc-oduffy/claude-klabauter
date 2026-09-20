@@ -274,6 +274,28 @@ def append_event(event: dict, *, repo_root: Path) -> dict:
     def _mutate(old_text: str) -> str:
         lines = _split_lines(old_text)
 
+        # Own-machine duplicate detection widened to the full history, not
+        # just the live flat shard: rotate_month relocates a closed month's
+        # lines out of `old_text` into `<YYYY-MM>/events.<slug>.jsonl`, and a
+        # same-idempotency_key retry re-derives the same id (F5). Scanning
+        # only `old_text` would let that retry sail past a rotated
+        # duplicate and double-append (DR-241 bound (i)). rotate_month locks
+        # this same shard path, so reading the rotated files here — inside
+        # this same locked_rmw mutation — cannot race a concurrent rotation.
+        for rotated_path in _peer_shard_paths(repo_root, machine_slug()):
+            if rotated_path == target:
+                continue
+            for line in _split_lines(rotated_path.read_text(encoding="utf-8")):
+                try:
+                    existing = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(existing, dict) and existing.get("id") == event["id"]:
+                    raise TrackerStoreDuplicateIdError(
+                        f"event id {event['id']!r} already appears in this "
+                        "machine's rotated shard history"
+                    )
+
         # Own-shard duplicate detection: one extra pass over data already
         # read into memory for the sequence bump. A line that fails to
         # parse is skipped here (not raised) — only the TAIL line's

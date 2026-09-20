@@ -350,6 +350,20 @@ class TestForLoopBareGlobStaysAdvisoryOnly:
         assert 'rm "$f"' not in example_line
         assert "..." in example_line or "'..." in ctx
 
+    def test_example_names_the_resolved_interpreter_not_a_bare_literal(self):
+        # Regression for state/bug-backlog/2026-08-18-generic-spawn-
+        # advisories-hardcode-python-c789cb245c5c.yaml: this generic
+        # advisory used to embed a literal `python3 -c` example, unlike
+        # `guard_grep_via_bash.py`'s sibling path which resolves the real
+        # interpreter via `_bt_python3_invocation`. A bare `python3` is
+        # frequently absent from PATH on a stock Windows box. Asserted
+        # structurally (the resolved invocation itself), not a second
+        # hardcoded literal -- matches `TestHeadTailPlumbing`'s existing
+        # pattern for the same fix on this guard's other shape.
+        out = guard.check(_payload(_FOR_LOOP_BARE_GLOB_CMD), host_is_windows=True)
+        ctx = _advisory_context(out)
+        assert guard._pl_python3_invocation() in ctx
+
 
 class TestWhileReadLoop:
     """New verdict arm (docs/plans/2026-08-10-the-one-fan-out-shape-the-
@@ -382,6 +396,15 @@ class TestWhileReadLoop:
         out = guard.check(_payload(_WHILE_READ_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert OVERRIDE_KEYS_DOC in ctx
+
+    def test_example_names_the_resolved_interpreter_not_a_bare_literal(self):
+        # Regression for state/bug-backlog/2026-08-18-generic-spawn-
+        # advisories-hardcode-python-c789cb245c5c.yaml -- see
+        # `TestForLoopBareGlobStaysAdvisoryOnly`'s identical regression test
+        # for the full "why" on this guard's for-loop shape.
+        out = guard.check(_payload(_WHILE_READ_CMD), host_is_windows=True)
+        ctx = _advisory_context(out)
+        assert guard._pl_python3_invocation() in ctx
 
 
 class TestBareSeamAdvisoryNeverDenies:
@@ -680,6 +703,11 @@ class TestPowerShellForLoopAndPipelineForeachObject:
         # never `xargs -P` or any other bash-only remediation.
         assert "python3" in ctx
         assert "xargs" not in ctx
+        # Regression for state/bug-backlog/2026-08-18-generic-spawn-
+        # advisories-hardcode-python-c789cb245c5c.yaml -- resolved
+        # interpreter, not a bare literal an operator without `python3` on
+        # PATH cannot run.
+        assert guard._pl_python3_invocation() in ctx
 
     @requires_powershell_grammar
     def test_powershell_percent_alias_for_foreach_object_advises(self):

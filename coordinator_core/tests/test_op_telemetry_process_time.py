@@ -258,7 +258,7 @@ def test_dispatch_from_hook_records_per_op_process_time_one_shot_cli(tmp_path, m
 
     captured_caller = {}
 
-    async def _fake_dispatch_message(msg, *, caller=None):
+    async def _fake_dispatch_message(msg, *, caller=None, corr_id=None):
         captured_caller["caller"] = caller
         return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {"ok": True}}
 
@@ -273,6 +273,31 @@ def test_dispatch_from_hook_records_per_op_process_time_one_shot_cli(tmp_path, m
     assert entries[0]["source_path"] == "one_shot_cli"
     assert entries[0]["caller"] == "coordinator_core.ipc.dispatch_from_hook"
     assert captured_caller["caller"] == "coordinator_core.ipc.dispatch_from_hook"
+
+def test_dispatch_from_hook_process_time_row_shares_corr_id_with_started_row(
+    tmp_path, monkeypatch
+):
+    """Regression, 2026-08-25-a-process-time-row-cannot-be-joined-to-its-own:
+    dispatch_from_hook's own process_time row must carry the SAME corr_id as
+    the started/complete rows dispatch_message records for the same call, so
+    a CPU sample can be joined to the wall-clock fire it belongs to."""
+    common_dir = _fake_common_dir(tmp_path)
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
+    monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", False)
+
+    ipc.dispatch_from_hook("ping", {}, origin_worktree=str(tmp_path))
+
+    entries = _read_entries(_sink(common_dir))
+    started = [e for e in entries if e.get("kind") == "started"]
+    process_time = [
+        e for e in entries
+        if e.get("kind") == "process_time" and e.get("source_path") == "one_shot_cli"
+    ]
+    assert len(started) == 1
+    assert len(process_time) == 1
+    assert started[0]["corr_id"] is not None
+    assert process_time[0]["corr_id"] == started[0]["corr_id"]
+
 
 def test_process_time_rows_carry_a_session_id(tmp_path, monkeypatch):
     """A process-time row must be joinable to the session that produced it.

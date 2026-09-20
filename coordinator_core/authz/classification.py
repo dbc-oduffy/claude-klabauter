@@ -4364,6 +4364,59 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # zero writes, pure computed dict.
     # Spec: docs/plans/2026-09-12-perforce-second-class-commit-and-shelve.md § C7, D9
     "p4.session_state": OpClass.COMPUTE_ONLY,
+
+    # RECORD authz-unclassified-ops-at-head — seven registered ops missing
+    # from this registry, leaving the registration-quad and drift-guard
+    # tests RED at HEAD.
+    #
+    # roadmap.plan_gate — COMPUTE_ONLY: ops/roadmap_plan_gate.py wraps
+    # `roadmap.plan_gate.assemble_plan_gate`, a pure scan. Module's own
+    # negative-spec: "Does NOT write, stamp, or mutate anything. ... Does
+    # NOT spawn." beyond the in-process git-index membership read.
+    "roadmap.plan_gate": OpClass.COMPUTE_ONLY,
+
+    # roadmap.blitz_land — MUTATING: ops/roadmap_blitz_land.py wraps
+    # `roadmap.blitz_land.land_wave`, which lands a wave's verdicts as
+    # real record writes ("Landing writes records" — module docstring's
+    # own negative-spec only disclaims committing and firing the next
+    # wave, never writing).
+    "roadmap.blitz_land": OpClass.MUTATING,
+
+    # memo.check_deliveries — COMPUTE_ONLY: ops/fleet/memo_send.py
+    # `_memo_check_deliveries`'s own docstring states plainly "'memo.
+    # check_deliveries' COMPUTE_ONLY op handler" and "Reads only: the
+    # sender's own ledger file, and the working trees + object stores of
+    # registered receiver repos ... Never writes into a receiver, never
+    # re-sends". `dry_run` is required True; no act mode exists.
+    "memo.check_deliveries": OpClass.COMPUTE_ONLY,
+
+    # docindex.emit — MUTATING: ops/docindex_emit.py `_docindex_emit`
+    # rewrites a resolved index document on disk
+    # (`(guarded_root / rel_path).write_text(...)`) whenever `write=True`
+    # and the comparison is ordinary drift. `write` defaults False but the
+    # op CAN write real coordinator substrate — same posture as
+    # fleet.backfill_reference_edges above (dry_run-default op still
+    # classified by its write-capable path, not its default params).
+    "docindex.emit": OpClass.MUTATING,
+
+    # workflow.bind_args — COMPUTE_ONLY: ops/workflow_bind.py composes and
+    # returns script TEXT only; module docstring states it "does not write
+    # to disk, matching workflow.scaffold's contract" — the caller places
+    # the file. The handler's only I/O is a read of the source script.
+    "workflow.bind_args": OpClass.COMPUTE_ONLY,
+
+    # baton.carry_forward — MUTATING: ops/baton_carry_forward.py
+    # `append_note` calls `session_baton.store.merge_baton`, a
+    # read-modify-write of the live session's baton.json under
+    # `.git/coordinator-sessions/<sid>/` — real, persistent (if
+    # session-scoped) mutation, same class already affirmed for
+    # session_baton.mint above.
+    #
+    # baton.carry_forward_read — COMPUTE_ONLY: `read_notes` calls
+    # `session_baton.store.read_baton` only; no write primitive on this
+    # path.
+    "baton.carry_forward": OpClass.MUTATING,
+    "baton.carry_forward_read": OpClass.COMPUTE_ONLY,
 })
 
 

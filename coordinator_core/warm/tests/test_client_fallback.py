@@ -650,17 +650,44 @@ def test_mutation_deadline_tracks_ipc_timeout_for_not_a_flat_constant(
     """Reviewer finding (sidecar dcf219af, SLICE 1): a flat
     `MUTATION_READ_DEADLINE_SECS` outlives the CALLER's own kill ceiling for
     every mutating op except `ceremony.scoped_git_commit`, because the
-    ceiling is `ipc._timeout_for(op) + MARGIN` and every other op resolves
+    ceiling is `ipc`'s per-op resolution + MARGIN and every other op resolves
     to `ipc`'s ~30s default. `_mutation_deadline_for` must derive from that
-    same function, not the flat constant, whenever the constant is at its
-    untouched default."""
+    per-op resolution, not the flat constant, whenever the constant is at its
+    untouched default.
+
+    The derivation source is `ipc.mutation_read_deadline_for`, NOT
+    `ipc._timeout_for`: the latter applies the `ceremony.*` performance clamp,
+    which made this deadline equal to `READ_DEADLINE_SECS` and the mutation
+    extension zero-length for every op that commits."""
     import coordinator_core.ipc as ipc
 
-    monkeypatch.setattr(ipc, "_timeout_for", lambda method: 7.0)
+    monkeypatch.setattr(ipc, "mutation_read_deadline_for", lambda method, msg=None: 7.0)
     assert client._mutation_deadline_for("some.mutating.op") == 7.0
 
-    monkeypatch.setattr(ipc, "_timeout_for", lambda method: 150.0)
+    monkeypatch.setattr(ipc, "mutation_read_deadline_for", lambda method, msg=None: 150.0)
     assert client._mutation_deadline_for("ceremony.scoped_git_commit") == 150.0
+
+
+def test_a_ceremony_mutation_gets_a_nonzero_extension_past_the_liveness_probe():
+    """THE DEFECT THIS GUARDS. The mutation extension at the call site waits
+    `mutation_deadline - READ_DEADLINE_SECS`. While this deadline came from
+    `ipc._timeout_for`, the `ceremony.*` clamp made it exactly
+    `CEREMONY_BUDGET_SECS` -- the same 2.0 as `READ_DEADLINE_SECS` -- so the
+    extension was `max(0.0, 0.0)` and waited ZERO seconds for every op that
+    commits, while a non-ceremony mutation got the full intended extension.
+
+    Asserted against the REAL derivation, not a monkeypatched one: the bug was
+    that the real values coincided, so a test that stubs the source cannot see
+    it. No specific number is pinned -- only that a committing op is given
+    strictly more time to answer than the liveness probe allows, which is the
+    property the whole mutation-extension mechanism exists to provide."""
+    for op in ("ceremony.commit_v2", "ceremony.close", "ceremony.scoped_git_commit"):
+        deadline = client._mutation_deadline_for(op)
+        assert deadline > client.READ_DEADLINE_SECS, (
+            f"{op}: mutation deadline {deadline}s does not exceed the "
+            f"{client.READ_DEADLINE_SECS}s liveness probe, so the extension "
+            "waits zero seconds and a delivered commit is abandoned"
+        )
 
 
 def test_mutation_deadline_derivation_does_not_outwait_the_ops_own_budget(
@@ -669,7 +696,10 @@ def test_mutation_deadline_derivation_does_not_outwait_the_ops_own_budget(
     """A mutating op with a short (default-sized) engine budget must not
     wait past it -- the whole point of deriving per-op rather than using a
     flat 120s that outlives the caller's own ~40s kill ceiling for every op
-    but the one the original incident concerned."""
+    but the one the original incident concerned.
+
+    Derivation source is `ipc.mutation_read_deadline_for` -- the unclamped
+    per-op resolution. See the sibling test above."""
     import threading
 
     import coordinator_core.ipc as ipc
@@ -679,7 +709,7 @@ def test_mutation_deadline_derivation_does_not_outwait_the_ops_own_budget(
             threading.Event().wait(30)
             return b'{"jsonrpc":"2.0","id":1,"result":{}}\n'
 
-    monkeypatch.setattr(ipc, "_timeout_for", lambda method: 0.1)
+    monkeypatch.setattr(ipc, "mutation_read_deadline_for", lambda method, msg=None: 0.1)
     monkeypatch.setattr(client, "READ_DEADLINE_SECS", 0.02)
     monkeypatch.setattr(client, "_open_pipe", lambda pipe: _StuckPipe())
 

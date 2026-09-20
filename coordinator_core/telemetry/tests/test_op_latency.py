@@ -767,7 +767,29 @@ def test_record_fact_span_shape(tmp_path):
     assert row["sid"] == "sid-fact-1"
     assert row["t_start"] == pytest.approx(before)
     assert row["elapsed_ms"] == pytest.approx(1.25)
+    assert row["invocation_id"] is None
     assert "op" not in row
+
+
+def test_record_fact_span_carries_invocation_id(tmp_path):
+    """`invocation_id` (state/bug-backlog/2026-08-27-fact-span-rows-cannot-
+    yield-a-per-ceremo-d9be470c2039.yaml) is additive: a caller that supplies
+    one gets it written verbatim, so a reader can group by it instead of the
+    session-collapsing `sid`."""
+    (tmp_path / ".git").mkdir()
+    record_fact_span(
+        fact="session_facts.session_diff_brightline",
+        t_start=time.time(),
+        elapsed_ms=5.0,
+        outcome="computed",
+        repo_root=tmp_path,
+        sid="sid-fact-1",
+        invocation_id="ceremony-call-42",
+    )
+
+    rows = _fact_span_rows(tmp_path)
+    assert len(rows) == 1
+    assert rows[0]["invocation_id"] == "ceremony-call-42"
 
 
 def test_pairing_summary_ignores_fact_span_rows(tmp_path):

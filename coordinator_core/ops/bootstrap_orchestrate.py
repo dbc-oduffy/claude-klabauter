@@ -710,6 +710,8 @@ def main(argv: List[str]) -> int:
                                 "commit",
                                 "-m",
                                 "chore(coordinator): record currency stamp",
+                                "--",
+                                "docs/coordinator-currency.yaml",
                             ],
                             timeout=_GIT_TIMEOUT_SECS,
                             stdin=subprocess.DEVNULL,

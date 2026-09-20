@@ -14,11 +14,14 @@ than shelled out to their source scripts, per
    does NOT import or call `cmd_reap_log`/`_run_reap_sessions`; only the
    pure `_span_assert` comparison and its `_current_branch` git read are
    ported into the in-process path.
-2. `coordinator_core/ops/check_auto_reconcile.py` — imported AS-IS
-   (already a clean, dependency-free module: `get_response()` dispatches
-   `handoff.reconcile_open` in-process with no `dry_run` override, so the
-   op's own `dry_run=True` default governs — observation only, never a
-   transition).
+2. RETIRED: `handoff.reconcile_open` is no longer a registered op (K-026,
+   superseded by K-057 -- absent from `ops/_registry_map.py`, and its
+   backing module `coordinator_core/ops/handoff_reconcile.py` no longer
+   exists). `_read_auto_reconcile` below is a permanent no-op stub, kept
+   under its original name only so the reader-family shape and existing
+   `collect()`/test monkeypatch seams stay stable; it dispatches nothing
+   and always returns an empty `ReaderResult()`. Bug-backlog:
+   state/bug-backlog/2026-09-11-orient-assemble-still-probes-the-retired-4775aa35bd49.yaml
 
 A `clear`/`narrow` verdict computed under dry_run=true never reaches
 `surfaced[]` (deliberate — see `handoff_reconcile.py`'s `_route_gate_clear`
@@ -67,15 +70,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from coordinator_core.contract.decision_object.judgment import (
-    build_disposition,
-    build_judgment_point,
-)
-from coordinator_core.orient_assemble.reader_result import (
-    ReaderResult,
-    cap_judgment_points,
-    truncate_external_text,
-)
+from coordinator_core.orient_assemble.reader_result import ReaderResult
 
 #: The source CLI's absolute path — resolved relative to this file, never a
 #: literal device path (portability discipline, AC-16). This file lives at
@@ -90,13 +85,6 @@ _SOURCE_PATH = (
 )
 
 _GIT_TIMEOUT = 10
-
-#: Named cap on the auto-reconcile family's per-surfaced-handoff judgment-
-#: point list — see `reader_result.cap_judgment_points`. Unbounded per-
-#: handoff lists were ~40 of 148 JPs contributing to a 124KB
-#: `brief('session')` payload before this cap existed.
-_AUTO_RECONCILE_JUDGMENT_POINT_CAP = 5
-
 
 def _load_source_module():
     """Load the hyphenated-filename source CLI as an importable module (same
@@ -180,246 +168,20 @@ def _read_span_assert(repo_root: str | None = None) -> ReaderResult:
     )
 
 
-def _auto_reconcile_probe_failed(error: dict[str, Any]) -> ReaderResult:
-    """Surface a JSON-RPC error envelope from the auto-reconcile probe as its
-    own judgment point.
-
-    Why this exists: a `handoff.reconcile_open` dispatch that ERRORS carries no
-    `result`, so `result.get("surfaced")` is `[]` — byte-identical, downstream,
-    to a successful probe that found nothing to reconcile. Without this branch
-    the reader returns an empty `ReaderResult()` and the Morning Briefing omits
-    `### Auto-Reconcile` entirely, rendering a refused or crashed probe as
-    "nothing open". Measured 2026-08-27: the op had produced zero op-latency
-    rows in ~10h against 3,301 rows from its peers, and nothing in the briefing
-    said so.
-
-    Precedence: an envelope carrying BOTH `result` and `error` (malformed, but
-    the shape permits it) is reported as the error and its `result` discarded —
-    a probe that reported an error has not established a clean corpus, so the
-    safe reading is the pessimistic one. Review: code-reviewer Finding 4.
-
-    Negative-spec:
-      - Does NOT re-dispatch, retry, or fall back to a second probe path — one
-        failed observation is reported as one failed observation.
-      - Does NOT emit a directive: an unreachable probe is a fact for the
-        reader to act on, never an action this module applies on its own.
-    """
-    code = error.get("code", "unknown")
-    if code is None:
-        code = "unknown"
-    message = truncate_external_text(str(error.get("message") or "(no message)"))
-    return ReaderResult(
-        judgment_points=[
-            build_judgment_point(
-                None,
-                id="j-auto-reconcile-probe-failed",
-                question=(
-                    "The auto-reconcile probe did not run — open handoffs were "
-                    "NOT checked. Investigate before treating the corpus as clean?"
-                ),
-                dispositions=[
-                    build_disposition("investigate_now"),
-                    build_disposition("leave_for_now"),
-                ],
-                evidence=(
-                    f"handoff.reconcile_open returned a JSON-RPC error "
-                    f"(code {code}): {message} | reason: an error envelope "
-                    "carries no surfaced[], which is indistinguishable "
-                    "downstream from a clean corpus"
-                ),
-                reason="recommendation-forbidden",
-            )
-        ]
-    )
-
-
 def _read_auto_reconcile(repo_root: str | None = None) -> ReaderResult:
-    """Open-handoff auto-reconcile observation — `check_auto_reconcile.get_response()`
-    dispatches `handoff.reconcile_open` in-process under its own conservative
-    `dry_run=True` default (never overridden here). `repo_root`, when given,
-    is threaded through to `get_response(repo_root)` (DR-382: an explicit
-    scan scope, never re-derived from process cwd inside a reader); `None`
-    preserves the prior ambient-cwd behaviour byte-for-byte via
-    `get_response()`'s own `_resolve_own_repo_root()` fallback. Each `surfaced[]` entry
-    names a handoff the reconcile op could not auto-resolve — an open human
-    branch (review/reconcile manually), so becomes a `judgment_points[]`
-    entry, never a silently-applied directive.
+    """RETIRED no-op stub -- `handoff.reconcile_open` is no longer a
+    registered op (K-026, superseded by K-057) and this reader must never
+    dispatch it. Always returns an empty `ReaderResult()` without touching
+    `coordinator_core.ops.check_auto_reconcile` at all. Kept under its
+    original name/signature (including the now-unused `repo_root`
+    parameter) purely so `collect()` and every existing test's
+    `monkeypatch.setattr(rbr, "_read_auto_reconcile", ...)` seam keep
+    working unchanged.
 
-    Cap-order note (Review: code-reviewer — Finding 5): unlike the memo
-    family, `surfaced[]` carries no meaningful priority key — it is
-    `handoff.reconcile_open`'s own response order, not a date or severity
-    ranking. This reader does NOT invent a sort key to fake one; when the
-    cap binds, entries are kept in response order and the overflow judgment
-    point's `list_command` is the complete, unordered view — cap order here
-    carries no priority signal, so a withheld entry is not "less important,"
-    only "later in an arbitrary order."
-
-    Re-asked and re-answered 2026-08-13 (DR-300, its correction block):
-    every `surfaced.append(...)` call site in `handoff_reconcile.py` (the
-    `gate_eval`-verdict branches, the `narrow+surface` composite, the C9
-    desync-read-error branch, and the terminal `commit_reality` fallthrough)
-    writes only `handoff_id`, `reason`, `evidence`, and — on two branches
-    only — `gate_evidence_resolved`/`contradiction`. No staleness, date, or
-    confidence field exists on any entry to sort by; inventing one here
-    would fabricate a ranking the producer never computed. DR-300 confirms
-    this residual is real but small: the cap's own overflow judgment point
-    already states the true total and the command to list every entry
-    (`cap_judgment_points`'s "{N} total ... {cap} shown, {withheld}
-    withheld" contract, live since `4f131b1bf`), so an arbitrary-order
-    5-entry surface never reads as "these are the only 5 that exist." Do
-    not re-open this question again without a genuine new field landing on
-    `surfaced[]` upstream.
-
-    Legibility (spec: docs/plans/2026-08-13-legible-reconcile-surface-and-
-    single-baton-check.md, chunk C1; docs/decisions/DR-300-pickup-may-not-
-    call-the-reconcile-orchestrator.md): the arbitrary order is a non-issue
-    only because `cap_judgment_points`' overflow entry states the true
-    surfaced total (`"{total} total ... {cap} shown, {withheld} withheld"`)
-    whenever the cap binds — shape (a), an aggregate judgment point naming
-    the true total, not shape (b) a ranking key. A reader always sees
-    either every surfaced entry (count <= cap, nothing withheld) or the
-    exact count withheld and the command to list them all; "5 shown" can
-    never be mistaken for "5 exist."
+    Bug-backlog: state/bug-backlog/2026-09-11-orient-assemble-still-probes-
+    the-retired-4775aa35bd49.yaml
     """
-    from coordinator_core.ops.check_auto_reconcile import get_response
-
-    # `repo_root=None` is called with get_response()'s own bare 0-arg form
-    # rather than get_response(None) -- byte-for-byte the same result (both
-    # resolve via _resolve_own_repo_root()), but preserves every existing
-    # 0-arg `get_response` fake across this reader family's own test suite
-    # (test_context_flood_caps.py, test_error_envelope_is_not_a_clean_corpus.py,
-    # test_reconcile_surface_legibility.py) and check_auto_reconcile's own
-    # (test_check_auto_reconcile.py) -- none of those four files are in this
-    # chunk's writes scope, so a positional None here would break signatures
-    # this chunk has no authorization to touch.
-    response = get_response(repo_root) if repo_root is not None else get_response()
-    if not response:
-        return ReaderResult()
-    error = response.get("error")
-    if isinstance(error, dict):
-        return _auto_reconcile_probe_failed(error)
-    if error is not None:
-        # A truthy non-dict `error` (a bare string, from a non-conforming
-        # transport) carries no `result` either, so falling through here would
-        # reproduce the exact silence this branch exists to end. Normalised
-        # rather than trusted for shape. Review: code-reviewer Finding 1.
-        return _auto_reconcile_probe_failed({"code": None, "message": str(error)})
-    result = response.get("result") or {}
-    surfaced = result.get("surfaced") or []
-    reconciled = result.get("reconciled") or []
-    gates_cleared = result.get("gates_cleared") or []
-    if not isinstance(gates_cleared, list):
-        gates_cleared = []
-    dry_run_clears = [
-        entry
-        for entry in gates_cleared
-        if isinstance(entry, dict) and entry.get("dry_run") and entry.get("blocker_ids")
-    ]
-    failed_reconciles = [
-        entry for entry in reconciled if entry.get("exit_code", 0) != 0
-    ]
-    if not surfaced and not failed_reconciles and not dry_run_clears:
-        return ReaderResult()
-
-    judgment_points: list[dict[str, Any]] = []
-    for idx, entry in enumerate(surfaced):
-        handoff_id = entry.get("handoff_id") or "?"
-        reason = truncate_external_text(
-            entry.get("reason") or "surfaced by handoff.reconcile_open"
-        )
-        evidence_text = truncate_external_text(entry.get("evidence") or reason)
-        judgment_points.append(
-            build_judgment_point(
-                None,
-                id=f"j-auto-reconcile-{idx + 1}",
-                question=(
-                    f"Handoff {handoff_id!r} surfaced by auto-reconcile "
-                    f"({reason}) — review manually?"
-                ),
-                dispositions=[
-                    build_disposition("pm_reviews_manually"),
-                    build_disposition("leave_for_now"),
-                ],
-                evidence=(
-                    f"{evidence_text} | reason: "
-                    "handoff.reconcile_open could not auto-ship or "
-                    "gate-cascade-clear this handoff — never silently resolved"
-                ),
-                reason="recommendation-forbidden",
-            )
-        )
-    judgment_points = cap_judgment_points(
-        judgment_points,
-        cap=_AUTO_RECONCILE_JUDGMENT_POINT_CAP,
-        overflow_id="j-overflow-auto-reconcile",
-        item_label="surfaced auto-reconcile handoffs",
-        list_command="check-auto-reconcile",
-    )
-
-    gate_clear_points: list[dict[str, Any]] = []
-    for idx, entry in enumerate(dry_run_clears):
-        handoff_id = entry.get("handoff_id") or "?"
-        verdict = entry.get("verdict") or "clear"
-        target = "ready_to_fire" if verdict == "clear" else "awaiting_gate (narrowed)"
-        blocker_ids = entry.get("blocker_ids") or []
-        blockers = ", ".join(str(b) for b in blocker_ids)
-        gate_clear_points.append(
-            build_judgment_point(
-                None,
-                id=f"j-gate-cleared-{idx + 1}",
-                question=(
-                    f"Handoff {handoff_id!r} gate cleared (verdict={verdict}) — "
-                    f"would flip awaiting_gate → {target} (dry-run, not applied) — "
-                    "arm the reconciler?"
-                ),
-                dispositions=[
-                    build_disposition("pm_reviews_manually"),
-                    build_disposition("leave_for_now"),
-                ],
-                evidence=(
-                    f"blockers cleared: {blockers} | dry_run=true, no transition "
-                    "applied — handoff.reconcile_open computed this verdict but "
-                    "arming (dry_run=false) is a separate, named posture change"
-                ),
-                reason="recommendation-forbidden",
-            )
-        )
-    gate_clear_points = cap_judgment_points(
-        gate_clear_points,
-        cap=_AUTO_RECONCILE_JUDGMENT_POINT_CAP,
-        overflow_id="j-overflow-gate-cleared",
-        item_label="dry-run gate-cleared handoffs",
-        list_command="check-auto-reconcile",
-    )
-
-    desync_points: list[dict[str, Any]] = []
-    for idx, entry in enumerate(failed_reconciles):
-        handoff_id = entry.get("handoff_id") or "?"
-        message = truncate_external_text(entry.get("message") or "no message")
-        desync_points.append(
-            build_judgment_point(
-                None,
-                id=f"j-desync-repair-failed-{idx + 1}",
-                question=(
-                    f"Handoff {handoff_id!r} ledger/frontmatter desync repair "
-                    "failed — review manually?"
-                ),
-                dispositions=[
-                    build_disposition("pm_reviews_manually"),
-                    build_disposition("leave_for_now"),
-                ],
-                evidence=f"exit_code={entry.get('exit_code')} | {message}",
-                reason="recommendation-forbidden",
-            )
-        )
-    desync_points = cap_judgment_points(
-        desync_points,
-        cap=_AUTO_RECONCILE_JUDGMENT_POINT_CAP,
-        overflow_id="j-overflow-desync-repair-failed",
-        item_label="failed desync repairs",
-        list_command="check-auto-reconcile",
-    )
-    return ReaderResult(judgment_points=judgment_points + gate_clear_points + desync_points)
+    return ReaderResult()
 
 
 def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
@@ -429,13 +191,13 @@ def collect(cadence: str, *, repo_root: str | None = None) -> ReaderResult:
     (`readers_clean_ops.collect`) but unused here — neither probe's
     severity varies by cadence.
 
-    `repo_root` is keyword-only and now threaded to both probes (C12 of the
-    orient-assemble repo-scope plan, DR-382): `_read_span_assert(repo_root)`
-    and `_read_auto_reconcile(repo_root)` each pass it through to their own
-    `repo_root`-accepting internals (`_current_branch` and
-    `check_auto_reconcile.get_response()` respectively). `None` — the
-    default, and every existing caller's prior behaviour — preserves the
-    prior ambient-cwd resolution byte-for-byte at each leaf. Still unwired
+    `repo_root` is keyword-only and threaded through to `_read_span_assert`
+    (C12 of the orient-assemble repo-scope plan, DR-382) via its own
+    `repo_root`-accepting `_current_branch` internal. `_read_auto_reconcile`
+    also accepts `repo_root` for signature parity but is a permanent no-op
+    (see its own docstring) and ignores it. `None` — the default, and every
+    existing caller's prior behaviour — preserves the prior ambient-cwd
+    resolution byte-for-byte at the `_read_span_assert` leaf. Still unwired
     into `__init__.py`'s cadence dispatch (`brief()`) — that remains shared
     write-surface across C2a-C2d and this module's own negative-spec already
     excludes wiring `collect()`'s results into `brief()` from this chunk;

@@ -207,16 +207,25 @@ def test_resolve_refs_batch_maps_each_ref_to_its_sha_preserving_failures():
 
 
 def test_commit_age_labels_batch_covers_multiple_shas_in_one_call(repo_with_origin, monkeypatch):
-    """`_commit_age_labels_batch` resolves >=2 shas' ages via ONE `git show` call."""
-    calls: list[list[str]] = []
-    real_run = resolvers.subprocess.run
+    """`_commit_age_labels_batch` resolves >=2 shas' ages via ONE `git show` call.
 
-    def _counting_run(argv, *args, **kwargs):
+    `_commit_age_labels_batch` spawns through `run_git` (`coordinator_core.git.run`),
+    which shells out via `subprocess.Popen` (a context manager, for the pipe-leak
+    reasoning documented on that call site) rather than `subprocess.run` — unlike the
+    other batching helpers in this module, which call `subprocess.run` directly. A
+    counting wrapper on `subprocess.run` therefore never observes this call and the
+    assertion beneath it silently passes on zero calls until strengthened; wrap
+    `Popen` instead, matching the primitive the callee actually uses.
+    """
+    calls: list[list[str]] = []
+    real_popen = resolvers.subprocess.Popen
+
+    def _counting_popen(argv, *args, **kwargs):
         if len(argv) >= 3 and argv[1] == "-C" and "show" in argv:
             calls.append(list(argv))
-        return real_run(argv, *args, **kwargs)
+        return real_popen(argv, *args, **kwargs)
 
-    monkeypatch.setattr(resolvers.subprocess, "run", _counting_run)
+    monkeypatch.setattr(resolvers.subprocess, "Popen", _counting_popen)
 
     shas = [repo_with_origin["off_main"], repo_with_origin["off_main_2"]]
     labels = resolvers._commit_age_labels_batch(Path(repo_with_origin["work"]), shas)

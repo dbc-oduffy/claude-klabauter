@@ -121,6 +121,21 @@ def test_mv_dest_still_caught_alongside_escaped_quote_fix():
     assert _fires('mv a.txt b?.txt')
 
 
+def test_mv_dest_double_quoted_no_space_fires():
+    """C3 follow-up (2026-08-07 bug-backlog record ccced871da89): the dest
+    leg was left reading the quote-STRIPPED `cmd_for_scan`, which erased a
+    quoted mv destination before tokenization ever saw it -- silent false
+    negative on HEAD prior to this fix."""
+    assert _fires('mv a.txt "b?.txt"')
+
+
+def test_mv_dest_quoted_source_with_space_still_fires():
+    """Same regression, quoted SOURCE with an embedded space ahead of the
+    quoted destination -- the dest leg must still land on arg #2, not be
+    thrown off by the source token containing a space."""
+    assert _fires('mv "a a.txt" "b?.txt"')
+
+
 def test_escaped_double_quote_inside_message_does_not_desync():
     assert not _fires('echo "he said \\"foo > bar?\\" loudly"')
 

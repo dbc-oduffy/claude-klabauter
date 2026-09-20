@@ -73,7 +73,7 @@ from coordinator_core.archive_stamp import (
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.ceremony.records_query import query_records
 from coordinator_core.ops.handoff_children import has_live_children_many
-from coordinator_core.session.liveness import session_live
+from coordinator_core.session.liveness import session_live, session_verdict
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -95,6 +95,7 @@ _VERDICT_RELEASE = "release"
 _VERDICT_RECLAIM_SHIPPED = "reclaim_shipped"
 _VERDICT_SKIP_LIVE_CHILDREN = "skip_live_children"
 _VERDICT_SKIP_GOVERNED_PLAN = "skip_governed_plan_implemented"
+_VERDICT_SKIP_CONTINUED = "skip_continued_into"
 
 
 @dataclass
@@ -110,6 +111,7 @@ class HandoffRecord:
     kind: Optional[str]
     deliverable_id: Optional[str]
     handoff_id: Optional[str]
+    continued_into: Optional[str]
 
 
 @dataclass
@@ -190,6 +192,7 @@ def _build_corpus(handoffs_dir: Path) -> List[HandoffRecord]:
                 kind=read_fm_field_unquoted(fm, "kind"),
                 deliverable_id=read_fm_field_unquoted(fm, "deliverable_id"),
                 handoff_id=read_fm_field_unquoted(fm, "handoff_id"),
+                continued_into=read_fm_field_unquoted(fm, "continued_into"),
             )
         )
     return records
@@ -363,6 +366,33 @@ def _best_shipped_sha(candidates: List[str], sha_ct: Dict[str, int]) -> str:
     return best_sha
 
 
+def _release_liveness_basis(holder: str, repo_root: Path) -> str:
+    """The deciding arm behind a RELEASE verdict, for the disposition detail.
+
+    2026-08-22 backlog (`the-crash-orphan-reaper-released-a-live-holder-s-
+    baton`): a live holder's claim was released with only a bare `park_note`
+    on disk naming the (wrongly) dead holder — no record of WHICH liveness
+    arm produced the verdict, so the false-dead diagnosis had to be
+    reconstructed after the fact from an already-gone reaping process, for
+    the second documented round of this bug class. `session_live` (the
+    boolean this module's dead-detection already calls) carries none of
+    that — `session_verdict` is the SAME per-id derivation with the basis
+    attached (`liveness.py::_verdict_for_sdir`), so this costs no second
+    liveness computation, only a second (already-O(1)) call for the
+    candidates this module is about to mutate. Never used for the dead/live
+    SPLIT itself (`session_live` still decides that, unchanged) — this is
+    read-only instrumentation on an already-dead candidate.
+
+    Falls back to `"unknown"` when `session_verdict` returns `None` (no
+    session dir, no registry record — the boundary case `session_live`
+    itself reads as dead via the same missing-sdir arm).
+    """
+    verdict = session_verdict(holder, cwd=str(repo_root))
+    if verdict is None:
+        return "unknown"
+    return verdict[1]
+
+
 # ---------------------------------------------------------------------------
 # survey() — the return-data call both callers consume
 # ---------------------------------------------------------------------------
@@ -389,6 +419,32 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
     if not dead:
         return SurveyResult(0, 0, [])
 
+    # 2026-09-11 backlog (`the-in-flight-reaper-releases-a-baton-th`): a
+    # claim that already carries `continued_into` has been superseded --
+    # its successor is (or will be) in the pool on its own, so releasing
+    # THIS one back to `ready_to_fire` double-lists the deliverable. Caught
+    # here, ahead of the live-children batch call, so a continued claim
+    # costs neither that call nor the governed-plan/ship-check machinery
+    # below (pay-for-use, same convention as the governed-plan precheck).
+    dispositions: List[Disposition] = []
+    still_dead: List[HandoffRecord] = []
+    for r in dead:
+        if r.continued_into:
+            dispositions.append(
+                Disposition(
+                    str(r.path),
+                    r.holder,
+                    _VERDICT_SKIP_CONTINUED,
+                    f"continued_into {r.continued_into!r} already names a successor "
+                    "-- releasing would double-list the deliverable",
+                )
+            )
+            continue
+        still_dead.append(r)
+    dead = still_dead
+    if not dead:
+        return SurveyResult(0, 0, dispositions)
+
     common_dir = git_common_dir(repo_root)
     live_children = asyncio.run(
         has_live_children_many([str(r.resolved_path) for r in dead], common_dir)
@@ -399,7 +455,6 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
         dead_holders_seen[r.holder] = dead_holders_seen.get(r.holder, 0) + 1
 
     pending: List[HandoffRecord] = []
-    dispositions: List[Disposition] = []
     for r in dead:
         exit_code = live_children.get(str(r.resolved_path), 2)
         if exit_code != 1:
@@ -490,7 +545,8 @@ def survey(repo_root: Path, *, handoffs_dir: Optional[Path] = None) -> SurveyRes
                     str(r.path),
                     r.holder,
                     _VERDICT_RELEASE,
-                    f"holder {r.holder} is dead with no resolvable shipped commit",
+                    f"holder {r.holder} is dead with no resolvable shipped commit "
+                    f"(deciding arm: {_release_liveness_basis(r.holder, repo_root)})",
                 )
             )
 

@@ -229,7 +229,7 @@ GENERATES: list = []
 
 MAX_ATTEMPTS = 3
 # Classes that are safe to retry; see classify_error() for why each is/isn't.
-_RETRYABLE_CLASSES = frozenset({"ref-lock", "network", "gh-transient"})
+_RETRYABLE_CLASSES = frozenset({"ref-lock", "network", "gh-transient", "transient-contention"})
 
 # ref-lock's own attempt budget (DEC-1, docs/plans/2026-08-30-ref-locks-ladder-
 # reaches-past-the-burst.md). MAX_ATTEMPTS stays the default AND the non-FF poll
@@ -369,6 +369,24 @@ _PAT_TIMEOUT = re.compile(r"^fatal: push exceeded \d+s and was killed", re.MULTI
 # leaving it non-retrying preserves "unknown"'s exact prior timing behavior, so
 # this changes only the label an operator sees.
 _PAT_SPAWN_ERROR = re.compile(r"^fatal: git push failed to spawn:", re.MULTILINE)
+# A `.tmp-<pid>-pack-<sha>.pack` under .git/objects/pack vanishing mid-push is
+# a sibling session's concurrent repack/gc cleaning up ITS OWN temp pack on a
+# repo shared by ~20 sessions -- contention, not a broken push. It surfaces as
+# the identical `push_once` spawn-failure prefix _PAT_SPAWN_ERROR matches
+# (subprocess.run raising FileNotFoundError before any git stderr exists), so
+# without this arm ahead of it, a transient race and a genuinely unresolvable
+# git executable are indistinguishable in the log (27 entries in one hour,
+# .git/push-failures.log on work/machine-a/2026-08-18to20, 2026-08-26). Matched
+# on the temp-pack path shape rather than the exception text, which is
+# platform-/locale-dependent -- same discipline _PAT_SPAWN_ERROR's own comment
+# states. IS in _RETRYABLE_CLASSES, unlike spawn-error: a vanished temp pack
+# heals on the next attempt once the sibling's repack finishes, where an
+# unresolvable PATH does not.
+_PAT_TRANSIENT_PACK_CONTENTION = re.compile(
+    r"^fatal: git push failed to spawn: FileNotFoundError:.*"
+    r"objects[/\\]pack[/\\]\.tmp-\d+-pack-",
+    re.MULTILINE,
+)
 
 
 def classify_error(stderr_text: str) -> str:
@@ -403,6 +421,8 @@ def classify_error(stderr_text: str) -> str:
     # (2026-08-30, see that pattern). These two arms are what keep a push
     # timeout from reporting as "auth" and sending the operator to check
     # credentials -- do not reorder them below _PAT_AUTH.
+    if _PAT_TRANSIENT_PACK_CONTENTION.search(stderr_text):
+        return "transient-contention"
     if _PAT_SPAWN_ERROR.search(stderr_text):
         return "spawn-error"
     if _PAT_TIMEOUT.search(stderr_text):

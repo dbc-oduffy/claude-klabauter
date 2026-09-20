@@ -435,13 +435,29 @@ def payload_from_event(event: Mapping[str, Any]) -> Dict[str, Any]:
     `plugin_root` RIDES THIS BODY AS A COMPUTED FIELD, never a forwarded env var. Measured
     (staff-eng finding 2, C1 dispatch brief): the harness's own posted event body carries no
     `plugin_root` under any spelling, so `payload_from_event`'s verbatim copy has nothing to
-    forward for it. This function therefore COMPUTES it once, HERE, at forward time, via
+    forward for it. This function therefore COMPUTES it once, HERE, via
     `warm.caller_context.resolve_caller_context` -- the shared accessor `bash_guards/
     dispatch.py` reads on the other end of this seam -- rather than leaving every downstream
     reader (`provision_report.assemble_contract_blocks_for_payload` today, the guard chain
     once C6/C7 wire it) to call `provision_report.resolve_plugin_root()`'s ambient probe
-    independently. One computed value on the wire, not N independent re-resolutions that
-    could in principle disagree.
+    independently a second time. One computed value on the wire, not N independent
+    re-resolutions that could in principle disagree.
+
+    NOT CALLER-SIDE, AND THE RESIDUAL IS NAMED (2026-08-29 bug-backlog row, C1's own
+    finding): `payload_from_event` runs wherever `build_request` runs, which is
+    `warm/supervisor.py`'s HTTP handler -- the RESIDENT SERVER receiving the harness's POST
+    -- not the harness/caller process. `resolve_caller_context(payload)` therefore falls
+    through to its ambient probe (`CLAUDE_PLUGIN_ROOT` env, then machine-global config-dir
+    and `.doe-root` rungs) READ IN THIS SERVER PROCESS, caller-independent: a foreign `cwd`
+    on the event does not change the answer (measured). Benign today only because no wire
+    carries a caller's real `plugin_root` for this function to prefer instead --
+    `FORWARDED_ENV_PREFIXES` deliberately excludes `CLAUDE_PLUGIN_ROOT` (rehome plan
+    anti-scope) -- so every caller shares one resident server's ambient answer, which is
+    invisible on a one-plugin box and wrong the moment a session sets a real, different
+    `CLAUDE_PLUGIN_ROOT`. Closing this needs a caller-side wire field this module does not
+    yet have a channel for (cross-repo, DoE forwarder), same latent shape as the C11
+    `agent_id` finding this docstring used to compare itself to without naming it as a
+    residual.
     """
     raw_env = event.get("env")
     payload = {k: v for k, v in event.items() if k != "env"}

@@ -153,19 +153,6 @@ _SCAN_REASON_LIVE_CLAIM = "live-claim-holder: claim dir holds a live session"
 # default.
 _RECOMMENDED_CAP_CHOICE = 150
 
-# Legacy repo-relative POSIX literal, kept ONLY for a caller outside this
-# plan's scope (`housekeeping/cycle.py`'s union dirty-check fallback
-# pathspec) that still imports this attribute by name. This module's own
-# candidate/dest resolution below no longer reads this constant -- it
-# resolves through `memo_corpus_root` (coordinator_core/memo_corpus.py),
-# the one named resolver every corpus-root construction in coordinator_core
-# routes through. Removal trigger: `cycle.py`'s fallback pathspec repoint,
-# queued as `state/bug-backlog/2026-09-03-cycle-py-fallback-pathspec-still-
-# hardcodes-the-legacy-cross-repo-inbox-literal.yaml` -- that row's
-# completion criterion is this constant's deletion (coordinator:
-# overengineering-reviewer, 2026-09-03).
-INBOX_RELDIR = "cross-repo/inbox"
-
 # Fallback receipt sink for the one setup-error shape that has NO common_dir
 # to root a receipt under at all (`repo_root` handler arg absent/None, with
 # or without an also-bad `cap`). `_sweep_receipt.record_sweep_outcome` is

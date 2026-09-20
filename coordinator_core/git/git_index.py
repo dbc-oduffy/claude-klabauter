@@ -191,6 +191,17 @@ def parse_index_identity(
     detected -- an early-exiting caller trades whole-file structural
     validation for the walk it skipped. A caller that needs the file
     validated end to end passes `wanted=None`.
+
+    RAISES `IndexParseError` on any RETURNED entry with `stage != 0`
+    (unmerged), mirroring `git_state`'s "a conflicted path must never read
+    as staged" rule -- `commit.py::commit_paths` calls this function
+    directly with the commit's own pathspec and treats every returned
+    entry as an ordinary staged identity, so a conflicted path silently
+    passing through here as identical to stage 0 would let a commit land
+    mid-conflict. Only checked for entries that pass the `wanted` filter
+    (or every entry, when `wanted=None`): a skipped entry costs only the
+    two `flags` bytes already read, same trade-off as the truncation note
+    above.
     """
     gitdir = resolve_git_dir(repo)
     index_path = gitdir / "index"
@@ -273,6 +284,7 @@ def _parse_index_bytes(
         offset += _ENTRY_FIXED_LEN
 
         extended = bool(flags & 0x4000)
+        stage = (flags >> 12) & 0x3
         name_len_field = flags & 0x0FFF
 
         if extended:
@@ -302,6 +314,12 @@ def _parse_index_bytes(
 
         if wanted_bytes is not None and name not in wanted_bytes:
             continue
+
+        if stage != 0:
+            raise IndexParseError(
+                f"{index_path}: entry {name!r} is unmerged (stage {stage}); "
+                "a conflicted path must never read as staged"
+            )
 
         mtime_sec, mtime_nsec = struct.unpack(
             ">II", raw[entry_start + 8 : entry_start + 16]

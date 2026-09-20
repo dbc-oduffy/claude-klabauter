@@ -201,7 +201,16 @@ _SUBCOMMAND_USAGE = {
     ),
     "resolve-memo": (
         "archive-stamp-cli resolve-memo <memo_path> [disposition-flags...]\n"
-        "  NOTE — same prose file siblings as action-memo."
+        "  NOTE — same prose file siblings as action-memo.\n"
+        "  disposition-flags (engine's, coordinator_core/archive_stamp.py ::\n"
+        "  _DISPOSITION_FLAGS/_DISPOSITION_BOOL_FLAGS): --decision <value>,\n"
+        "  --decision-note <text>, --realized-by <value>, --actioned-note <text>,\n"
+        "  --distill-fate <value>, --in-repo-capture <value>,\n"
+        "  --superseded-by <memo_path>, --supersede-note <text>,\n"
+        "  --supersede-realized-by <value>, --supersede-at <ISO-date>,\n"
+        "  --correct-realization (no value). --superseded-by is mutually exclusive\n"
+        "  with --decision/--actioned-note — alternative terminal shapes, not\n"
+        "  combinable."
     ),
     "release-memo-revert": "archive-stamp-cli release-memo-revert <memo_path>",
     "stamp-plan-implemented": "archive-stamp-cli stamp-plan-implemented <plan_path>",

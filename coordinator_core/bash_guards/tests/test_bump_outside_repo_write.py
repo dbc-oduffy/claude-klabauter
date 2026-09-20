@@ -682,6 +682,36 @@ def test_same_repo_write_does_not_bump(env, monkeypatch):
     assert result is None
 
 
+def test_unexpanded_variable_redirect_target_bumps(env, monkeypatch):
+    """Bug-backlog record 2026-08-14 (4a1e7c93b256): `> $D` resolves `$D`
+    LITERALLY against the anchor cwd, landing at `<repo>/$D` -- which the
+    git-root check would otherwise find INSIDE the anchor's own repo and
+    silently skip (this guard's whole predicate is "no git root at all").
+    The shape-only unexpanded-variable branch must catch it ahead of that
+    check."""
+    _set_anchor(monkeypatch, env, "sess-var-1")
+    cmd = "echo x > $D"
+
+    result = guard.check_bump_outside_repo_write(cmd, "sess-var-1", str(env["anchor"]), {})
+
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "$D" in reason
+    assert "did not expand" in reason
+
+
+def test_variable_used_as_path_prefix_is_not_treated_as_unexpanded_shape(env, monkeypatch):
+    """`$D/out.txt` is a variable used as part of a larger path -- plausibly
+    a real path once expanded -- so the new shape-only branch must not
+    fire on it; whether the rest of the guard bumps is governed by the
+    existing (unrelated) literal-resolution behavior, not this check."""
+    assert not guard._is_unexpanded_variable_target("$D/out.txt")
+    assert not guard._is_unexpanded_variable_target("out-$D.txt")
+    assert guard._is_unexpanded_variable_target("$D")
+    assert guard._is_unexpanded_variable_target("${D}")
+    assert guard._is_unexpanded_variable_target('"$D"')
+
+
 def test_write_into_a_different_git_repo_does_not_bump_here(env, tmp_path, monkeypatch):
     """A target that resolves to SOME git root (even a foreign one) is C4's
     concern, never this guard's -- see module docstring, "PREDICATE"."""
@@ -1761,17 +1791,23 @@ def test_c1_ac6_deny_message_names_the_session_scratchpad_for_a_subagent(env, mo
     assert "coordinator-local" in reason and "subagent-share" in reason
 
 
-def test_c1_ac7_dollar_var_target_class_stays_out_of_scope_and_unchanged(env, monkeypatch):
-    """`echo hi > $D` -- the `$D`-style empty/unexpanded-variable class this
-    shell-doc-ok: that command IS the bash specimen this test asserts on.
-    plan's own Out of scope names explicitly -- must stay `None`,
-    unaffected by this chunk's addition."""
+def test_c1_ac7_dollar_var_target_class_now_bumps(env, monkeypatch):
+    """`echo hi > $D` -- the `$D`-style unexpanded-variable class the C1
+    plan explicitly deferred (its own Out of scope), and which was then
+    recorded as bug-backlog 2026-08-14-write-guards-fail-open-on-
+    unexpanded-variable-targets-4a1e7c93b256 precisely because deferring it
+    left a literal `$D` write silently unconfined. That record's fix landed
+    the shape-only unexpanded-variable branch this test now pins: the
+    class is IN scope as of that fix, superseding this test's old
+    stays-out-of-scope name and assertion."""
     _set_anchor(monkeypatch, env, "sess-c1-ac7")
     cmd = "echo hi > $D"
 
     result = guard.check_bump_outside_repo_write(cmd, "sess-c1-ac7", str(env["anchor"]), {})
 
-    assert result is None
+    assert result is not None
+    reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "$D" in reason and "did not expand" in reason
 
 
 def test_c1_ac8_both_target_module_docstrings_record_the_pm_ratified_reversal():

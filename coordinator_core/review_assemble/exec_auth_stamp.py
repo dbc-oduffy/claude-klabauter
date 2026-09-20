@@ -105,6 +105,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from coordinator_core.argv_fidelity import ArgvFidelityError, refuse_newline_argv
 from coordinator_core.frontmatter.primitives import (
     BlockScalar,
     append_fm_block_scalar_line,
@@ -787,6 +788,32 @@ def main(argv: list[str]) -> int:
 
     if note is not None and append_note_text is not None:
         print("review-exec-auth-stamp: --note and --append-note are mutually exclusive", file=sys.stderr)
+        return EXIT_USAGE
+
+    try:
+        refuse_newline_argv(
+            note,
+            flag_name="--note",
+            remedy=(
+                "a real line break here would be truncated by a .cmd "
+                "forwarder before it reaches this stamp; there is no "
+                "--note-file leg (the field's own PM-verbatim block-scalar "
+                "shape is written another way -- see this module's "
+                "docstring), so express the note as a single line."
+            ),
+        )
+        refuse_newline_argv(
+            append_note_text,
+            flag_name="--append-note",
+            remedy=(
+                "a real line break here would be truncated by a .cmd "
+                "forwarder before it reaches this stamp; there is no "
+                "--append-note-file leg, so express the appended text as a "
+                "single line."
+            ),
+        )
+    except ArgvFidelityError as exc:
+        print(f"review-exec-auth-stamp: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
     if by is None or (note is None and append_note_text is None):

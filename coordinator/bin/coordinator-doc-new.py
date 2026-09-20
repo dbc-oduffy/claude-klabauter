@@ -3269,7 +3269,9 @@ def _scaffold_goal_seed(
     (coordinator:goal-setting SKILL.md § Step 5b, "pickup-from-goal-seed" entry
     point). Like spinoff/roadmap-seed, this is a PM-directive fork with
     no baton branch-point: predecessor: none, no forked_from (CROSS_FIELD_RULES
-    Rule A3a-3, Negative-spec at bin/lib/schema.js:1404).
+    Rule A3a-3 — the live negative-spec is in
+    `coordinator_core/frontmatter/schema_validate.py`'s spinoff-kind rules; the
+    `bin/lib/schema.js` oracle this once cited was deleted 2026-07-24).
 
     goals (origin_goal_id in the emitted frontmatter — schema field name, NOT the
     SKILL's colloquial "goals:") is OPTIONAL for goal-seed: a deferred
@@ -3427,7 +3429,9 @@ def _scaffold_roadmap_seed(
     is the PM-gated baton that FIRES a future coordinator:roadmap-planning
     invocation; it does NOT carry the roadmap's graph-primitive fields (sprint,
     wave, blocks, blocked_by) — CROSS_FIELD_RULES rejects graph primitives on
-    roadmap-seed (bin/lib/schema.js:1102-1105, negative-spec).
+    roadmap-seed (negative-spec; live in
+    `coordinator_core/frontmatter/schema_validate.py`'s spinoff-kind rules, not
+    in the `bin/lib/schema.js` oracle deleted 2026-07-24).
 
     Like spinoff/goal-seed, this is a PM-directive fork with no baton
     branch-point: predecessor: none, no forked_from (Rule A3a-3).
@@ -4919,7 +4923,8 @@ def _scaffold_run_report(
 
     divergence is emitted in BLOCK style (key on its own line, nested `diverged:`
     indented below), NOT flow style (`divergence: {diverged: false}`) — this
-    repo's minimal YAML parser (bin/lib/schema.js parseYaml) does not support
+    repo's minimal YAML parser (`schema_validate.parse_yaml`, the native port
+    of the deleted oracle's parseYaml) does not support
     flow-style mappings and would parse a flow-style value as a raw string,
     failing the object-shaped schema check (divergence: type object, required
     [diverged], additionalProperties: false). Block style is the only shape

@@ -85,13 +85,15 @@ def test_cap_helper_binds_and_emits_exactly_one_overflow_entry():
     assert overflow["reason"] == "recommendation-forbidden"
 
 
-def test_cap_helper_is_the_single_shared_implementation_for_both_families():
-    """Both reader families must import the SAME function object — not two
-    independently-written copies of the cap-and-overflow loop."""
-    import coordinator_core.orient_assemble.readers_branch_reconcile as rbr_mod
+def test_cap_helper_is_the_single_shared_implementation():
+    """`readers_clean_ops` must import the SAME cap-and-overflow function
+    object this test file imports — not an independently-written copy.
+    `readers_branch_reconcile` is excluded here: its own auto-reconcile
+    family is retired (§ the module's own docstring) and no longer imports
+    `cap_judgment_points` at all — state/bug-backlog/2026-09-11-orient-
+    assemble-still-probes-the-retired-4775aa35bd49.yaml."""
     import coordinator_core.orient_assemble.readers_clean_ops as rco_mod
 
-    assert rbr_mod.cap_judgment_points is cap_judgment_points
     assert rco_mod.cap_judgment_points is cap_judgment_points
 
 
@@ -238,51 +240,32 @@ def test_memo_surface_no_overflow_when_under_cap(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# auto-reconcile family — capped regardless of cadence
+# auto-reconcile family — retired: `handoff.reconcile_open` is no longer a
+# registered op (K-026, superseded by K-057). `_read_auto_reconcile` is a
+# permanent no-op and must never dispatch it.
+# Bug-backlog: state/bug-backlog/2026-09-11-orient-assemble-still-probes-the-
+# retired-4775aa35bd49.yaml
 # ---------------------------------------------------------------------------
 
 
-def test_auto_reconcile_caps_unbounded_surfaced_list(monkeypatch):
-    surfaced = [
-        {"handoff_id": f"h-{i}", "reason": "gate_eval verdict=surface", "evidence": "x"}
-        for i in range(rbr._AUTO_RECONCILE_JUDGMENT_POINT_CAP + 7)
-    ]
-    def _fake_get_response():
-        return {"result": {"surfaced": surfaced}}
-
+def test_auto_reconcile_probe_never_dispatches(monkeypatch):
+    """The retired probe must not be called, even if a caller still fakes a
+    response for it — proves `_read_auto_reconcile` no longer reaches
+    `check_auto_reconcile.get_response` at all."""
     import coordinator_core.ops.check_auto_reconcile as check_auto_reconcile
 
-    monkeypatch.setattr(check_auto_reconcile, "get_response", _fake_get_response)
+    def _unexpected_call():
+        raise AssertionError(
+            "check_auto_reconcile.get_response was called by the retired "
+            "_read_auto_reconcile probe"
+        )
+
+    monkeypatch.setattr(check_auto_reconcile, "get_response", _unexpected_call)
 
     result = rbr._read_auto_reconcile()
 
-    # Overflow entry is `j-overflow-auto-reconcile` (Review: code-reviewer —
-    # Finding 4) — a distinct prefix from `j-auto-reconcile-N`, so a naive
-    # `startswith("j-auto-reconcile-")` filter can no longer silently
-    # include it. No exclusion needed here.
-    reconcile_jps = [
-        jp for jp in result.judgment_points if jp["id"].startswith("j-auto-reconcile-")
-    ]
-    overflow_jps = [
-        jp for jp in result.judgment_points if jp["id"] == "j-overflow-auto-reconcile"
-    ]
-    assert len(reconcile_jps) == rbr._AUTO_RECONCILE_JUDGMENT_POINT_CAP
-    assert len(overflow_jps) == 1
-
-
-def test_auto_reconcile_no_overflow_when_under_cap(monkeypatch):
-    surfaced = [{"handoff_id": "h-1", "reason": "gate_eval verdict=surface", "evidence": "x"}]
-
-    def _fake_get_response():
-        return {"result": {"surfaced": surfaced}}
-
-    import coordinator_core.ops.check_auto_reconcile as check_auto_reconcile
-
-    monkeypatch.setattr(check_auto_reconcile, "get_response", _fake_get_response)
-
-    result = rbr._read_auto_reconcile()
-
-    assert [jp["id"] for jp in result.judgment_points] == ["j-auto-reconcile-1"]
+    assert result.judgment_points == []
+    assert result.directives == []
 
 
 # ---------------------------------------------------------------------------

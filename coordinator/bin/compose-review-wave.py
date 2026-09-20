@@ -474,7 +474,7 @@ def _provision_phase(
         payload["contract_blocks"] = contract_block_names
 
     try:
-        sidecar_path = _provision(payload, str(policy_file), None)
+        sidecar_path = _provision(payload, str(policy_file), str(_REPO_ROOT))
     except Exception as exc:
         raise ComposeError(
             f"provision_report._provision failed for {agent_type}/{provision_key}: {exc}"

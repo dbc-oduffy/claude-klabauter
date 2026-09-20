@@ -26,15 +26,24 @@ questions:
      `psutil`), and job-object accounting is tick-quantised at ~15.6ms.
 
   2. `measure_import_set` -- the `sys.modules` module-COUNT delta from
-     importing a target module in a fresh subprocess, under either the
-     "armed" (`COORDINATOR_CORE_LAZY_OPS=1`) or "unarmed" (eager-default)
-     shape. This is a distinct question from (1) ("how much does this cost"
-     vs "how many modules does this pull in") and this module keeps them as
-     two functions rather than one, mirroring `import_budget.py`'s own
-     module-count-vs-wall-clock split (see that module's "Why module count,
-     not wall-clock" docstring section) -- except this probe self-times with
-     `time.process_time()`, not wall clock, per this plan's own
-     § Anti-scope ("Do not measure in wall clock").
+     importing a target module in a fresh subprocess. This is a distinct
+     question from (1) ("how much does this cost" vs "how many modules does
+     this pull in") and this module keeps them as two functions rather than
+     one, mirroring `import_budget.py`'s own module-count-vs-wall-clock split
+     (see that module's "Why module count, not wall-clock" docstring
+     section) -- except this probe self-times with `time.process_time()`,
+     not wall clock, per this plan's own § Anti-scope ("Do not measure in
+     wall clock").
+
+     Retired the armed/unarmed axis (bug-backlog
+     2026-08-23-the-boot-backstop-benchmark-keeps-an-armed-un-778280fc04c9):
+     `docs/plans/2026-08-22-the-import-path-costs-nothing.md` made op
+     registration unconditionally lazy, so `COORDINATOR_CORE_LAZY_OPS`
+     no longer changes what a fresh subprocess imports -- both former arms
+     measure the identical child. A single unparameterised measurement is
+     the honest shape now; `IMPORT_SET_HISTORICAL_READINGS` below still
+     records the two now-collapsed historical numbers verbatim, since those
+     were real readings taken while the flag was still live.
 
 RECONCILING THE IMPORT-SET DISCREPANCY (EM decision 2026-08-23, resolving
 staff-eng review F2; binds AC3d). Three different import-set readings for
@@ -135,7 +144,14 @@ IMPORT_SET_HISTORICAL_READINGS = {
 as not being one number under measurement noise (EM decision 2026-08-23,
 resolving staff-eng review F2). Never adopt the smallest of these silently --
 `measure_import_set`/`reconcile_import_set_readings` re-measure the module
-actually on disk instead."""
+actually on disk instead.
+
+The `armed`/`unarmed` tags on the second and third entries are HISTORY, not
+a live axis: `measure_import_set` no longer takes an `armed` parameter (the
+flag it named is retired, see the module docstring's point 2). The tags stay
+exactly as recorded because they are what those two readings were actually
+taken under at the time -- rewriting them would misattribute a real past
+reading to a shape it wasn't measured under."""
 
 
 class ColdProcessTimeSample(NamedTuple):
@@ -232,11 +248,9 @@ _IMPORT_SET_PROBE_TIMEOUT_S = 30
 
 class ImportSetReading(NamedTuple):
     """One fresh-subprocess `sys.modules` delta reading for importing
-    `module`, under either the `armed` (`COORDINATOR_CORE_LAZY_OPS=1`) or
-    unarmed (eager-default) shape."""
+    `module`."""
 
     module: str
-    armed: bool
     module_count: int
     own_module_count: int
     elapsed_process_ms: float
@@ -244,20 +258,16 @@ class ImportSetReading(NamedTuple):
 
 def measure_import_set(
     module: str,
-    armed: bool,
     python: Optional[str] = None,
 ) -> ImportSetReading:
     """Measures the `sys.modules` module-count delta (and this process's own
-    process time) of `import <module>` in a fresh subprocess, under the
-    `armed`/unarmed shape named by `armed`.
+    process time) of `import <module>` in a fresh subprocess.
 
-    `armed=True` sets `COORDINATOR_CORE_LAZY_OPS=1` in the child's
-    environment (the two-channel flag documented at the top of
-    `coordinator_core/ops/__init__.py` -- the env-var channel, not the
-    `sys._coordinator_core_lazy_ops` attribute channel, since this is a
-    fresh subprocess with no attribute to set yet). `armed=False` strips the
-    var entirely (rather than setting it to some other value) so no future
-    accepted value for the var can quietly change which shape is measured.
+    No longer takes an `armed` parameter: `COORDINATOR_CORE_LAZY_OPS` is
+    retired (`docs/plans/2026-08-22-the-import-path-costs-nothing.md` made op
+    registration unconditionally lazy) and setting or stripping it in the
+    child's environment no longer changes what gets imported -- a fresh
+    subprocess's `os.environ` is passed through unmodified.
 
     Isolation is load-bearing, same reasoning as `_import_probe.py`'s own
     docstring: measuring in-process after a sibling import already pulled the
@@ -276,10 +286,6 @@ def measure_import_set(
     """
     python = python or sys.executable
     env = dict(os.environ)
-    if armed:
-        env["COORDINATOR_CORE_LAZY_OPS"] = "1"
-    else:
-        env.pop("COORDINATOR_CORE_LAZY_OPS", None)
     existing_pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = (
         f"{_REPO_ROOT}{os.pathsep}{existing_pythonpath}" if existing_pythonpath else _REPO_ROOT
@@ -297,14 +303,13 @@ def measure_import_set(
     )
     if result.returncode != 0:
         raise RuntimeError(
-            f"import-set probe for module {module!r} (armed={armed}) exited "
+            f"import-set probe for module {module!r} exited "
             f"{result.returncode}: {result.stderr}"
         )
     fields = result.stdout.strip().split()
     module_count, elapsed_ms_str, own_module_count = fields[0], fields[1], fields[2]
     return ImportSetReading(
         module=module,
-        armed=armed,
         module_count=int(module_count),
         own_module_count=int(own_module_count),
         elapsed_process_ms=float(elapsed_ms_str),
@@ -315,39 +320,35 @@ def reconcile_import_set_readings(
     module: str,
     python: Optional[str] = None,
 ) -> Dict[str, object]:
-    """Re-measures `module`'s import set under both shapes (armed and
-    unarmed) against the module ACTUALLY on disk, and returns them alongside
-    any historical reading recorded in `IMPORT_SET_HISTORICAL_READINGS` for
-    the same module path -- so a caller sees the live number and the
-    historical readings side by side rather than one silently overwriting
-    the other.
+    """Re-measures `module`'s import set against the module ACTUALLY on disk,
+    and returns it alongside any historical reading recorded in
+    `IMPORT_SET_HISTORICAL_READINGS` for the same module path -- so a caller
+    sees the live number and the historical readings side by side rather
+    than one silently overwriting the other.
 
     A module this plan DELETES (the old composite) is not an error here: its
-    live halves come back None with `live_module_absent` True, and its
-    historical record still reconciles. A retired shape's numbers are history
-    -- refusing to report them because the module is gone would destroy the
-    very record AC3d asks be reconciled.
+    live reading comes back None with `live_module_absent` True, and its
+    historical record still reconciles. A retired reading is history --
+    refusing to report it because the module is gone would destroy the very
+    record AC3d asks be reconciled.
 
     This is the reconciliation AC3d requires before it can be trusted: a
-    fresh measurement, tagged with the shape each half was taken under, next
-    to the historical record rather than in place of it.
+    fresh measurement next to the historical record rather than in place of
+    it.
     """
-    def _measure(is_armed: bool) -> Optional[Dict[str, object]]:
-        try:
-            return measure_import_set(module, armed=is_armed, python=python)._asdict()
-        except RuntimeError as exc:
-            if "ModuleNotFoundError" not in str(exc):
-                raise
-            return None
-
-    armed = _measure(True)
-    unarmed = _measure(False)
+    try:
+        live: Optional[Dict[str, object]] = measure_import_set(
+            module, python=python
+        )._asdict()
+    except RuntimeError as exc:
+        if "ModuleNotFoundError" not in str(exc):
+            raise
+        live = None
     return {
         "module": module,
-        "armed": armed,
-        "unarmed": unarmed,
+        "live": live,
         "historical": list(IMPORT_SET_HISTORICAL_READINGS.get(module, [])),
-        "live_module_absent": armed is None and unarmed is None,
+        "live_module_absent": live is None,
     }
 
 

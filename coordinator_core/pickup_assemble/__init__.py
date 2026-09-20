@@ -2489,6 +2489,21 @@ def _claim_grant_denied_live_reason(
     # EM is meant to act on.
     holder_display = holder_sid or "an unidentified session"
 
+    if basis == "harness-registry-elsewhere":
+        header = f"held by {holder_display} — live in another repo"
+        clauses = []
+        if age_sec is not None:
+            clauses.append(f"last activity {age_sec}s ago")
+        if recent_paths:
+            clauses.append(f"last touched {recent_paths[0]}")
+            if scope_overlap is True:
+                clauses.append("intersects this handoff's scope")
+            elif scope_overlap is False:
+                clauses.append("does not intersect this handoff's scope")
+        if clauses:
+            return header + ", " + ", ".join(clauses)
+        return header
+
     if basis in ("stable-pid", "harness-registry"):
         header = f"held by {holder_display} — live ({basis})"
         clauses = []

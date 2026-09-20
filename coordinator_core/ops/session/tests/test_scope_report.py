@@ -397,6 +397,37 @@ class TestAssertPathsInSessionScopeAllowOrphans:
         assert ok is True
         assert reason == ""
 
+    def test_clean_unclaimed_path_denies_even_with_allow_orphans(self, tmp_path):
+        """state/bug-backlog/2026-08-29-orphan-adoption-admits-a-clean-path.yaml.
+
+        Doctrine defines an orphan as dirty AND claimed by nobody.
+        `OWNERSHIP_UNCLAIMED` alone (a pure claim-ledger verdict) must not be
+        enough to adopt a path that was never touched -- a clean, committed,
+        untouched file is unclaimed but NOT dirty, so `allow_orphans=True`
+        must still deny it.
+        """
+        repo = _make_repo(tmp_path)
+        core.init("mine", cwd=str(repo))
+        (repo / "clean.py").write_text("c")
+        subprocess.run(
+            ["git", "add", "clean.py"],
+            cwd=str(repo),
+            check=True,
+            **no_console_passthrough_kwargs(),
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "add clean.py"],
+            cwd=str(repo),
+            check=True,
+            **no_console_passthrough_kwargs(),
+        )
+
+        ok, reason = assert_paths_in_session_scope(
+            "mine", ["clean.py"], cwd=str(repo), allow_orphans=True
+        )
+        assert ok is False
+        assert "clean.py" in reason
+
     def test_peer_claimed_path_denies_in_both_modes(self, tmp_path):
         repo = _make_repo(tmp_path)
         core.init("mine", cwd=str(repo))

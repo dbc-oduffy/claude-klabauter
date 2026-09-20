@@ -91,6 +91,7 @@ Negative-spec:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -348,6 +349,45 @@ _BODY_HEADER = (
 )
 
 
+def _marker_is_installed(existing_text: str, gate: _Gate) -> bool:
+    """Is `gate` present as a REAL gate in `existing_text`, rather than
+    merely as a substring somewhere in it (e.g. a retirement or provenance
+    comment naming the marker)?
+
+    2026-08-25-class fix, ported from
+    `install_meta_repo_precommit_hook._marker_is_installed` (same defect,
+    independent copy — see this module's own docstring for why the two stay
+    duplicated rather than shared). The bare `gate.marker in existing_text`
+    test this replaces is true for a marker mentioned only in a COMMENT,
+    which silently makes the gate un-installable forever: it falls out of
+    `missing_gates` (never appended) while `_gate_region_is_current` also
+    can never fire (the region this module would emit is not present
+    either), leaving a registry entry that can never reach the hook.
+
+    Presence means either of:
+      - this gate's own `# --- Gate: <label> (<marker>) ---` region header
+        (the ONE comment this module's own emitted body legitimately
+        carries the marker in), or
+      - the marker on the CODE portion of some line — the part before any
+        `#`, whether the line is comment-only or code with a trailing
+        inline comment — word-bounded so one marker can never cross-match
+        as a substring of another.
+
+    Only a mention confined entirely to OTHER comment text (a retirement
+    note, a provenance sentence, anything that is not this module's own
+    region header) now counts as absent.
+    """
+    header = f"# --- Gate: {gate.label} ({gate.marker}) ---"
+    if header in existing_text:
+        return True
+    marker_re = re.compile(r"(?<![\w-])" + re.escape(gate.marker) + r"(?![\w-])")
+    for line in existing_text.splitlines():
+        code_part = line.split("#", 1)[0]
+        if marker_re.search(code_part):
+            return True
+    return False
+
+
 def _gate_region_is_current(existing_text: str, gate: _Gate) -> bool:
     """Whether `existing_text` contains this gate's block EXACTLY as it would
     be emitted today.
@@ -424,7 +464,7 @@ def _install_or_append_hook(repo_root: str, gates: List[_Gate]) -> int:
             print(f"skip: _install_or_append_hook: reading {hook_path} failed: {exc}", file=sys.stderr)
             existing_text = ""
 
-    missing_gates = [g for g in gates if g.marker not in existing_text]
+    missing_gates = [g for g in gates if not _marker_is_installed(existing_text, g)]
 
     if not hook_exists:
         content = _hook_body(gates)

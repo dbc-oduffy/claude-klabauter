@@ -1222,6 +1222,52 @@ def _timeout_for(method: str, msg: Any = None) -> float:
     return resolved
 
 
+def mutation_read_deadline_for(method: str, msg: Any = None) -> float:
+    """How long a client may wait to READ the answer to a mutation it has
+    already put on the wire. `_timeout_for` WITHOUT the ceremony clamp.
+
+    THE TWO NUMBERS ARE NOT THE SAME KIND OF THING, which is the whole reason
+    this function exists separately. `CEREMONY_BUDGET_SECS` is a PERFORMANCE
+    bar: an op that exceeds it is a defect, and DR-344 says so in the
+    strongest terms. A read deadline is a TRANSPORT question: how long before
+    this client concludes it will never hear an answer. Using the performance
+    bar as the transport deadline means that the moment an op misses its
+    performance target, the client destroys its own ability to learn whether
+    the mutation happened -- converting a slowness report into an integrity
+    unknown, exactly when the op is slow.
+
+    `warm/client.py` applied the clamped value here, and the effect was total:
+    its mutation extension waits `mutation_deadline - READ_DEADLINE_SECS`, and
+    both terms were 2.0 for every `ceremony.*` op, so the extension waited
+    `max(0.0, 0.0)` -- ZERO additional seconds. The mechanism whose entire
+    purpose is to not abandon a delivered mutation was inert for precisely the
+    ops that commit, while a non-ceremony mutation got the intended 28s.
+    Measured 2026-09-20: `ceremony.commit_v2` answers in 354ms of process time
+    with one spawn, but takes 5.8-12.5s of WALL clock on a box at its stated
+    50-70 session load norm -- so every commit reported
+    `WARM_DISPATCH_INDETERMINATE` and then landed seconds later.
+
+    NOT A BUDGET WIDENING, and it must not be read as one. Nothing here
+    changes what any op is allowed to cost, what the dispatch path enforces,
+    or what `_timeout_for` returns; `CEREMONY_BUDGET_SECS` is untouched and
+    every ceremony op is still held to it and still reported when it misses.
+    What changes is that missing it is reported as SLOW rather than as
+    UNKNOWN-WHETHER-IT-COMMITTED.
+
+    Negative spec: not a general-purpose timeout. Callers that ask "how long
+    may this op take" still call `_timeout_for` and still get the clamp. This
+    is only for a client that has already delivered a mutating request and is
+    deciding how long to keep reading the same response -- never a resend, so
+    a longer wait cannot double-execute anything.
+    """
+    lane_budget = publish_lane.budget_for(method, msg)
+    if lane_budget is not None:
+        return lane_budget
+    if method in _OP_TIMEOUT_OVERRIDES:
+        return _OP_TIMEOUT_OVERRIDES[method]
+    return _resolve_dispatch_timeout_secs()
+
+
 # ---------------------------------------------------------------------------
 # Repo-key transport field (C1a seam — AC-1 / AC-1c)
 #
@@ -2598,7 +2644,9 @@ def _timeout_error_envelope(method: str, op_timeout: float, id_: Any) -> dict:
 
 
 
-async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
+async def dispatch_message(
+    msg: dict, *, caller: Optional[str] = None, corr_id: Optional[str] = None
+) -> dict:
     """Validate + dispatch ``msg``, recording a durable per-op wall-clock sample.
 
     Thin timing wrapper around ``_dispatch_message_impl`` (which retains this
@@ -2657,6 +2705,16 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
     Spec backlink: state/handoffs/2026-08-08-engine-fails-the-load-norm.md
                    docs/wiki/machine-load-norm.md
 
+    ``corr_id`` (2026-08-25-a-process-time-row-cannot-be-joined-to-its-own):
+    a wrapping call site (dispatch_from_hook, dispatch_ops_from_hook) that
+    mints its own `corr_id` before calling here MAY hand it in, so its own
+    `record_op_process_time` row shares the SAME `corr_id` as the
+    started/complete rows this function records -- the join the process-time
+    row exists to support. Omitted (the default, and every pre-existing
+    call site), this function mints its own via `new_correlation_id()`
+    exactly as before -- purely additive, never a behavior change for an
+    unmigrated caller.
+
     STAMP GATE (checked FIRST, before anything else in this function): a
     refused dispatch never ran, so it gets no `record_op_started`/
     `record_op_latency` row -- those measure real invocations, and a
@@ -2703,7 +2761,6 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
     _nested_token = _NESTED_DISPATCH_CPU_MS.set([])
     outcome = "ok"
 
-    corr_id = None
     # Review: code-reviewer (Finding 2, P2) — sid is resolved once here, in the
     # entry block, not independently re-resolved in the `finally` block below.
     # If the entry block raises after this point but before `sid` is assigned
@@ -2748,7 +2805,8 @@ async def dispatch_message(msg: dict, *, caller: Optional[str] = None) -> dict:
         )
         from coordinator_core.session.core import resolve_session_id
 
-        corr_id = new_correlation_id()
+        if corr_id is None:
+            corr_id = new_correlation_id()
         sid = resolve_session_id() or None
         record_op_started(
             op=method if isinstance(method, str) else "<unknown>",
@@ -3278,6 +3336,13 @@ def dispatch_from_hook(
     process_start = _time.process_time()
     spawn_start = _spawn_count_or_none()
     _caller = "coordinator_core.ipc.dispatch_from_hook"
+    # Minted here, not inside dispatch_message, so THIS function's own
+    # process-time row below can carry the SAME corr_id as the
+    # started/complete rows dispatch_message records for this call --
+    # 2026-08-25-a-process-time-row-cannot-be-joined-to-its-own.
+    from coordinator_core.telemetry.op_latency import new_correlation_id
+
+    _corr_id = new_correlation_id()
     try:
         # C16 (following up C15's honest PARTIAL): this function IS one of
         # `dispatch_message`'s own call sites, and now declares itself
@@ -3286,7 +3351,9 @@ def dispatch_from_hook(
         # signature (`coordinator_core.ops.tests.test_ipc_dispatch_from_hook`)
         # are in THIS row's `writes:` and have been widened to accept
         # `caller=`.
-        response = asyncio.run(dispatch_message(envelope, caller=_caller))
+        response = asyncio.run(
+            dispatch_message(envelope, caller=_caller, corr_id=_corr_id)
+        )
     finally:
         process_ms = (_time.process_time() - process_start) * 1000.0
         request_repo = resolve_request_repo(envelope) or resolve_caller_cwd(envelope)
@@ -3298,6 +3365,7 @@ def dispatch_from_hook(
             t_start=t_start,
             repo_root=request_repo,
             sid=_telemetry_sid(),
+            corr_id=_corr_id,
             spawns=_spawn_delta(spawn_start, _spawn_count_or_none()),
             caller=_caller,
         )
@@ -3406,11 +3474,20 @@ def dispatch_ops_from_hook(
             process_start = _time.process_time()
             spawn_start = _spawn_count_or_none()
             _caller = "coordinator_core.ipc.dispatch_ops_from_hook"
+            # Same join fix as dispatch_from_hook: mint here and hand it in,
+            # so this op's process-time row shares its corr_id with the
+            # started/complete rows dispatch_message records for it --
+            # 2026-08-25-a-process-time-row-cannot-be-joined-to-its-own.
+            from coordinator_core.telemetry.op_latency import new_correlation_id
+
+            _corr_id = new_correlation_id()
             try:
                 # C16 (following up C15's honest PARTIAL): declares itself
                 # explicitly now that this function's own test doubles
                 # (in this row's `writes:`) accept `caller=`.
-                response = await dispatch_message(envelope, caller=_caller)
+                response = await dispatch_message(
+                    envelope, caller=_caller, corr_id=_corr_id
+                )
             finally:
                 record_op_process_time(
                     op=op_name,
@@ -3419,6 +3496,7 @@ def dispatch_ops_from_hook(
                     source_path="hook_batch",
                     t_start=t_start,
                     sid=_telemetry_sid(),
+                    corr_id=_corr_id,
                     repo_root=(
                         resolve_request_repo(envelope) or resolve_caller_cwd(envelope)
                     ),

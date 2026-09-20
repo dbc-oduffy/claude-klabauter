@@ -4267,24 +4267,41 @@ class TestSupersedeReconcilesClaimFromDurableLedger:
 
     def test_no_ledger_record_leaves_the_dr242_refusal_verbatim(self, tmp_path, monkeypatch):
         """DR-242 is NOT weakened: with no ledger entry there is no independent
-        evidence, so the op is never composed, the predecessor is left
-        byte-identical, and the degrade reason is unchanged."""
+        evidence. The wrapper-level pre-filter that used to gate composing the
+        op on `reconciled` was itself the DoE-claude defect (see
+        `_dispatch_handoff_supersede_predecessor`'s own "reconciled is
+        deliberately NOT branched on any more" comment) -- the op IS still
+        composed, and it is `handoff.archive_transition`'s own choke point
+        (`mode == "supersede"`) that refuses. The predecessor is left
+        byte-identical and the degrade reason is unchanged."""
         repo = tmp_path / "repo"
         predecessor = self._seed_repo(repo, _UNCLAIMED_PREDECESSOR_FM)
         before = predecessor.read_text(encoding="utf-8")
 
         calls: list = []
-        monkeypatch.setattr(
-            ba_apply,
-            "_invoke_op_in_process",
-            lambda op_name, params, repo_root: calls.append(op_name),
-        )
+
+        def _fake_invoke(op_name, params, repo_root):
+            calls.append(op_name)
+            return {
+                "exit_code": 0,
+                "transition": {
+                    "superseded": False,
+                    "choke_point_refusal": True,
+                    "error": (
+                        f"mode='supersede' refused: {_PRED_REL} was never "
+                        "claimed or shipped (DR-242: a successor-named child "
+                        "is not evidence of succession; nothing to supersede)"
+                    ),
+                },
+            }
+
+        monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _fake_invoke)
 
         result = ba_apply._dispatch_handoff_supersede_predecessor(
             [_PRED_REL, "state/handoffs/successor.md", "state/handoffs/successor.md"], repo
         )
 
-        assert calls == []
+        assert calls == ["housekeeping.cycle"]
         assert result["degraded"]["reason"] == "predecessor-not-claimed-or-shipped"
         assert predecessor.read_text(encoding="utf-8") == before
 
@@ -4334,9 +4351,10 @@ class TestSupersedeReconcilesClaimFromDurableLedger:
 
     def test_legacy_pid_only_claim_dir_is_not_evidence(self, tmp_path, monkeypatch):
         """A claim dir carrying no `session_id` (the legacy pid-only residual)
-        names no holder, and `handoff.transition` verb="claim" fails loud on an
-        empty session id rather than stamping `claimed_by:` empty. Treated as
-        no evidence -- the refusal stands, and nothing is written."""
+        names no holder, so `_ledger_claim_record` reports no record and
+        `handoff.transition` verb="claim" is never reached. Treated as no
+        evidence -- same as the no-ledger-record case above, the op is still
+        composed and it is the choke point that refuses; nothing is written."""
         repo = tmp_path / "repo"
         predecessor = self._seed_repo(repo, _UNCLAIMED_PREDECESSOR_FM)
         claim_dir = _seed_ledger_handoff_claim(repo, "predecessor.md")
@@ -4344,17 +4362,29 @@ class TestSupersedeReconcilesClaimFromDurableLedger:
         before = predecessor.read_text(encoding="utf-8")
 
         calls: list = []
-        monkeypatch.setattr(
-            ba_apply,
-            "_invoke_op_in_process",
-            lambda op_name, params, repo_root: calls.append(op_name),
-        )
+
+        def _fake_invoke(op_name, params, repo_root):
+            calls.append(op_name)
+            return {
+                "exit_code": 0,
+                "transition": {
+                    "superseded": False,
+                    "choke_point_refusal": True,
+                    "error": (
+                        f"mode='supersede' refused: {_PRED_REL} was never "
+                        "claimed or shipped (DR-242: a successor-named child "
+                        "is not evidence of succession; nothing to supersede)"
+                    ),
+                },
+            }
+
+        monkeypatch.setattr(ba_apply, "_invoke_op_in_process", _fake_invoke)
 
         result = ba_apply._dispatch_handoff_supersede_predecessor(
             [_PRED_REL, "state/handoffs/successor.md", "state/handoffs/successor.md"], repo
         )
 
-        assert calls == []
+        assert calls == ["housekeeping.cycle"]
         assert result["degraded"]["reason"] == "predecessor-not-claimed-or-shipped"
         assert predecessor.read_text(encoding="utf-8") == before
 

@@ -38,6 +38,7 @@ import pytest
 
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
 from coordinator_core.bash_guards import _command_tokenizer
+from coordinator_core.bash_guards._dialect import Dialect
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 from coordinator_core.bash_guards._write_bump_marker import (
     marker_basename,
@@ -2644,3 +2645,26 @@ def test_interpreter_payload_write_into_own_repo_does_not_bump(repos, monkeypatc
     result = guard.check_bump_foreign_repo_write(cmd, "sess-ip-own", str(repos["anchor"]), {})
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# bug-backlog 2026-08-18-powershell-text-reaches-the-posix-tokeni-ea6ff0baddab
+# -- the PowerShell leg's own AC5 carve-out check must not posix-tokenize the
+# raw PowerShell text it was handed.
+# ---------------------------------------------------------------------------
+
+
+def test_ac5_powershell_start_process_cross_repo_memo_invocation_recognized_under_powershell_dialect():
+    """`Start-Process -FilePath cross-repo-memo ...` only resolves to a
+    `cross-repo-memo` head once `expand_start_process_invocations` has run
+    -- a PowerShell-only step `resolve_segments_for_dialect` applies for
+    `Dialect.POWERSHELL` and the posix `resolve_command_positions` path
+    knows nothing about. Passing `dialect=Dialect.POWERSHELL` must route
+    through that PowerShell-aware seam and recognize the invocation;
+    without it (the pre-fix default posix path) the head token is literally
+    `Start-Process`, never `cross-repo-memo`, and the carve-out is missed.
+    """
+    cmd = "Start-Process -FilePath cross-repo-memo -ArgumentList 'send'"
+
+    assert guard._command_invokes_cross_repo_memo(cmd, None, dialect=Dialect.POWERSHELL) is True
+    assert guard._command_invokes_cross_repo_memo(cmd, None) is False

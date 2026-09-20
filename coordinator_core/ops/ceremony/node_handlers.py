@@ -23,7 +23,7 @@ Bulk-eligibility helper (C2):
   _resolve_in_reply_to_target, which stays outside this module's no-disk-I/O
   contract by construction.
 
-The 8 J-questions and 3 F-slots are defined as module-level dicts keyed by step_id
+The 8 J-questions and 1 F-slot are defined as module-level dicts keyed by step_id
 (authoritative — changing a question/slot here changes all consumers).
 
 Spec backlink:
@@ -106,7 +106,16 @@ STEP_4B = "step_4b"
 # Node-type classification — canonical map for the wsc ceremony
 # ---------------------------------------------------------------------------
 # Source: node-map § Step-by-Step Node-Type Table + Count Summary (corrected).
-# 37 D / 8 J / 3 F / 1 B / 0 X = 49 pipeline steps.
+# 39 D / 8 J / 1 F / 1 B / 0 X = 49 pipeline steps.
+#
+# STEP_2B/STEP_4B reclassified F->D 2026-09-20 (bug-blitz audit of
+# state/bug-backlog/2026-07-08-wsc-step2b-step4b-disk-first-audit.yaml):
+# grep across coordinator_core found no wsc_commit transcriber for either
+# step_id outside this module — same disk-first / no-fill-target shape
+# STEP_1B/STEP_2_4B had before their Option B reclassification (memo
+# 2026-07-08). STEP_2B's own slot description ("plan doc is updated in
+# place") already named the disk-first authorship; STEP_4B's narrative is
+# likewise EM-authored straight to disk with no op-side payload consumer.
 #
 # Negative-spec: step_4c is documented in the node-map table as a J-labelled
 # meta-step that describes the EM's flag-severity-triage practice (CLAUDE.md
@@ -152,6 +161,8 @@ _STEP_NODE_TYPES: dict[str, str] = {
     STEP_2_67A:   "D",  # reclassified X→D: filesystem-mtime scratch scan (C2 spinoff)
     STEP_1B:      "D",  # reclassified F→D: lesson authored disk-first via coordinator-lesson-add; op records provenance, not payload (Option B, memo 2026-07-08)
     STEP_2_4B:    "D",  # reclassified F→D: plan-reconciliation ALLOWLIST edit written in place at Step 2.4; op records provenance, not payload (Option B, memo 2026-07-08)
+    STEP_2B:      "D",  # reclassified F→D: plan completion notes written in place, no wsc_commit transcriber (bug-blitz audit, 2026-09-20)
+    STEP_4B:      "D",  # reclassified F→D: work-done narrative authored disk-first, no wsc_commit transcriber (bug-blitz audit, 2026-09-20)
     # -------- J — judgment-elicited (8) --------
     STEP_1A:      "J",
     STEP_1_2:     "J",
@@ -161,10 +172,8 @@ _STEP_NODE_TYPES: dict[str, str] = {
     STEP_2_8A:    "J",
     STEP_2_8C:    "J",
     STEP_2_95B:   "J",
-    # -------- F — free-authored prose (3) --------
-    STEP_2B:      "F",
+    # -------- F — free-authored prose (1) --------
     STEP_2_6_6C:  "F",
-    STEP_4B:      "F",
     # -------- X — illegible-state gap (0 — reserved; BranchResolution/receipts may still emit X) --------
     # -------- B — EM-turn bracket (1) --------
     STEP_B1:      "B",
@@ -231,29 +240,24 @@ J_QUESTIONS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# F-slot corpus (3 authoring slots)
+# F-slot corpus (1 authoring slot)
 # ---------------------------------------------------------------------------
 # Slot descriptions sourced from node-map § Step-by-Step Node-Type Table.
 # filled="" until the EM authors the prose during the EM turn.
 #
 # These are irreducible EM prose slots — no bounded-choice framing applies.
 # The handler DOES NOT author prose (anti-scope).
+#
+# Negative-spec: STEP_2B/STEP_4B are NOT here — reclassified F→D (see
+# _STEP_NODE_TYPES comment above). Both are disk-first EM authorship with no
+# wsc_commit transcriber; re-adding either here without a real op-side fill
+# target reopens the silent-drop shape the reclassification closed.
 
 F_SLOTS: dict[str, str] = {
-    STEP_2B: (
-        "Plan completion notes — check off completed tasks; write what was built,"
-        " key decisions, and notable outcomes."
-        " Requires session memory; plan doc is updated in place."
-    ),
     STEP_2_6_6C: (
         "Completion entry body paragraph."
         " ONE paragraph ≤8 sentences: what shipped + why it matters."
         " Irreducible EM prose from session context."
-    ),
-    STEP_4B: (
-        "\"Work done\" narrative synthesis."
-        " 1-2 sentence summary of what shipped and why it matters."
-        " Irreducible EM synthesis from session context."
     ),
 }
 
@@ -407,11 +411,11 @@ def emit_f(step_id: str, filled: str = "") -> dict[str, Any]:
     """Produce an F-node dict with the canonical slot description for step_id.
 
     The slot description is sourced from F_SLOTS (authoritative corpus).
-    Raises KeyError if step_id is not one of the 3 F-steps.
+    Raises KeyError if step_id is not the 1 registered F-step.
 
     Anti-scope: does NOT author prose.  filled="" until the EM authors the prose
-    during the EM turn.  The 3 F-steps are irreducible EM writing —
-    completion narrative, plan completion notes, etc.
+    during the EM turn.  The 1 F-step is irreducible EM writing —
+    completion narrative.
 
     Args:
         step_id: canonical step ID; must be a key in F_SLOTS.
@@ -421,7 +425,7 @@ def emit_f(step_id: str, filled: str = "") -> dict[str, Any]:
         Schema-valid F-node dict (receipt_schema.make_f_node shape).
 
     Raises:
-        KeyError: if step_id is not one of the 3 registered F-steps.
+        KeyError: if step_id is not the 1 registered F-step.
     """
     slot = F_SLOTS[step_id]  # intentional KeyError if not an F-step
     return make_f_node(node_id=step_id, slot=slot, filled=filled)

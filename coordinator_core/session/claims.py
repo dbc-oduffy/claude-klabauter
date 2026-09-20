@@ -2085,8 +2085,11 @@ def _clear_path_claim_if_dead(
     if not base:
         return True  # no sessions dir -> no claim can exist -> idempotent
 
-    def _claimants() -> List[str]:
-        return claim_index.lookup([path], sessions_dir=base, cwd=cwd).get(path, [])
+    def _lookup():
+        return claim_index.lookup([path], sessions_dir=base, cwd=cwd)
+
+    def _claimants(result) -> List[str]:
+        return result.get(path, [])
 
     my_sid = core.resolve_session_id(cwd)
 
@@ -2097,11 +2100,27 @@ def _clear_path_claim_if_dead(
             if sid != my_sid and liveness.session_live(sid, cwd)
         ]
 
-    claimants = _claimants()
+    result = _lookup()
+    claimants = _claimants(result)
     if claim_index.UNANSWERABLE in claimants:
         print(
             f"cs_clear_claim_if_dead: claim ownership for {path!r} could not "
             f"be verified (claim index unanswerable) -- refusing to clear",
+            file=sys.stderr,
+        )
+        return False
+    if not result.complete:
+        # A positive claimant list from an INCOMPLETE walk is not
+        # trustworthy: the walk may have read a dead holder's touched.txt
+        # and aborted before reaching a live peer's, yielding claimants=[dead
+        # sid] with the live peer's claim unread. Only the empty-list branch
+        # signals incompleteness via UNANSWERABLE (see claim_index.lookup's
+        # docstring) -- the non-empty branch returns claimants verbatim
+        # regardless of completeness, so this consumer must check
+        # `.complete` itself rather than rely on UNANSWERABLE membership.
+        print(
+            f"cs_clear_claim_if_dead: claim index rebuild for {path!r} was "
+            "incomplete -- refusing to clear",
             file=sys.stderr,
         )
         return False
@@ -2141,11 +2160,19 @@ def _clear_path_claim_if_dead(
 
     # TOCTOU re-read — bracket the write, mirroring the mkdir-plane's own
     # double claim_holder_live read around its rm.
-    claimants2 = _claimants()
+    result2 = _lookup()
+    claimants2 = _claimants(result2)
     if claim_index.UNANSWERABLE in claimants2:
         print(
             f"cs_clear_claim_if_dead: aborting clear of path claim {path!r} "
             f"-- claim index became unanswerable on re-read",
+            file=sys.stderr,
+        )
+        return False
+    if not result2.complete:
+        print(
+            f"cs_clear_claim_if_dead: aborting clear of path claim {path!r} "
+            "-- claim index rebuild became incomplete on re-read",
             file=sys.stderr,
         )
         return False

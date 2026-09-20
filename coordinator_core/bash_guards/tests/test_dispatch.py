@@ -221,5 +221,44 @@ def test_ac7_oracle_liveness_runaway_find_and_grep_rewrite_still_bash_only():
 
 
 # ---------------------------------------------------------------------------
-# AC11 -- the http-leg transport truth: advisories deliver nothing there.
+# bug-backlog 2026-08-18-powershell-text-reaches-the-posix-tokeni-ea6ff0baddab
+# -- the M5 resolve-once pre-pass must not posix-tokenize raw PowerShell text
+# ahead of any guard's own dialect resolution.
 # ---------------------------------------------------------------------------
+
+
+def test_m5_resolve_once_prepass_skips_posix_tokenize_for_powershell_payload(monkeypatch):
+    """`_evaluate_payload_json_budgeted` gates its `resolve_command_positions`
+    pre-pass on `"git" in cmd` alone (M5) -- for a `tool_name="PowerShell"`
+    payload that pre-pass must not run at all, since it feeds the raw
+    PowerShell command text to the posix tokenizer before any guard's own
+    `dialect_from_tool_name` resolution. A `tool_name="Bash"` payload with
+    the same `git`-containing command must still take the pre-pass, proving
+    the gate is dialect-specific, not a blanket skip.
+    """
+    calls = []
+    original = dispatch._resolve_command_positions
+
+    def _spy(cmd_text, **kwargs):
+        calls.append(cmd_text)
+        return original(cmd_text, **kwargs)
+
+    monkeypatch.setattr(dispatch, "_resolve_command_positions", _spy)
+
+    payload = {
+        "tool_name": "PowerShell",
+        "tool_input": {"command": "git status"},
+        "session_id": "sess-m5-pwsh",
+        "cwd": "/tmp",
+    }
+    evaluate_payload_json(json.dumps(payload))
+    assert calls == [], (
+        "resolve_command_positions ran against raw PowerShell text: %r" % calls
+    )
+
+    calls.clear()
+    payload["tool_name"] = "Bash"
+    evaluate_payload_json(json.dumps(payload))
+    assert calls == ["git status"], (
+        "Bash leg regressed: pre-pass should still fire for git commands: %r" % calls
+    )

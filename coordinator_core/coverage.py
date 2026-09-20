@@ -1095,6 +1095,18 @@ def _commit_deliverable_id_trailers(shas: List[str], cwd: str) -> Dict[str, str]
 
     On git failure (rc != 0), every sha maps to "" (absent) — fail-closed:
     an unreadable trailer is treated as "no trailer" rather than raising.
+
+    Safe against the trailing-\x1f truncation class flagged in
+    state/bug-backlog/2026-08-08-commit-deliverable-id-trailers-may-carry-
+    34052a90b5ec.yaml: `_run`'s whole-stdout `.strip()` can eat a trailing
+    empty `%(trailers:...)` field on the LAST commit in the batch (\x1f is
+    Unicode whitespace). Unlike C6a's multi-field format, this line carries
+    exactly ONE `\x1f` separator, so a stripped trailing separator just
+    leaves `rest` with no `\x1f` at all — `rest.partition("\x1f")` then
+    falls back to `("<sha>", "", "")`, giving `value == ""`, which is
+    already this function's own "absent" default. There is no second field
+    for the missing separator to shift into, so the truncation is inert
+    here rather than merely unlikely.
     """
     if not shas:
         return {}

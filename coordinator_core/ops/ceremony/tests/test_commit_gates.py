@@ -110,6 +110,27 @@ def _make_conflicted_repo(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# _parse_cli_args pathspec separator normalisation (2026-08-26 bug-backlog,
+# P2+P3) -- the one shared choke point every caller of the CLI passes
+# through, so normalisation lives here rather than at any one builder, and
+# platform-conditional because a backslash is a legal POSIX filename
+# character.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_cli_args_normalises_backslashes_to_forward_slashes_on_windows(monkeypatch):
+    monkeypatch.setattr(_cg.os, "name", "nt")
+    parsed = _cg._parse_cli_args(["msg.txt", "--", "a\\b\\c.md", "already/posix.md"])
+    assert parsed == ("msg.txt", ["a/b/c.md", "already/posix.md"])
+
+
+def test_parse_cli_args_leaves_backslashes_untouched_on_posix(monkeypatch):
+    monkeypatch.setattr(_cg.os, "name", "posix")
+    parsed = _cg._parse_cli_args(["msg.txt", "--", "weird\\name.md"])
+    assert parsed == ("msg.txt", ["weird\\name.md"])
+
+
+# ---------------------------------------------------------------------------
 # parse_step267_blocks / has_step267_block
 # ---------------------------------------------------------------------------
 

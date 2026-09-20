@@ -150,12 +150,14 @@ def format_oneline_row(
     comment and ``docgen/templates/handoff.json`` document this shape in
     prose only; this function is the one place that actually builds it.
 
-    *session_id* is truncated to its trailing 6 characters (``sid6``),
-    matching the ``sid[-6:]`` convention ``coordinator_core.ops.
-    coordinator_complete_entry`` already uses for its own sid6-suffixed
-    filenames — NOT the ``tail -c 7 | head -c 6`` variant referenced in
-    ``wsc_resolve.py`` (that variant drops the session id's final
-    character; this keeps it).
+    *session_id* is truncated to its LEADING 6 characters (``sid6``) —
+    a 2026-08-14 measurement across state/handoffs/ plus archive/handoffs/
+    found 207 of 207 matchable corpus rows abbreviate the leading 6 (0
+    trailing), matching how sessions refer to themselves by short id
+    everywhere else in this system. This is NOT the ``sid[-6:]``
+    convention ``coordinator_core.ops.coordinator_complete_entry`` uses
+    for its own sid6-suffixed filenames — that is a separate grammar for
+    a different artifact and is unaffected by this choice.
 
     *created* is truncated to its leading ``YYYY-MM-DD`` — accepts either a
     bare date or a full ISO timestamp.
@@ -168,7 +170,7 @@ def format_oneline_row(
     detect via a round-trip parse, not silently patched over here.
     """
     date = (created or "")[:10]
-    sid6 = (session_id or "")[-6:]
+    sid6 = (session_id or "")[:6]
     return f"{date} | {sid6} | {tshirt} | {agent_dispatches}d / {opus_dispatches}o | {summary}"
 
 

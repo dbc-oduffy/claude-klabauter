@@ -33,14 +33,17 @@ same shared helpers (`_Watchdog`, `_banner`, `emit_jsonl`, `_delete_path`,
 `_resolve_repo_root`, `_get_mtime`) rather than growing private twins.
 `sweep_harness_scratchpads` shares the `(apply, json_mode, quiet,
 log_path=None, emit_fn=None)` slice of that contract and reuses `_banner`
-and `emit_jsonl`, but does NOT declare `watchdog_ceiling_secs` and has no
-wall-clock ceiling of any kind: it is a thin adapter over
-`scratchpad_sweep.sweep_scratchpads`, which contains no watchdog, timeout,
-or lock, so its directory walk is uninterruptible mid-loop today. A future
-maintainer should not assume ceiling protection exists on this phase. A
-future reader auditing this module against the bash oracle line-for-line
-should NOT go looking for the bash either net-new phase was "ported" from
-— there isn't one.
+and `emit_jsonl`. It DOES also accept `watchdog_ceiling_secs` (fixes
+state/bug-backlog/2026-08-10-scratchpad-sweep-has-no-watchdog-ceiling.yaml),
+but — unlike every sibling phase — never constructs its own `_Watchdog`:
+it is a thin adapter over `scratchpad_sweep.sweep_scratchpads`, which now
+owns and checks a ceiling of the same shape internally, once per session
+directory (see that module's own "Watchdog ceiling" docstring note). This
+adapter has no visibility into that per-directory walk to check a watchdog
+against from the outside, so the ceiling parameter passes straight through
+rather than being enforced here. A future reader auditing this module
+against the bash oracle line-for-line should NOT go looking for the bash
+either net-new phase was "ported" from — there isn't one.
 
 Net-new phase — sweep_empty_toplevel_dirs (added 2026-07-28, incident-driven):
   Catches, by structure rather than by name, a class of cruft the four
@@ -1977,6 +1980,7 @@ def sweep_harness_scratchpads(
     log_path: Optional[Path] = None,
     temp_root: Optional[str] = None,
     ttl_days: Optional[float] = None,
+    watchdog_ceiling_secs: Optional[float] = None,
     emit_fn: Optional[EmitFn] = None,
     **scratchpad_sweep_kwargs,
 ) -> Tuple[int, int]:
@@ -1995,6 +1999,17 @@ def sweep_harness_scratchpads(
     `project_slugs`, `self_session_id`, `slug_to_root_map`,
     `size_cut_target_bytes`, `size_cut_floor_days`) pass straight through —
     this adapter owns none of that policy.
+
+    `watchdog_ceiling_secs` now also passes straight through to
+    `sweep_scratchpads` (fixes
+    state/bug-backlog/2026-08-10-scratchpad-sweep-has-no-watchdog-ceiling.yaml):
+    unlike every sibling phase in this module, this adapter does NOT construct
+    its own `_Watchdog` here — `scratchpad_sweep.sweep_scratchpads` owns that
+    ceiling internally (see that module's own "Watchdog ceiling" docstring
+    note), since the adapter has no visibility into the delegate's
+    per-directory walk to check a watchdog against. `None` (the default)
+    means "use `sweep_scratchpads`'s own default ceiling", exactly like
+    leaving `ttl_days`/`temp_root` unset above.
 
     Archive-shaped surfacing (2026-08-11, additive — see
     `scratchpad_sweep`'s own "Archive-shaped exemption" module-docstring
@@ -2016,6 +2031,8 @@ def sweep_harness_scratchpads(
         kwargs["temp_root"] = temp_root
     if ttl_days is not None:
         kwargs["ttl_days"] = ttl_days
+    if watchdog_ceiling_secs is not None:
+        kwargs["watchdog_ceiling_secs"] = watchdog_ceiling_secs
 
     report = sweep_scratchpads(**kwargs)
 

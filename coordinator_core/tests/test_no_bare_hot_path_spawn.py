@@ -747,6 +747,33 @@ def test_no_bare_hot_path_spawn():
     assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
 
 
+def test_no_bare_hot_path_spawn_in_publish_py():
+    """`coordinator/bin/publish.py`-scoped regression for
+    state/bug-backlog/2026-08-08-all-11-subprocess-sites-in-publish-py-la-c5108b1585b6.yaml:
+    no `coordinator/bin/` site was ever in `_GATE_SCOPE_DIRS`'s reach (the
+    standing gate above only walks `coordinator_core`), so every bare
+    `subprocess` spawn in `publish.py` went unflagged.
+
+    Deliberately scoped to this one file rather than landed via a
+    `_GATE_SCOPE_DIRS`/walk-root widening covering all of `coordinator/bin`:
+    a repo-wide widening surfaces ~95 pre-existing bare-spawn sites across
+    other `coordinator/bin` files outside this fix's footprint, and even the
+    un-widened standing gate above is independently red on HEAD from
+    unrelated `coordinator_core` sites (`benchmarks/process_time.py`,
+    `hooks/runtime_tripwire_stop_watcher.py`) -- a full-directory widening
+    here would not go green and would exceed this fix's remit. The
+    `coordinator/bin/`-wide gap the bug record's `proposed_action` names is
+    real and larger than this one file; closing it for every site is a
+    follow-up outside this record's scope.
+    """
+    violations = [
+        site
+        for site in find_bare_hot_path_spawns(REPO_ROOT / "coordinator" / "bin")
+        if site.path == "publish.py"
+    ]
+    assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
+
+
 def find_double_console_suppressions(
     root: pathlib.Path,
 ) -> list[BareSpawnSite]:

@@ -724,12 +724,24 @@ def _op_may_mutate(method: Any) -> bool:
 
 def _mutation_deadline_for(method: Any) -> float:
     """The mutation read deadline for `method`, derived from the same source
-    of truth the CALLER's own kill ceiling comes from: `cc_invoke.py::
-    _op_timeout_ceiling` sizes that ceiling as `engine_budget(op) + MARGIN`,
-    and `engine_budget` is `ipc._timeout_for`. Deriving from the identical
-    function keeps this wait inside the caller's ceiling for every mutating
-    op, not just `ceremony.scoped_git_commit` -- see
-    `MUTATION_READ_DEADLINE_SECS`'s own comment for the gap this closes.
+    of truth the CALLER's own kill ceiling comes from -- `ipc`'s per-op
+    dispatch resolution -- but WITHOUT the `ceremony.*` performance clamp,
+    via `ipc.mutation_read_deadline_for` rather than `ipc._timeout_for`.
+
+    WHY THE CLAMP MUST NOT APPLY HERE. This wait is `mutation_deadline -
+    READ_DEADLINE_SECS` at the one call site below. `_timeout_for` clamps
+    every `ceremony.*` op to `CEREMONY_BUDGET_SECS`, which is 2.0 -- the same
+    value as `READ_DEADLINE_SECS`. So for every ceremony op the extension
+    computed `max(0.0, 2.0 - 2.0)` and waited ZERO additional seconds: the
+    mechanism whose entire purpose is to not abandon a delivered mutation was
+    inert for exactly the ops that commit, while a non-ceremony mutation got
+    the intended 28s. Every commit on a loaded box reported
+    `WARM_DISPATCH_INDETERMINATE` and then landed seconds later.
+
+    The clamp is a PERFORMANCE bar; this is a TRANSPORT deadline. See
+    `ipc.mutation_read_deadline_for` for why conflating them turns a slowness
+    report into an integrity unknown. No budget is widened by this: the op is
+    still held to `CEREMONY_BUDGET_SECS` and still reported when it misses.
 
     THE DERIVATION ALWAYS RUNS. An explicit `MUTATION_READ_DEADLINE_SECS`
     (a test, an operator) may only NARROW the result -- `min(override,
@@ -751,9 +763,9 @@ def _mutation_deadline_for(method: Any) -> float:
     wait.
     """
     try:
-        from coordinator_core.ipc import _timeout_for
+        from coordinator_core.ipc import mutation_read_deadline_for
 
-        derived = _timeout_for(method)
+        derived = mutation_read_deadline_for(method)
     except Exception:
         derived = _MUTATION_READ_DEADLINE_DEFAULT
     if MUTATION_READ_DEADLINE_SECS != _MUTATION_READ_DEADLINE_DEFAULT:

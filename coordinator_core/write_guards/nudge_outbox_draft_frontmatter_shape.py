@@ -57,6 +57,14 @@ Negative-spec:
   - Never raises: any unexpected input shape, read failure, or
     reconstruction failure fails OPEN (returns `None`), matching every
     sibling advisory guard in this package.
+  - Does NOT trust the path-shape regex alone as a containment check — a
+    resolvable git root gates every regex-matched candidate through
+    `coordinator_core.ops._path_guard.contained_path` (INTERFACE.md rule 8),
+    mirroring `nudge_handoff_ac_shape.py`'s own gate, so an absolute path
+    outside the repo that merely CONTAINS the matched shape (e.g.
+    `/tmp/anywhere/state/memo-outbox/x.md`) is never treated as a real
+    outbox draft. An unresolvable git root leaves this gate inert (`None`
+    stays silent), same fail-open discipline as every other check here.
 
 Spec backlink: cross-repo/inbox/2026-08-07-example-store-repo-em-memo-tool-rejects-
 the-shape-it-teaches.md (the originating memo — this landed straight off a
@@ -67,7 +75,11 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.write_guards._repo_root import resolve_repo_root
 
 CLASS = "advisory"
 MATCHERS = ["Write", "Edit", "MultiEdit"]
@@ -200,6 +212,14 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return None
 
         cwd = payload.get("cwd") or None
+        # Resolved only when the payload actually supplies a `cwd` — a
+        # missing `cwd` must leave this gate inert rather than falling back
+        # to `resolve_repo_root`'s own process-cwd default, which would
+        # contain-check every candidate against THIS process's repo root
+        # instead of the caller's, a mismatch that is only ever a test
+        # artifact (every real PreToolUse payload carries `cwd`).
+        git_root = resolve_repo_root(cwd) if isinstance(cwd, str) and cwd else None
+        allowed_roots = [Path(git_root)] if git_root else []
 
         for cand in candidates:
             cn = _collapse_slashes(cand)
@@ -209,6 +229,14 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             resolved = cand
             if not os.path.isabs(resolved) and isinstance(cwd, str) and cwd:
                 resolved = os.path.join(cwd, cand)
+
+            if allowed_roots:
+                # INTERFACE.md rule 8: reuse contained_path rather than trust
+                # the regex alone — a substring match on an absolute path
+                # outside the repo (e.g. /tmp/anywhere/state/memo-outbox/x.md)
+                # must not be treated as a real outbox draft.
+                if contained_path(Path(resolved), allowed_roots) is None:
+                    continue
 
             post_content = _compute_post_content(tool_name, tool_input, cand, resolved)
             if post_content is None:

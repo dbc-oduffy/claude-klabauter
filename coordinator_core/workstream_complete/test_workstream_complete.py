@@ -423,21 +423,29 @@ def test_deletion_blocks_directive_scopes_the_gate_to_the_ceremonys_own_paths():
     ]
 
 
-def test_deletion_blocks_directive_normalises_windows_separators():
-    """A backslash would drop a path silently OUT of the gate's scope.
+def test_deletion_blocks_directive_passes_separators_through_verbatim():
+    """The builder hands paths on untouched; normalisation is the gate's job.
 
     `gate_scope` membership is exact-string matching against `git diff --cached
     --name-status` output, which is always repo-relative with forward slashes,
-    while git accepts either spelling in the commit pathspec. Unnormalised, the
-    gate would be NARROWER than the commit -- the one direction that weakens
-    it, and silently."""
+    while git accepts either spelling in the commit pathspec -- so a backslash
+    reaching the gate unconverted would make the gate NARROWER than the commit,
+    the one direction that weakens it silently.
+
+    Converting HERE fixed that at the cost of a worse bug: a backslash is a
+    legal character in a POSIX filename, so an unconditional rewrite mangles a
+    real path on every non-Windows box. The conversion therefore lives at
+    `commit_gates._parse_cli_args`, the single choke point every caller passes
+    through, conditioned on `os.name == "nt"` -- see that module's
+    `test_parse_cli_args_normalises_backslashes_to_forward_slashes_on_windows`
+    and its POSIX counterpart."""
     directive = wsc.build_deletion_blocks_check_directive(
         "msg.txt", [r"state\lessons\a.yaml", "archive/completed/b.md"]
     )
 
     assert directive is not None
     assert directive["args"][2:] == [
-        "state/lessons/a.yaml",
+        r"state\lessons\a.yaml",
         "archive/completed/b.md",
     ]
 
@@ -510,6 +518,22 @@ def test_resolver_backed_review_partition_strategy_never_demoted_by_a_single_emp
     )
     jp_ids = {jp["id"] for jp in decision_object["judgment_points"]}
     assert "review-partition-strategy" in jp_ids
+
+
+def test_review_partition_scalar_value_refuses_by_name_not_a_raw_crash(
+    monkeypatch, tmp_path
+):
+    """2026-08-21 bug-backlog: `decisions['review_partition']` is the
+    engine's INPUT for freeze/integrator directives (a mapping with
+    `range`/`slices`) -- a confusable sibling, the `review-partition-
+    strategy` judgment point's own answer (a short strategy string like
+    `'by-concern'`), sits one line away in the same payload. Passing that
+    string under the wrong key used to crash `build_directives` with a raw
+    `AttributeError: 'str' object has no attribute 'get'`; it must instead
+    raise a named `ValueError` a caller can act on."""
+    _patch_gate(monkeypatch, _gate("single-session", consumed_handoff_paths=()))
+    with pytest.raises(ValueError, match="review_partition"):
+        wsc.brief(decisions={"review_partition": "by-concern"}, repo_root=tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -6239,3 +6263,28 @@ def test_review_scope_resolution_does_not_take_the_trailer_map_fast_path():
                 "commits predate it is silently truncated and the partitioned "
                 "review under-covers without saying so"
             )
+
+
+def test_existing_pinboard_line_returns_none_when_cache_file_absent(tmp_path):
+    """`_existing_pinboard_line` must degrade to `None` ('not verified',
+    per `build_pinboard_directive`'s own contract) rather than `""`
+    ('verified empty') when the orientation cache file has never been
+    written -- an empty string would be indistinguishable from a real
+    empty pinboard line and could wrongly mark a note as already_satisfied.
+    """
+    assert wsc._existing_pinboard_line(tmp_path) is None
+
+
+def test_existing_pinboard_line_reads_the_current_pinboard_bullet(tmp_path):
+    """2026-08-08 bug-backlog: the pinboard directive's satisfaction check
+    (`build_pinboard_directive`'s `existing_pinboard_line` param) was never
+    threaded at its production call site, so it never fired. This exercises
+    the disk-read half of that wiring directly: given a real orientation
+    cache file with a `## Pinboard` section, `_existing_pinboard_line` must
+    return the current bullet's text, matching `read_existing_pinboard`."""
+    from coordinator_core.orientation.regenerate_cache import resolve_cache_file
+
+    cache_file = resolve_cache_file(tmp_path)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text("# Orientation\n\n## Pinboard\n- current note here\n", encoding="utf-8")
+    assert wsc._existing_pinboard_line(tmp_path) == "current note here"

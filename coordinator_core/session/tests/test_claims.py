@@ -1498,6 +1498,31 @@ class TestClearClaimIfDeadArtifactClass:
 
         assert claims.clear_claim_if_dead("bogus", "x", cwd=str(repo)) is False
 
+    def test_incomplete_walk_with_positive_claimants_refuses(self, tmp_path, monkeypatch):
+        # state/bug-backlog/2026-08-11-clear-claim-if-dead-clears-a-live-peer-s-
+        # fa8f1f77608a.yaml: claim_index.lookup returns a positive claimant
+        # list VERBATIM when the rebuild walk aborted -- incompleteness is
+        # signalled ONLY on the empty branch (UNANSWERABLE). A walk that read
+        # a dead holder's touched.txt but aborted before reaching a live
+        # peer's yields claimants=[dead sid], and a consumer that only checks
+        # UNANSWERABLE membership would clear a path a live peer still holds.
+        repo = _make_repo(tmp_path)
+        dead_sid = "11111111-1111-4111-8111-111111111111"
+        live_sid = "22222222-2222-4222-8222-222222222222"
+        _write_session(repo, dead_sid, _stale())
+        _write_session(repo, live_sid, _fresh())
+
+        def _fake_lookup(paths, sessions_dir=None, cwd=None):
+            result = claim_index._LookupResult((p, [dead_sid]) for p in paths)
+            result.complete = False
+            result.abort_cause = "test-forced-partial-walk"
+            result.edit_ts = {}
+            result.recorded_name = {}
+            return result
+
+        monkeypatch.setattr(claim_index, "lookup", _fake_lookup)
+        assert claims.clear_claim_if_dead("artifact", self._TARGET, cwd=str(repo)) is False
+
 
 class TestClaimArtifactRefusesTheArtifactClass:
     """`artifact` is releasable and clearable, never claimable.

@@ -360,6 +360,35 @@ def test_a_degraded_per_fact_row_lands_in_the_degraded_population():
     assert result["aggregate"].computed_ms == []
 
 
+def test_per_fact_rows_are_grouped_by_invocation_id_when_present():
+    """`invocation_id` (state/bug-backlog/2026-08-27-fact-span-rows-cannot-
+    yield-a-per-ceremo-d9be470c2039.yaml, option (a)) must win over `sid`:
+    two ceremony invocations from the SAME session must not collapse into
+    one aggregate row when each carries its own `invocation_id`."""
+    rows = [
+        {
+            "kind": "fact_span",
+            "sid": "s1",
+            "invocation_id": "inv-1",
+            "fact": "session_facts.session_pickup_kind",
+            "elapsed_ms": 10.0,
+            "outcome": "computed",
+        },
+        {
+            "kind": "fact_span",
+            "sid": "s1",
+            "invocation_id": "inv-2",
+            "fact": "session_facts.session_pickup_kind",
+            "elapsed_ms": 20.0,
+            "outcome": "computed",
+        },
+    ]
+
+    result = flhp.compute_timing_distributions(rows)
+
+    assert sorted(result["aggregate"].computed_ms) == [10.0, 20.0]
+
+
 def test_a_per_fact_row_without_a_sid_is_excluded_from_the_aggregate():
     rows = [
         {

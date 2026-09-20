@@ -295,6 +295,22 @@ def test_push_once_spawn_failure_classifies_as_spawn_error(tmp_path, monkeypatch
     assert "FileNotFoundError" in stderr_text
 
 
+def test_classify_error_vanished_temp_pack_is_transient_contention_not_spawn_error():
+    # A sibling session's concurrent repack/gc deleting its own temp pack
+    # mid-push (2026-08-26, 27 rows on work/machine-a/2026-08-18to20) raises
+    # the identical push_once spawn-failure prefix _PAT_SPAWN_ERROR matches,
+    # so without a more specific arm ahead of it this misclassifies as
+    # "spawn-error" -- indistinguishable from a genuinely unresolvable git
+    # executable, and non-retrying.
+    stderr_text = (  # abs-path-ok: fixture stderr text, verbatim from the bug record, not a real path
+        "fatal: git push failed to spawn: FileNotFoundError: [Errno 2] "
+        "No such file or directory: "
+        "'X:\\claude-klabauter\\.git\\objects\\pack\\.tmp-35812-pack-37ef5fe6abc.pack'\n"
+    )
+    assert auto_push.classify_error(stderr_text) == "transient-contention"
+    assert "transient-contention" in auto_push._RETRYABLE_CLASSES
+
+
 def test_push_once_unresolvable_git_never_spawns(tmp_path, monkeypatch):
     # When git is not on PATH at all, push_once must report -- not raise, and
     # not attempt a spawn it already knows will fail with [WinError 2].

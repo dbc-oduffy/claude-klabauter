@@ -494,21 +494,43 @@ class Hit:
     marked: bool
 
 
+# Sentence punctuation that can trail a citation in prose -- a closing
+# paren/bracket/brace, or a mark ending/joining a clause. NEVER a path
+# separator or an extension dot: `_TOKEN_RE`'s `[^\s"'`]+` has no notion of
+# "the path ended, the sentence resumed", so it swallows this punctuation
+# into the token whenever it sits flush against the citation (`(...file)`,
+# `...file,`, `...file.`). Left uncut, `_replacement_for` folds a trailing
+# `)`/`,`/`.` into the matched path segment (normalized away by
+# `_normalize_segment`'s alnum-only comparison) and the rewrite then drops
+# it from the line entirely -- the punctuation-eating defect this guards.
+_TRAILING_PUNCTUATION_RE = re.compile(r"[)\]},.;:!?]+$")
+
+
+def _strip_trailing_punctuation(token: str) -> str:
+    """`token` with any trailing sentence punctuation removed -- the text
+    that was actually swallowed is left untouched in the source line, since
+    the caller only ever `.replace()`s the returned (shorter) token."""
+    return _TRAILING_PUNCTUATION_RE.sub("", token)
+
+
 def _raw_hits_in_line(line: str) -> List[Tuple[str, str]]:
     """Return (rule, token) pairs for every non-exempt path-shape match in
     one line -- same four rules, same placeholder/well-known-root exemptions
     as `guard_concrete_path_citations.detect_in_text`, but keeping the whole
     token (not just the matched root) so a caller can compute a trailing
-    subpath."""
+    subpath. Every token is trimmed of trailing sentence punctuation (see
+    `_strip_trailing_punctuation`) before use, so a citation sitting inside
+    parentheses or followed by a comma/period keeps that punctuation intact
+    under `--apply`."""
     out: List[Tuple[str, str]] = []
 
     for m in _POSIX_HOME_RE.finditer(line):
         if _is_placeholder_segment(m.group(1)):
             continue
-        out.append(("posix-home", _extract_token(line, m.start())))
+        out.append(("posix-home", _strip_trailing_punctuation(_extract_token(line, m.start()))))
 
     for m in WIN_DRIVE_RE.finditer(line):
-        token = _extract_token(line, m.start())
+        token = _strip_trailing_punctuation(_extract_token(line, m.start()))
         root_len = m.end() - m.start()
         if _is_win_drive_root_exempt(token, root_len) or _has_ellipsis_segment(token, root_len):
             continue
@@ -518,11 +540,11 @@ def _raw_hits_in_line(line: str) -> List[Tuple[str, str]]:
         host = m.group(0).lstrip("\\").split("\\")[0]
         if _is_placeholder_segment(host):
             continue
-        out.append(("unc", _extract_token(line, m.start())))
+        out.append(("unc", _strip_trailing_punctuation(_extract_token(line, m.start()))))
 
     for rx in _ANCHOR_RES:
         for m in rx.finditer(line):
-            token = _extract_token(line, m.start())
+            token = _strip_trailing_punctuation(_extract_token(line, m.start()))
             if "/" not in token or "\\" not in token:
                 continue
             out.append(("mixed-separators", token))

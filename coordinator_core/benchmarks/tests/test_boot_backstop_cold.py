@@ -97,66 +97,38 @@ def test_measure_cold_process_time_n_counts_one_process_per_bare_invocation():
 
 
 def test_measure_import_set_reports_a_positive_module_count_for_a_real_module():
-    reading = measure_import_set("json", armed=False)
+    reading = measure_import_set("json")
     assert isinstance(reading, ImportSetReading)
     assert reading.module == "json"
-    assert reading.armed is False
     assert reading.module_count > 0
     assert reading.own_module_count == 0  # stdlib, no coordinator_core.* share
     assert reading.elapsed_process_ms >= 0.0
 
 
-def test_measure_import_set_armed_sets_the_env_var_channel(monkeypatch):
-    """`armed=True` must reach the child as `COORDINATOR_CORE_LAZY_OPS=1` --
-    verified by inspecting the subprocess env the probe actually builds,
-    rather than trusting a downstream module's behavior under it (which is
-    itself under construction across C4a/C4b)."""
-    captured = {}
-
-    import coordinator_core.benchmarks.boot_backstop_cold as mod
-
-    real_run = mod.subprocess.run
-
-    def _spy_run(cmd, **kwargs):
-        captured["env"] = kwargs.get("env")
-        return real_run(cmd, **kwargs)
-
-    monkeypatch.setattr(mod.subprocess, "run", _spy_run)
-
-    mod.measure_import_set("json", armed=True)
-    assert captured["env"]["COORDINATOR_CORE_LAZY_OPS"] == "1"
-
-    mod.measure_import_set("json", armed=False)
-    assert "COORDINATOR_CORE_LAZY_OPS" not in captured["env"]
-
-
 def test_measure_import_set_raises_on_a_bad_module_path():
     with pytest.raises(RuntimeError):
-        measure_import_set("coordinator_core.this_module_does_not_exist_xyz", armed=False)
+        measure_import_set("coordinator_core.this_module_does_not_exist_xyz")
 
 
-def test_reconcile_import_set_readings_returns_armed_unarmed_and_historical():
-    """AC3d reconciliation: a live re-measurement under both shapes, plus
-    whatever historical readings this module records for the same path --
-    never one silently overwriting the other.
+def test_reconcile_import_set_readings_returns_live_and_historical():
+    """AC3d reconciliation: a live re-measurement, plus whatever historical
+    readings this module records for the same path -- never one silently
+    overwriting the other.
 
     Retargeted 2026-08-27 off `ops.session.boot_backstop`, which was
     gravestoned (K-059) and no longer exists. What this test owns is the
     HARNESS's reconciliation shape, not that one particular op is measurable,
     so it now probes a module that is live and will stay live. The
-    absent-module arm has its own test below and is unaffected."""
+    absent-module case has its own test below and is unaffected."""
     live = reconcile_import_set_readings("coordinator_core.ops.session.reap")
 
     assert live["module"] == "coordinator_core.ops.session.reap"
     assert live["live_module_absent"] is False
-    assert live["armed"]["armed"] is True
-    assert live["unarmed"]["armed"] is False
-    assert live["armed"]["module_count"] > 0
-    assert live["unarmed"]["module_count"] > 0
+    assert live["live"]["module_count"] > 0
 
 
 def test_reconcile_reports_history_for_the_composite_this_plan_deleted():
-    """C5 deletes boot_sweep.py, so its live halves cannot be measured -- but
+    """C5 deletes boot_sweep.py, so its live reading cannot be taken -- but
     its three historical readings are exactly what AC3d asks be reconciled.
     A deleted module must degrade to history, never raise: raising here would
     have made the reconciliation obligation unsatisfiable the moment the plan
@@ -164,8 +136,7 @@ def test_reconcile_reports_history_for_the_composite_this_plan_deleted():
     retired = reconcile_import_set_readings("coordinator_core.ops.session.boot_sweep")
 
     assert retired["live_module_absent"] is True
-    assert retired["armed"] is None
-    assert retired["unarmed"] is None
+    assert retired["live"] is None
     assert retired["historical"] == IMPORT_SET_HISTORICAL_READINGS[
         "coordinator_core.ops.session.boot_sweep"
     ]

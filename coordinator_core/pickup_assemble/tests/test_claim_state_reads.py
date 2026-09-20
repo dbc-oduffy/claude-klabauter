@@ -548,3 +548,26 @@ def test_claim_grant_denied_live_reason_harness_registry_is_strong_arm():
     assert reason == "held by some-sid — live (harness-registry)"
     assert "basis unknown" not in reason
     assert "may be a stale claim" not in reason
+
+
+def test_claim_grant_denied_live_reason_harness_registry_elsewhere_is_strong_arm():
+    """`harness-registry-elsewhere` (session_verdict()'s foreign-repo-live
+    basis, plan 2026-08-13-liveness-stops-conflating-dead-with-elsewhere,
+    chunk C1) is the takeover-bait case the originating plan's Problem
+    section describes: the registry positively confirms the holder is live
+    in another repo. It must render in the strong arm, never the
+    `basis unknown` hedge that nudges an EM toward overriding a confirmed-live
+    foreign-repo claim (bug-backlog 2026-08-13-grant-denied-reason-not-
+    strengthened-for-742c866f6e81)."""
+    evidence = {
+        "liveness_basis": "harness-registry-elsewhere",
+        "last_activity_age_sec": None,
+        "recent_paths": [],
+        "scope_overlap": None,
+    }
+
+    reason = pa._claim_grant_denied_live_reason("some-sid", evidence)
+
+    assert reason == "held by some-sid — live in another repo"
+    assert "basis unknown" not in reason
+    assert "may be a stale claim" not in reason

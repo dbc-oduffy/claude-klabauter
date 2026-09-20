@@ -315,6 +315,7 @@ class Args:
         self.body_file: str = ""
         self.body: str = ""
         self.paths: List[str] = []
+        self.declared_reverts: List[str] = []
 
 
 def usage() -> None:
@@ -332,6 +333,10 @@ Optional flags (combinable):
                                     when dirty files exist outside declared scope
   --include-orphans <pathspec>...   Claim hook/install-script-touched files for
                                     this commit. Variadic until next flag or --.
+  --declared-revert <path>          A path this commit intentionally restores
+                                    to an older state. Repeat per path. Without
+                                    it, commit_v2's staged-rollback gate refuses
+                                    the commit and names this parameter.
   --body-file <path>                Commit BODY (second paragraph) read from a
                                     file — avoids shell-quoting hazards for
                                     multi-paragraph messages. <subject> is
@@ -392,6 +397,15 @@ def parse_args(argv: Sequence[str]) -> Args:
                 raise UsageError("--body-file requires a path argument.")
             args.body_file = argv[i + 1]
             i += 2
+        elif tok == "--declared-revert":
+            # Repeatable single-value, NOT variadic. This flag is combinable
+            # with the `-- <paths>` form, where the subject is the token
+            # immediately before the separator rather than the last token
+            # overall -- a variadic sweep consumes it as a path.
+            if i + 1 >= n:
+                raise UsageError("--declared-revert requires a path argument.")
+            args.declared_reverts.append(argv[i + 1])
+            i += 2
         elif tok == "--include-orphans":
             i += 1
             # Variadic: consume until next flag (starts with -), '--', or until
@@ -440,6 +454,23 @@ def parse_args(argv: Sequence[str]) -> Args:
     args.subject = positionals[0]
     if not args.subject:
         raise UsageError("Commit subject cannot be empty.")
+    # Refuses a degenerate subject BEFORE any mode dispatch, mirroring the
+    # existing directory-shaped `writes:` refusal's own door (state/bug-
+    # backlog/2026-08-28-an-engine-commit-path-landed-152-lines-under-the-
+    # subject-x.yaml). A one-character subject on a 152-line commit to the
+    # merge-gate file defeated every downstream reader that indexes a change
+    # by its subject (`git log --oneline`, blame, bisect) -- the requirement
+    # is a refusal at the door, not doctrine telling a caller to write
+    # better messages, which carried correct prose for a month while
+    # enforcing nothing (K-063). Threshold (<=3 stripped chars) covers both
+    # measured incidents (`x`, `bu`) without narrowing legitimate short
+    # subjects like a scoped rename.
+    if len(args.subject.strip()) <= 3:
+        raise UsageError(
+            f"Commit subject {args.subject!r} is too short "
+            f"({len(args.subject.strip())} chars) to be legible in git log/blame/"
+            "bisect output -- write a subject that names the change."
+        )
 
     if saw_pathspec_separator and not args.paths:
         raise UsageError("`--` requires at least one path argument after it.")
@@ -589,6 +620,13 @@ def do_pathspec(args: "Args") -> None:
         "deleted_paths": deleted_paths,
         "message": message,
     }
+    # Only sent when non-empty. `commit_v2` treats the key's absence and an
+    # empty list identically, but an always-present key would put a
+    # rollback-declaring field in the payload of every ordinary commit, where
+    # the reader of a ledger row could not tell "declared nothing" from
+    # "never considered it".
+    if args.declared_reverts:
+        params["declared_reverts"] = args.declared_reverts
     try:
         result = cc_invoke("ceremony.commit_v2", params, worktree_root)
     except BrokenPipeError as exc:
@@ -1263,12 +1301,38 @@ def _reconcile_after_indeterminate(
 
 
 #: How long the AC8 reconcile keeps re-probing for its Attempt-Id after a
-#: client-side timeout, and how often. The engine may still be inside its own
-#: ceremony budget when the client gives up, so a single probe reads a race as
-#: a determinate negative. Sized above the 2.0s ceremony ceiling so a commit
-#: still landing when the client bailed is normally observed rather than
-#: reported unknown.
-_RECONCILE_SETTLE_SECS = 3.0
+#: client-side timeout, and how often. The engine may still be writing when the
+#: client gives up, so a single probe reads a race as a determinate negative.
+#:
+#: NOT DERIVED FROM `CEREMONY_BUDGET_SECS`, and must not be re-derived from it.
+#: This was 3.0s, documented as "sized above the 2.0s ceremony ceiling" -- which
+#: treats that constant as a bound on how long the ENGINE takes. It bounds how
+#: long the CLIENT waits. `ipc.py` states the difference directly above
+#: `DISPATCH_TIMEOUT_SECS`: these ops' commits "can and do land AFTER the client
+#: already treated the call" as failed. The engine does not stop when the client
+#: stops waiting -- that is the premise of the whole indeterminate hazard, so a
+#: window sized off the client's patience is sized off the wrong quantity.
+#:
+#: Measured 2026-09-20 on a loaded box, two samples: the client returns at
+#: 5.53s (2.0s warm deadline + 3.0s settle + overhead) and the commit becomes
+#: observable at 5.76s and 5.89s -- missing by 0.23s and 0.36s. Five
+#: indeterminate commits that session, five landings, zero observed. The
+#: reconcile reported UNKNOWN every time in exactly the case it exists to
+#: resolve. Sized here at ~2.5x the measured shortfall (~3.9s of engine work
+#: past the client's deadline). See
+#: state/audits/2026-09-20-the-reconcile-window-is-sized-to-a-budget-not-to-
+#: the-box.md.
+#:
+#: The cost of widening is paid only on a path where the commit has ALREADY
+#: failed or is already late, never on a healthy commit -- the loop exits the
+#: moment the Attempt-Id appears. The cost of leaving it short is paid on every
+#: commit, as an operator hand-verifying with `git log`.
+#:
+#: Negative spec: widening this does NOT weaken the absence rule below. Absence
+#: after the window is still UNKNOWN and still never reads as "safe to
+#: re-run" -- a longer look makes the reconcile reach a determinate answer more
+#: often, and cannot turn an absence into a permission.
+_RECONCILE_SETTLE_SECS = 10.0
 _RECONCILE_POLL_SECS = 0.25
 
 
@@ -2772,7 +2836,13 @@ def do_scoped(
         try:
             with os.fdopen(msg_fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(message)
-            commit_result = git_native.commit_scoped(commit_paths, msg_path, cwd=os.getcwd())
+            commit_result = git_native.commit_scoped(
+                commit_paths,
+                msg_path,
+                cwd=os.getcwd(),
+                detect_rollback=True,
+                declared_reverts=args.declared_reverts,
+            )
         finally:
             try:
                 os.remove(msg_path)
@@ -3001,7 +3071,13 @@ def do_scope_from(args: "Args", session_id: str, cs_core, cs_liveness, cs_scope,
         try:
             with os.fdopen(msg_fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(message)
-            commit_result = git_native.commit_scoped(my_scope, msg_path, cwd=os.getcwd())
+            commit_result = git_native.commit_scoped(
+                my_scope,
+                msg_path,
+                cwd=os.getcwd(),
+                detect_rollback=True,
+                declared_reverts=args.declared_reverts,
+            )
         finally:
             try:
                 os.remove(msg_path)

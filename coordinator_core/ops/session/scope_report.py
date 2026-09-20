@@ -192,6 +192,7 @@ Negative-spec:
 from __future__ import annotations
 
 import os
+import subprocess
 from typing import Optional, Sequence, Tuple
 
 from coordinator_core.ipc import register_op
@@ -199,6 +200,52 @@ from coordinator_core.ops.session.safe_commit_offer import compute_offer
 from coordinator_core.session import claim_index
 from coordinator_core.session import core
 from coordinator_core.session.liveness import live_session_ids
+from coordinator_core.win_portability import no_console_creationflags
+
+#: Bound on the orphan-adoption dirtiness probe (state/bug-backlog/
+#: 2026-08-29-orphan-adoption-admits-a-clean-path.yaml). A single `git
+#: status --porcelain` call over the small, caller-supplied set of
+#: OWNERSHIP_UNCLAIMED candidates -- never a tree enumeration -- so a slow
+#: or wedged git cannot stall the commit hot path past the brightline.
+_ORPHAN_DIRTY_PROBE_TIMEOUT_SECONDS = 2.0
+
+
+def _dirty_unclaimed_paths(cwd: Optional[str], candidates: Sequence[str]) -> Optional[set]:
+    """Return the subset of `candidates` that `git status --porcelain` shows dirty.
+
+    None (never an empty set) on any probe failure -- git missing, a
+    non-zero exit, or a timeout -- so a caller that cannot get an answer
+    fails CLOSED (treats every candidate as not-yet-proven-dirty) rather
+    than silently reading "no output" as "nothing is dirty". Called ONLY
+    over the OWNERSHIP_UNCLAIMED candidates already selected by the caller,
+    never the whole tree -- see this module's `assert_paths_in_session_scope`
+    for the gate that keeps this bounded.
+    """
+    if not candidates:
+        return set()
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--", *candidates],
+            cwd=cwd or os.getcwd(),
+            capture_output=True,
+            text=True,
+            timeout=_ORPHAN_DIRTY_PROBE_TIMEOUT_SECONDS,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    dirty: set = set()
+    for line in result.stdout.splitlines():
+        # Porcelain v1: two status chars, one space, then the path (or
+        # "old -> new" for a rename, where the NEW path is what a caller's
+        # pathspec would name).
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        dirty.add(path)
+    return dirty
 
 #: Orphan ADOPTION is enabled — orphan *diagnosis* has shipped since
 #: 2026-08-03, and staff-eng R1 (2026-08-03, re-review pass 2) is now closed:
@@ -435,6 +482,31 @@ def assert_paths_in_session_scope(
     # allow-list membership test below exactly like any other path.
     already_clean_set = set(already_clean) if already_clean else set()
 
+    # state/bug-backlog/2026-08-29-orphan-adoption-admits-a-clean-path.yaml:
+    # doctrine defines an orphan as dirty AND claimed by nobody;
+    # OWNERSHIP_UNCLAIMED is a pure claim-ledger verdict with no dirtiness
+    # component. A bounded `git status --porcelain` over ONLY the
+    # OWNERSHIP_UNCLAIMED candidates -- never the whole tree, and only when
+    # the arm is actually in play -- narrows adoption back to that
+    # definition. A probe failure fails CLOSED (empty dirty set), never
+    # open, matching the allow-list polarity the rest of this gate holds.
+    unclaimed_candidates = (
+        [
+            p
+            for p in paths
+            if isinstance(p, str)
+            and answer.by_path.get(p) is not None
+            and answer.by_path[p].verdict == claim_index.OWNERSHIP_UNCLAIMED
+        ]
+        if verified_caller
+        else []
+    )
+    dirty_unclaimed = (
+        _dirty_unclaimed_paths(cwd, unclaimed_candidates) or set()
+        if unclaimed_candidates
+        else set()
+    )
+
     denied_paths: list = []
     allowed: list = []
     for p in paths:
@@ -443,7 +515,11 @@ def assert_paths_in_session_scope(
         if verdict == claim_index.OWNERSHIP_MINE:
             allowed.append(p)
             continue
-        if verdict == claim_index.OWNERSHIP_UNCLAIMED and verified_caller:
+        if (
+            verdict == claim_index.OWNERSHIP_UNCLAIMED
+            and verified_caller
+            and p in dirty_unclaimed
+        ):
             allowed.append(p)
             continue
         denied_paths.append(p)

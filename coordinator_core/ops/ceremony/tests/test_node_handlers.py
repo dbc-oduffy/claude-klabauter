@@ -12,8 +12,8 @@ Coverage:
   (f) j_question_answer_empty_phase1 — answer="" in phase-1 (EM has not yet answered)
   (g) j_question_answer_filled     — emit_j(step_id, answer="yes") stores the answer
   (h) j_unknown_step_raises        — emit_j raises KeyError for a D/F/B/X step
-  (i) f_slot_count                 — exactly 3 F-slots registered
-  (j) f_slot_set                   — all 3 step IDs produce a non-empty slot description
+  (i) f_slot_count                 — exactly 1 F-slot registered
+  (j) f_slot_set                   — all 1 step IDs produce a non-empty slot description
   (k) f_slot_node_shape            — emit_f returns a schema-valid F-node with id/type/slot/filled
   (l) f_slot_filled_empty_phase1   — filled="" in phase-1 (EM has not yet authored)
   (m) f_slot_filled_authored       — emit_f(step_id, filled="text") stores the prose
@@ -134,9 +134,7 @@ _ALL_J_STEPS = [
 ]
 
 _ALL_F_STEPS = [
-    STEP_2B,
     STEP_2_6_6C,
-    STEP_4B,
 ]
 
 _ALL_D_STEPS = [
@@ -151,6 +149,9 @@ _ALL_D_STEPS = [
     # --- F→D reclassifications (Option B, memo 2026-07-08) ---
     STEP_1B,     # reclassified F→D: lesson authored disk-first (Option B, memo 2026-07-08)
     STEP_2_4B,   # reclassified F→D: ALLOWLIST edit written in place (Option B, memo 2026-07-08)
+    # --- F→D reclassifications (bug-blitz audit, 2026-09-20) ---
+    STEP_2B,     # reclassified F→D: plan completion notes written in place, no wsc_commit transcriber
+    STEP_4B,     # reclassified F→D: work-done narrative written disk-first, no wsc_commit transcriber
 ]
 
 # X is currently unpopulated: all prior X-steps reclassified to D (C1/C2/C3 spinoffs).
@@ -291,9 +292,9 @@ def test_emit_j_raises_for_non_j_step(non_j_step: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_f_slot_count_is_3() -> None:
-    """Exactly 3 F-slots are registered (Option B: STEP_1B/STEP_2_4B reclassified F→D)."""
-    assert len(F_SLOTS) == 3
+def test_f_slot_count_is_1() -> None:
+    """Exactly 1 F-slot is registered (STEP_1B/STEP_2_4B/STEP_2B/STEP_4B all reclassified F→D)."""
+    assert len(F_SLOTS) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +310,8 @@ def test_f_slot_is_non_empty(step_id: str) -> None:
     assert len(slot) > 0
 
 
-def test_f_slot_all_3_step_ids_in_corpus() -> None:
-    """All 3 canonical F-step IDs are present as keys in F_SLOTS."""
+def test_f_slot_all_1_step_ids_in_corpus() -> None:
+    """The 1 canonical F-step ID is present as a key in F_SLOTS."""
     for step_id in _ALL_F_STEPS:
         assert step_id in F_SLOTS, f"F-step {step_id!r} missing from F_SLOTS"
 
@@ -349,8 +350,8 @@ def test_emit_f_filled_empty_by_default(step_id: str) -> None:
 
 def test_emit_f_filled_stored() -> None:
     """emit_f(step_id, filled='prose') stores the supplied prose."""
-    node = emit_f(STEP_2B, filled="This is the plan completion note.")
-    assert node["filled"] == "This is the plan completion note."
+    node = emit_f(STEP_2_6_6C, filled="This is the completion entry body.")
+    assert node["filled"] == "This is the completion entry body."
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +359,22 @@ def test_emit_f_filled_stored() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("non_f_step", [STEP_0, STEP_1A, STEP_B1, STEP_2_6_3, "step_unknown"])
+@pytest.mark.parametrize(
+    "non_f_step",
+    [
+        STEP_0,
+        STEP_1A,
+        STEP_B1,
+        STEP_2_6_3,
+        "step_unknown",
+        # Regression: bug-blitz audit 2026-09-20 (state/bug-backlog/
+        # 2026-07-08-wsc-step2b-step4b-disk-first-audit.yaml) reclassified
+        # STEP_2B/STEP_4B F→D; adding them here locks the reclassification —
+        # re-adding either to F_SLOTS without a real transcriber turns this red.
+        STEP_2B,
+        STEP_4B,
+    ],
+)
 def test_emit_f_raises_for_non_f_step(non_f_step: str) -> None:
     """emit_f raises KeyError when the step_id is not in F_SLOTS."""
     with pytest.raises(KeyError):
@@ -509,6 +525,33 @@ def test_handle_d_defaults() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Regression: bug-blitz audit — STEP_2B/STEP_4B F→D reclassification
+# state/bug-backlog/2026-07-08-wsc-step2b-step4b-disk-first-audit.yaml
+# ---------------------------------------------------------------------------
+# The audit found STEP_2B/STEP_4B classified "F" with no wsc_commit
+# transcriber — the same disk-first / silent-drop shape STEP_1B/STEP_2_4B had
+# before their Option B reclassification. This locks the same fix for these
+# two steps: they emit as D-nodes via handle_d, not F-nodes via emit_f.
+
+
+@pytest.mark.parametrize("step_id", [STEP_2B, STEP_4B])
+def test_step_2b_step_4b_emit_as_d_nodes(step_id: str) -> None:
+    """STEP_2B/STEP_4B classify as D and produce a well-formed D-node via handle_d.
+
+    Without the fix, classify_step(step_id) == "F" and this step_id is a key
+    in F_SLOTS (emit_f succeeds instead of raising) — the disk-first prose
+    silently has no op-side transcriber to carry it into the payload.
+    """
+    assert classify_step(step_id) == "D"
+    assert step_id not in F_SLOTS
+    node = handle_d(step_id, resolving_op="disk-first", evidence={"note": "authored in place"})
+    assert node["id"] == step_id
+    assert node["type"] == "D"
+    with pytest.raises(KeyError):
+        emit_f(step_id)
+
+
+# ---------------------------------------------------------------------------
 # (w) x_handler_node_shape — emit_x returns schema-valid X-node
 # ---------------------------------------------------------------------------
 
@@ -587,8 +630,8 @@ def test_known_j_step_ids_count() -> None:
 
 
 def test_known_f_step_ids_count() -> None:
-    """known_f_step_ids() returns exactly 3 entries."""
-    assert len(known_f_step_ids()) == 3
+    """known_f_step_ids() returns exactly 1 entry."""
+    assert len(known_f_step_ids()) == 1
 
 
 def test_known_b_step_ids_count() -> None:
@@ -604,7 +647,7 @@ def test_known_j_step_ids_match_corpus() -> None:
 
 
 def test_known_f_step_ids_match_corpus() -> None:
-    """known_f_step_ids() matches the F_SLOTS keys (same 3 steps)."""
+    """known_f_step_ids() matches the F_SLOTS keys (same 1 step)."""
     assert set(known_f_step_ids()) == set(F_SLOTS.keys())
 
 

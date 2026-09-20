@@ -760,9 +760,8 @@ def _memo_draft(params: dict, repo_root=None) -> dict:
         summary (str, optional):  tl;dr ≤120 chars; left empty-string when absent
                                    (filled in / re-derived by memo.compose once
                                    a body exists — footgun #4).
-        kind    (str, REQUIRED):  one of `_memo_compose._VALID_KINDS`
-                                  (ask | consult | fyi | proposal | bug --
-                                  read the constant, not this line). Gated here
+        kind    (str, REQUIRED):  one of `memo_kinds.VALID_KINDS` -- read the
+                                  constant, never a list copied here. Gated here
                                   as well as at send, so `draft` cannot mint
                                   an artifact `send` will refuse.
         scoped_to (dict, optional): {artifact, exactly one of version|sha, seam} —

@@ -189,10 +189,30 @@ def brief(cadence: str, *, repo_root: str | None = None) -> dict[str, Any]:
             f"must be one of {CADENCES}"
         )
 
+    # The guard is HERE, not inside each reader, and must not move back. A
+    # reader raising should cost its own contribution to the brief, never the
+    # whole orientation -- but expressing that per-reader means every reader
+    # carrying a bare `except Exception`, which is exactly what they grew.
+    # Those clauses then swallow the reader's OWN defects too: a bootstrap
+    # error in the health-reaper family read as a clean box for months,
+    # because the broad clause that was there to keep orientation alive could
+    # not tell a vanishing file apart from a broken import. One guard at the
+    # seam that owns the loop lets each reader's own clause name only what it
+    # actually expects, and names the degraded reader on stderr instead of
+    # dropping it silently.
     directives: list[dict[str, Any]] = []
     judgment_points: list[dict[str, Any]] = []
     for reader in _READER_MODULES:
-        result = reader.collect(cadence, repo_root=repo_root)
+        try:
+            result = reader.collect(cadence, repo_root=repo_root)
+        except Exception as exc:  # noqa: BLE001 - see the block comment below
+            print(
+                f"orient-assemble: reader {reader.__name__.rsplit('.', 1)[-1]} "
+                f"failed ({type(exc).__name__}: {exc}); its directives and "
+                f"judgment points are absent from this brief",
+                file=sys.stderr,
+            )
+            continue
         directives.extend(result.directives)
         judgment_points.extend(result.judgment_points)
     judgment_points = [

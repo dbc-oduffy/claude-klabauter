@@ -66,15 +66,15 @@ from coordinator_core.win_portability import leaf_spawn_creationflags
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-#: Scope for axes (a)/(c): the two live planes this primitive and its named
-#: exclusions actually live in (`coordinator_core`, `coordinator`) --
-#: deliberately NOT the whole repo. `state/roadmap/**/spikes/` holds
-#: intentionally-exploratory, never-shipped scratch scripts (e.g.
-#: `pcore-01-hook-shim.py`) that predate this workstream and are out of its
-#: writes-scope to touch; scoping the gate to the shipped planes keeps it
-#: standing/fast-tier-safe without silently blessing that spike's own
-#: combination via an ad-hoc per-file exemption.
-_GATE_SCOPE_ROOTS: tuple[str, ...] = ("coordinator_core", "coordinator")
+#: Scope for axes (a)/(c). Was narrowed to the two shipped planes
+#: (`coordinator_core`, `coordinator`) to avoid an ad-hoc per-file exemption
+#: for `state/roadmap/**/spikes/pcore-01-hook-shim.py`, which carried the
+#: exact combined-flags defect axis (a) exists to catch (fixed
+#: 2026-09-20, see that file's own comment). With the spike fixed there is
+#: no longer a known repo-wide violation to carve out, so the gate now
+#: covers the whole repo -- `None` disables `_find_both_flags_violations`'s
+#: scope filter entirely (see that function).
+_GATE_SCOPE_ROOTS: tuple[str, ...] | None = None
 
 _STDIO_KWARGS = frozenset({"stdin", "stdout", "stderr", "capture_output"})
 
@@ -251,7 +251,8 @@ def test_no_detached_process_and_no_window_combined():
     """Gate axis (a) -- see module docstring. Standing/fast-tier: must stay
     green now that `auto_push._windows_detached_flags` no longer composes
     both flags together (fixed 2026-08-21, see that function's own
-    docstring measurement)."""
+    docstring measurement) and now that `pcore-01-hook-shim.py`'s spike no
+    longer does either (fixed 2026-09-20, repo-wide scope restored)."""
     violations = _find_both_flags_violations(REPO_ROOT, scope_roots=_GATE_SCOPE_ROOTS)
     assert violations == [], "\n".join(f"{path}:{lineno}" for path, lineno in violations)
 

@@ -144,10 +144,33 @@ directory that carries an archive-shaped file — "no silent reclaim" is the
 property this line exists to preserve, deliberately kept even though the
 exemption it was built alongside did not survive.
 
+Watchdog ceiling (2026-09-20, fixes state/bug-backlog/2026-08-10-scratchpad-sweep-has-no-watchdog-ceiling.yaml):
+``sweep_scratchpads`` now accepts ``watchdog_ceiling_secs`` (default 300s,
+matching ``coordinator_core.ops.cruft_sweep._Watchdog``'s own default) and
+constructs a local ``_Watchdog`` of the same ``check()``/``remaining()``
+shape. Cooperative cancellation is checked once per session directory,
+BEFORE that directory's liveness/scan work begins — never mid-scan, so a
+single directory's own ``_scan_dir`` walk is still uninterruptible, but the
+sweep can no longer be stuck iterating an unbounded NUMBER of directories.
+Once the ceiling trips, every remaining (and not-yet-visited) session
+directory across every remaining project-slug directory gets verdict
+``"watchdog-bail"`` instead of being scanned — never touched, never sized,
+never reclaimed; a bailed directory is reported so a caller can see the
+sweep stopped short, and rerunning the op later picks up where it left off
+(idempotent — a bailed directory is simply re-evaluated next call). A named
+stderr line is printed exactly once at the moment the ceiling trips.
+
 Negative-spec:
     - NEVER descend into a non-``claude`` child of the temp root (pytest-of-*,
       tmp.*, repro, W, and any other OS/tool scratch sibling are out of scope
       by construction — only ``<temp_root>/claude/`` is ever walked).
+    - NEVER let the watchdog ceiling stop mid-directory — the check happens
+      only at a session-directory boundary, before that directory's own scan
+      begins, so a directory that has already started being scanned always
+      finishes its own scan/liveness decision.
+    - NEVER let a "watchdog-bail" verdict be treated as "live" or "dead" by a
+      caller — it means "not evaluated this call", distinct from every other
+      verdict, and carries no size/age/liveness information.
     - NEVER treat a directory whose basename does not parse as a canonical
       UUID (8-4-4-4-12 hex, case-insensitive) as a session dir — this is the
       safety-critical filter separating real session dirs from anything else
@@ -203,6 +226,36 @@ _CLAUDE_DIRNAME = "claude"
 
 _DEFAULT_TTL_DAYS = 7.0
 _SECONDS_PER_DAY = 86400.0
+
+#: Watchdog ceiling default — matches
+#: ``coordinator_core.ops.cruft_sweep._WATCHDOG_CEILING_SECS_DEFAULT`` so this
+#: module converges on the same convention rather than inventing a second one
+#: (see module docstring's "Watchdog ceiling" note).
+_DEFAULT_WATCHDOG_CEILING_SECS = 300.0
+
+
+class _Watchdog:
+    """Cooperative wall-clock ceiling bail, checked once per session
+    directory (see module docstring's "Watchdog ceiling" note). Same
+    ``check()``/``remaining()`` shape as
+    ``coordinator_core.ops.cruft_sweep._Watchdog`` — duplicated rather than
+    imported so this module stays free of a load-time dependency on
+    ``cruft_sweep`` (which already imports this module lazily, function-local,
+    to adapt it; a module-level import back the other way would invert that
+    and risk a real cycle)."""
+
+    def __init__(self, ceiling_secs: Optional[float] = None):
+        if ceiling_secs is None:
+            ceiling_secs = _DEFAULT_WATCHDOG_CEILING_SECS
+        self._ceiling = ceiling_secs
+        self._start = time.monotonic()
+
+    def check(self) -> bool:
+        """Return True to continue, False to bail (ceiling exceeded)."""
+        return (time.monotonic() - self._start) < self._ceiling
+
+    def remaining(self) -> float:
+        return max(self._ceiling - (time.monotonic() - self._start), 0.0)
 
 #: Size-cut pass defaults (surfaced as ``_handler`` params, same style as
 #: ``_DEFAULT_TTL_DAYS`` above) — see module docstring's "Size-cut pass" note.
@@ -697,6 +750,7 @@ def sweep_scratchpads(
     size_cut_floor_days: float = _DEFAULT_SIZE_CUT_FLOOR_DAYS,
     size_cut_large_file_bytes: int = _DEFAULT_SIZE_CUT_LARGE_FILE_BYTES,
     size_cut_large_file_floor_days: float = _DEFAULT_SIZE_CUT_LARGE_FILE_FLOOR_DAYS,
+    watchdog_ceiling_secs: Optional[float] = None,
 ) -> dict:
     """Enumerate + (optionally) reclaim dead scratchpad directories.
 
@@ -720,6 +774,12 @@ def sweep_scratchpads(
     predicate's threshold and floor — see module docstring's "Per-file size
     predicate" note and ``_apply_size_cut``'s docstring.
 
+    ``watchdog_ceiling_secs`` (default 300, module docstring's "Watchdog
+    ceiling" note) bounds the per-session-directory enumeration loop below —
+    checked once per session directory, before that directory's own
+    liveness/scan work starts. Once tripped, every remaining directory gets
+    verdict "watchdog-bail" instead of being evaluated.
+
     Returns a report dict:
         {
           "reclaim": bool, "ttl_days": float, "temp_root": str,
@@ -732,6 +792,7 @@ def sweep_scratchpads(
           "bytes_reclaimed": int,    # sum over verdict == "reclaimed"
           "archives_seen": [ {project_slug, session_id, path, bytes, mtime,
                                verdict}, ... ],  # flat, sorted by bytes desc
+          "watchdog_bailed": bool,  # True iff the ceiling tripped this call
         }
 
     Verdict vocabulary (mutually exclusive per directory):
@@ -756,6 +817,9 @@ def sweep_scratchpads(
                              ``size_cut_target_bytes``; dry-run action only.
         "size-cut-reclaimed"   — as above, deleted this call
                              (``reclaim=True`` only).
+        "watchdog-bail"   — the wall-clock ceiling tripped before this
+                             directory was reached; never evaluated this
+                             call, never reclaimable — re-checked next call.
 
     The report also carries a top-level ``"size_cut"`` dict — see
     ``_apply_size_cut``'s docstring for its shape.
@@ -775,6 +839,8 @@ def sweep_scratchpads(
     counts: dict = {}
     bytes_reclaimable = 0
     bytes_reclaimed = 0
+    watchdog = _Watchdog(watchdog_ceiling_secs)
+    watchdog_bailed = False
 
     def _bump(verdict: str) -> None:
         counts[verdict] = counts.get(verdict, 0) + 1
@@ -794,6 +860,24 @@ def sweep_scratchpads(
             sid = session_dir.name
             scratchpad_path = session_dir / _SCRATCHPAD_DIRNAME
 
+            # Cooperative cancellation, checked once per session directory —
+            # BEFORE that directory's own liveness/scan work starts (module
+            # docstring's "Watchdog ceiling" note). Never mid-scan: a
+            # directory whose own _scan_dir walk has already begun always
+            # finishes it.
+            if not watchdog_bailed and not watchdog.check():
+                watchdog_bailed = True
+                effective_ceiling = (
+                    watchdog_ceiling_secs
+                    if watchdog_ceiling_secs is not None
+                    else _DEFAULT_WATCHDOG_CEILING_SECS
+                )
+                print(
+                    f"scratchpad_sweep: watchdog ceiling ({effective_ceiling}s) "
+                    "reached; remaining session directories reported as "
+                    "watchdog-bail, unevaluated this call",
+                    file=sys.stderr,
+                )
             entry = {
                 "project_slug": project_slug,
                 "session_id": sid,
@@ -812,11 +896,21 @@ def sweep_scratchpads(
 
             try:
                 # Belt-and-braces: never touch the invoking session's own
-                # scratchpad, regardless of what the liveness/age checks say.
+                # scratchpad, regardless of what the liveness/age checks say
+                # — checked BEFORE the watchdog gate below, so a bailed sweep
+                # still correctly identifies its own scratchpad rather than
+                # reporting it "watchdog-bail" (an O(1) check, so it never
+                # meaningfully spends the ceiling's budget).
                 if self_session_id and sid == self_session_id:
                     entry["verdict"] = "self"
                     entries.append(entry)
                     _bump("self")
+                    continue
+
+                if watchdog_bailed:
+                    entry["verdict"] = "watchdog-bail"
+                    entries.append(entry)
+                    _bump("watchdog-bail")
                     continue
 
                 if not scratchpad_path.is_dir():
@@ -960,6 +1054,7 @@ def sweep_scratchpads(
         "bytes_reclaimed": bytes_reclaimed,
         "size_cut": size_cut_report,
         "archives_seen": archives_seen,
+        "watchdog_bailed": watchdog_bailed,
     }
 
 
@@ -985,6 +1080,11 @@ def _handler(params: dict, repo_root=None) -> dict:
             large-file directory (see size_cut_large_file_bytes above), in
             days; default 0.5. Nothing younger is ever eligible, even a
             directory carrying a very large file.
+        watchdog_ceiling_secs: number — wall-clock ceiling in seconds for
+            the per-session-directory walk; default 300 (module docstring's
+            "Watchdog ceiling" note). Once exceeded, every remaining
+            directory is reported verdict "watchdog-bail" rather than
+            evaluated.
 
     Scope: ``none`` — this op reads/writes only the OS temp root, never
     coordinator substrate or a git repo; ``repo_root`` is accepted for
@@ -1058,6 +1158,16 @@ def _handler(params: dict, repo_root=None) -> dict:
             "non-negative number"
         }
 
+    watchdog_ceiling_secs = params.get("watchdog_ceiling_secs")
+    if watchdog_ceiling_secs is not None and (
+        isinstance(watchdog_ceiling_secs, bool)
+        or not isinstance(watchdog_ceiling_secs, (int, float))
+        or watchdog_ceiling_secs < 0
+    ):
+        return {
+            "error": "scratchpad.sweep: watchdog_ceiling_secs must be a non-negative number"
+        }
+
     return sweep_scratchpads(
         temp_root=temp_root,
         project_slugs=project_slugs,
@@ -1067,4 +1177,7 @@ def _handler(params: dict, repo_root=None) -> dict:
         size_cut_floor_days=float(size_cut_floor_days),
         size_cut_large_file_bytes=int(size_cut_large_file_bytes),
         size_cut_large_file_floor_days=float(size_cut_large_file_floor_days),
+        watchdog_ceiling_secs=(
+            float(watchdog_ceiling_secs) if watchdog_ceiling_secs is not None else None
+        ),
     )

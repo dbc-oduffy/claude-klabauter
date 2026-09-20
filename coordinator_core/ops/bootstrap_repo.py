@@ -826,9 +826,19 @@ def main(argv: List[str]) -> int:
                 file=sys.stderr,
             )
 
+    # AMBIENT-REPO fix (bug-backlog 2026-08-28-two-bootstrap-ops-bare-commit-
+    # into-an-operator-selected-repo): `git diff --cached --name-only` reports
+    # EVERY staged path, including one an operator (or a peer) staged into
+    # this ambient repo before bootstrap ever ran -- it is not scoped to what
+    # THIS run added. `stage_targets` (this run's own untracked+modified list,
+    # captured before staging) is the honest scope; intersecting it against
+    # what actually landed in the index (`staged_files`) drops any path this
+    # run's own `git add` batch failed to stage.
     staged_files = _git_lines(["diff", "--cached", "--name-only"], root_path)
+    staged_set = set(staged_files)
+    scoped_commit_paths = [p for p in stage_targets if p in staged_set]
 
-    if not staged_files:
+    if not scoped_commit_paths:
         _print("bootstrap-repo: nothing to commit (scaffold was already up to date).")
         _print("  status: bootstrap already current — no commit made.")
         return 0
@@ -844,7 +854,16 @@ def main(argv: List[str]) -> int:
 
     try:
         proc = subprocess.run(
-            ["git", "-C", root_path, "commit", "-m", "chore(coordinator): bootstrap"],
+            [
+                "git",
+                "-C",
+                root_path,
+                "commit",
+                "-m",
+                "chore(coordinator): bootstrap",
+                "--",
+                *scoped_commit_paths,
+            ],
             env=env,
             timeout=_COMMIT_TIMEOUT_SECS,
             stdin=subprocess.DEVNULL,

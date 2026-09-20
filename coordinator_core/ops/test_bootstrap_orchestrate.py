@@ -474,6 +474,55 @@ def test_out_of_tree_paths_not_collected(tmp_path, fake_home, capsys):
 
 
 # ---------------------------------------------------------------------------
+# AMBIENT REPO regression (bug-backlog 2026-08-28-two-bootstrap-ops-bare-
+# commit-into-an-operator-selected-repo): the currency-stamp commit must not
+# absorb whatever else is already staged in the operator-selected repo.
+# ---------------------------------------------------------------------------
+
+
+def test_currency_commit_does_not_absorb_unrelated_staged_file(tmp_path, fake_home, monkeypatch):
+    repo = tmp_path / "ambient-repo"
+    repo.mkdir()
+    _init_git(str(repo))
+    _baseline_commit(str(repo))
+
+    with open(repo / "unrelated.txt", "w", encoding="utf-8") as fh:
+        fh.write("someone else's staged work\n")
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "--", "unrelated.txt"],
+        check=True, timeout=30, **no_console_passthrough_kwargs(),
+    )
+
+    # Stub the Wave-1 primitive: bootstrap "succeeds" (rc 0) without touching
+    # the tree, isolating this test to the currency-stamp commit this module
+    # itself issues -- bootstrap_repo.main's OWN commit scoping is covered by
+    # coordinator_core/ops/test_bootstrap_repo.py, not here.
+    monkeypatch.setattr(
+        "coordinator_core.ops.bootstrap_orchestrate._import_bootstrap_repo_main",
+        lambda: (lambda argv: 0),
+    )
+
+    _write_working_repos_yaml(fake_home, str(repo))
+
+    rc = main(["--non-interactive"])
+    assert rc == 0
+    assert (repo / "docs" / "coordinator-currency.yaml").is_file()
+
+    committed_paths = subprocess.run(
+        ["git", "-C", str(repo), "show", "--name-only", "--format=", "HEAD"],
+        capture_output=True, text=True, timeout=30, **no_console_creationflags(),
+    ).stdout.splitlines()
+    assert "unrelated.txt" not in committed_paths
+    assert "docs/coordinator-currency.yaml" in committed_paths
+
+    still_staged = subprocess.run(
+        ["git", "-C", str(repo), "diff", "--cached", "--name-only"],
+        capture_output=True, text=True, timeout=30, **no_console_creationflags(),
+    ).stdout.splitlines()
+    assert "unrelated.txt" in still_staged
+
+
+# ---------------------------------------------------------------------------
 # C19 parity — _coordinator_currency_write (Port of:
 # coordinator-currency.sh::coordinator_currency_write, DoE 9cc1d315,
 # 2026-07-21). Locks the

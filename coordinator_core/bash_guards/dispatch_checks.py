@@ -3020,6 +3020,50 @@ def _orphan_c_cwd(c_dir: str) -> Optional[str]:
     return c_dir or None
 
 
+_BT_LEADING_CD_RE = re.compile(r"^\s*cd\s+(\S+)\s*(?:&&|;)")
+
+
+def _bt_leading_cd_prefix_cwd(cmd: str, base_cwd: Optional[str]) -> Optional[str]:
+    """The effective cwd a repo-root-resolving guard should probe against
+    when the COMMAND, not the guard process, changes directory first --
+    `cd <fixture> && git ...`.
+
+    Bug row: state/bug-backlog/2026-08-27-destructive-git-and-scope-guards-
+    resolve-295928a71726.yaml. A guard resolving `os.getcwd()` (the guard
+    process's own cwd) or the payload's session-level `cwd` reads the WRONG
+    repo whenever the executed command's own leading `cd <dir> &&` moves it
+    elsewhere -- observed both directions: a scope guard warning about a
+    path from an unrelated repo, and a destructive-checkout guard blocking a
+    harmless command on a foreign repo's state.
+
+    NARROW BY DESIGN, matching the evidenced shape only: a `cd <dir>` at the
+    very START of the command, immediately followed by `&&` or `;`. This
+    does NOT track cwd across an arbitrary chain of segments (`git ... && cd
+    x && git ...`) -- that is `_bt_blanket_add_dash_c_cwd`'s sibling-shape
+    gap for a FUTURE widening, not this fix. Reuses that function's `-C`
+    resolution shape (last value wins is not applicable here since only the
+    leading form is matched at all).
+
+    Returns `None` -- never raises, never denies more -- when no leading
+    `cd` is present, the directory token cannot be resolved (a glob or an
+    unexpanded variable), or `base_cwd`/`os.getcwd()` resolution fails; the
+    caller falls back to its own prior `cwd` in every such case. A guard
+    whose root resolution only ever narrows on a hit and never widens on a
+    miss cannot turn an unrelated command into a false deny."""
+    m = _BT_LEADING_CD_RE.match(cmd)
+    if not m:
+        return None
+    raw = m.group(1).strip("'\"")
+    if not raw or "*" in raw or "?" in raw or raw.startswith("$"):
+        return None
+    if os.path.isabs(raw):
+        return os.path.normpath(raw)
+    try:
+        return os.path.normpath(os.path.join(base_cwd or os.getcwd(), raw))
+    except (OSError, ValueError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # 3. check_destructive_rm -- block-destructive-rm.sh
 # F0: per-target repo resolution (git -C "$(dirname TGT_ABS)"), never a
@@ -4023,6 +4067,25 @@ def check_destructive_rm(
             # argument above and must fall through to the general git-store
             # deny below.
             if is_git_store_target and os.path.basename(tgt_abs).endswith(".lock") and os.path.isfile(tgt_abs):
+                continue
+
+            # The write-confinement bump's own clear marker
+            # (`allow-xrepo-write-<session-id>`, `_write_bump_marker.py`) is
+            # a zero-byte sentinel directly under the gitdir, not objects,
+            # refs, or logs -- removing it only re-arms the bump for the
+            # rest of the session, per that module's own docstring. Denying
+            # its removal leaves a session that cleared the bump for one
+            # deliberate operation with no way to put it back
+            # (state/bug-backlog/2026-09-02-git-store-rm-guard-blocks-
+            # removing-the-w-d2194cff6d30.yaml). Same shape as the `.lock`
+            # allow above: scoped to a FILE whose basename matches, so a
+            # directory merely named with that prefix still falls through
+            # to the general git-store deny below.
+            if (
+                is_git_store_target
+                and os.path.basename(tgt_abs).startswith("allow-xrepo-write-")
+                and os.path.isfile(tgt_abs)
+            ):
                 continue
 
             # Review: code-reviewer (Finding 4) -- a target whose basename is
@@ -5289,7 +5352,16 @@ def _check_destructive_git_revert_full(
             continue
 
         c_dir = _extract_git_c_dir(seg)
-        git_cwd = _orphan_c_cwd(c_dir)
+        # A leading `cd <dir> &&` ahead of this segment's own `git ...`
+        # moves the executed command's cwd away from the guard process's --
+        # see `_bt_leading_cd_prefix_cwd`'s docstring and state/bug-backlog/
+        # 2026-08-27-destructive-git-and-scope-guards-resolve-
+        # 295928a71726.yaml (the `cd <fixture> && git checkout -q .` shape
+        # that blocked a harmless command on a foreign repo's uncommitted
+        # files). `-C <dir>` on THIS segment still wins where present.
+        git_cwd = _orphan_c_cwd(c_dir) or _bt_leading_cd_prefix_cwd(
+            cmd, (hook_payload or {}).get("cwd") or None
+        )
         after = re.sub(r".*(^|\s)" + verb + r"(\s|$)", " ", seg, count=1)
 
         affected: List[str] = []
@@ -7069,7 +7141,13 @@ def check_validate_commit(
     command = _crlf_strip(cmd) if cmd else ""
     if not command:
         return None
-    _cwd = cwd or None
+    # A leading `cd <dir> &&` moves the EXECUTED command's cwd away from
+    # the payload's session-level `cwd` -- see `_bt_leading_cd_prefix_cwd`'s
+    # docstring and state/bug-backlog/2026-08-27-destructive-git-and-scope-
+    # guards-resolve-295928a71726.yaml. `None` (no leading `cd`, or an
+    # unresolvable one) falls back to the pre-existing `cwd or None`
+    # unchanged.
+    _cwd = _bt_leading_cd_prefix_cwd(command, cwd or None) or cwd or None
 
     contains_git_commit = bool(re.match(r"^git\s+commit(\s|$)", command))
     if not contains_git_commit:
@@ -10368,35 +10446,42 @@ def _bt_commit_has_amend_flag(seg_tokens: List[str]) -> bool:
     return False
 
 
-def _bt_commit_is_help_invocation(seg_tokens: List[str]) -> bool:
-    """True iff a `git commit` segment carries `-h` or `--help`: git prints
-    usage (or opens the manpage) and exits, staging nothing and committing
-    nothing.
+def _bt_commit_is_noop_invocation(seg_tokens: List[str]) -> bool:
+    """True iff a `git commit` segment carries `-h`/`--help`, `--dry-run`, or
+    `--version`: git prints usage/output and exits WITHOUT staging or
+    committing anything.
 
     Why a carve-out rather than one more shape the predicates below happen
-    to deny: a help invocation names no pathspec, so every bare-commit
-    predicate reads it as unscoped and the operator gets a deny on the one
+    to deny: a no-op invocation names no pathspec, so every bare-commit
+    predicate reads it as unscoped and the operator gets a deny on a
     `git commit` shape that cannot sweep anything. Noise on a harmless
     command is what trains operators to stop reading guard output --
     reported alongside a real sweep this guard did not stop
     (`state/bug-backlog/2026-08-21-bare-commit-guard-likely-fails-open-
     unde-0d2276775068.yaml`, SECONDARY).
 
+    `--dry-run` and `--version` were named alongside `-h`/`--help` as an
+    identical-property gap (`state/bug-backlog/2026-08-31-the-noop-commit-
+    carve-out-stops-at-help.yaml`): no staging, no commit, no pathspec.
+    `--short`/`--porcelain` are deliberately NOT members -- git still
+    commits under either.
+
     Bounded by the segment's own `--` separator and skipping
     option-with-arg VALUE tokens, on the same footing as
     `_bt_commit_has_sweep_all_flag`: a message operand or a pathspec
-    literally named `-h` must never read as help, since the cost of a false
-    positive here is a real bare commit going unguarded. A BUNDLED short
-    cluster carrying `h` (`-sh`) is deliberately NOT matched -- git treats
-    it as help, but leaving it to today's deny costs one noisy refusal,
-    while widening the match risks the silence direction."""
+    literally named `-h` must never read as a no-op, since the cost of a
+    false positive here is a real bare commit going unguarded -- this reads
+    argv OPERANDS only, never the commit message. A BUNDLED short cluster
+    carrying `h` (`-sh`) is deliberately NOT matched -- git treats it as
+    help, but leaving it to today's deny costs one noisy refusal, while
+    widening the match risks the silence direction."""
     i = 0
     n = len(seg_tokens)
     while i < n:
         tok = seg_tokens[i]
         if tok == "--":
             break
-        if tok in ("-h", "--help"):
+        if tok in ("-h", "--help", "--dry-run", "--version"):
             return True
         if tok in _GIT_COMMIT_OPT_WITH_ARG:
             i += 2
@@ -11013,9 +11098,9 @@ def check_git_commit_safe_commit_advise(
     probe failure denies (a false silence there would be the worse outcome
     for that guard's own class).
 
-    HELP CARVE-OUT: `git commit -h`/`--help` exits before staging or
-    committing anything and is skipped ahead of every predicate -- see
-    `_bt_commit_is_help_invocation`.
+    NO-OP CARVE-OUT: `git commit -h`/`--help`/`--dry-run`/`--version` exits
+    before staging or committing anything and is skipped ahead of every
+    predicate -- see `_bt_commit_is_noop_invocation`.
 
     FAIL-OPEN LEGIBILITY: when an index probe fails, the escalation is
     still declined (posture unchanged), but the fall-through advisory now
@@ -11114,7 +11199,7 @@ def check_git_commit_safe_commit_advise(
             continue
         # `continue`, not `return None`: a later segment of the same command
         # (`git commit -h && git commit -m x`) still gets every predicate.
-        if _bt_commit_is_help_invocation(seg_tokens):
+        if _bt_commit_is_noop_invocation(seg_tokens):
             continue
         # Amend-ownership gate (example-retrieval-repo-em cross-repo memo, Finding 2):
         # evaluated BEFORE the explicit-pathspec early return below, so a

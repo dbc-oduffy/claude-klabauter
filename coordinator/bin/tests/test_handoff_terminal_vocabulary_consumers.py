@@ -1,5 +1,5 @@
 """test_handoff_terminal_vocabulary_consumers.py — pins the terminal-vocabulary
-agreement property for 19 of the 24 files a sibling repo's cutover gate flagged as
+agreement property for the 15 surviving files (of 24) a sibling repo's cutover gate flagged as
 "consumers" of ``coordinator_core.lifecycle_constants.HANDOFF_TERMINAL_DEPLOYMENT``
 (DR-084's widened handoff terminal set: ``{shipped, abandoned, continued, closed}``).
 
@@ -11,7 +11,8 @@ cross-repo-memo status, initiative status — none of which are the handoff
 (``sweep-shipped-handoffs.py``, out of scope here — a different workstream
 owns it) was a real unmigrated consumer: it enumerated a stale subset of the
 terminal vocabulary instead of importing the SSOT constant. This module pins,
-per file, that the same mistake is not latent in 19 of the remaining 23. The
+per file, that the same mistake is not latent in the 15 of the remaining 23 that
+still exist — each row retired since carries its own re-triage note below. The
 other 4 are ``tests/fixtures/validator-negative/*.md`` data fixtures, which
 carry no code to scan — they are covered instead by
 ``test_validator_negative_corpus.py``, which re-ports the loader that proves
@@ -41,12 +42,12 @@ behavioral test suites elsewhere in this tree.
 The scanning helper (``_string_literal_collections``) exists exactly once and
 dispatches on file shape: AST parsing (via ``ast``) for ``.py`` files —
 preferred over regex because regex-over-source is how this class of check
-goes stale — and a text-level bracket scan for the two non-Python files
-(``.mjs``/``.js``, where no native AST is available). The text-level arm is
+goes stale — and a text-level bracket scan for the one non-Python file
+(``.js``, where no native AST is available). The text-level arm is
 weaker (it cannot distinguish an array literal from a string that merely
 looks like one inside a comment or template string) — acceptable here only
-because both non-Python sites are themselves test fixtures, not production
-readers, and the property they are checked against is a defensive-subset
+because that non-Python site is itself a test fixture, not a production
+reader, and the property it is checked against is a defensive-subset
 check, not a primary classification.
 """
 
@@ -87,9 +88,6 @@ CANON = frozenset({"shipped", "abandoned", "continued", "closed"})
 _KNOWN_OVERLAP_EXEMPTIONS: dict[str, frozenset[frozenset[str]]] = {
     # test_sweep_shipped_handoffs_terminal_selector.py's exemption removed 2026-08-07 —
     # the file was excised in the spawn-heavy test cull (see _CONSUMERS below).
-    "coordinator/bin/tests/test-initiative-shape.mjs": frozenset(
-        {frozenset({"active", "paused", "shipped", "abandoned"})}
-    ),
     "coordinator/bin/tests/test_handoff_terminal_vocabulary_consumers.py": frozenset(
         {
             frozenset({"shipped", "abandoned", "superseded"}),
@@ -135,7 +133,19 @@ _CONSUMERS: list[tuple[str, bool]] = [
     ("coordinator/bin/test_prune_closed_bugs.py", False),  # bug-backlog status, not handoff
     ("coordinator/bin/tests/test_archive_stamp_cli_chain_supersede_archive.py", False),  # argv-shape test; continued_into is a path param, not a vocabulary enumeration
     ("coordinator/bin/tests/test_doe_root_routing.py", False),  # queue status enum {open, closed, deferred}, not handoff
-    ("coordinator/bin/tests/test-initiative-shape.mjs", False),  # initiative status enum, not handoff
+    # Re-triaged 2026-09-20, NOT silently dropped: test-initiative-shape.mjs was
+    # deleted along with five sibling .js/.mjs tests that `require()` the Node
+    # oracle `coordinator/bin/lib/schema.js`, retired in the 2026-07-24 de-node
+    # cutover (480ad8f867 / 90de9c3083) — they had been unrunnable for two
+    # months, and pytest never collected them. It was never a handoff consumer
+    # (its row already read False, correctly: an initiative status enum on a
+    # different axis), so no replacement coverage is owed here; the burn-down
+    # (null) vs completion (YYYY-MM-DD) target_date shape it pinned is covered
+    # natively by test_initiatives_store.py::test_target_date_nullable and
+    # test_coordinator_initiative_cli.py. Its overlap exemption
+    # above went with it; the same literal survives in this module's own
+    # self-exemption, which is where the fixed point needs it. Recover via
+    # `git show 9621d374e1:coordinator/bin/tests/test-initiative-shape.mjs`.
     ("coordinator/bin/tests/test-query-handoff-ledger.js", True),  # touches deployment_state, but only a fixed non-terminal fixture value ("ready_to_fire")
     # Reconciled 2026-08-02 (stale-test cleanup, triage-F): commit 5310420b2
     # ("C13: cmd_supersede confirms its own write instead of trusting the
@@ -198,8 +208,8 @@ def _text_string_literal_collections(source: str) -> list[frozenset[str]]:
     Weaker than the AST arm by design (see module docstring): finds bracketed
     ``[...]`` groups and, within each, extracts every quoted string token,
     without regard for JS syntax outside string literals (comments, template
-    strings, nesting). Acceptable only because both non-Python sites under
-    test are test fixtures, checked against a defensive subset property, not
+    strings, nesting). Acceptable only because the non-Python site under
+    test is a test fixture, checked against a defensive subset property, not
     the primary reads/does-not-read classification.
     """
     collections: list[frozenset[str]] = []

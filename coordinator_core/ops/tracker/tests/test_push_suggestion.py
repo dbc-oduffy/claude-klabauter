@@ -850,26 +850,62 @@ def _scan_for_literal(source: str, needle: str) -> bool:
     return needle.lower() in source.lower()
 
 
+def _strip_leading_module_docstring(text: str) -> str:
+    """Return *text* with its leading module docstring removed.
+
+    Mirrors `test_tracker_holder_brightline.py`'s own `_docstring_span`
+    exemption boundary — `tracker_holder.py`'s own module docstring
+    legitimately names a worked-example destination and must stay exempt
+    from the literal scan; only its CODE is in scope.
+    """
+    match = re.match(r'^\s*(?:"""|\'\'\')', text)
+    if not match:
+        return text
+    quote = text[match.end() - 3 : match.end()]
+    close = text.find(quote, match.end())
+    if close == -1:
+        return text
+    return text[close + 3 :]
+
+
+def _d2a_scan_targets() -> "list[tuple[Path, bool]]":
+    """The D2a scan's target list: (path, strip_leading_docstring) pairs.
+
+    state/bug-backlog/2026-08-20-d2a-derived-guard-covers-the-op-but-not-
+    its-resolution-chain.yaml — DR-338 D2a's condition binds "the delivery
+    op's code path OR ITS RESOLUTION CHAIN". Scoping this scan to
+    `push_suggestion.py` alone leaves a successor destination hardcoded
+    into `tracker_holder.py` (one module upstream, on the resolution chain
+    this op calls into) caught by neither this guard nor the sibling
+    brightline scan once `tracker.holder_repo` is repointed — the
+    brightline scan matches hardcoded SPELLINGS of today's destination,
+    not this box's actual (derived) one. `tracker_holder.py` itself is
+    therefore in scope here too, with its leading module docstring
+    exempted the same way the brightline guard exempts it.
+    """
+    return [
+        (Path(push_suggestion.__file__), False),
+        (Path(tracker_holder.__file__), True),
+    ]
+
+
 @pytest.mark.real_home
 def test_d2a_no_destination_specific_literal_in_module_source():
-    """No destination-specific identifier may appear anywhere in THIS op's
-    own module. The mechanism must stay destination-agnostic: repointing
-    `tracker.holder_repo` at a different `repos.*` member must require NO
-    code change here — D2a's own third discharge test (module docstring).
+    """No destination-specific identifier may appear anywhere in this op's
+    own module OR its resolution chain (`tracker_holder.py`). The mechanism
+    must stay destination-agnostic: repointing `tracker.holder_repo` at a
+    different `repos.*` member must require NO code change here — D2a's own
+    third discharge test (module docstring).
 
     RULING 2026-08-20 (C4): the forbidden token is DERIVED from the
     `tracker.holder_repo` registry key, never hardcoded — a hardcoded
     destination-name literal here is exactly what the sibling brightline
     guard (`test_tracker_holder_brightline.py`'s own no-hardcoded-
-    destination-literal check, which scans `tracker_holder.py` plus every
-    importer, this module included, since it imports `tracker_holder`)
-    flags as a violation — two guards enforcing the same D2a/AC1 policy
-    must not fight each other. Deriving the token also keeps this guard
-    testing the property D2a actually states for WHATEVER this box's
-    destination is, rather than one hardcoded fleet's seeded value.
-
-    Scoped to `push_suggestion.py` only, not `tracker_holder.py` — this
-    chunk's `writes:` list does not include that file.
+    destination-literal check) flags as a violation — two guards enforcing
+    the same D2a/AC1 policy must not fight each other. Deriving the token
+    also keeps this guard testing the property D2a actually states for
+    WHATEVER this box's destination is, rather than one hardcoded fleet's
+    seeded value.
     """
     from coordinator_core.machine_resolver import registry_get
 
@@ -880,11 +916,29 @@ def test_d2a_no_destination_specific_literal_in_module_source():
         "registry is configured (a silently-empty scan must not read as "
         "clean, mirrors the brightline guard's own non-zero assertions)"
     )
-    source = Path(push_suggestion.__file__).read_text(encoding="utf-8")
-    assert not _scan_for_literal(source, str(holder_value)), (
-        f"destination-specific literal {holder_value!r} (this box's "
-        "tracker.holder_repo registry value) found in "
-        f"{push_suggestion.__file__} — violates DR-338 D2a"
+    for path, strip_docstring in _d2a_scan_targets():
+        source = path.read_text(encoding="utf-8")
+        if strip_docstring:
+            source = _strip_leading_module_docstring(source)
+        assert not _scan_for_literal(source, str(holder_value)), (
+            f"destination-specific literal {holder_value!r} (this box's "
+            f"tracker.holder_repo registry value) found in {path} — "
+            "violates DR-338 D2a"
+        )
+
+
+def test_d2a_scan_targets_include_the_resolution_chain():
+    """The scan target list must name `tracker_holder.py`, not just this
+    op's own module — pins the fix for state/bug-backlog/2026-08-20-d2a-
+    derived-guard-covers-the-op-but-not-its-resolution-chain.yaml. Without
+    this, a destination literal hardcoded into `tracker_holder.py` alone
+    (never `push_suggestion.py`) would be caught by neither this guard nor
+    the brightline scan the moment `tracker.holder_repo` is repointed."""
+    targets = {path.resolve() for path, _strip in _d2a_scan_targets()}
+    assert Path(tracker_holder.__file__).resolve() in targets, (
+        "D2a scan target list does not include tracker_holder.py — a "
+        "successor destination hardcoded there, one module upstream of "
+        "push_suggestion.py, would go undetected"
     )
 
 

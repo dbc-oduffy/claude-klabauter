@@ -233,6 +233,7 @@ from coordinator_core.bash_guards._tool_names import (
     COMMAND_TOOL_NAMES,
 )
 from coordinator_core.bash_guards._dialect import (
+    Dialect as _Dialect,
     dialect_from_tool_name as _dialect_from_tool_name,
 )
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel
@@ -1703,7 +1704,11 @@ def _evaluate_payload_json_budgeted(
     # walk-reduction for this one call; `check_no_verify` falls back to its
     # own pre-existing, self-contained tokenize path whenever `resolved` is
     # `None`, so degrading to that on any exception is always safe.
-    if resolved is None and "git" in cmd:
+    if (
+        resolved is None
+        and "git" in cmd
+        and _dialect_from_tool_name(_raw_tool_name) is not _Dialect.POWERSHELL
+    ):
         try:
             resolved = _resolve_command_positions(cmd)
         except Exception as exc:  # noqa: BLE001 -- degrade to per-guard fallback, never propagate

@@ -928,6 +928,7 @@ def record_fact_span(
     process_ms: Optional[float] = None,
     repo_root: Optional[Path] = None,
     sid: Optional[str] = None,
+    invocation_id: Optional[str] = None,
 ) -> None:
     """Append one JSON line recording ONE served fact's timing, from
     `coordinator_core.session.session_facts` (C1, plan
@@ -975,15 +976,26 @@ def record_fact_span(
     ``quick_wrap_assemble/__init__.py``"). Per-fact rows are the only shape
     implementable without touching that file, so that is what is built here.
 
-    THIS ROW SHAPE CANNOT PRODUCE A PER-CEREMONY AGGREGATE, and an earlier
+    ``sid`` ALONE CANNOT PRODUCE A PER-CEREMONY AGGREGATE, and an earlier
     version of this docstring claimed it could: "grouping by ``sid`` at read
     time recovers the per-ceremony breakdown". It does not. ``sid`` is the
     SESSION id and is stable across every ceremony invocation a session makes,
-    so grouping N invocations by it collapses them into one — measured, ten
-    real ``brief()`` calls yield an aggregate of n=1. A reader wanting the
-    aggregate must either sum per-fact statistics (honest arithmetic, but not
-    a distribution) or wait for a per-invocation correlation id. Tracked:
-    ``state/bug-backlog/2026-08-27-fact-span-rows-cannot-yield-a-per-ceremo-d9be470c2039.yaml``.
+    so grouping N invocations by it alone collapses them into one — measured,
+    ten real ``brief()`` calls yield an aggregate of n=1. ``invocation_id``
+    (additive, optional, default ``None``) is the per-invocation correlation
+    id option (a) of
+    ``state/bug-backlog/2026-08-27-fact-span-rows-cannot-yield-a-per-ceremo-d9be470c2039.yaml``
+    named: a caller minting one fresh id per ceremony call and passing it to
+    every ``_timed_fact`` call within that ceremony lets a reader
+    (``compute_timing_distributions``) group by it instead of ``sid`` and
+    recover the real per-ceremony distribution. No caller passes it yet —
+    the production call site,
+    ``coordinator_core/quick_wrap_assemble/__init__.py::brief``, is out of
+    this module's own scope (see that bug-backlog record's
+    ``proposed_action``) — so today's rows still carry ``invocation_id: null``
+    and a reader still falls back to the ``sid``-collapsed aggregate. This is
+    the instrumentation half of the fix; wiring a real caller is the
+    remaining half.
 
     Same fail-open contract as the other three row kinds: resolves the sink
     via ``coordinator_core.lifecycle.git_common_dir``, honours
@@ -997,6 +1009,7 @@ def record_fact_span(
         "outcome": outcome,
         "pid": os.getpid(),
         "sid": sid,
+        "invocation_id": invocation_id,
         "repo_key": None,
         "kind": "fact_span",
     }

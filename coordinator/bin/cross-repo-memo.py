@@ -1958,7 +1958,7 @@ def _build_and_validate_scoped_to(
     Assembles the nested scoped_to dict from the --scoped-to-* flags and
     validates it against `_scoped_to_errors` (the same presence-triggered
     completeness rule enforced on the outbox/self-receipt paths — see
-    _scoped_to_errors docstring / schema.js:2290). `error_prefix` carries
+    _scoped_to_errors docstring). `error_prefix` carries
     the only wording difference between call sites (e.g. "refusing send" vs
     "refusing --campaign-to send").
 
@@ -2387,18 +2387,20 @@ def _run_scoped_premise_checks(
 
 _OUTBOX_REQUIRED_FIELDS = ("title", "from", "to", "created", "status", "delivery_mode", "summary")
 
-# Mirrors the canonical `kind` enum in coordinator/bin/lib/schema.js:2131
-# (validKinds) — the receiver-side cross-field rule. Checked here too so a
-# malformed kind fails loud on the SENDER side, before delivery, instead of
-# jamming the receiver's lifecycle wrappers at stamp time.
+# Mirrors `coordinator_core.ops.fleet.memo_kinds.VALID_KINDS`, the single home
+# of the memo-kind enum. That module is also what the receiver-side cross-field
+# rule (`schema_validate._memo_cf_kind_enum`) reads, so sender and receiver
+# cannot disagree. Checked here too so a malformed kind fails loud on the
+# SENDER side, before delivery, instead of jamming the receiver's lifecycle
+# wrappers at stamp time.
 #
-# `notice` (klabauter#46/#40, 2026-09-19): added here and in claude-klabauter's own
-# `coordinator_core/ops/fleet/memo_kinds.VALID_KINDS` (this CLI's sender-side
-# gate mirrors that op-level enum, not the other way round — see that
-# module's own docstring). schema.js:2131 is DoE-claude-owned and out of
-# this fix's footprint; until DoE lands the matching enum entry there, a
-# `notice`-kind memo sends cleanly from here but the RECEIVER's own
-# cross-field validation is the one that has the final say on its wire.
+# There is no third, peer-owned leg. The Node oracle this comment previously
+# named as authoritative (`coordinator/bin/lib/schema.js`, `validKinds`) was
+# retired in the 2026-07-24 de-node cutover (480ad8f867 / 90de9c3083) and no
+# sibling repo validates `kind` on arrival — DoE-claude's vendored
+# `cross-repo-memo.schema.json` declares it as a bare string with no enum.
+# `notice` (klabauter#46/#40, 2026-09-19) therefore round-trips today; nothing
+# is owed by a peer. Confirmed against DoE-claude's tree 2026-09-20.
 _VALID_KINDS = ("ask", "consult", "fyi", "proposal", "bug", "notice")
 
 # The kinds that assert a premise about the RECEIVER's tree state, and so earn
@@ -2421,21 +2423,22 @@ _PREMISE_BEARING_KINDS = frozenset({"ask", "proposal"})
 # `_parse_outbox_file` accepts BOTH the flat `scoped_to_artifact: "..."`
 # top-level-key shape (hand-edited drafts, this CLI's own pre-2026-07-21
 # emission) AND claude-klabauter's `memo.draft` op's nested `scoped_to:` mapping shape
-# (schema.js's shape), normalizing either into these same flat keys on read —
+# (the `memo.draft` nested shape), normalizing either into these same flat keys on read —
 # see `_parse_outbox_file`'s docstring for the round-trip fix (2026-07-21).
 # The --scoped-to-* CLI flags emit/consume this flattened shape too.
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 
 
-# CANONICAL SOURCE OF TRUTH: coordinator/bin/lib/schema.js:2290 (the
-# scoped_to presence-triggered-completeness check) and claude-klabauter's
-# coordinator_core/ops/fleet/memo_send.py. All three implementations must
-# stay legibly identical — this function mirrors the other two CLI-side, same
+# CANONICAL SOURCE OF TRUTH: `coordinator_core/ops/fleet/memo_send.py`'s
+# scoped_to presence-triggered-completeness check. Both implementations must
+# stay legibly identical — this function mirrors it CLI-side, same
 # direction/idiom as the _VALID_KINDS mirror above, so a malformed scoped_to
 # fails loud on the SENDER side, before delivery, instead of only surfacing
-# when the receiver validates the inbox copy. schema.js is authoritative;
-# this is the copy — keep all three in sync on any future change to the
-# scoped_to shape.
+# when the receiver validates the inbox copy. memo_send.py is authoritative;
+# this is the copy — keep both in sync on any future change to the scoped_to
+# shape. (A third leg, the Node oracle `bin/lib/schema.js`, was named here
+# until the 2026-07-24 de-node cutover deleted it; it is gone, not merely
+# unreferenced.)
 def _scoped_to_errors(kind: str | None, scoped_to: dict[str, str | None] | None) -> list[str]:
     """Validate scoped_to under presence-triggered completeness.
 
@@ -2446,7 +2449,7 @@ def _scoped_to_errors(kind: str | None, scoped_to: dict[str, str | None] | None)
     triple is required regardless of kind: 'artifact' (non-empty str),
     exactly one of 'version' (non-empty str) or 'sha' (7-40 hex str), and
     'seam' (non-empty str) — else fail loud. This mirrors claude-klabauter's
-    memo_send.py and DoE's schema.js:2290 exactly; do not reintroduce a
+    memo_send.py exactly; do not reintroduce a
     kind-based gate here — the old "required when kind=ask/proposal" rule
     was the actual source of sender friction being fixed (see
     cross-repo/inbox/2026-07-21-claude-klabauter-em-scoped-to-engine-fixed-gate-is-yours.md).
@@ -2595,6 +2598,20 @@ def _print_stale_engine_kind_diagnosis(exc: BaseException) -> None:
     `coordinator/bin/tests/test_memo_kind_enum_mirrors.py` cannot catch it --
     it pins the CLI tuples to the IN-TREE engine, which is exactly the
     comparison that agrees.
+
+    Deliberately pins no sha. The observed instance (`notice`, 2026-09-20) was
+    republished out of existence within the hour, which is the normal life of
+    a publish-lag defect and the reason this diagnoses a CONDITION rather than
+    citing a state. Do not re-add a "<engine> carries N kinds" citation here;
+    it is stale by the time anyone reads it.
+
+    How to check whether the mirror is actually behind, when this fires:
+    `coordinator_core.warm.skew.publish_lag(engine_clone, source_root)`, which
+    reads the engine stamp and counts commits. NOT a recursive file diff
+    between the two trees -- a source repo and its published mirror differ by
+    thousands of files by construction (different content sets, not lag), so a
+    `diff -rq` count answers a different question and reads as catastrophic
+    staleness when the stamp says minutes.
 
     Negative-spec:
       - Error path only. Never called on a successful draft/send, so it adds
@@ -3928,7 +3945,7 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     # REQUIRED, matching `send`'s own gate on the same field: a kindless
     # draft is an artifact this CLI's own send verb refuses. See
     # memo_draft.py::_validate_draft_params for the full note.
-    draft_p.add_argument("--kind", choices=list(_VALID_KINDS), required=True, help="REQUIRED. Memo kind (ask | consult | fyi | proposal | bug)")
+    draft_p.add_argument("--kind", choices=list(_VALID_KINDS), required=True, help="REQUIRED. Memo kind (" + " | ".join(_VALID_KINDS) + ")")
     draft_p.add_argument(
         "--in-reply-to", metavar="MEMO", default=None,
         help="OPTIONAL. Basename (or path — normalized to basename) of the "
@@ -3942,7 +3959,7 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     # regardless of --kind. Supply ANY one of the four and the complete
     # triple (artifact + exactly one of version/sha + seam) is required at
     # send time, else the send fails loud. Mirrors
-    # coordinator/bin/lib/schema.js:2290 — see _scoped_to_errors.
+    # coordinator_core/ops/fleet/memo_send.py — see _scoped_to_errors.
     draft_p.add_argument("--scoped-to-artifact", metavar="ARTIFACT", default=None, help="scoped_to.artifact — the file/contract/schema/subsystem this decision governs")
     draft_p.add_argument("--scoped-to-version", metavar="VERSION", default=None, help="scoped_to.version — point-in-time pin (mutually exclusive with --scoped-to-sha); use this arm when the artifact is only reachable via a publish mirror, since it is never sha-verified against the receiver's clone")
     draft_p.add_argument("--scoped-to-sha", metavar="SHA", default=None, help="scoped_to.sha — 7-40 hex chars, point-in-time pin (mutually exclusive with --scoped-to-version)")

@@ -281,6 +281,10 @@ from coordinator_core.ops.ceremony.wsc_disposition import (
 )
 from coordinator_core.ipc import _is_dispatch_engine_stamped  # noqa: SLF001 - C11: cold-fallback reachability check, coordinator-lesson-add needs schema.describe (DR-315 s2)
 from coordinator_core.ops.fleet._common import handoff_archive_dest
+from coordinator_core.orientation.regenerate_cache import (  # C3 pinboard idempotence wiring (2026-08-08 bug-backlog): resolves the cache file this call site's read_existing_pinboard needs
+    read_existing_pinboard as _read_existing_pinboard,
+    resolve_cache_file as _resolve_orientation_cache_file,
+)
 from coordinator_core.pickup_assemble import compute_repo_identity_gate  # C2: foreign-repo gate
 from coordinator_core.pickup_assemble import resolve_repo_root  # AC8: NOT zero-spawn — runs `git rev-parse --show-toplevel` via `_run_git`, one subprocess spawn per resolution
 from coordinator_core.resolution.facade import resolve_operator_config
@@ -1324,22 +1328,42 @@ def build_deletion_blocks_check_directive(
         return None
     args = [msg_file]
     if stage_paths:
-        # Normalised to repo-relative forward slashes because `gate_scope`
-        # membership is exact-string matching against `git diff --cached
-        # --name-status` output, which always spells paths that way. A caller
-        # handing over Windows separators would drop silently OUT of the scope
-        # while the same value still drove the commit pathspec (git accepts
-        # both there) -- the gate would then be narrower than the commit,
-        # which is the one direction that weakens it (2026-08-26 review,
-        # slice 4). Doing it here rather than trusting an upstream guarantee:
-        # `decisions` is operator-supplied JSON and carries no such contract.
+        # Pathspec separator normalisation (platform-conditional, POSIX
+        # backslashes are legal filename characters) now lives at the one
+        # shared choke point every caller of the CLI passes through --
+        # `commit_gates._parse_cli_args` -- rather than being redone
+        # unconditionally here (2026-08-26 bug-backlog, P2+P3: this
+        # builder is not the only present or future producer of this
+        # pathspec, and an unconditional strip here would corrupt a POSIX
+        # filename that genuinely contains a backslash). This builder
+        # forwards `stage_paths` as-is.
         args.append("--")
-        args.extend(str(path).replace("\\", "/") for path in stage_paths)
+        args.extend(str(path) for path in stage_paths)
     return _directive(
         "d-deletion-blocks",
         "check-workstream-complete-deletion-blocks",
         args,
     )
+
+
+def _existing_pinboard_line(repo_root: Path) -> Optional[str]:
+    """Disk-derived current `## Pinboard` line, for `build_pinboard_directive`'s
+    `existing_pinboard_line` satisfaction check (C3,
+    docs/plans/2026-08-08-wsc-judgment-directive-boundary.md).
+
+    Returns `None` when the orientation cache file does not exist yet — the
+    build_pinboard_directive caller already treats `None` as "not verified"
+    rather than "satisfied", so a missing cache degrades to the pre-wiring
+    M4 (structural, non-emission) behavior, never a false already_satisfied.
+
+    NEGATIVE SPEC: never raises on a missing/unreadable cache file --
+    `read_existing_pinboard` itself returns "" for that case, and an empty
+    string is a real (non-matching) pinboard line, not a sentinel for
+    "absent"; only a genuinely absent cache file yields `None` here."""
+    cache_file = _resolve_orientation_cache_file(repo_root)
+    if not cache_file.is_file():
+        return None
+    return _read_existing_pinboard(cache_file)
 
 
 def _consumed_handoff_ship_paths(
@@ -1537,6 +1561,7 @@ def build_directives(
     pinboard_directive = directives_session_hygiene.build_pinboard_directive(
         orientation_cache_exists=bool(decisions.get("orientation_cache_exists")),
         pinboard_note=decisions.get("pinboard_note"),
+        existing_pinboard_line=_existing_pinboard_line(repo_root),
     )
     if pinboard_directive is not None:
         directives.append(pinboard_directive)
@@ -1611,6 +1636,25 @@ def build_directives(
         )
     )
     review_partition = decisions.get("review_partition") or {}
+    if not isinstance(review_partition, dict):
+        # 2026-08-21 bug-backlog (a string crashes build_directives with a raw
+        # `AttributeError` out of `.get()`): `review-partition-strategy`'s
+        # judgment point answers with one of these same short strings (e.g.
+        # `"by-concern"`), and that key sits one line away in the same
+        # decisions payload -- a caller who just answered that point has
+        # every reason to believe the value belongs here too. Named refusal,
+        # not a crash: this key is the engine's INPUT for freeze/integrator
+        # directives (a mapping with `range`/`slices`), never the strategy
+        # choice itself.
+        raise ValueError(
+            f"decisions['review_partition'] must be a mapping with 'range' and "
+            f"'slices' keys (optionally 'integrator_spec_tsv'), got "
+            f"{review_partition!r} ({type(review_partition).__name__}) — this is "
+            "NOT the same key as review-partition-strategy's judgment-point "
+            "answer (e.g. 'by-concern'); that strategy choice belongs under "
+            "decisions['review-partition-strategy'] or wherever that judgment "
+            "point's disposition is recorded, never here"
+        )
     if review_partition.get("range") and review_partition.get("slices"):
         slices = [
             directives_review.ReviewSlice(slice_id=str(s["slice_id"]), paths=tuple(str(p) for p in s["paths"]))

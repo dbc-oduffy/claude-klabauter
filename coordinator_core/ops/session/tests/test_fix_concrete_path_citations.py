@@ -1124,3 +1124,44 @@ def test_explicit_path_zero_positional_paths_still_runs_tracked_sweep(
     assert len(calls) == 1
     assert calls[0][0] == tmp_path
     assert calls[0][1] is fix_mod._tracked_files
+
+
+# ---------------------------------------------------------------------------
+# bug-backlog 2026-08-29-fix-concrete-path-citations-apply-eats-p-c46219236614
+# -- --apply must not consume punctuation adjacent to the token it rewrites.
+# ---------------------------------------------------------------------------
+
+
+def test_apply_preserves_closing_parenthesis_around_citation(tmp_path: Path) -> None:
+    """A citation sitting inside parentheses keeps the closing paren --
+    the token scan (`_TOKEN_RE`) has no notion of prose punctuation and
+    would otherwise fold the `)` into the matched path segment, which
+    `_normalize_segment` (alnum-only) still resolves to the same family, so
+    the rewrite silently ate the paren."""
+    target = tmp_path / "doc.md"
+    target.write_text(
+        "see the fixture (/Users/example-operator/X/claude-klabauter/coordinator/foo.py) for details\n",  # abs-path-ok: synthetic test fixture
+        encoding="utf-8",
+    )
+    result = sweep(tmp_path, _FAMILIES, apply=True, list_files=_list_files(["doc.md"]))
+    subs = [f for f in result.findings if f.outcome == SUBSTITUTE]
+    assert len(subs) == 1
+    assert subs[0].replacement == "claude-klabauter:coordinator/foo.py"
+    text = target.read_text(encoding="utf-8")
+    assert "(claude-klabauter:coordinator/foo.py)" in text
+
+
+def test_apply_preserves_trailing_comma_and_period_around_citation(tmp_path: Path) -> None:
+    """A citation immediately followed by a comma (mid-sentence) or a period
+    (end-of-sentence) keeps that punctuation after `--apply`."""
+    target = tmp_path / "doc.md"
+    target.write_text(
+        "first see /Users/example-operator/X/claude-klabauter/coordinator/foo.py, then stop.\n",  # abs-path-ok: synthetic test fixture
+        encoding="utf-8",
+    )
+    result = sweep(tmp_path, _FAMILIES, apply=True, list_files=_list_files(["doc.md"]))
+    subs = [f for f in result.findings if f.outcome == SUBSTITUTE]
+    assert len(subs) == 1
+    assert subs[0].replacement == "claude-klabauter:coordinator/foo.py"
+    text = target.read_text(encoding="utf-8")
+    assert "claude-klabauter:coordinator/foo.py, then stop." in text

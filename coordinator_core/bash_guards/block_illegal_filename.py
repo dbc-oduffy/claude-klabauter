@@ -200,15 +200,72 @@ def _strip_heredocs(cmd: str) -> str:
     return "\n".join(out)
 
 
-def _extract_dest_candidates(cmd_for_scan: str) -> List[str]:
-    """Port of the reference hook's mv/git-mv 2nd-non-flag-arg awk scan
-    (lines 422-437). State (``in_mv``/``arg_count``) persists across the
-    whole scan, not per-line, matching the awk `BEGIN`-once semantics.
+def _tokenize_quote_aware(cmd: str) -> List[str]:
+    """Whitespace tokenizer that keeps a quoted span (and any spaces inside
+    it) glued to its token instead of splitting on the spaces within it —
+    the same quote-depth tracking ``_extract_redir_candidates`` uses,
+    applied to whole-command tokenization rather than a single target
+    capture (C3 follow-up, quote-blindness parity fix: the dest leg was the
+    only extractor still reading the quote-STRIPPED ``cmd_for_scan``, which
+    deletes a quoted mv destination -- spaced or unspaced -- wholesale
+    before this scan ever runs). Backslash-escape handling mirrors that
+    same function's rule: a backslash unconditionally escapes the next
+    character except inside a single-quoted span (bash never honours
+    escapes there).
+    """
+    tokens: List[str] = []
+    cur: List[str] = []
+    n = len(cmd)
+    i = 0
+    in_quote: Optional[str] = None
+    while i < n:
+        ch = cmd[i]
+        if ch == "\\" and i + 1 < n and in_quote != "'":
+            cur.append(ch)
+            cur.append(cmd[i + 1])
+            i += 2
+            continue
+        if in_quote is not None:
+            cur.append(ch)
+            if ch == in_quote:
+                in_quote = None
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            in_quote = ch
+            cur.append(ch)
+            i += 1
+            continue
+        if ch in " \t\n\r\f\v":
+            if cur:
+                tokens.append("".join(cur))
+                cur = []
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    if cur:
+        tokens.append("".join(cur))
+    return tokens
+
+
+def _extract_dest_candidates(cmd: str) -> List[str]:
+    """mv/git-mv 2nd-non-flag-arg scan (originally a port of the reference
+    hook's awk scan at lines 422-437; now reads the quote-INTACT,
+    heredoc-stripped ``cmd`` via ``_tokenize_quote_aware`` instead of the
+    quote-stripped ``cmd_for_scan`` -- the redirect leg's quote-aware
+    substrate, extended to this leg (C3 follow-up:
+    ``docs/plans/2026-08-07-deny-legs-reachable-and-quoted-redirects-visible.md``
+    left this leg on the old quote-blind substrate, which made
+    ``mv a.txt "b?.txt"`` silent because the quoted destination was erased
+    before tokenization ever saw it). State (``in_mv``/``arg_count``)
+    persists across the whole scan, not per-line, matching the awk
+    `BEGIN`-once semantics the original port preserved.
     """
     dest: List[str] = []
     in_mv = False
     arg_count = 0
-    for t in _TOKEN_SPLIT_RE.split(cmd_for_scan):
+    for t in _tokenize_quote_aware(cmd):
         if t == "" or t == "\\":
             continue
         if in_mv:
@@ -518,7 +575,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not (_MV_WORD_RE.search(cmd_for_scan) or ">" in cmd):
             return None
 
-        dest_candidates = _extract_dest_candidates(cmd_for_scan)
+        dest_candidates = _extract_dest_candidates(cmd)
         redir_candidates = _extract_redir_candidates(cmd)
         out_candidates = _extract_out_candidates(cmd)
 

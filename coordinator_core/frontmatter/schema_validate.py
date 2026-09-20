@@ -6,8 +6,14 @@ rules engine. Python port of validateFrontmatter + applyCrossFieldRules from
 DoE-claude coordinator/bin/lib/schema.js (W4 / JSON-Schema-backed path only).
 
 Spec backlink:
-  DoE-claude: coordinator/bin/lib/schema.js — validateRecord, validateJsonSchemaNode,
-               CROSS_FIELD_RULES['handoff'], applyCrossFieldRules
+  coordinator/bin/lib/schema.js — validateRecord, validateJsonSchemaNode,
+    CROSS_FIELD_RULES['handoff'], applyCrossFieldRules.
+  HISTORICAL: that file no longer exists in any repo. It moved DoE-claude ->
+  claude-klabauter 2026-07-22 (b644d5a9b / 5ffc537876) and was deleted here 2026-07-24
+  (480ad8f867 / 90de9c3083, the de-node cutover). Every "Port of schema.js:NNNN"
+  citation below is provenance for a completed port, not a live oracle to
+  reconcile against — this module is the oracle. Read a body via
+  `git show c79e66cd~1:coordinator/bin/lib/schema.js`.
 
 Public surface (imported by C3/C4 executors and handoff.transition post-mutation gate):
   validate_frontmatter(fm_dict, schema_path) -> list[ErrorDict]
@@ -4196,12 +4202,13 @@ def _memo_cf_disposition_superseded_requires_companions(fm: dict) -> ErrorDict |
 def _memo_cf_kind_enum(fm: dict) -> ErrorDict | None:
     """kind must be a valid memo kind when present; absent/null is valid.
 
-    Port of schema.js:1509-1520, kept in sync with the DoE oracle's kind list
-    by hand (see cross-repo-memo.py's own copy). The Python-side list is
-    single-sourced from _memo_compose._VALID_KINDS rather than hand-mirrored
-    a fourth time.
-    # Review: overengineering-reviewer — was a stale hand-mirrored list still
-    # missing 'bug'; single-sourced instead of re-copying the value.
+    Originally ported from the retired Node oracle (schema.js:1509-1520).
+    There is no oracle left to sync with: schema.js was deleted in the
+    2026-07-24 de-node cutover, and no sibling repo validates memo `kind` on
+    arrival — this function IS the receiver-side check. The list is
+    single-sourced from `ops.fleet.memo_kinds.VALID_KINDS`, which
+    cross-repo-memo.py's sender-side gate and the emitted memo schema's `kind`
+    description both read; nothing is hand-mirrored.
     'ack' is NOT a valid kind — acknowledgement is receipt-state, not sender-declared kind.
     """
     kind = fm.get('kind')

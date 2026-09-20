@@ -93,6 +93,15 @@ Negative-spec:
     reported in the envelope's `failed[]` (DETERMINATE-PARTIAL, exit_code 2)
     exactly like a downstream sender-receipt failure already is, never
     dropped silently.
+  - Does NOT silently drop a draft's `distill_fate`/`in_repo_capture` fields
+    (bug-backlog 297a3a6012a8) — present, they are stamped onto the composed
+    content (`_stamp_distill_fate`) before `validate_memo_cross_fields` runs,
+    so `schema_validate.py::_memo_cf_distill_fate` sees what the draft
+    actually declared instead of judging a field composition already threw
+    away. `_compose_memo` itself still does not know these fields (same
+    footprint reasoning as `cc`, klabauter#46) — this stamps the
+    already-composed content, then lets the existing validator refuse a
+    malformed value loud.
   - Does NOT overwrite an existing receiver-inbox file — refused twice,
     independently: an existence pre-check AND the `O_EXCL` open flag (AC6).
   - Does NOT trust a wire-supplied inbox path — `to` is resolved solely via
@@ -565,6 +574,50 @@ def _stamp_cc(content: str, cc: list) -> str:
     return _rebuild_frontmatter(split, fm_text)
 
 
+#: 2026-09-01 backlog item 297a3a6012a8 — `distill_fate`/`in_repo_capture`
+#: reached `_compose_memo` nowhere (neither is a declared kwarg), so both
+#: were dropped from the delivered memo with no trace: a draft carrying
+#: `distill_fate: ratification` + `in_repo_capture: "~/.claude/..."` sent
+#: with rc 0 and delivered WITHOUT either field, which also disarmed
+#: `schema_validate.py::_memo_cf_distill_fate` — a cross-field guard cannot
+#: refuse a field composition already discarded. Same shape and same fix
+#: pattern as `cc` (klabauter#46, `_stamp_cc` above): stamp the already-
+#: composed content post-hoc rather than widening `_compose_memo`'s kwargs
+#: (out of this op's footprint). Carries the fields through UNVALIDATED —
+#: `_memo_send`'s own `validate_memo_cross_fields(delivered_fm)` call,
+#: immediately after `_compose_delivered_content` runs, is what re-arms the
+#: guard; this function's only job is to stop discarding its input.
+def _stamp_distill_fate(content: str, fm: dict) -> str:
+    """Carry a draft's `distill_fate`/`in_repo_capture` fields into the
+    already-composed delivered content, when present, so the cross-field
+    validator the caller runs next actually sees them instead of validating
+    against fields composition already dropped.
+
+    Negative-spec: does NOT validate either value — a malformed
+    `distill_fate` or a `~/.claude`-rooted `in_repo_capture` is refused by
+    `validate_memo_cross_fields` downstream, not here (mirrors the ordering
+    `cc` already uses: stamp first, let the existing validator judge it).
+    """
+    distill_fate = fm.get("distill_fate")
+    in_repo_capture = fm.get("in_repo_capture")
+    if distill_fate is None and in_repo_capture is None:
+        return content
+    split = split_frontmatter(content)
+    if split is None:
+        # Unreachable in practice (content was just composed by
+        # _compose_memo, which always emits parseable frontmatter) — but
+        # never corrupt a memo silently: return it as composed rather than
+        # raise past the caller's own validation step.
+        return content
+    fm_text = split.fm_text
+    if distill_fate is not None:
+        fm_text = insert_fm_field(fm_text, "distill_fate", distill_fate, after_key="kind")
+    if in_repo_capture is not None:
+        after = "distill_fate" if distill_fate is not None else "kind"
+        fm_text = insert_fm_field(fm_text, "in_repo_capture", in_repo_capture, after_key=after)
+    return _rebuild_frontmatter(split, fm_text)
+
+
 def _compose_delivered_content(
     *, fm: dict, body: str, today: str, sent_by: str,
 ) -> tuple[Optional[str], Optional[str]]:
@@ -637,6 +690,8 @@ def _compose_delivered_content(
 
     if cc is not None:
         content = _stamp_cc(content, cc)
+
+    content = _stamp_distill_fate(content, fm)
 
     return content, None
 

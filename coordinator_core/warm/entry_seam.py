@@ -338,6 +338,10 @@ def _environ_identity_borrow(
             if isinstance(value, str) and value and os.path.isabs(value):
                 os.environ[name] = value
             else:
+                emit_diagnostic(
+                    f"{name} override rejected (not an absolute path): {value!r} -- "
+                    "falling back to the server's own value"
+                )
                 os.environ.pop(name, None)
 
         # OVERRIDE branch (session-id precedence triple, unchanged UUID gate).
@@ -550,14 +554,23 @@ def per_request_state(
     # (`session.core._UUID_RE`) -- not re-validated here, so an out-of-shape
     # candidate is silently treated as "no override" exactly as it always
     # was, with no duplicated gate to drift out of sync with that one.
+    diagnostics_scope: "contextlib.AbstractContextManager[object]"
+    if diagnostics is None:
+        diagnostics_scope = contextlib.nullcontext()
+    else:
+        diagnostics_scope = collecting_diagnostics(diagnostics)
+
+    # `diagnostics_scope` opens BEFORE `_environ_identity_borrow`, not after:
+    # that borrow's own pre-yield body (where a malformed REFUSE claim calls
+    # `emit_diagnostic`) runs at __enter__ time, ahead of any context manager
+    # nested inside it -- a diagnostics sink opened only around the `yield`
+    # would still be unset while the borrow's own body executes, silently
+    # dropping exactly the diagnostic this axis exists to carry.
     with warm_scope, session_identity_override(_session_id_from_env(merged_env)):
-        with _environ_identity_borrow(merged_env, isolated, caller_pid):
-            with collecting(into) as declared:
-                if diagnostics is None:
+        with diagnostics_scope:
+            with _environ_identity_borrow(merged_env, isolated, caller_pid):
+                with collecting(into) as declared:
                     yield declared
-                else:
-                    with collecting_diagnostics(diagnostics):
-                        yield declared
 
 
 

@@ -224,6 +224,36 @@ def main(argv: list[str]) -> int:
     rvc._metachar_warn(cmd, f"ceremony-hook:{ceremony}", caller="coordinator-ceremony-hook")
     redacted = rvc.redact_for_diag(cmd)
 
+    # W1 pre-exec routing (coordinator_core.ceremony_config.argv_only): a
+    # `VAR=value` first-token prefix parses cleanly under shlex (it is not a
+    # ValueError, see the try/except below) and used to reach the exec
+    # attempt, where it fails with ENOENT and only THEN explains itself in
+    # the launch-failure WARN's trailing clause — the confusing primary
+    # signal (`No such file or directory: 'VAR=value'`) ran ahead of the
+    # precise diagnosis. `check_argv_only` classifies this case before any
+    # exec is attempted, so a W1 command routes straight to its own
+    # diagnostic instead of arriving there by way of a failed launch. See
+    # `argv_only.py`'s module docstring, "CORRECTION" section, for the
+    # sequencing defect this closes.
+    try:
+        from coordinator_core.ceremony_config.argv_only import check_argv_only
+    except ImportError as exc:
+        print(
+            f"[coordinator-ceremony-hook] WARN: argv_only module unavailable "
+            f"({exc}) — skipping W1 pre-exec diagnostic",
+            file=sys.stderr,
+        )
+    else:
+        verdict = check_argv_only(cmd)
+        if not verdict.conformant and verdict.rule == "W1-assignment-prefix":
+            print(
+                f"[coordinator-ceremony-hook] WARN: {ceremony} post-command "
+                f"('{key}') is not argv-only conformant: {verdict.detail} "
+                "Skipping.",
+                file=sys.stderr,
+            )
+            return 0
+
     # Argv-only contract (PM-ruled 2026-08-06, breaking change): no shell=True,
     # no compatibility path. win_argv.win_safe_shlex_split failure (e.g. an
     # unterminated quote) is a hard, clearly-diagnosed skip — not a crash,

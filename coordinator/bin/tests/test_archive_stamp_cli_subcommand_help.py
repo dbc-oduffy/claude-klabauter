@@ -104,6 +104,20 @@ class TestSubcommandHelp(unittest.TestCase):
             listed | set(_cli._DEPRECATED_ALIASES), set(_cli._SUBCOMMAND_USAGE)
         )
 
+    def test_resolve_memo_help_enumerates_disposition_flags(self):
+        # Defect this closes: `resolve-memo --help` printed only the bare
+        # usage synopsis with no flag list, so `--superseded-by` was
+        # undiscoverable (state/bug-backlog/2026-08-15-resolve-memo-help-
+        # prints-a-bare-usage-li-a855aaff0f1c.yaml).
+        with unittest.mock.patch.object(_cli, "_import_module", _explode):
+            with unittest.mock.patch("sys.stdout") as out:
+                rc = _cli.main(["resolve-memo", "--help"])
+        self.assertEqual(rc, 0)
+        printed = "".join(c.args[0] for c in out.write.call_args_list if c.args)
+        self.assertIn("--superseded-by", printed)
+        self.assertIn("--decision", printed)
+        self.assertIn("mutually exclusive", printed)
+
     def test_bareword_help_is_not_a_subcommand_help_flag(self):
         # `action-memo` forwards its tail to the engine verbatim; a disposition
         # value is free to be the string "help", so only the dashed forms count.

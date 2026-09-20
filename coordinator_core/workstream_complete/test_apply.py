@@ -815,6 +815,55 @@ def test_apply_degrades_transport_failure_to_transport_fail_exit_code(
     assert "could not resolve a git worktree root" in report["error"]
 
 
+def test_apply_releases_claims_on_transport_failure_from_execute_directives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2026-08-25 bug-backlog: a `TransportFailure` out of `_execute_directives`
+    sits above the unconditional `_run_close_commit_tail` seam, so it used to
+    return TRANSPORT_FAIL with neither hard-constraint-4's per-path claim nor
+    AC5's governing-plan artifact claim released -- indistinguishable, to any
+    downstream reader, from a session still actively holding both. This pins
+    that both release helpers now fire best-effort on that exact path."""
+    from coordinator_core.workstream_complete import directives_commit_tail
+
+    def fake_brief(decisions: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        return {
+            "directives": [_directive("d_a", "archive-stamp-cli")],
+            "judgment_points": [],
+            "decisions": decisions or {},
+            "artifact": {"path": "/tmp/fake-worktree-root"},
+            "preflight": {"session_shape": {"sid": "sid-xyz"}},
+        }
+
+    def raising_execute_directives(*args: Any, **kwargs: Any) -> Any:
+        raise TransportFailure("op timed out")
+
+    calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def fake_release_path_claims(worktree_root, session_id, stage_paths):
+        calls.append(("path", (worktree_root, session_id, tuple(stage_paths))))
+
+    def fake_release_plan_claim(worktree_root, governing_plan_slug):
+        calls.append(("plan", (worktree_root, governing_plan_slug)))
+
+    monkeypatch.setattr(ws_apply, "brief", fake_brief)
+    monkeypatch.setattr(ws_apply, "_execute_directives", raising_execute_directives)
+    monkeypatch.setattr(
+        directives_commit_tail, "_release_committed_path_claims", fake_release_path_claims
+    )
+    monkeypatch.setattr(
+        directives_commit_tail, "_release_governing_plan_claim", fake_release_plan_claim
+    )
+
+    decisions = {"stage_paths": ["a.md"], "governing_plan_slug": "plan-slug-1"}
+    exit_code, report = ws_apply.apply(decisions=decisions)
+
+    assert exit_code == int(ws_apply.WorkstreamApplyExitCode.TRANSPORT_FAIL)
+    assert report["landed"] == []
+    assert ("path", ("/tmp/fake-worktree-root", "sid-xyz", ("a.md",))) in calls
+    assert ("plan", ("/tmp/fake-worktree-root", "plan-slug-1")) in calls
+
+
 def test_apply_executes_directives_from_a_successful_brief(monkeypatch: pytest.MonkeyPatch) -> None:
     def ok_main(argv: list[str]) -> int:
         return 0

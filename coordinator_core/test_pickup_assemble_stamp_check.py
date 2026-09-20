@@ -120,6 +120,21 @@ class TestStampCheckWrapper:
             "next_move",
         }
 
+    def test_stamp_check_matches_on_absolute_path(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        plan_path, expected_sha = _seed_plan(repo)
+        rel = str(plan_path.relative_to(repo))
+
+        exit_code_rel, gate_rel = stamp_check(rel, repo_root=repo)
+        exit_code_abs, gate_abs = stamp_check(str(plan_path), repo_root=repo)
+
+        assert exit_code_rel == pa.EXIT_OK
+        assert exit_code_abs == pa.EXIT_OK
+        assert gate_abs == gate_rel
+        assert gate_abs["verdict"] == "match"
+        assert gate_abs["computed_sha"] == expected_sha
+
     def test_stamp_check_business_fail_on_unreadable_artifact(self, tmp_path):
         repo = tmp_path / "repo"
         _init_repo(repo)

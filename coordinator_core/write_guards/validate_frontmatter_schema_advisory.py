@@ -137,6 +137,20 @@ PRIORITY = 100
 
 _GUARDED_TOOLS = ("Write", "Edit", "MultiEdit")
 
+# Unconditional stand-down for `state/priority-ledger/*` — mirrors the
+# own-inbox / lineage-reachability / grouping-approval / handoff-kind-enum
+# stand-downs below: `block_priority_ledger_edit` (PRIORITY 114) claims
+# every file under this directory unconditionally with its own, far more
+# specific "hand-editing this disk-truth ledger" advisory, so this module's
+# generic schema-shape warning has no business firing there and winning the
+# "first non-None advisory wins" race ahead of it. Path-tail regex, same
+# shape as `block_priority_ledger_edit._LEDGER_RE` (not imported from there
+# to avoid coupling this module's stand-down to that guard's own internal
+# regex object identity).
+# Spec backlink: state/bug-backlog/2026-08-06-priority-ledger-advisory-is-
+# swallowed-by-7d2cb865e06f.yaml
+_PRIORITY_LEDGER_RE = re.compile(r"(^|/)state/priority-ledger/[^/]+$")
+
 _MEMO_SCHEMA_NAMES = ("cross-repo-memo", "archived-memo")
 _DOE_CLAUDE_REGISTRY_KEY = "repos.doe_claude"
 
@@ -1563,6 +1577,9 @@ def check(payload: dict) -> Optional[dict]:
         repo_root = cwd
     repo_rel = to_repo_relative(abs_file_path, repo_root)
     if not repo_rel:
+        return None
+
+    if _PRIORITY_LEDGER_RE.search(repo_rel.replace("\\", "/")):
         return None
 
     registry = _load_doe_registry()

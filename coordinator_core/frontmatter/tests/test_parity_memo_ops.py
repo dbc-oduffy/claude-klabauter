@@ -21,7 +21,9 @@ the reference conversion for this sweep; see that module's docstring and
 
 Parity contract:
   - Byte-identical resulting file content across all three verbs × fixture matrix.
-  - No structural exclusions (unlike handoff parity tests, memos have no minted IDs).
+  - Byte-identical modulo `_POST_FREEZE_FIELDS` — fields added to the memo
+    vocabulary after the goldens were frozen, which the (now-deleted) oracle
+    could never have written. Memos mint no IDs, so there are no other exclusions.
 
 Validation-fail arm (mirrors TestOvercapSummaryRejectionParity in test_parity_handoff_ops.py):
   - One reject-parity fixture per reachable cross-field rule.
@@ -70,6 +72,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -401,6 +404,59 @@ def _js_memo(
 # ---------------------------------------------------------------------------
 
 
+#: Frontmatter keys claude-klabauter's Python path writes that the frozen oracle never
+#: could — added to the memo vocabulary AFTER the 2026-07-21 golden capture, and
+#: after `coordinator/bin/memo-transition.js` itself was deleted in the
+#: 2026-07-24 de-node cutover. The goldens are an unrecapturable snapshot of a
+#: file that no longer exists in any repo, so a post-freeze field can never
+#: appear on the JS side; hand-editing one into a golden would forge oracle
+#: output. Excluding it by name is the honest alternative — the parity contract
+#: is "byte-identical on everything the oracle knew about", and each entry here
+#: names what the oracle did not.
+#:
+#: `actioned_at` — memo schema 1.7.0 -> 1.8.0 (commit f5a08be1f3): the closure
+#: timestamp for the live terminal status `actioned`, which previously recorded
+#: no time at all. Its presence and shape are asserted directly by the action
+#: cases' own field-level spot-checks, not by this comparison.
+_POST_FREEZE_FIELDS = ("actioned_at",)
+
+#: UTC instant shape memo schema 1.8.0 declares for `actioned_at`.
+_POST_FREEZE_ACTIONED_AT_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+
+
+def _strip_post_freeze_fields(content: str) -> str:
+    """Drop `_POST_FREEZE_FIELDS` lines from a memo's frontmatter block.
+
+    Operates on the first `---`-delimited block only — a memo may carry a
+    preamble above the fence (see `test_action_preamble_preserved`), and a body
+    line that happens to start with one of these keys is untouched.
+
+    Negative-spec: flat top-level scalar lines only. Every post-freeze field is
+    a flat scalar today; a nested mapping would need this widened rather than
+    silently half-stripped.
+    """
+    lines = content.splitlines(keepends=True)
+    fences = [i for i, line in enumerate(lines) if line.strip() == "---"]
+    if len(fences) < 2:
+        return content
+    open_i, close_i = fences[0], fences[1]
+    kept = [
+        line for line in lines[open_i + 1:close_i]
+        if not any(line.startswith(f"{k}:") for k in _POST_FREEZE_FIELDS)
+    ]
+    return "".join(lines[:open_i + 1] + kept + lines[close_i:])
+
+
+def _assert_oracle_parity(js_content: str, py_content: str, label: str) -> None:
+    """Byte-compare native output against the frozen oracle golden, modulo
+    `_POST_FREEZE_FIELDS`. The single comparison site for every verb."""
+    stripped = _strip_post_freeze_fields(py_content)
+    assert js_content == stripped, (
+        f"{label}: byte-mismatch.\n"
+        f"JS (golden):\n{js_content!r}\n\nPython (post-freeze fields stripped):\n{stripped!r}"
+    )
+
+
 def _capture_or_load_case(
     case: str,
     verb: str,
@@ -530,10 +586,7 @@ class TestClaimParity:
         assert py_result["applied"] is True
 
         py_content = py_file.read_text(encoding="utf-8")
-        assert js_content == py_content, (
-            "claim basic: byte-mismatch.\n"
-            f"JS (golden):\n{js_content!r}\n\nPython:\n{py_content!r}"
-        )
+        _assert_oracle_parity(js_content, py_content, "claim basic")
 
         # Field-level spot-checks on Python output.
         split = split_frontmatter(py_content)
@@ -632,10 +685,7 @@ class TestClaimParity:
         )
 
         py_content = py_file.read_text(encoding="utf-8")
-        assert js_content == py_content, (
-            "claim preamble: byte-mismatch.\n"
-            f"JS (golden):\n{js_content!r}\n\nPython:\n{py_content!r}"
-        )
+        _assert_oracle_parity(js_content, py_content, "claim preamble")
         assert "<!-- example_retrieval_repo_setup baton v2 -->" in py_content
         assert "<!-- generated: 2026-01-01 -->" in py_content
 
@@ -682,10 +732,7 @@ class TestActionParity:
         assert py_result["applied"] is True
 
         py_content = py_file.read_text(encoding="utf-8")
-        assert js_content == py_content, (
-            "action basic: byte-mismatch.\n"
-            f"JS (golden):\n{js_content!r}\n\nPython:\n{py_content!r}"
-        )
+        _assert_oracle_parity(js_content, py_content, "action basic")
 
         split = split_frontmatter(py_content)
         assert split is not None
@@ -693,6 +740,12 @@ class TestActionParity:
         assert read_fm_field(fm, "status") == "actioned"
         assert read_fm_field(fm, "decision") == "accepted"
         assert read_fm_field(fm, "realized_by") == "docs/plans/test.md"
+        # The one field _POST_FREEZE_FIELDS excludes from the oracle comparison;
+        # its presence and shape are pinned here instead, so the exclusion never
+        # becomes a hole the field can silently disappear through.
+        assert _POST_FREEZE_ACTIONED_AT_RE.fullmatch(
+            (read_fm_field(fm, "actioned_at") or "").strip("'\"")
+        ), f"actioned_at absent or malformed: {read_fm_field(fm, 'actioned_at')!r}"
 
     def test_action_idempotent_noop(self, tmp_path):
         """Action on already-actioned memo with same disposition → no-op, exit 0."""
@@ -818,10 +871,7 @@ class TestActionParity:
         )
 
         py_content = py_file.read_text(encoding="utf-8")
-        assert js_content == py_content, (
-            "action preamble: byte-mismatch.\n"
-            f"JS (golden):\n{js_content!r}\n\nPython:\n{py_content!r}"
-        )
+        _assert_oracle_parity(js_content, py_content, "action preamble")
         assert "<!-- example_retrieval_repo_setup baton v2 -->" in py_content
 
     def test_action_all_digit_realized_by_quoted(self, tmp_path):
@@ -857,10 +907,7 @@ class TestActionParity:
         )
 
         py_content = py_file.read_text(encoding="utf-8")
-        assert js_content == py_content, (
-            "action all-digit realized_by: byte-mismatch.\n"
-            f"JS (golden):\n{js_content!r}\n\nPython:\n{py_content!r}"
-        )
+        _assert_oracle_parity(js_content, py_content, "action all-digit realized_by")
         # Assert quoted — JS's serializeYamlScalar quotes all-digit values (SHA-as-int
         # guard); Python matches via numeric_quoting=True.
         assert f"realized_by: '{all_digit_sha}'" in py_content, (
@@ -903,10 +950,7 @@ class TestActionParity:
         )
 
         py_content = py_file.read_text(encoding="utf-8")
-        assert js_content == py_content, (
-            "action all-digit decision_note: byte-mismatch.\n"
-            f"JS (golden):\n{js_content!r}\n\nPython:\n{py_content!r}"
-        )
+        _assert_oracle_parity(js_content, py_content, "action all-digit decision_note")
         # Assert quoted — JS's serializeYamlScalar quotes all-digit values unconditionally;
         # Python matches via numeric_quoting=True.
         assert f"decision_note: '{all_digit_note}'" in py_content, (
@@ -949,10 +993,7 @@ class TestActionParity:
         )
 
         py_content = py_file.read_text(encoding="utf-8")
-        assert js_content == py_content, (
-            "action all-digit actioned_note: byte-mismatch.\n"
-            f"JS (golden):\n{js_content!r}\n\nPython:\n{py_content!r}"
-        )
+        _assert_oracle_parity(js_content, py_content, "action all-digit actioned_note")
         # Assert quoted — JS's serializeYamlScalar quotes all-digit values unconditionally;
         # Python matches via numeric_quoting=True.
         assert f"actioned_note: '{all_digit_note}'" in py_content, (
@@ -1014,10 +1055,7 @@ class TestActionDistillFateParity:
         assert py_result["applied"] is True
 
         py_content = py_file.read_text(encoding="utf-8")
-        assert js_content == py_content, (
-            "action distill_fate/in_repo_capture: byte-mismatch.\n"
-            f"JS (golden):\n{js_content!r}\n\nPython:\n{py_content!r}"
-        )
+        _assert_oracle_parity(js_content, py_content, "action distill_fate/in_repo_capture")
         assert "distill_fate: ratification" in py_content
         assert "in_repo_capture: docs/decisions/DR-999-fixture.md" in py_content
 
@@ -1045,10 +1083,7 @@ class TestActionDistillFateParity:
         )
 
         py_content = py_file.read_text(encoding="utf-8")
-        assert js_content == py_content, (
-            "action ephemeral note-shape: byte-mismatch.\n"
-            f"JS (golden):\n{js_content!r}\n\nPython:\n{py_content!r}"
-        )
+        _assert_oracle_parity(js_content, py_content, "action ephemeral note-shape")
 
     def test_action_ratification_without_in_repo_capture_both_reject(self, tmp_path):
         """distill_fate=ratification without in_repo_capture → both JS and Python reject
@@ -1153,10 +1188,7 @@ class TestReleaseParity:
         assert py_result["applied"] is True
 
         py_content = py_file.read_text(encoding="utf-8")
-        assert js_content == py_content, (
-            "release basic: byte-mismatch.\n"
-            f"JS (golden):\n{js_content!r}\n\nPython:\n{py_content!r}"
-        )
+        _assert_oracle_parity(js_content, py_content, "release basic")
 
         split = split_frontmatter(py_content)
         assert split is not None
@@ -1232,10 +1264,7 @@ class TestReleaseParity:
         )
 
         py_content = py_file.read_text(encoding="utf-8")
-        assert js_content == py_content, (
-            "release preamble: byte-mismatch.\n"
-            f"JS (golden):\n{js_content!r}\n\nPython:\n{py_content!r}"
-        )
+        _assert_oracle_parity(js_content, py_content, "release preamble")
         assert "<!-- example_retrieval_repo_setup baton v2 -->" in py_content
 
 

@@ -4322,6 +4322,30 @@ class TestRotateMonthRelocatesClosedMonth:
         assert shard_path(repo, machine="host-a") == repo / EVENTS_DIR_RELPATH / "events.host-a.jsonl"
         assert EVENTS_DIR_RELPATH == "state/sovereign-tracker"
 
+    def test_append_event_rejects_a_duplicate_id_rotated_out_of_the_live_shard(
+        self, tmp_path, monkeypatch
+    ):
+        # F5's own claim: a same-idempotency_key retry re-derives the same
+        # id and must collide with append_event's duplicate-id guard
+        # instead of double-appending. rotate_month relocates the original
+        # out of the live shard append_event's guard used to scan alone —
+        # the retry must still be caught after that relocation.
+        repo = _make_git_repo(tmp_path / "repo")
+        monkeypatch.setattr(ts, "machine_slug", lambda *a, **kw: "host-a")
+        _write_shard(
+            repo,
+            "host-a",
+            [{**_event("evt-1", "2026-07-15T00:00:00Z"), "sequence": 1}],
+        )
+        moved = rotate_month(repo_root=repo, month="2026-07", machine="host-a")
+        assert moved == 1
+
+        with pytest.raises(ts.TrackerStoreDuplicateIdError):
+            ts.append_event(
+                _event("evt-1", "2026-07-15T00:00:00Z"),
+                repo_root=repo,
+            )
+
 
 class TestReadEventsMergesFlatAndPartitionedLayouts:
     def test_rotated_month_still_readable_through_read_events(self, tmp_path):

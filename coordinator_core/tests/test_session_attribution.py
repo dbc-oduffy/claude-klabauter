@@ -151,6 +151,31 @@ def test_trailer_naming_different_session_is_foreign(repo_root):
     assert theirs_sha in foreign
 
 
+def test_non_uuid_shaped_foreign_trailer_logs_data_integrity_warning(repo_root, caplog):
+    """bug-backlog 2026-08-07-corrupted-session-id-trailer-reads-as-a-session-
+    that-never-existed.yaml, proposed_action (1): a Session-Id trailer that
+    parses but is not UUID-shaped (a text-encoding mangle at the authoring
+    seam) must surface a warning, not classify silently identically to an
+    ordinary foreign session."""
+    sid = "sess-attr-mangle-001"
+    corrupted = "68b5456e-beb0-4c1f-910a-328э5cb47"  # U+044D substituted in
+    init_sha = _init_repo(repo_root)
+    mangled_sha = _commit(
+        repo_root, f"mangled trailer\n\nSession-Id: {corrupted}",
+        files={"mangled.txt": "mangled\n"},
+    )
+
+    with caplog.at_level("WARNING", logger="coordinator_core.session_attribution"):
+        foreign = session_attribution.detect_foreign_commits(
+            repo_root, sid, f"{init_sha}..HEAD", frozenset(),
+        )
+
+    assert mangled_sha in foreign
+    assert any(
+        "not UUID-shaped" in record.message for record in caplog.records
+    ), "expected a data-integrity warning for the non-UUID-shaped trailer"
+
+
 def test_trailerless_commit_inside_known_scope_is_in_scope(repo_root):
     sid = "sess-attr-inscope-001"
     init_sha = _init_repo(repo_root)

@@ -251,6 +251,7 @@ Negative-spec:
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -751,6 +752,50 @@ def _no_git_repo_target_label(
 # ---------------------------------------------------------------------------
 
 
+#: Shape-only unexpanded-variable target (bug-backlog record 2026-08-14,
+#: 4a1e7c93b256): `$D` or `${D}` with nothing else in the raw token. Matches
+#: the shape a caller left un-set/un-exported, not the SET of characters a
+#: legal path could also contain -- so `$D/out.txt` (a variable used as a
+#: path PREFIX, still plausibly a real path once expanded) does not match.
+_UNEXPANDED_VAR_TARGET_RE = re.compile(r"^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$")
+
+
+def _is_unexpanded_variable_target(raw_target: str) -> bool:
+    """True when `raw_target` is NOTHING but a bare, never-expanded shell
+    variable reference (`$D`, `${D}`) -- the shape a redirect/mv/cp target
+    takes when the caller meant to interpolate a variable that was never
+    set or exported, so bash passes the LITERAL text through unexpanded and
+    the write lands at a file/directory named after the variable itself,
+    not its intended value (state/bug-backlog/2026-08-14-write-guards-fail-
+    open-on-unexpanded-variable-targets-4a1e7c93b256.yaml).
+
+    Deliberately SHAPE-only, never an evaluation: this function does not
+    and must not attempt to look up whether the named variable actually
+    has a value (the bug record's own scoping caution -- "the fix must not
+    become variable expansion", a much larger and more fragile thing than
+    detecting this one shape). Quotes are stripped first because bash
+    performs no parameter expansion difference between `$D` and `"$D"` --
+    both are still literally unexpanded if the variable itself was never
+    set; only single-quoting (`'$D'`) suppresses expansion by shell rule,
+    but that case is indistinguishable from "author really did want the
+    literal string `$D`" and is correctly left alone -- SEE NEGATIVE-SPEC.
+
+    Negative-spec:
+      - Does NOT fire on `$D/sub/out.txt` or `out-$D.txt` -- a variable
+        used as part of a larger path is not this guard's concern; only a
+        target that is the bare reference and nothing else matches.
+      - Does NOT fire on `$(cmd)`/backtick command substitution -- that is
+        a different, unrelated shell construct, not an unexpanded simple
+        variable.
+      - Does NOT resolve, evaluate, or look up the named variable's actual
+        value anywhere in this module.
+    """
+    stripped = raw_target.strip()
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in ('"', "'"):
+        stripped = stripped[1:-1]
+    return bool(_UNEXPANDED_VAR_TARGET_RE.match(stripped))
+
+
 def check_bump_outside_repo_write(
     cmd: str, session_id: str, cwd: str, payload: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
@@ -838,6 +883,31 @@ def check_bump_outside_repo_write(
     effective_sid = effective_session_id(session_id, anchor_git_root_str, agent_id)
 
     for candidate_index, (target_dir, _label, raw_target) in enumerate(candidates):
+        if _is_unexpanded_variable_target(raw_target):
+            # Own branch, BEFORE git-root resolution: `_resolve_relative`
+            # already resolved `$D` LITERALLY against `effective_cwd`, so
+            # from a repo root it lands at `<repo>/$D` -- which the
+            # git-root check below would then correctly find INSIDE the
+            # anchor's own repo and silently skip (this guard's whole
+            # predicate is "no git root at all"). That is exactly how this
+            # class fell between both guards' contracts (bug-backlog
+            # 4a1e7c93b256) -- caught here, ahead of that check, so a
+            # same-repo-looking `$D` target never reaches it.
+            if bump_is_cleared(anchor, session_id, git_root=anchor_git_root_str, agent_id=agent_id):
+                continue
+            stood_down = environment_stands_the_bump_down(env)
+            if stood_down is not None:
+                _stand_down_instead_of_denying(
+                    anchor_git_root_str, effective_sid, raw_target, stood_down
+                )
+                return None
+            return _deny(
+                "'%s' did not expand -- the variable was never set, so this "
+                "write will create a literal file or directory named '%s', "
+                "not use the value you intended. Set/export the variable "
+                "first, or write the real path." % (raw_target, raw_target)
+            )
+
         probe_dir = _nearest_existing_ancestor(target_dir)
         if probe_dir is None:
             # No existing ancestor at all -- cannot resolve a git root

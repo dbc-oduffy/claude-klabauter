@@ -432,6 +432,51 @@ def test_first_bootstrap_creates_commit(tmp_path):
     assert (target / "state" / "orientation_cache.md").is_file()
 
 
+def test_forced_dirty_tree_commit_does_not_absorb_unrelated_staged_file(tmp_path, monkeypatch):
+    """AMBIENT REPO regression (bug-backlog 2026-08-28-two-bootstrap-ops-bare-
+    commit-into-an-operator-selected-repo.yaml): the Stage 5 commit must carry
+    a pathspec scoped to what THIS bootstrap actually staged, not a bare
+    commit that absorbs whatever else happens to be sitting in the index.
+
+    `unrelated.txt` is pre-staged (`git add`, no commit) before bootstrap
+    runs -- the dirty-tree gate is forced past (the operator's own
+    [Force] path), leaving `unrelated.txt` staged but otherwise unchanged, so
+    Stage 5's own untracked/modified re-derivation never re-discovers it
+    (`git diff --name-only` only reports unstaged changes). A bare commit
+    would still absorb it via the index; a pathspec'd commit must not.
+    """
+    target = tmp_path / "target"
+    target.mkdir()
+    _init_git(str(target))
+    _baseline_commit(str(target))
+
+    with open(target / "unrelated.txt", "w", encoding="utf-8") as fh:
+        fh.write("someone else's staged work\n")
+    subprocess.run(
+        ["git", "-C", str(target), "add", "--", "unrelated.txt"],
+        check=True, timeout=30, **no_console_passthrough_kwargs(),
+    )
+
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "y")
+
+    rc = main(["--root", str(target)])
+    assert rc == 0
+    assert _commit_subject(str(target)) == "chore(coordinator): bootstrap"
+
+    committed_paths = subprocess.run(
+        ["git", "-C", str(target), "show", "--name-only", "--format=", "HEAD"],
+        capture_output=True, text=True, timeout=30, **no_console_creationflags(),
+    ).stdout.splitlines()
+    assert "unrelated.txt" not in committed_paths
+    assert "state/orientation_cache.md" in committed_paths
+
+    still_staged = subprocess.run(
+        ["git", "-C", str(target), "diff", "--cached", "--name-only"],
+        capture_output=True, text=True, timeout=30, **no_console_creationflags(),
+    ).stdout.splitlines()
+    assert "unrelated.txt" in still_staged
+
+
 def test_second_bootstrap_is_noop_when_nothing_to_stage(tmp_path, capsys):
     target = tmp_path / "target"
     target.mkdir()
