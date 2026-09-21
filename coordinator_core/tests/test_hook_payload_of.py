@@ -56,8 +56,7 @@ def test_a_non_dict_is_an_empty_payload_not_a_raise(bad):
     assert payload_of(bad) == {}
 
 
-def test_a_non_dict_payload_value_falls_back_to_the_params_dict():
-    """`{"payload": "..."}` is not a wrapper — treating it as one would hand the
-    handler a string. The outer dict is the better guess and stays readable."""
-    params = {"payload": "not-a-dict", "tool_name": "Bash"}
-    assert payload_of(params) == params
+def test_a_non_dict_payload_value_is_neither_shape_and_is_not_guessed():
+    """No producer sends `{"payload": <non-dict>}`, and a real event has no
+    `payload` key, so the outer dict is not treated as the event either."""
+    assert payload_of({"payload": "not-a-dict", "tool_name": "Bash"}) == {}

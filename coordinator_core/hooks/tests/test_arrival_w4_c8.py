@@ -84,7 +84,14 @@ def test_preuse_bash_dispatch_fails_open_when_chain_raises(monkeypatch):
 #: manifest behind it. `git add -A` would read better but degrades to fail-open
 #: whenever the manifest does not resolve -- true under pytest -- which would
 #: make these tests pass or fail on ambient env rather than on the handler.
-_BANNED = "git worktree add /tmp/x"
+#
+# Review: coordinator-code-reviewer — a bare hardcoded `/tmp/x` bakes a
+# POSIX-only absolute path into a shared fixture; `_banned_command` takes
+# `tmp_path` instead so the argument is platform-neutral, matching this
+# repo's macOS+Windows portability lens (never executed, only fed to the
+# guard chain as a string, but no reason to rely on that).
+def _banned_command(tmp_path) -> str:
+    return f"git worktree add {tmp_path / 'x'}"
 
 
 def _wire_params(tmp_path, command):
@@ -126,7 +133,7 @@ def test_preuse_bash_dispatch_denies_through_the_envelope_the_doors_send(tmp_pat
     """
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
-    assert _decision(_run(_handler(_wire_params(tmp_path, _BANNED)))) == "deny"
+    assert _decision(_run(_handler(_wire_params(tmp_path, _banned_command(tmp_path))))) == "deny"
 
 
 def test_preuse_bash_dispatch_deny_and_allow_are_distinguishable(tmp_path):
@@ -135,7 +142,7 @@ def test_preuse_bash_dispatch_deny_and_allow_are_distinguishable(tmp_path):
     class, including a future fail-open that keeps the deny leg working."""
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
-    denied = _run(_handler(_wire_params(tmp_path, _BANNED)))
+    denied = _run(_handler(_wire_params(tmp_path, _banned_command(tmp_path))))
     allowed = _run(_handler(_wire_params(tmp_path, "echo hi")))
     assert denied != allowed
     assert _decision(allowed) != "deny"
@@ -147,7 +154,7 @@ def test_preuse_bash_dispatch_still_reads_a_flat_payload(tmp_path):
     caller mismatch into a second fail-open rather than a verdict."""
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
-    flat = _wire_params(tmp_path, _BANNED)["payload"]
+    flat = _wire_params(tmp_path, _banned_command(tmp_path))["payload"]
     assert _decision(_run(_handler(flat))) == "deny"
 
 
@@ -261,6 +268,33 @@ def test_named_dispatch_restriction_passes_unnamed_ordinary_type():
         )
     )
     assert out == {}
+
+
+def test_named_dispatch_restriction_denies_through_the_wrapped_envelope():
+    """Review: coordinator-code-reviewer — both engine doors send `params`
+    as `{"payload": <event>}`. Through the wrapped door this guard's own
+    fail-closed leg (an unrecognised `tool_input` key on a named
+    Explore/Plan dispatch) was unreachable, same defect class as
+    `block_worktree_tool`."""
+    from coordinator_core.hooks.guard_named_dispatch_tool_restriction import _handler
+
+    out = _run(
+        _handler(
+            {
+                "payload": {
+                    "tool_name": "Agent",
+                    "tool_input": {
+                        "subagent_type": "Explore",
+                        "name": "foo",
+                        "prompt": "p",
+                        "unrecognised_key": "x",
+                    },
+                }
+            }
+        )
+    )
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
 
 
 # ---------------------------------------------------------------------------

@@ -49,7 +49,7 @@ import re
 from pathlib import Path
 from typing import Mapping, Optional
 
-from coordinator_core._hook_envelope import allow_advisory, no_advisory
+from coordinator_core._hook_envelope import allow_advisory, no_advisory, payload_of
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.hooks.support.message_envelope import compose, render
@@ -119,6 +119,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Skill, Workflow) op: nudge toward the emitted-and-fired
     path at either of the two hand-authoring entry points, once per session.
     """
+    # Review: coordinator-code-reviewer — normalize the two params shapes
+    # both engine doors and the cold chain send (see block_worktree_tool).
+    params = payload_of(params)
     tool_name = params.get("tool_name")
     tool_input = params.get("tool_input")
 

@@ -56,7 +56,7 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
-from coordinator_core.hooks._envelope import no_advisory, post_advisory
+from coordinator_core.hooks._envelope import no_advisory, payload_of, post_advisory
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import get_op_handler, register_op
 
@@ -234,6 +234,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
     initiative has no `goals` field and the repo carries goal(s) to attach.
     """
     try:
-        return await _handle(params if isinstance(params, dict) else {})
+        # Review: coordinator-code-reviewer — normalize the two params
+        # shapes both engine doors and the cold chain send (see
+        # block_worktree_tool).
+        return await _handle(payload_of(params))
     except Exception:
         return no_advisory()

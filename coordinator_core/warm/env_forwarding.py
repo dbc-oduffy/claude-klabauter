@@ -163,7 +163,12 @@ CALLER_PREFIXES: Tuple[str, ...] = (
 
 
 def is_caller_prefixed(name: str) -> bool:
-    return name.startswith(CALLER_PREFIXES)
+    # Review: coordinator-code-reviewer -- strict `>` matches both compiled
+    # door legs (door_posix.c's `name_len > plen`, door.c's `name_len <= plen`
+    # continue-guard); a name equal to a bare prefix carries no suffix and is
+    # not a caller override, so `startswith` alone would diverge from the C
+    # legs on that edge case.
+    return any(len(name) > len(prefix) and name.startswith(prefix) for prefix in CALLER_PREFIXES)
 
 
 _HEADER_BANNER = (

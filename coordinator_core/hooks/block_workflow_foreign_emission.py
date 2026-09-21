@@ -55,7 +55,7 @@ import json
 from pathlib import Path
 from typing import Mapping
 
-from coordinator_core._hook_envelope import deny, no_advisory
+from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core._settings_home import settings_home
 from coordinator_core.ipc import register_op
 
@@ -118,6 +118,9 @@ def _session_mismatch_reason(script: Path, session: str, recorded_session: str) 
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Workflow) op: refuse to fire a script this session did not
     emit."""
+    # Review: coordinator-code-reviewer — normalize the two params shapes
+    # both engine doors and the cold chain send (see block_worktree_tool).
+    params = payload_of(params)
     if params.get("tool_name") != "Workflow":
         return no_advisory()
 

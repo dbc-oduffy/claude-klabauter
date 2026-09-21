@@ -1427,7 +1427,15 @@ int main(int argc, char **argv) {
          * because the names are not known in advance: a guard adds a key and
          * the door must carry it with no rebuild. Same omit-empty contract
          * as the declared names; no declared name matches a prefix (pinned
-         * Python-side), so no name is sent twice. */
+         * Python-side), so no name is sent twice.
+         *
+         * Review: coordinator-code-reviewer -- this leg carries the name's
+         * case as-is (POSIX env names are case-sensitive); door.c's Windows
+         * walk upper-cases the name before it crosses, since Windows env
+         * names are case-insensitive there. Guard code reading these names
+         * is expected to use the canonical SCREAMING_SNAKE spelling, but
+         * that convention is unenforced -- a mixed-case override name set on
+         * this leg keeps its case, unlike the Windows leg. */
         #define X(prefix) #prefix,
         static const char *const kDoorEnvPrefixes[] = { DOOR_ENV_PREFIXES(X) };
         #undef X

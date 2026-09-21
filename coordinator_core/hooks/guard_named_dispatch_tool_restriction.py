@@ -50,7 +50,12 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C8
 
 from __future__ import annotations
 
-from coordinator_core.hooks._envelope import deny, no_advisory, rewrite_input
+from coordinator_core.hooks._envelope import (
+    deny,
+    no_advisory,
+    payload_of,
+    rewrite_input,
+)
 from coordinator_core.hooks.support.named_dispatch_strip import (
     compute_named_dispatch_result,
 )
@@ -61,7 +66,10 @@ from coordinator_core.ipc import register_op
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent) op: offer to strip `name` off a named Explore/Plan
     dispatch, denying only on this guard's own fail-closed leg."""
-    if not isinstance(params, dict):
+    # Review: coordinator-code-reviewer — normalize the two params shapes
+    # both engine doors and the cold chain send (see block_worktree_tool).
+    params = payload_of(params)
+    if not params:
         return no_advisory()
     if params.get("tool_name") != "Agent":
         return no_advisory()

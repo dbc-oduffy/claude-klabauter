@@ -72,7 +72,7 @@ import os
 import re
 from typing import Any, Mapping, NamedTuple, Optional
 
-from coordinator_core._hook_envelope import deny, no_advisory
+from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.ipc import register_op
@@ -216,6 +216,9 @@ def _compose_precision_deny_reason(
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Agent, Workflow) op: deny a dispatch brief carrying a
     suite-shaped imperative command or a directory-scoped Tier-F/U one."""
+    # Review: coordinator-code-reviewer — normalize the two params shapes
+    # both engine doors and the cold chain send (see block_worktree_tool).
+    params = payload_of(params)
     env = params.get("env")
     if _env_value(env, _OVERRIDE_ENV) == "1":
         return no_advisory()

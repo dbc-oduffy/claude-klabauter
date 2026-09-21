@@ -315,7 +315,6 @@ static int env_pair_append_w(buf_t *pairs, const wchar_t *name, const wchar_t *v
     return ok;
 }
 
-
 static wchar_t *utf8_to_wide(const char *u8) {
     int needed = MultiByteToWideChar(CP_UTF8, 0, u8, -1, NULL, 0);
     if (needed <= 0) return NULL;

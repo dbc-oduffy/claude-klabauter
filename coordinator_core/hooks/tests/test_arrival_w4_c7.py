@@ -275,6 +275,29 @@ def test_repo_setup_claude_home_refusal_allows_wrong_tool():
     assert result == {}
 
 
+def test_repo_setup_claude_home_refusal_denies_through_the_wrapped_envelope(tmp_path, monkeypatch):
+    """Review: coordinator-code-reviewer — both engine doors send `params`
+    as `{"payload": <event>}`, not the flat event this module used to read
+    directly. Through the wrapped door the guard was a structural no-op;
+    this pins the fix."""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    result = asyncio.run(
+        guard_repo_setup_claude_home_refusal._handler(
+            {
+                "payload": {
+                    "tool_name": "Bash",
+                    "tool_input": {
+                        "command": "python3 -m coordinator_core.install.scaffold_structure"
+                    },
+                    "cwd": str(tmp_path),
+                }
+            }
+        )
+    )
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny"
+
+
 # ---------------------------------------------------------------------------
 # nudge_plan_test_surface_tier
 # ---------------------------------------------------------------------------

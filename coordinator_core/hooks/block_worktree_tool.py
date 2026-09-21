@@ -44,7 +44,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C9
 
 from __future__ import annotations
 
-from coordinator_core._hook_envelope import deny, no_advisory
+from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.hooks.support.worktree_isolation_strip import (
     sentinel_override_active,
@@ -69,6 +69,10 @@ def _deny_message(env: object = None) -> str:
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(EnterWorktree|ExitWorktree) op: deny EnterWorktree unless
     the repo-root sentinel override is active; always allow ExitWorktree."""
+    # Review: coordinator-code-reviewer — params arrives wrapped as
+    # {"payload": event} through both engine doors; payload_of reads either
+    # shape (see preuse_bash_dispatch's identical fix, same defect class).
+    params = payload_of(params)
     tool_name = params.get("tool_name") or ""
 
     if tool_name == "ExitWorktree":

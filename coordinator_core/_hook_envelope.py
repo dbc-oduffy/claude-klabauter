@@ -302,12 +302,13 @@ def payload_of(params: object) -> dict:
     through the doors, and reproduced on `hooks.block_worktree_tool`.
 
     The two shapes are unambiguous: a real hook event carries no `payload` key.
-    Returns `{}` for anything that is not a dict, so callers can read fields off
-    the result without re-checking.
+    So a `payload` that is present but not a dict is neither shape, and is not
+    guessed at: it returns `{}`, exactly as a non-dict `params` does, so callers
+    can read fields off the result without re-checking.
     """
     if not isinstance(params, dict):
         return {}
-    inner = params.get("payload")
-    if isinstance(inner, dict):
-        return inner
-    return params
+    if "payload" not in params:
+        return params
+    inner = params["payload"]
+    return inner if isinstance(inner, dict) else {}

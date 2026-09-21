@@ -88,8 +88,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
     here rather than assumed: reading the wrong one fails open (silent
     ALLOW), never a visible error.
 
-    NEGATIVE SPEC: never refuse the flat shape -- a caller mismatch must
-    surface as a verdict, not as a second fail-open.
+    NEGATIVE SPEC: never refuse the flat shape -- the cold DoE guard chain
+    sends it, and must keep reaching the same verdict the doors do.
     """
     params = payload_of(params)
     if not params:

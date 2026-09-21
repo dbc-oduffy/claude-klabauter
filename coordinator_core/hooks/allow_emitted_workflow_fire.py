@@ -54,7 +54,7 @@ import json
 from pathlib import Path
 from typing import Mapping, Optional
 
-from coordinator_core._hook_envelope import allow_advisory, no_advisory
+from coordinator_core._hook_envelope import allow_advisory, no_advisory, payload_of
 from coordinator_core.ipc import register_op
 
 
@@ -129,7 +129,10 @@ async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Workflow) op: auto-approve a fire whose script carries a
     verifying emission receipt."""
     try:
-        reason = _decide(params)
+        # Review: coordinator-code-reviewer — normalize the two params
+        # shapes both engine doors and the cold chain send (see
+        # block_worktree_tool).
+        reason = _decide(payload_of(params))
     except Exception:
         return no_advisory()
     if reason is None:

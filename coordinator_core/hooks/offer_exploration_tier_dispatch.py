@@ -61,7 +61,7 @@ import os
 import re
 from typing import Any
 
-from coordinator_core._hook_envelope import allow_advisory, no_advisory
+from coordinator_core._hook_envelope import allow_advisory, no_advisory, payload_of
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.hooks.support.session_hub import ensure_session_dir, session_id_is_real
@@ -238,6 +238,9 @@ def _handler(params: dict, repo_root=None) -> dict:
     block/deny) for a read-only-shaped dispatch to a doctrine-carrying
     agent, once per session."""
     try:
-        return _handle(params)
+        # Review: coordinator-code-reviewer — normalize the two params
+        # shapes both engine doors and the cold chain send (see
+        # block_worktree_tool).
+        return _handle(payload_of(params))
     except Exception:
         return no_advisory()

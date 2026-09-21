@@ -63,7 +63,7 @@ from __future__ import annotations
 import os
 import re
 
-from coordinator_core._hook_envelope import deny, no_advisory
+from coordinator_core._hook_envelope import deny, no_advisory, payload_of
 from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
     _canonical,
     _join_onto_cwd,
@@ -222,6 +222,9 @@ def _deny_reason() -> str:
 async def _handler(params: dict, repo_root=None) -> dict:
     """PreToolUse(Bash|PowerShell) op: deny a command that scaffolds
     repo-setup against ~/.claude."""
+    # Review: coordinator-code-reviewer — normalize the two params shapes
+    # both engine doors and the cold chain send (see block_worktree_tool).
+    params = payload_of(params)
     if params.get("tool_name") not in _COMMAND_TOOL_NAMES:
         return no_advisory()
 
