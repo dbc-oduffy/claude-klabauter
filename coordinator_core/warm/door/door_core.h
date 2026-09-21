@@ -285,27 +285,23 @@ int door_basename_declares_stdin_read(const char *basename);
  * into `out` (which the caller must `buf_init` first), appending a
  * trailing newline. Returns 1 on success.
  *
- * THE HOOK-MODE FAIL-CLOSED DISPOSITION. `door.c`'s and `door_posix.c`'s
- * shipped safety property is "on any doubt, fall through to the cold
- * Python entrypoint" (see either file's own module docstring) -- exactly
- * right for an ordinary op invocation, exactly wrong for a guard: a hook
- * that falls through has not been consulted, and for a PreToolUse hook
- * the fall-through cost is an interpreter start on every Bash call, the
- * very thing the door exists to avoid. A caller that declared hook mode
- * (`DOOR_STDIN_MODE_HOOK_VALUE`) gets THIS envelope at every point that
- * would otherwise fall through, instead -- the same
- * `{"hookSpecificOutput":...}` shape every Bash guard in this repo already
- * authors for a deny verdict (e.g.
- * `coordinator_core/bash_guards/block_approval_sentinel_creation.py`),
- * with a reason naming the door so a transcript reader can tell which
- * layer refused.
+ * THE HOOK-MODE LAST RESORT. An ordinary invocation falls through to the
+ * cold Python entrypoint on any doubt. Hook mode falls through too -- every
+ * fall-through is pre-delivery or provably undispatched, so the guard has
+ * not run, and each door's `hook_fall_through` runs it cold and relays its
+ * verdict (the cold leg then asks for the engine back, so an outage costs
+ * one cold call, not one per Bash call). THIS envelope is what hook mode
+ * emits only when there is no verdict to relay: no cold entrypoint, a cold
+ * leg that could not start, exited nonzero or wrote nothing, or a stdin
+ * payload over the bound. A hook that did not answer must never read as one
+ * that allowed, and an empty stdout or a bare nonzero exit reads as "no
+ * opinion" to a hook runner.
  *
- * DR-367 ("cold fall-through succeeds, loudly") is NOT reversed by this.
- * Its own non-license clause already excludes a warm server that is
- * reachable and answers no -- a hook whose endpoint is dead (unreachable)
- * is the case DR-367 never covered, and denying is the correct answer for
- * it precisely because a caller that declared hook mode asked to be
- * guarded, not merely dispatched. */
+ * Same `{"hookSpecificOutput":...}` shape every Bash guard in this repo
+ * authors for a deny (e.g.
+ * `coordinator_core/bash_guards/block_approval_sentinel_creation.py`), with
+ * a reason naming the door so a transcript reader can tell which layer
+ * refused. */
 int build_hook_deny_envelope(buf_t *out, const char *reason);
 
 /* =========================================================================

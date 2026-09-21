@@ -1161,6 +1161,7 @@ def _try_warm_dispatch_inner(
         # part-way leaves a partial frame, which the server cannot parse as a
         # request and therefore never dispatches -- safe to re-open.
         delivered = False
+        held_past_probe = False
         try:
             fh.write(payload)
             fh.flush()
@@ -1178,6 +1179,7 @@ def _try_warm_dispatch_inner(
                 # request) up to the mutation's own deadline.
                 if not _op_may_mutate(msg.get("method")):
                     return None
+                held_past_probe = True
                 mutation_deadline = _mutation_deadline_for(msg.get("method"))
                 line = pending.wait(max(0.0, mutation_deadline - liveness_secs))
                 if line is _TIMED_OUT:
@@ -1206,6 +1208,17 @@ def _try_warm_dispatch_inner(
             if _op_may_mutate(msg.get("method")):
                 return _indeterminate_envelope(msg, detail)
             return None
+
+        if (not line or not line.strip()) and held_past_probe:
+            # A zero-byte close AFTER the liveness probe expired is not the
+            # unserviced-connection shape below: that one dies at once, while
+            # this server held a delivered mutation past the probe, which is
+            # what an engaged server looks like. Going cold here re-runs a
+            # mutation that may have landed, and pays a second full read on
+            # top of the first -- a wait no caller ceiling is sized for.
+            # -> state/bug-backlog/2026-09-20-the-warm-pool-re-enters-the-
+            # engine-by-cold-subprocess.yaml (e), residual.
+            return _indeterminate_envelope(msg, "closed without a response after delivery")
 
         if not line or not line.strip():
             # EOF with NOT ONE BYTE back. This is the one post-delivery shape

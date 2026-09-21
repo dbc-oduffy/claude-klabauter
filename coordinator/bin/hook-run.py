@@ -283,7 +283,30 @@ def main(argv: "list[str] | None" = None) -> int:
 
     sys.stdout.write(json.dumps(result))
     sys.stdout.write("\n")
+    sys.stdout.flush()
+    _ask_for_the_engine_back()
     return 0
+
+
+def _ask_for_the_engine_back() -> None:
+    """Cold only: the warm door fell through to this process because it could
+    not reach the engine, so ask for it back, or every later hook pays this
+    interpreter start too. Served in-engine there is nothing to ask for.
+
+    A ping through `warm.client.try_warm_dispatch` rather than a spawn of our
+    own: that seam already owns the whole policy (spawn only on an absent
+    server, debounced across processes, never on a contended one, never from
+    test traffic), and a second copy of it here would drift. Best-effort:
+    the verdict is already written, so nothing here may fail the hook.
+    """
+    if os.environ.get("COORDINATOR_EXECUTION_ROUTE") == "warm_server":
+        return
+    try:
+        from coordinator_core.warm.client import try_warm_dispatch
+
+        try_warm_dispatch({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}})
+    except Exception:  # noqa: BLE001 -- see docstring: never fail a written verdict
+        pass
 
 
 if __name__ == "__main__":

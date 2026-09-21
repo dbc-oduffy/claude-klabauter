@@ -130,7 +130,7 @@ def test_an_engine_that_does_not_publish_it_degrades_to_the_budget():
         if not k.startswith("__ceremony__")
     }
     payload.pop("__ceremony_mutation_read_deadline__")
-    payload.pop("__warm_boot_wait__")
+    payload.pop("__warm_miss_wait__")
 
     def _install(*_args, **_kwargs):
         _mod._OP_TIMEOUTS_STATE = "ok"
@@ -148,7 +148,7 @@ def test_a_non_ceremony_op_is_untouched():
     payload = {k: float(v) for k, v in _dump_op_timeouts().items()}
     assert _ceiling_against_the_live_dump("session.boot_sweep") == int(
         payload.get("session.boot_sweep", payload["__default__"])
-    ) + math.ceil(payload["__warm_boot_wait__"]) + 2
+    ) + math.ceil(payload["__warm_miss_wait__"]) + 2
 
 
 def test_an_unlisted_ceremony_op_is_bounded_by_the_ceremony_budget_not_the_default():
@@ -169,7 +169,7 @@ def test_an_unlisted_ceremony_op_is_bounded_by_the_ceremony_budget_not_the_defau
     # With the transport row withheld, the budget arm is observable on its own.
     stripped = dict(payload)
     stripped.pop("__ceremony_mutation_read_deadline__")
-    stripped.pop("__warm_boot_wait__")
+    stripped.pop("__warm_miss_wait__")
 
     def _install_stripped(*_args, **_kwargs):
         _mod._OP_TIMEOUTS_STATE = "ok"
@@ -225,20 +225,24 @@ def test_membership_falls_back_to_the_prefix_when_no_dump_is_available():
 _ORDINARY_MUTATION = "queue.append"
 
 
-def test_the_ceiling_clears_the_boot_wait_plus_the_read():
-    """(e) of the warm-pool P0: boot wait and read run back to back, so the
-    ceiling clears the sum (see `_op_timeout_ceiling`)."""
+def test_the_ceiling_clears_a_warm_miss_plus_the_read():
+    """(e) of the warm-pool P0: a missed attempt's liveness read, the boot wait
+    and the op's read run back to back, so the ceiling clears the sum (see
+    `_op_timeout_ceiling`)."""
     from coordinator_core.invoke.__main__ import _warm_boot_wait_deadline
+    from coordinator_core.warm.client import READ_DEADLINE_SECS
 
     boot = _warm_boot_wait_deadline()
     assert boot > 0, "fixture stale: the boot wait is off, so this pins nothing"
     for op in (*_CEREMONY_OPS, _ORDINARY_MUTATION):
-        assert _ceiling_against_the_live_dump(op) >= boot + _mutation_deadline_for(op), op
+        assert _ceiling_against_the_live_dump(op) >= (
+            READ_DEADLINE_SECS + boot + _mutation_deadline_for(op)
+        ), op
 
 
-def test_the_published_boot_wait_follows_the_childs_own_env(monkeypatch):
+def test_the_published_miss_wait_follows_the_childs_own_env(monkeypatch):
     """One number produces both. The dump runs in the env the real child gets,
     so a caller that turns the wait off for its child gets no boot term."""
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "0")
-    assert _dump_op_timeouts()["__warm_boot_wait__"] == 0.0
+    assert _dump_op_timeouts()["__warm_miss_wait__"] == 0.0
 

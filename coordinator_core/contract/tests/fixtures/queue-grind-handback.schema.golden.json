@@ -1,0 +1,135 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "appetite": {
+      "enum": [
+        "hunt",
+        "standard",
+        "sweep"
+      ],
+      "type": "string"
+    },
+    "counts": {
+      "type": "object"
+    },
+    "handed_back": {
+      "items": {
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "row": {
+            "type": "string"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "baton",
+                  "budget-exhausted",
+                  "commit-failed",
+                  "manifest-stale",
+                  "needs-judgment",
+                  "peer-dirty",
+                  "rejected-after-retry",
+                  "stage-dead",
+                  "verify-failed",
+                  "widen-exhausted"
+                ]
+              },
+              {
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+              }
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "row",
+          "type",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "profile": {
+      "type": "string"
+    },
+    "schema": {
+      "const": "queue-grind-handback/1"
+    },
+    "settled": {
+      "items": {
+        "properties": {
+          "outcome": {
+            "type": "string"
+          },
+          "row": {
+            "type": "string"
+          },
+          "sha": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "row",
+          "outcome",
+          "sha"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "spend": {
+      "properties": {
+        "agent_calls_by_stage_kind": {
+          "properties": {
+            "commit": {
+              "type": "integer"
+            },
+            "fix": {
+              "type": "integer"
+            },
+            "refute-close": {
+              "type": "integer"
+            },
+            "triage": {
+              "type": "integer"
+            },
+            "undo": {
+              "type": "integer"
+            },
+            "verify": {
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "agent_calls_total": {
+          "type": "integer"
+        },
+        "output_tokens": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "output_tokens",
+        "agent_calls_total",
+        "agent_calls_by_stage_kind"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema",
+    "profile",
+    "appetite",
+    "handed_back",
+    "settled",
+    "counts",
+    "spend"
+  ],
+  "title": "queue-grind-handback/1",
+  "type": "object"
+}

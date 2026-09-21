@@ -924,25 +924,13 @@ static int emit_indeterminate(const char *detail) {
  * operation. The two messages this function can print are the genuinely
  * fatal cases: no engine it can name at all, and no interpreter it can
  * launch at all. */
-static int fall_through(int argc, char **argv, const char *engine_root) {
-    /* HOOK MODE INVERTS THIS FUNCTION'S ENTIRE PURPOSE (door_core.h ::
-     * build_hook_deny_envelope), the same inversion door.c's own
-     * `fall_through` applies -- see that file's comment for the full
-     * rationale. Every fall-through in this file reaches this function
-     * directly, so checking the flag HERE, first, covers every existing
-     * call site (and any added later) without a second edit. `argc`/
-     * `argv`/`engine_root` go unused on this leg -- the caller declared no
-     * argv grammar is going to run here, only a decision. */
-    if (g_door_hook_mode) {
-        (void)argc;
-        (void)argv;
-        (void)engine_root;
-        return emit_hook_deny(
-            "coordinator-door: could not deliver this request to the "
-            "resident engine; denying rather than falling through to the "
-            "cold entrypoint in hook mode");
-    }
-
+/* Resolves the cold entrypoint `fall_through` spawns into `script_path`
+ * (`PATH_MAX` bytes): `<engine>/coordinator/bin/<own basename>.py`, or the
+ * extensionless sibling. Returns 0 on success; on failure prints the one
+ * diagnostic naming why and returns 1. Shared by both fall-through legs so
+ * a hook-mode fall-through can never resolve a different CLI than an
+ * ordinary one. */
+static int resolve_fallback_script(const char *engine_root, char *script_path) {
     const char *root = (engine_root != NULL) ? engine_root : BUILD_ENGINE_ROOT;
 
     /* `engine_root`, when supplied, was already validated by
@@ -982,10 +970,9 @@ static int fall_through(int argc, char **argv, const char *engine_root) {
      * different CLI's grammar. */
     const char *entrypoint_basename = door_entrypoint_basename();
 
-    char script_path[PATH_MAX];
-    int n = snprintf(script_path, sizeof(script_path),
+    int n = snprintf(script_path, PATH_MAX,
                      "%s/coordinator/bin/%s.py", root, entrypoint_basename);
-    if (n < 0 || (size_t)n >= sizeof(script_path)) return 1;
+    if (n < 0 || (size_t)n >= PATH_MAX) return 1;
 
     char extensionless_path[PATH_MAX];
     int ext_n = snprintf(extensionless_path, sizeof(extensionless_path),
@@ -998,7 +985,7 @@ static int fall_through(int argc, char **argv, const char *engine_root) {
         struct stat ext_st;
         int ext_ok = (stat(extensionless_path, &ext_st) == 0) && S_ISREG(ext_st.st_mode);
         if (ext_ok) {
-            memcpy(script_path, extensionless_path, sizeof(script_path));
+            memcpy(script_path, extensionless_path, PATH_MAX);
         } else {
             fprintf(stderr,
                 "door: this image is named %s, and no matching coordinator/bin "
@@ -1012,6 +999,121 @@ static int fall_through(int argc, char **argv, const char *engine_root) {
             return 1;
         }
     }
+
+    return 0;
+}
+
+/* The caller's hook payload, kept for `hook_fall_through`: every
+ * fall-through is pre-delivery or provably undispatched, so the cold leg
+ * must be handed the same bytes the warm request would have carried. */
+static const char *g_hook_payload = NULL;
+static size_t g_hook_payload_len = 0;
+
+/* HOOK MODE'S FALL-THROUGH: run the guard cold, never skip it.
+ *
+ * Every `fall_through` call site is pre-delivery or provably undispatched,
+ * so nothing has evaluated this hook yet. Denying there turned a dead or
+ * idle-demoted engine into a wall around every Bash call until some other
+ * process happened to respawn it. Instead the same entrypoint runs cold
+ * (`hook-run.py`, ~0.2s process time) with the payload on its stdin, and
+ * its verdict is relayed; the cold leg also asks for the engine back, so
+ * only the first call of an outage pays that.
+ *
+ * FAIL-CLOSED on anything that is not a verdict. The child's stdout is
+ * captured, not inherited: a nonzero exit or an empty stdout means the guard
+ * did not answer, and a hook that did not answer must never read as one
+ * that allowed -- that case still gets `emit_hook_deny`. */
+static int hook_fall_through(int argc, char **argv, const char *engine_root) {
+    char script_path[PATH_MAX];
+    if (resolve_fallback_script(engine_root, script_path) != 0) {
+        return emit_hook_deny("coordinator-door: engine unreachable and no cold entrypoint resolved; denying");
+    }
+
+    int in_pipe[2], out_pipe[2];
+    if (pipe(in_pipe) != 0) {
+        return emit_hook_deny("coordinator-door: engine unreachable and the cold guard could not be started; denying");
+    }
+    if (pipe(out_pipe) != 0) {
+        close(in_pipe[0]);
+        close(in_pipe[1]);
+        return emit_hook_deny("coordinator-door: engine unreachable and the cold guard could not be started; denying");
+    }
+
+    int spawn_argc = 2 + (argc > 1 ? argc - 1 : 0);
+    char **spawn_argv = (char **)calloc((size_t)spawn_argc + 1, sizeof(char *));
+    posix_spawn_file_actions_t actions;
+    int actions_ok = spawn_argv != NULL && posix_spawn_file_actions_init(&actions) == 0;
+    int rc = -1;
+    pid_t pid = 0;
+    if (actions_ok) {
+        spawn_argv[0] = (char *)PYTHON_BIN;
+        spawn_argv[1] = script_path;
+        for (int i = 1; i < argc; i++) spawn_argv[1 + i] = argv[i];
+        spawn_argv[spawn_argc] = NULL;
+        posix_spawn_file_actions_adddup2(&actions, in_pipe[0], STDIN_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, out_pipe[1], STDOUT_FILENO);
+        posix_spawn_file_actions_addclose(&actions, in_pipe[1]);
+        posix_spawn_file_actions_addclose(&actions, out_pipe[0]);
+        rc = posix_spawnp(&pid, PYTHON_BIN, &actions, NULL, spawn_argv, environ);
+        posix_spawn_file_actions_destroy(&actions);
+    }
+    free(spawn_argv);
+    close(in_pipe[0]);
+    close(out_pipe[1]);
+    if (rc != 0) {
+        close(in_pipe[1]);
+        close(out_pipe[0]);
+        return emit_hook_deny("coordinator-door: engine unreachable and the cold guard could not be started; denying");
+    }
+
+    /* hook-run reads all of stdin before it writes anything, so writing the
+     * whole payload before reading cannot deadlock on a full pipe. */
+    if (g_hook_payload_len > 0) {
+        write_all_fd(in_pipe[1], g_hook_payload, g_hook_payload_len);
+    }
+    close(in_pipe[1]);
+
+    buf_t verdict;
+    int verdict_ok = buf_init(&verdict, 4096);
+    char chunk[4096];
+    for (;;) {
+        ssize_t got = read(out_pipe[0], chunk, sizeof(chunk));
+        if (got > 0) {
+            if (verdict_ok) verdict_ok = buf_append(&verdict, chunk, (size_t)got);
+            continue;
+        }
+        if (got < 0 && errno == EINTR) continue;
+        break;
+    }
+    close(out_pipe[0]);
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) break;
+    }
+
+    int answered = verdict_ok && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    size_t i = 0;
+    while (answered && i < verdict.len && (verdict.data[i] == ' ' || verdict.data[i] == '\n' ||
+                                           verdict.data[i] == '\r' || verdict.data[i] == '\t')) {
+        i++;
+    }
+    if (!answered || i == verdict.len) {
+        if (verdict_ok) free(verdict.data);
+        return emit_hook_deny("coordinator-door: engine unreachable and the cold guard returned no verdict; denying");
+    }
+    write_all_fd(STDOUT_FILENO, verdict.data, verdict.len);
+    free(verdict.data);
+    return 0;
+}
+
+static int fall_through(int argc, char **argv, const char *engine_root) {
+    if (g_door_hook_mode) {
+        return hook_fall_through(argc, argv, engine_root);
+    }
+
+    char script_path[PATH_MAX];
+    if (resolve_fallback_script(engine_root, script_path) != 0) return 1;
 
     /* argv[0] is replaced by the interpreter, argv[1] by the script, and
      * the caller's argv[1:] follows -- exactly what door.c's command line
@@ -1112,7 +1214,7 @@ int main(int argc, char **argv) {
      * invocation. Read before engine-root resolution because it depends on
      * none of it, and so a caller who declared hook mode gets a decided
      * verdict even when the engine root cannot be resolved -- that failure
-     * now denies too, via `fall_through`'s own hook-mode check.
+     * reaches `hook_fall_through`, which denies when no cold leg resolves.
      *
      * From this point to the request-build site further below, every
      * pre-delivery fall-through call site frees its own intermediate
@@ -1136,6 +1238,8 @@ int main(int argc, char **argv) {
                     : "coordinator-door: stdin read failed; refusing");
         }
         have_stdin_payload = 1;
+        g_hook_payload = stdin_payload.data;
+        g_hook_payload_len = stdin_payload.len;
     }
 
     /* Resolved once, unconditionally, before any branch splits -- see
@@ -1320,9 +1424,7 @@ int main(int argc, char **argv) {
 
     /* HOOK MODE'S PAYLOAD (door_core.h). Inside `params`, sibling of
      * `argv`/`cwd` above -- an OP ARGUMENT, never transport metadata,
-     * mirroring exactly where door.c places the same field. Freed
-     * immediately after appending -- `buf_append_json_escaped` copies the
-     * bytes, so `stdin_payload.data` has no further use. */
+     * mirroring exactly where door.c places the same field. */
     if (req_ok && have_stdin_payload) {
         req_ok &= buf_append_cstr(&req, ",\"stdin\":\"");
         if (req_ok) {
@@ -1331,10 +1433,9 @@ int main(int argc, char **argv) {
         }
         req_ok &= buf_append_cstr(&req, "\"");
     }
-    if (have_stdin_payload) {
-        free(stdin_payload.data);
-        have_stdin_payload = 0;
-    }
+    /* `stdin_payload.data` is NOT freed here: `hook_fall_through` still
+     * needs it if the delivery below fails, and the process exit that follows
+     * every return reclaims it (at most `DOOR_STDIN_MAX_BYTES`). */
 
     /* ADDITIVE, NOT ALWAYS PRESENT (C0) -- the POSIX half of the field
      * `door.c` appends at the same point in the same request; see that

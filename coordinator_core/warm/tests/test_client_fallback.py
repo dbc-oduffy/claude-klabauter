@@ -662,6 +662,27 @@ def test_zero_byte_close_still_goes_cold_for_a_mutation(
     assert client.try_warm_dispatch(_MUTATING_MSG) is None
 
 
+def test_zero_byte_close_after_the_probe_is_indeterminate_for_a_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The residual of (e). An unserviced connection closes at once; a close
+    that arrives after the liveness probe expired came from a server that held
+    the delivered mutation, so it may have landed. Going cold there re-runs it
+    and pays a second full read that no caller ceiling covers."""
+    import threading
+
+    class _LateClosePipe(_FakePipe):
+        def readline(self):
+            threading.Event().wait(0.10)
+            return b""
+
+    monkeypatch.setattr(client, "READ_DEADLINE_SECS", 0.02)
+    monkeypatch.setattr(client, "MUTATION_READ_DEADLINE_SECS", 5.0)
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _LateClosePipe())
+
+    _assert_indeterminate(client.try_warm_dispatch(_MUTATING_MSG))
+
+
 def test_malformed_response_is_indeterminate_for_a_mutation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

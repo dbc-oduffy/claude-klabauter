@@ -22,11 +22,12 @@ checked one would happily pass a "fix" that reintroduces either defect:
       than truncated if it is too large.
   (b) NON-HANG. A caller that declares NOTHING never touches stdin at all,
       even against an inherited stdin whose writer never closes.
-  (f) FAIL-CLOSED. Hook mode's disposition on an unreachable engine is an
-      affirmative `permissionDecision: deny`, never the ordinary
-      fall-through -- the plan's second half, and equally load-bearing:
-      landing the read without this ships a guard that receives its
-      payload and still fails open on a dead endpoint.
+  (f) FAIL-CLOSED. On an unreachable engine hook mode runs the guard cold
+      and relays its verdict; when the cold guard does not answer either,
+      the disposition is an affirmative `permissionDecision: deny`, never
+      an exit a hook runner would read as "no opinion". (The cold-verdict
+      relay itself is pinned against the POSIX door in
+      `test_hook_mode_cold_fallthrough.py`.)
 
 NO LIVE WARM SERVER IS INVOLVED, deliberately, following
 `test_door_read_deadline.py`'s own precedent: the stub server (borrowed
@@ -248,7 +249,7 @@ def test_try_warm_dispatch_inner_forwards_params_verbatim():
 
     source = Path(warm_client.__file__).read_text(encoding="utf-8")
     match = re.search(
-        r"def _try_warm_dispatch_inner\(msg: dict\).*?request = \{\*\*msg, ",
+        r"def _try_warm_dispatch_inner\(\s*msg: dict\b.*?request = \{\*\*msg, ",
         source,
         re.DOTALL,
     )
@@ -404,16 +405,12 @@ def test_a_payload_spanning_multiple_reads_arrives_intact(tmp_path: Path) -> Non
 
 
 @_WINDOWS_ONLY
-def test_hook_mode_fails_closed_on_a_dead_endpoint(tmp_path: Path) -> None:
-    """(f) No server is listening (a dead endpoint) and hook mode is
-    declared. The door must deny -- affirmatively, in the
-    `hookSpecificOutput` shape a PreToolUse hook already knows how to read
-    -- rather than falling through to the cold Python entrypoint, which
-    would defeat the entire reason a guard uses the door.
-
-    DR-367 is not reversed by this: its own non-license clause already
-    excludes a warm server that is reachable and answers no, and a dead
-    endpoint is unreachable, not answering-no."""
+def test_hook_mode_denies_when_the_cold_guard_does_not_answer(tmp_path: Path) -> None:
+    """(f) No server is listening and hook mode is declared, so the door runs
+    the cold entrypoint. This stub's cold entrypoint prints a non-verdict and
+    exits nonzero -- a guard that did not answer -- so the door must deny
+    affirmatively, in the `hookSpecificOutput` shape a PreToolUse hook reads,
+    and must not relay the stub's output as if it were a verdict."""
     root = _make_stub_engine_root(tmp_path)
     payload = b'{"tool_name":"Bash","tool_input":{"command":"echo hi"}}'
 
@@ -422,13 +419,5 @@ def test_hook_mode_fails_closed_on_a_dead_endpoint(tmp_path: Path) -> None:
     assert proc.returncode == 0
     assert _FALLBACK_MARKER.encode() not in proc.stdout
     body = json.loads(proc.stdout.decode("utf-8").strip())
-    assert body == {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": body["hookSpecificOutput"][
-                "permissionDecisionReason"
-            ],
-        }
-    }
-    assert "hook mode" in body["hookSpecificOutput"]["permissionDecisionReason"]
+    assert body["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "cold guard" in body["hookSpecificOutput"]["permissionDecisionReason"]

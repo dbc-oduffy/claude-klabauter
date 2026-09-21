@@ -336,7 +336,7 @@ def _dump_op_timeouts() -> dict:
         dict -- {"<op>": <float>, ..., "__ceremony__<op>": <float>, ...,
         "__default__": <float>, "__ceremony_budget__": <float>,
         "__ceremony_mutation_read_deadline__": <float>,
-        "__warm_boot_wait__": <float>}. "__default__" is the
+        "__warm_miss_wait__": <float>}. "__default__" is the
         reserved key for the global runaway-guard fallback; "__ceremony__<op>"
         asserts `<op>` is a ceremony op and carries its transport read deadline.
     """
@@ -406,7 +406,7 @@ def _dump_op_timeouts() -> dict:
         "ceremony.commit_v2"
     )
     # Same reader, same inherited env as the real child; why it adds: `cc_invoke._op_timeout_ceiling`.
-    payload["__warm_boot_wait__"] = _warm_boot_wait_deadline()
+    payload["__warm_miss_wait__"] = _warm_miss_wait_secs()
     return payload
 
 
@@ -530,6 +530,20 @@ def _warm_boot_wait_deadline() -> float:
     if value < 0:
         return WARM_BOOT_WAIT_SECS
     return value
+
+
+def _warm_miss_wait_secs() -> float:
+    """The most a warm miss spends before the op's own read begins: the missed
+    attempt's liveness read (a zero-byte close or a compute-only probe expiry
+    inside it goes on to the boot wait), then the boot wait. 0 when the wait is
+    off, since a miss then fails at once and the first read was the only one.
+    Connect deadlines (0.25s each) ride the caller's start margin."""
+    boot = _warm_boot_wait_deadline()
+    if boot <= 0:
+        return 0.0
+    from coordinator_core.warm.client import READ_DEADLINE_SECS
+
+    return READ_DEADLINE_SECS + boot
 
 
 def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
