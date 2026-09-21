@@ -92,6 +92,20 @@ def test_a_task_that_never_started_is_a_determinate_safe_to_rerun(monkeypatch):
     assert "not started" in out["error"]["message"]
 
 
+def test_a_compute_only_task_that_never_started_is_the_same_determinate(monkeypatch):
+    """The not-started branch does not ask `_op_may_mutate` -- a successful
+    cancel proves nothing ran, whatever the op could have done. Pinned for a
+    read too, because the started branch below DOES split on it."""
+    from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE, _op_may_mutate
+
+    assert not _op_may_mutate("ping")
+    out = _ctx_with(_Future(cancellable=True), monkeypatch)._pool_dispatch(_msg("ping"))
+
+    assert out["error"]["code"] == server.INTERNAL_ERROR
+    assert out["error"]["code"] != WARM_DISPATCH_INDETERMINATE
+    assert "safe to re-run" in out["error"]["message"]
+
+
 def test_a_started_mutation_is_indeterminate(monkeypatch):
     """The worker has it and may be mid-write. Only this case is genuinely
     unknown, and only this case may tell a caller to reconcile."""
@@ -166,3 +180,59 @@ def test_a_result_inside_the_deadline_is_returned_untouched(monkeypatch):
 
     out = _ctx_with(_Fast(), monkeypatch)._pool_dispatch(_msg("ping"))
     assert out == {"jsonrpc": "2.0", "id": 7, "result": {"pong": True}}
+
+
+# --- against the real `concurrent.futures.Future`, not the stand-in above ---
+#
+# The branch is decided by `Future.cancel()`'s own contract: True only while the
+# task is queued, False once a worker has picked it up. That contract lives in
+# `concurrent.futures.Future` itself, shared by every executor, so a one-worker
+# THREAD pool exercises the real primitive without spawning a process.
+
+
+def _real_pool_ctx(monkeypatch, pool):
+    ctx = server._ServerContext.__new__(server._ServerContext)
+    monkeypatch.setattr(ctx, "_ensure_dispatch_pool", lambda: pool, raising=False)
+    monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 0.05)
+    return ctx
+
+
+def test_real_future_queued_behind_a_busy_worker_is_not_started(monkeypatch):
+    import threading
+
+    release = threading.Event()
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        pool.submit(release.wait)  # occupies the only worker
+        monkeypatch.setattr(server, "_pool_dispatch_worker", lambda *_a: {"result": "ran"})
+        out = _real_pool_ctx(monkeypatch, pool)._pool_dispatch(_msg("ceremony.commit_v2"))
+    finally:
+        release.set()
+        pool.shutdown(wait=True)
+
+    assert "not started" in out["error"]["message"]
+
+
+def test_real_future_already_running_is_indeterminate_for_a_mutation(monkeypatch):
+    import threading
+
+    from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE
+
+    started, release = threading.Event(), threading.Event()
+
+    def _slow_worker(*_a):
+        started.set()
+        release.wait()
+        return {"result": "ran"}
+
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        monkeypatch.setattr(server, "_pool_dispatch_worker", _slow_worker)
+        ctx = _real_pool_ctx(monkeypatch, pool)
+        out = ctx._pool_dispatch(_msg("ceremony.commit_v2"))
+        assert started.is_set(), "premise: the worker had picked the task up"
+    finally:
+        release.set()
+        pool.shutdown(wait=True)
+
+    assert out["error"]["code"] == WARM_DISPATCH_INDETERMINATE

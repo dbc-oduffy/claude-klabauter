@@ -432,6 +432,14 @@ def _render_json(rows: list[dict], repo_sha: str, doe_sha: str, klabauter_sha: s
     }
 
 
+def _excerpt(text: str) -> str:
+    """One source line as a manifest table cell: pipes escaped for the table,
+    and `](` broken so a quoted markdown link is not read as a live link --
+    the published mirror's reference validator fails on those, and the target
+    is a fixture path that was never meant to resolve."""
+    return text.strip().replace("|", "\\|").replace("](", "]\\(")[:160]
+
+
 def _render_manifest(
     rows: list[dict],
     repo_sha: str,
@@ -498,7 +506,7 @@ def _render_manifest(
         a("| file:line | secondary | text |")
         a("|---|---|---|")
         for r in cls_rows:
-            text = r["text"].strip().replace("|", "\\|")[:160]
+            text = _excerpt(r["text"])
             a(f"| `{r['file']}:{r['line']}` | {r['secondary_class'] or '-'} | `{text}` |")
         a("")
 
@@ -529,7 +537,7 @@ def _render_manifest(
             a("| file:line | secondary | text |")
             a("|---|---|---|")
             for r in slice_rows:
-                text = r["text"].strip().replace("|", "\\|")[:160]
+                text = _excerpt(r["text"])
                 a(f"| `{r['file']}:{r['line']}` | {r['secondary_class'] or '-'} | `{text}` |")
             a("")
 

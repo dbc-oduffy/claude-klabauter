@@ -4104,7 +4104,7 @@ justifies itself per use" clause) and is flagged here for the EM rather than gue
 | `coordinator/bin/test_check_doctrine_citations.py:187` | - | `def test_each_doe_vs_claude_klabauter_collision_anchored_is_still_ambiguous(self):` |
 | `coordinator/bin/test_check_doctrine_citations.py:191` | - | `for name in DOE_VS_CLAUDE_KLABAUTER_COLLISIONS:` |
 | `coordinator/bin/test_check_doctrine_citations.py:203` | - | `self.assertIn("claude-klabauter", findings[0])` |
-| `coordinator/bin/test_check_doctrine_citations.py:259` | - | `"See [`docs/wiki/only-in-claude-klabauter.md`](docs/wiki/only-in-claude-klabauter.md) for detail.\n",` |
+| `coordinator/bin/test_check_doctrine_citations.py:259` | - | `"See [`docs/wiki/only-in-claude-klabauter.md`]\(docs/wiki/only-in-claude-klabauter.md) for detail.\n",` |
 | `coordinator/bin/test_check_doctrine_citations.py:266` | - | `self.assertIn("only-in-claude-klabauter.md", findings[0])` |
 | `coordinator/bin/test_check_doctrine_citations.py:272` | - | `"See docs/wiki/only-in-claude-klabauter.md and docs/wiki/only-in-coordinator.md.\n",` |
 | `coordinator/bin/test_check_doctrine_citations.py:279` | - | `self.assertTrue(any("only-in-claude-klabauter.md" in f for f in findings), msg=findings)` |

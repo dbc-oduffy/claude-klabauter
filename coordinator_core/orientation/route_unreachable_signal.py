@@ -17,10 +17,12 @@ Shape mirrors `warm_health_signal.emit_warm_engine_health` deliberately: one
 rendered line, omit-when-quiet, fail-open to "" on any error, cold
 orientation-regen path only. Two differences, both load-bearing:
 
-  - REPO-SCOPED, not clone-scoped. Warm telemetry is keyed to the engine clone
-    this interpreter runs from; this ledger is keyed to the registered claude-klabauter
-    checkout, because the question is "which routes went unreachable to how
-    many sessions on this box", which is not answerable from one clone's view.
+  - PER-BOX, not repo-scoped or clone-scoped. Warm telemetry is keyed to the
+    engine clone this interpreter runs from; this ledger is keyed to a
+    per-box runtime base (see `LEDGER_RELPATH` below), because the question is
+    "which routes went unreachable to how many sessions on this box", which is
+    not answerable from one clone's view — and a repo-relative path was tried
+    first and broke across the source/mirror clone split (same comment).
   - WINDOWED, not cumulative. A rate over all time would still be rendering a
     line about a bad afternoon weeks later, and an operator who learns to
     scroll past a section has lost it. Only the recent window counts.

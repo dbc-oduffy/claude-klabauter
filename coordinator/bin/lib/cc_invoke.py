@@ -2276,6 +2276,7 @@ def _try_in_engine_dispatch(
     """
     if os.environ.get(_ROUTE_ENV) != _ROUTE_WARM_SERVER:
         return None
+    path_before = list(sys.path)
     try:
         _front_insert_on_path(claude_klabauter_root)
         import asyncio
@@ -2284,9 +2285,14 @@ def _try_in_engine_dispatch(
         from coordinator_core.invoke.dispatch import dispatch_message
         from coordinator_core.op_scopes import WORKTREE_SCOPED_OPS
     except Exception:  # noqa: BLE001 -- pre-dispatch: fall through, see docstring
+        # Falling through promises the ladder an untouched process; the
+        # front-insert above is the one mutation this attempt made.
+        sys.path[:] = path_before
         return None
 
-    msg: dict[str, Any] = {"jsonrpc": "2.0", "id": 1, "method": op, "params": params}
+    # Unique per CLI process, so anything that logs by id can tell two
+    # in-engine calls apart.
+    msg: dict[str, Any] = {"jsonrpc": "2.0", "id": f"in-engine-{os.getpid()}", "method": op, "params": params}
     if op in WORKTREE_SCOPED_OPS:
         # `show_toplevel` WALKS ONLY and never spawns; the cold path's
         # `_resolve_repo_root` would add a git spawn to a function whose whole

@@ -1022,6 +1022,10 @@ def _register_stack_dump_signal(engine_root=None) -> "str | None":
         _STACK_DUMP_FILE = open(path, "a", buffering=1, encoding="utf-8")
         faulthandler.register(sig, file=_STACK_DUMP_FILE, all_threads=True, chain=False)
     except Exception:  # noqa: BLE001 -- see docstring; a server that cannot describe itself still serves
+        # Review: coordinator-code-reviewer -- close before dropping the
+        # reference so a failure after open() doesn't leak the fd.
+        if _STACK_DUMP_FILE is not None:
+            _STACK_DUMP_FILE.close()
         _STACK_DUMP_FILE = None
         return None
     return "kill -USR1 {0}   # every thread's stack -> {1}".format(os.getpid(), path)
@@ -2699,7 +2703,9 @@ def _run_guarded() -> int:
 
     _stack_dump_remedy = _register_stack_dump_signal(repo_root)
     print(
-        "[warm-server] stack dump: " + _stack_dump_remedy
+        # Review: coordinator-code-reviewer -- parens make the truthy branch
+        # unambiguous against the ternary's precedence on a skim.
+        ("[warm-server] stack dump: " + _stack_dump_remedy)
         if _stack_dump_remedy
         else "[warm-server] stack dump: unavailable -- no SIGUSR1 on this platform; "
              "attach a debugger to inspect a slow server here",

@@ -154,7 +154,10 @@ def test_an_import_failure_falls_through_rather_than_raising(_in_engine, monkeyp
         return real_import(name, *a, **k)
 
     monkeypatch.setattr(builtins, "__import__", _fail)
-    assert cc_invoke._try_in_engine_dispatch("ping", {}, _REPO, _REPO) is None
+    engine_root = "/nonexistent/engine-root-for-this-test"
+    path_before = list(sys.path)
+    assert cc_invoke._try_in_engine_dispatch("ping", {}, _REPO, engine_root) is None
+    assert sys.path == path_before, "a fall-through must leave the ladder an untouched sys.path"
 
 
 def test_an_unwalkable_worktree_falls_through(_in_engine, monkeypatch, tmp_path):

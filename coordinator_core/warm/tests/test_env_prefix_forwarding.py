@@ -134,7 +134,7 @@ def test_the_posix_door_carries_prefixed_names_and_nothing_else(tmp_path, runtim
         COORDINATOR_ALLOW_QUOTED='a "b"',
         COORDINATOR_SCOPE_EMPTY="",
         COORDINATOR_OVERRIDE_="bare-prefix",
-        UNRELATED_SECRET="never",
+        UNRELATED_SECRET="never",  # noqa: secrets
     )
     server = _ReplyingServer(sock_path, reply)
     try:
