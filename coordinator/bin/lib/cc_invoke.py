@@ -2167,10 +2167,26 @@ def _timeout_exceeded_message(op: str, timeout: int) -> str:
     ceiling no longer reads the environment at all (see `_op_timeout_ceiling`'s
     negative-spec), so naming those variables would now also be false.
 
-    What survives is the derivation with real numbers — the reader still learns which
-    term bound the wait — plus the one remedy that works: reconcile, then make the op
-    cheaper. The reconcile line is on EVERY branch, not just ceremony ops: a client-side
-    timeout never stops the engine, so any op that mutates may already have landed.
+    CLAIMS ONLY WHAT THE DOOR KNOWS (C4, docs/plans/2026-09-20-stop-the-engine-
+    spawning-to-talk-to-itself.md). Two sentences were cut, both unsupportable and
+    both contradicted on 2026-09-21 while the reader was being told to trust them:
+
+      - *"The engine does not stop when this client does"* — an assertion about the
+        engine's behaviour that this process cannot observe. What the door knows is
+        that it sent a request and no answer arrived inside the deadline. The
+        CONSEQUENCE that mattered survives, and is now stated first: a mutating op
+        may have landed, so reconcile.
+      - *"Make the op cheaper: fewer spawns, batched git, a warm path"* — a diagnosis,
+        not a fact, and a wrong one on the measured day. A stamped `ping` took 28.8s
+        through a resident door whose process and every pool member sat at 0.0% CPU
+        (docs/research/warm-door-in-process-reentry/c1-isolation-boundary.md). There
+        was nothing to make cheaper. A remedy that names the wrong cause teaches the
+        reader to discount the whole message, and this one must be read every time.
+
+    What survives is the reconcile instruction, exactly as strong as it was — it is
+    the half that was right — plus the derivation with real numbers, so the reader
+    still learns which term bound the wait. The reconcile line is on EVERY branch,
+    not just ceremony ops: any op that mutates may already have landed.
 
     The degraded branch (dump unavailable) states the ceiling without asserting a budget
     number it could not read.
@@ -2182,7 +2198,8 @@ def _timeout_exceeded_message(op: str, timeout: int) -> str:
     # COORDINATOR_DISPATCH_TIMEOUT_SECS here would hand the reader a remedy that
     # provably cannot work (the engine clamps ceremony ops with `min()` AFTER
     # reading that var) and would point them at the one door the ratchet exists
-    # to close. The honest remedy for a ceremony breach is the op, not the cap.
+    # to close. The ratchet is stated as a FACT, last, so it forecloses the knob
+    # without being read as this breach's cause.
     if _is_ceremony_op(op):
         budget_txt = ""
         if _OP_TIMEOUTS_STATE == "ok":
@@ -2193,12 +2210,10 @@ def _timeout_exceeded_message(op: str, timeout: int) -> str:
                 budget_txt = f" against a {ceremony_budget}s ceremony budget"
         return (
             f"{_TIMEOUT_MESSAGE_PREFIX}{timeout}s (op={op}) — "
-            f"the ceremony did not complete{budget_txt}\n"
-            "  The ceremony budget is a ratchet; no env var widens it. Make the op\n"
-            "  cheaper: fewer git spawns, batched pathspecs, a warm path.\n"
-            "  The engine does not stop when this client does — a mutating ceremony\n"
-            "  may still have committed. Reconcile against real repo state before\n"
-            "  re-running.\n"
+            f"no answer arrived{budget_txt}\n"
+            "  A mutating ceremony may have committed. Reconcile against real repo\n"
+            "  state (e.g. `git log`) before re-running.\n"
+            "  The ceremony budget is a ratchet; no env var widens it.\n"
             "  docs/decisions/DR-348-the-ceremony-budget-is-a-ratchet.md"
         )
 
@@ -2211,13 +2226,93 @@ def _timeout_exceeded_message(op: str, timeout: int) -> str:
     else:
         derivation = "the no-budget fallback (engine op-budget dump unavailable)"
     return (
-        f"{_TIMEOUT_MESSAGE_PREFIX}{timeout}s (op={op}) — the op is over budget\n"
-        f"  Exceeded {timeout}s = {derivation}.\n"
-        "  The client wait is derived from the engine's own budget; nothing outside the\n"
-        "  engine widens it. Make the op cheaper: fewer spawns, batched git, a warm path.\n"
-        "  The engine does not stop when this client does — a mutating op may still have\n"
-        "  landed. Reconcile against real repo state before re-running."
+        f"{_TIMEOUT_MESSAGE_PREFIX}{timeout}s (op={op}) — no answer arrived\n"
+        f"  Waited {timeout}s = {derivation}.\n"
+        "  A mutating op may have landed. Reconcile against real repo state (e.g.\n"
+        "  `git log`) before re-running.\n"
+        "  The client wait is derived from the engine's own budget; nothing outside\n"
+        "  the engine widens it."
     )
+
+
+#: Mirror of `coordinator_core.telemetry.op_latency.ROUTE_ENV` / `WARM_SERVER`.
+#: Spelled here, not imported: this module carries no `coordinator_core` import
+#: at module scope, and every coordinator CLI on the box pays its import cost.
+#: Pinned against the engine's own constants by
+#: `coordinator/bin/tests/test_cc_invoke_in_process_reentry.py`.
+_ROUTE_ENV = "COORDINATOR_EXECUTION_ROUTE"
+_ROUTE_WARM_SERVER = "warm_server"
+
+
+def _try_in_engine_dispatch(
+    op: str,
+    params: dict[str, Any],
+    repo_root: str,
+    claude_klabauter_root: str,
+) -> dict[str, Any] | None:
+    """Dispatch `op` in THIS process when this process is already inside the
+    warm engine's process tree. Returns the JSON-RPC response, or `None` to
+    fall through to today's warm-then-cold ladder unchanged.
+
+    WHY. An op running in a warm dispatch pool worker that spawns a
+    `coordinator/bin/` CLI (`backfill_initiative_fk`, `deliverable_rollup`,
+    `central_run_due`, ...) hands that CLI an inherited
+    `COORDINATOR_EXECUTION_ROUTE=warm_server` -- `server._worker_process_init`
+    sets it and nothing scrubs it. The CLI then took BOTH legs this function
+    removes: it dialled the resident door it was already running under -- a
+    request queued behind the very pool worker waiting on it -- and on a miss
+    spawned `python -m coordinator_core.invoke`, an interpreter start to ask
+    the engine a question the engine was already holding. DR-344: "an
+    interpreter start ahead of warmth is break-class."
+    (docs/research/warm-door-in-process-reentry/c1-isolation-boundary.md)
+
+    The value read here is already correctly present at every such call site;
+    nothing new is plumbed. `hooks/group_em_autofire.py` made this same change
+    for one op and recorded it as "one fewer process spawn per fire ... not a
+    re-architecture".
+
+    FALLS THROUGH, never raises, on anything that happens BEFORE dispatch: the
+    route env unset (the common case -- every caller outside the engine), the
+    engine not importable, or a worktree-scoped op whose worktree cannot be
+    walked. A caller outside the engine must be untouched.
+
+    NEVER FALLS THROUGH once dispatch has begun. An exception out of
+    `dispatch_message` means the op may have run; retrying it through the warm
+    or cold leg would be the double execution `WarmDispatchIndeterminate`
+    exists to prevent. That raises instead.
+    """
+    if os.environ.get(_ROUTE_ENV) != _ROUTE_WARM_SERVER:
+        return None
+    try:
+        _front_insert_on_path(claude_klabauter_root)
+        import asyncio
+
+        from coordinator_core.git.repo_root import show_toplevel
+        from coordinator_core.invoke.dispatch import dispatch_message
+        from coordinator_core.op_scopes import WORKTREE_SCOPED_OPS
+    except Exception:  # noqa: BLE001 -- pre-dispatch: fall through, see docstring
+        return None
+
+    msg: dict[str, Any] = {"jsonrpc": "2.0", "id": 1, "method": op, "params": params}
+    if op in WORKTREE_SCOPED_OPS:
+        # `show_toplevel` WALKS ONLY and never spawns; the cold path's
+        # `_resolve_repo_root` would add a git spawn to a function whose whole
+        # purpose is removing one.
+        worktree = show_toplevel(repo_root)
+        if not worktree:
+            return None
+        msg["_origin_worktree"] = worktree
+    msg["_caller_cwd"] = os.getcwd()
+
+    try:
+        return asyncio.run(
+            dispatch_message(msg, caller="coordinator.bin.lib.cc_invoke._try_in_engine_dispatch")
+        )
+    except Exception as exc:  # noqa: BLE001 -- post-dispatch: surface, never retry
+        raise RuntimeError(
+            f"cc_invoke: in-engine dispatch raised (op={op}): {exc!r}. The op may "
+            "have run; reconcile against real state before re-running."
+        ) from exc
 
 
 def _try_in_process_warm_reach(
@@ -2499,6 +2594,10 @@ def cc_invoke(
     # -> a warm-served response, handled by the SAME rung-(2)/(4) logic the
     # cold-spawn's own parsed stdout gets below, applied to this envelope
     # instead (see `_apply_warm_envelope`'s own docstring for the mapping).
+    _in_engine = _try_in_engine_dispatch(op, params, repo_root, claude_klabauter_root)
+    if _in_engine is not None:
+        return _apply_warm_envelope(op, _in_engine, "", _stderr_sink)
+
     _warm_response, _warm_stderr = _capture_warm_reach(op, params, repo_root)
     if _warm_response is not None:
         return _apply_warm_envelope(op, _warm_response, _warm_stderr, _stderr_sink)
@@ -2672,6 +2771,10 @@ def cc_invoke_bare(
     # envelope instead (see `_apply_warm_envelope`'s own docstring for the
     # mapping; its unwrap-to-`result` return is the warm-hit analogue of the
     # already-bare `--bare` stdout this function otherwise parses).
+    _in_engine = _try_in_engine_dispatch(op, params, repo_root, claude_klabauter_root)
+    if _in_engine is not None:
+        return _apply_warm_envelope(op, _in_engine, "", _stderr_sink)
+
     _warm_response, _warm_stderr = _capture_warm_reach(op, params, repo_root)
     if _warm_response is not None:
         return _apply_warm_envelope(op, _warm_response, _warm_stderr, _stderr_sink)

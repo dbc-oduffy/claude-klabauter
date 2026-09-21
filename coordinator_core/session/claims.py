@@ -3238,6 +3238,7 @@ def self_claim(path: str, cwd: Optional[str] = None) -> bool:
                 agent_id=None,
                 verb=touch_record.VERB_TOUCH,
                 path=entry,
+                kind=touch_record.KIND_WRITE,
             )
         except (OSError, ValueError) as exc:
             # fail-open — self-claim attribution is advisory and must never
@@ -3278,6 +3279,7 @@ def self_claim(path: str, cwd: Optional[str] = None) -> bool:
             agent_id=None,
             verb=touch_record.VERB_TOUCH,
             path=entry,
+            kind=touch_record.KIND_WRITE,
         )
     except (OSError, ValueError) as exc:
         # fail-open — self-claim attribution is advisory and must never

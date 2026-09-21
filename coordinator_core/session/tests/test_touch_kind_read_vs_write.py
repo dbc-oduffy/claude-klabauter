@@ -254,3 +254,145 @@ def test_the_release_route_cannot_reach_a_peers_claim(repo, monkeypatch):
     assert scope.contested_by_live_peers(["pkg/mod.py"], "mine", repo) == {
         "pkg/mod.py": ["peer-writer"]
     }
+
+
+# ---------------------------------------------------------------------------
+# "Unknown" has to keep meaning "predates the axis".
+# ---------------------------------------------------------------------------
+#
+# The whole migration argument rests on that sentence: an unknown-kind line
+# blocks because it cannot be asked, and the corpus drains as those lines'
+# authors release them or die. It was false the day it was written. Five
+# live writers -- `scope.touch` (and through it every handler's declared
+# writes and `touch_written_path`), both arms of `claims.self_claim`, and
+# `js_bridge_cli`'s `claim-path` -- still wrote kind-less `T`s, so the
+# unknown population was being refilled by current code and would never
+# drain. `who-claims-path` rendered a provable write as "unknown-kind".
+#
+# The gate is structural rather than a list of the five, because the five
+# were found by grepping once and a sixth writer is one new call site away.
+
+import ast
+import pathlib
+
+_PKG_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+#: Writers that emit a TOUCH and deliberately state no kind. Each is named,
+#: never pattern-matched: an entry here is a claim that a machine guessing
+#: this line's kind would be wrong.
+_KINDLESS_BY_DESIGN = frozenset({
+    # Rewrites historical lines into the current record. Stamping them would
+    # be the backfill this axis's negative spec forbids.
+    "ops/session/legacy_touch_corpus_migrate.py",
+})
+
+_TOUCH_WRITERS = {"append_event", "append_touch_claims", "touch"}
+_RELEASE_VERBS = {"VERB_RELEASE", "R"}
+
+
+def _callee(node: ast.Call):
+    fn = node.func
+    if isinstance(fn, ast.Attribute):
+        owner = fn.value
+        owner_name = (
+            owner.id if isinstance(owner, ast.Name)
+            else owner.attr if isinstance(owner, ast.Attribute)
+            else None
+        )
+        return owner_name, fn.attr
+    if isinstance(fn, ast.Name):
+        return None, fn.id
+    return None, None
+
+
+def _is_release(node: ast.Call) -> bool:
+    for kw in node.keywords:
+        if kw.arg != "verb":
+            continue
+        v = kw.value
+        if isinstance(v, ast.Constant) and v.value in _RELEASE_VERBS:
+            return True
+        if isinstance(v, ast.Attribute) and v.attr in _RELEASE_VERBS:
+            return True
+    return False
+
+
+def _is_touch_record_write(owner, name, rel: str) -> bool:
+    if name not in _TOUCH_WRITERS:
+        return False
+    if name == "touch":
+        # `scope.touch` only -- `Path.touch()` is everywhere and unrelated.
+        return owner in {"scope", "_scope", "session_scope"} or (
+            owner is None and rel == "session/scope.py"
+        )
+    if name == "append_event":
+        # `tracker_store.append_event` is a different ledger entirely.
+        return owner in {"touch_record", "_tr", None} and (
+            owner is not None or rel == "session/touch_record.py"
+        )
+    return True
+
+
+def _unstamped_touch_writes():
+    offenders = []
+    for path in sorted(_PKG_ROOT.rglob("*.py")):
+        rel = path.relative_to(_PKG_ROOT).as_posix()
+        if "/tests/" in f"/{rel}" or path.name.startswith("test_"):
+            continue
+        if rel in _KINDLESS_BY_DESIGN:
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            owner, name = _callee(node)
+            if not _is_touch_record_write(owner, name, rel):
+                continue
+            if _is_release(node):
+                continue
+            if any(kw.arg == "kind" for kw in node.keywords):
+                continue
+            offenders.append(f"{rel}:{node.lineno} {owner or ''}.{name}".replace(" .", " "))
+    return offenders
+
+
+def test_every_live_touch_writer_states_a_kind():
+    """A new writer that omits `kind` refills the unknown population, which
+    then never drains -- and unknown blocks, so the too-strict guard this
+    axis was built to fix comes back one call site at a time."""
+    assert _unstamped_touch_writes() == []
+
+
+def test_the_gate_can_see_a_kindless_writer(tmp_path, monkeypatch):
+    """Guards the gate. A structural check that matches nothing passes for
+    free, which is the failure shape this module has already met once."""
+    src = (
+        "from coordinator_core.session import touch_record\n"
+        "def f(sink):\n"
+        "    touch_record.append_event(sink, session_id='s', agent_id=None,\n"
+        "                              verb=touch_record.VERB_TOUCH, path='a')\n"
+        "    touch_record.append_event(sink, session_id='s', agent_id=None,\n"
+        "                              verb=touch_record.VERB_RELEASE, path='a')\n"
+    )
+    (tmp_path / "writer.py").write_text(src, encoding="utf-8")
+    monkeypatch.setattr(
+        __import__(__name__, fromlist=["_PKG_ROOT"]), "_PKG_ROOT", tmp_path
+    )
+    assert _unstamped_touch_writes() == ["writer.py:3 touch_record.append_event"]
+
+
+def test_an_in_process_write_claim_lands_as_a_write(repo, monkeypatch):
+    """End to end through the busiest of the five: every handler's declared
+    writes and every in-process writer reach the record via this helper."""
+    monkeypatch.setattr(scope.core, "session_dir", lambda sid, cwd=None: _sid_dir(repo, sid))
+    os.makedirs(_sid_dir(repo, "mine"), exist_ok=True)
+    monkeypatch.setattr(scope.core, "ensure_session", lambda *a, **k: _sid_dir(repo, "mine"), raising=False)
+
+    scope.touch_written_path("mine", "pkg/mod.py", repo)
+
+    sink = touch_record.sink_path(_sid_dir(repo, "mine"))
+    claims = touch_record.project_live_claims(sink, cwd=repo).claims
+    assert claims["pkg/mod.py"].kind == touch_record.KIND_WRITE

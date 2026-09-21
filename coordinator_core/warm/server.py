@@ -178,6 +178,7 @@ gap found and named during C15 execution, 2026-08-18.
 from __future__ import annotations
 
 import concurrent.futures
+import faulthandler
 # `concurrent.futures.process` is a LAZY submodule attribute: referencing it as
 # `concurrent.futures.process.BrokenProcessPool` inside an `except` clause raises
 # AttributeError until something has already built a ProcessPoolExecutor. Imported
@@ -187,13 +188,19 @@ import json
 import multiprocessing
 import os
 import queue
+import signal
 import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Mapping, NamedTuple, Optional
 
-from coordinator_core.ipc import INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR
+from coordinator_core.ipc import (
+    INTERNAL_ERROR,
+    INVALID_REQUEST,
+    PARSE_ERROR,
+    _timeout_error_envelope,
+)
 from coordinator_core.telemetry import op_latency
 from coordinator_core.telemetry import spawn_counter as _spawn_counter
 from coordinator_core.warm import (
@@ -221,7 +228,11 @@ from coordinator_core.warm.entry_seam import per_request_state
 # safe to re-run, which is exactly the double-execution hazard this
 # import exists to prevent. `client.py` does not import this module (see
 # its own module docstring), so this edge is acyclic.
-from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE, _op_may_mutate
+from coordinator_core.warm.client import (
+    MUTATION_READ_DEADLINE_SECS,
+    WARM_DISPATCH_INDETERMINATE,
+    _op_may_mutate,
+)
 
 __all__ = [
     "InFlightCounter",
@@ -802,6 +813,30 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
     return response
 
 
+#: Ceiling on how long `_pool_dispatch` blocks its connection thread waiting for
+#: a pool worker's result. Before this, `future.result()` took no timeout at all:
+#: a blocked worker held its connection thread for the server's whole life, and
+#: the ambiguity a caller was handed -- "this mutation may or may not have
+#: landed" -- was bounded by nothing. An unbounded ambiguous window is how a
+#: duplicate commit eventually happens, because an operator waiting on one
+#: without end reconciles by hand and guesses.
+#:
+#: READ AGAINST THE CLIENT'S OWN CEILINGS, not chosen freely. `warm.client`
+#: stops reading a mutation at `MUTATION_READ_DEADLINE_SECS` (30.0s) and a
+#: non-mutating call far sooner. A server deadline LONGER than the client's buys
+#: nothing but a held thread: the caller is already gone and will never see the
+#: result. Sized at the client's mutation deadline so the server never out-waits
+#: the longest-waiting caller it can have, and never gives up on one still
+#: listening.
+#:
+#: ONE ceiling for every op, deliberately. A compute-only caller gives up far
+#: sooner, so an abandoned read can still hold a thread for up to this long --
+#: bounded now, where before it was held forever. Per-op ceilings would shave
+#: that residue at the cost of a second deadline table that can disagree with
+#: the client's; not worth it until the residue is measured to matter.
+_POOL_RESULT_DEADLINE_SECS = MUTATION_READ_DEADLINE_SECS
+
+
 _POOL_BROKEN_INDETERMINATE_MESSAGE = (
     "warm dispatch indeterminate: this MUTATING op was submitted to the warm "
     "engine's dispatch process pool, and the worker executing it died "
@@ -813,6 +848,31 @@ _POOL_BROKEN_INDETERMINATE_MESSAGE = (
     "outcome is unknown is exactly the double-execution this refusal "
     "prevents."
 )
+
+
+#: A DETERMINATE refusal: the request queued past `_POOL_RESULT_DEADLINE_SECS`
+#: and was cancelled before any worker picked it up. Worded so it cannot be read
+#: as the outcome-unknown case, because the two demand opposite responses.
+_POOL_NOT_STARTED_MESSAGE = (
+    "warm dispatch not started: the request waited {0:.0f}s in the warm engine's "
+    "dispatch queue and was withdrawn before any worker ran it. Nothing was "
+    "executed or written; it is safe to re-run."
+).format(_POOL_RESULT_DEADLINE_SECS)
+
+
+def _pool_not_started_envelope(msg: dict) -> dict:
+    """The envelope for a request cancelled before it started.
+
+    INTERNAL_ERROR, never WARM_DISPATCH_INDETERMINATE: the whole value of the
+    successful cancel is that it PROVES the op did not run, and an indeterminate
+    code would throw that proof away and tell a caller to reconcile a write that
+    cannot exist.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": msg.get("id"),
+        "error": {"code": INTERNAL_ERROR, "message": _POOL_NOT_STARTED_MESSAGE},
+    }
 
 
 def _pool_broken_indeterminate_envelope(msg: dict) -> dict:
@@ -899,6 +959,71 @@ def _scrub_test_harness_env() -> None:
     """
     for key in _TEST_HARNESS_ENV_KEYS:
         os.environ.pop(key, None)
+
+
+#: Filename in the per-clone svc dir that a stack dump is written to. A SEPARATE
+#: file from `telemetry.jsonl`, which is one row per server LIFE -- a dump is
+#: free-form multi-thread text, appended at an operator's request, and mixing the
+#: two would make neither parseable.
+STACK_DUMP_FILENAME = "stack-dump.txt"
+
+#: Module-level so the file object outlives `_register_stack_dump_signal`'s frame.
+#: `faulthandler.register` keeps only a file DESCRIPTOR; if the object it came
+#: from is garbage-collected the fd closes and the handler writes into a closed
+#: or, worse, a recycled descriptor.
+_STACK_DUMP_FILE = None
+
+
+def _stack_dump_path(engine_root=None):
+    """`<svc dir>/stack-dump.txt` -- beside the breadcrumb, never inside the
+    engine clone (`breadcrumb.svc_dir`'s own ruling: `state/` must not exist in
+    a publish mirror, and the engine runs out of one)."""
+    return breadcrumb.svc_dir(engine_root) / STACK_DUMP_FILENAME
+
+
+def _register_stack_dump_signal(engine_root=None) -> "str | None":
+    """Make a slow server answerable: `kill -USR1 <pid>` dumps every thread's
+    stack to `<svc dir>/stack-dump.txt`.
+
+    THE GAP THIS CLOSES. On 2026-09-21 a resident door answered a no-op `ping`
+    in up to 28.8s while its own process and all 30 pool members sat at 0.0%
+    CPU, state `S`, holding no lock. Every fact in that sentence is EXTERNAL --
+    `ps` can say a thread is asleep and cannot say on what -- because this
+    server registers no handler that reports its own threads. The diagnosis
+    stalled there (`docs/research/warm-door-in-process-reentry/
+    c1-isolation-boundary.md` § The premise did not reproduce).
+
+    Writes to a FILE, not `sys.stderr`. A resident server is started detached
+    with `stderr=DEVNULL` (`ops.ceremony.detached_spawn`), so a dump to stderr
+    is a dump into nothing -- the same mistake the `_suppress_pool_worker_consoles`
+    docstring records for worker output.
+
+    RETURNS the remediation line, or `None` where the signal does not exist.
+    SIGUSR1 is POSIX-only: on Windows this registers nothing and says so,
+    rather than shipping a handler that silently is not there and letting an
+    operator believe the box has an instrument it does not.
+
+    Never raises. An unavailable `faulthandler`, an unwritable svc dir or a
+    platform without the signal degrade to `None` -- a server that cannot
+    describe itself must still serve.
+    """
+    global _STACK_DUMP_FILE
+
+    sig = getattr(signal, "SIGUSR1", None)
+    if sig is None:
+        return None
+    try:
+        path = _stack_dump_path(engine_root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Line-buffered and append: several dumps over one server life must
+        # accumulate rather than truncate, and a handler firing mid-write must
+        # not leave the previous dump half-flushed.
+        _STACK_DUMP_FILE = open(path, "a", buffering=1, encoding="utf-8")
+        faulthandler.register(sig, file=_STACK_DUMP_FILE, all_threads=True, chain=False)
+    except Exception:  # noqa: BLE001 -- see docstring; a server that cannot describe itself still serves
+        _STACK_DUMP_FILE = None
+        return None
+    return "kill -USR1 {0}   # every thread's stack -> {1}".format(os.getpid(), path)
 
 
 def _suppress_pool_worker_consoles() -> None:
@@ -1804,7 +1929,38 @@ class _ServerContext:
         """
         try:
             future = self._ensure_dispatch_pool().submit(_pool_dispatch_worker, msg, caller)
-            return future.result()
+            try:
+                return future.result(timeout=_POOL_RESULT_DEADLINE_SECS)
+            except concurrent.futures.TimeoutError:
+                # CANCEL FIRST -- it is the only thing here that can PROVE an
+                # outcome. `Future.cancel()` succeeds only on a task no worker
+                # has picked up, so a successful cancel means the op provably
+                # never ran: nothing was written, and re-running is safe. That
+                # is a determinate answer, and reporting it in the
+                # outcome-unknown shape is the defect 0ce83f4208 records --
+                # it trains operators to hand-verify refusals that never
+                # needed it. Measured 2026-09-21: the server and every pool
+                # member sat at 0.0% CPU through 28s waits, so an expiry is
+                # usually a QUEUED task, and this is the common branch, not
+                # the edge. (Raised by claude-klabauter-0b.)
+                if future.cancel():
+                    return _pool_not_started_envelope(msg)
+                # The task STARTED and is still running. Only this is
+                # genuinely indeterminate, and the split it needs already
+                # exists one seam in: `ipc._timeout_error_envelope` returns
+                # WARM_DISPATCH_INDETERMINATE for an op that may mutate and a
+                # plain INTERNAL_ERROR for a COMPUTE_ONLY one, classified by the
+                # same fail-closed `_op_may_mutate` the BrokenProcessPool
+                # branch below uses. A second predicate here would be a copy
+                # that can drift from it.
+                #
+                # The worker is deliberately NOT killed: it may be
+                # mid-mutation, and killing it converts a slow op into a
+                # half-applied one. What this bounds is how long THIS
+                # connection thread is held, not how long the op runs.
+                return _timeout_error_envelope(
+                    msg.get("method"), _POOL_RESULT_DEADLINE_SECS, msg.get("id")
+                )
         except BrokenProcessPool:
             # A ProcessPoolExecutor whose worker died is broken PERMANENTLY --
             # every later submit() on that instance raises, so without this the
@@ -2555,6 +2711,15 @@ def _run_guarded() -> int:
 
     _declare_execution_route()
     _scrub_test_harness_env()
+
+    _stack_dump_remedy = _register_stack_dump_signal(repo_root)
+    print(
+        "[warm-server] stack dump: " + _stack_dump_remedy
+        if _stack_dump_remedy
+        else "[warm-server] stack dump: unavailable -- no SIGUSR1 on this platform; "
+             "attach a debugger to inspect a slow server here",
+        file=sys.stderr,
+    )
 
     _suppress_pool_worker_consoles()
 

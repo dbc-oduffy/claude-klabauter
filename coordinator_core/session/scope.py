@@ -2074,6 +2074,8 @@ def touch(
     path: str,
     cwd: Optional[str] = None,
     root: Optional[str] = None,
+    *,
+    kind: Optional[str] = None,
 ) -> None:
     """Port of ``cs_touch <session_id> <path>``: append a repo-relative file
     path to this session's ``touch-record.jsonl`` (C4 -- the writer flip;
@@ -2204,6 +2206,7 @@ def touch(
             agent_id=None,
             verb=touch_record.VERB_TOUCH,
             path=fpath,
+            kind=kind,
         )
     except touch_record.LineTooLong as exc:
         # fail-open — touch() must never block a tool call on a write
@@ -2252,7 +2255,7 @@ def touch_written_path(session_id: str, rel_path: str, cwd: Optional[str] = None
     session_dir = core.session_dir(session_id, cwd)
     if not session_dir or not os.path.isdir(session_dir):
         return
-    touch(session_id, rel_path, cwd)
+    touch(session_id, rel_path, cwd, kind=touch_record.KIND_WRITE)
 
 
 def _tree_relocation_claim_pairs(

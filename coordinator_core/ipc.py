@@ -1692,6 +1692,7 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
 
         from coordinator_core.session import core as _session_core
         from coordinator_core.session import scope as _scope
+        from coordinator_core.session import touch_record as _touch_record
 
         # AC8 (docs/plans/2026-08-30-the-c-door-sends-the-callers-session-
         # identity.md) - this resolution MINTS: the id chosen here names the
@@ -1761,6 +1762,7 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
                 try:
                     _scope.touch(
                         sid, abs_path, path_repo_root, root=path_repo_root,
+                        kind=_touch_record.KIND_WRITE,
                     )
                 except Exception as exc:  # fail-open — one bad path must not abort the rest
                     _log().debug(
