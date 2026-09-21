@@ -193,7 +193,14 @@ def collecting_diagnostics(into: Optional[List[str]] = None) -> Iterator[List[st
 # treated as "no carried identity" on this axis, never mirrored into
 # `os.environ` where every ambient reader downstream would trust it.
 # ---------------------------------------------------------------------------
-from coordinator_core.warm.env_forwarding import BORROW, CALLER, FORWARDING_SET, OVERRIDE, REFUSE
+from coordinator_core.warm.env_forwarding import (
+    BORROW,
+    CALLER,
+    FORWARDING_SET,
+    OVERRIDE,
+    REFUSE,
+    is_caller_prefixed,
+)
 
 _ENV_LOWER_TIER_SESSION_NAMES = ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID")
 _ENV_TOP_TIER_SESSION_NAME = "COORDINATOR_SESSION_ID"
@@ -319,9 +326,15 @@ def _environ_identity_borrow(
 
     from coordinator_core.session.core import _UUID_RE
 
+    env = env or {}
     saved = {name: os.environ.get(name) for name in _ENV_BORROWED_NAMES}
+    saved.update({name: value for name, value in os.environ.items() if is_caller_prefixed(name)})
+    carried_prefixed = {
+        name: value
+        for name, value in env.items()
+        if is_caller_prefixed(name) and isinstance(value, str) and value
+    }
     try:
-        env = env or {}
 
         # REFUSE branch (isolated-only mirror -- see docstring above for why
         # this is not the refusal itself). ABSENT FROM `env` ENTIRELY is
@@ -382,12 +395,23 @@ def _environ_identity_borrow(
             else:
                 os.environ.pop(name, None)
 
+        # PREFIX branch (`env_forwarding.CALLER_PREFIXES`, the per-session
+        # guard overrides) -- CALLER terms for a name set not known in
+        # advance: every server-side name under a prefix pops, then exactly
+        # the carried ones bind. An override this worker inherited from its
+        # spawner must never read as this caller's.
+        for name in [n for n in os.environ if is_caller_prefixed(n)]:
+            os.environ.pop(name, None)
+        os.environ.update(carried_prefixed)
+
         if caller_pid is not None and caller_pid.isdigit():
             os.environ[_ENV_CLAUDE_PID_NAME] = caller_pid
         else:
             os.environ.pop(_ENV_CLAUDE_PID_NAME, None)
         yield
     finally:
+        for name in [n for n in os.environ if is_caller_prefixed(n) and n not in saved]:
+            os.environ.pop(name, None)
         for name, value in saved.items():
             if value is None:
                 os.environ.pop(name, None)

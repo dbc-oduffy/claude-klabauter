@@ -90,6 +90,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C16, W4-C1
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 
@@ -244,6 +245,16 @@ def main(argv: "list[str] | None" = None) -> int:
 
     event = _read_event()
     event_name = event.get("hook_event_name")
+    # The harness's hook event carries no `env`, and `payload_from_event`
+    # never falls back to ambient environment -- so without this every
+    # per-session guard override arrived as "not requested", a hard wall.
+    # THIS process's environment is the caller's on both legs: cold, it is
+    # the hook's own process; served, the warm door carried the caller's
+    # `CALLER_PREFIXES` names in `_env` and the isolated borrow bound exactly
+    # those (`entry_seam._environ_identity_borrow`). `payload_from_event`
+    # filters to those prefixes, so nothing else crosses.
+    if not isinstance(event.get("env"), dict):
+        event = {**event, "env": dict(os.environ)}
     params = {"payload": payload_from_event(event)}
 
     # A worktree-scoped op REQUIRES `_origin_worktree` and refuses (-32602)

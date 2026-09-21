@@ -47,6 +47,7 @@ import json
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from coordinator_core.warm.caller_context import resolve_caller_context
+from coordinator_core.warm.env_forwarding import CALLER_PREFIXES
 
 #: `hook_event_name` values whose verdict can BLOCK the operation. A missing guard on one of
 #: these is a safety regression; a missing guard on any other event is a lost advisory. The
@@ -224,7 +225,9 @@ def _with_context(body: Dict[str, Any], context: Optional[str]) -> Dict[str, Any
 #: deletes the override boundary. Forwarding the prefixes the guards read is the narrow
 #: middle, and it is a prefix match rather than a fixed list because guards add override
 #: keys without telling this module.
-FORWARDED_ENV_PREFIXES = ("COORDINATOR_ALLOW_", "COORDINATOR_OVERRIDE_", "COORDINATOR_PROBE_", "COORDINATOR_SCOPE_")
+#: One tuple with the compiled door's prefix rule (`env_forwarding.CALLER_PREFIXES`), so
+#: an override the http leg carries can never be one the door leg drops.
+FORWARDED_ENV_PREFIXES = CALLER_PREFIXES
 
 #: Exact names the HEADER channel carries in addition to the prefixes above -- the env diet
 #: of the ops that actually run over this transport, enumerated rather than pattern-matched.

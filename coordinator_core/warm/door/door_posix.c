@@ -820,6 +820,20 @@ static int read_line_bounded(int fd, buf_t *resp) {
  * as its FIRST statement, the single choke point every fall-through in
  * this file already reaches, so gating there covers every existing call
  * site (and any added later) without a second edit. */
+/* One `"NAME":"VALUE"` member of the envelope's `_env` object, comma-led
+ * after the first. `name` is not NUL-terminated at `name_len` when it points
+ * into an `environ` entry. */
+static int env_pair_append(buf_t *pairs, const char *name, size_t name_len,
+                           const char *value) {
+    int ok = 1;
+    ok &= buf_append_cstr(pairs, pairs->len > 0 ? ",\"" : "\"");
+    ok &= buf_append_json_escaped(pairs, name, name_len);
+    ok &= buf_append_cstr(pairs, "\":\"");
+    ok &= buf_append_json_escaped(pairs, value, strlen(value));
+    ok &= buf_append_cstr(pairs, "\"");
+    return ok;
+}
+
 static int g_door_hook_mode = 0;
 
 /* True iff the caller declared hook mode via `DOOR_STDIN_MODE_ENV_NAME`
@@ -1388,31 +1402,57 @@ int main(int argc, char **argv) {
      * second resolver -- see `warm/entry_seam.py` for the one place that
      * validation belongs. */
     if (req_ok) {
+        /* Pairs are collected into `env_pairs` first and the `_env` object is
+         * opened in exactly one place below, so "no name resolved" still omits
+         * `_env` entirely without either source of names tracking whether the
+         * other already opened it. */
+        buf_t env_pairs;
+        req_ok &= buf_init(&env_pairs, 256);
+
         #define X(name) #name,
         static const char *const kDoorEnvSet[] = { DOOR_ENV_SET(X) };
         #undef X
         const size_t door_env_set_count =
             sizeof(kDoorEnvSet) / sizeof(kDoorEnvSet[0]);
 
-        int env_obj_open = 0;
         for (size_t i = 0; req_ok && i < door_env_set_count; i++) {
             const char *value = getenv(kDoorEnvSet[i]);
             if (value == NULL || value[0] == '\0') continue;
-            if (!env_obj_open) {
-                req_ok &= buf_append_cstr(&req, ",\"_env\":{");
-                env_obj_open = 1;
-            } else {
-                req_ok &= buf_append_cstr(&req, ",");
-            }
-            req_ok &= buf_append_cstr(&req, "\"");
-            req_ok &= buf_append_cstr(&req, kDoorEnvSet[i]);
-            req_ok &= buf_append_cstr(&req, "\":\"");
-            req_ok &= buf_append_json_escaped(&req, value, strlen(value));
-            req_ok &= buf_append_cstr(&req, "\"");
+            req_ok &= env_pair_append(&env_pairs, kDoorEnvSet[i],
+                                      strlen(kDoorEnvSet[i]), value);
         }
-        if (env_obj_open) {
+
+        /* PREFIX RULE -- `DOOR_ENV_PREFIXES`, the per-session guard override
+         * namespace (`env_forwarding.CALLER_PREFIXES`). Walked off `environ`
+         * because the names are not known in advance: a guard adds a key and
+         * the door must carry it with no rebuild. Same omit-empty contract
+         * as the declared names; no declared name matches a prefix (pinned
+         * Python-side), so no name is sent twice. */
+        #define X(prefix) #prefix,
+        static const char *const kDoorEnvPrefixes[] = { DOOR_ENV_PREFIXES(X) };
+        #undef X
+        const size_t door_env_prefix_count =
+            sizeof(kDoorEnvPrefixes) / sizeof(kDoorEnvPrefixes[0]);
+
+        for (char **entry = environ; req_ok && entry && *entry; entry++) {
+            const char *eq = strchr(*entry, '=');
+            if (eq == NULL || eq == *entry || eq[1] == '\0') continue;
+            size_t name_len = (size_t)(eq - *entry);
+            for (size_t p = 0; p < door_env_prefix_count; p++) {
+                size_t plen = strlen(kDoorEnvPrefixes[p]);
+                if (name_len > plen && strncmp(*entry, kDoorEnvPrefixes[p], plen) == 0) {
+                    req_ok &= env_pair_append(&env_pairs, *entry, name_len, eq + 1);
+                    break;
+                }
+            }
+        }
+
+        if (req_ok && env_pairs.len > 0) {
+            req_ok &= buf_append_cstr(&req, ",\"_env\":{");
+            req_ok &= buf_append(&req, env_pairs.data, env_pairs.len);
             req_ok &= buf_append_cstr(&req, "}");
         }
+        free(env_pairs.data);
     }
 
     /* `_caller.pid` -- NOT a forwarded name (`CLAUDE_PID` is deliberately

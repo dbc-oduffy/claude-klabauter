@@ -1067,6 +1067,17 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
     if claimed_home:
         request[settings_home_claim.SETTINGS_HOME_FIELD] = claimed_home
 
+    # Per-session guard overrides (`env_forwarding.CALLER_PREFIXES`), the same
+    # prefix rule both native doors walk their environment for, and for the same
+    # reason as every seam above: the server's own values are its spawner's, and
+    # it scrubs them at boot. Carried in `_env`, the door's own envelope object,
+    # and only when one is set -- an ordinary call is unchanged byte-for-byte.
+    from coordinator_core.warm.env_forwarding import is_caller_prefixed
+
+    overrides = {k: v for k, v in os.environ.items() if v and is_caller_prefixed(k)}
+    if overrides:
+        request["_env"] = overrides
+
     payload = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
 
     # At most 2 attempts: the original open, plus the table's single

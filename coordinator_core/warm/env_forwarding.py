@@ -73,7 +73,7 @@ from typing import NamedTuple, Tuple
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 from coordinator_core.session.mode_resolution import COORDINATOR_JOB_MODE
 
-__all__ = ["Mode", "EnvEntry", "FORWARDING_SET", "generate_header"]
+__all__ = ["Mode", "EnvEntry", "FORWARDING_SET", "CALLER_PREFIXES", "is_caller_prefixed", "generate_header"]
 
 #: The four modes that exist today -- see module docstring. A fifth mode
 #: is a new row's judgment call, not a value to add here casually.
@@ -143,6 +143,29 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
 )
 
 
+#: Per-session guard overrides, forwarded BY PREFIX rather than by name. The
+#: guards own this namespace and add keys to it without telling this module, so
+#: a fixed list here would miss the next key silently -- and miss it in the
+#: permissive-for-nobody direction: an override the caller set arrives as "not
+#: requested", every Bash-guard override on the box becomes a hard wall, and
+#: nothing errors on either side. Each matching name is CALLER-mode: the server's
+#: own values belong to whichever session spawned it, so an omitted name pops.
+#:
+#: The same four prefixes the http header channel carries
+#: (`warm.hook_http.FORWARDED_ENV_PREFIXES` is this tuple). No `FORWARDING_SET`
+#: name may match one -- a name is forwarded by exactly one rule.
+CALLER_PREFIXES: Tuple[str, ...] = (
+    "COORDINATOR_ALLOW_",
+    "COORDINATOR_OVERRIDE_",
+    "COORDINATOR_PROBE_",
+    "COORDINATOR_SCOPE_",
+)
+
+
+def is_caller_prefixed(name: str) -> bool:
+    return name.startswith(CALLER_PREFIXES)
+
+
 _HEADER_BANNER = (
     "/* DO NOT EDIT — generated from coordinator_core/warm/env_forwarding.py\n"
     " * Regenerate via coordinator_core/warm/tests/test_env_forwarding_set.py\n"
@@ -158,7 +181,17 @@ _HEADER_BANNER = (
 _HEADER_GUARD = "COORDINATOR_WARM_DOOR_ENV_SET_H"
 
 
-def generate_header(entries: Tuple[EnvEntry, ...] = FORWARDING_SET) -> str:
+def _x_macro_body(names) -> list:
+    body = [f"    X({name}) \\\n" for name in names]
+    if body:
+        body[-1] = body[-1].rstrip(" \\\n") + "\n"
+    return body
+
+
+def generate_header(
+    entries: Tuple[EnvEntry, ...] = FORWARDING_SET,
+    prefixes: Tuple[str, ...] = CALLER_PREFIXES,
+) -> str:
     """Render `door_env_set.h`'s exact committed bytes from `entries`.
 
     Pure function of `FORWARDING_SET` (or an explicit override, used only
@@ -184,10 +217,19 @@ def generate_header(entries: Tuple[EnvEntry, ...] = FORWARDING_SET) -> str:
         " * those files for the actual expansion each leg uses. */\n",
         "#define DOOR_ENV_SET(X) \\\n",
     ]
-    entry_lines = [f"    X({entry.name}) \\\n" for entry in entries]
-    if entry_lines:
-        entry_lines[-1] = entry_lines[-1].rstrip(" \\\n") + "\n"
-    lines.extend(entry_lines)
+    lines.extend(_x_macro_body(entry.name for entry in entries))
+    lines.extend(
+        [
+            "\n",
+            "/* Name PREFIXES forwarded from the caller's whole environment: every\n",
+            " * variable whose name starts with one of these, non-empty, rides `_env`\n",
+            " * under its own name. Per-session guard overrides, a namespace the guards\n",
+            " * extend without telling the door. Expanded as a string literal per leg,\n",
+            " * like DOOR_ENV_SET above. */\n",
+            "#define DOOR_ENV_PREFIXES(X) \\\n",
+        ]
+    )
+    lines.extend(_x_macro_body(prefixes))
     lines.append("\n")
     lines.append(f"#endif /* {_HEADER_GUARD} */\n")
     return "".join(lines)

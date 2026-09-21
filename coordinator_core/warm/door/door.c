@@ -132,6 +132,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
+#include <wctype.h>
 
 /* THE OS-AGNOSTIC HALF LIVES HERE, and used to live in this file. SHA-1,
  * the growable `buf_t`, the JSON envelope reader, and -- the load-bearing
@@ -293,6 +295,26 @@ static char *wide_to_utf8(const wchar_t *w, int *out_len) {
     if (out_len) *out_len = needed - 1; /* exclude the NUL WideCharToMultiByte counted */
     return out;
 }
+
+/* One `"NAME":"VALUE"` member of the envelope's `_env` object, comma-led
+ * after the first, both halves converted to UTF-8. */
+static int env_pair_append_w(buf_t *pairs, const wchar_t *name, const wchar_t *value) {
+    int name_len, val_len;
+    char *name_u8 = wide_to_utf8(name, &name_len);
+    char *val_u8 = name_u8 ? wide_to_utf8(value, &val_len) : NULL;
+    int ok = name_u8 != NULL && val_u8 != NULL;
+    if (ok) {
+        ok &= buf_append_cstr(pairs, pairs->len > 0 ? ",\"" : "\"");
+        ok &= buf_append_json_escaped(pairs, name_u8, (size_t)name_len);
+        ok &= buf_append_cstr(pairs, "\":\"");
+        ok &= buf_append_json_escaped(pairs, val_u8, (size_t)val_len);
+        ok &= buf_append_cstr(pairs, "\"");
+    }
+    free(name_u8);
+    free(val_u8);
+    return ok;
+}
+
 
 static wchar_t *utf8_to_wide(const char *u8) {
     int needed = MultiByteToWideChar(CP_UTF8, 0, u8, -1, NULL, 0);
@@ -1533,11 +1555,17 @@ int main(void) {
      * one; a truncated path is the worst possible value to stamp (the
      * `_settings_home` block's own prior rationale, unchanged here). */
     if (req_ok) {
+        /* Pairs are collected into `env_pairs` first and the `_env` object is
+         * opened in exactly one place below, so "no name resolved" still omits
+         * `_env` entirely without either source of names tracking whether the
+         * other already opened it. */
+        buf_t env_pairs;
+        req_ok &= buf_init(&env_pairs, 256);
+
 #define X(name) L"" #name,
         static const wchar_t *const kDoorEnvNames[] = { DOOR_ENV_SET(X) };
 #undef X
         const size_t kDoorEnvCount = sizeof(kDoorEnvNames) / sizeof(kDoorEnvNames[0]);
-        int env_opened = 0;
         for (size_t i = 0; i < kDoorEnvCount && req_ok; i++) {
             DWORD val_len = GetEnvironmentVariableW(kDoorEnvNames[i], NULL, 0);
             if (val_len <= 1) {
@@ -1555,33 +1583,55 @@ int main(void) {
                 free(val_w);
                 continue;
             }
-            int val_u8_len;
-            char *val_u8 = wide_to_utf8(val_w, &val_u8_len);
+            req_ok &= env_pair_append_w(&env_pairs, kDoorEnvNames[i], val_w);
             free(val_w);
-            if (!val_u8) {
-                req_ok = 0;
-                break;
-            }
-            int name_u8_len;
-            char *name_u8 = wide_to_utf8(kDoorEnvNames[i], &name_u8_len);
-            if (!name_u8) {
-                free(val_u8);
-                req_ok = 0;
-                break;
-            }
-
-            req_ok &= buf_append_cstr(&req, env_opened ? ",\"" : ",\"_env\":{\"");
-            req_ok &= buf_append_json_escaped(&req, name_u8, (size_t)name_u8_len);
-            req_ok &= buf_append_cstr(&req, "\":\"");
-            req_ok &= buf_append_json_escaped(&req, val_u8, (size_t)val_u8_len);
-            req_ok &= buf_append_cstr(&req, "\"");
-            free(name_u8);
-            free(val_u8);
-            env_opened = 1;
         }
-        if (env_opened) {
+
+        /* PREFIX RULE -- `DOOR_ENV_PREFIXES`, the per-session guard override
+         * namespace (`env_forwarding.CALLER_PREFIXES`); the POSIX leg walks
+         * `environ` for the same set. Walked off the environment block
+         * because the names are not known in advance: a guard adds a key and
+         * the door must carry it with no rebuild. Same omit-empty contract
+         * as the declared names; no declared name matches a prefix (pinned
+         * Python-side), so no name is sent twice. Windows env names are
+         * case-insensitive, so the prefix match is too, and the name crosses
+         * upper-cased -- the spelling every guard reads. */
+#define X(prefix) L"" #prefix,
+        static const wchar_t *const kDoorEnvPrefixes[] = { DOOR_ENV_PREFIXES(X) };
+#undef X
+        const size_t kDoorEnvPrefixCount =
+            sizeof(kDoorEnvPrefixes) / sizeof(kDoorEnvPrefixes[0]);
+        wchar_t *env_block = req_ok ? GetEnvironmentStringsW() : NULL;
+        for (const wchar_t *entry = env_block; req_ok && entry && *entry;
+             entry += wcslen(entry) + 1) {
+            const wchar_t *eq = wcschr(entry + 1, L'=');
+            if (eq == NULL || eq[1] == L'\0') continue;
+            size_t name_len = (size_t)(eq - entry);
+            for (size_t p = 0; p < kDoorEnvPrefixCount; p++) {
+                size_t plen = wcslen(kDoorEnvPrefixes[p]);
+                if (name_len <= plen || _wcsnicmp(entry, kDoorEnvPrefixes[p], plen) != 0) {
+                    continue;
+                }
+                wchar_t *name_w = (wchar_t *)malloc((name_len + 1) * sizeof(wchar_t));
+                if (name_w == NULL) {
+                    req_ok = 0;
+                    break;
+                }
+                for (size_t k = 0; k < name_len; k++) name_w[k] = towupper(entry[k]);
+                name_w[name_len] = L'\0';
+                req_ok &= env_pair_append_w(&env_pairs, name_w, eq + 1);
+                free(name_w);
+                break;
+            }
+        }
+        if (env_block) FreeEnvironmentStringsW(env_block);
+
+        if (req_ok && env_pairs.len > 0) {
+            req_ok &= buf_append_cstr(&req, ",\"_env\":{");
+            req_ok &= buf_append(&req, env_pairs.data, env_pairs.len);
             req_ok &= buf_append_cstr(&req, "}");
         }
+        free(env_pairs.data);
     }
 
     /* `_caller.pid` (2026-08-30, docs/plans/2026-08-30-every-op-runs-in-

@@ -959,6 +959,22 @@ def _scrub_test_harness_env() -> None:
     """
     for key in _TEST_HARNESS_ENV_KEYS:
         os.environ.pop(key, None)
+    _scrub_caller_prefixed_env()
+
+
+def _scrub_caller_prefixed_env() -> None:
+    """Drop every per-session guard override this server inherited from the
+    session that spawned it (`env_forwarding.CALLER_PREFIXES`).
+
+    Those values are the spawner's, not any caller's. An isolated dispatch
+    re-binds each caller's own from its `_env`; the unisolated
+    `BrokenProcessPool` fallback does not borrow at all, and without this it
+    would hand one session's override to every caller on the box.
+    """
+    from coordinator_core.warm.env_forwarding import is_caller_prefixed
+
+    for key in [k for k in os.environ if is_caller_prefixed(k)]:
+        os.environ.pop(key, None)
 
 
 #: Filename in the per-clone svc dir that a stack dump is written to. A SEPARATE
