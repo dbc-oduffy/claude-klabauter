@@ -235,17 +235,10 @@ def _route_unreachable_ledger_path() -> str:
 def _record_route_unreachable(op: str, arrival: str) -> None:
     """Append one row recording that a sanctioned CLI route was unreachable.
 
-    WHY THIS EXISTS, since a ledger nobody reads is waste: on 2026-09-20 the
-    warm door degraded and three sessions independently hand-wrote the artifact
-    their CLI would have produced. Every one of them reconciled first, produced
-    a valid record, and kept working -- the correct behaviour, and not the
-    defect. The defect was that each logged it as a local inconvenience and
-    nothing logged that the gate had stopped being reachable, so the pattern
-    only surfaced because three sessions compared notes by hand and a fourth
-    noticed the comparison was worth making. Alone, any one of them would have
-    left no trace at all. This gives that aggregate a home
-    (`state/improvement-queue/2026-09-20-the-gates-get-routed-around-exactly-
-    when-the-system-is-under-stress.yaml`, proposed_action 1).
+    Purpose and the incident this answers: see the reader,
+    `coordinator_core.orientation.route_unreachable_signal` module docstring.
+    This is the writer half; that module is the reader and the home for the
+    full rationale.
 
     NEGATIVE SPEC -- THIS RECORDS, IT NEVER REFUSES. The queue row's own
     negative_spec forbids resolving that finding by blocking hand-written

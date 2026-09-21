@@ -151,9 +151,23 @@ def _registry_machine_local_get(key: str) -> str | None:
     a separate, deliberately deferred cross-site change (all 6 sites
     together), not a local patch.
     """
-    _in_process = _mlir_registry_get(key)
-    if _in_process:
-        return _in_process
+    # MACHINE_LOCAL_IMPL, when explicitly set, governs this function ENTIRELY
+    # — the in-process rung is skipped, not merely ranked below the spawn.
+    # The var names the machine-local implementation to use; a fast path that
+    # reads the real registry.local.toml before consulting it does not honour
+    # that name, and silently answers from the real box while a test believes
+    # it has substituted a stub. Measured 2026-09-20: a suite that set the
+    # stub to a fixture path still resolved `repos.doe_claude` to the live
+    # DoE-claude tree, which is how "neutralize every doe_root() rung" stopped
+    # being achievable for the lessons-outbox leg at all.
+    #
+    # Negative-spec: unset is the production case and is NOT affected — the
+    # in-process rung keeps its precedence there, which is the whole point of
+    # it (a spawn per registry read is over the process budget).
+    if not (os.environ.get(_REGISTRY_MACHINE_LOCAL_IMPL_ENV) or "").strip():
+        _in_process = _mlir_registry_get(key)
+        if _in_process:
+            return _in_process
     impl = _registry_machine_local_impl()
     cmd = [sys.executable, impl, "get", key]
     try:

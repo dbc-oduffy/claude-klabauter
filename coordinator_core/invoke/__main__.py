@@ -555,6 +555,17 @@ def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
     (`last_cold_reason`): those recur identically on every poll, so waiting the
     deadline out would burn the bound to reach a conclusion already in hand.
 
+    THE BOUND COVERS EACH ATTEMPT'S READ, NOT ONLY WHETHER ONE STARTS. Every
+    poll passes what is left of `deadline_secs` down as its read deadline, so
+    the wait cannot outrun its own bound by an attempt's blocking read (a
+    retired shape: the 15s bound served at a median 30.11s, 2026-09-20). A
+    MUTATING op is never the poll: a delivered mutation's read cannot be cut
+    short without minting an indeterminate for an op that may merely be slow
+    (`try_warm_dispatch`'s negative-spec). It polls with compute-only `ping`,
+    and the mutation is dispatched once, after the server answers, on its own
+    transport deadline -- outside this bound and outside `waited`.
+    -> state/bug-backlog/2026-09-20-the-warm-pool-re-enters-the-engine-by-cold-subprocess.yaml (d)
+
     Negative-spec:
         - Does NOT retry a served error envelope. Anything well-formed coming
           back is the server answering, which is the condition this waits for.
@@ -564,7 +575,11 @@ def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
     """
     import time as _time
 
-    from coordinator_core.warm.client import last_cold_reason, try_warm_dispatch
+    from coordinator_core.warm.client import (
+        _op_may_mutate,
+        last_cold_reason,
+        try_warm_dispatch,
+    )
 
     deadline_secs = _warm_boot_wait_deadline()
     if deadline_secs <= 0:
@@ -578,14 +593,20 @@ def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
     )
     sys.stderr.flush()
 
+    mutating = _op_may_mutate(msg.get("method"))
+    probe = (
+        {"jsonrpc": "2.0", "id": msg.get("id"), "method": "ping", "params": {}}
+        if mutating
+        else msg
+    )
     interval = _BOOT_POLL_MIN_SECS
     response = None
     while True:
+        _time.sleep(max(0.0, min(interval, deadline_secs - (_time.monotonic() - started))))
         remaining = deadline_secs - (_time.monotonic() - started)
         if remaining <= 0:
             break
-        _time.sleep(min(interval, remaining))
-        response = try_warm_dispatch(msg)
+        response = try_warm_dispatch(probe, read_deadline_secs=remaining)
         if response is not None:
             break
         if last_cold_reason():
@@ -603,6 +624,8 @@ def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
         )
     except Exception:  # noqa: BLE001 -- an instrument may not be why an op fails
         pass
+    if mutating and response is not None:
+        response = try_warm_dispatch(msg)
     return response, waited
 
 

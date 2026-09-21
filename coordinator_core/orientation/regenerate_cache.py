@@ -236,16 +236,10 @@ from coordinator_core.resolve_validation_cmd import (
 # write_cache all live here), so its own movement changes
 # state/orientation_cache.md's content.
 #
-# The per-signal `emit_*` modules are sources too, and were missing. Each one
-# renders a section of the artifact, so any of them moving changes the emitted
-# bytes exactly as this file does -- a declaration naming only this path leaves
-# the staleness sweep watching the wrong set, which is the identical defect
-# `emit_memo_schema.GENERATES` carried (it omitted the two constant modules
-# whose values land in its output, so a change to `memo_kinds.VALID_KINDS`
-# moved the emission and moved nothing the sweep looked at). Found while adding
-# `route_unreachable_signal`; fixed for the whole set rather than for the new
-# one alone, since a declaration that is right about one import and wrong about
-# five is harder to trust than one that is wrong about all six.
+# Every per-signal `emit_*` module is a source: each renders a section of the
+# artifact, so any of them moving changes the emitted bytes exactly as this
+# file does. A declaration naming only this path leaves the staleness sweep
+# watching the wrong set.
 GENERATES = [
     {
         "artifact": "state/orientation_cache.md",

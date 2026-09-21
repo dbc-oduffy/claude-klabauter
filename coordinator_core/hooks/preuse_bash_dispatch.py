@@ -84,19 +84,12 @@ async def _handler(params: dict, repo_root=None) -> dict:
     signature contract) and unused — the chain derives `cwd` from the payload
     itself, exactly as every cold invocation always has.
 
-    This body previously read `params` AS the payload and serialised the whole
-    envelope. The guard chain then found no `tool_input`, matched no rule, and
-    returned ALLOW for every command through both doors — a silent fail-open on
-    the one surface whose job is to deny, with output byte-identical for a
-    payload that must be denied and one that must be allowed. Measured by
-    `doe-claude-79` against `hooks.preuse_bash_dispatch`; `git worktree add`,
-    `git add -A` and unscoped `git stash` all evaluate to `deny` when the chain
-    is handed the payload rather than the envelope.
+    See `_envelope.payload_of` for why the two shapes must be normalised
+    here rather than assumed: reading the wrong one fails open (silent
+    ALLOW), never a visible error.
 
-    `payload_of` reads either shape -- a flat payload is what the cold DoE
-    guard chain passes, and a real PreToolUse payload carries no `payload` key,
-    so the two are unambiguous. Refusing the flat one would turn a caller
-    mismatch into a second fail-open rather than a verdict.
+    NEGATIVE SPEC: never refuse the flat shape -- a caller mismatch must
+    surface as a verdict, not as a second fail-open.
     """
     params = payload_of(params)
     if not params:

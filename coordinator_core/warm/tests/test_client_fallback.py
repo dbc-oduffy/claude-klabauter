@@ -268,7 +268,7 @@ def _drive_one_cold_dispatch(monkeypatch: pytest.MonkeyPatch, exc: Exception) ->
 
     monkeypatch.setattr(skew, "compute_client_token", _raise)
     monkeypatch.setattr(client, "engine_token", _REAL_ENGINE_TOKEN)
-    monkeypatch.setattr(client, "_try_warm_dispatch_inner", lambda msg: client.engine_token() and None)
+    monkeypatch.setattr(client, "_try_warm_dispatch_inner", lambda msg, *a: client.engine_token() and None)
     assert client.try_warm_dispatch(_MSG) is None
 
 
@@ -371,7 +371,7 @@ def test_transient_warm_miss_records_no_cold_reason(monkeypatch: pytest.MonkeyPa
     home makes that path exceed `sun_path` on macOS -- a genuinely permanent
     condition that would be recorded before any transport stub was reached.
     The subject here is the classification, not the transport."""
-    monkeypatch.setattr(client, "_try_warm_dispatch_inner", lambda msg: None)
+    monkeypatch.setattr(client, "_try_warm_dispatch_inner", lambda msg, *a: None)
 
     assert client.try_warm_dispatch(_MSG) is None
     assert client.last_cold_reason() is None
@@ -490,6 +490,26 @@ def test_read_deadline_expiry_goes_cold(monkeypatch: pytest.MonkeyPatch) -> None
     assert client.try_warm_dispatch(_MSG) is None
 
 
+def test_caller_read_deadline_bounds_a_compute_only_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`read_deadline_secs` is how `_wait_for_warm_boot` charges an attempt's
+    read against its own bound. For a compute-only op it bounds the whole
+    read: expiry is a miss, returned inside the caller's budget."""
+    import threading
+    import time
+
+    class _StuckPipe(_FakePipe):
+        def readline(self):
+            threading.Event().wait(30)
+            return b'{"jsonrpc":"2.0","id":1,"result":{}}\n'
+
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _StuckPipe())
+    t0 = time.monotonic()
+    assert client.try_warm_dispatch(_MSG, read_deadline_secs=0.05) is None
+    assert time.monotonic() - t0 < client.READ_DEADLINE_SECS
+
+
 # --- delivered mutations never go cold and never re-send -------------------
 # The 2026-08-19 defect: a `git commit` outran the 2s liveness deadline, the
 # client went cold, and the cold engine re-ran the op -- committing nothing,
@@ -565,6 +585,27 @@ def test_delivered_mutation_that_never_answers_is_indeterminate_not_cold(
     monkeypatch.setattr(client, "_open_pipe", lambda pipe: _StuckPipe())
 
     _assert_indeterminate(client.try_warm_dispatch(_MUTATING_MSG))
+
+
+def test_caller_read_deadline_never_cuts_a_delivered_mutation_short(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller's lowered read deadline shortens only the liveness probe; the
+    delivered mutation still waits out its own transport deadline and returns
+    the real answer. Cutting it at the caller's bound would mint an
+    indeterminate for an op that was merely slow."""
+    import threading
+
+    class _SlowPipe(_FakePipe):
+        def readline(self):
+            threading.Event().wait(0.20)
+            return b'{"jsonrpc":"2.0","id":1,"result":{"committed":true}}\n'
+
+    monkeypatch.setattr(client, "MUTATION_READ_DEADLINE_SECS", 5.0)
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _SlowPipe())
+
+    response = client.try_warm_dispatch(_MUTATING_MSG, read_deadline_secs=0.02)
+    assert response == {"jsonrpc": "2.0", "id": 1, "result": {"committed": True}}
 
 
 def test_broken_pipe_after_delivery_is_not_resent_for_a_mutation(
@@ -856,7 +897,7 @@ def test_socket_path_too_long_is_a_permanent_reason_not_a_transient_miss(
         "socket path is 168 bytes, over the 100-byte sun_path budget: '/very/long/faketoken.sock'"
     )
     monkeypatch.setattr(
-        client, "_try_warm_dispatch_inner", lambda msg: (_ for _ in ()).throw(exc)
+        client, "_try_warm_dispatch_inner", lambda msg, *a: (_ for _ in ()).throw(exc)
     )
 
     assert client.try_warm_dispatch(_MSG) is None
@@ -875,7 +916,7 @@ def test_other_preamble_failures_stay_transient(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(
         client,
         "_try_warm_dispatch_inner",
-        lambda msg: (_ for _ in ()).throw(RuntimeError("something unforeseen")),
+        lambda msg, *a: (_ for _ in ()).throw(RuntimeError("something unforeseen")),
     )
 
     assert client.try_warm_dispatch(_MSG) is None

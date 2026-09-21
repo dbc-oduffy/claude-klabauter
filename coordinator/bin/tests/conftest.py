@@ -49,41 +49,14 @@ from engine_stamp_probe import (  # noqa: E402  (import after path setup)
 )
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_REAL_STATE_DIRS_TO_GUARD = (
-    _REPO_ROOT / "state" / "improvement-queue",
-    _REPO_ROOT / "state" / "lessons-outbox",
-)
-
-
-@pytest.fixture(autouse=True)
-def real_state_dir_untouched_guard(request: pytest.FixtureRequest):
-    """Fail loudly if a test under `coordinator/bin/tests/` writes into this
-    repo's REAL `state/improvement-queue/` or `state/lessons-outbox/`.
-
-    This is the pytest-reachable form of the containment check that
-    `test_harvest_doe_root_machine_local_leg.py::main()` already performed --
-    but `main()` is only reached via `if __name__ == "__main__":`, which
-    pytest never calls, so under the suite's actual runner the guard was
-    inert (see
-    state/bug-backlog/2026-09-01-the-harvest-suites-containment-guard-never-runs-under-pytest.yaml).
-    Autouse here makes it fire on every test in this directory, not just the
-    two harvest suites, on the same terms: snapshot before, snapshot after,
-    fail if the real dir gained a file.
-    """
-    before = {
-        d: (set(os.listdir(d)) if d.is_dir() else set()) for d in _REAL_STATE_DIRS_TO_GUARD
-    }
-    yield
-    for d in _REAL_STATE_DIRS_TO_GUARD:
-        after = set(os.listdir(d)) if d.is_dir() else set()
-        gained = after - before[d]
-        if gained:
-            pytest.fail(
-                f"real_state_dir_untouched_guard: {d} gained unexpected file(s) "
-                f"{gained} during {request.node.nodeid} -- this suite must never "
-                f"write to the real repo state dirs",
-                pytrace=False,
-            )
+# The live state-corpus write guard that used to live here is now
+# `coordinator_core.conftest._no_live_state_corpus_writes`, re-exported from the
+# repo-root conftest. It was moved for two reasons, both measured 2026-09-20:
+# it watched only THIS repo's state/ and so saw none of an eleven-week leak into
+# a sibling's tracked tree, and it could not reach the second leaker in
+# `coordinator/tests/` at all. A guard scoped to one directory is not a guard on
+# the contract; keeping a second copy here would be a second implementation of
+# it.
 
 
 @pytest.fixture

@@ -13,14 +13,6 @@ one of them would have left no trace. `cc_invoke :: _record_route_unreachable`
 now writes the events; this module is the half that reads them, because a
 ledger with no reader repeats the failure it was built to fix.
 
-That is not hypothetical here. `warm_health_signal`'s own docstring exists
-because `warm_rate()` was "recorded into a file nobody opened" for months, and
-`DoE-claude/state/audits/2026-08-29-routes-around-the-warm-door.md` ranked this
-exact surface second by heat and then sat three weeks — correctly surveyed,
-correctly classified, with no owner and no date. Analysis was never what was
-missing. A writer shipped without a reader would have been the third instance
-of the same mistake in one corpus.
-
 Shape mirrors `warm_health_signal.emit_warm_engine_health` deliberately: one
 rendered line, omit-when-quiet, fail-open to "" on any error, cold
 orientation-regen path only. Two differences, both load-bearing:

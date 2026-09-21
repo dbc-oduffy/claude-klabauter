@@ -873,8 +873,18 @@ def _indeterminate_envelope(msg: dict, detail: str) -> dict:
     }
 
 
-def try_warm_dispatch(msg: dict) -> Optional[dict]:
+def try_warm_dispatch(msg: dict, *, read_deadline_secs: Optional[float] = None) -> Optional[dict]:
     """Attempt one warm-pipe request/response for JSON-RPC request `msg`.
+
+    `read_deadline_secs`, when given, lowers the liveness read below
+    `READ_DEADLINE_SECS` so a caller holding its own bound (the op/CLI door's
+    `_wait_for_warm_boot`) can charge the attempt against it. It bounds the
+    whole read ONLY for a compute-only op, whose expiry is a plain miss.
+    NEGATIVE SPEC: it never shortens a DELIVERED mutation's wait -- the
+    extension still runs to `_mutation_deadline_for`, because abandoning a
+    delivered mutation early mints an indeterminate for an op that may merely
+    be slow. A caller that must bound a mutation probes with a compute-only op
+    first and dispatches the mutation only once the server answers.
 
     Returns the JSON-RPC response dict when the warm server served it --
     ANY well-formed response counts, including an error envelope, per the
@@ -892,7 +902,7 @@ def try_warm_dispatch(msg: dict) -> Optional[dict]:
     signal rather than propagated.
     """
     try:
-        result = _try_warm_dispatch_inner(msg)
+        result = _try_warm_dispatch_inner(msg, read_deadline_secs)
     except Exception as exc:  # noqa: BLE001 -- Backstop 2: never fail the op
         print(
             f"[warm-client] preamble failed, falling back to cold: {exc!r}",
@@ -979,7 +989,9 @@ def _record_cold_fallback(op: "str | None" = None) -> None:
         return
 
 
-def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
+def _try_warm_dispatch_inner(
+    msg: dict, read_deadline_secs: Optional[float] = None
+) -> Optional[dict]:
     if not is_warm_enabled():
         return None
 
@@ -1154,7 +1166,10 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
             fh.flush()
             delivered = True
             pending = _PendingRead(fh)
-            line = pending.wait(READ_DEADLINE_SECS)
+            liveness_secs = READ_DEADLINE_SECS
+            if read_deadline_secs is not None:
+                liveness_secs = max(0.0, min(READ_DEADLINE_SECS, read_deadline_secs))
+            line = pending.wait(liveness_secs)
             if line is _TIMED_OUT:
                 # The liveness probe expired. For a compute-only op that is the
                 # table's own "wedged server -> go cold" row, unchanged. For a
@@ -1164,9 +1179,7 @@ def _try_warm_dispatch_inner(msg: dict) -> Optional[dict]:
                 if not _op_may_mutate(msg.get("method")):
                     return None
                 mutation_deadline = _mutation_deadline_for(msg.get("method"))
-                line = pending.wait(
-                    max(0.0, mutation_deadline - READ_DEADLINE_SECS)
-                )
+                line = pending.wait(max(0.0, mutation_deadline - liveness_secs))
                 if line is _TIMED_OUT:
                     return _indeterminate_envelope(
                         msg, f"no response within {mutation_deadline}s"

@@ -814,26 +814,11 @@ def _pool_dispatch_worker(msg: dict, caller: Optional[CallerContext]) -> dict:
 
 
 #: Ceiling on how long `_pool_dispatch` blocks its connection thread waiting for
-#: a pool worker's result. Before this, `future.result()` took no timeout at all:
-#: a blocked worker held its connection thread for the server's whole life, and
-#: the ambiguity a caller was handed -- "this mutation may or may not have
-#: landed" -- was bounded by nothing. An unbounded ambiguous window is how a
-#: duplicate commit eventually happens, because an operator waiting on one
-#: without end reconciles by hand and guesses.
-#:
-#: READ AGAINST THE CLIENT'S OWN CEILINGS, not chosen freely. `warm.client`
-#: stops reading a mutation at `MUTATION_READ_DEADLINE_SECS` (30.0s) and a
-#: non-mutating call far sooner. A server deadline LONGER than the client's buys
-#: nothing but a held thread: the caller is already gone and will never see the
-#: result. Sized at the client's mutation deadline so the server never out-waits
-#: the longest-waiting caller it can have, and never gives up on one still
-#: listening.
-#:
-#: ONE ceiling for every op, deliberately. A compute-only caller gives up far
-#: sooner, so an abandoned read can still hold a thread for up to this long --
-#: bounded now, where before it was held forever. Per-op ceilings would shave
-#: that residue at the cost of a second deadline table that can disagree with
-#: the client's; not worth it until the residue is measured to matter.
+#: a pool worker's result. NEGATIVE SPEC: never longer than the client's own
+#: `MUTATION_READ_DEADLINE_SECS` -- a longer server deadline just holds a
+#: thread for a caller that already gave up. ONE ceiling for every op,
+#: deliberately: per-op ceilings would shave the abandoned-read residue at the
+#: cost of a second deadline table that can disagree with the client's.
 _POOL_RESULT_DEADLINE_SECS = MUTATION_READ_DEADLINE_SECS
 
 
@@ -1948,46 +1933,30 @@ class _ServerContext:
             try:
                 return future.result(timeout=_POOL_RESULT_DEADLINE_SECS)
             except concurrent.futures.TimeoutError:
-                # CANCEL FIRST -- it is the only thing here that can PROVE an
-                # outcome. `Future.cancel()` succeeds only on a task no worker
-                # has picked up, so a successful cancel means the op provably
-                # never ran: nothing was written, and re-running is safe. That
-                # is a determinate answer, and reporting it in the
-                # outcome-unknown shape is the defect 0ce83f4208 records --
-                # it trains operators to hand-verify refusals that never
-                # needed it. Measured 2026-09-21: the server and every pool
-                # member sat at 0.0% CPU through 28s waits, so an expiry is
-                # usually a QUEUED task, and this is the common branch, not
-                # the edge. (Raised by claude-klabauter-0b.)
+                # NEGATIVE SPEC: CANCEL FIRST. `Future.cancel()` succeeds only
+                # on a task no worker has picked up, so a successful cancel
+                # proves the op never ran -- a determinate answer, not the
+                # outcome-unknown shape.
                 if future.cancel():
                     return _pool_not_started_envelope(msg)
-                # The task STARTED and is still running. Only this is
-                # genuinely indeterminate, and the split it needs already
-                # exists one seam in: `ipc._timeout_error_envelope` returns
-                # WARM_DISPATCH_INDETERMINATE for an op that may mutate and a
-                # plain INTERNAL_ERROR for a COMPUTE_ONLY one, classified by the
-                # same fail-closed `_op_may_mutate` the BrokenProcessPool
-                # branch below uses. A second predicate here would be a copy
-                # that can drift from it.
+                # The task STARTED and is still running: genuinely
+                # indeterminate. `ipc._timeout_error_envelope` classifies via
+                # the same fail-closed `_op_may_mutate` the BrokenProcessPool
+                # branch below uses, so this does not duplicate that predicate.
                 #
-                # The worker is deliberately NOT killed: it may be
+                # NEGATIVE SPEC: NEVER KILL THE WORKER. It may be
                 # mid-mutation, and killing it converts a slow op into a
-                # half-applied one. What this bounds is how long THIS
-                # connection thread is held, not how long the op runs.
+                # half-applied one. This bounds how long THIS connection
+                # thread is held, not how long the op runs.
                 return _timeout_error_envelope(
                     msg.get("method"), _POOL_RESULT_DEADLINE_SECS, msg.get("id")
                 )
         except BrokenProcessPool:
             # A ProcessPoolExecutor whose worker died is broken PERMANENTLY --
-            # every later submit() on that instance raises, so without this the
-            # first dead worker turns a resident server into one that fails
-            # every request it will ever receive, for its whole 15-minute idle
-            # life. Observed live 2026-08-19: a published server served
-            # BrokenProcessPool to `ping` itself, and only a hard kill cleared
-            # it. That silently violated this module's own NEVER FAIL A CALLER
-            # contract, which the pool was never exempt from.
-            #
-            # Drop the corpse so the next request rebuilds a fresh pool.
+            # every later submit() on that instance raises, so without this
+            # the first dead worker fails every request the server ever
+            # receives for its whole idle life. Drop the corpse so the next
+            # request rebuilds a fresh pool.
             with self._dispatch_pool_lock:
                 broken = self._dispatch_pool
                 self._dispatch_pool = None

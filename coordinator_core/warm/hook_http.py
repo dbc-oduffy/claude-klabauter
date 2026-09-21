@@ -47,7 +47,7 @@ import json
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from coordinator_core.warm.caller_context import resolve_caller_context
-from coordinator_core.warm.env_forwarding import CALLER_PREFIXES
+from coordinator_core.warm.env_forwarding import CALLER_PREFIXES, is_caller_prefixed
 
 #: `hook_event_name` values whose verdict can BLOCK the operation. A missing guard on one of
 #: these is a safety regression; a missing guard on any other event is a lost advisory. The
@@ -255,9 +255,7 @@ FORWARDED_ENV_NAMES = frozenset(
 
 
 def _is_forwardable_name(name: str) -> bool:
-    return name in FORWARDED_ENV_NAMES or any(
-        name.startswith(p) for p in FORWARDED_ENV_PREFIXES
-    )
+    return name in FORWARDED_ENV_NAMES or is_caller_prefixed(name)
 
 
 OVERRIDE_CHANNEL_HEADER = "X-Coordinator-Env-Channel"
@@ -411,11 +409,7 @@ def forwardable_env(environ: Mapping[str, str]) -> Dict[str, str]:
     session's `HOME` off any caller that passed its own environ, which is the invisible-
     disarm case one layer up. They are reachable only by explicit header.
     """
-    return {
-        k: v
-        for k, v in environ.items()
-        if any(k.startswith(p) for p in FORWARDED_ENV_PREFIXES)
-    }
+    return {k: v for k, v in environ.items() if is_caller_prefixed(k)}
 
 
 def payload_from_event(event: Mapping[str, Any]) -> Dict[str, Any]:

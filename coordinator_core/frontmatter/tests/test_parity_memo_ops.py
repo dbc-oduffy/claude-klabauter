@@ -438,6 +438,9 @@ def _strip_post_freeze_fields(content: str) -> str:
     lines = content.splitlines(keepends=True)
     fences = [i for i, line in enumerate(lines) if line.strip() == "---"]
     if len(fences) < 2:
+        # Review: coordinator-code-reviewer -- deliberate fallback, not an
+        # oversight: unfenced/malformed content passes through unchanged and
+        # the byte-compare downstream fails on the raw diff.
         return content
     open_i, close_i = fences[0], fences[1]
     kept = [

@@ -245,41 +245,22 @@ def main(argv: "list[str] | None" = None) -> int:
 
     event = _read_event()
     event_name = event.get("hook_event_name")
-    # The harness's hook event carries no `env`, and `payload_from_event`
-    # never falls back to ambient environment -- so without this every
-    # per-session guard override arrived as "not requested", a hard wall.
-    # THIS process's environment is the caller's on both legs: cold, it is
-    # the hook's own process; served, the warm door carried the caller's
-    # `CALLER_PREFIXES` names in `_env` and the isolated borrow bound exactly
-    # those (`entry_seam._environ_identity_borrow`). `payload_from_event`
-    # filters to those prefixes, so nothing else crosses.
+    # The event carries no env; this process's env is the caller's on both
+    # legs (cold: the hook's own process; served: the isolated borrow bound
+    # the caller's prefixed names -- see entry_seam._environ_identity_borrow).
     if not isinstance(event.get("env"), dict):
         event = {**event, "env": dict(os.environ)}
     params = {"payload": payload_from_event(event)}
 
     # A worktree-scoped op REQUIRES `_origin_worktree` and refuses (-32602)
-    # without it. `coordinator_core/invoke/__main__.py` injects it for the cold
-    # path; this door did not, so every `scope='common_dir'`/`'show_top'` op
-    # registered through here refused instead of running -- and refused at
-    # exit 0 behind `unreachable_response`, which is a FAIL-OPEN with output
-    # byte-identical for a command that must be denied and one that must be
-    # allowed. Measured by `doe-claude-79` against
-    # `hooks.preuse_bash_dispatch`: the cold path returned
-    # `permissionDecision: "deny"` with real guard text while this door
-    # returned an inert envelope for the same payload
-    # (DoE-claude `state/audits/2026-09-20-preuse-bash-door-flip-control-leg.md`).
+    # without it; `coordinator_core/invoke/__main__.py` injects it for the
+    # cold path, so this door must too or it fails open instead of running.
     #
-    # `show_toplevel` WALKS ONLY and never spawns, on any path -- see its own
-    # docstring, and note that a spawn here would be break-class on a
-    # PreToolUse hot path regardless of correctness. The event's own `cwd` is
-    # the caller's, never this process's: served through the door, those are
-    # different processes.
-    #
-    # Injected ONLY for ops in `WORKTREE_SCOPED_OPS`, per that set's
-    # parity-check contract clause (1) -- never stamp a central/none-scoped op.
-    # An unresolvable worktree passes None, which `dispatch_from_hook` omits
-    # rather than carrying as "": the op then refuses exactly as it does today,
-    # which is the honest outcome when there is no worktree to name.
+    # NEGATIVE SPEC: `show_toplevel` WALKS ONLY, never spawns -- a spawn here
+    # would be break-class on a PreToolUse hot path. Inject ONLY for ops in
+    # `WORKTREE_SCOPED_OPS` (that set's parity-check contract clause (1)) --
+    # never stamp a central/none-scoped op. An unresolvable worktree passes
+    # None, which `dispatch_from_hook` omits rather than carrying as "".
     origin_worktree = None
     if op_name in WORKTREE_SCOPED_OPS:
         event_cwd = event.get("cwd")

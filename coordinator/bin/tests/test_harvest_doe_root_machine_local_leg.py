@@ -91,6 +91,8 @@ from importlib.machinery import SourceFileLoader
 
 import pytest
 
+from engine_stamp_probe import _ENGINE_ROOT_VAR
+
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -295,10 +297,25 @@ def test_second_run_idempotent_end_to_end(stamped_engine_env: str) -> None:
         # Force BOTH write seams onto their legacy path, regardless of
         # native-seam state — see module docstring finding (2).
         env["QUEUE_APPEND_OUTPUT_ROOT"] = fake_doe_root
-        env["LESSON_PROMOTE_OUTBOX_ROOT"] = os.path.join(fake_doe_root, "state", "lessons-outbox")
-        # Real checkout — required so schema.validate/schema.describe (no
-        # legacy fallback) can resolve coordinator_core.invoke at all.
-        env["COORDINATOR_ENGINE_ROOT"] = _REPO_ROOT
+        outbox_dir = os.path.join(fake_doe_root, "state", "lessons-outbox")
+        # Must EXIST before the spawn. coordinator-lesson-promote refuses a
+        # LESSON_PROMOTE_OUTBOX_ROOT that resolves under the system temp dir and
+        # is absent — it cannot tell a never-created fixture dir from a swept
+        # tmp_path inherited by a long-lived process, and recreating it would
+        # silently file the entry where nobody looks. Never surfaced before
+        # because the child resolved to the published launcher, which ignored
+        # this var outright and wrote to the live sibling repo instead.
+        os.makedirs(outbox_dir, exist_ok=True)
+        env["LESSON_PROMOTE_OUTBOX_ROOT"] = outbox_dir
+        # The BOX's stamped engine, handed over by `stamped_engine_env` — required
+        # so schema.validate/schema.describe (no legacy fallback) can dispatch at
+        # all. This previously named `_REPO_ROOT`, which the dispatch-axis stamp
+        # gate refuses ("engine root ... has no build stamp"): the source checkout
+        # carries no build stamp, so every dispatch from the spawned harvest died
+        # before any dedup logic ran. Taking the fixture and then overwriting its
+        # value with the unstamped root is the whole defect — do not reintroduce a
+        # literal here.
+        env[_ENGINE_ROOT_VAR] = stamped_engine_env
 
         cmd = ["python3", os.path.abspath(_HARVEST_CLI), "--plan", plan_path]
 
@@ -356,9 +373,10 @@ def test_real_state_dir_guard_fires_under_pytest() -> None:
     is only reached via `if __name__ == "__main__":`, which pytest never
     calls (see
     state/bug-backlog/2026-09-01-the-harvest-suites-containment-guard-never-runs-under-pytest.yaml).
-    The fix moved the check into an autouse `conftest.py` fixture
-    (`real_state_dir_untouched_guard`). This test proves that fixture is
-    live: it spawns a nested pytest run, inside THIS directory (so the real
+    The fix moved the check into an autouse `conftest.py` fixture, now
+    `coordinator_core.conftest._no_live_state_corpus_writes` (renamed and
+    widened 2026-09-20 when it moved suite-wide and gained the live
+    DoE-claude outbox). This test proves that fixture is live: it spawns a nested pytest run, inside THIS directory (so the real
     `conftest.py` is picked up), against a throwaway probe test module that
     deliberately drops a stray file into the real
     `state/improvement-queue/`, and asserts the nested run FAILS on the
@@ -398,7 +416,7 @@ def test_real_state_dir_guard_fires_under_pytest() -> None:
                 "exited 0 -- the containment guard did not fire under pytest. "
                 f"stdout={r.stdout!r} stderr={r.stderr!r}"
             )
-        if "real_state_dir_untouched_guard" not in r.stdout:
+        if "_no_live_state_corpus_writes" not in r.stdout:
             raise AssertionError(
                 "test_real_state_dir_guard_fires_under_pytest: nested pytest run failed "
                 "but not on the containment guard's own message -- unexpected failure mode. "

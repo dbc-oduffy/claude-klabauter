@@ -526,20 +526,12 @@ def _native_route_entry(name: str, dotted: str) -> Callable[[List[str]], int]:
     legacy_entry = _simple_entry(name, dotted)
 
     def _entry(argv: List[str]) -> int:
-        # ALREADY INSIDE THE ENGINE: run the implementation, never route again.
-        # `invoke.from_argv` serves this name by running `coordinator/bin/
-        # <name>.py :: main(argv)` in-process (`_run_entrypoint`) -- and that
-        # `main` IS this shim. Routing from here would ask the engine to run
-        # this same entrypoint again, which runs this shim again: an unbounded
-        # self-recursion through the door, cut only by the 30s mutation read
-        # deadline on the first hop. Every warm-served `pickup-assemble`,
-        # `baton-assemble` and `workstream-complete-assemble` call ended that
-        # way, while the work itself takes ~0.5s (measured 2026-09-21:
-        # `workstream_complete.brief()` in-process, 0.55s wall).
-        #
-        # The pool worker declares its route (`server._worker_process_init`),
-        # so the served side knows it is served; the caller side, which has
-        # not declared one, still routes exactly as before.
+        # NEGATIVE SPEC: served side runs the implementation; routing here
+        # again would re-enter this same shim through the door (this `main`
+        # IS what `invoke.from_argv` serves) -- unbounded self-recursion, cut
+        # only by the mutation read deadline. The pool worker declares its
+        # route (`server._worker_process_init`); the caller side, undeclared,
+        # still routes exactly as before.
         if os.environ.get("COORDINATOR_EXECUTION_ROUTE") == "warm_server":
             return legacy_entry(list(argv))
 

@@ -1034,6 +1034,128 @@ def _dir_is_ours(name: str) -> bool:
     return str(stamped) == str(ours)
 
 
+# ---------------------------------------------------------------------------
+# Live state-corpus write guard — this repo's AND a sibling's
+# ---------------------------------------------------------------------------
+#
+# Same family as the live session-hub litter guard below, one corpus out. A
+# test that fails to neutralize every write-root rung does not write somewhere
+# wrong-and-local: central-scope `coordinator-lesson-promote` writes route to
+# DoE-claude BY DESIGN, so the row lands in a repo this one does not own —
+# invisible here, unreviewable there.
+#
+# Measured 2026-09-20: 148+ fixture-derived rows in DoE-claude's tracked
+# `state/lessons-outbox/`, oldest 2026-07-04, 142 of them already drained by
+# the lessons pipeline. Nothing in this repo went red at any point in eleven
+# weeks. A narrower version of this guard existed in
+# `coordinator/bin/tests/conftest.py` and watched only THIS repo's two state
+# dirs, which is exactly why it saw none of it — and it could not have caught
+# the second leaker either, `coordinator/tests/test_lesson_promote_node_enum.py`,
+# which sits outside that directory entirely.
+#
+# Suite-wide here rather than at the repo root for the reason the hub guard
+# gives: `coordinator_core/pytest.ini` wins as configfile for any invocation
+# rooted under `coordinator_core/`, so the repo-root conftest is unreachable
+# in that regime. Re-exported by name from the root conftest for the
+# `coordinator/tests` and `coordinator/bin` testpaths.
+_OWN_LIVE_STATE_DIRS = (
+    Path(__file__).resolve().parent.parent / "state" / "improvement-queue",
+    Path(__file__).resolve().parent.parent / "state" / "lessons-outbox",
+)
+
+def _resolve_live_doe_lessons_outbox():
+    """The LIVE `repos.doe_claude` lessons-outbox, resolved AT IMPORT TIME.
+
+    EAGER ON PURPOSE, and this is the whole correctness argument. The first
+    version resolved lazily on first fixture use and memoized the result for
+    the session. That is wrong in a way that disables the instrument silently:
+    the resolution reads `os.environ` and the machine-local registry, and
+    whichever test happens to run FIRST may already have replaced both (this
+    suite is full of `patch.dict(os.environ, ..., clear=True)` cold-env
+    helpers). Resolution then fails, the memo caches None, and the guard
+    watches NOTHING for the entire session while reporting nothing wrong.
+
+    Measured 2026-09-20: that is exactly what happened. Eight `cold-path test
+    lesson` rows reached the live sibling outbox from tests in a directory the
+    guard was supposed to be covering, and the guard never fired -- because a
+    cold-env test had run first and poisoned the memo. An autouse guard that
+    misses a live write is the instrument failing, not just the test.
+
+    Import time is before pytest imports ANY test module, so the environment
+    here is the real one. Returns None when the sibling is genuinely
+    unresolvable on this box (a clone with no DoE-claude registered) -- a
+    legitimate state, never a failure.
+    """
+    root = (os.environ.get("DOE_ROOT") or os.environ.get("REPO_DOE_CLAUDE") or "").strip()
+    if not root:
+        # Load coordinator_registry BY LOCATION, and do not leave
+        # `coordinator/bin/lib` on `sys.path`. An earlier version inserted it at
+        # position 0 and left it there: this runs at conftest IMPORT time, before
+        # every test module in the repo is imported, so that directory would
+        # shadow same-named modules for the whole session — the exact
+        # import-precedence hazard this repo's root conftest exists to close,
+        # reintroduced by a guard. The path entry is removed in a `finally`.
+        try:
+            import importlib.util as _ilu  # noqa: PLC0415
+            import sys as _sys  # noqa: PLC0415
+
+            _lib = Path(__file__).resolve().parent.parent / "coordinator" / "bin" / "lib"
+            _added = str(_lib) not in _sys.path
+            if _added:
+                _sys.path.insert(0, str(_lib))
+            try:
+                _spec = _ilu.spec_from_file_location(
+                    "_guard_coordinator_registry", str(_lib / "coordinator_registry.py")
+                )
+                _mod = _ilu.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)
+                root = _mod.doe_root()
+            finally:
+                if _added:
+                    try:
+                        _sys.path.remove(str(_lib))
+                    except ValueError:
+                        pass
+        except Exception:
+            root = ""
+    return (Path(root) / "state" / "lessons-outbox") if root else None
+
+
+_LIVE_DOE_LESSONS_OUTBOX = _resolve_live_doe_lessons_outbox()
+
+
+@_pytest.fixture(autouse=True)
+def _no_live_state_corpus_writes(request):
+    """Fail loudly if a test adds a file to a live state corpus — this repo's
+    `state/improvement-queue/` or `state/lessons-outbox/`, or the LIVE
+    DoE-claude `state/lessons-outbox/` this repo does not own."""
+    doe = _LIVE_DOE_LESSONS_OUTBOX
+    guarded = _OWN_LIVE_STATE_DIRS + ((doe,) if doe is not None else ())
+    before = {}
+    for d in guarded:
+        try:
+            before[d] = set(os.listdir(d)) if d.is_dir() else set()
+        except OSError:
+            before[d] = set()
+    yield
+    for d in guarded:
+        try:
+            after = set(os.listdir(d)) if d.is_dir() else set()
+        except OSError:
+            continue
+        gained = after - before[d]
+        if gained:
+            _pytest.fail(
+                f"_no_live_state_corpus_writes: {d} gained {sorted(gained)!r} during "
+                f"{request.node.nodeid} -- a write-root rung was not neutralized. "
+                f"Set the seam's isolation root (QUEUE_APPEND_OUTPUT_ROOT / "
+                f"LESSON_PROMOTE_OUTBOX_ROOT, dir must EXIST), strip DOE_ROOT / "
+                f"REPO_DOE_CLAUDE / CLAUDE_KLABAUTER_ROOT, and run the child cold -- a "
+                f"warm-served CLI never receives any of them.",
+                pytrace=False,
+            )
+
+
 @_pytest.fixture(autouse=True)
 def _no_new_live_session_hub_entries():
     try:

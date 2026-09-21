@@ -2614,9 +2614,10 @@ def _print_stale_engine_kind_diagnosis(exc: BaseException) -> None:
     staleness when the stamp says minutes.
 
     Negative-spec:
+      <!-- Review: coordinator-code-reviewer -- stale/self-contradicting clause dropped: the body is a regex over exc/op_stderr, there is no "engine-root resolution" here to justify. -->
       - Error path only. Never called on a successful draft/send, so it adds
-        nothing to the happy path -- the engine-root resolution below is the
-        reason it must stay here.
+        nothing to the happy path -- it needs `op_stderr` off the raised
+        exception, which is only available at this call site.
       - Diagnoses only the enum-disagreement case: a kind this CLI's own tuple
         accepts and the engine's refusal text omits. Any other refusal prints
         nothing, because any other refusal is not evidence of publish lag.

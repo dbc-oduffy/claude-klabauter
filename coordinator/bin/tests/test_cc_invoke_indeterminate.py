@@ -225,15 +225,10 @@ def test_warm_hit_other_error_is_not_the_typed_error():
 
 
 # ---------------------------------------------------------------------------
-# The route-unreachable ledger
-#
-# What these pin is that the AGGREGATE exists. Each session that hits a
-# degraded door reconciles and hand-writes the artifact, which is correct and
-# leaves no trace; the row in state/improvement-queue/2026-09-20-the-gates-get-
-# routed-around-exactly-when-the-system-is-under-stress.yaml is about that
-# silence, not about the workaround. So the properties worth pinning are: a row
-# lands, it carries enough to aggregate on, it carries no argv payload, and a
-# failure to write it never becomes the caller's problem.
+# The route-unreachable ledger: a row lands, it carries enough to aggregate
+# on, it carries no argv payload, and a failure to write it never becomes the
+# caller's problem. See cc_invoke._record_route_unreachable / the reader
+# module's docstring for why this exists.
 # ---------------------------------------------------------------------------
 
 def test_cold_path_indeterminate_records_a_row(_ledger_in_tmp):
