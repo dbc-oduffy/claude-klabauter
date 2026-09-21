@@ -335,7 +335,8 @@ def _dump_op_timeouts() -> dict:
     Returns:
         dict -- {"<op>": <float>, ..., "__ceremony__<op>": <float>, ...,
         "__default__": <float>, "__ceremony_budget__": <float>,
-        "__ceremony_mutation_read_deadline__": <float>}. "__default__" is the
+        "__ceremony_mutation_read_deadline__": <float>,
+        "__warm_boot_wait__": <float>}. "__default__" is the
         reserved key for the global runaway-guard fallback; "__ceremony__<op>"
         asserts `<op>` is a ceremony op and carries its transport read deadline.
     """
@@ -404,6 +405,8 @@ def _dump_op_timeouts() -> dict:
     payload["__ceremony_mutation_read_deadline__"] = mutation_read_deadline_for(
         "ceremony.commit_v2"
     )
+    # Same reader, same inherited env as the real child; why it adds: `cc_invoke._op_timeout_ceiling`.
+    payload["__warm_boot_wait__"] = _warm_boot_wait_deadline()
     return payload
 
 

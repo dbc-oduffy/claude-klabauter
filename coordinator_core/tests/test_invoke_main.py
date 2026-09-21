@@ -826,7 +826,12 @@ def test_dump_op_timeouts_emits_valid_json_with_default_and_overrides():
 
     from coordinator_core.ipc import CEREMONY_BUDGET_SECS, is_ceremony_method
 
-    reserved = {"__default__", "__ceremony_budget__", "__ceremony_mutation_read_deadline__"}
+    reserved = {
+        "__default__",
+        "__ceremony_budget__",
+        "__ceremony_mutation_read_deadline__",
+        "__warm_boot_wait__",
+    }
     for key, value in parsed.items():
         if key in reserved or key.startswith("__ceremony__"):
             continue

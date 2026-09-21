@@ -28,6 +28,7 @@ coordinator/bin/tests/test_client_ceiling_clears_the_mutation_read_deadline.py -
 """
 from __future__ import annotations
 
+import math
 import sys
 import unittest.mock
 from pathlib import Path
@@ -129,6 +130,7 @@ def test_an_engine_that_does_not_publish_it_degrades_to_the_budget():
         if not k.startswith("__ceremony__")
     }
     payload.pop("__ceremony_mutation_read_deadline__")
+    payload.pop("__warm_boot_wait__")
 
     def _install(*_args, **_kwargs):
         _mod._OP_TIMEOUTS_STATE = "ok"
@@ -142,11 +144,11 @@ def test_an_engine_that_does_not_publish_it_degrades_to_the_budget():
 
 def test_a_non_ceremony_op_is_untouched():
     """The max only applies where the two resolvers diverge. A non-ceremony
-    op's ceiling is its budget plus the margin, exactly as before."""
+    op's ceiling is its budget plus the boot wait plus the margin."""
     payload = {k: float(v) for k, v in _dump_op_timeouts().items()}
     assert _ceiling_against_the_live_dump("session.boot_sweep") == int(
         payload.get("session.boot_sweep", payload["__default__"])
-    ) + 2
+    ) + math.ceil(payload["__warm_boot_wait__"]) + 2
 
 
 def test_an_unlisted_ceremony_op_is_bounded_by_the_ceremony_budget_not_the_default():
@@ -167,6 +169,7 @@ def test_an_unlisted_ceremony_op_is_bounded_by_the_ceremony_budget_not_the_defau
     # With the transport row withheld, the budget arm is observable on its own.
     stripped = dict(payload)
     stripped.pop("__ceremony_mutation_read_deadline__")
+    stripped.pop("__warm_boot_wait__")
 
     def _install_stripped(*_args, **_kwargs):
         _mod._OP_TIMEOUTS_STATE = "ok"
@@ -215,3 +218,27 @@ def test_membership_falls_back_to_the_prefix_when_no_dump_is_available():
     _mod._reset_op_timeout_cache()
     assert _mod._is_ceremony_op("ceremony.commit_v2")
     assert not _mod._is_ceremony_op("session.boot_sweep")
+
+
+#: Mutating, not ceremony: sized off `__default__`, and the op class the 32s
+#: ceiling was measured killing (queue.append, lesson writes, memo.draft).
+_ORDINARY_MUTATION = "queue.append"
+
+
+def test_the_ceiling_clears_the_boot_wait_plus_the_read():
+    """(e) of the warm-pool P0: boot wait and read run back to back, so the
+    ceiling clears the sum (see `_op_timeout_ceiling`)."""
+    from coordinator_core.invoke.__main__ import _warm_boot_wait_deadline
+
+    boot = _warm_boot_wait_deadline()
+    assert boot > 0, "fixture stale: the boot wait is off, so this pins nothing"
+    for op in (*_CEREMONY_OPS, _ORDINARY_MUTATION):
+        assert _ceiling_against_the_live_dump(op) >= boot + _mutation_deadline_for(op), op
+
+
+def test_the_published_boot_wait_follows_the_childs_own_env(monkeypatch):
+    """One number produces both. The dump runs in the env the real child gets,
+    so a caller that turns the wait off for its child gets no boot term."""
+    monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "0")
+    assert _dump_op_timeouts()["__warm_boot_wait__"] == 0.0
+

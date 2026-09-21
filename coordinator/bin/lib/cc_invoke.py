@@ -90,6 +90,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import math
 import os
 import subprocess
 import sys
@@ -2044,6 +2045,15 @@ def _op_timeout_ceiling(op: str, claude_klabauter_root: str, env: dict[str, str]
     max of the engine's two published numbers is what keeps the client's wait inside its
     own parent's ceiling, which is the invariant this whole derivation exists for.
 
+    THE CHILD'S WARM BOOT WAIT IS A THIRD ENGINE NUMBER, and it ADDS rather than
+    competes. On a warm miss the child waits up to `__warm_boot_wait__` for a server to
+    answer, and only then starts the read the max above covers -- a mutation's read is
+    never shortened to fit, since a cut delivered mutation is a false indeterminate. So
+    the child can spend boot wait + read deadline, and a ceiling of read + margin killed
+    a child that was being served (30 + 2 = 32s against 2 + 30s). Rounded up, not
+    truncated: undershooting is the defect this term exists to close. Absent on an
+    older engine, it contributes 0, exactly as before.
+
     STILL NOT A WIDENING KNOB. Both terms are the ENGINE's, read live from
     `--dump-op-timeouts`, and no environment read re-enters here (see the negative-spec
     above). The op is still held to its 2s budget and still reported when it misses; what
@@ -2082,7 +2092,8 @@ def _op_timeout_ceiling(op: str, claude_klabauter_root: str, env: dict[str, str]
             budget = max(budget, read_deadline)
 
         budget_int = int(budget)  # integer-truncate a float budget (e.g. 30.0 -> 30)
-        return budget_int + _CLIENT_START_MARGIN_SECS
+        boot_wait = math.ceil(_OP_TIMEOUTS_MAP.get("__warm_boot_wait__", 0.0))
+        return budget_int + boot_wait + _CLIENT_START_MARGIN_SECS
 
     if _OP_TIMEOUTS_STATE == "error" and not _OP_TIMEOUTS_BREADCRUMB_SHOWN:
         print(
