@@ -23,7 +23,8 @@ Contract (trust guarantees):
 
 Exit codes (must match `main()`'s actual returns byte-for-byte — do not drift):
   0  Bootstrap complete (or dry-run completed without error).
-  1  Usage error, missing prerequisite, or git not available.
+  1  Usage error, missing prerequisite, git not available, or a target root
+     that resolves to Claude Home.
   2  User declined git-init offer (repo is not a git repo; nothing done).
   3  Dirty working tree detected; bootstrap refused without user acknowledgement.
      (Under --non-interactive, exits 3 on a dirty tree — never silently proceeds.)
@@ -176,7 +177,8 @@ Flags:
 
 Exit codes:
   0  Bootstrap complete (or dry-run completed without error).
-  1  Usage error, missing prerequisite, or git not available.
+  1  Usage error, missing prerequisite, git not available, or a target root
+     that resolves to Claude Home.
   2  User declined git-init offer (repo is not a git repo; nothing done).
   3  Dirty working tree detected; bootstrap refused without user acknowledgement.
      (Under --non-interactive, exits 3 on a dirty tree — never silently proceeds.)
@@ -569,6 +571,23 @@ def main(argv: List[str]) -> int:
 
     if not os.path.isdir(root_path):
         _print(f"bootstrap-repo.sh: target root does not exist: {root_path}", file=sys.stderr)
+        return 1
+
+    # Claude Home is not a working tree. `guard_repo_setup_claude_home_refusal`
+    # denies this for a Bash-invoked repo-setup, but this op runs in-process
+    # (bootstrap_orchestrate imports it directly), so that guard never sees it.
+    # Refused before stage 1: every stage below writes into `root_path`.
+    from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
+        resolves_to_claude_home,
+    )
+
+    if resolves_to_claude_home(root_path, dict(os.environ)):
+        _print(
+            f"bootstrap-repo: refusing -- target root ({root_path}) resolves to Claude Home "
+            "(~/.claude), which is not a working tree. Run repo-setup against the project "
+            "clone you mean to set up: /repo-setup --root <path-to-that-clone>.",
+            file=sys.stderr,
+        )
         return 1
 
     # ---- dry-run header --------------------------------------------------

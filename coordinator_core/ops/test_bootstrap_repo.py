@@ -312,6 +312,39 @@ def test_non_git_non_interactive_exits_two_and_writes_nothing(tmp_path, capsys):
     assert list(target.iterdir()) == []
 
 
+def _claude_home_env(monkeypatch, home):
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("USERPROFILE", raising=False)
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+
+def test_claude_home_target_is_refused_before_any_stage(tmp_path, monkeypatch, capsys):
+    """The in-process leg of `guard_repo_setup_claude_home_refusal`: that
+    PreToolUse guard never sees this op, so the op refuses on its own. The
+    target is a real git repo, so nothing but this check can refuse it."""
+    home = tmp_path / "home"
+    claude_home = home / ".claude"
+    claude_home.mkdir(parents=True)
+    _init_git(str(claude_home))
+    before = sorted(p.name for p in claude_home.iterdir())
+    _claude_home_env(monkeypatch, home)
+    rc = main(["--root", str(claude_home), "--non-interactive"])
+    assert rc == 1
+    assert "resolves to Claude Home" in capsys.readouterr().err
+    assert sorted(p.name for p in claude_home.iterdir()) == before
+
+
+def test_claude_config_dir_is_claude_home_for_the_refusal(tmp_path, monkeypatch, capsys):
+    config_dir = tmp_path / "custom-claude-config"
+    config_dir.mkdir()
+    _init_git(str(config_dir))
+    _claude_home_env(monkeypatch, tmp_path / "home")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    rc = main(["--root", str(config_dir), "--non-interactive"])
+    assert rc == 1
+    assert "resolves to Claude Home" in capsys.readouterr().err
+
+
 def test_eof_at_git_init_prompt_defaults_to_accept(tmp_path, monkeypatch):
     """Negative-spec regression: bash `${_reply:-Y}` on EOF accepts the git-init
     offer. Faithfully reproduced -- EOF must NOT silently decline here."""

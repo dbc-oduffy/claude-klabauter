@@ -257,18 +257,10 @@ def _scaffold_root_is_claude_home(scaffold_root: str, env: Dict[str, str]) -> bo
     definition rather than two that can drift.
     """
     from coordinator_core.bash_guards.guard_repo_setup_claude_home_refusal import (
-        _canonical as _guard_canonical,
-        _resolve_claude_home as _guard_resolve_claude_home,
+        resolves_to_claude_home,
     )
 
-    claude_home = _guard_resolve_claude_home(env)
-    if claude_home is None:
-        return False
-    try:
-        resolved_scaffold_root = _guard_canonical(scaffold_root)
-    except OSError:
-        return False
-    return resolved_scaffold_root == claude_home
+    return resolves_to_claude_home(scaffold_root, env)
 
 
 class _UsageError(Exception):
