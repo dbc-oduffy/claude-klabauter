@@ -1773,6 +1773,55 @@ def _wrap_socket(conn: Any) -> Any:
     return io
 
 
+#: How long a draining acceptor waits for a late caller's request frame
+#: before dropping it. The caller writes its frame immediately after
+#: connecting, so this bounds only a stalled peer's hold on an acceptor.
+_DRAIN_REFUSAL_READ_SECS = 2.0
+
+
+def _refuse_while_draining(conn: Any, *, server_sha: Optional[str]) -> None:
+    """Answer one connection accepted after `close_listener` with a
+    determinate ENGINE_SKEW, without dispatching or counting it in flight.
+
+    ENGINE_SKEW is the one answer `warm.client` treats as "provably not
+    executed", so a mutation goes cold safely instead of being reported
+    indeterminate.
+
+    NEGATIVE SPEC: never enqueue these, and never count them in
+    `in_flight`. Traffic arriving during a drain must not extend the drain
+    (`warm.skew`'s module docstring: more traffic SHORTENS a stale server's
+    life). Never raises -- this runs on an acceptor thread.
+    """
+    io = None
+    try:
+        conn.settimeout(_DRAIN_REFUSAL_READ_SECS)
+        io = _wrap_socket(conn)
+        line = io.readline()
+        if not line:
+            return
+        try:
+            msg = _parse_frame(line)
+        except _FrameError as exc:
+            response = exc.response
+        else:
+            request_id = msg.get("id")
+            client_token = msg.get("_engine_token")
+            if client_token is None:
+                response = _untrusted_caller_response(request_id)
+            else:
+                response = skew.build_skew_response(request_id, server_sha, client_token)
+        io.write(_encode(response))
+        io.flush()
+    except Exception:  # noqa: BLE001 -- a late caller must never cost an acceptor thread
+        pass
+    finally:
+        target = io if io is not None else conn
+        try:
+            target.close()
+        except OSError:
+            pass
+
+
 class _ServerContext:
     """Boot-scoped server state: the pipe name, the ACL identity, the
     version state constructed once, the in-flight counter every connection
@@ -1826,6 +1875,12 @@ class _ServerContext:
         # keeping the idle watchdog's behaviour unchanged for them.
         self.boot_token = boot_token
         self.in_flight = InFlightCounter()
+        # Pool tasks submitted and not yet settled, counted by the future's
+        # own done-callback rather than by the connection thread. The two
+        # diverge exactly when it matters: a connection thread gives up at
+        # `_POOL_RESULT_DEADLINE_SECS` and releases its `in_flight` slot while
+        # the worker process is still running the op. See `drain_outstanding`.
+        self._pool_outstanding = InFlightCounter()
         self.telemetry = telemetry.ServerTelemetry()
         self._queue: "queue.Queue[Any]" = queue.Queue()
         self._listening_lock = threading.Lock()
@@ -1869,8 +1924,9 @@ class _ServerContext:
         evict_on_skew`, `lifecycle.begin_shutdown` -- run it first
         precisely to release the endpoint early, and both said so in their
         own docstrings until 2026-08-26. It does not: while the drain runs,
-        the endpoint stays bound, a caller is accepted and dropped with
-        zero bytes (non-spawning per `warm/client.py`'s table), and a
+        the endpoint stays bound, a caller is answered ENGINE_SKEW without
+        dispatch on POSIX (`_refuse_while_draining`) or dropped with zero
+        bytes on Windows (both non-spawning per `warm/client.py`'s table), and a
         SAME-TOKEN successor cannot bind at all. Different-token successors
         are unaffected -- they bind a different endpoint. See
         `docs/research/2026-08-26-repo-warm-succession.md` § 2; moving the
@@ -1934,6 +1990,8 @@ class _ServerContext:
         """
         try:
             future = self._ensure_dispatch_pool().submit(_pool_dispatch_worker, msg, caller)
+            self._pool_outstanding.enter()
+            future.add_done_callback(lambda _f: self._pool_outstanding.exit())
             try:
                 return future.result(timeout=_POOL_RESULT_DEADLINE_SECS)
             except concurrent.futures.TimeoutError:
@@ -2043,8 +2101,23 @@ class _ServerContext:
                 pass
         return None
 
+    def drain_outstanding(self) -> int:
+        """What a drain must wait out: live connections PLUS unsettled pool
+        tasks. The `in_flight_count` every shutdown trigger binds.
+
+        `in_flight` alone reaches zero while a pool worker is still running
+        an op whose connection thread already returned the timeout
+        envelope. `_ctx_shutdown` then ends in `os._exit(0)`, and each
+        worker's `_exit_with_parent` watchdog follows it within a second --
+        killing that op mid-run, which is the half-applied mutation
+        `_pool_dispatch`'s own NEVER-KILL-THE-WORKER spec forbids.
+        """
+        return self.in_flight() + self._pool_outstanding()
+
     def _drain(self) -> None:
-        lifecycle.drain_and_exit(in_flight_count=self.in_flight, ctx_shutdown=self._ctx_shutdown)
+        lifecycle.drain_and_exit(
+            in_flight_count=self.drain_outstanding, ctx_shutdown=self._ctx_shutdown
+        )
 
     def _token_is_stale(self) -> bool:
         """`warm.idle.TokenStaleFn`: has a newer engine generation
@@ -2116,7 +2189,7 @@ class _ServerContext:
             served_count=self.telemetry.served_count,
             token_stale=lambda: token_stale,
             close_listener=self.close_listener,
-            in_flight_count=self.in_flight,
+            in_flight_count=self.drain_outstanding,
             ctx_shutdown=self._ctx_shutdown,
         )
         # `warm.push_cadence`'s cadence counter, on this SAME tick -- see
@@ -2257,11 +2330,16 @@ class _ServerContext:
         `_worker_loop` worker, never here, so acceptance can never spawn an
         unbounded number of dispatching threads (AC7).
 
-        A connection accepted after `close_listener` is closed WITHOUT being
-        served, which is the same outcome the Windows chain produces for a
-        pipe instance connected after the listener closed: the client reads
-        EOF and goes cold rather than being answered by a generation that is
-        already draining.
+        A connection accepted after `close_listener` is answered ENGINE_SKEW
+        by `_refuse_while_draining` and never dispatched, and this thread
+        keeps accepting. It used to close that connection and RETURN, so
+        after `ACCEPTOR_POOL_SIZE` late callers no thread accepted at all.
+        The socket stays bound through the drain (`close_listener`'s own
+        docstring), so every later caller sat in the kernel backlog until
+        `_ctx_shutdown` closed it: up to the 35s drain ceiling for a
+        compute-only op, and a false "may have COMPLETED" indeterminate for a
+        delivered mutation that never ran. Observed 2026-09-20 18:49:04Z: 9
+        clients went cold at the instant a skew-evicted server exited.
 
         An `OSError` from `accept()` ends this thread rather than looping.
         The one way it happens is the listening socket being closed --
@@ -2280,11 +2358,8 @@ class _ServerContext:
                 return
 
             if not self._is_listening():
-                try:
-                    conn.close()
-                except OSError:
-                    pass
-                return
+                _refuse_while_draining(conn, server_sha=self.version_state.server_sha)
+                continue
 
             try:
                 io = _wrap_socket(conn)

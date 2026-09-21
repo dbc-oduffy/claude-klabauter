@@ -928,8 +928,10 @@ def evict_on_skew(
     an in-process boolean; the OS-level close and unlink happen in
     `_ServerContext._ctx_shutdown`, AFTER the drain, up to a 35s ceiling.
     Until then the endpoint stays bound: a caller arriving in that window is
-    accepted and dropped with zero bytes (a NON-spawning outcome per
-    `warm/client.py`'s table), and a successor computing the SAME token
+    answered ENGINE_SKEW without dispatch on POSIX
+    (`warm/server.py :: _refuse_while_draining`) or dropped with zero bytes
+    on Windows -- both NON-spawning per `warm/client.py`'s table -- and a
+    successor computing the SAME token
     cannot bind at all -- `ERROR_ACCESS_DENIED` on Windows, `EADDRINUSE` on
     POSIX with the staleness probe reading the still-bound socket as live.
     A successor with a DIFFERENT token is unaffected; it binds a different

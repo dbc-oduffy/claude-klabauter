@@ -85,6 +85,7 @@ from coordinator_core.git.divergence import (
     diverging_paths,
 )
 from coordinator_core.git.git_dir import resolve_git_common_dir, resolve_git_dir
+from coordinator_core.ops.ceremony.commit_admission import governed_surface_refusal
 from coordinator_core.git.commit_signing import (
     commit_signing_enabled,
     sign_flag_args,
@@ -4803,6 +4804,21 @@ def _commit_via_head_spine(
     orphaning a peer's own commit (ref case) -- exactly the hazard each
     refusal exists to prevent.
     """
+    # DOCTRINE-SURFACE ADMISSION, before every precondition below -- see
+    # `commit_admission`'s module docstring. First so that a refusal is a
+    # failing result and never the `None` that would hand the same content to
+    # the plumbing ladder, which runs no admission of its own.
+    admission_refusal = governed_surface_refusal(root, assembled)
+    if admission_refusal is not None:
+        return GitResult(
+            returncode=1,
+            stdout="",
+            stderr=(
+                f"{caller}: refused -- this commit grows a governed doctrine surface "
+                f"that its admission ledger does not admit:\n{admission_refusal}"
+            ),
+        )
+
     root_tree_sha = _git_state_head_tree_sha(root)
     if root_tree_sha is None:
         return None

@@ -44,6 +44,9 @@ class _Future:
         self.cancel_called = True
         return self._cancellable
 
+    def add_done_callback(self, fn):
+        pass
+
 
 class _Pool:
     def __init__(self, future):
@@ -55,6 +58,7 @@ class _Pool:
 
 def _ctx_with(future, monkeypatch):
     ctx = server._ServerContext.__new__(server._ServerContext)
+    ctx._pool_outstanding = server.InFlightCounter()
     monkeypatch.setattr(ctx, "_ensure_dispatch_pool", lambda: _Pool(future), raising=False)
     return ctx
 
@@ -178,6 +182,9 @@ def test_a_result_inside_the_deadline_is_returned_untouched(monkeypatch):
         def cancel(self):  # pragma: no cover -- must not be reached on a hit
             raise AssertionError("cancel() called on a future that answered")
 
+        def add_done_callback(self, fn):
+            pass
+
     out = _ctx_with(_Fast(), monkeypatch)._pool_dispatch(_msg("ping"))
     assert out == {"jsonrpc": "2.0", "id": 7, "result": {"pong": True}}
 
@@ -192,6 +199,7 @@ def test_a_result_inside_the_deadline_is_returned_untouched(monkeypatch):
 
 def _real_pool_ctx(monkeypatch, pool):
     ctx = server._ServerContext.__new__(server._ServerContext)
+    ctx._pool_outstanding = server.InFlightCounter()
     monkeypatch.setattr(ctx, "_ensure_dispatch_pool", lambda: pool, raising=False)
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 0.05)
     return ctx

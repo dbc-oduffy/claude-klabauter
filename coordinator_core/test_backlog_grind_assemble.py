@@ -66,6 +66,7 @@ import pytest
 import coordinator_core.backlog_grind_assemble as bga
 import coordinator_core.backlog_grind_assemble.apply as bga_apply
 import coordinator_core.backlog_grind_assemble.directives as bga_directives
+import coordinator_core.backlog_grind_assemble.grind_rows as bga_grind_rows
 import coordinator_core.backlog_grind_assemble.verifier as bga_verifier
 from coordinator_core.contract import apply_base
 from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
@@ -3491,6 +3492,7 @@ _EXPECTED_CALLEE_BY_SUBCOMMAND = {
     "mint-run-id": "brief.main",
     "apply": "apply.main_apply",
     "drop": "apply.main_drop",
+    "grind-row": "grind_rows.main",
 }
 
 
@@ -3636,6 +3638,7 @@ class TestTrampolineDispatchRouting:
         monkeypatch.setattr(bga, "main", _make_spy("brief.main"))
         monkeypatch.setattr(bga_apply, "main_apply", _make_spy("apply.main_apply"))
         monkeypatch.setattr(bga_apply, "main_drop", _make_spy("apply.main_drop"))
+        monkeypatch.setattr(bga_grind_rows, "main", _make_spy("grind_rows.main"))
 
         full_argv = [subcommand, "mise-en-place"]
         exit_code = shim._backlog_grind_assemble_entry(full_argv)

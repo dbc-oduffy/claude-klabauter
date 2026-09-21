@@ -645,10 +645,20 @@ def _merge_assemble_entry(argv: List[str]) -> int:
 def _backlog_grind_assemble_entry(argv: List[str]) -> int:
     """Verbatim port of backlog-grind-assemble.py's own `main(argv)` —
     subcommand routing to `coordinator_core.backlog_grind_assemble`
-    (brief/mint-run-id) and its `.apply` submodule (apply/drop), which
-    is the one target besides workday-complete-assemble that fans out to
-    more than a single `mod.main(argv)` call."""
-    usage_text = "usage: backlog-grind-assemble brief|mint-run-id|apply|drop <cadence> [...]"
+    (brief/mint-run-id), its `.apply` submodule (apply/drop), and its
+    `.grind_rows` submodule (grind-row) — the one target besides
+    workday-complete-assemble that fans out to more than a single
+    `mod.main(argv)` call.
+
+    `grind-row` needs BOTH the allowlist tuple below AND its own dispatch
+    branch: allowlisting alone routes an unhandled subcommand into the
+    bare `main_drop` fallthrough at the bottom -- exit 0, drop's payload,
+    silently wrong (the exact mint-run-id incident `TestTrampolineDispatchRouting`
+    in `coordinator_core/test_backlog_grind_assemble.py` now pins for every
+    allowlisted subcommand, `grind-row` included)."""
+    usage_text = (
+        "usage: backlog-grind-assemble brief|mint-run-id|apply|drop|grind-row <cadence|verb> [...]"
+    )
 
     def _usage() -> int:
         print(usage_text, file=sys.stderr)
@@ -661,7 +671,7 @@ def _backlog_grind_assemble_entry(argv: List[str]) -> int:
         return 0
 
     subcommand, rest = argv[0], argv[1:]
-    if subcommand not in ("brief", "mint-run-id", "apply", "drop"):
+    if subcommand not in ("brief", "mint-run-id", "apply", "drop", "grind-row"):
         return _usage()
 
     try:
@@ -671,6 +681,7 @@ def _backlog_grind_assemble_entry(argv: List[str]) -> int:
             sys.path.insert(0, claude_klabauter_root)
         import coordinator_core.backlog_grind_assemble as brief_mod
         import coordinator_core.backlog_grind_assemble.apply as apply_mod
+        import coordinator_core.backlog_grind_assemble.grind_rows as grind_rows_mod
     except RuntimeError as exc:
         print(f"backlog-grind-assemble: CLAUDE_KLABAUTER_ROOT resolution failed: {exc}", file=sys.stderr)
         return _TRANSPORT_FAIL
@@ -685,6 +696,8 @@ def _backlog_grind_assemble_entry(argv: List[str]) -> int:
         return brief_mod.main(argv)
     if subcommand == "apply":
         return apply_mod.main_apply(rest)
+    if subcommand == "grind-row":
+        return grind_rows_mod.main(rest)
     return apply_mod.main_drop(rest)
 
 

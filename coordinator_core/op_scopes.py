@@ -1748,6 +1748,16 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # `resolve_repo_root()`-shaped default on every call.
     "learn_lessons_pipeline.brief":               "show_top",
     "learn_lessons_pipeline.apply":                "show_top",
+    # "show_top" — C9 (docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md):
+    # each handler's own `repo_root` arrives already resolved and is forwarded
+    # straight through as a path-resolution base for its own params paths
+    # (`lessons_dir`/`manifest`/`split_dir`); the `coordinator/bin` scripts
+    # these ops load are ENGINE-provisioned and resolved independently via
+    # `resolve_cli_script_root()`, never against `repo_root`. Same reasoning
+    # as the `learn_lessons_pipeline.*` pair immediately above.
+    "lessons.extract":                            "show_top",
+    "lessons.verify_extraction":                  "show_top",
+    "doctrine.surface_split_regenerate":          "show_top",
     # fleet.mode_set / fleet.mode_show — "none", and exact rather than defaulted: the
     # record these ops read and write lives under `_settings_home.settings_home()`, which
     # session/fleet_mode.py resolves with no repo input at all. Neither handler accepts

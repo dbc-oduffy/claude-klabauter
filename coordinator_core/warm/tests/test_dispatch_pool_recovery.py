@@ -44,6 +44,7 @@ def ctx(monkeypatch):
     context = server._ServerContext.__new__(server._ServerContext)
     context._dispatch_pool = _BrokenPool()
     context._dispatch_pool_lock = __import__("threading").Lock()
+    context._pool_outstanding = server.InFlightCounter()
     return context
 
 
@@ -121,6 +122,7 @@ def test_a_healthy_pool_is_not_disturbed(monkeypatch):
     context = server._ServerContext.__new__(server._ServerContext)
     context._dispatch_pool = _GoodPool()
     context._dispatch_pool_lock = __import__("threading").Lock()
+    context._pool_outstanding = server.InFlightCounter()
 
     monkeypatch.setattr(
         server, "_run_dispatch", lambda *a, **k: pytest.fail("fell back with a healthy pool")

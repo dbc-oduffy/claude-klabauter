@@ -456,6 +456,13 @@ OP_MODULE_MAP: Dict[str, str] = {
     # `merge_assemble.apply` above — not `__init__`/`apply` directly.
     "learn_lessons_pipeline.brief":             "coordinator_core.learn_lessons_pipeline.ops",
     "learn_lessons_pipeline.apply":             "coordinator_core.learn_lessons_pipeline.ops",
+    # C9 (docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md): the closed
+    # queue-grind op list the vocabulary's SOURCE_OPS/VERIFY_OPS/REGENERATE_OPS
+    # (C1) resolve to — one shared owning module, same many-keys-one-value
+    # shape as the learn_lessons_pipeline.* pair above.
+    "lessons.extract":                          "coordinator_core.ops.grind_ops",
+    "lessons.verify_extraction":                "coordinator_core.ops.grind_ops",
+    "doctrine.surface_split_regenerate":        "coordinator_core.ops.grind_ops",
 }
 
 

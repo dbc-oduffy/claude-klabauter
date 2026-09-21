@@ -4306,6 +4306,48 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "learn_lessons_pipeline.apply": OpClass.MUTATING,
     "learn_lessons_pipeline.brief": OpClass.COMPUTE_ONLY,
 
+    # lessons.extract — COMPUTE_ONLY: `coordinator_core.ops.grind_ops::
+    # _lessons_extract` is a thin adapter over `extract-lessons.py::extract()`,
+    # which only reads `state/lessons/*.yaml` and returns computed record
+    # dicts; it opens no file for write.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   No.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              No.
+    #   4. Mutates shared mutable state outside its own module?                 No.
+    #   5. Persistent state changes observable across process boundaries?       No.
+    #
+    # lessons.verify_extraction — COMPUTE_ONLY: `_lessons_verify_extraction`
+    # wraps `extract-lessons.py::verify()`, a read-only grounding check. The
+    # routing-records tempfile it spills to disk is throwaway (removed in a
+    # `finally` before the handler returns) and never a coordinator substrate
+    # artifact — no state persists past the call.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   No.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              Yes,
+    #      transiently — a self-owned tempfile, deleted before return; not a
+    #      coordinator substrate artifact.
+    #   4. Mutates shared mutable state outside its own module?                 No.
+    #   5. Persistent state changes observable across process boundaries?       No.
+    #
+    # doctrine.surface_split_regenerate — MUTATING: `_doctrine_surface_split_
+    # regenerate` wraps `generate-doctrine-surface-split.py::
+    # regenerate_split_dir()`, which (absent `check_mode`) overwrites the
+    # split directory's `README.md` on disk — real, persistent mutation.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   Yes.
+    #      Overwrites `<split_dir>/README.md`.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              Yes.
+    #   4. Mutates shared mutable state outside its own module?                 Yes.
+    #      The split directory is repo-tracked, cross-process state.
+    #   5. Persistent state changes observable across process boundaries?       Yes.
+    # Spec: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § C9
+    "lessons.extract": OpClass.COMPUTE_ONLY,
+    "lessons.verify_extraction": OpClass.COMPUTE_ONLY,
+    "doctrine.surface_split_regenerate": OpClass.MUTATING,
+
     # git.maintenance — MUTATING: `coordinator_core.ops.git_maintenance::run_tier`
     # runs the tier's `git maintenance run` task set (gc/loose-objects/pack-refs/
     # commit-graph/incremental-repack) plus reflog and orphan-pack reaping against
