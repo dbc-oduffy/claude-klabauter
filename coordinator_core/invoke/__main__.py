@@ -479,75 +479,22 @@ def _fatal_stderr(message: str) -> None:
 
 #: How long `_wait_for_warm_boot` may wait for a just-spawned warm server to
 #: start answering, in seconds. `COORDINATOR_WARM_BOOT_WAIT_SECS` overrides it;
-#: `0` disables the wait entirely, restoring the pre-wait behaviour (miss ->
-#: immediate refusal).
+#: `0` disables the wait entirely (miss -> immediate refusal).
 #:
-#: READ THE RIGHT CLOCK. This is WALL CLOCK at near-zero process time -- a
-#: sleeping poll loop, not work. CLAUDE.md's brightline is measured in process
-#: time and spawn count, "never wall clock", so a bounded wait does not breach
-#: the 500ms or 2s bars however long it sits: nothing on this box is occupied
-#: while it does. An AC or report that charges this number against those bars is
-#: reading the wrong clock (claude-klabauter-22, 2026-08-26, sharpening the
-#: defence from "it beats four minutes of human guessing").
-#:
-#: NOT A BUDGET AND NOT A MEASUREMENT. Reaching the engine is budgeted in
-#: hundreds of milliseconds (CLAUDE.md's brightline), and this number is an
-#: order of magnitude past it by construction: it bounds a FAULT -- the window
-#: in which a box that should already have had a resident server is standing
-#: one up. It is deliberately not fitted to an observed boot, because no boot
-#: on this box has ever been measured: the only intervals on record
-#: (2026-08-25/26: +0s, +30s, +4min) are the intervals four operators happened
-#: to retry at, which bound nothing. `record_client_boot_wait` exists to
-#: replace this guess with the real distribution. Until it has rows, 15s is
-#: chosen to be long enough that a genuine interpreter-plus-election boot is
-#: not cut off mid-flight, and short enough that nobody can mistake it for
-#: normal operation or absorb it as cadence.
-#:
-#: WHAT THE COLD LOG SAYS, AND WHY IT CANNOT SET THIS NUMBER (doe-claude-cb,
-#: 2026-08-26, swept from `client-cold.jsonl`; both readings below
-#: reproduced independently here). 2131 recorded misses, 2026-08-20 ->
-#: 2026-08-26, clustered into 121 outage windows at a >60s gap.
-#:
-#: THE FILE HAS TWO DEFENSIBLE READINGS AND THEY DISAGREE BY 9x. A window is
-#: measured from its first miss to its last, so it is bounded by when callers
-#: happened to call, and 42 of the 121 windows hold a SINGLE miss -- they
-#: measure 0s carrying no duration information at all. Read every window and
-#: the median is 1s with 28% over 15s. Drop the windows that cannot measure
-#: anything and the median is 9s with 43% over 15s (n=79). Neither is the
-#: answer: the first is dragged down by windows that measured nothing, and
-#: the second over-samples long outages, because a long outage collects more
-#: calls and so is likelier to clear the >=2 bar. The honest statement is a
-#: bracket -- median somewhere in 1-9s, over-bound share somewhere in 28-43%
-#: -- and nothing on disk narrows it.
-#:
-#: So the premise is COMPATIBLE with this file, not vindicated by it. A wait
-#: is worth having if misses are usually a server nearly up; that reading
-#: survives, and so does a materially worse one.
-#:
-#: This is worse than censored: it is censored with the bias direction
-#: unknown. Fitting a constant to either reading would be the same defect as
-#: quoting an ETA -- a number that looks measured and is not. What the tail
-#: does establish (p90 56s, max 234s on the all-windows reading) is that no
-#: fixed bound covers it.
-#:
-#: What the tail DOES establish is that no fixed bound covers it, and that
-#: chasing it would be the wrong move: a caller inside the 234s window eats
-#: the full failure either way, and a longer bound only adds sleeping to it.
-#: The long windows are a separate fault to be found, not a duration to be
-#: absorbed. `client-boot-wait.jsonl` is the instrument that can eventually
-#: set this number, because it records actual waits with `served` alongside
-#: elapsed -- uncensored, and able to separate "waited and got there" from
-#: "waited and never did".
+#: SIZED FROM THE MEASURED BOOT, NOT A GUESS. `server-boot.jsonl`, 49 boots to
+#: 2026-09-21: spawn-to-ready median 0.47s, p90 0.78s, max 1.04s. 2s is twice
+#: the worst boot on record. A wait longer than that is not waiting on a boot:
+#: `client-boot-wait.jsonl` showed the retired 15s bound serving 15 of 249 waits
+#: inside 2s and nearly all the rest never or at ~30s -- a server already up
+#: and not answering, which no boot wait can fix and a long one only hides.
+#: If boots slow past this bound, that is the defect to find; do not widen it.
 #:
 #: NEVER REACHABLE FROM A HOOK. This wait is for the op/CLI door, where a
 #: caller is already waiting on a result. A hook path must pass
 #: `COORDINATOR_WARM_BOOT_WAIT_SECS=0` in the child it spawns: hooks fire on
-#: the session and commit hot path where blocking is never acceptable, and
-#: `client-cold.jsonl` carries a burst of 1600 misses in 13 seconds
-#: (2026-08-25T16:33:28Z, ~123/s), which is many short-lived processes each
-#: taking one miss. Whatever produces that burst must never each sleep here.
+#: the session and commit hot path where blocking is never acceptable.
 #: -> state/bug-backlog/2026-08-26-sixteen-hundred-warm-misses-in-thirteen-seconds.yaml
-WARM_BOOT_WAIT_SECS = 15.0
+WARM_BOOT_WAIT_SECS = 2.0
 
 #: First poll interval, and the cap it backs off to. Fast at the start because
 #: the case this exists for is a server that is nearly up; capped at a second
@@ -611,9 +558,9 @@ def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
     Negative-spec:
         - Does NOT retry a served error envelope. Anything well-formed coming
           back is the server answering, which is the condition this waits for.
-        - Does NOT print an ETA or a countdown. Boot time is load-dependent
-          and, until `record_client_boot_wait` has rows, unknown -- an interval
-          an operator can satisfy is one they will draw a wrong conclusion from.
+        - Does NOT print an ETA or a countdown. Boot time is load-dependent,
+          and an interval an operator can satisfy is one they will draw a wrong
+          conclusion from.
     """
     import time as _time
 

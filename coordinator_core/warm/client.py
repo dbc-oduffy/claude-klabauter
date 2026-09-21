@@ -801,7 +801,15 @@ def _mutation_deadline_for(method: Any) -> float:
 #: and this one must be read every time it fires.
 #:
 #: So the text now states the uncertainty it actually has and keeps every
-#: instruction unchanged. NEGATIVE SPEC: do not restore a delivery claim here
+#: instruction unchanged.
+#:
+#: 2026-09-21 (C4, docs/plans/2026-09-20-stop-the-engine-spawning-to-talk-to-
+#: itself.md): "a slow op is not a hung one, and the engine does not stop when
+#: this client stops waiting" cut for the same reason. Both are claims about the
+#: engine this client cannot observe, and both were contradicted the day they
+#: were cited: a no-op ping waited 28.8s on a server idle at 0.0% CPU, which is
+#: neither "slow" nor observably "working". The "may never have started" half
+#: already carries the only uncertainty the client actually has. NEGATIVE SPEC: do not restore a delivery claim here
 #: without a server-side read/dispatch acknowledgement to support it -- an ack
 #: is the only thing that would make the stronger sentence true, and no part
 #: of today's framing gives this client one.
@@ -809,8 +817,7 @@ _MUTATION_INDETERMINATE_MESSAGE = (
     "warm dispatch indeterminate: this MUTATING op's request was written to "
     "the warm engine's pipe, which did not answer in time. Whether the engine "
     "read it is unknown from here, so the op may have COMPLETED, or may never "
-    "have started -- a slow op is not a hung one, and the engine does not stop "
-    "when this client stops waiting. Reconcile against real state (e.g. `git "
+    "have started. Reconcile against real state (e.g. `git "
     "log`) before re-running; re-running blind is how a duplicate commit "
     "happens, and finding no trace means it is safe to re-run. Deliberately "
     "NOT retried and NOT re-run cold here: a mutation the engine IS executing, "

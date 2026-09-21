@@ -678,6 +678,19 @@ class TimeoutMessageClaimsOnlyWhatTheDoorKnows(unittest.TestCase):
                 self.assertTrue(text.startswith(_mod._TIMEOUT_MESSAGE_PREFIX))
                 self.assertTrue(_mod.is_timeout_error(RuntimeError(text)))
 
+    def test_the_warm_clients_indeterminate_message_makes_no_engine_claim(self):
+        """The same C4 cut, on the message a warm-served refusal actually
+        prints. The cc_invoke remedies above were fixed first and this one was
+        missed -- it surfaced verbatim in the next indeterminate after they
+        shipped, which is the case for pinning every copy rather than one."""
+        from coordinator_core.warm import client
+
+        text = " ".join(client._MUTATION_INDETERMINATE_MESSAGE.split())
+        self.assertNotIn("slow op is not a hung one", text)
+        self.assertNotIn("does not stop when this client", text)
+        self.assertIn("Reconcile against real state", text)
+        self.assertIn("may never have started", text)
+
     def test_no_branch_names_an_override_key(self):
         """Unchanged contract from this file's original subject — re-asserted
         here because C4 rewrote both branches and a reworded message is exactly
