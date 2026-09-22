@@ -971,7 +971,9 @@ def test_operator_blocks_like_a_gate_not_like_a_deferral():
 
     src = inspect.getsource(spine_read.read_spine)
     # The operator predicate sits on the gate arm, beside the gate check.
-    assert "_has_uncleared_execution_gate(raw) or _is_operator_row(raw)" in src
+    import re
+
+    assert re.search(r"_has_uncleared_execution_gate\(raw\b[^\n]*\)\s*or _is_operator_row\(raw\)", src)
 
 
 def test_an_excluded_row_is_reported_not_silently_dropped():

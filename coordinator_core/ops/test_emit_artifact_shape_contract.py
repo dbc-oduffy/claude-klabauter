@@ -424,12 +424,15 @@ class TestRealTreeParity:
         assert bundle["version"] == "9.2.0"
 
     def test_queue_grind_profile_registered(self, bundle):
-        # DoE's queue-grind-profile.schema.json (DoE-claude 4b7ea5ddc) enters the
-        # bundle by directory discovery; its local `$defs` hoist to the bundle root.
+        # DoE's queue-grind-profile.schema.json enters the bundle by directory
+        # discovery; its local `$defs` hoist to the bundle root under a
+        # `queue_grind_` prefix (DoE 2.0.1), never a generic shared name.
         defs = bundle["$defs"]
         assert "queue-grind-profile" in defs
-        for hoisted in ("knob", "graph_node", "stage_kind", "verify_op"):
-            assert hoisted in defs, hoisted
+        hoisted = [name for name in defs if name.startswith("queue_grind_")]
+        assert len(hoisted) == 12, hoisted
+        for generic in ("knob", "graph_node", "stage_kind", "verify_op"):
+            assert generic not in defs, generic
 
     def test_9_2_0_is_a_minor_bump_over_9_1_0(self):
         major, minor, patch = (int(p) for p in CONTRACT_VERSION.split("."))

@@ -171,14 +171,15 @@ def compose_triage_call(
     script_path_js: Optional[str] = None,
     run_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
+    repo_root: str = ".",
 ) -> str:
     """`triage` (general-purpose, sonnet, medium). Runs `grind-row check`
     first, then per row returns verdict, evidence, a t-shirt size plus
     sizing evidence, a tradeoff statement (empty when there is none),
     triage-declared files, and a fix plan. Appends one ledger line per row
     (`grind-row append --profile P --row-id R --digest D --stage triage
-    --verdict V --outcome O --evidence-file F --run-stamp T`) as it
-    finishes, and writes the per-batch triage record to
+    --verdict V --outcome O --evidence-file F --run-stamp T --repo-root
+    <repo_root>`) as it finishes, and writes the per-batch triage record to
     `<run_dir>/records/<batch-id>.json` for a verify op to read.
 
     ``batch_id_js``/``triage_depth_js``/``rows_js``/``script_path_js``/
@@ -213,6 +214,7 @@ def compose_triage_call(
             "--evidence-file <a file with your evidence> --run-stamp ",
         ),
         run_id_part,
+        ("lit", f" --repo-root {repo_root}"),
         (
             "lit",
             "` immediately (idempotent under a retried agent -- an identical "
@@ -261,23 +263,26 @@ def compose_refute_close_call(
     phase_title: str,
     profile: str = "",
     profile_dir: str = "",
+    profile_dir_js: Optional[str] = None,
     proposals_js: Optional[str] = None,
     run_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
+    repo_root: str = ".",
 ) -> str:
     """`refute-close` (general-purpose, sonnet, medium). Tries to refute
     each close proposal it is handed. Closes only the confirmed ones, via
     `grind-row close --profile-dir D --profile P --row <path> --digest DIG
     --verdict refute-close --evidence-file F --closed-by refute-close
-    --run-stamp T`, reporting the `{old,new}` path pair the command prints
-    so the committer can stage the archive add and declare the queue-path
-    removal.
+    --run-stamp T --repo-root <repo_root>`, reporting the `{old,new}` path
+    pair the command prints so the committer can stage the archive add and
+    declare the queue-path removal.
 
     ``proposals_js``/``run_id_js`` name JS runtime expressions -- the
     proposal rows (row_id/path/digest/triage evidence) this batch's
     refute-close node actually reached, and the run stamp -- interpolated
     instead of a static/omitted value."""
     proposals_part: tuple[str, str] = ("expr", proposals_js) if proposals_js else ("lit", "[]")
+    profile_dir_part: tuple[str, str] = ("expr", profile_dir_js) if profile_dir_js else ("lit", profile_dir)
     run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
     parts: list[tuple[str, str]] = [
         ("lit", "You are the refute-close stage. Your close proposals (row_id/path/digest/evidence) are: "),
@@ -286,12 +291,17 @@ def compose_refute_close_call(
             "lit",
             ". For each one, actively try to refute it -- look for evidence the "
             "row is not actually resolved. For every proposal that survives "
-            "that attempt, run `grind-row close --profile-dir "
-            f"{profile_dir} --profile {profile} --row <its path> --digest "
+            "that attempt, run `grind-row close --profile-dir ",
+        ),
+        profile_dir_part,
+        (
+            "lit",
+            f" --profile {profile} --row <its path> --digest "
             "<its digest> --verdict refute-close --evidence-file <a file "
             "with your evidence> --closed-by refute-close --run-stamp ",
         ),
         run_id_part,
+        ("lit", f" --repo-root {repo_root}"),
         (
             "lit",
             "`, and report the `{old,new}` path pair it prints as that "
@@ -349,6 +359,12 @@ def compose_fix_call(
     locked_files: Sequence[str] = (),
     locked_files_js: Optional[str] = None,
     feedback_js: Optional[str] = None,
+    profile: str = "",
+    profile_dir_js: Optional[str] = None,
+    row_path_js: Optional[str] = None,
+    digest_js: Optional[str] = None,
+    run_id_js: Optional[str] = None,
+    repo_root: str = ".",
     agent_type_host: Optional[str] = None,
 ) -> str:
     """`fix` (general-purpose, sonnet, high). Holds the lock on its files
@@ -394,10 +410,23 @@ def compose_fix_call(
             "carries a tradeoff triage did not catch, report that tradeoff "
             "instead of proceeding. Otherwise, fix the row, run its tests, "
             "report every file you touched and every file you created, and "
-            "run `grind-row close` when they pass, reporting the `{old,new}` "
-            "path pair it prints as `close_result`.",
+            "when they pass run `grind-row close --profile-dir ",
         )
     )
+    parts.append(("expr", profile_dir_js) if profile_dir_js else ("lit", "<profile dir>"))
+    parts.append(("lit", f" --profile {profile} --row "))
+    parts.append(("expr", row_path_js) if row_path_js else ("lit", "<row path>"))
+    parts.append(("lit", " --digest "))
+    parts.append(("expr", digest_js) if digest_js else ("lit", "<row digest>"))
+    parts.append((
+        "lit",
+        " --verdict fix --evidence-file <a file with your evidence> --closed-by fix --run-stamp ",
+    ))
+    parts.append(("expr", run_id_js) if run_id_js else ("lit", "<run-id>"))
+    parts.append((
+        "lit",
+        f" --repo-root {repo_root}`, reporting the `{{old,new}}` path pair it prints as `close_result`.",
+    ))
     if feedback_js:
         parts.append(("expr", feedback_js))
     parts.append(("lit", " " + _NO_STAGING_CLAUSE))
@@ -526,6 +555,45 @@ def compose_verify_op_call(
     )
 
 
+#: `commit`'s own wire schema -- identical for both the per-row form and the
+#: ledger-only form (batch-end/drain): both are the SAME `coordinator:
+#: git-commit-agent` stage kind, only the staged content differs.
+_COMMIT_SCHEMA = {
+    "type": "object",
+    "required": ["outcome"],
+    "properties": {
+        "outcome": {"type": "string", "enum": ["committed", "commit-failed"]},
+        "sha": {"type": "string"},
+    },
+}
+
+#: The trailing "then commit" clause every `commit` prompt ends on
+#: (trap 4: an indeterminate outcome is reconciled against `git log`/`git
+#: status` before any retry, never retried blind) -- shared verbatim by
+#: `compose_commit_call` and `compose_commit_ledger_only_call`.
+_COMMIT_TAIL_LIT = (
+    " Then commit. If the outcome is indeterminate, reconcile it against "
+    "`git log` and `git status` before doing anything else -- never retry blind."
+)
+
+
+def _compose_commit_agent_call(
+    parts: list[tuple[str, str]], *, label: str, phase_title: str, agent_type_host: Optional[str]
+) -> str:
+    """Shared tail: both `commit` forms hand their own prompt ``parts`` in
+    here to finish the same way (schema, agent type, effort, ``is_expr``)."""
+    return _agent_call(
+        _join_prompt_parts(parts),
+        label=label,
+        phase_title=phase_title,
+        agent_type=COMMIT_AGENT_TYPE,
+        agent_type_host=agent_type_host,
+        effort="low",
+        schema=_COMMIT_SCHEMA,
+        is_expr=True,
+    )
+
+
 def compose_commit_call(
     *,
     label: str,
@@ -566,30 +634,9 @@ def compose_commit_call(
         parts.append(("lit", " Pass --declared-revert for every one of these removed paths: ["))
         parts.extend(_list_parts(removed_files, removed_files_js))
         parts.append(("lit", "]."))
-    parts.append(
-        (
-            "lit",
-            " Then commit. If the outcome is indeterminate, reconcile it against "
-            "`git log` and `git status` before doing anything else -- never retry blind.",
-        )
-    )
-    schema = {
-        "type": "object",
-        "required": ["outcome"],
-        "properties": {
-            "outcome": {"type": "string", "enum": ["committed", "commit-failed"]},
-            "sha": {"type": "string"},
-        },
-    }
-    return _agent_call(
-        _join_prompt_parts(parts),
-        label=label,
-        phase_title=phase_title,
-        agent_type=COMMIT_AGENT_TYPE,
-        agent_type_host=agent_type_host,
-        effort="low",
-        schema=schema,
-        is_expr=True,
+    parts.append(("lit", _COMMIT_TAIL_LIT))
+    return _compose_commit_agent_call(
+        parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host
     )
 
 
@@ -633,30 +680,9 @@ def compose_commit_ledger_only_call(
         else:
             parts.append(("lit", str(run_id)))
         parts.append(("lit", ".json in this same commit."))
-    parts.append(
-        (
-            "lit",
-            " Then commit. If the outcome is indeterminate, reconcile it against "
-            "`git log` and `git status` before doing anything else -- never retry blind.",
-        )
-    )
-    schema = {
-        "type": "object",
-        "required": ["outcome"],
-        "properties": {
-            "outcome": {"type": "string", "enum": ["committed", "commit-failed"]},
-            "sha": {"type": "string"},
-        },
-    }
-    return _agent_call(
-        _join_prompt_parts(parts),
-        label=label,
-        phase_title=phase_title,
-        agent_type=COMMIT_AGENT_TYPE,
-        agent_type_host=agent_type_host,
-        effort="low",
-        schema=schema,
-        is_expr=True,
+    parts.append(("lit", _COMMIT_TAIL_LIT))
+    return _compose_commit_agent_call(
+        parts, label=label, phase_title=phase_title, agent_type_host=agent_type_host
     )
 
 

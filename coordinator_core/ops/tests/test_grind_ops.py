@@ -153,6 +153,42 @@ def test_lessons_verify_extraction_fail(tmp_path: Path, monkeypatch: pytest.Monk
     assert result["failing_ids"] == ["proj-L99"]
 
 
+def test_lessons_verify_extraction_missing_manifest_is_a_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _no_spawn(monkeypatch)
+    with pytest.raises(grind_ops.VerifyRefusalError):
+        asyncio.run(
+            grind_ops._lessons_verify_extraction(
+                {"manifest": str(tmp_path / "never-existed.json"), "records": []},
+                tmp_path,
+            )
+        )
+
+
+def test_lessons_verify_extraction_bad_input_exit_is_a_refusal_not_a_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _no_spawn(monkeypatch)
+    # An empty extraction DIRECTORY with no `*-extracted-full.{yaml,json}`
+    # inside is `verify()`'s own exit-2 bad-input case (§ module docstring
+    # `_discover_extractions`/"no extractions found") -- distinct from a
+    # grounding failure (exit 1), which this adapter must never conflate
+    # with `ok=False`.
+    empty_extraction_dir = tmp_path / "extractions"
+    empty_extraction_dir.mkdir()
+    with pytest.raises(grind_ops.VerifyRefusalError):
+        asyncio.run(
+            grind_ops._lessons_verify_extraction(
+                {
+                    "manifest": str(empty_extraction_dir),
+                    "records": [{"id": "proj-L1", "source": "", "summary": "x"}],
+                },
+                tmp_path,
+            )
+        )
+
+
 def test_doctrine_surface_split_regenerate_no_spawn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

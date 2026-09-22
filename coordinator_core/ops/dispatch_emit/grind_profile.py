@@ -22,7 +22,11 @@ Profile:
     ``vocab.STAGE_OUTCOMES`` — a stray outcome outside that set is refused,
     naming the node and the outcome;
   - the graph is acyclic apart from ``on_fail``, a single optional back-edge
-    per node the engine bounds to one traversal per path;
+    per node the engine bounds to one traversal per path; an ``on_fail`` (like
+    any edge) may instead name a hand-back type, ending the path there;
+  - edge targets are graph nodes, universal hand-back types, or the
+    profile's own ``hand_back_types`` (DR-404 § 3), which must be disjoint
+    from both;
   - the floor: no path reaches a commit without having passed through
     ``refute-close`` or a ``fix``, and no ``fix``-carrying path reaches
     commit without a ``verify`` pass downstream of the LAST fix on that
@@ -78,10 +82,13 @@ _TOP_LEVEL_KEYS = frozenset(
         "archive_path",
         "schema",
         "source",
+        "hand_back_types",
     }
 )
 
-_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"absent_sentinels", "source"}
+_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"absent_sentinels", "source", "hand_back_types"}
+
+_HANDBACK_TYPE_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 _NODE_KEYS = frozenset({"kind", "edges", "on_fail", "verify"})
 
@@ -123,175 +130,52 @@ class Profile:
     schema: str
     source: Optional[dict]
     source_path: Path
+    hand_back_types: tuple[str, ...] = ()
+
+    @property
+    def all_hand_back_types(self) -> frozenset[str]:
+        """The universal set plus the profile's own additions (DR-404 § 3:
+        profiles add to the universal set, never remove from it)."""
+        return vocab.UNIVERSAL_HANDBACK_TYPES | frozenset(self.hand_back_types)
 
 
 # ---------------------------------------------------------------------------
-# Exceptions — each names the offending node/path, never a bare ValueError.
+# Exceptions — one class, naming the offending node/path via `rule`/`node`,
+# never a bare ValueError a caller has to string-match.
 # ---------------------------------------------------------------------------
 
 
-class InvalidProfileNameError(ValueError):
-    """Raised when a profile ``name`` fails ``^[a-z][a-z0-9-]*$`` or contains
-    a path separator — the name is joined onto ``profile_dir`` verbatim, so
-    an unvalidated name is a path-traversal surface."""
+class ProfileError(ValueError):
+    """The one refusal class every check in this module raises.
 
+    ``rule`` names which check failed (a short, stable snake_case tag — see
+    the call sites below for the full set: ``invalid_profile_name``,
+    ``unknown_profile_key``, ``profile_field_type``, ``unknown_node_kind``,
+    ``refute_close_not_agent_only``, ``verify_default_missing``,
+    ``verify_op_unknown``, ``unknown_edge_target``, ``stray_outcome``,
+    ``triage_verdict_totality``, ``graph_cycle``, ``graph_on_fail_traversal``,
+    ``verify_floor``, ``closing_floor``, ``closure_block``,
+    ``closure_branch_missing``, ``unknown_appetite_preset``,
+    ``unoverridable_knob``, ``hand_back_type_collision``). ``node`` is the offending node/knob id when the
+    rule is node-shaped, ``None`` for a profile-wide or path-shaped rule
+    (the path itself is folded into ``detail``, same as the prior per-rule
+    classes' own message). ``detail`` is the free-text description.
 
-class UnknownProfileKeyError(ValueError):
-    """Raised when a profile (or one of its nested blocks) declares a
-    top-level/knob/node key this module does not recognise."""
+    Replaces eighteen single-purpose subclasses (one per rule) that carried
+    no information a caller ever read off the exception object — every
+    caller in this repo catches by rule text or by the bare class, never by
+    a per-rule attribute (``.node_id``/``.path``/``.missing``/etc, grepped
+    with none found outside this module and its own tests) — so the
+    per-rule split bought type-checking specificity nobody used, at the
+    cost of eighteen names a caller had to know to catch."""
 
-    def __init__(self, keys: list[str], *, node: str | None = None) -> None:
-        where = f" in {node}" if node else ""
-        super().__init__(f"unknown key(s){where}: {keys}")
-        self.keys = keys
+    def __init__(self, rule: str, node: str | None = None, detail: str = "") -> None:
+        where = f" ({node})" if node else ""
+        message = f"{rule}{where}: {detail}" if detail else f"{rule}{where}"
+        super().__init__(message)
+        self.rule = rule
         self.node = node
-
-
-class ProfileFieldTypeError(ValueError):
-    """Raised when a field this module reads has the wrong shape or is
-    missing where required."""
-
-
-class UnknownNodeKindError(ValueError):
-    """Raised when a graph node's ``kind`` is not a member of
-    ``vocab.STAGE_KINDS``."""
-
-    def __init__(self, node_id: str, kind: object) -> None:
-        super().__init__(f"{node_id}: unknown stage kind {kind!r}")
-        self.node_id = node_id
-        self.kind = kind
-
-
-class RefuteCloseNotAgentOnlyError(ValueError):
-    """Raised when a ``refute-close`` node declares a ``verify`` block.
-    ``refute-close`` is agent-only (§ Design § Profile) — it never routes
-    through the op-runner path a ``verify`` block would name."""
-
-    def __init__(self, node_id: str) -> None:
-        super().__init__(f"{node_id}: refute-close is agent-only, may not carry a verify block")
-        self.node_id = node_id
-
-
-class VerifyDefaultMissingError(ValueError):
-    """Raised when a ``verify``-kind node's ``verify`` map has no ``default``
-    entry."""
-
-    def __init__(self, node_id: str) -> None:
-        super().__init__(f"{node_id}: verify map has no 'default' entry")
-        self.node_id = node_id
-
-
-class VerifyOpUnknownError(ValueError):
-    """Raised when a ``verify``-kind node names an op-mode entry that is not
-    a member of ``vocab.VERIFY_OPS``, or a bare mode outside
-    ``vocab.VERIFY_MODES``."""
-
-    def __init__(self, node_id: str, key: str, mode: object) -> None:
-        super().__init__(f"{node_id}[{key!r}]: invalid verify mode {mode!r}")
-        self.node_id = node_id
-        self.key = key
-        self.mode = mode
-
-
-class UnknownEdgeTargetError(ValueError):
-    """Raised when an edge (or ``on_fail``) names a target that is neither
-    another graph node nor a member of ``vocab.UNIVERSAL_HANDBACK_TYPES``."""
-
-    def __init__(self, node_id: str, outcome: str, target: object) -> None:
-        super().__init__(f"{node_id}[{outcome!r}]: unknown edge target {target!r}")
-        self.node_id = node_id
-        self.outcome = outcome
-        self.target = target
-
-
-class StrayOutcomeError(ValueError):
-    """Raised when a node's edges name an outcome outside its own stage
-    kind's outcome set (``vocab.STAGE_OUTCOMES[node.kind]``, or the
-    profile's declared ``verdicts`` for a ``triage`` node)."""
-
-    def __init__(self, node_id: str, stray: list[str]) -> None:
-        super().__init__(f"{node_id}: outcome(s) outside its stage kind's set: {stray}")
-        self.node_id = node_id
-        self.stray = stray
-
-
-class TriageVerdictTotalityError(ValueError):
-    """Raised when a ``triage`` node's edges do not cover every verdict the
-    profile declares (§ Design § Profile: "every node's verdict map is
-    total over the profile's verdict vocabulary")."""
-
-    def __init__(self, node_id: str, missing: list[str]) -> None:
-        super().__init__(f"{node_id}: verdict map missing edge(s) for: {missing}")
-        self.node_id = node_id
-        self.missing = missing
-
-
-class GraphCycleError(ValueError):
-    """Raised when the graph carries a cycle through plain ``edges`` (never
-    through ``on_fail``, which is the one permitted back-edge)."""
-
-    def __init__(self, node_id: str, path: list[str]) -> None:
-        super().__init__(f"{node_id}: non-on_fail cycle, path {path!r}")
-        self.node_id = node_id
-        self.path = path
-
-
-class GraphOnFailTraversalError(ValueError):
-    """Raised when a single path attempts a second ``on_fail`` traversal —
-    the engine bounds every path to exactly one."""
-
-    def __init__(self, node_id: str, path: list[str]) -> None:
-        super().__init__(f"{node_id}: second on_fail traversal on path {path!r}")
-        self.node_id = node_id
-        self.path = path
-
-
-class VerifyFloorError(ValueError):
-    """Raised when a path reaches a commit after a ``fix`` with no
-    ``verify`` pass downstream of the LAST fix on that path."""
-
-    def __init__(self, path: list[str]) -> None:
-        super().__init__(f"path {path!r} reaches commit without a verify downstream of its last fix")
-        self.path = path
-
-
-class ClosingFloorError(ValueError):
-    """Raised when a path reaches a commit having passed through neither
-    ``refute-close`` nor ``fix`` — no closing path may bypass both."""
-
-    def __init__(self, path: list[str]) -> None:
-        super().__init__(f"path {path!r} reaches commit without refute-close or fix")
-        self.path = path
-
-
-class ClosureBlockError(ValueError):
-    """Raised when the profile's ``closure`` block is missing a required
-    field or names an unknown closing branch."""
-
-
-class ClosureBranchMissingError(ValueError):
-    """Raised when the graph can reach a commit via a closing branch
-    (``fix`` or ``refute-close``) that ``closure.closed_values`` does not
-    map (EM note 3)."""
-
-    def __init__(self, branch: str, path: list[str]) -> None:
-        super().__init__(f"closure.closed_values has no entry for {branch!r} (path {path!r})")
-        self.branch = branch
-        self.path = path
-
-
-class UnknownAppetitePresetError(ValueError):
-    """Raised when ``resolve_appetite`` is asked for an appetite the
-    vocabulary does not know, or the profile itself never declared."""
-
-
-class UnoverridableKnobError(ValueError):
-    """Raised when ``resolve_appetite`` receives an override for a knob
-    outside ``vocab.OVERRIDABLE_KNOBS``."""
-
-    def __init__(self, knob: str) -> None:
-        super().__init__(f"knob {knob!r} is not overridable (only {sorted(vocab.OVERRIDABLE_KNOBS)})")
-        self.knob = knob
+        self.detail = detail
 
 
 # ---------------------------------------------------------------------------
@@ -307,28 +191,28 @@ def load_profile(name: str, profile_dir: str | Path) -> Profile:
     module reads are checked; DoE's own JSON-schema gate is the fuller
     check (EM note 2)."""
     if "/" in name or "\\" in name or not _NAME_RE.match(name):
-        raise InvalidProfileNameError(f"invalid profile name: {name!r}")
+        raise ProfileError("invalid_profile_name", detail=f"invalid profile name: {name!r}")
 
     path = Path(profile_dir) / f"{name}.yaml"
     text = path.read_text(encoding="utf-8")
     doc = yaml.safe_load(text)
     if not isinstance(doc, dict):
-        raise ProfileFieldTypeError("profile document must be a mapping")
+        raise ProfileError("profile_field_type", detail="profile document must be a mapping")
 
     unknown = set(doc) - _TOP_LEVEL_KEYS
     if unknown:
-        raise UnknownProfileKeyError(sorted(unknown))
+        raise ProfileError("unknown_profile_key", detail=f"unknown key(s): {sorted(unknown)}")
     missing = _REQUIRED_TOP_LEVEL_KEYS - set(doc)
     if missing:
-        raise ProfileFieldTypeError(f"missing required top-level key(s): {sorted(missing)}")
+        raise ProfileError("profile_field_type", detail=f"missing required top-level key(s): {sorted(missing)}")
 
     row_id_key = doc["row_id_key"]
     if not isinstance(row_id_key, str) or not row_id_key:
-        raise ProfileFieldTypeError("row_id_key must be a non-empty string")
+        raise ProfileError("profile_field_type", detail="row_id_key must be a non-empty string")
 
     batch_key = doc["batch_key"]
     if not isinstance(batch_key, list) or not batch_key or not all(isinstance(k, str) for k in batch_key):
-        raise ProfileFieldTypeError("batch_key must be a non-empty list of strings")
+        raise ProfileError("profile_field_type", detail="batch_key must be a non-empty list of strings")
 
     priority = doc["priority"]
     if (
@@ -336,11 +220,11 @@ def load_profile(name: str, profile_dir: str | Path) -> Profile:
         or not isinstance(priority.get("field"), str)
         or priority.get("order") not in ("asc", "desc")
     ):
-        raise ProfileFieldTypeError("priority must be {field: str, order: 'asc'|'desc'}")
+        raise ProfileError("profile_field_type", detail="priority must be {field: str, order: 'asc'|'desc'}")
 
     verdicts = doc["verdicts"]
     if not isinstance(verdicts, list) or not verdicts or not all(isinstance(v, str) for v in verdicts):
-        raise ProfileFieldTypeError("verdicts must be a non-empty list of strings")
+        raise ProfileError("profile_field_type", detail="verdicts must be a non-empty list of strings")
 
     graph = _build_graph(doc["graph"])
     closure = _build_closure(doc["closure"])
@@ -348,30 +232,32 @@ def load_profile(name: str, profile_dir: str | Path) -> Profile:
 
     absent_sentinels_raw = doc.get("absent_sentinels", {}) or {}
     if not isinstance(absent_sentinels_raw, dict):
-        raise ProfileFieldTypeError("absent_sentinels must be a mapping")
+        raise ProfileError("profile_field_type", detail="absent_sentinels must be a mapping")
     absent_sentinels = {}
     for key, values in absent_sentinels_raw.items():
         if not isinstance(values, list):
-            raise ProfileFieldTypeError(f"absent_sentinels[{key!r}] must be a list")
+            raise ProfileError("profile_field_type", detail=f"absent_sentinels[{key!r}] must be a list")
         absent_sentinels[key] = tuple(values)
 
     triage_policy = doc["triage_policy"]
     if not isinstance(triage_policy, str) or not triage_policy:
-        raise ProfileFieldTypeError("triage_policy must be a non-empty string")
+        raise ProfileError("profile_field_type", detail="triage_policy must be a non-empty string")
     digest = hashlib.sha256(triage_policy.encode("utf-8")).hexdigest()
 
     archive_path = doc["archive_path"]
     if not isinstance(archive_path, str) or not archive_path:
-        raise ProfileFieldTypeError("archive_path must be a non-empty string")
+        raise ProfileError("profile_field_type", detail="archive_path must be a non-empty string")
 
     schema_rel_path = doc["schema"]
     if not isinstance(schema_rel_path, str) or not schema_rel_path:
-        raise ProfileFieldTypeError("schema must be a non-empty string")
+        raise ProfileError("profile_field_type", detail="schema must be a non-empty string")
 
     source_block = doc.get("source")
     if source_block is not None:
         if not isinstance(source_block, dict) or not isinstance(source_block.get("op"), str):
-            raise ProfileFieldTypeError("source, when present, must be {op: str, args?: dict}")
+            raise ProfileError("profile_field_type", detail="source, when present, must be {op: str, args?: dict}")
+
+    hand_back_types = _build_hand_back_types(doc.get("hand_back_types", []), graph)
 
     return Profile(
         name=name,
@@ -389,41 +275,66 @@ def load_profile(name: str, profile_dir: str | Path) -> Profile:
         schema=schema_rel_path,
         source=dict(source_block) if source_block is not None else None,
         source_path=path,
+        hand_back_types=hand_back_types,
     )
+
+
+def _build_hand_back_types(raw: object, graph: dict[str, "GraphNode"]) -> tuple[str, ...]:
+    """A profile's own hand-back types: kebab-case, unique, and disjoint from
+    both the universal set and the graph's node ids — an edge target must
+    name exactly one thing."""
+    if not isinstance(raw, list) or not all(isinstance(t, str) for t in raw):
+        raise ProfileError("profile_field_type", detail="hand_back_types must be a list of strings")
+    bad = [t for t in raw if not _HANDBACK_TYPE_RE.match(t)]
+    if bad:
+        raise ProfileError("profile_field_type", detail=f"hand_back_types must be kebab-case: {bad}")
+    if len(set(raw)) != len(raw):
+        raise ProfileError("profile_field_type", detail="hand_back_types has duplicate entries")
+    universal = sorted(set(raw) & vocab.UNIVERSAL_HANDBACK_TYPES)
+    if universal:
+        raise ProfileError("hand_back_type_collision", detail=f"already universal hand-back types: {universal}")
+    nodes = sorted(set(raw) & set(graph))
+    if nodes:
+        raise ProfileError("hand_back_type_collision", detail=f"hand_back_types name graph nodes: {nodes}")
+    return tuple(raw)
 
 
 def _build_graph(raw: object) -> dict[str, GraphNode]:
     if not isinstance(raw, dict) or not raw:
-        raise ProfileFieldTypeError("graph must be a non-empty mapping")
+        raise ProfileError("profile_field_type", detail="graph must be a non-empty mapping")
     nodes: dict[str, GraphNode] = {}
     for node_id, raw_node in raw.items():
         if not isinstance(raw_node, dict):
-            raise ProfileFieldTypeError(f"graph node {node_id!r} must be a mapping")
+            raise ProfileError("profile_field_type", detail=f"graph node {node_id!r} must be a mapping")
         unknown = set(raw_node) - _NODE_KEYS
         if unknown:
-            raise UnknownProfileKeyError(sorted(unknown), node=str(node_id))
+            raise ProfileError("unknown_profile_key", node=str(node_id), detail=f"unknown key(s): {sorted(unknown)}")
 
         kind = raw_node.get("kind")
         if kind not in vocab.STAGE_KINDS:
-            raise UnknownNodeKindError(str(node_id), kind)
+            raise ProfileError("unknown_node_kind", node=str(node_id), detail=f"unknown stage kind {kind!r}")
 
         edges_raw = raw_node.get("edges", {}) or {}
         if not isinstance(edges_raw, dict):
-            raise ProfileFieldTypeError(f"{node_id}: edges must be a mapping")
+            raise ProfileError("profile_field_type", detail=f"{node_id}: edges must be a mapping")
         edges = {str(k): str(v) for k, v in edges_raw.items()}
 
         on_fail = raw_node.get("on_fail")
         if on_fail is not None and not isinstance(on_fail, str):
-            raise ProfileFieldTypeError(f"{node_id}: on_fail must be a string")
+            raise ProfileError("profile_field_type", detail=f"{node_id}: on_fail must be a string")
 
         verify = raw_node.get("verify")
         if verify is not None:
             if not isinstance(verify, dict):
-                raise ProfileFieldTypeError(f"{node_id}: verify must be a mapping")
+                raise ProfileError("profile_field_type", detail=f"{node_id}: verify must be a mapping")
             if kind == "refute-close":
-                raise RefuteCloseNotAgentOnlyError(str(node_id))
+                raise ProfileError(
+                    "refute_close_not_agent_only",
+                    node=str(node_id),
+                    detail="refute-close is agent-only, may not carry a verify block",
+                )
             if kind != "verify":
-                raise ProfileFieldTypeError(f"{node_id}: verify block only valid on verify nodes")
+                raise ProfileError("profile_field_type", detail=f"{node_id}: verify block only valid on verify nodes")
 
         nodes[str(node_id)] = GraphNode(id=str(node_id), kind=kind, edges=edges, on_fail=on_fail, verify=verify)
     return nodes
@@ -431,25 +342,27 @@ def _build_graph(raw: object) -> dict[str, GraphNode]:
 
 def _build_closure(raw: object) -> Closure:
     if not isinstance(raw, dict):
-        raise ClosureBlockError("closure must be a mapping")
+        raise ProfileError("closure_block", detail="closure must be a mapping")
     missing = vocab.CLOSURE_BLOCK_REQUIRED_FIELDS - set(raw)
     if missing:
-        raise ClosureBlockError(f"closure block missing field(s): {sorted(missing)}")
+        raise ProfileError("closure_block", detail=f"closure block missing field(s): {sorted(missing)}")
 
     closed_values = raw["closed_values"]
     if not isinstance(closed_values, dict) or not closed_values:
-        raise ClosureBlockError("closure.closed_values must be a non-empty mapping")
+        raise ProfileError("closure_block", detail="closure.closed_values must be a non-empty mapping")
     stray = set(closed_values) - vocab.CLOSURE_CLOSING_BRANCHES
     if stray:
-        raise ClosureBlockError(f"closure.closed_values names unknown branch(es): {sorted(stray)}")
+        raise ProfileError(
+            "closure_block", detail=f"closure.closed_values names unknown branch(es): {sorted(stray)}"
+        )
 
     stamp_fields = raw["stamp_fields"]
     if not isinstance(stamp_fields, list) or not all(isinstance(f, str) for f in stamp_fields):
-        raise ClosureBlockError("closure.stamp_fields must be a list of strings")
+        raise ProfileError("closure_block", detail="closure.stamp_fields must be a list of strings")
 
     status_field = raw["status_field"]
     if not isinstance(status_field, str) or not status_field:
-        raise ClosureBlockError("closure.status_field must be a non-empty string")
+        raise ProfileError("closure_block", detail="closure.status_field must be a non-empty string")
 
     return Closure(
         status_field=status_field,
@@ -460,21 +373,23 @@ def _build_closure(raw: object) -> Closure:
 
 def _build_appetite(raw: object) -> dict[str, dict]:
     if not isinstance(raw, dict) or not raw:
-        raise ProfileFieldTypeError("appetite must be a non-empty mapping")
+        raise ProfileError("profile_field_type", detail="appetite must be a non-empty mapping")
     stray = set(raw) - vocab.APPETITE_PRESETS
     if stray:
-        raise UnknownProfileKeyError(sorted(stray), node="appetite")
+        raise ProfileError("unknown_profile_key", node="appetite", detail=f"unknown key(s): {sorted(stray)}")
 
     presets: dict[str, dict] = {}
     for preset_name, preset in raw.items():
         if not isinstance(preset, dict):
-            raise ProfileFieldTypeError(f"appetite.{preset_name} must be a mapping")
+            raise ProfileError("profile_field_type", detail=f"appetite.{preset_name} must be a mapping")
         stray_knobs = set(preset) - vocab.KNOB_NAMES
         if stray_knobs:
-            raise UnknownProfileKeyError(sorted(stray_knobs), node=f"appetite.{preset_name}")
+            raise ProfileError(
+                "unknown_profile_key", node=f"appetite.{preset_name}", detail=f"unknown key(s): {sorted(stray_knobs)}"
+            )
         missing_knobs = _REQUIRED_KNOBS - set(preset)
         if missing_knobs:
-            raise ProfileFieldTypeError(f"appetite.{preset_name} missing knob(s): {sorted(missing_knobs)}")
+            raise ProfileError("profile_field_type", detail=f"appetite.{preset_name} missing knob(s): {sorted(missing_knobs)}")
         presets[preset_name] = dict(preset)
     return presets
 
@@ -511,7 +426,9 @@ def _check_outcome_membership(profile: Profile) -> None:
         outcome_set = set(profile.verdicts) if node.kind == "triage" else set(vocab.STAGE_OUTCOMES[node.kind])
         stray = set(node.edges) - outcome_set
         if stray:
-            raise StrayOutcomeError(node_id, sorted(stray))
+            raise ProfileError(
+                "stray_outcome", node=node_id, detail=f"outcome(s) outside its stage kind's set: {sorted(stray)}"
+            )
         missing = outcome_set - set(node.edges)
         # A missing outcome is tolerated when `on_fail` is set: `follow_edge`
         # falls back to it at run time for any outcome the `edges` map does
@@ -519,7 +436,9 @@ def _check_outcome_membership(profile: Profile) -> None:
         # even with a sparse `edges` map. Only a node with NO `on_fail` must
         # name every one of its own outcomes explicitly.
         if missing and node.on_fail is None:
-            raise TriageVerdictTotalityError(node_id, sorted(missing))
+            raise ProfileError(
+                "triage_verdict_totality", node=node_id, detail=f"verdict map missing edge(s) for: {sorted(missing)}"
+            )
 
 
 def _check_verify_nodes(profile: Profile) -> None:
@@ -528,22 +447,36 @@ def _check_verify_nodes(profile: Profile) -> None:
             continue
         verify_map = node.verify or {}
         if "default" not in verify_map:
-            raise VerifyDefaultMissingError(node_id)
+            raise ProfileError("verify_default_missing", node=node_id, detail="verify map has no 'default' entry")
         for key, mode in verify_map.items():
             if isinstance(mode, dict):
                 if mode.get("mode") != "op" or mode.get("op") not in vocab.VERIFY_OPS:
-                    raise VerifyOpUnknownError(node_id, key, mode)
+                    raise ProfileError(
+                        "verify_op_unknown", node=node_id, detail=f"[{key!r}]: invalid verify mode {mode!r}"
+                    )
             elif mode not in vocab.VERIFY_MODES:
-                raise VerifyOpUnknownError(node_id, key, mode)
+                raise ProfileError(
+                    "verify_op_unknown", node=node_id, detail=f"[{key!r}]: invalid verify mode {mode!r}"
+                )
 
 
 def _check_edge_targets(profile: Profile) -> None:
     for node_id, node in profile.graph.items():
         for outcome, target in node.edges.items():
-            if target not in profile.graph and target not in vocab.UNIVERSAL_HANDBACK_TYPES:
-                raise UnknownEdgeTargetError(node_id, outcome, target)
-        if node.on_fail is not None and node.on_fail not in profile.graph:
-            raise UnknownEdgeTargetError(node_id, "on_fail", node.on_fail)
+            if target not in profile.graph and target not in profile.all_hand_back_types:
+                raise ProfileError(
+                    "unknown_edge_target", node=node_id, detail=f"[{outcome!r}]: unknown edge target {target!r}"
+                )
+        if (
+            node.on_fail is not None
+            and node.on_fail not in profile.graph
+            and node.on_fail not in profile.all_hand_back_types
+        ):
+            raise ProfileError(
+                "unknown_edge_target",
+                node=node_id,
+                detail=f"['on_fail']: unknown edge target {node.on_fail!r}",
+            )
 
 
 def _check_acyclic(profile: Profile) -> None:
@@ -558,7 +491,9 @@ def _check_acyclic(profile: Profile) -> None:
             if target not in profile.graph:
                 continue  # a hand-back type target, terminal
             if color[target] == gray:
-                raise GraphCycleError(node_id, path + [target])
+                raise ProfileError(
+                    "graph_cycle", node=node_id, detail=f"non-on_fail cycle, path {path + [target]!r}"
+                )
             if color[target] == white:
                 visit(target, path + [target])
         color[node_id] = black
@@ -571,7 +506,7 @@ def _check_acyclic(profile: Profile) -> None:
 def _check_paths(profile: Profile) -> None:
     starts = [node_id for node_id, node in profile.graph.items() if node.kind == "triage"]
     if not starts:
-        raise ProfileFieldTypeError("graph has no triage entry node")
+        raise ProfileError("profile_field_type", detail="graph has no triage entry node")
     for start in starts:
         _walk(
             profile,
@@ -598,13 +533,22 @@ def _walk(
 
     if node.kind == "commit":
         if saw_fix and not since_fix_verified:
-            raise VerifyFloorError(path)
+            raise ProfileError(
+                "verify_floor", detail=f"path {path!r} reaches commit without a verify downstream of its last fix"
+            )
         if not saw_fix and not saw_refute_close:
-            raise ClosingFloorError(path)
+            raise ProfileError(
+                "closing_floor", detail=f"path {path!r} reaches commit without refute-close or fix"
+            )
         if saw_refute_close and "refute-close" not in profile.closure.closed_values:
-            raise ClosureBranchMissingError("refute-close", path)
+            raise ProfileError(
+                "closure_branch_missing",
+                detail=f"closure.closed_values has no entry for 'refute-close' (path {path!r})",
+            )
         if saw_fix and "fix" not in profile.closure.closed_values:
-            raise ClosureBranchMissingError("fix", path)
+            raise ProfileError(
+                "closure_branch_missing", detail=f"closure.closed_values has no entry for 'fix' (path {path!r})"
+            )
         return
 
     next_saw_fix = saw_fix or node.kind == "fix"
@@ -627,9 +571,11 @@ def _walk(
             path=path + [target],
         )
 
-    if node.on_fail is not None:
+    if node.on_fail is not None and node.on_fail in profile.graph:
         if on_fail_used:
-            raise GraphOnFailTraversalError(node_id, path)
+            raise ProfileError(
+                "graph_on_fail_traversal", node=node_id, detail=f"second on_fail traversal on path {path!r}"
+            )
         _walk(
             profile,
             node.on_fail,
@@ -657,21 +603,26 @@ def resolve_appetite(profile: Profile, appetite: str, overrides: dict | None = N
     cpu_count-dependent clamp would make the emitted bytes vary with the
     emitting host, which re-emit determinism does not want."""
     if appetite not in vocab.APPETITE_PRESETS:
-        raise UnknownAppetitePresetError(f"unknown appetite: {appetite!r}")
+        raise ProfileError("unknown_appetite_preset", detail=f"unknown appetite: {appetite!r}")
     if appetite not in profile.appetite:
-        raise UnknownAppetitePresetError(f"profile {profile.name!r} has no {appetite!r} preset")
+        raise ProfileError(
+            "unknown_appetite_preset", detail=f"profile {profile.name!r} has no {appetite!r} preset"
+        )
 
     overrides = overrides or {}
     for knob in overrides:
         if knob not in vocab.OVERRIDABLE_KNOBS:
-            raise UnoverridableKnobError(knob)
+            raise ProfileError(
+                "unoverridable_knob",
+                detail=f"knob {knob!r} is not overridable (only {sorted(vocab.OVERRIDABLE_KNOBS)})",
+            )
 
     resolved = copy.deepcopy(profile.appetite[appetite])
     resolved.update(overrides)
     if "concurrency" in resolved:
         concurrency = resolved["concurrency"]
         if isinstance(concurrency, bool) or not isinstance(concurrency, int) or concurrency < 1:
-            raise ProfileFieldTypeError(
+            raise ProfileError("profile_field_type", detail=
                 f"appetite.{appetite}.concurrency must be an int >= 1, got {concurrency!r}"
             )
         resolved["concurrency"] = min(concurrency, vocab.ENGINE_CONCURRENCY_CEILING)

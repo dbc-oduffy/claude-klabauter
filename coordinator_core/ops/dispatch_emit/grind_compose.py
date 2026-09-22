@@ -81,9 +81,7 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from coordinator_core.contract import grind_vocab as vocab
@@ -183,6 +181,8 @@ def follow_edge(routing: Mapping[str, dict], node_id: str, outcome: str, row: "R
     target = node["edges"].get(outcome)
     if target is None:
         on_fail = node.get("on_fail")
+        if on_fail and on_fail not in routing:
+            return ("handback", on_fail)
         if on_fail and not row.on_fail_used:
             row.on_fail_used = True
             return ("node", on_fail)
@@ -241,7 +241,6 @@ def run_admission(
     routing: Mapping[str, dict],
     triage_node_id: str,
     *,
-    window: int,
     reserve: int,
     max_agent_calls: Optional[int] = None,
     budget_tokens: Optional[int] = None,
@@ -267,7 +266,10 @@ def run_admission(
     Downstream-first, one admitted batch's row work fully drains before the
     next admission decision -- this reference scheduler never holds more
     than one batch open at once, which is a compliant (if not maximally
-    concurrent) instance of "at most `window` batches in flight"; the
+    concurrent) instance of "at most WINDOW batches in flight" (no `window`
+    param here: a single-batch-at-a-time scheduler is compliant at every
+    window size, so the value was read but never branched on -- pyright's
+    own unused-parameter flag); the
     rendered `.mjs` (below) implements the SAME admission invariant with
     real bounded concurrency via an async worker pool, since Node cannot be
     executed to verify true interleaving under pytest (CLAUDE.md: no Node
@@ -582,6 +584,7 @@ _ROUTING_HELPERS = (
     "  const node = ROUTING[nodeId];\n"
     "  const target = node.edges[outcome];\n"
     "  if (target === undefined) {\n"
+    "    if (node.on_fail && !ROUTING[node.on_fail]) return { kind: 'handback', value: node.on_fail };\n"
     "    if (node.on_fail && !row.onFailUsed) { row.onFailUsed = true; return { kind: 'node', value: node.on_fail }; }\n"
     "    return { kind: 'handback', value: 'stage-dead' };\n"
     "  }\n"
@@ -620,21 +623,6 @@ def _capture(call_text: str, stage_kind: str, *, return_expr: str = "_result", t
     if tail is not None:
         return body + f"\n{tail}"
     return body + f"\n  return {return_expr};"
-
-def _render_profile_dir(profile: Profile, repo_root: Any) -> str:
-    """Render ``profile.source_path.parent`` POSIX and, where possible,
-    RELATIVE to ``repo_root`` -- an absolute path baked straight from
-    ``source_path`` would vary with the emitting machine's checkout
-    location (no-single-machine-assumptions), breaking re-emit
-    byte-identity across clones/CI runners even with no real input
-    change."""
-    parent = profile.source_path.parent
-    try:
-        rendered = os.path.relpath(parent, Path(repo_root))
-    except ValueError:
-        rendered = str(parent)
-    return PurePosixPath(Path(rendered)).as_posix()
-
 
 def _node_kind_map(profile: Profile) -> dict[str, str]:
     return {node_id: node.kind for node_id, node in profile.graph.items()}
@@ -702,7 +690,6 @@ def compose_grind_script(
     *,
     repo_root: Any,
     run_dir: Any,
-    session_id: Optional[str] = None,
     agent_type_host: Optional[str] = None,
 ) -> str:
     """Compose one top-level `.mjs` Workflow script implementing § Design §
@@ -711,7 +698,14 @@ def compose_grind_script(
     runtime provides ``agent``, ``phase``, ``budget`` (``spent()``/``total``/
     ``remaining()``) and ``args`` globals; the runtime mutex is defined
     in-script (no ``lock`` global is assumed -- the first attempt's ``lock.
-    acquire``/``lock.release`` calls had no such runtime counterpart)."""
+    acquire``/``lock.release`` calls had no such runtime counterpart).
+
+    Fire-time ``args`` contract (the launcher supplies these; the script
+    bakes none of them, so its bytes never vary with the emitting host):
+    ``run_stamp`` (run id and the only timestamp), ``script_path`` (this
+    script's path, which ``grind-row check --manifest`` reads) and
+    ``profile_dir`` (the profile directory, which may live in another repo
+    per DR-404's DoE-owned profiles)."""
     run_dir_s = str(run_dir)
     grouped = _group_into_batches(manifest, knobs)
     window = int(knobs.get("window", 6))
@@ -774,7 +768,7 @@ def compose_grind_script(
     lines.append(f"const RUN_ID = args.run_stamp;")
     lines.append(f"const SCRIPT_PATH = args.script_path;")
     lines.append(f"const PROFILE_NAME = {_js_string_literal(profile.name)};")
-    lines.append(f"const PROFILE_DIR = {_js_string_literal(_render_profile_dir(profile, repo_root))};")
+    lines.append("const PROFILE_DIR = args.profile_dir;")
     lines.append(f"const APPETITE_NAME = {_js_string_literal(str(knobs.get('appetite', 'standard')))};")
     lines.append(
         f"const RESOLVED_KNOBS = {json.dumps({k: v for k, v in knobs.items() if k != 'appetite'}, sort_keys=True)};"
@@ -805,7 +799,7 @@ def compose_grind_script(
         label="triage", phase_title="Grind", run_dir=run_dir_s, profile=profile.name,
         batch_id_js="batchId", triage_depth_js="TRIAGE_DEPTH_BY_KEY[batchKey]",
         rows_js="JSON.stringify(rowsData)", script_path_js="SCRIPT_PATH", run_id_js="RUN_ID",
-        agent_type_host=agent_type_host,
+        agent_type_host=agent_type_host, repo_root=".",
     )
     lines.append(
         "async function _triageCall(batchId, batchKey, rowIds) {\n"
@@ -818,13 +812,11 @@ def compose_grind_script(
     )
 
     if has_close_node:
-        # `profile_dir` is compose-time-static (never varies at run
-        # time, unlike the proposal list/run stamp) -- rendered relative
-        # to repo_root where possible for re-emit determinism.
         close_raw = stages.compose_refute_close_call(
             label="close", phase_title="Grind", profile=profile.name,
-            profile_dir=_render_profile_dir(profile, repo_root),
+            profile_dir_js="PROFILE_DIR",
             proposals_js="JSON.stringify(proposals)", run_id_js="RUN_ID", agent_type_host=agent_type_host,
+            repo_root=".",
         )
         lines.append(
             "async function _closeCall(proposals) {\n" + _indent_block(_capture(close_raw, "refute-close"), "  ") + "\n}"
@@ -833,7 +825,8 @@ def compose_grind_script(
     fix_raw = stages.compose_fix_call(
         label="fix", phase_title="Grind", row_id_js="row.rowId", locked_files_js="row.declaredFiles",
         feedback_js="(row.verifyFeedback ? (' Verifier feedback from your last attempt: ' + row.verifyFeedback) : '')",
-        agent_type_host=agent_type_host,
+        profile=profile.name, profile_dir_js="PROFILE_DIR", row_path_js="row.path", digest_js="row.digest",
+        run_id_js="RUN_ID", agent_type_host=agent_type_host,
     )
     lines.append("async function _fixCall(row) {\n" + _indent_block(_capture(fix_raw, "fix"), "  ") + "\n}")
 
@@ -879,8 +872,9 @@ def compose_grind_script(
         "const _rows = {};\n"
         "for (const b of BATCHES) {\n"
         "  for (const r of b.rows) {\n"
-        "    const _path = QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r).path;\n"
-        "    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, node: null, "
+        "    const _entry = QUEUE_GRIND_MANIFEST.entries.find((e) => e.row_id === r);\n"
+        "    const _path = _entry.path;\n"
+        "    _rows[r] = { rowId: r, batchId: b.id, batchKey: b.batch_key, path: _path, digest: _entry.digest, node: null, "
         "declaredFiles: [_path], touchedFiles: [_path], removedFiles: [], createdFiles: [], "
         "evidence: '', verifyFeedback: '', fixNode: null, "
         "widened: false, verifyRetried: false, onFailUsed: false, done: false, sha: '' };\n"

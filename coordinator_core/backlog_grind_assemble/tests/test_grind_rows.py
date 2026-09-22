@@ -153,6 +153,7 @@ class TestCloseLeavesIndexUntouched:
                 "--evidence-file", str(close_fixture["evidence_file"]),
                 "--closed-by", "test-session",
                 "--run-stamp", "2026-09-21T00:00:00Z",
+                "--repo-root", str(tmp_path),
             ]
         )
         assert exit_code == grind_rows.EXIT_OK
@@ -168,7 +169,7 @@ class TestCloseLeavesIndexUntouched:
 
 
 class TestDigestRefusal:
-    def test_mismatched_digest_refuses_with_manifest_stale(self, close_fixture):
+    def test_mismatched_digest_refuses_with_manifest_stale(self, close_fixture, tmp_path):
         exit_code = grind_rows.main(
             [
                 "close",
@@ -180,12 +181,13 @@ class TestDigestRefusal:
                 "--evidence-file", str(close_fixture["evidence_file"]),
                 "--closed-by", "test-session",
                 "--run-stamp", "2026-09-21T00:00:00Z",
+                "--repo-root", str(tmp_path),
             ]
         )
         assert exit_code == grind_rows.EXIT_MANIFEST_STALE
         assert close_fixture["row_path"].is_file(), "a refused close must not move the row"
 
-    def test_vanished_row_refuses_with_manifest_stale(self, close_fixture):
+    def test_vanished_row_refuses_with_manifest_stale(self, close_fixture, tmp_path):
         close_fixture["row_path"].unlink()
         exit_code = grind_rows.main(
             [
@@ -198,13 +200,14 @@ class TestDigestRefusal:
                 "--evidence-file", str(close_fixture["evidence_file"]),
                 "--closed-by", "test-session",
                 "--run-stamp", "2026-09-21T00:00:00Z",
+                "--repo-root", str(tmp_path),
             ]
         )
         assert exit_code == grind_rows.EXIT_MANIFEST_STALE
 
 
 class TestUntouchedFormattingPreservedByteForByte:
-    def test_untouched_title_field_and_body_survive_byte_for_byte(self, close_fixture):
+    def test_untouched_title_field_and_body_survive_byte_for_byte(self, close_fixture, tmp_path):
         exit_code = grind_rows.main(
             [
                 "close",
@@ -216,10 +219,11 @@ class TestUntouchedFormattingPreservedByteForByte:
                 "--evidence-file", str(close_fixture["evidence_file"]),
                 "--closed-by", "test-session",
                 "--run-stamp", "2026-09-21T00:00:00Z",
+                "--repo-root", str(tmp_path),
             ]
         )
         assert exit_code == grind_rows.EXIT_OK
-        new_path = Path("archive/bug-backlog/2026-09/bug-1.yaml")
+        new_path = tmp_path / "archive/bug-backlog/2026-09/bug-1.yaml"
         new_text = new_path.read_text(encoding="utf-8")
         assert "title: a bug with an untouched title field\n" in new_text
         assert "Body text describing the bug. Untouched by close.\n" in new_text
@@ -245,6 +249,7 @@ class TestAppendIdempotence:
             "--outcome", "profile-declared",
             "--evidence-file", "evidence.txt",
             "--run-stamp", "2026-09-21T00:00:00Z",
+            "--repo-root", str(tmp_path),
         ]
         assert grind_rows.main(argv) == grind_rows.EXIT_OK
         assert grind_rows.main(argv) == grind_rows.EXIT_OK
@@ -265,6 +270,7 @@ class TestAppendIdempotence:
             "--outcome", "profile-declared",
             "--evidence-file", "evidence.txt",
             "--run-stamp", "2026-09-21T00:00:00Z",
+            "--repo-root", str(tmp_path),
         ]
         assert grind_rows.main(base_argv) == grind_rows.EXIT_OK
         other_argv = list(base_argv)
@@ -284,7 +290,9 @@ class TestSettleDeletesOnlyItsOwnRowFile:
         (ledger_dir / "bug-1.jsonl").write_text('{"row_id": "bug-1"}\n', encoding="utf-8")
         (ledger_dir / "bug-2.jsonl").write_text('{"row_id": "bug-2"}\n', encoding="utf-8")
 
-        exit_code = grind_rows.main(["settle", "--profile", "bug", "--row-id", "bug-1"])
+        exit_code = grind_rows.main(
+            ["settle", "--profile", "bug", "--row-id", "bug-1", "--repo-root", str(tmp_path)]
+        )
 
         assert exit_code == grind_rows.EXIT_OK
         assert not (ledger_dir / "bug-1.jsonl").exists()
@@ -292,8 +300,48 @@ class TestSettleDeletesOnlyItsOwnRowFile:
 
     def test_settle_on_an_already_settled_row_is_a_no_op(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        exit_code = grind_rows.main(["settle", "--profile", "bug", "--row-id", "never-existed"])
+        exit_code = grind_rows.main(
+            ["settle", "--profile", "bug", "--row-id", "never-existed", "--repo-root", str(tmp_path)]
+        )
         assert exit_code == grind_rows.EXIT_OK
+
+
+class TestRepoRootRequired:
+    def test_append_without_repo_root_is_a_usage_error(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        argv = [
+            "append",
+            "--profile", "bug",
+            "--row-id", "bug-1",
+            "--digest", "abc123",
+            "--stage", "triage",
+            "--verdict", "confirmed",
+            "--outcome", "profile-declared",
+            "--evidence-file", "evidence.txt",
+            "--run-stamp", "2026-09-21T00:00:00Z",
+        ]
+        assert grind_rows.main(argv) == grind_rows.EXIT_USAGE
+
+    def test_close_without_repo_root_is_a_usage_error(self, close_fixture):
+        exit_code = grind_rows.main(
+            [
+                "close",
+                "--profile-dir", str(close_fixture["profile_dir"]),
+                "--profile", "bug",
+                "--row", str(close_fixture["row_path"]),
+                "--digest", close_fixture["digest"],
+                "--verdict", "fix",
+                "--evidence-file", str(close_fixture["evidence_file"]),
+                "--closed-by", "test-session",
+                "--run-stamp", "2026-09-21T00:00:00Z",
+            ]
+        )
+        assert exit_code == grind_rows.EXIT_USAGE
+
+    def test_settle_without_repo_root_is_a_usage_error(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        exit_code = grind_rows.main(["settle", "--profile", "bug", "--row-id", "never-existed"])
+        assert exit_code == grind_rows.EXIT_USAGE
 
 
 class TestCheckVerb:

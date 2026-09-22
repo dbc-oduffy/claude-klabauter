@@ -51,20 +51,19 @@ def test_load_profile_fixture_round_trip():
 
 
 def test_load_profile_name_refusal():
-    with pytest.raises(gp.InvalidProfileNameError):
-        gp.load_profile("Fixture", _FIXTURE_DIR)
-    with pytest.raises(gp.InvalidProfileNameError):
-        gp.load_profile("../fixture", _FIXTURE_DIR)
-    with pytest.raises(gp.InvalidProfileNameError):
-        gp.load_profile("a/b", _FIXTURE_DIR)
+    for bad_name in ("Fixture", "../fixture", "a/b"):
+        with pytest.raises(gp.ProfileError) as exc_info:
+            gp.load_profile(bad_name, _FIXTURE_DIR)
+        assert exc_info.value.rule == "invalid_profile_name"
 
 
 def test_load_profile_unknown_top_level_key(tmp_path):
     doc = _load_fixture_doc()
     doc["not-a-real-field"] = True
     _write_profile(tmp_path, "bad-profile", doc)
-    with pytest.raises(gp.UnknownProfileKeyError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.load_profile("bad-profile", tmp_path)
+    assert exc_info.value.rule == "unknown_profile_key"
 
 
 def test_load_profile_fixture_passes_totality():
@@ -105,14 +104,16 @@ def test_resolve_appetite_overrides():
 
 def test_resolve_appetite_rejects_non_overridable_knob():
     profile = gp.load_profile("fixture", _FIXTURE_DIR)
-    with pytest.raises(gp.UnoverridableKnobError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.resolve_appetite(profile, "standard", overrides={"concurrency": 1})
+    assert exc_info.value.rule == "unoverridable_knob"
 
 
 def test_resolve_appetite_unknown_preset():
     profile = gp.load_profile("fixture", _FIXTURE_DIR)
-    with pytest.raises(gp.UnknownAppetitePresetError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.resolve_appetite(profile, "hunt")
+    assert exc_info.value.rule == "unknown_appetite_preset"
 
 
 # ---------------------------------------------------------------------------
@@ -173,8 +174,9 @@ def test_validate_graph_verify_then_fix_refused(tmp_path):
         }
     )
     profile = _profile_from_doc(tmp_path, "verify-then-fix", doc)
-    with pytest.raises(gp.VerifyFloorError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.validate_graph(profile)
+    assert exc_info.value.rule == "verify_floor"
 
 
 def test_validate_graph_closing_path_without_refute_close_refused(tmp_path):
@@ -202,8 +204,9 @@ def test_validate_graph_closing_path_without_refute_close_refused(tmp_path):
         }
     )
     profile = _profile_from_doc(tmp_path, "no-refute-close", doc)
-    with pytest.raises(gp.ClosingFloorError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.validate_graph(profile)
+    assert exc_info.value.rule == "closing_floor"
 
 
 def test_validate_graph_non_on_fail_cycle_refused(tmp_path):
@@ -232,8 +235,9 @@ def test_validate_graph_non_on_fail_cycle_refused(tmp_path):
         }
     )
     profile = _profile_from_doc(tmp_path, "edge-cycle", doc)
-    with pytest.raises(gp.GraphCycleError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.validate_graph(profile)
+    assert exc_info.value.rule == "graph_cycle"
 
 
 def test_validate_graph_second_on_fail_traversal_refused(tmp_path):
@@ -254,8 +258,9 @@ def test_validate_graph_second_on_fail_traversal_refused(tmp_path):
         }
     )
     profile = _profile_from_doc(tmp_path, "double-on-fail", doc)
-    with pytest.raises(gp.GraphOnFailTraversalError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.validate_graph(profile)
+    assert exc_info.value.rule == "graph_on_fail_traversal"
 
 
 def test_validate_graph_stray_outcome_outside_stage_outcomes_refused(tmp_path):
@@ -269,8 +274,9 @@ def test_validate_graph_stray_outcome_outside_stage_outcomes_refused(tmp_path):
         }
     )
     profile = _profile_from_doc(tmp_path, "stray-outcome", doc)
-    with pytest.raises(gp.StrayOutcomeError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.validate_graph(profile)
+    assert exc_info.value.rule == "stray_outcome"
 
 
 def test_validate_graph_triage_totality_refused_when_incomplete(tmp_path):
@@ -283,8 +289,9 @@ def test_validate_graph_triage_totality_refused_when_incomplete(tmp_path):
         }
     )
     profile = _profile_from_doc(tmp_path, "not-total", doc)
-    with pytest.raises(gp.TriageVerdictTotalityError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.validate_graph(profile)
+    assert exc_info.value.rule == "triage_verdict_totality"
 
 
 def test_validate_graph_refute_close_verify_block_refused(tmp_path):
@@ -294,37 +301,112 @@ def test_validate_graph_refute_close_verify_block_refused(tmp_path):
     doc = _load_fixture_doc()
     doc["graph"]["refute_close"]["verify"] = {"default": "agent"}
     _write_profile(tmp_path, "refute-close-verify", doc)
-    with pytest.raises(gp.RefuteCloseNotAgentOnlyError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.load_profile("refute-close-verify", tmp_path)
+    assert exc_info.value.rule == "refute_close_not_agent_only"
 
 
 def test_validate_graph_verify_default_missing_refused(tmp_path):
     doc = _load_fixture_doc()
     doc["graph"]["verify"]["verify"] = {"P0": {"mode": "op", "op": "lessons.verify_extraction"}}
     profile = _profile_from_doc(tmp_path, "no-default", doc)
-    with pytest.raises(gp.VerifyDefaultMissingError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.validate_graph(profile)
+    assert exc_info.value.rule == "verify_default_missing"
 
 
 def test_validate_graph_verify_op_unknown_refused(tmp_path):
     doc = _load_fixture_doc()
     doc["graph"]["verify"]["verify"]["P0"] = {"mode": "op", "op": "not-a-real-op"}
     profile = _profile_from_doc(tmp_path, "bad-op", doc)
-    with pytest.raises(gp.VerifyOpUnknownError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.validate_graph(profile)
+    assert exc_info.value.rule == "verify_op_unknown"
 
 
 def test_validate_graph_closure_branch_missing_refused(tmp_path):
     doc = _load_fixture_doc()
     del doc["closure"]["closed_values"]["refute-close"]
     profile = _profile_from_doc(tmp_path, "missing-branch", doc)
-    with pytest.raises(gp.ClosureBranchMissingError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.validate_graph(profile)
+    assert exc_info.value.rule == "closure_branch_missing"
 
 
 def test_validate_graph_unknown_edge_target_refused(tmp_path):
     doc = _load_fixture_doc()
     doc["graph"]["fix"]["edges"]["done"] = "not-a-node-or-handback"
     profile = _profile_from_doc(tmp_path, "bad-target", doc)
-    with pytest.raises(gp.UnknownEdgeTargetError):
+    with pytest.raises(gp.ProfileError) as exc_info:
         gp.validate_graph(profile)
+    assert exc_info.value.rule == "unknown_edge_target"
+
+
+# ---------------------------------------------------------------------------
+# Profile hand-back types (DR-404 § 3) and on_fail to a hand-back type
+# ---------------------------------------------------------------------------
+
+
+def _handback_graph(*, fix_on_fail: str) -> dict:
+    return {
+        "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "park"}},
+        "fix": {"kind": "fix", "edges": {"done": "verify"}, "on_fail": fix_on_fail},
+        "verify": {
+            "kind": "verify",
+            "verify": {"default": "agent"},
+            "edges": {"pass": "commit"},
+            "on_fail": "needs-judgment",
+        },
+        "commit": {"kind": "commit", "edges": {}, "on_fail": "commit-failed"},
+    }
+
+
+def test_profile_hand_back_type_is_a_legal_edge_target(tmp_path):
+    doc = _minimal_doc(_handback_graph(fix_on_fail="needs-judgment"))
+    doc["hand_back_types"] = ["park", "wont-do"]
+    profile = _profile_from_doc(tmp_path, "profile-handback", doc)
+    assert profile.hand_back_types == ("park", "wont-do")
+    assert "park" in profile.all_hand_back_types
+    assert "budget-exhausted" in profile.all_hand_back_types
+    gp.validate_graph(profile)
+
+
+def test_undeclared_profile_hand_back_type_refused(tmp_path):
+    doc = _minimal_doc(_handback_graph(fix_on_fail="needs-judgment"))
+    profile = _profile_from_doc(tmp_path, "undeclared-handback", doc)
+    with pytest.raises(gp.ProfileError) as exc_info:
+        gp.validate_graph(profile)
+    assert exc_info.value.rule == "unknown_edge_target"
+
+
+def test_on_fail_may_target_a_hand_back_type(tmp_path):
+    doc = _minimal_doc(_handback_graph(fix_on_fail="park"))
+    doc["hand_back_types"] = ["park"]
+    gp.validate_graph(_profile_from_doc(tmp_path, "on-fail-handback", doc))
+
+
+def test_on_fail_to_unknown_target_still_refused(tmp_path):
+    doc = _minimal_doc(_handback_graph(fix_on_fail="nowhere"))
+    doc["hand_back_types"] = ["park"]
+    profile = _profile_from_doc(tmp_path, "on-fail-nowhere", doc)
+    with pytest.raises(gp.ProfileError) as exc_info:
+        gp.validate_graph(profile)
+    assert exc_info.value.rule == "unknown_edge_target"
+
+
+@pytest.mark.parametrize("collides", ["stage-dead", "verify"])
+def test_hand_back_types_must_be_disjoint_from_universal_and_nodes(tmp_path, collides):
+    doc = _minimal_doc(_handback_graph(fix_on_fail="needs-judgment"))
+    doc["hand_back_types"] = ["park", collides]
+    with pytest.raises(gp.ProfileError) as exc_info:
+        _profile_from_doc(tmp_path, "collision", doc)
+    assert exc_info.value.rule == "hand_back_type_collision"
+
+
+@pytest.mark.parametrize("bad", [["Park"], ["park", "park"], "park", [3]])
+def test_hand_back_types_shape_refused(tmp_path, bad):
+    doc = _minimal_doc(_handback_graph(fix_on_fail="needs-judgment"))
+    doc["hand_back_types"] = bad
+    with pytest.raises(gp.ProfileError) as exc_info:
+        _profile_from_doc(tmp_path, "bad-shape", doc)
+    assert exc_info.value.rule == "profile_field_type"

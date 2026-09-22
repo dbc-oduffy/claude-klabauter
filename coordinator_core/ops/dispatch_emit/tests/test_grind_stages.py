@@ -248,3 +248,53 @@ def test_fix_schema_carries_touched_files():
         label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
     )
     assert '"touched_files"' in call_text
+
+
+_REPO = __import__("pathlib").Path(__file__).resolve().parents[4]
+_GOLDEN = _REPO / "coordinator_core/ops/dispatch_emit/tests/fixtures/grind-fixture.golden.mjs"
+_NEW_MODULES = [
+    "coordinator_core/contract/grind_vocab.py",
+    "coordinator_core/ops/dispatch_emit/queue_select.py",
+    "coordinator_core/ops/dispatch_emit/grind_profile.py",
+    "coordinator_core/ops/dispatch_emit/grind_stages.py",
+    "coordinator_core/ops/dispatch_emit/grind_compose.py",
+    "coordinator_core/ops/dispatch_emit/queue_emit.py",
+    "coordinator_core/backlog_grind_assemble/grind_rows.py",
+    "coordinator_core/ops/grind_ops.py",
+]
+
+
+def test_emitted_prompts_carry_no_posix_only_construct():
+    """multi-os-first-class: agents run on Bash or PowerShell, so no prompt
+    may lean on a POSIX-only construct."""
+    import re
+    text = _GOLDEN.read_text(encoding="utf-8")
+    for construct in ("/dev/null", "| grep", "sleep "):
+        assert construct not in text, construct
+    assert not re.search(r"(?<![\w-])[A-Z][A-Z0-9_]*=\S+ [a-z]", text), "VAR=value cmd"
+
+
+def test_no_machine_local_path_in_new_modules_or_golden():
+    """no-single-machine-assumptions: the queue path is cloud-launchable, so
+    neither the engine modules nor the emitted script name a host path."""
+    import re
+    banned = re.compile(r"/Users/|/home/|\b[A-Za-z]:\\|~/\.claude/projects|/private/tmp|gettempdir|machine_local")
+    for rel in _NEW_MODULES + [str(_GOLDEN.relative_to(_REPO))]:
+        text = (_REPO / rel).read_text(encoding="utf-8")
+        hit = banned.search(text)
+        assert hit is None, f"{rel}: {hit.group(0) if hit else ''}"
+
+
+def test_every_grind_row_close_in_golden_carries_every_required_flag():
+    """A close invocation missing a flag is one the agent cannot run; the fixer's
+    once said only "run `grind-row close`"."""
+    import re
+    text = _GOLDEN.read_text(encoding="utf-8")
+    closes = re.findall(r"grind-row close --[^`]*", text)
+    assert len(closes) >= 2
+    required = ("--profile-dir", "--profile ", "--row ", "--digest", "--verdict", "--evidence-file",
+                "--closed-by", "--run-stamp", "--repo-root")
+    for invocation in closes:
+        for flag in required:
+            assert flag in invocation, (flag, invocation[:120])
+    assert "PROFILE_DIR = args.profile_dir" in text

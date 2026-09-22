@@ -208,6 +208,14 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         )
         return EXIT_USAGE
 
+    if (args.where or args.where_file) and not is_queue_route:
+        print(
+            "emit-dispatch-workflow: ERROR — --where/--where-file requires "
+            "--queue/--profile (the queue route)",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
     if is_queue_route and (not args.queue or not args.profile or not args.profile_dir):
         print(
             "emit-dispatch-workflow: ERROR — the queue route requires --queue, "
@@ -235,10 +243,18 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         params["appetite"] = args.appetite
 
         where = None
-        if args.where:
-            where = json.loads(args.where)
-        elif args.where_file:
-            where = json.loads(Path(args.where_file).read_text(encoding="utf-8"))
+        try:
+            if args.where:
+                where = json.loads(args.where)
+            elif args.where_file:
+                where = json.loads(Path(args.where_file).read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(
+                f"emit-dispatch-workflow: ERROR — --where/--where-file is not "
+                f"valid JSON: {exc}",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
 
         overrides: dict = {}
         if where is not None:

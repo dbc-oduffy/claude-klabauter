@@ -31,6 +31,7 @@ from coordinator_core.ops.dispatch_emit import grind_profile as gp
 from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
 
 _FIXTURE_PROFILE_DIR = Path(__file__).parent / "fixtures" / "queue-profiles"
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _GOLDEN_PATH = Path(__file__).parent / "fixtures" / "grind-fixture.golden.mjs"
 
 
@@ -62,9 +63,8 @@ def _compose(**overrides):
         manifest,
         profile,
         knobs,
-        repo_root=Path("/repo"),
+        repo_root=_REPO_ROOT,
         run_dir=Path("state/queue-grind/fixture/run-1"),
-        session_id="sess1",
         agent_type_host=None,
     )
 
@@ -227,8 +227,8 @@ def test_agent_call_site_count_independent_of_row_count():
 
     def _agent_count(n):
         script = gc.compose_grind_script(
-            _manifest(n), profile, knobs, repo_root=Path("/repo"),
-            run_dir=Path("state/queue-grind/fixture/run-1"), session_id="sess1", agent_type_host=None,
+            _manifest(n), profile, knobs, repo_root=_REPO_ROOT,
+            run_dir=Path("state/queue-grind/fixture/run-1"), agent_type_host=None,
         )
         return len(re.findall(r"\bagent\(", script)), len(script.encode("utf-8"))
 
@@ -362,7 +362,7 @@ def _agent_stub(script_by_kind, budget):
     return _agent
 
 
-def _run(batches, script_by_kind, *, window=6, batch_size=4, max_agent_calls=None, budget_tokens=None):
+def _run(batches, script_by_kind, *, batch_size=4, max_agent_calls=None, budget_tokens=None):
     routing, triage_node = _fixture_routing()
     budget = _StubBudgetSpender(total=budget_tokens)
     agent_fn = _agent_stub(script_by_kind, budget)
@@ -370,7 +370,6 @@ def _run(batches, script_by_kind, *, window=6, batch_size=4, max_agent_calls=Non
         batches,
         routing,
         triage_node,
-        window=window,
         reserve=gc.batch_reserve(batch_size),
         max_agent_calls=max_agent_calls,
         budget_tokens=budget_tokens,
@@ -407,7 +406,7 @@ def test_downstream_before_triage_and_window_bound():
         "verify": lambda rid: {"outcome": "pass"},
         "commit": lambda rid: {"outcome": "committed", "sha": "abc"},
     }
-    result, _budget = _run(batches, script_by_kind, window=2, batch_size=2)
+    result, _budget = _run(batches, script_by_kind, batch_size=2)
     call_log = result["call_log"]
 
     triage_indices = [i for i, (kind, _uid) in enumerate(call_log) if kind == "triage"]
@@ -434,7 +433,7 @@ def test_admission_checks_spend_before_every_triage_admit_and_drain_hands_back_b
         "verify": lambda rid: {"outcome": "pass"},
         "commit": lambda rid: {"outcome": "committed", "sha": "x"},
     }
-    result, _budget = _run(batches, script_by_kind, window=6, batch_size=1, budget_tokens=1)
+    result, _budget = _run(batches, script_by_kind, batch_size=1, budget_tokens=1)
     handback_types = {h["type"] for h in result["handed_back"]}
     assert "budget-exhausted" in handback_types
 
@@ -448,7 +447,7 @@ def test_max_agent_calls_is_the_deterministic_secondary_bound():
         "verify": lambda rid: {"outcome": "pass"},
         "commit": lambda rid: {"outcome": "committed", "sha": "x"},
     }
-    result, _budget = _run(batches, script_by_kind, window=6, batch_size=1, max_agent_calls=3)
+    result, _budget = _run(batches, script_by_kind, batch_size=1, max_agent_calls=3)
     triage_calls = [c for c in result["call_log"] if c[0] == "triage"]
     assert len(triage_calls) == 1
     handback_types = {h["type"] for h in result["handed_back"]}
@@ -462,7 +461,7 @@ def test_widen_release_reacquire_exactly_once_then_widen_exhausted():
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
         "fix": lambda rid: (calls.__setitem__("fix", calls["fix"] + 1), {"outcome": "NEEDS_WIDER_SCOPE"})[1],
     }
-    result, _budget = _run([("b0", ["r0"])], script_by_kind, window=6, batch_size=1)
+    result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
     assert calls["fix"] == 2
     assert any(h["type"] == "widen-exhausted" for h in result["handed_back"])
 
@@ -476,7 +475,7 @@ def test_verify_retry_exactly_once_then_undo_rejected_after_retry():
         "verify": lambda rid: (seen.append("verify"), {"outcome": "fail", "reason": "nope"})[1],
         "undo": lambda rid: (seen.append("undo"), {"outcome": "undone"})[1],
     }
-    result, _budget = _run([("b0", ["r0"])], script_by_kind, window=6, batch_size=1)
+    result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
     assert seen.count("verify") == 2
     assert seen.count("undo") == 1
     assert any(h["type"] == "rejected-after-retry" for h in result["handed_back"])
@@ -489,7 +488,7 @@ def test_row_sized_m_or_above_routes_to_baton_never_fix():
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
         "fix": lambda rid: (fix_calls.__setitem__("n", fix_calls["n"] + 1), {"outcome": "done"})[1],
     }
-    result, _budget = _run([("b0", ["r0"])], script_by_kind, window=6, batch_size=1)
+    result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
     assert fix_calls["n"] == 0
     assert any(h["type"] == "baton" and h["row"] == "r0" for h in result["handed_back"])
 
@@ -501,7 +500,7 @@ def test_tradeoff_below_plan_weight_routes_to_needs_judgment_never_fix():
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
         "fix": lambda rid: (fix_calls.__setitem__("n", fix_calls["n"] + 1), {"outcome": "done"})[1],
     }
-    result, _budget = _run([("b0", ["r0"])], script_by_kind, window=6, batch_size=1)
+    result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
     assert fix_calls["n"] == 0
     assert any(h["type"] == "needs-judgment" and h["row"] == "r0" for h in result["handed_back"])
 
@@ -512,7 +511,7 @@ def test_fixer_reported_tradeoff_also_routes_needs_judgment():
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
         "fix": lambda rid: {"outcome": "done", "tradeoff": "surprise tradeoff"},
     }
-    result, _budget = _run([("b0", ["r0"])], script_by_kind, window=6, batch_size=1)
+    result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
     assert any(h["type"] == "needs-judgment" and h["row"] == "r0" for h in result["handed_back"])
 
 
@@ -524,7 +523,7 @@ def test_each_stage_runs_exactly_once_per_row_in_call_log():
         "verify": lambda rid: {"outcome": "pass"},
         "commit": lambda rid: {"outcome": "committed", "sha": "x"},
     }
-    result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, window=6, batch_size=2)
+    result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
     counts = Counter(result["call_log"])
     for rid in ("r0", "r1"):
         assert counts[("fix", rid)] == 1
@@ -539,7 +538,7 @@ def test_refute_close_confirmed_and_refuted_both_route_via_profile_edges():
         "refute-close": lambda bid: {"confirmed": [{"row": "r0", "new_path": "archive/r0.yaml"}], "refuted": [{"row": "r1", "reason": "still broken"}]},
         "commit": lambda rid: {"outcome": "committed", "sha": "x"},
     }
-    result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, window=6, batch_size=2)
+    result, _budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
     settled_rows = {s["row"] for s in result["settled"]}
     # the fixture profile's refute_close node routes BOTH confirmed and
     # refuted to `commit` -- both rows settle, per the profile's own graph.
@@ -563,7 +562,7 @@ def test_handback_spend_matches_stub_budget_delta_and_call_counts():
         "verify": lambda rid: {"outcome": "pass"},
         "commit": lambda rid: {"outcome": "committed", "sha": "x"},
     }
-    result, budget = _run([("b0", ["r0", "r1"])], script_by_kind, window=6, batch_size=2)
+    result, budget = _run([("b0", ["r0", "r1"])], script_by_kind, batch_size=2)
     spend = result["spend"]
     assert spend["output_tokens"] == budget.spent()
     assert spend["agent_calls_total"] == len(result["call_log"])
@@ -576,6 +575,18 @@ def test_on_fail_traversed_at_most_once_structurally():
     profile = _fixture_profile()
     for node in profile.graph.values():
         assert node.on_fail is None or node.on_fail in profile.graph
+
+
+def test_on_fail_naming_a_hand_back_type_hands_back_without_spending_the_retry():
+    routing = {
+        "fix": {"kind": "fix", "edges": {"done": "verify"}, "on_fail": "needs-judgment"},
+        "verify": {"kind": "verify", "edges": {"pass": "commit"}, "on_fail": "fix"},
+    }
+    row = gc.Row(row_id="r1", path="p", batch_id="b")
+    assert gc.follow_edge(routing, "fix", "failed", row) == ("handback", "needs-judgment")
+    assert row.on_fail_used is False
+    assert gc.follow_edge(routing, "verify", "fail", row) == ("node", "fix")
+    assert row.on_fail_used is True
 
 
 # ---------------------------------------------------------------------------
@@ -664,7 +675,7 @@ def test_verify_fail_routes_back_to_fix_with_feedback_then_undo_on_second_fail()
         "verify": verify_stub,
         "undo": undo_stub,
     }
-    result, _budget = _run([("b0", ["r0"])], script_by_kind, window=6, batch_size=1)
+    result, _budget = _run([("b0", ["r0"])], script_by_kind, batch_size=1)
     assert seen == ["fix", "verify", "fix", "verify", "undo"]
     assert any(h["type"] == "rejected-after-retry" for h in result["handed_back"])
 
@@ -688,7 +699,7 @@ def test_triage_rows_omitted_from_result_hand_back_stage_dead_not_stranded():
         return {"outcome": "n/a"}
 
     result = gc.run_admission(
-        [("b0", ["r0"])], routing, triage_node, window=6, reserve=gc.batch_reserve(1),
+        [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(1),
         budget=budget, agent=agent_fn,
     )
     assert any(h["row"] == "r0" and h["type"] == "stage-dead" for h in result["handed_back"])

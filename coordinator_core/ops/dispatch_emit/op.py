@@ -189,6 +189,18 @@ class InventoryPathConflictError(ValueError):
     """
 
 
+class QueueRootMissingError(ValueError):
+    """Raised on the queue route when neither the request's ``repo_root``
+    nor an explicit ``target_root`` param is given.
+
+    The queue route resolves relative ``queue`` directories against
+    ``target_root`` (S5) -- with neither supplied, ``target_root`` would
+    silently default to ``output_path``'s own parent (the plan route's
+    fallback), anchoring queue-dir resolution and containment to wherever
+    the caller happened to name ``output_path``, not the repo the queue
+    rows actually live in. Refused rather than defaulted."""
+
+
 class QueuePlanConflictError(ValueError):
     """Raised when a caller passes ``queue``/``profile`` together with
     ``plan_path``/``inventory_path``.
@@ -628,6 +640,14 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not output_path:
         raise ValueError(f"dispatch.emit requires param: {spellings('output_path', 'out_path')}")
 
+    if is_queue_route and not params.get("target_root") and repo_root is None:
+        raise QueueRootMissingError(
+            "dispatch.emit queue route requires either the request's "
+            "repo_root or an explicit target_root param -- neither was "
+            "given, and the queue route never defaults to output_path's "
+            "own parent directory"
+        )
+
     target_root = (
         params.get("target_root")
         or (str(repo_root) if repo_root is not None else None)
@@ -671,11 +691,15 @@ def _dispatch_emit(params: dict, repo_root: Optional[Path] = None) -> dict:
         if not profile_dir:
             raise ValueError("dispatch.emit queue route requires param: profile_dir")
 
+        target_root_path = Path(target_root)
         emission = emit_queue_script(
             profile_name,
             params.get("appetite") or "standard",
             params.get("overrides"),
-            queue=[Path(q) for q in queue],
+            queue=[
+                q_path if (q_path := Path(q)).is_absolute() else target_root_path / q_path
+                for q in queue
+            ],
             profile_dir=Path(profile_dir),
             repo_root=Path(target_root),
             run_dir=guarded_path.parent,

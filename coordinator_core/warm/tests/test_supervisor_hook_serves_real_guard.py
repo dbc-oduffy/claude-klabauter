@@ -320,3 +320,30 @@ def test_explicit_guard_op_path_still_refuses_an_event_it_has_no_route_for(tmp_p
     assert "permissionDecision" not in hso
     assert "did not run" in hso["additionalContext"]
     assert seen == []
+
+
+def test_an_engine_skew_answer_is_a_409_so_the_forwarder_runs_the_guard_cold(tmp_path):
+    """ENGINE_SKEW is provably-not-run AND runnable cold. Wrapped as a 200 "guard did
+    not run" body it passed every Bash guard unchecked for the length of every publish;
+    as a 409 -- `_refuse_stale_caller`'s own status -- it sends the forwarder down its
+    non-2xx ladder to `hook_http.evaluate_cold`, which runs the guard."""
+    import urllib.error
+
+    import pytest
+
+    def _skew_dispatch(msg, *, caller=None, isolated=False):
+        return {
+            "jsonrpc": "2.0",
+            "id": msg.get("id"),
+            "error": {"code": skew.ENGINE_SKEW, "message": "engine generation changed"},
+        }
+
+    httpd, port = _bind_handler(tmp_path, dispatch=_skew_dispatch)
+    try:
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            _post(port, {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                         "tool_input": {"command": "echo hi"}})
+        assert exc.value.code == 409
+        assert json.loads(exc.value.read())["error"]["code"] == skew.ENGINE_SKEW
+    finally:
+        httpd.shutdown()

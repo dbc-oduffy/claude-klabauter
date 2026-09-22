@@ -74,7 +74,7 @@ from __future__ import annotations
 import json
 import re
 import tempfile
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 from types import ModuleType
@@ -130,14 +130,13 @@ async def _lessons_extract(
 ) -> dict[str, Any]:
     """Source op: thin adapter over `extract-lessons.py::extract()`.
 
-    params:
-        lessons_dir: str, required — path to a `state/lessons/` directory
-                     (repo_root-relative unless already absolute).
-        shortname: optional str — forwarded to `extract()`; defaults to
-                   `lessons_dir`'s parent directory name (its own default
-                   is undefined, this adapter needs one every call makes).
-        since: optional str (`YYYY-MM-DD`) — forwarded verbatim.
-        include_md: optional bool, default False — forwarded verbatim.
+    Measured process time: ~8ms (module docstring; includes the one-time
+    `load_cli_module` cost of the first call in a process).
+
+    Negative-spec: does NOT re-derive `extract()`'s own decision logic —
+    `shortname` defaults to `lessons_dir`'s parent directory name only
+    because `extract()` itself has no default for it; every other param
+    forwards verbatim.
     """
     module = _load("extract-lessons")
     lessons_dir = _resolve_path(repo_root, params["lessons_dir"])
@@ -166,29 +165,37 @@ def _parse_failing_ids(stderr_text: str) -> list[str]:
     return failing_ids
 
 
+class VerifyRefusalError(RuntimeError):
+    """Raised when `verify()` cannot ground the routing records at all — a
+    missing/unreadable `manifest` path, or `verify()`'s own exit 2 (bad
+    input: no `*-extracted-full.{yaml,json}` found under a directory
+    manifest). Distinct from a grounding failure (exit 1, `ok=False` with
+    `failing_ids`): a refusal means the check never ran, not that it ran
+    and found fabricated ids."""
+
+
 @register_op("lessons.verify_extraction")
 async def _lessons_verify_extraction(
     params: dict[str, Any], repo_root: Optional[Path]
 ) -> dict[str, Any]:
-    """Verify op: thin adapter over `extract-lessons.py::verify()`, honouring
-    the DR-404 verify-op wire contract this row's body pins.
+    """Verify op: thin adapter over `extract-lessons.py::verify()`, the
+    DR-404 verify-op wire contract (params `{manifest, records}`, return
+    `{ok, failing_ids}`).
 
-    params:
-        manifest: str, required — the trusted extraction file OR directory
-                  (repo_root-relative unless already absolute), forwarded to
-                  `verify()`'s own `extraction_path` argument.
-        records: list[dict], required — the routing records to ground,
-                 already materialised in memory (never a file path). Spilled
-                 to a throwaway JSON tempfile (the `{"records": [...]}`
-                 shape `verify()`'s own `_parse_records_file` already reads
-                 for `.json`), removed in a `finally`.
+    Measured process time: <1ms (module docstring).
 
-    Returns `{"ok": bool, "failing_ids": list[str]}` — exit 0 from
-    `verify()` means `ok=True`, `failing_ids=[]`; a non-zero exit reports
-    every id `verify()`'s own stderr named as a grounding failure.
+    Negative-spec:
+      - Does NOT report `verify()`'s exit 2 (bad input) or a missing
+        `manifest` path as a grounding failure — both raise
+        `VerifyRefusalError` instead of returning `ok=False`.
+      - Does NOT capture `verify()`'s stdout — only stderr is read (for
+        `failing_ids` on a grounding failure), so only one process-global
+        stream is redirected, not two.
     """
     module = _load("extract-lessons")
     extraction_path = _resolve_path(repo_root, params["manifest"])
+    if not extraction_path.exists():
+        raise VerifyRefusalError(f"lessons.verify_extraction: manifest not found: {extraction_path}")
     records = params["records"]
 
     tmp = tempfile.NamedTemporaryFile(
@@ -198,15 +205,20 @@ async def _lessons_verify_extraction(
         json.dump({"records": records}, tmp)
         tmp.close()
         routing_path = Path(tmp.name)
-        stdout_buf, stderr_buf = StringIO(), StringIO()
-        with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+        stderr_buf = StringIO()
+        with redirect_stderr(stderr_buf):
             exit_code = module.verify(extraction_path, routing_path)
     finally:
         Path(tmp.name).unlink(missing_ok=True)
 
     if exit_code == 0:
         return {"ok": True, "failing_ids": []}
-    return {"ok": False, "failing_ids": _parse_failing_ids(stderr_buf.getvalue())}
+    if exit_code == 1:
+        return {"ok": False, "failing_ids": _parse_failing_ids(stderr_buf.getvalue())}
+    raise VerifyRefusalError(
+        f"lessons.verify_extraction: verify() refused (exit {exit_code}): "
+        f"{stderr_buf.getvalue().strip()}"
+    )
 
 
 @register_op("doctrine.surface_split_regenerate")
@@ -214,20 +226,16 @@ async def _doctrine_surface_split_regenerate(
     params: dict[str, Any], repo_root: Optional[Path]
 ) -> dict[str, Any]:
     """Regenerate op: thin adapter over `generate-doctrine-surface-
-    split.py::regenerate_split_dir()` — refreshes ONLY an already-split
-    directory's `README.md` from its `_preamble.md`, never touching body
-    files (see that function's own docstring).
+    split.py::regenerate_split_dir()`.
 
-    params:
-        split_dir: str, required — an already-split directory (repo_root-
-                   relative unless already absolute).
-        check_mode: optional bool, default False — forwarded verbatim
-                    (diff-only, no write).
-        allow_dirty: optional bool, default False — forwarded verbatim.
+    Measured process time: ~18ms (module docstring; `check_mode`, first
+    call in a process, includes the one-time module-load cost).
 
-    Returns `{"exit_code": int}` — `regenerate_split_dir()`'s own exit
-    contract (0 ok, 1 drift under `check_mode`, 2 not a split directory,
-    3 dirty bodies refused).
+    Negative-spec: does NOT refresh body files, only `README.md` from
+    `_preamble.md` — see `regenerate_split_dir()`'s own docstring for that
+    boundary. Returns `regenerate_split_dir()`'s own exit contract
+    (0 ok, 1 drift under `check_mode`, 2 not a split directory, 3 dirty
+    bodies refused) unchanged.
     """
     module = _load("generate-doctrine-surface-split")
     split_dir = _resolve_path(repo_root, params["split_dir"])

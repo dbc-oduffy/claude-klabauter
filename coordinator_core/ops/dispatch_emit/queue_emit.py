@@ -130,8 +130,13 @@ def _reemit_argv(
     same script from the same queue/profile/appetite/overrides inputs --
     never the resolved knobs, which are a DERIVED fact, not an input; re-
     deriving from the resolved value rather than the raw override would mask
-    a profile-preset change on re-emit."""
+    a profile-preset change on re-emit.
+
+    The entrypoint itself (``emit-dispatch-workflow.py``) is the argv's
+    first element -- a runnable argv, not a bare flag list a caller has to
+    know to prepend a command onto first."""
     argv: list = [
+        "emit-dispatch-workflow.py",
         "--profile", profile,
         "--appetite", appetite,
         "--profile-dir", str(profile_dir),
@@ -207,7 +212,6 @@ def emit_queue_script(
         resolved_knobs,
         repo_root=repo_root,
         run_dir=guarded_run_dir,
-        session_id=session_id,
         agent_type_host=agent_type_host,
     )
 

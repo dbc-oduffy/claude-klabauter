@@ -117,7 +117,8 @@ def test_emit_queue_script_end_to_end(tmp_path):
     assert "manifest_digest" in extras and len(extras["manifest_digest"]) == 64
     assert extras["source"] is None
     assert isinstance(extras["resolved_knobs"], dict)
-    assert extras["reemit"][:2] == ["--profile", "fixture"]
+    assert extras["reemit"][0] == "emit-dispatch-workflow.py"
+    assert extras["reemit"][1:3] == ["--profile", "fixture"]
     assert "plan" not in extras
 
 
@@ -334,6 +335,35 @@ def test_op_refuses_foreign_overwrite(tmp_path):
         _dispatch_emit(params, repo_root=repo_root)
 
 
+def test_op_refuses_queue_route_with_no_repo_root_or_target_root(tmp_path):
+    repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
+    output_path = tmp_path / "emitted.mjs"
+    params = {
+        "queue": [str(queue_dir)],
+        "profile": "fixture",
+        "profile_dir": str(_FIXTURE_PROFILE_DIR),
+        "output_path": str(output_path),
+    }
+    with pytest.raises(op_module.QueueRootMissingError):
+        _dispatch_emit(params, repo_root=None)
+
+
+def test_op_resolves_relative_queue_dir_against_target_root(tmp_path):
+    repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
+    output_path = repo_root / "queue-grind" / "emitted.mjs"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    relative_queue = str(queue_dir.relative_to(repo_root))
+    params = {
+        "queue": [relative_queue],
+        "profile": "fixture",
+        "profile_dir": str(_FIXTURE_PROFILE_DIR),
+        "output_path": str(output_path),
+        "target_root": str(repo_root),
+    }
+    result = _dispatch_emit(params, repo_root=None)
+    assert result["ok"] is True
+
+
 def test_cli_round_trip_produces_same_bytes_as_the_op(tmp_path):
     result, output_path, repo_root, queue_dir = _dispatch_queue_emit(tmp_path)
     op_bytes = output_path.read_bytes()
@@ -352,6 +382,32 @@ def test_cli_round_trip_produces_same_bytes_as_the_op(tmp_path):
     exit_code = cli_module.main(argv)
     assert exit_code == cli_module.EXIT_OK
     assert cli_output.read_bytes() == op_bytes
+
+
+def test_cli_malformed_where_json_is_exit_usage(tmp_path):
+    repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
+    argv = [
+        "--queue", str(queue_dir),
+        "--profile", "fixture",
+        "--profile-dir", str(_FIXTURE_PROFILE_DIR),
+        "--out", str(tmp_path / "out.mjs"),
+        "--repo-root", str(repo_root),
+        "--where", "{not valid json",
+    ]
+    assert cli_module.main(argv) == cli_module.EXIT_USAGE
+
+
+def test_cli_where_without_queue_route_is_exit_usage(tmp_path):
+    repo_root, _queue_dir, _run_dir = _setup_repo(tmp_path)
+    plan_path = tmp_path / "plan.md"
+    plan_path.write_text("# a plan\n", encoding="utf-8")
+    argv = [
+        "--plan", str(plan_path),
+        "--out", str(tmp_path / "out.mjs"),
+        "--repo-root", str(repo_root),
+        "--where", '{"a": 1}',
+    ]
+    assert cli_module.main(argv) == cli_module.EXIT_USAGE
 
 
 # ---------------------------------------------------------------------------

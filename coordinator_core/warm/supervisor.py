@@ -1498,6 +1498,21 @@ def _make_handler(ctx: "_ServerContext"):
                     serve_kwargs["dispatch"] = ctx.dispatch
 
                 raw_response = _collect_response(request_frame, _serve_line, serve_kwargs)
+                if _is_engine_skew(raw_response):
+                    # PROVABLY NOT RUN, AND RUNNABLE COLD. `_serve_line` answers
+                    # ENGINE_SKEW without dispatching, so the guard can still be
+                    # evaluated -- which `interpret_result` would turn into a
+                    # 200 "guard did not run" pass, skipping every Bash guard for
+                    # the length of every publish. A 409, the same status
+                    # `_refuse_stale_caller` uses, sends the forwarder down its
+                    # non-2xx ladder to `evaluate_cold` instead. The loud pass is
+                    # for an engine that is genuinely unreachable, not this.
+                    self.send_response(409)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(raw_response)))
+                    self.end_headers()
+                    self.wfile.write(raw_response)
+                    return
                 response = hook_http.interpret_result(event_name, raw_response)
 
                 body = json.dumps(response, ensure_ascii=False).encode("utf-8")
@@ -1510,6 +1525,16 @@ def _make_handler(ctx: "_ServerContext"):
                 _release_once()
 
     return _Handler
+
+
+def _is_engine_skew(frame: bytes) -> bool:
+    """True iff `frame` is a JSON-RPC error envelope carrying ENGINE_SKEW."""
+    try:
+        obj = json.loads(frame.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return False
+    err = obj.get("error") if isinstance(obj, dict) else None
+    return isinstance(err, dict) and err.get("code") == skew.ENGINE_SKEW
 
 
 def _assert_credential_ready(root: Path) -> None:

@@ -283,13 +283,13 @@ def cmd_append(rest: list[str]) -> int:
             "outcome",
             "evidence-file",
             "run-stamp",
+            "repo-root",
         ),
-        optional=("repo-root",),
     )
     if flags is None:
         return _usage(
             "usage: grind-row append --profile P --row-id R --digest D --stage S "
-            "--verdict V --outcome O --evidence-file F --run-stamp T [--repo-root D]"
+            "--verdict V --outcome O --evidence-file F --run-stamp T --repo-root D"
         )
 
     record = {
@@ -308,7 +308,7 @@ def cmd_append(rest: list[str]) -> int:
     )
     line = json.dumps(record, sort_keys=True)
 
-    repo_root = Path(flags["repo-root"]) if flags.get("repo-root") else Path.cwd()
+    repo_root = Path(flags["repo-root"])
     try:
         ledger_path = _ledger_path(repo_root, flags["profile"], flags["row-id"])
     except RowIdEscapeError as exc:
@@ -351,14 +351,14 @@ def cmd_close(rest: list[str]) -> int:
             "evidence-file",
             "closed-by",
             "run-stamp",
+            "repo-root",
         ),
-        optional=("repo-root",),
     )
     if flags is None:
         return _usage(
             "usage: grind-row close --profile-dir D --profile P --row <path> "
             "--digest D --verdict V --evidence-file F --closed-by S --run-stamp T "
-            "[--repo-root D]"
+            "--repo-root D"
         )
 
     row_path = Path(flags["row"])
@@ -381,7 +381,7 @@ def cmd_close(rest: list[str]) -> int:
             f"{sorted(CLOSURE_CLOSING_BRANCHES)}, got {verdict!r}"
         )
 
-    repo_root = Path(flags["repo-root"]) if flags.get("repo-root") else Path.cwd()
+    repo_root = Path(flags["repo-root"])
 
     try:
         profile = grind_profile.load_profile(flags["profile"], Path(flags["profile-dir"]))
@@ -479,11 +479,11 @@ def cmd_close(rest: list[str]) -> int:
 
 
 def cmd_settle(rest: list[str]) -> int:
-    flags = _parse_flags(rest, required=("profile", "row-id"), optional=("repo-root",))
+    flags = _parse_flags(rest, required=("profile", "row-id", "repo-root"))
     if flags is None:
-        return _usage("usage: grind-row settle --profile P --row-id R [--repo-root D]")
+        return _usage("usage: grind-row settle --profile P --row-id R --repo-root D")
 
-    repo_root = Path(flags["repo-root"]) if flags.get("repo-root") else Path.cwd()
+    repo_root = Path(flags["repo-root"])
     try:
         ledger_path = _ledger_path(repo_root, flags["profile"], flags["row-id"])
     except RowIdEscapeError as exc:
