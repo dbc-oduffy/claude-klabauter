@@ -58,18 +58,44 @@ def _write_transcript(tmp_path: Path, *, model: str, extra_lines: "list[str]" = 
 # ---------------------------------------------------------------------------
 
 
-def test_general_purpose_no_model_under_opus_parent_denies(
+def _assert_rewritten_to_sonnet(envelope, payload: dict) -> None:
+    assert envelope is not None
+    hso = envelope["hookSpecificOutput"]
+    assert "permissionDecision" not in hso
+    assert hso["updatedInput"] == {**payload["tool_input"], "model": "sonnet"}
+    assert "model" not in payload["tool_input"]  # a new object, never a mutation
+
+
+def test_general_purpose_no_model_under_opus_parent_rewrites_to_sonnet(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _patch_pins(monkeypatch, {})
     transcript = _write_transcript(tmp_path, model="claude-opus-4-1-20250805")
-    envelope = mod.check(_agent_payload("general-purpose", transcript_path=transcript))
+    payload = _agent_payload("general-purpose", transcript_path=transcript)
+    envelope = mod.check(payload)
+    _assert_rewritten_to_sonnet(envelope, payload)
+    assert "general-purpose" in envelope["hookSpecificOutput"]["additionalContext"]
+
+
+def test_general_purpose_explicit_model_opus_still_denies(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_pins(monkeypatch, {})
+    transcript = _write_transcript(tmp_path, model="claude-opus-4-1-20250805")
+    envelope = mod.check(_agent_payload("general-purpose", model="opus", transcript_path=transcript))
     assert envelope is not None
     assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
-    reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "general-purpose" in reason
-    assert 'model: "sonnet"' in reason
-    assert "coordinator:executor" in reason
+    assert "updatedInput" not in envelope["hookSpecificOutput"]
+
+
+def test_fable_pinned_type_with_no_model_param_still_denies(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_pins(monkeypatch, {"some-type": {"model": "fable"}})
+    transcript = _write_transcript(tmp_path, model="claude-sonnet-4-5")
+    envelope = mod.check(_agent_payload("some-type", transcript_path=transcript))
+    assert envelope is not None
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 def test_general_purpose_explicit_model_sonnet_passes(
@@ -100,12 +126,12 @@ def test_sonnet_parent_inherit_passes(monkeypatch: pytest.MonkeyPatch, tmp_path:
     assert envelope is None
 
 
-def test_unknown_parent_denies_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unknown_parent_rewrites_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_pins(monkeypatch, {})
-    envelope = mod.check(_agent_payload("general-purpose", transcript_path=""))
-    assert envelope is not None
-    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "unresolved" in envelope["hookSpecificOutput"]["permissionDecisionReason"]
+    payload = _agent_payload("general-purpose", transcript_path="")
+    envelope = mod.check(payload)
+    _assert_rewritten_to_sonnet(envelope, payload)
+    assert "unresolved" in envelope["hookSpecificOutput"]["additionalContext"]
 
 
 def test_opus_pinned_persona_passes_with_no_model_param(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -136,8 +162,8 @@ def test_unresolved_roster_never_denies_sonnet(monkeypatch: pytest.MonkeyPatch, 
     monkeypatch.setattr(mod, "resolve_model_pins", lambda: (None, "roster missing"))
     transcript = _write_transcript(tmp_path, model="claude-opus-4-1-20250805")
     assert mod.check(_agent_payload("general-purpose", model="sonnet", transcript_path=transcript)) is None
-    envelope = mod.check(_agent_payload("general-purpose", transcript_path=transcript))
-    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+    payload = _agent_payload("general-purpose", transcript_path=transcript)
+    _assert_rewritten_to_sonnet(mod.check(payload), payload)
 
 
 def test_grant_env_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -191,7 +217,7 @@ def test_sonnet_pinned_type_with_explicit_opus_override_denies(monkeypatch: pyte
 # ---------------------------------------------------------------------------
 
 
-def test_composed_seam_denies_via_opus_gate_when_pin_leg_is_silent(
+def test_composed_seam_rewrites_via_opus_gate_when_pin_leg_is_silent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     def _fake_resolve_roster(*, doe_root=None, home=None):
@@ -212,9 +238,7 @@ def test_composed_seam_denies_via_opus_gate_when_pin_leg_is_silent(
         "transcript_path": transcript,
     }
     envelope = unenumerated_mod.check(payload)
-    assert envelope is not None
-    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "general-purpose" in envelope["hookSpecificOutput"]["permissionDecisionReason"]
+    _assert_rewritten_to_sonnet(envelope, payload)
 
 
 def test_composed_seam_pin_deny_short_circuits_before_opus_gate(
