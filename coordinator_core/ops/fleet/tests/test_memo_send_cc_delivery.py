@@ -269,3 +269,51 @@ class TestCcNeverReachesAPublishMirror:
 
         assert result["exit_code"] == 1, result
         assert _inbox_files(to_repo) == []
+
+
+class TestPublishMirrorAddressesRouteToTheOwner:
+    """A publish mirror is not a receiver. It is registered in `repos.*` so tools can
+    find it, and `to:`/`cc:` naming it used to deliver into its own inbox, where the
+    next publish clobbers it. Both legs deliver to the mirror's owner instead."""
+
+    def _home_with_mirror(self, tmp_path, monkeypatch, owner_repo, mirror_repo, extra=None):
+        repos = {"example_cockpit_repo": owner_repo, "claude_klabauter": mirror_repo, **(extra or {})}
+        claude_home = _make_claude_home(tmp_path, repos)
+        machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
+        mirror_path = str(mirror_repo).replace("\\", "\\\\").replace('"', '\\"')
+        (machine_local / "registry.toml").write_text(
+            "schema = 1\n\n[publish.mirrors.claude_klabauter]\n"
+            f'owner = "example-cockpit-repo-em"\npath = "{mirror_path}"\n',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+    def test_to_a_mirror_lands_in_the_owner_inbox(self, tmp_path, monkeypatch):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        owner_repo = _make_receiver_git_repo(tmp_path, name="owner-repo")
+        mirror_repo = _make_receiver_git_repo(tmp_path, name="mirror-repo")
+        self._home_with_mirror(tmp_path, monkeypatch, owner_repo, mirror_repo)
+        _write_draft_with_cc(sender_repo, "mirror-to", to="claude-klabauter-em")
+
+        result = _memo_send({"dry_run": False, "topic": "mirror-to"}, repo_root=sender_repo)
+
+        assert result["exit_code"] == 0, result
+        assert len(_inbox_files(owner_repo)) == 1
+        assert _inbox_files(mirror_repo) == []
+
+    def test_cc_a_mirror_lands_in_the_owner_inbox(self, tmp_path, monkeypatch):
+        sender_repo = _make_sender_git_repo(tmp_path)
+        to_repo = _make_receiver_git_repo(tmp_path, name="to-repo")
+        owner_repo = _make_receiver_git_repo(tmp_path, name="owner-repo")
+        mirror_repo = _make_receiver_git_repo(tmp_path, name="mirror-repo")
+        self._home_with_mirror(
+            tmp_path, monkeypatch, owner_repo, mirror_repo, extra={"example_retrieval_repo": to_repo},
+        )
+        _write_draft_with_cc(sender_repo, "mirror-cc", to="example-retrieval-repo-em", cc="claude-klabauter-em")
+
+        result = _memo_send({"dry_run": False, "topic": "mirror-cc"}, repo_root=sender_repo)
+
+        assert result["exit_code"] == 0, result
+        assert len(_inbox_files(to_repo)) == 1
+        assert len(_inbox_files(owner_repo)) == 1
+        assert _inbox_files(mirror_repo) == []

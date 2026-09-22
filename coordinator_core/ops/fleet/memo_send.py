@@ -83,11 +83,9 @@ Negative-spec:
     unresolvable cc name refuses the WHOLE send loud, before any write —
     mirrors `to:`'s own UNKNOWN RECEIVER refusal exactly, so a cc leg is
     held to the same "resolvable before any byte moves" bar `to:` already
-    was. This is a REGISTRY reuse, not a new guard: a publish-mirror name is
-    excluded from `repos.*` by construction (module docstring's registry
-    note above), so a cc naming one refuses the same UNKNOWN RECEIVER way
-    `to:` naming one always has — no separate mirror check was added, nor
-    was one needed. Once every cc name resolves, a PER-RECEIVER write
+    was. A cc naming a publish mirror or a redirect alias is delivered to
+    its owner, exactly as `to:` is: `_resolve_receiver_inbox` does the
+    rerouting for both. Once every cc name resolves, a PER-RECEIVER write
     failure (collision, declined/unverified commit) after `to:` has already
     landed does NOT undo `to:`'s delivery or fail the whole send — it is
     reported in the envelope's `failed[]` (DETERMINATE-PARTIAL, exit_code 2)
@@ -809,10 +807,8 @@ def _resolve_cc_targets(cc_list: list) -> tuple[Optional[list], Optional[str]]:
     Runs BEFORE any write (klabauter#46, second half): an unresolvable cc
     name refuses the WHOLE send loud here, mirroring `to:`'s own UNKNOWN
     RECEIVER refusal — never a partial send that silently drops one cc leg
-    because it happened not to resolve. A publish-mirror name is already
-    excluded from `repos.*` by `_resolve_receiver_inbox`'s own registry read
-    (module docstring), so it resolves to `(None, None, all_repos)` here
-    exactly as it would for `to:` — no separate mirror check is added.
+    because it happened not to resolve. A publish-mirror or redirect-alias
+    name resolves to its owner's inbox here exactly as it does for `to:`.
     """
     if not cc_list:
         return [], None

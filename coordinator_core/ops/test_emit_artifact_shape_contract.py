@@ -418,10 +418,10 @@ class TestRealTreeParity:
         # fresh from the emitter, so asserting against the constant that produced it
         # is a tautology that catches nothing. The literal is the pin: a version bump
         # must be an explicit two-place edit, never a silent side effect. Bumped to
-        # 9.3.0 alongside CONTRACT_VERSION (emit_artifact_shape_contract.py's history
-        # comment, 2026-09-22 queue-grind-profile hand_back_types stamp collision) — this
-        # is the second of the two places.
-        assert bundle["version"] == "9.3.0"
+        # 10.0.0 alongside CONTRACT_VERSION (emit_artifact_shape_contract.py's history
+        # comment, 2026-09-22 stamp collision plus queue-grind-profile source required-add)
+        # — this is the second of the two places.
+        assert bundle["version"] == "10.0.0"
 
     def test_queue_grind_profile_registered(self, bundle):
         # DoE's queue-grind-profile.schema.json enters the bundle by directory
@@ -434,9 +434,9 @@ class TestRealTreeParity:
         for generic in ("knob", "graph_node", "stage_kind", "verify_op"):
             assert generic not in defs, generic
 
-    def test_9_3_0_is_a_minor_bump_over_9_2_0(self):
+    def test_10_0_0_is_a_major_bump_over_9_2_0(self):
         major, minor, patch = (int(p) for p in CONTRACT_VERSION.split("."))
-        assert (major, minor, patch) == (9, 3, 0)
+        assert (major, minor, patch) == (10, 0, 0)
 
     def test_no_external_ref_values_anywhere_in_bundle(self, bundle):
         # Regression for cross-repo/inbox/2026-08-03-doe-claude-em-artifact-contract-
