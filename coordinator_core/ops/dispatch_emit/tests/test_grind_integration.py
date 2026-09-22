@@ -66,11 +66,7 @@ def _write_row(path: Path, **fields) -> str:
             lines.append(f"{key}: {rendered}")
         else:
             lines.append(f"{key}: {json.dumps(value)}")
-    # Frontmatter-delimited (`close` reads/writes via
-    # `frontmatter.primitives.split_frontmatter`, which requires the `---`
-    # fence -- a bare YAML row parses fine for the SELECTOR (plain
-    # `schema_validate.parse_yaml`) but not for `close`).
-    text = "---\n" + "\n".join(lines) + "\n---\n\nA bug row body.\n"
+    text = "\n".join(lines) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return text
@@ -402,3 +398,55 @@ def test_emitted_script_names_no_host_path(grind_repo):
     root = str(grind_repo["repo_root"].resolve())
     assert root not in script
     assert str(grind_repo["repo_root"]) not in script
+
+
+def test_close_round_trips_a_real_bug_backlog_row_through_its_schema(tmp_path):
+    """A real state/bug-backlog row is whole-document YAML with no fence; a
+    DoE profile names its schema bare; the run stamp is compact. close must
+    handle all three and leave a row its own schema accepts."""
+    import shutil
+    from coordinator_core.frontmatter import schema_validate
+
+    repo_root = Path(__file__).resolve().parents[4]
+    real = next(p for p in sorted((repo_root / "state" / "bug-backlog").glob("*.yaml"))
+                if schema_validate.parse_yaml(p.read_text(encoding="utf-8")).get("status") == "open")
+    queue = tmp_path / "state" / "bug-backlog"
+    queue.mkdir(parents=True)
+    row = queue / real.name
+    shutil.copyfile(real, row)
+    assert not row.read_text(encoding="utf-8").startswith("---")
+
+    profile_dir = tmp_path / "profiles"
+    profile_dir.mkdir()
+    profile_text = (_FIXTURE_PROFILE_DIR / "fixture.yaml").read_text(encoding="utf-8")
+    profile_text = profile_text.replace(
+        "schema: coordinator_core/frontmatter/schemas/bug-backlog.schema.json",
+        "schema: bug-backlog.schema.json",
+    )
+    assert "schema: bug-backlog.schema.json" in profile_text
+    (profile_dir / "fixture.yaml").write_text(profile_text, encoding="utf-8")
+    evidence = tmp_path / "evidence.txt"
+    evidence.write_text("verified gone at HEAD", encoding="utf-8")
+
+    exit_code = grind_rows.main([
+        "close", "--profile-dir", str(profile_dir), "--profile", "fixture",
+        "--row", f"state/bug-backlog/{real.name}",
+        "--digest", hashlib.sha256(row.read_bytes()).hexdigest(),
+        "--verdict", "fix", "--evidence-file", str(evidence),
+        "--closed-by", "fix", "--run-stamp", "20260922T110458Z",
+        "--repo-root", str(tmp_path),
+    ])
+    assert exit_code == grind_rows.EXIT_OK
+    archived = tmp_path / "state" / "bug-backlog" / "archive" / "2026-09" / real.name
+    assert archived.is_file() and not row.exists()
+    closed = schema_validate.parse_yaml(archived.read_text(encoding="utf-8"))
+    assert closed["status"] == "closed"
+    assert str(closed["closed_at"]) == "2026-09-22"
+    assert closed["closed_by"] == "fix"
+    schema = json.loads((repo_root / "coordinator_core/frontmatter/schemas/bug-backlog.schema.json").read_text(encoding="utf-8"))
+    result = schema_validate.validate_frontmatter_obj(closed, schema)
+    assert isinstance(result, dict) and result.get("ok"), result
+    before = schema_validate.parse_yaml(real.read_text(encoding="utf-8"))
+    for key, value in before.items():
+        if key not in ("status", "closed_at", "closed_by"):
+            assert closed.get(key) == value, key

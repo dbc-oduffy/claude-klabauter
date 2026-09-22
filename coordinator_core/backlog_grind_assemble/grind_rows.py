@@ -11,15 +11,11 @@ library), never this module's.
 Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
 § Row verbs, Tasks § C4.
 
-- `check --manifest <script> --batch <id>`: reads the frozen manifest the
-  composer embeds in the emitted script as the single-line sentinel constant
-  `const QUEUE_GRIND_MANIFEST = <json-array>;` (one JSON array of
-  `{row_id, path, digest, batch_key}` entries, § Design § Selector's manifest
-  shape). Filters to `batch_key == --batch`, recomputes each entry's digest
-  from disk, and prints `{"stale": [...row_id], "vanished": [...row_id]}` —
-  stale for a digest mismatch, vanished for a path that no longer exists.
-  This module OWNS this sentinel's name; C7's composer must emit the manifest
-  under this exact constant name for `check` to find it.
+- `check --manifest <script> --batch <batch-id> --repo-root D`: reads the
+  emitted script's `const QUEUE_GRIND_MANIFEST = {...};` and one-line
+  `const BATCHES = [...];`, takes that batch's row ids, recomputes each row's
+  digest under D, and prints `{"stale": [...], "vanished": [...]}`. This
+  module owns the manifest const's name.
 - `append --profile P --row-id R --digest D --stage S --verdict V --outcome O
   --evidence-file F --run-stamp T`: appends one `json.dumps(sort_keys=True)`
   line (LEDGER_LINE_FIELDS order, per `grind_vocab.LEDGER_LINE_FIELDS`) to
@@ -27,19 +23,17 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
   Idempotent under a retried agent: an identical line already present (same
   serialized bytes) is not appended twice.
 - `close --profile-dir D --profile P --row <path> --digest DIG --verdict V
-  --evidence-file F --closed-by S --run-stamp T`: refuses (exit
-  `EXIT_MANIFEST_STALE`) when the row's current on-disk digest does not match
-  `--digest` or the row is missing. `V` is the CLOSING STAGE KIND (a member
-  of `grind_vocab.CLOSURE_CLOSING_BRANCHES`, e.g. `fix` | `refute-close`),
-  not a free-form status string — the actual status value written is
-  `closed_values[V]` from the profile's closure block. Edits only the closure
-  fields via `coordinator_core.frontmatter.primitives`
-  (`replace_fm_field`/`insert_fm_field`), appends the evidence paragraph to
-  the body block verbatim (no whole-document reflow), validates the result
-  with `schema_validate.validate_frontmatter_obj` against the profile's own
-  named schema, then moves the edited file with a single `os.replace` into
-  `<archive_path>/<YYYY-MM from --run-stamp>/`, refusing an existing
-  destination. Prints `{"old": ..., "new": ...}`.
+  --evidence-file F --closed-by S --run-stamp T --repo-root R`: refuses with
+  exit 3 when the row under R is missing or its digest differs. V is the
+  closing stage kind; the status written is `closed_values[V]`. Only the
+  status and stamp fields change, through `frontmatter.primitives`: a
+  whole-document-YAML row (the schema's `match_mode`) is edited as a whole,
+  and a fenced row gets the evidence paragraph appended to its body. A stamp
+  field the schema types `format: date` takes YYYY-MM-DD from the stamp. The
+  result is validated against the profile's schema (a bare name resolves to
+  the engine's vendored `frontmatter/schemas/`), written to
+  `<archive_path>/<YYYY-MM>/`, and only then is the source removed. Prints
+  `{"old": ..., "new": ...}`.
 - `settle --profile P --row-id R`: deletes
   `state/queue-grind/<P>/<R>.jsonl` if present — idempotent (already-settled
   is not an error). Only the committer calls this, immediately before the
@@ -356,10 +350,24 @@ def cmd_append(rest: list[str]) -> int:
 
 
 def _archive_month(run_stamp: str) -> str:
-    # `run_stamp` is expected to be (or begin with) an ISO date/timestamp,
-    # e.g. "2026-09-21" or "2026-09-21T10:00:00Z" -- "YYYY-MM" is its first
-    # 7 characters either way.
-    return run_stamp[:7]
+    return _stamp_date(run_stamp)[:7]
+
+
+def _stamp_date(run_stamp: str) -> str:
+    """YYYY-MM-DD from a run stamp (`20260922T110458Z` or ISO-8601), for a
+    stamp field the queue schema types `format: date`."""
+    digits = run_stamp.replace("-", "")[:8]
+    if len(digits) != 8 or not digits.isdigit():
+        raise ValueError(f"grind-row close: run stamp {run_stamp!r} carries no YYYYMMDD date")
+    return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+
+
+def _resolve_schema_path(schema: str, repo_root: Path) -> Path:
+    """A bare schema file name resolves against the engine's vendored
+    schemas (how DoE's profiles name them); a path resolves under repo_root."""
+    if "/" not in schema and "\\" not in schema:
+        return Path(schema_validate.__file__).resolve().parent / "schemas" / schema
+    return repo_root / schema
 
 
 def cmd_close(rest: list[str]) -> int:
@@ -384,7 +392,7 @@ def cmd_close(rest: list[str]) -> int:
             "--repo-root D"
         )
 
-    row_path = Path(flags["row"])
+    row_path = Path(flags["repo-root"]) / flags["row"]
     current_digest = _sha256_file(row_path)
     if current_digest is None:
         print(f"grind-row close: row not found: {row_path}", file=sys.stderr)
@@ -422,52 +430,55 @@ def cmd_close(rest: list[str]) -> int:
     status_field = closure.status_field
     stamp_fields = closure.stamp_fields
 
-    text = row_path.read_text(encoding="utf-8")
-    split = fm_primitives.split_frontmatter(text)
-    if split is None:
-        print(f"grind-row close: {row_path} carries no parseable frontmatter", file=sys.stderr)
+    schema_obj_path = _resolve_schema_path(profile.schema, repo_root)
+    if not schema_obj_path.is_file():
+        print(f"grind-row close: schema file not found: {schema_obj_path}", file=sys.stderr)
         return EXIT_REFUSAL
+    schema_obj = json.loads(schema_obj_path.read_text(encoding="utf-8"))
+    properties = schema_obj.get("properties") or {}
 
-    fm_text = split.fm_text
-    fm_text = (
-        fm_primitives.replace_fm_field(fm_text, status_field, status_value)
-        if fm_primitives.read_fm_field(fm_text, status_field) is not None
-        else fm_primitives.insert_fm_field(fm_text, status_field, status_value)
-    )
+    def _stamp_value(field_name: str) -> Any:
+        if field_name == "closed_by":
+            return flags["closed-by"]
+        if (properties.get(field_name) or {}).get("format") == "date":
+            return _stamp_date(flags["run-stamp"])
+        return flags["run-stamp"]
 
-    # `stamp_fields` is a LIST of frontmatter field names (`grind_profile.
-    # Closure`); the SOURCE each one takes is a naming convention, not a
-    # per-field mapping -- a field literally named `closed_by` takes the
-    # `--closed-by` value, every other stamp field takes `--run-stamp` (the
-    # only two computed values `close` has to give).
-    for field_name in stamp_fields:
-        value: Any = flags["closed-by"] if field_name == "closed_by" else flags["run-stamp"]
+    text = row_path.read_text(encoding="utf-8")
+    whole_document = schema_obj.get("match_mode") == "whole-document-yaml"
+    if whole_document:
+        fm_text = text
+    else:
+        split = fm_primitives.split_frontmatter(text)
+        if split is None:
+            print(f"grind-row close: {row_path} carries no parseable frontmatter", file=sys.stderr)
+            return EXIT_REFUSAL
+        fm_text = split.fm_text
+
+    for field_name, value in [(status_field, status_value)] + [(f, _stamp_value(f)) for f in stamp_fields]:
         fm_text = (
             fm_primitives.replace_fm_field(fm_text, field_name, value)
             if fm_primitives.read_fm_field(fm_text, field_name) is not None
             else fm_primitives.insert_fm_field(fm_text, field_name, value)
         )
 
-    evidence_text = Path(flags["evidence-file"]).read_text(encoding="utf-8").strip()
-    body = split.body_with_leading_newline.rstrip("\n")
-    body += (
-        f"\n\nCLOSED {flags['run-stamp']} ({flags['closed-by']}, {verdict}): "
-        f"{evidence_text}\n"
-    )
-
-    new_split = fm_primitives.FrontmatterSplit(
-        preamble=split.preamble,
-        fm_text=fm_text,
-        body_with_leading_newline=body,
-    )
-    new_text = fm_primitives.rebuild(new_split, fm_text)
+    if whole_document:
+        new_text = fm_text if fm_text.endswith("\n") else fm_text + "\n"
+    else:
+        evidence_text = Path(flags["evidence-file"]).read_text(encoding="utf-8").strip()
+        body = split.body_with_leading_newline.rstrip("\n")
+        body += (
+            f"\n\nCLOSED {flags['run-stamp']} ({flags['closed-by']}, {verdict}): "
+            f"{evidence_text}\n"
+        )
+        new_text = fm_primitives.rebuild(
+            fm_primitives.FrontmatterSplit(
+                preamble=split.preamble, fm_text=fm_text, body_with_leading_newline=body
+            ),
+            fm_text,
+        )
 
     fm_dict = schema_validate.parse_yaml(fm_text)
-    schema_obj_path = repo_root / profile.schema
-    if not schema_obj_path.is_file():
-        print(f"grind-row close: schema file not found: {schema_obj_path}", file=sys.stderr)
-        return EXIT_REFUSAL
-    schema_obj = json.loads(schema_obj_path.read_text(encoding="utf-8"))
     result = schema_validate.validate_frontmatter_obj(fm_dict, schema_obj)
     if not (isinstance(result, dict) and result.get("ok")):
         print(f"grind-row close: schema validation failed: {result}", file=sys.stderr)
