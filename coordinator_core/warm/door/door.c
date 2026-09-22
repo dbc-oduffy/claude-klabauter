@@ -736,6 +736,21 @@ static int door_basename_declares_stdin_read_w(const wchar_t *basename) {
  * earlier by `emit_hook_deny` immediately below. */
 static int write_all(HANDLE h, const char *data, size_t len);
 
+/* Engine down: pass loudly, never deny -- see `build_hook_pass_loudly_envelope`.
+ * Exit 0 either way; if the envelope cannot be built, an empty stdout is a
+ * pass, and the stderr line keeps it from being a silent one. */
+static int emit_hook_pass_loudly(const char *reason) {
+    buf_t out;
+    if (!buf_init(&out, 1024) || !build_hook_pass_loudly_envelope(&out, reason)) {
+        fwprintf(stderr, L"door: guard did not run: %hs\n", reason);
+        free(out.data);
+        return 0;
+    }
+    write_all(GetStdHandle(STD_OUTPUT_HANDLE), out.data, out.len);
+    free(out.data);
+    return 0;
+}
+
 /* Same split as `emit_indeterminate` below: the envelope's bytes are built
  * in `door_core.c` (shared, so the two doors cannot drift in what they
  * tell an operator), only the write is Windows-specific. Exit 0, matching
@@ -944,7 +959,7 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
     wchar_t script_path_w[MAX_PATH * 2];
     wchar_t *cmdline_w = build_fallback_cmdline(argc, wargv, engine_root_w, script_path_w);
     if (!cmdline_w) {
-        return emit_hook_deny("coordinator-door: engine unreachable and no cold entrypoint resolved; denying");
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and no cold entrypoint resolved");
     }
 
     SECURITY_ATTRIBUTES sa;
@@ -956,7 +971,7 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
         if (in_r) CloseHandle(in_r);
         if (in_w) CloseHandle(in_w);
         free(cmdline_w);
-        return emit_hook_deny("coordinator-door: engine unreachable and the cold guard could not be started; denying");
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
     /* The parent's ends must not leak into the child, or the child never sees
      * EOF on stdin and the parent never sees EOF on stdout. */
@@ -981,7 +996,7 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
     if (!spawned) {
         CloseHandle(in_w);
         CloseHandle(out_r);
-        return emit_hook_deny("coordinator-door: engine unreachable and the cold guard could not be started; denying");
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
 
     /* hook-run reads all of stdin before it writes anything, so writing the
@@ -1013,7 +1028,7 @@ static int hook_fall_through(int argc, wchar_t **wargv, const wchar_t *engine_ro
     }
     if (!answered || i == verdict.len) {
         if (verdict_ok) free(verdict.data);
-        return emit_hook_deny("coordinator-door: engine unreachable and the cold guard returned no verdict; denying");
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard returned no verdict");
     }
     write_all(GetStdHandle(STD_OUTPUT_HANDLE), verdict.data, verdict.len);
     free(verdict.data);

@@ -147,6 +147,8 @@ def _minimal_doc(graph: dict, *, verdicts=("confirmed-bug", "not-reproduced")) -
         "closure": _CLOSURE,
         "triage_policy": "Triage per the manifest.",
         "appetite": _APPETITE,
+        "archive_path": "state/bug-backlog/archive",
+        "schema": "coordinator_core/frontmatter/schemas/bug-backlog.schema.json",
     }
 
 
@@ -156,7 +158,17 @@ def test_validate_graph_verify_then_fix_refused(tmp_path):
         {
             "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "refute_close"}},
             "refute_close": {"kind": "refute-close", "edges": {"confirmed": "commit", "refuted": "commit"}},
-            "fix": {"kind": "fix", "edges": {"done": "commit"}},
+            "fix": {
+                "kind": "fix",
+                "edges": {
+                    "done": "commit",
+                    "NEEDS_WIDER_SCOPE": "widen-exhausted",
+                    "PEER_DIRTY": "peer-dirty",
+                    "NOT_REPRODUCED": "verify-failed",
+                    "baton": "baton",
+                    "needs-judgment": "needs-judgment",
+                },
+            },
             "commit": {"kind": "commit", "edges": {}},
         }
     )
@@ -170,8 +182,22 @@ def test_validate_graph_closing_path_without_refute_close_refused(tmp_path):
     doc = _minimal_doc(
         {
             "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "commit"}},
-            "fix": {"kind": "fix", "edges": {"done": "verify"}},
-            "verify": {"kind": "verify", "verify": {"default": "agent"}, "edges": {"pass": "commit"}},
+            "fix": {
+                "kind": "fix",
+                "edges": {
+                    "done": "verify",
+                    "NEEDS_WIDER_SCOPE": "widen-exhausted",
+                    "PEER_DIRTY": "peer-dirty",
+                    "NOT_REPRODUCED": "verify",
+                    "baton": "baton",
+                    "needs-judgment": "needs-judgment",
+                },
+            },
+            "verify": {
+                "kind": "verify",
+                "verify": {"default": "agent"},
+                "edges": {"pass": "commit", "fail": "verify-failed"},
+            },
             "commit": {"kind": "commit", "edges": {}},
         }
     )
@@ -186,7 +212,17 @@ def test_validate_graph_non_on_fail_cycle_refused(tmp_path):
         {
             "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "refute_close"}},
             "refute_close": {"kind": "refute-close", "edges": {"confirmed": "commit", "refuted": "commit"}},
-            "fix": {"kind": "fix", "edges": {"done": "verify"}},
+            "fix": {
+                "kind": "fix",
+                "edges": {
+                    "done": "verify",
+                    "NEEDS_WIDER_SCOPE": "widen-exhausted",
+                    "PEER_DIRTY": "peer-dirty",
+                    "NOT_REPRODUCED": "verify",
+                    "baton": "baton",
+                    "needs-judgment": "needs-judgment",
+                },
+            },
             "verify": {
                 "kind": "verify",
                 "verify": {"default": "agent"},
@@ -288,7 +324,7 @@ def test_validate_graph_closure_branch_missing_refused(tmp_path):
 
 def test_validate_graph_unknown_edge_target_refused(tmp_path):
     doc = _load_fixture_doc()
-    doc["graph"]["fix"]["edges"] = {"done": "not-a-node-or-handback"}
+    doc["graph"]["fix"]["edges"]["done"] = "not-a-node-or-handback"
     profile = _profile_from_doc(tmp_path, "bad-target", doc)
     with pytest.raises(gp.UnknownEdgeTargetError):
         gp.validate_graph(profile)

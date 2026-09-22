@@ -508,12 +508,15 @@ static const char *const door_stdin_reading_basenames[] = {
     "detect-initiative-candidates",
     "distill-log-append",
     "fan-out-dispatch",
+    "hook-run",
     "misc-session-and-guards",
     "normalize-snippet",
     "percolate-mirror",
     "queue-triage",
     "refresh-plugin-live-install",
     "statusline",
+    "subagent-statusline",
+    "survey-consume-gate",
     "workday-complete-backfill-anchor",
     "workday-complete-close",
 };
@@ -527,6 +530,19 @@ int door_basename_declares_stdin_read(const char *basename) {
         if (strcmp(basename, door_stdin_reading_basenames[i]) == 0) return 1;
     }
     return 0;
+}
+
+int build_hook_pass_loudly_envelope(buf_t *out, const char *reason) {
+    int ok = 1;
+    ok &= buf_append_cstr(out, "{\"systemMessage\":\"coordinator: guard did not run (");
+    ok &= buf_append_json_escaped(out, reason, strlen(reason));
+    ok &= buf_append_cstr(out,
+        ")\",\"suppressOutput\":false,\"hookSpecificOutput\":{"
+        "\"hookEventName\":\"PreToolUse\",\"additionalContext\":"
+        "\"A coordinator guard for PreToolUse could not be evaluated (");
+    ok &= buf_append_json_escaped(out, reason, strlen(reason));
+    ok &= buf_append_cstr(out, "). It did not pass -- it did not run.\"}}\n");
+    return ok;
 }
 
 int build_hook_deny_envelope(buf_t *out, const char *reason) {

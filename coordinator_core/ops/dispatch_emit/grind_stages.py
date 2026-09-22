@@ -96,15 +96,24 @@ def _agent_call(
     agent_type_host: Optional[str],
     effort: str,
     schema: dict,
+    is_expr: bool = False,
 ) -> str:
     """Compose one ``const ... = await agent(...)`` call's text. Shared by
     every ``compose_*`` function below -- the only thing that varies per
     stage kind is the prompt, the label, the agentType, the effort and the
     schema; the option-object shape and the literal model are identical
-    everywhere (module docstring above)."""
+    everywhere (module docstring above).
+
+    ``prompt`` is plain prompt TEXT by default, escaped here via
+    ``_js_string_literal``. When a caller has already built a JS
+    EXPRESSION that evaluates to the prompt at run time (``is_expr=True`` --
+    ``_join_prompt_parts``'s output: static, escaped literal pieces
+    concatenated with a live runtime expression via ``+``), it is emitted
+    verbatim instead."""
+    prompt_text = prompt if is_expr else _js_string_literal(prompt)
     return (
         "  await agent("
-        f"{_js_string_literal(prompt)}, "
+        f"{prompt_text}, "
         "{ "
         f"label: {_js_string_literal(label)}, "
         f"phase: {_js_string_literal(phase_title)}, "
@@ -116,34 +125,105 @@ def _agent_call(
     )
 
 
+def _join_prompt_parts(parts: Sequence[tuple[str, str]]) -> str:
+    """Build a JS EXPRESSION (string literal(s) concatenated with ``+``)
+    that evaluates, at RUN time, to a full prompt -- letting a caller splice
+    a live JS expression (e.g. ``row.declaredFiles.join(', ')``) between
+    static text segments. Each part is ``("lit", text)`` (escaped through
+    ``_js_string_literal``, the existing escaper) or ``("expr", js_expr)``
+    (emitted verbatim, parenthesised). Runtime interpolation support for
+    ``compose_fix_call``/``compose_commit_call``/``compose_undo_call``/
+    ``compose_commit_ledger_only_call`` -- fixes the break-class defect
+    where a static per-row manifest path stood in for the live triage-
+    declared/fixer-touched file list a real committer/undoer needs."""
+    pieces: list[str] = []
+    for kind, text in parts:
+        if kind == "lit":
+            if text:
+                pieces.append(_js_string_literal(text))
+        elif kind == "expr":
+            pieces.append(f"({text})")
+        else:
+            raise ValueError(f"grind_stages._join_prompt_parts: unknown part kind {kind!r}")
+    return " + ".join(pieces) if pieces else "''"
+
+
+def _list_parts(files: Sequence[str], files_js: Optional[str]) -> list[tuple[str, str]]:
+    """One or more ``_join_prompt_parts`` parts rendering a file/row-id list
+    clause: a live ``files_js`` JS expression (joined with ``', '`` at run
+    time) when given, else the static ``files`` list (or ``(none)``)."""
+    if files_js:
+        return [("expr", f"({files_js}).join(', ')")]
+    return [("lit", ", ".join(files) if files else "(none)")]
+
+
 def compose_triage_call(
     *,
     label: str,
     phase_title: str,
     run_dir: str,
-    batch_id: str,
-    triage_depth: str,
+    profile: str = "",
+    batch_id: str = "",
+    triage_depth: str = "",
+    batch_id_js: Optional[str] = None,
+    triage_depth_js: Optional[str] = None,
+    rows_js: Optional[str] = None,
+    script_path_js: Optional[str] = None,
+    run_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
 ) -> str:
     """`triage` (general-purpose, sonnet, medium). Runs `grind-row check`
     first, then per row returns verdict, evidence, a t-shirt size plus
     sizing evidence, a tradeoff statement (empty when there is none),
     triage-declared files, and a fix plan. Appends one ledger line per row
-    as it finishes, and writes the per-batch triage record to
-    `<run_dir>/records/<batch-id>.json` for a verify op to read."""
-    prompt = (
-        "You are the triage stage. Run `grind-row check --manifest <script> "
-        f"--batch {batch_id}` first, and skip any row it reports as `stale` "
-        "or `vanished`. For every remaining row, decide a verdict, cite the "
-        "evidence for it, size the row XS through XXL with the evidence for "
-        "that size, and write a fix plan. Only fill in a tradeoff statement "
-        "when the fix genuinely carries one -- leave it empty otherwise. "
-        "Name every file your triage declares the row touches. As you "
-        "finish each row, append one ledger line for it immediately (a "
-        "retried agent skips rows that already have one) and write the "
-        f"per-batch triage record to {run_dir}/records/{batch_id}.json. "
-        f"Triage depth for this batch is '{triage_depth}'. " + _NO_STAGING_CLAUSE
-    )
+    (`grind-row append --profile P --row-id R --digest D --stage triage
+    --verdict V --outcome O --evidence-file F --run-stamp T`) as it
+    finishes, and writes the per-batch triage record to
+    `<run_dir>/records/<batch-id>.json` for a verify op to read.
+
+    ``batch_id_js``/``triage_depth_js``/``rows_js``/``script_path_js``/
+    ``run_id_js`` name JS runtime expressions to interpolate instead of the
+    static values -- letting ONE composed call site serve every batch,
+    telling the agent its own rows (row_id/path/digest) and the exact
+    `grind-row check`/`append` invocations rather than a literal
+    `<script>` placeholder."""
+    batch_id_part: tuple[str, str] = ("expr", batch_id_js) if batch_id_js else ("lit", batch_id)
+    depth_part: tuple[str, str] = ("expr", triage_depth_js) if triage_depth_js else ("lit", triage_depth)
+    rows_part: tuple[str, str] = ("expr", rows_js) if rows_js else ("lit", "[]")
+    script_part: tuple[str, str] = ("expr", script_path_js) if script_path_js else ("lit", "<script>")
+    run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
+    parts: list[tuple[str, str]] = [
+        ("lit", "You are the triage stage. Your rows (row_id/path/digest) are: "),
+        rows_part,
+        ("lit", ". Run `grind-row check --manifest "),
+        script_part,
+        ("lit", " --batch "),
+        batch_id_part,
+        (
+            "lit",
+            "` first, and skip any row it reports as `stale` "
+            "or `vanished`. For every remaining row, decide a verdict, cite the "
+            "evidence for it, size the row XS through XXL with the evidence for "
+            "that size, and write a fix plan. Only fill in a tradeoff statement "
+            "when the fix genuinely carries one -- leave it empty otherwise. "
+            "Name every file your triage declares the row touches. As you finish "
+            "each row, run `grind-row append --profile "
+            f"{profile} --row-id <its row_id> --digest <its digest> --stage "
+            "triage --verdict <its verdict> --outcome <its verdict> "
+            "--evidence-file <a file with your evidence> --run-stamp ",
+        ),
+        run_id_part,
+        (
+            "lit",
+            "` immediately (idempotent under a retried agent -- an identical "
+            "line already appended is not re-appended) and write the "
+            f"per-batch triage record to {run_dir}/records/",
+        ),
+        batch_id_part,
+        ("lit", ".json. Triage depth for this batch is '"),
+        depth_part,
+        ("lit", "'. " + _NO_STAGING_CLAUSE),
+    ]
     row_schema = {
         "type": "object",
         "required": list(TRIAGE_RECORD_FIELDS),
@@ -164,13 +244,14 @@ def compose_triage_call(
         "properties": {"rows": {"type": "array", "items": row_schema}},
     }
     return _agent_call(
-        prompt,
+        _join_prompt_parts(parts),
         label=label,
         phase_title=phase_title,
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="medium",
         schema=schema,
+        is_expr=True,
     )
 
 
@@ -178,23 +259,62 @@ def compose_refute_close_call(
     *,
     label: str,
     phase_title: str,
+    profile: str = "",
+    profile_dir: str = "",
+    proposals_js: Optional[str] = None,
+    run_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
 ) -> str:
     """`refute-close` (general-purpose, sonnet, medium). Tries to refute
     each close proposal it is handed. Closes only the confirmed ones, via
-    `grind-row close`."""
-    prompt = (
-        "You are the refute-close stage. For each close proposal you are "
-        "handed, actively try to refute it -- look for evidence the row is "
-        "not actually resolved. Close only the proposals that survive that "
-        "attempt, via `grind-row close`, and report every proposal you "
-        "refuted along with why. " + _NO_STAGING_CLAUSE
-    )
+    `grind-row close --profile-dir D --profile P --row <path> --digest DIG
+    --verdict refute-close --evidence-file F --closed-by refute-close
+    --run-stamp T`, reporting the `{old,new}` path pair the command prints
+    so the committer can stage the archive add and declare the queue-path
+    removal.
+
+    ``proposals_js``/``run_id_js`` name JS runtime expressions -- the
+    proposal rows (row_id/path/digest/triage evidence) this batch's
+    refute-close node actually reached, and the run stamp -- interpolated
+    instead of a static/omitted value."""
+    proposals_part: tuple[str, str] = ("expr", proposals_js) if proposals_js else ("lit", "[]")
+    run_id_part: tuple[str, str] = ("expr", run_id_js) if run_id_js else ("lit", "<run-id>")
+    parts: list[tuple[str, str]] = [
+        ("lit", "You are the refute-close stage. Your close proposals (row_id/path/digest/evidence) are: "),
+        proposals_part,
+        (
+            "lit",
+            ". For each one, actively try to refute it -- look for evidence the "
+            "row is not actually resolved. For every proposal that survives "
+            "that attempt, run `grind-row close --profile-dir "
+            f"{profile_dir} --profile {profile} --row <its path> --digest "
+            "<its digest> --verdict refute-close --evidence-file <a file "
+            "with your evidence> --closed-by refute-close --run-stamp ",
+        ),
+        run_id_part,
+        (
+            "lit",
+            "`, and report the `{old,new}` path pair it prints as that "
+            "row's `new_path`. Report every proposal you refuted along "
+            "with why, and never run `grind-row close` for one of those. "
+            + _NO_STAGING_CLAUSE,
+        ),
+    ]
     schema = {
         "type": "object",
         "required": ["confirmed", "refuted"],
         "properties": {
-            "confirmed": {"type": "array", "items": {"type": "string"}},
+            "confirmed": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["row", "new_path"],
+                    "properties": {
+                        "row": {"type": "string"},
+                        "new_path": {"type": "string"},
+                    },
+                },
+            },
             "refuted": {
                 "type": "array",
                 "items": {
@@ -209,13 +329,14 @@ def compose_refute_close_call(
         },
     }
     return _agent_call(
-        prompt,
+        _join_prompt_parts(parts),
         label=label,
         phase_title=phase_title,
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="medium",
         schema=schema,
+        is_expr=True,
     )
 
 
@@ -223,8 +344,11 @@ def compose_fix_call(
     *,
     label: str,
     phase_title: str,
-    row_id: str,
-    locked_files: Sequence[str],
+    row_id: str = "",
+    row_id_js: Optional[str] = None,
+    locked_files: Sequence[str] = (),
+    locked_files_js: Optional[str] = None,
+    feedback_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
 ) -> str:
     """`fix` (general-purpose, sonnet, high). Holds the lock on its files
@@ -232,21 +356,51 @@ def compose_fix_call(
     (trap 5, `PEER_DIRTY`) before doing any work. Returns
     `NEEDS_WIDER_SCOPE` with the extra files, or `NEEDS_PLAN` (engine-mapped
     to `baton`), or a non-empty tradeoff statement (engine-mapped to
-    `needs-judgment`). Otherwise fixes, tests, and runs `grind-row close`."""
-    locked_list = ", ".join(locked_files) if locked_files else "(none declared)"
-    prompt = (
-        f"You are the fix stage for row {row_id}. You hold the lock on "
-        f"[{locked_list}] plus `ledger:{row_id}`. Before doing any work, "
-        "pre-check every locked file for peer dirt -- if a locked file has "
-        "changed under you since the lock was acquired, stop and report "
-        "PEER_DIRTY rather than fixing over it. If the fix needs files "
-        "beyond your locked set, stop and report NEEDS_WIDER_SCOPE with the "
-        "extra files, and take no other action. If the fix needs a plan "
-        "before it can proceed, report NEEDS_PLAN. If your fix genuinely "
-        "carries a tradeoff triage did not catch, report that tradeoff "
-        "instead of proceeding. Otherwise, fix the row, run its tests, and "
-        "run `grind-row close` when they pass. " + _NO_STAGING_CLAUSE
+    `needs-judgment`). Otherwise fixes, tests, reports every file it
+    touched AND created, and runs `grind-row close` when they pass,
+    reporting the `{old,new}` path pair it prints as `close_result`.
+
+    ``locked_files_js``/``row_id_js``/``feedback_js`` name JS expressions
+    (a row's runtime triage-declared-files array, its own id, and -- on a
+    verify-failure retry -- the verifier's own reason) to interpolate at
+    RUN time instead of the static ``locked_files``/``row_id`` -- letting
+    ONE composed call site serve every row, with real, live-declared lock
+    keys rather than a static approximation (§ Design § Stage library,
+    "Fix locks cover the TRIAGE-DECLARED files"), and the verifier's
+    feedback fed back on a retry (DR-404: fail routes back to FIX with
+    feedback, never a blind re-verify)."""
+    row_id_part: tuple[str, str] = ("expr", row_id_js) if row_id_js else ("lit", row_id)
+    tail = (
+        "] plus `ledger:"
     )
+    parts: list[tuple[str, str]] = [
+        ("lit", "You are the fix stage for row "),
+        row_id_part,
+        ("lit", ". You hold the lock on ["),
+    ]
+    parts.extend(_list_parts(locked_files, locked_files_js))
+    parts.append(("lit", tail))
+    parts.append(row_id_part)
+    parts.append(
+        (
+            "lit",
+            "`. Before doing any work, "
+            "pre-check every locked file for peer dirt -- if a locked file has "
+            "changed under you since the lock was acquired, stop and report "
+            "PEER_DIRTY rather than fixing over it. If the fix needs files "
+            "beyond your locked set, stop and report NEEDS_WIDER_SCOPE with the "
+            "extra files, and take no other action. If the fix needs a plan "
+            "before it can proceed, report NEEDS_PLAN. If your fix genuinely "
+            "carries a tradeoff triage did not catch, report that tradeoff "
+            "instead of proceeding. Otherwise, fix the row, run its tests, "
+            "report every file you touched and every file you created, and "
+            "run `grind-row close` when they pass, reporting the `{old,new}` "
+            "path pair it prints as `close_result`.",
+        )
+    )
+    if feedback_js:
+        parts.append(("expr", feedback_js))
+    parts.append(("lit", " " + _NO_STAGING_CLAUSE))
     schema = {
         "type": "object",
         "required": ["outcome"],
@@ -262,17 +416,24 @@ def compose_fix_call(
                 ],
             },
             "extra_files": {"type": "array", "items": {"type": "string"}},
+            "touched_files": {"type": "array", "items": {"type": "string"}},
+            "created_files": {"type": "array", "items": {"type": "string"}},
+            "close_result": {
+                "type": "object",
+                "properties": {"old": {"type": "string"}, "new": {"type": "string"}},
+            },
             "tradeoff": {"type": "string"},
         },
     }
     return _agent_call(
-        prompt,
+        _join_prompt_parts(parts),
         label=label,
         phase_title=phase_title,
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="high",
         schema=schema,
+        is_expr=True,
     )
 
 
@@ -314,23 +475,37 @@ def compose_verify_op_call(
     *,
     label: str,
     phase_title: str,
-    op: str,
     run_dir: str,
-    batch_id: str,
+    op: str = "",
+    op_js: Optional[str] = None,
+    batch_id: str = "",
+    batch_id_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
 ) -> str:
     """`verify` in its op form (`coordinator:queue-grind-op-runner`, sonnet,
     low). Shell-only: runs
     `coordinator-invoke <op> --params-file <run_dir>/records/<batch-id>.json`
     and returns the JSON verbatim. Exit 0 passes; otherwise the JSON names
-    the failing ids."""
-    prompt = (
-        f"Run `coordinator-invoke {op} --params-file "
-        f"{run_dir}/records/{batch_id}.json` and return its JSON output "
-        "verbatim. Exit 0 means the batch passes. A non-zero exit means the "
-        "JSON output names the failing row ids -- return it unchanged "
-        "either way; do not summarize or reinterpret it. " + _NO_STAGING_CLAUSE
-    )
+    the failing ids.
+
+    ``op_js``/``batch_id_js`` name JS expressions (a per-batch-key verify-op
+    const, and the row's owning batch id) to interpolate at RUN time --
+    letting ONE composed call site serve every batch-key's op variant."""
+    op_part: tuple[str, str] = ("expr", op_js) if op_js else ("lit", op)
+    batch_id_part: tuple[str, str] = ("expr", batch_id_js) if batch_id_js else ("lit", batch_id)
+    parts: list[tuple[str, str]] = [
+        ("lit", "Run `coordinator-invoke "),
+        op_part,
+        ("lit", f" --params-file {run_dir}/records/"),
+        batch_id_part,
+        (
+            "lit",
+            ".json` and return its JSON output "
+            "verbatim. Exit 0 means the batch passes. A non-zero exit means the "
+            "JSON output names the failing row ids -- return it unchanged "
+            "either way; do not summarize or reinterpret it. " + _NO_STAGING_CLAUSE,
+        ),
+    ]
     schema = {
         "type": "object",
         "required": ["exit_code", "output"],
@@ -340,12 +515,13 @@ def compose_verify_op_call(
         },
     }
     return _agent_call(
-        prompt,
+        _join_prompt_parts(parts),
         label=label,
         phase_title=phase_title,
         agent_type=OP_RUNNER_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="low",
+        is_expr=True,
         schema=schema,
     )
 
@@ -354,9 +530,12 @@ def compose_commit_call(
     *,
     label: str,
     phase_title: str,
-    row_id: str,
-    touched_files: Sequence[str],
+    row_id: str = "",
+    row_id_js: Optional[str] = None,
+    touched_files: Sequence[str] = (),
+    touched_files_js: Optional[str] = None,
     removed_files: Sequence[str] = (),
+    removed_files_js: Optional[str] = None,
     regenerate_op: Optional[str] = None,
     agent_type_host: Optional[str] = None,
 ) -> str:
@@ -365,27 +544,34 @@ def compose_commit_call(
     settle`), runs the profile's index-regenerate op when one is named,
     then commits. Passes `--declared-revert` for every removed path
     (trap 3). An indeterminate outcome is reconciled against `git log` and
-    `git status` before any retry, and never retried blind (trap 4)."""
-    touched_list = ", ".join(touched_files) if touched_files else "(none)"
-    regenerate_clause = (
-        f" Before staging, run the index-regenerate op `{regenerate_op}`."
-        if regenerate_op
-        else ""
-    )
-    declared_revert_clause = (
-        " Pass --declared-revert for every one of these removed paths: "
-        f"[{', '.join(removed_files)}]."
-        if removed_files
-        else ""
-    )
-    prompt = (
-        f"You are the committer for row {row_id}. You are the only stage "
-        "that stages or commits anything. Stage exactly this touched list: "
-        f"[{touched_list}], plus this row's ledger deletion via "
-        f"`grind-row settle`.{regenerate_clause}{declared_revert_clause} "
-        "Then commit. If the outcome is indeterminate, reconcile it against "
-        "`git log` and `git status` before doing anything else -- never "
-        "retry blind."
+    `git status` before any retry, and never retried blind (trap 4).
+
+    ``touched_files_js``/``removed_files_js``/``row_id_js`` name JS
+    expressions (e.g. the fixer's own returned touched-files list, the row
+    paths a `close` moved to archive, and the row's own id) to interpolate
+    at RUN time instead of the static values -- letting ONE composed call
+    site serve every row, with the committer staging what the worker
+    ACTUALLY touched, never a static per-row approximation."""
+    row_id_part: tuple[str, str] = ("expr", row_id_js) if row_id_js else ("lit", row_id)
+    parts: list[tuple[str, str]] = [
+        ("lit", "You are the committer for row "),
+        row_id_part,
+        ("lit", ". You are the only stage that stages or commits anything. Stage exactly this touched list: ["),
+    ]
+    parts.extend(_list_parts(touched_files, touched_files_js))
+    parts.append(("lit", "], plus this row's ledger deletion via `grind-row settle`."))
+    if regenerate_op:
+        parts.append(("lit", f" Before staging, run the index-regenerate op `{regenerate_op}`."))
+    if removed_files or removed_files_js:
+        parts.append(("lit", " Pass --declared-revert for every one of these removed paths: ["))
+        parts.extend(_list_parts(removed_files, removed_files_js))
+        parts.append(("lit", "]."))
+    parts.append(
+        (
+            "lit",
+            " Then commit. If the outcome is indeterminate, reconcile it against "
+            "`git log` and `git status` before doing anything else -- never retry blind.",
+        )
     )
     schema = {
         "type": "object",
@@ -396,13 +582,14 @@ def compose_commit_call(
         },
     }
     return _agent_call(
-        prompt,
+        _join_prompt_parts(parts),
         label=label,
         phase_title=phase_title,
         agent_type=COMMIT_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="low",
         schema=schema,
+        is_expr=True,
     )
 
 
@@ -411,30 +598,47 @@ def compose_commit_ledger_only_call(
     label: str,
     phase_title: str,
     profile: str,
-    unsettled_row_ids: Sequence[str],
+    unsettled_row_ids: Sequence[str] = (),
+    unsettled_row_ids_js: Optional[str] = None,
     run_id: Optional[str] = None,
+    run_id_js: Optional[str] = None,
     is_drain: bool = False,
     agent_type_host: Optional[str] = None,
 ) -> str:
     """`commit` (ledger-only) (`coordinator:git-commit-agent`, sonnet, low).
     At batch end and on drain, commits exactly the unsettled rows' ledger
     files. On the drain commit only, additionally writes and stages
-    `state/queue-grind/<profile>/runs/<run-id>.json` in the same commit."""
-    rows_list = ", ".join(unsettled_row_ids) if unsettled_row_ids else "(none)"
-    drain_clause = (
-        f" This is the drain commit: also write and stage "
-        f"state/queue-grind/{profile}/runs/{run_id}.json in this same "
-        "commit."
-        if is_drain
-        else ""
-    )
-    prompt = (
-        "You are the committer for a ledger-only commit. You are the only "
-        "stage that stages or commits anything. Stage exactly these "
-        f"unsettled rows' ledger files: [{rows_list}], and nothing "
-        f"else.{drain_clause} Then commit. If the outcome is indeterminate, "
-        "reconcile it against `git log` and `git status` before doing "
-        "anything else -- never retry blind."
+    `state/queue-grind/<profile>/runs/<run-id>.json` in the same commit.
+
+    ``unsettled_row_ids_js``/``run_id_js`` name JS expressions to
+    interpolate at RUN time instead of the static values -- the real
+    unsettled-row set at commit time, and the real run stamp, neither of
+    which is known at emit time."""
+    parts: list[tuple[str, str]] = [
+        (
+            "lit",
+            "You are the committer for a ledger-only commit. You are the only "
+            "stage that stages or commits anything. Stage exactly these "
+            "unsettled rows' ledger files: [",
+        )
+    ]
+    parts.extend(_list_parts(unsettled_row_ids, unsettled_row_ids_js))
+    parts.append(("lit", "], and nothing else."))
+    if is_drain:
+        parts.append(
+            ("lit", f" This is the drain commit: also write and stage state/queue-grind/{profile}/runs/")
+        )
+        if run_id_js:
+            parts.append(("expr", run_id_js))
+        else:
+            parts.append(("lit", str(run_id)))
+        parts.append(("lit", ".json in this same commit."))
+    parts.append(
+        (
+            "lit",
+            " Then commit. If the outcome is indeterminate, reconcile it against "
+            "`git log` and `git status` before doing anything else -- never retry blind.",
+        )
     )
     schema = {
         "type": "object",
@@ -445,13 +649,14 @@ def compose_commit_ledger_only_call(
         },
     }
     return _agent_call(
-        prompt,
+        _join_prompt_parts(parts),
         label=label,
         phase_title=phase_title,
         agent_type=COMMIT_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="low",
         schema=schema,
+        is_expr=True,
     )
 
 
@@ -459,29 +664,35 @@ def compose_undo_call(
     *,
     label: str,
     phase_title: str,
-    touched_files: Sequence[str],
+    touched_files: Sequence[str] = (),
+    touched_files_js: Optional[str] = None,
     created_files: Sequence[str] = (),
+    created_files_js: Optional[str] = None,
     agent_type_host: Optional[str] = None,
 ) -> str:
     """`undo` (general-purpose, sonnet, low). Restores the fixer's own
-    touched files from HEAD and removes the files it created."""
-    touched_list = ", ".join(touched_files) if touched_files else "(none)"
-    created_list = ", ".join(created_files) if created_files else "(none)"
-    prompt = (
-        f"Restore these files from HEAD: [{touched_list}], and remove "
-        f"these files the fix created: [{created_list}]. " + _NO_STAGING_CLAUSE
-    )
+    touched files from HEAD and removes the files it created.
+
+    ``touched_files_js``/``created_files_js`` name JS expressions (the
+    fixer's own returned touched/created lists) to interpolate at RUN time
+    instead of the static lists."""
+    parts: list[tuple[str, str]] = [("lit", "Restore these files from HEAD: [")]
+    parts.extend(_list_parts(touched_files, touched_files_js))
+    parts.append(("lit", "], and remove these files the fix created: ["))
+    parts.extend(_list_parts(created_files, created_files_js))
+    parts.append(("lit", "]. " + _NO_STAGING_CLAUSE))
     schema = {
         "type": "object",
         "required": ["outcome"],
         "properties": {"outcome": {"type": "string", "enum": ["undone"]}},
     }
     return _agent_call(
-        prompt,
+        _join_prompt_parts(parts),
         label=label,
         phase_title=phase_title,
         agent_type=GENERAL_PURPOSE_AGENT_TYPE,
         agent_type_host=agent_type_host,
         effort="low",
         schema=schema,
+        is_expr=True,
     )

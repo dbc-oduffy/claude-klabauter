@@ -863,6 +863,21 @@ static long door_stdin_read_chunk(void *reader_ctx, char *buf, size_t cap) {
     }
 }
 
+/* Engine down: pass loudly, never deny -- see `build_hook_pass_loudly_envelope`.
+ * Exit 0 either way; if the envelope cannot be built, an empty stdout is a
+ * pass, and the stderr line keeps it from being a silent one. */
+static int emit_hook_pass_loudly(const char *reason) {
+    buf_t out;
+    if (!buf_init(&out, 1024) || !build_hook_pass_loudly_envelope(&out, reason)) {
+        fprintf(stderr, "door: guard did not run: %s\n", reason);
+        free(out.data);
+        return 0;
+    }
+    write_all_fd(STDOUT_FILENO, out.data, out.len);
+    free(out.data);
+    return 0;
+}
+
 /* Same split as `emit_indeterminate` below: the envelope's bytes are built
  * in `door_core.c` (shared, so the two doors cannot drift in what they
  * tell an operator), only the write is POSIX-specific. Exit 0, matching
@@ -1019,24 +1034,25 @@ static size_t g_hook_payload_len = 0;
  * its verdict is relayed; the cold leg also asks for the engine back, so
  * only the first call of an outage pays that.
  *
- * FAIL-CLOSED on anything that is not a verdict. The child's stdout is
+ * PASSES LOUDLY on anything that is not a verdict. The child's stdout is
  * captured, not inherited: a nonzero exit or an empty stdout means the guard
- * did not answer, and a hook that did not answer must never read as one
- * that allowed -- that case still gets `emit_hook_deny`. */
+ * did not answer, which gets `emit_hook_pass_loudly` -- never a deny (the
+ * engine being down is no reason to wall off Bash) and never a silent pass
+ * (an unrun guard must not read as one that allowed). */
 static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     char script_path[PATH_MAX];
     if (resolve_fallback_script(engine_root, script_path) != 0) {
-        return emit_hook_deny("coordinator-door: engine unreachable and no cold entrypoint resolved; denying");
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and no cold entrypoint resolved");
     }
 
     int in_pipe[2], out_pipe[2];
     if (pipe(in_pipe) != 0) {
-        return emit_hook_deny("coordinator-door: engine unreachable and the cold guard could not be started; denying");
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
     if (pipe(out_pipe) != 0) {
         close(in_pipe[0]);
         close(in_pipe[1]);
-        return emit_hook_deny("coordinator-door: engine unreachable and the cold guard could not be started; denying");
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
 
     int spawn_argc = 2 + (argc > 1 ? argc - 1 : 0);
@@ -1063,7 +1079,7 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     if (rc != 0) {
         close(in_pipe[1]);
         close(out_pipe[0]);
-        return emit_hook_deny("coordinator-door: engine unreachable and the cold guard could not be started; denying");
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
 
     /* hook-run reads all of stdin before it writes anything, so writing the
@@ -1100,7 +1116,7 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     }
     if (!answered || i == verdict.len) {
         if (verdict_ok) free(verdict.data);
-        return emit_hook_deny("coordinator-door: engine unreachable and the cold guard returned no verdict; denying");
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard returned no verdict");
     }
     write_all_fd(STDOUT_FILENO, verdict.data, verdict.len);
     free(verdict.data);
@@ -1214,7 +1230,7 @@ int main(int argc, char **argv) {
      * invocation. Read before engine-root resolution because it depends on
      * none of it, and so a caller who declared hook mode gets a decided
      * verdict even when the engine root cannot be resolved -- that failure
-     * reaches `hook_fall_through`, which denies when no cold leg resolves.
+     * reaches `hook_fall_through`, which passes loudly when no cold leg resolves.
      *
      * From this point to the request-build site further below, every
      * pre-delivery fall-through call site frees its own intermediate

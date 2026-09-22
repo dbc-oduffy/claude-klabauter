@@ -563,10 +563,10 @@ def _wait_for_warm_boot(msg: dict) -> Tuple[Optional[dict], float]:
     evening's memo traffic to it, 2026-08-25/26).
 
     WHY THIS IS NOT BACKSTOP 2. What the PM retired (2026-08-21) was a SILENT
-    degrade to a full cold spawn on every miss, forever. This waits for the
-    WARM server, announces itself on stderr before it waits, waits once, and
-    still fails hard when the bound expires -- there is no path from here to a
-    cold dispatch the caller did not ask for with `--allow-unstamped-dispatch`.
+    degrade to a full cold spawn on every miss. This waits for the WARM server,
+    announces itself on stderr before it waits, and waits once; when the bound
+    expires the caller runs cold LOUDLY (2026-09-21 ruling: an unreachable
+    engine passes loudly, never denies).
 
     Aborts early on a PERMANENT reason established mid-wait
     (`last_cold_reason`): those recur identically on every poll, so waiting the
@@ -974,9 +974,9 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #     dispatch` itself never raises. BACKSTOP 2 IS RETIRED (2026-08-21,
     #     PM ruling, state/handoffs/2026-08-21_103635_reaching-the-warm-
     #     engine.md): "the cold path is a SUCCESS path" is no longer this
-    #     box's rule when warm is enabled -- see the fail-hard block
-    #     immediately below `try_warm_dispatch`'s call, which refuses to
-    #     fall through to cold on a warm miss unless the caller opted in.
+    #     box's rule when warm is enabled: a miss is no longer a quiet
+    #     success. The block immediately below `try_warm_dispatch`'s call
+    #     waits once and then runs cold LOUDLY (2026-09-21 ruling).
     #     Everything below THAT point is the pre-existing cold dispatch
     #     path, unchanged: it only runs when `response` is not already set,
     #     which now means either a served warm hit, warm disabled entirely,
@@ -1014,146 +1014,52 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
 
             response = try_warm_dispatch(msg)
 
-            # FAIL HARD, NOT FAIL CLOSED (state/handoffs/2026-08-21_103635_
-            # reaching-the-warm-engine.md; PM ruling verbatim: "I'd rather
-            # have a fail than a silent slow. Much rather."). THIS REVERSES
-            # Backstop 2 -- warm.client's own module docstring names it "the
-            # cold path is a SUCCESS path", the deliberate design this box
-            # ran on until today. See that module's docstring for the
-            # retirement notice; this is the enforcement half of it.
+            # AN UNREACHABLE ENGINE PASSES LOUDLY, NEVER DENIES (PM ruling
+            # 2026-09-21, DoE-claude coordinator/docs/wiki/coordinator-tripwires/
+            # an-unreachable-engine-passes-loudly-never-denies.md). This
+            # replaces the 2026-08-21 refusal ("no live ops without warm")
+            # without reversing its reason -- "I'd rather have a fail than a
+            # SILENT slow": nothing here is silent. Refusing made an engine
+            # outage an outage of every op on the box, and the retry it asked
+            # for was itself the load.
             #
-            # A warm-enabled box that could not reach a live server for
-            # THIS call (skew-evicted, still booting, busy, wedged) no
-            # longer silently degrades to a slow cold spawn -- it fails,
-            # loudly, on THIS invocation. `try_warm_dispatch` has already
-            # kicked off a fresh spawn attempt on its own way out for every
-            # miss that can trigger one (see its own module docstring's
-            # spawn-trigger table) -- this failure's own remediation is
-            # therefore "retry", not "go fix something": the self-heal is
-            # already in flight by the time this message is printed.
+            # `None` from `try_warm_dispatch` is NEVER a delivered mutation --
+            # a delivered-but-unanswered mutation comes back as the -32004
+            # indeterminate envelope, is returned as the response, and never
+            # reaches the cold path (warm.client's delivered-never-cold
+            # invariant). So running cold here cannot execute an op twice.
             #
-            # Bypassed by the SAME explicit opt-in as the stamp gate
-            # (`ipc.is_unstamped_dispatch_allowed()`) -- one carve-out for
-            # "this is a deliberate manual/test invocation", not two
-            # independently-toggled ones. A manual test against a live
-            # engine build routinely has no warm server for that build at
-            # all; demanding one would make the carve-out unusable for the
-            # exact case it exists to serve.
+            # Wait once, bounded, first: every miss already triggered a
+            # respawn, and a server that comes up inside the bound serves this
+            # call warm. A permanent reason recurs on every poll, so skip the
+            # wait then. `--allow-unstamped-dispatch` goes cold quietly: that
+            # caller asked for exactly this.
             if response is None:
                 from coordinator_core.ipc import is_unstamped_dispatch_allowed
 
                 if not is_unstamped_dispatch_allowed():
-                    # "Retry in a moment" is the right remediation for a
-                    # TRANSIENT miss (server booting, busy, skew-evicted) and
-                    # the wrong one when this process can never reach a warm
-                    # server at all. In that second case the client has
-                    # already established why, and printing the retry advice
-                    # over the top of it produced the contradiction an
-                    # operator hit on every live op (2026-08-22): "every call
-                    # from this tree goes cold", then "cold fallback is
-                    # disabled", with no path in either half. Ask the client
-                    # for its reason and lead with that instead.
                     from coordinator_core.warm.client import last_cold_reason
 
                     reason = last_cold_reason()
-                    if reason:
-                        _fatal_stderr(
-                            f"{reason}\n"
-                            "Cold fallback is disabled (no live ops without warm); "
-                            "retrying will not clear this. For deliberate manual "
-                            "testing, pass --allow-unstamped-dispatch."
-                        )
-                    # WAIT ONCE, BOUNDED, RATHER THAN MAKE A HUMAN GUESS THE
-                    # INTERVAL. Every miss reaching this point has already
-                    # triggered a respawn on its way out (see the block above),
-                    # so the fix for this refusal is in flight while the
-                    # refusal is being printed. Refusing here regardless made
-                    # the retry interval an operator's guess, and the guess is
-                    # unbounded: on 2026-08-25/26 four sessions lost an
-                    # evening's memo traffic re-running `cross-repo-memo send`
-                    # by hand until one happened to land, the last at +4min.
-                    # None of those numbers measured a boot; they measured
-                    # patience. `_wait_for_warm_boot` replaces the guess with a
-                    # bound, and records what it actually waited so the boot
-                    # itself finally gets measured.
-                    response, waited = _wait_for_warm_boot(msg)
-                    if response is None:
-                        # A permanent reason can be established DURING the wait
-                        # (the first `try_warm_dispatch` had none, a later poll
-                        # did). Re-ask before reaching for the transient
-                        # wording, for the same reason the check above exists.
+                    waited = 0.0
+                    if not reason:
+                        response, waited = _wait_for_warm_boot(msg)
                         reason = last_cold_reason()
-                        if reason:
-                            _fatal_stderr(
-                                f"{reason}\n"
-                                "Cold fallback is disabled (no live ops without warm); "
-                                "retrying will not clear this. For deliberate manual "
-                                "testing, pass --allow-unstamped-dispatch."
-                            )
-
-                        # Negative-spec: no ETA, no countdown, no "wait N
-                        # minutes" -- this process observes only what it
-                        # ACTUALLY waited, never an interval to aim at. Reaching
-                        # the engine is budgeted in hundreds of milliseconds;
-                        # a multi-minute wait is a P0, not a cadence to absorb.
-                        #
-                        # `waited == 0` is not a knob the reader can turn: the
-                        # value comes from the process this door runs in, not
-                        # the caller's shell (measured 2026-09-01 -- setting
-                        # COORDINATOR_WARM_BOOT_WAIT_SECS=20 in the calling
-                        # shell left five consecutive failures still reporting
-                        # 0). Only hook-spawned children are supposed to pass 0
-                        # (see `WARM_BOOT_WAIT_SECS`, which must stay
-                        # unchanged -- hooks fire on the commit hot path and
-                        # must never sleep); this is the op/CLI door, so 0
-                        # arriving here is itself what to investigate.
-                        waited_clause = (
-                            f"this call waited {waited:.1f}s without the warm server "
-                            "accepting connections"
+                    if response is None:
+                        why = reason or (
+                            f"no warm server answered within {waited:.1f}s of a respawn"
                             if waited > 0
-                            else "the bounded boot wait is off in this process "
-                            "(COORDINATOR_WARM_BOOT_WAIT_SECS=0), so this call did not "
-                            "wait for the respawn it just triggered -- setting that "
-                            "variable in your own shell will NOT change this, and a "
-                            "CLI door reaching this branch means whatever launched "
-                            "this process set it, which only hook children should"
+                            else "no warm server answered, and the boot wait is off "
+                            "in this process"
                         )
-                        # This process observes only that its own dispatch did
-                        # not land -- never assert the server's state. Measured
-                        # 2026-09-01, session 9b6b537a: five consecutive
-                        # failures of one command while peers committed
-                        # successfully through the same route in the same
-                        # minutes, and that caller's very next command
-                        # succeeded -- the server was serving the whole time.
-                        # `warm-engine-stop` is a RUNNABLE (cold-path rule: what
-                        # fires before a session exists cannot be remediated by
-                        # a slash command); it clears a wedged-but-LISTENING
-                        # server and is gated behind the is-anyone-else-served
-                        # discriminator below, as the last rung, not the second.
-                        _fatal_stderr(
-                            "warm dispatch unavailable and cold fallback is disabled "
-                            f"(no live ops without warm). A respawn was triggered and "
-                            f"{waited_clause}. THIS IS A DEFECT, not a queue: reaching "
-                            "the engine is budgeted in hundreds of milliseconds.\n"
-                            "Re-issue this same command once -- the respawn already in "
-                            "flight normally answers the next call.\n"
-                            "If it fails the same way again, this process still only "
-                            "knows that ITS OWN dispatch did not land -- that is not "
-                            "evidence the server is down. Check whether anything else "
-                            "is reaching it (a peer's commit landing, or a second op "
-                            "from another session). If other callers ARE being served, "
-                            "the server is up and the fault is local to this caller: do "
-                            "NOT restart it. Only if nothing anywhere is being served "
-                            "is it a wedged or crash-looping engine, and then "
-                            "`warm-engine-stop` (the operator hatch for a "
-                            "wedged-but-listening server) from the serving clone is the "
-                            "move -- it evicts a listener every session on this box "
-                            "shares, so it is the last rung, not the second. Do not "
-                            "hand-roll the underlying git or op -- that skips the gates "
-                            "this op carries.\n"
-                            "For deliberate manual testing, pass "
-                            "--allow-unstamped-dispatch."
+                        print(
+                            f"[warm-client] ENGINE UNREACHABLE -- running {msg.get('method')} "
+                            f"COLD: {why}. This is a defect (reaching the engine is "
+                            "budgeted in hundreds of milliseconds), not a queue; the "
+                            "op still runs, slower.",
+                            file=sys.stderr,
                         )
+                        sys.stderr.flush()
 
     # 7. Dispatch in-process via dispatch_message (async, no socket, no auth gate).
     #    Manual loop instead of asyncio.run() to avoid executor drain on the timeout

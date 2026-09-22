@@ -25,6 +25,11 @@ graph:
     kind: fix
     edges:
       done: verify
+      NEEDS_WIDER_SCOPE: widen-exhausted
+      PEER_DIRTY: peer-dirty
+      NOT_REPRODUCED: verify
+      baton: baton
+      needs-judgment: needs-judgment
   verify:
     kind: verify
     verify:
@@ -40,9 +45,12 @@ graph:
 closure:
   status_field: status
   closed_values:
-    fix: fixed
-    refute-close: not-a-bug
+    fix: closed
+    refute-close: wontfix
   stamp_fields: [closed_at, closed_by]
+
+archive_path: state/bug-backlog/archive
+schema: coordinator_core/frontmatter/schemas/bug-backlog.schema.json
 
 absent_sentinels:
   owner: ["none", "N/A"]

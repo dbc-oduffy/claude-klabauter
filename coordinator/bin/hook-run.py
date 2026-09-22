@@ -35,8 +35,10 @@ Contract:
                     "guard did not run" envelope on a dispatch failure — the
                     module's own obligation 3: a guard that cannot run must
                     never read as a guard that passed.
-    exit code — 0 on every dispatch outcome except the two argv-contract
-                refusals above (missing/non-"hooks." argv[1], unknown op).
+    exit code — 0 on every dispatch outcome, an unimportable engine included
+                (a loud pass, see `_engine_down_pass`), except the two
+                argv-contract refusals above (missing/non-"hooks." argv[1],
+                unknown op).
                 The verdict itself always travels in the JSON body, never in
                 the exit code: `hooks.*` op handlers already return the full
                 harness envelope (`_hook_envelope.py`'s shape builders), so
@@ -112,6 +114,28 @@ def _read_event() -> dict:
     except (ValueError, UnicodeDecodeError):
         return {}
     return obj if isinstance(obj, dict) else {}
+
+
+def _engine_down_pass(event_name: "str | None", detail: str) -> dict:
+    """`hook_http.unreachable_response`'s shape, inlined because that module is
+    what failed to import. An unreachable engine PASSES LOUDLY, never denies:
+    these guards are ergonomics, and a deny here walls off every tool call on
+    the box (DoE-claude coordinator/docs/wiki/coordinator-tripwires/
+    an-unreachable-engine-passes-loudly-never-denies.md). `systemMessage`
+    reaches the operator and `additionalContext` the model, so an unrun guard
+    never reads as one that passed. `SessionEnd` refuses `hookSpecificOutput`
+    (`hook_http.EVENTS_REJECTING_HOOK_SPECIFIC_OUTPUT`)."""
+    body: dict = {
+        "systemMessage": "coordinator: guard did not run (engine unreachable: %s)" % detail,
+        "suppressOutput": False,
+    }
+    if event_name != "SessionEnd":
+        body["hookSpecificOutput"] = {
+            "hookEventName": event_name,
+            "additionalContext": "A coordinator guard for %s could not be evaluated "
+            "(engine unreachable: %s). It did not pass -- it did not run." % (event_name, detail),
+        }
+    return body
 
 
 def _read_check_all_names(args: "list[str]") -> "tuple[list[str], int]":
@@ -241,7 +265,9 @@ def main(argv: "list[str] | None" = None) -> int:
         )
     except (RuntimeError, ImportError) as exc:
         sys.stderr.write("hook-run: %s: engine unreachable (%s)\n" % (op_name, exc))
-        return 2
+        sys.stdout.write(json.dumps(_engine_down_pass(_read_event().get("hook_event_name"), str(exc))))
+        sys.stdout.write("\n")
+        return 0
 
     event = _read_event()
     event_name = event.get("hook_event_name")

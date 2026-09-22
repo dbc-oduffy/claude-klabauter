@@ -82,11 +82,9 @@ the chunk, not a detail):
         "The cold path is a SUCCESS path" described `coordinator_core.
         invoke.__main__._dispatch_argv_body`'s OWN behaviour, documented
         here because this preamble's whole design leaned on that caller
-        always having a safe landing. It no longer does: that function now
-        fails hard on a `None` here (when warm is enabled and the caller
-        did not opt into manual-testing mode via
-        `ipc.is_unstamped_dispatch_allowed()`) instead of degrading to a
-        slow cold spawn. See `invoke.__main__`'s own "6a. Warm preamble"
+        always having a safe landing. Since 2026-09-21 that function runs
+        cold on a `None` here again, but LOUDLY, after one bounded boot wait
+        (PM ruling: an unreachable engine passes loudly, never denies). See `invoke.__main__`'s own "6a. Warm preamble"
         comment for the enforcement half of this retirement -- this module
         itself needed no code change, only this notice: `try_warm_dispatch`
         was already returning the same honest `None` this policy now acts
@@ -330,7 +328,8 @@ _LIVE_TREE_COLD_MESSAGE = (
 
 #: The last reason THIS process went permanently cold, as
 #: `_log_live_tree_cold_once` phrased it -- read back by
-#: `invoke.__main__`'s fail-hard block via `last_cold_reason()`.
+#: `invoke.__main__`'s warm-miss block via `last_cold_reason()`, which names it in
+#: the loud cold-run notice and skips the boot wait (it recurs on every poll).
 #:
 #: Without it the operator got both halves of a contradiction and neither
 #: half named a path: this module's "every call from this tree goes cold",
@@ -1161,7 +1160,6 @@ def _try_warm_dispatch_inner(
         # part-way leaves a partial frame, which the server cannot parse as a
         # request and therefore never dispatches -- safe to re-open.
         delivered = False
-        held_past_probe = False
         try:
             fh.write(payload)
             fh.flush()
@@ -1179,12 +1177,17 @@ def _try_warm_dispatch_inner(
                 # request) up to the mutation's own deadline.
                 if not _op_may_mutate(msg.get("method")):
                     return None
-                held_past_probe = True
                 mutation_deadline = _mutation_deadline_for(msg.get("method"))
                 line = pending.wait(max(0.0, mutation_deadline - liveness_secs))
                 if line is _TIMED_OUT:
                     return _indeterminate_envelope(
                         msg, f"no response within {mutation_deadline}s"
+                    )
+                if not line or not line.strip():
+                    # Held past the probe, then closed silently: engaged, not
+                    # unserviced -- see the zero-byte branch below. -> warm-pool P0 (e).
+                    return _indeterminate_envelope(
+                        msg, "closed without a response after delivery"
                     )
         except BrokenPipeError:
             if delivered and _op_may_mutate(msg.get("method")):
@@ -1208,17 +1211,6 @@ def _try_warm_dispatch_inner(
             if _op_may_mutate(msg.get("method")):
                 return _indeterminate_envelope(msg, detail)
             return None
-
-        if (not line or not line.strip()) and held_past_probe:
-            # A zero-byte close AFTER the liveness probe expired is not the
-            # unserviced-connection shape below: that one dies at once, while
-            # this server held a delivered mutation past the probe, which is
-            # what an engaged server looks like. Going cold here re-runs a
-            # mutation that may have landed, and pays a second full read on
-            # top of the first -- a wait no caller ceiling is sized for.
-            # -> state/bug-backlog/2026-09-20-the-warm-pool-re-enters-the-
-            # engine-by-cold-subprocess.yaml (e), residual.
-            return _indeterminate_envelope(msg, "closed without a response after delivery")
 
         if not line or not line.strip():
             # EOF with NOT ONE BYTE back. This is the one post-delivery shape

@@ -280,22 +280,29 @@ int door_argv_declares_params_stdin(int argc, const char *const *argv);
  * would then no longer be honest about. */
 int door_basename_declares_stdin_read(const char *basename);
 
+/* Builds `hook_http.unreachable_response`'s shape for PreToolUse -- exit-0
+ * body, no `permissionDecision`, a `systemMessage` for the operator and a
+ * nested `additionalContext` for the model -- into `out` (caller
+ * `buf_init`s first), with a trailing newline. Returns 1 on success.
+ *
+ * WHAT HOOK MODE EMITS WHEN THE ENGINE IS DOWN: no cold entrypoint, a cold
+ * leg that could not start, exited nonzero or wrote nothing. An unreachable
+ * engine PASSES LOUDLY, never denies -- these guards are ergonomics, and a
+ * deny here walled off every Bash call on the box (DoE-claude
+ * coordinator/docs/wiki/coordinator-tripwires/an-unreachable-engine-passes-
+ * loudly-never-denies.md). Loud, so an unrun guard never reads as one that
+ * passed. Built here so the two doors cannot drift. */
+int build_hook_pass_loudly_envelope(buf_t *out, const char *reason);
+
 /* Builds `{"hookSpecificOutput":{"hookEventName":"PreToolUse",
  * "permissionDecision":"deny","permissionDecisionReason":"<reason>"}}`
  * into `out` (which the caller must `buf_init` first), appending a
  * trailing newline. Returns 1 on success.
  *
- * THE HOOK-MODE LAST RESORT. An ordinary invocation falls through to the
- * cold Python entrypoint on any doubt. Hook mode falls through too -- every
- * fall-through is pre-delivery or provably undispatched, so the guard has
- * not run, and each door's `hook_fall_through` runs it cold and relays its
- * verdict (the cold leg then asks for the engine back, so an outage costs
- * one cold call, not one per Bash call). THIS envelope is what hook mode
- * emits only when there is no verdict to relay: no cold entrypoint, a cold
- * leg that could not start, exited nonzero or wrote nothing, or a stdin
- * payload over the bound. A hook that did not answer must never read as one
- * that allowed, and an empty stdout or a bare nonzero exit reads as "no
- * opinion" to a hook runner.
+ * USED NOW ONLY FOR A PAYLOAD FAULT: stdin over the bound, unreadable, or
+ * no memory to hold it. That is not the engine being down -- the payload
+ * itself cannot be carried to any guard, warm or cold. Engine-down gets
+ * `build_hook_pass_loudly_envelope` above.
  *
  * Same `{"hookSpecificOutput":...}` shape every Bash guard in this repo
  * authors for a deny (e.g.

@@ -52,6 +52,7 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -74,10 +75,13 @@ _TOP_LEVEL_KEYS = frozenset(
         "absent_sentinels",
         "triage_policy",
         "appetite",
+        "archive_path",
+        "schema",
+        "source",
     }
 )
 
-_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"absent_sentinels"}
+_REQUIRED_TOP_LEVEL_KEYS = _TOP_LEVEL_KEYS - {"absent_sentinels", "source"}
 
 _NODE_KEYS = frozenset({"kind", "edges", "on_fail", "verify"})
 
@@ -115,6 +119,9 @@ class Profile:
     triage_policy: str
     triage_policy_sha256: str
     appetite: dict[str, dict]
+    archive_path: str
+    schema: str
+    source: Optional[dict]
     source_path: Path
 
 
@@ -353,6 +360,19 @@ def load_profile(name: str, profile_dir: str | Path) -> Profile:
         raise ProfileFieldTypeError("triage_policy must be a non-empty string")
     digest = hashlib.sha256(triage_policy.encode("utf-8")).hexdigest()
 
+    archive_path = doc["archive_path"]
+    if not isinstance(archive_path, str) or not archive_path:
+        raise ProfileFieldTypeError("archive_path must be a non-empty string")
+
+    schema_rel_path = doc["schema"]
+    if not isinstance(schema_rel_path, str) or not schema_rel_path:
+        raise ProfileFieldTypeError("schema must be a non-empty string")
+
+    source_block = doc.get("source")
+    if source_block is not None:
+        if not isinstance(source_block, dict) or not isinstance(source_block.get("op"), str):
+            raise ProfileFieldTypeError("source, when present, must be {op: str, args?: dict}")
+
     return Profile(
         name=name,
         row_id_key=row_id_key,
@@ -365,6 +385,9 @@ def load_profile(name: str, profile_dir: str | Path) -> Profile:
         triage_policy=triage_policy,
         triage_policy_sha256=digest,
         appetite=appetite,
+        archive_path=archive_path,
+        schema=schema_rel_path,
+        source=dict(source_block) if source_block is not None else None,
         source_path=path,
     )
 
@@ -473,16 +496,30 @@ def validate_graph(profile: Profile) -> None:
     _check_paths(profile)
 
 
+#: Node kinds the composer actually routes by consulting a node's `edges`
+#: map at run time (`route_after_triage`/`follow_edge`) — `commit`/`undo`
+#: are terminal, dispatched by their own outcome without an edge lookup, so
+#: totality/stray-outcome checking over their `edges` would check a map the
+#: engine never reads.
+_EDGE_ROUTED_KINDS = frozenset({"triage", "refute-close", "fix", "verify"})
+
+
 def _check_outcome_membership(profile: Profile) -> None:
     for node_id, node in profile.graph.items():
+        if node.kind not in _EDGE_ROUTED_KINDS:
+            continue
         outcome_set = set(profile.verdicts) if node.kind == "triage" else set(vocab.STAGE_OUTCOMES[node.kind])
         stray = set(node.edges) - outcome_set
         if stray:
             raise StrayOutcomeError(node_id, sorted(stray))
-        if node.kind == "triage":
-            missing = outcome_set - set(node.edges)
-            if missing:
-                raise TriageVerdictTotalityError(node_id, sorted(missing))
+        missing = outcome_set - set(node.edges)
+        # A missing outcome is tolerated when `on_fail` is set: `follow_edge`
+        # falls back to it at run time for any outcome the `edges` map does
+        # not name, so an `on_fail`-carrying node is total by construction
+        # even with a sparse `edges` map. Only a node with NO `on_fail` must
+        # name every one of its own outcomes explicitly.
+        if missing and node.on_fail is None:
+            raise TriageVerdictTotalityError(node_id, sorted(missing))
 
 
 def _check_verify_nodes(profile: Profile) -> None:
@@ -632,5 +669,19 @@ def resolve_appetite(profile: Profile, appetite: str, overrides: dict | None = N
     resolved = copy.deepcopy(profile.appetite[appetite])
     resolved.update(overrides)
     if "concurrency" in resolved:
-        resolved["concurrency"] = min(resolved["concurrency"], vocab.ENGINE_CONCURRENCY_CEILING)
+        concurrency = resolved["concurrency"]
+        if isinstance(concurrency, bool) or not isinstance(concurrency, int) or concurrency < 1:
+            raise ProfileFieldTypeError(
+                f"appetite.{appetite}.concurrency must be an int >= 1, got {concurrency!r}"
+            )
+        resolved["concurrency"] = min(concurrency, vocab.ENGINE_CONCURRENCY_CEILING)
+    batch_size = resolved.get("batch_size")
+    if isinstance(batch_size, dict) and "default" in batch_size and "@unkeyed" not in batch_size:
+        # The selector's reserved fallback key is `@unkeyed` (never `default`,
+        # which `_group_into_batches`/`select_rows` do not read) -- map the
+        # profile author's `default` onto it so an `@unkeyed`-batched row
+        # resolves the SAME batch size a named key would.
+        batch_size = dict(batch_size)
+        batch_size["@unkeyed"] = batch_size["default"]
+        resolved["batch_size"] = batch_size
     return resolved

@@ -257,6 +257,49 @@ def test_verify_installed_provenance_ok(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# committed_prebuilt_source_drift
+# ---------------------------------------------------------------------------
+
+
+def _write_prebuilt_record(tmp_path, monkeypatch, record):
+    path = tmp_path / "door.exe.provenance.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    monkeypatch.setattr(door_install, "_WINDOWS_PREBUILT_PROVENANCE", path)
+
+
+def _tree_sources():
+    return {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in door_install.door_build.SOURCES
+    }
+
+
+def test_prebuilt_built_from_this_trees_sources_has_no_drift(tmp_path, monkeypatch):
+    _write_prebuilt_record(tmp_path, monkeypatch, {"sources": _tree_sources()})
+    assert door_install.committed_prebuilt_source_drift() == []
+
+
+def test_prebuilt_built_from_older_sources_names_each_changed_file(tmp_path, monkeypatch):
+    sources = _tree_sources()
+    sources["door.c"] = "0" * 64
+    del sources["door_env_set.h"]
+    _write_prebuilt_record(tmp_path, monkeypatch, {"sources": sources})
+    assert door_install.committed_prebuilt_source_drift() == ["door.c", "door_env_set.h"]
+
+
+@pytest.mark.parametrize("record", [None, {}, {"sources": {}}])
+def test_prebuilt_drift_is_unanswerable_without_a_source_record(tmp_path, monkeypatch, record):
+    if record is None:
+        monkeypatch.setattr(
+            door_install, "_WINDOWS_PREBUILT_PROVENANCE", tmp_path / "missing.json"
+        )
+    else:
+        _write_prebuilt_record(tmp_path, monkeypatch, record)
+    with pytest.raises(door_install.DoorInstallError):
+        door_install.committed_prebuilt_source_drift()
+
+
+# ---------------------------------------------------------------------------
 # install_door -- prebuilt/sidecar disagreement and stale-sidecar removal
 # ---------------------------------------------------------------------------
 

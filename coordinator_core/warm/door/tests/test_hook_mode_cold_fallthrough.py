@@ -12,7 +12,11 @@ verdict.
 
 Pinned: a cold verdict is relayed byte-for-byte with the payload delivered
 intact; a cold leg that exits nonzero, or exits 0 with nothing on stdout,
-still denies. A hook that did not answer must never read as one that allowed.
+passes LOUDLY -- no `permissionDecision`, a `systemMessage` and model-facing
+`additionalContext` saying the guard did not run. An unreachable engine never
+denies (DoE-claude coordinator/docs/wiki/coordinator-tripwires/
+an-unreachable-engine-passes-loudly-never-denies.md), and an unrun guard never
+reads as one that passed.
 
 No live server: the runtime base is a fresh directory, so the connect fails
 and the door takes the fall-through.
@@ -99,12 +103,35 @@ def test_an_unreachable_engine_gets_the_cold_guards_verdict(door, tmp_path, runt
         pytest.param("import sys\nsys.stdin.read()\n", id="silent-exit-0"),
     ],
 )
-def test_a_cold_guard_that_does_not_answer_still_denies(door, tmp_path, runtime_base, cold_body):
+def test_a_cold_guard_that_does_not_answer_passes_loudly(door, tmp_path, runtime_base, cold_body):
     root = _make_stub_engine_root(tmp_path)
     proc = _run(door, root, runtime_base, cold_body)
 
     assert proc.returncode == 0
     assert b"not a verdict" not in proc.stdout
-    hso = _decision(proc)
-    assert hso["permissionDecision"] == "deny"
-    assert "cold guard" in hso["permissionDecisionReason"]
+    body = json.loads(proc.stdout.decode("utf-8").strip())
+    assert "guard did not run" in body["systemMessage"]
+    assert "cold guard" in body["systemMessage"]
+    hso = body["hookSpecificOutput"]
+    assert "permissionDecision" not in hso
+    assert "did not run" in hso["additionalContext"]
+
+
+def test_no_cold_entrypoint_passes_loudly(door, tmp_path, runtime_base):
+    root = _make_stub_engine_root(tmp_path)
+    (root / "coordinator" / "bin" / "coordinator-invoke.py").unlink(missing_ok=True)
+    env = dict(os.environ)
+    env.update(
+        COORDINATOR_DOOR_ENGINE_ROOT=str(root),
+        COORDINATOR_WARM_RUNTIME_BASE=str(runtime_base),
+        COORDINATOR_DOOR_STDIN_MODE="hook",
+    )
+    proc = subprocess.run(
+        [str(door), "hooks.preuse_bash_dispatch"],
+        input=_PAYLOAD, capture_output=True, env=env, cwd=str(root), timeout=60,
+    )
+
+    assert proc.returncode == 0
+    body = json.loads(proc.stdout.decode("utf-8").strip())
+    assert "no cold entrypoint" in body["systemMessage"]
+    assert "permissionDecision" not in body["hookSpecificOutput"]

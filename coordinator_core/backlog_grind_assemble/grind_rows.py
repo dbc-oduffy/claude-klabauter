@@ -84,12 +84,12 @@ from pathlib import Path
 from typing import Any
 
 from coordinator_core.contract.grind_vocab import (
-    CLOSURE_BLOCK_REQUIRED_FIELDS,
     CLOSURE_CLOSING_BRANCHES,
     LEDGER_LINE_FIELDS,
 )
 from coordinator_core.frontmatter import primitives as fm_primitives
 from coordinator_core.frontmatter import schema_validate
+from coordinator_core.ops.dispatch_emit import grind_profile
 
 EXIT_OK = 0
 EXIT_REFUSAL = 1
@@ -145,12 +145,17 @@ def _sha256_file(path: Path) -> str | None:
 
 
 def _extract_manifest(script_text: str) -> list[dict[str, Any]]:
-    """Extract the frozen manifest array from the emitted script's own
-    `const QUEUE_GRIND_MANIFEST = [...];` sentinel line. The composer emits
-    the array via `json.dumps`, which is also valid JS array-literal syntax,
-    so a plain `json.loads` over the captured span works without a JS
-    parser. Raises `ValueError` naming the sentinel when it is absent or
-    unparseable — never a silent empty manifest."""
+    """Extract the frozen manifest entries from the emitted script's own
+    `const QUEUE_GRIND_MANIFEST = {"entries": [...], "digest": ...};`
+    sentinel line (the exact shape `grind_compose._manifest_const` emits —
+    an object, not a bare array, so `check` reads the SAME const shape the
+    composer writes). The composer emits it via `json.dumps`, which is also
+    valid JS object-literal syntax, so a plain `json.loads` over the
+    captured span works without a JS parser. The span is found by BALANCING
+    braces from the object's own opening `{` (never a naive `find(';')`),
+    since a row's `path`/`row_id` may itself contain a `;`. Raises
+    `ValueError` naming the sentinel when it is absent or unparseable —
+    never a silent empty manifest."""
     marker = f"const {_MANIFEST_CONST_NAME} = "
     start = script_text.find(marker)
     if start == -1:
@@ -159,24 +164,51 @@ def _extract_manifest(script_text: str) -> list[dict[str, Any]]:
             "manifest script"
         )
     body_start = start + len(marker)
-    end = script_text.find(";", body_start)
-    if end == -1:
+    if body_start >= len(script_text) or script_text[body_start] != "{":
         raise ValueError(
-            f"grind-row check: `{_MANIFEST_CONST_NAME}` sentinel has no "
-            "terminating ';'"
+            f"grind-row check: `{_MANIFEST_CONST_NAME}` sentinel is not a "
+            "JSON object"
+        )
+    depth = 0
+    end = None
+    in_string = False
+    escape = False
+    for i in range(body_start, len(script_text)):
+        ch = script_text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+    if end is None:
+        raise ValueError(
+            f"grind-row check: `{_MANIFEST_CONST_NAME}` sentinel object never closes"
         )
     raw = script_text[body_start:end]
     try:
-        manifest = json.loads(raw)
+        parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ValueError(
             f"grind-row check: `{_MANIFEST_CONST_NAME}` sentinel is not valid JSON: {exc}"
         ) from exc
-    if not isinstance(manifest, list):
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("entries"), list):
         raise ValueError(
-            f"grind-row check: `{_MANIFEST_CONST_NAME}` sentinel is not a JSON array"
+            f"grind-row check: `{_MANIFEST_CONST_NAME}` sentinel carries no "
+            "`entries` array"
         )
-    return manifest
+    return parsed["entries"]
 
 
 def cmd_check(rest: list[str]) -> int:
@@ -216,8 +248,27 @@ def cmd_check(rest: list[str]) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _ledger_path(profile: str, row_id: str) -> Path:
-    return Path("state") / "queue-grind" / profile / f"{row_id}.jsonl"
+class RowIdEscapeError(ValueError):
+    """Raised when a `--row-id` value carries a path separator or `..` —
+    refused before it is ever joined onto the ledger directory (S3): an
+    unvalidated row id is a path-traversal surface into an arbitrary
+    `*.jsonl` under (or outside) `state/queue-grind/<profile>/`."""
+
+
+def _check_row_id(row_id: str) -> None:
+    if "/" in row_id or "\\" in row_id or row_id in (".", "..") or ".." in Path(row_id).parts:
+        raise RowIdEscapeError(f"grind-row: --row-id escapes the ledger directory: {row_id!r}")
+
+
+def _ledger_path(repo_root: Path, profile: str, row_id: str) -> Path:
+    """`<repo_root>/state/queue-grind/<profile>/<row_id>.jsonl`.
+
+    Resolved under an EXPLICIT `repo_root` (S3) — never `Path("state")` /
+    `Path.cwd()`, which diverges from `queue_select._read_ledger_lines`'s
+    own `repo_root`-anchored read the moment a caller's cwd is not the repo
+    root, and reads/writes two different files for the SAME row."""
+    _check_row_id(row_id)
+    return Path(repo_root) / "state" / "queue-grind" / profile / f"{row_id}.jsonl"
 
 
 def cmd_append(rest: list[str]) -> int:
@@ -233,11 +284,12 @@ def cmd_append(rest: list[str]) -> int:
             "evidence-file",
             "run-stamp",
         ),
+        optional=("repo-root",),
     )
     if flags is None:
         return _usage(
             "usage: grind-row append --profile P --row-id R --digest D --stage S "
-            "--verdict V --outcome O --evidence-file F --run-stamp T"
+            "--verdict V --outcome O --evidence-file F --run-stamp T [--repo-root D]"
         )
 
     record = {
@@ -256,7 +308,11 @@ def cmd_append(rest: list[str]) -> int:
     )
     line = json.dumps(record, sort_keys=True)
 
-    ledger_path = _ledger_path(flags["profile"], flags["row-id"])
+    repo_root = Path(flags["repo-root"]) if flags.get("repo-root") else Path.cwd()
+    try:
+        ledger_path = _ledger_path(repo_root, flags["profile"], flags["row-id"])
+    except RowIdEscapeError as exc:
+        return _usage(str(exc))
     ledger_path.parent.mkdir(parents=True, exist_ok=True)
 
     if ledger_path.is_file():
@@ -274,44 +330,6 @@ def cmd_append(rest: list[str]) -> int:
 # ---------------------------------------------------------------------------
 # close
 # ---------------------------------------------------------------------------
-
-
-def _load_profile_closure(profile_dir: Path, profile: str) -> dict[str, Any]:
-    """Minimal profile read for `close`'s own needs: the `closure` block
-    (`status_field`/`closed_values`/`stamp_fields`), `archive_path`, and
-    `schema` (a repo-relative path to the row's own JSON schema). This is
-    NOT `grind_profile.load_profile` (C3, not yet landed) — no graph
-    validation, no vocabulary-membership checks, no unknown-key refusal.
-    Raises `ValueError` naming the missing key on any gap."""
-    profile_path = profile_dir / f"{profile}.yaml"
-    if not profile_path.is_file():
-        raise ValueError(f"profile file not found: {profile_path}")
-    doc = schema_validate.parse_yaml(profile_path.read_text(encoding="utf-8"))
-    if not isinstance(doc, dict):
-        raise ValueError(f"profile file did not parse to a mapping: {profile_path}")
-
-    closure = doc.get("closure")
-    if not isinstance(closure, dict):
-        raise ValueError(f"profile {profile_path} carries no `closure` block")
-    missing = CLOSURE_BLOCK_REQUIRED_FIELDS - set(closure)
-    if missing:
-        raise ValueError(
-            f"profile {profile_path} closure block missing field(s): {sorted(missing)}"
-        )
-
-    archive_path = doc.get("archive_path")
-    if not isinstance(archive_path, str) or not archive_path:
-        raise ValueError(f"profile {profile_path} carries no `archive_path`")
-
-    schema_rel_path = doc.get("schema")
-    if not isinstance(schema_rel_path, str) or not schema_rel_path:
-        raise ValueError(f"profile {profile_path} carries no `schema`")
-
-    return {
-        "closure": closure,
-        "archive_path": archive_path,
-        "schema": schema_rel_path,
-    }
 
 
 def _archive_month(run_stamp: str) -> str:
@@ -334,11 +352,13 @@ def cmd_close(rest: list[str]) -> int:
             "closed-by",
             "run-stamp",
         ),
+        optional=("repo-root",),
     )
     if flags is None:
         return _usage(
             "usage: grind-row close --profile-dir D --profile P --row <path> "
-            "--digest D --verdict V --evidence-file F --closed-by S --run-stamp T"
+            "--digest D --verdict V --evidence-file F --closed-by S --run-stamp T "
+            "[--repo-root D]"
         )
 
     row_path = Path(flags["row"])
@@ -361,21 +381,23 @@ def cmd_close(rest: list[str]) -> int:
             f"{sorted(CLOSURE_CLOSING_BRANCHES)}, got {verdict!r}"
         )
 
+    repo_root = Path(flags["repo-root"]) if flags.get("repo-root") else Path.cwd()
+
     try:
-        profile_info = _load_profile_closure(Path(flags["profile-dir"]), flags["profile"])
+        profile = grind_profile.load_profile(flags["profile"], Path(flags["profile-dir"]))
     except ValueError as exc:
         print(f"grind-row close: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
-    closure = profile_info["closure"]
-    closed_values = closure["closed_values"]
-    if not isinstance(closed_values, dict) or verdict not in closed_values:
+    closure = profile.closure
+    closed_values = closure.closed_values
+    if verdict not in closed_values:
         return _usage(
             f"grind-row close: profile's closed_values carries no entry for {verdict!r}"
         )
     status_value = closed_values[verdict]
-    status_field = closure["status_field"]
-    stamp_fields = closure.get("stamp_fields") or {}
+    status_field = closure.status_field
+    stamp_fields = closure.stamp_fields
 
     text = row_path.read_text(encoding="utf-8")
     split = fm_primitives.split_frontmatter(text)
@@ -390,19 +412,13 @@ def cmd_close(rest: list[str]) -> int:
         else fm_primitives.insert_fm_field(fm_text, status_field, status_value)
     )
 
-    # `stamp_fields` maps a frontmatter field name to which computed value it
-    # takes -- "closed_by" or "run_stamp" -- the only two `close` has to give.
-    for field_name, source in stamp_fields.items():
-        if source == "closed_by":
-            value: Any = flags["closed-by"]
-        elif source == "run_stamp":
-            value = flags["run-stamp"]
-        else:
-            return _usage(
-                f"grind-row close: profile's stamp_fields names an unknown "
-                f"source {source!r} for field {field_name!r} (must be "
-                "'closed_by' or 'run_stamp')"
-            )
+    # `stamp_fields` is a LIST of frontmatter field names (`grind_profile.
+    # Closure`); the SOURCE each one takes is a naming convention, not a
+    # per-field mapping -- a field literally named `closed_by` takes the
+    # `--closed-by` value, every other stamp field takes `--run-stamp` (the
+    # only two computed values `close` has to give).
+    for field_name in stamp_fields:
+        value: Any = flags["closed-by"] if field_name == "closed_by" else flags["run-stamp"]
         fm_text = (
             fm_primitives.replace_fm_field(fm_text, field_name, value)
             if fm_primitives.read_fm_field(fm_text, field_name) is not None
@@ -424,8 +440,7 @@ def cmd_close(rest: list[str]) -> int:
     new_text = fm_primitives.rebuild(new_split, fm_text)
 
     fm_dict = schema_validate.parse_yaml(fm_text)
-    repo_root = Path.cwd()
-    schema_obj_path = repo_root / profile_info["schema"]
+    schema_obj_path = repo_root / profile.schema
     if not schema_obj_path.is_file():
         print(f"grind-row close: schema file not found: {schema_obj_path}", file=sys.stderr)
         return EXIT_REFUSAL
@@ -436,15 +451,23 @@ def cmd_close(rest: list[str]) -> int:
         return EXIT_REFUSAL
 
     month = _archive_month(flags["run-stamp"])
-    archive_dir = repo_root / profile_info["archive_path"] / month
+    archive_dir = repo_root / profile.archive_path / month
     new_path = archive_dir / row_path.name
     if new_path.exists():
         print(f"grind-row close: destination already exists: {new_path}", file=sys.stderr)
         return EXIT_REFUSAL
 
-    row_path.write_text(new_text, encoding="utf-8")
+    # Atomic (S4): write the edited text to the DESTINATION via temp file +
+    # os.replace, only THEN remove the source -- never mutate the live row
+    # in place first. A failed write/replace between the two steps leaves
+    # the source untouched and re-closable; the old shape wrote the edited
+    # text over the live row before the move, so a failed replace left a
+    # mutated row with a digest that no longer matched the manifest.
     archive_dir.mkdir(parents=True, exist_ok=True)
-    os.replace(row_path, new_path)
+    tmp_path = archive_dir / f".{row_path.name}.tmp-{os.getpid()}"
+    tmp_path.write_text(new_text, encoding="utf-8")
+    os.replace(tmp_path, new_path)
+    row_path.unlink()
 
     print(json.dumps({"old": str(row_path), "new": str(new_path)}, sort_keys=True))
     return EXIT_OK
@@ -456,11 +479,15 @@ def cmd_close(rest: list[str]) -> int:
 
 
 def cmd_settle(rest: list[str]) -> int:
-    flags = _parse_flags(rest, required=("profile", "row-id"))
+    flags = _parse_flags(rest, required=("profile", "row-id"), optional=("repo-root",))
     if flags is None:
-        return _usage("usage: grind-row settle --profile P --row-id R")
+        return _usage("usage: grind-row settle --profile P --row-id R [--repo-root D]")
 
-    ledger_path = _ledger_path(flags["profile"], flags["row-id"])
+    repo_root = Path(flags["repo-root"]) if flags.get("repo-root") else Path.cwd()
+    try:
+        ledger_path = _ledger_path(repo_root, flags["profile"], flags["row-id"])
+    except RowIdEscapeError as exc:
+        return _usage(str(exc))
     if ledger_path.is_file():
         ledger_path.unlink()
     return EXIT_OK

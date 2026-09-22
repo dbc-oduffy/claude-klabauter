@@ -176,3 +176,75 @@ def test_commit_reconciles_before_retry():
     assert "git log" in call_text
     assert "git status" in call_text
     assert "retry blind" in call_text
+
+
+# ---------------------------------------------------------------------------
+# Runtime interpolation (`*_js` params) -- a static file/row-id list is a
+# break-class defect for fix/commit/undo/ledger-only-commit, since the real
+# touched/declared/unsettled set is only known at RUN time (EM follow-up on
+# C7's redo).
+# ---------------------------------------------------------------------------
+
+
+def test_fix_prompt_interpolates_locked_files_js_expression():
+    call_text = grind_stages.compose_fix_call(
+        label="fix:row1",
+        phase_title="Fix",
+        row_id="row1",
+        locked_files_js="row.declaredFiles",
+    )
+    assert "(row.declaredFiles).join(', ')" in call_text
+    assert "'a.py'" not in call_text  # no static list baked in
+
+
+def test_fix_static_locked_files_still_works():
+    call_text = grind_stages.compose_fix_call(
+        label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
+    )
+    assert "a.py" in call_text
+    assert ".join(" not in call_text
+
+
+def test_commit_prompt_interpolates_touched_and_removed_js_expressions():
+    call_text = grind_stages.compose_commit_call(
+        label="commit:row1",
+        phase_title="Commit",
+        row_id="row1",
+        touched_files_js="fixResult.touched_files",
+        removed_files_js="closedPaths",
+    )
+    assert "(fixResult.touched_files).join(', ')" in call_text
+    assert "(closedPaths).join(', ')" in call_text
+    assert "--declared-revert" in call_text
+
+
+def test_undo_prompt_interpolates_touched_and_created_js_expressions():
+    call_text = grind_stages.compose_undo_call(
+        label="undo:row1",
+        phase_title="Undo",
+        touched_files_js="fixResult.touched_files",
+        created_files_js="fixResult.extra_files",
+    )
+    assert "(fixResult.touched_files).join(', ')" in call_text
+    assert "(fixResult.extra_files).join(', ')" in call_text
+
+
+def test_ledger_only_commit_interpolates_unsettled_rows_and_run_id():
+    call_text = grind_stages.compose_commit_ledger_only_call(
+        label="commit:ledger",
+        phase_title="Commit",
+        profile="p1",
+        unsettled_row_ids_js="unsettled",
+        is_drain=True,
+        run_id_js="RUN_ID",
+    )
+    assert "(unsettled).join(', ')" in call_text
+    assert "(RUN_ID)" in call_text
+    assert "runs/" in call_text and ".json in this same commit." in call_text
+
+
+def test_fix_schema_carries_touched_files():
+    call_text = grind_stages.compose_fix_call(
+        label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
+    )
+    assert '"touched_files"' in call_text

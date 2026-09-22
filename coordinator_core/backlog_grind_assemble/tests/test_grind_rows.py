@@ -54,14 +54,30 @@ def _write_row(path: Path, *, status: str = "open") -> str:
 def _write_profile(profile_dir: Path, *, archive_path: str, schema_rel: str) -> None:
     profile_dir.mkdir(parents=True, exist_ok=True)
     profile_text = (
+        "row_id_key: id\n"
+        "batch_key: [status]\n"
+        "priority: {field: status, order: asc}\n"
+        "verdicts: [confirmed, refuted]\n"
+        "graph:\n"
+        "  triage:\n"
+        "    kind: triage\n"
+        "    edges: {}\n"
         "closure:\n"
         "  status_field: status\n"
         "  closed_values:\n"
         "    fix: closed-fixed\n"
         "    refute-close: closed-refuted\n"
-        "  stamp_fields:\n"
-        "    closed_by: closed_by\n"
-        "    closed_at: run_stamp\n"
+        "  stamp_fields: [closed_by, closed_at]\n"
+        "triage_policy: |\n"
+        "  Triage per fixture.\n"
+        "appetite:\n"
+        "  standard:\n"
+        "    concurrency: 1\n"
+        "    extra_verification: false\n"
+        "    batch_size: 4\n"
+        "    triage_depth: standard\n"
+        "    window: 1\n"
+        "    max_agent_calls: 10\n"
         f"archive_path: {archive_path}\n"
         f"schema: {schema_rel}\n"
     )
@@ -297,8 +313,9 @@ class TestCheckVerb:
             {"row_id": "d", "path": str(row_a), "digest": digest_a, "batch_key": "other-batch"},
         ]
         script_path = tmp_path / "script.mjs"
+        manifest_const = {"entries": manifest, "digest": "0" * 64}
         script_path.write_text(
-            f"const QUEUE_GRIND_MANIFEST = {json.dumps(manifest)};\nconsole.log('ok');\n",
+            f"const QUEUE_GRIND_MANIFEST = {json.dumps(manifest_const)};\nconsole.log('ok');\n",
             encoding="utf-8",
         )
 

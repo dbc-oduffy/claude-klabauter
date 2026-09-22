@@ -380,12 +380,46 @@ def check_door_provenance(plugin_root: str, claude_klabauter_root: str) -> int:
       - `"no-door"` -> 0, NOTE only. The door install is advisory in
         `scripts/setup.py`; its absence is a different leg's concern, not
         this one's failure.
+
+    On Windows it also fails when the committed prebuilt is itself behind
+    its sources (`door_install.committed_prebuilt_source_drift`): every
+    verdict above compares against that prebuilt, so a stale one passes
+    them all, and a Windows box is the only place it can be rebuilt.
     """
     del plugin_root, claude_klabauter_root
 
-    bin_dst = settings_home() / "bin"
-    verdict = door_install.verify_installed_provenance(bin_dst)
+    rc = _report_installed_verdict(
+        door_install.verify_installed_provenance(settings_home() / "bin")
+    )
+    if sys.platform == "win32":
+        rc = max(rc, _report_prebuilt_currency())
+    return rc
 
+
+def _report_prebuilt_currency() -> int:
+    try:
+        drifted = door_install.committed_prebuilt_source_drift()
+    except door_install.DoorInstallError as exc:
+        print(f"[door-provenance] NOTE: {exc}")
+        return 0
+    if not drifted:
+        return 0
+    print(
+        f"[door-provenance] FAIL: the committed door.exe was built from older "
+        f"door sources than this tree ships ({', '.join(drifted)})",
+        file=sys.stderr,
+    )
+    print(
+        "[door-provenance] remediation: in a claude-klabauter checkout on this box, run "
+        "`python coordinator_core/warm/door/build.py <published-engine-root>`, "
+        "commit door.exe and door.exe.provenance.json, publish, then "
+        "`python scripts/setup.py`",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _report_installed_verdict(verdict: "door_install.ProvenanceVerdict") -> int:
     if verdict.status == "ok":
         print(f"[door-provenance] {verdict.detail}")
         return 0

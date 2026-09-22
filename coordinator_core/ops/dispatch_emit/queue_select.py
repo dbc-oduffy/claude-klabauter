@@ -52,6 +52,8 @@ __all__ = [
     "UnparseableRowError",
     "WhereTermError",
     "UnknownSourceOpError",
+    "MissingRowIdError",
+    "DuplicateRowIdError",
 ]
 
 
@@ -73,6 +75,20 @@ class RouteToRefusedError(ValueError):
 
 class UnknownSourceOpError(ValueError):
     """Raised when `source["op"]` names an op outside `grind_vocab.SOURCE_OPS`."""
+
+
+class MissingRowIdError(ValueError):
+    """Raised when `row_id_key` (not `'@stem'`) names a field a row does not
+    carry — never silently coerced to the literal string `"None"`, which
+    would make every row missing the field collide onto one shared id (and
+    one shared ledger file)."""
+
+
+class DuplicateRowIdError(ValueError):
+    """Raised when two rows resolve to the same `row_id` under a
+    profile-declared `row_id_key` (not `'@stem'`, which has its own
+    `DuplicateStemError`) — sharing a ledger file cross-contaminates fold-in,
+    skip and settle between two otherwise-unrelated rows."""
 
 
 _SENTINEL_ABSENT = object()
@@ -145,6 +161,36 @@ def _read_ledger_lines(profile: str, repo_root: Path) -> dict[str, list[dict]]:
                 row_id = record.get("row_id")
                 by_row.setdefault(row_id, []).append(record)
     return by_row
+
+
+def _read_handback_marks(profile: str, repo_root: Path) -> dict[str, str]:
+    """Read every hand-back record the drain writes under
+    `state/queue-grind/<profile>/_handback/*.json` (S2) -- one file per
+    row, `{"row": row_id, "type": ..., "reason": ...}`, the same on-disk
+    shape/location family as the run-cost/ledger records this profile's
+    stage kinds write beside it (`state/queue-grind/<profile>/`). A row
+    marked `route-to-*` here is refused the same way a `route-to-*` ledger
+    line already is (`_fold_in_ledger`) -- fold-in must not re-enter a row
+    the LAST run already handed off elsewhere."""
+    handback_dir = (repo_root / "state" / "queue-grind" / profile / "_handback").resolve()
+    marks: dict[str, str] = {}
+    if not handback_dir.is_dir():
+        return marks
+    for name in sorted(os.listdir(handback_dir)):
+        if not name.endswith(".json"):
+            continue
+        record_path = handback_dir / name
+        if not record_path.is_file():
+            continue
+        try:
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        row_id = record.get("row")
+        htype = record.get("type")
+        if isinstance(row_id, str) and isinstance(htype, str):
+            marks[row_id] = htype
+    return marks
 
 
 def _fold_in_ledger(
@@ -232,9 +278,14 @@ def _check_where_term(
             f"queue_select: where term {term!r} — {op!r} requires a literal value"
         )
     value = term[2]
+    if op == "in" and not isinstance(value, (list, tuple)):
+        raise WhereTermError(
+            f"queue_select: where term {term!r} — 'in' requires a list literal, "
+            f"got {type(value).__name__}"
+        )
     if op in ("==", "in"):
         sentinel_values = absent_sentinels.get(field_name, ())
-        literals = value if op == "in" and isinstance(value, (list, tuple)) else (value,)
+        literals = value if op == "in" else (value,)
         for literal in literals:
             if literal in sentinel_values:
                 raise WhereTermError(
@@ -339,10 +390,45 @@ def _call_source_op(
     import inspect
 
     if inspect.isawaitable(result):
-        import asyncio
-
-        result = asyncio.run(result)
+        result = _run_awaitable_sync(result)
     return result
+
+
+def _run_awaitable_sync(awaitable: Any) -> Any:
+    """Await `awaitable` to completion from SYNCHRONOUS code, whether or not
+    a loop is already running in this thread.
+
+    `asyncio.run` raises `RuntimeError: asyncio.run() cannot be called from
+    a running event loop` the moment `select_rows` is reached from inside
+    the IPC daemon's own loop (S1) — a bare `asyncio.run` call here is a
+    dead path over the daemon's real call shape, not a hypothetical. When no
+    loop is running in this thread, `asyncio.run` is used directly (the
+    common, loop-free test/CLI path); when one IS running, the coroutine is
+    driven to completion on a SEPARATE thread with its own fresh loop, so
+    this thread's running loop is never re-entered.
+    """
+    import asyncio
+    import threading
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(awaitable)
+
+    box: dict[str, Any] = {}
+
+    def _runner() -> None:
+        try:
+            box["result"] = asyncio.run(awaitable)
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread below
+            box["error"] = exc
+
+    thread = threading.Thread(target=_runner)
+    thread.start()
+    thread.join()
+    if "error" in box:
+        raise box["error"]
+    return box["result"]
 
 
 def select_rows(
@@ -417,7 +503,19 @@ def select_rows(
                     )
                 seen_stems[row_id] = row_path
             else:
-                row_id = str(parsed.get(row_id_key))
+                raw_row_id = parsed.get(row_id_key)
+                if raw_row_id is None:
+                    raise MissingRowIdError(
+                        f"queue_select: row {row_path!s} carries no {row_id_key!r} "
+                        "field — refused, never coerced to the literal string 'None'"
+                    )
+                row_id = str(raw_row_id)
+                if row_id in seen_stems and seen_stems[row_id] != row_path:
+                    raise DuplicateRowIdError(
+                        f"queue_select: row_id {row_id!r} is yielded by both "
+                        f"{seen_stems[row_id]!s} and {row_path!s}"
+                    )
+                seen_stems[row_id] = row_path
 
             normalised = _normalise_sentinels(parsed, absent_sentinels)
             rows.append((row_id, row_path, digest, normalised))
@@ -426,22 +524,41 @@ def select_rows(
     filtered = [r for r in rows if _matches_where(r[3], checked_where)]
 
     if order is not None:
-        order_field, ordered_values = order
-        order_index = {v: i for i, v in enumerate(ordered_values)}
+        order_field, order_spec = order
+        if isinstance(order_spec, str) and order_spec in ("asc", "desc"):
+            # The `{field, order: asc|desc}` shape a profile's `priority`
+            # block declares (B4) -- no enumerated value list to index into,
+            # so a present field value sorts by its own natural ordering; a
+            # row missing the field sorts last regardless of direction.
+            reverse = order_spec == "desc"
+            present = [item for item in filtered if item[3].get(order_field) is not None]
+            missing = [item for item in filtered if item[3].get(order_field) is None]
+            present = sorted(present, key=lambda item: item[3].get(order_field), reverse=reverse)
+            filtered = present + missing
+        else:
+            ordered_values = order_spec
+            order_index = {v: i for i, v in enumerate(ordered_values)}
 
-        def _sort_key(item: tuple[str, Path, str, dict[str, Any]]) -> tuple[int, int]:
-            value = item[3].get(order_field)
-            return (order_index.get(value, len(ordered_values)), rows.index(item))
+            def _sort_key(item: tuple[str, Path, str, dict[str, Any]]) -> tuple[int, int]:
+                value = item[3].get(order_field)
+                return (order_index.get(value, len(ordered_values)), rows.index(item))
 
-        filtered = sorted(filtered, key=_sort_key)
+            filtered = sorted(filtered, key=_sort_key)
 
     if limit is not None:
         filtered = filtered[:limit]
 
     ledger_by_row = _read_ledger_lines(profile, repo_root)
+    handback_marks = _read_handback_marks(profile, repo_root)
 
     entries: list[ManifestEntry] = []
     for row_id, row_path, digest, normalised in filtered:
+        mark = handback_marks.get(row_id, "")
+        if mark.startswith("route-to-"):
+            raise RouteToRefusedError(
+                f"queue_select: row {row_id!r} carries a route-to-* hand-back mark "
+                f"({mark!r}) — refused, never re-entered into another selector"
+            )
         skip_stages = _fold_in_ledger(row_id, digest, ledger_by_row)
         entries.append(
             ManifestEntry(
@@ -462,6 +579,41 @@ def select_rows(
             json.dumps(output, sort_keys=True, default=str).encode("utf-8")
         ).hexdigest()
         source_result = SourceOpResult(op=op_name, args=args, output_sha256=output_sha256)
+
+        # The source op's own output rows enter the SAME manifest as a
+        # queue source (S1) -- `records` is the shape `lessons.extract`
+        # (the one registered SOURCE_OPS member) returns; a source op with
+        # no `records` list contributes no rows, only the recorded
+        # `SourceOpResult` provenance.
+        source_records = output.get("records") if isinstance(output, Mapping) else None
+        if source_records:
+            for i, record in enumerate(source_records):
+                if not isinstance(record, Mapping):
+                    continue
+                normalised = _normalise_sentinels(record, absent_sentinels)
+                if not _matches_where(normalised, checked_where):
+                    continue
+                raw_row_id = record.get(row_id_key) if row_id_key != "@stem" else None
+                row_id = str(raw_row_id) if raw_row_id is not None else f"@source-{op_name}-{i}"
+                record_digest = hashlib.sha256(
+                    json.dumps(record, sort_keys=True, default=str).encode("utf-8")
+                ).hexdigest()
+                mark = handback_marks.get(row_id, "")
+                if mark.startswith("route-to-"):
+                    raise RouteToRefusedError(
+                        f"queue_select: source row {row_id!r} carries a route-to-* "
+                        f"hand-back mark ({mark!r}) — refused"
+                    )
+                skip_stages = _fold_in_ledger(row_id, record_digest, ledger_by_row)
+                entries.append(
+                    ManifestEntry(
+                        row_id=row_id,
+                        path=f"@source:{op_name}:{i}",
+                        digest=record_digest,
+                        batch_key=_coalesce_batch_key(normalised, batch_key),
+                        skip_stages=skip_stages,
+                    )
+                )
 
     canonical = {
         "entries": [

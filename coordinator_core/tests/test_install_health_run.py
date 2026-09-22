@@ -889,6 +889,27 @@ def test_check_door_provenance_no_door_exits_zero_with_note(monkeypatch, capsys)
     assert "NOTE" in captured.out
 
 
+def test_prebuilt_behind_its_sources_fails_with_a_rebuild_remediation(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.committed_prebuilt_source_drift",
+        lambda: ["door.c"],
+    )
+    rc = install_health_run_module._report_prebuilt_currency()
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "door.c" in captured.err
+    assert "coordinator_core/warm/door/build.py" in captured.err
+
+
+def test_current_prebuilt_reports_nothing(monkeypatch, capsys):
+    monkeypatch.setattr(
+        "coordinator_core.ops.install_health_run.door_install.committed_prebuilt_source_drift",
+        lambda: [],
+    )
+    assert install_health_run_module._report_prebuilt_currency() == 0
+    assert capsys.readouterr() == ("", "")
+
+
 # ---------------------------------------------------------------------------
 # check-door-route (C2)
 # ---------------------------------------------------------------------------
