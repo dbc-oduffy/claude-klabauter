@@ -736,12 +736,25 @@ static int door_basename_declares_stdin_read_w(const wchar_t *basename) {
  * earlier by `emit_hook_deny` immediately below. */
 static int write_all(HANDLE h, const char *data, size_t len);
 
+/* The caller's hook payload, kept for `hook_fall_through` -- see the POSIX
+ * leg's identical pair for why. */
+static const char *g_hook_payload = NULL;
+static size_t g_hook_payload_len = 0;
+
 /* Engine down: pass loudly, never deny -- see `build_hook_pass_loudly_envelope`.
  * Exit 0 either way; if the envelope cannot be built, an empty stdout is a
  * pass, and the stderr line keeps it from being a silent one. */
 static int emit_hook_pass_loudly(const char *reason) {
-    buf_t out;
-    if (!buf_init(&out, 1024) || !build_hook_pass_loudly_envelope(&out, reason)) {
+    buf_t event, out;
+    const char *event_name = NULL;
+    int have_event = buf_init(&event, 32);
+    if (have_event && g_hook_payload &&
+        door_hook_event_name(g_hook_payload, g_hook_payload_len, &event)) {
+        event_name = event.data;
+    }
+    int built = buf_init(&out, 1024) && build_hook_pass_loudly_envelope(&out, reason, event_name);
+    if (have_event) free(event.data);
+    if (!built) {
         fwprintf(stderr, L"door: guard did not run: %hs\n", reason);
         free(out.data);
         return 0;
@@ -943,10 +956,6 @@ static wchar_t *build_fallback_cmdline(int argc, wchar_t **wargv, const wchar_t 
 
 static int write_all(HANDLE h, const char *data, size_t len);
 
-/* The caller's hook payload, kept for `hook_fall_through` -- see the POSIX
- * leg's identical pair for why. */
-static const char *g_hook_payload = NULL;
-static size_t g_hook_payload_len = 0;
 
 /* HOOK MODE'S FALL-THROUGH: run the guard cold, never skip it. The Windows
  * half of `door_posix.c :: hook_fall_through` -- see that function for the

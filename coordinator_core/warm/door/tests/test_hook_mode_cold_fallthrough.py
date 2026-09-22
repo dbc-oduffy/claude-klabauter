@@ -45,7 +45,7 @@ pytestmark = [
 ]
 
 _DOOR_DIR = Path(__file__).resolve().parents[1]
-_PAYLOAD = b'{"tool_name":"Bash","tool_input":{"command":"echo hi"}}'
+_PAYLOAD = b'{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"}}'
 
 
 @pytest.fixture(scope="module")
@@ -135,3 +135,37 @@ def test_no_cold_entrypoint_passes_loudly(door, tmp_path, runtime_base):
     body = json.loads(proc.stdout.decode("utf-8").strip())
     assert "no cold entrypoint" in body["systemMessage"]
     assert "permissionDecision" not in body["hookSpecificOutput"]
+
+
+@pytest.mark.parametrize(
+    ("event", "has_hso"),
+    [("PostToolUse", True), ("SessionEnd", False), (None, False)],
+)
+def test_the_loud_pass_names_the_payloads_own_event(door, tmp_path, runtime_base, event, has_hso):
+    """`hook-run` serves every hook event through this door, not only
+    PreToolUse. A wrong `hookEventName` fails the harness's validation and
+    `SessionEnd` rejects `hookSpecificOutput` outright, so the envelope carries
+    the payload's own event, or only the `systemMessage` when it has none."""
+    root = _make_stub_engine_root(tmp_path)
+    (root / "coordinator" / "bin" / "coordinator-invoke.py").unlink(missing_ok=True)
+    payload = {"tool_name": "Bash"}
+    if event:
+        payload["hook_event_name"] = event
+    env = dict(os.environ)
+    env.update(
+        COORDINATOR_DOOR_ENGINE_ROOT=str(root),
+        COORDINATOR_WARM_RUNTIME_BASE=str(runtime_base),
+        COORDINATOR_DOOR_STDIN_MODE="hook",
+    )
+    proc = subprocess.run(
+        [str(door), "hooks.preuse_bash_dispatch"],
+        input=json.dumps(payload).encode(), capture_output=True, env=env, cwd=str(root), timeout=60,
+    )
+
+    assert proc.returncode == 0
+    body = json.loads(proc.stdout.decode("utf-8").strip())
+    assert "guard did not run" in body["systemMessage"]
+    assert ("hookSpecificOutput" in body) is has_hso
+    if has_hso:
+        assert body["hookSpecificOutput"]["hookEventName"] == event
+

@@ -16,7 +16,11 @@ Coverage:
   (d) a surface with NO ledger is not enforced here (see the module's SCOPE);
   (e) a commit touching no governed surface is unaffected;
   (f) the refusal also stops the ladder: forcing the head spine's preconditions
-      to fail still yields the refusal, never a ladder commit.
+      to fail still yields the refusal, never a ladder commit;
+  (g) `uncommitted_surface_refusals` names refused uncommitted growth in the
+      working tree, and stays quiet for admitted edits and a clean tree;
+  (h) `governed_write_refusal` answers for an in-process op write before it
+      happens, and ignores ungoverned paths.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ import subprocess
 
 import pytest
 
-from coordinator_core.ops.ceremony import git_native
+from coordinator_core.ops.ceremony import commit_admission, git_native
 from coordinator_core.win_portability import no_console_creationflags
 
 from .fixtures.real_git import real_git_repo
@@ -128,3 +132,26 @@ def test_the_refusal_also_stops_the_plumbing_ladder(repo, monkeypatch):
     assert not result.ok
     assert "governed doctrine surface" in result.stderr
     assert _head(repo) == before
+
+
+_GROWN_UNCLASSIFIED = _CLAUDE.replace("beta body\n", "beta body\n\nan op added this paragraph\n")
+
+
+def test_uncommitted_refused_growth_is_reported(repo):
+    (repo / "CLAUDE.md").write_text(_GROWN_UNCLASSIFIED, encoding="utf-8")
+    refusals = commit_admission.uncommitted_surface_refusals(repo)
+    assert len(refusals) == 1
+    assert refusals[0].startswith("CLAUDE.md: ")
+    assert "## Beta" in refusals[0]
+
+
+def test_uncommitted_admitted_edits_and_a_clean_tree_are_quiet(repo):
+    assert commit_admission.uncommitted_surface_refusals(repo) == []
+    (repo / "CLAUDE.md").write_text(_CLAUDE.replace("alpha body\n", "alpha body, longer\n"), encoding="utf-8")
+    assert commit_admission.uncommitted_surface_refusals(repo) == []
+
+
+def test_write_refusal_answers_before_an_op_writes(repo):
+    assert commit_admission.governed_write_refusal(repo, "CLAUDE.md", _CLAUDE, _GROWN_UNCLASSIFIED)
+    assert commit_admission.governed_write_refusal(repo, "CLAUDE.md", _GROWN_UNCLASSIFIED, _CLAUDE) is None
+    assert commit_admission.governed_write_refusal(repo, "notes.md", "", "anything\n") is None

@@ -164,11 +164,12 @@ import argparse
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, FrozenSet, List, Optional, Tuple
 
 from coordinator_core.git.repo_root import show_toplevel
+from coordinator_core.ops.ceremony.commit_admission import governed_write_refusal
 from coordinator_core.machine_resolver import load_flat_registry_file, registry_dir
 from coordinator_core.win_portability import leaf_spawn_creationflags
 from coordinator_core.ops.session.guard_concrete_path_citations import (
@@ -725,6 +726,9 @@ class SweepResult:
     findings: List[Finding]
     files_rewritten: List[str]  # apply=True only: files ACTUALLY written to disk
     files_matched: List[str]  # apply=True or False: files with >=1 SUBSTITUTE finding
+    # apply=True only: governed doctrine surfaces left unwritten because the
+    # rewrite fails admission, one "<path>: <refusal>" line each
+    files_refused: List[str] = field(default_factory=list)
 
 
 def sweep(
@@ -748,6 +752,7 @@ def sweep(
     all_findings: List[Finding] = []
     files_rewritten: List[str] = []
     files_matched: List[str] = []
+    files_refused: List[str] = []
 
     for rel in list_files(root):
         text = _read(root, rel)
@@ -804,10 +809,14 @@ def sweep(
             files_matched.append(rel)
             if apply:
                 new_text = "".join(b + e for b, e in new_lines)
+                refusal = governed_write_refusal(root, rel, text, new_text)
+                if refusal is not None:
+                    files_refused.append(refusal)
+                    continue
                 _write_preserving_newlines(root / rel, new_text)
                 files_rewritten.append(rel)
 
-    return SweepResult(all_findings, files_rewritten, files_matched)
+    return SweepResult(all_findings, files_rewritten, files_matched, files_refused)
 
 
 # ---------------------------------------------------------------------------
@@ -835,6 +844,10 @@ def _print_report(
         print(f"  {k}: {counts[k]}")
     print(f"files with >=1 substitute match: {len(result.files_matched)}")
     print(f"files actually rewritten on disk: {len(result.files_rewritten)}")
+    if result.files_refused:
+        print(f"governed doctrine surfaces NOT rewritten (admission refused): {len(result.files_refused)}")
+        for line in result.files_refused:
+            print(f"  {line}")
     if result.findings:
         print("--- detail (first 40) ---")
         for f in result.findings[:40]:
@@ -896,11 +909,13 @@ def _merge_sweep_results(results: List[SweepResult]) -> SweepResult:
     findings: List[Finding] = []
     files_rewritten: List[str] = []
     files_matched: List[str] = []
+    files_refused: List[str] = []
     for r in results:
         findings.extend(r.findings)
         files_rewritten.extend(r.files_rewritten)
         files_matched.extend(r.files_matched)
-    return SweepResult(findings, files_rewritten, files_matched)
+        files_refused.extend(r.files_refused)
+    return SweepResult(findings, files_rewritten, files_matched, files_refused)
 
 
 def _sweep_explicit_paths(

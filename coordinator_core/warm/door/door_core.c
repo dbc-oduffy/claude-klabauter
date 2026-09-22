@@ -532,16 +532,47 @@ int door_basename_declares_stdin_read(const char *basename) {
     return 0;
 }
 
-int build_hook_pass_loudly_envelope(buf_t *out, const char *reason) {
+int door_hook_event_name(const char *json, size_t len, buf_t *out) {
+    cursor_t c = { json, json + len };
+    skip_ws(&c);
+    if (c.p >= c.end || *c.p != '{') return 0;
+    c.p++;
+    for (;;) {
+        skip_ws(&c);
+        if (c.p >= c.end || *c.p == '}') return 0;
+        if (*c.p == ',') { c.p++; continue; }
+        buf_t key;
+        if (!buf_init(&key, 32)) return 0;
+        if (!parse_json_string(&c, &key)) { free(key.data); return 0; }
+        int match = key.len == 15 && memcmp(key.data, "hook_event_name", 15) == 0;
+        free(key.data);
+        skip_ws(&c);
+        if (c.p >= c.end || *c.p != ':') return 0;
+        c.p++;
+        skip_ws(&c);
+        if (match) {
+            if (c.p >= c.end || *c.p != '"') return 0;
+            return parse_json_string(&c, out) && buf_append(out, "", 1);
+        }
+        if (!skip_json_value(&c)) return 0;
+    }
+}
+
+int build_hook_pass_loudly_envelope(buf_t *out, const char *reason, const char *event_name) {
     int ok = 1;
     ok &= buf_append_cstr(out, "{\"systemMessage\":\"coordinator: guard did not run (");
     ok &= buf_append_json_escaped(out, reason, strlen(reason));
-    ok &= buf_append_cstr(out,
-        ")\",\"suppressOutput\":false,\"hookSpecificOutput\":{"
-        "\"hookEventName\":\"PreToolUse\",\"additionalContext\":"
-        "\"A coordinator guard for PreToolUse could not be evaluated (");
-    ok &= buf_append_json_escaped(out, reason, strlen(reason));
-    ok &= buf_append_cstr(out, "). It did not pass -- it did not run.\"}}\n");
+    ok &= buf_append_cstr(out, ")\",\"suppressOutput\":false");
+    if (event_name && *event_name && strcmp(event_name, "SessionEnd") != 0) {
+        ok &= buf_append_cstr(out, ",\"hookSpecificOutput\":{\"hookEventName\":\"");
+        ok &= buf_append_json_escaped(out, event_name, strlen(event_name));
+        ok &= buf_append_cstr(out, "\",\"additionalContext\":\"A coordinator guard for ");
+        ok &= buf_append_json_escaped(out, event_name, strlen(event_name));
+        ok &= buf_append_cstr(out, " could not be evaluated (");
+        ok &= buf_append_json_escaped(out, reason, strlen(reason));
+        ok &= buf_append_cstr(out, "). It did not pass -- it did not run.\"}");
+    }
+    ok &= buf_append_cstr(out, "}\n");
     return ok;
 }
 

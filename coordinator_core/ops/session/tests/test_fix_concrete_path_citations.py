@@ -1165,3 +1165,49 @@ def test_apply_preserves_trailing_comma_and_period_around_citation(tmp_path: Pat
     assert subs[0].replacement == "claude-klabauter:coordinator/foo.py"
     text = target.read_text(encoding="utf-8")
     assert "claude-klabauter:coordinator/foo.py, then stop." in text
+
+
+_ADMISSION_LEDGER = """# test ledger
+
+## Classification table
+
+| # | Heading | Bytes | Disposition | Reason |
+|---|---|---|---|---|
+| 1 | `## Alpha` | 20 | FLOOR | Test row. Demote target: `docs/alpha.md`. |
+
+## Watermark
+
+- Bytes: 4000
+- Reason: test watermark
+"""
+
+
+def _governed_fixture(tmp_path: Path) -> str:
+    body = (
+        "## Alpha\n\nalpha body\n\n## Beta\n\n"
+        "config lives at /Users/example-operator/.claude/settings.json today\n"  # abs-path-ok: synthetic test fixture
+    )
+    (tmp_path / "CLAUDE.md").write_text(body, encoding="utf-8")
+    ledger = tmp_path / "state" / "audits" / "claude-classification.md"
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text(_ADMISSION_LEDGER, encoding="utf-8")
+    return body
+
+
+def test_apply_leaves_a_governed_surface_unwritten_when_admission_refuses(tmp_path: Path) -> None:
+    body = _governed_fixture(tmp_path)
+    result = sweep(tmp_path, _FAMILIES, apply=True, list_files=_list_files(["CLAUDE.md"]))
+    assert result.files_matched == ["CLAUDE.md"]
+    assert result.files_rewritten == []
+    assert len(result.files_refused) == 1
+    assert result.files_refused[0].startswith("CLAUDE.md: ")
+    assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") == body
+
+
+def test_apply_rewrites_a_governed_surface_with_no_ledger(tmp_path: Path) -> None:
+    body = _governed_fixture(tmp_path)
+    (tmp_path / "state" / "audits" / "claude-classification.md").unlink()
+    result = sweep(tmp_path, _FAMILIES, apply=True, list_files=_list_files(["CLAUDE.md"]))
+    assert result.files_rewritten == ["CLAUDE.md"]
+    assert result.files_refused == []
+    assert (tmp_path / "CLAUDE.md").read_text(encoding="utf-8") != body

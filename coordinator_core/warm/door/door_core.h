@@ -280,10 +280,18 @@ int door_argv_declares_params_stdin(int argc, const char *const *argv);
  * would then no longer be honest about. */
 int door_basename_declares_stdin_read(const char *basename);
 
-/* Builds `hook_http.unreachable_response`'s shape for PreToolUse -- exit-0
- * body, no `permissionDecision`, a `systemMessage` for the operator and a
- * nested `additionalContext` for the model -- into `out` (caller
- * `buf_init`s first), with a trailing newline. Returns 1 on success.
+/* Appends the top-level `hook_event_name` string of the hook payload `json`
+ * to `out` (caller `buf_init`s first), NUL-terminated. Returns 0 when the
+ * payload is not an object or carries no such string. */
+int door_hook_event_name(const char *json, size_t len, buf_t *out);
+
+/* Builds `hook_http.unreachable_response`'s shape -- exit-0 body, no
+ * `permissionDecision`, a `systemMessage` for the operator and, for a named
+ * event other than `SessionEnd` (which rejects it), a nested
+ * `hookSpecificOutput` carrying that event name and `additionalContext` for
+ * the model -- into `out` (caller `buf_init`s first), with a trailing
+ * newline. `event_name` NULL or empty -> the `systemMessage` alone, since a
+ * wrong `hookEventName` fails the harness's validation. Returns 1 on success.
  *
  * WHAT HOOK MODE EMITS WHEN THE ENGINE IS DOWN: no cold entrypoint, a cold
  * leg that could not start, exited nonzero or wrote nothing. An unreachable
@@ -292,7 +300,7 @@ int door_basename_declares_stdin_read(const char *basename);
  * coordinator/docs/wiki/coordinator-tripwires/an-unreachable-engine-passes-
  * loudly-never-denies.md). Loud, so an unrun guard never reads as one that
  * passed. Built here so the two doors cannot drift. */
-int build_hook_pass_loudly_envelope(buf_t *out, const char *reason);
+int build_hook_pass_loudly_envelope(buf_t *out, const char *reason, const char *event_name);
 
 /* Builds `{"hookSpecificOutput":{"hookEventName":"PreToolUse",
  * "permissionDecision":"deny","permissionDecisionReason":"<reason>"}}`

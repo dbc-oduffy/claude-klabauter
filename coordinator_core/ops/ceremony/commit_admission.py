@@ -27,11 +27,19 @@ malformed ledger, or any exception evaluating it refuses the commit with the
 cause named. Shrinking a surface is always admitted by the predicate itself,
 and a deletion is a shrink.
 
+Two further entry points carry the same predicate to the other places the
+boot payload changes without a tool call:
+  - `governed_write_refusal` is for an op that rewrites a file in-process: it
+    asks before writing, so an op never leaves refused text in the tree.
+  - `uncommitted_surface_refusals` compares the working tree with HEAD. Text
+    that is written but not yet committed is already in the next session's boot
+    payload, and no commit has checked it. A SessionStart hook reports it.
+
 Negative-spec:
     Does NOT spawn: HEAD blobs come from `head_blobs` (in-process tree walk)
     and new blobs from `read_object`.
-    Does NOT read the working tree for the surface's content -- only the blobs
-    being committed. The LEDGER is read from the working tree, as every other
+    `governed_surface_refusal` does NOT read the working tree for the
+    surface's content -- only the blobs being committed. The LEDGER is read from the working tree, as every other
     enforcement point reads it, so a commit that classifies a section and
     grows it can land together.
     Does NOT carry an override key; the remedy is the ledger (classify the
@@ -41,7 +49,7 @@ Negative-spec:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import List, Mapping, Optional
 
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_objects import read_object
@@ -89,21 +97,73 @@ def governed_surface_refusal(root: Path, assembled: Mapping[str, object]) -> Opt
                 if isinstance(entry, tuple) and len(entry) == 2
                 else ""
             )
-            if old_text is None or new_text is None:
-                refusals.append(
-                    f"{path}: a blob this commit would land could not be read, so its "
-                    "admission could not be checked -- refusing rather than landing an "
-                    "unchecked change to a governed doctrine surface."
-                )
-                continue
-            allowed, message = admission_check_for_surface(path, old_text, new_text, root)
         except Exception as exc:  # noqa: BLE001 -- fail closed, see module docstring.
+            refusals.append(_incomplete(path, exc))
+            continue
+        if old_text is None or new_text is None:
             refusals.append(
-                f"{path}: the doctrine-surface admission check could not complete "
-                f"({exc.__class__.__name__}: {exc}) -- refusing rather than landing an "
+                f"{path}: a blob this commit would land could not be read, so its "
+                "admission could not be checked -- refusing rather than landing an "
                 "unchecked change to a governed doctrine surface."
             )
             continue
-        if not allowed:
-            refusals.append(f"{path}: {message}")
+        refusal = governed_write_refusal(root, path, old_text, new_text)
+        if refusal is not None:
+            refusals.append(refusal)
     return "\n".join(refusals) if refusals else None
+
+
+def _incomplete(path: str, exc: Exception) -> str:
+    return (
+        f"{path}: the doctrine-surface admission check could not complete "
+        f"({exc.__class__.__name__}: {exc}) -- refusing rather than landing an "
+        "unchecked change to a governed doctrine surface."
+    )
+
+
+def governed_write_refusal(root: Path, path: str, old_text: str, new_text: str) -> Optional[str]:
+    """`None` when replacing `old_text` with `new_text` at repo-relative `path` is
+    admitted, or when `path` is not a ledgered governed surface; otherwise the
+    refusal text. Fails closed."""
+    root = Path(root)
+    if path not in GOVERNED_AUTHORING_SURFACES or not resolve_ledger_path(root, path).is_file():
+        return None
+    try:
+        allowed, message = admission_check_for_surface(path, old_text, new_text, root)
+    except Exception as exc:  # noqa: BLE001 -- fail closed, see module docstring.
+        return _incomplete(path, exc)
+    return None if allowed else f"{path}: {message}"
+
+
+def uncommitted_surface_refusals(root: Path) -> List[str]:
+    """One refusal line per ledgered governed surface whose working-tree text
+    differs from HEAD in a way admission refuses. A surface with no HEAD blob
+    counts as growth from empty; a surface missing from the working tree is a
+    deletion, which is a shrink, and is always admitted."""
+    root = Path(root)
+    governed = [p for p in GOVERNED_AUTHORING_SURFACES if resolve_ledger_path(root, p).is_file()]
+    if not governed:
+        return []
+    common_dir = resolve_git_common_dir(root)
+    old_blobs = head_blobs(root, governed)
+    refusals: List[str] = []
+    for path in governed:
+        live = root / path
+        if not live.is_file():
+            continue
+        try:
+            new_text = live.read_bytes().decode("utf-8", errors="replace")
+            old_entry = old_blobs.get(path)
+            old_text = "" if old_entry is None else _blob_text(common_dir, old_entry[1])
+        except Exception as exc:  # noqa: BLE001 -- fail closed, see module docstring.
+            refusals.append(_incomplete(path, exc))
+            continue
+        if old_text is None:
+            refusals.append(f"{path}: its HEAD blob could not be read, so its admission could not be checked.")
+            continue
+        if new_text == old_text:
+            continue
+        refusal = governed_write_refusal(root, path, old_text, new_text)
+        if refusal is not None:
+            refusals.append(refusal)
+    return refusals

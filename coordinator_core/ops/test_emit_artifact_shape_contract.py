@@ -418,10 +418,23 @@ class TestRealTreeParity:
         # fresh from the emitter, so asserting against the constant that produced it
         # is a tautology that catches nothing. The literal is the pin: a version bump
         # must be an explicit two-place edit, never a silent side effect. Bumped to
-        # 9.0.0 alongside CONTRACT_VERSION (emit_artifact_shape_contract.py's history
-        # comment, 2026-09-11 research-claim required-set add plus the plan-tasks writes
-        # trailing-separator narrow) — this is the second of the two places.
-        assert bundle["version"] == "9.0.0"
+        # 9.2.0 alongside CONTRACT_VERSION (emit_artifact_shape_contract.py's history
+        # comment, 2026-09-22 queue-grind-profile registration) — this is the second of
+        # the two places.
+        assert bundle["version"] == "9.2.0"
+
+    def test_queue_grind_profile_registered(self, bundle):
+        # DoE's queue-grind-profile.schema.json (DoE-claude 4b7ea5ddc) enters the
+        # bundle by directory discovery; its local `$defs` hoist to the bundle root.
+        defs = bundle["$defs"]
+        assert "queue-grind-profile" in defs
+        for hoisted in ("knob", "graph_node", "stage_kind", "verify_op"):
+            assert hoisted in defs, hoisted
+
+    def test_9_2_0_is_a_minor_bump_over_9_1_0(self):
+        major, minor, patch = (int(p) for p in CONTRACT_VERSION.split("."))
+        assert (major, minor, patch) == (9, 2, 0)
+        assert (major, minor) > (9, 1)
 
     def test_no_external_ref_values_anywhere_in_bundle(self, bundle):
         # Regression for cross-repo/inbox/2026-08-03-doe-claude-em-artifact-contract-
@@ -541,9 +554,12 @@ class TestRealTreeParity:
     def test_provenance_envelope_ref_anyof(self, bundle):
         ref = bundle["$defs"]["ProvenanceEnvelope"]["properties"]["ref"]
         assert len(ref["anyOf"]) == 2
-        assert ref["anyOf"][0]["type"] == "object"
-        assert ref["anyOf"][0]["additionalProperties"] is False
-        assert sorted(ref["anyOf"][0]["required"]) == ["branch", "sha"]
+        git_arm, p4_arm = ref["anyOf"][0]["anyOf"]
+        for arm in (git_arm, p4_arm):
+            assert arm["type"] == "object"
+            assert arm["additionalProperties"] is False
+        assert sorted(git_arm["required"]) == ["branch", "sha"]
+        assert sorted(p4_arm["required"]) == ["change", "stream"]
         assert ref["anyOf"][1]["type"] == "null"
 
     def test_provenance_envelope_not_counted_in_schema_count(self, bundle):
@@ -574,6 +590,8 @@ class TestRealTreeParity:
             "git_commit",
             "github_graphql",
             "github_rest",
+            "p4_server",
+            "p4_workspace",
         ]
         assert all_of[0]["then"]["properties"]["ref"] == {"not": {"type": "null"}}
         assert sorted(all_of[1]["if"]["properties"]["source_kind"]["enum"]) == [

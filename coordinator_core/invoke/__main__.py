@@ -1014,14 +1014,9 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
 
             response = try_warm_dispatch(msg)
 
-            # AN UNREACHABLE ENGINE PASSES LOUDLY, NEVER DENIES (PM ruling
-            # 2026-09-21, DoE-claude coordinator/docs/wiki/coordinator-tripwires/
-            # an-unreachable-engine-passes-loudly-never-denies.md). This
-            # replaces the 2026-08-21 refusal ("no live ops without warm")
-            # without reversing its reason -- "I'd rather have a fail than a
-            # SILENT slow": nothing here is silent. Refusing made an engine
-            # outage an outage of every op on the box, and the retry it asked
-            # for was itself the load.
+            # AN UNREACHABLE ENGINE PASSES LOUDLY, NEVER DENIES -- DoE-claude
+            # coordinator/docs/wiki/coordinator-tripwires/an-unreachable-engine-
+            # passes-loudly-never-denies.md.
             #
             # `None` from `try_warm_dispatch` is NEVER a delivered mutation --
             # a delivered-but-unanswered mutation comes back as the -32004

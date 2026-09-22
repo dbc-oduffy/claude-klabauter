@@ -74,21 +74,9 @@ the chunk, not a detail):
         resolves to a served response or a clean `None`, never a raised
         exception. That mechanical guarantee stands, unchanged.
 
-        RETIRED 2026-08-21 (PM ruling, state/handoffs/2026-08-21_103635_
-        reaching-the-warm-engine.md, verbatim: "I'd rather have a fail than
-        a silent slow. Much rather."): what is retired is NOT this table's
-        own never-raise contract -- it is the CALLER'S assumption that a
-        `None` here is always safe to fall through to a cold spawn.
-        "The cold path is a SUCCESS path" described `coordinator_core.
-        invoke.__main__._dispatch_argv_body`'s OWN behaviour, documented
-        here because this preamble's whole design leaned on that caller
-        always having a safe landing. Since 2026-09-21 that function runs
-        cold on a `None` here again, but LOUDLY, after one bounded boot wait
-        (PM ruling: an unreachable engine passes loudly, never denies). See `invoke.__main__`'s own "6a. Warm preamble"
-        comment for the enforcement half of this retirement -- this module
-        itself needed no code change, only this notice: `try_warm_dispatch`
-        was already returning the same honest `None` this policy now acts
-        on differently.
+        The caller (`invoke.__main__._dispatch_argv_body`) runs cold on a
+        `None` after one bounded boot wait, LOUDLY -- a `None` is never a
+        delivered mutation, so that cold run cannot execute an op twice.
 
 Caller-identity seam: `_caller_session_id()` resolves THIS client process's
 own session id (`coordinator_core.session.core.resolve_session_id()`) --
