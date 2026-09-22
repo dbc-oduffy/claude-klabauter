@@ -192,6 +192,12 @@ SERVED_ENTRYPOINT_ENV = "COORDINATOR_SERVED_ENTRYPOINT"
 #: for every session on the box. Refused with -32007 before anything loads, so
 #: the door runs them cold in the caller's own process tree, where the mutex
 #: wait costs nobody else a worker.
+#:
+#: THE SANCTIONED CARVE-OUT LIST, and the only one: everything else reaches the
+#: warm engine (DR-344). Membership is by PM ruling and by enumeration here --
+#: satisfying the rationale is not membership. Why occupancy rather than latency
+#: is the axis, and why -32007 is the code that makes the cold leg legitimate:
+#: docs/reference/warm-pool-carve-outs.md.
 _POOL_REFUSED_VERBS = frozenset({
     ("workday-complete-assemble", "apply"),
     ("workday-complete-args-and-validate", "run-step1"),

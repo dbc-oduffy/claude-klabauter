@@ -499,6 +499,26 @@ def test_is_inline_install_false_on_bare_directory(tmp_path):
     assert _gsi.is_inline_install(config_dir) is False
 
 
+@pytest.mark.parametrize("migrated_body", ["", "/nonexistent/DoE-claude\n"])
+def test_non_live_migrated_rung_does_not_shadow_live_legacy(tmp_path, monkeypatch, migrated_body):
+    """A migrated pointer caught blank mid-rewrite (or stale) armed the
+    kill-switch on a live inline install by shadowing the live legacy rung."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    settings_home = tmp_path / "settings_home"
+    (settings_home / "machine-local").mkdir(parents=True)
+    (settings_home / "machine-local" / ".doe-root").write_text(migrated_body, encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+    doe = tmp_path / "DoE-claude"
+    (doe / "coordinator").mkdir(parents=True)
+    (config_dir / ".doe-root").write_text(str(doe) + "\n", encoding="utf-8")
+
+    assert _gsi.is_inline_install(config_dir) is True
+
+    (config_dir / ".doe-root").write_text("/nonexistent/legacy\n", encoding="utf-8")
+    assert _gsi.is_inline_install(config_dir) is False
+
+
 def test_flat_mirror_install_is_silent_even_with_unreachable_key(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()

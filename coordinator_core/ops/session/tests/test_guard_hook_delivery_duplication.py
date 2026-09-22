@@ -1120,6 +1120,51 @@ def test_double_fire_banner_and_kill_switch_detail_agree_on_shared_fixture(
 
 
 # ---------------------------------------------------------------------------
+# The plugin-live branch of `_double_fire_summary` and
+# `gen_settings_hooks.generate`'s double-fire refusal describe the SAME state
+# to two audiences -- an operator reading the kill-switch banner, and the
+# generator deciding whether to write. They disagreed (2026-09-22,
+# doe-claude-b4): the banner called disarming unsafe on a boot where
+# generate() refuses to write at all. Pinned here against the real generator,
+# not a restatement of its docstring.
+# ---------------------------------------------------------------------------
+
+
+def test_plugin_live_branch_agrees_with_generate_s_own_refusal(tmp_path, monkeypatch):
+    """On plugin-live-and-resolvable boot: generate() must skip without
+    touching settings.json, and the kill-switch line must say disarming is
+    safe -- never that it would cause double-fire."""
+    from coordinator_core.install import gen_settings_hooks
+
+    content_root = tmp_path / "plugin-root"
+    content_root.mkdir()
+    _write_hooks_json(content_root, ["hooks/scripts/plugin-live.py"])
+    monkeypatch.setattr(gsi, "resolve_content_root", lambda: str(content_root))
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    _write_settings(config_dir, {"enabledPlugins": {"foo@bar": True}})
+    (config_dir / ".coordinator-hooks-enabled").touch()
+
+    report = gsi.detect_hook_delivery_duplication(config_dir)
+    assert (report.plugin_present, report.plugin_resolvable) == (True, True)
+    assert report.double_fire is False
+
+    out_path = config_dir / "settings-generated.json"
+    status = gen_settings_hooks.generate(
+        out_path=str(out_path),
+        hooks_json_override=str(content_root / "hooks" / "hooks.json"),
+        coordinator_root_override=str(content_root),
+    )
+    assert status == "skipped (plugin delivery already live)"
+    assert not out_path.exists()
+
+    line = gsi._double_fire_summary(config_dir)
+    assert "disarming is safe today" in line
+    assert "cause double-fire" not in line
+
+
+# ---------------------------------------------------------------------------
 # C4, item 3 (EM decision): a resurrected-decision finding must render
 # ADDITIVELY when it co-occurs with `double_fire` -- not suppressed behind
 # it. Resurrected decisions are worse than an ordinary duplicate (a config

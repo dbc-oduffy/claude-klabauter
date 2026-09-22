@@ -321,6 +321,46 @@ def _replace_section(content: str, header: str, new_block: str) -> str:
     return new_content
 
 
+#: The machine segment every BACKFILLED day is recorded under, in place of the
+#: machine that happened to run the ceremony.
+#:
+#: WHY A BACKFILL IS NOT MACHINE-SCOPED. A live block records what one box did
+#: that day, and is correctly keyed by that box. A backfill is a different
+#: object: it is synthesized from git history for a date, and git history has no
+#: machine in it. Much of the work in a day's range now comes from cloud
+#: sessions that belong to no box at all (2026-09-09 landed entirely via
+#: `claude/*` PR merges), so labelling that range with the local hostname
+#: attributes other machines' — and nobody's — commits to whoever ran the
+#: ceremony last. Two boxes backfilling one day then each claim ALL of it:
+#: on 2026-09-22 this repo gained 11 `machine-b` blocks, three duplicating
+#: machine-a's 2026-09-12 backfill of the identical range (`2026-09-09.md` held
+#: two blocks, both "Commits: 34 (range: 2d9c3238..2487dbb7)").
+#:
+#: A backfilled date therefore gets exactly ONE block covering every commit in
+#: the range, whoever or whatever produced them. PM ruling 2026-09-22: "I don't
+#: want backfills to be limited to one box ... better to get all the changes by
+#: date."
+BACKFILL_MACHINE = "all-machines"
+
+
+def _superseded_backfill_headers(content: str, date: str) -> List[str]:
+    """Machine-keyed BACKFILL section headers for `date` — the records that the
+    single `BACKFILL_MACHINE` block replaces.
+
+    Identified by the `**Backfilled:** yes` provenance line `_compose_block`
+    writes, so a LIVE block (a real ceremony on a real box, which owns its
+    machine attribution and its own narrower range) is never touched.
+    """
+    headers = []
+    for m in re.finditer(rf"^## {re.escape(date)} — (.+)$", content, re.MULTILINE):
+        machine = m.group(1).strip()
+        if machine == BACKFILL_MACHINE:
+            continue
+        if re.search(r"^\*\*Backfilled:\*\*\s*yes", _extract_section(content, m.group(0)), re.MULTILINE):
+            headers.append(m.group(0))
+    return headers
+
+
 def append_day(
     *,
     worktree: Path,
@@ -364,6 +404,12 @@ def append_day(
     if reviewed_lines is None:
         reviewed_lines = []
 
+    if is_backfill:
+        # A synthesized day is keyed by DATE, never by the box that ran the
+        # ceremony -- see BACKFILL_MACHINE for why the caller's machine is the
+        # wrong attribution for a machine-agnostic commit range.
+        machine = BACKFILL_MACHINE
+
     block = _compose_block(
         date=date,
         machine=machine,
@@ -391,6 +437,15 @@ def append_day(
 
     if changelog_file.exists():
         existing = changelog_file.read_text(encoding="utf-8", errors="replace")
+        if is_backfill:
+            # Absorb any earlier machine-keyed backfill of this same date: those
+            # are this block's predecessors, each claiming the whole day under
+            # one box's name. Live blocks are left alone (see
+            # `_superseded_backfill_headers`).
+            for header in _superseded_backfill_headers(existing, date):
+                section = _extract_section(existing, header)
+                existing = existing.replace(section, "", 1).replace("\n\n\n", "\n\n")
+            existing = existing.strip() + "\n"
         # line-anchored lookup, not a plain substring
         # membership test; see _find_section_start for why (prefix-colliding
         # machine-name headers, e.g. "## {date} — a" vs "## {date} — ab").
@@ -2354,6 +2409,26 @@ def compute_day_fields(
     """
     resolved_local_today = local_today or date
     is_backfill = date != resolved_local_today
+
+    if is_backfill and commit_span:
+        # A BACKFILL IGNORES THE CALLER'S SPAN and reads the date window.
+        #
+        # A two-endpoint `A..B` span only equals "that day's work" when the day
+        # is a linear run on one branch. It is not, once cloud sessions land via
+        # separately-merged `claude/*` PR lineages: a commit reachable only
+        # through another lineage is outside `A..B` no matter when it was
+        # authored. Measured 2026-09-22 while backfilling this repo:
+        # 2026-09-13's scan span held 3 commits against 29 that day (the
+        # endpoints were not ancestor-related), and 2026-09-17's span spanned
+        # SIX days and 1059 commits, overlapping three other backfilled days.
+        # Wrong in both directions, and invisible in the record it produces.
+        #
+        # The date window is what a backfilled day means: every commit with
+        # that committer date, whatever branch, box or cloud session produced
+        # it (PM ruling 2026-09-22 -- backfills are not limited to one box).
+        # A LIVE day still honours its caller's span: there the ceremony knows
+        # its own session's boundaries and the span is the narrower truth.
+        commit_span = None
 
     commits = _collect_commits(worktree, date, commit_span=commit_span)
     hashes = [c[0] for c in commits]

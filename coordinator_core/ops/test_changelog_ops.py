@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -33,6 +34,8 @@ from coordinator_core.ops.changelog_ops import (
     _has_daily_file,
     _plan_status,
     _plans_touched,
+    BACKFILL_MACHINE,
+    compute_day_fields,
     append_day,
     backfill_gaps,
     main,
@@ -1078,3 +1081,128 @@ class TestUpsertReviewed:
             "**Reviewed:** sha_range=aaa1111..bbb2222 reviewer=the Staff Engineer "
             "verdict=pass diff_loc=12" in content
         )
+
+
+def _backfilled_block(tmp_path, date, machine, commit_range, count=34):
+    return append_day(
+        worktree=tmp_path,
+        date=date,
+        machine=machine,
+        branch="work/%s/x" % machine,
+        commit_count=count,
+        commit_range=commit_range,
+        scope="s",
+        is_backfill=True,
+    )
+
+
+def _headers_for(tmp_path, date):
+    text = (tmp_path / "state" / "week-changelog" / ("%s.md" % date)).read_text(encoding="utf-8")
+    return re.findall(r"^## %s \u2014 (.+)$" % date, text, re.MULTILINE)
+
+
+def test_a_backfilled_day_is_keyed_by_date_not_by_the_box_that_ran_it(tmp_path):
+    """A backfill is synthesized from git history, which has no machine in it —
+    and much of a day's range now comes from cloud sessions belonging to no box
+    (2026-09-09 landed entirely via `claude/*` PR merges). Labelling that range
+    with the local hostname attributes other machines' commits to whoever ran
+    the ceremony last."""
+    result = _backfilled_block(tmp_path, "2026-09-09", "machine-b", "2d9c3238..2487dbb7")
+
+    assert result["action"] == "written"
+    assert _headers_for(tmp_path, "2026-09-09") == [BACKFILL_MACHINE]
+
+
+def test_a_second_box_backfilling_the_same_day_does_not_double_count_it(tmp_path):
+    """Measured 2026-09-22: `2026-09-09.md` held a machine-a AND a machine-b
+    block, both "Commits: 34 (range: 2d9c3238..2487dbb7)" — one day recorded
+    twice, double-counted by every consumer that sums these blocks."""
+    _backfilled_block(tmp_path, "2026-09-09", "machine-a", "2d9c3238..2487dbb7")
+
+    _backfilled_block(tmp_path, "2026-09-09", "machine-b", "2d9c3238..2487dbb7")
+
+    assert _headers_for(tmp_path, "2026-09-09") == [BACKFILL_MACHINE]
+
+
+def test_an_earlier_machine_keyed_backfill_is_absorbed(tmp_path):
+    """The predecessor records — one box each, each claiming the whole day —
+    are replaced by the single by-date block, not left beside it."""
+    changelog_dir = tmp_path / "state" / "week-changelog"
+    changelog_dir.mkdir(parents=True)
+    legacy = (
+        "## 2026-09-09 \u2014 machine-a\n\n"
+        "**Branch:** work/machine-a/2026-09-06to11\n"
+        "**Commits:** 34 (range: 2d9c3238..2487dbb7)\n"
+        "**Backfilled:** yes\n"
+    )
+    (changelog_dir / "2026-09-09.md").write_text(legacy, encoding="utf-8")
+
+    _backfilled_block(tmp_path, "2026-09-09", "machine-b", "2d9c3238..2487dbb7")
+
+    assert _headers_for(tmp_path, "2026-09-09") == [BACKFILL_MACHINE]
+
+
+def test_a_live_block_is_never_absorbed(tmp_path):
+    """A real ceremony on a real box owns its machine attribution; only a
+    `**Backfilled:** yes` predecessor is superseded."""
+    append_day(
+        worktree=tmp_path,
+        date="2026-09-09",
+        machine="machine-a",
+        branch="work/machine-a/x",
+        commit_count=12,
+        commit_range="1111111..2222222",
+        scope="s",
+        is_backfill=False,
+    )
+
+    _backfilled_block(tmp_path, "2026-09-09", "machine-b", "2d9c3238..2487dbb7")
+
+    assert _headers_for(tmp_path, "2026-09-09") == ["machine-a", BACKFILL_MACHINE]
+
+
+def _commit_on(repo, date, name):
+    (repo / name).write_text(name, encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", name], check=True, **no_console_passthrough_kwargs())
+    env = dict(os.environ, GIT_AUTHOR_DATE=f"{date}T12:00:00", GIT_COMMITTER_DATE=f"{date}T12:00:00")
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", name], check=True, env=env,
+                   **no_console_passthrough_kwargs())
+    out = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+                         capture_output=True, text=True, **no_console_creationflags())
+    return out.stdout.strip()
+
+
+def test_a_backfill_counts_the_whole_date_not_the_callers_span(tmp_path: Path) -> None:
+    """A two-endpoint span only equals a day's work when the day is linear on
+    one branch — false once cloud sessions land via separately-merged PR
+    lineages. Measured 2026-09-22: 2026-09-13's span held 3 commits against 29
+    that day; 2026-09-17's spanned SIX days and 1059 commits."""
+    repo = _init_repo(tmp_path)
+    first = _commit_on(repo, "2026-09-13", "a.txt")
+    second = _commit_on(repo, "2026-09-13", "b.txt")
+    _commit_on(repo, "2026-09-13", "c.txt")
+
+    backfilled = compute_day_fields(
+        worktree=repo, date="2026-09-13", commit_span=f"{first}..{second}",
+        local_today="2026-09-22",
+    )
+
+    assert backfilled["is_backfill"] is True
+    assert backfilled["commit_count"] == 3
+
+
+def test_a_live_day_still_honours_its_callers_span(tmp_path: Path) -> None:
+    """There the ceremony knows its own session's boundaries, and the span is
+    the narrower truth."""
+    repo = _init_repo(tmp_path)
+    first = _commit_on(repo, "2026-09-13", "a.txt")
+    second = _commit_on(repo, "2026-09-13", "b.txt")
+    _commit_on(repo, "2026-09-13", "c.txt")
+
+    live = compute_day_fields(
+        worktree=repo, date="2026-09-13", commit_span=f"{first}..{second}",
+        local_today="2026-09-13",
+    )
+
+    assert live["is_backfill"] is False
+    assert live["commit_count"] == 1

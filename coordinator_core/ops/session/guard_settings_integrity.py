@@ -361,10 +361,16 @@ def is_inline_install(config_dir: Path) -> bool:
          2026-08-01 (see `_settings_home_scoped_to` and the "Restore
          rungs" section's 2026-08-01 scope-escape note). When not scoped,
          the migrated rung is treated as absent, not consulted at all.
-      2. `{config_dir}/.doe-root` (legacy) — read only when the migrated
-         rung's file is not present (regardless of the migrated rung's
-         content: an empty/blank migrated pointer FILE still suppresses
-         this rung, it does not fall through).
+      2. `{config_dir}/.doe-root` (legacy) — consulted whenever the
+         migrated rung does not answer live (absent, blank, unreadable, or
+         naming a missing tree).
+
+    Either rung answering live is sufficient. A non-live migrated rung must
+    NOT shadow a live legacy one: the SessionStart pointer writer rewrites
+    the migrated file while sibling sessions boot, so a reader can catch it
+    blank mid-write, and a shadowing read turned that window into a
+    persistent kill-switch arm on a live inline install. Destroyed-clone
+    detection is unaffected — it still needs both rungs dead.
 
     Strips ONLY a trailing CR/LF from whichever rung answers — NOT a
     blanket whitespace strip, which would clobber embedded spaces in a
@@ -388,7 +394,6 @@ def is_inline_install(config_dir: Path) -> bool:
     (`.doe-root` present and live); the caller's job, not this function's,
     is to never read its `False` branch as a health verdict.
     """
-    doeroot_file = config_dir / _DOEROOT_NAME
     try:
         home = settings_home()
     except Exception:
@@ -399,10 +404,12 @@ def is_inline_install(config_dir: Path) -> bool:
         # which internally re-resolves settings_home() a second time for the
         # same path; on this SessionStart boot path resolution cost is a
         # first-order concern (see module docstring).
-        migrated_candidate = home / "machine-local" / _DOEROOT_NAME
-        if migrated_candidate.is_file():
-            doeroot_file = migrated_candidate
+        if _doe_root_pointer_is_live(home / "machine-local" / _DOEROOT_NAME):
+            return True
+    return _doe_root_pointer_is_live(config_dir / _DOEROOT_NAME)
 
+
+def _doe_root_pointer_is_live(doeroot_file: Path) -> bool:
     if not doeroot_file.is_file():
         return False
     try:
@@ -2086,11 +2093,19 @@ def _double_fire_summary(config_dir: Path) -> str:
             "regenerating on top of it without first checking for overlap."
         )
     if report.plugin_present and report.plugin_resolvable:
+        # Says what `gen_settings_hooks.generate` DOES on this same state, not
+        # what an unguarded generator would do: generate() runs this very
+        # detector before any write and returns "skipped (plugin delivery
+        # already live)" on exactly `plugin_present and plugin_resolvable`,
+        # leaving settings.json untouched. A banner that calls this state
+        # unsafe scares operators off the one case the generator provably
+        # refuses itself -- pinned against generate() by
+        # `test_plugin_live_branch_agrees_with_generate_s_own_refusal`.
         return (
             "double-fire status: plugin-side delivery is live and healthy on "
-            "its own -- disarming today would start regenerating settings.json's "
-            "`hooks` block ALONGSIDE it, i.e. cause double-fire, not restore "
-            "normal operation."
+            "its own -- disarming is safe today: generation refuses itself on "
+            "this positive evidence (\"skipped (plugin delivery already "
+            "live)\") and leaves settings.json untouched."
         )
     return "double-fire status: neither delivery surface currently resolves on this machine."
 
